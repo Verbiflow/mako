@@ -1,9 +1,10 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 /**
  * Appshots in the production desk with the fixture bridge (`?mock`): the
@@ -19,7 +20,7 @@ import { fileURLToPath } from "node:url"
  * picture and one named under the pointer, and the chip in the sent prompt
  * opening the same. The capture is a real one of the fixture page
  * (`scripts/fixtures/appshot/`). Screenshots go to the printed directory,
- * or the one given as the first argument. Vite listens on 20029.
+ * or the one given as the first argument. Vite listens on 20029 unless --port names another.
  */
 if (process.versions.electron) {
   const { app } = await import("electron")
@@ -28,11 +29,14 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const { createServer } = await import("vite")
-  const root = await mkdtemp(join(tmpdir(), "mako-appshot-ui-"))
-  const evidence = process.argv[2] ? resolve(process.argv[2]) : root
+  const { uiVite } = await import("./lib/ui-vite.mjs")
+  const args = process.argv.slice(2)
+  const portAt = args.indexOf("--port")
+  const port = portAt === -1 ? 20029 : Number(args.splice(portAt, 2)[1])
+  const root = testScratch("mako-appshot-ui-")
+  const evidence = args[0] ? resolve(args[0]) : process.env.MAKO_TEST_EVIDENCE ? join(process.env.MAKO_TEST_EVIDENCE, "appshot") : root
   await mkdir(evidence, { recursive: true })
-  const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 20029, strictPort: true, hmr: false } })
+  const server = await uiVite({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port, strictPort: true, hmr: false } })
   await server.listen()
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-appshot-ui-check", main: fileURLToPath(import.meta.url) }))
   const env = { ...process.env, MAKO_APPSHOT_ROOT: root, MAKO_APPSHOT_EVIDENCE: evidence, MAKO_APPSHOT_URL: server.resolvedUrls.local[0] }
@@ -46,7 +50,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`Appshot UI evidence: ${evidence}`)
 }
 
 async function check() {
@@ -54,9 +57,11 @@ async function check() {
   const root = process.env.MAKO_APPSHOT_ROOT
   const evidence = process.env.MAKO_APPSHOT_EVIDENCE
   app.setPath("userData", join(root, "profile"))
+  withMotion(app)
   await app.whenReady()
   const watchdog = setTimeout(() => app.exit(1), 180_000)
   const window = new BrowserWindow({ width: 1360, height: 900, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
+  atSize(window, 1360, 900)
   const page = window.webContents
   page.debugger.attach("1.3")
   page.on("console-message", (details) => {
@@ -67,6 +72,7 @@ async function check() {
   const capture = async (name) => {
     await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
     await writeFile(join(evidence, name), (await page.capturePage()).toPNG())
+    await writeFile(join(evidence, name.replace(/\.png$/, ".json")), JSON.stringify(await evaluate(`({ viewport: { width: innerWidth, height: innerHeight }, hover: window.__appshotHover ?? null, preview: document.querySelector('[aria-label="Capture of Electron"]')?.getBoundingClientRect().toJSON() })`), null, 2))
     shots.push(name)
   }
   const until = async (code, label = code, timeoutMs = 10_000) => {
@@ -245,12 +251,39 @@ async function check() {
   await until(`document.querySelectorAll('svg[aria-label="Element boxes"] g').length > 20`, "the element boxes")
   const outline = await readFile(resolve("scripts/fixtures/appshot/capture.txt"), "utf8")
   const red = /Button "Delete draft" \[(\d+),(\d+),(\d+),(\d+)\]/.exec(outline).slice(1).map(Number)
-  const point = await evaluate(`(() => {
+  await until(`(() => { const image = document.querySelector('[aria-label="Capture of Electron"] img'); return image?.complete && image.naturalWidth > 0 })()`, "the preview image loaded")
+  await settled()
+  await evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))`)
+  await evaluate(`(() => {
     const rect = [...document.querySelectorAll('svg[aria-label="Element boxes"] g > rect:last-child')].find(r => r.getAttribute("x") === "${red[0]}" && r.getAttribute("y") === "${red[1]}")
-    const box = rect.getBoundingClientRect()
-    return { x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2) }
+    rect.parentElement.setAttribute('data-appshot-hover-target', '')
+    window.__appshotHover = { received: false }
+    document.addEventListener('pointermove', (event) => {
+      window.__appshotHover.received = event.target instanceof Element && Boolean(event.target.closest('[data-appshot-hover-target]'))
+      window.__appshotHover.target = event.target instanceof Element ? event.target.tagName : null
+    }, { capture: true })
+    return true
   })()`)
-  await mouse("mouseMoved", point, { button: "none" })
+  const attempts = []
+  const hoverDeadline = Date.now() + 10_000
+  for (;;) {
+    const point = await evaluate(`(() => {
+      const box = document.querySelector('[data-appshot-hover-target]').getBoundingClientRect()
+      window.__appshotHover.received = false
+      return { x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2) }
+    })()`)
+    await mouse("mouseMoved", point, { button: "none" })
+    const observed = await evaluate("window.__appshotHover")
+    attempts.push({ point, ...observed })
+    if (observed.received) break
+    if (Date.now() > hoverDeadline) {
+      await capture("failure.png")
+      throw new Error("The pointer did not reach the outline's button")
+    }
+    // A popover can reposition after its elements open; resample only when the input missed its target.
+    await evaluate(`new Promise(resolve => requestAnimationFrame(() => resolve(true)))`)
+  }
+  await writeFile(join(evidence, "hover-input.json"), JSON.stringify(attempts, null, 2))
   await until(`document.body.textContent.includes('Button "Delete draft" [${red.join(",")}]')`, "the line under the pointer")
   await capture("08-elements-overlay.png")
   await key("Escape", "Escape", 0, 27)

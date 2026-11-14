@@ -111,35 +111,51 @@ assert.ok(sameFoldedThreadState(mixed, foldedThreadState(members, () => ({ kind:
 assert.ok(!sameFoldedThreadState(mixed, read))
 assert.equal(presenceThreadStatus(presence("x", "grok", first, "needs-permission")).kind, "needs-permission")
 
-// The rail folds on every catalog event; 2,000 rows with 100 multi-Session
-// Threads must stay well under a frame.
-const manyGroups: Record<string, ThreadGroup> = {}
-const manyThreadOf: Record<string, string> = {}
-const manyRows: FoldRow[] = []
-const sharedOwners = Array.from({ length: 100 }, () => randomUUID())
-for (let index = 0; index < 2_000; index++) {
-  const session = randomUUID()
-  const owner = sharedOwners[Math.floor(index / 3)] ?? randomUUID()
-  if (index < 300) {
-    const current = manyGroups[owner] ?? { id: ThreadIdSchema.parse(owner), sessions: [] }
-    current.sessions.push({ id: SessionIdSchema.parse(session), origin: "imported", started: true })
-    manyGroups[owner] = current
-    manyThreadOf[session] = owner
+// The rail folds on every catalog event, so a fold stays proportional to its rows: ten times the rows costs about ten
+// times as much. A shared runner's speed varies by several times, so the yardstick is the same fold of a tenth of the
+// rows, timed turn about in the same run, and a median keeps a stalled run out.
+const railOf = (rows: number) => {
+  const groups: Record<string, ThreadGroup> = {}
+  const threadOf: Record<string, string> = {}
+  const list: FoldRow[] = []
+  const owners = Array.from({ length: Math.ceil(rows / 20) }, () => randomUUID())
+  for (let index = 0; index < rows; index++) {
+    const session = randomUUID()
+    const owner = owners[Math.floor(index / 3)] ?? randomUUID()
+    if (index < rows * 0.15) {
+      const current = groups[owner] ?? { id: ThreadIdSchema.parse(owner), sessions: [] }
+      current.sessions.push({ id: SessionIdSchema.parse(session), origin: "imported", started: true })
+      groups[owner] = current
+      threadOf[session] = owner
+    }
+    const row: ThreadRef = { harness: "codex", nativeId: String(index), path: `/codex/${index}`, threadId: owner, sessionId: session }
+    list.push({ kind: "native", key: row.path, ref: row })
   }
-  const row: ThreadRef = { harness: "codex", nativeId: String(index), path: `/codex/${index}`, threadId: owner, sessionId: session }
-  manyRows.push({ kind: "native", key: row.path, ref: row })
+  return { list, groups, threadOf }
 }
-for (let warm = 0; warm < 20; warm++) foldThreads(manyRows, manyGroups, manyThreadOf)
-const timings: number[] = []
-for (let run = 0; run < 50; run++) {
+const small = railOf(200)
+const large = railOf(2_000)
+const timeFold = ({ list, groups, threadOf }: ReturnType<typeof railOf>, folded: number) => {
   const started = performance.now()
-  const result = foldThreads(manyRows, manyGroups, manyThreadOf)
-  timings.push(performance.now() - started)
-  assert.equal(result.byLead.size, 100)
+  const result = foldThreads(list, groups, threadOf)
+  const taken = performance.now() - started
+  assert.equal(result.byLead.size, folded)
+  return taken
 }
-timings.sort((left, right) => left - right)
-const median = timings[Math.floor(timings.length / 2)] ?? Infinity
-assert.ok(median < 1, `folding 2,000 rows took ${median.toFixed(3)}ms at the median`)
+for (let warm = 0; warm < 20; warm++) {
+  timeFold(small, 10)
+  timeFold(large, 100)
+}
+const smallTimes: number[] = []
+const largeTimes: number[] = []
+for (let run = 0; run < 50; run++) {
+  smallTimes.push(timeFold(small, 10))
+  largeTimes.push(timeFold(large, 100))
+}
+const medianOf = (times: number[]) => [...times].sort((left, right) => left - right)[Math.floor(times.length / 2)] ?? Infinity
+const foldGrowth = medianOf(largeTimes) / medianOf(smallTimes)
+console.log(`Thread fold: 200 rows ${medianOf(smallTimes).toFixed(3)} ms, 2,000 rows ${medianOf(largeTimes).toFixed(3)} ms at the median, ${foldGrowth.toFixed(1)} times`)
+assert.ok(foldGrowth < 30, `ten times the rows took ${foldGrowth.toFixed(1)} times as long to fold`)
 
 /* Tabs ---------------------------------------------------------------------- */
 
@@ -188,13 +204,22 @@ assert.equal(sessionDraftKey(draft), sessionDraftKey({ ...draft, id: randomUUID(
 
 /* Strip ----------------------------------------------------------------------- */
 
-const strip = renderToStaticMarkup(
+// Initial tabs are still an initial cohort when rendering takes longer
+// than one frame. CI exposed the old wall-clock arrival heuristic here.
+const clockDescriptor = Object.getOwnPropertyDescriptor(performance, "now")
+let renderClock = 1_000
+Object.defineProperty(performance, "now", { configurable: true, value: () => (renderClock += 40) })
+let strip: string
+try { strip = renderToStaticMarkup(
   <TooltipProvider>
     <div role="tablist">
       <SessionTabList tabs={tabs} here={{ thread, session: second }} paneId="main" agentActive />
     </div>
   </TooltipProvider>
-)
+) } finally {
+  if (clockDescriptor) Object.defineProperty(performance, "now", clockDescriptor)
+  else Reflect.deleteProperty(performance, "now")
+}
 assert.match(strip, /aria-selected="true"[^>]*data-tab-id="agent"[^>]*data-session-tab="[^"]+"/, "the Session on screen is the selected tab")
 assert.equal((strip.match(/role="tab"/g) ?? []).length, 3)
 assert.match(strip, />Fix rail flicker</)

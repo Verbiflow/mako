@@ -1,13 +1,13 @@
 {
   "harness": "grok",
   "native": {
-    "version": "1.0.70"
+    "version": "1.0.77"
   },
   "about": "Read notes.md and tell me the release day. Don't run commands. / Which day does QA sign off? Answer without reading anything. / /rewind / Without reading anything, how many lines does notes.md have? Two turns, a rewind to before the second, then a turn that replaces it.",
   "stores": [
     {
       "reader": "grok",
-      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a172ae-1e7f-7100-a7ec-7664be5c21b5/updates.jsonl",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a1b13a-eae6-7f30-a939-27dbaddfca1c/updates.jsonl",
       "known": [
         {
           "side": "-",

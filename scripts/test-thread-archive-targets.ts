@@ -60,5 +60,6 @@ assert.equal(railAnnouncement(asking, [{ key: "/a", title: "Fix login", kind: "n
 assert.equal(railAnnouncement(new Map(), [{ key: "/a", title: "A", kind: "needs-permission" }, { key: "/b", title: "B", kind: "needs-permission" }]), "2 threads need you", "several at once are one announcement")
 assert.equal(railAnnouncement(asking, []), undefined, "a row that stops asking says nothing")
 console.log("thread archive targets: a Thread's row archives its hidden, filtered and live Sessions too; the rail announces only rows that start asking")
-// The window's stores keep timers alive.
+// The window's stores keep timers alive. Run with --no-maglev: Node's exit joins V8's workers, and exiting this soon
+// after loading, one could be compiling and waiting on a collection only this thread can run, and neither ever ends.
 process.exit(0)

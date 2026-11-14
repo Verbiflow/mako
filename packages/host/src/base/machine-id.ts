@@ -1,10 +1,9 @@
-import { execFile } from "node:child_process"
+import { hostCommand } from "./host-command.js"
 import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
-import { promisify } from "node:util"
 import { nodePlatform } from "./platform.js"
 
-const run = promisify(execFile)
+const run = hostCommand
 const TIMEOUT_MS = 2_000
 const SALT = "mako-telemetry-machine\0"
 

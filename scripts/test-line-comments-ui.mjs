@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 // Comments on picked lines, through the production file viewer, the Changes
 // panel's diff, its Review stream and a commit's diff in the center, with
@@ -21,7 +21,7 @@ if (process.versions.electron) {
 } else {
   const { createServer } = await import("vite")
   const { default: electronPath } = await import("electron")
-  const root = await mkdtemp(join(tmpdir(), "mako-line-comments-"))
+  const root = testScratch("mako-line-comments-")
   const out = process.env.MAKO_LINE_COMMENTS_OUT ?? root
   await mkdir(out, { recursive: true })
   const server = await createServer({
@@ -42,7 +42,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`Line comments evidence: ${out}`)
 }
 
 async function check() {

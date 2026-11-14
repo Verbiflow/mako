@@ -40,7 +40,7 @@ function ChangesMade() {
   if (data === undefined) return <p className="text-ui"><Shimmer text="Reading Mako's record of changes…" /></p>
   if (!data || !data.total.files) {
     return (
-      <p className="rounded-lg bg-surface px-3 py-4 text-center text-ui text-faint ring-1 ring-hairline" data-changes-empty>
+      <p className="bg-raised px-3 py-4 text-center text-ui text-faint" data-changes-empty>
         {data
           ? `No agent changes in the last ${data.days} days. They appear here as agents edit files in your projects.`
           : "Mako's record of changes isn't open yet. It opens a few seconds after Mako starts."}
@@ -52,7 +52,7 @@ function ChangesMade() {
   const peak = Math.max(...data.projects.map((project) => project.added + project.removed), 0)
   return (
     <div className="flex flex-col gap-1">
-      <div className="rounded-lg bg-surface px-3 py-3 ring-1 ring-hairline">
+      <div className="bg-raised px-3 py-3">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
           <span className="tabular text-title font-medium" data-changes-total>
             {files(total.files)}
@@ -91,7 +91,7 @@ function ChangesMade() {
           <Eyebrow className="px-0 pb-1">By project</Eyebrow>
           <div className="flex flex-col gap-0.5">
             {data.projects.map((project) => (
-              <div key={project.path} title={project.path} className="flex items-center gap-2 rounded-md px-1.5 py-1">
+              <div key={project.path} title={project.path} className="flex items-center gap-2 px-1.5 py-1">
                 <span className="min-w-0 flex-1 truncate text-ui text-foreground/85">{shortPath(project.path)}</span>
                 <span aria-hidden className="h-1 w-16 shrink-0 overflow-hidden rounded-full bg-raised">
                   <span className="block h-full rounded-full bg-foreground/35" style={{ width: `${peak ? Math.round(((project.added + project.removed) / peak) * 100) : 0}%` }} />
@@ -177,7 +177,7 @@ function PlanLimits() {
 
 function CostReading({ label, value, title }: { label: string; value: string; title?: string }) {
   return (
-    <div className="rounded-md bg-raised px-2 py-1.5" title={title}>
+    <div className="bg-raised px-2 py-1.5" title={title}>
       <span className="block text-label text-faint">{label}</span>
       <span className="tabular text-ui">{value}</span>
     </div>

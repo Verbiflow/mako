@@ -10,7 +10,7 @@ import type { StoreFormats } from "./store-formats.js"
 import type { FileEventsService } from "./file-events-service.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
 import type { Entry } from "@mako/sessions/entries"
-import type { WorktreeStep } from "./thread-worktrees.js"
+import type { WorktreeStep, WorktreeSummary } from "./thread-worktrees.js"
 import type { MachineOffer } from "./machine-offer.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { CloudStartStep, ThreadContinueStep, ThreadMoveStep, ThreadReturnStep } from "./cloud-threads.js"
@@ -78,6 +78,8 @@ export type HostEventBody =
   | { type: "cloud-archive-step"; step: CloudArchiveStep }
   /** A followed checkout's HEAD moved, by folder; window-wide. */
   | { type: "checkout-heads"; heads: CheckoutHeads }
+  /** Every worktree's summary, said whenever one changes (`ThreadWorktreeService.followSummaries`); window-wide. */
+  | { type: "worktree-summaries"; summaries: WorktreeSummary[] }
   /** A new Thread's worktree is checked out; its provider starts next. */
   | { type: "worktree-ready"; conversationId: string }
   | { type: "worktree-step"; conversationId: string; step: WorktreeStep }
@@ -95,6 +97,10 @@ export type HostEventBody =
    * nothing more is laid over it, and the way back merges both. Said for each of its conversations here.
    */
   | { type: "thread-follow-stopped"; conversations: string[]; folders: string[]; at: number }
+  /** The conversations whose Sessions wait for the account's word since this Mac went away (`AwayNotes`), the whole list each time. */
+  | { type: "away-held"; conversations: string[] }
+  /** A Thread the cloud took while this Mac was away left these files of its own in the project folder: not as the cloud has them. */
+  | { type: "checkout-stayed"; conversation: string; paths: string[]; unpushed: number }
   | { type: "thread-return-step"; conversationId: string; move: string; step: ThreadReturnStep }
   /**
    * The cloud's word on a cloud Thread's work, as its object says it in the Thread's stream, only when the person's own
@@ -104,12 +110,16 @@ export type HostEventBody =
   | { type: "cloud-machine-notice"; conversationIds: string[]; notice: import("@mako/protocol/saves").ThreadMachineNotice }
   /** An agent's tool changed this device's worktrees; windows read them again. */
   | { type: "worktrees-changed" }
+  /**
+   * Every app on this Mac that isn't stopped, as the sidebar marks them, said when anything about the apps changed:
+   * their marks, a run's state, a check or an install ending. Windows read a followed folder's app again on it.
+   */
+  | { type: "thread-app-marks"; marks: import("./thread-app.js").AppMark[] }
   /** An agent's tool pushed, opened or merged a pull request; windows read GitHub and the worktrees' summaries again. */
   | { type: "github-changed" }
   /** Agents' requests to move onto their Thread's own branch, and the projects that always allow it. */
   | { type: "workspace-moves"; moves: WorkspaceMoves }
   /** Agents' asks to move their Thread to the cloud (`thread_move` below full access), which the person answers above its composer. */
-  | { type: "thread-move-asks"; asks: import("./thread-tools.js").ThreadMoveAsk[] }
   /** The host's record of built plans changed; window-wide. */
   | { type: "plan-builds"; builds: PlanBuilds }
   /** The person's access choices changed, here or on another device (`contracts/access-choices.ts`); window-wide. */
@@ -127,9 +137,10 @@ export type HostEventBody =
   /**
    * A conversation's batch, and as its host emits it, the same in the compact live form (`compact`), which a reader that
    * said it reads that form hears in its place: each is encoded apart (`encodeRuntimeEvent`), never together. A window
-   * that reads the compact form may hear `batch` itself so (`HeardLiveBatch`, read by `expandLiveBatch`).
+   * that reads the compact form may hear `batch` itself so (`HeardLiveBatch`, read by `expandLiveBatch`). `rostered`: the
+   * same again for a host's own windows, its roster as what changed, where it has one (`rosteredLiveBatch`).
    */
-  | { type: "live-batch"; batch: LiveBatch; compact?: CompactLiveBatch }
+  | { type: "live-batch"; batch: LiveBatch; compact?: CompactLiveBatch; rostered?: CompactLiveBatch }
   /**
    * Conversations the account lists that this host doesn't run (another device's in the cloud): each listed as one is
    * at boot, unopened, or listed again as it changed. Opening one reads it where it runs.
@@ -163,6 +174,8 @@ export type HostEventBody =
   | { type: "simulator-setup"; setup: import("./simulator-setup.js").SimulatorSetup }
   /** The person's choice about handing agents to the cloud as this Mac sleeps changed. */
   | { type: "handoff-settings"; settings: import("./cloud-threads.js").HandOffSettings }
+  /** Keeping this Mac awake while agents work: the person's choice, or what's held, changed (`KeepAwake`). */
+  | { type: "keep-awake"; state: import("./keep-awake.js").KeepAwakeState }
   /** The person's conversation settings changed (`ConversationSettings`). */
   | { type: "conversation-settings"; settings: import("./turn-continuation.js").ConversationSettings }
   /** Something happened to the account's devices (`@mako/protocol/account-events`); `mine` when it's about this Mac. */

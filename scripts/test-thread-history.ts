@@ -367,7 +367,7 @@ async function main() {
     // Scoping: a thread nobody referenced is refused, with what is readable.
     const refused = await call({ action: "turns", thread: "thread:test-alpha:native-x" })
     assert.ok(refused.isError, "an unreferenced thread is refused")
-    assert.match(refused.content[0]!.text, /thread:test-alpha:native-x isn't one this Thread's messages referenced.*thread:test-alpha:native-d, thread:test-alpha:native-e/)
+    assert.match(refused.content[0]!.text, /thread:test-alpha:native-x isn't in this Thread's tree or one its messages referenced.*thread:test-alpha:native-d, thread:test-alpha:native-e/)
     assert.ok(!opened.includes(pathX), "nothing of it is read")
 
     // A referenced conversation whose history isn't read yet: the answer waits for it.

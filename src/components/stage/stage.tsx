@@ -1,11 +1,11 @@
-import { memo, useEffect, useRef, useState } from "react"
+import { memo, useContext, useEffect, useRef, useState } from "react"
 import { Composer } from "@/components/composer/composer"
 import { Transcript } from "@/components/transcript/transcript"
 import { ThreadViewer } from "@/components/viewer/thread-viewer"
 import { AcpPanel } from "@/components/viewer/acp-panel"
 import { FileViewer, type AgentSurfaceProps } from "@/components/viewer/file-viewer"
 import { ConversationScopeContext, TranscriptPaneContext, useConversationScope, type ConversationScope } from "@/state/conversation-scope"
-import { usePaneScope } from "@/state/session-panes"
+import { closeWorkbenchPane, usePaneScope } from "@/state/session-panes"
 import { PaneComposer } from "@/components/composer/pane-composer"
 import { SearchView } from "@/components/search/search-view"
 import { InboxView } from "@/components/inbox/inbox-view"
@@ -13,7 +13,7 @@ import { SessionDraftReceipt } from "@/components/stage/session-draft-receipt"
 import { openSessionDraft, useThreadGroups } from "@/state/thread-groups"
 import { Divider } from "@/components/shell/divider"
 import { ErrorBoundary } from "@/components/shell/error-boundary"
-import { useSurfaces, type SurfaceDefinition } from "@/extend/surfaces"
+import { useSurfaces } from "@/extend/surfaces"
 import { stage, useStage } from "@/state/stage"
 import { useTabs } from "@/state/tabs"
 import { useThreads } from "@/state/threads"
@@ -22,15 +22,18 @@ import { prefsStore, setPref, usePrefs } from "@/state/prefs"
 import {
   clampCompanionWidth,
   clampDockHeight,
+  COMPANION_DEFAULT,
   COMPANION_MIN_DEFAULT,
   fitsBeside,
 } from "@/components/stage/stage-width"
 import { cn } from "@/lib/utils"
 import { ArrowLeftIcon, MoonIcon } from "lucide-react"
 import { QUIET_WORDS } from "@/lib/quiet-device"
-import { Blank } from "@/components/ui/kit"
+import { Action, Blank } from "@/components/ui/kit"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { ChildBreadcrumb } from "@/components/stage/child-view"
+import { SideRail } from "@/components/stage/side-rail"
+import { useStageLayoutWatch } from "@/components/stage/stage-layout-watch"
 import type { TabStage } from "@/state/stage"
 
 /** Identity-stable fallback so the selector never allocates per render. */
@@ -41,7 +44,7 @@ const NO_COMPANION: TabStage = {
 }
 
 /**
- * The stage: a central tab workbench, one right sidebar, and an independent dock.
+ * The stage: a central tab workbench, the right rail, and an independent dock.
  *
  * The workbench is rendered first, in a stable position, and is *hidden*
  * rather than unmounted when the sidebar covers the stage — opening a panel
@@ -95,6 +98,7 @@ export function Stage() {
     return () => observer.disconnect()
   }, [])
 
+  useStageLayoutWatch(stageRef)
   const companionRef = useRef<HTMLDivElement>(null)
   const dockRef = useRef<HTMLDivElement>(null)
   const workbenchRef = useRef<HTMLDivElement>(null)
@@ -110,7 +114,7 @@ export function Stage() {
   )
   const width = sideSurface
     ? clampCompanionWidth({
-        width: surfaceWidths["right-sidebar"] ?? 500,
+        width: surfaceWidths["right-sidebar"] ?? COMPANION_DEFAULT,
         available: available?.width,
         min,
       })
@@ -178,29 +182,23 @@ export function Stage() {
             ref={companionRef}
             style={covered ? undefined : { width }}
             className={cn(
-              "companion-panel relative flex min-h-0 flex-col overflow-hidden bg-surface",
+              "companion-panel relative flex min-h-0 flex-col overflow-hidden bg-shell",
               covered && "min-w-0 flex-1"
             )}
           >
             {covered ? (
-              <div className="flex h-8 shrink-0 items-center gap-2 px-2.5 text-label text-faint">
-                <span className="min-w-0 flex-1 truncate">
-                  {sideSurface.label}
-                </span>
+              <div className="flex h-8 shrink-0 items-center justify-end px-2 text-label text-faint">
                 <button
                   type="button"
                   onClick={() => stage.close()}
-                  className="pressable flex items-center gap-1 rounded px-1.5 py-0.5 text-muted-foreground hover:bg-fill-hover hover:text-foreground"
+                  className="pressable flex items-center gap-1 px-1.5 py-0.5 text-muted-foreground hover:bg-fill-hover hover:text-foreground"
                 >
                   <ArrowLeftIcon className="size-3" />
                   Workbench
                 </button>
               </div>
             ) : null}
-            <RightSidebarTabs
-              surfaces={sideSurfaces}
-              activeId={sideSurface.id}
-            />
+            <SideRail surfaces={sideSurfaces} activeId={sideSurface.id} />
             <ErrorBoundary key={sideSurface.id} surface={sideSurface.label}>
               <CompanionBody render={sideSurface.render} />
             </ErrorBoundary>
@@ -268,85 +266,20 @@ const AgentSurface = memo(function AgentSurface({ session, composer, paneId }: A
 
 /** A chat without focus whose Session has no transcript to stream. */
 function PaneNotice({ scope }: { scope: Extract<ConversationScope, { kind: "draft" | "missing" }> }) {
+  const paneId = useContext(TranscriptPaneContext)
   return (
-    <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-ui text-faint">
-      {scope.kind === "draft"
-        ? `New session${scope.title ? ` in “${scope.title}”` : ""}, not sent yet. Click to write it here.`
-        : "This session isn't in its thread any more. Close the pane or open another tab."}
+    <div data-pane-notice={scope.kind} className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-ui text-faint">
+      <p>
+        {scope.kind === "draft"
+          ? `New session${scope.title ? ` in “${scope.title}”` : ""}, not sent yet. Click to write it here.`
+          : "This session isn't in its thread any more. Close the pane or open another tab."}
+      </p>
+      {scope.kind === "missing" && paneId ? (
+        <Action tone="outline" size="md" onClick={() => closeWorkbenchPane(paneId)}>
+          Close pane
+        </Action>
+      ) : null}
     </div>
-  )
-}
-
-function RightSidebarTabs({
-  surfaces,
-  activeId,
-}: {
-  surfaces: SurfaceDefinition[]
-  activeId: string
-}) {
-  return (
-    <nav
-      role="tablist"
-      aria-label="Right sidebar"
-      className="flex h-10 shrink-0 items-stretch overflow-hidden gap-0.5 bg-shell px-1"
-    >
-      {surfaces.map((surface) => {
-        const active = surface.id === activeId
-        const Icon = surface.icon
-        return (
-          <button
-            key={surface.id}
-            type="button"
-            role="tab"
-            aria-selected={active}
-            tabIndex={active ? 0 : -1}
-            data-surface-id={surface.id}
-            onClick={() => stage.open(surface.id)}
-            onKeyDown={(event) => {
-              if (
-                !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)
-              ) {
-                return
-              }
-              event.preventDefault()
-              const index = surfaces.findIndex(
-                (candidate) => candidate.id === surface.id
-              )
-              const next =
-                event.key === "Home"
-                  ? surfaces[0]
-                  : event.key === "End"
-                    ? surfaces.at(-1)
-                    : surfaces[
-                        (index +
-                          (event.key === "ArrowRight" ? 1 : -1) +
-                          surfaces.length) %
-                          surfaces.length
-                      ]
-              if (!next) return
-              stage.open(next.id)
-              const list = event.currentTarget.closest('[role="tablist"]')
-              requestAnimationFrame(() => {
-                list
-                  ?.querySelector<HTMLButtonElement>(
-                    `[data-surface-id="${CSS.escape(next.id)}"]`
-                  )
-                  ?.focus()
-              })
-            }}
-            className={cn(
-              "my-1.5 flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md px-1.5 text-ui font-medium transition-[background-color,color] duration-150 ease-(--ease-out)",
-              active
-                ? "bg-raised text-foreground"
-                : "text-faint hover:bg-fill-hover hover:text-muted-foreground"
-            )}
-          >
-            {Icon ? <Icon className="size-3.5 shrink-0" /> : null}
-            <span className="truncate">{surface.label}</span>
-          </button>
-        )
-      })}
-    </nav>
   )
 }
 

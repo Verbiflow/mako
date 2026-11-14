@@ -282,7 +282,7 @@ function doneWords(result: TurnUndoResult, whose: string): string {
 
 function Notice({ tone, children }: { tone: "caution" | "error"; children: string }) {
   return (
-    <p role={tone === "error" ? "alert" : "status"} className={cn("flex items-start gap-2 rounded-xl px-3 py-2.5 text-ui", tone === "error" ? "bg-negative/10 text-negative" : "bg-caution/12 text-foreground")}>
+    <p role={tone === "error" ? "alert" : "status"} className={cn("flex items-start gap-2 px-3 py-2.5 text-ui", tone === "error" ? "bg-negative/10 text-negative" : "bg-caution/12 text-foreground")}>
       <TriangleAlertIcon aria-hidden className={cn("mt-1 size-3.5 shrink-0", tone === "caution" && "text-caution")} />
       <span className="min-w-0">{children}</span>
     </p>

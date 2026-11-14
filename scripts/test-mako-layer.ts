@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { NATIVE_CAPABILITIES, TOOL_FAMILIES, replacementPath, type LayerCapabilities } from "@mako/host/contracts/mako-layer"
 import { nativeSpawnsOff, type RoutedThread } from "@mako/host/contracts/native-routing"
-import { conversationInstructions, conversationServers, type ConversationTools } from "@mako/host/harnesses/live-driver"
+import { conversationServers, launchInstructions, type ConversationTools } from "@mako/host/harnesses/live-driver"
 import { layerOf } from "@mako/host/harnesses/mako-layer"
 import { claudeLayer, type ClaudeLayerFragment } from "@mako/host/harnesses/claude/layer"
 import { codexLayer } from "@mako/host/harnesses/codex/layer"
@@ -13,9 +13,9 @@ import { DEVIN_LAYER } from "@mako/host/harnesses/devin/layer"
 import { MAKO_TOOL_TIMEOUT_MS } from "@mako/host/tools/index"
 
 /**
- * Each adapter gives its driver exactly what the driver built inline before
- * the Mako layer: the expressions below are those drivers' own, from before
- * the change, compared as JSON so key order counts too.
+ * Servers and switches are what each driver built before the layer.
+ * Instructions are the primer blocks (`launchInstructions`), which an
+ * Apex's role changes. Compared as JSON so key order counts too.
  */
 const same = <Value>(actual: Value, expected: Value, what: string) => assert.equal(JSON.stringify(actual), JSON.stringify(expected), what)
 
@@ -41,13 +41,13 @@ for (const tools of grants) for (const routing of routings) {
   const claudeServers: ClaudeLayerFragment["servers"] = {}
   for (const { name, url } of servers) claudeServers[name] = { type: "http", url, headers: { Authorization: bearer }, timeout: MAKO_TOOL_TIMEOUT_MS }
   same(claude.servers, claudeServers, "claude servers")
-  same(claude.append, conversationInstructions(tools), "claude append")
+  same(claude.append, launchInstructions(options), "claude append")
   for (const requested of [undefined, true, false])
     same(claude.agentTeams(requested), requested === undefined ? undefined : requested && routing?.().role !== "apex" ? "1" : "0", "claude agent teams")
 
   const codex = codexLayer.apply(layerOf(options), "c")
   same(codex.servers, servers, "codex servers")
-  same(codex.instructions, conversationInstructions(tools), "codex instructions")
+  same(codex.instructions, launchInstructions(options), "codex instructions")
   same(codex.config(), off ? { "agents.enabled": false, "features.multi_agent_v2": false } : {}, "codex config")
 
   const cursor = cursorLayer.apply(layerOf(options), "c")

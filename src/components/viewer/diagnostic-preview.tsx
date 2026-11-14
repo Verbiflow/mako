@@ -109,7 +109,7 @@ export function DiagnosticPreview({
       <div className="flex flex-col gap-2 p-4 text-ui">
         <p className="text-muted-foreground">{value.message}</p>
         <button
-          className="pressable self-start rounded-md bg-raised px-3 py-1.5"
+          className="pressable self-start bg-raised px-3 py-1.5"
           onClick={() => {
             setResult(undefined)
             setAttempt((value) => value + 1)
@@ -148,7 +148,7 @@ export function DiagnosticPreview({
             setQuery(event.target.value)
             setPage(0)
           }}
-          className="min-w-0 flex-1 rounded-md bg-raised px-3 py-1.5 text-ui outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          className="min-w-0 flex-1 bg-raised px-3 py-1.5 text-ui outline-none focus-visible:ring-1 focus-visible:ring-ring"
         />
         <span className="shrink-0 text-label text-faint tabular-nums">
           {rows.length.toLocaleString()} rows

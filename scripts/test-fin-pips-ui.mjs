@@ -1,11 +1,11 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { childGroup, childStateOf, CHILD_GROUPS, orderedChildren, rollup, rollupLabel } from "@mako/host/contracts/children"
 import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * An Apex's row through the production rail and phone list, on the mock bridge's Apex (`?mock&app=apex`): one pip per
@@ -25,12 +25,12 @@ if (process.versions.electron) {
   })
 } else {
   const given = process.argv.indexOf("--url")
-  const root = await mkdtemp(join(tmpdir(), "mako-fin-pips-ui-"))
+  const root = testScratch("mako-fin-pips-ui-")
   let server
   let base = given > 0 ? process.argv[given + 1] : undefined
   if (!base) {
-    const { createServer } = await import("vite")
-    server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false, watch: { ignored: ["**"] } } })
+    const { uiVite } = await import("./lib/ui-vite.mjs")
+    server = await uiVite({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false, watch: { ignored: ["**"] } } })
     await server.listen()
     base = server.resolvedUrls.local[0]
   }
@@ -46,7 +46,6 @@ if (process.versions.electron) {
   } finally {
     await server?.close()
   }
-  console.log(`UI evidence: ${root}`)
 }
 
 const LETTER = { needs: "n", queued: "q", idle: "i", failed: "f", done: "d" }
@@ -132,7 +131,7 @@ async function check() {
   assert.equal(rail.height, 44, "the Apex's row is two lines, 44 px")
   const asking = orderedChildren(roster).filter((agent) => childGroup(childStateOf(agent)) === "needs")
   assert.deepEqual(rail.asking.map((row) => row.thread), asking.map((agent) => agent.child.thread), "the Fins that need you hang under the Apex, oldest first")
-  for (const row of rail.asking) assert.match(row.text, /Needs you$/)
+  for (const row of rail.asking) assert.match(row.text, /Needs you \S/, `${row.text}: Needs you, then what it needs`)
   for (const agent of roster) if (!asking.includes(agent)) assert.ok(!rail.rail.includes(agent.title), `no other Fin is in the rail: ${agent.title}`)
   await capture("desktop-dark.png")
 
@@ -158,7 +157,8 @@ async function check() {
   const after = rail.rows.filter((row) => row.key !== `fin:${working.child.thread}`)
   assert.deepEqual(after.map((row) => row.key), before.map((row) => row.key), "every other row keeps its order")
   const top = rail.rows[nested].top
-  for (const [index, row] of after.entries()) assert.equal(row.top - before[index].top, row.top > top ? 28 : 0, `${row.key} moves by the nested row alone`)
+  // An asking Fin's row is two lines, its name and "Needs you" over what it needs: 44 px.
+  for (const [index, row] of after.entries()) assert.equal(row.top - before[index].top, row.top > top ? 44 : 0, `${row.key} moves by the nested row alone`)
   await capture("desktop-asking-dark.png")
 
   // Answered, it leaves the rail and the rows go back.

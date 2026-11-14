@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 if (process.versions.electron) {
   void check().catch(async (error) => {
@@ -11,9 +11,9 @@ if (process.versions.electron) {
     ;(await import("electron")).app.exit(1)
   })
 } else {
-  const { createServer } = await import("vite")
-  const root = await mkdtemp(join(tmpdir(), "mako-terminal-ui-"))
-  const server = await createServer({
+  const { uiVite } = await import("./lib/ui-vite.mjs")
+  const root = testScratch("mako-terminal-ui-")
+  const server = await uiVite({
     cacheDir: join(root, "cache"),
     server: { port: 0, host: "127.0.0.1" },
   })
@@ -43,7 +43,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`Terminal UI evidence: ${root}`)
 }
 
 async function check() {

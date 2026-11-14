@@ -33,7 +33,7 @@ export function ConversationRelations() {
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="pressable flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-ui text-faint hover:bg-fill-hover hover:text-foreground"
+          className="pressable flex h-7 shrink-0 items-center gap-1.5 px-2 text-ui text-faint hover:bg-fill-hover hover:text-foreground"
         >
           <GitForkIcon className="size-3" />
           {parentId ? "Forked" : "Fork findings"}
@@ -44,7 +44,7 @@ export function ConversationRelations() {
           <button
             type="button"
             onClick={() => act(() => acp.openRelated(parentId))}
-            className="pressable flex w-full flex-col gap-0.5 rounded-md px-2 py-2 text-left hover:bg-fill-hover"
+            className="pressable flex w-full flex-col gap-0.5 px-2 py-2 text-left hover:bg-fill-hover"
           >
             <span className="text-ui">Open the original</span>
             <span className="text-label text-faint">The conversation this one forked from</span>
@@ -54,7 +54,7 @@ export function ConversationRelations() {
           <button
             type="button"
             onClick={() => act(() => acp.mergeFork())}
-            className="pressable flex w-full flex-col gap-0.5 rounded-md px-2 py-2 text-left hover:bg-fill-hover"
+            className="pressable flex w-full flex-col gap-0.5 px-2 py-2 text-left hover:bg-fill-hover"
           >
             <span className="text-ui">Return findings</span>
             <span className="text-label text-faint">

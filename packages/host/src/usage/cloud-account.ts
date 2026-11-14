@@ -1,3 +1,5 @@
+import { SOURCE_PROJECT_PATH, SourceProjectReceiptSchema, type SourceProjectCommand } from "@mako/protocol/source-project"
+import { stoppingSignal } from "../base/host-stopping.js"
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
@@ -13,10 +15,13 @@ import { SessionListingsSchema, type SessionListings } from "@mako/protocol/thre
 import { WaitingInputSchema, WaitingMessageSchema, type WaitingInput, type WaitingMessage } from "@mako/protocol/waiting"
 import type { SessionPublishing } from "./machine-runtime.js"
 import { ContinueStateSchema, type ContinueState } from "@mako/protocol/continues"
+import { OwnerAnswerSchema, OwnerAskSchema, QuietAnswerSchema, QuietNoteSchema, type OwnerAnswer, type OwnerAsk, type QuietAnswer, type QuietNote } from "@mako/protocol/handoff"
 import { MOVE_ANSWER_WAIT_MS, MoveAnswerSchema, MoveHandOverRequestSchema, MoveHandOverStateSchema, ReturnReleaseRequestSchema, ReturnStateSchema, type MoveAnswer, type MoveCheckpoint, type MoveHandOverRequest, type MoveHandOverState, type ReturnDeparture, type ReturnState } from "@mako/protocol/moves"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { Agent, fetch as fetchWith, type Response as CloudResponse } from "undici"
 import { z } from "zod"
+import { ArtifactSchema, BORROW_PATHS, BorrowAnswerSchema, GrantSchema, type Artifact, LeaseEventSchema, LeaseSchema, SourceAnswerSchema, SourceAskSchema, type BorrowAnswer, type Grant, type Lease, type Progress, type SourceAnswer, type Stream } from "@mako/protocol/borrow"
+import type { BorrowSnapshot } from "../contracts/setup.js"
 import {
   LIVE_FORM,
   clientEndpointPath,
@@ -27,6 +32,7 @@ import {
   clientSessionOverSockets,
   type RuntimeLink,
   RuntimeRefusedError,
+  type Advertisement,
   type GoingQuietReason,
   type RuntimeOptions,
   type ServedRuntime,
@@ -42,6 +48,9 @@ import {
   SILENT_WHILE_WORKING_MS,
   CLOUD_ENTITLEMENT,
   servesDeviceRuntime,
+  QUIET_PROJECT_LINK_VERSION,
+  QUIET_OTHERS_LINK_VERSION,
+  QUIET_PROJECT_FROM_LINK_VERSION,
 } from "@mako/protocol"
 import {
   CloudBrowserSessionSchema,
@@ -71,6 +80,7 @@ import { clipReason, CloudRepositorySchema, type CloudRepository } from "../cont
 import type { BaseStanding } from "../contracts/cloud-turn-on.js"
 import { CloudCarriedFileSchema, type CloudCarriedFile } from "../contracts/cloud-carried-files.js"
 import { GitHubTokenAnswerSchema, GitHubTokenListingSchema, type GitHubTokenListing } from "../contracts/github-person.js"
+import { GitHubAuthorshipSchema, type CommitAuthor, type GitHubAuthorship } from "../contracts/github-authorship.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import type { CloudRoute, DiagnosticEvents } from "../contracts/telemetry.js"
 import { CloudHarnessesSchema, type CloudHarnesses } from "../contracts/cloud-harnesses.js"
@@ -243,9 +253,13 @@ export function cloudLegacyFiles(dataRoot: string): LegacyFiles {
 /** A Thread this Mac's runtime runs, and under which generation: claimed again when its link comes back. */
 export type RuntimeClaim = { threadId: string; generation: number }
 
+/** A file a lent session made, as its lease lists it (the contract's `Artifact`): by name, hash and size, never contents. */
+export const BorrowArtifactSchema = ArtifactSchema
+export type BorrowArtifact = Artifact
+
 /** How this Mac serves the host to the cloud as a runtime: the host's own dispatcher, behind the protocol. */
 export type CloudRuntime = {
-  serve(link: RuntimeLink, options: { runtimeId: string; credential: ConnectionCredential; threads: RuntimeClaim[]; watch?: RuntimeOptions["watch"] }): Promise<ServedRuntime>
+  serve(link: RuntimeLink, options: { runtimeId: string; credential: ConnectionCredential; threads: RuntimeClaim[]; watch?: RuntimeOptions["watch"]; lending?: RuntimeOptions["lending"] }): Promise<ServedRuntime>
 }
 
 /** How a cloud Thread is made: ahead of its first message (`prepare`), and the harness that message is for. */
@@ -256,6 +270,13 @@ export interface CloudThreadMaking {
   folder?: string
   /** Kept ready for a Thread of this Mac's that may move: records and checkpoints go to it, and its machine starts only with the move. */
   standby?: boolean
+  /**
+   * With `standby`: the Thread of this Mac's it stands by for (its local `ThreadId`, as a going-away's note names it), so
+   * the account continuing that Thread while this Mac is quiet trusts this cloud Thread, at its own folder and
+   * repository, even where the Thread's Sessions list neither (a project folder's main checkout). A gateway before it
+   * ignores it.
+   */
+  standsByFor?: string
 }
 
 export type CloudAccountOptions = {
@@ -277,6 +298,11 @@ export type CloudAccountOptions = {
   runtime?: CloudRuntime
   /** What tells the account's list of this Mac's Sessions over that runtime's link, and relays what's watched. */
   sessions?: SessionPublishing | undefined
+  /**
+   * What this Mac lends under borrowing's leases: its advertisement (`Advertiser`), said as its runtime's link enrols;
+   * what the link says it lends (`RuntimeOptions.lending`); and the enrolment itself, after which it reads its leases.
+   */
+  lending?: { advertisement(): Advertisement | undefined; frames: NonNullable<RuntimeOptions["lending"]>; enrolled(): void }
   /** A connection down this long shows as offline; a shorter blip isn't shown. For tests. */
   offlineAfterMs?: number
   /**
@@ -299,6 +325,8 @@ export type CloudAccountOptions = {
    * stream, with nothing to say when that's all of it, so what must know the list as it stands reads it whole.
    */
   onAccountLinked?: () => void
+  /** This device's runtime is enrolled on a new link: from now its account's other devices' calls reach it again. */
+  onRuntimeLinked?: () => void
 }
 
 export class CloudAccountError extends Error {
@@ -356,6 +384,11 @@ export class CloudAccounts {
   #runtimeLink: CloudLink | undefined
   /** The Threads this Mac's runtime ran when its link last ended, claimed again when it comes back. */
   #claims: RuntimeClaim[] = []
+  /**
+   * The link version this Mac's runtime link last agreed with the gateway, kept after the link drops (a Mac going away
+   * often has none by then); none before its first enrolment, and again once signed out.
+   */
+  #agreed: number | undefined
   /** The runtime link this Mac serves on now, and what serves there: where its Sessions are reported. */
   #served: { link: RuntimeLink; served: ServedRuntime } | undefined
   readonly #sessions = new Set<ClientSessionOverSockets>()
@@ -452,6 +485,7 @@ export class CloudAccounts {
           return true
         },
         (error) => {
+          this.#options.log?.("cloud sign-in didn't finish", { error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) })
           this.#endSignIn({ kind: "failed", message: messageOf(error, "Signing in didn't finish. Try again.") }, { graceful: true })
           finish()
           return false
@@ -517,7 +551,7 @@ export class CloudAccounts {
       show(shown)
       let interval = grant.interval ?? SLOW_DOWN_SECONDS
       for (;;) {
-        await delay(interval * 1000, undefined, { signal })
+        await delay(interval * 1000, undefined, { signal: stoppingSignal(signal) })
         if (Date.now() >= deadline) return this.#joinEnded({ kind: "timed-out", message: "The code expired before it was confirmed. Join again for a new one." })
         const polled = await this.#fetch("devices.code-token", new URL("/oauth/token", cloud), {
           method: "POST",
@@ -624,6 +658,63 @@ export class CloudAccounts {
     return response.status === 404 ? null : CloudHarnessesSchema.parse(await response.json())
   }
 
+  /**
+   * What the account's broker holds for this person: its standing grants, live leases, lease log since `since`, and the
+   * asks waiting on this device as a source, each parsed by the open contract. Null from a cloud without a broker yet.
+   */
+  async borrowSnapshot(since: number): Promise<BorrowSnapshot | null> {
+    const read = async <Answer extends z.ZodType>(path: string, answer: Answer): Promise<z.infer<Answer> | null> => {
+      const response = await this.#call("borrow.read", "GET", path, undefined, false, [404])
+      return response.status === 404 ? null : answer.parse(await response.json())
+    }
+    const [grants, leases, events, asks] = await Promise.all([
+      read(BORROW_PATHS.grants, z.object({ grants: z.array(GrantSchema) })),
+      read("/v1/borrow/leases", z.object({ leases: z.array(LeaseSchema) })),
+      read(`${BORROW_PATHS.events}?since=${since}`, z.object({ events: z.array(LeaseEventSchema) })),
+      read("/v1/borrow/asks", z.object({ asks: z.array(SourceAskSchema) })),
+    ])
+    if (!grants || !leases || !events) return null
+    const at = Date.now()
+    return { grants: grants.grants, leases: leases.leases, events: events.events, asks: (asks?.asks ?? []).map((ask) => ({ ask, at })) }
+  }
+
+  /** This device's answer, as a source, to an ask the account's broker holds for it. */
+  async answerBorrowAsk(ask: string, answer: SourceAnswer): Promise<BorrowAnswer | undefined> {
+    const response = await this.#call("borrow.answer", "POST", `/v1/borrow/asks/${encodeURIComponent(ask)}`, SourceAnswerSchema.parse(answer))
+    return z.object({ answer: BorrowAnswerSchema }).safeParse(await response.json().catch(() => undefined)).data?.answer
+  }
+
+  /** The account's live leases, as its broker lists them; null from a cloud without a broker. */
+  async borrowLeases(): Promise<Lease[] | null> {
+    const response = await this.#call("borrow.read", "GET", "/v1/borrow/leases", undefined, false, [404])
+    return response.status === 404 ? null : z.object({ leases: z.array(LeaseSchema) }).parse(await response.json()).leases
+  }
+
+  /** The person ends a session lease, from any of their devices (Setup's Stop on what's lent): its device stops it. */
+  async cancelBorrowLease(lease: string): Promise<void> {
+    await this.#call("borrow.cancel", "POST", `${BORROW_PATHS.lease(lease)}/cancel`)
+  }
+
+  /**
+   * A file a session this Mac serves made (a recording, a large picture), given to its lease: the cloud seals it, keeps
+   * it as content-addressed pieces, and lists it on the lease by name, hash and size for its borrower alone.
+   */
+  async putBorrowArtifact(lease: string, name: string, file: string, bytes: number): Promise<BorrowArtifact> {
+    const response = await this.#call("borrow.artifact", "POST", `${BORROW_PATHS.lease(lease)}/artifacts?name=${encodeURIComponent(name)}`, new FileBody(file, bytes))
+    return BorrowArtifactSchema.parse(await response.json())
+  }
+
+  /** The grants that stand at the account's broker; null from a cloud that has none. */
+  async borrowGrants(): Promise<Grant[] | null> {
+    const response = await this.#call("borrow.read", "GET", BORROW_PATHS.grants, undefined, false, [404])
+    return response.status === 404 ? null : z.object({ grants: z.array(GrantSchema) }).parse(await response.json()).grants
+  }
+
+  /** The person's revoke of a grant the account's broker holds: every lease under it ends. */
+  async revokeBorrowGrant(grant: string): Promise<void> {
+    await this.#call("borrow.revoke", "DELETE", `${BORROW_PATHS.grants}/${encodeURIComponent(grant)}`)
+  }
+
   /** The person's access choice per harness, as the account keeps them; null from a cloud that doesn't keep them yet. */
   async accessChoices(): Promise<AccessChoicesAnswer | null> {
     const response = await this.#call("access.read", "GET", ACCESS_CHOICES_PATH, undefined, false, [404])
@@ -707,6 +798,21 @@ export class CloudAccounts {
     await this.#call("github-token.remove", "DELETE", `${this.#accountPath()}/github-token`)
   }
 
+  /**
+   * Who the account's cloud commits and pull requests are authored as (`github-authorship.ts`), and what that means for
+   * pull requests now; null from a cloud that doesn't keep it yet.
+   */
+  async githubAuthorship(): Promise<GitHubAuthorship | null> {
+    const response = await this.#call("github-authorship.read", "GET", `${this.#accountPath()}/github-authorship`, undefined, false, [404])
+    return response.status === 404 ? null : GitHubAuthorshipSchema.parse(await response.json())
+  }
+
+  /** Chooses it for the account; running cloud machines hear it within their minute. */
+  async saveGitHubAuthorship(as: CommitAuthor): Promise<GitHubAuthorship> {
+    const response = await this.#call("github-authorship.save", "PUT", `${this.#accountPath()}/github-authorship`, { as })
+    return GitHubAuthorshipSchema.parse(await response.json())
+  }
+
   /** A project's carried files the account's store keeps (`?repository=`), listed without their values. */
   async carriedFiles(repository: string): Promise<CloudCarriedFile[]> {
     const response = await this.#call("carried-files.list", "GET", `${this.#accountPath()}/carried-files?repository=${encodeURIComponent(repository)}`)
@@ -738,6 +844,7 @@ export class CloudAccounts {
     if (options.harness) body.harness = options.harness
     if (options.folder) body.folder = options.folder
     if (options.standby) body.standby = true
+    if (options.standby && options.standsByFor) body.standsByFor = options.standsByFor
     const response = await this.#call(options.prepare ? "threads.prepare" : options.standby ? "threads.standby" : "threads.create", "POST", "/v1/threads", body)
     const answer = CreatedThreadSchema.safeParse(await response.json().catch(() => undefined))
     return { ready: answer.success && answer.data.ready === true, ...answer.success && answer.data.ended === true && { ended: true as const } }
@@ -925,6 +1032,59 @@ export class CloudAccounts {
     this.#token = undefined
     await this.#connectionToken()
     return this.account()
+  }
+
+  /**
+   * This Mac is going away (`QuietNote`): each of its Threads with a turn parked, the Sessions it holds at their
+   * generations, and the checkpoint the cloud acknowledged, which the account may continue it from while this Mac is
+   * quiet. It releases nothing. The same note again is the same note. A gateway that takes no notes yet answers 404:
+   * `unserved`, and nothing is continued. A Thread's `project` goes only to a gateway whose link last agreed
+   * `QUIET_PROJECT_LINK_VERSION`, and its `others` and `projectFrom` only to one that agreed 26: one before refuses the
+   * whole note, so to any other the Thread goes without them. `record` is handed the very note that's about to go, as it
+   * goes, before it does: what a going-away records (`CloudReadiness.noted`) is exactly what was sent, whatever version
+   * the link agreed meanwhile. One that fails sends nothing.
+   */
+  async quiet(note: QuietNote, record?: (sent: QuietNote) => Promise<void>): Promise<QuietAnswer | "unserved"> {
+    const deviceId = await this.deviceId()
+    if (!deviceId) throw new CloudAccountError("This Mac isn't signed in to Mako.")
+    const sent = QuietNoteSchema.parse(this.#noteFor(note))
+    await record?.(sent)
+    const response = await this.#call("devices.quiet", "POST", `/v1/devices/${encodeURIComponent(deviceId)}/quiet`, sent, false, [404])
+    if (response.status === 404) return "unserved"
+    return QuietAnswerSchema.parse(await response.json())
+  }
+
+  /** The note as this gateway takes it: a Thread's `project`, `others` and `projectFrom` each only where its link agreed the version that carries it. */
+  #noteFor(note: QuietNote): QuietNote {
+    const agreed = this.#agreed ?? 0
+    const project = agreed >= QUIET_PROJECT_LINK_VERSION || !note.threads.some((thread) => thread.project !== undefined)
+    const others = agreed >= QUIET_OTHERS_LINK_VERSION || !note.threads.some((thread) => thread.others !== undefined)
+    // The folder `project` mirrors goes only with `project`, to a gateway that places Sessions by it.
+    const from = (project && agreed >= QUIET_PROJECT_FROM_LINK_VERSION) || !note.threads.some((thread) => thread.projectFrom !== undefined)
+    if (project && others && from) return note
+    this.#options.log?.("a quiet note's project folders left out: the gateway's link hasn't agreed them", { agreed: this.#agreed ?? "none", ...(!project && { project: "left out" }), ...(!others && { others: "left out" }), ...(!from && { projectFrom: "left out" }) })
+    return {
+      ...note,
+      threads: note.threads.map((thread) => {
+        const without = { ...thread }
+        if (!project) delete without.project
+        if (!others) delete without.others
+        if (!from) delete without.projectFrom
+        return without
+      }),
+    }
+  }
+
+  /**
+   * This Mac is back, and asks who owns each Session it holds before it runs any (`OwnerAsk`): `yours`, `departed` to a
+   * continue it joins, or `unknown`. Asking ends this Mac's quiet. `unserved` from a gateway that doesn't answer it yet.
+   */
+  async owner(ask: OwnerAsk): Promise<OwnerAnswer | "unserved"> {
+    const deviceId = await this.deviceId()
+    if (!deviceId) throw new CloudAccountError("This Mac isn't signed in to Mako.")
+    const response = await this.#call("devices.owner", "POST", `/v1/devices/${encodeURIComponent(deviceId)}/owner`, OwnerAskSchema.parse(ask), false, [404])
+    if (response.status === 404) return "unserved"
+    return OwnerAnswerSchema.parse(await response.json())
   }
 
   /** This Mac's device in the account, while it's signed in. */
@@ -1238,6 +1398,11 @@ export class CloudAccounts {
    * ends for an expired token opens again on the next call; one ended because this device was removed signs it out.
    * Signing out closes every session.
    */
+  /** Internal selected-project publication only; not exposed as a model/UI move action. */
+  async sourceProjectControl(input: SourceProjectCommand) {
+    return SourceProjectReceiptSchema.parse(await (await this.#call("source-project.control", "POST", SOURCE_PROJECT_PATH, input)).json())
+  }
+
   session(): ClientSessionOverSockets {
     const cloud = this.#require()
     const session = clientSessionOverSockets(
@@ -1360,7 +1525,7 @@ export class CloudAccounts {
     const trace = this.#traces.follow(correlationId)
     let response: CloudResponse
     try {
-      response = await fetchWith(url, { ...init, headers: { ...init.headers, [CORRELATION_HEADER]: correlationId }, dispatcher: this.#pool })
+      response = await fetchWith(url, { ...init, signal: stoppingSignal(init.signal), headers: { ...init.headers, [CORRELATION_HEADER]: correlationId }, dispatcher: this.#pool })
     } catch (error) {
       // How far it got: whether it ever left this Mac, and on which connection, which the cloud's log can't say.
       report("unreachable", undefined, { error: errorMessage({ error }), reached: trace.describe() })
@@ -1493,13 +1658,18 @@ export class CloudAccounts {
     let served: ServedRuntime | undefined
     let closed = false
     if (runtime)
-      runtime.serve(link, { runtimeId, credential: this.#credential(), threads: this.#claims, watch: (conversations, after, forms) => this.#options.sessions?.watch(link, conversations, after, forms) }).then(
+      runtime.serve(link, { runtimeId, credential: this.#credential(), threads: this.#claims, watch: (conversations, after, forms) => this.#options.sessions?.watch(link, conversations, after, forms), ...(this.#options.lending && { lending: this.#options.lending.frames }) }).then(
         (started) => {
           served = started
           if (closed) return started.close()
+          this.#agreed = started.version
           this.#served = { link, served: started }
           this.#options.sessions?.linked(this.#served)
+          const advertisement = this.#options.lending?.advertisement()
+          if (advertisement) started.advertise(advertisement)
+          this.#options.lending?.enrolled()
           this.#options.log?.("cloud runtime enrolled", { runtimeId, claims: this.#claims.length })
+          this.#options.onRuntimeLinked?.()
           void started.ended.then((problem) => {
             this.#claims = started.claims()
             if (this.#served?.served === started) this.#served = undefined
@@ -1516,6 +1686,16 @@ export class CloudAccounts {
         link.close()
       },
     }
+  }
+
+  /** Says what this Mac can serve and its room on the runtime link it serves now; false while there's none, or it's older. */
+  advertise(advertisement: Advertisement): boolean {
+    return this.#served?.served.advertise(advertisement) ?? false
+  }
+
+  /** Says a session this Mac serves is alive on its runtime link; false while there's none, or it's older. */
+  beat(lease: string, progress?: Progress, streams?: Stream[]): boolean {
+    return this.#served?.served.beat(lease, progress, streams) ?? false
   }
 
   /** Tells the cloud this runtime is going away on purpose, on a link that knows the frame. */
@@ -1539,6 +1719,7 @@ export class CloudAccounts {
     this.#runtimeLink?.stop()
     this.#runtimeLink = undefined
     this.#claims = []
+    this.#agreed = undefined
     for (const session of this.#sessions) session.close()
     this.#sessions.clear()
   }

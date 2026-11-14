@@ -3,4 +3,4 @@ Chrome round 1: native messaging, trusted input, cross-client exclusion, six com
 {"hiddenBenchmark":{"observe":{"count":60,"p50":2.706584000001385,"p95":9.801249999999527},"type":{"count":60,"p50":8.13183299999946,"p95":46.86316599999918}},"round":1}
 Chrome · Your Chromium round 2: native messaging, trusted input, cross-client exclusion, six complete saved jobs with canceled confirmations, restricted-frame detach, temporary tab/window ownership, disconnect/reconnect lifetime cleanup, cancellation without replay and stale-handle refusal passed
 {"latencyMs":{"open":{"count":16,"p50":54.873625000000175,"p95":136.79174999999987},"observe":{"count":146,"p50":2.960417000000234,"p95":27.12537499999962},"type":{"count":144,"p50":8.830666000000747,"p95":62.50245799999993},"click":{"count":26,"p50":48.26124999999956,"p95":187.27654200000052},"screenshot":{"count":2,"p50":202.18041600000015,"p95":202.18041600000015}}}
-Extension integration evidence: /var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-extension-e2e-uedeLM
+Extension integration evidence: $TMPDIR/mako-extension-e2e-uedeLM

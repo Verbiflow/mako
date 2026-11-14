@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto"
-import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { readdir, readFile } from "node:fs/promises"
+import { join } from "node:path"
 import { Worker } from "node:worker_threads"
 import { z } from "zod"
 import { cursorSdkDirectoryName } from "@mako/sessions"
 import { CURSOR_QUIET_MS } from "@mako/sessions/cursor-sdk-collect"
 import { errorMessage } from "../../../base/error-message.js"
+import { publishFile } from "../../../base/published-files.js"
 import { hostLog, hostWarn } from "../../../base/host-log.js"
 import type { StorageCollection } from "../../../contracts/storage.js"
 import type { HarnessStorage } from "../../../usage/index.js"
@@ -186,9 +187,6 @@ export class CursorCheckpointCollector implements HarnessStorage {
   }
 
   async #writeStamps(stamps: ReadonlyMap<string, z.infer<typeof StampSchema>>): Promise<void> {
-    await mkdir(dirname(this.#stampsPath), { recursive: true })
-    const temporary = `${this.#stampsPath}.${process.pid}.tmp`
-    await writeFile(temporary, JSON.stringify(Object.fromEntries(stamps)))
-    await rename(temporary, this.#stampsPath)
+    await publishFile(this.#stampsPath, JSON.stringify(Object.fromEntries(stamps)))
   }
 }

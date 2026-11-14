@@ -1,5 +1,5 @@
 import { Slot } from "@/extend/slot"
-import { elementScroll, useVirtualizer, type Virtualizer } from "@tanstack/react-virtual"
+import { elementScroll, measureElement, useVirtualizer, type Virtualizer } from "@tanstack/react-virtual"
 import { registerCommands } from "@/extend/commands"
 import {
   TranscriptSourceContext,
@@ -39,9 +39,25 @@ import { toast } from "sonner"
 import { TranscriptPaneContext } from "@/state/conversation-scope"
 import { SCROLL_WRITE_EVENT, TRANSCRIPT_END_EVENT, TranscriptEndContext } from "./transcript-end"
 import { CompactPresentationContext } from "./compact-presentation"
+import { rowChecker } from "./row-check"
 import { wokeAfterRest } from "@/lib/woke-after-rest"
 
 const NEAR_BOTTOM = 96
+/**
+ * How far a reader moves to mean it. Fingers resting on a trackpad send a few pixels each way, which is no leaving the
+ * end; a flick passes this in a few events, a wheel's notch in one. Short of the 60 px a slow move up is kept at.
+ */
+const LEFT_END = 24
+/**
+ * What a wheel adds up over: its travel in the direction it's going now, since it last turned, so jitter starts over
+ * at each turn and only a move in one direction reaches `LEFT_END`. Not its net: a reader who wheeled up and then
+ * the same way back down had a net of nothing, read as fingers at rest, and the end they came back to wasn't followed.
+ */
+const WHEEL_WINDOW_MS = 500
+/** A reader's input has ended this long after it last moved anything, for what no `scrollend` follows: input that moved nothing, or a browser without it. */
+const INPUT_SETTLE_MS = 160
+/** The longest a crossing into a window waits for the reader's input to settle (`sized`): one who never stops still crosses. */
+const CROSSING_WAIT_MS = 2000
 const TEXT_BLOCKS = "p,pre,li,td,h1,h2,h3,h4,h5,h6"
 const PREVIEW_ATTRIBUTES = {
   file: "data-inline-file-preview",
@@ -71,19 +87,24 @@ const MORE_TURNS = 30
  * Past either, only the turns near the viewport mount. A session of few prompts can hold thousands of tool calls,
  * so the turn count alone would mount every one of them.
  */
-const WINDOWED_TURNS = 200
-const WINDOWED_ITEMS = 400
+const WINDOWED_TURNS = 40
+const WINDOWED_ITEMS = 120
 
 /**
  * What each windowed transcript's rows measured, by row key, at the window's width, for the few read last. Opened
- * again, its rows are placed at those sizes in the first frame: the virtualizer's own measurements arrive a frame
- * after it paints, and placed at the estimate the newest turn painted, then jumped as they landed.
+ * again, the virtualizer starts from these as its own measurements (`seedMeasured`), so its rows are placed at those
+ * sizes in the first frame: its measurements arrive a frame after it paints, and placed at the estimate the newest turn
+ * painted, then jumped as they landed. They can't be its estimates: a row measured at its estimate is never stored, so
+ * when the estimate moved (these sizes replaced, a new width) every such row moved with it, and no resize said so.
  */
 type RowSizes = Virtualizer<HTMLDivElement, Element>["itemSizeCache"]
-type Key = RowSizes extends Map<infer Key, number> ? Key : never
 const measuredRows = new Map<string, { width: number; sizes: RowSizes }>()
 const MEASURED_KEPT = 8
 const ESTIMATED_ROW = 360
+/** The column's `gap-7` between turns, kept by the virtualizer between windowed rows. */
+const ROW_GAP = 28
+/** A row can grow with nothing in the document changing (an image's size, a font): how long that can go unseen. */
+const ROW_CHECK_MS = 1_000
 
 function keepMeasured(source: string, sizes: RowSizes): void {
   if (!sizes.size) return
@@ -95,9 +116,10 @@ function keepMeasured(source: string, sizes: RowSizes): void {
   }
 }
 
-function measuredSize(source: string, key: Key): number {
+function seedMeasured(source: string, sizes: RowSizes): void {
   const kept = measuredRows.get(source)
-  return (kept?.width === innerWidth ? kept.sizes.get(key) : undefined) ?? ESTIMATED_ROW
+  if (kept?.width !== innerWidth || kept.sizes === sizes) return
+  for (const [key, size] of kept.sizes) if (!sizes.has(key)) sizes.set(key, size)
 }
 
 const NO_KEYS: ReadonlyMap<string, string> = new Map()
@@ -309,12 +331,45 @@ function leftEnd(node: HTMLDivElement, from: number): boolean {
   return Math.min(node.scrollTop, end) < Math.min(from, end) - 0.5
 }
 
-/**
- * Moves the scroller so the captured content is where it was, and says whether
- * it had to. Content already within a pixel of its place is left alone: a
- * shift under a pixel is the layout's rounding, not the content moving.
- */
-function preserveScrollAnchor(node: HTMLDivElement, snapshot: ScrollAnchor): boolean {
+/** How far `travel` went in the direction of its last step, back to the step before it that went the other way. */
+function wheelRun(travel: readonly { by: number }[]): number {
+  let run = 0
+  for (let index = travel.length - 1; index >= 0; index -= 1) {
+    const { by } = travel[index]!
+    if (run !== 0 && Math.sign(by) === -Math.sign(run)) break
+    run += by
+  }
+  return run
+}
+
+/** `event` added to a wheel's `travel`, what went past `WHEEL_WINDOW_MS` dropped, and how far it has gone since it last turned, in pixels. */
+function wheelNet(travel: { at: number; by: number }[], event: ReactWheelEvent, pageHeight: number): number {
+  const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? pageHeight : 1
+  const at = performance.now()
+  travel.push({ at, by: event.deltaY * unit })
+  while (travel[0]!.at < at - WHEEL_WINDOW_MS) travel.shift()
+  return wheelRun(travel)
+}
+
+/** Whether the wheel's last half second came to nothing a reader meant, as fingers at rest do. */
+function wheelResting(travel: readonly { at: number; by: number }[], now: number): boolean {
+  const recent = travel.filter((step) => step.at >= now - WHEEL_WINDOW_MS)
+  return recent.length > 0 && Math.abs(wheelRun(recent)) < LEFT_END
+}
+
+/** Whether a wheel over `target` moves a scroller inside the transcript rather than the transcript. */
+function wheelTakenInside(target: EventTarget, viewport: HTMLElement, deltaY: number): boolean {
+  for (let node = target instanceof Element ? target : null; node && node !== viewport; node = node.parentElement) {
+    const room = node.scrollHeight - node.clientHeight
+    if (room <= 1 || (deltaY < 0 ? node.scrollTop <= 0 : node.scrollTop >= room - 1)) continue
+    const { overflowY } = getComputedStyle(node)
+    if (overflowY === "auto" || overflowY === "scroll") return true
+  }
+  return false
+}
+
+/** The offset needed to put the captured content back at its recorded place. */
+function scrollAnchorShift(node: HTMLDivElement, snapshot: ScrollAnchor): number {
   const block = snapshot.block
   const anchor = snapshot.exchangeId
     ? node.querySelector(`[data-exchange="${CSS.escape(snapshot.exchangeId)}"]`)
@@ -332,6 +387,16 @@ function preserveScrollAnchor(node: HTMLDivElement, snapshot: ScrollAnchor): boo
   } else {
     shift = snapshot.scrollTop + (node.scrollHeight - snapshot.scrollHeight) - node.scrollTop
   }
+  return shift
+}
+
+/**
+ * Moves the scroller so the captured content is where it was, and says whether
+ * it had to. Content already within a pixel of its place is left alone: a
+ * shift under a pixel is the layout's rounding, not the content moving.
+ */
+function preserveScrollAnchor(node: HTMLDivElement, snapshot: ScrollAnchor): boolean {
+  const shift = scrollAnchorShift(node, snapshot)
   if (Math.abs(shift) < 1) return false
   node.scrollTop += shift
   return true
@@ -475,14 +540,6 @@ export function ConversationTimeline({
   const viewport = useRef<HTMLDivElement>(null)
   const topFade = useRef<HTMLSpanElement>(null)
   const edgeRow = useRef<HTMLDivElement>(null)
-  // Once windowed, a conversation stays windowed while it's shown: releasing a turn's body never remounts the rest.
-  const sized = useRef({ identity, windowed: false })
-  if (sized.current.identity !== identity) sized.current = { identity, windowed: false }
-  if (!sized.current.windowed && (exchanges.length > WINDOWED_TURNS ||
-      exchanges.reduce((items, exchange) => items + exchange.system.length +
-        exchange.response.reduce((blocks, message) => blocks + message.blocks.length, 0), 0) > WINDOWED_ITEMS))
-    sized.current.windowed = true
-  const windowed = sized.current.windowed
   const pinned = useRef(true)
   const userScrolling = useRef(false)
   // Pointer/key release ends input ownership, but scroll motion can continue.
@@ -495,6 +552,55 @@ export function ConversationTimeline({
    * content back under the finger.
    */
   const touching = useRef(false)
+  /** A button held on the scroller: its bar being dragged, or a selection. Its input isn't over, however still it is. */
+  const pressing = useRef(false)
+  const settleTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const inputSettled = useRef<() => void>(() => {})
+  /** Input is the reader's only until it settles: left standing, the next layout shift would count as their scroll. */
+  const settleInput = useCallback(() => {
+    clearTimeout(settleTimer.current)
+    settleTimer.current = setTimeout(() => inputSettled.current(), INPUT_SETTLE_MS)
+  }, [])
+  /** The reader's input is under way: a finger down, a button held, a wheel or a fling still moving the scroller. */
+  const inputMoving = () => userScrolling.current || scrollMotion.current || touching.current || pressing.current
+  /*
+   * Once windowed, a conversation stays windowed while it's shown: releasing a turn's body never remounts the rest.
+   * The crossing lays out every row it keeps in one long task (80 to 150 ms on a 4× slowed phone), which under a finger
+   * or a fling holds the page while the scroller travels on. So it waits for the reader's input to settle, or for
+   * `CROSSING_WAIT_MS` of input that never does, and crosses then. Only a column that already holds its turns but
+   * the one arriving waits (`drawn`, the turns its last commit drew unwindowed): drawing that one more costs what a turn
+   * does. A conversation opened mid-gesture (the timeline is reused across Threads, and the last one's input may not
+   * have settled) or a history arriving whole would draw all of it, and windows at once. One that falls back below
+   * the window as it waits (a rewind, a fork in place) stops waiting.
+   */
+  const sized = useRef<{ identity: string; windowed: boolean; drawn?: number; waitingSince?: number }>({ identity, windowed: false })
+  if (sized.current.identity !== identity) sized.current = { identity, windowed: false }
+  if (!sized.current.windowed && (exchanges.length > WINDOWED_TURNS ||
+      exchanges.reduce((items, exchange) => items + exchange.system.length +
+        exchange.response.reduce((blocks, message) => blocks + message.blocks.length, 0), 0) > WINDOWED_ITEMS)) {
+    const since = sized.current.waitingSince ?? performance.now()
+    const drawn = sized.current.drawn
+    if (drawn === undefined || exchanges.length - drawn > 1 || !inputMoving() || performance.now() - since >= CROSSING_WAIT_MS)
+      sized.current = { identity, windowed: true }
+    else sized.current.waitingSince = since
+  } else if (sized.current.waitingSince !== undefined) sized.current = { identity, windowed: false, drawn: sized.current.drawn }
+  useLayoutEffect(() => {
+    if (sized.current.identity === identity && !sized.current.windowed) sized.current.drawn = exchanges.length
+  })
+  const windowed = sized.current.windowed
+  const crossingWait = windowed ? undefined : sized.current.waitingSince
+  // A look that finds input settled renders again; should input have started by then, the wait goes on from a new look.
+  const [looked, crossNow] = useState(0)
+  useEffect(() => {
+    if (crossingWait === undefined) return
+    let timer: ReturnType<typeof setTimeout>
+    const look = () => {
+      if (!inputMoving() || performance.now() - crossingWait >= CROSSING_WAIT_MS) crossNow((count) => count + 1)
+      else timer = setTimeout(look, INPUT_SETTLE_MS)
+    }
+    timer = setTimeout(look, Math.min(INPUT_SETTLE_MS, Math.max(0, crossingWait + CROSSING_WAIT_MS - performance.now())))
+    return () => clearTimeout(timer)
+  }, [crossingWait, looked])
   /** The end is followed again as the finger lifts; set by the observer below. */
   const followEnd = useRef<() => void>(() => {})
   /**
@@ -504,19 +610,94 @@ export function ConversationTimeline({
    */
   const seeking = useRef(false)
   const lastScrollTop = useRef(0)
+  /** The wheel's last half second, as when and how far: `wheelNet`. */
+  const wheelTravel = useRef<{ at: number; by: number }[]>([])
+  /** The wheel is on a scroller inside the transcript: a gesture stays with the scroller it began on, as the browser's does. */
+  const innerWheel = useRef(false)
   /**
    * The offset the timeline last scrolled to itself. Any other scroll — the
    * reader's, the virtualizer's, the browser's for focus or find — moves the
    * reading position, which must follow it.
    */
   const ownScrollTop = useRef<number | null>(null)
+  const correction = useRef<{ node: HTMLDivElement; anchor: ScrollAnchor; top: number; frame: number; revision: number } | null>(null)
+  const restore = useRef<ScrollAnchor | null>(null)
+  const readingAnchor = useRef<ScrollAnchor | null>(null)
+  // A correction owns the logical point until a complete layout frame agrees with it. Scroll callbacks in that
+  // interval can carry real input, but the DOM they see may still contain a remounted turn's estimated height.
+  const displaceCorrection = useCallback((node: HTMLDivElement) => {
+    const owner = correction.current
+    if (!owner) return false
+    if (owner.node !== node || owner.anchor !== (restore.current ?? readingAnchor.current)) {
+      cancelAnimationFrame(owner.frame)
+      correction.current = null
+      return false
+    }
+    // Every internal write records its actual readback in owned(). A browser clamp at a newly shorter end is also
+    // layout movement. Any other displacement belongs to the reader, even after the correction's own scrollend.
+    const end = Math.max(0, node.scrollHeight - node.clientHeight)
+    const clamped = owner.top > end && node.scrollTop === end
+    const movement = clamped ? 0 : node.scrollTop - owner.top
+    if (movement !== 0) {
+      const anchor = owner.anchor
+      const moved = { ...anchor,
+        exchangeOffset: anchor.exchangeOffset === undefined ? undefined : anchor.exchangeOffset - movement,
+        block: anchor.block ? { ...anchor.block, offset: anchor.block.offset - movement } : undefined }
+      if (restore.current === anchor) restore.current = moved
+      if (readingAnchor.current === anchor) readingAnchor.current = moved
+      owner.anchor = moved
+    }
+    owner.top = node.scrollTop
+    return true
+  }, [])
+  const settleCorrection = useCallback(function settleCorrection(): void {
+    const owner = correction.current
+    if (!owner) return
+    cancelAnimationFrame(owner.frame)
+    const revision = ++owner.revision
+    // The first frame allows the resize observers to reconcile estimates. Publication waits for the next frame,
+    // the same owner/revision, its actual scroll readback and matching anchor geometry; another write restarts it.
+    owner.frame = requestAnimationFrame(() => {
+      owner.frame = requestAnimationFrame(() => {
+        if (correction.current !== owner || owner.revision !== revision || viewport.current !== owner.node) return
+        const pendingMovement = owner.node.scrollTop !== owner.top
+        if (!displaceCorrection(owner.node)) return
+        if (pendingMovement) {
+          settleCorrection()
+          return
+        }
+        const retired = owner.anchor.exchangeId && !owner.node.querySelector(`[data-exchange="${CSS.escape(owner.anchor.exchangeId)}"]`)
+        const shift = retired ? 0 : scrollAnchorShift(owner.node, owner.anchor)
+        const end = Math.max(0, owner.node.scrollHeight - owner.node.clientHeight)
+        // A shortened document can make the old offset unattainable. Accept the browser's bound rather than
+        // repeatedly scheduling a correction it cannot apply.
+        const limited = Math.max(0, Math.min(end, owner.node.scrollTop + shift)) === owner.node.scrollTop
+        if (retired || Math.abs(shift) < 1 || limited) {
+          correction.current = null
+          // Once coherent, a long gesture may have reached another turn. Hand off to the point actually painted
+          // there; retaining an off-screen or virtualized-away anchor would pin the wrong turn through later changes.
+          if (readingAnchor.current === owner.anchor && !restore.current) {
+            readingAnchor.current = captureAnchor(owner.node, [], false)
+            reportReading.current()
+          }
+        } else followEnd.current()
+      })
+    })
+  }, [displaceCorrection])
+  useLayoutEffect(() => () => {
+    if (correction.current) cancelAnimationFrame(correction.current.frame)
+    correction.current = null
+  }, [identity])
   const owned = useCallback((node: HTMLDivElement) => {
     lastScrollTop.current = node.scrollTop
     ownScrollTop.current = node.scrollTop
+    if (correction.current?.node === node) {
+      correction.current.top = node.scrollTop
+      settleCorrection()
+    }
     if (touching.current) node.dispatchEvent(new Event(SCROLL_WRITE_EVENT, { bubbles: true }))
-  }, [])
-  const restore = useRef<ScrollAnchor | null>(null)
-  const readingAnchor = useRef<ScrollAnchor | null>(null)
+  }, [settleCorrection])
+
   const restoringReader = useRef<ScrollAnchor | null>(null)
   const pendingJump = useRef<string | null>(null)
   const readerPane = useRef(Symbol("transcript pane"))
@@ -550,6 +731,16 @@ export function ConversationTimeline({
   const steadyEnd = useRef<HTMLDivElement>(null)
   const highWater = useRef(0)
   const highWaterWidth = useRef(0)
+  const reflowing = useRef(0)
+  /** For this frame and the next, the column's height is all flowing again, and a smaller one is no shrink to keep room for. */
+  const reflow = useCallback(() => {
+    cancelAnimationFrame(reflowing.current)
+    reflowing.current = requestAnimationFrame(() => {
+      reflowing.current = requestAnimationFrame(() => {
+        reflowing.current = 0
+      })
+    })
+  }, [])
   const [activeTurn, setActiveTurn] = useState<string | null>(null)
   /**
    * Each turn's React key, for the turns that came back under another id. A
@@ -619,19 +810,103 @@ export function ConversationTimeline({
       ? "more"
       : "start"
   const rowKey = (index: number) => keys.get(exchanges[index]!.id) ?? exchanges[index]!.id
+  const placedTotal = useRef(0)
+  /** How much of a windowed column is rows' estimates (`estimateSize`), not yet their measured sizes. */
+  const estimated = useRef<() => number>(() => 0)
+  estimated.current = () => {
+    if (!windowed) return 0
+    let height = 0
+    for (let index = 0; index < exchanges.length; index += 1) {
+      const key = rowKey(index)
+      if (!rows.itemSizeCache.has(key)) height += ESTIMATED_ROW
+    }
+    return height
+  }
+  /*
+   * A row's new size is placed in the frame it is laid out, never the next: the resize observer's sizes apply in its
+   * own callback, the virtualizer writes every row's offset and the column's height there itself, and the end is
+   * followed in the same pass. Placed a frame later, a row that just grew (a sent message, a report, an answer) is
+   * painted over what follows it. The space between rows is the virtualizer's gap, so a row arriving below another
+   * doesn't change that one's size.
+   */
+  const [rowCheck] = useState(rowChecker)
+  /** The viewport and offset a live crossing into a window starts from (`carryIntoWindow`): `initialRect` is read as it's enabled. */
+  const crossingRect = useRef({ width: 0, height: 0 })
+  const crossingOffset = useRef(0)
+  const carried = useRef(false)
   const rows = useVirtualizer({
     count: exchanges.length,
     enabled: windowed,
     getScrollElement: () => viewport.current,
-    estimateSize: (index) => measuredSize(readingSource, rowKey(index)),
+    initialRect: crossingRect.current,
+    initialOffset: () => crossingOffset.current,
+    estimateSize: () => ESTIMATED_ROW,
     getItemKey: (index) => rowKey(index),
     overscan: 6,
+    gap: ROW_GAP,
     scrollMargin: edge ? 80 : 24,
-    useAnimationFrameWithResizeObserver: true,
+    directDomUpdates: true,
+    measureElement: (element, entry, instance) => {
+      if (entry) rowCheck.heard(element)
+      return measureElement(element, entry, instance)
+    },
+    onChange: (instance) => {
+      const total = instance.getTotalSize()
+      if (total === placedTotal.current) return
+      placedTotal.current = total
+      followEnd.current()
+    },
     scrollToFn: (offset, options, instance) => {
       elementScroll(offset, options, instance)
       if (viewport.current) owned(viewport.current)
     },
+  })
+  /**
+   * A conversation that grows into a window is on screen as it crosses, and the virtualizer's first commit knows neither
+   * the viewport nor its rows: it would mount the first turns at offset 0, and the column would paint empty until a seek
+   * landed a frame later. The rows are still laid out here, so it starts from their sizes, the viewport, and the offset
+   * that keeps the first row in view where it is, and that first commit paints what the last one did.
+   */
+  const carryIntoWindow = () => {
+    const node = viewport.current
+    if (!node?.clientHeight || named.current.identity !== identity || node.querySelector("[data-virtual-transcript]")) return
+    const view = node.getBoundingClientRect()
+    const indexes = new Map(exchanges.map((exchange, index) => [exchange.id, index]))
+    let anchor: { index: number; top: number } | undefined
+    for (const turn of node.querySelectorAll("[data-exchange]")) {
+      const index = indexes.get(turn.getAttribute("data-exchange") ?? "")
+      if (index === undefined) continue
+      const box = turn.getBoundingClientRect()
+      // One `content-visibility` skips has its placeholder's height, not its own, and only what's inside it says so.
+      if (turn.firstElementChild?.checkVisibility({ contentVisibilityAuto: true })) rows.itemSizeCache.set(rowKey(index), Math.round(box.height))
+      if (!anchor && box.bottom > view.top) anchor = { index, top: box.top }
+    }
+    if (!anchor) return
+    let start = rows.options.scrollMargin
+    for (let index = 0; index < anchor.index; index += 1)
+      start += (rows.itemSizeCache.get(rowKey(index)) ?? ESTIMATED_ROW) + ROW_GAP
+    crossingRect.current.width = node.clientWidth
+    crossingRect.current.height = node.clientHeight
+    crossingOffset.current = Math.max(0, start + view.top - anchor.top)
+    carried.current = true
+  }
+  const seeded = useRef<string | undefined>(undefined)
+  if (!windowed) {
+    seeded.current = undefined
+    crossingRect.current.width = crossingRect.current.height = crossingOffset.current = 0
+  } else if (seeded.current !== identity) {
+    seeded.current = identity
+    seedMeasured(readingSource, rows.itemSizeCache)
+    carryIntoWindow()
+  }
+  const mountedRows = useRef<() => boolean>(() => false)
+  mountedRows.current = () => rowCheck.check({
+    rows,
+    list: viewport.current?.querySelector("[data-virtual-transcript]") ?? null,
+    keyOf: rowKey,
+    partsOf: (index) => exchanges[index]!.response.length,
+    streaming: (index) => exchanges[index]!.id === streamingId,
+    following: pinned.current,
   })
   /** Sends the virtualizer toward a row or the end, which it keeps reconciling toward until `endSeek`. */
   const seek = useCallback((target: number | "end") => {
@@ -648,6 +923,7 @@ export function ConversationTimeline({
   /** One owner preserves the captured content through every layout change. */
   const holdReader = useCallback(
     (node: HTMLDivElement) => {
+      const displaced = displaceCorrection(node)
       const snapshot = restore.current ?? readingAnchor.current
       if (
         !snapshot?.exchangeId ||
@@ -658,22 +934,30 @@ export function ConversationTimeline({
         return
       // A resize can arrive before the scroll event for this frame. Preserve
       // the reader's unreported movement as well as their place in the media.
-      const movement = userScrolling.current || scrollMotion.current || touching.current
+      const movement = !displaced && (userScrolling.current || scrollMotion.current || touching.current)
         ? node.scrollTop - lastScrollTop.current : 0
       const moved = movement === 0 ? snapshot : { ...snapshot,
         exchangeOffset: snapshot.exchangeOffset === undefined ? undefined : snapshot.exchangeOffset - movement,
         block: snapshot.block ? { ...snapshot.block, offset: snapshot.block.offset - movement } : undefined }
       // Nothing above the reader changed: the scroller is theirs, and the
       // snapshot stays measured from the last position they reported.
-      if (!preserveScrollAnchor(node, moved)) return
+      if (!preserveScrollAnchor(node, moved)) {
+        if (displaced) settleCorrection()
+        return
+      }
       if (restore.current === snapshot) restore.current = moved
       if (readingAnchor.current === snapshot) readingAnchor.current = moved
       // Replace the virtualizer's outstanding target so it cannot undo the
       // offset just restored inside the answer.
       endSeek(node)
       owned(node)
+      const owner = correction.current ?? { node, anchor: moved, top: node.scrollTop, frame: 0, revision: 0 }
+      owner.anchor = moved
+      owner.top = node.scrollTop
+      correction.current = owner
+      settleCorrection()
     },
-    [owned, endSeek]
+    [owned, endSeek, displaceCorrection, settleCorrection]
   )
   useLayoutEffect(() => {
     const before = named.current
@@ -709,6 +993,25 @@ export function ConversationTimeline({
     const node = viewport.current,
       snapshot = readingAnchor.current
     if (!node || awaitingEarlier.current) return
+    if (carried.current) {
+      carried.current = false
+      // The rows it couldn't know take their sizes before this paints, so no frame shows them at an estimate, and the row
+      // in view is held by hand: the virtualizer keeps a reader's place for a first measure, not for one going up. It's
+      // already where the reader was, so one who's up gets no seek, which would only send them to their turn's top.
+      reflow()
+      const top = node.getBoundingClientRect().top
+      const placed = [...(node.querySelector("[data-virtual-transcript]")?.children ?? [])]
+      const held = placed.find((row) => row.getBoundingClientRect().bottom > top)
+      const before = held?.getBoundingClientRect().top
+      for (const row of placed) rows.resizeItem(Number(row.getAttribute("data-index")), Math.round(row.getBoundingClientRect().height))
+      const moved = held && before !== undefined ? held.getBoundingClientRect().top - before : 0
+      if (moved) {
+        node.scrollTop += moved
+        owned(node)
+      }
+      if (pinned.current) seek("end")
+      return
+    }
     if (pinned.current) {
       if (windowed) seek("end")
       else node.scrollTop = node.scrollHeight
@@ -723,7 +1026,7 @@ export function ConversationTimeline({
     else if (index < hidden)
       setTail((current) => ({ ...current, limit: exchanges.length - index }))
     restoringReader.current = snapshot
-  }, [windowed, seek, exchanges, hidden])
+  }, [windowed, seek, exchanges, hidden, owned, reflow])
   const virtualRows = rows.getVirtualItems()
   const mountedKeys = windowed
     ? virtualRows.map((row) => row.key).join("\0")
@@ -804,36 +1107,48 @@ export function ConversationTimeline({
     if (!node) return
     topFade.current?.toggleAttribute("data-scrolled", node.scrollTop > 0.5)
     const movingUp = leftEnd(node, lastScrollTop.current)
+    const positionChanged = node.scrollTop !== lastScrollTop.current
     const movingDown = node.scrollTop > lastScrollTop.current + 0.5
     const distance = node.scrollHeight - node.scrollTop - node.clientHeight
     const atBottom = distance < NEAR_BOTTOM
     // Layout/virtualizer adjustments are not reader intent. Keyboard input
     // participates through the same explicit input handlers below.
+    const corrected = displaceCorrection(node)
+    if (corrected && positionChanged) settleCorrection()
     lastScrollTop.current = node.scrollTop
     const ours =
       ownScrollTop.current !== null &&
-      Math.abs(node.scrollTop - ownScrollTop.current) < 1
+      node.scrollTop === ownScrollTop.current
+    // A wheel that outran the scroller inside has chained on down to the transcript, and is the reader's here again.
+    if (innerWheel.current && movingDown && !ours) {
+      innerWheel.current = false
+      userScrolling.current = true
+    }
     if ((userScrolling.current || touching.current) && !ours) scrollMotion.current = true
+    if (userScrolling.current || scrollMotion.current) settleInput()
     ownScrollTop.current = null
     // Only the reader's movement decides: up leaves the end, down into it follows again. A scroll that ended
     // short of the end after moving up stays where it was left.
     if ((userScrolling.current || scrollMotion.current || touching.current) && !ours) {
-      if (movingUp) pinned.current = false
-      else if (movingDown && atBottom) pinned.current = true
+      if (movingUp && distance >= LEFT_END) pinned.current = false
+      else if (movingDown && atBottom && !wheelResting(wheelTravel.current, performance.now())) pinned.current = true
     }
     // A reader who keeps scrolling while a page is on its way moves the
     // position that page must be placed around.
-    if (awaitingEarlier.current && restore.current && !pinned.current) {
+    if (!corrected && awaitingEarlier.current && restore.current && !pinned.current) {
       const { shown, hasEarlier, head } = restore.current
       restore.current = { ...captureAnchor(node, [], hasEarlier), shown, head }
     }
+    // During correction, displace the intended point instead of adopting transient DOM geometry.
+    // A duplicate scrollend with no movement cannot supply a new reading position.
     if (
+      !corrected &&
       !pinned.current &&
       !awaitingEarlier.current &&
       !pendingJump.current &&
       !bookmarkRestore.current &&
       !restoringReader.current &&
-      (userScrolling.current || !ours || !readingAnchor.current)
+      ((!ours && positionChanged) || !readingAnchor.current)
     )
       readingAnchor.current = captureAnchor(node, [], false)
     else if (pinned.current) readingAnchor.current = null
@@ -844,30 +1159,45 @@ export function ConversationTimeline({
     // edge observer alone stays silent while the edge never left view.
     if (userScrolling.current) wake.current()
     reportReading.current()
-  }, [])
+  }, [settleInput, displaceCorrection, settleCorrection])
+
+  useEffect(() => {
+    inputSettled.current = () => {
+      innerWheel.current = false
+      if (touching.current || pressing.current) return
+      if (userScrolling.current || scrollMotion.current) onScroll()
+      userScrolling.current = false
+      scrollMotion.current = false
+      reportReading.current()
+    }
+    return () => clearTimeout(settleTimer.current)
+  }, [onScroll])
 
   const onWheel = useCallback(
     (event: ReactWheelEvent<HTMLDivElement>) => {
+      // The crew card's list or a code block taking the wheel: it scrolls that, and the transcript is left as it was.
+      if (viewport.current && wheelTakenInside(event.target, viewport.current, event.deltaY)) innerWheel.current = true
+      if (innerWheel.current) return settleInput()
       if (viewport.current) endSeek(viewport.current)
       bookmarkRestore.current = undefined
       if (!awaitingEarlier.current) viewport.current?.removeAttribute("data-preserve-scroll")
       pendingJump.current = null
       restoringReader.current = null
-      readingAnchor.current = viewport.current ? captureAnchor(viewport.current, [], false) : null
+      if (viewport.current && displaceCorrection(viewport.current)) settleCorrection()
+      else readingAnchor.current = viewport.current ? captureAnchor(viewport.current, [], false) : null
       userScrolling.current = true
       direction.current = event.deltaY < 0 ? "up" : "down"
       stalled.current = false
       if (!awaitingEarlier.current) restore.current = null
-      if (event.deltaY < 0) pinned.current = false
       const node = viewport.current
+      // Up leaves the end now: the scroll this wheel makes may come after the end's next write, which would swallow it.
+      // Down into the end follows again, whichever of this event and its scroll comes first. Either takes a wheel that
+      // means it: fingers resting on a trackpad send a few pixels each way.
+      const net = wheelNet(wheelTravel.current, event, node?.clientHeight ?? 0)
+      if (net <= -LEFT_END) pinned.current = false
+      if (node && net >= LEFT_END && node.scrollHeight - node.scrollTop - node.clientHeight < NEAR_BOTTOM) pinned.current = true
       node?.toggleAttribute("data-reading-anchor", !pinned.current && !!readingAnchor.current?.exchangeId)
-      if (
-        node &&
-        ((event.deltaY < 0 && node.scrollTop <= 0) ||
-          (event.deltaY > 0 &&
-            node.scrollTop + node.clientHeight >= node.scrollHeight))
-      )
-        userScrolling.current = false
+      settleInput()
       // A wheel toward earlier turns asks for them even when it moves
       // nothing: at the top edge, or when the compositor applied this
       // (passive) wheel's scroll before it reached this handler, no scroll
@@ -876,7 +1206,7 @@ export function ConversationTimeline({
       if (event.deltaY < 0) wake.current()
       reportReading.current()
     },
-    [endSeek]
+    [endSeek, settleInput, displaceCorrection, settleCorrection]
   )
 
   /** The last finger lifts: a glide may go on, and the end, if followed, is caught up with. */
@@ -913,7 +1243,8 @@ export function ConversationTimeline({
     const node = viewport.current
     const selected = event.target instanceof Element ? readingBlockAt(event.target) : undefined
     const turn = selected?.closest("[data-exchange]")
-    readingAnchor.current = node ? selected && turn && node.contains(turn)
+    if (node && displaceCorrection(node)) settleCorrection()
+    else readingAnchor.current = node ? selected && turn && node.contains(turn)
       ? { ...captureAnchor(node, [], false, turn), block: {
           element: selected, offset: selected.getBoundingClientRect().top - node.getBoundingClientRect().top,
           preview: previewIdentity(selected),
@@ -921,10 +1252,11 @@ export function ConversationTimeline({
       : captureAnchor(node, [], false) : null
     node?.toggleAttribute("data-reading-anchor", !pinned.current && !!readingAnchor.current?.exchangeId)
     userScrolling.current = true
+    pressing.current = true
     stalled.current = false
     if (!awaitingEarlier.current) restore.current = null
     reportReading.current()
-  }, [endSeek])
+  }, [endSeek, displaceCorrection, settleCorrection])
 
   useEffect(() => {
     const node = viewport.current
@@ -1012,12 +1344,13 @@ export function ConversationTimeline({
       const selection = document.getSelection()
       const selecting = !!selection && !selection.isCollapsed &&
         (node.contains(selection.anchorNode) || node.contains(selection.focusNode))
-      const focus = document.activeElement
-      const interacting = selecting || !!focus && focus !== node && node.contains(focus)
-      lease.report({ visible: ids, nearby,
+      // Focus resting in a turn keeps that turn; it isn't a reason to keep every other. A selection may span any of them.
+      const focused = document.activeElement?.closest("[data-exchange]")
+      const focusedTurn = focused && node.contains(focused) ? focused.getAttribute("data-exchange") : null
+      lease.report({ visible: ids, nearby: focusedTurn ? [...nearby, focusedTurn] : nearby,
         anchor: anchorTurn ? { turn: anchorTurn, offset: snapshot.exchangeOffset ?? 0, block } : undefined,
         following: pinned.current, moving: userScrolling.current || scrollMotion.current || awaitingEarlier.current || !!pendingJump.current || !!bookmarkRestore.current,
-        interacting, window: historyBlocks !== undefined && historyBase !== undefined ? { blocks: historyBlocks, base: historyBase } : undefined })
+        interacting: selecting, window: historyBlocks !== undefined && historyBase !== undefined ? { blocks: historyBlocks, base: historyBase } : undefined })
       if (anchorTurn) setActiveTurn(current => current === anchorTurn ? current : anchorTurn)
     }
     const schedule = () => { if (!frame) frame = requestAnimationFrame(report) }
@@ -1083,7 +1416,8 @@ export function ConversationTimeline({
     const pin = () => {
       // The reader moved toward earlier turns and its scroll event is still to come (iOS moves the scroller first):
       // they're leaving the end, and following it now would take their move back.
-      if (pinned.current && (userScrolling.current || scrollMotion.current || touching.current) && leftEnd(node, lastScrollTop.current))
+      if (pinned.current && (userScrolling.current || scrollMotion.current || touching.current) && leftEnd(node, lastScrollTop.current) &&
+        node.scrollHeight - node.scrollTop - node.clientHeight >= LEFT_END)
         pinned.current = false
       const column = node.firstElementChild
       const spacer = steadyEnd.current
@@ -1092,15 +1426,19 @@ export function ConversationTimeline({
           // A transcript followed at its end never moves back under the reader: a column that got shorter (a sending
           // row giving way to its turn's own) keeps its height as room at the end, which what it writes next fills.
           // At another width every line has flowed again (a phone turned sideways, a pane resized), and a height from
-          // before says nothing of what's under the reader: kept, it would leave the end blank.
+          // before says nothing of what's under the reader: kept, it would leave the end blank. Windowed rows take their
+          // new sizes after this first reads the width, so the frame after it is that same reflow, and no shrink.
+          // Rows still at their estimate aren't height the column had: one measured below it is no shrink.
           const natural = column.offsetHeight
+          const measured = natural - estimated.current()
           const width = column.offsetWidth
-          highWater.current = width === highWaterWidth.current ? Math.max(highWater.current, natural) : natural
+          if (width !== highWaterWidth.current) reflow()
+          highWater.current = reflowing.current ? measured : Math.max(highWater.current, measured)
           highWaterWidth.current = width
-          spacer.style.height = `${highWater.current - natural}px`
+          spacer.style.height = `${highWater.current - measured}px`
         } else {
           // Away from the end, the room kept there goes: nothing the reader sees moves.
-          highWater.current = column.offsetHeight
+          highWater.current = column.offsetHeight - estimated.current()
           highWaterWidth.current = column.offsetWidth
           spacer.style.height = "0px"
         }
@@ -1167,6 +1505,30 @@ export function ConversationTimeline({
     structure.observe(node, { childList: true, characterData: true, subtree: true })
     return () => { structure.disconnect(); grown.disconnect(); cancelAnimationFrame(shrinkFrame); node.style.overflowY = "" }
   }, [identity, isEmpty, owned, holdReader])
+
+  useEffect(() => {
+    const node = viewport.current
+    if (!windowed || !node) return
+    let frame = 0
+    const look = () => {
+      frame = 0
+      if (mountedRows.current()) soon()
+    }
+    const soon = () => {
+      frame ||= requestAnimationFrame(look)
+    }
+    const changes = new MutationObserver(soon)
+    changes.observe(node, { childList: true, characterData: true, subtree: true })
+    node.addEventListener("scroll", soon, { passive: true })
+    const steady = setInterval(soon, ROW_CHECK_MS)
+    soon()
+    return () => {
+      changes.disconnect()
+      node.removeEventListener("scroll", soon)
+      clearInterval(steady)
+      cancelAnimationFrame(frame)
+    }
+  }, [windowed, identity])
 
   const endEarlier = useCallback((progressed: boolean) => {
     awaitingEarlier.current = false
@@ -1449,8 +1811,13 @@ export function ConversationTimeline({
     requestAnimationFrame(settle)
   }, [exchanges, hidden, mountedKeys, endSeek, owned, holdReader])
 
+  // Registered once: a stream renders the transcript every batch, and registering again each time sets every
+  // command's reader (the palette) to work through the whole list.
+  const moving = useRef({ activeTurn, exchanges, jump })
+  moving.current = { activeTurn, exchanges, jump }
   useEffect(() => {
     const move = (offset: number) => {
+      const { activeTurn, exchanges, jump } = moving.current
       if (!exchanges.length) return
       const at = exchanges.findIndex((exchange) => exchange.id === activeTurn)
       const from = at < 0 ? exchanges.length - 1 : at
@@ -1473,7 +1840,7 @@ export function ConversationTimeline({
         run: () => move(1),
       },
     ])
-  }, [activeTurn, exchanges, jump])
+  }, [])
 
   const showNavigator = navigates && !isEmpty && exchanges.length >= 3
   const woke = useMemo(() => wokeAfterRest(exchanges, askedAt), [exchanges, askedAt])
@@ -1516,8 +1883,15 @@ export function ConversationTimeline({
           data-virtualized={windowed ? "" : undefined}
           onPointerDown={onPointerDown}
           onPointerUp={(event) => {
+            pressing.current = false
             if (event.pointerType === "mouse") userScrolling.current = false
+            // A settle that came due during the press waited for this: with no `scrollend`, nothing else would end it.
+            settleInput()
             reportReading.current()
+          }}
+          onPointerCancel={() => {
+            pressing.current = false
+            settleInput()
           }}
           onTouchStart={(event) => {
             touching.current = event.touches.length > 0
@@ -1591,32 +1965,28 @@ export function ConversationTimeline({
               ) : opening ? (
                 <HistoryEdge state="start" opening={opening} />
               ) : null}
+              {/* One tree either way: a turn on screen as the column crosses into a window is the same element after it. */}
               {windowed ? (
-                <div
-                  data-virtual-transcript
-                  style={{ height: rows.getTotalSize(), position: "relative" }}
-                >
+                <div ref={rows.containerRef} data-virtual-transcript style={{ position: "relative" }}>
                   {virtualRows.map((row) => (
                     <div
                       key={row.key}
                       data-index={row.index}
                       ref={rows.measureElement}
-                      style={{
-                        position: "absolute",
-                        top: 0,
-                        left: 0,
-                        width: "100%",
-                        transform: `translateY(${row.start - rows.options.scrollMargin}px)`,
-                        paddingBottom:
-                          row.index < exchanges.length - 1 ? 28 : 0,
-                      }}
+                      style={{ position: "absolute", top: 0, left: 0, width: "100%" }}
                     >
                       {renderExchange(exchanges[row.index]!)}
                     </div>
                   ))}
                 </div>
               ) : (
-                shown.map(renderExchange)
+                <div style={{ display: "contents" }}>
+                  {shown.map((exchange) => (
+                    <div key={keys.get(exchange.id) ?? exchange.id} style={{ display: "contents" }}>
+                      {renderExchange(exchange)}
+                    </div>
+                  ))}
+                </div>
               )}
               {footer}
             </div>

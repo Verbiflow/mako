@@ -268,7 +268,7 @@ const snapshot: LiveSnapshot = {
 }
 
 document.documentElement.classList.toggle("light", new URLSearchParams(location.search).get("theme") !== "dark")
-prefsStore.set({ theme: new URLSearchParams(location.search).get("theme") === "dark" ? "dark" : "light", changesLayout: "review", diffStyle: "unified" })
+prefsStore.set({ theme: new URLSearchParams(location.search).get("theme") === "dark" ? "dark" : "light", changesView: "review", diffStyle: "unified" })
 bindTheme()
 threadsStore.set({ composerHarness: "claude", descriptors: fixtureHarnesses })
 threadTitlesStore.set({ byThread: { [OTHER]: { title: "Move logging under telemetry", source: "user" } } })

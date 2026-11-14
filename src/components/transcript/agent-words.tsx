@@ -2,6 +2,7 @@ import { memo } from "react"
 import { isBrief, YOUR_APEX, YOUR_FINS, type AgentWords } from "@mako/host/contracts/children"
 import { APEX_WORD, FIN_WORD } from "@mako/host/contracts/agents"
 import { AgentAvatar } from "@/components/transcript/message-avatar"
+import { FinReports } from "@/components/transcript/fin-report"
 import { Prose } from "@/components/transcript/markdown"
 import { useTranscriptSource } from "@/components/transcript/source-context"
 import { formatTime } from "@/lib/format"
@@ -11,8 +12,9 @@ import { useAcp } from "@/state/acp"
 /**
  * Words another Thread wrote into this one, where a prompt would stand: a
  * Fin's brief from its Apex, or its Apex's later word, the person's own
- * message its Apex passed on, and the reports an Apex hears from its Fins.
- * Read from their header, so live and saved draw the same card.
+ * message its Apex passed on, and the reports an Apex hears from its Fins,
+ * which draw as their Fins' own messages (`FinReports`) when the wake carries
+ * them as data. Read from their header, so live and saved draw the same card.
  */
 export const AgentWordsCard = memo(function AgentWordsCard({ words, raw, timestamp }: { words: AgentWords; raw: string; timestamp?: number }) {
   const source = useTranscriptSource()
@@ -23,8 +25,10 @@ export const AgentWordsCard = memo(function AgentWordsCard({ words, raw, timesta
   const harness = from === YOUR_APEX ? apexHarness : fin
   const name = from === YOUR_APEX ? (apexTitle ?? `its ${APEX_WORD}`) : from === YOUR_FINS ? `its ${FIN_WORD}s` : from
   const kind = passedOn ? "Passed on" : from === YOUR_FINS ? "Reports" : isBrief(raw) ? "Brief" : "Message"
+  // A wake's reports are the Fins' own messages; the words around them are the Apex's to read, not the person's.
+  if (words.reports?.length) return <FinReports reports={words.reports} timestamp={timestamp} />
   return (
-    <div data-agent-words={kind} className="rounded-lg bg-shell/55 px-4 py-3 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
+    <div data-agent-words={kind} className="bg-shell/55 px-4 py-3 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
       <div className="flex items-center gap-2 text-label text-faint">
         <AgentAvatar harness={harness} kind={from === YOUR_APEX ? "thread" : "fin"} label={name} className="bg-surface" />
         <span className="font-medium text-muted-foreground">{passedOn ? `Your message, passed on by ${name}` : `From ${name}`}</span>

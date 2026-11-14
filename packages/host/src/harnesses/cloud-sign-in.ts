@@ -1,10 +1,12 @@
-import { spawn } from "node:child_process"
+import { hostSpawn } from "../base/host-command.js"
 import { createHash } from "node:crypto"
-import { lstat, mkdir, readFile, readlink, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises"
+import { lstat, mkdir, readFile, readlink, rm, stat, symlink, utimes } from "node:fs/promises"
 import { dirname, isAbsolute, join, normalize, sep } from "node:path"
 import { z } from "zod"
 import type { CloudSignIn, CloudSignInChain } from "../contracts/cloud-sign-ins.js"
 import type { JsonValue } from "../contracts/json.js"
+import { publishFile } from "../base/published-files.js"
+import { endChildInput } from "@mako/sessions/child-input"
 
 /** A harness's sign-in as its adapter reads it for the cloud: everything but which harness it is. */
 export type CloudSignInExport = Omit<CloudSignIn, "harness">
@@ -130,7 +132,7 @@ print "held
 
 export async function withFlock<T>(path: string, work: () => Promise<T>, waitMs = 2_000): Promise<T | undefined> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 })
-  const holder = spawn("/usr/bin/perl", ["-e", FLOCK_HOLDER, path, String(waitMs / 1000)], { stdio: ["pipe", "pipe", "ignore"] })
+  const holder = hostSpawn("/usr/bin/perl", ["-e", FLOCK_HOLDER, path, String(waitMs / 1000)], { stdio: ["pipe", "pipe", "ignore"] })
   const held = await new Promise<boolean>((resolve) => {
     holder.stdout.once("data", (chunk: Buffer) => resolve(chunk.toString().startsWith("held")))
     holder.once("exit", () => resolve(false))
@@ -144,14 +146,14 @@ export async function withFlock<T>(path: string, work: () => Promise<T>, waitMs 
     if (!held) return undefined
     return await work()
   } finally {
-    holder.stdin.end()
+    endChildInput(holder)
     await released
   }
 }
 
 /** Replaces `path` with `text` in one rename, so a harness reading it sees the old file or the new, never half. */
 export async function replaceFile(path: string, text: string): Promise<void> {
-  await writeAtomic(path, text, 0o600)
+  await publishFile(path, text, { mode: 0o600, dirMode: 0o700, foreignFolder: true })
 }
 
 /** The refresh token's place in a payload: kept empty, so a harness that insists on the field still parses. */
@@ -169,13 +171,6 @@ function inside(root: string, relative: string): string {
   return join(root, clean)
 }
 
-async function writeAtomic(path: string, text: string, mode: number): Promise<void> {
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 })
-  const temporary = `${path}.${process.pid}.tmp`
-  await writeFile(temporary, text, { mode })
-  await rename(temporary, path)
-}
-
 /**
  * A secret file: kept in `place.secrets`, and linked from where the harness
  * reads it in `place.home`. A file or older link already there is replaced.
@@ -183,7 +178,7 @@ async function writeAtomic(path: string, text: string, mode: number): Promise<vo
 export async function placeSecret(place: CloudSignInPlace, relative: string, text: string): Promise<void> {
   const kept = inside(place.secrets, relative)
   const read = inside(place.home, relative)
-  await writeAtomic(kept, text, 0o600)
+  await publishFile(kept, text, { mode: 0o600, dirMode: 0o700 })
   await mkdir(dirname(read), { recursive: true, mode: 0o700 })
   if ((await readlink(read).catch(() => null)) === kept) return
   await rm(read, { force: true })
@@ -220,7 +215,7 @@ export async function changeJsonFile(
       // Unreadable settings are replaced rather than kept half-understood.
     }
   }
-  await writeAtomic(path, `${JSON.stringify(change(current), null, 2)}\n`, 0o600)
+  await publishFile(path, `${JSON.stringify(change(current), null, 2)}\n`, { mode: 0o600, dirMode: 0o700, foreignFolder: true })
 }
 
 /** The ISO time of a JWT's `exp`, or null when it has none. */

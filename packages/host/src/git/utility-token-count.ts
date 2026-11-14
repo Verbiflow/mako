@@ -1,3 +1,4 @@
+import { hostFetch } from "../base/host-stopping.js"
 import { z } from "zod"
 import type { UtilityConnection } from "../contracts/utility-models.js"
 
@@ -19,7 +20,7 @@ const countSchema = z.object({
 export function utilityTokenCounter(
   connection: UtilityConnection,
   apiKey: string,
-  request: typeof fetch = fetch
+  request: typeof fetch = hostFetch
 ): UtilityTokenCounter {
   return async ({ instructions, prompt, signal }) => {
     signal.throwIfAborted()

@@ -54,7 +54,7 @@ export function HarnessDefaultPicker({ harness, profile }: { harness: string; pr
           aria-label={`${harnessLabel(harness)} starts on ${label}`}
           title={preference ? `Your choice. ${recommended} is in the menu.` : `Following ${recommended}`}
           className={cn(
-            "pressable flex h-7 max-w-[17rem] min-w-0 shrink-0 items-center gap-1.5 rounded-md px-2",
+            "pressable flex h-7 max-w-[17rem] min-w-0 shrink-0 items-center gap-1.5 px-2",
             "text-ui font-medium text-foreground/85",
             "[transition:transform_var(--duration-press)_var(--ease-out),background-color_120ms_ease]",
             "hover:bg-fill-hover data-[state=open]:bg-fill-selected"

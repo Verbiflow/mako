@@ -161,8 +161,10 @@ try {
   const kept = first0!.path!
   const old = new Date(Date.now() - 3 * 60 * 60_000)
   utimesSync(kept, old, old)
+  // A file system may keep whole seconds, so a time from the second the reuse began counts.
+  const reused = Date.now() - 1_000
   assets.retainPrompt([{ name: "shot.png", mimeType: "image/png", data: Buffer.from("same bytes").toString("base64") }])
-  assert.ok(Date.now() - statSync(kept).mtimeMs < 60_000, "a reused file's grace starts again")
+  assert.ok(statSync(kept).mtimeMs >= reused, "a reused file's grace starts again")
   console.log("PASS: every profile, client and browser store a desk's drafts may be in, the holds for those that can't be read, and a reused file's times")
 } finally {
   chmodSync(safari, 0o755)

@@ -15,7 +15,7 @@ export function AboutSection() {
         <img
           src={appIcon}
           alt=""
-          className="size-14 rounded-xl ring-1 ring-hairline"
+          className="size-14 bg-raised"
         />
         <span className="min-w-0">
           <span className="block text-title font-semibold">Mako</span>
@@ -57,7 +57,7 @@ export function AboutSection() {
         <button
           type="button"
           onClick={() => void desktop.openUrl(`${REPOSITORY}/blob/main/LICENSE`)}
-          className="pressable rounded text-muted-foreground underline decoration-foreground/20 underline-offset-2 hover:text-foreground"
+          className="pressable text-muted-foreground underline decoration-foreground/20 underline-offset-2 hover:text-foreground"
         >
           Elastic License 2.0
         </button>

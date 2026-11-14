@@ -3,6 +3,7 @@ import { join } from "node:path"
 import { z } from "zod"
 import { environmentForExecutable } from "../base/executable.js"
 import { spawnProviderProcess } from "./provider-process.js"
+import { writeChildInput } from "@mako/sessions/child-input"
 
 /**
  * What a start runs first, run ahead: a cloud machine does it as it boots, for the harness its Thread was made for,
@@ -160,7 +161,8 @@ export function prefetchProcess(launch: PrefetchLaunch | undefined, cwd: string,
     }
     const write = () => {
       const next = steps[step]
-      if (next) child.stdin.write(`${next.send}\n`)
+      // A start gone as it's written to settles as its `exit` says.
+      if (next) writeChildInput(child, `${next.send}\n`).catch(() => {})
     }
     const timer = setTimeout(() => settle(false), timeoutMs)
     timer.unref()
@@ -185,7 +187,6 @@ export function prefetchProcess(launch: PrefetchLaunch | undefined, cwd: string,
     child.once("error", () => settle(false))
     child.once("exit", () => settle(false))
     child.stderr.resume()
-    child.stdin.on("error", () => undefined)
     write()
   })
 }

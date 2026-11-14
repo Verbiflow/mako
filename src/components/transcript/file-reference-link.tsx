@@ -274,7 +274,7 @@ function FileChooser({ spelling, candidates, picked, drawn, onOpen, onChoose, ch
             }}
             placeholder="Filter by folder"
             aria-label="Filter the files"
-            className="mx-1 mb-1 h-7 rounded-md border border-hairline bg-transparent px-2 text-ui outline-none placeholder:text-faint focus:border-border"
+            className="mx-1 mb-1 h-7 border border-hairline bg-transparent px-2 text-ui outline-none placeholder:text-faint focus:border-border"
           />
         ) : null}
         <div role="listbox" aria-label={`Files matching ${spelling}`} tabIndex={candidates.length >= FILTER_FROM ? -1 : 0} autoFocus={candidates.length < FILTER_FROM} className="flex max-h-80 flex-col overflow-y-auto outline-none">
@@ -288,7 +288,7 @@ function FileChooser({ spelling, candidates, picked, drawn, onOpen, onChoose, ch
               data-file-option={file.path}
               onMouseEnter={() => setSelected(i)}
               onClick={() => choose(file)}
-              className={cn("pressable flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left", i === selected ? "bg-fill-selected" : "hover:bg-fill-hover")}
+              className={cn("pressable flex w-full items-start gap-2 px-2 py-1.5 text-left", i === selected ? "bg-fill-selected" : "hover:bg-fill-hover")}
             >
               <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <span className="text-ui break-all text-foreground">{nameOf(file.path)}</span>

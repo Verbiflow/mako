@@ -1,4 +1,6 @@
-import { spawn } from "node:child_process"
+import { stoppingSignal } from "../base/host-stopping.js"
+import { execFile, spawn } from "node:child_process"
+import { promisify } from "node:util"
 import { z } from "zod"
 
 /** How long a stopped step's process group has between SIGTERM and SIGKILL. */
@@ -29,6 +31,21 @@ export interface GroupRunResult {
 }
 
 const errnoSchema = z.object({ code: z.string() })
+const run = promisify(execFile)
+
+/**
+ * Whether the process table shows nothing alive in group `group`. macOS answers EPERM for a group of only zombies, the
+ * last member gone and not yet reaped, as it does for a live member Mako may not signal, so EPERM alone says neither. A
+ * table that can't be read shows nothing, and the group counts as alive.
+ */
+export async function groupHoldsNothingAlive(group: number): Promise<boolean> {
+  const table = await run("ps", ["-A", "-o", "pgid=,stat="], { maxBuffer: 16 * 1024 * 1024, timeout: 5_000 }).catch(() => undefined)
+  if (!table) return false
+  return table.stdout.split("\n").every((row) => {
+    const [pgid, stat] = row.trim().split(/\s+/)
+    return Number(pgid) !== group || stat?.startsWith("Z") === true
+  })
+}
 
 /**
  * Runs a build step (npm install, npm run build, packaging) in a process
@@ -43,6 +60,7 @@ const errnoSchema = z.object({ code: z.string() })
  * their steps through this.
  */
 export async function runProcessGroup(command: string, args: string[], options: GroupRunOptions): Promise<GroupRunResult> {
+  options = { ...options, signal: stoppingSignal(options.signal) }
   options.signal?.throwIfAborted()
   const grace = options.graceMs ?? GROUP_STOP_GRACE_MS
   const child = spawn(command, args, {
@@ -57,6 +75,10 @@ export async function runProcessGroup(command: string, args: string[], options: 
     child.stderr?.setEncoding("utf8").on("data", (text: string) => output("stderr", text))
   }
   let failure: Error | null = null
+  /** A stop this group refused: nothing but its being gone settles that, a look at it being allowed included. */
+  let denied: Error | null = null
+  /** Whether the last look at the group was answered EPERM: of a live member, or of only zombies (`groupHoldsNothingAlive`). */
+  let unclear = false
   /** Signals the group; false once nothing in it is left. */
   const signalGroup = (name: NodeJS.Signals | 0): boolean => {
     if (!child.pid) return false
@@ -64,9 +86,22 @@ export async function runProcessGroup(command: string, args: string[], options: 
       process.kill(-child.pid, name)
       return true
     } catch (error) {
-      if (errnoSchema.safeParse(error).data?.code !== "ESRCH") failure ??= error instanceof Error ? error : new Error(String(error))
+      const code = errnoSchema.safeParse(error).data?.code
+      const raised = error instanceof Error ? error : new Error(String(error))
+      if (code === "EPERM") {
+        if (name === 0) unclear = true
+        else denied ??= raised
+        return true
+      }
+      if (code !== "ESRCH") failure ??= raised
       return false
     }
+  }
+  /** Whether the group has anything left, an unclear answer settled by the process table. */
+  const present = async (): Promise<boolean> => {
+    unclear = false
+    if (!signalGroup(0)) return false
+    return !unclear || !(await groupHoldsNothingAlive(child.pid!))
   }
   let stopped: GroupRunResult["stopped"] = null
   let killAt = 0
@@ -91,13 +126,15 @@ export async function runProcessGroup(command: string, args: string[], options: 
       // The step itself is gone; what it started may not be. Wait for its
       // group to empty, with SIGKILL at the grace for whatever is still there.
       const gone = async (until: number) => {
-        while (signalGroup(0) && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 25))
-        return !signalGroup(0)
+        while ((await present()) && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 25))
+        return !(await present())
       }
       if (!(await gone(killAt))) {
         signalGroup("SIGKILL")
         await gone(Date.now() + GROUP_REAP_MS)
       }
+      // Something outlived the stop, so the step's end is no end of its work.
+      if (await present()) failure ??= denied ?? new Error("The step's process group outlived its kill")
     }
     if (failure) throw failure
     return { code, stopped }

@@ -88,7 +88,7 @@ export function AppshotButton({
         <button
           type="button"
           aria-label="Attach a screenshot"
-          className="pressable flex min-h-9 w-full items-center gap-3 rounded-md px-3 py-2 text-left text-ui text-foreground hover:bg-fill-hover focus-visible:bg-fill-hover disabled:opacity-40"
+          className="pressable flex min-h-9 w-full items-center gap-3 px-3 py-2 text-left text-ui text-foreground hover:bg-fill-hover focus-visible:bg-fill-hover disabled:opacity-40"
           disabled={disabled || capturing !== null}
         >
           {capturing ? (
@@ -143,10 +143,10 @@ export function AppshotButton({
                 key={`${window.pid}:${window.windowId}`}
                 type="button"
                 onClick={() => void capture(window)}
-                className="pressable group min-w-0 rounded-lg p-1.5 text-left outline-none hover:bg-fill-hover focus-visible:bg-fill-selected"
+                className="pressable group min-w-0 p-1.5 text-left outline-none hover:bg-fill-hover focus-visible:bg-fill-selected"
                 aria-label={`Capture ${window.app}: ${window.title || "Window"}`}
               >
-                <div className="flex aspect-video items-center justify-center overflow-hidden rounded-md border border-hairline bg-background">
+                <div className="flex aspect-video items-center justify-center overflow-hidden border border-hairline bg-background">
                   {window.thumbnail ? (
                     <img
                       src={`data:${window.thumbnail.mimeType};base64,${window.thumbnail.data}`}

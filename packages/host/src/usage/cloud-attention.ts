@@ -1,9 +1,8 @@
-import { execFile } from "node:child_process"
-import { promisify } from "node:util"
+import { hostCommand } from "../base/host-command.js"
 import type { HostJobs } from "../base/host-jobs.js"
 import type { MachineCapability } from "../base/machine.js"
 
-const run = promisify(execFile)
+const run = hostCommand
 
 /** How recently the person touched this Mac for it to count as their being at it: past this, its banners go unseen. */
 export const ATTENDED_WITHIN_SECONDS = 120

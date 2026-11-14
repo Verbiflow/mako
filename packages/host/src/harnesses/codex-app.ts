@@ -6,7 +6,7 @@ import { applyThreadEnvironment } from "../workspaces/index.js"
 import { join } from "node:path"
 import { CodexPermissionObserver, codexApprovalEnvironment } from "./codex/permission-observer.js"
 import type { ApprovalSubmission } from "../contracts/approval-response.js"
-import { preparePrompt, TurnInProgressError, type PromptDispatch } from "./prompt-dispatch.js"
+import { handOff, preparePrompt, TurnInProgressError, type PromptDispatch } from "./prompt-dispatch.js"
 import { ProviderStartupWatch } from "./provider-startup.js"
 import type { ProviderLaunchTrace } from "./provider-launch.js"
 import { CodexAgents } from "./codex/agents.js"
@@ -20,7 +20,7 @@ import type {
   ProviderSteerInput,
   ProviderSteerResult,
 } from "./live-driver.js"
-import { resolveCodexExecutable } from "./codex/executable.js"
+import { codexLaunch, resolveCodexExecutable } from "./codex/executable.js"
 import { SHUTDOWN_GRACE_MS, type AdmittedStartOptions, type DriverGoalCommand, type DriverSideQuestion } from "./live-driver.js"
 import { codexGoalObservation } from "./codex/goals.js"
 import { reviewDisplayText, type ReviewTarget } from "../contracts/live-reviews.js"
@@ -28,7 +28,7 @@ import type { ReviewTarget as CodexReviewTarget } from "./codex/generated/v2/Rev
 import { CodexSideQuestions } from "./codex/side-questions.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
-import { spawnProviderProcess } from "./provider-process.js"
+import { closeProviderProcess, endProviderProcess, spawnProviderProcess } from "./provider-process.js"
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { mergeWindows } from "../contracts/account-usage.js"
@@ -109,7 +109,7 @@ type Live = {
   tuning?: Tuning
   /** Mako's own servers, opened with the token in `MAKO_CONVERSATIONS_TOKEN`. */
   makoServers: Array<{ name: string; url: string }>
-  /** Mako's instructions for the model (`conversationInstructions`), handed to every turn as Codex's application context. */
+  /** Mako's instructions for the model, from the layer, handed to every turn as Codex's application context. */
   instructions?: string
   mcpSnapshot: McpRegistrySnapshot
   /** The Thread as native routing reads it (`ProviderStartOptions.nativeRouting`), read when the thread opens. */
@@ -164,6 +164,13 @@ const CODEX_INITIALIZE = {
   capabilities: CODEX_CLIENT_CAPABILITIES,
 }
 
+/** The process a session or a prefetch starts. The package manager is read from the env that process gets. */
+export async function codexChildLaunch(env: NodeJS.ProcessEnv, command: string): Promise<{ command: string, env: NodeJS.ProcessEnv }> {
+  const seen = environmentForExecutable(command, codexApprovalEnvironment(env))
+  const launch = await codexLaunch(command, undefined, seen)
+  return { command: launch.executable, env: { ...seen, ...launch.env } }
+}
+
 /**
  * A start's app-server, through `initialize` and a `thread/start` in `cwd`, for the driver's `startPrefetch`. The
  * thread is ephemeral and never takes a turn, so Codex keeps nothing of it: a process's first `thread/start` costs it
@@ -172,12 +179,13 @@ const CODEX_INITIALIZE = {
 export async function codexStartPrefetch(base: NodeJS.ProcessEnv, cwd: string): Promise<PrefetchLaunch | undefined> {
   const command = await resolveCodexExecutable(base)
   if (!command) return undefined
+  const launch = await codexChildLaunch(base, command)
   const initialize = { jsonrpc: "2.0", id: 0, method: "initialize", params: CODEX_INITIALIZE }
   const open = { jsonrpc: "2.0", id: 1, method: "thread/start", params: { cwd, ephemeral: true } }
   return {
-    command,
+    command: launch.command,
     args: CODEX_APP_SERVER_ARGS,
-    env: codexApprovalEnvironment({ ...base }),
+    env: launch.env,
     exchange: [
       { send: JSON.stringify(initialize), answer: answersId(0) },
       { send: `${JSON.stringify({ jsonrpc: "2.0", method: "initialized" })}\n${JSON.stringify(open)}`, answer: answersId(1) },
@@ -203,9 +211,10 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
     applyThreadEnvironment(env, options.threadEnvironment)
     const executable = await trace.step("runtime-discovery", () => resolveCodexExecutable(env))
     if (!executable) throw new Error("Codex is not installed")
-    const child = trace.sync("spawn", () => spawnProviderProcess(executable, CODEX_APP_SERVER_ARGS, {
+    const launch = await trace.step("runtime-discovery", () => codexChildLaunch(env, executable))
+    const child = trace.sync("spawn", () => spawnProviderProcess(launch.command, CODEX_APP_SERVER_ARGS, {
       cwd: workingDir,
-      env: environmentForExecutable(executable, codexApprovalEnvironment(env)),
+      env: launch.env,
       shell: false,
       windowsHide: true,
     }, { kind: "codex:app-server", owner: id }))
@@ -216,7 +225,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
         return
       }
     }
-    const started = codexLayer.apply(layerOf({ conversationTools: options.conversationTools }), id)
+    const started = codexLayer.apply(layerOf(options), id)
     const live: Live = {
       id,
       cwd: workingDir,
@@ -358,7 +367,8 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
       const message =
         error instanceof Error && error.message ? error.message : fallback
       failLive(live, message)
-      await codexAppClose(id)
+      // One that outlives this stays in `sessions` for the next close; what the start reports is why it failed.
+      await codexAppClose(id).catch(() => undefined)
       throw new Error(message, { cause: error })
     }
   }
@@ -434,6 +444,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
       turn.check()
       return { live, threadId: live.threadId, joining }
     })
+    handOff(dispatch, { kind: "submitted", source: "transport-call" })
     const sequence = ++live.promptSequence
     let resolveStarted = () => {}
     const startingTurn = new Promise<void>(resolve => { resolveStarted = resolve })
@@ -451,7 +462,6 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
     live.stream?.prompted({ text: turn.text, shown: dispatch.shown, shownAt: dispatch.shownAt, attachments: turn.attachments })
     live.decoder.expectTurn()
     try {
-      dispatch.report({ kind: "submitted", source: "transport-call" })
       const result = await turn.start(live, threadId)
       dispatch.report({ kind: "accepted", source: "native-response", referenceId: result.turn.id })
       // Steered into the goal's turn, the message starts none of its own.
@@ -669,7 +679,9 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
         updateState(live, { status: "closed" })
         live.stream?.closed()
         disposeLive(live, new Error("Codex session closed"))
-        if (!live.child.killed) live.child.kill()
+        // One that outlives this rejects the close and stays in `sessions`, for the next close to try again. Its pipes
+        // close once it exits (`spawnProviderProcess`).
+        await closeProviderProcess(live.child)
         await live.processClosed
         await live.approvals.close()
         if (sessions.get(id) === live) sessions.delete(id)
@@ -685,7 +697,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
   }
 
   function stop(): void {
-    for (const id of sessions.keys()) void codexAppClose(id)
+    for (const id of sessions.keys()) void codexAppClose(id).catch(() => undefined)
   }
 
   async function openThread(
@@ -773,7 +785,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
 
   function protocolFatal(live: Live, message: string): void {
     handleProcessEnd(live, message)
-    if (!live.child.killed) live.child.kill()
+    void endProviderProcess(live.child)
   }
 
   function handleProcessEnd(live: Live, message: string): void {

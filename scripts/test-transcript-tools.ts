@@ -27,7 +27,7 @@ const acpBlocksToMessages = (entries: Entry[], running: boolean, provider?: stri
   const liveRow = pairTools(liveRows.messages[0]!.blocks)[0]!
   const savedRows = threadToMessages([{ kind: "assistant", blocks: [{ type: "tool", id: "status", name: "mcp", input: JSON.stringify(input), output: "" }] }], 0, "cursor")
   const savedRow = pairTools(savedRows[0]!.blocks)[0]!
-  assert.equal(liveRow.tool.label, "App status")
+  assert.equal(liveRow.tool.label, "Read the app's status")
   assert.equal(savedRow.tool.label, liveRow.tool.label)
   assert.equal(liveRow.tool.server, "mako")
   assert.equal(liveRow.tool.tool, "app_status")

@@ -25,6 +25,7 @@ import { chainFingerprint, type CloudSignInCapability, type CloudSignInExport, t
 import { CloudSignInSync, installCloudSignIns } from "@mako/host/harnesses/cloud-sign-ins"
 import { CloudSignInSchema, type CloudKeptSignIn, type CloudShareOutcome, type CloudSharedChain, type CloudSignIn, type CloudSignInChain, type CloudSignInHarness, type CloudSignInListing } from "@mako/host/contracts/cloud-sign-ins"
 import type { JsonValue } from "@mako/host/contracts/json"
+import { ranOut } from "./lib/ran-out.ts"
 
 /**
  * Each harness's sign-in read from a Mac's stores, written into a machine's home, and read back from there as the
@@ -498,15 +499,17 @@ else process.exit(1);
   const woken = new CloudSignInSync({ accounts: new HarnessAccounts(registry, accountRoot), capabilities: registry, store: offline, dataRoot: join(root, "woken"), onChange: () => {}, wakeRetryMs: [20, 20, 20] })
   const gated = new HarnessAccounts(registry, accountRoot)
   gated.gateLaunches(() => woken.inStep())
-  const wokeAt = performance.now()
-  woken.wake()
   const order: string[] = []
-  const launched = gated.launch("codex", { ...process.env }).then(() => order.push("launch"))
-  const synced2 = gated.launch("codex", { ...process.env }, { trackCredential: false }).then(() => order.push("sync's own read"))
-  await Promise.all([launched, synced2])
+  const { waits } = await ranOut(async () => {
+    woken.wake()
+    const launched = gated.launch("codex", { ...process.env }).then(() => order.push("launch"))
+    const synced2 = gated.launch("codex", { ...process.env }, { trackCredential: false }).then(() => order.push("sync's own read"))
+    await Promise.all([launched, synced2])
+  })
   assert.deepEqual(order, ["sync's own read", "launch"], "the sync's own reads never wait; a launch waits for the check")
   assert.equal(unreachable, -1, "tried until the cloud answered")
-  assert.ok(performance.now() - wokeAt < 2_000)
+  // The launch went as the check answered, not when its own 5 s wait (`LAUNCH_WAIT_MS`) gave up on it.
+  assert.ok(waits.every((ms) => ms < 5_000), `the launch never waited out its 5 s: ${waits.join(", ")}`)
   await woken.inStep()
   woken.stop()
   console.log("ok  after a wake the check is retried until the cloud answers, and launches wait for it")

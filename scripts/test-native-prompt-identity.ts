@@ -101,12 +101,24 @@ for (const harness of [...registeredHarnessIds(), "future-fixture"]) {
 const message = { id: "same", role: "user" as const, blocks: [], anchor: { id: "native", index: 0, at: 1 } }
 assert.notEqual(reconcileMessages([message], [{ ...message, anchor: { ...message.anchor, at: 2 } }])[0], message)
 
-const many = Array.from({ length: 10000 }, (_, index) => ({ ...request, id: auditId(index + 1),
+const many = Array.from({ length: 32_000 }, (_, index) => ({ ...request, id: auditId(index + 1),
   nativePrompt: { ...reference, messageId: `u${index}` },
   nativeDelivery: { ...request.nativeDelivery, evidence: { ...accepted, referenceId: `u${index}` } },
 }))
-const started = performance.now()
 assert.equal(nativePromptRequestIds(source, many).size, many.length)
-const elapsed = performance.now() - started
-assert.ok(elapsed < 1000, `10,000 exact correspondences took ${elapsed.toFixed(1)}ms`)
-console.log(`Native prompt correspondence: exact receipts, source/attempt/binding fencing, ambiguity refusal, six registry labels plus future fixture, metadata/object reuse; 10,000 lookups in ${elapsed.toFixed(1)}ms. No native prompt sent.`)
+// Linear, judged against a pass that plainly is over the same requests, timed here: putting them in a map by message.
+// Whatever the runner's speed, caches and collections do to one they do to the other, so the correspondence costs a few
+// times the map, where a cost that grows with their square costs thousands. Each the quickest of five.
+const quickest = (work: () => void) => {
+  let best = Infinity
+  for (let run = 0; run < 5; run++) {
+    const began = performance.now()
+    work()
+    best = Math.min(best, performance.now() - began)
+  }
+  return best
+}
+const corresponding = quickest(() => nativePromptRequestIds(source, many))
+const mapping = quickest(() => new Map(many.map((each) => [each.nativePrompt.messageId, each.id])))
+assert.ok(corresponding < mapping * 100, `exact correspondences in linear time: ${corresponding.toFixed(2)} ms for 32,000, against ${mapping.toFixed(2)} ms to map them`)
+console.log(`Native prompt correspondence: exact receipts, source/attempt/binding fencing, ambiguity refusal, six registry labels plus future fixture, metadata/object reuse; ${corresponding.toFixed(2)} ms for 32,000 lookups, ${mapping.toFixed(2)} ms to map them. No native prompt sent.`)

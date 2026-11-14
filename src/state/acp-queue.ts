@@ -2,12 +2,12 @@ import { continueTurnPrompt, type PendingPrompt } from "@/state/prompt-delivery"
 import type { InterruptionReason } from "@/lib/types"
 import type { QueuedPromptEdit } from "@mako/host/contracts/live-queue"
 import { threadsStore } from "@/state/thread-store"
-import { applyLiveSnapshot, hydrateLive } from "@/state/live-recovery"
+import { applyLiveSnapshot, hydrateLive, readLive } from "@/state/live-recovery"
 import { stagePrompt, removePendingPrompt } from "@/state/acp-pending"
 import { liveSettingsTarget, settingsForSend } from "@/state/composer-settings"
 import { revealWorkedProject } from "@/state/prefs"
 import { getMako, hasBridge } from "@/lib/bridge"
-import type { LiveActionInput, PromptAttachment } from "@/lib/types"
+import type { LiveActionInput, LiveSnapshot, PromptAttachment } from "@/lib/types"
 import { readLiveSnapshot } from "@/state/live-history"
 import {
   acpStore,
@@ -142,16 +142,17 @@ async function attemptSend(
     updateAcpConversation(id, (conversation) => ({ ...conversation, pendingPrompts: conversation.pendingPrompts?.map((prompt) => prompt.id === requestId ? { ...prompt, unconfirmed: false, waiting: undefined } : prompt) }))
     return true
   } catch (error) {
-    const snapshot = await withinPatience(getMako().liveSnapshot(id)).catch(() => null)
-    if (
+    const tookIt = (snapshot: LiveSnapshot | null) =>
       snapshot?.requests.some((request) => request.id === requestId) ||
       snapshot?.control?.transfers.some(
         (transfer) => transfer.input.id === requestId
       ) ||
       // Steered into the turn under this ID before it came here as a message (`steerTo`).
       snapshot?.control?.actions?.some((action) => action.input.id === requestId && action.state.kind !== "not-accepted")
-    ) {
-      if (snapshot) applyLiveSnapshot(snapshot)
+    const snapshot = await readLive(id, () => withinPatience(getMako().liveSnapshot(id)).catch(() => null), (read) => {
+      if (tookIt(read)) applyLiveSnapshot(read)
+    })
+    if (tookIt(snapshot)) {
       settleMessage(requestId)
       return true
     }
@@ -235,8 +236,7 @@ async function steerOnce(id: string, input: Extract<LiveActionInput, { kind: "st
     if (action.state.kind === "uncertain" || action.state.kind === "failed") toast.error(action.state.reason)
     return "steered"
   } catch (error) {
-    const snapshot = await withinPatience(readLiveSnapshot(id)).catch(() => null)
-    if (snapshot) applyLiveSnapshot(snapshot)
+    const snapshot = await readLive(id, () => withinPatience(readLiveSnapshot(id)).catch(() => null))
     const receipt = snapshot?.control?.actions?.find((action) => action.input.id === input.id)
     if (receipt) return receipt.state.kind === "not-accepted" ? { refused: receipt.state.reason } : "steered"
     // It came first as a message of its own: that is where its words went.
@@ -428,6 +428,6 @@ export async function editQueuedPrompt(
     if (threadsStore.get().nativeRequests === previous)
       threadsStore.set({ nativeRequests: updated })
   } else {
-    applyLiveSnapshot(await getMako().liveEditQueued(target.id, input))
+    await readLive(target.id, () => getMako().liveEditQueued(target.id, input))
   }
 }

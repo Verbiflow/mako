@@ -1,11 +1,10 @@
-import { execFile } from "node:child_process"
+import { hostCommand } from "../base/host-command.js"
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
-import { promisify } from "node:util"
 import { onMac } from "../base/platform.js"
 
-const execute = promisify(execFile)
+const execute = hostCommand
 
 /** Browsers' bundle icons, decoded once per bundle until its Info.plist changes. */
 export class BrowserIcons {

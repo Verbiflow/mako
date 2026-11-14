@@ -13,11 +13,15 @@ export const conversationCalls: ReadonlySet<string> = new Set([
   "mako:live-continue", "mako:live-snapshot", "mako:live-state", "mako:live-prompt", "mako:live-permission",
   "mako:live-mode", "mako:live-cancel", "mako:live-stop-agent", "mako:live-goal", "mako:live-side-question", "mako:live-review", "mako:live-close", "mako:live-prewarm", "mako:live-edit-queued",
   "mako:live-clear-queue", "mako:live-hold-until", "mako:live-sign-in-readiness", "mako:live-sign-in-resume", "mako:live-earlier", "mako:live-bind", "mako:read-live-file",
+  "mako:live-files-folders", "mako:live-files-find", "mako:live-files-grep",
   "mako:live-merge-fork",
   "mako:live-rewind-preview", "mako:live-rewind", "mako:live-turn-changes", "mako:live-turn-diff", "mako:live-turn-hunks", "mako:live-turn-writers", "mako:live-turn-undo-preview", "mako:live-turn-undo", "mako:live-action", "mako:live-steer-queued",
   "mako:live-action-acknowledge", "mako:live-fork", "mako:live-transfer",
   // An Apex's host holds its Fins: the person's messages to them go there.
   "mako:agents-redirect", "mako:agents-direct", "mako:agents-respond",
+  // What its agent asked the person is its host's to answer.
+  "mako:agent-ask-answer",
+  "mako:agents-next-place", "mako:agents-continue-next",
 ])
 
 /** The conversation a call is aimed at, when it's one that goes to the host running it. */

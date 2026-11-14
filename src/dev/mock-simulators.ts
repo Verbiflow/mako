@@ -1,5 +1,6 @@
 import type { SetupFix, SetupStep, SimulatorSetup } from "@mako/host/contracts/simulator-setup"
-import type { SimulatorClaim, SimulatorsActResult, SimulatorsListed, SimulatorsOpenResult } from "@mako/host/contracts/simulators"
+import { encodeControlVideoBatch } from "@mako/control-runtime/contracts"
+import type { SimulatorClaim, SimulatorsActResult, SimulatorsListed, SimulatorsOpenResult, SimulatorsWatchResult } from "@mako/host/contracts/simulators"
 import type { HostEvent } from "@/lib/types"
 
 const MAC = "macOS 26.6.2, arm64"
@@ -60,6 +61,8 @@ export function mockSimulators(emit: (event: HostEvent) => void) {
     },
     simulatorsAct: async (): Promise<SimulatorsActResult> => ({ ms: 12 }),
     simulatorsRelease: async () => ({ released: true }),
+    // The stand-in shows its frame as an image, never a stream.
+    simulatorsWatch: async (): Promise<SimulatorsWatchResult> => ({ live: false, batch: btoa(String.fromCharCode(...encodeControlVideoBatch({ live: false, packets: [] }))) }),
   }
 }
 

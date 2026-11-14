@@ -1,10 +1,15 @@
-import { fork, type ChildProcess } from "node:child_process"
+import { hostCommand, hostFork } from "../base/host-command.js"
+import type { HostProbes, ProbeOptions } from "../base/host-stopping.js"
+import type { ChildProcess } from "node:child_process"
+import { z } from "zod"
 import { existsSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { SLOW_DELIVERY_MS, WatcherReplySchema, type DropReason, type HistoryMark, type WatchEvent, type WatcherReply, type WatcherRequest } from "../contracts/watcher-child.js"
 import { headlessNodeExecutable } from "../base/headless-node.js"
 import { onMac } from "../base/platform.js"
 import { WatchReadings, type ChildStart } from "./watch-readings.js"
+import type { Row, RunLeader } from "./process-table.js"
+import { sendToChild } from "@mako/sessions/child-input"
 
 export interface WatchListener {
   events(events: readonly WatchEvent[]): void
@@ -92,7 +97,8 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
   const ended = new WeakMap<ChildProcess, "idle" | "silence" | "recovery">()
 
   const post = (request: WatcherRequest) => {
-    if (child?.connected) child.send(request)
+    // A child gone as it's told ends as its `exit` says, and the next watch starts another.
+    if (child) sendToChild(child, request).catch(() => {})
   }
 
   // Like a watch in this process, a watch keeps the process alive; an idle child doesn't.
@@ -202,7 +208,7 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
   }
 
   const start = (why: ChildStart) => {
-    const next = fork(script, [], {
+    const next = hostFork(script, [], {
       execPath: headlessNodeExecutable(),
       // Under tsx (tests, development scripts) the child needs its loader to run TypeScript.
       execArgv: script.endsWith(".ts") ? process.execArgv : [],
@@ -250,6 +256,21 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
 }
 
 /** What changed on disk in a stretch of time, from the file system's own history. */
+export interface HistoryOptions {
+  ignore?: readonly string[]
+  exclude?: readonly string[]
+  /** At most this many paths of each folder one level into a root; a folder that had more is named in `capped`. */
+  perFolder?: number
+}
+
+export interface HistoryRead {
+  paths: string[]
+  lost: string[]
+  ignored: number[]
+  /** With `perFolder`: the folders that had more paths than were sent. */
+  capped?: string[]
+}
+
 export interface FileHistory {
   /** Where the history stands now. */
   mark(): Promise<HistoryMark>
@@ -260,7 +281,7 @@ export interface FileHistory {
    * folder are left out in the reader and counted per folder in `ignored`;
    * paths under an `exclude` folder inside a root are never read at all.
    */
-  since(mark: HistoryMark, roots: readonly string[], options?: { ignore?: readonly string[]; exclude?: readonly string[] }): Promise<{ paths: string[]; lost: string[]; ignored: number[] }>
+  since(mark: HistoryMark, roots: readonly string[], options?: HistoryOptions): Promise<HistoryRead>
   /** fseventsd started over: reads under way end, reported as failed, and the next starts a reader afresh. */
   recover?(): void
 }
@@ -314,7 +335,7 @@ export function childHistory(script = defaultChildScript(), readings = new Watch
   const running = () => {
     clearTimeout(idle)
     if (child) return child
-    const next = fork(script, [], {
+    const next = hostFork(script, [], {
       execPath: headlessNodeExecutable(),
       execArgv: script.endsWith(".ts") ? process.execArgv : [],
       env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
@@ -358,9 +379,9 @@ export function childHistory(script = defaultChildScript(), readings = new Watch
       const current = running()
       current.ref()
       current.channel?.ref()
-      const timer = setTimeout(() => end(current, new Error(`The file system's history didn't answer within ${Math.round(ms / 1000)} seconds`)), ms)
+      const timer = setTimeout(afterReplies(() => pending.has(request.id), () => end(current, new Error(`The file system's history didn't answer within ${Math.round(ms / 1000)} seconds`)), ms), ms)
       pending.set(request.id, { child: current, settle, fail, timer })
-      current.send(request)
+      sendToChild(current, request).catch((error: Error) => end(current, error))
     })
 
   const failed = (reply: WatcherReply) => new Error(reply.t === "failed" ? reply.message : `Unexpected reply ${reply.t}`)
@@ -377,17 +398,215 @@ export function childHistory(script = defaultChildScript(), readings = new Watch
     async since(mark, roots, options) {
       const asked = performance.now()
       const reply = await ask(
-        { t: "since", id: nextId++, mark, roots: [...roots], ignore: [...(options?.ignore ?? [])], exclude: [...(options?.exclude ?? [])] },
+        { t: "since", id: nextId++, mark, roots: [...roots], ignore: [...(options?.ignore ?? [])], exclude: [...(options?.exclude ?? [])], ...(options?.perFolder !== undefined && { perFolder: options.perFolder }) },
         HISTORY_MS,
       )
       if (reply.t !== "history") throw failed(reply)
-      readings.historyRead(performance.now() - asked, reply.paths.length + reply.ignored.reduce((sum, count) => sum + count, 0), { caughtUpMs: reply.caughtUpMs, readMs: reply.readMs })
+      readings.historyRead(performance.now() - asked, reply.paths.length + (reply.unsent ?? 0) + reply.ignored.reduce((sum, count) => sum + count, 0), { caughtUpMs: reply.caughtUpMs, readMs: reply.readMs })
       const crossed = daemon ? await daemon.restartedSince(markMs(mark)).catch(() => false) : false
-      return { paths: reply.paths, lost: crossed ? roots.filter((root) => existsSync(root)) : reply.lost, ignored: reply.ignored }
+      return { paths: reply.paths, lost: crossed ? roots.filter((root) => existsSync(root)) : reply.lost, ignored: reply.ignored, ...(reply.capped && { capped: reply.capped }) }
     },
     recover() {
       if (child) end(child, new Error("macOS's file-change service started over during the read"))
     },
+  }
+}
+
+/**
+ * A deadline's action, taken only if `waiting` still holds once the replies the child sent in time have been read. A
+ * timer that comes due while the host's loop is held fires before the loop reads what the child sent meanwhile, and a
+ * reply as long as the process table comes over the channel a piece at a time: it ended a child that had answered in
+ * time. A timer firing more than `LATE_MS` after its deadline gives the reply `GRACE_MS` of a running loop first.
+ */
+function afterReplies(waiting: () => boolean, overdue: () => void, waitMs: number): () => void {
+  const dueAt = performance.now() + waitMs
+  return () => setImmediate(() => {
+    if (!waiting()) return
+    if (performance.now() - dueAt < LATE_MS) return overdue()
+    setTimeout(() => {
+      if (waiting()) overdue()
+    }, GRACE_MS).unref()
+  })
+}
+/** A deadline's timer this late was held by the host's loop, not waiting on the child. */
+const LATE_MS = 250
+/** What a late deadline gives the reply to arrive over a running loop. */
+const GRACE_MS = 2_000
+
+/** A table this late means the child is stuck; it's ended and the caller reads its own. */
+const TABLE_ASK_MS = 20_000
+
+/** The process table read off the host's loop (`childProcessReader`), and the host's probes run there. */
+export interface ProcessReader extends HostProbes {
+  /** Every process, as `ps` prints it. */
+  table(): Promise<string>
+  /** Only the processes of `runs`, parsed and matched in the child (`membersOnly`); `self` is the host. */
+  members(runs: RunLeader[], self: number): Promise<Row[]>
+}
+
+/**
+ * The process table read in a watcher child of its own, so `ps`'s spawn and its wait leave the host's loop: what
+ * reads the apps' marks and traces asks every few seconds while an app runs, and on a busy Mac one spawn from the
+ * host's thread held it for seconds. `members` leaves the parsing and matching there too, and sends back only the
+ * rows the runs asked about. The child starts at the first ask and goes after `IDLE_MS` without one; one that
+ * doesn't answer in time is ended with what it had, and the next ask starts another.
+ */
+export function childProcessReader(script = defaultChildScript(), askMs = TABLE_ASK_MS): ProcessReader {
+  let child: ChildProcess | undefined
+  let nextId = 1
+  let idle: NodeJS.Timeout | undefined
+  const pending = new Map<number, { child: ChildProcess; settle(reply: WatcherReply): void; fail(error: Error): void; timer: NodeJS.Timeout }>()
+
+  const end = (gone: ChildProcess, error: Error) => {
+    if (child === gone) child = undefined
+    gone.kill()
+    for (const [id, request] of pending) {
+      if (request.child !== gone) continue
+      pending.delete(id)
+      clearTimeout(request.timer)
+      request.fail(error)
+    }
+  }
+
+  const rest = (current: ChildProcess) => {
+    current.unref()
+    current.channel?.unref()
+    clearTimeout(idle)
+    idle = setTimeout(() => {
+      if (pending.size || child !== current) return
+      child = undefined
+      current.kill()
+    }, IDLE_MS)
+    idle.unref()
+  }
+
+  const running = () => {
+    clearTimeout(idle)
+    if (child) return child
+    const next = hostFork(script, [], {
+      execPath: headlessNodeExecutable(),
+      execArgv: script.endsWith(".ts") ? process.execArgv : [],
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+      stdio: ["ignore", "ignore", "inherit", "ipc"],
+    })
+    child = next
+    next.on("message", (raw) => {
+      const reply = WatcherReplySchema.safeParse(raw)
+      if (!reply.success || !("id" in reply.data)) return
+      const request = pending.get(reply.data.id)
+      if (!request) return
+      pending.delete(reply.data.id)
+      clearTimeout(request.timer)
+      if (reply.data.t === "failed") request.fail(new Error(reply.data.message))
+      else request.settle(reply.data)
+      if (![...pending.values()].some((other) => other.child === next)) rest(next)
+    })
+    next.once("exit", () => end(next, new Error("The process table's reader stopped")))
+    next.once("error", (error) => end(next, error))
+    return next
+  }
+
+  const ask = (request: (id: number) => WatcherRequest, waitMs = askMs) => new Promise<WatcherReply>((settle, fail) => {
+    const current = running()
+    current.ref()
+    current.channel?.ref()
+    const id = nextId++
+    const timer = setTimeout(afterReplies(() => pending.has(id), () => end(current, new Error(`The process table's reader didn't answer within ${Math.round(waitMs / 1000)} seconds`)), waitMs), waitMs)
+    pending.set(id, { child: current, settle, fail, timer })
+    sendToChild(current, request(id)).catch((error: Error) => end(current, error))
+  })
+  const unexpected = (reply: WatcherReply) => new Error(`Unexpected reply ${reply.t}`)
+
+  /** A probe in the child, answered as `hostCommand` answers; one the child can't run is run here. */
+  const run = (file: string, args: readonly string[], options: ProbeOptions): Promise<{ stdout: string; stderr: string }> => {
+    options.signal?.throwIfAborted()
+    let asked: number | undefined
+    const answered = ask((id) => {
+      asked = id
+      const request: WatcherRequest = { t: "run", id, file, args: [...args] }
+      if (options.env) request.env = Object.fromEntries(Object.entries(options.env).filter((entry): entry is [string, string] => entry[1] !== undefined))
+      if (options.cwd !== undefined) request.cwd = options.cwd
+      if (options.timeout !== undefined) request.timeout = options.timeout
+      if (options.maxBuffer !== undefined) request.maxBuffer = options.maxBuffer
+      return request
+    }, (options.timeout ?? 0) + askMs)
+    const command = `${file} ${args.join(" ")}`
+    const result = answered.then((reply) => {
+      if (reply.t !== "ran") throw unexpected(reply)
+      if (reply.code === 0) return { stdout: reply.stdout, stderr: reply.stderr }
+      const failed = new Error(reply.failure?.message ?? `Command failed: ${command}\n${reply.stderr}`)
+      throw Object.assign(failed, { cmd: command, code: reply.failure?.code ?? reply.code ?? undefined, signal: reply.signal ?? undefined, killed: reply.killed, stdout: reply.stdout, stderr: reply.stderr })
+    }, (error: Error) => {
+      // The child couldn't take it (gone, stuck, refused): run it here, as it was before there was a child.
+      if (options.signal?.aborted) throw options.signal.reason
+      if (error.message.startsWith("Not a probe")) throw error
+      return hostCommand(file, args, options)
+    })
+    if (!options.signal) return result
+    const signal = options.signal
+    const abort = () => {
+      if (asked !== undefined && child) sendToChild(child, { t: "cancel", id: asked }).catch(() => {})
+    }
+    signal.addEventListener("abort", abort, { once: true })
+    return Promise.race([result, new Promise<never>((_, reject) => {
+      if (signal.aborted) reject(signal.reason)
+      else signal.addEventListener("abort", () => reject(signal.reason), { once: true })
+    })]).finally(() => signal.removeEventListener("abort", abort))
+  }
+
+  // Start times asked for in one turn, read by one `ps` (`startedAt`).
+  let starts: Map<number, { settle(at: number): void; fail(error: Error): void }[]> | undefined
+  const readStarts = async (asked: Map<number, { settle(at: number): void; fail(error: Error): void }[]>) => {
+    const unreadable = () => new Error("Process start time is unreadable")
+    const stdout = await (async () => {
+      try {
+        return (await run("ps", ["-o", "pid=,lstart=", "-p", [...asked.keys()].join(",")], { env: { ...process.env, LC_ALL: "C" }, maxBuffer: 1024 * 1024, timeout: 5_000 })).stdout
+      } catch (error) {
+        // ps exits 1 when any pid has ended; the rest it printed still hold.
+        const printed = z.object({ code: z.literal(1), stdout: z.string() }).safeParse(error)
+        if (printed.success) return printed.data.stdout
+        const failure = error instanceof Error ? error : unreadable()
+        for (const waiting of asked.values()) for (const one of waiting) one.fail(failure)
+        return ""
+      }
+    })()
+    const read = new Map<number, number>()
+    for (const line of stdout.split("\n")) {
+      const match = /^\s*(\d+)\s+(.+)$/.exec(line)
+      const at = match ? Date.parse(match[2]!.trim()) : Number.NaN
+      if (match && Number.isFinite(at)) read.set(Number(match[1]), at)
+    }
+    for (const [pid, waiting] of asked) {
+      const at = read.get(pid)
+      for (const one of waiting) {
+        if (at === undefined) one.fail(unreadable())
+        else one.settle(at)
+      }
+    }
+  }
+
+  return {
+    run,
+    startedAt: (pid, signal) => new Promise<number>((settle, fail) => {
+      signal?.throwIfAborted()
+      if (!starts) {
+        const batch = new Map<number, { settle(at: number): void; fail(error: Error): void }[]>()
+        starts = batch
+        setImmediate(() => {
+          if (starts === batch) starts = undefined
+          void readStarts(batch)
+        })
+      }
+      starts.set(pid, [...starts.get(pid) ?? [], { settle, fail }])
+    }),
+    table: () => ask((id) => ({ t: "table", id })).then((reply) => {
+      if (reply.t === "table") return reply.text
+      throw unexpected(reply)
+    }),
+    members: (runs, self) => ask((id) => ({ t: "members", id, self, runs: runs.map(({ pid, startedMs }) => ({ pid, startedMs })) })).then((reply) => {
+      if (reply.t === "members") return reply.rows
+      throw unexpected(reply)
+    }),
   }
 }
 
@@ -398,7 +617,7 @@ export function childHistory(script = defaultChildScript(), readings = new Watch
  */
 export function probeDelivery(script = defaultChildScript(), beats = 5): Promise<number[]> {
   return new Promise((settle) => {
-    const child = fork(script, [], {
+    const child = hostFork(script, [], {
       execPath: headlessNodeExecutable(),
       execArgv: script.endsWith(".ts") ? process.execArgv : [],
       env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
@@ -417,7 +636,7 @@ export function probeDelivery(script = defaultChildScript(), beats = 5): Promise
     })
     child.once("exit", () => done([]))
     child.once("error", () => done([]))
-    child.send({ t: "probe", id: 1, beats } satisfies WatcherRequest)
+    sendToChild(child, { t: "probe", id: 1, beats } satisfies WatcherRequest).catch(() => done([]))
   })
 }
 

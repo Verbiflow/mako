@@ -58,7 +58,7 @@ function ThreadTranscripts({ draft }: { draft: SessionDraft }) {
               data-draft-transcript={tab.id}
               onClick={() => { if (ref) toggle(ref) }}
               className={cn(
-                "pressable inline-flex h-7 max-w-60 items-center gap-1.5 rounded-md px-2 text-ui ring-1 ring-inset transition-colors disabled:opacity-40",
+                "pressable inline-flex h-7 max-w-60 items-center gap-1.5 px-2 text-ui ring-1 ring-inset transition-colors disabled:opacity-40",
                 on ? "bg-fill-selected text-foreground ring-border" : "text-muted-foreground ring-hairline hover:bg-fill-hover hover:text-foreground"
               )}
             >

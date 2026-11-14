@@ -1,10 +1,11 @@
-import { createHash, randomUUID } from "node:crypto"
-import { lstat, readFile, realpath, rename, rm, writeFile } from "node:fs/promises"
+import { createHash } from "node:crypto"
+import { lstat, readFile, realpath } from "node:fs/promises"
 import { join } from "node:path"
 import { parse, stringify } from "smol-toml"
 import { z } from "zod"
 import { readKeychain } from "../accounts-common.js"
 import { onMac } from "../../base/platform.js"
+import { publishFile } from "../../base/published-files.js"
 const AuthConfig = z.object({
   cli_auth_credentials_store: z.enum(["file", "keyring", "auto", "ephemeral"]).default("file"),
   features: z.object({ secret_auth_storage: z.boolean().optional() }).optional(),
@@ -74,9 +75,5 @@ export async function managedCodexConfig(sourceHome: string, home: string, oauth
   })
   if (!existing?.isSymbolicLink() && await optionalFile(destination) === serialized) return
   // Replaces a legacy symlink without writing through it into the ordinary home.
-  const temporary = `${destination}.${randomUUID()}.tmp`
-  try {
-    await writeFile(temporary, serialized, { mode: 0o600, flag: "wx" })
-    await rename(temporary, destination)
-  } finally { await rm(temporary, { force: true }) }
+  await publishFile(destination, serialized, { mode: 0o600 })
 }

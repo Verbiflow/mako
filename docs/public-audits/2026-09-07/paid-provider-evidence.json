@@ -2,7 +2,7 @@
   "date": "2026-09-07",
   "providerExecution": "Real installed CLIs through Mako LiveConversations, ACP/app-server and conversation MCP",
   "codexCompatibility": {
-    "shellExecutable": "/Users/kashyab/.nvm/versions/node/v24.19.0/bin/codex",
+    "shellExecutable": "~/.nvm/versions/node/v24.19.0/bin/codex",
     "shellVersion": "0.147.0",
     "compatibleExecutable": "/Applications/ChatGPT.app/Contents/Resources/codex",
     "compatibleVersion": "0.153.4",
@@ -11,7 +11,7 @@
   "suites": [
     {
       "command": "MAKO_E2E_MODELS='{\"opencode\":\"openai/gpt-5.6-sol\"}' PATH=\"/Applications/ChatGPT.app/Contents/Resources:$PATH\" node scripts/test-provider-e2e.mjs --flows --fork --restart --attachments --delegate --remote",
-      "evidenceRoot": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-provider-e2e-DeSHGY",
+      "evidenceRoot": "$TMPDIR/mako-provider-e2e-DeSHGY",
       "results": [
         {
           "provider": "claude",
@@ -89,9 +89,9 @@
           "proof": "5e87a904-d339-4fbd-859f-6ba426515377",
           "bytes": 340057,
           "tools": [
-            "/bin/zsh -lc 'cat /var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-provider-e2e-DeSHGY/journals/context/02cee8789fc5160db3b4165e1f2a68d91008f35d3777b7f62ee20d001d3fe1cc/transcript.md'",
-            "/bin/zsh -lc 'cat /Users/kashyab/.codex/skills/unslop/SKILL.md'",
-            "/bin/zsh -lc 'tail -n 5 /var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-provider-e2e-DeSHGY/journals/context/attachments/da8487b9364f33d894dc1c18d349096d2ce46bbdda3b505212e697260163f647-large.txt'"
+            "/bin/zsh -lc 'cat $TMPDIR/mako-provider-e2e-DeSHGY/journals/context/02cee8789fc5160db3b4165e1f2a68d91008f35d3777b7f62ee20d001d3fe1cc/transcript.md'",
+            "/bin/zsh -lc 'cat ~/.codex/skills/unslop/SKILL.md'",
+            "/bin/zsh -lc 'tail -n 5 $TMPDIR/mako-provider-e2e-DeSHGY/journals/context/attachments/da8487b9364f33d894dc1c18d349096d2ce46bbdda3b505212e697260163f647-large.txt'"
           ]
         },
         {
@@ -101,7 +101,7 @@
           "child": "2135a1d3-9aa8-40ad-8332-daec0618c5d8",
           "parentValue": "0fb7cab6-9074-4bcc-a278-3bc19c92369b",
           "childValue": "dd585481-d5c0-4a59-bba3-cafb1b61777c",
-          "workspace": "/private/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-provider-e2e-DeSHGY/journals/child-workspaces/2135a1d3-9aa8-40ad-8332-daec0618c5d8"
+          "workspace": "$TMPDIR/mako-provider-e2e-DeSHGY/journals/child-workspaces/2135a1d3-9aa8-40ad-8332-daec0618c5d8"
         },
         {
           "flow": "native-restart",
@@ -126,7 +126,7 @@
           "nativeId": "01a07beb-da27-7f60-bd9a-ab32f273508f",
           "proof": "1a588e2f-1615-4ca3-bb83-e0dba39c6369",
           "tools": [
-            "/bin/zsh -lc 'cat /var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-provider-e2e-DeSHGY/journals/context/269855cb6affb51e816631c9294700b46d404c2d5b3677c143b169bb899a1d18/transcript.md'"
+            "/bin/zsh -lc 'cat $TMPDIR/mako-provider-e2e-DeSHGY/journals/context/269855cb6affb51e816631c9294700b46d404c2d5b3677c143b169bb899a1d18/transcript.md'"
           ]
         },
         {
@@ -152,7 +152,7 @@
     },
     {
       "command": "node scripts/test-provider-e2e.mjs codex --direct-attachments --fork",
-      "evidenceRoot": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-provider-e2e-q87zOQ",
+      "evidenceRoot": "$TMPDIR/mako-provider-e2e-q87zOQ",
       "results": [
         {
           "provider": "codex",

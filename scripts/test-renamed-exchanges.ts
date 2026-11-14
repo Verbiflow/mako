@@ -1,8 +1,8 @@
 import assert from "node:assert/strict"
-import { performance } from "node:perf_hooks"
 import { renamedExchanges, toExchanges, type Exchange } from "../src/lib/exchanges.ts"
 import { projectLive } from "../src/state/live-projection.ts"
 import type { ChatMessage, LiveSnapshot } from "../src/lib/types.ts"
+import { growth, subquadratic } from "./lib/growth.ts"
 
 // A host checkpoint hands the finished turns to native history: the same
 // conversation, projected again under the provider's message ids.
@@ -62,18 +62,24 @@ assert.equal(renamedExchanges(turns("live", prompts), turns("live", prompts).sli
   "a turn gone with none arriving is gone")
 
 const count = 10000
-const longBefore = turns("old", Array.from({ length: count }, (_, index) => `Original question number ${index}`))
-const longAfter = turns("new", Array.from({ length: count }, (_, index) => `Completely rewritten native prompt ${index}`))
-const began = performance.now()
-assert.equal(renamedExchanges(longBefore, longAfter).size, count, "equal gaps retain visual continuity without quadratic search")
-const elapsed = performance.now() - began
-assert.ok(elapsed < 1000, `10,000 entirely rewritten prompts took ${elapsed.toFixed(1)}ms`)
+const rewritten = (size: number) => [
+  turns("old", Array.from({ length: size }, (_, index) => `Original question number ${index}`)),
+  turns("new", Array.from({ length: size }, (_, index) => `Completely rewritten native prompt ${index}`)),
+] as const
+const [longBefore, longAfter] = rewritten(count)
+assert.equal(renamedExchanges(longBefore, longAfter).size, count, "equal gaps retain visual continuity")
+const grew = growth((size) => {
+  const [before, after] = rewritten(size)
+  return () => void renamedExchanges(before, after)
+}, count / 10, count)
+assert.ok(grew.ratio < subquadratic(count / 10, count),
+  `10,000 entirely rewritten prompts took ${grew.ratio.toFixed(1)} times 1,000 (${grew.largeMs.toFixed(1)} ms): no quadratic search`)
 let reads = 0
 const known = longBefore.map(item => ({ ...item, prompt: item.prompt && { ...item.prompt,
   get blocks() { reads++; return item.prompt!.blocks },
 } }))
 assert.equal(renamedExchanges(known, known).size, 0)
 assert.equal(reads, 0, "stable proven identities never read historical prompt text")
-console.log(`Checkpoint layout matching: 10,000 rewritten prompts in ${elapsed.toFixed(1)}ms; stable IDs read zero prompt bodies`)
+console.log(`Checkpoint layout matching: 10,000 rewritten prompts in ${grew.largeMs.toFixed(1)}ms, ${grew.ratio.toFixed(1)} times 1,000; stable IDs read zero prompt bodies`)
 
 console.log("renamed exchanges: a checkpoint's native turns matched to the live ones by prompt, retold prompts, reworded turns by position, uneven stretches left alone, arrivals and removals never renames")

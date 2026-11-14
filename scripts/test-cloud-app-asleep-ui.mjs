@@ -1,10 +1,11 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { manualDevUpdates } from "../electron/dev-updates.mjs"
+import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 /**
  * A cloud Thread's app while its machine sleeps, against the production components and the fixture desk: the strip
@@ -24,11 +25,11 @@ if (process.versions.electron) {
 } else {
   const args = process.argv.slice(2)
   const option = (name) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined)
-  const { createServer } = await import("vite")
-  const root = await mkdtemp(join(tmpdir(), "mako-asleep-app-ui-"))
+  const { uiVite } = await import("./lib/ui-vite.mjs")
+  const root = testScratch("mako-asleep-app-ui-")
   const out = option("--out") ? resolve(option("--out")) : root
   await mkdir(out, { recursive: true })
-  const server = await createServer({
+  const server = await uiVite({
     cacheDir: join(root, "cache"),
     define: { "import.meta.env.MAKO_MANUAL_RELOAD": "true" },
     plugins: [manualDevUpdates()],
@@ -47,7 +48,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`UI evidence: ${out}`)
 }
 
 async function checkWindow() {
@@ -56,8 +56,10 @@ async function checkWindow() {
   const out = process.env.MAKO_UI_TEST_OUT
   const base = process.env.MAKO_UI_TEST_URL
   app.setPath("userData", join(root, "profile"))
+  withMotion(app)
   await app.whenReady()
   const window = new BrowserWindow({ width: 1280, height: 900, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
+  atSize(window, 1280, 900)
   const page = window.webContents
   page.debugger.attach("1.3")
   const watchdog = setTimeout(() => {

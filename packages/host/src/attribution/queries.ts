@@ -1,10 +1,11 @@
 import type { Attribution, Certainty, ContentRef, FootprintEntry } from "@mako/protocol"
+import { atOnce, inSlices, StepsStopped, type Steps } from "@mako/sessions/slices"
 import { TURN_CHANGES_VERSION, type TurnChangedFile, type TurnChangeLines, type TurnChanges, type TurnChangeShare } from "../contracts/turn-changes.js"
 import { decodeText } from "./content.js"
 import { wholeChange, type FileState, type JournalStore, type StatRow, type StoredEntry, type StoredRoot } from "./journal-store.js"
 import { splitLines } from "./line-diff.js"
 import { BASE, type Run } from "./line-map.js"
-import { walkLines } from "./line-walk.js"
+import { walkingLines } from "./line-walk.js"
 import { within } from "./paths.js"
 
 /*
@@ -599,6 +600,11 @@ export function restorable(view: JournalView, target: { root: string; path: stri
 
 /** Files a turn's summary lists, at most; the rest are counted (`more`). */
 export const TURN_FILES = 500
+/** A turn's entries `countingTurn` reads a page. */
+const TURN_PAGE = 256
+/** Entries of the journal's numbering `othersDuring` reads a window, and how many of those in the turn's span it counts at most. */
+const OTHERS_WINDOW = 1_024
+const OTHERS_LIMIT = 10_000
 
 /** Whose a line is in a turn's count: the Thread's, possibly its, or someone else's. */
 type Tag = "own" | "maybe" | "other"
@@ -611,13 +617,13 @@ interface FileCount {
 
 /**
  * The lines of one file across a stretch of its entries, each counted for
- * whoever wrote it last in the stretch (`walkLines`); undefined when some
+ * whoever wrote it last in the stretch (`walkingLines`); undefined when some
  * version's content isn't kept. A line there before the turn that someone
  * else removes stays theirs; one the turn wrote and took back counts for
  * nobody; a version Git put back (a stash popped) has the writers it had.
  */
-function countLines(view: JournalView, chain: readonly StoredEntry[], tagOf: (seq: number) => Tag): FileCount | undefined {
-  const walk = walkLines<Tag>(chain, (ref) => linesOf(view, ref), (entry) => tagOf(entry.seq), "other")
+function* countLines(view: JournalView, chain: readonly StoredEntry[], tagOf: (seq: number) => Tag): Steps<FileCount | undefined> {
+  const walk = yield* walkingLines<Tag>(chain, (ref) => linesOf(view, ref), (entry) => tagOf(entry.seq), "other")
   if (!walk) return undefined
   const count: FileCount = { own: { added: 0, removed: 0 }, maybe: { added: 0, removed: 0 } }
   for (const line of walk.lines) {
@@ -639,21 +645,52 @@ function countLines(view: JournalView, chain: readonly StoredEntry[], tagOf: (se
  * a rewind's writers do (`writersSince`).
  */
 export function turnChanges(view: JournalView, thread: string, turn: string, state: TurnChanges["state"] = "settled", now = Date.now()): TurnChanges {
+  return atOnce(countingTurn(view, thread, turn, state, now))
+}
+
+/**
+ * `countingTurn` a slice at a time; undefined when the journal closed under
+ * it (its host stopping, or another host taking it over): not counted, and
+ * nothing went wrong. Its turn is counted when the journal next opens.
+ */
+export async function countTurnInSlices(view: JournalView, thread: string, turn: string, state: TurnChanges["state"]): Promise<TurnChanges | undefined> {
+  try {
+    return await inSlices(countingTurn(view, thread, turn, state), undefined, () => view.store.closed)
+  } catch (error) {
+    if (error instanceof StepsStopped) return undefined
+    throw error
+  }
+}
+
+/**
+ * `turnChanges` as `Steps`, stopping after each entry it reads and each
+ * version of a file it walks: counted at once, a turn of 337 files held the
+ * host's loop for 1.2 s. It counts the journal through its newest entry when
+ * it begins (`through`), whatever is journaled meanwhile; a recount
+ * (`turnsChangedAfter`) takes in what came after.
+ */
+export function* countingTurn(view: JournalView, thread: string, turn: string, state: TurnChanges["state"] = "settled", now = Date.now()): Steps<TurnChanges> {
   const store = view.store
+  const through = store.lastSeq()
   const roots = new Map(store.roots().map((root) => [root.id, root.path]))
   const tags = new Map<number, Tag>()
   const entries: StoredEntry[] = []
-  for (const entry of store.entriesOfTurn(thread, turn)) {
-    const at = entrySide(view, entry.seq, thread)
-    if (at === "other") continue
-    tags.set(entry.seq, at === "thread" ? "own" : "maybe")
-    entries.push(entry)
+  for (let after: number | undefined = 0; after !== undefined; ) {
+    const page = store.entriesOfTurnPage(thread, turn, after, through, TURN_PAGE)
+    for (const entry of page.entries) {
+      const at = entrySide(view, entry.seq, thread)
+      yield
+      if (at === "other") continue
+      tags.set(entry.seq, at === "thread" ? "own" : "maybe")
+      entries.push(entry)
+    }
+    after = page.next
   }
   const groups = fileGroups(entries)
   const tagOf = (seq: number): Tag => tags.get(seq) ?? "other"
   const counted: TurnChangedFile[] = []
   for (const group of groups.values()) {
-    const file = countFile(view, group, tagOf, roots.get(group.root) ?? group.root)
+    const file = yield* countFile(view, group, tagOf, roots.get(group.root) ?? group.root)
     if (file) counted.push(file)
   }
   counted.sort((a, b) => a.path.localeCompare(b.path))
@@ -675,11 +712,11 @@ export function turnChanges(view: JournalView, thread: string, turn: string, sta
     turn,
     own: share((file) => file.own),
     maybe: share((file) => file.maybe),
-    others: othersDuring(view, thread, turn, tags),
+    others: yield* othersDuring(view, thread, turn, tags, through),
     files: counted.slice(0, TURN_FILES),
     more: Math.max(0, counted.length - TURN_FILES),
     journal: store.id,
-    through: store.lastSeq(),
+    through,
     at: now,
   }
 }
@@ -717,19 +754,81 @@ export interface TurnFile {
 
 /** Every entry on a file from a turn's first on it to its last, others' among them. */
 export function turnChain(view: JournalView, group: Pick<TurnFile, "root" | "paths" | "first" | "last">): StoredEntry[] {
-  return [...new Map([...group.paths].flatMap((path) => view.store.chain(group.root, path, group.first - 1)).filter((entry) => entry.seq <= group.last).map((entry) => [entry.seq, entry])).values()]
+  return [...new Map([...group.paths].flatMap((path) => view.store.chain(group.root, path, group.first - 1, group.last)).map((entry) => [entry.seq, entry])).values()]
     .sort((a, b) => a.seq - b.seq)
 }
 
+/**
+ * `turnChain` in steps: a long file history is read in bounded indexed pages, and renamed paths are merged by seq
+ * without a whole-chain decode or sort between yields. The counters need content refs and authors, never line maps.
+ */
+export function* readingTurnChain(view: JournalView, group: Pick<TurnFile, "root" | "paths" | "first" | "last">): Steps<StoredEntry[]> {
+  type Cursor = { path: string; page: StoredEntry[]; at: number }
+  const heads: Cursor[] = []
+  const seq = (cursor: Cursor) => cursor.page[cursor.at]!.seq
+  const add = (cursor: Cursor) => {
+    let index = heads.length
+    heads.push(cursor)
+    while (index > 0) {
+      const parent = (index - 1) >>> 1
+      if (seq(heads[parent]!) <= seq(cursor)) break
+      heads[index] = heads[parent]!
+      index = parent
+    }
+    heads[index] = cursor
+  }
+  for (const path of group.paths) {
+    const page = view.store.chainPage(group.root, path, group.first - 1, group.last, TURN_PAGE)
+    if (page.length) add({ path, page, at: 0 })
+    yield
+  }
+  const chain: StoredEntry[] = []
+  let last = 0
+  while (heads.length) {
+    const head = heads[0]!
+    const entry = head.page[head.at++]!
+    if (entry.seq !== last) {
+      chain.push(entry)
+      last = entry.seq
+    }
+    if (head.at === head.page.length) {
+      head.page = head.page.length === TURN_PAGE ? view.store.chainPage(group.root, head.path, entry.seq, group.last, TURN_PAGE) : []
+      head.at = 0
+      if (!head.page.length) {
+        const tail = heads.pop()!
+        if (heads.length) heads[0] = tail
+      }
+    }
+    // The first cursor advanced or was removed: restore the smallest head at the root.
+    if (heads.length) {
+      const cursor = heads[0]!
+      let index = 0
+      for (;;) {
+        const left = index * 2 + 1
+        if (left >= heads.length) break
+        const right = left + 1
+        const child = right < heads.length && seq(heads[right]!) < seq(heads[left]!) ? right : left
+        if (seq(cursor) <= seq(heads[child]!)) break
+        heads[index] = heads[child]!
+        index = child
+      }
+      heads[index] = cursor
+    }
+    yield
+  }
+  return chain
+}
+
 /** One file of a turn, counted; undefined when the turn made it and took it away again, or none of it is the Thread's. */
-function countFile(view: JournalView, group: TurnFile, tagOf: (seq: number) => Tag, base: string): TurnChangedFile | undefined {
-  const chain = turnChain(view, group)
+function* countFile(view: JournalView, group: TurnFile, tagOf: (seq: number) => Tag, base: string): Steps<TurnChangedFile | undefined> {
+  const chain = yield* readingTurnChain(view, group)
+  yield
   const first = chain[0]
   const last = chain.at(-1)
   if (!first || !last || (first.before === null && last.after === null)) return undefined
   const renamed = group.was !== group.path
   const kind: TurnChangedFile["kind"] = first.before === null ? "create" : last.after === null ? "delete" : renamed ? "rename" : "modify"
-  const lines = countLines(view, chain, tagOf)
+  const lines = yield* countLines(view, chain, tagOf)
   // A whole-file change is its maker's: the entry that created, deleted or renamed it.
   const maker = kind === "create" ? first : kind === "delete" ? last : kind === "rename" ? chain.find((entry) => entry.kind === "rename") : undefined
   const madeBy = maker && tagOf(maker.seq)
@@ -752,18 +851,26 @@ function countFile(view: JournalView, group: TurnFile, tagOf: (seq: number) => T
 }
 
 /** What others changed in the turn's checkout while it ran: files and lines as each entry stated them, never the Thread's, Mako's or Git's. */
-function othersDuring(view: JournalView, thread: string, turn: string, tags: ReadonlyMap<number, Tag>): TurnChangeShare {
+function* othersDuring(view: JournalView, thread: string, turn: string, tags: ReadonlyMap<number, Tag>, through: number): Steps<TurnChangeShare> {
   const span = view.store.turn(thread, turn)
   const out = { files: 0, added: 0, removed: 0 }
   if (!span?.checkout) return out
   const inside = new Set(rootsIn(view, span.checkout).map((root) => root.root.id))
   const files = new Set<string>()
-  for (const entry of view.store.entriesBetween(span.start, span.end ?? Number.MAX_SAFE_INTEGER)) {
-    if (!inside.has(entry.root) || tags.has(entry.seq) || entry.author.certainty === "mako" || entry.git) continue
-    if ("author" in entry.author && entry.author.author.thread === thread) continue
-    files.add(`${entry.root}\u0000${entry.path}`)
-    out.added += entry.added ?? 0
-    out.removed += entry.removed ?? 0
+  // The span's first `OTHERS_LIMIT` entries, oldest first, a window of the numbering at a time.
+  const end = span.end ?? Number.MAX_SAFE_INTEGER
+  const first = view.store.firstSeqFrom(span.start)
+  let read = 0
+  for (let after = first === undefined ? through : first - 1; after < through && read < OTHERS_LIMIT; after += OTHERS_WINDOW) {
+    yield
+    for (const entry of view.store.entriesBetweenIn(span.start, end, after, Math.min(after + OTHERS_WINDOW, through), OTHERS_LIMIT - read)) {
+      read++
+      if (!inside.has(entry.root) || tags.has(entry.seq) || entry.author.certainty === "mako" || entry.git) continue
+      if ("author" in entry.author && entry.author.author.thread === thread) continue
+      files.add(`${entry.root}\u0000${entry.path}`)
+      out.added += entry.added ?? 0
+      out.removed += entry.removed ?? 0
+    }
   }
   out.files = files.size
   return out

@@ -1,11 +1,19 @@
-import { execFile } from "node:child_process"
+import { hostCommand, hostProbe } from "./host-command.js"
+import { hostStopping } from "./host-stopping.js"
 import { readFile, readlink, realpath } from "node:fs/promises"
 import { basename, isAbsolute } from "node:path"
-import { promisify } from "node:util"
 import { onLinux, onMac, onWindows } from "./platform.js"
 
-const run = promisify(execFile)
+const run = hostCommand
 const START_TOLERANCE_MS = 30_000
+/**
+ * How far a start read here (`processStartedAt`) may sit from a moment the host took itself, at a spawn or its own
+ * start. The reading is whole seconds: Linux's is the boot time and the process's ticks, each truncated, so it runs up
+ * to 2 s before the real start, and the moment taken comes a little after it. At 1.5 s about one launch in eight read
+ * as another process on Linux: a child's identity was never taken, a reap dropped a child the host had spawned, and
+ * a live host's holds could read as a stale one's (#635).
+ */
+export const START_READING_TOLERANCE_MS = 3_000
 /** The kernel's clock ticks per second in /proc: USER_HZ, 100 on every architecture Node runs Linux on. */
 const USER_HZ = 100
 
@@ -28,6 +36,9 @@ export async function processStartedAt(
       throw new Error("Process start time is unreadable")
     return (bootSeconds + Math.floor(ticks / USER_HZ)) * 1_000
   }
+  // Batched with every other pid asked about this turn, in the host's probe child.
+  const probes = hostStopping()?.probes
+  if (probes) return probes.startedAt(pid, signal)
   const { stdout } = await run("ps", ["-p", String(pid), "-o", "lstart="], {
     maxBuffer: 4_096,
     timeout: 1_500,
@@ -45,7 +56,7 @@ async function processExecutables(
 ): Promise<string[]> {
   if (onLinux()) return [await readlink(`/proc/${pid}/exe`)]
   if (onMac()) {
-    const { stdout } = await run(
+    const { stdout } = await hostProbe(
       "/usr/sbin/lsof",
       ["-nP", "-a", "-p", String(pid), "-d", "txt", "-Fn"],
       { maxBuffer: 64_000, timeout: 1_500, signal }

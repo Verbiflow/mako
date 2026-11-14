@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { finsWord } from "@mako/host/contracts/agents"
 import { FinPips } from "@/components/rail/fin-pips"
-import { apexPips, pipsCounts } from "@/state/fin-pips"
-import { useAcp } from "@/state/acp"
-import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, InboxIcon, LaptopIcon, MoonIcon, SquarePenIcon } from "lucide-react"
-import { childLine, childStateOf, childWord, rollupLabel } from "@mako/host/contracts/children"
+import { apexPips, pipsCounts, pipsOf } from "@/state/fin-pips"
+import { useAcp } from "@/state/acp-state"
+import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, InboxIcon, LaptopIcon, MoonIcon, ServerIcon, SquarePenIcon } from "lucide-react"
+import { askWords, childLine, childStateOf, childWord, finsAsChildren, rollup, rollupLabel } from "@mako/host/contracts/children"
+import type { LiveSummary } from "@mako/host/contracts/live-conversations"
 import { ApexMark } from "@/components/ui/apex-mark"
 import { finMarkState, motionOf } from "@/lib/live-mark-state"
 import { shallowEqual } from "@/state/store"
@@ -32,14 +33,14 @@ import { shownTitle } from "./renames"
 import { rowDetail, type RowContext } from "./rows"
 import { foldThreads, type ThreadStanding, type WebThread } from "./threads"
 import { webHarnessLabel } from "./labels"
-import { macCount } from "./places"
+import { computerCount } from "./places"
 import { followedWays, listedMove, useMoves } from "./moves"
 import type { MoveWay } from "./move-progress"
 import { ConnectMac } from "./connect-mac"
 import { macConnection } from "./mac-connection"
 import { macPlace, useReach } from "./reach"
 import { DiagnosisCard } from "./trouble"
-import { useWebFinAsks, waitingThreads, webInboxCount, type WebFinAsk } from "./inbox"
+import { useWebFinAsks, waitingThreads, webInboxCount, type WebFinAsk, asksBesidePlaced } from "./inbox"
 import { checkList, useListDiagnosis, useTryAgain } from "./trouble-state"
 
 /**
@@ -47,8 +48,9 @@ import { checkList, useListDiagnosis, useTryAgain } from "./trouble-state"
  * its own), what's at work, and the rest, a failure among them wearing its mark. An Apex whose asks are its Fins'
  * stands with the work, its Fins' rows saying what they ask.
  */
-function sections(threads: readonly WebThread[], fins: readonly WebFinAsk[]) {
-  const needs = waitingThreads(threads, fins)
+function sections(threads: readonly WebThread[], asks: readonly WebFinAsk[], placed: readonly WebThread[]) {
+  const fins = asksBesidePlaced(asks, placed)
+  const needs = waitingThreads(threads, asks, placed)
   const waiting = new Set(needs.map((thread) => thread.id))
   const working = threads.filter((thread) => !waiting.has(thread.id) && (thread.standing === "working" || thread.standing === "moving" || thread.standing === "waiting"))
   const rest = threads.filter((thread) => thread.standing === "idle" || thread.standing === "failed")
@@ -74,9 +76,11 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
   // A Thread swiped away leaves the list at once; it's back only if the archive is taken back or refused.
   const hidden = useArchiving((state) => state.hidden)
   const threads = useMemo(() => (hidden.size ? folded.threads.filter((thread) => !hidden.has(thread.id)) : folded.threads), [folded, hidden])
-  const { archived } = folded
+  const { archived, placed } = folded
   const fins = useWebFinAsks()
   const byId = useMemo(() => new Map(threads.map((thread) => [thread.id, thread])), [threads])
+  // A Fin placed on another device opens as its own row, where its device answers; its Apex's row otherwise.
+  const placedById = useMemo(() => new Map(placed.map((thread) => [thread.id, thread])), [placed])
   const read = useReadState((state) => state)
   // Threads listed here for the first time read as seen: only what happens from now on is news.
   useEffect(() => {
@@ -120,7 +124,7 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
   const pull = usePullToRefresh(scroller, content, () => client.list.refresh())
   const away = useAwayWhileScrolling(scroller, !wide)
   useRowFlip(scroller, showArchived ? "archived" : "threads")
-  const named = macCount(list) > 1
+  const named = computerCount(list) > 1
   return (
     <div data-list={wide ? "rail" : "screen"} className={cn("web-list relative flex min-h-0 flex-1 flex-col", wide ? "bg-shell" : "bg-surface")}>
       <header className="web-bar flex shrink-0 items-center gap-0.5 pr-1.5 pl-4">
@@ -145,12 +149,12 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
         <PullIndicator pulled={pull.pulled} refreshing={pull.refreshing} />
         <div ref={content} className="pb-[calc(var(--dock,0px)+24px)]">
           <ListTrouble />
-          {onInbox && (threads.length > 0 || archived.length > 0) ? <TopChips count={webInboxCount(threads, fins)} open={inbox} onInbox={onInbox} /> : null}
+          {onInbox && (threads.length > 0 || archived.length > 0) ? <TopChips count={webInboxCount(threads, fins, placed)} open={inbox} onInbox={onInbox} /> : null}
           {threads.length === 0 && archived.length === 0 ? (
             <EmptyList answered={list.phase === "live" || list.asOf !== undefined} onNew={onNew} />
           ) : (
             <>
-              {sections(threads, fins).map((section) => (
+              {sections(threads, fins, placed).map((section) => (
                 <section key={section.id} aria-labelledby={`section-${section.id}`} data-list-section={section.id} className="web-section">
                   <h2 id={`section-${section.id}`} className={cn("web-section-label", section.id === "needs" && "text-attention")}>
                     {section.label}
@@ -162,7 +166,7 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
                       </li>
                     ))}
                     {section.fins.map((fin) => {
-                      const apex = byId.get(fin.apex.thread)
+                      const apex = placedById.get(fin.ask.fin) ?? byId.get(fin.apex.thread)
                       return (
                         <li key={fin.key} data-flip-key={fin.key}>
                           <FinAskRow fin={fin} onOpen={apex ? () => onOpen(apex) : onInbox} />
@@ -277,10 +281,10 @@ function EmptyList({ answered, onNew }: { answered: boolean; onNew: () => void }
       <div className="skeleton-rows flex flex-col gap-1 px-4 pt-5" aria-hidden>
         {[0.62, 0.48, 0.7, 0.4].map((width) => (
           <div key={width} className="flex items-center gap-3 py-2.5">
-            <span className="skeleton size-[18px] rounded-md" />
+            <span className="skeleton size-[18px]" />
             <span className="flex flex-1 flex-col gap-1.5">
-              <span className="skeleton h-3.5 rounded" style={{ width: `${width * 100}%` }} />
-              <span className="skeleton h-3 w-1/3 rounded" />
+              <span className="skeleton h-3.5" style={{ width: `${width * 100}%` }} />
+              <span className="skeleton h-3 w-1/3" />
             </span>
           </div>
         ))}
@@ -368,7 +372,7 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, unrea
   const front = useRef<HTMLButtonElement>(null)
   useRowGestures(box, front, swipe, { onTap: onOpen, onHold: () => onHold?.(box.current), onArchive: () => onArchive?.() })
   // A Mac that's off says so on its own rows, dimmed with a moon where its laptop stood, rather than in a line of its own.
-  const Place = detail.move ? (detail.move === "cloud" ? ArrowUpIcon : ArrowDownIcon) : detail.place === "cloud" ? CloudIcon : thread.quietSince ? MoonIcon : LaptopIcon
+  const Place = detail.move ? (detail.move === "cloud" ? ArrowUpIcon : ArrowDownIcon) : detail.place === "cloud" ? CloudIcon : thread.quietSince ? MoonIcon : detail.place === "machine" ? ServerIcon : LaptopIcon
   const receding = thread.standing === "working" || thread.standing === "moving"
   const spoken = detail.elapsed ? `${detail.text} for ${detail.elapsed}` : detail.lead ? `${detail.lead}, ${detail.text}` : detail.text
   return (
@@ -388,6 +392,7 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, unrea
         aria-current={selected ? "page" : undefined}
         aria-label={threadLabel(thread, spoken, unread)}
         data-thread={thread.id}
+        data-under={thread.apex?.thread}
         data-standing={thread.standing}
         data-moving={detail.move}
         data-unread={unread || undefined}
@@ -398,14 +403,18 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, unrea
         </span>
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 items-baseline gap-2">
-            <span className={cn("min-w-0 flex-1 truncate text-ui text-foreground", receding ? "font-normal" : "font-medium")}>{shownTitle(thread)}</span>
+            <span className={cn("min-w-0 flex-1 truncate text-ui text-foreground", receding ? "font-normal" : "font-medium")}>
+              {shownTitle(thread)}
+              {thread.apex ? <span data-row-apex={thread.apex.thread} className="text-label font-normal text-faint"> · {thread.apex.title}</span> : null}
+            </span>
             <span className="flex shrink-0 items-center gap-1.5 self-center">
               <span className="tabular text-label text-faint">{formatRelative(thread.activityAt)}</span>
             </span>
           </span>
-          <ApexLineOr thread={thread.id}>
+          <ApexLineOr thread={thread.id} fins={thread.sessions.find((session) => session.summary.fins)?.summary.fins}>
           <span className="flex min-w-0 items-center gap-1.5 text-label">
-            {detail.place || detail.move ? <Place aria-hidden data-move-mark={detail.move} className={cn("size-3 shrink-0", detail.move ? "web-move-blink text-foreground" : "text-faint")} /> : null}
+            {detail.place || detail.move ? <Place aria-hidden data-move-mark={detail.move} data-place={detail.move ? undefined : detail.place} className={cn("size-3 shrink-0", detail.move ? "web-move-blink text-foreground" : "text-faint")} /> : null}
+            {detail.where ? <span data-row-where className="shrink-0 text-faint">{detail.where} ·</span> : null}
             {detail.tone === "working" ? (
               <Shimmer className="min-w-0 truncate">
                 {detail.text}
@@ -469,7 +478,7 @@ export function FinAskRow({ fin, onOpen }: { fin: WebFinAsk; onOpen?: () => void
       type="button"
       onClick={onOpen}
       data-fin-row={fin.ask.fin}
-      aria-label={`${fin.ask.title}, in ${fin.apex.title}. Needs you: ${fin.ask.question}`}
+      aria-label={`${fin.ask.title}, in ${fin.apex.title}. ${fin.ask.done ? askWords(fin.ask) : `Needs you: ${fin.ask.question}`}`}
       className="web-row group relative flex w-full items-center text-left"
     >
       <span className="web-row-mark">
@@ -485,7 +494,7 @@ export function FinAskRow({ fin, onOpen }: { fin: WebFinAsk; onOpen?: () => void
         <span className="flex min-w-0 items-center gap-1.5 text-label text-faint">
           <ApexMark aria-hidden className="size-3 shrink-0" />
           <span className="min-w-0 truncate">
-            <span data-fin-row-apex>{fin.apex.title}</span> · {fin.ask.question}
+            <span data-fin-row-apex>{fin.apex.title}</span> · {askWords(fin.ask)}
           </span>
         </span>
       </span>
@@ -528,10 +537,12 @@ function useAwayWhileScrolling(scroller: React.RefObject<HTMLDivElement | null>,
 
 /**
  * An Apex's second line: one pip per Fin and how many, where another row says what it's doing, from the snapshot this
- * page holds of it. Its Fins that need the person are rows of their own under Needs you. Repaints when a pip changes.
+ * page holds of it, or else from its row's Fins as its owner listed them (`finsAsChildren`), drawn by the same
+ * selectors. Its Fins that need the person are rows of their own under Needs you. Repaints when a pip changes.
  */
-function ApexLineOr({ thread, children }: { thread: string; children: ReactNode }) {
-  const pips = useAcp((state) => apexPips(state, thread))
+function ApexLineOr({ thread, fins, children }: { thread: string; fins: LiveSummary["fins"]; children: ReactNode }) {
+  const held = useAcp((state) => apexPips(state, thread))
+  const pips = held || (fins ? pipsOf(finsAsChildren(fins), rollup(finsAsChildren(fins))) : "")
   if (!pips) return children
   const label = rollupLabel(pipsCounts(pips))
   return (

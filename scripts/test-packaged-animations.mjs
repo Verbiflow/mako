@@ -21,12 +21,13 @@ import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync, spawn } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
+import { mkdir, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { createInterface } from "node:readline"
 import { setTimeout as delay } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 
 /**
@@ -64,7 +65,7 @@ async function check() {
   const harness = flag("harness") ?? "claude"
   await mkdir(join(out, `${prefix}frames`), { recursive: true })
 
-  const root = await realpath(await mkdtemp(join(tmpdir(), "mako-animations-")))
+  const root = await realpath(testScratch("mako-animations-"))
   const workspace = join(root, "workspace")
   await mkdir(workspace)
   await writeFile(join(workspace, "README.md"), "Disposable workspace for the animation check.\n")

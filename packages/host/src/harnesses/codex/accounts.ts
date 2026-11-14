@@ -11,7 +11,6 @@ import {
   rm,
   rmdir,
   symlink,
-  writeFile,
 } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -33,6 +32,7 @@ import {
   type AccountRoot,
 } from "../accounts-common.js"
 import { childProcessEnv } from "../../base/child-environment.js"
+import { publishFile, publisherFile } from "../../base/published-files.js"
 import type { JsonValue } from "../../contracts/json.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import { chatGptUsage } from "../chatgpt-usage.js"
@@ -73,6 +73,7 @@ function hasCredentials(contents: string): boolean {
 function isPrivateEntry(name: string): boolean {
   return (
     name.startsWith("auth.json") ||
+    publisherFile(name) ||
     [".mako-account.json", "config.toml", "models_cache.json", "log", "memories", "tmp"].includes(name)
   )
 }
@@ -239,7 +240,7 @@ async function captureAccount(root: AccountRoot, name: string): Promise<void> {
       throw new Error(
         "The Codex login is missing or invalid. Sign in with the CLI and capture it again."
       )
-    await writeFile(join(dir, "auth.json"), credentials, { mode: 0o600 })
+    await publishFile(join(dir, "auth.json"), credentials, { mode: 0o600 })
     await chmod(join(dir, "auth.json"), 0o600)
 
     // Sessions, archives and names remain in the one watched store for every account.

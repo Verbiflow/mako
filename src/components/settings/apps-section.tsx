@@ -5,6 +5,7 @@ import type { ProjectAppSetup, RecipeProofSummary, RecipeVersionView, RecipeView
 import { environmentRepairPrompt } from "@mako/host/contracts/thread-environments"
 import { Action, Blank, Chip, Eyebrow, ListCard, ListCardRow } from "@/components/ui/kit"
 import { Shimmer } from "@/components/ui/shimmer"
+import { SetupPage } from "@/components/setup/setup-page"
 import { Skeleton } from "@/components/ui/skeleton"
 import { recipeChangeContext } from "@/lib/app-setup-context"
 import { threadFolderKey } from "@/lib/thread-folders"
@@ -85,6 +86,7 @@ export function AppsSection() {
 
 function ProjectList({ onOpen }: { onOpen: (root: string) => void }) {
   const roots = useProjects()
+  const tab = useAppSetup((state) => state.tab)
   const [setups, setSetups] = useState<Record<string, ProjectAppSetup | null>>({})
   const key = roots.join("\n")
   useEffect(() => {
@@ -102,9 +104,9 @@ function ProjectList({ onOpen }: { onOpen: (root: string) => void }) {
   return (
     <div>
       <p className="pb-4 text-ui leading-relaxed text-muted-foreground">
-        How each project’s Threads install, start and check their own copy of
-        its app. An agent works this out once and Mako keeps it as the
-        project’s recipe, for every branch.
+        {tab === "setup"
+          ? "Choose a project to see its files, accounts, tools and services on this Mac, your devices and the cloud."
+          : "How each project’s Threads install, start and check their own copy of its app. An agent works this out once and Mako keeps it as the project’s recipe, for every branch."}
       </p>
       {roots.length ? (
         <ListCard className="px-0">
@@ -113,7 +115,7 @@ function ProjectList({ onOpen }: { onOpen: (root: string) => void }) {
           ))}
         </ListCard>
       ) : (
-        <div className="rounded-lg bg-shell/55 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
+        <div className="bg-raised">
           <Blank title="No projects yet" body="Start a Thread in a project folder and it shows up here." />
         </div>
       )}
@@ -127,7 +129,7 @@ function ProjectRow({ root, setup, onOpen }: { root: string; setup: ProjectAppSe
       type="button"
       data-app-project={folderName(root)}
       onClick={onOpen}
-      className="group flex w-full items-center gap-3 px-4 py-3 text-left transition-colors duration-100 first:rounded-t-lg last:rounded-b-lg hover:bg-fill-hover"
+      className="group flex w-full items-center gap-3 px-4 py-3 text-left transition-colors duration-100 hover:bg-fill-hover"
     >
       <span className="min-w-0 flex-1">
         <span className="block truncate text-ui font-medium text-foreground">{setup?.project ?? folderName(root)}</span>
@@ -160,6 +162,7 @@ function runsSummary(recipe: RecipeView): string {
 /* ------------------------------------------------------------------ */
 
 function ProjectApp({ root, onBack }: { root: string; onBack: () => void }) {
+  const tab = useAppSetup((state) => state.tab ?? "recipe")
   const [setup, setSetup] = useState<ProjectAppSetup | null>(null)
   const [failure, setError] = useState<string | null>(null)
   const error = threadAppDriver()?.setup ? failure : "This Mako can't run apps."
@@ -187,23 +190,38 @@ function ProjectApp({ root, onBack }: { root: string; onBack: () => void }) {
         </Action>
         <div className="flex items-start gap-4">
           <div className="min-w-0 flex-1">
-            <h3 className="truncate text-title font-semibold text-foreground">{setup?.project ?? "\u00a0"}</h3>
-            <p className="mt-0.5 truncate text-label text-faint">{setup ? shortPath(setup.root) : "\u00a0"}</p>
+            <h3 className="truncate text-title font-semibold text-foreground">{setup?.project ?? folderName(root)}</h3>
+            <p className="mt-0.5 truncate text-label text-faint">{shortPath(setup?.root ?? root)}</p>
           </div>
-          {setup?.recipe.kind === "ready" ? (
+          {tab === "recipe" && setup?.recipe.kind === "ready" ? (
             <Action tone="outline" data-app-setup-action="change" onClick={() => void changeWithAgent(setup)}>
               Change with an agent
             </Action>
           ) : null}
         </div>
+        <div role="tablist" aria-label="Project" className="mt-3 flex gap-1">
+          {(["recipe", "setup"] as const).map((name) => (
+            <Action key={name} role="tab" size="xs" aria-selected={tab === name} data-on={tab === name} data-project-tab={name} onClick={() => appSetupStore.set({ tab: name })}>
+              {name === "recipe" ? "Recipe" : "Setup"}
+            </Action>
+          ))}
+        </div>
       </div>
 
+      {tab === "setup" ? <SetupPage folder={root} /> : <RecipePage setup={setup} error={error} />}
+    </div>
+  )
+}
+
+function RecipePage({ setup, error }: { setup: ProjectAppSetup | null; error: string | null }) {
+  return (
+    <>
       {error ? <p className="text-ui text-negative">The project&apos;s app couldn&apos;t be read: {error}</p> : null}
       {!setup && !error ? <p className="text-ui text-faint"><Shimmer text="Reading the recipe…" /></p> : null}
       {setup?.recipe.kind === "none" ? <NotSetUp setup={setup} /> : null}
       {setup?.recipe.kind === "invalid" ? <Broken setup={setup} message={setup.recipe.message} file={setup.recipe.file} /> : null}
       {setup?.recipe.kind === "ready" ? <Recipe state={setup.recipe} root={setup.root} /> : null}
-    </div>
+    </>
   )
 }
 
@@ -214,7 +232,7 @@ function NotSetUp({ setup }: { setup: ProjectAppSetup }) {
     Object.values(state.byCwd).find((view) => view.kind === "setting-up" && view.root === setup.root)
   )
   return (
-    <div className="rounded-lg bg-shell/55 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
+    <div className="bg-raised">
       <Blank
         title={underWay?.kind === "setting-up" ? `“${underWay.thread.title}” is setting it up` : `${setup.project} isn’t set up to run yet`}
         body={
@@ -254,7 +272,7 @@ function NotSetUp({ setup }: { setup: ProjectAppSetup }) {
 function Broken({ setup, message, file }: { setup: ProjectAppSetup; message: string; file?: string }) {
   return (
     <div className="flex flex-col gap-3">
-      <div className="rounded-lg bg-negative/[0.06] px-4 py-3.5 [box-shadow:inset_0_0_0_0.5px_color-mix(in_oklab,var(--negative)_30%,transparent)]">
+      <div className="bg-negative/[0.06] px-4 py-3.5 [box-shadow:inset_0_0_0_0.5px_color-mix(in_oklab,var(--negative)_30%,transparent)]">
         <p className="text-ui font-medium text-negative">The recipe is broken, so its Threads can’t run the app</p>
         <p className="mt-1 text-label leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">{message}</p>
       </div>
@@ -552,7 +570,7 @@ function RecipeSource({ state }: { state: ReadyRecipe }) {
       ? `${state.version ? `Version ${state.version}, saved` : "Saved"} in Mako${state.savedAt ? ` ${ago(state.savedAt)}` : ""}, for every branch${state.earlier ? `; ${plural(state.earlier, "earlier version")} kept` : ""}.`
       : "Committed with the project as .mako/recipe.json, so it changes with the branch."
   return (
-    <div className="flex items-center gap-3 border-t border-hairline pt-4">
+    <div className="flex items-center gap-3 pt-4">
       <p className="min-w-0 flex-1 text-label leading-relaxed text-faint">
         {where}
         {state.ignored ? " A committed .mako/recipe.json is ignored while this one exists." : ""}
@@ -601,7 +619,7 @@ function Command({ className, children }: { className?: string; children: ReactN
 
 function FileName({ children }: { children: ReactNode }) {
   return (
-    <span className="inline-flex h-6 items-center rounded-md bg-raised px-2 font-mono text-label text-foreground/85 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
+    <span className="inline-flex h-6 items-center bg-raised px-2 font-mono text-label text-foreground/85">
       {children}
     </span>
   )

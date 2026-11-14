@@ -135,6 +135,20 @@ export function pinnedPolicy<T extends RuntimeUpdateSource>(source: T): T {
   }
 }
 
+/**
+ * Whether an installer's output says the build it fetched is no longer published: curl's HTTP error for the build's
+ * own file (a vendor that withdraws a release answers 403 or 404 for it, as Devin did for 3000.12.17), or npm finding
+ * no such version.
+ */
+export function unpublishedBuild(output: string): boolean {
+  return /curl: \(22\)[^\n]*\b(?:403|404|410)\b/.test(output) || /\b(?:E404|ETARGET)\b|No matching version found/.test(output)
+}
+
+/** What a pinned install says when the build it pins is gone, in place of the installer's own words. */
+export function unpublishedWords(label: string, tested: string): string {
+  return `${label} ${tested}, which this Mako is tested with, is no longer published. Update Mako, or move the pin.`
+}
+
 export function npmInstall(name: string, version = "latest"): HarnessUpdateCommand {
   return { ...npmUpdate(`${name}@${version}`), label: "Install with npm" }
 }

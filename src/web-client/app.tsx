@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react"
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { SquarePenIcon } from "lucide-react"
 import { toast } from "sonner"
 import { landTranscriptsAtEnd } from "@/components/transcript/transcript-end"
@@ -9,7 +9,8 @@ import { useKeyboardInset } from "./keyboard"
 import { ThreadList } from "./list"
 import { followNotices } from "./open-notice"
 import { RETURNED_EVENT, returnedOf } from "./resume"
-import { parseRoute, routeHref, useForm, useRoute, type ScreenRoute } from "./route"
+import { parseRoute, routeHref, useForm, useRoute, type ScreenRoute, type WebForm } from "./route"
+import { deskReviewCode, touchReviewCode } from "./review-open"
 import { ScreenStack } from "./screens"
 import { startedFromHere } from "./started"
 import type { Started } from "./start"
@@ -17,8 +18,13 @@ import { tapOnLift } from "./taps"
 import { useSeenWhileOpen } from "./read-state"
 import { useThread } from "./use-thread"
 import { ReviewLayer } from "./review-layer"
+import { FilesLayer } from "./files-layer"
 import { arrivedUpdated, takeUpdates } from "./update"
-import { chunk, transcriptChunk } from "./chunks"
+import { chunk, deskComposerChunk, filesScreenChunk, transcriptChunk } from "./chunks"
+import { LazyBoundary } from "@/components/ui/lazy-boundary"
+import { ScreenFailed, ScreenLoading } from "./code-unavailable"
+import { Sheet } from "./sheet"
+import { ThreadShell } from "./thread-shell"
 
 /**
  * What the list paints without, each a chunk of its own (`chunk`): a Thread (its screen, then its transcript, the
@@ -33,11 +39,18 @@ const deskChunk = chunk(() => import("./desk"))
 const Toaster = lazy(() => import("@/components/ui/sonner").then((module) => ({ default: module.Toaster })))
 const Settings = lazy(() => import("./settings").then((module) => ({ default: module.Settings })))
 const InboxScreen = lazy(() => import("./inbox-screen").then((module) => ({ default: module.InboxScreen })))
+const SetupScreen = lazy(() => import("./setup-screen").then((module) => ({ default: module.SetupScreen })))
 
-/** A Thread's code first, the screen most often opened next, then New's: one after the other, each has the line to itself. */
-async function readNextScreens(): Promise<void> {
+/**
+ * A Thread's code first, the screen most often opened next, then New's, then a Thread's Changes and Files: one after the
+ * other, each has the line to itself, and none is read while a Thread opens, where it would share the line and the main
+ * thread with the Thread's own answer.
+ */
+async function readNextScreens(form: WebForm): Promise<void> {
   await Promise.allSettled([threadChunk.read(), transcriptChunk.read(), conversationsChunk.read()])
   await startChunk.read().catch(() => undefined)
+  await (form === "desk" ? deskReviewCode : touchReviewCode).read().catch(() => undefined)
+  await filesScreenChunk.read().catch(() => undefined)
 }
 
 /** Runs `then` in a task of its own once the list's first frame is on screen: work the first paint shouldn't wait on. */
@@ -78,18 +91,18 @@ export function WebApp() {
   // Opened again, the app's files are on this device (its service worker keeps them): a Thread's are read at once, as
   // the list paints from the list kept here. The first time, they wait for the list, which has the network to itself.
   useEffect(() => {
-    if (navigator.serviceWorker?.controller) void readNextScreens()
-  }, [])
+    if (navigator.serviceWorker?.controller) void readNextScreens(form)
+  }, [form])
   useEffect(() => {
     if (!painted || settled) return
     return afterFirstPaint(() => {
       setSettled(true)
       // Then the page's own work, so a service worker keeping these files finds them already fetched.
-      void readNextScreens()
+      void readNextScreens(form)
         .catch(() => undefined)
         .then(() => client.options.painted?.())
     })
-  }, [painted, settled, client])
+  }, [painted, settled, client, form])
   // New's sheet is mounted from its first opening on, so it leaves on its own path when closed. Wide, New is a pane.
   const [startOpened, setStartOpened] = useState(false)
   if (route.kind === "new" && !startOpened) setStartOpened(true)
@@ -98,8 +111,23 @@ export function WebApp() {
   const threadCode = threadChunk.use()
   const startCode = startChunk.use()
   const deskCode = deskChunk.use()
+  // Each read again by Retry, or by itself once online, when it failed (`CodeLine`).
+  const threadFailed = threadChunk.useFailed()
+  const startFailed = startChunk.useFailed()
+  const deskFailed = deskChunk.useFailed()
+  // Past their patience still under way: said as still loading, never as a failure (`chunk`).
+  const threadSlow = threadChunk.useSlow()
+  const startSlow = startChunk.useSlow()
+  const deskSlow = deskChunk.useSlow()
+  const readThread = useCallback(() => Promise.all([threadChunk.read(), transcriptChunk.read()]).then(() => undefined), [])
+  const readStart = useCallback(() => startChunk.read().then(() => undefined), [])
+  const readDesk = useCallback(() => deskChunk.read().then(() => undefined), [])
+  // A laptop's browser: the desk, and with it the desktop's composer, its main input, read together from the first
+  // render rather than the composer after the desk has arrived and mounted, so a Thread opened at once finds it here.
   useEffect(() => {
-    if (desk && !deskCode) void deskChunk.read().catch(() => undefined)
+    if (!desk) return
+    if (!deskCode) void deskChunk.read().catch(() => undefined)
+    void deskComposerChunk.read().catch(() => undefined)
   }, [desk, deskCode])
   // The Thread on screen is read, here: a run that finishes while it's open never lists as "Done".
   const shownThread = useThread(route.kind === "thread" ? route.thread : route.kind === "new" && route.over?.kind === "thread" ? route.over.thread : "")
@@ -178,8 +206,10 @@ export function WebApp() {
   const detail = startPane ? (
     startCode ? (
       <startCode.StartPane onDismiss={back} onStarted={onStarted} />
+    ) : startFailed ? (
+      <ScreenFailed what="New" retry={readStart} onBack={back} />
     ) : (
-      <div className="flex-1 bg-surface" />
+      <ScreenLoading what="New" slow={startSlow} />
     )
   ) : under.kind === "thread" ? (
       threadCode ? (
@@ -192,30 +222,50 @@ export function WebApp() {
           onSession={(session) => navigate({ kind: "thread", thread: under.thread, session }, { replace: true })}
         />
       ) : (
-        <div data-thread-loading className="flex-1 bg-surface" />
+        <ThreadShell title={shownThread?.title} onBack={wide ? undefined : back} failed={threadFailed} slow={threadSlow} retry={readThread} />
       )
     ) : under.kind === "settings" ? (
-      <Suspense fallback={null}>
-        <Settings onBack={wide ? undefined : back} />
-      </Suspense>
+      <LazyBoundary fallback={() => <ScreenFailed what="Settings" onBack={wide ? undefined : back} />}>
+        <Suspense fallback={<ScreenLoading what="Settings" />}>
+          <Settings onBack={wide ? undefined : back} onSetup={(project) => open({ kind: "setup", project })} />
+        </Suspense>
+      </LazyBoundary>
     ) : under.kind === "inbox" ? (
-      <Suspense fallback={null}>
-        <InboxScreen onBack={wide ? undefined : back} onOpen={(thread) => open({ kind: "thread", thread: thread.id })} />
-      </Suspense>
+      <LazyBoundary fallback={() => <ScreenFailed what="The Inbox" onBack={wide ? undefined : back} />}>
+        <Suspense fallback={<ScreenLoading what="the Inbox" />}>
+          <InboxScreen onBack={wide ? undefined : back} onOpen={(thread) => open({ kind: "thread", thread: thread.id })} />
+        </Suspense>
+      </LazyBoundary>
+    ) : under.kind === "setup" ? (
+      <LazyBoundary fallback={() => <ScreenFailed what="Setup" onBack={back} />}>
+        <Suspense fallback={<ScreenLoading what="Setup" />}>
+          <SetupScreen project={under.project} onBack={back} />
+        </Suspense>
+      </LazyBoundary>
     ) : null
   // Changes belongs to the Thread on screen: anywhere else, it's closed.
   const reviewPlace = under.kind === "thread" ? `thread:${under.thread}` : under.kind
-  const sheet = startOpened && startCode && !wide ? <startCode.StartSheet open={route.kind === "new"} onDismiss={back} onStarted={onStarted} /> : null
+  // New's sheet, the one `StartSheet` draws, held here so a tap before its form's code arrives opens it at once with a
+  // line saying it's loading, and the form takes its place in the same sheet.
+  const sheet =
+    startOpened && !wide ? (
+      <Sheet open={route.kind === "new"} onDismiss={back} label="New thread" className="web-start-sheet">
+        {route.kind !== "new" ? null : startCode ? <startCode.StartForm onStarted={onStarted} /> : startFailed ? <ScreenFailed what="New" retry={readStart} /> : <ScreenLoading what="New" slow={startSlow} className="min-h-40" />}
+      </Sheet>
+    ) : null
+  // The toaster's code failing leaves the page without toasts, never on the window's error screen.
   const toaster = settled ? (
-    <Suspense fallback={null}>
-      {desk ? <Toaster position="top-right" offset={{ top: 46, right: 12 }} duration={3000} /> : <Toaster position="top-center" offset={{ top: "calc(env(safe-area-inset-top) + 8px)" }} />}
-      <SayUpdated />
-    </Suspense>
+    <LazyBoundary fallback={() => null}>
+      <Suspense fallback={null}>
+        {desk ? <Toaster position="top-right" offset={{ top: 46, right: 12 }} duration={3000} /> : <Toaster position="top-center" offset={{ top: "calc(env(safe-area-inset-top) + 8px)" }} />}
+        <SayUpdated />
+      </Suspense>
+    </LazyBoundary>
   ) : null
   if (desk)
     return (
       <div className="web-app flex w-full overflow-hidden bg-shell text-foreground" data-form="desk">
-        {deskCode ? <deskCode.default route={route} navigate={navigate} back={back} onStarted={onStarted} /> : <div className="flex-1 bg-shell" />}
+        {deskCode ? <deskCode.default route={route} navigate={navigate} back={back} onStarted={onStarted} /> : deskFailed ? <ScreenFailed what="Mako" retry={readDesk} className="bg-shell" /> : <ScreenLoading what="Mako" slow={deskSlow} className="bg-shell" />}
         {toaster}
       </div>
     )
@@ -227,12 +277,14 @@ export function WebApp() {
           <main className="relative flex min-w-0 flex-1 flex-col">
             {detail ?? <NothingOpen onNew={() => navigate({ kind: "new", over: under })} />}
             <ReviewLayer form={form} place={reviewPlace} />
+            <FilesLayer form={form} place={reviewPlace} />
           </main>
         </>
       ) : (
         <main className="relative flex min-w-0 flex-1 flex-col">
           <ScreenStack under={list} top={detail} topKey={detail ? routeHref(under, client.options.base).split("?")[0] : undefined} onBack={back} />
           <ReviewLayer form={form} place={reviewPlace} />
+          <FilesLayer form={form} place={reviewPlace} />
         </main>
       )}
       {sheet}

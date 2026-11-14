@@ -15,7 +15,8 @@
  * other: an account is never removed under a holder, and never left pending
  * after its last holder ends.
  */
-import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { rmSync } from "node:fs"
+import { publishFileSync } from "../base/published-files.js"
 import { readdir, readFile, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
@@ -155,15 +156,12 @@ export class AccountHolds {
         rmSync(path, { force: true })
         return
       }
-      mkdirSync(this.root.holds, { recursive: true, mode: 0o700 })
-      const temporary = `${path}.tmp`
-      writeFileSync(temporary, JSON.stringify({
+      publishFileSync(path, JSON.stringify({
         version: 1,
         pid: process.pid,
         startedAt: HOST_STARTED_AT,
         accounts: [...this.held.keys()],
-      }), { mode: 0o600 })
-      renameSync(temporary, path)
+      }), { mode: 0o600, dirMode: 0o700 })
     } catch (error) {
       hostWarn("accounts", "account lease could not be written", { error: error instanceof Error ? error.message : String(error) })
     }

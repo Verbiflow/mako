@@ -1,10 +1,10 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { manualDevUpdates } from "../electron/dev-updates.mjs"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 if (process.versions.electron) {
   void checkWindow().catch(async (error) => {
@@ -14,7 +14,7 @@ if (process.versions.electron) {
   })
 } else {
   const { createServer } = await import("vite")
-  const root = await mkdtemp(join(tmpdir(), "mako-workspace-ui-"))
+  const root = testScratch("mako-workspace-ui-")
   const server = await createServer({
     cacheDir: join(root, "cache"),
     define: { "import.meta.env.MAKO_MANUAL_RELOAD": "true" },
@@ -44,7 +44,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`UI evidence: ${root}`)
 }
 
 async function checkWindow() {

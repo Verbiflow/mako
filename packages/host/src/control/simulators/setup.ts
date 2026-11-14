@@ -1,4 +1,5 @@
-import { execFile, spawn } from "node:child_process"
+import { hostSpawn } from "../../base/host-command.js"
+import { hostExecFile } from "../../base/host-command.js"
 import { mkdir, readdir, readFile, stat, statfs, writeFile } from "node:fs/promises"
 import { arch, homedir } from "node:os"
 import { dirname, join } from "node:path"
@@ -28,7 +29,7 @@ export type Run = (file: string, args: readonly string[], options?: { env?: Node
 
 export const runCommand: Run = (file, args, options = {}) =>
   new Promise((resolve) => {
-    execFile(file, [...args], { env: options.env ?? process.env, timeout: options.timeoutMs ?? 15_000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+    hostExecFile(file, [...args], { env: options.env ?? process.env, timeout: options.timeoutMs ?? 15_000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
       const code = error ? (Number.isInteger(error.code) ? Number(error.code) : null) : 0
       resolve({ code, stdout: String(stdout), stderr: error && !stderr && code === null ? error.message : String(stderr) })
     })
@@ -67,11 +68,23 @@ export function developerFolder(xcode: XcodeFound): string {
   return join(xcode.path, "Contents", "Developer")
 }
 
-/** Each complete Xcode in the Applications folders: a bundle whose `xcodebuild` is there, which an App Store download isn't until it's done. */
+/** Spotlight's query for every Xcode on this Mac, wherever it was put: an Xcode kept outside Applications counts too. */
+const XCODE_QUERY = "kMDItemCFBundleIdentifier == 'com.apple.dt.Xcode'"
+
+/**
+ * Each complete Xcode on this Mac: in the Applications folders, and anywhere Spotlight finds one. A bundle counts once
+ * its `xcodebuild` is there, which an App Store download's isn't until it's done. Whichever folder `xcode-select` names,
+ * Mako runs a found Xcode's tools through its own developer folder (`DEVELOPER_DIR`).
+ */
 export async function findXcodes(run: Run, folders: readonly string[]): Promise<XcodeFound[]> {
-  const bundles = (
-    await Promise.all(folders.map(async (folder) => (await readdir(folder).catch(() => [])).filter((name) => /^Xcode.*\.app$/.test(name)).map((name) => join(folder, name))))
-  ).flat()
+  const [listed, spotlight] = await Promise.all([
+    Promise.all(folders.map(async (folder) => (await readdir(folder).catch(() => [])).filter((name) => /^Xcode.*\.app$/.test(name)).map((name) => join(folder, name)))),
+    run("/usr/bin/mdfind", [XCODE_QUERY], { timeoutMs: 5_000 }).then(
+      (found) => (found.code === 0 ? found.stdout.split("\n").map((line) => line.trim()).filter((line) => line.endsWith(".app")) : []),
+      () => []
+    ),
+  ])
+  const bundles = [...new Set([...listed.flat(), ...spotlight])]
   const found = await Promise.all(
     bundles.map(async (path): Promise<XcodeFound | undefined> => {
       if (!(await stat(join(path, "Contents", "Developer", "usr", "bin", "xcodebuild")).then(() => true, () => false))) return undefined
@@ -349,7 +362,7 @@ export class SimulatorSetupFollower {
     let said = 0
     let last = ""
     const code = await new Promise<number | null>((resolve, reject) => {
-      const child = spawn(join(developer, "usr", "bin", "xcodebuild"), ["-downloadPlatform", "iOS"], { env: { ...process.env, DEVELOPER_DIR: developer }, stdio: ["ignore", "pipe", "pipe"] })
+      const child = hostSpawn(join(developer, "usr", "bin", "xcodebuild"), ["-downloadPlatform", "iOS"], { env: { ...process.env, DEVELOPER_DIR: developer }, stdio: ["ignore", "pipe", "pipe"] })
       const heard = (chunk: Buffer) => {
         // It redraws one line with carriage returns and terminal codes.
         for (const raw of stripVTControlCharacters(chunk.toString("utf8")).split(/[\r\n]+/)) {
@@ -378,9 +391,10 @@ export class SimulatorSetupFollower {
     const list = await this.#run("/usr/bin/xcrun", ["simctl", "list", "-j"], { env, timeoutMs: 30_000 })
     if (list.code !== 0) throw new Error(`simctl didn't list this Mac's simulators: ${list.stderr.trim()}`)
     const parsed = parseSimctlList(list.stdout)
-    const runtime = chooseRuntime(parsed.runtimes, setupStep(this.#last, "runtime")?.wanted)
+    const wanted = setupStep(this.#last, "runtime")?.wanted
+    const runtime = chooseRuntime(parsed.runtimes, wanted, parsed.runtimeTypes)
     if (!runtime) throw new Error("There's no iOS runtime to make the simulators on yet.")
-    for (const simulator of makoSimulators(parsed)) {
+    for (const simulator of makoSimulators({ ...parsed, ...(wanted && { wantedRuntime: wanted }) })) {
       if (simulator.udid) continue
       const made = await this.#run("/usr/bin/xcrun", ["simctl", "create", simulator.name, simulator.type, runtime.identifier], { env, timeoutMs: 60_000 })
       if (made.code !== 0) throw new Error(`simctl didn't make ${simulator.name}: ${made.stderr.trim()}`)

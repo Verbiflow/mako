@@ -39,10 +39,9 @@
 // had it. --fixture writes the capture the fixture desk's mock serves.
 import assert from "node:assert/strict"
 import { execFile, spawn } from "node:child_process"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, rm, writeFile } from "node:fs/promises"
 import { createConnection } from "node:net"
 import { createRequire } from "node:module"
-import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { promisify } from "node:util"
 import sharp from "sharp"
@@ -53,12 +52,13 @@ import { PRESENT, controlClient } from "@mako/control/control"
 import { resolveExecutable } from "@mako/host/base/executable"
 import { DriverBroker, connectMcpComputerDriver, createControlSession } from "@mako/control-runtime/host"
 import { serveControlSession } from "@mako/control-runtime/session"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 const run = promisify(execFile)
 const args = process.argv.slice(2)
 const front = args.includes("--front")
 const fixtureOut = args.includes("--fixture")
-const root = await mkdtemp(join(tmpdir(), "mako-appshot-live-"))
+const root = testScratch("mako-appshot-live-")
 const evidence = resolve(args.find((arg) => !arg.startsWith("--")) ?? join(root, "evidence"))
 await mkdir(evidence, { recursive: true })
 

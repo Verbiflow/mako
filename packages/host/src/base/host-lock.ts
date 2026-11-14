@@ -40,6 +40,12 @@ export interface HostLockOptions {
   waitMs?: number
   /** What the lock is for, in its name: `host` unless said. Letters, digits and dashes. */
   purpose?: string
+  /**
+   * A holder that answers nothing on the host's socket may be a `mako-host` command (a `join` ending, a `status` of a
+   * build that took the lock to read) and lets go within a moment: wait it out, this long at most, asking `listening`
+   * before each try, so a host that answers on its socket is refused at once and two hosts never share a data root.
+   */
+  brief?: { ms: number; listening: () => Promise<boolean> }
 }
 
 export async function acquireHostLock(dataRoot: string, options: HostLockOptions = {}): Promise<HostLock> {
@@ -47,11 +53,21 @@ export async function acquireHostLock(dataRoot: string, options: HostLockOptions
   const purpose = options.purpose ?? "host"
   const attempt = () => (platform === "darwin" ? fileLock(dataRoot, purpose) : nameLock(dataRoot, platform, purpose))
   const until = Date.now() + (options.waitMs ?? 30_000)
+  const briefUntil = Date.now() + (options.brief?.ms ?? 0)
   for (;;) {
     const lock = await attempt()
-    if (lock.kind === "held" || options.predecessor === undefined || lock.holder !== options.predecessor || Date.now() >= until)
-      return lock
-    await new Promise((done) => setTimeout(done, 50))
+    if (lock.kind === "held") return lock
+    // Linux's lock answers from the holder's main thread, so a holder stuck in its exit names nobody.
+    const predecessor = options.predecessor !== undefined && Date.now() < until && (lock.holder === options.predecessor || (lock.holder === null && running(options.predecessor)))
+    if (predecessor) {
+      await new Promise((done) => setTimeout(done, 50))
+      continue
+    }
+    if (options.brief && Date.now() < briefUntil && !(await options.brief.listening())) {
+      await new Promise((done) => setTimeout(done, 100))
+      continue
+    }
+    return lock
   }
 }
 

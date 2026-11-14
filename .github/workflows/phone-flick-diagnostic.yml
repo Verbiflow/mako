@@ -1,0 +1,82 @@
+# PRIVATE proposal; not registered, published, or dispatched. Source publication and one dispatch need new approval.
+name: Phone flick diagnostic (one manual capture)
+run-name: Instrumented phone capture at 571fa50e38329f3be297f49550f4cb1b58d509a2
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  phone-flick-diagnostic:
+    if: github.repository == 'Verbiflow/mako' && github.event_name == 'workflow_dispatch' && github.run_attempt == '1'
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - name: Manual first attempt only
+        shell: bash
+        run: |
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REPOSITORY" = Verbiflow/mako
+          test "$GITHUB_RUN_ATTEMPT" = 1
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5; same normal suites action
+        with:
+          ref: 571fa50e38329f3be297f49550f4cb1b58d509a2
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5; same normal suites selector
+        with:
+          node-version: 24
+          package-manager-cache: false
+      # These are exactly the normal suites setup steps from the pinned source; no provider/secrets added.
+      - uses: ./.github/actions/install-dependencies
+      - run: brew install ffmpeg
+      - run: npm run build:control-runtime
+      - name: Source-linked pure capture safety controls
+        timeout-minutes: 2
+        run: node scripts/test-phone-diagnostic-capture.mjs
+      - name: One instrumented fixture invocation (no normative performance clearance)
+        id: capture
+        timeout-minutes: 6
+        continue-on-error: true
+        shell: bash
+        run: |
+          capture_parent=$(node -p 'require("node:fs").realpathSync(process.env.RUNNER_TEMP)')
+          capture_upload="$capture_parent/phone-diagnostic-upload-${{ github.run_id }}-1"
+          set +e
+          node scripts/phone-diagnostic-capture.mjs "$capture_parent" "$capture_upload" 571fa50e38329f3be297f49550f4cb1b58d509a2 9f2cdd477b529e2faccacfbc1c06d619542a5286
+          capture_exit=$?
+          printf 'exit_code=%s\n' "$capture_exit" >> "$GITHUB_OUTPUT"
+          exit "$capture_exit"
+      - name: Retain only the isolated validated packet and manifest, also on success
+        id: upload
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4; same normal suites action
+        with:
+          name: phone-flick-diagnostic-${{ github.run_id }}
+          path: ${{ runner.temp }}/phone-diagnostic-upload-${{ github.run_id }}-1
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+      - name: Preserve test failure; expose unavailable capture or upload
+        if: always()
+        shell: bash
+        env:
+          CAPTURE_EXIT: ${{ steps.capture.outputs.exit_code }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+        run: |
+          node --input-type=module <<'JS'
+          import { appendFileSync } from 'node:fs'
+          const raw = process.env.CAPTURE_EXIT ?? ''
+          const valid = /^(0|[1-9][0-9]{0,2})$/.test(raw) && Number(raw) <= 255
+          let code = valid ? Number(raw) : 70
+          const upload = ['success', 'failure', 'skipped', 'cancelled'].includes(process.env.UPLOAD_OUTCOME) ? process.env.UPLOAD_OUTCOME : 'unknown'
+          if (!code && upload !== 'success') code = 70
+          const text = `Phone capture final: capture exit=${valid ? raw : 'unavailable'}, upload=${upload}, exit=${code}. Instrumented evidence only; original main FAIL and 68ms cause UNKNOWN remain unchanged.`
+          process.stdout.on('error', () => { process.exitCode ||= 70 })
+          process.stderr.on('error', () => { process.exitCode ||= 70 })
+          try {
+            console.log(text)
+            if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${text}\n`)
+          } catch { if (!code) code = 70 }
+          process.exitCode = code
+          JS

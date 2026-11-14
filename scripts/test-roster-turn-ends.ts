@@ -101,8 +101,10 @@ async function replay(live: LiveConversations, root: string, id: string): Promis
   await waitFor(() => live.snapshot(id)?.requests[0]?.status === "interrupted", "the first turn stopped")
   live.submit(id, randomUUID(), "Five more")
   await waitFor(() => live.snapshot(id)?.requests[1]?.status === "failed", "the second turn failed")
-  live.submit(id, randomUUID(), "Is anything still running?")
-  await waitFor(() => live.snapshot(id)?.requests[2]?.status === "completed", "the third turn finished")
+  // By its own id: a failed turn may leave a continuation waiting, which this message takes the place of.
+  const third = randomUUID()
+  live.submit(id, third, "Is anything still running?")
+  await waitFor(() => live.snapshot(id)?.requests.find((request) => request.id === third)?.status === "completed", "the third turn finished")
 }
 
 function working(agents: readonly NativeAgent[] | undefined): number {

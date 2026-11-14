@@ -1,8 +1,8 @@
-import { processIdentityMatches } from "../base/process-liveness.js"
+import { processIdentityMatches, START_READING_TOLERANCE_MS } from "../base/process-liveness.js"
 import { existsSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { makoUserRoot } from "@mako/sessions/mako-root"
-import { DatabaseSync } from "node:sqlite"
+import { DatabaseSync, type StatementSync } from "node:sqlite"
 import { z } from "zod"
 import type { ThreadRef } from "@mako/sessions"
 import { ReadOnlyConnection, ReadOnlyStoreError } from "@mako/sessions/read-only-sqlite"
@@ -66,6 +66,8 @@ const HoldRowSchema = z.object({
   since: z.number(),
   heartbeat_at: z.number(),
 })
+const StaleHoldsSchema = z.array(HoldRowSchema.extend({ provider: z.string(), native_id: z.string() }))
+const ConversationEndpointSchema = z.object({ conversationId: z.string(), socket: z.string() })
 
 export interface SessionMemoryEntry {
   settings?: SessionSettings
@@ -225,6 +227,7 @@ export class SessionMemory {
   private readonly lifecycle = new AbortController()
   private verifying = false
   private holdCheckOffset = 0
+  private holdRead: { db: DatabaseSync; statement: StatementSync } | undefined
   private stopHeartbeat: (() => void) | null = null
   private readonly annotations = new Map<string, { at: number; entry: SessionMemoryEntry | null; hold: SessionHold | null; elsewhere: boolean }>()
   /**
@@ -246,7 +249,7 @@ export class SessionMemory {
     this.now = options.now ?? Date.now
     this.alive = options.alive ?? processAlive
     this.listening = options.listening ?? existsSync
-    this.identityCurrent = options.identityCurrent ?? ((pid, startedAt, signal) => processIdentityMatches({ pid, startedAt, signal, toleranceMs: 1_500 }))
+    this.identityCurrent = options.identityCurrent ?? ((pid, startedAt, signal) => processIdentityMatches({ pid, startedAt, signal, toleranceMs: START_READING_TOLERANCE_MS }))
     this.build = options.format ?? { writableBy: SESSION_MEMORY_SCHEMA, readableBy: SESSION_MEMORY_READS }
     // Read before anything is created, so a newer Mako's layout gets none of this build's tables.
     const found = inspectStoreFormat(path, "store_meta")
@@ -408,7 +411,7 @@ export class SessionMemory {
     if (this.verifying || this.lifecycle.signal.aborted || !this.writable || this.newer) return
     this.verifying = true
     try {
-      const rows = z.array(HoldRowSchema.extend({ provider: z.string(), native_id: z.string() })).parse(
+      const rows = StaleHoldsSchema.parse(
         this.db.prepare("SELECT * FROM holds WHERE heartbeat_at < ? ORDER BY provider, native_id LIMIT 8 OFFSET ?").all(this.now() - HOLD_STALE_MS, this.holdCheckOffset))
       this.holdCheckOffset = rows.length < 8 ? 0 : this.holdCheckOffset + rows.length
       await Promise.all(rows.map(async (row) => {
@@ -642,7 +645,7 @@ export class SessionMemory {
   }
 
   routeForConversation(conversationId: string): ConversationEndpoint | null {
-    const journal = z.object({ conversationId: z.string(), socket: z.string() }).safeParse(
+    const journal = ConversationEndpointSchema.safeParse(
       this.db.prepare("SELECT conversation_id AS conversationId, socket FROM conversation_journals WHERE conversation_id = ?").get(conversationId))
     return journal.success && journal.data.socket !== this.host.socket ? journal.data : null
   }
@@ -652,7 +655,7 @@ export class SessionMemory {
     if (hold && this.holdLive(hold)) {
       const row = this.db.prepare(`SELECT conversation_id AS conversationId, socket
         FROM conversation_journals WHERE conversation_id = ?`).get(hold.conversation_id)
-      const parsed = z.object({ conversationId: z.string(), socket: z.string() }).safeParse(row)
+      const parsed = ConversationEndpointSchema.safeParse(row)
       return parsed.success ? { ...parsed.data, provider, nativeId } : null
     }
     const row = this.db.prepare(`SELECT b.conversation_id AS conversationId, b.provider,
@@ -771,9 +774,11 @@ export class SessionMemory {
   }
 
   private readHold(provider: string, nativeId: string): z.infer<typeof HoldRowSchema> | null {
-    const row = this.db
-      .prepare("SELECT host_pid, host_started_at, host_label, conversation_id, since, heartbeat_at FROM holds WHERE provider = ? AND native_id = ?")
-      .get(provider, nativeId)
+    const db = this.db
+    // Read on every flush of every conversation at work, so prepared once. A reader's connection can reopen, and this goes with it.
+    if (this.holdRead?.db !== db)
+      this.holdRead = { db, statement: db.prepare("SELECT host_pid, host_started_at, host_label, conversation_id, since, heartbeat_at FROM holds WHERE provider = ? AND native_id = ?") }
+    const row = this.holdRead.statement.get(provider, nativeId)
     if (!row) return null
     const parsed = HoldRowSchema.safeParse(row)
     return parsed.success ? parsed.data : null

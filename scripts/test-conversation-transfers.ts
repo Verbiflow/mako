@@ -147,7 +147,7 @@ function createOwner() {
     root,
     appPath: root,
     driver: (provider) => drivers.get(provider),
-    controlInstructions: () => instructions,
+    controlInstructions: () => ({ standing: Object.fromEntries(instructions.entries()), notices: [] }),
     history: async () => {
       throw new Error(
         "Transfers must use captured history, not lagging native files"

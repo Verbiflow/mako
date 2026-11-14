@@ -24,6 +24,10 @@ async function start() {
   }
 
   const { default: App } = await import("./App.tsx")
+  if (import.meta.env.DEV && new URLSearchParams(location.search).has("mock")) {
+    const { mockState } = await import("./dev/mock-state.ts")
+    Reflect.set(window, "mockState", mockState)
+  }
   watchForFailures()
 
   createRoot(document.getElementById("root")!).render(
@@ -40,7 +44,7 @@ void start().catch((error) => {
     <div className="p-8 text-ui text-foreground">
       <p>{error instanceof Error ? error.message : "Mako could not start"}</p>
       <button
-        className="pressable mt-4 rounded border border-hairline px-3 py-2"
+        className="pressable mt-4 border border-hairline px-3 py-2"
         onClick={() => location.reload()}
       >
         Retry connection

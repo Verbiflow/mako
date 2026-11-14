@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType, type ReactNode, type RefObject } from "react"
 import {
   CircleCheckIcon,
+  CircleDotIcon,
   InfoIcon,
   OctagonXIcon,
   TriangleAlertIcon,
@@ -18,6 +19,7 @@ const GLYPHS = {
   info: { icon: InfoIcon, className: "text-muted-foreground" },
   success: { icon: CircleCheckIcon, className: "text-positive" },
   caution: { icon: TriangleAlertIcon, className: "text-caution" },
+  attention: { icon: CircleDotIcon, className: "text-attention" },
   danger: { icon: OctagonXIcon, className: "text-negative" },
 } satisfies Record<ComposerNoticeTone, { icon: ComponentType<LucideProps>; className: string }>
 
@@ -25,6 +27,7 @@ const GLYPHS = {
 const LIPS = {
   danger: "bg-negative/30",
   caution: "bg-caution/30",
+  attention: "bg-attention/30",
   progress: "bg-foreground/15",
   info: "bg-foreground/15",
   success: "bg-positive/25",
@@ -171,7 +174,7 @@ function NoticeStack({ entries }: { entries: readonly Entry[] }) {
       aria-label="Notices"
       data-composer-notices={entries.length}
       data-expanded={expanded || undefined}
-      className="relative shrink-0 px-2 pt-2"
+      className="relative shrink-0 px-3 pt-2"
       onPointerEnter={() => {
         clearTimeout(fold.current)
         setOpen(true)
@@ -196,7 +199,7 @@ function NoticeStack({ entries }: { entries: readonly Entry[] }) {
           inert={!expanded}
           data-notice-list
           className={cn(
-            "overlay-panel absolute inset-x-2 bottom-full z-20 mb-1 flex flex-col-reverse gap-px p-1",
+            "overlay-panel absolute inset-x-3 bottom-full z-20 mb-1 flex flex-col-reverse gap-px p-1",
             "transition-[opacity,translate] duration-150 ease-[var(--ease-out)] motion-reduce:transition-none",
             expanded ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-1 opacity-0"
           )}
@@ -208,10 +211,10 @@ function NoticeStack({ entries }: { entries: readonly Entry[] }) {
         <span
           aria-hidden
           data-notice-peek={next.notice.tone}
-          className={cn("absolute inset-x-5 top-[3px] h-3 rounded-t-md transition-colors duration-150", LIPS[next.notice.tone])}
+          className={cn("absolute inset-x-6 top-[3px] h-3 transition-colors duration-150", LIPS[next.notice.tone])}
         />
       ) : null}
-      <div className={cn("relative rounded-lg bg-raised [box-shadow:inset_0_0_0_0.5px_var(--hairline)]", ARRIVE)}>
+      <div className={cn("relative bg-raised [box-shadow:inset_0_0_0_0.5px_var(--hairline)]", ARRIVE)}>
         {row(front, "front")}
       </div>
     </div>
@@ -261,7 +264,7 @@ function NoticeRow({
         if (leaving && event.target === event.currentTarget && event.propertyName === "opacity") onLeft(notice)
       }}
       className={cn(
-        "flex min-h-9 min-w-0 items-center gap-2 rounded-md py-1 pr-1 pl-2.5 text-ui",
+        "flex min-h-9 min-w-0 items-center gap-2 py-1 pr-1 pl-2.5 text-ui",
         "transition-[opacity,translate] duration-200 ease-[var(--ease-swift)]",
         replacing && ARRIVE,
         leaving && "-translate-y-1 opacity-0"
@@ -278,7 +281,7 @@ function NoticeRow({
         <button
           type="button"
           onClick={onMore}
-          className="pressable shrink-0 rounded px-1 text-label text-faint hover:text-foreground"
+          className="pressable shrink-0 px-1 text-label text-faint hover:text-foreground"
         >
           {more} more
         </button>
@@ -291,7 +294,7 @@ function NoticeRow({
           title={action.title}
           onClick={action.onClick}
           className={cn(
-            "pressable h-6 shrink-0 rounded-md px-2 text-label transition-colors duration-100 disabled:opacity-45",
+            "pressable h-6 shrink-0 px-2 text-label transition-colors duration-100 disabled:opacity-45",
             action.primary
               ? "bg-fill-selected font-medium text-foreground hover:bg-foreground/15"
               : "text-muted-foreground hover:bg-fill-hover hover:text-foreground"
@@ -309,7 +312,7 @@ function NoticeRow({
           aria-label={notice.dismissLabel ?? "Dismiss"}
           title={notice.dismissLabel ?? "Dismiss"}
           onClick={() => onDismiss(notice)}
-          className="pressable grid size-6 shrink-0 place-items-center rounded-md text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
+          className="pressable grid size-6 shrink-0 place-items-center text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
         >
           <XIcon className="size-3.5" />
         </button>
@@ -327,7 +330,7 @@ function NoticeDetail({ notice, open, onOpenChange }: { notice: ComposerNotice; 
           type="button"
           aria-label="More about this"
           title="More about this"
-          className="pressable grid size-6 shrink-0 place-items-center rounded-md text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground data-[state=open]:bg-fill-hover data-[state=open]:text-foreground"
+          className="pressable grid size-6 shrink-0 place-items-center text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground data-[state=open]:bg-fill-hover data-[state=open]:text-foreground"
         >
           <InfoIcon className="size-3.5" />
         </button>

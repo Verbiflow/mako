@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CopyIcon, ExternalLinkIcon, KeyRoundIcon, LaptopMinimalIcon, SearchIcon, ServerIcon, XIcon } from "lucide-react"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
-import { Action, Eyebrow, IconAction } from "@/components/ui/kit"
+import { FIELD, Action, Check, Eyebrow, IconAction } from "@/components/ui/kit"
 import { HarnessIcon, ProviderIcon } from "@/components/ui/provider-icon"
 import { Spinner } from "@/components/ui/spinner"
 import { useCopy } from "@/components/ui/use-copy"
@@ -20,8 +20,7 @@ import {
 } from "@mako/host/contracts/model-connections"
 import { routeAccepted } from "@mako/host/contracts/model-routes"
 
-const inputClass =
-  "h-9 w-full rounded-md bg-raised px-2.5 text-ui text-foreground ring-1 ring-hairline placeholder:text-faint focus:outline-none focus-visible:ring-border"
+const inputClass = cn(FIELD, "h-9 w-full")
 
 const GROUPS: Array<{ kind: ModelConnectionKind; title: string; note: string }> = [
   { kind: "subscription", title: "Subscriptions", note: "Sign in with the plan you already pay for." },
@@ -41,7 +40,7 @@ export function ConnectionMark({ provider, className = "size-3.5" }: { provider:
 
 export function MarkTile({ children }: { children: React.ReactNode }) {
   return (
-    <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-raised [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
+    <span className="flex size-7 shrink-0 items-center justify-center bg-fill-hover">
       {children}
     </span>
   )
@@ -111,7 +110,7 @@ export function AddConnection({ onClose }: { onClose: () => void }) {
               </IconAction>
             </header>
             <div className="px-5 pb-3">
-              <label className="flex h-8 items-center gap-2 rounded-md bg-surface px-2.5 ring-1 ring-hairline focus-within:ring-border">
+              <label className="flex h-8 items-center gap-2 bg-surface px-2.5 focus-within:ring-border">
                 <SearchIcon className="size-3.5 shrink-0 text-faint" />
                 <input
                   ref={search}
@@ -175,7 +174,7 @@ function ProviderRow({ provider, onPick }: { provider: ModelConnectionProvider; 
       type="button"
       disabled={connected}
       onClick={() => onPick(provider, subscription.addable)}
-      className="pressable group/row flex w-full items-center gap-3 rounded-md px-2 py-2 text-left outline-none hover:bg-fill-hover focus-visible:bg-fill-hover disabled:pointer-events-none disabled:opacity-60"
+      className="pressable group/row flex w-full items-center gap-3 px-2 py-2 text-left outline-none hover:bg-fill-hover focus-visible:bg-fill-hover disabled:pointer-events-none disabled:opacity-60"
     >
       <MarkTile><ConnectionMark provider={provider} /></MarkTile>
       <span className="min-w-0 flex-1">
@@ -226,7 +225,7 @@ function SubscriptionDetail({ provider, onBack, onClose }: { provider: ModelConn
             : `${harness} keeps this login itself. Run this in a terminal to sign in; Mako picks the account up.`}
         </p>
         {command ? (
-          <div className="flex items-center gap-2 rounded-md bg-raised px-3 py-2 ring-1 ring-hairline">
+          <div className="flex items-center gap-2 bg-raised px-3 py-2">
             <code className="min-w-0 flex-1 truncate font-mono text-code text-foreground">{command}</code>
             <Action size="xs" onClick={() => void copy()}>
               {copied ? <CheckIcon /> : <CopyIcon className="text-faint" />}
@@ -416,7 +415,7 @@ function ConnectionForm({ provider, onBusy, onBack, onClose }: { provider: Model
           {check ? <ModelChecklist check={check} kept={kept} filter={filter} onFilter={setFilter} onKept={setKept} disabled={adding} /> : null}
           {error ? <p role="alert" className="text-ui leading-relaxed text-negative">{error}</p> : null}
         </div>
-        <footer className="flex flex-col gap-3 border-t border-hairline px-5 py-4">
+        <footer className="flex flex-col gap-3 px-5 py-4">
           <p className="text-label leading-relaxed text-faint">
             {check
               ? takenBy.length
@@ -488,7 +487,7 @@ function ModelChecklist({ check, kept, filter, onFilter, onKept, disabled }: {
       </div>
       {check.notice ? <p className="text-label text-caution">{check.notice}</p> : null}
       {check.models.length > 8 ? (
-        <label className="flex h-7 items-center gap-2 rounded-md bg-surface px-2 ring-1 ring-hairline focus-within:ring-border">
+        <label className="flex h-7 items-center gap-2 bg-surface px-2 focus-within:ring-border">
           <SearchIcon className="size-3.5 shrink-0 text-faint" />
           <input
             value={filter}
@@ -500,11 +499,11 @@ function ModelChecklist({ check, kept, filter, onFilter, onKept, disabled }: {
         </label>
       ) : null}
       {check.models.length ? (
-        <ul className="max-h-56 overflow-y-auto rounded-lg bg-shell/55 py-1 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
+        <ul className="max-h-56 overflow-y-auto bg-raised py-1">
           {shown.map((model) => (
             <li key={model.id}>
               <label className="flex cursor-pointer items-center gap-2.5 px-3 py-1.5 hover:bg-fill-hover">
-                <input type="checkbox" checked={kept.has(model.id)} disabled={disabled} onChange={() => toggle(model)} className="size-3.5 accent-foreground" />
+                <Check label={model.name ?? model.id} checked={kept.has(model.id)} disabled={disabled} onChange={() => toggle(model)} />
                 <span className="min-w-0 flex-1 truncate text-ui">{model.name ?? model.id}</span>
                 <span className="shrink-0 truncate text-label text-faint">
                   {[model.name ? model.id : undefined, model.contextTokens ? formatTokens(model.contextTokens) : undefined].filter(Boolean).join(" · ")}

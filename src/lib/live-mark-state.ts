@@ -73,7 +73,7 @@ export function threadMarkState(status: ThreadStatus): LiveMarkState {
   }
 }
 
-/** A Fin's state as its mark draws it. A Fin that ended well is done: its glyph alone, as an idle Thread's. */
+/** A Fin's state as its mark draws it. A Fin that ended well is done: its glyph alone, as an idle Thread's, unless it leaves the person a decision. */
 export function finMarkState(state: ChildState): LiveMarkState {
   switch (state.kind) {
     case "queued":
@@ -87,7 +87,7 @@ export function finMarkState(state: ChildState): LiveMarkState {
     case "idle":
       return "idle"
     case "ended":
-      return state.outcome === "failed" ? "failed" : "idle"
+      return state.outcome === "failed" || state.unfinished ? "failed" : state.decision?.on === "person" ? "needs" : "idle"
   }
 }
 

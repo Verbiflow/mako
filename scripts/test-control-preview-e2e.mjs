@@ -1,13 +1,13 @@
 import assert from "node:assert/strict"
 import { spawn, execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { writeFile } from "node:fs/promises"
 import { resolve, join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 if (!process.versions.electron) {
-  const root = await mkdtemp(join(tmpdir(), "mako-chat-preview-"))
+  const root = testScratch("mako-chat-preview-")
   const child = spawn(
     resolve("node_modules/.bin/electron"),
     [fileURLToPath(import.meta.url)],
@@ -185,7 +185,6 @@ async function run() {
       join(root, "result.json"),
       JSON.stringify({ ...outcome, preservedFocus: true, windows: 2 }, null, 2)
     )
-    console.log(`PASS chat-scoped browser/native preview. Evidence: ${root}`)
   } finally {
     viewer.destroy()
     fixture.destroy()

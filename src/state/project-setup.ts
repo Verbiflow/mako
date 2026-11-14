@@ -4,6 +4,7 @@ import type { ThreadAppView } from "@mako/host/contracts/thread-app"
 import { appSetupContext } from "@/lib/app-setup-context"
 import type { AttachmentInput } from "@/lib/attachments"
 import { harnessLabel } from "@/lib/harness-label"
+import { threadFolderKey } from "@/lib/thread-folders"
 import type { HarnessProfile, ThreadRef } from "@/lib/types"
 import { acp } from "@/state/acp"
 import { acpStore, activeAcp, useAcp, type AcpConversation } from "@/state/acp-state"
@@ -13,6 +14,7 @@ import { currentHarnessOrder, useHarnessOrder } from "@/state/harness-order"
 import { prefsStore, usePrefs, type Prefs } from "@/state/prefs"
 import { providerStore, useProviders } from "@/state/providers"
 import { actions, store } from "@/state/session"
+import { openAppSetup } from "@/state/app-setup"
 import { threadAppStore, useThreadApp } from "@/state/thread-app"
 import { threads } from "@/state/threads"
 import { threadsStore, useThreads } from "@/state/thread-store"
@@ -116,6 +118,15 @@ function composerAppView(byCwd: Record<string, ThreadAppView>): ThreadAppView | 
 
 export function useComposerAppView(): ThreadAppView | undefined {
   return useThreadApp((state) => composerAppView(state.byCwd))
+}
+
+/** The current project's files, accounts and tools; the project picker when no project is open. */
+export function openProjectSetup(): void {
+  const live = activeAcp(acpStore.get())
+  const viewed = threadsStore.get().viewing?.ref
+  const cwd = live?.cwd ?? store.get().meta?.cwd
+  const root = live?.cwd ? threadFolderKey({ cwd: live.cwd }) : viewed ? threadFolderKey(viewed) : cwd ? threadFolderKey({ cwd }) : undefined
+  openAppSetup(root || undefined, "setup")
 }
 
 /** The project whose app control was hidden, if it's the composer's. */

@@ -107,7 +107,7 @@ function goalHost(goals: GoalsCapability, turns: (text: string, index: number) =
     history: async () => null,
     emit: () => {},
     goalContinueDelayMs: options.delayMs ?? 0,
-    controlInstructions: () => options.note ? [options.note] : [],
+    controlInstructions: () => ({ standing: { control: options.note }, notices: [] }),
   })
   return {
     id,

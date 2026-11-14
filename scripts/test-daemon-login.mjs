@@ -12,12 +12,12 @@ globalThis.__makoLoginTest = state
 try {
   const mocks = {
     'node:os': `export const homedir = () => globalThis.__makoLoginTest.root; export const release = () => '25.0.0';`,
-    'node:child_process': `export function execFile(command, args, cb) {
+    '../base/host-command.js': `export async function hostCommand(command, args) {
       const s = globalThis.__makoLoginTest; s.calls.push(args[0]);
       if (args[0] === 'bootstrap') s.loaded = true;
       if (args[0] === 'bootout') s.loaded = false;
-      // As promisify reads the real execFile: one value holding both streams.
-      cb(args[0] === 'print' && !s.loaded ? new Error('not loaded') : null, { stdout: args[0] === 'print' && s.print ? s.print : 'pid = 123', stderr: '' });
+      if (args[0] === 'print' && !s.loaded) throw new Error('not loaded');
+      return { stdout: args[0] === 'print' && s.print ? s.print : 'pid = 123', stderr: '' };
     }`,
     '../base/host-log.js': `export const hostLog = (...line) => globalThis.__makoLoginTest.logs.push(line);`,
     '../base/headless-node.js': `export const headlessNodeExecutable = () => '/test/Mako Helper';`,

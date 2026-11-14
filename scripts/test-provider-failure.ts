@@ -34,6 +34,20 @@ const cases: [string, string][] = [
   ["The selected Cursor account's login expired. Sign in again in Settings → Agents.", "auth"],
   ["OpenCode: ProviderAuthError: Unauthorized", "auth"],
   ["403 Forbidden", "auth"],
+  ['API Error: 403 {"error":{"type":"permission_error"}}', "permission"],
+  ["oauth_org_not_allowed", "permission"],
+  ["Insufficient permissions", "permission"],
+  ["Insufficient scope", "permission"],
+  // A string alone cannot attest to credentials; the native boundary supplies that separate evidence.
+  ["Failed to authenticate. API Error: 403 <html><title>Temporary access check</title></html>", "auth"],
+  ["API Error: 403 <html><title>Temporary access check</title></html>", "auth"],
+  ["Failed to authenticate. API Error: 503 Service Unavailable", "provider-unavailable"],
+  ["Failed to authenticate. API Error: 502 Bad Gateway", "provider-unavailable"],
+  ["Failed to authenticate. API Error: 529 Overloaded", "provider-unavailable"],
+  ["Failed to authenticate. fetch failed", "network"],
+  ["Failed to authenticate. API Error: 503 Service Unavailable: invalid api key", "auth"],
+  ["Failed to authenticate. API Error: 403 Forbidden", "auth"],
+  ["Failed to authenticate. API Error: 403 <html><title>Temporary access check</title></html>: OAuth access token has been revoked", "auth"],
   ["429 Too Many Requests", "rate-limited"],
   ["overloaded_error: Overloaded", "rate-limited"],
   ["You have hit your usage limit. Try again in 3 hours.", "rate-limited"],
@@ -75,6 +89,10 @@ const cases: [string, string][] = [
 
 for (const [text, kind] of cases)
   assert.equal(classifyProviderFailure(text).kind, kind, `"${text.slice(0, 60)}" → ${kind}`)
+
+assert.equal(classifyProviderFailure('API Error: 401 {"error":{"type":"some_new_error"}}', "Claude", { kind: "unknown", source: "provider-error" }).kind, "auth", "unlisted provider JSON must retain the ordinary 401 sign-in verdict")
+assert.equal(classifyStartFailure('API Error: 401 {"error":{"type":"some_new_error"}}', true, { kind: "unknown", source: "provider-error" }), "auth", "startup uses the same fallback")
+assert.equal(classifyProviderFailure("unrecognised failure", "Claude", { kind: "unknown", source: "provider-error" }).kind, "unknown", "fallback does not invent a cause when the text has none")
 
 // A specific fault wins over the broad HTTP family it could also trip: a
 // rejected transcript arrives as a 400 invalid_request_error.

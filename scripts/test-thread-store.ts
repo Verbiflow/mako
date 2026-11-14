@@ -287,6 +287,23 @@ function receipts(): void {
   threads.close()
 }
 
+/** A reader of placed rows keeps them while `placementVersion` holds: another write leaves it, a placement moves it. */
+function placementVersion(): void {
+  const threads = store("placement-version")
+  const placed = threads.resolveRefs([row("opencode", "pv-1", "/opencode/pv-1")], catalog).get("/opencode/pv-1")
+  assert.ok(placed)
+  const settled = threads.placementVersion()
+  const written = threads.version()
+  threads.renameThread({ operationId: randomUUID(), thread: placed.thread, title: "Parser", actor: threads.person() })
+  assert.notEqual(threads.version(), written, "a rename is a write")
+  assert.equal(threads.placementVersion(), settled, "but places nothing")
+  threads.resolveRefs([row("opencode", "pv-1", "/opencode/pv-1")], catalog)
+  assert.equal(threads.placementVersion(), settled, "a row placed already is the same placement")
+  threads.resolveRefs([row("opencode", "pv-2", "/opencode/pv-2")], catalog)
+  assert.notEqual(threads.placementVersion(), settled, "a new row's placement moves it")
+  threads.close()
+}
+
 function threadGroups(): void {
   const path = join(root, "groups.sqlite")
   const threads = new ThreadStore(path, { now })
@@ -478,6 +495,27 @@ function membership(): void {
 }
 
 /** A Thread has one worktree per device, even where two Threads with one each became one. */
+/** A worktree added, moved home or forgotten is heard (`onWorktrees`): the account's rows say the worktree they're in. */
+function worktreesHeard(): void {
+  const threads = new ThreadStore(join(root, "worktrees-heard.sqlite"), { now })
+  const { thread } = threads.registerJournal(journal({ harness: "claude" }), migration)
+  let heard = 0
+  const stop = threads.onWorktrees(() => (heard += 1))
+  const worktree = { path: "/repo/.worktrees/heard", thread, repoRoot: "/repo", project: "/repo", branch: "mako/heard", base: "main" }
+  threads.attachWorktree(worktree)
+  assert.equal(heard, 1, "an added worktree is heard")
+  threads.attachWorktree(worktree)
+  assert.equal(heard, 1, "one already there adds nothing, and isn't")
+  threads.rehomeWorktree(worktree.path, "/moved", "/moved")
+  assert.equal(heard, 2, "one moved home is heard")
+  threads.detachWorktree(worktree.path)
+  assert.equal(heard, 3, "one forgotten is heard")
+  stop()
+  threads.attachWorktree({ ...worktree, path: "/repo/.worktrees/unheard" })
+  assert.equal(heard, 3, "and nothing once it stopped listening")
+  threads.close()
+}
+
 function oneWorktreePerThread(): void {
   const path = join(root, "worktrees.sqlite")
   const threads = new ThreadStore(path, { now })
@@ -561,12 +599,14 @@ try {
   handoffAndCatalogFirst()
   conflicts()
   receipts()
+  placementVersion()
   threadGroups()
   manyAtOnce()
   twoHosts()
   placementLog()
   membership()
   oneWorktreePerThread()
+  worktreesHeard()
   harnessForks()
   console.log("thread store: ok")
 } finally {

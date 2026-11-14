@@ -13,6 +13,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { promisify } from "node:util"
+import { finishControlFixture } from "./lib/packaged-control-cleanup.mjs"
 
 const run = promisify(execFile)
 const worker = process.argv[2] === "--worker"
@@ -47,11 +48,13 @@ if (!worker) {
   const runtime = await import(
     pathToFileURL(require.resolve("@mako/control-runtime/session")).href
   )
-  const source = await mkdtemp(join(tmpdir(), "mako-packaged-cli-"))
-  const owner = await runtime.startDesktopControlSession({
-    taskId: "packaged-cli",
-  })
+  const source = await mkdtemp(join(tmpdir(), "mc-"))
+  const workers = new runtime.ControlWorkers({ spare: false, cleanup: { scope: "owned", root: source } })
+  let owner
+  let primaryFailed = false
+  let primary
   try {
+    owner = await runtime.startDesktopControlSession({ taskId: "packaged-cli" }, { workers })
     const adapter = createControlMcpServer(owner.request)
     await adapter.close()
     const initialized = await owner.request({method:"js",code:"let packaged=41; packaged",timeout_ms:5000}, AbortSignal.timeout(7000))
@@ -107,8 +110,17 @@ if (!worker) {
         ],
       })
     )
+  } catch (error) {
+    primaryFailed = true
+    primary = error
   } finally {
-    await owner.close()
-    await rm(source, { recursive: true, force: true })
+    await finishControlFixture({
+      owner, workers, primaryFailed, primary,
+      removeRoot: () => rm(source, { recursive: true, force: true }),
+      report: ({ root, terminationKnown, failures }) => {
+        if (root !== "removed" || failures.length)
+          process.stderr.write(JSON.stringify({ fixtureCleanup: { root, terminationKnown, failures: failures.map(({ stage, kind }) => ({ stage, kind })) } }) + "\n")
+      },
+    })
   }
 }

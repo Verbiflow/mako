@@ -1,3 +1,4 @@
+import { hostFetch } from "../base/host-stopping.js"
 import type {
   AccountUsage,
   UsageBalance,
@@ -103,7 +104,7 @@ export async function chatGptUsage(
   try {
     const headers = new Headers({ Authorization: `Bearer ${accessToken}` })
     if (accountId) headers.set("ChatGPT-Account-Id", accountId)
-    const response = await fetch("https://chatgpt.com/backend-api/wham/usage", {
+    const response = await hostFetch("https://chatgpt.com/backend-api/wham/usage", {
       headers,
       signal: AbortSignal.timeout(10_000),
     })

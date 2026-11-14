@@ -1,5 +1,9 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
-import { CloudIcon, LaptopIcon, LinkIcon, MoonIcon, PanelRightIcon, PlusIcon, SearchIcon, SquareIcon, XIcon, ArchiveIcon } from "lucide-react"
+import { useLimitContinueNotice } from "@/components/composer/account-notice"
+import { useAskNotice } from "@/components/composer/agent-ask-card"
+import { askBringBack } from "./moves"
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import type { NativeAgent } from "@mako/host/contracts/native-agents"
+import { LinkIcon, MoonIcon, PanelRightIcon, PlusIcon, SearchIcon, SquareIcon, XIcon, ArchiveIcon } from "lucide-react"
 import { toast } from "sonner"
 import { CommandPalette } from "@/components/palette/command-palette"
 import { InboxView } from "@/components/inbox/inbox-view"
@@ -8,8 +12,12 @@ import { inboxView } from "@/state/inbox"
 import { AgentThreads } from "@/components/rail/agent-threads"
 import { Divider } from "@/components/shell/divider"
 import { RailToggle, TitleStrip } from "@/components/shell/title-bar"
+import { PlaceMark } from "@/components/ui/place-mark"
+import { runPlace } from "@mako/host/contracts/account-devices"
 import { useStaleSendNotice } from "@/components/composer/stale-send-notice"
+import { FinTab } from "@/components/stage/child-tabs"
 import { SessionTabList } from "@/components/stage/session-tabs"
+import { RoutedOpenContext } from "@/components/transcript/routed-open"
 import { Welcome } from "@/components/transcript/transcript"
 import { OceanScene } from "@/components/ui/ocean-scene"
 import { WorkbenchStrip } from "@/components/stage/stage-strip"
@@ -28,8 +36,16 @@ import { store } from "@/state/session"
 import { noteOpenedByScreen, useThreadTabs } from "@/state/thread-sessions"
 import { routeWindow } from "@/state/window-routes"
 import { useAccountList } from "./account-list"
+import { AgentsLayer } from "./agents-layer"
+import { deskComposerChunk } from "./chunks"
+import { ScreenFailed, ScreenLoading } from "./code-unavailable"
+import { LazyBoundary } from "@/components/ui/lazy-boundary"
+import { SetupLayer } from "./setup-layer"
+import { closeSetup, setupOpenStore } from "./setup-open"
+import { agentsOpenStore, closeAgents, closeDeskFin, deskFinStore, openDeskFin, toggleAgents, useAgentsOpen, useDeskFin } from "./agents-open"
 import { useWebClient } from "./client"
 import { followListing } from "./desk-listing"
+import { FinOfApexContext, childSession, placedSessionOf } from "./fin-of-apex"
 import { webHarnessLabel } from "./labels"
 import { StartForm, StartSheet, type AddingTo, type StartIn } from "./new-thread"
 import { CLOUD_PLACE } from "./places"
@@ -38,16 +54,19 @@ import { routeHref } from "./route"
 import type { Started } from "./start"
 import { startingWhere } from "./started"
 import { archiveWithUndo } from "./archive-thread"
-import { ThreadActions, ThreadBody, TranscriptLoading } from "./thread"
-import { CLOUD_WHERE, foldThreads, openingSession, ownerOf, subtitle, type WebThread } from "./threads"
+import { ThreadActions, ThreadBody } from "./thread"
+import { TranscriptLoading } from "./transcript-loading"
+import { CLOUD_WHERE, foldThreads, openingSession, ownerOf, subtitle, threadById, type WebThread } from "./threads"
 import { useThread } from "./use-thread"
 import { ConnectMac } from "./connect-mac"
 import { macConnection } from "./mac-connection"
 import { macPlace, useReach } from "./reach"
 import { ReviewLayer } from "./review-layer"
+import { FilesLayer } from "./files-layer"
+import { closeFiles, filesOpenStore, openFiles, useFilesOpen } from "./files-open"
 import { closeReview, deskReviewCode, openReview, reviewOpenStore, useReviewOpen } from "./review-open"
 
-const Settings = lazy(() => import("./settings").then((module) => ({ default: module.Settings })))
+const DeskSettings = lazy(() => import("./desk-settings"))
 
 /** The rail's narrowest and widest, as the desktop's. */
 const RAIL_MIN = 200
@@ -57,6 +76,11 @@ const RAIL_MAX = 420
  * page, so the web takes the chord web apps share for a new conversation; the palette offers it too.
  */
 const NEW_THREAD_KEYS = "mod+shift+o"
+
+/** A browser reaches a Mac through the sheet that picks it, where the desk's own window brings a Thread back itself. */
+function useWebAskNotice() {
+  return useAskNotice(askBringBack)
+}
 
 /**
  * Mako in a laptop's browser: the desktop app, drawn by the desktop's own pieces. Its title strip (the rail's header on
@@ -86,6 +110,8 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
   // The Thread on screen's `+`, which its pane answers with its own Add a Session.
   const addSession = useRef<(() => boolean) | null>(null)
   useEffect(() => followListing(), [])
+  // The desktop's composer, which a Thread here draws under its transcript: read now, before one opens.
+  useEffect(() => void deskComposerChunk.read().catch(() => undefined), [])
   // A browser has no file manager to show a path in and no folder chooser: the desk's pieces don't offer either.
   useEffect(() => store.set({ machine: { fileManager: null, chooseFolder: false } }), [])
   const latest = useRef({ open, newThread, list })
@@ -96,6 +122,8 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
     () =>
       routeWindow({
         open: (presence) => {
+          // A Session tab or a rail row opens that Session, even the one a Fin stands in front of.
+          closeDeskFin()
           if (presence.threadId) latest.current.open({ kind: "thread", thread: presence.threadId, ...(presence.sessionId && { session: presence.sessionId }) })
         },
         newSession: () => addSession.current?.() ?? false,
@@ -105,14 +133,27 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
           latest.current.newThread(row ? { place: row.runsOn.kind === "cloud" ? CLOUD_PLACE : row.runsOn.deviceId, project: cwd } : undefined)
         },
         threadMenu: (thread) => <DeskThreadMenu thread={thread} />,
+        agents: toggleAgents,
+        fin: (thread, agent) => {
+          // A Fin placed on another device is a Thread of its own there (decision D6): its own page opens, by the row
+          // its device lists, through the gateway to that device, which answers.
+          const own = placedSessionOf(agent)
+          if (own) return latest.current.open({ kind: "thread", thread: own.row.thread, session: own.row.session })
+          const listed = foldThreads(latest.current.list).threads.find((each) => each.id === thread)
+          if (listed) openDeskFin(agent, thread, openingSession(listed).row.conversation)
+          latest.current.open({ kind: "thread", thread })
+        },
       }),
     []
   )
   // The Inbox lies over whatever the desk shows; its address opens it, and going anywhere else puts it away.
   useEffect(() => (under.kind === "inbox" ? inboxView.open() : inboxView.close()), [route, under.kind])
   useDeskKeys({ threads, selected, open, newThread: () => newThread(), settings: () => open({ kind: "settings" }) })
-  // Of the desk's notices above its composer, the one a laptop's browser needs: a send to an old Session asks first.
+  // Of the desk's notices above its composer, those a laptop's browser needs: a send to an old Session asks first, and
+  // what an agent asked is answered here as on the desk.
   useEffect(() => registerNotice("stale-send", useStaleSendNotice, -11), [])
+  useEffect(() => registerNotice("limit-continue", useLimitContinueNotice, -4), [])
+  useEffect(() => registerNotice("agent-ask", useWebAskNotice), [])
 
   return (
     <TooltipProvider delayDuration={350}>
@@ -123,7 +164,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
           <>
             <nav ref={rail} aria-label="Threads" style={{ width: prefsStore.get().railWidth }} className="flex min-h-0 shrink-0 flex-col overflow-hidden">
               <AgentThreads />
-              <DeskIdentity settings={!starting && under.kind === "settings"} onSettings={() => open({ kind: "settings" })} />
+              <DeskIdentity settings={!starting && (under.kind === "settings" || under.kind === "setup")} onSettings={() => open({ kind: "settings" })} />
             </nav>
             <Divider
               side="left"
@@ -142,16 +183,21 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
             <DeskStart key="new" startIn={startIn} onDismiss={back} onStarted={onStarted} />
           ) : under.kind === "thread" ? (
             <DeskThread key={under.thread} threadId={under.thread} sessionId={under.session} addSessionRef={addSession} onArchived={back} onSession={(session) => navigate({ kind: "thread", thread: under.thread, session }, { replace: true })} />
-          ) : under.kind === "settings" ? (
-            <Suspense fallback={null}>
-              <Settings onBack={undefined} />
-            </Suspense>
+          ) : under.kind === "settings" || under.kind === "setup" ? (
+            <LazyBoundary fallback={() => <ScreenFailed what="Settings" className="bg-shell" />}>
+              <Suspense fallback={<ScreenLoading what="Settings" className="bg-shell" />}>
+                <DeskSettings route={under} open={open} />
+              </Suspense>
+            </LazyBoundary>
           ) : (
             <DeskEmpty onNew={() => newThread()} />
           )}
           <InboxView />
         </main>
         <ReviewLayer form="desk" place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
+        <FilesLayer form="desk" place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
+        <AgentsLayer place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
+        <SetupLayer place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} onAll={(project) => open({ kind: "setup", project })} />
       </div>
       <CommandPalette />
       <ConfirmHost />
@@ -169,6 +215,8 @@ function DeskTitleBar({ starting, onNew }: { starting: boolean; onNew: () => voi
   const running = useAcp((state) => activeLiveAcp(state)?.session.status === "running")
   const live = useAcp((state) => activeLiveAcp(state)?.key)
   const changes = useReviewOpen((state) => state.open !== null)
+  const files = useFilesOpen((state) => state.open !== null)
+  const agents = useAgentsOpen((state) => state.open)
   const railOpen = usePrefs((prefs) => prefs.railOpen)
   return (
     <TitleStrip
@@ -193,13 +241,21 @@ function DeskTitleBar({ starting, onNew }: { starting: boolean; onNew: () => voi
           <IconAction label="Search threads and commands" keys={formatChord("mod+k")} onClick={() => window.dispatchEvent(new CustomEvent("mako:palette"))}>
             <SearchIcon />
           </IconAction>
-          <IconAction label={changes ? "Hide changed files" : "Show changed files"} data-on={changes} disabled={!changes && !live} onClick={toggleChanges}>
+          <IconAction label={changes || files || agents ? "Hide the right sidebar" : "Show the right sidebar"} data-on={changes || files || agents} disabled={!changes && !files && !agents && !live} onClick={toggleSide}>
             <PanelRightIcon />
           </IconAction>
         </>
       }
     />
   )
+}
+
+/** The right rail, for the Session on screen, on Changes as the desktop's starts, or away again, whichever row is open. */
+function toggleSide(): void {
+  if (filesOpenStore.get().open) return closeFiles()
+  if (agentsOpenStore.get().open) return closeAgents()
+  if (setupOpenStore.get().open) return closeSetup()
+  toggleChanges()
 }
 
 /** Changes beside the transcript, for the Session on screen, or away again: the desktop's right sidebar, here. */
@@ -209,6 +265,13 @@ function toggleChanges(): void {
   if (!live) return
   void deskReviewCode.read()
   openReview({ conversation: live.key, scope: { kind: "thread" } })
+}
+
+/** The open Session's folder beside its transcript, where Changes goes, or away again. */
+function toggleFiles(): void {
+  if (filesOpenStore.get().open) return closeFiles()
+  const live = activeLiveAcp(acpStore.get())
+  if (live) openFiles({ conversation: live.key })
 }
 
 /**
@@ -254,6 +317,7 @@ function useDeskKeys({ threads, selected, open, newThread, settings }: { threads
       },
       // The desk's own command for Changes: the open Session's turns, beside its transcript, and away again.
       { id: "view.changes", title: "Show changed files", section: "View", keywords: "review diff turn right sidebar", when: () => Boolean(reviewOpenStore.get().open ?? activeLiveAcp(acpStore.get())), run: toggleChanges },
+      { id: "view.files", title: "Browse files", section: "View", keywords: "files tree folder find file search code source explorer", when: () => Boolean(filesOpenStore.get().open ?? activeLiveAcp(acpStore.get())), run: toggleFiles },
       { id: "view.settings", title: "Settings", section: "View", keys: "mod+,", keywords: "preferences notifications theme sign out", run: () => latest.current.settings() },
       { id: "session.new", title: "New thread", section: "Session", keys: NEW_THREAD_KEYS, keywords: "start create", run: () => latest.current.newThread() },
       { id: "session.focus-composer", title: "Focus the composer", section: "Session", keys: "mod+l", run: () => document.querySelector<HTMLTextAreaElement>("main textarea:not([readonly]):not([disabled])")?.focus() },
@@ -314,7 +378,7 @@ function DeskIdentity({ settings, onSettings }: { settings: boolean; onSettings:
         aria-label="Settings"
         aria-current={settings ? "page" : undefined}
         onClick={onSettings}
-        className={cn("pressable flex w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1.5 text-left transition-colors duration-100 hover:bg-fill-hover", settings && "bg-fill-selected")}
+        className={cn("pressable flex w-full min-w-0 items-center gap-2 px-1.5 py-1.5 text-left transition-colors duration-100 hover:bg-fill-hover", settings && "bg-fill-selected")}
       >
         <Avatar name={client.account.name} src={client.account.image ?? undefined} size={5} />
         <span className="min-w-0 flex-1 truncate text-ui text-foreground/85">{client.account.name || client.account.email}</span>
@@ -330,7 +394,7 @@ function DeskIdentity({ settings, onSettings }: { settings: boolean; onSettings:
  */
 function DeskThreadMenu({ thread: id }: { thread: string | undefined }) {
   const client = useWebClient()
-  const thread = useAccountList((state) => (id ? foldThreads(state).threads.find((each) => each.id === id) : undefined))
+  const thread = useAccountList((state) => (id ? threadById(foldThreads(state), (each) => each.id === id) : undefined))
   if (!thread) return null
   const reachable = !thread.quietSince && !thread.archived
   const copyLink = async () => {
@@ -376,10 +440,10 @@ function DeskEmpty({ onNew }: { onNew: () => void }) {
     <div className="web-enter flex min-h-0 flex-1 flex-col items-center justify-center gap-6 text-center">
       <MakoMark className="size-9 opacity-25" />
       <div className="flex flex-col gap-1.5 text-ui text-muted-foreground">
-        <button type="button" onClick={onNew} className="pressable flex h-8 items-center justify-between gap-8 rounded-md px-2.5 hover:bg-fill-hover hover:text-foreground">
+        <button type="button" onClick={onNew} className="pressable flex h-8 items-center justify-between gap-8 px-2.5 hover:bg-fill-hover hover:text-foreground">
           New thread <Keys keys={formatChord(NEW_THREAD_KEYS)} />
         </button>
-        <button type="button" onClick={() => window.dispatchEvent(new CustomEvent("mako:palette"))} className="pressable flex h-8 items-center justify-between gap-8 rounded-md px-2.5 hover:bg-fill-hover hover:text-foreground">
+        <button type="button" onClick={() => window.dispatchEvent(new CustomEvent("mako:palette"))} className="pressable flex h-8 items-center justify-between gap-8 px-2.5 hover:bg-fill-hover hover:text-foreground">
           Search threads and commands <Keys keys={formatChord("mod+k")} />
         </button>
       </div>
@@ -424,6 +488,22 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession 
   }, [addSessionRef, canAdd])
   const tabs = useThreadTabs(useMemo(() => ({ thread: threadId, session: session?.row.session }), [threadId, session?.row.session]))
   const shown = session?.row.session
+  // The Fin opened from the crew card or Agents, in this pane as the phone opens it: its one tab beside the Apex's Sessions.
+  const apexConversation = session?.row.conversation
+  const child = useDeskFin((state) => (state.fin?.thread === threadId ? state.fin.agent : null))
+  const openChild = useCallback(
+    (agent: NativeAgent) => {
+      if (apexConversation) openDeskFin(agent, threadId, apexConversation)
+    },
+    [threadId, apexConversation]
+  )
+  // Leaving the Thread leaves its Fin; one the rail just opened in the Thread being gone to stands.
+  useEffect(
+    () => () => {
+      if (deskFinStore.get().fin?.thread === threadId) closeDeskFin()
+    },
+    [threadId]
+  )
   // The address named none: the Session is the Thread's own choice, and a send to it may ask first (`openedBy`).
   useEffect(() => {
     if (sessionId === undefined && shown) noteOpenedByScreen(shown)
@@ -442,23 +522,31 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession 
       </>
     )
   }
-  const Place = session.row.runsOn.kind === "cloud" ? CloudIcon : session.quietSince ? MoonIcon : LaptopIcon
+  // Where it runs, in the place's one glyph: a cloud, a server for a machine of the person's own, a laptop for a Mac;
+  // a device asleep or offline under the moon.
+  const place = runPlace(session.row.runsOn.kind === "cloud", session.machine ? "runtime" : undefined)
+  const opened = child ? childSession(session, child) : undefined
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-thread-screen={thread.id}>
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-thread-screen={thread.id} data-child-of={opened ? thread.id : undefined}>
       <WorkbenchStrip
         end={
           <>
             <span className="flex min-w-0 shrink items-center gap-1.5 px-2 text-label text-faint">
-              <Place aria-hidden className="size-3 shrink-0" />
+              {session.quietSince && place !== "cloud" ? <MoonIcon aria-hidden data-place="quiet" className="size-3 shrink-0" /> : <PlaceMark place={place} />}
               <span className="truncate">{subtitle(thread, session)}</span>
             </span>
             {thread.archived ? null : <ThreadActions desk thread={thread} session={session} onArchived={onArchived} onAdd={undefined} />}
           </>
         }
       >
-        {tabs.length ? <SessionTabList tabs={tabs} here={{ thread: thread.id, session: session.row.session }} paneId="main" agentActive /> : null}
+        {tabs.length ? <SessionTabList tabs={tabs} here={{ thread: thread.id, session: session.row.session }} paneId="main" agentActive={!opened} /> : null}
+        {child && opened ? <FinTab agent={child} onClose={closeDeskFin} /> : null}
       </WorkbenchStrip>
-      <ThreadBody thread={thread} session={session} desk />
+      <RoutedOpenContext value={openChild}>
+        <FinOfApexContext value={opened ? thread.title : undefined}>
+          <ThreadBody key={opened?.row.conversation} thread={thread} session={opened ?? session} desk />
+        </FinOfApexContext>
+      </RoutedOpenContext>
       {addingTo ? (
         <StartSheet
           open={adding}
@@ -495,7 +583,7 @@ function DeskStart({ startIn, onDismiss, onStarted }: { startIn: StartIn | undef
           </IconAction>
         }
       >
-        <div role="tab" aria-selected data-active className="relative flex h-7 w-56 min-w-16 max-w-56 shrink items-center gap-1.5 overflow-hidden rounded-md bg-raised px-1.5 text-ui font-medium text-foreground">
+        <div role="tab" aria-selected data-active className="relative flex h-7 w-56 min-w-16 max-w-56 shrink items-center gap-1.5 overflow-hidden bg-raised px-1.5 text-ui font-medium text-foreground">
           <MakoMark className="size-4" />
           <span className="truncate">New thread</span>
         </div>

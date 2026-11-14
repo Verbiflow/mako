@@ -1,5 +1,7 @@
 import { useEffect, useRef, useSyncExternalStore } from "react"
 import { finsWord } from "@mako/host/contracts/agents"
+import { askWords } from "@mako/host/contracts/children"
+import { agentAskLine, type AgentAsk } from "@mako/host/contracts/agent-asks"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import type { LivePermissionRequest, ThreadRef } from "@/lib/types"
 import { workspaceName } from "@/lib/format"
@@ -12,11 +14,16 @@ import { hydrateLive } from "@/state/live-recovery"
 import { threads } from "@/state/threads"
 import { openConversation, windowRoutesStore } from "@/state/window-routes"
 import { personAsks, type PersonAsk } from "@/state/fin-asks"
-import { createHook, createStore } from "@/state/store"
+import { inboxView } from "@/state/inbox-view"
 import type { ThreadsState } from "@/state/thread-state"
 import { threadStatus } from "@/state/thread-status"
 import { threadsStore } from "@/state/thread-store"
 import { threadTitle } from "@/state/thread-titles"
+import { allAsks, setupAskWords, setupStore } from "@/state/setup"
+import { openAppSetup } from "@/state/app-setup"
+import type { SetupAsk } from "@mako/host/contracts/setup"
+
+export { inboxView, inboxViewStore, useInboxView } from "@/state/inbox-view"
 
 /**
  * The Inbox: everything waiting on the person, across every Thread and Fin,
@@ -78,7 +85,33 @@ export interface WaitingInboxItem {
   open: InboxTarget
 }
 
-export type InboxAsk = FinInboxItem | ApprovalInboxItem | WaitingInboxItem
+/** What a Thread's agent asked through Mako's tools (`AgentAsk`), kept in its conversation and answered as its card is. */
+export interface AgentAskInboxItem {
+  kind: "agent-ask"
+  key: string
+  title: string
+  harness: string
+  question: string
+  since: number
+  conversation: string
+  ask: AgentAsk
+}
+
+/** An agent's ask for something its place lacks, from the project's Setup (`setup.ts`), answered the same as there. */
+export interface SetupInboxItem {
+  kind: "setup"
+  key: string
+  title: string
+  harness: string
+  question: string
+  since: number
+  folder: string
+  ask: SetupAsk
+  /** Its page was built away from its Mac (`SetupView.away`): only a no can be said here. */
+  away: boolean
+}
+
+export type InboxAsk = FinInboxItem | ApprovalInboxItem | AgentAskInboxItem | WaitingInboxItem | SetupInboxItem
 
 /** An answer not yet read, or a failure: opening its Thread is reading it. */
 export interface ReadInboxItem {
@@ -112,6 +145,16 @@ function refTitle(ref: ThreadRef): string {
 }
 
 const approvals = new WeakMap<LivePermissionRequest, ApprovalInboxItem>()
+const agentAskItems = new WeakMap<AgentAsk, AgentAskInboxItem>()
+
+function agentAskItem(conversation: LiveAcpConversation, ask: AgentAsk): AgentAskInboxItem {
+  const held = agentAskItems.get(ask)
+  const title = liveTitle(conversation)
+  if (held?.title === title) return held
+  const item: AgentAskInboxItem = { kind: "agent-ask", key: `agent-ask:${conversation.key}:${ask.id}`, title, harness: conversation.harness, question: agentAskLine(ask.want), since: ask.at, conversation: conversation.key, ask }
+  agentAskItems.set(ask, item)
+  return item
+}
 
 function approvalOf(conversation: LiveAcpConversation, permission: LivePermissionRequest, apex: ApprovalInboxItem["apex"]): ApprovalInboxItem {
   const held = approvals.get(permission)
@@ -145,7 +188,7 @@ function finItemsOf(children: readonly NativeAgent[], apex: InboxApex): readonly
       key: `fin:${ask.fin}:${ask.ask.id}`,
       title: ask.title,
       harness: ask.harness,
-      question: ask.question,
+      question: askWords(ask),
       since: agent.observedAt ?? agent.startedAt ?? 0,
       apex,
       ask,
@@ -168,14 +211,15 @@ function refsByPath(refs: readonly ThreadRef[]): Map<string, ThreadRef> {
   return index
 }
 
-type Inputs = [AcpState["conversations"], ThreadRef[], ThreadsState["attention"], ThreadsState["externalActivity"], ThreadsState["working"]]
+type Inputs = [AcpState["conversations"], ThreadRef[], ThreadsState["attention"], ThreadsState["externalActivity"], ThreadsState["working"], SetupStateOf["byFolder"]]
+type SetupStateOf = ReturnType<typeof setupStore.get>
 let last: { inputs: Inputs; model: InboxModel } | null = null
 
 /** What waits on the person and what's to read, the same object while none of what it reads has changed. */
-export function inboxModel(acp: AcpState = acpStore.get(), threads: ThreadsState = threadsStore.get()): InboxModel {
-  const inputs: Inputs = [acp.conversations, threads.threads, threads.attention, threads.externalActivity, threads.working]
+export function inboxModel(acp: AcpState = acpStore.get(), threads: ThreadsState = threadsStore.get(), setup: SetupStateOf = setupStore.get()): InboxModel {
+  const inputs: Inputs = [acp.conversations, threads.threads, threads.attention, threads.externalActivity, threads.working, setup.byFolder]
   if (last && last.inputs.every((input, index) => input === inputs[index])) return last.model
-  const model = buildModel(acp, threads)
+  const model = buildModel(acp, threads, setup)
   const previous = last?.model
   // Unchanged items keep the last model, so a reader comparing it by identity never repaints for a token.
   const kept = previous && sameItems(previous.asks, model.asks) && sameItems(previous.toRead, model.toRead) ? previous : model
@@ -183,7 +227,7 @@ export function inboxModel(acp: AcpState = acpStore.get(), threads: ThreadsState
   return kept
 }
 
-function buildModel(acp: AcpState, threads: ThreadsState): InboxModel {
+function buildModel(acp: AcpState, threads: ThreadsState, setup: SetupStateOf): InboxModel {
   const conversations = Object.values(acp.conversations)
   const asks: InboxAsk[] = []
   // Threads whose asks are said here already: an Apex's by its Fins, a conversation's by its approval.
@@ -211,6 +255,13 @@ function buildModel(acp: AcpState, threads: ThreadsState): InboxModel {
     for (const item of items) askingFins.add(item.ask.fin)
     asks.push(...items)
     if (items.length && conversation.threadPath) coveredPaths.add(conversation.threadPath)
+  }
+  // What an agent asked is its conversation's own, beside its Fins' asks and whatever else it waits on. A Fin's goes
+  // through its Apex first, as its harness's approvals do, and is listed from the Apex's roster once it's the person's.
+  for (const conversation of conversations) {
+    if (conversation.kind !== "live" || conversation.parent || conversation.session.connection !== "connected") continue
+    for (const ask of conversation.control?.asks ?? []) asks.push(agentAskItem(conversation, ask))
+    if (conversation.control?.asks?.length && conversation.threadPath) coveredPaths.add(conversation.threadPath)
   }
   const apexTitle = (thread: string) => {
     const apex = conversations.find((conversation) => conversation.threadId === thread && conversation.kind === "live")
@@ -243,6 +294,8 @@ function buildModel(acp: AcpState, threads: ThreadsState): InboxModel {
     if (status.kind !== "needs-permission") continue
     asks.push({ kind: "waiting", key: `waiting:${path}`, title: refTitle(ref), harness: ref.harness, question: status.detail ?? "Waiting for you", since: status.since, open: { kind: "ref", ref } })
   }
+  for (const { folder, ask } of allAsks(setup))
+    asks.push({ kind: "setup", key: `setup:${ask.id}`, title: ask.by.title, harness: ask.by.harness ?? "", question: setupAskWords(ask), since: ask.at, folder, ask, away: Boolean(setup.byFolder[folder]?.away) })
   asks.sort((left, right) => left.since - right.since)
 
   const toRead: ReadInboxItem[] = []
@@ -263,7 +316,9 @@ function sameItem(left: InboxAsk | ReadInboxItem, right: InboxAsk | ReadInboxIte
   if (left.key !== right.key || left.kind !== right.kind || left.title !== right.title) return false
   if (left.kind === "fin") return right.kind === "fin" && left.ask === right.ask && left.since === right.since && left.apex.title === right.apex.title
   if (left.kind === "approval") return right.kind === "approval" && left.permission === right.permission
+  if (left.kind === "agent-ask") return right.kind === "agent-ask" && left.ask === right.ask
   if (left.kind === "waiting") return right.kind === "waiting" && left.question === right.question && left.since === right.since
+  if (left.kind === "setup") return right.kind === "setup" && left.ask === right.ask
   return (right.kind === "review" || right.kind === "failed") && left.at === right.at && left.detail === right.detail
 }
 
@@ -279,9 +334,11 @@ export function inboxCount(model: InboxModel): number {
 function subscribe(listener: () => void): () => void {
   const offAcp = acpStore.subscribe(listener)
   const offThreads = threadsStore.subscribe(listener)
+  const offSetup = setupStore.subscribe(listener)
   return () => {
     offAcp()
     offThreads()
+    offSetup()
   }
 }
 
@@ -340,14 +397,18 @@ export function openInboxItem(item: InboxAsk | ReadInboxItem): void {
   const conversation = (key: string) => {
     const presence = routes ? selectAcpPresence(acpStore.get()).find((entry) => entry.key === key) : undefined
     if (presence) openConversation(presence)
-    else acp.activate(key)
+    else acp.open(key)
+  }
+  if (item.kind === "setup") {
+    openAppSetup(setupStore.get().byFolder[item.folder]?.root ?? item.folder, "setup")
+    return
   }
   if (item.kind === "fin") {
     if (routes) conversation(item.apex.conversation)
     else openFinInApex(item.apex.thread, item.apex.title, item.agent)
     return
   }
-  const target = item.kind === "approval" ? ({ kind: "conversation", key: item.conversation } as const) : item.open
+  const target = item.kind === "approval" || item.kind === "agent-ask" ? ({ kind: "conversation", key: item.conversation } as const) : item.open
   if (target.kind === "conversation") conversation(target.key)
   else void threads.view(target.ref)
 }
@@ -355,14 +416,4 @@ export function openInboxItem(item: InboxAsk | ReadInboxItem): void {
 /** Answers a Thread's approval with one of its options, as its own card would; false when it didn't land. */
 export function answerApproval(item: ApprovalInboxItem, optionId: string): Promise<boolean> {
   return answerLiveApproval(item.conversation, item.permission.id, { kind: "choice", optionId })
-}
-
-/** Whether the Inbox is what the main pane shows. */
-export const inboxViewStore = createStore<{ open: boolean }>({ open: false })
-export const useInboxView = createHook(inboxViewStore)
-
-export const inboxView = {
-  open: () => inboxViewStore.set({ open: true }),
-  close: () => inboxViewStore.set({ open: false }),
-  toggle: () => inboxViewStore.set({ open: !inboxViewStore.get().open }),
 }

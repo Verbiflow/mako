@@ -9,13 +9,13 @@ import { execFileSync, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
 import { createServer } from "node:http"
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
 import { admitted } from "./fixtures/admitted-start.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 const nativeStores = new NativeStores(false)
 
@@ -24,7 +24,7 @@ const installed = () => { try { execFileSync("grok", ["--version"], { stdio: "ig
 if (!process.versions.electron && !installed()) {
   console.log("Grok modes: skipped, grok is not installed")
 } else if (!process.versions.electron) {
-  const root = mkdtempSync(join(tmpdir(), "grok-mako-e2e-"))
+  const root = testScratch("grok-mako-e2e-")
   writeFileSync(join(root, "package.json"), JSON.stringify({ name: "grok-mako-e2e", main: fileURLToPath(import.meta.url) }))
   const home = join(root, "home")
   mkdirSync(join(home, ".grok"), { recursive: true })
@@ -95,7 +95,7 @@ async function check() {
 
   async function conversation(options, answer) {
     const id = randomUUID()
-    const cwd = mkdtempSync(join(tmpdir(), "grok-mako-e2e-cwd-"))
+    const cwd = testScratch("grok-mako-e2e-cwd-")
     globalThis.e2eCwd = cwd
     const events = []
     const asked = []

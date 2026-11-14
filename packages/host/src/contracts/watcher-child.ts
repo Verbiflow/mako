@@ -22,9 +22,37 @@ export const WatcherRequestSchema = z.discriminatedUnion("t", [
    * Paths in or under an `ignore` folder are counted per folder and left
    * out, so a busy machine's churn stays in the child. `exclude` folders
    * inside a root are left out by fseventsd itself, before they're sent,
-   * stat-ed or counted: at most `MAX_EXCLUDED` of them per root.
+   * stat-ed or counted: at most `MAX_EXCLUDED` of them per root. With
+   * `perFolder`, each folder one level into a root sends at most that many
+   * paths, and one that had more is named in the reply's `capped`.
    */
-  z.object({ t: z.literal("since"), id: z.number().int(), mark: HistoryMarkSchema, roots: z.array(z.string()), ignore: z.array(z.string()), exclude: z.array(z.string()).optional() }),
+  z.object({ t: z.literal("since"), id: z.number().int(), mark: HistoryMarkSchema, roots: z.array(z.string()), ignore: z.array(z.string()), exclude: z.array(z.string()).optional(), perFolder: z.number().int().positive().optional() }),
+  /**
+   * Every process on the machine as `ps` prints it (`pid ppid pgid rss lstart command`), read here so the spawn and
+   * its wait leave the host's loop: the apps' marks and traces ask for it every few seconds while an app runs.
+   */
+  z.object({ t: z.literal("table"), id: z.number().int() }),
+  /**
+   * Only the processes of `runs` (each a group's leader and when it started), read, parsed and matched here: a look at
+   * running apps needs a few dozen rows of a busy Mac's thousands, and parsing and matching all of them held the host's
+   * loop. `self` is the host, never one of a run's processes.
+   */
+  z.object({ t: z.literal("members"), id: z.number().int(), self: z.number().int(), runs: z.array(z.object({ pid: z.number().int(), startedMs: z.number() })) }),
+  /**
+   * A probe that only reads the machine (`ps`, `lsof`, `sysctl`; the child refuses any other), run here so its spawn
+   * never holds the host's loop (`HostProbes`). `cancel` ends one under way.
+   */
+  z.object({
+    t: z.literal("run"),
+    id: z.number().int(),
+    file: z.string(),
+    args: z.array(z.string()),
+    env: z.record(z.string(), z.string()).optional(),
+    cwd: z.string().optional(),
+    timeout: z.number().int().nonnegative().optional(),
+    maxBuffer: z.number().int().positive().optional(),
+  }),
+  z.object({ t: z.literal("cancel"), id: z.number().int() }),
   /** How late a folder of the child's own hears `beats` writes, one after another: delivery measured now, not over the last minute. */
   z.object({ t: z.literal("probe"), id: z.number().int(), beats: z.number().int().positive().max(20) }),
 ])
@@ -45,7 +73,23 @@ export type WatchEvent = z.infer<typeof WatchEventSchema>
 export const DropReasonSchema = z.enum(["client", "kernel", "coalesced"])
 export type DropReason = z.infer<typeof DropReasonSchema>
 
+/** A process as `ps` gives it: what a run's look reads of it. */
+export const ProcessRowSchema = z.object({ pid: z.number().int(), ppid: z.number().int(), pgid: z.number().int(), rssKb: z.number(), startedMs: z.number(), command: z.string() })
+
 export const WatcherReplySchema = z.discriminatedUnion("t", [
+  z.object({ t: z.literal("table"), id: z.number().int(), text: z.string() }),
+  z.object({ t: z.literal("members"), id: z.number().int(), rows: z.array(ProcessRowSchema) }),
+  /** A probe's answer: its exit `code` (or `signal`), its output, and `failure` when it couldn't run or was cut short. */
+  z.object({
+    t: z.literal("ran"),
+    id: z.number().int(),
+    stdout: z.string(),
+    stderr: z.string(),
+    code: z.number().int().nullable(),
+    signal: z.string().nullable(),
+    failure: z.object({ message: z.string(), code: z.string().optional() }).optional(),
+    killed: z.boolean(),
+  }),
   z.object({ t: z.literal("ready"), id: z.number().int() }),
   z.object({ t: z.literal("failed"), id: z.number().int(), message: z.string() }),
   z.object({ t: z.literal("events"), id: z.number().int(), events: z.array(WatchEventSchema) }),
@@ -70,6 +114,8 @@ export const WatcherReplySchema = z.discriminatedUnion("t", [
    */
   z.object({
     t: z.literal("history"), id: z.number().int(), paths: z.array(z.string()), lost: z.array(z.string()), ignored: z.array(z.number().int()),
+    /** Folders past `perFolder`, and how many paths they left unsent. */
+    capped: z.array(z.string()).optional(), unsent: z.number().int().nonnegative().optional(),
     caughtUpMs: z.number().nonnegative().optional(), readMs: z.number().nonnegative().optional(),
   }),
 ])

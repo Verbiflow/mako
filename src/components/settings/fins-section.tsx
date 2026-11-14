@@ -1,17 +1,21 @@
-import { useEffect } from "react"
+import { useEffect, type ReactNode } from "react"
+import { targetLine } from "./agent-reads"
 import { FinRules } from "./fin-rules"
+import { FinMoveOnLimit } from "./fin-move-on-limit"
+import { RoleRules } from "./role-rules"
 import { toast } from "sonner"
-import { AlertCircleIcon, CheckIcon, ChevronDownIcon, ZapIcon } from "lucide-react"
+import { AlertCircleIcon, CheckIcon, ChevronDownIcon, MinusIcon, PlusIcon, ZapIcon } from "lucide-react"
 import type { ResolvedSetting, SessionSettings } from "@mako/sessions/settings"
-import { finTuningLine, finTuningWords, resolveFinTuning, type FinTuningSource } from "@mako/host/contracts/fin-tuning"
+import { cloudWords, FIN_CEILING, FIN_CEILING_MAX, FIN_LIMIT, FIN_LIMIT_MAX, finTuningLine, finTuningWords, resolveFinTuning, type FinTuningSource } from "@mako/host/contracts/fin-tuning"
 import { ModelList, ModelOptionRows, ModelSummary, type ModelChoice } from "@/components/composer/agent-model-picker"
+import { IconAction, Segmented } from "@/components/ui/kit"
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { harnessLabel, useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import type { HarnessProfile } from "@/lib/types"
 import { harnessDefaults } from "@/state/composer-settings"
-import { chooseFinDefault, loadFinDefaults, useFinDefaults } from "@/state/fin-defaults"
+import { chooseFinDefault, loadFinDefaults, setFinCeiling, setFinLimit, useFinDefaults } from "@/state/fin-defaults"
 import { useHarnessOrder } from "@/state/harness-order"
 import { providers, useProviders } from "@/state/providers"
 
@@ -32,7 +36,9 @@ export function FinsSection() {
   const failed = useFinDefaults((state) => state.failed)
   return (
     <div className="flex flex-col gap-8">
+      <FinLimit />
       <FinRules order={order} profiles={profiles} />
+      <RoleRules target={(target) => targetLine(target, profiles)} />
       <section className="flex flex-col gap-3">
       <div>
         <h3 className="text-ui font-medium">What Fins run on, per harness</h3>
@@ -50,6 +56,87 @@ export function FinsSection() {
       </div>
       {failed ? <p className="text-label text-caution">This Mac's choices for Fins couldn't be read. Reopen Settings to try again.</p> : null}
       </section>
+      <FinMoveOnLimit />
+    </div>
+  )
+}
+
+/**
+ * How many Fins run at once, one line per place: this Mac's capacity, from its hardware and what a Fin costs here,
+ * or the person's own number; the cloud's, by their plan; and their ceiling across every place.
+ */
+function FinLimit() {
+  const reading = useFinDefaults((state) => state.reading)
+  if (!reading) return null
+  const capacity = reading.capacity
+  const own = reading.limit
+  const atOnce = own ?? capacity?.atOnce ?? FIN_LIMIT
+  const ceiling = reading.ceiling ?? FIN_CEILING
+  const fail = (error: Error) => toast.error(error.message || "That number couldn't be saved. Try again.")
+  const saveLimit = (next: number | null) => void setFinLimit(next).catch(fail)
+  const saveCeiling = (next: number) => void setFinCeiling(next).catch(fail)
+  const based = capacity ? [capacity.pressure ?? capacity.why, ...capacity.measured ? [] : ["defaults so far"]].join(" · ") : undefined
+  // Another place's operations this Mac runs take Fins' places from the same number.
+  const lending = capacity?.lent?.length ? `${capacity.lent.length} lent: ${capacity.lent.join(", ")}` : undefined
+  const detail = [own !== undefined ? `Your number${capacity ? ` · Auto would be ${capacity.auto}` : ""}` : based ?? "Its capacity", lending].filter(Boolean).join(" · ")
+  return (
+    <section className="flex flex-col gap-3" aria-label="Fins at once">
+      <div>
+        <h3 className="text-ui font-medium">Fins at once</h3>
+        <p className="mt-0.5 text-label text-muted-foreground">
+          How many of your Fins run at the same time in each place, across every Apex. Past it, an Apex waits for one to
+          end only when it asks to.
+        </p>
+      </div>
+      <div role="list" className="flex flex-col gap-px">
+        <PlaceRow
+          place="This Mac"
+          detail={detail}
+          caution={Boolean(capacity?.pressure) && own === undefined}
+        >
+          <Segmented
+            label="How this Mac's number is set"
+            value={own === undefined ? "auto" : "fixed"}
+            options={[{ value: "auto", label: "Auto" }, { value: "fixed", label: "Fixed" }]}
+            onChange={(next) => saveLimit(next === "auto" ? null : atOnce)}
+          />
+          {own === undefined ? <span className="tabular w-[5.5rem] text-right text-ui font-medium">{atOnce}</span> : <Stepper label="This Mac's Fins at once" value={own} most={FIN_LIMIT_MAX} onChange={saveLimit} />}
+        </PlaceRow>
+        {reading.cloud ? (
+          <PlaceRow place="Cloud" detail="A machine per Fin, so your plan and daily spend ceiling set it">
+            <span className="text-ui font-medium">{cloudWords(reading.cloud)}</span>
+          </PlaceRow>
+        ) : null}
+        <PlaceRow place="Across every place" detail="A safety net over each place's own number">
+          <Stepper label="Fins at once across every place" value={ceiling} most={FIN_CEILING_MAX} onChange={saveCeiling} />
+        </PlaceRow>
+      </div>
+    </section>
+  )
+}
+
+function PlaceRow({ place, detail, caution, children }: { place: string; detail: string; caution?: boolean; children: ReactNode }) {
+  return (
+    <div role="listitem" className="flex items-center gap-3 bg-shell/55 px-3 py-2.5">
+      <div className="min-w-0 flex-1">
+        <p className="text-ui font-medium">{place}</p>
+        <p className={cn("truncate text-label", caution ? "text-caution" : "text-faint")}>{detail}</p>
+      </div>
+      <div className="flex shrink-0 items-center gap-3">{children}</div>
+    </div>
+  )
+}
+
+function Stepper({ label, value, most, onChange }: { label: string; value: number; most: number; onChange: (next: number) => void }) {
+  return (
+    <div role="group" aria-label={label} className="flex shrink-0 items-center gap-1">
+      <IconAction label="One fewer" disabled={value <= 1} onClick={() => onChange(value - 1)}>
+        <MinusIcon />
+      </IconAction>
+      <output aria-live="polite" className="tabular w-7 text-center text-ui font-medium">{value}</output>
+      <IconAction label="One more" disabled={value >= most} onClick={() => onChange(value + 1)}>
+        <PlusIcon />
+      </IconAction>
     </div>
   )
 }
@@ -63,6 +150,7 @@ const SOURCE_WORDS = {
   used: () => "your last here",
   mako: () => "Mako's recommendation",
   harness: (harness) => `${harnessLabel(harness)}'s own default`,
+  connection: () => "a connection's model",
 } satisfies Record<FinTuningSource, (harness: string) => string>
 
 function FinRow({ harness, profile }: { harness: string; profile: HarnessProfile | undefined }) {
@@ -76,8 +164,8 @@ function FinRow({ harness, profile }: { harness: string; profile: HarnessProfile
   const words = elsewhere?.settings ? finTuningWords(models, elsewhere.settings) : undefined
   const gone = chosen?.model && models.length && !finTuningWords(models, chosen) ? chosen.model : undefined
   return (
-    <div role="listitem" className={cn("flex items-center gap-3 bg-shell/55 px-3 py-2.5", !signedIn && !pending && "text-muted-foreground")}>
-      <span className={cn("flex size-7 shrink-0 items-center justify-center bg-raised", !signedIn && !pending && "opacity-50")}>
+    <div role="listitem" className={cn("flex items-center gap-3 bg-raised px-3 py-2.5", !signedIn && !pending && "text-muted-foreground")}>
+      <span className={cn("flex size-7 shrink-0 items-center justify-center bg-fill-hover", !signedIn && !pending && "opacity-50")}>
         <HarnessIcon harness={harness} className="size-3.5" />
       </span>
       <div className="min-w-0 flex-1">

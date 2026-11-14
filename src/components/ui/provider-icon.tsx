@@ -8,10 +8,10 @@ import { cn } from "@/lib/utils"
  *
  * A model picker that shows the same generic glyph on every row is telling you
  * nothing — the provider is the single most recognisable fact about a model,
- * and a brand mark is read at a glance where a name has to be parsed. Each
- * mark carries the provider's own colour, which is the one place in this
- * otherwise achromatic interface where hue is worth spending: it is
- * information, not decoration.
+ * and a brand mark is read at a glance where a name has to be parsed. Its
+ * shape says it; inside Mako's chrome it draws in one ink, the text's, so a
+ * provider's colour never becomes a second brand beside Mako's
+ * (`docs/design.md`). `tinted` keeps the brand colour where one is wanted.
  */
 
 type Mark = (props: SVGProps<SVGSVGElement>) => React.ReactElement
@@ -85,7 +85,7 @@ const MARKS = {
 export function HarnessIcon({
   harness,
   className,
-  tinted = true,
+  tinted = false,
 }: {
   harness: string
   className?: string
@@ -102,7 +102,7 @@ export function HarnessIcon({
 export function ProviderIcon({
   provider,
   className,
-  tinted = true,
+  tinted = false,
 }: {
   provider: string
   className?: string

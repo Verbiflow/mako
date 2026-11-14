@@ -31,10 +31,10 @@ export interface LoopSlice {
 
 /** `function package/file:line` for a frame of Mako's own packages; undefined for a dependency's, Node's or V8's. */
 function ownFrame(frame: CpuProfile["nodes"][number]["callFrame"]): string | undefined {
-  const at = frame.url.indexOf("/packages/")
-  if (at < 0 || frame.url.includes("/node_modules/")) return undefined
-  const file = frame.url.slice(at + "/packages/".length).replace(/^([^/]+)\/(dist|src)\//, "$1/")
-  return `${frame.functionName || "(anonymous)"} ${file}:${frame.lineNumber + 1}`
+  // In a checkout under `packages/`; in the installed app, under `node_modules/@mako/`, which is the host's own too.
+  const own = /\/(?:packages|node_modules\/@mako)\/([^/]+)\/(?:(?:dist|src)\/)?(.+)$/.exec(frame.url)
+  if (!own || /\/node_modules\/(?!@mako\/)/.test(frame.url.slice(own.index))) return undefined
+  return `${frame.functionName || "(anonymous)"} ${own[1]}/${own[2]}:${frame.lineNumber + 1}`
 }
 
 /** Every slice of at least `minMs`, in order, each with its `frames` busiest frames. */

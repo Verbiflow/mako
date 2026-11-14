@@ -1,3 +1,4 @@
+import { claudeRecoveryControls } from "./lib/claude-recovery-controls.ts"
 import type { PromptDeliveryEvidence } from "@mako/host/contracts/prompt-delivery"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
@@ -21,6 +22,7 @@ import {
   type ClaudeSdkDependencies,
 } from "@mako/host/harnesses/claude/sdk-driver"
 import { claudeExecutablePath } from "@mako/host/harnesses/claude/sdk-process"
+import { HandoffRefused } from "@mako/host/harnesses/prompt-dispatch"
 import { ClaudeProjection } from "@mako/sessions/claude-projection"
 import { readPromptAttachments } from "@mako/sessions/prompt-attachments"
 import { claudeInputContent, ClaudeInput } from "@mako/host/harnesses/claude/input"
@@ -155,6 +157,14 @@ await driver.start("/tmp", admitted("claude", {
   emit: (event) => events.push(event),
 }))
 const delivery: PromptDeliveryEvidence[] = []
+// The handoff refused (a Stop during preparation, a journal that can't record it as sent): the SDK's input queue never
+// holds it, so its consumer can't take it later, and the session doesn't read as running. The next input is "Begin".
+const refused: PromptDeliveryEvidence[] = []
+await assert.rejects(driver.prompt("sdk-fixture", "Stopped while prepared", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: (evidence) => {
+  if (evidence.kind === "submitted") throw new HandoffRefused("stopped")
+  refused.push(evidence)
+} }), HandoffRefused)
+assert.deepEqual(refused.map((evidence) => evidence.kind), ["not-accepted"], "a refused handoff is proof nothing was sent")
 const attemptId = randomUUID()
 await driver.prompt("sdk-fixture", "Begin", [], undefined, { operationId: randomUUID(), attemptId, report: (evidence) => delivery.push(evidence) })
 assert.equal(delivery.at(-1)?.kind, "submitted", "SDK enqueue does not acknowledge delivery")
@@ -792,7 +802,6 @@ console.log("PASS: A turn Claude starts after a background task opens with its c
     for (const deadline = Date.now() + 3_000; !ready(); await delay(10))
       if (Date.now() > deadline) throw new Error(`Timed out: ${what}`)
   }
-  const started = Date.now()
   await driver.prompt("midturn-fixture", "Watch and wait", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
   messages.send({ type: "system", subtype: "init", uuid: randomUUID(), ...ids, apiKeySource: "none", claude_code_version: "2.1.283", cwd: "/disposable",
     tools: [], mcp_servers: [], model: "fixture", permissionMode: "default", slash_commands: [], output_style: "default", skills: [], plugins: [] })
@@ -811,15 +820,18 @@ console.log("PASS: A turn Claude starts after a background task opens with its c
   // Claude Code flushes the lines it took in a moment after the next request has started.
   const eventLine = randomUUID()
   const commandLine = randomUUID()
+  let flushed = 0
   setTimeout(() => void (async () => {
     await line({ type: "attachment", uuid: eventLine, timestamp: new Date().toISOString(), isSidechain: false, sessionId: "midturn-fixture", attachment: { type: "queued_command", prompt: monitorEvent, commandMode: "task-notification" } })
     await line({ type: "queue-operation", operation: "remove", timestamp: new Date().toISOString(), sessionId: "midturn-fixture", content: monitorEvent, reason: "absorbed_mid_turn" })
     await line({ type: "attachment", uuid: commandLine, timestamp: new Date().toISOString(), isSidechain: false, sessionId: "midturn-fixture", attachment: { type: "queued_command", prompt: commandDone, commandMode: "task-notification" } })
     await line({ type: "queue-operation", operation: "remove", timestamp: new Date().toISOString(), sessionId: "midturn-fixture", content: commandDone, reason: "absorbed_mid_turn" })
+    flushed = performance.now()
   })(), 80)
   // Claude Code reports `requesting` as it sends the request it wrote them for, before the reply's first event.
   messages.send({ type: "system", subtype: "status", status: "requesting", uuid: randomUUID(), ...ids })
   await until(() => updates().some((update) => update.kind === "event"), "the events, drawn before the reply starts")
+  const drawnAfterFlush = performance.now() - flushed
   request("msg_2")
   reply("msg_2", [{ type: "text", text: "Both are in.", citations: null }])
   messages.send({ type: "result", subtype: "success", uuid: randomUUID(), ...ids, duration_ms: 1, duration_api_ms: 1, is_error: false, num_turns: 1, result: "", stop_reason: "end_turn", total_cost_usd: 0,
@@ -839,7 +851,9 @@ console.log("PASS: A turn Claude starts after a background task opens with its c
   assert.ok(at((update) => update.kind === "tool-update") < at((update) => update.kind === "event") &&
     at((update) => update.kind === "event") < at((update) => update.kind === "text" && update.text.includes("Both are in")),
   "drawn where saved history draws them: after the command's result, before the reply to the request that took them in")
-  assert.ok(Date.now() - started < 2_500, "the request waited one flush for the lines, not the whole bound")
+  // Timed from the lines' landing to their drawing: one poll when the wait ends as they land, the rest of the 750 ms
+  // take-in wait when it doesn't. The whole turn's time can't say it: the runner's pace moves it more than that wait does.
+  assert.ok(drawnAfterFlush < 375, `the request waited one flush for the lines, not the whole bound: drawn ${Math.round(drawnAfterFlush)} ms after they landed`)
   await driver.close("midturn-fixture")
   outputs.close()
   await rm(home, { recursive: true, force: true })
@@ -1004,6 +1018,13 @@ const revoked = claudeAuthDiagnostics({}, fields => revokedFields.push(fields), 
 revoked.observe({ ...assistantError("authentication_failed"), message: { ...assistant.message,
   content: [{ type: "text", text: "Failed to authenticate. API Error: 401 OAuth access token has been revoked.", citations: null }] } })
 await revoked.settled()
+assert.deepEqual(await revoked.failureEvidence("Failed to authenticate"), { kind: "auth", source: "provider-auth-error" }, "a generic terminal result retains an explicit native revocation from its own turn")
+assert.equal(await revoked.failureEvidence("Unknown model"), undefined, "the next turn cannot inherit revocation evidence")
+const clearedEvidence = claudeAuthDiagnostics({}, () => {}, async () => clearedStore)
+clearedEvidence.observe(assistantError("authentication_failed"))
+await clearedEvidence.failureEvidence(undefined)
+assert.equal(await clearedEvidence.failureEvidence("Unknown model"), undefined, "a successful result clears the native authentication marker")
+await clearedEvidence.settled()
 assert.equal(revokedFields[0]?.category, "access-revoked")
 assert.equal(revokedFields[0]?.cause, "store-unreadable", "a failed store read is evidence, not a crash")
 projection.project({
@@ -1243,5 +1264,6 @@ try {
   messages.close()
 }
 console.log("PASS: A steer that aborts a running command keeps the turn running until Claude answers it")
+await claudeRecoveryControls(dependencies, authLogRoot)
 await authHostLog.flush()
 await rm(authLogRoot, { recursive: true, force: true })

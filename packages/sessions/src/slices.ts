@@ -20,15 +20,34 @@ export function atOnce<Result>(steps: Steps<Result>): Result {
   }
 }
 
-/** `steps` run a slice of `sliceMs` at a time, other work running between slices. */
-export async function inSlices<Result>(steps: Steps<Result>, sliceMs = SLICE_MS): Promise<Result> {
+/**
+ * `steps` run a slice of `sliceMs` at a time, other work running between
+ * slices. Once `stopping` says so between two slices, `StepsStopped` is
+ * thrown into the steps where they stopped, so what they hold (a read
+ * transaction, say) is let go as on any error, and out of here: work cut
+ * by its host's stop ends at its next step, never holding the stop open.
+ */
+export async function inSlices<Result>(steps: Steps<Result>, sliceMs = SLICE_MS, stopping?: () => boolean): Promise<Result> {
   let until = performance.now() + sliceMs
   for (;;) {
     const next = steps.next()
     if (next.done) return next.value
     if (performance.now() >= until) {
       await new Promise((resolve) => setImmediate(resolve))
+      if (stopping?.()) {
+        steps.throw(new StepsStopped())
+        // Steps that kept going past it stop all the same.
+        throw new StepsStopped()
+      }
       until = performance.now() + sliceMs
     }
+  }
+}
+
+/** What `inSlices` throws, into the steps and out of itself, for work its `stopping` cut: not a failure. */
+export class StepsStopped extends Error {
+  constructor() {
+    super("Stopped before it finished, as its host stopped")
+    this.name = "StepsStopped"
   }
 }

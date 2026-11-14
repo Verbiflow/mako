@@ -10,7 +10,7 @@ export function UnsentList({ drafts, take, dismissLabel }: { drafts: readonly Re
         <li key={draft.id} className="flex items-center gap-1">
           <button
             type="button"
-            className="pressable flex min-w-0 flex-1 items-baseline gap-2 rounded-md px-1 py-1 text-left hover:bg-fill-hover"
+            className="pressable flex min-w-0 flex-1 items-baseline gap-2 px-1 py-1 text-left hover:bg-fill-hover"
             onClick={() => {
               const taken = take(draft.id)
               if (taken) restoreUnsent(taken)
@@ -23,7 +23,7 @@ export function UnsentList({ drafts, take, dismissLabel }: { drafts: readonly Re
             type="button"
             aria-label={dismissLabel}
             title={dismissLabel}
-            className="pressable grid size-6 shrink-0 place-items-center rounded-md text-faint hover:bg-fill-hover hover:text-foreground"
+            className="pressable grid size-6 shrink-0 place-items-center text-faint hover:bg-fill-hover hover:text-foreground"
             onClick={() => take(draft.id)}
           >
             <XIcon className="size-3.5" />

@@ -20,6 +20,9 @@ export type ElsewhereFolder = {
 /** What a window reads and changes in its folder, answered by the host that has it. */
 export const ELSEWHERE_CALLS: ReadonlySet<string> = new Set([
   "mako:list-files",
+  "mako:files-folders",
+  "mako:files-find",
+  "mako:files-grep",
   "mako:read-file",
   "mako:search",
   "mako:git-status",

@@ -1,7 +1,7 @@
 import { useEffect } from "react"
 import { getMako, hasBridge } from "@/lib/bridge"
-import { loadPlugin, plugins, unloadPlugin } from "@/extend/plugin-host"
 import { toast } from "sonner"
+import { plugins } from "@/extend/plugin-registry"
 
 /**
  * Keeps the loaded plugins in step with the plugins directory.
@@ -18,10 +18,15 @@ export function usePlugins() {
     const bridge = getMako()
 
     let live = true
+    // The plugin runtime and its compiler (sucrase) load with the first plugin, never for a person with none.
+    let host: typeof import("@/extend/plugin-host") | undefined
 
     const sync = async () => {
       const files = await bridge.listPlugins().catch(() => [])
+      if (!live || (!files.length && !host)) return
+      host ??= await import("@/extend/plugin-host")
       if (!live) return
+      const { loadPlugin, unloadPlugin } = host
 
       const present = new Set(files.map((file) => file.id))
       // A plugin whose file is gone must give its registrations back, or a
@@ -44,9 +49,13 @@ export function usePlugins() {
       }
     }
 
-    void sync()
+    // A runtime that can't load (a chunk gone after an update) leaves every plugin unloaded: say so, as a plugin's own failure is said.
+    const syncing = () => sync().catch((error) => {
+      toast.error("Plugins couldn't load", { description: error instanceof Error ? error.message : String(error) })
+    })
+    void syncing()
     const unsubscribe = bridge.onEvent((event) => {
-      if (event.type === "plugins-changed") void sync()
+      if (event.type === "plugins-changed") void syncing()
     })
 
     return () => {

@@ -45,7 +45,7 @@ export function FeatureFloorLine({ harness, feature }: { harness: string; featur
           type="button"
           disabled={pending}
           onClick={() => void update()}
-          className="pressable shrink-0 rounded px-1.5 py-0.5 text-label font-medium text-foreground hover:bg-fill-hover disabled:opacity-60"
+          className="pressable shrink-0 px-1.5 py-0.5 text-label font-medium text-foreground hover:bg-fill-hover disabled:opacity-60"
         >
           {failure ? "Try again" : "Update"}
         </button>

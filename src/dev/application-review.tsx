@@ -23,7 +23,7 @@ export function ApplicationReview() {
         <ApplicationNotice />
         <textarea
           aria-label="Draft retained across updates"
-          className="m-6 rounded-md bg-surface p-4 text-ui"
+          className="m-6 bg-surface p-4 text-ui"
           onChange={(event) => rememberDraft("fixture", event.target.value)}
         />
         <div className="m-auto text-ui text-faint">

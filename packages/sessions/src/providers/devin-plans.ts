@@ -19,7 +19,8 @@ import type { LiveUpdate } from "../live-content.js"
  * offered `plan_accept_edits`, `plan_bypass` and `reject_once`; and the
  * approval is followed by `current_mode_update` to the chosen mode. The CLI
  * keeps each call's ACP JSON in `tool_call_state`, so its saved sessions
- * read the same.
+ * read the same. From 3000.12.17 it marks only the call `isPlanFileEdit`, not
+ * the update that carries the diff, so the plan is found by the call's id.
  *
  * The live decoder (`packages/host/src/harnesses/devin/plans.ts`) and both history
  * readers track plans here, so a card has one id and one text everywhere.
@@ -54,11 +55,17 @@ const ExitPlanSchema = z.object({
   path: _meta["cognition.ai/planFilePath"],
   text: rawInput?.plan?.trim() ?? "",
 }))
+/** An update carrying a diff, marked or not: a plan file's when its call was (`DevinPlanTracker.edits`). */
+const DiffUpdateSchema = z.object({ toolCallId: z.string(), content: z.array(z.json()) }).transform(({ toolCallId, content }) => ({
+  kind: "diff" as const,
+  toolCallId,
+  diff: content.map((part) => DiffSchema.safeParse(part)).find((part) => part.success)?.data,
+})).refine((update) => update.diff !== undefined)
 const ToolEndSchema = z.object({ toolCallId: z.string(), status: z.enum(["completed", "failed"]) })
   .transform(({ toolCallId }) => ({ kind: "tool-end" as const, toolCallId }))
 
 /** An ACP `tool_call` or `tool_call_update`, live or saved, as far as plans need it. */
-export const DevinPlanCallSchema = z.union([PlanFileEditSchema, ExitPlanSchema, ToolEndSchema])
+export const DevinPlanCallSchema = z.union([PlanFileEditSchema, ExitPlanSchema, DiffUpdateSchema, ToolEndSchema])
 export type DevinPlanCall = z.infer<typeof DevinPlanCallSchema>
 /** Most calls are none of these, and a failed `safeParse` builds an `Error` each time. */
 const PlanCallRead = DevinPlanCallSchema.optional().catch(undefined)
@@ -74,12 +81,23 @@ export class DevinPlanTracker {
   private readonly open = new Map<string, string>()
   /** Each running `exit_plan_mode` call's plan file. */
   private readonly exits = new Map<string, string>()
+  /** The calls marked `isPlanFileEdit`, whose later diffs are the plan's. */
+  private readonly edits = new Set<string>()
+  /** Each card's text as last proposed: a diff sent again with the same plan proposes nothing. */
+  private readonly said = new Map<string, string>()
 
   /** The plan a tool call or update proposes, or revises under the same card. */
   observe(call: DevinPlanCall | undefined, sessionId: string): DevinProposedPlan | undefined {
     switch (call?.kind) {
       case "plan-edit":
+        this.edits.add(call.toolCallId)
         return call.diff ? this.plan(call.diff.path, `devin:${sessionId}:${call.toolCallId}`, call.diff.newText) : undefined
+      case "diff": {
+        if (!this.edits.has(call.toolCallId) || !call.diff) return undefined
+        const card = this.open.get(call.diff.path)
+        if (card !== undefined && this.said.get(card) === call.diff.newText.replace(FRONT_MATTER, "")) return undefined
+        return this.plan(call.diff.path, `devin:${sessionId}:${call.toolCallId}`, call.diff.newText)
+      }
       case "plan-exit":
         this.exits.set(call.toolCallId, call.path)
         // A plan written without `write_plan` reaches Mako only as the call's own copy.
@@ -105,7 +123,9 @@ export class DevinPlanTracker {
   private plan(path: string, id: string, text: string): DevinProposedPlan {
     const card = this.open.get(path) ?? id
     this.open.set(path, card)
-    return { id: card, text: text.replace(FRONT_MATTER, "") }
+    const plan = { id: card, text: text.replace(FRONT_MATTER, "") }
+    this.said.set(card, plan.text)
+    return plan
   }
 }
 

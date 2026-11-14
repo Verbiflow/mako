@@ -55,7 +55,7 @@ export async function assessProviderResume(binding: ProviderBinding, driver: Pro
   if (resume.kind !== "native")
     return { kind: "unavailable", reason: `This provider can't reopen its sessions: ${resume.reason}` }
   if (!binding.nativeId || !binding.path)
-    return { kind: "unavailable", reason: "The native session identity or source has not been located." }
+    return { kind: "unavailable", reason: "The native session identity or source has not been located.", lost: true }
   const started = performance.now()
   try {
     const store = binding.executionContext?.store

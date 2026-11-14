@@ -16,8 +16,8 @@ export type { GitTab } from "./methods.js"
 export { WorkspaceGit, previewDiffs, treeDiff, treeFiles } from "./workspace-git.js"
 export { hostGit } from "./host-git.js"
 export { discoverRepositories, projectRepositories } from "./repository-discovery.js"
-export { githubStatus, listBranchPulls, listPullHeads } from "./github.js"
-export { pullRequestTools, registerPullRequestTools, type PullRequestTools, type ReachableRepository, type RepositoryPlace } from "./pull-request-tools.js"
+export { githubApi, githubStatus, listBranchPulls, listPullHeads, readPull, type GitHubRunner, type PullTarget } from "./github.js"
+export { machinePullRequestsAs, pullRequestTools, registerPullRequestTools, type PullRequestTools, type ReachableRepository, type RepositoryPlace } from "./pull-request-tools.js"
 
 export interface GitMethodsDeps {
   /** Thread worktrees remember each branch's pull request; a new or merged one makes them read it again. */

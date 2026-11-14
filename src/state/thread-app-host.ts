@@ -3,10 +3,14 @@ import { getMako } from "@/lib/bridge"
 import { installThreadAppDriver, putAppMarks, putRoom, putThreadApp, targetOf, threadAppStore, type AppPhase, type ThreadAppView } from "@/state/thread-app"
 import type { AppActionOutcome, AppOutputCursor } from "@mako/host/contracts/thread-app"
 
-/** While something is changing, the control follows it closely; otherwise it looks now and then. */
+/**
+ * While a check or an install runs, its steps are followed closely. Otherwise the host says when the apps change
+ * (`thread-app-marks`, from one sampler for every window) and a folder's app is read again then; this look is only
+ * for what no process shows, such as a recipe saved.
+ */
 const BUSY_MS = 1_000
-const SETTLED_MS = 4_000
-const HIDDEN_MS = 15_000
+const SETTLED_MS = 30_000
+const HIDDEN_MS = 60_000
 /** A host that can't answer (an older one, or no Thread store) isn't asked again soon. */
 const UNAVAILABLE_MS = 60_000
 /**
@@ -15,6 +19,8 @@ const UNAVAILABLE_MS = 60_000
  */
 const ASLEEP_MS = 30_000
 const OUTPUT_MS = 500
+/** The Room's own look, for what it shows beyond the marks: what each app holds and what fits. */
+const ROOM_MS = 4_000
 /** A read this long stopped at the host's limit, so there is more to read straight away. */
 const FULL_READ_CHARS = 128 * 1024
 /** How long a click's phase stands while the host hasn't caught up with it yet. */
@@ -94,8 +100,8 @@ export function installHostThreadApp(): void {
   }
 
   /**
-   * The sidebar's marks: one look at every app on this Mac, closer while one
-   * is starting. While the Room shows, the same look brings it too.
+   * The sidebar's marks: read once as the first watcher comes, then as the host pushes them. While the Room shows,
+   * it's looked at now and then, closer while an app starts, and brings the marks with it.
    */
   let markWatchers = 0
   let roomWatchers = 0
@@ -107,7 +113,7 @@ export function installHostThreadApp(): void {
     const look = ++markLook
     const watching = () => look === markLook && (markWatchers > 0 || roomWatchers > 0)
     const withRoom = roomWatchers > 0 && document.visibilityState === "visible"
-    let wait = SETTLED_MS
+    let wait = ROOM_MS
     try {
       const room = withRoom ? await mako.threadAppRoom() : undefined
       const marks = room?.marks ?? await mako.threadAppMarks()
@@ -115,6 +121,8 @@ export function installHostThreadApp(): void {
       putAppMarks(marks)
       if (room) putRoom(room)
       if (marks.some((mark) => mark.state === "starting")) wait = BUSY_MS
+      // Without the Room the host's pushes keep them; a host from before them is read as rarely.
+      if (!withRoom) wait = SETTLED_MS
     } catch {
       if (!watching()) return
       putAppMarks([])
@@ -213,6 +221,12 @@ export function installHostThreadApp(): void {
   // A cloud machine heard asleep, waking or awake: each folder followed looks again now. Which folder is whose isn't
   // known here, and a look at a local one is cheap.
   mako.onEvent((event) => {
+    if (event.type === "thread-app-marks") {
+      // Something about the apps changed: the marks, and each followed folder's app read again.
+      if (markWatchers || roomWatchers) putAppMarks(event.marks)
+      for (const cwd of watched.keys()) schedule(cwd, 0)
+      return
+    }
     if (event.type !== "cloud-machine") return
     for (const cwd of watched.keys()) schedule(cwd, 0)
   })

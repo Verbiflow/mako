@@ -1,6 +1,7 @@
 // Explicit deterministic fixture page for "Open pull requests as me" beyond the desk's own Settings (`?mock`): the
-// transcript's notice under a refused pull request, drawn by the real timeline, and a phone's Settings group from the
-// web client. `?view=notice|phone`, `?theme=light`, and for the phone `?scene=off|asking|refused|on|expired|confirm`.
+// transcript's notice under a refused pull request, drawn by the real timeline, and the web client's Settings group on
+// a phone and in a laptop's browser. `?view=notice|phone|desk`, `?theme=light`, `?authorship=you|mako|failed`, and
+// `?scene=off|asking|refused|on|expired|confirm`.
 import { useEffect } from "react"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { personTokenRefusal, type GitHubTokenListing } from "@mako/host/contracts/github-person"
@@ -9,7 +10,10 @@ import { toExchanges } from "@/lib/exchanges"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { installBuiltins } from "@/desk/builtins"
+import type { CommitAuthor, GitHubAuthorship } from "@mako/host/contracts/github-authorship"
 import type { GitHubTokens } from "@/state/github-token"
+import type { GitHubAuthorships } from "@/state/github-authorship"
+import { PullRequestsAsMe } from "@/components/settings/pull-requests-as-me"
 import { TouchPullRequests } from "@/web-client/settings"
 import { installMockBridge } from "./mock-bridge"
 import "../web-client/style.css"
@@ -55,6 +59,41 @@ const tokens: GitHubTokens = {
   remove: async () => void (kept = null),
   openUrl: () => undefined,
 }
+// The gateway's `github-authorship` route as it answers: `?authorship=mako` starts As Mako, `=failed` can't be read,
+// `=missing` is a gateway without the route, `=refused` can't be saved, `=unanswered` saves but loses its answer, `=gone`
+// fails the save and every read after it, and `=slow` hasn't been read yet.
+let as: CommitAuthor = params.get("authorship") === "mako" ? "mako" : "you"
+const answer = (): GitHubAuthorship => ({ as, pullRequests: as === "mako" ? "mako" : kept ? "you" : "mako-fallback", login: kept?.login ?? null })
+let lost = false
+const authorships: GitHubAuthorships = {
+  read: async () => {
+    if (lost) throw new Error("Error invoking remote method 'mako:github-authorship': GET answered 500")
+    if (params.get("authorship") === "failed") throw new Error("Error invoking remote method 'mako:github-authorship': GET answered 500")
+    if (params.get("authorship") === "missing") return null
+    if (params.get("authorship") === "slow") await new Promise(() => {})
+    return answer()
+  },
+  save: async (next) => {
+    if (params.get("authorship") === "unanswered") as = next
+    lost = params.get("authorship") === "gone"
+    if (params.get("authorship") === "refused" || params.get("authorship") === "unanswered" || lost) throw new Error("Error invoking remote method 'mako:github-authorship-save': PUT answered 500")
+    as = next
+    return answer()
+  },
+}
+
+/** A laptop browser's Settings: the desktop's own group, in the web client's pane. */
+export function Desk() {
+  return (
+    <TooltipProvider>
+      <div className="min-h-screen bg-shell px-5 py-6 text-foreground">
+        <div className="mx-auto max-w-[560px]">
+          <PullRequestsAsMe tokens={tokens} authorships={authorships} />
+        </div>
+      </div>
+    </TooltipProvider>
+  )
+}
 
 /** A phone's Settings screen around the group, as the web client lays it out. */
 export function Phone() {
@@ -85,12 +124,9 @@ export function Phone() {
       </header>
       <div className="px-4 pb-6">
         <div className="mx-auto flex max-w-[560px] flex-col gap-7 pt-3">
-          <TouchPullRequests tokens={tokens} />
+          <TouchPullRequests tokens={tokens} authorships={authorships} />
         </div>
       </div>
     </div>
   )
 }
-
-/** The view the page's address asks for. */
-export const phoneView = params.get("view") === "phone"

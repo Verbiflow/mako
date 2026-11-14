@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * Settings › Models › Connections and Add a connection, the production
@@ -14,9 +14,9 @@ import { fileURLToPath } from "node:url"
  * captures. `node scripts/test-model-connections-ui.mjs [evidence folder]`.
  */
 if (!process.versions.electron) {
-  const { createServer } = await import("vite")
-  const root = await mkdtemp(join(tmpdir(), "mako-model-connections-ui-"))
-  const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: Number(process.env.MAKO_UI_PORT ?? 0) } })
+  const { uiVite } = await import("./lib/ui-vite.mjs")
+  const root = testScratch("mako-model-connections-ui-")
+  const server = await uiVite({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: Number(process.env.MAKO_UI_PORT ?? 0) } })
   await server.listen()
   await writeFile(join(root, "package.json"), JSON.stringify({ main: fileURLToPath(import.meta.url) }))
   const evidence = resolve(process.argv[2] ?? join(root, "evidence"))
@@ -31,7 +31,6 @@ if (!process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`UI evidence: ${evidence}`)
 } else {
   void checkWindow().catch(async (error) => {
     console.error(error)

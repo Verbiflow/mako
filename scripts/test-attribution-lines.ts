@@ -3,6 +3,7 @@ import { test } from "node:test"
 import { diffLines, splitLines, type Hunk } from "@mako/host/attribution/line-diff"
 import { applyHunks, baseMap, decodeMap, encodeMap, presentLines, presentRuns, rebase, UNKNOWN, type Run } from "@mako/host/attribution/line-map"
 import { applyPatch } from "@mako/host/attribution/patch"
+import { growth, subquadratic } from "./lib/growth.ts"
 
 /** A deterministic generator, so a failure names its seed. */
 function random(seed: number) {
@@ -49,23 +50,33 @@ test("diffs reproduce the new text, and find nothing between equal ones", () => 
   }
 })
 
+/** A rewrite of about half of `size` lines: mostly unique lines, with repeated ones (blank lines, braces) mixed in, as code has. */
+function rewrite(next: () => number, size: number) {
+  const a = Array.from({ length: size }, (_, i) => (next() < 0.15 ? `${["}", "", "  return"][Math.floor(next() * 3)]}\n` : `line ${i}\n`))
+  const b = a.flatMap((line) => (next() < 0.45 ? [`${line.trimEnd()} rewritten\n`] : next() < 0.02 ? [] : next() < 0.02 ? [line, "added\n"] : [line]))
+  return { a, b }
+}
+
 test("a rewrite past the edit budget anchors on unique lines, reproduces the text, and keeps untouched lines", () => {
   const next = random(11)
   for (let round = 0; round < 12; round++) {
-    const size = 3_000 + Math.floor(next() * 3_000)
-    // Mostly unique lines, with repeated ones (blank lines, braces) mixed in, as code has.
-    const a = Array.from({ length: size }, (_, i) => (next() < 0.15 ? `${["}", "", "  return"][Math.floor(next() * 3)]}\n` : `line ${i}\n`))
-    const b = a.flatMap((line) => (next() < 0.45 ? [`${line.trimEnd()} rewritten\n`] : next() < 0.02 ? [] : next() < 0.02 ? [line, "added\n"] : [line]))
-    const started = performance.now()
+    const { a, b } = rewrite(next, 3_000 + Math.floor(next() * 3_000))
     const hunks = diffLines(a, b)
-    const ms = performance.now() - started
     assert.deepEqual(apply(a, hunks, b), b, `round ${round}`)
     const kept = b.length - hunks.reduce((sum, hunk) => sum + hunk.added, 0)
     const after = new Set(b)
     const untouched = a.filter((line) => line.startsWith("line") && after.has(line)).length
     assert.ok(kept >= untouched * 0.95, `round ${round}: ${kept} lines kept of ${untouched} unique untouched`)
-    assert.ok(ms < 250, `round ${round}: ${ms.toFixed(1)} ms`)
   }
+})
+
+test("past the edit budget, a rewrite four times the size costs well under the sixteen times an unbounded search would", () => {
+  const grew = growth((size) => {
+    const { a, b } = rewrite(random(11), size)
+    return () => diffLines(a, b)
+  }, 3_000, 12_000)
+  console.log(`rewrite past the edit budget: 12,000 lines in ${grew.largeMs.toFixed(1)} ms, ${grew.ratio.toFixed(1)} times 3,000`)
+  assert.ok(grew.ratio < subquadratic(3_000, 12_000), `12,000 lines took ${grew.ratio.toFixed(1)} times 3,000`)
 })
 
 test("lines keep their last writer through random edits by many writers", () => {
@@ -121,22 +132,22 @@ test("a reported patch applies to exactly the text after", () => {
   assert.deepEqual(splitLines("a\r\nb\nc"), ["a\r\n", "b\n", "c"])
 })
 
-test("a change to a 5,000-line file is diffed and its writers updated in well under 5 ms", () => {
-  const base = Array.from({ length: 5000 }, (_, i) => `const line${i} = ${i * 7} // some ordinary source text\n`)
-  let map = baseMap(base.length)
-  let current = base
-  const times: number[] = []
-  for (let entry = 1; entry <= 200; entry++) {
-    const at = (entry * 37) % 4900
-    const edited = [...current.slice(0, at), `changed by ${entry}\n`, `added by ${entry}\n`, ...current.slice(at + 1)]
-    const started = performance.now()
-    map = applyHunks(map, diffLines(current, edited), entry)
-    times.push(performance.now() - started)
-    current = edited
-  }
-  times.sort((a, b) => a - b)
-  const p50 = times[100]!
-  const p95 = times[190]!
-  console.log(`5,000-line file: diff and line map per change p50 ${p50.toFixed(3)} ms, p95 ${p95.toFixed(3)} ms, max ${times.at(-1)!.toFixed(3)} ms, ${map.length} runs`)
-  assert.ok(p95 < 5, `p95 ${p95} ms`)
+test("a change to a file is diffed and its writers updated in time that grows with its lines, not their square", () => {
+  let runs = 0
+  const grew = growth((size) => {
+    const versions = [Array.from({ length: size }, (_, i) => `const line${i} = ${i * 7} // some ordinary source text\n`)]
+    for (let entry = 1; entry <= 200; entry++) {
+      const current = versions.at(-1)!
+      const at = (entry * 37) % (size - 100)
+      versions.push([...current.slice(0, at), `changed by ${entry}\n`, `added by ${entry}\n`, ...current.slice(at + 1)])
+    }
+    return () => {
+      let map = baseMap(size)
+      for (let entry = 1; entry <= 200; entry++) map = applyHunks(map, diffLines(versions[entry - 1]!, versions[entry]!), entry)
+      assert.equal(presentLines(map), versions.at(-1)!.length)
+      runs = map.length
+    }
+  }, 500, 5_000)
+  console.log(`5,000-line file: 200 changes diffed and mapped in ${grew.largeMs.toFixed(1)} ms (${(grew.largeMs / 200).toFixed(3)} ms each), ${grew.ratio.toFixed(1)} times a 500-line file's, ${runs} runs`)
+  assert.ok(grew.ratio < subquadratic(500, 5_000), `a 5,000-line file's changes took ${grew.ratio.toFixed(1)} times a 500-line file's`)
 })

@@ -362,8 +362,16 @@ export async function returnOutside(opened: OpenedCarry, plan: readonly OutsideR
 /**
  * Clones a project's other repository at `path` on a machine, as its agent clones the Thread's first: its blobs fetched
  * as they're read, beside its place and renamed in, so `path` holds a whole clone or nothing. One already there (a host
- * that restarted) is kept. Never asks for a credential: a repository the machine can't read fails at once.
+ * that restarted) is kept. Never asks for a credential: a repository the machine can't read fails at once. Its failure
+ * is said in the machine's own words when its credential helper gave some (a line starting "Mako", such as why Mako
+ * can't read the repository and what would let it), which Git follows with its own last line; otherwise in Git's.
  */
+/** A failed clone's words: the machine's own line, the last of them, before Git's last. */
+export function cloneFailureSaid(stderr: string): string {
+  const lines = stderr.trim().split("\n").map((line) => line.trim()).filter(Boolean)
+  return lines.filter((line) => line.startsWith("Mako ")).at(-1) ?? lines.at(-1) ?? "git clone failed"
+}
+
 export async function cloneRepository(git: Git, repository: { path: string; url: string; branch?: string }): Promise<void> {
   if (existsSync(join(repository.path, ".git"))) return
   await mkdir(dirname(repository.path), { recursive: true })
@@ -376,7 +384,7 @@ export async function cloneRepository(git: Git, repository: { path: string; url:
       timeoutMs: 10 * 60_000,
       codes: [128],
     })
-    if (result.code !== 0) throw new Error(result.stderr.trim().split("\n").at(-1) ?? "git clone failed")
+    if (result.code !== 0) throw new Error(cloneFailureSaid(result.stderr))
     await rename(beside, repository.path)
   } finally {
     await rm(beside, { recursive: true, force: true })

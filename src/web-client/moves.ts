@@ -48,6 +48,11 @@ export function settledEnd(end: MoveEnd | undefined): boolean {
   return end?.kind === "done" || end?.kind === "failed"
 }
 
+/** The conversation whose agent's ask to come back the person allowed, until its Thread's actions open the way back. */
+export const bringBackAskedStore = createStore<{ conversation?: string }>({})
+export const useBringBackAsked = createHook(bringBackAskedStore)
+export const askBringBack = (conversation?: string) => bringBackAskedStore.set({ conversation })
+
 export const movesStore = createStore<{ moves: ReadonlyMap<string, WebMove> }>({ moves: new Map() })
 export const useMoves = createHook(movesStore)
 

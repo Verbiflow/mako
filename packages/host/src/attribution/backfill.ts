@@ -41,7 +41,7 @@ export interface BackfillSession {
 }
 
 export interface BackfillDeps {
-  sessions(): readonly BackfillSession[]
+  sessions(): readonly BackfillSession[] | Promise<readonly BackfillSession[]>
   records: ChildSource
   /** Text files with uncommitted lines nobody is sure of, each with its tracked root and its oldest such change's time (0: unknown). */
   unsure(): ReadonlyMap<string, { root: string; since: number }>
@@ -98,7 +98,7 @@ export class Backfill {
     const worked = (session: BackfillSession) =>
       [session.cwd, session.currentCwd, ...(session.worktrees ?? []).map((worktree) => worktree.path)]
         .some((at) => at !== undefined && [...roots].some((root) => within(root, at) || within(at, root)))
-    const candidates = this.deps.sessions()
+    const candidates = (await this.deps.sessions())
       .filter((session) => session.threadId && session.sessionId && session.updatedAt && Date.parse(session.updatedAt) >= since && worked(session))
       .filter((session) => this.read.get(session.path) !== session.updatedAt)
       .sort((left, right) => Date.parse(right.updatedAt!) - Date.parse(left.updatedAt!))

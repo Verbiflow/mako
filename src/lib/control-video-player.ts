@@ -8,20 +8,26 @@ export interface ControlVideoStats {
   unsent: number
   /** The machine's capture time of the picture last drawn. */
   capturedAt?: number
+  /** The source sequence of the newest picture decoded. */
+  sequence?: number
 }
 
 type Picture = VideoFrame | ImageBitmap
 
 /** Decodes a remote preview's H.264 units with WebCodecs and hands each
  * picture to `draw`, which must use it before returning; it is closed after.
- * A poster JPEG is drawn only until the first decoded frame. Every key unit
- * carries its configuration, so a new size or a recovered viewer reconfigures
- * without asking the sender for anything. */
+ * A poster JPEG is drawn until a frame decodes after it. A poster after decoded
+ * frames means the sender started its stream again or switched to JPEGs, so the
+ * decoder is let go and posters are drawn until the next key decodes. Every key
+ * unit carries its configuration, so a new size or a recovered viewer
+ * reconfigures without asking the sender for anything. */
 export class ControlVideoPlayer {
   readonly stats: ControlVideoStats = { decoded: 0, skipped: 0, unsent: 0 }
   private decoder?: VideoDecoder
   private configured?: string
   private awaitingKey = true
+  /** A frame decoded since the last poster: posters wait until the sender sends one again. */
+  private decoding = false
   private lastSequence?: number
   private readonly captured = new Map<number, number>()
   private readonly draw: (picture: Picture, width: number, height: number, capturedAt: number) => void
@@ -38,7 +44,8 @@ export class ControlVideoPlayer {
   push(bytes: Uint8Array) {
     const packet = decodeControlVideo(bytes)
     if (packet.kind === "poster") {
-      if (!this.stats.decoded) void this.poster(packet)
+      if (this.decoding) this.restart()
+      void this.poster(packet)
       return
     }
     if (this.lastSequence !== undefined && packet.sequence > this.lastSequence + 1)
@@ -84,10 +91,19 @@ export class ControlVideoPlayer {
   private async poster(packet: ControlVideoPacket) {
     const bitmap = await createImageBitmap(new Blob([packet.data.slice()], { type: "image/jpeg" }))
     try {
-      if (!this.stats.decoded) this.draw(bitmap, bitmap.width, bitmap.height, packet.capturedAt)
+      if (!this.decoding) this.draw(bitmap, bitmap.width, bitmap.height, packet.capturedAt)
     } finally {
       bitmap.close()
     }
+  }
+
+  private restart() {
+    if (this.decoder?.state !== "closed") this.decoder?.close()
+    this.decoder = undefined
+    this.configured = undefined
+    this.awaitingKey = true
+    this.decoding = false
+    this.captured.clear()
   }
 
   private present(frame: VideoFrame) {
@@ -96,7 +112,9 @@ export class ControlVideoPlayer {
       if (sequence <= frame.timestamp) this.captured.delete(sequence)
     try {
       this.stats.decoded++
+      this.stats.sequence = frame.timestamp
       this.stats.capturedAt = capturedAt
+      this.decoding = true
       this.draw(frame, frame.displayWidth, frame.displayHeight, capturedAt)
     } finally {
       frame.close()

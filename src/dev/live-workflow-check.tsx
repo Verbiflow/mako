@@ -466,8 +466,9 @@ function publishBackground() {
  * object new). `reconciled` applies batches the way the window does;
  * otherwise each batch replaces the roster outright, the baseline.
  */
-const agentsProfile = { commits: 0, ms: 0 }
-const chatProfile = { commits: 0, ms: 0 }
+const agentsProfile = { commits: 0, ms: 0, each: new Array<number>() }
+const chatProfile = { commits: 0, ms: 0, each: new Array<number>() }
+const medianOf = (values: readonly number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)] ?? 0
 const BENCH_HARNESSES = ["claude", "cursor", "codex", "grok", "opencode", "devin"]
 /** `detached`: every entry a child Thread (`childEntry`'s shape) on one of six harnesses, as `agents_start`'s are. */
 async function backgroundBench(reconciled: boolean, entries = 50, batches = 120, detached = false) {
@@ -487,8 +488,10 @@ async function backgroundBench(reconciled: boolean, entries = 50, batches = 120,
   await new Promise((resolve) => setTimeout(resolve, 200))
   agentsProfile.commits = 0
   agentsProfile.ms = 0
+  agentsProfile.each = []
   chatProfile.commits = 0
   chatProfile.ms = 0
+  chatProfile.each = []
   for (let batch = 0; batch < batches; batch++) {
     roster = { ...roster, agents: roster.agents.map((agent, index) => index === 7 ? { ...agent, observedAt: now + batch + 1, state: { kind: "working" as const, activity: `Step ${batch}` }, usage: { toolUses: batch } } : agent) }
     const wire = NativeAgentRosterSchema.parse(JSON.parse(JSON.stringify(roster)))
@@ -500,6 +503,8 @@ async function backgroundBench(reconciled: boolean, entries = 50, batches = 120,
   return {
     reconciled, entries, batches, detached, commits: agentsProfile.commits, renderMs: Math.round(agentsProfile.ms * 10) / 10, perBatchMs: Math.round(agentsProfile.ms / batches * 100) / 100,
     chatCommits: chatProfile.commits, chatPerBatchMs: Math.round(chatProfile.ms / batches * 100) / 100,
+    medianMs: Math.round(medianOf(agentsProfile.each) * 100) / 100, chatMedianMs: Math.round(medianOf(chatProfile.each) * 100) / 100,
+    longestMs: Math.round(Math.max(0, ...agentsProfile.each) * 100) / 100, chatLongestMs: Math.round(Math.max(0, ...chatProfile.each) * 100) / 100,
   }
 }
 Object.assign(window, { makoBackgroundBench: backgroundBench })
@@ -567,13 +572,13 @@ export function Fixture() {
             <span>{new URLSearchParams(location.search).has("native") ? "Development UI · real native provider session" : "Isolated live workflow fixture · no agent is started"}</span>
             <HotIndicator />
             <button
-              className="pressable rounded border border-hairline px-2 py-1"
+              className="pressable border border-hairline px-2 py-1"
               onClick={() => publishQueue("starting")}
             >
               First message startup
             </button>
             <button
-              className="pressable rounded border border-hairline px-2 py-1"
+              className="pressable border border-hairline px-2 py-1"
               onClick={() => {
                 const receipt = preserveSendingDraft({
                   key: id,
@@ -586,40 +591,40 @@ export function Fixture() {
               Interrupted send
             </button>
             <button
-              className="pressable rounded border border-hairline px-2 py-1"
+              className="pressable border border-hairline px-2 py-1"
               data-fixture="running"
               onClick={() => publishQueue("reasoning")}
             >
               Working with queue
             </button>
-            <button className="pressable rounded border border-hairline px-2 py-1" data-fixture="responding" onClick={() => publishQueue("responding")}>Streaming reply</button>
-            <button className="pressable rounded border border-hairline px-2 py-1" data-fixture="quiet-tool" onClick={() => publishQueue("quiet-tool")}>Quiet tool</button>
-            <button className="pressable rounded border border-hairline px-2 py-1" data-fixture="quiet-reply" onClick={() => publishQueue("quiet-reply")}>Quiet reply</button>
+            <button className="pressable border border-hairline px-2 py-1" data-fixture="responding" onClick={() => publishQueue("responding")}>Streaming reply</button>
+            <button className="pressable border border-hairline px-2 py-1" data-fixture="quiet-tool" onClick={() => publishQueue("quiet-tool")}>Quiet tool</button>
+            <button className="pressable border border-hairline px-2 py-1" data-fixture="quiet-reply" onClick={() => publishQueue("quiet-reply")}>Quiet reply</button>
             {(["compacting", "retrying", "compacted"] as const).map((scene) => (
-              <button key={scene} className="pressable rounded border border-hairline px-2 py-1" data-fixture={scene} onClick={() => publishNative(scene)}>
+              <button key={scene} className="pressable border border-hairline px-2 py-1" data-fixture={scene} onClick={() => publishNative(scene)}>
                 {{ compacting: "Compacting", retrying: "Retrying", compacted: "Provider markers" }[scene]}
               </button>
             ))}
-            <button className="pressable rounded border border-hairline px-2 py-1" data-fixture="background" onClick={publishBackground}>Background work</button>
+            <button className="pressable border border-hairline px-2 py-1" data-fixture="background" onClick={publishBackground}>Background work</button>
             {(["tools", "parallel", "parallel-settling", "agents", "settled", "stopped", "table", "changed", "changed-maybe", "reopened"] as const).map((scene) => (
-              <button key={scene} className="pressable rounded border border-hairline px-2 py-1" data-fixture={`turn-${scene}`} onClick={() => publishTurn(scene)}>
+              <button key={scene} className="pressable border border-hairline px-2 py-1" data-fixture={`turn-${scene}`} onClick={() => publishTurn(scene)}>
                 {{ tools: "Several tools", parallel: "Calls at once", "parallel-settling": "One call of several done", agents: "Agents together", settled: "Settled turn", stopped: "Stopped turn", table: "Writing a table", changed: "Turn's changes", "changed-maybe": "Changes, some not sure whose", reopened: "Reopened turn" }[scene]}
               </button>
             ))}
             <span data-fixture="status-marks" className="flex items-center gap-3">
               {statusMarks.map(({ label, status }) => (
-                <span key={label} className="flex items-center gap-1 rounded-md bg-fill-hover px-2 py-0.5 text-ui text-foreground/85">
+                <span key={label} className="flex items-center gap-1 bg-fill-hover px-2 py-0.5 text-ui text-foreground/85">
                   {label}
                   <ThreadMark status={status} harness="claude" />
                 </span>
               ))}
             </span>
-            <span data-fixture="spinner" className="flex items-center gap-1 rounded-md bg-fill-hover px-2 py-0.5 text-ui text-foreground/85">
+            <span data-fixture="spinner" className="flex items-center gap-1 bg-fill-hover px-2 py-0.5 text-ui text-foreground/85">
               Starting
               <Spinner className="size-3.5" />
             </span>
             <button
-              className="pressable rounded border border-hairline px-2 py-1"
+              className="pressable border border-hairline px-2 py-1"
               onClick={() => setNarrow((value) => !value)}
             >
               {narrow ? "Wide layout" : "Narrow layout"}
@@ -630,7 +635,7 @@ export function Fixture() {
           >
             <main className="flex min-w-0 flex-1 flex-col">
               <HostConnectionNotice />
-              <Profiler id="chat" onRender={(_, __, actual) => { chatProfile.commits += 1; chatProfile.ms += actual }}>
+              <Profiler id="chat" onRender={(_, __, actual) => { chatProfile.commits += 1; chatProfile.ms += actual; chatProfile.each.push(actual) }}>
                 <AcpPanel />
                 <Composer />
               </Profiler>
@@ -639,7 +644,7 @@ export function Fixture() {
               className={`min-h-0 shrink-0 border-l border-hairline ${narrow ? "w-80" : "w-96"}`}
               aria-label="Agents companion"
             >
-              <Profiler id="agents" onRender={(_, __, actual) => { agentsProfile.commits += 1; agentsProfile.ms += actual }}>
+              <Profiler id="agents" onRender={(_, __, actual) => { agentsProfile.commits += 1; agentsProfile.ms += actual; agentsProfile.each.push(actual) }}>
                 <AgentsPanel />
               </Profiler>
             </aside>

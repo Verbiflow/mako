@@ -472,6 +472,11 @@ const CASES: EventCase[] = [
     failed: "acp-request-",
   },
   {
+    id: "marker-limit-moved",
+    title: "A usage limit, and the move after it: neither reads as a failure",
+    exchanges: live([go, reply("a1", "Running the suite."), marker({ label: "Turn failed", detail: "Your team has reached its usage limit Please reach out to an admin to increase your limit, or return on 11/8/2026 when your usage resets.", tone: "error" }), marker({ label: "Moved to Claude Code", detail: "Cursor is at its limit until Sun, 12:00 AM PST" })]),
+  },
+  {
     id: "marker-retries-recovered",
     title: "The provider retried and recovered",
     exchanges: live([go, reply("a1", "Reading the failing test."), marker(retriesEvent({ count: 3, outcome: "recovered", durationMs: 41_000 }, "Overloaded (529)")), reply("a2", "The fixture expects UTC; fixing the parser.")]),

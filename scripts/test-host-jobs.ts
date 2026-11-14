@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { mock } from "node:test"
 import { setTimeout as sleep } from "node:timers/promises"
 import { Foreground } from "@mako/host/base/foreground"
 import { HostJobs } from "@mako/host/base/host-jobs"
@@ -11,8 +12,11 @@ const timers = () => process.getActiveResourcesInfo().filter((kind) => kind === 
   let runs = 0
   jobs.every("count", 10, () => { runs += 1 })
   assert.equal(timers(), before, "A job's timer keeps nothing alive")
-  await sleep(80)
-  assert.ok(runs >= 3, `A job runs again and again (${runs} runs)`)
+  const hung = performance.now() + 10_000
+  while (runs < 3) {
+    assert.ok(performance.now() < hung, `A job runs again and again (${runs} runs)`)
+    await sleep(5)
+  }
   const [state] = jobs.list()
   assert.equal(state?.name, "count")
   assert.equal(state?.runs, runs)
@@ -90,6 +94,15 @@ const timers = () => process.getActiveResourcesInfo().filter((kind) => kind === 
 
 {
   // Each scheduled run is one setTimeout; unreferenced timers don't show in getActiveResourcesInfo.
+  // Advance each timer turn explicitly: a delayed real event loop may run the
+  // 40 ms observer after only one job tick, before the newly armed tick is due.
+  mock.timers.enable({ apis: ["setTimeout"] })
+  const advance = async (ms: number) => {
+    for (let elapsed = 0; elapsed < ms; elapsed += 1) {
+      mock.timers.tick(1)
+      await Promise.resolve()
+    }
+  }
   const realSetTimeout = globalThis.setTimeout
   let scheduled = 0
   globalThis.setTimeout = Object.assign((...args: Parameters<typeof realSetTimeout>) => {
@@ -105,21 +118,21 @@ const timers = () => process.getActiveResourcesInfo().filter((kind) => kind === 
     assert.equal(scheduled, 0, "A job none of whose demands is on schedules no timer")
     assert.deepEqual(jobs.list()[0]?.needs, ["a window is open", "an operation waits"])
     assert.equal(jobs.list()[0]?.paused, true)
-    await sleep(40)
+    await advance(40)
     assert.equal(runs, 0, "and never runs")
     windows.set(true)
     assert.equal(jobs.list()[0]?.paused, false)
-    await sleep(40)
+    await advance(40)
     assert.ok(runs >= 2, `It runs once a demand is on (${runs} runs)`)
     waiting.set(true)
     windows.set(false)
-    await sleep(30)
+    await advance(30)
     assert.equal(jobs.list()[0]?.paused, false, "Any one demand keeps it going")
     waiting.set(false)
     const paused = runs
     const timers = scheduled
     assert.equal(jobs.list()[0]?.paused, true)
-    await sleep(40)
+    await advance(40)
     assert.equal(runs, paused, "Paused again, it runs no more")
     assert.equal(scheduled, timers, "and schedules no timer")
     windows.set(true)
@@ -127,10 +140,11 @@ const timers = () => process.getActiveResourcesInfo().filter((kind) => kind === 
     const stopped = scheduled
     windows.set(false)
     windows.set(true)
-    await sleep(30)
+    await advance(30)
     assert.equal(scheduled, stopped, "A demand changing after stop schedules nothing")
   } finally {
     globalThis.setTimeout = realSetTimeout
+    mock.timers.reset()
   }
 }
 
@@ -144,7 +158,8 @@ const timers = () => process.getActiveResourcesInfo().filter((kind) => kind === 
   await sleep(150)
   assert.equal(runs, 0, "Nothing routine runs while a start holds the foreground, however often it comes due")
   release()
-  await sleep(2)
+  // Promises only, so the job's next tick, which can fall any moment now, can't run in between.
+  for (let turn = 0; turn < 10; turn++) await Promise.resolve()
   assert.equal(runs, 1, "It runs once the start is over, once")
   await sleep(60)
   assert.ok(runs >= 2, "and on its schedule after")

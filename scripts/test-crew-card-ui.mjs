@@ -1,9 +1,11 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
+import { crewEvidencePlugin, CREW_EVIDENCE_PRELOAD, withCrewFailureEvidence, saveCrewInteraction } from "./lib/crew-card-evidence.mjs"
 
 // The crew card (`crew-card.tsx`) that replaces "Waiting on N agents" at the end of an Apex's own transcript once
 // its own turn settles and its Fins still work, on the mock bridge's Apex scene (`?mock&app=apex`): every Fin
@@ -19,7 +21,7 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const root = await mkdtemp(join(tmpdir(), "mako-crew-card-ui-"))
+  const root = testScratch("mako-crew-card-ui-")
   await writeFile(
     join(root, "package.json"),
     JSON.stringify({
@@ -33,6 +35,7 @@ if (process.versions.electron) {
     const { createServer } = await import("vite")
     server = await createServer({
       cacheDir: join(root, "cache"),
+      plugins: [crewEvidencePlugin()],
       server: {
         host: "127.0.0.1",
         port: 0,
@@ -60,7 +63,6 @@ if (process.versions.electron) {
   } finally {
     await server?.close()
   }
-  console.log(`Crew card UI evidence: ${root}`)
 }
 
 /**
@@ -103,14 +105,15 @@ window.__benchReset = () => (tally = { commits: 0, components: {} })
 async function check() {
   const { app, BrowserWindow } = await import("electron")
   const root = process.env.MAKO_CREW_UI_ROOT
-  const shots = process.env.MAKO_CREW_UI_SHOTS ?? join(root, "shots")
+  const shots = process.env.MAKO_CREW_UI_SHOTS ?? (process.env.MAKO_TEST_EVIDENCE ? join(process.env.MAKO_TEST_EVIDENCE, "crew-card") : join(root, "shots"))
   await mkdir(shots, { recursive: true })
   app.setPath("userData", join(root, "profile"))
   app.dock?.hide()
+  withMotion(app)
   await app.whenReady()
   const base = process.env.MAKO_CREW_UI_URL
   const preload = join(root, "commit-counter.cjs")
-  await writeFile(preload, COMMIT_COUNTER)
+  await writeFile(preload, COMMIT_COUNTER + CREW_EVIDENCE_PRELOAD)
 
   const window = new BrowserWindow({
     width: 1440,
@@ -123,15 +126,24 @@ async function check() {
       sandbox: false,
     },
   })
+  atSize(window, 1440, 900)
   const page = window.webContents
+  await withCrewFailureEvidence({ page, shots }, () => checkPage({ window, page, shots, base }))
+  app.exit(0)
+}
+
+async function checkPage({ window, page, shots, base }) {
   const errors = []
   page.on("console-message", (event) => {
     if (event.level === "error") errors.push(event.message)
   })
   const evaluate = (code) => page.executeJavaScript(code)
+  // Each look asks for a frame first. The window is hidden, and what the page learns only when it draws, such as the
+  // crew card's IntersectionObserver saying the card is back in view, waits for a frame it may not get. Screenshots
+  // drew it before a step; after a scroll that nothing else draws, a step waited out its 20 s on the runner.
   const until = async (code, what = code) => {
     const deadline = Date.now() + 20_000
-    while (!(await evaluate(code))) {
+    while ((page.invalidate(), !(await evaluate(code)))) {
       if (Date.now() > deadline)
         throw new Error(
           `Timed out waiting for ${what}${errors.length ? `; the page said: ${errors.join(" | ")}` : ""}`
@@ -141,7 +153,7 @@ async function check() {
   }
   const settle = () =>
     evaluate(
-      "document.fonts.ready.then(() => Promise.all(document.getAnimations().filter((each) => each.effect?.getTiming().iterations !== Infinity).map((each) => each.finished.catch(() => undefined)))).then(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))).then(() => true)"
+      "document.fonts.ready.then(() => new Promise((done) => { const look = () => document.getAnimations().some((each) => each.playState === \"running\" && each.effect?.getTiming().iterations !== Infinity && each.effect.target?.checkVisibility({ contentVisibilityAuto: true }) !== false) ? requestAnimationFrame(look) : done(); requestAnimationFrame(look) })).then(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))).then(() => true)"
     )
   const capture = async (name) => {
     await settle()
@@ -161,9 +173,9 @@ async function check() {
     await capture(`${name}-light`)
     await theme(false)
   }
-  const click = (selector) =>
+  const click = (selector, evidence = false) =>
     evaluate(
-      `(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) return false; node.click(); return true })()`
+      `(() => { const probe = ${evidence} ? window.__crewEvidence : undefined; probe?.begin(); try { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) return false; node.click(); return true } finally { probe?.post() } })()`
     )
   // The card virtualizes past its own height, so a row off screen isn't in the DOM yet: scroll its own scroller
   // top to bottom, a screenful at a time, collecting every row once, in the order it comes into view (the order
@@ -346,11 +358,12 @@ async function check() {
     "[...document.querySelectorAll('[data-sonner-toast]')].forEach((toast) => toast.remove()); true"
   )
   await both("away")
-  await click("[data-crew-away]")
+  assert.equal(await click("[data-crew-away]", true), true, "the crew-away click target exists at dispatch")
   await until(
     "!document.querySelector('[data-crew-away]')",
     "the line leaves once Needs you is back in view"
   )
+  await saveCrewInteraction({ page, shots })
 
   // Working: the current step, time run; the Fin asking its own Apex says so with a turned-back arrow.
   const working = rows12.filter((row) => row.group === "working")
@@ -360,6 +373,14 @@ async function check() {
     5,
     "composer-chips, dictation, outbox, hunks and token-refresh (asking its Apex) work"
   )
+  // Each was spawned days ago: a row's time is how long its turn has run, never the Fin's age.
+  const onTurn = working.find((row) => row.text.includes("Composer chips on iPad"))
+  assert.match(onTurn.text, /\b18m$/, `a working row counts its turn: ${onTurn.text}`)
+  for (const row of rows12) assert.doesNotMatch(row.text, /\b\d+h\b/, `no row says the Fin's age: ${row.text}`)
+  // Every time says what it means: in a sentence on the row, and a finished row's number never reads as how long it ran.
+  const times = await evaluate("[...document.querySelectorAll('[data-crew-row]')].map((row) => [...row.querySelectorAll('.tabular[title]')].map((time) => ({ time: time.textContent, title: time.title, group: row.dataset.childGroup }))).flat()")
+  assert.ok(times.length >= 7, `the rows' times carry their sentence: ${JSON.stringify(times)}`)
+  assert.ok(times.some((each) => /^On this turn for \d+m$/.test(each.title)), `a working row says so: ${JSON.stringify(times)}`)
   const asking = working.find((row) => row.text.includes("Push token refresh"))
   assert.ok(
     asking?.html.includes("lucide-corner-up-left"),
@@ -429,11 +450,14 @@ async function check() {
   const railBefore = await evaluate(
     "document.querySelector('.thread-jump-scope [data-fin-pips]').getAttribute('aria-label')"
   )
-  await click("[data-apex-count]")
+  await click("[data-agents-toggle]")
   await until(
     "Boolean(document.querySelector('[data-apex-fins]'))",
     "the Agents panel's Fins section"
   )
+  // The Agents panel reads the same time as the card.
+  await until("Boolean(document.querySelector('[data-apex-fins] [data-child-row]'))", "the panel's rows")
+  assert.doesNotMatch(await evaluate("document.querySelector('[data-apex-fins]').innerText"), /\b\d+h\b/, "no row of the panel says the Fin's age")
   await click(`[data-crew-row="${sheetMotion}"] button[data-fin-answer=allow]`)
   await until(
     `document.querySelector('[data-crew-row="${sheetMotion}"]')?.dataset.childGroup === 'working'`,
@@ -518,14 +542,30 @@ async function check() {
   )
   assert.ok(forty.scrollable, "the card scrolls inside itself past twenty rows")
   assert.equal(forty.more, false, "no cutoff text, however many Fins there are")
-  const lastTitle = await evaluate("window.apexScene.children().at(-1).title")
+  // The roster's last inserted Fin is a needs-you row, sorted near the top. Check the last queued row in display
+  // order (oldest start first), before the folded settled group, after the virtualizer has painted the scroll.
+  const lastTitle = await evaluate(`(() => {
+    const queued = window.apexScene.children().filter(agent => agent.child.state.kind === 'queued')
+    queued.sort((left, right) => (left.startedAt ?? left.observedAt) - (right.startedAt ?? right.observedAt))
+    return queued.at(-1).title
+  })()`)
   await evaluate(
     "(() => { const scroller = document.querySelector('[data-crew-scroller]'); scroller.scrollTop = scroller.scrollHeight; return true })()"
   )
+  await evaluate("new Promise(done => requestAnimationFrame(() => requestAnimationFrame(() => done(true))))")
   await until(
-    `document.querySelector('[data-crew-scroller]').innerText.includes(${JSON.stringify(lastTitle)})`,
+    `(() => {
+      const scroller = document.querySelector('[data-crew-scroller]')
+      const row = [...scroller.querySelectorAll('[data-crew-row]')].find(row => row.innerText.includes(${JSON.stringify(lastTitle)}))
+      const bounds = row?.getBoundingClientRect(), viewport = scroller.getBoundingClientRect()
+      if (bounds && bounds.top >= viewport.top && bounds.bottom <= viewport.bottom) return true
+      // Measuring newly mounted rows can extend the scroll range. Continue to the end of that measured range.
+      scroller.scrollTop = scroller.scrollHeight
+      return false
+    })()`,
     "the last Fin reachable by scrolling"
   )
+  console.log("SCROLLED LAST", lastTitle)
   await evaluate(
     "document.querySelector('[data-crew]')?.scrollIntoView({ block: 'start' }); true"
   )
@@ -589,14 +629,28 @@ async function check() {
   )
   await click("[data-thread]")
   await until(
-    "Boolean(document.querySelector('[data-child-chips]'))",
-    "the Apex's chips on the phone"
+    "Boolean(document.querySelector('[data-apex-count]'))",
+    "the Apex's count on the phone"
   )
   await evaluate("window.apexScene.setRunning(false); true")
   await until(
     "Boolean(document.querySelector('[data-crew]'))",
     "the crew card on the phone"
   )
+  await settle()
+  assert.doesNotMatch(await evaluate("document.querySelector('[data-crew]').innerText"), /\b\d+h\b/, "no row on the phone says the Fin's age")
+  // A laptop's browser draws the same rows from the same roster.
+  await window.loadURL(`${base}scripts/web-desk.html?thread=apex&theme=dark`)
+  await until("document.querySelectorAll('[data-crew] [data-crew-row]').length > 0", "the crew card in a laptop's browser")
+  const laptop = await evaluate("document.querySelector('[data-crew]').innerText")
+  assert.match(laptop, /Composer chips on iPad[\s\S]*?18m/, `its working row counts its turn: ${laptop}`)
+  assert.doesNotMatch(laptop, /\b\d+h\b/, "no row in the browser says the Fin's age")
+  window.setContentSize(390, 844)
+  await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
+  await until("Boolean(document.querySelector('[data-thread] [data-fin-pips]'))", "the phone again")
+  await click("[data-thread]")
+  await until("Boolean(document.querySelector('[data-crew]'))", "the crew card on the phone again")
+  await evaluate("window.apexScene.setRunning(false); true")
   await settle()
   const phone = await evaluate(`(() => {
     const card = document.querySelector('[data-crew]')
@@ -675,5 +729,4 @@ async function check() {
   console.log(
     "Crew card UI: header, order, needs/working/done rows, answers moving everywhere, forty Fins, re-render discipline, and the phone passed"
   )
-  app.exit(0)
 }

@@ -5,6 +5,13 @@ import { locateGitDir } from "../base/checkout-location.js"
 
 /** What moves on every commit, add, reset or checkout, and nothing else does. */
 const MARKERS = ["index", join("logs", "HEAD")]
+/**
+ * What moves only when a checkout's HEAD does: a commit, checkout, reset, merge or rebase. The index also moves when
+ * any `git status` refreshes its stat cache, as a Changes panel's does on every edit.
+ */
+export const HEAD_MARKER = [join("logs", "HEAD")]
+/** What moves when what's staged does, and on any `git status` that refreshes the index's stat cache. */
+export const INDEX_MARKER = ["index"]
 
 export interface GitDirWatch {
   /** Settles once the markers are watched, or once it's clear there's nothing to watch. */
@@ -28,6 +35,31 @@ export interface GitDirWatch {
  * inode, size, mtime and ctime as they were is not a change.
  */
 export function watchOutsideGitDir(folder: string, changed: () => void): GitDirWatch {
+  let markers: GitDirWatch | undefined
+  let closed = false
+  const ready = (async () => {
+    const [gitDir, root] = await Promise.all([
+      locateGitDir(folder).then((found) => found && realpath(found)).catch(() => null),
+      realpath(folder).catch(() => null),
+    ])
+    if (closed || !gitDir || !root || gitDir.startsWith(root + sep)) return
+    markers = watchGitMarkers(gitDir, changed)
+  })()
+  return {
+    ready,
+    close() {
+      closed = true
+      markers?.close()
+    },
+  }
+}
+
+/**
+ * A Git directory's markers (`MARKERS`, or those given) watched as files, wherever the directory is: each event that
+ * changed one moves the watch to the file now there, then says so. A read that only touched the index's access time
+ * says nothing.
+ */
+export function watchGitMarkers(gitDir: string, changed: () => void, markers: readonly string[] = MARKERS): GitDirWatch {
   let closed = false
   const watchers = new Map<string, FSWatcher>()
   const arm = (path: string) => {
@@ -52,16 +84,9 @@ export function watchOutsideGitDir(folder: string, changed: () => void): GitDirW
       // left: the tree watch and explicit refreshes still cover it.
     }
   }
-  const ready = (async () => {
-    const [gitDir, root] = await Promise.all([
-      locateGitDir(folder).then((found) => found && realpath(found)).catch(() => null),
-      realpath(folder).catch(() => null),
-    ])
-    if (closed || !gitDir || !root || gitDir.startsWith(root + sep)) return
-    for (const marker of MARKERS) arm(join(gitDir, marker))
-  })()
+  for (const marker of markers) arm(join(gitDir, marker))
   return {
-    ready,
+    ready: Promise.resolve(),
     close() {
       closed = true
       for (const watcher of watchers.values()) watcher.close()

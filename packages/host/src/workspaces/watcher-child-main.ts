@@ -1,8 +1,12 @@
 import parcel, { type AsyncSubscription } from "@parcel/watcher"
+import { execFile, type ChildProcess } from "node:child_process"
+import { z } from "zod"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
-import { CanaryTestSchema, HISTORY_SCRATCH, HistoryMarkSchema, MAX_EXCLUDED, WatcherRequestSchema, type CanaryTest, type DropReason, type HistoryMark, type WatcherReply } from "../contracts/watcher-child.js"
+import { OTHER_APPS_DATA } from "../base/other-apps-data.js"
+import { membersOnly, parseTable, PS_ARGS, type RunLeader } from "./process-table.js"
+import { CanaryTestSchema, HISTORY_SCRATCH, HistoryMarkSchema, MAX_EXCLUDED, WatcherRequestSchema, type CanaryTest, type DropReason, type HistoryMark, type WatcherReply, type WatcherRequest } from "../contracts/watcher-child.js"
 
 /*
  * @parcel/watcher's FSEvents backend races its own callback thread on
@@ -23,9 +27,23 @@ process.on("message", (raw) => {
   const request = WatcherRequestSchema.safeParse(raw)
   if (!request.success) return
   const { id } = request.data
+  if (request.data.t === "run") {
+    runProbe(request.data)
+    return
+  }
+  if (request.data.t === "cancel") {
+    probes.get(id)?.kill()
+    return
+  }
+  if (request.data.t === "table" || request.data.t === "members") {
+    const asked = request.data
+    void (asked.t === "table" ? readTable().then((text) => reply({ t: "table", id, text })) : readMembers(id, asked.runs, asked.self))
+      .catch((error) => reply({ t: "failed", id, message: error instanceof Error ? error.message : String(error) }))
+    return
+  }
   if (request.data.t === "mark" || request.data.t === "since" || request.data.t === "probe") {
     const asked = request.data
-    void (asked.t === "mark" ? mark(id) : asked.t === "probe" ? probe(id, asked.beats) : since(id, asked.mark, asked.roots, asked.ignore, asked.exclude ?? [])).catch((error) =>
+    void (asked.t === "mark" ? mark(id) : asked.t === "probe" ? probe(id, asked.beats) : since(id, asked.mark, asked.roots, asked.ignore, asked.exclude ?? [], asked.perFolder)).catch((error) =>
       reply({ t: "failed", id, message: error instanceof Error ? error.message : String(error) }))
     return
   }
@@ -143,7 +161,7 @@ async function caughtUp(): Promise<boolean> {
   }
 }
 
-async function since(id: number, from: HistoryMark, roots: string[], ignore: readonly string[], exclude: readonly string[]): Promise<void> {
+async function since(id: number, from: HistoryMark, roots: string[], ignore: readonly string[], exclude: readonly string[], perFolder?: number): Promise<void> {
   if (process.platform !== "darwin") throw new Error("The file system's history is read through FSEvents, on macOS only.")
   const started = performance.now()
   const complete = await caughtUp()
@@ -154,17 +172,39 @@ async function since(id: number, from: HistoryMark, roots: string[], ignore: rea
   const lost: string[] = []
   const folders = new Map(ignore.map((folder, index) => [folder, index]))
   const ignored = ignore.map(() => 0)
+  // Sent per folder one level into its root, so a busy day's 345,000 changed paths (2026-11-12) aren't all sent to be
+  // parsed and walked on the host's thread for a trace that keeps a few of each folder's.
+  const sent = new Map<string, number>()
+  const capped = new Set<string>()
+  let unsent = 0
   try {
     for (const root of roots) {
       if (!existsSync(root)) continue
       // Only folders inside the root: excluding one that holds it would leave the whole read out.
-      const excluded = exclude.filter((folder) => folder.startsWith(`${root}/`)).slice(0, MAX_EXCLUDED)
+      // Other apps' containers first, always: replaying a change, the watcher stats the path unless it's left out here,
+      // and a stat in another app's container from Mako's child makes macOS ask the person to let Mako read that app's data.
+      const sealed = OTHER_APPS_DATA.map((folder) => join(homedir(), folder)).filter((folder) => folder.startsWith(`${root}/`))
+      const excluded = [...sealed, ...exclude.filter((folder) => folder.startsWith(`${root}/`) && !sealed.includes(folder))].slice(0, MAX_EXCLUDED)
       try {
         for (const event of await parcel.getEventsSince(root, file, { backend: "fs-events", ignore: excluded })) {
           if (paths.has(event.path)) continue
           const at = folders.size ? ignoredBy(folders, event.path) : -1
-          if (at < 0) paths.add(event.path)
-          else ignored[at]! += 1
+          if (at >= 0) ignored[at]! += 1
+          else if (perFolder === undefined) paths.add(event.path)
+          else {
+            // A folder itself, or a path outside every folder, is always sent; past `perFolder`, a folder's are counted.
+            const folder = folderIn(root, event.path)
+            if (folder !== undefined && folder !== event.path) {
+              const count = sent.get(folder) ?? 0
+              if (count >= perFolder) {
+                capped.add(folder)
+                unsent += 1
+                continue
+              }
+              sent.set(folder, count + 1)
+            }
+            paths.add(event.path)
+          }
         }
         if (!complete) lost.push(root)
       } catch {
@@ -174,7 +214,14 @@ async function since(id: number, from: HistoryMark, roots: string[], ignore: rea
   } finally {
     rmSync(file, { force: true })
   }
-  reply({ t: "history", id, paths: [...paths], lost, ignored, caughtUpMs, readMs: performance.now() - started - caughtUpMs })
+  reply({ t: "history", id, paths: [...paths], lost, ignored, caughtUpMs, readMs: performance.now() - started - caughtUpMs, ...(perFolder !== undefined && { capped: [...capped], unsent }) })
+}
+
+/** The folder one level into `root` that holds `path`; undefined for the root itself or a path outside it. */
+function folderIn(root: string, path: string): string | undefined {
+  if (!path.startsWith(`${root}/`)) return undefined
+  const end = path.indexOf("/", root.length + 1)
+  return end < 0 ? path : path.slice(0, end)
 }
 
 /**
@@ -383,5 +430,57 @@ process.on("exit", () => {
   if (canary) rmSync(canary.folder, { recursive: true, force: true })
 })
 
-// The host is gone, or let this child go: nothing here outlives it.
-process.on("disconnect", () => process.exit(0))
+// The host is gone, let this child go, or stopped it: nothing here outlives it, its probes included, which a host
+// that died rather than stopped leaves no one to end.
+const leave = () => {
+  for (const probe of probes.values()) probe.kill("SIGKILL")
+  process.exit(0)
+}
+process.on("disconnect", leave)
+process.on("SIGTERM", leave)
+
+/** At most this much of `ps`'s output, as the host's own read allows. */
+const TABLE_BYTES = 16 * 1024 * 1024
+/** A `ps` this slow is stuck; the host reads its own table instead. */
+const TABLE_MS = 15_000
+
+/** The process table as `ps` prints it: one `ps` per ask, in this child's process group, ended with it. */
+function readTable(): Promise<string> {
+  return new Promise<string>((done, fail) => {
+    execFile("ps", [...PS_ARGS], { env: { ...process.env, LC_ALL: "C" }, maxBuffer: TABLE_BYTES, timeout: TABLE_MS }, (error, stdout) => {
+      if (error) fail(error)
+      else done(stdout)
+    })
+  })
+}
+
+/** Programs a probe may run: they only read the machine. The host asks only for these (`isProbe`). */
+const PROBE_PROGRAMS = new Set(["ps", "pgrep", "lsof", "sysctl", "footprint", "vm_stat", "pmset", "notifyutil", "nice"])
+/** Probes under way, by the host's id, so a `cancel` ends one. */
+const probes = new Map<number, ChildProcess>()
+
+/** A probe, answered whatever becomes of it: its output, its exit, and why it failed when it did. */
+function runProbe(asked: Extract<WatcherRequest, { t: "run" }>): void {
+  const { id, file, args } = asked
+  const program = basename(file)
+  const lowered = program === "nice" ? basename(args[2] ?? "") : program
+  if (!PROBE_PROGRAMS.has(program) || lowered === "nice" || !PROBE_PROGRAMS.has(lowered)) {
+    reply({ t: "failed", id, message: `Not a probe: ${file}` })
+    return
+  }
+  const child = execFile(file, args, { env: asked.env ?? process.env, cwd: asked.cwd, timeout: asked.timeout ?? 0, maxBuffer: asked.maxBuffer ?? 1024 * 1024, encoding: "utf8" }, (error, stdout, stderr) => {
+    probes.delete(id)
+    // An exit code is a number; a string code (ENOENT, the output past its limit) is a failure to run.
+    const exited = z.number().int().safeParse(error?.code)
+    const named = z.string().safeParse(error?.code)
+    const exit = !error ? 0 : exited.success ? exited.data : null
+    const failure = error && exit === null ? { message: error.message, ...(named.success && { code: named.data }) } : undefined
+    reply({ t: "ran", id, stdout, stderr, code: exit, signal: error?.signal ?? null, killed: Boolean(error?.killed), ...(failure && { failure }) })
+  })
+  probes.set(id, child)
+}
+
+/** Only `runs`' processes of the table, parsed and matched here, off the host's loop. */
+async function readMembers(id: number, runs: RunLeader[], self: number): Promise<void> {
+  reply({ t: "members", id, rows: membersOnly(parseTable(await readTable()), runs, self) })
+}

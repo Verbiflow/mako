@@ -1,17 +1,17 @@
-import { execFile } from "node:child_process"
+import { hostCommand } from "../../base/host-command.js"
 import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { promisify } from "node:util"
 import { z } from "zod"
 import type { SetupTool } from "../../contracts/simulator-setup.js"
 import { environmentForExecutable, resolveExecutable } from "../../base/executable.js"
 
-const execute = promisify(execFile)
+const execute = hostCommand
 
 /**
- * The tools Mako installs for simulators, each at the version it was read at (2026-11-03). Which of them drives touch
- * is decided once it can be measured on a real Xcode; until then they're installed so that choice is made on what the
- * person has, and nothing runs them.
+ * The tools Mako installs for simulators, each at the version it was read at (2026-11-03). serve-sim's capture and
+ * touch and inspect-webkit's bridge run inside Mako's own hub (`electron/simulator-hub-entry.ts`), never as their own
+ * servers. agent-device is installed beside them and not run yet: serve-sim's accessibility tree covers what driving
+ * by what's on screen needs here.
  */
 export const PINNED_TOOLS = [
   {
@@ -54,7 +54,13 @@ function installDir(root: string, spec: { name: string; version: string }): stri
 
 /** Where a tool's entry is, once it's installed. */
 export function toolEntry(root: string, spec: ToolSpec): string {
-  return join(installDir(root, spec), "node_modules", spec.name, ...spec.entry)
+  return join(toolPackage(root, spec.name), ...spec.entry)
+}
+
+/** A pinned tool's package folder, which the hub loads it from. */
+export function toolPackage(root: string, name: ToolSpec["name"]): string {
+  const spec = PINNED_TOOLS.find((tool) => tool.name === name)!
+  return join(installDir(root, spec), "node_modules", spec.name)
 }
 
 /** Each pinned tool, with the version installed when its folder is complete: an entry and a sentinel naming that version. */

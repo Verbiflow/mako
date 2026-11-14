@@ -1,6 +1,5 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { attentionLine } from "@mako/host/contracts/notifications"
-import { CloudIcon, LaptopIcon } from "lucide-react"
 import { AppMarkIcon } from "@/components/rail/app-mark"
 import { ThreadPurposeChip } from "@/components/rail/purpose-chip"
 import { ApexCrewLine } from "@/components/rail/fin-pips"
@@ -25,6 +24,8 @@ import { threadFolderKey } from "@/lib/thread-folders"
 import { acpForThread, useAcp } from "@/state/acp"
 import { openConversation, useWindowRoutes } from "@/state/window-routes"
 import { CLOUD_WHERE } from "@/state/cloud-moves"
+import { PlaceMark } from "@/components/ui/place-mark"
+import { runPlace } from "@mako/host/contracts/account-devices"
 import type { AcpPresence } from "@/state/acp-presence"
 import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { useThreadPurposes } from "@/state/thread-purposes"
@@ -67,8 +68,10 @@ export function LiveAgentRow({
     )
   )
   const lit = draftOpen || (viewedMember ?? liveOnScreen)
-  // In a browser every computer is elsewhere: only the cloud is marked, as the place apart from the person's own Macs.
+  // In a browser every computer is elsewhere: the cloud and a machine of the person's own are marked, as the places
+  // apart from their Macs. The row's tip names the place.
   const routed = useWindowRoutes((state) => state.routes !== null)
+  const place = runPlace(presence.elsewhere === CLOUD_WHERE, presence.elsewhereKind)
   // Its device can't be heard: nothing there is shown at work, and the row says when it was last seen instead.
   const lastSeen = presence.quietSince === undefined ? undefined : `last seen ${copyAge(presence.quietSince)}`
   const where = presence.elsewhere ? `on ${presence.elsewhere}${lastSeen ? `, ${lastSeen}` : ""}` : undefined
@@ -158,7 +161,7 @@ export function LiveAgentRow({
           {title}
         </span>
         <ThreadPurposeChip thread={thread} starting={presence.purpose} />
-        {presence.elsewhere && (!routed || presence.elsewhere === CLOUD_WHERE) ? <ElsewhereMark where={presence.elsewhere} /> : null}
+        {presence.elsewhere && (!routed || place !== "device") ? <PlaceMark place={place} data-elsewhere={place} className="text-faint/80" /> : null}
         {folded ? <SessionCount count={folded.members.length} /> : null}
         {/* The branch its owner's worktree is on, as a row this Mac made one for wears it. */}
         {presence.worktreeBranch ? <WorktreeMark worktree={{ branch: presence.worktreeBranch }} summary={undefined} /> : null}
@@ -191,10 +194,4 @@ export function LiveAgentRow({
     {apex ? <ApexAsks apex={thread} apexTitle={title} indent={indent} /> : null}
     </>
   )
-}
-
-/** Where a Thread that isn't on this Mac runs, at a glance: a cloud machine, or another of your computers. The row's tip names it. */
-function ElsewhereMark({ where }: { where: string }) {
-  const Icon = where === CLOUD_WHERE ? CloudIcon : LaptopIcon
-  return <Icon aria-hidden data-elsewhere={where === CLOUD_WHERE ? "cloud" : "device"} className="size-3 shrink-0 text-faint/80" />
 }

@@ -146,11 +146,10 @@ const stateFeedback = new Map<string, { animation: string; reduced: RegExp | "gl
   ['.link-bead[data-state="offline"]::before', { animation: "link-bead-breathe", reduced: "global" }],
   // A side question's mark pulses only while it's being answered.
   [".side-panel-glyph", { animation: "side-glyph", reduced: /\.side-panel-glyph\s*\{\s*animation:\s*none;/ }],
-  // The live mark: the fin's own gesture for each state (bob, glide and wake, brace, breathe, drift). Each rests
+  // The live mark: the fin's own gesture for each state (bob, glide, brace, breathe, drift, and the glint). Each rests
   // on the gate (`observePhaseLockedAnimation`), which also stills it under reduced motion.
   ['.live-mark[data-live-mark="working"][data-motion="thinking"] .live-mark-body', { animation: "live-mark-bob", reduced: "global" }],
   ['.live-mark[data-live-mark="working"][data-motion="writing"] .live-mark-body', { animation: "live-mark-glide", reduced: "global" }],
-  [".live-mark-wake", { animation: "live-mark-wake", reduced: "global" }],
   [".live-mark-glint > i", { animation: "live-mark-glint", reduced: "global" }],
   ['.live-mark[data-live-mark="working"][data-motion="tool"] .live-mark-body', { animation: "live-mark-brace", reduced: "global" }],
   ['.live-mark[data-live-mark="background"] .live-mark-body', { animation: "live-mark-bob", reduced: "global" }],
@@ -432,8 +431,8 @@ assert.equal(toolKindWork(identifyTool({ name: "Subagent" }).kind), "agent")
 assert.equal(identifyTool({ name: "exec_command" }).label, "Shell")
 assert.equal(identifyTool({ harness: "codex", name: "WAIT" }).label, "Command output")
 for (const asked of ["mcp__mako__app_start", "mako.app_start", "mako: app_start"])
-  assert.equal(identifyTool({ title: asked }).label, "Start app", `an approval for ${asked} names the Mako tool`)
-assert.notEqual(identifyTool({ title: "mako: shell" }).label, "Start app", "a name Mako doesn't serve stays as the agent wrote it")
+  assert.equal(identifyTool({ title: asked }).label, "Start the app", `an approval for ${asked} names the Mako tool`)
+assert.notEqual(identifyTool({ title: "mako: shell" }).label, "Start the app", "a name Mako doesn't serve stays as the agent wrote it")
 assert.equal(toolKindWork(identifyTool({ harness: "codex", name: "wait", input: '{"cell_id":"706"}' }).kind), "other")
 assert.equal(toolKindWork(identifyTool({ harness: "devin", name: "subagent", input: '{"agent_id":"a1","status":"running"}' }).kind), "other", "Devin's subagent checks on an agent; it starts none")
 assert.equal(

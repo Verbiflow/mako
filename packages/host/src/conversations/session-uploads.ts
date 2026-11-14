@@ -27,10 +27,15 @@ export type UploadSources = {
   /** Where the catalog reads a native session, by its harness and ID; undefined for one it doesn't list. */
   path(harness: string, nativeId: string): string | undefined
   /**
-   * The children of a Session's Thread, by their harness Sessions (`ThreadStore.childSessions`): no row of their own,
-   * they go up with it, so another device reads each under it as this one shows it.
+   * Every Thread's children, by their harness Sessions (`ThreadStore.childSessions`): no row of their own, they go up
+   * with their parent, so another device reads each under it as this one shows it. Read once a tick.
    */
-  agents?(session: string): readonly { harness: string; nativeId?: string }[]
+  agents?(): ReadonlyMap<string, readonly { harness: string; nativeId?: string }[]>
+  /**
+   * What moves when anything else the scope is made from does: the store `agents` reads, as a new child has no row of
+   * its own, and what `path` knows. Without one, a tick always works the scope out.
+   */
+  scopeVersion?(): string | undefined
   /** Where this device's copies and originals go in the account, while it's signed in with the cloud; else why not. */
   links(): Promise<UploadLinks>
   power(): Promise<PowerReading>
@@ -57,10 +62,11 @@ export function uploadScope(
   power: PowerReading,
   pathOf: (harness: string, nativeId: string) => string | undefined,
   now: number,
-  agentsOf: (session: string) => readonly { harness: string; nativeId?: string }[] = () => []
+  agents: ReadonlyMap<string, readonly { harness: string; nativeId?: string }[]> = new Map()
 ): SyncScope {
   const threads = threadActivity(rows)
   const seen = new Set<string>()
+  const walked = new Set<string>()
   const sessions: SyncScope["sessions"] = []
   for (const row of [...rows].sort((left, right) => syncOrder(left, right, threads))) {
     if (!row.nativeId) continue
@@ -70,7 +76,10 @@ export function uploadScope(
     if (!path || !tier || seen.has(key)) continue
     seen.add(key)
     sessions.push({ harness: row.harness, nativeId: row.nativeId, path, thread: row.thread, busy: busyRow(row), tier })
-    for (const agent of agentsOf(row.session)) {
+    // A Thread's children follow its first Session in the order; an Apex can have dozens of each.
+    if (walked.has(row.thread)) continue
+    walked.add(row.thread)
+    for (const agent of agents.get(row.thread) ?? []) {
       const at = agent.nativeId && pathOf(agent.harness, agent.nativeId)
       const own = agent.nativeId && `${agent.harness}\n${agent.nativeId}`
       if (!at || !own || seen.has(own)) continue
@@ -99,11 +108,16 @@ export class SessionUploads {
   #statusText = JSON.stringify(this.#status)
   /** The catalog's status as it last answered: a read that fails, as one the catalog's process is too busy to answer in time, shows and hides nothing. */
   #catalog: CatalogSyncStatus | null = null
+  /** The scope as last worked out, with what it was made from. */
+  #looked: { scope: SyncScope; rows: readonly ReportedSession[]; power: PowerReading; version: string } | undefined
   /**
    * Failures already logged, by when they began and what: the catalog keeps each Session's newest until it's pushed,
    * and one tried again keeps when it began (`since`), so it's logged once rather than at every try.
    */
   readonly #logged = new Set<string>()
+
+  /** The last look left something undone (`needsRetry`): a throw, or links the catalog didn't take. */
+  #retry = false
 
   constructor(sources: UploadSources) {
     this.#sources = sources
@@ -114,7 +128,18 @@ export class SessionUploads {
     return this.#status
   }
 
+  /** Whether the last look left something undone (a link the catalog didn't take): it's looked at again on a backoff. */
+  needsRetry(): boolean {
+    return this.#retry
+  }
+
   async tick(): Promise<void> {
+    // A look that throws (the account's links unreadable, the catalog gone) leaves it to be retried.
+    this.#retry = true
+    await this.#tick()
+  }
+
+  async #tick(): Promise<void> {
     const links = await this.#sources.links()
     if (links.state === "off") {
       if (this.#links) {
@@ -123,15 +148,37 @@ export class SessionUploads {
         await this.#sources.originals(null)
         hostLog("sync", "this device's Sessions stopped going to the account", { reason: links.reason })
       }
+      this.#looked = undefined
       this.#said({ state: "off", reason: links.reason })
+      this.#retry = false
       return
     }
     const rows = this.#sources.rows()
-    if (!rows) return
+    // No list yet: nothing undone, and the list's first report looks again.
+    if (!rows) {
+      this.#retry = false
+      return
+    }
     // Once a scope was given, the links go first, whatever the scope does: a scope the catalog's process was too busy
     // to take in time once kept every renewed token from it, and its pushes went with an expired one.
     if (this.#scopeKey !== undefined) await this.#give(links)
-    const scope = uploadScope(rows, await this.#reading(), (harness, nativeId) => this.#sources.path(harness, nativeId), this.#sources.now(), (session) => this.#sources.agents?.(session) ?? [])
+    const scope = await this.#scope(rows)
+    await this.#give(links)
+    await this.#read(scope, rows)
+    // Done but for the links, if the catalog didn't take them (`#give` leaves `#links` unset then).
+    this.#retry = this.#links === undefined
+  }
+
+  /**
+   * The scope, worked out again only when something it's made from moved. It's all known here: the rows, the power,
+   * read afresh each minute, which is as late as a tier's edge is seen, and `scopeVersion` for the rest.
+   */
+  async #scope(rows: readonly ReportedSession[]): Promise<SyncScope> {
+    const power = await this.#reading()
+    const version = this.#sources.scopeVersion?.()
+    const looked = this.#looked
+    if (looked && version !== undefined && looked.rows === rows && looked.power === power && looked.version === version) return looked.scope
+    const scope = uploadScope(rows, power, (harness, nativeId) => this.#sources.path(harness, nativeId), this.#sources.now(), this.#sources.agents?.())
     const scopeKey = JSON.stringify(scope)
     if (scopeKey !== this.#scopeKey) {
       await this.#sources.scope(scope)
@@ -141,8 +188,8 @@ export class SessionUploads {
         hostLog("sync", scope.paused ? "catching up waits: on a low battery or in Low Power Mode" : "catching up goes on", { sessions: scope.sessions.length })
       }
     }
-    await this.#give(links)
-    await this.#read(scope, rows)
+    this.#looked = version === undefined ? undefined : { scope, rows, power, version }
+    return scope
   }
 
   /** The catalog's process says a link is due or was refused (`ThreadCatalog.onLinkDue`): the links go now, renewed. */

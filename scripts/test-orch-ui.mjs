@@ -1,9 +1,10 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 // An Apex's Fins on the desk and the phone, through production components on the mock bridge (`?mock&app=apex`):
 // the rail lists only the Fins that need the person, under the Apex's row and its pips; a Fin's tab opens it in place with its brief and its
@@ -20,7 +21,7 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const root = await mkdtemp(join(tmpdir(), "mako-orch-ui-"))
+  const root = testScratch("mako-orch-ui-")
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-orch-ui", main: fileURLToPath(import.meta.url) }))
   const given = process.argv.slice(2).find((arg) => /^https?:/.test(arg))
   let server
@@ -40,7 +41,6 @@ if (process.versions.electron) {
   } finally {
     await server?.close()
   }
-  console.log(`Orchestration UI evidence: ${root}`)
 }
 
 async function check() {
@@ -50,6 +50,7 @@ async function check() {
   await mkdir(shots, { recursive: true })
   app.setPath("userData", join(root, "profile"))
   app.dock?.hide()
+  withMotion(app)
   await app.whenReady()
   const base = process.env.MAKO_ORCH_UI_URL
   if (process.env.MAKO_ORCH_UI_BENCH) {
@@ -62,6 +63,7 @@ async function check() {
     return
   }
   const window = new BrowserWindow({ width: 1440, height: 900, show: false, webPreferences: { backgroundThrottling: false } })
+  atSize(window, 1440, 900)
   const page = window.webContents
   page.debugger.attach("1.3")
   const type = (text) => page.debugger.sendCommand("Input.insertText", { text })
@@ -80,10 +82,11 @@ async function check() {
       await new Promise((done) => setTimeout(done, 40))
     }
   }
-  // Fonts in, finite animations done (a card entering), and two frames painted.
+  // Fonts in, finite animations done (a card entering), and two frames painted. Only what's rendered: a transition in
+  // a turn scrolled out (`content-visibility: auto`) stops where it was and never finishes, and paints nothing.
   const settle = () =>
     evaluate(
-      "document.fonts.ready.then(() => Promise.all(document.getAnimations().filter((each) => each.effect?.getTiming().iterations !== Infinity).map((each) => each.finished.catch(() => undefined)))).then(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))).then(() => true)"
+      "document.fonts.ready.then(() => new Promise((done) => { const look = () => document.getAnimations().some((each) => each.playState === \"running\" && each.effect?.getTiming().iterations !== Infinity && each.effect.target?.checkVisibility({ contentVisibilityAuto: true }) !== false) ? requestAnimationFrame(look) : done(); requestAnimationFrame(look) })).then(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))).then(() => true)"
     )
   const capture = async (name, prefix = "orch-build-ui-") => {
     await settle()
@@ -107,7 +110,7 @@ async function check() {
   // The rail lists the Apex once, and of its Fins only those that need the person, under it.
   const children = await evaluate("window.apexScene.children().map((agent) => agent.title)")
   assert.equal(children.length, 12)
-  const nested = await evaluate(`(() => { const rail = document.querySelector('.thread-jump-scope').cloneNode(true); const asking = [...rail.querySelectorAll('[data-asking-fin]')].map((node) => node.querySelector('.flex-1').textContent); rail.querySelectorAll('[data-asking-fin]').forEach((node) => node.remove()); return { text: rail.innerText, asking } })()`)
+  const nested = await evaluate(`(() => { const rail = document.querySelector('.thread-jump-scope').cloneNode(true); const asking = [...rail.querySelectorAll('[data-asking-fin]')].map((node) => node.querySelector('[data-asking-title]').textContent); rail.querySelectorAll('[data-asking-fin]').forEach((node) => node.remove()); return { text: rail.innerText, asking } })()`)
   assert.deepEqual(nested.asking.sort(), ["Quiet-hours push wording", "Sheet motion on iPad"], "the Fins that need the person hang under the Apex")
   for (const title of children) assert.ok(!nested.text.includes(title), `the rail lists no other Fin: ${title}`)
   assert.equal(await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-fin-pips]')].length"), 1, "one Apex row wears the pips")
@@ -141,14 +144,11 @@ async function check() {
 
   // The Apex opens from its row.
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.querySelector('[data-fin-pips]')).click(); true")
-  // The strip: the Apex's Sessions, a hairline, the count, then as many Fin tabs as fit and "+N".
-  await until("Boolean(document.querySelector('[data-child-tabs] [data-child-tab]'))", "the Apex's Fin tabs")
-  const strip = await evaluate(`(() => {
-    const tabs = [...document.querySelectorAll('[data-child-tab]')]
-    const more = document.querySelector('[data-child-more]')
-    return { tabs: tabs.map((tab) => tab.title), more: more ? Number(more.dataset.childMore) : 0, count: document.querySelector('[data-apex-count]')?.dataset.apexCount }
-  })()`)
+  // The strip: the Apex's Sessions, and no tab a Fin didn't earn by being opened, however many it has.
+  await until("Boolean(document.querySelector('[data-crew]'))", "the Apex's crew card")
+  const strip = await evaluate(`(() => ({ tabs: document.querySelectorAll('[data-child-tab]').length, sessions: document.querySelectorAll('[data-session-tab]').length, count: document.querySelector('[data-apex-count]') !== null }))()`)
   console.log("STRIP", JSON.stringify(strip))
+  assert.deepEqual(strip, { tabs: 0, sessions: 1, count: false }, "twelve Fins add nothing to the strip")
   // The composer's agents line counts the Apex's Fins by the rollup: queued and asking ones aren't "running".
   assert.equal(await evaluate("document.querySelector('[data-agents-toggle]')?.innerText.trim()"), "12", "the composer's chip is the count, its needs pip beside it")
   assert.equal(await evaluate("document.querySelector('[data-agents-toggle]')?.getAttribute('aria-label')"), "12 Fins · 2 need you · 5 working")
@@ -224,25 +224,24 @@ async function check() {
   await evaluate("[...document.querySelectorAll('[data-direct-exchange]')].at(-1).scrollIntoView({ block: 'center' }); true")
   await both("direct-sent", "orch-names-")
 
-  // The count opens the Agents panel: the Apex's Fins by group, above what its harness runs in the turn.
-  await click("[data-apex-count]")
+  // The composer's chip opens the Agents panel: the Apex's Fins by group, above what its harness runs in the turn.
+  await click("[data-agents-toggle]")
   await until("Boolean(document.querySelector('[data-apex-fins]'))", "the panel's Fins section")
   const panel = await evaluate(`(() => {
     const section = document.querySelector('[data-apex-fins]')
     return { heading: section.querySelector('div').innerText, groups: [...section.querySelectorAll('[data-child-group]')].map((group) => group.innerText.replace(/\\s+/g, ' ')), rows: section.querySelectorAll('[data-child-row]').length }
   })()`)
   console.log("PANEL", JSON.stringify(panel))
-  assert.match(panel.heading, /Mobile polish's Fins/)
   assert.match(panel.heading, /12 Fins · 2 need you · 5 working · 2 queued · 1 idle · 2 done/)
   assert.match(panel.heading, /Stop all/)
   assert.deepEqual(panel.groups, ["Needs you 2", "Working 5", "Queued 2", "Idle 1", "Done 2"])
   await both("panel")
 
-  // A Fin's tab opens it in place: its breadcrumb, its brief from the Apex first, the approval it waits on, its
-  // composer saying the Apex hears it, and its tab selected in the Apex's strip.
-  const opened = await evaluate(`(() => { const tab = [...document.querySelectorAll('[data-child-tab]')].find((node) => node.title.startsWith('Sheet motion')); return tab?.dataset.childTab })()`)
-  assert.ok(opened, "the Fin waiting on approval has a tab")
-  await press(`[data-child-tab="${opened}"]`)
+  // Opening a Fin opens it in place: its breadcrumb, its brief from the Apex first, the approval it waits on, its
+  // composer saying the Apex hears it, and the one tab a Fin gets, selected in the Apex's strip.
+  const opened = await evaluate(`[...document.querySelectorAll('[data-child-row]')].find((node) => node.innerText.startsWith('Sheet motion')).dataset.childRow`)
+  assert.ok(opened, "the Fin waiting on approval has a row")
+  await press(`[data-child-row="${opened}"]`)
   await until("Boolean(document.querySelector('[data-child-breadcrumb]'))", "the Fin's breadcrumb")
   await until("Boolean(document.querySelector('[data-agent-words=Brief]'))", "the brief's card")
   const child = await evaluate(`(() => ({
@@ -251,6 +250,7 @@ async function check() {
     first: document.querySelector('[data-exchange]')?.querySelector('[data-agent-words]') !== null,
     note: document.querySelector('[data-child-note]')?.innerText,
     selected: document.querySelector('[data-child-tab="${opened}"]').getAttribute('aria-selected'),
+    tabs: document.querySelectorAll('[data-child-tab]').length,
     sessionSelected: [...document.querySelectorAll('[data-session-tab]')].some((tab) => tab.getAttribute('aria-selected') === 'true'),
     approval: document.body.innerText.includes('Allow once'),
     lit: document.querySelector('[data-child-row][aria-current=true]')?.innerText.split('\\n')[0],
@@ -263,6 +263,7 @@ async function check() {
   assert.equal(child.first, true, "the brief is the first card")
   assert.equal(child.note, undefined, "no line over the composer: the crumb says whose it is")
   assert.equal(child.selected, "true")
+  assert.equal(child.tabs, 1, "the Fin opened has the one tab")
   assert.equal(child.sessionSelected, false, "no Session of the Apex is selected while its Fin is shown")
   assert.equal(child.approval, true)
   assert.equal(child.lit, "Sheet motion on iPad", "the panel keeps the Apex's Fins, the open one lit")
@@ -278,10 +279,15 @@ async function check() {
   // Back returns to the Apex; the Apex's own tab does too.
   await click("[data-child-breadcrumb] button")
   await until("!document.querySelector('[data-child-breadcrumb]') && [...document.querySelectorAll('[data-session-tab]')].some((tab) => tab.getAttribute('aria-selected') === 'true')", "the Apex after Back")
-  await press(`[data-child-tab="${opened}"]`)
+  assert.equal(await evaluate("document.querySelectorAll('[data-child-tab]').length"), 0, "going back gives the Fin's tab up")
+  await press(`[data-child-row="${opened}"]`)
   await until("Boolean(document.querySelector('[data-child-breadcrumb]'))", "the Fin again")
   await press("[data-session-tab]")
   await until("!document.querySelector('[data-child-breadcrumb]')", "the Apex after its tab")
+  await press(`[data-child-row="${opened}"]`)
+  await until("Boolean(document.querySelector('[data-child-tab]'))", "the Fin's tab again")
+  await click('[role="tablist"] button[aria-label="Close Sheet motion on iPad"]')
+  await until("!document.querySelector('[data-child-breadcrumb]') && !document.querySelector('[data-child-tab]')", "the Apex after closing the Fin's tab")
 
   // Stop in the Apex's composer asks first while any of its Fins works.
   const stop = "[data-composer] button[aria-label=Stop]"
@@ -329,7 +335,7 @@ async function check() {
   await until("!document.querySelector('[data-agents-diagnostics]')", "Settings closing")
 
   // The phone: the list shows the Apex as one row with the same pips, and each Fin that needs the person as a row of
-  // its own under Needs you, no other; its screen's chips open a Fin, whose back reads the Apex's name; Stop asks
+  // its own under Needs you, no other; its crew card opens a Fin, whose back reads the Apex's name; Stop asks
   // first, full width.
   window.setContentSize(390, 844)
   await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
@@ -341,11 +347,9 @@ async function check() {
   assert.equal(list.label, "12 Fins: 2 need you · 5 working · 2 queued · 1 idle · 2 done")
   await both("phone-list")
   await click("[data-thread]")
-  await until("Boolean(document.querySelector('[data-child-chips]'))", "the Apex's chips")
-  const chips = await evaluate("[...document.querySelectorAll('[data-child-chip]')].map((chip) => chip.innerText.replace(/\\s+/g, ' '))")
-  console.log("CHIPS", JSON.stringify(chips))
-  assert.equal(chips.length, 7, "chips for the Fins that need the person or are working")
-  assert.match(chips[0], /Sheet motion|Push wording/)
+  await until("Boolean(document.querySelector('[data-crew]'))", "the Apex's crew card on the phone")
+  assert.equal(await evaluate("document.querySelector('[data-apex-count]')?.dataset.apexCount"), "12", "the bar counts the Fins")
+  assert.equal(await evaluate("document.querySelectorAll('[data-child-chip]').length"), 0, "no chip a Fin repeating the card")
   await until("Boolean(document.querySelector('[data-send-action=stop]'))", "the Apex's transcript and dock on the phone")
   await both("phone-apex")
   await until("Boolean(document.querySelector('[data-routed]'))", "the routing line on the phone")
@@ -366,15 +370,14 @@ async function check() {
   await click("[data-child-note=direct] button")
   await until("!document.querySelector('[data-child-note=direct]')", "the phone writing to the Apex again")
   // The count opens the Agents sheet on the Apex's Fins; a row there opens that Fin, the sheet put away.
-  assert.equal(await evaluate("document.querySelector('[data-child-chips] [data-apex-count]')?.dataset.apexCount"), "12")
-  await click("[data-child-chips] [data-apex-count]")
+  await click("[data-apex-count]")
   await until("Boolean(document.querySelector('[data-agents-sheet] [data-apex-fins]'))", "the phone's Agents sheet on the Apex's Fins")
   await both("phone-agents")
   await click(`[data-agents-sheet] [data-child-row="${opened}"]`)
   await until("Boolean(document.querySelector('[data-child-of]')) && !document.querySelector('[data-agents-sheet] [data-apex-fins]')", "the Fin from the sheet")
   await click("[data-back-to-apex]")
-  await until("Boolean(document.querySelector('[data-child-chips]')) && !document.querySelector('[data-child-of]')", "the Apex again")
-  await click(`[data-child-chip="${opened}"]`)
+  await until("Boolean(document.querySelector('[data-apex-count]')) && !document.querySelector('[data-child-of]')", "the Apex again")
+  await click(`[data-crew-row="${opened}"] button`)
   await until("Boolean(document.querySelector('[data-child-of]'))", "the Fin on the phone")
   await until("Boolean(document.querySelector('[data-agent-words=Brief]'))", "the Fin's brief on the phone")
   const phoneChild = await evaluate(`(() => ({ back: document.querySelector('[data-back-to-apex]')?.innerText, brief: document.querySelector('[data-agent-words=Brief]').innerText.replace(/\\s+/g, ' '), note: document.querySelector('[data-child-note]')?.innerText }))()`)
@@ -384,7 +387,7 @@ async function check() {
   assert.equal(phoneChild.note, undefined, "no line over the phone's composer: the back button names the Apex")
   await both("phone-child")
   await click("[data-back-to-apex]")
-  await until("Boolean(document.querySelector('[data-child-chips]')) && !document.querySelector('[data-child-of]')", "the Apex after the phone's back")
+  await until("Boolean(document.querySelector('[data-apex-count]')) && !document.querySelector('[data-child-of]')", "the Apex after the phone's back")
   const phoneStop = "[data-send-action=stop]"
   await until(`Boolean(document.querySelector(${JSON.stringify(phoneStop)}))`, "the Apex's Stop on the phone")
   await click(phoneStop)
@@ -395,68 +398,53 @@ async function check() {
   assert.ok(phonePopover.height <= 120)
   await both("phone-stop")
 
-  // What the Fins ask the person stands over the Apex's composer on the desk, each answered there in a click as the
-  // person's own answer, under a request ID; the rail marks the Apex with the first; an answered ask leaves.
+  // What the Fins ask the person is answered in the crew card on the desk, which stays through the Apex's turn, each in
+  // a click as the person's own answer, under a request ID; the rail marks the Apex with the first; an answered ask
+  // leaves. An ask is drawn in one place: the composer holds none while the card is on screen.
   window.setContentSize(1440, 900)
   await window.loadURL(`${base}?mock&app=apex`)
-  await until("document.querySelectorAll('[data-fin-asks] [data-fin-ask]').length === 2", "the Fins' asks over the Apex's composer")
+  await until("document.querySelectorAll('[data-crew] [data-fin-ask]').length === 2", "the Fins' asks in the crew card through the Apex's turn")
+  assert.equal(await evaluate("document.querySelectorAll('[data-fin-asks] [data-fin-ask]').length"), 0, "and none over the composer as well")
   const deskAsks = await evaluate(`(() => ({
-    rows: [...document.querySelectorAll('[data-fin-asks] [data-fin-ask]')].map((row) => ({ kind: row.dataset.finAsk, fin: row.dataset.fin, text: row.innerText.replace(/\\s+/g, ' '), recommended: row.querySelector('[data-recommended]')?.innerText.replace(/\\s+/g, ' ') })),
+    rows: [...document.querySelectorAll('[data-crew] [data-fin-ask]')].map((row) => ({ kind: row.dataset.finAsk, fin: row.dataset.fin, text: row.innerText.replace(/\\s+/g, ' '), recommended: row.querySelector('[data-recommended]')?.innerText.replace(/\\s+/g, ' ') })),
     marks: [...document.querySelectorAll('.thread-jump-scope [role=img][aria-label]')].map((mark) => mark.getAttribute('aria-label')),
   }))()`)
   console.log("DESK ASKS", JSON.stringify(deskAsks))
   const finName = (fin) => evaluate(`window.apexScene.children().find((agent) => agent.child?.thread === ${JSON.stringify(fin)})?.child?.name`)
   const report = deskAsks.rows.find((row) => row.kind === "report")
   assert.equal(await finName(report?.fin), "push-wording")
-  assert.match(report.text, /^Quiet-hours push wording Needs your answer Which tone for the quiet-hours notice\? Plain or friendly\? Pick the tone the phone ships with\. Plain · recommended Friendly/)
-  assert.equal(report.recommended, "Plain · recommended")
+  assert.match(report.text, /Quiet-hours push wording.*Which tone for the quiet-hours notice\? Plain or friendly\?.*Plain.*Friendly/)
+  assert.match(report.recommended ?? "", /^Plain/)
   const approval = deskAsks.rows.find((row) => row.kind === "approval")
   assert.equal(await finName(approval?.fin), "sheet-motion")
-  assert.match(approval.text, /Needs approval Approve: npm ci Allow once Refuse$/)
+  assert.match(approval.text, /Approve: npm ci Allow once Refuse/)
   assert.ok(deskAsks.marks.includes("Quiet-hours push wording: Which tone for the quiet-hours notice? Plain or friendly?") || deskAsks.marks.includes("Sheet motion on iPad: Approve: npm ci"), "the rail marks the Apex with its Fin's ask")
   await both("desk-asks", "orch-gaps-")
-  await click('[data-fin-ask=report] [data-fin-answer="0"]')
+  await click('[data-crew] [data-fin-ask=report] [data-fin-answer="0"]')
   await until("window.apexScene.responds().length === 1", "the person's answer reaching the Apex's host")
   const deskAnswer = await evaluate("window.apexScene.responds()[0]")
   assert.deepEqual({ fin: deskAnswer.fin, ask: deskAnswer.ask, option: deskAnswer.option }, { fin: report.fin, ask: "report:push-wording:tone", option: 0 })
   assert.equal(deskAnswer.conversation, "1ead1ead-2000-4000-8000-000000001ead", "to the Apex's conversation")
   assert.match(deskAnswer.request, /^[0-9a-f-]{36}$/)
-  await until("document.querySelectorAll('[data-fin-asks] [data-fin-ask]').length === 1", "the answered ask leaving the desk")
+  await until("document.querySelectorAll('[data-crew] [data-fin-ask]').length === 1", "the answered ask leaving the desk")
   await both("desk-asks-answered", "orch-gaps-")
 
-  // On the phone, in the Apex's dock: its Fins' asks one at a time, a tap or a word answering each.
+  // On the phone the same: the crew card stays through the Apex's turn and holds its Fins' asks, each a tap; the dock
+  // holds none of them while the card is drawn.
   window.setContentSize(390, 844)
   await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
   await click("[data-thread]")
-  await until("Boolean(document.querySelector('.web-dock [data-ask=fin]'))", "a Fin's ask in the Apex's dock")
-  const phoneAsk = await evaluate(`(() => { const card = document.querySelector('.web-dock [data-ask=fin]'); return { kind: card.dataset.finAsk, fin: card.dataset.fin, text: card.innerText.replace(/\\s+/g, ' '), placeholder: document.querySelector('.web-dock textarea')?.placeholder } })()`)
-  console.log("PHONE ASK", JSON.stringify(phoneAsk))
-  assert.match(phoneAsk.text, /1 more Fin asks/)
+  await until("document.querySelectorAll('[data-crew] [data-fin-ask]').length === 2", "the Fins' asks in the phone's crew card")
+  assert.equal(await evaluate("Boolean(document.querySelector('.web-dock [data-ask=fin]'))"), false, "none in the dock as well")
   await both("phone-ask", "orch-gaps-")
-  const tapped = phoneAsk.kind === "approval" ? '[data-fin-answer="allow"]' : '[data-fin-answer="0"]'
-  await click(`.web-dock [data-ask=fin] ${tapped}`)
+  await click('[data-crew] [data-fin-ask=approval] [data-fin-answer="allow"]')
   await until("window.apexScene.responds().length === 1", "the phone's tap reaching the Apex's host")
-  assert.equal((await evaluate("window.apexScene.responds()[0]")).fin, phoneAsk.fin)
-  await until(`document.querySelector('.web-dock [data-ask=fin]')?.dataset.fin !== ${JSON.stringify(phoneAsk.fin)}`, "the next Fin's ask after the tap")
-  const next = await evaluate(`(() => { const card = document.querySelector('.web-dock [data-ask=fin]'); return card && { kind: card.dataset.finAsk, fin: card.dataset.fin, placeholder: document.querySelector('.web-dock textarea')?.placeholder } })()`)
-  console.log("PHONE NEXT ASK", JSON.stringify(next))
-  if (next?.kind === "report") {
-    assert.equal(next.placeholder, "Tap an answer above, or type your own")
-    await both("phone-ask-words", "orch-gaps-")
-    const turns = await evaluate("window.apexScene.asked()")
-    await evaluate("document.querySelector('.web-dock textarea').focus(); true")
-    await type("Friendly")
-    await until("document.querySelector('.web-dock [data-send-action=send]')?.getAttribute('aria-label') === 'Send answer'", "the send button answering the Fin")
-    await click(".web-dock [data-send-action=send]")
-    await until("window.apexScene.responds().length === 2", "the phone's typed answer reaching the Apex's host")
-    const typedAnswer = await evaluate("window.apexScene.responds()[1]")
-    assert.deepEqual({ fin: await finName(typedAnswer.fin), answer: typedAnswer.answer }, { fin: "push-wording", answer: "Friendly" })
-    assert.equal(await evaluate("window.apexScene.asked()"), turns, "a typed answer is no turn of the Apex's")
-  } else if (next) {
-    await click(`.web-dock [data-ask=fin] [data-fin-answer="allow"]`)
-    await until("window.apexScene.responds().length === 2", "the second tap reaching the Apex's host")
-  }
-  await until("!document.querySelector('.web-dock [data-ask=fin]')", "no Fin's ask left in the dock")
+  assert.equal(await finName((await evaluate("window.apexScene.responds()[0]")).fin), "sheet-motion")
+  await click('[data-crew] [data-fin-ask=report] [data-fin-answer="1"]')
+  await until("window.apexScene.responds().length === 2", "the second tap reaching the Apex's host")
+  const tapped = await evaluate("window.apexScene.responds()[1]")
+  assert.deepEqual({ fin: await finName(tapped.fin), option: tapped.option }, { fin: "push-wording", option: 1 })
+  await until("!document.querySelector('[data-crew] [data-fin-ask]')", "no Fin's ask left in the card")
   await both("phone-ask-answered", "orch-gaps-")
 
   assert.deepEqual(errors.filter((message) => !/Download the React DevTools/.test(message)), [])
@@ -576,6 +564,7 @@ async function bench(BrowserWindow, base, root) {
   await writeFile(preload, COMMIT_COUNTER)
   const open = async (query, counting) => {
     const window = new BrowserWindow({ width: 1440, height: 900, show: false, webPreferences: { backgroundThrottling: false, ...(counting && { preload, contextIsolation: false, sandbox: false }) } })
+    atSize(window, 1440, 900)
     // A cold dev server reloads the page once its dependencies are bundled, aborting this load; the wait below holds.
     await window.loadURL(`${base}?mock&app=apex${query}`).catch((error) => {
       if (!/ERR_ABORTED|ERR_FAILED/.test(String(error))) throw error

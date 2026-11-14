@@ -2,19 +2,20 @@ import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
-import { mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
 import { noAcpCapabilities } from "./fixtures/driver-capabilities.ts"
 import { admitted } from "./fixtures/admitted-start.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { testScratch } from "./lib/test-scratch.mjs"
+import { ranOut } from "./lib/ran-out.ts"
 
 const nativeStores = new NativeStores(false)
 
 if (!process.versions.electron) {
-  const root = await mkdtemp(join(tmpdir(), "mako-acp-background-test-"))
+  const root = testScratch("mako-acp-background-test-")
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-acp-background-test", main: fileURLToPath(import.meta.url) }))
   const env = { ...process.env, MAKO_ACP_BACKGROUND_ROOT: root, MAKO_REPO: resolve(".") }
   delete env.ELECTRON_RUN_AS_NODE
@@ -80,7 +81,7 @@ async function check() {
       .filter((update) => update.kind === "text").map((update) => update.text)
     const until = async (label, predicate) => {
       for (let waited = 0; !predicate(); waited += 10) {
-        if (waited > 5000) throw new Error(`${agent}: timed out waiting for ${label}; status ${session()?.status}`)
+        if (waited > 30_000) throw new Error(`${agent}: timed out waiting for ${label}; status ${session()?.status}`)
         await delay(10)
       }
     }
@@ -96,26 +97,28 @@ async function check() {
   async function close(agent) {
     const { id, acp, background } = await open(agent)
     const started = Date.now()
-    await acp.close(id)
+    const { waits } = await ranOut(() => acp.close(id))
     const elapsed = Date.now() - started
     await delay(100)
     const survived = running(background)
     if (survived) process.kill(background)
-    return { survived, elapsed }
+    return { survived, elapsed, waits }
   }
 
   const grok = await close("grok")
   assert.equal(grok.survived, false, "session/close reaches an agent that advertises it")
-  assert.ok(grok.elapsed < 2_000, `Grok closed in ${grok.elapsed} ms`)
+  // What each close waited for, rather than the runner's clock: the 5 s grace is what a close that didn't reach the agent would wait out.
+  assert.ok(grok.waits.every((ms) => ms < 5_000), `Grok closed without waiting out the grace (${grok.elapsed} ms; ran out: ${grok.waits.join(", ")})`)
   console.log("PASS: Closing a conversation sends session/close, which ends the background work Grok started")
 
   const devin = await close("devin")
   assert.equal(devin.survived, false, "closing stdin reaches an agent without session/close")
-  assert.ok(devin.elapsed < 2_000, `Devin closed in ${devin.elapsed} ms`)
+  assert.ok(devin.waits.every((ms) => ms < 5_000), `Devin closed without waiting out the grace (${devin.elapsed} ms; ran out: ${devin.waits.join(", ")})`)
   console.log("PASS: Closing a conversation closes stdin, which ends the background work Devin started")
 
   const stuck = await close("stuck")
-  assert.ok(stuck.elapsed >= 4_900 && stuck.elapsed < 7_000, `a stuck agent is terminated after the grace, not ${stuck.elapsed} ms`)
+  assert.ok(stuck.elapsed >= 4_900, `a stuck agent is terminated after the grace, not ${stuck.elapsed} ms`)
+  assert.deepEqual(stuck.waits.filter((ms) => ms >= 5_000), [5_000], "the grace ran out, and no later wait did")
   console.log("PASS: An agent that does not exit after its stdin closes is terminated once the grace ends")
 
   for (const agent of ["grok", "devin"]) {

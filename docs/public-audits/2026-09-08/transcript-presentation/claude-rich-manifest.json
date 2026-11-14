@@ -2,26 +2,26 @@
   {
     "provider": "claude",
     "desktopTitle": "Cleanshot X crashes and lag investigation",
-    "path": "/Users/kashyab/.claude/projects/-Users-kashyab-flage/b816361c-bd06-4c6c-87cd-b694f1100e28.jsonl"
+    "path": "~/.claude/projects/-Users-someone-flage/b816361c-bd06-4c6c-87cd-b694f1100e28.jsonl"
   },
   {
     "provider": "claude",
     "desktopTitle": "Arca information",
-    "path": "/Users/kashyab/.claude/projects/-Users-kashyab-flage/483e35de-f175-4bd4-a2d1-705aa63357f8.jsonl"
+    "path": "~/.claude/projects/-Users-someone-flage/483e35de-f175-4bd4-a2d1-705aa63357f8.jsonl"
   },
   {
     "provider": "claude",
     "desktopTitle": "Flage billing and credit accounting",
-    "path": "/Users/kashyab/.claude/projects/-Users-kashyab-flage/04f45cae-6758-4de4-ba62-a493a8c40bd8.jsonl"
+    "path": "~/.claude/projects/-Users-someone-flage/04f45cae-6758-4de4-ba62-a493a8c40bd8.jsonl"
   },
   {
     "provider": "claude",
     "desktopTitle": "Continuity camera focus loss",
-    "path": "/Users/kashyab/.claude/projects/-Users-kashyab/f3be688d-8ec8-4fdc-b059-191fbd2f22e4.jsonl"
+    "path": "~/.claude/projects/-Users-someone/f3be688d-8ec8-4fdc-b059-191fbd2f22e4.jsonl"
   },
   {
     "provider": "claude",
     "desktopTitle": "Podcast name brainstorming",
-    "path": "/Users/kashyab/.claude/projects/-Users-kashyab-pods/a8df1d3e-8175-493f-bda0-2497d05d6525.jsonl"
+    "path": "~/.claude/projects/-Users-someone-pods/a8df1d3e-8175-493f-bda0-2497d05d6525.jsonl"
   }
 ]

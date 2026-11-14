@@ -49,16 +49,132 @@ export const FinRuleSchema = z.object({
 })
 export type FinRule = z.infer<typeof FinRuleSchema>
 
+/** The longest standing rules a person writes for one role: every agent of that role reads them whole. */
+export const ROLE_RULES_CHARS = 2000
+
 /**
  * How the person wants an Apex to pick its Fins' harness and model (Settings › Fins): rules in their own words, first
  * fit wins, read by every Apex as it starts a Fin and named on the Fin it chose, and where the rest go (`otherwise`;
- * absent, the Apex's own harness).
+ * absent, the Apex's own harness). `forFins` and `forApexes` are their standing rules for every agent of each role, in
+ * their own words; absent or empty, there are none.
  */
 export const FinPolicySchema = z.object({
   rules: z.array(FinRuleSchema).max(FIN_RULES_LIMIT),
   otherwise: FinTargetSchema.optional(),
+  forFins: z.string().trim().max(ROLE_RULES_CHARS).optional(),
+  forApexes: z.string().trim().max(ROLE_RULES_CHARS).optional(),
 })
 export type FinPolicy = z.infer<typeof FinPolicySchema>
+
+/** The person's standing rules for one role, as `FinPolicy` keeps them. */
+export type RoleRules = "forFins" | "forApexes"
+
+/**
+ * The names of the person's standing rules among the standing lines of Mako's note (`standingLines`): each said whole
+ * to a new process, then again only when it changes, and forgotten when the harness compacts or rewinds its history.
+ */
+export const ROLE_RULE_LINES = { forFins: "fin-rules", forApexes: "apex-rules" } as const satisfies Record<RoleRules, string>
+
+const HEADS = { forFins: "The person's rules for every Fin:", forApexes: "The person's rules for you as an Apex:" } as const satisfies Record<RoleRules, string>
+const NONE = {
+  forFins: "The person has no rules for every Fin now: any they gave you before no longer apply.",
+  forApexes: "The person has no rules for you as an Apex now: any they gave you before no longer apply.",
+} as const satisfies Record<RoleRules, string>
+
+/** Each role's standing line, by its name (`ROLE_RULE_LINES`); undefined where there's nothing to say. */
+export type RoleRuleLines = { [Role in RoleRules as (typeof ROLE_RULE_LINES)[Role]]?: string }
+
+/** Who reads a role's standing rules: a Fin the Fin rules, and the Apex rules any Thread that is or may become an Apex. */
+export interface RuleReader {
+  fin: boolean
+  apex: boolean
+  /** The rule lines (`ROLE_RULE_LINES`) the conversation's history ever carried: a line it read stays, to say the rules went. */
+  read: ReadonlySet<string>
+}
+
+/**
+ * The person's standing rules as standing lines of Mako's note, by name: each under its head, or once the conversation
+ * read some and the person cleared them, the line that says they no longer apply. A line a reader doesn't take, or has
+ * nothing to say, is undefined, so a person who never wrote any rules changes no note.
+ */
+export function roleRuleLines(policy: Pick<FinPolicy, RoleRules> | undefined, reader: RuleReader): RoleRuleLines {
+  const line = (role: RoleRules, takes: boolean): string | undefined => {
+    if (!takes) return undefined
+    const text = policy?.[role]?.trim()
+    if (text) return `${HEADS[role]}\n${text}`
+    return reader.read.has(ROLE_RULE_LINES[role]) ? NONE[role] : undefined
+  }
+  return { [ROLE_RULE_LINES.forFins]: line("forFins", reader.fin), [ROLE_RULE_LINES.forApexes]: line("forApexes", reader.apex) }
+}
+
+/**
+ * What the person's rules add to Mako's note for a new agent of `role`, as Settings previews it on every device: its
+ * standing line (`roleRuleLines`), and for an Apex the rules for which work goes where (`finPolicyNote`). Empty when
+ * they add nothing.
+ */
+export function roleRulesPreview(role: RoleRules, policy: FinPolicy, target: (target: FinTarget) => string): string[] {
+  const fin = role === "forFins"
+  const lines = Object.values(roleRuleLines(policy, { fin, apex: !fin, read: new Set() })).filter((line) => line !== undefined)
+  return fin ? lines : [...lines, ...finPolicyNote(policy, target)]
+}
+
+/**
+ * How many of the person's Fins run at once on one device, every tree's: its capacity, from its hardware and what a
+ * Fin costs there (`fin-capacity.ts`), unless they fix a number for it (Settings › Fins), at most `FIN_LIMIT_MAX`.
+ * The count protects that machine, so each device keeps its own. `FIN_LIMIT` is a host's without a capacity reading.
+ * A start past it is refused unless its Apex asks it to wait (`agents_start` `queue`).
+ */
+export const FIN_LIMIT = 16
+export const FIN_LIMIT_MAX = 64
+export const FinLimitSchema = z.number().int().min(1).max(FIN_LIMIT_MAX)
+/** The person's Fins at work across every place at once: a safety net over the places' own bounds, generous by default. */
+export const FIN_CEILING = 64
+export const FIN_CEILING_MAX = 500
+export const FinCeilingSchema = z.number().int().min(1).max(FIN_CEILING_MAX)
+
+/** A device's capacity as Settings › Fins shows it: the number in force, the one it computed, and what it's based on. */
+export interface FinCapacityReading {
+  /** In force now: the person's own number, else the computed one as pressure allows. */
+  atOnce: number
+  /** What the hardware and the cost of a Fin here give. */
+  auto: number
+  /** "14 cores, 36 GB · a Fin ≈ 0.35 core, 0.8 GB · room for 1 build". */
+  why: string
+  /** Why it's lower than `auto` now: "14 now, not 17: memory pressure for 6 min". */
+  pressure?: string
+  /** False while it's still on the measured defaults, before this machine read enough of its own Fins. */
+  measured: boolean
+  /** What this device runs now for another place's Threads, each in a Fin's place: "an iOS simulator for a cloud Thread". */
+  lent?: string[]
+}
+
+/**
+ * What bounds the cloud's Fins: each runs on a machine of its own, so no device's count does, only the person's plan
+ * (how many at once) and the daily spend ceiling they set. Absent, either one holds nothing.
+ */
+export interface CloudFinLimits {
+  atOnce?: number
+  dailySpendCents?: number
+  spentTodayCents?: number
+}
+
+/** What a place's Fins at once are held to: a device's own count, or the cloud's plan and spend. */
+export type FinPlaceLimit = { place: "device"; atOnce: number } | ({ place: "cloud" } & CloudFinLimits)
+
+/** The cloud's bounds as Settings › Fins says them: "8 at once · $20.00 a day", or "By your plan". */
+export function cloudWords(limits: CloudFinLimits): string {
+  const parts = [...limits.atOnce !== undefined ? [`${limits.atOnce} at once`] : [], ...limits.dailySpendCents !== undefined ? [`$${(limits.dailySpendCents / 100).toFixed(2)} a day`] : []]
+  return parts.length ? parts.join(" · ") : "By your plan"
+}
+
+/** Why a place takes no more Fins now, in the words a refused start or a queued one says; undefined while it has room. */
+export function placeFull(limit: FinPlaceLimit, working: number): string | undefined {
+  if (limit.place === "device") return working >= limit.atOnce ? `${working} of the ${limit.atOnce} Fins this device runs at once are at work` : undefined
+  if (limit.atOnce !== undefined && working >= limit.atOnce) return `${working} of the ${limit.atOnce} cloud Fins the person's plan runs at once are at work`
+  if (limit.dailySpendCents !== undefined && (limit.spentTodayCents ?? 0) >= limit.dailySpendCents)
+    return `today's cloud spend reached the person's ceiling of $${(limit.dailySpendCents / 100).toFixed(2)}`
+  return undefined
+}
 
 /** What the host keeps of the person's model choices for Fins (`mako:fin-defaults`). */
 export interface FinChoicesReading {
@@ -68,6 +184,19 @@ export interface FinChoicesReading {
   used: Readonly<Record<string, SessionSettings>>
   /** The person's rules for which work goes where. */
   policy: FinPolicy
+  /** The person's own number of Fins at once for this device; absent: its capacity (Auto). */
+  limit?: number
+  /** This device's capacity; absent from a host before it. */
+  capacity?: FinCapacityReading
+  /** The person's Fins at once across every place (`FIN_CEILING` unless they set another); absent from a host before it. */
+  ceiling?: number
+  /** The cloud's, once Fins start there: by the person's plan and spend ceiling, never this device's count. */
+  cloud?: CloudFinLimits
+  /**
+   * "When an account runs out, continue on the next one" (`contracts/fin-fallback.ts`): on unless the person turned
+   * it off, which keeps a Fin where it is when its account runs out, as before.
+   */
+  moveOnLimit: boolean
 }
 
 /**
@@ -85,8 +214,8 @@ export function finPolicyNote(policy: FinPolicy, target: (target: FinTarget) => 
 
 const oneLine = (text: string) => text.replace(/\s+/g, " ").trim()
 
-/** Where a Fin's model came from, most specific first. */
-export const FinTuningSourceSchema = z.enum(["asked", "rule", "fins", "apex", "used", "mako", "harness"])
+/** Where a Fin's model came from, most specific first; `connection` is a connection's model its harness's account ran out for. */
+export const FinTuningSourceSchema = z.enum(["asked", "rule", "fins", "apex", "used", "mako", "harness", "connection"])
 export type FinTuningSource = z.infer<typeof FinTuningSourceSchema>
 
 /** What a spawn named, as the person said it through its Apex. */

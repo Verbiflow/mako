@@ -23,14 +23,17 @@ import {
   type TrackedRoot,
   type TrackerFileStat,
   type TrackerPorts,
-} from "@mako/protocol"
+} from "@mako/protocol/attribution"
 import { join } from "node:path"
+import { inSlices, StepsStopped } from "@mako/sessions/slices"
 import { HourCounts } from "../base/hour-counts.js"
 import type { RescanFootprint } from "../contracts/mako-footprint.js"
 import { contentRef, decodeText, hasher, isText, READ_LIMIT, secretPath, STORE_LIMIT } from "./content.js"
 import { attribute, authorOf, claim, Evidence, LEAD_MS, reaches as reachesChange, TRAIL_MS, type Interval, type ObservedChange, type Reach } from "./evidence.js"
 import { WorkingSets } from "./working-set.js"
-import { JournalStore, wholeChange, type FileState, type StatRow, type StoredActivity, type StoredEntry, type StoredRoot } from "./journal-store.js"
+import { StatCache } from "./stat-cache.js"
+import { collectPlanOffThread, JournalReader } from "./journal-reader.js"
+import { JournalStore, wholeChange, type FileState, type Recency, type StatRow, type ActivityKey, type Collected, type Row, type StoredActivity, type StoredEntry, type StoredRoot } from "./journal-store.js"
 import { diffLines, splitLines } from "./line-diff.js"
 import { applyHunks, BASE, baseMap, onlyBase, presentLines, presentRuns, rebase, UNKNOWN, withKnownWriters, withWriter, writers, type Run } from "./line-map.js"
 import { FootprintReader, type FootprintOptions } from "./footprint-reader.js"
@@ -62,6 +65,8 @@ export interface TrackerOptions {
   repository?(root: string): Promise<TrackerRepository | null>
   /** How long content no uncommitted line needs is kept. Default 14 days. */
   retentionMs?: number
+  /** How long a root nobody changed or worked around stays awake before it sleeps (`sleepIdle`). Default 6 hours. */
+  sleepAfterMs?: number
   /** The most kept content may take, compressed. Default 2 GB. */
   budgetBytes?: number
   /** Where a turn's footprint is read from (the home folder and temporary folders), and what the host knows to leave out. */
@@ -69,7 +74,7 @@ export interface TrackerOptions {
   /** A change heard live came out uncertain while these Sessions were running: their child agents' records may name its author. */
   uncertain?(sessions: ReadonlySet<string>): void
   /** An agent this host doesn't run, working now where `path` (absolute, in `root`) is, in a few words; undefined when there's none. */
-  outsider?(path: string, root: string): string | undefined
+  outsider?(path: string, root: string): string | undefined | Promise<string | undefined>
   /** One line per flush, at most every `LOG_EVERY_MS`, and every slow one. Paths, never content. */
   log?(message: string, facts: Readonly<Record<string, string | number | boolean>>): void
   /**
@@ -154,6 +159,14 @@ const RESCAN_MAX_MS = 10 * 60_000
 const RESCAN_QUIET_MS = 15 * 60_000
 /** After each rescan, any root's next waits this many times as long as it ran: rescans take at most a twentieth of the time. */
 const RESCAN_REST = 19
+/** Blobs dropped in one transaction of a collection: the owner's other writes wait no longer than that. */
+const COLLECT_BATCH = 200
+/** Rows of activity scanned at once for what changed in a gap: about 15 ms on a journal the size of the person's. */
+const ACTIVITY_PAGE = 2_000
+/** How long a root nobody changed or worked around stays awake: it sleeps after, and the next turn there wakes it. */
+const SLEEP_AFTER_MS = 6 * 60 * 60_000
+/** How many times `whatWasHeard` journals what flushing turned up (a folder that came stands for its files) before it answers. */
+const HEARD_PASSES = 3
 /** Spacing past which a root is reported as rescanned less often because its losses keep coming. */
 const BACKED_OFF_MS = 60_000
 
@@ -173,7 +186,7 @@ interface Flush {
 interface RootState {
   root: StoredRoot
   repo: TrackerRepository | null
-  stats: Map<string, StatRow>
+  stats: StatCache
   files: Map<string, FileState>
   /** Paths Git tracked when tracking began, the only ones kept in build folders. */
   tracked: Set<string>
@@ -203,6 +216,13 @@ interface RootState {
   rescanEvery: number
   losses: HourCounts
   headTimer?: ReturnType<typeof setTimeout>
+  /**
+   * Asleep: not watched, its stat cache and tracked paths let go (`sleep`), its uncommitted files kept. It's still
+   * tracked: the next `track` wakes it as a restart resumes it, from its history or a rescan since it fell asleep.
+   */
+  asleep?: boolean
+  /** How many times `track` asked for this root: a sleep it asked during, while the watch was closed, doesn't go ahead. */
+  tracks: number
   /**
    * When Git's own files (HEAD, the index, a branch) began moving, until the
    * HEAD check that follows: file flushes wait for it, so what a checkout,
@@ -296,6 +316,8 @@ const GIT_HEAD = /^\.git\/(HEAD|index|packed-refs|ORIG_HEAD|logs\/HEAD|refs\/hea
  */
 export class LaptopTracker implements AttributionTracker {
   readonly store: JournalStore
+  /** Reads too big for this thread, on a worker of their own. */
+  private readonly reader: JournalReader
   private readonly ports: TrackerPorts
   private readonly options: TrackerOptions
   private readonly states = new Map<string, RootState>()
@@ -337,6 +359,7 @@ export class LaptopTracker implements AttributionTracker {
     this.ports = ports
     this.options = options
     this.store = store
+    this.reader = new JournalReader(store.path)
     this.evidence = new Evidence(new WorkingSets((thread) => store.activityOfThread(thread)))
     this.seq = store.lastSeq()
     if (options.footprint)
@@ -369,8 +392,11 @@ export class LaptopTracker implements AttributionTracker {
     // Whatever was running when the last host stopped ran until it was last seen.
     if (lastSeen) store.closeOpenActivity(lastSeen)
     let previous = Promise.resolve()
+    const quiet = tracker.now() - (options.sleepAfterMs ?? SLEEP_AFTER_MS)
     for (const root of roots) {
-      const resumed = previous.then(() => tracker.resumeOrLetGo(root))
+      // Unseen for longer than a root stays awake (it was asleep when the host stopped, or the host was away that
+      // long): it starts asleep, and the next turn there wakes it.
+      const resumed = previous.then(() => (root.seenAt < quiet ? tracker.restOrLetGo(root) : tracker.resumeOrLetGo(root)))
       tracker.tracking.set(root.path, resumed)
       void resumed.then(() => {
         if (tracker.tracking.get(root.path) === resumed) tracker.tracking.delete(root.path)
@@ -392,6 +418,18 @@ export class LaptopTracker implements AttributionTracker {
       this.store.forgetRoot(root.id)
       this.options.log?.("a root could not be resumed", { root: root.path, error: error instanceof Error ? error.message : String(error) })
     }
+  }
+
+  /** A root `open` found long unseen, kept asleep; one whose folder went is let go, as a resume would. */
+  private async restOrLetGo(root: StoredRoot): Promise<void> {
+    if (this.closing) return
+    if ((await this.ports.fs.stat(root.path))?.kind !== "directory") {
+      this.store.forgetRoot(root.id)
+      this.options.log?.("a root could not be resumed", { root: root.path, error: "The folder is gone." })
+      return
+    }
+    const files = new Map(this.store.files().filter((file) => file.root === root.id).map((file) => [file.path, file]))
+    this.state(root, null, new StatCache(), files).asleep = true
   }
 
   private now(): number {
@@ -419,7 +457,12 @@ export class LaptopTracker implements AttributionTracker {
   private async startTracking(root: TrackedRoot): Promise<void> {
     const known = this.store.roots().find((stored) => stored.id === root.id || stored.path === root.path)
     if (known?.active && known.path === root.path) {
-      if (!this.states.has(known.id)) await this.resume({ ...known, carry: root.carry })
+      const state = this.states.get(known.id)
+      if (state) state.tracks++
+      if (!state || state.asleep) {
+        if (state?.asleep) this.log("woke a root", { root: known.path, sleptMs: this.now() - known.seenAt })
+        await this.resume({ ...known, carry: root.carry })
+      }
       return
     }
     if (known) this.store.forgetRoot(known.id)
@@ -427,7 +470,7 @@ export class LaptopTracker implements AttributionTracker {
     const mark = await this.ports.events.mark().catch(() => null)
     const head = repo ? await repo.head() : null
     const stored: StoredRoot = { ...root, repository: Boolean(repo), head, mark, seenAt: this.now(), trackedAt: this.now(), active: true }
-    const state = this.state(stored, repo, new Map(), new Map())
+    const state = this.state(stored, repo, new StatCache(), new Map())
     await this.listen(state)
     await this.queue(state, () => this.baseline(state))
   }
@@ -443,10 +486,10 @@ export class LaptopTracker implements AttributionTracker {
     this.store.forgetRoot(id)
   }
 
-  private state(root: StoredRoot, repo: TrackerRepository | null, stats: Map<string, StatRow>, files: Map<string, FileState>): RootState {
+  private state(root: StoredRoot, repo: TrackerRepository | null, stats: StatCache, files: Map<string, FileState>): RootState {
     const state: RootState = {
       root, repo, stats, files, tracked: new Set(), pending: new Map(), adopted: new Set(), firstHeard: 0, chain: Promise.resolve(), muted: false, recent: [], headSeq: this.seq,
-      ignoreMoves: 0, rescanQueued: false, rescanning: false, rescanAgain: false, rescannedAt: -Infinity, rescanEvery: 0, losses: new HourCounts(),
+      ignoreMoves: 0, rescanQueued: false, rescanning: false, rescanAgain: false, rescannedAt: -Infinity, rescanEvery: 0, losses: new HourCounts(), tracks: 0,
     }
     const replaced = this.states.get(root.id)
     if (replaced) this.unlisten(replaced)
@@ -521,8 +564,8 @@ export class LaptopTracker implements AttributionTracker {
   }
 
   private heard(state: RootState, paths: readonly string[]): void {
-    // A state replaced for its root, however that came about, journals nothing more.
-    if (this.closed || this.states.get(state.root.id) !== state) return
+    // A state replaced for its root, however that came about, journals nothing more; nor one asleep, which its wake catches up.
+    if (this.closed || state.asleep || this.states.get(state.root.id) !== state) return
     let head = false
     for (const raw of paths) {
       const path = raw.startsWith("/") ? relative(state.root.path, raw) : raw
@@ -546,7 +589,7 @@ export class LaptopTracker implements AttributionTracker {
   }
 
   private lost(state: RootState, reason: LossReason): void {
-    if (this.closed) return
+    if (this.closed || state.asleep) return
     if (reason === "gone") {
       // A root that went away (a removed worktree) is forgotten, not rescanned into a delete for every file.
       void this.ports.fs.stat(state.root.path).then((stat) => {
@@ -574,7 +617,7 @@ export class LaptopTracker implements AttributionTracker {
    * is attributed as found in it. Roots take turns (see `rescanTurn`).
    */
   private rescanSoon(state: RootState): void {
-    if (this.closed || this.states.get(state.root.id) !== state) return
+    if (this.closed || state.asleep || this.states.get(state.root.id) !== state) return
     if (state.rescanning) {
       state.rescanAgain = true
       return
@@ -631,7 +674,7 @@ export class LaptopTracker implements AttributionTracker {
   }
 
   private headMoved(state: RootState): void {
-    if (!state.repo) return
+    if (!state.repo || state.asleep) return
     state.ignoreMoves++
     state.gitSince ??= this.now()
     clearTimeout(state.timer)
@@ -1004,8 +1047,13 @@ export class LaptopTracker implements AttributionTracker {
     started = performance.now()
     const at = this.now()
     let slowest = 0
-    // Changes found after lost events could have happened any time in the gap, which memory may no longer hold.
-    const gapEvidence = state.gap && prepared.some(({ how }) => how !== "event") ? evidenceOf(this.store.activityBetween(state.gap.from - TRAIL_MS, at), this.evidence.worked) : undefined
+    // Changes found after lost events could have happened any time in the gap, which memory may no longer hold: the
+    // journal's activity is read for the stretch they could have happened in, a page at a time between other work.
+    const lostFrom = state.gap ? this.lostFrom(state, prepared, renamed, at) : undefined
+    const gapEvidence = lostFrom !== undefined ? evidenceOf(await this.activityOverlapping(lostFrom - TRAIL_MS, at), this.evidence.worked) : undefined
+    // A remote owner asks its host for current session context before taking the SQLite write transaction.
+    const outsiders = this.options.outsider ? new Map(await Promise.all(prepared.filter(({ how }) => how === "event").map(async ({ item }) =>
+      [item.path, await this.options.outsider!(join(state.root.path, item.path), state.root.path)] as const))) : new Map<string, string | undefined>()
     // A burst (a build's output, a copied folder) is journaled a slice at a time: each change is attributed as it's recorded.
     const slice = new Slice(this.slicing)
     try {
@@ -1016,7 +1064,7 @@ export class LaptopTracker implements AttributionTracker {
             const { item, how, before } = prepared[index]!
             const t = performance.now()
             const from = renamed.get(item.path)
-            const seq = this.record(state, item, how, undefined, at, before, from, how === "event" ? undefined : gapEvidence)
+            const seq = this.record(state, item, how, undefined, at, before, from, how === "event" ? undefined : gapEvidence, outsiders.get(item.path))
             if (seq) timing.entries++
             const spent = performance.now() - t
             if (spent > slowest) {
@@ -1043,6 +1091,61 @@ export class LaptopTracker implements AttributionTracker {
     this.scheduleSettle()
     // A change proved as it was recorded can make a later one there someone else's.
     this.reattribute()
+  }
+
+  /**
+   * The earliest a change found after lost events could have happened, of those `record` will attribute: a file
+   * whose content changed (or that moved), found by a rescan rather than heard. Each is attributed only by the
+   * activity overlapping its own lost span (`lostSpan`, bounded by its modification time) and its own time, so
+   * reading the whole gap's activity, days of it after a long one, read nothing more: on the person's journal
+   * (175,857 calls and turns) it held the host's loop for 2.7 s. Undefined when none needs it.
+   */
+  private lostFrom(state: RootState, prepared: readonly { item: Observed; how: ObservedBy; before: { ref: ContentRef | null } }[], renamed: ReadonlyMap<string, string>, at: number): number | undefined {
+    const gap = state.gap
+    if (!gap) return undefined
+    let earliest: number | undefined
+    for (const { item, how, before } of prepared) {
+      if (how === "event") continue
+      const from = renamed.get(item.path)
+      if (!from && before.ref === (item.kind === "file" ? item.ref : null)) continue
+      const written = item.stat && !from ? millis(item.stat.mtimeNs) : undefined
+      const span = lostSpan(gap.from, at, written)
+      // Content from before the gap is put on nobody by its timing.
+      if (span === "before") continue
+      const changedAt = written === undefined ? at : Math.min(at, Math.max(at - SETTLE_MS - this.lateMs(), written))
+      earliest = Math.min(earliest ?? Infinity, span.from, changedAt)
+    }
+    return earliest
+  }
+
+  /**
+   * The journal's activity overlapping `[from, to]`, read by the journal's reader off this thread, then parsed a page
+   * at a time. Where the reader can't (it failed, or took too long), found and read here a page at a time instead.
+   */
+  private async activityOverlapping(from: number, to: number): Promise<StoredActivity[]> {
+    let rows: readonly Row[] | undefined
+    try {
+      rows = await this.reader.activityOverlapping(from, to)
+    } catch (error) {
+      this.log("the journal's reader couldn't read; reading here", { error: error instanceof Error ? error.message : String(error) })
+    }
+    const found: StoredActivity[] = []
+    if (rows) {
+      for (let first = 0; first < rows.length; first += ACTIVITY_PAGE) {
+        if (first) await new Promise<void>((resolve) => setImmediate(resolve))
+        found.push(...this.store.activityOfRows(rows.slice(first, first + ACTIVITY_PAGE)))
+      }
+      return found
+    }
+    let after: ActivityKey | undefined
+    for (;;) {
+      const page = this.store.activityTimes(after, ACTIVITY_PAGE)
+      const overlapping = page.filter((item) => item.start <= to && (item.end === null || item.end >= from))
+      if (overlapping.length) found.push(...this.store.activityOfKeys(overlapping))
+      if (page.length < ACTIVITY_PAGE) return found
+      after = page.at(-1)
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
   }
 
   /** The paths not inside a repository nested in this root (a submodule): those are its files, not this root's. */
@@ -1094,6 +1197,7 @@ export class LaptopTracker implements AttributionTracker {
       const path = effect.kind === "rename" ? effect.to : effect.kind === "create" || effect.kind === "write" || effect.kind === "modify" ? effect.path : undefined
       if (!path) continue
       for (const state of this.states.values()) {
+        if (state.asleep) continue
         if (!state.repo || !within(state.root.path, path) || path === state.root.path) continue
         const own = relative(state.root.path, path)
         if (!state.stats.has(own) && !untrackable(own, state.tracked.has(own))) written.set(state, [...(written.get(state) ?? []), own])
@@ -1124,6 +1228,7 @@ export class LaptopTracker implements AttributionTracker {
     known?: { ref: ContentRef | null; bytes?: Uint8Array },
     from?: string,
     evidence: Evidence = this.evidence,
+    outsider?: string,
   ): number {
     const { root } = state
     const path = item.path
@@ -1200,7 +1305,6 @@ export class LaptopTracker implements AttributionTracker {
     }
     // Its modification time isn't when it was written: a copy that kept an old one, one ahead of the clock, or one rounded to the second.
     if (written === undefined || written > at || at - written > TRAIL_MS + late || item.stat!.mtimeNs % 1_000_000_000n === 0n) change.heard = at
-    const outsider = how === "event" && !given ? this.options.outsider?.(change.path, root.path) : undefined
     if (outsider) change.outsider = outsider
     const author = given ?? attribute(change, evidence)
     if (author.certainty === "exact") evidence.proved(author.author, change.path, change.changedAt)
@@ -1328,6 +1432,16 @@ export class LaptopTracker implements AttributionTracker {
         this.store.saveFile(next)
       }
     }
+    // The contents the transaction reads, read off this thread first: on a big journal each read waits on the disk.
+    const wanted: ContentRef[] = []
+    for (const path of paths) {
+      const file = state.files.get(path)
+      const row = state.stats.get(path)
+      if (file) wanted.push(...[file.current, file.base].filter((ref): ref is ContentRef => Boolean(ref)))
+      else if (row?.ref) wanted.push(row.ref)
+    }
+    const fetched = await this.reader.blobs(wanted).catch(() => new Map<string, Uint8Array>())
+    const blob = (ref: ContentRef) => fetched.get(ref) ?? this.store.blob(ref)
     let landed = 0
     this.store.transaction(() => {
       for (const path of paths) {
@@ -1357,7 +1471,7 @@ export class LaptopTracker implements AttributionTracker {
         if (!file) {
           if (!row) continue
           // A clean file's content is the commit it was clean against; pin it before the base moves.
-          const old = row.ref ? this.store.blob(row.ref) : earlier.get(path)
+          const old = row.ref ? blob(row.ref) : earlier.get(path)
           const current = row.ref ?? keep(path, old)
           if (current === ref) continue
           if (current !== row.ref) {
@@ -1370,8 +1484,8 @@ export class LaptopTracker implements AttributionTracker {
           save({ root: root.id, path, base: ref, baseSeq: this.seq, current, text, map })
           continue
         }
-        const current = file.current ? this.store.blob(file.current) : undefined
-        const before = file.base ? this.store.blob(file.base) : new Uint8Array()
+        const current = file.current ? blob(file.current) : undefined
+        const before = file.base ? blob(file.base) : new Uint8Array()
         // A file the commit doesn't have (one Git doesn't track yet, or whose deletion the disk didn't take) rebases onto nothing: every line it has stays uncommitted.
         if (file.text && current && before && (!bytes || isText(bytes))) {
           const known = file.base ? this.store.committedAuthors(root.id, path, file.base) : undefined
@@ -1851,7 +1965,18 @@ export class LaptopTracker implements AttributionTracker {
     if (!more && !this.pending.size) this.evidence.prune(now - SETTLE_MS - this.lateMs())
   }
 
-  async settled(): Promise<void> {
+  /**
+   * Every change heard so far journaled. With `rescans: false` (a turn's
+   * count), only what was heard: a rescan waiting out its spacing keeps
+   * waiting, and a root rescanning now isn't waited for. A turn ends about
+   * once a minute on a busy Mac. Each ended turn used to rescan every root
+   * that had lost events, back to back with no rest, and wait until none was
+   * left. While fseventsd stayed behind, that could go on for good: the
+   * shared journal's caller gave up at 15 s, and the walks and the stat
+   * cache's writes held the host's loop.
+   */
+  async settled(options: { rescans?: boolean } = {}): Promise<void> {
+    if (options.rescans === false) return this.whatWasHeard()
     await this.resuming
     this.settling++
     try {
@@ -1878,6 +2003,31 @@ export class LaptopTracker implements AttributionTracker {
     } finally {
       this.settling--
     }
+  }
+
+  /** What was heard journaled, rescans left to their own pace: a root rescanning now is passed over, its changes found by the rescan. */
+  private async whatWasHeard(): Promise<void> {
+    await this.resuming
+    for (let pass = 0; pass < HEARD_PASSES; pass++) {
+      const runs: Promise<void>[] = []
+      for (const state of this.states.values()) {
+        if (state.rescanning) continue
+        if (state.headTimer || state.gitSince !== undefined) {
+          clearTimeout(state.timer)
+          clearTimeout(state.headTimer)
+          state.headTimer = undefined
+          runs.push(this.queue(state, () => this.gitMoved(state)))
+        } else if (state.pending.size) {
+          clearTimeout(state.timer)
+          runs.push(this.queue(state, () => this.flush(state)))
+        }
+      }
+      if (!runs.length) break
+      await Promise.all(runs)
+    }
+    await Promise.all(this.scriptReads)
+    await this.footprints?.settled()
+    while (this.reattribution) await this.reattribution
   }
 
   /** How often roots were rescanned for lost events in the last hour, and which are rescanned less often because their losses keep coming. */
@@ -1928,6 +2078,7 @@ export class LaptopTracker implements AttributionTracker {
     const file = this.states.get(root)?.files.get(path)
     if (!file) {
       const state = this.states.get(root)
+      if (state?.asleep) return this.store.hasStat(root, path) ? [] : null
       return state?.stats.has(path) ? [] : null
     }
     if (!file.text) return null
@@ -1978,15 +2129,106 @@ export class LaptopTracker implements AttributionTracker {
    */
   async letGoIdle(): Promise<string[]> {
     const before = this.now() - (this.options.retentionMs ?? 14 * DAY_MS)
-    const changed = this.store.lastChanged()
-    const worked = this.store.lastWorked(this.now()).filter(({ at }) => at >= before)
-    const idle = [...this.states.values()].filter(({ root, pending }) =>
-      root.trackedAt < before && (changed.get(root.id) ?? 0) < before && !pending.size &&
-      !worked.some(({ folder }) => within(root.path, folder) || within(folder, root.path)))
-    for (const { root } of idle) await this.untrack(root.id)
-    const paths = idle.map(({ root }) => root.path)
+    // Where Threads worked is read only for a root nobody changed lately: on most passes there's none.
+    // The tracker closing (its host stopping) ends it at its next step, letting go of nothing: the next pass looks again.
+    const stopping = () => this.closing || this.store.closed
+    let read: Recency
+    try {
+      read = await inSlices(this.store.recency(this.now(), (changed) => this.idle({ changed, worked: new Map() }, before).length > 0), undefined, stopping)
+    } catch (error) {
+      if (error instanceof StepsStopped) return []
+      throw error
+    }
+    const paths: string[] = []
+    for (const state of this.idle(read, before)) {
+      if (stopping()) break
+      // Other work ran since the reading, and runs while each root is let go: what was journaled or began there since
+      // keeps it. Nothing stops between this reading and `untrack` taking the root out of `states`.
+      if (this.states.get(state.root.id) !== state || !this.idle(this.store.recencySince(read.mark, this.now()), before).includes(state)) continue
+      await this.untrack(state.root.id)
+      paths.push(state.root.path)
+    }
     if (paths.length) this.log("let go of idle roots", { roots: paths.length, paths: paths.join(", ").slice(0, 500) })
     return paths
+  }
+
+  /** The roots tracked before `before` that `read` says nobody changed since, with no Thread working in or around them since. */
+  private idle(read: Pick<Recency, "changed" | "worked">, before: number): RootState[] {
+    const recent = [...read.worked].filter(([, at]) => at >= before).map(([folder]) => folder)
+    return [...this.states.values()].filter(({ root, pending }) => root.trackedAt < before && (read.changed.get(root.id) ?? 0) < before && !pending.size &&
+      !recent.some((folder) => within(root.path, folder) || within(folder, root.path)))
+  }
+
+  /**
+   * Let roots sleep that nobody changed or worked in or around for `sleepAfterMs` (6 hours): their watches close and
+   * their stat caches and tracked paths go, the bulk of what the tracker holds (on the person's Mac on 2026-11-12, 154
+   * roots and a million stat rows, most of them finished Threads' worktrees). Their uncommitted files stay, so what
+   * they answer stays. Each stays tracked: the next turn there, or a move or a status of its checkout, wakes it as a
+   * restart resumes a root, its changes since read from the system's history or found by a rescan. Returns the paths.
+   */
+  async sleepIdle(): Promise<string[]> {
+    const before = this.now() - (this.options.sleepAfterMs ?? SLEEP_AFTER_MS)
+    const stopping = () => this.closing || this.store.closed
+    const awake = (states: RootState[]) => states.filter((state) => !state.asleep)
+    let read: Recency
+    try {
+      read = await inSlices(this.store.recency(this.now(), (changed) => awake(this.idle({ changed, worked: new Map() }, before)).length > 0), undefined, stopping)
+    } catch (error) {
+      if (error instanceof StepsStopped) return []
+      throw error
+    }
+    const paths: string[] = []
+    for (const state of awake(this.idle(read, before))) {
+      if (stopping()) break
+      if (this.states.get(state.root.id) !== state || !this.idle(this.store.recencySince(read.mark, this.now()), before).includes(state)) continue
+      if (await this.sleep(state, () => this.idle(this.store.recencySince(read.mark, this.now()), before).includes(state))) paths.push(state.root.path)
+    }
+    if (paths.length) this.log("roots asleep", { roots: paths.length, asleep: [...this.states.values()].filter((item) => item.asleep).length, paths: paths.join(", ").slice(0, 500) })
+    return paths
+  }
+
+  /** Whether a root is asleep (`sleepIdle`): tracked, not watched, woken by `track`. */
+  asleep(path: string): boolean {
+    for (const state of this.states.values()) if (state.root.path === path) return Boolean(state.asleep)
+    return false
+  }
+
+  /**
+   * Put one quiet root to sleep; false when something under way there keeps it awake. Its watch closes first, and
+   * what it heard is journaled, so the root is checked again once that's done: a turn that started there meanwhile
+   * (`track` asked, or `stillIdle` no longer holds) keeps it awake, its watch open again and what changed while it was
+   * closed found by a rescan.
+   */
+  private async sleep(state: RootState, stillIdle: () => boolean): Promise<boolean> {
+    const busy = () => Boolean(state.asleep || state.gap || state.pending.size || state.rescanning || state.rescanQueued || state.rescanTimer || state.headTimer ||
+      state.gitSince !== undefined || this.tracking.has(state.root.path))
+    if (busy()) return false
+    const tracks = state.tracks
+    const closedAt = this.now()
+    this.unlisten(state)
+    state.watch = undefined
+    state.headWatch = undefined
+    await state.chain
+    // What the watch heard before it closed is journaled first: nothing it said is left for a wake to find again.
+    if (state.pending.size) await this.queue(state, () => this.flush(state))
+    if (this.closed || this.states.get(state.root.id) !== state) return false
+    if (busy() || state.tracks !== tracks || !stillIdle()) {
+      // Asked for while the watch was closed: it stays awake, and what it didn't hear meanwhile is lost events.
+      state.root.seenAt = closedAt
+      await this.listen(state).catch((error: Error) => this.log("a root could not be watched again", { root: state.root.path, error: error.message }))
+      this.lost(state, "dropped")
+      return false
+    }
+    state.asleep = true
+    state.root.seenAt = this.now()
+    this.store.saveRoot(state.root)
+    state.stats = new StatCache()
+    state.tracked = new Set()
+    state.adopted = new Set()
+    state.recent = []
+    state.ignored = undefined
+    state.markTaken = undefined
+    return true
   }
 
   /** Drop kept content past the retention window and over the budget. */
@@ -1994,6 +2236,33 @@ export class LaptopTracker implements AttributionTracker {
     const retention = this.options.retentionMs ?? 14 * DAY_MS
     return this.store.collect(this.now() - retention, this.options.budgetBytes ?? 2 * 1024 ** 3)
   }
+
+  /**
+   * `collect`, its reading on a worker with a connection of its own and its deletes here a batch at a time, leaving
+   * this thread free: what this connection writes meanwhile is kept whatever the reading found. At most
+   * `COLLECT_MOST` blobs a pass.
+   */
+  async collectOffThread(): Promise<Collected & { ms: number }> {
+    const started = performance.now()
+    const retainAfter = this.now() - (this.options.retentionMs ?? 14 * DAY_MS)
+    this.store.touching()
+    try {
+      const plan = await collectPlanOffThread(this.store.path, retainAfter, this.options.budgetBytes ?? 2 * 1024 ** 3)
+      let dropped = 0
+      let bytes = 0
+      for (let first = 0; first < plan.refs.length && !this.closed; first += COLLECT_BATCH) {
+        if (first) await new Promise<void>((resolve) => setImmediate(resolve))
+        const batch = this.store.dropPlanned(plan.refs.slice(first, first + COLLECT_BATCH))
+        dropped += batch.dropped
+        bytes += batch.bytes
+      }
+      if (!this.closed) this.store.dropOld(retainAfter)
+      return { dropped, bytes, ms: Math.round(performance.now() - started) }
+    } finally {
+      this.store.untouched()
+    }
+  }
+
 
   private flushed(flush: Flush): void {
     this.flushes.push(flush)
@@ -2030,12 +2299,15 @@ export class LaptopTracker implements AttributionTracker {
     await this.settled()
     this.closed = true
     this.footprints?.close()
+    this.reader.close()
     clearTimeout(this.settleTimer)
     for (const state of this.states.values()) this.unlisten(state)
     await Promise.all([...this.states.values()].map((state) => state.chain))
     this.settle(true)
     this.store.transaction(() => {
       for (const state of this.states.values()) {
+        // One asleep keeps when it fell asleep: its wake reads what changed since then.
+        if (state.asleep) continue
         state.root.seenAt = this.now()
         this.store.saveRoot(state.root)
       }

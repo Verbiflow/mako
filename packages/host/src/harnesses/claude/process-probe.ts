@@ -1,8 +1,7 @@
-import { execFile } from "node:child_process"
+import { hostCommand } from "../../base/host-command.js"
 import { readdir, readFile, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import { promisify } from "node:util"
 import { z } from "zod"
 import { resolveExecutable } from "../../base/executable.js"
 import { probeOpenFiles } from "../open-files-probe.js"
@@ -13,7 +12,7 @@ import type {
 } from "../../threads/index.js"
 import { onWindows } from "../../base/platform.js"
 
-const run = promisify(execFile)
+const run = hostCommand
 const MAX_REGISTRY_ENTRY_BYTES = 64 * 1024
 const ClaudeAgentSchema = z.object({
   id: z.string().min(1).max(160).optional(),

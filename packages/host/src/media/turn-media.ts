@@ -1,5 +1,6 @@
 import { mkdirSync } from "node:fs"
 import { open, stat } from "node:fs/promises"
+import { homedir } from "node:os"
 import { extname, join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { imageSize } from "image-size"
@@ -7,6 +8,7 @@ import mimeTypes from "mime"
 import { z } from "zod"
 import { keepFileCopy } from "@mako/sessions/attachment-storage"
 import { mediaKind, type MediaKind } from "@mako/sessions/turn-media"
+import { otherAppsData } from "../base/other-apps-data.js"
 import type { KeptMedia, MediaCheck, MediaConfirmation } from "../contracts/turn-media.js"
 import { keepPage, keptPage } from "./page-copy.js"
 
@@ -124,6 +126,8 @@ export class TurnMedia {
       const kept = check.digest ? await this.kept(check.path, check.digest, kind) : this.shownBetween(check.path, (check.startedAt ?? 0) - BEFORE_MS, end)
       if (kept && await this.present(kept)) return { kind: "kept", media: kept }
     }
+    // A file in another app's container is that app's, and a stat there makes macOS ask the person to let Mako read it.
+    if (otherAppsData(check.path, homedir())) return { kind: "dropped", reason: `${check.path} is another app's data` }
     const found = await stat(check.path).catch(() => undefined)
     if (!found) return check.endedAt === undefined ? { kind: "pending" } : { kind: "dropped", reason: `No file at ${check.path}` }
     if (!found.isFile()) return { kind: "dropped", reason: `${check.path} isn't a file` }

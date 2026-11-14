@@ -12,7 +12,7 @@
   "runs": [
     {
       "label": "Devin extension",
-      "sourceDirectory": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-provider-e2e-CUzB8N",
+      "sourceDirectory": "$TMPDIR/mako-provider-e2e-CUzB8N",
       "proof": "77faf06f-9bc5-4c55-badc-8fa704aa2f0a",
       "submissions": [
         {
@@ -109,7 +109,7 @@
     },
     {
       "label": "Grok and OpenCode v2 extension",
-      "sourceDirectory": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-provider-e2e-N993O8",
+      "sourceDirectory": "$TMPDIR/mako-provider-e2e-N993O8",
       "proof": "7b2a0e9b-5f82-4a39-9345-30f5d7a23dae",
       "submissions": [
         {
@@ -232,7 +232,7 @@
     },
     {
       "label": "Claude Codex Cursor extension",
-      "sourceDirectory": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-provider-e2e-u5xmn7",
+      "sourceDirectory": "$TMPDIR/mako-provider-e2e-u5xmn7",
       "proof": "9007addb-76f9-450e-8869-cf7841b645e7",
       "submissions": [
         {
@@ -414,7 +414,7 @@
     },
     {
       "label": "OpenCode v1 default model",
-      "sourceDirectory": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-provider-e2e-q6sFX3",
+      "sourceDirectory": "$TMPDIR/mako-provider-e2e-q6sFX3",
       "proof": "6809edb4-894d-44d1-a4f4-85b88001a6b3",
       "submissions": [
         {
@@ -454,7 +454,7 @@
     },
     {
       "label": "OpenCode v1 OpenAI model",
-      "sourceDirectory": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-provider-e2e-jh6eOM",
+      "sourceDirectory": "$TMPDIR/mako-provider-e2e-jh6eOM",
       "proof": "78f2a406-62f1-4f78-a0de-ea85064c9402",
       "submissions": [],
       "results": [

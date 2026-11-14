@@ -1,0 +1,48 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Wheel trace</title>
+<!-- Records real wheel input for scripts/fixtures/wheel-traces.json: open this file in the browser Mako runs in, rest
+     or scroll over the box, and copy what it writes. Each trace is [ms since the event before, deltaY in pixels]. -->
+<style>
+  body { font: 15px system-ui; margin: 32px; max-width: 720px; color-scheme: light dark; }
+  #pad { height: 280px; display: grid; place-items: center; background: color-mix(in oklab, currentColor 8%, transparent); user-select: none; }
+  button { margin: 12px 8px 12px 0; font: inherit; }
+  textarea { width: 100%; height: 200px; font: 12px ui-monospace, monospace; }
+</style>
+<h1>Wheel trace</h1>
+<p>Press a kind, do it over the box for a few seconds, then press Stop. Then copy the text below.</p>
+<div id="kinds"></div>
+<button id="stop">Stop</button>
+<div id="pad">Over here</div>
+<textarea id="out" readonly></textarea>
+<script>
+  const kinds = { "trackpad-rest": "keeps", "trackpad-flick": "leaves", "trackpad-slow-scroll": "leaves", "mouse-notch": "leaves" }
+  const traces = {}
+  let recording = null
+  let last = 0
+  const show = () => { out.value = JSON.stringify({ browser: navigator.userAgent, traces }, null, 1) }
+  for (const [kind, expect] of Object.entries(kinds)) {
+    const button = document.createElement("button")
+    button.textContent = kind
+    button.onclick = () => {
+      traces[kind] = { expect, deltaMode: 0, events: [] }
+      recording = kind
+      last = 0
+      pad.textContent = `Recording ${kind}`
+    }
+    document.getElementById("kinds").append(button)
+  }
+  document.getElementById("stop").onclick = () => {
+    recording = null
+    pad.textContent = "Over here"
+    show()
+  }
+  pad.addEventListener("wheel", (event) => {
+    event.preventDefault()
+    if (!recording) return
+    traces[recording].deltaMode = event.deltaMode
+    traces[recording].events.push([last ? Math.round(event.timeStamp - last) : 0, event.deltaY])
+    last = event.timeStamp
+    show()
+  }, { passive: false })
+</script>

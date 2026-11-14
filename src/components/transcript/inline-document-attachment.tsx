@@ -1,6 +1,6 @@
 import { lazy, Suspense, useMemo, useState, useRef, useContext } from "react"
 import { ChevronDownIcon, ExpandIcon } from "lucide-react"
-import { FileTypeIcon } from "@/components/ui/file-type-icon"
+import { FileIcon } from "@/components/ui/file-icon"
 import { ExpandedFilePreview } from "@/components/viewer/expanded-file-preview"
 import { AssetPreviewContext, useAssetPreview } from "@/components/viewer/asset-preview-context"
 import { toast } from "sonner"
@@ -53,7 +53,7 @@ export function InlineDocumentAttachment({
       data-inline-document={name}
     >
       <div className="flex items-center gap-2 px-3 py-2.5">
-        <FileTypeIcon path={name} mimeType={mimeType} className="size-4 shrink-0 text-muted-foreground" />
+        <FileIcon path={name} mimeType={mimeType} className="size-4 shrink-0 text-muted-foreground" />
         <button
           type="button"
           className="pressable flex min-w-0 flex-1 items-center gap-2 text-left"
@@ -67,12 +67,12 @@ export function InlineDocumentAttachment({
             className={`size-3.5 shrink-0 text-faint transition-transform ${open ? "rotate-180" : ""}`}
           />
         </button>
-        {result?.file ? <button type="button" aria-label={`Expand ${name}`} title="Expand preview" onClick={() => changeEnlarged(true)} className="pressable rounded p-1 text-muted-foreground hover:bg-fill-hover">
+        {result?.file ? <button type="button" aria-label={`Expand ${name}`} title="Expand preview" onClick={() => changeEnlarged(true)} className="pressable p-1 text-muted-foreground hover:bg-fill-hover">
           <ExpandIcon className="size-3.5" />
         </button> : null}
         <button
           type="button"
-          className="pressable rounded px-2 py-1 text-label text-muted-foreground hover:bg-fill-hover"
+          className="pressable px-2 py-1 text-label text-muted-foreground hover:bg-fill-hover"
           onClick={() => {
             try {
               downloadInlineDocument({ name, mimeType, data })
@@ -108,7 +108,7 @@ export function InlineDocumentAttachment({
                       key={value}
                       aria-pressed={mode === value}
                       onClick={() => setMode(value)}
-                      className={`pressable rounded px-2 py-1 ${mode === value ? "bg-fill-selected text-foreground" : "text-faint hover:bg-fill-hover"}`}
+                      className={`pressable px-2 py-1 ${mode === value ? "bg-fill-selected text-foreground" : "text-faint hover:bg-fill-hover"}`}
                     >
                       {value === "preview" ? "Preview" : "Source"}
                     </button>

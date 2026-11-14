@@ -1,12 +1,12 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, writeFile, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { writeFile, rm } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 if (!process.versions.electron) {
-  const root = await mkdtemp(join(tmpdir(), "mako-preload-test-"))
+  const root = testScratch("mako-preload-test-")
   const file = fileURLToPath(import.meta.url)
   await writeFile(
     join(root, "package.json"),

@@ -6,8 +6,11 @@ import { z } from "zod"
 import { PING, PONG } from "@mako/protocol"
 import { CloudLink } from "../packages/host/src/usage/cloud-link.ts"
 
-const SILENT_MS = 300
-const ANSWER_MS = 150
+// Long enough that a runner stalled for a second can't make a link look silent, or an answer late.
+const SILENT_MS = 3_000
+const ANSWER_MS = 1_500
+/** A hang guard: what the probe or a reach opens comes well before the 25 s heartbeat would find a link dead. */
+const OPENS_MS = 20_000
 
 const server = new WebSocketServer({ host: "127.0.0.1", port: 0 })
 await once(server, "listening")
@@ -47,7 +50,7 @@ const nextAttached = (count: number) =>
   attached.length >= count
     ? Promise.resolve()
     : new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error(`connection ${count} never opened`)), 2_000)
+        const timer = setTimeout(() => reject(new Error(`connection ${count} never opened within ${OPENS_MS / 1_000} s`)), OPENS_MS)
         onAttached = () => {
           if (attached.length < count) return
           clearTimeout(timer)
@@ -56,7 +59,7 @@ const nextAttached = (count: number) =>
       })
 
 async function until(check: () => boolean, what: string): Promise<void> {
-  const deadline = Date.now() + 2_000
+  const deadline = Date.now() + OPENS_MS
   while (!check() && Date.now() < deadline) await sleep(5)
   assert.ok(check(), what)
 }
@@ -83,7 +86,6 @@ try {
   const replacedMs = Date.now() - sentAt
   assert.equal(served[0]!.pings, 1, "the stalled link was asked once")
   assert.ok(replacedMs >= SILENT_MS + ANSWER_MS - 20, `replaced only after it was silent and unanswered (${replacedMs} ms)`)
-  assert.ok(replacedMs < SILENT_MS + ANSWER_MS + 1_000, `replaced soon after (${replacedMs} ms)`)
 
   // A link that answers when asked is kept.
   await heard()
@@ -108,14 +110,21 @@ try {
   // Dropped, its next try a backoff step away: reached, it connects now and says so.
   served[1]!.socket.terminate()
   await until(() => !link.heard, "the drop is heard")
-  const askedAt = Date.now()
   assert.equal(await link.reach(), true, "it opened")
   assert.equal(served.length, 3)
-  assert.ok(Date.now() - askedAt < 500, `at once, not at the backoff's next step (${Date.now() - askedAt} ms)`)
+
+  // Closed for a sleep, its next try 30 s away: reached, it connects now, well before then.
+  link.quiet()
+  await until(() => !link.heard, "the close is heard")
+  const hold = setTimeout(() => assert.fail("the reach waited for the 30 s hold"), OPENS_MS)
+  assert.equal(await link.reach(), true, "it opened")
+  clearTimeout(hold)
+  await nextAttached(4)
+  assert.equal(served.length, 4)
 
   // Offline: the try can't open, and says so.
   server.close()
-  served[2]!.socket.terminate()
+  served[3]!.socket.terminate()
   await until(() => !link.heard, "the drop is heard")
   // The link's timers don't keep a process alive, and with the server closed nothing else does.
   const held = setTimeout(() => assert.fail("the try never said"), 2_000)

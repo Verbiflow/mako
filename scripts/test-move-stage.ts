@@ -140,6 +140,41 @@ try {
     assert.equal(arrival.checkout, "applied", "a clone that doesn't read as the checkpoint is never taken as it")
     assert.equal(s.files()[0], "one, staged\n")
   }
+  // A project folder's other repository, named with its own checkpoint (a going-away's `others`): this machine lacks it,
+  // so the arrival clones it, then lays the Thread's change in it over the clone, as a carry's are, before the mark.
+  {
+    const s = setup("others")
+    const checkpoint = await s.capture("one, in the first repository\n")
+    const base = join(root, "others")
+    const webRemote = join(base, "web.git")
+    const webDevice = join(base, "web-device")
+    sh(root, "init", "--bare", "--quiet", webRemote)
+    sh(root, "clone", "--quiet", webRemote, webDevice)
+    writeFileSync(join(webDevice, "w.txt"), "web\n")
+    sh(webDevice, "add", ".")
+    sh(webDevice, "commit", "--quiet", "-m", "base")
+    sh(webDevice, "push", "--quiet", "origin", "main")
+    writeFileSync(join(webDevice, "w.txt"), "web, changed by the Thread\n")
+    const { checkpoint: web, file } = await captureMoveCheckpoint(git, webDevice, mkdtempSync(join(base, "capture-")))
+    bundles.set(web.sha256, file)
+    const webMachine = join(base, "Users", "ada", "worktrees", "fix-web")
+    const cloned: string[] = []
+    const deps: MoveArrivalDeps = { ...s.deps, clone: async ({ path, url }) => {
+      cloned.push(url)
+      sh(root, "clone", "--quiet", webRemote, path)
+    } }
+    const arrival = await arriveMove(deps, { move: randomUUID(), folder: s.machine, checkpoint, sessions, others: [{ path: webMachine, url: "https://github.com/acme/web", checkpoint: web }] })
+    assert.equal(arrival.checkout, "applied")
+    assert.deepEqual(cloned, ["https://github.com/acme/web"], "cloned where this machine lacked it")
+    assert.equal(s.files()[0], "one, in the first repository\n")
+    assert.equal(readFileSync(join(webMachine, "w.txt"), "utf8"), "web, changed by the Thread\n", "the other repository's change laid over its clone")
+    // One whose bundle the cloud doesn't hold: the arrival fails, and no mark says it arrived.
+    const s2 = setup("others-missing")
+    const first = await s2.capture("one, again\n")
+    const lost = { ...web, sha256: "0".repeat(64) }
+    await assert.rejects(arriveMove({ ...s2.deps, clone: async ({ path }) => void sh(root, "clone", "--quiet", webRemote, path) }, { move: randomUUID(), folder: s2.machine, checkpoint: first, sessions, others: [{ path: join(root, "others-missing", "web"), url: "https://github.com/acme/web", checkpoint: lost }] }), /other repositories/)
+  }
+
   // Getting ready, the machine pulls what the Thread's records hold so far, and the stage after waits for that pull
   // rather than reading beside it: the cold first read of the cloud's copy is paid while the machine gets ready.
   {

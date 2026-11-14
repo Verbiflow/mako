@@ -11,7 +11,8 @@ import { approvalAnswerDigest } from "@mako/host/harnesses/approval-evidence"
 import { describeApprovalResponse, type NativeApprovalDecision } from "@mako/host/contracts/approval-response"
 import type { LivePermissionRequest } from "@mako/host/contracts/providers-acp"
 import type { SessionNotification, CreateElicitationRequest } from "@agentclientprotocol/sdk"
-import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
+import type { SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
+import { claudeCommandLifecycle } from "@mako/host/harnesses/claude/sdk-message-kinds"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
 const nativeStores = new NativeStores(false)
@@ -32,6 +33,23 @@ try {
   claude.observe(message)
   assert.equal(decisions[0].answerDigest, digest)
   assert.notEqual(digest, approvalAnswerDigest(answer), "compare provider encoding without guessing comma boundaries")
+  // Two schemas that can only match one `type` meet every message Claude Code sends. A failed parse builds its whole
+  // error first, 300 MB of peak footprint at 8 sessions, so a message of another kind is turned away on its `type`.
+  const reading = (text: string) => {
+    const read = new Set<string>()
+    const message: SDKMessage = JSON.parse(text)
+    for (const [key, value] of Object.entries(message)) Object.defineProperty(message, key, { enumerable: true, get: () => (read.add(key), value) })
+    return { read, message }
+  }
+  const assistant = JSON.stringify({ type: "assistant", session_id: "session", parent_tool_use_id: null, command_uuid: "c", state: "queued", message: { role: "assistant", content: [{ type: "text", text: "x".repeat(4_096) }] } })
+  const lifecycle = reading(assistant)
+  assert.equal(claudeCommandLifecycle(lifecycle.message), undefined)
+  assert.deepEqual([...lifecycle.read], ["type"], "another kind of message is turned away on its type, unread")
+  const observed = reading(assistant)
+  claude.observe(observed.message)
+  assert.deepEqual([...observed.read], ["type"], "by the approval observer too")
+  const queued = { type: "command_lifecycle", command_uuid: "c", state: "queued" }
+  assert.deepEqual(claudeCommandLifecycle(reading(JSON.stringify(queued)).message), queued, "and the kind it's for still reads")
   const receipt = { id: randomUUID(), origin: { native: identity, nativeRequestId: "callback", bindingId: "binding", epoch: "epoch", generation: 1, connectionGeneration: 1 }, digest: approvalAnswerDigest(answer), nativeAnswerDigest: digest, createdAt: 1, state: { kind: "uncertain" as const, reason: "lost" }, nativeDecision: decisions[0] }
   assert.equal(describeApprovalResponse(receipt).title, "Agent recorded your answer")
   assert.equal(describeApprovalResponse({ ...receipt, nativeAnswerDigest: "0".repeat(64) }).title, "Agent recorded a different decision")

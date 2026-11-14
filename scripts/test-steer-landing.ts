@@ -24,6 +24,7 @@ import { decodeRuntimeValue, encodeRuntimeValue } from "@mako/host/contracts/run
 import { serveHostThroughGateway } from "@mako/host/transport/gateway"
 import type { LiveAction } from "@mako/host/contracts/live-actions"
 import { sealedDrivers } from "./fixtures/sealed-drivers.ts"
+import { ranOut } from "./lib/ran-out.ts"
 import { installClaude } from "@mako/host/harnesses/claude/index"
 import { installCodex } from "@mako/host/harnesses/codex/index"
 import { installCursor } from "@mako/host/harnesses/cursor/index"
@@ -33,17 +34,23 @@ import { installOpenCode } from "@mako/host/harnesses/opencode/index"
 
 const root = mkdtempSync(join(tmpdir(), "mako-steer-landing-"))
 
+/**
+ * A fixture turn ends only when Mako stops it, and its harness answers a held steer only then, so a steer that
+ * waits for the turn's end (Cursor held the person's 88 s) waits forever. This is the hang guard on that, thirty
+ * times the landing's own second.
+ */
+const HELD_MS = 30 * STEER_LANDS_MS
+
 interface World {
   owner: LiveConversations
   id: string
   first: string
-  /** Each prompt the harness was sent, with when, from the test's start. */
-  prompts: { text: string; at: number }[]
+  /** Each prompt the harness was sent. */
+  prompts: { text: string }[]
   steers: string[]
   cancels: number
   /** What the harness's own steer answers, and when. */
   answer: PromiseWithResolvers<ProviderSteerResult>
-  began: number
   running(): Promise<void>
   close(): void
 }
@@ -56,7 +63,6 @@ async function world(provider: string, landing: SteerLanding | undefined, name: 
   let state: LiveSessionState
   let owner: LiveConversations
   let cancels = 0
-  const began = performance.now()
   const driver: ProviderLiveDriver = {
     ...noCapabilities,
     resume: fixtureResume(),
@@ -79,7 +85,7 @@ async function world(provider: string, landing: SteerLanding | undefined, name: 
     },
     async prompt(_id, text, _attachments, _settings, dispatch) {
       dispatch.report({ kind: "submitted", source: "transport-call" })
-      prompts.push({ text, at: performance.now() - began })
+      prompts.push({ text })
       state = { ...state, status: "running", nativeRunId: randomUUID() }
       owner.observe({ type: "live-session", session: state })
     },
@@ -98,7 +104,7 @@ async function world(provider: string, landing: SteerLanding | undefined, name: 
   for (let i = 0; owner.snapshot(id)?.session.connection !== "connected" && i < 100; i++) await delay(5)
   owner.submit(id, first, "build the importer")
   return {
-    owner, id, first, prompts, steers, answer, began,
+    owner, id, first, prompts, steers, answer,
     get cancels() { return cancels },
     async running() {
       for (let i = 0; owner.snapshot(id)?.requests.find((request) => request.id === first)?.nativeRun === undefined && i < 200; i++) await delay(5)
@@ -109,11 +115,24 @@ async function world(provider: string, landing: SteerLanding | undefined, name: 
   }
 }
 
-async function until(test: () => boolean, ms = 3_000): Promise<void> {
-  const by = performance.now() + ms
+async function until(what: string, test: () => boolean): Promise<void> {
+  const by = performance.now() + HELD_MS
   while (!test()) {
-    if (performance.now() > by) throw new Error("timed out")
+    if (performance.now() > by) throw new Error(`${what}: still waiting after ${HELD_MS / 1_000} s, so it waited for the turn's end`)
     await delay(5)
+  }
+}
+
+/** `work`, unless it waits for the turn's end. */
+async function held<T>(what: string, work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const never = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what}: still waiting after ${HELD_MS / 1_000} s, so it waited for the turn's end`)), HELD_MS)
+  })
+  try {
+    return await Promise.race([work, never])
+  } finally {
+    clearTimeout(timer)
   }
 }
 
@@ -132,14 +151,11 @@ try {
       const input: LiveActionInput = kind === "steer"
         ? { kind, id: randomUUID(), requestId: w.first, text: words, attachments: [] }
         : { kind, id: randomUUID(), requestId: w.first, queuedRequestId: queuedId, text: words, attachments: [] }
-      const sent = performance.now() - w.began
-      const receipt = await w.owner.act(w.id, input)
+      const receipt = await held("the steer's receipt", w.owner.act(w.id, input))
       assert.equal(receipt.state.kind, "accepted", "the steer's receipt says it's taken at once")
       assert.deepEqual(w.steers, [], "the harness's own steer, which would wait for the command, isn't used")
-      await until(() => w.prompts.length === 2)
-      const landed = w.prompts[1]!.at - sent
-      assert.ok(landed < STEER_LANDS_MS, `the message reached the agent ${Math.round(landed)} ms after it was sent`)
-      assert.equal(w.cancels, 1)
+      await until("the message reaching the agent", () => w.prompts.length === 2)
+      assert.equal(w.cancels, 1, "it reached the agent through Mako's stop, while the command still ran")
       const text = w.prompts[1]!.text
       assert.ok(text.endsWith(words), "the stopped turn's next message is the person's")
       assert.match(text, /Your previous turn was cut short at [\d:]+: the user sent the message below while you worked, and Mako stopped your turn so you read it at once\. Work you did before then is in place\./)
@@ -169,15 +185,15 @@ try {
       const input: LiveActionInput = kind === "steer"
         ? { kind, id: randomUUID(), requestId: w.first, text: words, attachments: [] }
         : { kind, id: randomUUID(), requestId: w.first, queuedRequestId: queuedId, text: words, attachments: [] }
-      const sent = performance.now() - w.began
-      const receipt = await w.owner.act(w.id, input)
-      const answered = performance.now() - w.began - sent
+      const sent = performance.now()
+      const { result: receipt, waits } = await ranOut(() => held("the steer's receipt", w.owner.act(w.id, input)))
+      const answered = performance.now() - sent
       assert.equal(receipt.state.kind, "accepted")
       assert.deepEqual(w.steers, [words], "Cursor's own steer is tried first")
-      assert.ok(answered >= STEER_LANDS_MS - 5 && answered < STEER_LANDS_MS + 500, `answered in ${Math.round(answered)} ms`)
-      await until(() => w.prompts.length === 2)
-      const landed = w.prompts[1]!.at - sent
-      assert.ok(landed < STEER_LANDS_MS + 500, `the message reached the agent ${Math.round(landed)} ms after it was sent, not at the turn's end`)
+      assert.ok(answered >= 995, `Cursor had its second to confirm (answered in ${Math.round(answered)} ms)`)
+      assert.deepEqual(waits.filter((ms) => ms >= 1_000), [1_000], "the wait for Cursor's confirmation is the landing's second, and the receipt comes when it runs out")
+      await until("the message reaching the agent", () => w.prompts.length === 2)
+      assert.equal(w.cancels, 1, "it reached the agent through Mako's stop, not at the turn's end")
       assert.ok(w.prompts[1]!.text.endsWith(words))
       assert.match(w.prompts[1]!.text, /Mako stopped your turn so you read it at once/)
       const own = kind === "steer" ? input.id : queuedId
@@ -212,15 +228,12 @@ try {
       w.owner.submit(w.id, queuedId, "the code is the truth")
       const client = await gateway.connectClient({ kind: "client", client: "desktop", deviceId: randomUUID() })
       const input: LiveActionInput = { kind: "steer-queued", id: randomUUID(), requestId: w.first, queuedRequestId: queuedId, text: "the code is the truth", attachments: [] }
-      const sent = performance.now() - w.began
       const call = gatewayHostCalls(client, { threadId, actor: { kind: "client", client: "desktop", deviceId: randomUUID() } }).call("mako:live-steer-queued", [w.id, input])
       // SAFETY: the machine's host answered `act`, a `LiveAction`, encoded as it encodes every value.
-      const receipt = decodeRuntimeValue(await sendWithRepeats("mako:live-steer-queued", call, { threadId })) as LiveAction
-      const answered = performance.now() - w.began - sent
+      const receipt = decodeRuntimeValue(await held("the Mac's call", sendWithRepeats("mako:live-steer-queued", call, { threadId }))) as LiveAction
       assert.equal(receipt.state.kind, "accepted")
-      assert.ok(answered < STEER_LANDS_MS + 500, `the Mac heard ${Math.round(answered)} ms after it sent`)
-      await until(() => w.prompts.length === 2)
-      assert.ok(w.prompts[1]!.at - sent < STEER_LANDS_MS + 500)
+      await until("the message reaching the machine's agent", () => w.prompts.length === 2)
+      assert.equal(w.cancels, 1, "through the machine's stop, not at its turn's end")
       assert.ok(w.prompts[1]!.text.endsWith("the code is the truth"))
     } finally { served.close(); w.close() }
   }
@@ -268,12 +281,10 @@ try {
       if (landing === undefined || landing === "native") setTimeout(() => w.answer.resolve({ kind: "accepted" }), 10)
       const queued = randomUUID()
       assert.equal(w.owner.submit(w.id, queued, "after this turn").status, "queued", `${provider}: a message mid-turn queues`)
-      const sent = performance.now()
-      const receipt = await w.owner.act(w.id, { kind: "steer", id: randomUUID(), requestId: w.first, text: "into this turn", attachments: [] })
+      const receipt = await held(`${provider}'s steer`, w.owner.act(w.id, { kind: "steer", id: randomUUID(), requestId: w.first, text: "into this turn", attachments: [] }))
       assert.equal(receipt.state.kind, "accepted", `${provider}: the steer is taken`)
-      assert.ok(performance.now() - sent < STEER_LANDS_MS + 500, `${provider}: within a second`)
       if (landing === "restart" || landing === "confirm") {
-        await until(() => w.prompts.length === 2)
+        await until(`${provider}'s steer reaching the agent`, () => w.prompts.length === 2)
         assert.ok(w.prompts[1]!.text.endsWith("into this turn"), `${provider}: the steer goes first, ahead of what was queued`)
       }
     } finally { w.close() }

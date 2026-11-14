@@ -49,7 +49,7 @@ export type MoveCarryRef = z.infer<typeof MoveCarryRefSchema>
 export const MOVE_OUTSIDE_FILE_BYTES = 8 * 1024 * 1024
 export const MOVE_OUTSIDE_BYTES = 64 * 1024 * 1024
 
-const CarriedPathSchema = z.string().min(2).max(4_096).regex(/^\/(?!.*(^|\/)\.\.?(\/|$))[^\0]*[^/]$/, "an absolute path")
+export const CarriedPathSchema = z.string().min(2).max(4_096).regex(/^\/(?!.*(^|\/)\.\.?(\/|$))[^\0]*[^/]$/, "an absolute path")
 
 /** A repository of the Thread's checkout: where it is, what its remote is, and its checkout as the move took it. */
 export const MoveCarryRepositorySchema = z.object({

@@ -1,3 +1,4 @@
+import { hostSpawn, closeHostChild } from "../base/host-command.js"
 /**
  * Continue a thread with its own harness.
  *
@@ -24,14 +25,14 @@
 import type { Admission } from "../base/admission.js"
 import type { LifecycleWork } from "../contracts/app-lifecycle.js"
 import { randomUUID } from "node:crypto"
-import { spawn, type ChildProcess } from "node:child_process"
+import type { ChildProcess } from "node:child_process"
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import type { ThreadRef } from "@mako/sessions"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { type AccountLaunch, type AccountHold, type ProviderHost, dropUncarried, type NativeCommand, type NativeRunOptions, type NativeRunner } from "../harnesses/index.js"
 import { resumable, type ResumeVerdict } from "../contracts/conversation-control.js"
-import { reconnectRefusal } from "./live-transfers.js"
+import { reconnectError } from "./live-transfers.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { launchContext } from "../base/execution-context.js"
 import type { ExecutionContext } from "../contracts/execution-context.js"
@@ -66,6 +67,7 @@ interface Run extends OwnedSessionClaim {
   resolve: (result: NativeRunResult) => void
   state: ThreadRunState
   stdout: string
+  stopRequested: boolean
   /** Released when the process closes, so its account can be removed. */
   accountHold?: AccountHold
 }
@@ -133,7 +135,7 @@ export class NativeRuns {
     let timedOut = false
     const timer = setTimeout(() => {
       timedOut = true
-      run.child.kill("SIGTERM")
+      void this.cancel(run).catch(() => {})
     }, timeoutMs)
     try {
       const result = await completed
@@ -199,7 +201,7 @@ export class NativeRuns {
       return
     }
     const run = this.runs.get(path)
-    if (run && run.state.status === "running" && (expectedToken === undefined || expectedToken === run.token)) run.child.kill("SIGTERM")
+    if (run && run.state.status === "running" && (expectedToken === undefined || expectedToken === run.token)) void this.cancel(run).catch(() => {})
   }
 
   stop(timeoutMs = 30_000): Promise<void> {
@@ -214,10 +216,11 @@ export class NativeRuns {
       releaseOwnership(entry, entry.work.provider, key)
       if (!entry.releaseSession && this.preparing.get(key) === entry) this.preparing.delete(key)
     }
+    const closing: Promise<void>[] = []
     for (const run of owned)
-      if (run.state.status === "running") run.child.kill("SIGTERM")
+      if (run.state.status === "running") closing.push(this.cancel(run))
       else if (run.releaseSession) releaseOwnership(run, run.state.harness, run.state.path)
-    const pending = preparing.map(([, entry]) => entry.settled).concat(owned.map(run => run.settled))
+    const pending = preparing.map(([, entry]) => entry.settled).concat(owned.map(run => run.settled), closing)
     const drain = drainOwnedWork(pending, timeoutMs, "Native shutdown did not complete.").then(() => {
       if (owned.some(run => run.releaseSession) || preparing.some(([, entry]) => entry.releaseSession))
         throw new Error("Native session ownership could not be released. The ledger must remain open.")
@@ -311,7 +314,7 @@ export class NativeRuns {
       if (ref) {
         const verdict = await hooks.assessResume?.(ref)
         assertPreparation()
-        if (!verdict || !resumable(verdict)) throw new Error(reconnectRefusal(verdict))
+        if (!verdict || !resumable(verdict)) throw reconnectError(verdict)
         if (!hooks.claimSession) throw new Error("Native session ownership is unavailable. Retry after the host reconnects.")
         releaseSession = hooks.claimSession(ref)
         preparation.releaseSession = releaseSession
@@ -331,7 +334,7 @@ export class NativeRuns {
       if (!executable) throw new Error(`${harness} is not installed`)
       await this.host.accounts.assertLaunch(harness, accountLaunch)
       assertPreparation()
-      child = spawn(executable, args, {
+      child = hostSpawn(executable, args, {
         cwd,
         stdio: ["ignore", "pipe", "pipe"],
         env: environmentForExecutable(executable, env),
@@ -361,6 +364,7 @@ export class NativeRuns {
       resolve: resolveRun,
       state,
       stdout: "",
+      stopRequested: false,
       releaseSession,
       accountHold,
     }
@@ -402,14 +406,14 @@ export class NativeRuns {
     // Exit is not output/child cleanup: a descendant can still hold these
     // pipes. Retain this exact claim until close drains them, including spawn
     // errors. Never admit a replacement using the leader's exit alone.
-    child.once("close", (code, signal) => {
+    child.once("close", (code, signal) => { void closeHostChild(child).then(() => {
       if (run.state.status !== "running") return
       if (processError) {
         this.finish(run, {
           status: "failed",
           error: processError.message.includes("ENOENT") ? `${command} is not installed` : processError.message,
         })
-      } else if (signal === "SIGTERM" || signal === "SIGKILL") {
+      } else if (run.stopRequested || signal === "SIGTERM" || signal === "SIGKILL") {
         this.finish(run, { status: "stopped" })
       } else if (code === 0) {
         this.finish(run, { status: "done" })
@@ -419,7 +423,7 @@ export class NativeRuns {
           error: lastLine(stderr) || `${command} exited with code ${code}`,
         })
       }
-    })
+    }, (error: Error) => this.retainCleanupFailure(run, error)) })
 
     return state
   }
@@ -449,6 +453,16 @@ export class NativeRuns {
       if (!removed) break
     }
     this.push(run.state)
+  }
+
+  private cancel(run: Run): Promise<void> {
+    run.stopRequested = true
+    return closeHostChild(run.child).catch((error: Error) => { this.retainCleanupFailure(run, error); throw error })
+  }
+
+  private retainCleanupFailure(run: Run, error: Error): void {
+    run.releaseError = error
+    hostWarn("native", "process group cleanup failed; session ownership retained", { harness: run.state.harness, path: run.state.path, error: error.name })
   }
 
   private push(state: ThreadRunState): void {

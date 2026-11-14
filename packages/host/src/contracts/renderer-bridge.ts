@@ -1,3 +1,5 @@
+import type { FileFindResults, FileFolders, FileFoldersOptions, FileGrepOptions, FileGrepResults } from "./file-index.js"
+import type { AgentAskAnswer } from "./agent-asks.js"
 import type { GitRemoteInput, GitRemoteResult, ExternalEditor, FileContents, FileReadPurpose, GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitHubStatus, GitStatus, GitPushInput, PullRequest, SearchOptions, SearchResults, StagedFile, WorkspaceFile } from "./git-workspace-search.js"
 import type { TurnFileHunks, TurnFileWriters, TurnUndoPreview, TurnUndoResult, TurnUndoScope } from "./turn-review.js"
 import type { AuthoringApplied, AuthoringCatalog, AuthoringChange, AuthoringPlan, AuthoringTarget, AuthoringView } from "./native-authoring.js"
@@ -10,6 +12,7 @@ import type {
   StopTarget,
 } from "./thread-lifecycle.js"
 import type { ThreadGroup } from "./thread-groups.js"
+import type { SetupAct, SetupActOutcome, SetupView } from "./setup.js"
 import type { ThreadPurpose } from "./thread-purposes.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
 import type { ProjectAppSetup } from "./project-app.js"
@@ -23,7 +26,7 @@ import type { MediaChecks, MediaConfirmation } from "./turn-media.js"
 import type { MoveOutcome, WorkspaceMoveAnswer, WorkspaceMoveHold, WorkspaceMoveTarget, WorkspaceMoves } from "./workspace-moves.js"
 import type { PlanBuild, PlanBuildClaim, PlanBuildTarget, PlanBuilds } from "./plan-builds.js"
 import type { AccessChoices } from "./access-choices.js"
-import type { FinChoicesReading, FinPolicy } from "./fin-tuning.js"
+import type { FinChoicesReading, FinPolicy, RoleRules } from "./fin-tuning.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
 import type { AppActionOutcome, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProbeView, RoomView, ThreadAppView } from "./thread-app.js"
 import type { ThreadPlacement } from "./thread-identity.js"
@@ -65,6 +68,7 @@ import type { ForkInput, TransferInput } from "./conversation-control.js"
 import type { HarnessDescriptor, ContextBreakdown, HarnessProfile, LivePermissionResponse, PromptAttachment } from "./providers-acp.js"
 import type { LiveStartOptions, LiveSnapshot, LiveRequest, SignInReadiness, SignInResume } from "./live-conversations.js"
 import type { ConversationSettings } from "./turn-continuation.js"
+import type { KeepAwakeSettings, KeepAwakeState } from "./keep-awake.js"
 import type { LiveHistoryRead, LiveHistoryChunk } from "./live-history.js"
 import type { ProviderConnection, ProviderConnectionAction } from "./provider-connection.js"
 import type { CloudAccount, CloudBrowserSession, CloudDevice } from "./cloud-account.js"
@@ -74,14 +78,14 @@ import type { MakoFootprint } from "./mako-footprint.js"
 import type { FileEventsService } from "./file-events-service.js"
 import type { CloudTurnOn } from "./cloud-turn-on.js"
 import type { SetupFix, SimulatorSetup } from "./simulator-setup.js"
-import type { SimulatorsActInput, SimulatorsActResult, SimulatorsListed, SimulatorsOpenInput, SimulatorsOpenResult, SimulatorsReleaseInput, SimulatorsReleaseResult } from "./simulators.js"
+import type { SimulatorsActInput, SimulatorsActResult, SimulatorsListed, SimulatorsOpenInput, SimulatorsOpenResult, SimulatorsReleaseInput, SimulatorsReleaseResult, SimulatorsWatchInput, SimulatorsWatchResult } from "./simulators.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { CarriedFilesView } from "./cloud-carried-files.js"
 import type { GitHubTokenListing } from "./github-person.js"
+import type { CommitAuthor, GitHubAuthorship } from "./github-authorship.js"
 import type { ThreadHarnessCheck } from "./cloud-harnesses.js"
 import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandOffCandidate, HandOffResult, HandOffSettings, ThreadContinueOffer, ThreadContinueOutcome, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOptions, ThreadReturnOutcome } from "./cloud-threads.js"
 import type { ContinueReading } from "./cloud-continues.js"
-import type { ThreadMoveAsk } from "./thread-tools.js"
 import type { TelemetryChoice, TelemetryState } from "./telemetry.js"
 import type { HarnessUpdateInfo } from "./harness-updates.js"
 import type { Automation, UpdateState, UsageSummary } from "./automations-usage-updates.js"
@@ -232,6 +236,14 @@ export function createMakoBridge(transport: BridgeTransport) {
     chooseFinDefault: (harness: string, settings: SessionSettings | null) => invokeTrustedHost<FinChoicesReading>("mako:fin-default-choose", harness, settings),
     /** The person's rules for which work goes to which harness and model, saved whole. */
     saveFinPolicy: (policy: FinPolicy) => invokeTrustedHost<FinChoicesReading>("mako:fin-policy-save", policy),
+    /** The person's standing rules for every agent of one role, saved alone: everything else in the policy stays. */
+    saveRoleRules: (role: RoleRules, text: string) => invokeTrustedHost<FinChoicesReading>("mako:fin-role-rules-save", role, text),
+    /** This device's own number of Fins at once, 1 to `FIN_LIMIT_MAX`, or with null its capacity (Auto). */
+    setFinLimit: (limit: number | null) => invokeTrustedHost<FinChoicesReading>("mako:fin-limit-set", limit),
+    /** The person's Fins at once across every place, 1 to `FIN_CEILING_MAX`. */
+    setFinCeiling: (ceiling: number) => invokeTrustedHost<FinChoicesReading>("mako:fin-ceiling-set", ceiling),
+    /** Settings › Fins: whether a Fin whose account runs out goes on to the next one. */
+    chooseFinMoveOnLimit: (on: boolean) => invokeTrustedHost<FinChoicesReading>("mako:fin-move-on-limit", on),
     planBuilds: () => invokeTrustedHost<PlanBuilds>("mako:plan-builds"),
     recordPlanBuild: (planId: string, build: PlanBuild) => invokeTrustedHost<void>("mako:plan-build-record", planId, build),
     claimPlanBuild: (claimId: string, planId: string, target: PlanBuildTarget, seen: number | null) =>
@@ -397,6 +409,10 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<LiveSnapshot>("mako:live-bind", id, path),
     readLiveFile: (id: string, path: string, purpose?: FileReadPurpose) =>
       invokeTrustedHost<FileContents>("mako:read-live-file", id, path, purpose),
+    /** The same, of a conversation's folder, answered by the host it runs on. */
+    liveFilesFolders: (id: string, paths: string[], options?: FileFoldersOptions) => invokeTrustedHost<FileFolders>("mako:live-files-folders", id, paths, options),
+    liveFilesFind: (id: string, query: string, limit?: number) => invokeTrustedHost<FileFindResults>("mako:live-files-find", id, query, limit),
+    liveFilesGrep: (id: string, query: string, options?: FileGrepOptions) => invokeTrustedHost<FileGrepResults>("mako:live-files-grep", id, query, options),
     liveAttach: (path: string) =>
       invokeTrustedHost<LiveSnapshot | null>("mako:live-attach", path),
     liveSnapshot: (id: string) =>
@@ -457,9 +473,8 @@ export function createMakoBridge(transport: BridgeTransport) {
      * answers how that move went. Its steps arrive as `thread-move-step` events.
      */
     threadMove: (conversationId: string, move: string, handOff?: ThreadHandOff) => invokeTrustedHost<ThreadMoveOutcome>("mako:thread-move", conversationId, move, handOff),
-    /** Agents' asks to move their Thread to the cloud (`thread_move` below full access); `thread-move-asks` events follow them. */
-    threadMoveAsks: () => invokeTrustedHost<ThreadMoveAsk[]>("mako:thread-move-asks"),
-    answerThreadMoveAsk: (id: string, allow: boolean) => invokeTrustedHost<void>("mako:thread-move-ask-answer", id, allow),
+    /** What the agent of a conversation asked the person (`AgentAsk`) is answered on the host running it. */
+    answerAgentAsk: (conversationId: string, id: string, allow: boolean) => invokeTrustedHost<AgentAskAnswer>("mako:agent-ask-answer", conversationId, id, allow),
     /** What the Thread of a conversation's harnesses here and in the cloud mean for moving it either way, before it moves. */
     threadHarnessCheck: (conversationId: string) => invokeTrustedHost<ThreadHarnessCheck>("mako:thread-harness-check", conversationId),
     /** This Mac's Threads whose agents are working, each with why it couldn't go to the cloud now, if it couldn't. */
@@ -469,6 +484,13 @@ export function createMakoBridge(transport: BridgeTransport) {
     /** Whether agents at work go to the cloud as this Mac sleeps, and whether it can. */
     handOffSettings: () => invokeTrustedHost<HandOffSettings>("mako:handoff-settings"),
     setHandOffOnSleep: (onSleep: boolean) => invokeTrustedHost<HandOffSettings>("mako:handoff-settings-set", onSleep),
+    /** The Thread of a conversation held since this Mac went away runs here now, whatever the account did meanwhile; answers how many of its Sessions it let go. */
+    runHandedOffHere: (conversationId: string) => invokeTrustedHost<number>("mako:handoff-run-here", conversationId),
+    /** The conversations whose Thread waits for the account's word since this Mac went away, as `away-held` says them. */
+    awayHeldConversations: () => invokeTrustedHost<string[]>("mako:handoff-away-held"),
+    /** Whether this Mac is kept awake while agents work, the person's choice for it, and what's held now. */
+    keepAwake: () => invokeTrustedHost<KeepAwakeState>("mako:keep-awake"),
+    setKeepAwake: (change: Partial<KeepAwakeSettings>) => invokeTrustedHost<KeepAwakeState>("mako:keep-awake-set", change),
     /**
      * Brings the Thread of a conversation back from the cloud under `move`; its steps arrive as `thread-return-step`
      * events. `options.project`: the folder its project is in now, when the one its worktree was made from moved.
@@ -516,6 +538,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     simulatorsOpen: (input: SimulatorsOpenInput) => invokeTrustedHost<SimulatorsOpenResult>("mako:simulators-open", { kind: "person" }, input),
     simulatorsAct: (input: SimulatorsActInput) => invokeTrustedHost<SimulatorsActResult>("mako:simulators-act", { kind: "person" }, input),
     simulatorsRelease: (input: SimulatorsReleaseInput) => invokeTrustedHost<SimulatorsReleaseResult>("mako:simulators-release", { kind: "person" }, input),
+    /** A viewer's next packets of a simulator's screen, as a base64 `ControlVideoBatch`; waits up to two seconds for one. */
+    simulatorsWatch: (input: SimulatorsWatchInput) => invokeTrustedHost<SimulatorsWatchResult>("mako:simulators-watch", { kind: "person" }, input),
     cloudSignIn: () => invokeTrustedHost<CloudAccount>("mako:cloud-sign-in"),
     cloudSignInCancel: () => invokeTrustedHost<CloudAccount>("mako:cloud-sign-in-cancel"),
     cloudDevices: () => invokeTrustedHost<{ devices: CloudDevice[]; current: string }>("mako:cloud-devices"),
@@ -532,10 +556,16 @@ export function createMakoBridge(transport: BridgeTransport) {
     githubToken: () => invokeTrustedHost<GitHubTokenListing | null>("mako:github-token"),
     githubTokenSave: (token: string, repository?: string) => invokeTrustedHost<GitHubTokenListing>("mako:github-token-save", token, repository),
     githubTokenRemove: () => invokeTrustedHost<void>("mako:github-token-remove"),
+    /* Who cloud commits and pull requests are authored as, and choosing it. */
+    githubAuthorship: () => invokeTrustedHost<GitHubAuthorship | null>("mako:github-authorship"),
+    githubAuthorshipSave: (as: CommitAuthor) => invokeTrustedHost<GitHubAuthorship>("mako:github-authorship-save", as),
     /* A project's carried files (its recipe's `carry`) in Mako Cloud: what goes, the person's word, a file kept on this Mac. */
     cloudCarriedFiles: (folder: string) => invokeTrustedHost<CarriedFilesView>("mako:cloud-carried-files", folder),
     cloudCarriedFilesDecide: (folder: string, allowed: boolean) => invokeTrustedHost<CarriedFilesView>("mako:cloud-carried-files-decide", folder, allowed),
     cloudCarriedFilesKeep: (folder: string, path: string, keep: boolean) => invokeTrustedHost<CarriedFilesView>("mako:cloud-carried-files-keep", folder, path, keep),
+    /* A project's Setup: what each place has for it and where each thing stands, and the person's taps on it. */
+    setup: (folder: string) => invokeTrustedHost<SetupView>("mako:setup", folder),
+    setupAct: (folder: string, act: SetupAct) => invokeTrustedHost<SetupActOutcome>("mako:setup-act", folder, act),
     /** Starts the harness's own sign-in for Mako Cloud to keep; wait, paste and cancel as an account sign-in. */
 
     /* What this install reports to Mako, and what the person allows. */
@@ -797,6 +827,10 @@ export function createMakoBridge(transport: BridgeTransport) {
     createWorkspaceText: (cwd: string, path: string, text: string) =>
       invokeTrustedHost<string>("mako:create-workspace-text", cwd, path, text),
     listFiles: () => invokeTrustedHost<WorkspaceFile[]>("mako:list-files"),
+    /** The Files view's folders of this window's workspace, from the host's index of it. */
+    filesFolders: (paths: string[], options?: FileFoldersOptions) => invokeTrustedHost<FileFolders>("mako:files-folders", paths, options),
+    filesFind: (query: string, limit?: number) => invokeTrustedHost<FileFindResults>("mako:files-find", query, limit),
+    filesGrep: (query: string, options?: FileGrepOptions) => invokeTrustedHost<FileGrepResults>("mako:files-grep", query, options),
     readFile: (path: string) =>
       invokeTrustedHost<FileContents>("mako:read-file", path),
     watchFile: (path: string) =>
@@ -990,6 +1024,11 @@ export function createMakoBridge(transport: BridgeTransport) {
     /** Sends the person's message from an Apex's conversation straight to one of its Fins, with no Apex turn. */
     agentsDirect: (conversation: string, input: AgentsDirectInput) =>
       invokeTrustedHost<AgentsDirected | AgentRefused>("mako:agents-direct", conversation, input),
+    /** Where a Thread held by a limit could go on, for its card (`Agents.nextPlace`). */
+    agentsNextPlace: (conversation: string) =>
+      invokeTrustedHost<{ label: string; harness: string } | null>("mako:agents-next-place", conversation),
+    agentsContinueNext: (conversation: string, id: string) =>
+      invokeTrustedHost<boolean>("mako:agents-continue-next", conversation, id),
     agentsRespond: (conversation: string, input: AgentsRespondInput) =>
       invokeTrustedHost<AgentsAnswered | AgentRefused>("mako:agents-respond", conversation, input),
     /** Where each harness stands on an Apex's native spawns: its control, unverified on this version, or words alone. */

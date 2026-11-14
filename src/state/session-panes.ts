@@ -3,6 +3,7 @@ import { toast } from "sonner"
 import { z } from "zod"
 import type { ThreadRef } from "@/lib/types"
 import { acpStore, useAcp } from "@/state/acp"
+import { inboxView } from "@/state/inbox-view"
 import type { ConversationScope } from "@/state/conversation-scope"
 import { hydrateLive } from "@/state/live-recovery"
 import { threadGroupsStore } from "@/state/thread-groups"
@@ -62,6 +63,7 @@ let pendingFrom: PaneSession | undefined
 
 /** Open a tab in its pane. With one pane this is opening the tab. */
 export function openTabInPane(paneId: string, thread: string | undefined, tab: SessionTab): void {
+  inboxView.close()
   const state = viewerStore.get()
   if (state.panes.length === 1 || !thread) {
     viewer.activate(paneId, AGENT_TAB_ID)
@@ -175,6 +177,13 @@ export function closeWorkbenchPane(paneId: string): void {
 export function watchSessionPanes(): () => void {
   const settle = () => {
     const state = viewerStore.get()
+    // A pane beside the focused one whose Session is gone (its Thread closed, archived or moved) goes with it, rather
+    // than staying on screen to say so.
+    const gone = state.panes.find((pane) => pane.id !== state.focusedPaneId && pane.session && isGone(pane.session))
+    if (gone && state.panes.length > 1) {
+      closeWorkbenchPane(gone.id)
+      return
+    }
     const focused = state.panes.find((pane) => pane.id === state.focusedPaneId)
     if (!focused?.session) return
     const now = onScreenSession()
@@ -224,6 +233,14 @@ function savedLayout(): SavedLayout {
   }
 }
 
+/**
+ * A Session the window knows is gone: its Thread's tabs are read and it isn't among them. A Thread the window doesn't
+ * list (a Fin's, one still loading) proves nothing, and its pane keeps its notice with Close instead.
+ */
+function isGone(session: PaneSession): boolean {
+  return arrived(session) === "gone" || (currentThreadTabs(session.thread).length > 0 && !tabFor(session))
+}
+
 /** Whether `session` can be shown yet; false once it is known to be gone. */
 function arrived(session: PaneSession): boolean | "gone" {
   if (tabFor(session)) return true
@@ -243,7 +260,7 @@ function keepPaneLayout(): () => void {
       if (state === "gone") focused = undefined
       if (tab) {
         focused = undefined
-        openSessionTab(tab)
+        openSessionTab(tab, "restore")
       }
     }
     if (resting) {

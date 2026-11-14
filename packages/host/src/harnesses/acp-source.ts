@@ -4,6 +4,7 @@ import type { LayerCapabilities } from "../contracts/mako-layer.js"
 import type { NativeRoutingCapability } from "../contracts/native-routing.js"
 import type { CallThread } from "../contracts/native-calls.js"
 import type { ModelRouteAdapter } from "./model-routes.js"
+import type { AccountContinuation } from "../contracts/fin-fallback.js"
 import type { McpServer, ClientCapabilities, SessionNotification, CreateElicitationRequest } from "@agentclientprotocol/sdk"
 import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
@@ -250,6 +251,8 @@ export interface ProviderAcpSource extends ProviderCapability, AcpDecoderHooks<A
   layer: LayerCapabilities
   /** Which of the person's model connections the agent runs on (`ProviderLiveDriver.modelRoutes`). */
   modelRoutes: ModelRouteAdapter
+  /** Whether its session goes on under another account (`ProviderLiveDriver.accountContinuation`). */
+  accountContinuation?: AccountContinuation
   resume: AcpResume
   steering: AcpSteering
   access?: AcpAccessPolicy

@@ -1,7 +1,7 @@
 import { carriedUsage } from "../harnesses/index.js"
 import type { LiveBatch, LiveDriverEvent, LiveRequest } from "../contracts/live-conversations.js"
 import { GoalObservationSchema } from "../contracts/live-goals.js"
-import type { NativeActivity, NativeActivityObservation } from "../contracts/native-activity.js"
+import { CONTEXT_COMPACTED, type NativeActivity, type NativeActivityObservation } from "../contracts/native-activity.js"
 import { disconnectNativeAgents, endWithTurns, isActiveNativeAgent, NativeAgentObservationSchema, observeNativeAgent, type TurnEnd } from "../contracts/native-agents.js"
 import type { LivePermissionRequest, LiveSessionState } from "../contracts/providers-acp.js"
 import { holdForSignIn } from "../contracts/sign-in-hold.js"
@@ -21,7 +21,7 @@ import { requestTurnEnd, sessionTurnEnd, settleRequest, turnSpendAt, usageMark }
 import { updateBinding } from "./live-sources.js"
 
 type EventsAccess = Pick<LiveAccess,
-  "dependencies" | "bindingOwners" | "resident" | "control" | "flush" | "keep" | "schedule" | "drain" | "storageFailed" | "signInHold" |
+  "dependencies" | "bindingOwners" | "resident" | "control" | "flush" | "noteWork" | "keep" | "schedule" | "drain" | "storageFailed" | "signInHold" |
   "scheduleAutoContinue" | "goalSettled" | "turnSettled" | "goalObserved" | "goalSpent" | "nativeRewound" | "scheduleHibernation" | "clearHibernationTimer">
 
 /** The parts a driver's events land in. */
@@ -34,6 +34,16 @@ export interface EventParts {
 }
 
 /** What drivers report, taken into the conversation each binding belongs to. */
+/** What only a model taking its turn produces, unlike a harness's own failure. */
+function modelAnswered(update: LiveBatch["updates"][number]): boolean {
+  return update.kind === "tool" || update.kind === "thinking" || update.kind === "proposed-plan" || (update.kind === "text" && update.text.trim().length > 0)
+}
+
+/** A digest on its way to a model that hasn't shown it heard (`LiveRequest.digest.heard`). */
+function unheardDigest(request: LiveRequest): boolean {
+  return request.status === "dispatching" && request.digest !== undefined && !request.digest.heard
+}
+
 export class LiveEvents {
   private readonly access: EventsAccess
   private readonly parts: EventParts
@@ -158,6 +168,7 @@ export class LiveEvents {
           ),
         }
         resident.driver = null
+        this.access.noteWork(resident)
         resident.connections.delete(bindingId)
         // A request this process asked and nobody answered stays on screen, said to be unanswerable.
         const askedHere = (permission: LivePermissionRequest) => (permission.origin?.bindingId ?? permission.sessionId) === bindingId
@@ -236,6 +247,7 @@ export class LiveEvents {
       if (gone && previousStatus !== "running")
         resident.snapshot = { ...resident.snapshot, ...turnSpendAt(resident.snapshot, bindingId, { ended: false, ownTurn: false, gone }) }
     } else if (event.type === "live-rewound") {
+      resident.controlSaid = undefined
       this.access.nativeRewound(resident, event.run)
     } else if (event.type === "live-goal") {
       this.access.goalObserved(resident, event.goal === null ? null : GoalObservationSchema.parse(event.goal))
@@ -258,6 +270,7 @@ export class LiveEvents {
         }),
       }
     } else if (event.type === "live-activity") {
+      if (event.activity?.kind === "compacting") resident.controlSaid = undefined
       const nativeActivity = observeNativeActivity(
         resident.snapshot.nativeActivity,
         resident.snapshot.session.status === "running" && !replaying ? event.activity : null
@@ -315,8 +328,12 @@ export class LiveEvents {
     // The model answering again is the end of a retry's wait.
     if (resident.snapshot.nativeActivity?.kind === "retrying" && prepared.some((update) => update.kind !== "user"))
       resident.snapshot = { ...resident.snapshot, nativeActivity: undefined }
+    if (prepared.some(modelAnswered) && resident.snapshot.requests.some(unheardDigest))
+      resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((request) => (unheardDigest(request) ? { ...request, digest: { ...request.digest!, heard: true as const } } : request)) }
     for (const update of prepared) {
       if (dispatching && update.kind === "user") continue
+      // What the harness kept of its history may have dropped Mako's note.
+      if (update.kind === "event" && update.label === CONTEXT_COMPACTED) resident.controlSaid = undefined
       resident.steps?.observe(update)
       if (queueLiveUpdate(resident, update) === "full") {
         this.access.keep(resident)

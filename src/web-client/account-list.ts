@@ -4,6 +4,7 @@ import { quietDevice, SessionListingsSchema, type ArchivedThread, type ListedSes
 import type { WaitingMessage } from "@mako/protocol/waiting"
 import { followAgainInMs, type Subscription } from "@mako/protocol"
 import { errorMessage, type FailureBoundary } from "@mako/host/contracts/error-message"
+import type { JoinedDevice } from "@mako/host/contracts/account-devices"
 import { z } from "zod"
 import { createHook, createStore, type StorePatch } from "@/state/store"
 import { GatewayError, SignedOutError, type Gateway } from "./gateway"
@@ -19,9 +20,23 @@ export interface WebDevice {
   appVersion?: string | null
   /** When the cloud last took its sign-in (a few minutes coarse): not whether it's connected now. */
   lastSeenAt?: string
+  /** When, how and from where it joined the account, as Settings › Devices says of each (`DeviceRecord`). */
+  createdAt?: string
+  enrolledBy?: "browser" | "device-code"
+  enrolledFrom?: { city: string | null; region: string | null; country: string | null } | null
 }
 
-const WebDeviceSchema = z.object({ id: z.string(), kind: z.string(), name: z.string(), platform: z.string(), appVersion: z.string().nullable().optional(), lastSeenAt: z.string().optional() }) satisfies z.ZodType<WebDevice>
+const WebDeviceSchema = z.object({
+  id: z.string(),
+  kind: z.string(),
+  name: z.string(),
+  platform: z.string(),
+  appVersion: z.string().nullable().optional(),
+  lastSeenAt: z.string().optional(),
+  createdAt: z.string().optional(),
+  enrolledBy: z.enum(["browser", "device-code"]).optional(),
+  enrolledFrom: z.object({ city: z.string().nullable(), region: z.string().nullable(), country: z.string().nullable() }).nullable().optional(),
+}) satisfies z.ZodType<WebDevice>
 /** The account's devices, as `GET /v1/devices` answers. */
 const DevicesSchema = z.object({ devices: z.array(WebDeviceSchema) })
 
@@ -46,6 +61,8 @@ export interface AccountListState {
   continues: ReadonlySet<string>
   archived: readonly ArchivedThread[]
   devices: ReadonlyMap<string, WebDevice>
+  /** The device that last joined the account, as its stream said it while this browser followed: what Add a machine waits for. */
+  joined?: JoinedDevice
   /** The account stream's number the rows stand at. */
   seq?: number
   /** When the rows were last known to be current, in ms since the epoch. */
@@ -65,6 +82,11 @@ export const accountListStore = createStore<AccountListState>({
 })
 webSync.listFrom(() => accountListStore.get().rows)
 export const useAccountList = createHook(accountListStore)
+
+/** A device joined the account, as its stream says it: kept as the newest to join, for whoever waits on one (Add a machine). */
+export function heardDeviceJoined(device: Omit<JoinedDevice, "at">): void {
+  accountListStore.set({ joined: { ...device, at: Date.now() } })
+}
 
 /** What a list paints from before the gateway answers: the last one this browser saw, and when. */
 type Cached = { at: number; listings: SessionListings; devices: WebDevice[] }
@@ -165,13 +187,28 @@ export class AccountList {
     if (phase === "live" || phase === "reconnecting") this.#publish(phase)
   }
 
+  /**
+   * Removes a device from the account, as Settings › Devices asks: its sign-in ends within seconds, wherever it is,
+   * and its Sessions leave the list. Gone from this browser's devices at once; the account's stream says the rest.
+   */
+  async removeDevice(id: string): Promise<void> {
+    await this.#gateway.rest("DELETE", `/v1/devices/${encodeURIComponent(id)}`)
+    const devices = new Map(accountListStore.get().devices)
+    devices.delete(id)
+    accountListStore.set({ devices })
+  }
+
   async #run(): Promise<void> {
     let failures = 0
     while (!this.#stopped) {
       try {
+        // The devices are asked beside the list on its first read, not after it: the list paints once both are here, a
+        // round trip sooner on a phone's network.
+        const devices = this.#devicesAsked ? undefined : this.refreshDevices().catch((error) => this.#failed({ error }))
         const listings = SessionListingsSchema.parse(await this.#gateway.rest("GET", "/v1/sessions"))
         this.#list.listed(listings)
-        if (!this.#devicesAsked || this.#unnamedDevice()) await this.refreshDevices().catch((error) => this.#failed({ error }))
+        if (devices) await devices
+        else if (this.#unnamedDevice()) await this.refreshDevices().catch((error) => this.#failed({ error }))
         this.#publish("live")
         failures = 0
         const subscription = this.#gateway.session.subscribe({ stream: accountStream(this.#accountId), after: listings.seq })
@@ -193,6 +230,7 @@ export class AccountList {
           // A device joining or leaving the account: its name, and whether it's a Mac, are read again at once, so a Mac
           // signing in for the first time shows up as it does.
           if (parsed.success && (parsed.data.type === "device-joined" || parsed.data.type === "device-removed")) {
+            if (parsed.data.type === "device-joined") heardDeviceJoined(parsed.data.device)
             void this.refreshDevices().catch((error) => this.#failed({ error }))
             continue
           }

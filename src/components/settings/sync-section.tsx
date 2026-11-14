@@ -144,7 +144,7 @@ function Failures({ status }: { status: Running }) {
   const notSynced = status.notSynced ?? status.failures.length
   const details = status.failures.map(detailLine).join("\n")
   return (
-    <div role="alert" className="flex flex-col gap-2 rounded-lg bg-negative/8 px-3 py-2.5 ring-1 ring-negative/20 ring-inset" data-sync-failures>
+    <div role="alert" className="flex flex-col gap-2 bg-negative/8 px-3 py-2.5 ring-1 ring-negative/20 ring-inset" data-sync-failures>
       <div className="flex items-start justify-between gap-4">
         <p className="min-w-0 text-ui font-medium text-negative">
           {notSynced === 1 ? `${name(first).text} isn't synced` : `${count(notSynced, "Session")} aren't synced`}
@@ -164,7 +164,7 @@ function Failures({ status }: { status: Running }) {
             </p>
             <p className="text-label text-muted-foreground">{words.next}</p>
             <details className="group/failure mt-0.5">
-              <summary className="pressable -mx-1 flex w-fit cursor-pointer list-none items-center gap-1 rounded-sm px-1 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground [&::-webkit-details-marker]:hidden">
+              <summary className="pressable -mx-1 flex w-fit cursor-pointer list-none items-center gap-1 px-1 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground [&::-webkit-details-marker]:hidden">
                 <ChevronRightIcon aria-hidden className="size-3 shrink-0 transition-transform duration-150 ease-(--ease-out) group-open/failure:rotate-90" />
                 Details
               </summary>
@@ -234,7 +234,7 @@ export function SyncRailLine() {
       type="button"
       data-sync-rail={notSynced}
       onClick={() => window.dispatchEvent(new CustomEvent("mako:settings", { detail: "account" }))}
-      className="pressable flex w-full items-center gap-2.5 border-t border-hairline px-3 py-2.5 text-left hover:bg-fill-hover"
+      className="pressable flex w-full items-center gap-2.5 px-3 py-2.5 text-left hover:bg-fill-hover"
     >
       <span className="flex min-w-0 flex-1 flex-col">
         {one?.title ? (

@@ -4,6 +4,7 @@ const { registeredHarnessIds } = await tsImport(
   import.meta.url
 )
 const { HostJobs } = await tsImport("@mako/host/base/host-jobs", import.meta.url)
+const { ThreadStore } = await tsImport("@mako/host/threads/store", import.meta.url)
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
 import { mkdtemp, rm } from "node:fs/promises"
@@ -121,6 +122,7 @@ const mocks = {
     export const PROTOCOL_VERSION = 31; export const threadIdentity = ref => ref.path;
     export const connectDaemon = () => s.connect();
     export const daemonMemoryUnsafe = () => false;
+    export const MAX_DAEMON_RSS = 1024 * 1024 * 1024;
     export { buildTranscript, transcriptNote, writeTranscript } from ${JSON.stringify(fileURLToPath(new URL("../packages/sessions/dist/transcript-builder.js", import.meta.url)))};
     export const makoViews = () => '';
     export { VIEWER_PAGE, contextFreeTitle } from ${JSON.stringify(fileURLToPath(new URL("../packages/sessions/dist/format.js", import.meta.url)))};
@@ -193,7 +195,7 @@ try {
     assert.deepEqual((await pagedThread(moving, "a")).entries, sessionOf(10, 4).entries)
     assert.equal(moving.calls.at(-1), "open", "one that keeps moving is opened whole")
   }
-  const threads = threadCatalog({
+  const deps = {
     dataRoot: root,
     userRoot: root,
     isolated: false,
@@ -208,7 +210,8 @@ try {
     jobs: new HostJobs(),
     readOnly: false,
     emit: (event) => state.events.push(event),
-  })
+  }
+  const threads = threadCatalog(deps)
   const install = () => threads.start()
   const listening = async () => {
     await tick()
@@ -551,6 +554,45 @@ try {
     workerCount,
     "stop does not start another reader"
   )
+
+  // Raw native history remains available to lifecycle/read owners, while
+  // known internal reviews never become ordinary rows, even with an older
+  // originless cached ref. Worker titles/roles and unknown origins remain.
+  {
+    const store = new ThreadStore(join(root, "internal-history.sqlite"))
+    const actor = { kind: "service", name: "catalog" }
+    const ref = (id, nativeAgent) => ({ harness: "codex", nativeId: id, path: `/fixture/${id}.jsonl`, cwd: "/fixture/project", title: id, updatedAt: new Date().toISOString(), ...nativeAgent && { nativeAgent } })
+    const internal = ref("review", { kind: "internal-review", source: "guardian_review" })
+    const old = ref("retained-review")
+    const worker = ref("guardian-worker", { kind: "agent", role: "guardian" })
+    const unknown = ref("unknown", { kind: "unknown", role: "future" })
+    const parent = store.place(worker, actor)
+    const child = store.place(old, actor)
+    store.keepEdge({ child: child.thread, parent: parent.thread, parentSession: parent.session, name: "internal", role: "worker", origin: "discovered", asked: { brief: { objective: "Internal native review" }, harness: "codex" }, op: "discovered:codex:retained-review", startedBy: actor, createdAt: 1, run: { harness: "codex", nativeId: old.nativeId, device: store.deviceId, startedAt: 1, nativeAgent: internal.nativeAgent } })
+    const retained = store.place(internal, actor)
+    // A current metadata classification and one recovered from durable
+    // history have the same ordinary-listing semantics.
+    store.keepEdge({ child: retained.thread, parent: parent.thread, parentSession: parent.session, name: "other-internal", role: "worker", origin: "discovered", asked: { brief: { objective: "Internal native review" }, harness: "codex" }, op: "discovered:codex:review", startedBy: actor, createdAt: 1, run: { harness: "codex", nativeId: internal.nativeId, device: store.deviceId, startedAt: 1, nativeAgent: internal.nativeAgent } })
+    const raw = [internal, old, worker, unknown]
+    const service = threadCatalog({ ...deps, threadStore: store })
+    state.list = deferred()
+    service.start()
+    await tick()
+    const reader = state.clients.at(-1)
+    reader.page = async path => ({ ref: raw.find(ref => ref.path === path), entries: [], start: 0, total: 0, hasEarlier: false })
+    state.list.resolve(raw)
+    await tick()
+    try {
+      assert.deepEqual(service.rail().map(ref => ref.nativeId).sort(), [unknown.nativeId, worker.nativeId].sort(), "fresh and persisted internal identities stay out of the rail")
+      assert.equal(service.list().length, 4, "native catalog history is retained for lifecycle owners")
+      assert.equal((await service.readRef(old.path)).nativeAgent.kind, "internal-review", "an originless historical read inherits its confirmed identity")
+      assert.equal((await service.viewPage(internal.path)).ref.nativeAgent.kind, "internal-review", "viewer read keeps metadata for graceful stale-tab handling")
+      for (const listener of reader.events) listener({ event: "updated", ref: old })
+      assert.equal(state.events.findLast(event => event.type === "thread-ref" && event.ref.path === old.path).ref.nativeAgent.kind, "internal-review", "an originless event cannot restore a known internal row")
+      assert.ok(!service.rail().some(ref => ref.path === old.path))
+      console.log("Catalog internal-review projection: retained history, stale refs/events, worker and unknown-source controls passed")
+    } finally { service.stop(); store.close(); state.list = null }
+  }
 
   console.log(
     "Catalog readiness: all-six/future reads, paged whole reads, missing source, follow replacement, recovery/fallback, failure and stop/reinstall passed"

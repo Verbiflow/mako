@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process"
+import { hostExecFile } from "../../../base/host-command.js"
 import { nodePlatform } from "../../../base/platform.js"
 
 /**
@@ -35,7 +35,7 @@ export interface CliKeychainOptions {
 
 function runSecurity(args: readonly string[], timeoutMs: number): Promise<{ stdout: string; code: number }> {
   return new Promise((resolve) => {
-    execFile("/usr/bin/security", [...args], { timeout: timeoutMs, encoding: "utf8", maxBuffer: 64 * 1024 }, (error, stdout) => {
+    hostExecFile("/usr/bin/security", [...args], { timeout: timeoutMs, maxBuffer: 64 * 1024 }, (error, stdout) => {
       if (!error) {
         resolve({ stdout, code: 0 })
         return

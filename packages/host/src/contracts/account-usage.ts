@@ -120,20 +120,23 @@ export const LIMIT_HEADROOM_PERCENT = 70
  * Another account of the same harness with room, offered when the one in
  * use is near its plan limit or the harness just refused a turn on it.
  * Never taken by itself: an account is money, so switching is the person's
- * click. `window` is the binding one, which names the limit.
+ * click; a Fin moves on by their switch in Settings › Fins alone
+ * (`contracts/fin-fallback.ts`). `window` is the binding one, which names the limit.
  */
 export interface AccountLimitOffer {
   harness: string
   because: "near-limit" | "refused"
   from: { name: string; email?: string; window?: UsageWindow }
-  to: { name: string; email?: string; window?: UsageWindow }
+  /** Absent near a limit with no account to offer: a warning before it, so the limit is no surprise. */
+  to?: { name: string; email?: string; window?: UsageWindow }
 }
 
 /**
  * The offer the readings make, or `null`: the active account near its limit
  * (or refused, whatever its reading says) and the account with the most
  * room in its binding window under `LIMIT_HEADROOM_PERCENT`. Accounts whose
- * reading failed are never offered: an unread account may be as spent.
+ * reading failed are never offered: an unread account may be as spent. Near a
+ * limit with no such account it's still said, with nothing to switch to.
  */
 export function limitOffer(
   harness: string,
@@ -153,11 +156,11 @@ export function limitOffer(
     if ((room?.usedPercent ?? 0) >= LIMIT_HEADROOM_PERCENT) continue
     if (!best || (room?.usedPercent ?? 0) < (best.window?.usedPercent ?? 0)) best = { account, window: room }
   }
-  if (!best) return null
+  if (!best && (refused || !window)) return null
   const side = (account: (typeof accounts)[number], window: UsageWindow | null | undefined) => ({
     name: account.name,
     ...account.email !== undefined && { email: account.email },
     ...window && { window },
   })
-  return { harness, because: refused ? "refused" : "near-limit", from: side(active, window), to: side(best.account, best.window) }
+  return { harness, because: refused ? "refused" : "near-limit", from: side(active, window), ...(best && { to: side(best.account, best.window) }) }
 }

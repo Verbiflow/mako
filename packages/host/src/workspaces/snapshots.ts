@@ -13,6 +13,7 @@ import {
   readdir,
   rm,
 } from "node:fs/promises"
+import { homedir } from "node:os"
 import { dirname, join, relative, resolve } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
@@ -45,6 +46,8 @@ import {
   type SnapshotObjects,
 } from "./snapshot-git.js"
 import { copyGitIndex } from "./index-copy.js"
+import type { FileHistory } from "./watch-backend.js"
+import type { HistoryMark } from "../contracts/watcher-child.js"
 const OperationSchema = z.object({
   plan: RewindPlanSchema,
   backupId: z.string().uuid(),
@@ -52,8 +55,25 @@ const OperationSchema = z.object({
 })
 type RestoreOperation = z.infer<typeof OperationSchema>
 const RowSchema = z.object({ value: z.string() })
+const SnapshotIdSchema = z.string().uuid()
 /** Files a checkpoint takes at most: Git reads again only the ones whose stat changed, so this is the listing's cost, not hashing's. */
 const MAX_FILES = 250_000
+/** Past this many changed paths a checkpoint reads the whole workspace again rather than only them. */
+const MAX_INCREMENT = 2_000
+/** Files whose change changes what every other path is: a capture reads the whole workspace again. */
+const RULE_FILES = new Set([".gitignore", ".gitattributes", ".gitmodules"])
+
+/**
+ * A capture from the last checkpoint: its record, the paths the watcher says changed since (relative to the
+ * workspace), and what to call once the turn's files are read, after which the agent may write.
+ */
+type Increment = { prev: SnapshotRecord; paths: string[]; frozen: () => void }
+
+async function changedBytes(scope: string, paths: readonly string[]): Promise<number> {
+  let bytes = 0
+  for (const path of paths) bytes += (await lstat(join(scope, path)).catch(() => null))?.size ?? 0
+  return bytes
+}
 /** A staging index kept with each checkpoint, at most. */
 const MAX_INDEX_BYTES = 64 * 1024 ** 2
 interface ActiveRun {
@@ -115,6 +135,17 @@ export class WorkspaceSnapshots {
   private readonly git: Git
   private readonly root: string
   private readonly retention: SnapshotRetentionPolicy
+  /** The watcher's history of file changes, once the workspaces are open: what lets a turn's checkpoint be the last one. */
+  private history: FileHistory | undefined
+  /**
+   * The last checkpoint taken of each repository, with what it was taken of: where the watcher's history stood as it
+   * began, HEAD, and a digest of what the index stages. A turn starting there with all of them as they were is that
+   * checkpoint again (`sinceLast`), and goes to its agent without a capture.
+   */
+  private readonly lastTaken = new Map<string, { id: string; mark: HistoryMark; head: string; staged: string; excludes: string }>()
+  /** Captures with nothing a later one from them can't follow: no sparse checkout, no flagged entries, no repository inside. */
+  private readonly plain = new Set<string>()
+
   constructor(git: Git, root: string, retention: Partial<SnapshotRetentionPolicy> = {}) {
     this.git = git
     this.retention = SnapshotRetentionPolicySchema.parse(retention)
@@ -132,6 +163,11 @@ export class WorkspaceSnapshots {
 
   close(): void {
     this.db.close()
+  }
+
+  /** Follows the watcher's history, so a turn whose workspace nothing changed in since the last checkpoint takes that one. */
+  followHistory(history: FileHistory): void {
+    this.history = history
   }
 
   /** Rewinds a crash left unfinished; one across several repositories as the whole rewind, which `restore` finishes. */
@@ -165,7 +201,7 @@ export class WorkspaceSnapshots {
    * captured, and each records the other, so a rewind to either says whose
    * each changed file is. Restoring still waits until none runs.
    */
-  async beginRun(id: string, cwd: string): Promise<WorkspaceSnapshot> {
+  async beginRun(id: string, cwd: string, frozen?: () => void): Promise<WorkspaceSnapshot> {
     const { scope } = await this.workspace(cwd)
     const run: ActiveRun = { scope, shared: new Set() }
     for (const [otherId, other] of this.runs) {
@@ -174,7 +210,15 @@ export class WorkspaceSnapshots {
       run.shared.add(otherId)
     }
     this.runs.set(id, run)
-    const snapshot = await this.capture(scope, run.shared)
+    // The turn's agent waits for this: it's the last checkpoint again when nothing changed since (`sinceLast`).
+    // Called once: at the moment the checkpoint holds the workspace, or else as it ends.
+    let told = false
+    const tell = () => {
+      if (told) return
+      told = true
+      frozen?.()
+    }
+    const snapshot = await this.capture(scope, run.shared, true, tell).finally(tell)
     run.snapshotId = snapshot.id
     return snapshot
   }
@@ -207,27 +251,144 @@ export class WorkspaceSnapshots {
    * A checkpoint of the workspace `cwd` is in: its repository, or each
    * repository of a project folder and each submodule, one after another.
    */
-  async capture(cwd: string, shared?: ReadonlySet<string>): Promise<WorkspaceSnapshot> {
+  /**
+   * `reuse`, for a turn's start: the last checkpoint again, or one from it, when nothing else can have changed
+   * (`sinceLast`). `frozen` is called once every repository's checkpoint holds the workspace as it is now.
+   */
+  async capture(cwd: string, shared?: ReadonlySet<string>, reuse = false, frozen?: () => void): Promise<WorkspaceSnapshot> {
     const workspace = await this.workspace(cwd)
-    if (workspace.repositories.length === 1 && workspace.repositories[0] === workspace.scope) return this.captureRepository(workspace.scope, shared)
+    // Only a workspace no other run shares: a checkpoint names the runs that shared it, and reusing one would name others.
+    const unshared = reuse && !shared?.size
+    if (workspace.repositories.length === 1 && workspace.repositories[0] === workspace.scope) return this.captureRepository(workspace.scope, shared, unshared, frozen)
+    // Each repository is its own lock: they're taken side by side, and the workspace is held once all of them are.
+    let held = 0
+    const each = workspace.repositories.map((repository) => {
+      let once = false
+      return this.captureRepository(repository, undefined, unshared, () => {
+        if (once) return
+        once = true
+        if (++held === workspace.repositories.length) frozen?.()
+      })
+    })
+    const captured = await Promise.all(each)
     const parts: GroupRecord["parts"] = []
     let files = 0
-    for (const repository of workspace.repositories) {
-      const part = await this.captureRepository(repository)
+    for (const [index, repository] of workspace.repositories.entries()) {
+      const part = captured[index]!
       parts.push({ path: relative(workspace.scope, repository) || ".", id: part.id })
       files += part.files
     }
     return this.saveGroup({ id: randomUUID(), scope: workspace.scope, createdAt: Date.now(), files, parts, ...(shared?.size && { shared: [...shared].slice(0, 64) }) })
   }
 
-  private async captureRepository(cwd: string, shared?: ReadonlySet<string>): Promise<WorkspaceSnapshot> {
+  /**
+   * `frozen`, when given, is called once the checkpoint holds the workspace as the turn starts, which may be before it's
+   * saved (`Increment`), and always by its end: the turn may go to its agent then.
+   */
+  private async captureRepository(cwd: string, shared?: ReadonlySet<string>, reuse = false, frozen?: () => void): Promise<WorkspaceSnapshot> {
     const scope = await this.scope(cwd)
-    return this.locked(scope, async (gitDir) => {
-      this.assertNoPending(scope)
-      const record = await this.captureLocked(scope, gitDir, "retained", shared)
-      await this.maintainLocked(record)
-      return this.summary(record)
-    })
+    try {
+      return await this.locked(scope, async (gitDir) => {
+        this.assertNoPending(scope)
+        // Marked before anything is read: a change while it's taken is after the mark, so the next turn reads it again.
+        // One shared with other runs names them, which a later turn alone there shouldn't say: it's never reused.
+        const mark = shared?.size ? undefined : await this.history?.mark().catch(() => undefined)
+        const last = reuse ? await this.sinceLast(scope) : undefined
+        if (last?.kind === "same") return this.summary(last.record)
+        const [staged, excludes] = mark ? await Promise.all([this.stagedDigest(scope), this.excludesStamp(scope)]) : []
+        const increment = last?.kind === "changed" && frozen ? { prev: last.record, paths: last.paths, frozen } : undefined
+        const record = await this.captureLocked(scope, gitDir, "retained", shared, increment)
+        if (mark && staged !== undefined && excludes !== undefined && (increment || this.plain.has(record.id)))
+          this.lastTaken.set(scope, { id: record.id, mark, head: record.head, staged, excludes })
+        else this.lastTaken.delete(scope)
+        this.plain.delete(record.id)
+        await this.maintainLocked(record)
+        return this.summary(record)
+      })
+    } finally {
+      frozen?.()
+    }
+  }
+
+  /**
+   * Where the repository stands against its last checkpoint: the same, when nothing it holds can have changed since
+   * (the watcher's history names no path in the working tree, Git's own folder aside, HEAD is where it was, the index
+   * stages the same and the ignore rules outside the tree are as they were); changed, with the paths, when only the
+   * working tree did; undefined, for a whole capture, when anything is unread or uncertain. A refresh of the index's
+   * stat cache (any `git status`) changes none of these.
+   */
+  private async sinceLast(scope: string): Promise<{ kind: "same"; record: SnapshotRecord } | { kind: "changed"; record: SnapshotRecord; paths: string[] } | undefined> {
+    const last = this.lastTaken.get(scope)
+    if (!last || !this.history) return undefined
+    this.lastTaken.delete(scope)
+    let record: SnapshotRecord
+    try {
+      record = this.get(last.id)
+    } catch {
+      return undefined
+    }
+    const [read, head, staged, excludes] = await Promise.all([
+      this.history.since(last.mark, [scope], { exclude: [join(scope, ".git")] }).catch(() => undefined),
+      this.head(scope).catch(() => undefined),
+      this.stagedDigest(scope).catch(() => undefined),
+      this.excludesStamp(scope).catch(() => undefined),
+    ])
+    if (!read || read.lost.length || head !== last.head || staged !== last.staged || excludes !== last.excludes) return undefined
+    if (!read.paths.length) {
+      this.lastTaken.set(scope, last)
+      return { kind: "same", record }
+    }
+    // Only paths that are the working tree's own: a repository inside it, a rule that changes what every other path
+    // is, more than a capture would read anyway, or a store this one can't read is a whole capture.
+    const paths = [...new Set(read.paths.map((path) => relative(scope, path)))].filter((path) => path && !path.startsWith(".."))
+    if (record.storage?.kind !== "private" || paths.length > MAX_INCREMENT) return undefined
+    for (const path of paths) {
+      const parts = path.split("/")
+      if (RULE_FILES.has(parts.at(-1)!)) return undefined
+      for (let depth = 1; depth <= parts.length; depth++) if (existsSync(join(scope, ...parts.slice(0, depth), ".git"))) return undefined
+    }
+    return { kind: "changed", record, paths }
+  }
+
+  /**
+   * The paths the watcher says changed, read into a working index holding the last checkpoint's tree as a whole
+   * capture's `add -A` would take them: one there now is added unless an ignore rule leaves it out and it isn't
+   * tracked; one gone is dropped, with whatever was under it.
+   */
+  private async takeChanged(scope: string, paths: readonly string[], index: string, objects: SnapshotObjects): Promise<void> {
+    const there: string[] = []
+    const gone: string[] = []
+    for (const path of paths) ((await lstat(join(scope, path)).then(() => true, () => false)) ? there : gone).push(path)
+    if (gone.length)
+      await this.snapshotGit(scope, ["--literal-pathspecs", "rm", "--cached", "-r", "-q", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul"], index, `${gone.join("\0")}\0`, objects)
+    if (!there.length) return
+    // Exit 1 is none ignored.
+    const ignored = new Set((await this.snapshotGit(scope, ["check-ignore", "-z", "--stdin"], index, `${there.join("\0")}\0`, objects).catch(() => "")).split("\0").filter(Boolean))
+    const taken = there.filter((path) => !ignored.has(path))
+    if (taken.length)
+      await this.snapshotGit(scope, ["--literal-pathspecs", "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], index, `${taken.join("\0")}\0`, objects)
+  }
+
+  /**
+   * The ignore rules outside the working tree, which the history doesn't see: the repository's `info/exclude` and the
+   * global excludes file, each by its path, size and modification time (none when it isn't there).
+   */
+  private async excludesStamp(scope: string): Promise<string> {
+    const [local, configured] = await Promise.all([
+      this.snapshotGit(scope, ["rev-parse", "--path-format=absolute", "--git-path", "info/exclude"]).then((path) => path.trim()),
+      this.snapshotGit(scope, ["config", "--path", "--get", "core.excludesFile"]).then((path) => path.trim(), () => ""),
+    ])
+    const global = configured || join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "git", "ignore")
+    const stamps = await Promise.all([local, global].map(async (path) => {
+      const found = await lstat(path).catch(() => null)
+      return `${path}:${found ? `${found.size}:${found.mtimeMs}` : "none"}`
+    }))
+    return stamps.join("\0")
+  }
+
+  /** What the index stages, by mode, object and path: its stat cache left out. */
+  private async stagedDigest(scope: string): Promise<string> {
+    return createHash("sha256").update(await this.snapshotGit(scope, ["ls-files", "--stage", "-z"])).digest("hex")
   }
 
   async prune(cwd: string): Promise<number> {
@@ -589,7 +750,7 @@ export class WorkspaceSnapshots {
       )
   }
   private get(id: string): SnapshotRecord {
-    z.string().uuid().parse(id)
+    SnapshotIdSchema.parse(id)
     const row = this.db
       .prepare("SELECT value FROM snapshots WHERE id=?")
       .get(id)
@@ -771,15 +932,22 @@ export class WorkspaceSnapshots {
     scope: string,
     gitDir: string,
     lifetime: "retained" | "temporary" = "retained",
-    shared?: ReadonlySet<string>
+    shared?: ReadonlySet<string>,
+    since?: Increment
   ): Promise<SnapshotRecord> {
-    const sparse =
+    const sparse = !since &&
       (
         await this.snapshotGit(scope, ["config", "--bool", "core.sparseCheckout"]).catch(() => "false")
       ).trim() === "true"
     // One listing of the index: each entry's tag (lower case when assumed unchanged, S when skipped), mode and stage.
     let entries = 0
     const flagged: string[] = []
+    let untracked: string[] = []
+    let embedded: string[] = []
+    let bytes = 0
+    // From the last checkpoint, only the paths that changed since are read: what the full listing finds, the last one did.
+    if (since) bytes = await changedBytes(scope, since.paths)
+    else {
     for (const line of (await this.snapshotGit(scope, ["ls-files", "--stage", "-v", "-z"])).split("\0")) {
       if (!line) continue
       const tab = line.indexOf("\t")
@@ -789,15 +957,14 @@ export class WorkspaceSnapshots {
       // A sparse checkout's skipped entries aren't on disk, and Git itself clears the flag of one that is.
       if (/[a-z]/.test(tag) || (tag === "S" && !sparse)) flagged.push(line.slice(tab + 1))
     }
-    const untracked = (await this.snapshotGit(scope, ["ls-files", "--others", "--exclude-standard", "-z"])).split("\0").filter(Boolean)
+    untracked = (await this.snapshotGit(scope, ["ls-files", "--others", "--exclude-standard", "-z"])).split("\0").filter(Boolean)
     // A repository inside this one, untracked, lists as its folder: it is its own workspace, never this one's files.
-    const embedded = untracked.filter((path) => path.endsWith("/"))
+    embedded = untracked.filter((path) => path.endsWith("/"))
     if (entries + untracked.length > MAX_FILES)
       throw new Error(`This workspace has more than ${MAX_FILES.toLocaleString("en-US")} files, past what a checkpoint holds`)
     // Only what Git must read again costs a checkpoint anything: untracked files, tracked ones whose stat changed, and those it was told not to look at.
     const modified = (await this.snapshotGit(scope, ["diff-files", "--name-only", "-z"])).split("\0").filter(Boolean)
     const reread = [...new Set([...untracked.filter((path) => !path.endsWith("/")), ...modified, ...flagged])]
-    let bytes = 0
     for (let offset = 0; offset < reread.length; offset += 64) {
       const sizes = await Promise.all(
         reread.slice(offset, offset + 64).map(async (path) => {
@@ -818,6 +985,9 @@ export class WorkspaceSnapshots {
       if (bytes > 256 * 1024 * 1024)
         throw new Error("This turn's new and changed files exceed the 256 MB a checkpoint holds")
     }
+    }
+    if (bytes > 256 * 1024 * 1024)
+      throw new Error("This turn's new and changed files exceed the 256 MB a checkpoint holds")
     const id = randomUUID()
     const directory = join(this.root, id)
     mkdirSync(directory, { mode: 0o700 })
@@ -835,6 +1005,8 @@ export class WorkspaceSnapshots {
     const workingIndex = join(directory, "working-index")
     const userIndex = join(gitDir, "index")
     const hasIndex = existsSync(userIndex)
+    // From the last checkpoint, the index as the turn starts is kept first: the agent may stage once it's told.
+    if (since && hasIndex) await copyGitIndex(userIndex, index)
     const head = await this.head(scope)
     let record: SnapshotRecord
     try {
@@ -850,8 +1022,16 @@ export class WorkspaceSnapshots {
       const objects = await privateSnapshotObjects(this.git, scope, directory)
       const captureGit = (args: string[], index?: string) =>
         this.snapshotGit(scope, args, index, undefined, objects)
+      if (since) {
+        // The last checkpoint's working tree, with what changed since read from disk now: the turn's files as it starts.
+        objects.read = [...(objects.read ?? []), join(this.root, since.prev.id, "git", "objects")]
+        await captureGit(["read-tree", since.prev.tree], workingIndex)
+        await this.takeChanged(scope, since.paths, workingIndex, objects)
+        // Fixed: the agent may write from here on, and nothing the checkpoint still does reads the working tree.
+        since.frozen()
+      }
       if (hasIndex) {
-        await copyGitIndex(userIndex, index)
+        if (!since) await copyGitIndex(userIndex, index)
         // Expand split indexes so retained snapshots do not depend on sharedindex GC.
         await captureGit(["update-index", "--no-split-index"], index)
       } else {
@@ -862,7 +1042,7 @@ export class WorkspaceSnapshots {
       const stagedTree = hasIndex
         ? (await captureGit(["write-tree"], index)).trim()
         : undefined
-      if (hasIndex) await copyGitIndex(index, workingIndex)
+      if (hasIndex && !since) await copyGitIndex(index, workingIndex)
       // The working copy looks at every file that is there: a flag that tells Git not to would leave a change out.
       const present = (
         await Promise.all(flagged.map(async (path) => ((await lstat(join(scope, path)).catch(() => null)) ? path : undefined)))
@@ -876,13 +1056,16 @@ export class WorkspaceSnapshots {
             .update(await readFile(index))
             .digest("hex")
         : "absent"
-      await captureGit(
-        ["add", "-A", ...(sparse ? ["--sparse"] : []), "--", ".", ...embedded.map((path) => `:(exclude,literal)${path.slice(0, -1)}`)],
-        workingIndex
-      )
+      if (!since)
+        await captureGit(
+          ["add", "-A", ...(sparse ? ["--sparse"] : []), "--", ".", ...embedded.map((path) => `:(exclude,literal)${path.slice(0, -1)}`)],
+          workingIndex
+        )
       const tree = (await captureGit(["write-tree"], workingIndex)).trim()
-      if ((await this.head(scope)) !== head)
+      // From the last checkpoint the turn has begun, and may commit: HEAD was read before it was told.
+      if (!since && (await this.head(scope)) !== head)
         throw new Error("Git HEAD changed while capturing the workspace")
+      if (since) entries = (await captureGit(["ls-files", "-z"], workingIndex)).split("\0").filter(Boolean).length
       const parents = stagedTree
         ? [
             "-p",
@@ -940,6 +1123,7 @@ export class WorkspaceSnapshots {
         indexDigest,
       }
       if (shared?.size) record.shared = [...shared].slice(0, 64)
+      if (!sparse && !flagged.length && !embedded.length) this.plain.add(id)
       if (lifetime === "temporary") return record
       // A pass removes at most 64 checkpoints; this one's room may take more.
       while (await this.pruneLocked(scope, gitDir, undefined, payloadBytes));

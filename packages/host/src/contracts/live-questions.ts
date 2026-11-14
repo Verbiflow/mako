@@ -36,6 +36,8 @@ export interface PendingAsk {
   feedbackOption?: string
   /** Its process exited, so nothing can answer it. */
   gone?: true
+  /** Answered in its own words: its first option allows, its second keeps (`FinAsk.named`). */
+  named?: true
 }
 
 /** Only answered, visible predecessors participate in dependent questions. */

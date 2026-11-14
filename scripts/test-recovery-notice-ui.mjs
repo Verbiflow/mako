@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtemp, writeFile, mkdir, readFile, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { writeFile, mkdir, readFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { testScratch } from "./lib/test-scratch.mjs"
 
 if (!process.versions.electron) {
   const { createServer } = await import('vite')
-  const root = await mkdtemp(join(tmpdir(), 'mako-recovery-ui-'))
+  const root = testScratch('mako-recovery-ui-')
   const server = await createServer({ cacheDir: join(root, 'cache'), server: {host:'127.0.0.1',port:0,hmr:false,watch:{ignored:['**']}} })
   await server.listen()
   await writeFile(join(root,'package.json'),JSON.stringify({main:fileURLToPath(import.meta.url)}))
@@ -63,7 +63,6 @@ async function checkWindow() {
         assert.equal(await evaluate('window.__nativeCalls'),0,'native evidence must not resend an answer')
       }
       console.log('PASS: all-six native confirmation, differing verdict, persistent dismissal and no answer replay')
-      console.log('Visual evidence: '+evidence)
       return
     }
     if (process.env.MAKO_RECOVERY_CONTROLS) {
@@ -125,7 +124,6 @@ async function checkWindow() {
         await capture(harness+'-unsupported-compaction.png')
       }
       console.log('PASS: all-six failure rows keep action reasons, messages that never reached the transcript, native error text, retry eligibility and compaction state; viewing never submits work')
-      console.log('Visual evidence: '+evidence)
       return
     }
     if (process.env.MAKO_APPROVAL_RECONCILIATION_FIXTURES) {
@@ -152,7 +150,6 @@ async function checkWindow() {
         await capture(harness+'-newer-preserved.png')
       }
       console.log('PASS: all-six renderer profiles remove an ended approval and preserve the newer occurrence without sending an answer')
-      console.log('Visual evidence: '+evidence)
       return
     }
     if (process.env.MAKO_APPROVAL_RECOVERY) {
@@ -217,7 +214,6 @@ async function checkWindow() {
         }
       }
       console.log('PASS: all-six approval pending/unknown/refusal/submitted UI, preserved structured drafts and dismissal; one answer call')
-      console.log('Visual evidence: '+evidence)
       return
     }
     if (process.env.MAKO_APPROVAL_FIXTURES) {
@@ -244,7 +240,6 @@ async function checkWindow() {
         await capture(harness+'-newer-approval-preserved.png')
       }
       console.log('PASS: all-six approval renderer profiles use host occurrence IDs; saved host-result snapshots preserve the newer approval')
-      console.log('Visual evidence: '+evidence)
       return
     }
     if (process.env.MAKO_QUEUED_STEERING) {
@@ -288,7 +283,6 @@ async function checkWindow() {
         }
       }
       console.log('PASS: all-six queued steering button sends one atomic command; no queue-removal RPC; refusal retains queue; unknown outcome stays recoverable without queue replay')
-      console.log('Visual evidence: '+evidence)
       return
     }
     if (process.env.MAKO_RECOVERY_OPERATIONS) {
@@ -347,7 +341,6 @@ async function checkWindow() {
       w.setSize(430,800)
       await capture('narrow-action-recovery.png')
       console.log('PASS: all-six operation guidance, acceptance distinct from completion, explicit action acknowledgement, and a settled operation leaves the composer')
-      console.log('Visual evidence: '+evidence)
       return
     }
     if (process.env.MAKO_RECOVERY_SNAPSHOT) {
@@ -370,7 +363,6 @@ async function checkWindow() {
       assert.equal(await evaluate("Boolean(document.querySelector('[data-recovery-notice]'))"),false)
       await capture('native-auth-dismissed.png')
       console.log('PASS: real native failure snapshot displays auth guidance, retained error details and persistent occurrence dismissal in the production renderer fixture')
-      console.log('Visual evidence: '+evidence)
       return
     }
     if (process.env.MAKO_RECOVERY_DELIVERY) {
@@ -435,7 +427,6 @@ async function checkWindow() {
       w.setSize(430,800)
       await capture('narrow.png')
       console.log('PASS: all-six receipt/refusal/legacy/uncertain presentation, late receipt while expanded, disconnected guard, explicit new-operation send and original receipt retained')
-      console.log('Visual evidence: '+evidence)
       return
     }
     await seed()
@@ -467,6 +458,5 @@ async function checkWindow() {
     await evaluate("(async()=>{const {acpStore}=await import('/src/state/acp-state.ts');const s=acpStore.get(),l=s.conversations[s.activeKey];acpStore.set({conversations:{...s.conversations,[s.activeKey]:{...l,requests:[...l.requests,{id:'resolved',status:'completed',text:'A later successful turn',attachments:[]}]}}});return true})()")
     await until("document.querySelectorAll('[data-failure-row]').length===0")
     console.log('PASS: failure rows where the messages failed, warning tone for capacity, details on demand, overflow and saved messages, all-six provider fixtures, narrow screenshot')
-    console.log('Visual evidence: '+evidence)
   } finally {clearTimeout(timer);w.destroy();app.quit()}
 }

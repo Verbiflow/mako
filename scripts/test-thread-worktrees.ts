@@ -1,18 +1,21 @@
 import "./lib/scratch-git.mjs"
 import { Git } from "@mako/git"
+import { HostJobs } from "@mako/host/base/host-jobs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import type { Actor } from "@mako/host/contracts/thread-identity"
 import type { Prepared } from "@mako/host/workspaces/thread-processes"
 import { inputsDigest, mirroredProject, projectRoot, recipePath, RecipeSchema, type Recipe } from "@mako/host/workspaces/thread-recipe"
 import { projectRepositories } from "@mako/host/git/repository-discovery"
 import { ThreadStore } from "@mako/host/threads/store"
-import { worktreeCheckout, worktreeSlug } from "@mako/host/contracts/thread-worktrees"
+import { worktreeCheckout, worktreeSlug, type WorktreeBranchPull, type WorktreeSummary } from "@mako/host/contracts/thread-worktrees"
+import { openWorkspaces } from "@mako/host/workspaces"
 import { ThreadWorktreeService, type CheckoutConversations } from "@mako/host/workspaces/thread-worktrees"
 import { bringFiles, carryOutputs, carryReport, type CheckoutSetup, holdsCredentials, LINKED_MARK, linkedCarry, linkReach, outputNames, throughLinks } from "@mako/host/workspaces/worktree-carry"
 
@@ -248,14 +251,18 @@ assert.equal(readFileSync(join(caughtUp.path, "web", "index.ts"), "utf8"), "expo
 assert.equal(git(caughtUp.path, "status", "--porcelain"), "")
 await worktrees.settled()
 
-// Outputs cloned before the step's inputs changed don't fit them: they go, and aren't cloned again while they differ.
+// Inputs that differ still start from a clone, so the install only catches up; nothing says the step ran, so it does.
 writeFileSync(join(shop, "package-lock.json"), "{\"lockfileVersion\":3}\n")
 const relocked = randomUUID()
 const unlocked = await worktrees.prepare(relocked, shop, "lockfile changed")
 assert.equal(unlocked.spare, true)
-assert.deepEqual(await worktrees.outputs(relocked), { carried: [], skipped: ["npm install: package-lock.json differs from the main checkout's, so it installs here in full."] })
-assert.equal(existsSync(join(unlocked.path, "node_modules")), false)
-assert.equal(existsSync(join(unlocked.path, "web", "node_modules")), false)
+{
+  const carried = await worktrees.outputs(relocked)
+  const started = existsSync(join(unlocked.path, "node_modules"))
+  assert.deepEqual(carried, { carried: [], skipped: [`npm install: package-lock.json differs from the main checkout's, so it installs here${started ? ", over a clone of what they agree on" : " in full"}.`] })
+  assert.equal(started, false, "a lockfile only one side has says nothing of what's stale, so it installs in full")
+}
+
 rmSync(join(shop, "package-lock.json"))
 await worktrees.settled()
 
@@ -791,6 +798,62 @@ await worktrees.abandon(droppedId)
 assert.equal(existsSync(dropped.path), false)
 assert.deepEqual([git(app, "branch", "--list", dropped.branch), git(api, "branch", "--list", dropped.branch)], ["", ""])
 
+// Another Git process holding the branch's lock (a spare being made, a worktree being removed, Git's maintenance) refuses
+// the delete for a moment: abandon waits it out rather than leave the branch behind, as CI saw on 2026-11-11.
+const lockOf = (repo: string, branch: string) => join(repo, ".git", "refs", "heads", `${branch}.lock`)
+const heldId = randomUUID()
+const held = await worktrees.prepare(heldId, suite, "Held a moment")
+writeFileSync(lockOf(app, held.branch), "")
+const freed = setTimeout(() => rmSync(lockOf(app, held.branch), { force: true }), 300)
+await worktrees.abandon(heldId)
+clearTimeout(freed)
+assert.deepEqual([git(app, "branch", "--list", held.branch), git(api, "branch", "--list", held.branch)], ["", ""], "a lock let go in a moment holds the delete, not the branch")
+// One that stays held is said, never hidden, and the next abandon deletes what's left.
+const stuckId = randomUUID()
+const stuck = await worktrees.prepare(stuckId, suite, "Held for good")
+writeFileSync(lockOf(app, stuck.branch), "")
+await assert.rejects(worktrees.abandon(stuckId), new RegExp(`Couldn't delete the empty branch ${stuck.branch} in app: .*lock`))
+assert.equal(existsSync(stuck.path), false, "its worktrees are given back all the same")
+assert.deepEqual([git(app, "branch", "--list", stuck.branch).replace(/^[*+ ]+/, ""), git(api, "branch", "--list", stuck.branch)], [stuck.branch, ""])
+rmSync(lockOf(app, stuck.branch))
+await worktrees.abandon(stuckId)
+assert.equal(git(app, "branch", "--list", stuck.branch), "", "abandoned again, the branch left behind goes")
+// A spare's install under way, which runs for minutes and holds no ref lock, doesn't hold the abandon: a refused start
+// or a failed move awaits it, and the person's next step with it.
+{
+  let installsStarted = 0
+  let installing = true
+  const installed = repository("installed")
+  const own = new ThreadWorktreeService(gitRunner, join(root, "installing-worktrees"), threads, undefined, undefined, undefined, {
+    ...setup,
+    spareInstall: {
+      start: async () => {
+        installsStarted += 1
+        return { command: "npm install", inputs: ["package-lock.json"] }
+      },
+      settle: async () => (installing ? "running" : "none"),
+      stop: async () => {},
+      critical: async () => false,
+      paused: (_app, work) => work(),
+    },
+  })
+  const first = randomUUID()
+  await own.prepare(first, installed, "Starts the spares")
+  for (const deadline = Date.now() + 60_000; !installsStarted; await new Promise((resolve) => setTimeout(resolve, 50)))
+    assert.ok(Date.now() < deadline, "a spare's install started")
+  const lockedId = randomUUID()
+  const locked = await own.prepare(lockedId, installed, "Locked while installing")
+  writeFileSync(lockOf(installed, locked.branch), "")
+  const began = performance.now()
+  await assert.rejects(own.abandon(lockedId), /Couldn't delete the empty branch/)
+  const waited = performance.now() - began
+  assert.ok(waited < 10_000, `a lock refused during an install is said in seconds, not after the install: ${Math.round(waited)} ms`)
+  rmSync(lockOf(installed, locked.branch))
+  await own.abandon(lockedId)
+  installing = false
+  await own.abandon(first).catch(() => undefined)
+}
+
 // A repository added to the project since its spares were made: they mirror what it was, so the next Thread checks out fresh, and they go.
 await worktrees.settled()
 const docs = repository("suite/docs")
@@ -858,6 +921,278 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
   await worktrees.abandon(id).catch(() => undefined)
 }
 
+// A spare shares what the main checkout holds rather than writing it: a clone keeps its source's time, which Git's own
+// write can't. What differs is Git's to write, and the checkout is whole and clean either way. No start waits for this.
+{
+  const cloned = repository("cloned")
+  mkdirSync(join(cloned, "audits"))
+  writeFileSync(join(cloned, "audits", "same.txt"), "unchanged\n")
+  writeFileSync(join(cloned, "edited.txt"), "committed\n")
+  writeFileSync(join(cloned, "run.sh"), "#!/bin/sh\n", { mode: 0o755 })
+  git(cloned, "add", ".")
+  git(cloned, "commit", "-q", "-m", "files")
+  writeFileSync(join(cloned, "edited.txt"), "uncommitted\n")
+  writeFileSync(join(cloned, "ignored.log"), "not tracked\n")
+  const long = new Date("2001-02-03T04:05:06Z")
+  utimesSync(join(cloned, "audits", "same.txt"), long, long)
+  const own = new ThreadWorktreeService(gitRunner, join(root, "cloned-worktrees"), threads, undefined, undefined, undefined, setup)
+  await own.want(cloned)
+  await own.settled()
+  const id = randomUUID()
+  started(id)
+  const made = await own.prepare(id, cloned, "Cloned work")
+  assert.equal(made.spare, true, "it came from a spare")
+  const at = (file: string) => join(made.path, file)
+  assert.equal(git(made.path, "status", "--porcelain"), "", "it's whole and clean, whatever was cloned")
+  assert.equal(readFileSync(at("edited.txt"), "utf8"), "committed\n", "a file changed in the main checkout comes from the commit")
+  assert.equal(existsSync(at("ignored.log")), false, "and nothing untracked comes along")
+  assert.equal(lstatSync(at("run.sh")).mode & 0o111, 0o111, "a file keeps its mode")
+  if (process.platform === "darwin") assert.equal(lstatSync(at("audits/same.txt")).mtime.getTime(), long.getTime(), "the same file is the main checkout's, cloned")
+  writeFileSync(at("audits/same.txt"), "changed here\n")
+  assert.equal(readFileSync(join(cloned, "audits", "same.txt"), "utf8"), "unchanged\n", "and changing it here changes nothing there")
+  assert.equal(git(made.path, "status", "--porcelain"), "M audits/same.txt", "and Git sees the change")
+  await own.abandon(id).catch(() => undefined)
+  await own.settled()
+}
+
+// A worktree is read again on its own events (its index or HEAD moved, a turn in it ended), and the windows hear it:
+// however often they ask, one nothing happened in is read only past the backstop. One with a conversation at work is
+// read as often as they ask, and one asked of alone is read then.
+{
+  const quiet = repository("quiet")
+  const id = randomUUID()
+  started(id)
+  const made = await worktrees.prepare(id, quiet, "Quiet work")
+  let now = Date.now()
+  let at: string[] = []
+  const real = { now: Date.now, readOutput: gitRunner.readOutput, idleOutput: gitRunner.idleOutput }
+  let reads = 0
+  let closing = () => {}
+  const pushed: WorktreeSummary[][] = []
+  const heard = async (what: string, test: () => boolean) => {
+    for (const deadline = performance.now() + 10_000; !test(); await new Promise((resolve) => setTimeout(resolve, 25)))
+      if (performance.now() > deadline) throw new Error(`never heard: ${what}`)
+  }
+  Date.now = () => now
+  // A summaries pass reads in the idle lane; a summary someone waits on, in the other.
+  gitRunner.readOutput = function (this: typeof gitRunner, cwd, args) {
+    if (args[0] === "status" && cwd === made.path) reads++
+    return real.readOutput.call(this, cwd, args)
+  }
+  gitRunner.idleOutput = function (this: typeof gitRunner, cwd, args) {
+    if (args[0] === "status" && cwd === made.path) reads++
+    return real.idleOutput.call(this, cwd, args)
+  }
+  try {
+    // As the host makes it: what's at work reaches the worktrees only through this.
+    const jobs = new HostJobs()
+    const workspaces = openWorkspaces({
+      git: gitRunner,
+      dataRoot: join(root, "composed"),
+      readOnly: false,
+      store: threads,
+      jobs,
+      emit: (event) => {
+        if (event.type === "worktree-summaries") pushed.push(event.summaries)
+      },
+      inUse: async () => [],
+      working: async () => [],
+      workingFolders: async () => at,
+      conversations: { holding: async () => [], leave: async () => [] },
+      cleanup: () => undefined,
+    })
+    closing = () => workspaces.close()
+    const watched = workspaces.worktrees!
+    // The pull requests GitHub has for its repository, as the window's ask reads them.
+    let pulls: WorktreeBranchPull[] = []
+    const pullsOf = async () => pulls
+    const changes = async () => (await watched.summaries(pullsOf)).find((summary) => summary.path === made.path)?.changes
+    const passes = async (count: number) => {
+      const before = reads
+      for (let pass = 0; pass < count; pass++) {
+        now += 30_000
+        await changes()
+      }
+      return reads - before
+    }
+    await passes(1)
+    // A quiet worktree's status is read again as its own wait runs out, doubling to five minutes while nothing
+    // changes: however often windows ask, a handful of reads in nine and a half minutes.
+    assert.ok(await passes(19) <= 6, "nine and a half quiet minutes of windows asking read it a handful of times, not nineteen")
+    assert.ok(await passes(20) >= 1, "a quiet worktree is still read now and then")
+    at = [made.path]
+    assert.equal(await passes(4), 4, "a conversation at work there keeps it current")
+    at = [join(made.path, "packages")]
+    assert.equal(await passes(2), 2, "so does one in a folder inside it")
+    at = [dirname(made.path)]
+    assert.equal(await passes(2), 2, "and one in the project folder around it")
+    at = []
+    await passes(2)
+    // A terminal's `git add`, the window left focused and asking nothing: the index's own event reads it, though no
+    // sooner than half a minute after it was last read, since every `git status` that refreshes the index moves it too.
+    // Read just now (its turn ended), so the gap is measured from here.
+    now += 6_000
+    const freshRead = reads
+    watched.turnEnded(made.path)
+    await heard("a read to measure the gap from", () => reads > freshRead)
+    await watched.summaries()
+    const said = pushed.length
+    now += 6_000
+    const quickReads = reads
+    writeFileSync(join(made.path, "new.txt"), "new\n")
+    git(made.path, "add", "new.txt")
+    await new Promise((resolve) => setTimeout(resolve, 2_500))
+    assert.equal(reads, quickReads, "within half a minute of its last read, an index moved alone waits")
+    // Past the gap, the host's own pass (the job a listening window keeps running) says it, nobody asking.
+    now += 31_000
+    await watched.summaries()
+    assert.ok(pushed.slice(said).some((summaries) => summaries.find((summary) => summary.path === made.path)?.changes === 1), "the terminal's git add is told unasked")
+    assert.equal(await changes(), 1, "and an ask after it answers what was heard")
+    // A pull request opened on GitHub moves nothing here: the host's own pass, which runs while a window listens,
+    // reads it once the repository's pull requests are read again, a minute on.
+    assert.ok(jobs.list().some((job) => job.name === "say the worktrees' summaries as they change"), "the pass is one of the host's jobs")
+    const opened = pushed.length
+    pulls = [{ number: 7, title: "Quiet work", url: "https://github.com/acme/quiet/pull/7", branch: made.branch, state: "open", head: "0".repeat(40), checks: null }]
+    now += 61_000
+    await watched.summaries()
+    assert.equal(pushed.slice(opened).flat().find((summary) => summary.path === made.path)?.pull?.number, 7, "the pull request is told without a window asking")
+    // The turn that made them ends there: read again unasked.
+    const turnEnds = pushed.length
+    writeFileSync(join(made.path, "turn.txt"), "turn\n")
+    now += 6_000
+    watched.turnEnded(join(made.path, "packages"))
+    await heard("the turn's end's summary", () => pushed.slice(turnEnds).some((summaries) => summaries.find((summary) => summary.path === made.path)?.changes === 2))
+    // A commit moves its HEAD: heard the same way.
+    const committed = pushed.length
+    now += 6_000
+    git(made.path, "add", "turn.txt")
+    git(made.path, "commit", "-qm", "new")
+    await heard("the commit's summary", () => pushed.slice(committed).some((summaries) => summaries.find((summary) => summary.path === made.path)?.changes === 0))
+    await passes(2)
+    const before = reads
+    now += 16_000
+    assert.equal((await watched.summary(made.path))?.changes, 0, "one worktree asked of alone")
+    assert.equal(reads - before, 1, "reads past the short wait whatever its quiet")
+  } finally {
+    Date.now = real.now
+    gitRunner.readOutput = real.readOutput
+    gitRunner.idleOutput = real.idleOutput
+    closing()
+  }
+  await worktrees.abandon(id).catch(() => undefined)
+}
+
+// A Fin started from its Apex's worktree takes a spare of the real project: a worktree has none of its own to take.
+{
+  const own = new ThreadWorktreeService(gitRunner, join(root, "spare-home-worktrees"), threads, undefined, undefined, undefined, setup)
+  const lone = repository("spare-home")
+  await own.want(lone)
+  await own.settled()
+  const apexId = randomUUID()
+  started(apexId)
+  const apex = await own.prepare(apexId, lone, "Apex")
+  assert.equal(apex.spare, true, "the Apex takes one of the project's")
+  await own.settled()
+  const finId = randomUUID()
+  started(finId)
+  writeFileSync(join(apex.path, "work.txt"), "the Apex's\n")
+  git(apex.path, "add", ".")
+  git(apex.path, "commit", "-q", "-m", "the Apex's work")
+  await own.list()
+  const fin = await own.prepare(finId, apex.path, "Fin", { kind: "head" })
+  assert.equal(fin.spare, true, "a Fin from its worktree takes one too")
+  assert.equal(readFileSync(join(fin.path, "work.txt"), "utf8"), "the Apex's\n", "at the commit it asked for")
+  assert.equal(git(fin.path, "rev-parse", "--abbrev-ref", "HEAD"), fin.branch, "on its own branch")
+  assert.equal(git(fin.path, "status", "--porcelain"), "")
+  await own.settled()
+  assert.equal(readdirSync(join(root, "spare-home-worktrees", "spares")).filter((name) => name.endsWith(".json")).every((name) => JSON.parse(readFileSync(join(root, "spare-home-worktrees", "spares", name), "utf8")).repoRoot === lone), true, "and spares are kept for the project, not for worktrees")
+  for (const id of [finId, apexId]) await own.abandon(id).catch(() => undefined)
+  await own.settled()
+  // Most Fins start in a project folder's worktree: each repository is matched to the project's own.
+  const folder = join(root, "spare-home-suite")
+  repository("spare-home-suite/web")
+  repository("spare-home-suite/api")
+  await own.want(folder)
+  await own.settled()
+  const suiteApexId = randomUUID()
+  started(suiteApexId)
+  const suiteApex = await own.prepare(suiteApexId, folder, "Suite Apex")
+  assert.equal(suiteApex.spare, true)
+  await own.settled()
+  const suiteFinId = randomUUID()
+  started(suiteFinId)
+  await own.list()
+  const suiteFin = await own.prepare(suiteFinId, suiteApex.path, "Suite Fin", { kind: "head" })
+  assert.equal(suiteFin.spare, true, "a Fin from a project folder's worktree takes one of the project's")
+  for (const name of ["web", "api"]) assert.equal(git(join(suiteFin.path, name), "rev-parse", "--abbrev-ref", "HEAD"), suiteFin.branch, `${name} is on its branch`)
+  for (const id of [suiteFinId, suiteApexId]) await own.abandon(id).catch(() => undefined)
+  await own.settled()
+}
+
+// Inputs that differ start from a clone only where npm's lockfiles say what's stale: a package they disagree on goes,
+// even at one version, or the install leaves a vendored tarball's old files in place and records the new integrity.
+{
+  const locked = repository("locked")
+  const lock = (tarball: string) => `${JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/keeps": { version: "1.0.0", integrity: "same" }, "node_modules/vendored": { version: "0.1.0", resolved: `file:vendor/${tarball}.tgz`, integrity: tarball } } })}\n`
+  writeFileSync(join(locked, ".gitignore"), "node_modules\n")
+  writeFileSync(join(locked, "package-lock.json"), lock("new"))
+  git(locked, "add", ".")
+  git(locked, "commit", "-q", "-m", "lock")
+  const base = git(locked, "rev-parse", "HEAD")
+  writeFileSync(join(locked, "package-lock.json"), lock("old"))
+  git(locked, "commit", "-qam", "older tarball")
+  for (const name of ["keeps", "vendored"]) {
+    mkdirSync(join(locked, "node_modules", name), { recursive: true })
+    writeFileSync(join(locked, "node_modules", name, "index.js"), "// the main checkout's\n")
+  }
+  writeFileSync(join(locked, "node_modules", ".package-lock.json"), "{}\n")
+  // What a tool keeps under its packages for itself, an account's among it: never another worktree's, whatever the lockfiles say.
+  mkdirSync(join(locked, "node_modules", ".cache", "tool"), { recursive: true })
+  writeFileSync(join(locked, "node_modules", ".cache", "tool", "account.json"), "{}\n")
+  mkdirSync(join(locked, "node_modules", ".mf"), { recursive: true })
+  writeFileSync(join(locked, "node_modules", ".mf", "cf.json"), "{}\n")
+  const outputs = { command: "npm install", inputs: ["package-lock.json"], outputs: ["node_modules"], link: true }
+  const read = async (from: string) => {
+    const id = randomUUID()
+    started(id)
+    const made = await worktrees.prepare(id, locked, `Locked ${from}`, { kind: "from", ref: base })
+    await worktrees.outputs(id)
+    await rm(join(made.path, "node_modules"), { recursive: true, force: true })
+    return { id, made, carried: await carryOutputs(gitRunner, locked, made.path, [outputs], setup) }
+  }
+  const { id, made, carried } = await read("npm")
+  if (process.platform === "darwin") {
+    assert.deepEqual(carried, { carried: [], skipped: ["npm install: package-lock.json differs from the main checkout's, so it installs here, over a clone of what they agree on."] })
+    assert.equal(existsSync(join(made.path, "node_modules", "keeps", "index.js")), true, "a package they agree on is cloned")
+    assert.equal(lstatSync(join(made.path, "node_modules")).isSymbolicLink(), false, "as its own, never a link to the main checkout's other packages")
+    assert.equal(existsSync(join(made.path, "node_modules", "vendored")), false, "one they don't is left for the install, whatever its version")
+    assert.equal(existsSync(join(made.path, "node_modules", ".package-lock.json")), false, "and so is npm's record of what's there")
+    assert.equal(existsSync(join(made.path, "node_modules", ".cache")), false, "a tool's own state stays the main checkout's")
+    assert.equal(existsSync(join(made.path, "node_modules", ".mf")), false, "all of it")
+    const sameId = randomUUID()
+    started(sameId)
+    const same = await worktrees.prepare(sameId, locked, "Locked same", { kind: "from", ref: git(locked, "rev-parse", "HEAD") })
+    await worktrees.outputs(sameId)
+    await rm(join(same.path, "node_modules"), { recursive: true, force: true })
+    await carryOutputs(gitRunner, locked, same.path, [{ ...outputs, link: false }], setup)
+    assert.equal(existsSync(join(same.path, "node_modules", "keeps", "index.js")), true, "a clone of the same inputs has every package")
+    assert.equal(existsSync(join(same.path, "node_modules", ".package-lock.json")), true, "and npm's record")
+    assert.equal(existsSync(join(same.path, "node_modules", ".cache")), false, "and no tool's state either")
+    assert.equal(existsSync(join(same.path, "node_modules", ".mf")), false, "none of it")
+    await worktrees.abandon(sameId).catch(() => undefined)
+  }
+  assert.equal((await setup.prepared(made.path)).done["npm install"], undefined, "nothing says the install ran")
+  await worktrees.abandon(id).catch(() => undefined)
+  const other = { ...outputs, inputs: ["yarn.lock"] }
+  writeFileSync(join(locked, "yarn.lock"), "theirs\n")
+  const { id: yarnId, made: yarnMade } = await read("yarn")
+  await rm(join(yarnMade.path, "node_modules"), { recursive: true, force: true })
+  const yarn = await carryOutputs(gitRunner, locked, yarnMade.path, [other], setup)
+  assert.deepEqual(yarn, { carried: [], skipped: ["npm install: yarn.lock differs from the main checkout's, so it installs here in full."] })
+  assert.equal(existsSync(join(yarnMade.path, "node_modules")), false, "any other lockfile can't say what's stale, so nothing is cloned")
+  await worktrees.abandon(yarnId).catch(() => undefined)
+}
+
 // Windows ask for summaries every half minute and on focus: one pass runs, and everyone who asked while it ran shares
 // the next, which starts after they asked.
 {
@@ -879,6 +1214,49 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
   await first
   assert.deepEqual(await Promise.all(later), later.map(() => []))
   assert.equal(lists, 2, "those who asked during a pass share one pass after it")
+  shared.list = async () => {
+    throw new Error("listing failed")
+  }
+  // An inventory walks every worktree: those asked during one share the next too.
+  let walks = 0
+  let open!: () => void
+  const held = new Promise<void>((resolve) => {
+    open = resolve
+  })
+  shared.list = async () => {
+    walks++
+    await held
+    return { root, worktrees: [] }
+  }
+  const walking = Array.from({ length: 12 }, () => shared.inventory())
+  await Promise.resolve()
+  assert.equal(walks, 1, "one inventory at a time")
+  open()
+  await Promise.all(walking)
+  assert.equal(walks, 2, "those who asked during one share one after it")
+  // One who asks as soon as a walk ends, with the next already promised, shares that one too: never two at once.
+  walks = 0
+  let walkingNow = 0
+  let mostAtOnce = 0
+  let letGo!: () => void
+  const walked = new Promise<void>((resolve) => {
+    letGo = resolve
+  })
+  shared.list = async () => {
+    walks++
+    mostAtOnce = Math.max(mostAtOnce, ++walkingNow)
+    await walked
+    walkingNow--
+    return { root, worktrees: [] }
+  }
+  let onEnd: Promise<unknown> | undefined
+  const firstWalk = shared.inventory().then(() => (onEnd = shared.inventory()))
+  const promised = shared.inventory()
+  await Promise.resolve()
+  letGo()
+  await firstWalk
+  await Promise.all([promised, onEnd])
+  assert.deepEqual([walks, mostAtOnce], [2, 1], "one asking as a walk ends shares the walk already promised")
   shared.list = async () => {
     throw new Error("listing failed")
   }

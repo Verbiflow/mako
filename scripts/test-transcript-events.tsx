@@ -17,7 +17,7 @@ import { entriesToMessages } from "../src/lib/entry-messages"
 import { createExchangeBuilder } from "../src/components/viewer/exchange-builder"
 import type { ViewedThread } from "../src/state/thread-state"
 import { exchangeRequests, promptLabel, toExchanges, turnExchange, turnRequest, type Exchange as ExchangeData } from "../src/lib/exchanges"
-import { causeWords, eventLabel, eventWords, setupWords } from "../src/lib/transcript-events"
+import { causeWords, eventLabel, eventWords, setupWords, standingNotes } from "../src/lib/transcript-events"
 import { textOf } from "../src/lib/format"
 import { acpStore, type LiveAcpConversation } from "../src/state/acp"
 import { threadsStore } from "../src/state/threads"
@@ -302,6 +302,23 @@ assert.doesNotMatch(text(warning), /Warning Approaching/, "the category label gi
 const failure = draw(streamed([go, marker({ label: "Turn failed", detail: "stream disconnected before completion", tone: "error" })]))
 assert.match(failure, /lucide-circle-alert[^"]*text-negative/)
 assert.match(failure, /class="[^"]*text-negative">Turn failed</)
+// A usage limit ends a turn, which isn't a failure: what it held waits or goes on, and the line beside it says which.
+for (const words of ["Your team has reached its usage limit Please reach out to an admin to increase your limit, or return on 11/8/2026 when your usage resets.", "You've hit your weekly limit · resets 1pm (America/Los_Angeles)"]) {
+  const limit = eventWords({ label: "Turn failed", detail: words, tone: "error" })
+  assert.deepEqual([limit.title, limit.tone, limit.glyph], ["Usage limit", undefined, "limit"], words)
+  assert.equal(limit.detail, words, "its words stay")
+  assert.doesNotMatch(draw(streamed([go, marker({ label: "Turn failed", detail: words, tone: "error" })])), /text-negative/)
+}
+// One move, one line: the limit's line gives way to what came of it, in its exchange or the next, and stands alone otherwise.
+const limited = { message: { note: { label: "Turn failed", detail: "You've hit your usage limit" } }, after: 0 }
+const moveLine = { message: { note: { label: "Moved to Claude Code", detail: "Cursor is at its limit" } }, after: 0 }
+const treeLine = { message: { note: { label: "Cursor ran out until Sun 12:00 AM PST", detail: "This Thread moved to Claude Code." } }, after: 0 }
+const notesLeft = (system: (typeof limited)[], later: (typeof limited)[] = []) => standingNotes(system, later).map((note) => note.message.note.label)
+assert.deepEqual(notesLeft([limited, moveLine]), ["Moved to Claude Code"], "a Fin's move")
+assert.deepEqual(notesLeft([limited], [treeLine]), [], "an Apex's, the tree's line landing in the turn it started")
+assert.deepEqual(notesLeft([treeLine]), ["Cursor ran out until Sun 12:00 AM PST"])
+assert.deepEqual(notesLeft([limited]), ["Turn failed"], "nothing came of it: it stands")
+assert.equal(eventWords({ label: "Turn failed", detail: "Failed to authenticate: invalid API key. Claude usage limit reached.", tone: "error" }).tone, "error", "a fault only the person can fix stays a failure, whatever else it says")
 
 // A provider's retries, quiet either way: the count, its words and how long; the failure after them says itself.
 const recoveredWords = eventWords(retriesEvent({ count: 3, outcome: "recovered", durationMs: 41_000 }, "Overloaded (529)"))
@@ -357,7 +374,7 @@ assert.deepEqual(before.map(([prompt]) => prompt), ["Run the suite"], "and leave
 const reopened = streamed([go, { kind: "text", id: "a", text: "Going ahead." }, ...signIn.map(marker), { kind: "user", text: "And QA?" }, { kind: "text", id: "b", text: "QA too." }])
 assert.deepEqual(where(reopened), [["Run the suite", []], ["And QA?", signIn.map((note) => `${note.label}@0`)]],
   "a session that opens again (a fork, a reconnect) reports under the next prompt, not at the end of the answer before it")
-assert.match(text(draw(reopened)), /And QA\? Y Copy question Reuse 3 MCP servers need sign-in wisprflow, todoist, axiom Claude Code QA too/)
+assert.match(text(draw(reopened)), /And QA\? Y 3 MCP servers need sign-in wisprflow, todoist, axiom Claude Code QA too/)
 const midTurn = streamed([go, { kind: "text", id: "a", text: "Reading." }, marker(signIn[0]!), { kind: "text", id: "b", text: "Going ahead." }, { kind: "user", text: "And QA?" }])
 assert.deepEqual(where(midTurn)[0], ["Run the suite", [`${signIn[0]!.label}@1`]], "one inside an answer keeps its place")
 const unanswered = streamed([go, { kind: "text", id: "a", text: "Going ahead." }, marker(signIn[0]!)])
@@ -493,7 +510,7 @@ assert.match(draw(saved([{ kind: "user", text: `${goalContinuePrompt("Ship the e
 // A live prompt carries the moment the host sent it, so it shows its time as a saved one does.
 const sentLive = streamed([{ kind: "user", text: "Refactor the store", requestId: "r1", at: Date.parse(at(44)) }, { kind: "text", id: "t", text: "Picking up." }], "cursor")
 assert.equal(sentLive[0]!.prompt?.timestamp, Date.parse(at(44)))
-assert.match(text(draw(sentLive)), /Refactor the store Y Copy question \d{1,2}:44 [AP]M/)
+assert.match(text(draw(sentLive)), /Refactor the store Y \d{1,2}:44 [AP]M/)
 
 const yours = draw([prompted("s", "Refactor the store")], { stops: { s: { reason: "stopped", continuable: false, automatic: false } } })
 assert.match(yours, /data-turn-stopped="stopped"[^>]*>[^]*?lucide-circle-stop/)

@@ -22,10 +22,10 @@ export function placeKey(place: Place): PlaceKey {
 
 type ListParts = Pick<AccountListState, "rows" | "devices" | "quiet">
 
-/** The account's Macs: devices that run Threads (not browsers), named. */
-export function macCount(list: Pick<AccountListState, "devices">): number {
+/** The account's computers: the devices that run Threads, its Macs and the machines of the person's own (not browsers or terminals). */
+export function computerCount(list: Pick<AccountListState, "devices">): number {
   let count = 0
-  for (const device of list.devices.values()) if (device.kind === "desktop") count++
+  for (const device of list.devices.values()) if (device.kind === "desktop" || device.kind === "runtime") count++
   return count
 }
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { Action, Blank, IconAction } from "@/components/ui/kit"
 import { Collapse } from "@/components/ui/collapse"
-import { FileTypeIcon } from "@/components/ui/file-type-icon"
+import { FileIcon } from "@/components/ui/file-icon"
 import { LineCounts, StatusLetter } from "@/components/inspector/change-marks"
 import { PathLabel } from "@/components/ui/path-label"
 import { GitLoading } from "@/components/inspector/git-loading"
@@ -116,7 +116,7 @@ function WorkspaceGitLog({
               aria-expanded={expanded}
               onClick={() => toggle(commit.hash)}
               title={`${commit.subject}\n${commit.shortHash} · ${commit.author} · ${new Date(commit.date).toLocaleString()}`}
-              className="pressable flex w-full items-start gap-2.5 rounded-md py-1.5 pr-9 pl-2 text-left transition-colors duration-100 hover:bg-fill-hover [contain-intrinsic-size:auto_42px] [content-visibility:auto]"
+              className="pressable flex w-full items-start gap-2.5 py-1.5 pr-9 pl-2 text-left transition-colors duration-100 hover:bg-fill-hover [contain-intrinsic-size:auto_42px] [content-visibility:auto]"
             >
               <span aria-hidden className="relative flex h-[18px] w-3 shrink-0 items-center justify-center">
                 <span className={cn(
@@ -160,12 +160,12 @@ function WorkspaceGitLog({
                         data-active={active || undefined}
                         title={file.path}
                         className={cn(
-                          "flex h-6 w-full items-center gap-1.5 rounded pr-1.5 pl-2 text-left",
+                          "flex h-6 w-full items-center gap-1.5 pr-1.5 pl-2 text-left",
                           "transition-colors duration-100 data-active:bg-fill-selected",
                           onPickFile && "hover:bg-fill-hover"
                         )}
                       >
-                        <FileTypeIcon path={file.path} className="size-3.5 shrink-0 text-faint/80" />
+                        <FileIcon path={file.path} className="size-3.5 shrink-0 text-faint/80" />
                         <PathLabel path={file.path} className="flex-1" nameClassName={file.status === "deleted" ? "text-faint line-through decoration-faint/60" : "text-foreground/85"} />
                         {!file.binary ? <LineCounts insertions={file.insertions} deletions={file.deletions} /> : null}
                         <StatusLetter status={file.status} className="w-3 text-center" />

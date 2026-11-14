@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { BorrowPushSchema, CapabilitySchema, LEASE_ENDS, LeaseSchema, ProgressSchema, SESSION_STREAMS_MAX, SlotsSchema, SourceAskSchema, StreamSchema } from "./borrow.js"
 import {
   type Operation,
   OperationEnvelopeSchema,
@@ -140,7 +141,30 @@ export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
    * rather than waiting for it to miss its heartbeats; the runtime connects again when it's back.
    */
   z.object({ type: z.literal("going-quiet"), reason: z.enum(["sleep", "quit", "sign-out"]) }).strict(),
+  /**
+   * What a device's runtime can serve, as it probed it, and its room (version 23 on, `borrow.ts`): sent on enrolment,
+   * on each change, and hourly. `slots.used` is its own work (its Fins); the account's broker counts what it lends.
+   * `load` says the room in the person's words ("14 cores, 36 GB"). Capabilities are names and versions, never a value.
+   */
+  z
+    .object({
+      type: z.literal("advertise"),
+      capabilities: z.array(CapabilitySchema).max(64),
+      slots: SlotsSchema,
+      load: z.string().max(200).optional(),
+      at: z.number().int().nonnegative(),
+    })
+    .strict(),
+  /**
+   * A session this device serves under a lease is alive (version 24 on, `borrow.ts`'s `heartbeat`), with how far it
+   * is when that changed (`progress`), and the streams it serves when they changed (`streams`). The gateway takes it only
+   * from the lease's own device. Missed beats end the lease.
+   */
+  z.object({ type: z.literal("lease-beat"), lease: z.string().min(1).max(128), progress: ProgressSchema.optional(), streams: z.array(StreamSchema).max(SESSION_STREAMS_MAX).optional() }).strict(),
 ])
+
+/** What a device's runtime says it can serve, and its room (`advertise`). */
+export type Advertisement = Omit<Extract<RuntimeFrameEnvelope, { type: "advertise" }>, "type">
 
 /** Why a runtime says it's going quiet (`going-quiet`). */
 export type GoingQuietReason = Extract<RuntimeFrameEnvelope, { type: "going-quiet" }>["reason"]
@@ -277,6 +301,21 @@ export const GatewayFrameEnvelopeSchema = z.discriminatedUnion("type", [
    * not said is written in form 1.
    */
   z.object({ type: z.literal("live-form"), threadId: ThreadIdSchema, form: LiveFormSchema }).strict(),
+  /**
+   * What a Thread this runtime runs borrows changed (version 21 on, `borrow.ts`): a lease decided after it waited, a
+   * lease ended, or a newer version of a copy. `seq` is the Thread's push sequence, the one asking for its pushes
+   * answers from, so a runtime that sees a gap asks from the last it had. Never a value.
+   */
+  z.object({ type: z.literal("borrow"), threadId: ThreadIdSchema, seq: SeqSchema, push: BorrowPushSchema }).strict(),
+  /**
+   * What this device is asked as a source (version 24 on, `borrow.ts`'s `SourceAsk`): it answers on the account's
+   * routes, by itself or after its person. Said as the broker asks, and again on enrolment for any still waiting.
+   */
+  z.object({ type: z.literal("source-ask"), ask: SourceAskSchema }).strict(),
+  /** A lease this device serves was issued (version 24 on): its session starts here, and it holds one of the device's slots. */
+  z.object({ type: z.literal("lent"), lease: LeaseSchema }).strict(),
+  /** A lease this device serves ended, and why (version 24 on): it stops the operation and frees its slot. */
+  z.object({ type: z.literal("lent-ended"), lease: z.string().min(1).max(128), why: z.enum(LEASE_ENDS) }).strict(),
 ])
 
 export type RuntimeFrameEnvelope = z.infer<typeof RuntimeFrameEnvelopeSchema>

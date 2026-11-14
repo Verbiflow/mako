@@ -1,27 +1,34 @@
+import { hostCommand } from "../base/host-command.js"
 import { lock } from "proper-lockfile"
 import { z } from "zod"
-import { execFile } from "node:child_process"
-import { createHmac, randomBytes, randomUUID } from "node:crypto"
+import { createHmac, randomBytes } from "node:crypto"
 import { existsSync } from "node:fs"
 import {
   mkdir,
   realpath,
   readlink,
   readFile,
-  rename,
   rm,
   symlink,
   writeFile,
 } from "node:fs/promises"
 import { userInfo } from "node:os"
 import { dirname, isAbsolute, join, resolve } from "node:path"
-import { promisify } from "node:util"
 import type { JsonValue } from "../contracts/json.js"
 import { securityKeychain } from "../base/keychain.js"
+import { withFileLock } from "../base/file-lock.js"
+import { publishFile } from "../base/published-files.js"
 import { onMac } from "../base/platform.js"
-const run = promisify(execFile)
+const run = hostCommand
 
 const credentialSalt = randomBytes(32)
+const CredentialJsonSchema = z.string().transform((text, context) => {
+  try { return JSON.parse(text) }
+  catch {
+    context.addIssue({ code: "custom", message: "not JSON" })
+    return z.NEVER
+  }
+})
 /** Host-only equality token; neither credentials nor an offline token hash crosses IPC. */
 export function credentialFingerprint(values: readonly (string | null)[]): string {
   return createHmac("sha256", credentialSalt).update(JSON.stringify(values)).digest("hex")
@@ -35,13 +42,7 @@ export function credentialFingerprint(values: readonly (string | null)[]): strin
  */
 export function principalFingerprint(contents: string | null, principal: z.ZodType): string {
   if (contents === null) return credentialFingerprint([null])
-  const parsed = z.string().transform((text, context) => {
-    try { return JSON.parse(text) }
-    catch {
-      context.addIssue({ code: "custom", message: "not JSON" })
-      return z.NEVER
-    }
-  }).pipe(principal).safeParse(contents)
+  const parsed = CredentialJsonSchema.pipe(principal).safeParse(contents)
   return credentialFingerprint([parsed.success ? JSON.stringify(parsed.data) : contents])
 }
 
@@ -138,6 +139,11 @@ export class AccountRoot {
     return join(this.path, "holds")
   }
 
+  /** The limit windows of a provider's accounts already warned of, each until it resets. */
+  warned(provider: string): string {
+    return join(this.path, "warned", `${providerName(provider)}.json`)
+  }
+
   /** Where a provider's removals wait, or every provider's without one. */
   removing(provider?: string): string {
     return provider === undefined ? join(this.path, "removing") : join(this.path, "removing", providerName(provider))
@@ -190,19 +196,22 @@ export class AccountRoot {
       recursive: true,
       mode: 0o700,
     })
-    // SAFETY: All profile hosts use identical lease timing. A compromised lease
-    // must fail closed; the library's default handler terminates the writer.
-    const release = await lock(path, {
-      realpath: false,
-      stale: 60_000,
-      update: 5_000,
-      retries: { retries: 20, minTimeout: 100, maxTimeout: 500, factor: 1.2 },
+    return withFileLock(`${path}.mako-lock`, async () => {
+      // SAFETY: hosts built before the kernel lock take only this lease, with
+      // identical timing. A compromised lease must fail closed; the library's
+      // default handler terminates the writer.
+      const release = await lock(path, {
+        realpath: false,
+        stale: 60_000,
+        update: 5_000,
+        retries: { retries: 20, minTimeout: 100, maxTimeout: 500, factor: 1.2 },
+      })
+      try {
+        return await operation()
+      } finally {
+        await release()
+      }
     })
-    try {
-      return await operation()
-    } finally {
-      await release()
-    }
   }
 
   async writeSelection(
@@ -211,20 +220,7 @@ export class AccountRoot {
   ): Promise<void> {
     if (name !== null) this.dir(provider, name)
     const destination = this.selectionPath(provider)
-    await mkdir(join(this.path, "selection"), {
-      recursive: true,
-      mode: 0o700,
-    })
-    const temporary = `${destination}.${randomUUID()}.tmp`
-    try {
-      await writeFile(temporary, JSON.stringify({ [provider]: name }), {
-        mode: 0o600,
-        flag: "wx",
-      })
-      await rename(temporary, destination)
-    } finally {
-      await rm(temporary, { force: true })
-    }
+    await publishFile(destination, JSON.stringify({ [provider]: name }), { mode: 0o600, dirMode: 0o700 })
   }
 }
 
@@ -257,7 +253,7 @@ const AccountHome = z.object({ version: z.literal(1), home: z.string().refine(is
 /** Preserve the settings/store origin across shell routing changes; never copy credentials here. */
 export async function recordAccountHome(dir: string, home: string): Promise<void> {
   const canonical = await realpath(home).catch(() => resolve(home))
-  await writeFile(join(dir, ".mako-account.json"), JSON.stringify({ version: 1, home: canonical }), { mode: 0o600, flag: "wx" })
+  await publishFile(join(dir, ".mako-account.json"), JSON.stringify({ version: 1, home: canonical }), { mode: 0o600, exclusive: true })
 }
 export async function managedAccountHome(dir: string, fallback: string, store: string): Promise<string> {
   try { return AccountHome.parse(JSON.parse(await readFile(join(dir, ".mako-account.json"), "utf8"))).home }

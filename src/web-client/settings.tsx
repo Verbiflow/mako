@@ -4,17 +4,21 @@ import { describeFollow, describeList } from "@mako/host/contracts/sync-readings
 import { webContinues } from "./continue-actions"
 import { readingWords, useReadings } from "./probe"
 import { webSync } from "./sync-readings"
-import { ArrowUpRightIcon, BellIcon, BellOffIcon, ChevronLeftIcon, CopyIcon, GitPullRequestIcon, LogOutIcon, MoonIcon, ShareIcon, SmartphoneIcon } from "lucide-react"
+import { ArrowUpRightIcon, BellIcon, BellOffIcon, ChevronLeftIcon, ChevronRightIcon, CopyIcon, GitPullRequestIcon, LogOutIcon, MoonIcon, ShareIcon, SmartphoneIcon } from "lucide-react"
 import { MAKO_GITHUB_APP, NEW_PERSON_TOKEN_URL, PERSON_TOKEN, PERSON_TOKEN_PERMISSIONS } from "@mako/host/contracts/github-person"
+import type { CommitAuthor } from "@mako/host/contracts/github-authorship"
 import { PullRequestsAsMe } from "@/components/settings/pull-requests-as-me"
 import { expiryWords, useGitHubToken, type GitHubTokens } from "@/state/github-token"
+import { AUTHORSHIP_UNAVAILABLE, AUTHORSHIP_UNREAD, authorshipChoosable, authorshipWords, FALLBACK_WORDS, TOKEN_KEPT_WORDS, useGitHubAuthorship, type GitHubAuthorships } from "@/state/github-authorship"
 import { webGitHubTokens } from "./github-tokens"
+import { webGitHubAuthorships } from "./github-authorship"
 import { useForm } from "./route"
 import { toast } from "sonner"
 import { Avatar } from "@/components/ui/avatar"
 import { copyAge } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { useAccountList } from "./account-list"
+import { projectOf } from "./threads"
 import { useWebClient } from "./client"
 import type { PushStanding, QuietHours } from "./push"
 import { install, onIos, useInstallWay } from "./install"
@@ -23,13 +27,14 @@ import { useTheme, type WebTheme } from "./theme"
 import { setPref, usePrefs } from "@/state/prefs"
 import { Group, Row, Switch } from "./settings-rows"
 import { Fins } from "./fins"
+import { WebDevices } from "./devices"
 
 const DEFAULT_QUIET: QuietHours = { start: "22:00", end: "07:00" }
 /** The device's latest readings Diagnostics lists; Copy takes every one kept. */
 const READINGS_SHOWN = 8
 
 /** Settings: a screen of its own on a phone, Back to the list; wide, the pane beside the rail, opened from its foot. */
-export function Settings({ onBack }: { onBack: (() => void) | undefined }) {
+export function Settings({ onBack, onSetup }: { onBack: (() => void) | undefined; onSetup?: (project: string) => void }) {
   const client = useWebClient()
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-shell">
@@ -52,9 +57,11 @@ export function Settings({ onBack }: { onBack: (() => void) | undefined }) {
               </div>
             </div>
           </Group>
+          {onSetup ? <Setups onOpen={onSetup} /> : null}
           <Notifications />
           <Conversation />
           <Fins />
+          <WebDevices />
           <PullRequests />
           <Appearance />
           <ThisBrowser />
@@ -62,6 +69,22 @@ export function Settings({ onBack }: { onBack: (() => void) | undefined }) {
         </div>
       </div>
     </div>
+  )
+}
+
+/** Each project's Setup, one row a project: what each place has for it, and where agents' asks wait. */
+function Setups({ onOpen }: { onOpen: (project: string) => void }) {
+  const rows = useAccountList((state) => state.rows)
+  const projects = useMemo(() => [...new Set(rows.map((row) => projectOf(row.folder)).filter((name): name is string => Boolean(name)))].sort(), [rows])
+  if (!projects.length) return null
+  return (
+    <Group title="Setup" footer="What each place has for a project, from your Mac to the cloud. Agents ask here; only your tap adds.">
+      {projects.map((project) => (
+        <button key={project} type="button" data-setup-project={project} onClick={() => onOpen(project)} className="pressable text-left">
+          <Row label={project} end={<ChevronRightIcon aria-hidden className="size-4 text-faint" />} />
+        </button>
+      ))}
+    </Group>
   )
 }
 
@@ -83,23 +106,33 @@ function Conversation() {
 }
 
 /**
- * "Open pull requests as me". In a laptop's browser it's the desktop's own Settings row (`PullRequestsAsMe`); on a
- * phone or tablet, the same setting in the touch layout here. Both read and change the account's, never keep the token.
+ * Who cloud commits and pull requests are authored as, and "Open pull requests as me". In a laptop's browser it's the
+ * desktop's own Settings group (`PullRequestsAsMe`); on a phone or tablet, the same settings in the touch layout here.
+ * Both read and change the account's, never keep the token.
  */
 function PullRequests() {
   const client = useWebClient()
   const tokens = useMemo(() => webGitHubTokens(client.gateway, client.account.id), [client])
-  if (useForm() === "desk") return <PullRequestsAsMe tokens={tokens} />
-  return <TouchPullRequests tokens={tokens} />
+  const authorships = useMemo(() => webGitHubAuthorships(client.gateway, client.account.id), [client])
+  if (useForm() === "desk") return <PullRequestsAsMe tokens={tokens} authorships={authorships} />
+  return <TouchPullRequests tokens={tokens} authorships={authorships} />
 }
 
-export function TouchPullRequests({ tokens }: { tokens: GitHubTokens }) {
+const AUTHORS: Array<{ value: CommitAuthor; label: string }> = [
+  { value: "you", label: "As you" },
+  { value: "mako", label: "As Mako" },
+]
+
+export function TouchPullRequests({ tokens, authorships }: { tokens: GitHubTokens; authorships: GitHubAuthorships }) {
   const { phase, busy, error, save, remove, read, clearError } = useGitHubToken(tokens)
+  const authorship = useGitHubAuthorship(authorships)
   const [asking, setAsking] = useState(false)
   const [confirmingOff, setConfirmingOff] = useState(false)
   const [token, setToken] = useState("")
   const listing = phase.kind === "ready" ? phase.listing : null
   const expiry = listing ? expiryWords(listing.expiresAt) : undefined
+  const as = authorship.phase.kind === "ready" ? authorship.phase.authorship.as : undefined
+  const hasToken = phase.kind === "ready" ? Boolean(listing) : undefined
   const cancel = () => {
     setAsking(false)
     setToken("")
@@ -116,14 +149,49 @@ export function TouchPullRequests({ tokens }: { tokens: GitHubTokens }) {
   }
   const footer = phase.kind === "failed"
     ? phase.message
-    : listing
-      ? "Your cloud Threads push, open and merge with your GitHub token. Turning this off deletes it from Mako Cloud."
-      : `Off: cloud Threads open pull requests as ${MAKO_GITHUB_APP}. Pull requests from your Mac always use your own GitHub sign-in.`
+    : as === "mako"
+      ? "While this is As Mako, a saved token is kept but not used. Pull requests from your Mac always use your own GitHub sign-in."
+      : listing
+        ? "Your cloud Threads push, open and merge with your GitHub token. Turning this off deletes it from Mako Cloud."
+        : "Pull requests from your Mac always use your own GitHub sign-in."
   return (
-    <Group title="Pull requests" footer={asking ? undefined : footer}>
+    <Group title="Commits and pull requests" footer={asking ? undefined : footer}>
+      <div className="flex flex-col gap-2.5 px-4 py-3">
+        <div>
+          <p className="text-ui">Commits and pull requests</p>
+          <p className="text-label text-faint">{as ? authorshipWords(as, hasToken) : authorship.phase.kind === "failed" ? AUTHORSHIP_UNREAD : authorship.phase.kind === "unavailable" ? AUTHORSHIP_UNAVAILABLE : "From cloud Threads"}</p>
+        </div>
+        {authorshipChoosable(authorship.phase) ? (
+          <div role="radiogroup" aria-label="Commits and pull requests" className="grid grid-cols-2 gap-1 bg-raised p-1">
+            {AUTHORS.map((each) => (
+              <button
+                key={each.value}
+                type="button"
+                role="radio"
+                aria-checked={as === each.value}
+                disabled={authorship.phase.kind !== "ready" || authorship.saving}
+                onClick={() => void authorship.choose(each.value)}
+                className={cn("pressable h-9 text-ui disabled:opacity-50", as === each.value ? "bg-surface font-medium text-foreground shadow-sm" : "text-muted-foreground")}
+              >
+                {each.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {authorship.error ? <p role="alert" className="text-label text-negative">{authorship.error}</p> : null}
+      </div>
+      {authorship.phase.kind === "failed" ? (
+        <button type="button" onClick={authorship.read} className="web-row flex h-12 w-full items-center px-4 text-left text-ui">Try again</button>
+      ) : null}
+      {authorship.phase.kind === "ready" && as === "you" && hasToken === false && !asking ? (
+        <div className="flex min-h-12 items-center gap-3 px-4 py-2.5">
+          <p className="min-w-0 flex-1 text-label text-muted-foreground">{FALLBACK_WORDS}</p>
+          <button type="button" className="web-quiet-button h-9 shrink-0 px-3" onClick={() => setAsking(true)}>Add token</button>
+        </div>
+      ) : null}
       <Row
         label="Open pull requests as me"
-        detail={listing ? "GitHub shows you as the author" : "From cloud Threads"}
+        detail={listing ? (as === "mako" ? TOKEN_KEPT_WORDS : "GitHub shows you as the author") : "From cloud Threads"}
         icon={<GitPullRequestIcon className="size-4" />}
         end={
           <Switch
@@ -217,7 +285,7 @@ function ThisBrowser() {
   const [steps, setSteps] = useState(false)
   const [confirming, setConfirming] = useState(false)
   return (
-    <Group title="This browser" footer="Signing out here, or from a Mac's Settings › Account, ends it at once.">
+    <Group title="This browser" footer="Signing out here, or removing this browser in Settings › Devices on another device, ends it at once.">
       {way !== "none" ? (
         <button type="button" onClick={() => (way === "prompt" ? void install() : setSteps(true))} className="web-row flex min-h-12 w-full items-center gap-3 px-4 text-left text-ui">
           <SmartphoneIcon className="size-4 text-muted-foreground" />
@@ -335,7 +403,7 @@ function Appearance() {
             role="radio"
             aria-checked={theme === each.value}
             onClick={() => setTheme(each.value)}
-            className={cn("pressable h-9 rounded-xl text-ui", theme === each.value ? "bg-fill-selected font-medium text-foreground" : "text-muted-foreground")}
+            className={cn("pressable h-9 text-ui", theme === each.value ? "bg-fill-selected font-medium text-foreground" : "text-muted-foreground")}
           >
             {each.label}
           </button>

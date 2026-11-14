@@ -1,8 +1,10 @@
+import { ProviderFailureEvidenceSchema } from "../contracts/provider-failure-evidence.js"
 import { LiveInputQuestionSchema } from "../contracts/live-questions.js"
 import { ApprovalOriginSchema, NativeApprovalIdentitySchema } from "../contracts/approval-response.js"
 import { PromptDeliverySchema } from "../contracts/prompt-delivery.js"
 import { NativePromptReferenceSchema } from "../contracts/native-prompt-identity.js"
 import { NativeAgentRosterSchema, providerRoster, sameProviderWork } from "../contracts/native-agents.js"
+import { NoticeSchema } from "../contracts/agents.js"
 import { ConversationGoalSchema } from "../contracts/live-goals.js"
 import { ReviewTargetSchema } from "../contracts/live-reviews.js"
 import {
@@ -16,6 +18,7 @@ import {
   StoredReason,
   NativeTotalsSchema,
   PromptAttachmentSchema,
+  RequestRetrySchema,
 } from "../contracts/conversation-control.js"
 import { existsSync, mkdirSync, readdirSync } from "node:fs"
 import { join } from "node:path"
@@ -42,7 +45,8 @@ import { errorMessage } from "../base/error-message.js"
 import { EntrySchema, type Entry } from "@mako/sessions/entries"
 import { sharedBase } from "./shared-entries.js"
 import { EntryPager, type PagedRows, type PagedTable } from "./paged-entries.js"
-import { atOnce, inSlices, type Steps } from "@mako/sessions/slices"
+import { atOnce, inSlices, StepsStopped, type Steps } from "@mako/sessions/slices"
+import { holdDue, holdOf, sooner, transferDue } from "../contracts/request-hold.js"
 
 export const LiveSessionModeSchema: z.ZodType<LiveSessionMode> = z.object({
   id: z.string(),
@@ -113,6 +117,7 @@ function controlRow(control: LiveSnapshot["control"]): LiveSnapshot["control"] {
 
 export const LiveRequestSchema = z.object({
   actor: ActorSchema.optional(),
+  grants: z.array(z.string().max(1024)).max(100).optional(),
   nativeDelivery: PromptDeliverySchema.optional(),
   nativePrompt: NativePromptReferenceSchema.optional(),
   targetBindingId: z.string().optional(),
@@ -121,6 +126,7 @@ export const LiveRequestSchema = z.object({
   undone: TurnUndoneSchema,
   tuning: SessionSettingsSchema.optional(),
   mode: z.string().optional(),
+  ruleLines: z.array(z.string()).optional(),
   inputDigest: z.string().optional(),
   nativeRun: z
     .object({
@@ -132,6 +138,9 @@ export const LiveRequestSchema = z.object({
   id: z.string().uuid(),
   /** When the host admitted it (epoch milliseconds); unset in journals written before it was kept. */
   createdAt: z.number().nonnegative().optional(),
+  admissionOrder: z.number().int().positive().optional(),
+  notification: z.literal(true).optional(),
+  dispatchedAt: z.number().optional(),
   text: z.string().max(1_000_000),
   attachments: z.array(PromptAttachmentSchema),
   displayText: z.string().optional(),
@@ -151,8 +160,12 @@ export const LiveRequestSchema = z.object({
   // What it waits for is read again whenever the wait is checked; one this build doesn't know is its current step.
   accountSwitch: z.object({ reason: z.enum(["selection", "credentials"]), waitingFor: z.enum(ACCOUNT_SWITCH_WAITS).catch("operation") }).optional(),
   ownerCheck: z.object({ since: z.number() }).optional(),
+  editing: z.literal(true).optional(),
+  pause: z.literal("stop").optional(),
   signIn: z.object({ harness: z.string(), account: z.string(), credential: z.string(), at: z.number() }).optional(),
   wake: z.object({ at: z.number(), after: z.string() }).optional(),
+  retry: RequestRetrySchema.optional(),
+  digest: z.object({ notices: z.array(NoticeSchema), lines: z.array(z.string()).optional(), sentAt: z.number().optional(), heard: z.literal(true).optional(), resting: z.literal(true).optional(), nextTry: z.number().optional() }).optional(),
   interruption: z
     .object({
       ...StoredReason,
@@ -178,6 +191,7 @@ export const LiveRequestSchema = z.object({
     .transform(readStoredReason)
     .optional(),
   failure: z.enum(PROVIDER_FAILURE_KINDS).optional(),
+  failureEvidence: ProviderFailureEvidenceSchema.optional(),
   /** The session's usage reading when this request was dispatched; `spend` is measured from it. */
   usageFrom: z.object({
     tokens: TokenCountsSchema.optional(),
@@ -191,6 +205,8 @@ export const LiveRequestSchema = z.object({
       requestId: z.string(),
       ...StoredReason,
       auto: z.boolean(),
+      brief: z.string().optional(),
+      since: z.number().optional(),
     })
     .transform(readStoredReason)
     .optional(),
@@ -235,6 +251,7 @@ const MetadataSchema = z.object({
     configOptions: z.array(ModelOptionSchema),
     settings: SessionSettingsSchema.optional(),
     lastStop: z.string().optional(),
+    failureEvidence: ProviderFailureEvidenceSchema.optional(),
     error: z.string().optional(),
     // How full the context is and the harness's own session totals belong to
     // the conversation and reopen with it; what was spent belonged to the
@@ -335,27 +352,43 @@ export function readBase(db: DatabaseSync): StoredBase | null {
 
 /** `readBase` as `Steps`: its rows are read and parsed `ROWS_PER_STEP` at a time. */
 function* readBaseSteps(db: DatabaseSync): Steps<StoredBase | null> {
+  return storedBaseOf(yield* baseRowSteps(db))
+}
+
+/**
+ * The base row and its entries' rows, read and parsed: plain data, so a reader (`JournalReaders`) can read them and
+ * hand them over. A base an earlier build kept in the base row is handed over as that row says it.
+ */
+type BaseRows = { kind: "rows"; page: Omit<z.infer<typeof BaseHeaderRowSchema>, "entryRows">; entries: Entry[] } | { kind: "value"; value: unknown }
+
+function* baseRowSteps(db: DatabaseSync): Steps<BaseRows | null> {
   const row = db.prepare("SELECT value FROM base WHERE id=1").get()
   if (!row) return null
-  const value = JSON.parse(RowSchema.parse(row).value)
+  const value: unknown = JSON.parse(RowSchema.parse(row).value)
   if (value === null) return null
   const header = BaseHeaderRowSchema.safeParse(value)
-  if (header.success) {
-    const { entryRows, ...page } = header.data
-    const entries: Entry[] = []
-    const rows = db.prepare("SELECT id, value FROM base_entries WHERE id >= ? AND id < ? ORDER BY id")
-    for (let from = 0; from < entryRows; from += ROWS_PER_STEP) {
-      for (const stored of rows.all(from, Math.min(from + ROWS_PER_STEP, entryRows))) {
-        const entry = BaseEntryRowSchema.parse(stored)
-        if (entry.id !== entries.length) throw new Error(`The journal's history is missing entry ${entries.length}`)
-        entries.push(EntrySchema.parse(JSON.parse(entry.value)))
-      }
-      if (entries.length !== Math.min(from + ROWS_PER_STEP, entryRows)) break
-      yield
+  if (!header.success) return { kind: "value", value }
+  const { entryRows, ...page } = header.data
+  const entries: Entry[] = []
+  const rows = db.prepare("SELECT id, value FROM base_entries WHERE id >= ? AND id < ? ORDER BY id")
+  for (let from = 0; from < entryRows; from += ROWS_PER_STEP) {
+    for (const stored of rows.all(from, Math.min(from + ROWS_PER_STEP, entryRows))) {
+      const entry = BaseEntryRowSchema.parse(stored)
+      if (entry.id !== entries.length) throw new Error(`The journal's history is missing entry ${entries.length}`)
+      entries.push(EntrySchema.parse(JSON.parse(entry.value)))
     }
-    if (entries.length !== entryRows) throw new Error(`The journal's history holds ${entries.length} of its ${entryRows} entries`)
-    return { base: { ...page, entries } }
+    if (entries.length !== Math.min(from + ROWS_PER_STEP, entryRows)) break
+    yield
   }
+  if (entries.length !== entryRows) throw new Error(`The journal's history holds ${entries.length} of its ${entryRows} entries`)
+  return { kind: "rows", page, entries }
+}
+
+/** The base `rows` say, as `readBase` gives it back. */
+function storedBaseOf(rows: BaseRows | null): StoredBase | null {
+  if (!rows) return null
+  if (rows.kind === "rows") return { base: { ...rows.page, entries: rows.entries } }
+  const { value } = rows
   const flat = BaseSchema.safeParse(value)
   if (flat.success) return { base: flat.data, whole: true }
   const grouped = MessageBaseSchema.parse(value)
@@ -368,12 +401,125 @@ function* readBaseSteps(db: DatabaseSync): Steps<StoredBase | null> {
   return { base: { ...grouped, entries, total }, entryIndex, whole: true }
 }
 
+/**
+ * Everything a journal's rows hold that its snapshot is made of, read and parsed (`journalRowSteps`): plain data,
+ * read here or on a reader (`JournalReaders`) and made into the snapshot by the journal that owns the file.
+ */
+export interface JournalRows {
+  metadata: string
+  revision: number
+  blocks: Entry[]
+  appends: { block: number; value: AppendValue }[]
+  base: BaseRows | null
+  requests: LiveRequest[]
+  order: string[] | undefined
+  harnessTurns: z.infer<typeof HarnessTurnSchema>[]
+  /** Mako's log, when it was asked for, and whether it holds anything. */
+  log: MakoLogEntry[] | undefined
+  logBegun: boolean
+}
+
+/** How often a read on a reader looks whether its host is stopping. */
+const STOP_LOOK_MS = 20
+
+/** Reads a journal file's rows elsewhere than the loop (`JournalReaders.read`); `withLog` reads Mako's log too. */
+export type JournalReader = (path: string, withLog: boolean) => Promise<JournalRows | null>
+
+/** A journal's rows, `ROWS_PER_STEP` at a time; null for one with nothing kept yet. Run in one read transaction. */
+export function* journalRowSteps(db: DatabaseSync, withLog: boolean): Steps<JournalRows | null> {
+  const metadata = metadataRow(db)
+  if (!metadata) return null
+  const revision = ProgressSchema.safeParse(db.prepare("SELECT revision FROM progress WHERE id=1").get()).data?.revision ?? 0
+  const blocks: Entry[] = []
+  const blockRows = db.prepare("SELECT id, value FROM blocks WHERE id > ? ORDER BY id LIMIT ?")
+  for (let last = -1; ;) {
+    const rows = blockRows.all(last, ROWS_PER_STEP)
+    for (const row of rows) {
+      const block = BlockRowSchema.parse(row)
+      blocks.push(EntrySchema.parse(JSON.parse(block.value)))
+      last = block.id
+    }
+    if (rows.length < ROWS_PER_STEP) break
+    yield
+  }
+  const appends = db.prepare("SELECT block_id, value FROM block_appends ORDER BY block_id, sequence").all().map((value) => {
+    const row = AppendRowSchema.parse(value)
+    return { block: row.block_id, value: AppendValueSchema.parse(JSON.parse(row.value)) }
+  })
+  const base = yield* baseRowSteps(db)
+  const requests: LiveRequest[] = []
+  const requestRows = db.prepare("SELECT rowid AS at, value FROM requests WHERE rowid > ? ORDER BY rowid LIMIT ?")
+  for (let last = -1; ;) {
+    const rows = requestRows.all(last, ROWS_PER_STEP)
+    for (const row of rows) {
+      const request = RowAtSchema.parse(row)
+      requests.push(LiveRequestSchema.parse(JSON.parse(request.value)))
+      last = request.at
+    }
+    if (rows.length < ROWS_PER_STEP) break
+    yield
+  }
+  const orderRow = db.prepare("SELECT keys FROM request_order WHERE id=1").get()
+  const order = orderRow ? z.array(z.string()).safeParse(JSON.parse(RowKeysSchema.parse(orderRow).keys)).data : undefined
+  const harnessTurns = db.prepare("SELECT value FROM harness_turns ORDER BY rowid").all()
+    .map((row) => HarnessTurnSchema.parse(JSON.parse(RowSchema.parse(row).value)))
+  const logBegun = Boolean(db.prepare("SELECT 1 AS found FROM log LIMIT 1").get())
+  const log = withLog ? yield* makoLogRowSteps(db) : undefined
+  return { metadata, revision, blocks, appends, base, requests, order, harnessTurns, log, logBegun }
+}
+
+function* makoLogRowSteps(db: DatabaseSync): Steps<MakoLogEntry[]> {
+  const entries: MakoLogEntry[] = []
+  const rows = db.prepare("SELECT seq, at, kind, value, origin, schema FROM log WHERE seq > ? ORDER BY seq LIMIT ?")
+  for (let last = 0; ;) {
+    const read = rows.all(last, ROWS_PER_STEP * 4)
+    for (const row of read) {
+      const entry = LogRowSchema.parse(row)
+      entries.push({ ...entry, value: LogValueSchema.parse(JSON.parse(entry.value)) })
+      last = entry.seq
+    }
+    if (read.length < ROWS_PER_STEP * 4) return entries
+    yield
+  }
+}
+
 function itemsIn(message: DecodedEntry): number {
   return message.kind === "assistant" ? message.blocks.length : 1
 }
 const RowSchema = z.object({ value: z.string() })
 const BlockRowSchema = z.object({ id: z.number().int(), value: z.string() })
 const RowAtSchema = z.object({ at: z.number().int(), value: z.string() })
+const RowKeysSchema = z.object({ keys: z.string() })
+
+/**
+ * Whether `next` is `previous` with requests added after it and none moved: the rows' insertion order still says the
+ * queue's, so no `request_order` row is needed. A removal keeps the order of the rest.
+ */
+function appendedTo(previous: readonly LiveRequest[] | undefined, next: readonly LiveRequest[]): boolean {
+  if (!previous) return true
+  const known = new Set(previous.map((request) => request.id))
+  let at = 0
+  let added = false
+  for (const request of next) {
+    if (!known.has(request.id)) {
+      added = true
+      continue
+    }
+    if (added) return false
+    while (at < previous.length && previous[at]!.id !== request.id) at++
+    if (at === previous.length) return false
+    at++
+  }
+  return true
+}
+
+/** `requests` sorted in place by `order`; any it doesn't name keep their place after those it does. */
+function inOrder(requests: LiveRequest[], order: readonly string[]): void {
+  const place = new Map(order.map((id, index) => [id, index]))
+  const indexed = requests.map((request, index) => ({ request, key: place.get(request.id) ?? order.length + index }))
+  indexed.sort((left, right) => left.key - right.key)
+  indexed.forEach((item, index) => { requests[index] = item.request })
+}
 const AppendRowSchema = z.object({
   block_id: z.number().int().nonnegative(),
   value: z.string(),
@@ -411,12 +557,12 @@ export type MakoLogEntry = Omit<z.infer<typeof LogRowSchema>, "value"> & MakoLog
 
 /**
  * Kept in their own tables, or by this host only; `revision` is in `progress`, which every flush moves; `wakeAt` is
- * read from `requests`, and `promptedAt` from `prompted`, which each commit of the requests keeps. `elsewhere`,
+ * read from `requests`, and `promptedAt` from `prompted`, which each commit of the requests keeps. `elsewhere`, `elsewhereKind`, `order`,
  * `waitingOn`, `waitingFor`, `attention`, `threadTitle`, `quietSince`, `cloudContinue`, `movedAt`, `rail` and `copy` are a cloud
  * router's word on a conversation it relays or reads from the account's copy, never a journal's. `parent` is its
  * Thread's edge, read from the Thread store whenever it's listed, and `children` its children's count, read from them.
  */
-type UnstoredMetadata = "parent" | "children" | "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "waitingOn" | "waitingFor" | "attention" | "threadTitle" | "quietSince" | "cloudContinue" | "movedAt" | "rail" | "copy" | "wakeAt" | "promptedAt"
+type UnstoredMetadata = "parent" | "children" | "fins" | "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "elsewhereKind" | "waitingOn" | "waitingFor" | "attention" | "threadTitle" | "quietSince" | "cloudContinue" | "movedAt" | "rail" | "copy" | "wakeAt" | "promptedAt" | "order"
 
 /**
  * Whether `next` holds metadata `previous` did not. Fields are compared by
@@ -486,6 +632,7 @@ export function journalSummary(metadata: string) {
       binding.nativeId ? [{ provider: binding.provider, nativeId: binding.nativeId }] : []
     ),
     steeredAt: personPromptedAt(undefined, control?.actions),
+    transferWakeAt: transferDue(control),
   }
 }
 
@@ -505,7 +652,10 @@ export class JournalWriteError extends Error {
  * are written.
  *
  * WAL with `synchronous=NORMAL`: a commit appends to the WAL without an
- * fsync, and the WAL is synced at each checkpoint. A committed transaction
+ * fsync, and the WAL is synced at each checkpoint. The one exception is the
+ * first frame into a WAL with none (a journal its last host closed), whose
+ * header SQLite syncs, folder and all: a restart's read-in has `WalPrimer`
+ * write it off the host's thread first. A committed transaction
  * survives a host crash or kill either way — SQLite's durability against the
  * application dying does not depend on this pragma — and only a power loss
  * or kernel panic in the same instant can lose the last few commits, and the
@@ -521,6 +671,8 @@ export class LiveJournal {
   private log?: MakoLogState
   /** Journals written before `options` had its own row keep it in metadata until their next commit. */
   private optionsStored = false
+  /** Whether the requests' order is kept in `request_order`: once one moved from where it came, the rows' order no longer says it. */
+  private ordered = false
   /** The stored base counts messages (`readBase`): the next commit writes it and the metadata again. */
   private messageBase = false
   /**
@@ -551,6 +703,11 @@ export class LiveJournal {
   private closing?: Promise<void>
   /** `keepFile`: the tidying `closing` waits to do is no longer this journal's. */
   private untidy = false
+  /** The journal's database file. */
+  get file(): string {
+    return this.path
+  }
+
   constructor(root: string, id: string) {
     z.string().uuid().parse(id)
     mkdirSync(root, { recursive: true })
@@ -566,6 +723,7 @@ export class LiveJournal {
       CREATE TABLE IF NOT EXISTS base_entries (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS blocks (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS request_order (id INTEGER PRIMARY KEY, keys TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS prompted (id INTEGER PRIMARY KEY, at INTEGER, requests INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS harness_turns (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS block_appends (block_id INTEGER NOT NULL, sequence INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (block_id, sequence));
@@ -579,6 +737,7 @@ export class LiveJournal {
         this.appends.set(row.block_id, row.count)
       }
       this.optionsStored = Boolean(this.db.prepare("SELECT 1 FROM options WHERE id=1").get())
+      this.ordered = Boolean(this.db.prepare("SELECT 1 FROM request_order WHERE id=1").get())
       // Every commit writes the metadata and the base row together: a journal without the one has neither.
       if (!this.db.prepare("SELECT 1 FROM metadata WHERE id=1").get()) this.rowsNamed = false
     } catch (error) {
@@ -634,8 +793,8 @@ export class LiveJournal {
   summary() {
     const metadata = this.metadata()
     if (!metadata) return null
-    const { steeredAt, ...summary } = journalSummary(metadata)
-    const wakeAt = this.wakeAt()
+    const { steeredAt, transferWakeAt, ...summary } = journalSummary(metadata)
+    const wakeAt = sooner(this.wakeAt(), transferWakeAt)
     const promptedAt = laterPrompt(this.requestedAt(), steeredAt)
     const unsettled = this.unsettled()
     return { ...summary, revision: Math.max(summary.revision, this.revision()), ...wakeAt !== undefined && { wakeAt }, ...promptedAt !== undefined && { promptedAt }, ...unsettled && { unsettled } }
@@ -679,12 +838,14 @@ export class LiveJournal {
       })
   }
 
-  /** The soonest a held request here sends itself (`LiveRequest.wake`); only rows that name a wake are parsed. */
+  /** The soonest a held request here sends itself (`LiveRequest.wake`, `LiveRequest.retry`); only rows that name one are parsed. */
   private wakeAt(): number | undefined {
     let soonest: number | undefined
-    for (const row of this.db.prepare("SELECT value FROM requests WHERE value LIKE '%\"wake\"%'").all()) {
+    for (const row of this.db.prepare("SELECT value FROM requests WHERE value LIKE '%\"wake\"%' OR value LIKE '%\"retry\"%'").all()) {
       const request = LiveRequestSchema.safeParse(JSON.parse(RowSchema.parse(row).value)).data
-      if (request?.status === "held" && request.wake && (soonest === undefined || request.wake.at < soonest)) soonest = request.wake.at
+      const hold = request && holdOf(request)
+      const at = hold && holdDue(hold)
+      if (at !== undefined && (soonest === undefined || at < soonest)) soonest = at
     }
     return soonest
   }
@@ -703,55 +864,60 @@ export class LiveJournal {
    * the host goes on: a journal of 150MB read at once held the loop for a
    * third of a second. Nothing else may use this journal until it resolves.
    */
-  readSliced(): Promise<LiveSnapshot | null> {
-    return inSlices(this.reading())
+  readSliced(stopping?: () => boolean, reader?: JournalReader): Promise<LiveSnapshot | null> {
+    if (!reader) return inSlices(this.reading(), undefined, stopping)
+    // Its rows are read and parsed on a reader, off the loop; the snapshot is made here, a slice at a time. Nothing
+    // writes the file meanwhile: nothing else may use this journal until this resolves, and this host is its writer.
+    // A stop ends the wait at once, as it ends a read on the loop at its next step; the reader's rows go unused.
+    let watching: ReturnType<typeof setInterval> | undefined
+    const stopped = new Promise<never>((_, reject) => {
+      if (!stopping) return
+      watching = setInterval(() => { if (stopping()) reject(new StepsStopped()) }, STOP_LOOK_MS)
+      watching.unref?.()
+    })
+    stopped.catch(() => undefined)
+    return Promise.race([reader(this.path, !this.log), stopped]).finally(() => clearInterval(watching)).then(
+      (rows) => inSlices(this.fromRows(rows), undefined, stopping),
+      (error) => {
+        if (error instanceof StepsStopped) throw error
+        hostWarn("journal", "a journal's reader failed; it's read here instead", { path: this.path, error: errorMessage({ error }) })
+        return inSlices(this.reading(), undefined, stopping)
+      })
   }
 
   /** `read` as `Steps`, its rows read and parsed `ROWS_PER_STEP` at a time, in one read transaction. */
   private *reading(): Steps<LiveSnapshot | null> {
     this.db.exec("BEGIN")
-    let snapshot: LiveSnapshot | null
+    let rows: JournalRows | null
     try {
-      snapshot = yield* this.readRows()
+      rows = yield* journalRowSteps(this.db, !this.log)
       this.db.exec("COMMIT")
     } catch (error) {
       if (this.db.isTransaction) this.db.exec("ROLLBACK")
       throw error
     }
-    if (!snapshot) return null
-    const begun = Boolean(this.log) || Boolean(this.db.prepare("SELECT 1 AS found FROM log LIMIT 1").get())
-    this.log ??= foldMakoLog(yield* this.makoLogSteps())
+    return yield* this.fromRows(rows)
+  }
+
+  /** The snapshot `rows` make, with Mako's log brought up to them. */
+  private *fromRows(rows: JournalRows | null): Steps<LiveSnapshot | null> {
+    if (!rows) return null
+    const snapshot = yield* this.readRows(rows)
+    const begun = Boolean(this.log) || rows.logBegun
+    this.log ??= foldMakoLog(rows.log ?? (yield* this.makoLogSteps()))
     this.reconcile(snapshot, begun)
     return snapshot
   }
 
-  private *readRows(): Steps<LiveSnapshot | null> {
-    const metadataValue = this.metadata()
-    if (!metadataValue) return null
-    const stored = MetadataSchema.parse(JSON.parse(metadataValue))
-    const metadata = { ...stored, revision: Math.max(stored.revision, this.revision()) }
-    const blocks: Entry[] = []
-    const blockRows = this.db.prepare("SELECT id, value FROM blocks WHERE id > ? ORDER BY id LIMIT ?")
-    for (let last = -1; ;) {
-      const rows = blockRows.all(last, ROWS_PER_STEP)
-      for (const row of rows) {
-        const block = BlockRowSchema.parse(row)
-        blocks.push(EntrySchema.parse(JSON.parse(block.value)))
-        last = block.id
-      }
-      if (rows.length < ROWS_PER_STEP) break
-      yield
-    }
+  private *readRows(rows: JournalRows): Steps<LiveSnapshot> {
+    const stored = MetadataSchema.parse(JSON.parse(rows.metadata))
+    const metadata = { ...stored, revision: Math.max(stored.revision, rows.revision) }
+    const { blocks } = rows
     const tails = new Map<number, AppendValue[]>()
-    for (const value of this.db
-      .prepare(
-        "SELECT block_id, value FROM block_appends ORDER BY block_id, sequence"
-      )
-      .all()) {
-      const row = AppendRowSchema.parse(value)
-      const parts = tails.get(row.block_id) ?? []
-      parts.push(AppendValueSchema.parse(JSON.parse(row.value)))
-      tails.set(row.block_id, parts)
+    for (const { block, value } of rows.appends) {
+      const parts = tails.get(block) ?? []
+      parts.push(value)
+      tails.set(block, parts)
     }
     for (const [index, parts] of tails) {
       let block = blocks[index]
@@ -763,29 +929,16 @@ export class LiveJournal {
       }
       if (block) blocks[index] = block
     }
-    const read = yield* readBaseSteps(this.db)
+    const read = storedBaseOf(rows.base)
     // Until the next commit writes both, the base row and `baseLiveStart` stay in messages.
     this.messageBase = Boolean(read?.entryIndex)
     this.rowsNamed = Boolean(read && !read.whole)
     // The rows hold what was read; merged again below, an entry that reads the same keeps the object its row holds.
     if (read && !read.whole) this.baseRows = [...read.base.entries]
     const baseLiveStart = read?.entryIndex && metadata.baseLiveStart !== undefined ? read.entryIndex(metadata.baseLiveStart) : metadata.baseLiveStart
-    const requests: LiveRequest[] = []
-    const requestRows = this.db.prepare("SELECT rowid AS at, value FROM requests WHERE rowid > ? ORDER BY rowid LIMIT ?")
-    for (let last = -1; ;) {
-      const rows = requestRows.all(last, ROWS_PER_STEP)
-      for (const row of rows) {
-        const request = RowAtSchema.parse(row)
-        requests.push(LiveRequestSchema.parse(JSON.parse(request.value)))
-        last = request.at
-      }
-      if (rows.length < ROWS_PER_STEP) break
-      yield
-    }
-    const harnessTurns = this.db
-      .prepare("SELECT value FROM harness_turns ORDER BY rowid")
-      .all()
-      .map((row) => HarnessTurnSchema.parse(JSON.parse(RowSchema.parse(row).value)))
+    const { requests, harnessTurns } = rows
+    const order = this.ordered ? rows.order : undefined
+    if (order) inOrder(requests, order)
     // A base an earlier build kept unmerged reads as every other reading of it does.
     const base = read
       ? yield* sharedBase(read.base, (yield* mergedBaseSteps(read.base, blocks, metadata.baseCoveredBlocks ?? 0, baseLiveStart, { cutOff: cutOffRequests(requests) })).base)
@@ -930,6 +1083,10 @@ export class LiveJournal {
         const kept = new Set(requests.map((request) => request.id))
         if (!previous || previous.requests.some((request) => !kept.has(request.id)))
           this.db.prepare("DELETE FROM requests WHERE id NOT IN (SELECT value FROM json_each(?))").run(JSON.stringify([...kept]))
+        if (this.ordered || !appendedTo(previous?.requests, requests)) {
+          this.db.prepare("INSERT OR REPLACE INTO request_order VALUES (1, ?)").run(JSON.stringify(requests.map((request) => request.id)))
+          this.ordered = true
+        }
         this.db.prepare("INSERT OR REPLACE INTO prompted VALUES (1, ?, ?)").run(personPromptedAt(requests) ?? null, requests.length)
       }
       // Each is kept as it ends and never changes.
@@ -1134,19 +1291,8 @@ export class LiveJournal {
     return atOnce(this.makoLogSteps())
   }
 
-  private *makoLogSteps(): Steps<MakoLogEntry[]> {
-    const entries: MakoLogEntry[] = []
-    const rows = this.db.prepare("SELECT seq, at, kind, value, origin, schema FROM log WHERE seq > ? ORDER BY seq LIMIT ?")
-    for (let last = 0; ;) {
-      const read = rows.all(last, ROWS_PER_STEP * 4)
-      for (const row of read) {
-        const entry = LogRowSchema.parse(row)
-        entries.push({ ...entry, value: LogValueSchema.parse(JSON.parse(entry.value)) })
-        last = entry.seq
-      }
-      if (read.length < ROWS_PER_STEP * 4) return entries
-      yield
-    }
+  private makoLogSteps(): Steps<MakoLogEntry[]> {
+    return makoLogRowSteps(this.db)
   }
 
   /**
@@ -1174,6 +1320,11 @@ export class LiveJournal {
       }
     }
     this.db.close()
+    // Closed, it writes nothing more, so it lets go of what its rows held by identity: kept, they were the paged
+    // entries' last holder, so none was ever collected and a journal waiting on them (`LiveRecords.releasing`) stayed
+    // for the host's life with its connection and its log (2026-11-12: 68 journals, 80 MB, after 60 opens).
+    this.baseRows = []
+    this.stagedBase = undefined
     const tidy = () => {
       if (this.untidy) return
       if (ahead && !compact && paged) dropRowsAhead(this.path)
@@ -1344,13 +1495,14 @@ const BaseHeaderSchema = z.object({
   entries: z.number().nullable(),
 })
 const RowBytesSchema = z.object({ bytes: z.number().nullable() })
+const OptionalBaseHeaderSchema = BaseHeaderSchema.optional()
 
 /** How many rows of a copy one step of `baseHeader` sums: a couple of milliseconds' reading. */
 const ROWS_SUMMED = 512
 
 /** The base row's page, read without decoding its entries, and the bytes of the copy it names: 0 when it names none. */
 function* baseHeader(db: DatabaseSync) {
-  const header = BaseHeaderSchema.optional().parse(db.prepare(`SELECT length(value) AS bytes,
+  const header = OptionalBaseHeaderSchema.parse(db.prepare(`SELECT length(value) AS bytes,
     json_extract(value, '$.start') AS start, json_extract(value, '$.hasEarlier') AS hasEarlier, json_extract(value, '$.preview') AS preview,
     json_extract(value, '$.ref.harness') AS harness, json_extract(value, '$.ref.nativeId') AS nativeId, json_extract(value, '$.ref.path') AS path,
     json_extract(value, '$.entryRows') AS entryRows, json_array_length(value, '$.entries') AS entries FROM base WHERE id=1`).get())

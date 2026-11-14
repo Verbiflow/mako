@@ -6,6 +6,9 @@ import { childStateOf } from "@mako/host/contracts/children"
 import { FinMark } from "@/components/stage/child-tabs"
 import { StillMark } from "@/components/transcript/message-avatar"
 import { ApexMark } from "@/components/ui/apex-mark"
+import { PlaceMark } from "@/components/ui/place-mark"
+import { runPlace } from "@mako/host/contracts/account-devices"
+import { CLOUD_WHERE } from "@/state/cloud-moves"
 import { acp, acpStore, activeAcp, useAcp } from "@/state/acp"
 import { followCheckouts, useCheckoutHead } from "@/state/checkout-heads"
 import { APEX_WORD, FIN_WORD } from "@mako/host/contracts/agents"
@@ -29,6 +32,7 @@ export function ChildBreadcrumb() {
   const child = shown?.open.child
   const cwd = useAcp((state) => (child ? childConversation(state, child)?.cwd : undefined))
   const elsewhere = useAcp((state) => (child ? childConversation(state, child)?.elsewhere : undefined))
+  const elsewhereKind = useAcp((state) => (child ? childConversation(state, child)?.elsewhereKind : undefined))
   useEffect(() => {
     if (cwd) followCheckouts([cwd])
   }, [cwd])
@@ -47,7 +51,7 @@ export function ChildBreadcrumb() {
         type="button"
         onClick={backToApex}
         title={`Back to ${open.apexTitle}`}
-        className="pressable flex h-6 shrink-0 items-center gap-1 rounded-md pr-1.5 pl-0.5 text-muted-foreground hover:bg-fill-hover hover:text-foreground"
+        className="pressable flex h-6 shrink-0 items-center gap-1 pr-1.5 pl-0.5 text-muted-foreground hover:bg-fill-hover hover:text-foreground"
       >
         <ChevronLeftIcon className="size-3.5" />
         <ApexMark className="size-3" />
@@ -57,6 +61,7 @@ export function ChildBreadcrumb() {
       {agent ? <FinMark agent={agent} state={childStateOf(agent)} read size={16} /> : null}
       <span className="min-w-0 truncate text-ui font-medium text-foreground">{agent?.title ?? FIN_WORD}</span>
       <span className="flex min-w-0 shrink items-center gap-1.5 overflow-hidden pl-1">
+        {elsewhere ? <PlaceMark place={runPlace(elsewhere === CLOUD_WHERE, elsewhereKind)} /> : null}
         <span className="truncate">{elsewhere ? capitalized(elsewhere) : "This Mac"}</span>
         {branch ? <span className="truncate font-mono text-label">· {branch}</span> : null}
       </span>
@@ -100,7 +105,7 @@ export function ChildComposerNote() {
             aria-label={`Write to ${apexTitle ?? `the ${APEX_WORD}`} instead`}
             title={`Write to ${apexTitle ?? `the ${APEX_WORD}`} instead`}
             onClick={() => unaddress(conversation)}
-            className="pressable flex size-5 shrink-0 items-center justify-center rounded text-faint hover:text-foreground"
+            className="pressable flex size-5 shrink-0 items-center justify-center text-faint hover:text-foreground"
           >
             <XIcon className="size-3" />
           </button>

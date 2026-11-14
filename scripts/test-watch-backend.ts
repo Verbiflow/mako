@@ -7,6 +7,7 @@ import type { WatchEvent } from "@mako/host/contracts/watcher-child"
 import { childBackend, childHistory, probeDelivery, type FileHistory, type WatchListener } from "@mako/host/workspaces/watch-backend"
 import { WatchReadings } from "@mako/host/workspaces/watch-readings"
 import { FileEventsServiceWatch } from "@mako/host/workspaces/file-events-service"
+import { ranOut } from "./lib/ran-out.ts"
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-watch-backend-")))
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -40,12 +41,27 @@ function watcherChildren(): number[] {
 }
 
 // FSEvents can deliver seconds late on a busy Mac, but in order: a marker
-// written after a change arriving means the change has arrived too.
+// written after a change arriving means the change has arrived too. A watch
+// that says `dropped` meanwhile (its child restarted, as a silence on a loaded
+// runner restarts it) has said what came before may be lost, which its
+// consumers answer with a rescan: a fresh marker is then the barrier. A watch
+// that goes quiet without saying so still fails, with what it did say.
 let markers = 0
-async function drained(folder: string, heard: string[]): Promise<void> {
-  const marker = join(folder, `marker-${++markers}`)
+async function drained(folder: string, watch: ReturnType<typeof recorder>): Promise<void> {
+  const deadline = Date.now() + 90_000
+  let drops = watch.dropped()
+  let marker = join(folder, `marker-${++markers}`)
   writeFileSync(marker, "")
-  await until(`file events arrive (${marker})`, () => heard.includes(marker))
+  while (!watch.heard.includes(marker)) {
+    const said = () => `${watch.dropped()} dropped, muted ${JSON.stringify(watch.mutes)}, late ${JSON.stringify(watch.lates)}, watcher children ${JSON.stringify(watcherChildren())}`
+    assert.ok(Date.now() < deadline, `file events arrive (${marker}); the watch said ${said()}`)
+    if (watch.dropped() > drops) {
+      drops = watch.dropped()
+      marker = join(folder, `marker-${++markers}`)
+      writeFileSync(marker, "")
+    }
+    await wait(25)
+  }
 }
 
 try {
@@ -59,11 +75,11 @@ try {
   const subscription = await backend(kept, ["**/node_modules/**"], a.listener)
   await backend(removed, [], b.listener)
   assert.equal(watcherChildren().length, 1, "every watch shares one child")
-  await drained(kept, a.heard)
+  await drained(kept, a)
   mkdirSync(join(kept, "node_modules", "pkg"), { recursive: true })
   writeFileSync(join(kept, "node_modules", "pkg", "index.js"), "")
   writeFileSync(join(kept, "index.ts"), "")
-  await drained(kept, a.heard)
+  await drained(kept, a)
   assert.ok(a.heard.includes(join(kept, "index.ts")))
   assert.equal(a.heard.some((path) => path.includes("node_modules/pkg/")), false, "ignored folders stay in the child")
 
@@ -76,7 +92,7 @@ try {
   await until("a root gone meanwhile is given up", () => b.gone() === 1, 15_000)
   const [second] = watcherChildren()
   assert.ok(second && second !== first, "in a new child")
-  await drained(kept, a.heard)
+  await drained(kept, a)
 
   await subscription.unsubscribe()
   const after = a.heard.length
@@ -89,9 +105,9 @@ try {
   // A child that dies every time is given up after five tries.
   const dying = join(root, "dying.mjs")
   writeFileSync(dying, "process.on('message', () => process.exit(1))\n")
-  const started = Date.now()
-  await assert.rejects(childBackend(dying)(kept, [], recorder().listener), /keeps stopping/)
-  assert.ok(Date.now() - started < 10_000, "within the backoff, not forever")
+  // Within the backoff, by the waits it took rather than the runner's clock: each restart twice the last, then given up.
+  const { waits } = await ranOut(() => assert.rejects(childBackend(dying)(kept, [], recorder().listener), /keeps stopping/))
+  assert.deepEqual(waits.filter((ms) => ms >= 250), [250, 500, 1_000, 2_000], "within the backoff, not forever")
 
   // Late isn't silent: a canary heard 8 s late, as a degraded fseventsd
   // delivers, mutes nothing and restarts nothing, and its lag is read and
@@ -203,12 +219,13 @@ try {
   process.env.MAKO_WATCHER_CANARY_TEST = JSON.stringify({ everyMs: 1_500 })
   const restarted = await service.restart()
   assert.equal(restarted.restart?.outcome, "restarted")
-  assert.ok((restarted.restart?.after?.lagMs ?? Infinity) < 250, `delivery measured again after: ${restarted.restart?.after?.lagMs} ms`)
+  // Measured again, not the late beats carried over: well under the lag it restarted from, whatever the runner's pace.
+  assert.ok((restarted.restart?.after?.lagMs ?? Infinity) < (restarted.restart?.before.lagMs ?? 0) / 2, `delivery measured again after: ${restarted.restart?.after?.lagMs} ms, from ${restarted.restart?.before.lagMs} ms`)
   assert.ok((restarted.restart?.before.lagMs ?? 0) >= 1_200)
   assert.equal(restarted.state, "healthy", "and the notice goes")
   await until("every watch hears its events may have been dropped, and rescans", () => d.dropped() === 1, 30_000)
   assert.equal(healthReadings.reading().starts.recovery, 1, "the watcher child started over once")
-  await drained(kept, d.heard)
+  await drained(kept, d)
   if (healthHistory && before) {
     const across = await healthHistory.since(before, [kept])
     assert.deepEqual(across.lost, [kept], "a read from before the restart is reported lost, not returned as if complete")

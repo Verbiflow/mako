@@ -1,10 +1,10 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { manualDevUpdates } from "../electron/dev-updates.mjs"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * A cloud Thread interrupted when its machine is lost, as the person sees it, against the production components and the
@@ -26,7 +26,7 @@ if (process.versions.electron) {
   })
 } else {
   const { createServer } = await import("vite")
-  const root = await mkdtemp(join(tmpdir(), "mako-machine-notice-ui-"))
+  const root = testScratch("mako-machine-notice-ui-")
   const server = await createServer({
     cacheDir: join(root, "cache"),
     define: { "import.meta.env.MAKO_MANUAL_RELOAD": "true" },
@@ -48,7 +48,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`UI evidence: ${shots}`)
 }
 
 async function checkWindow() {
@@ -58,7 +57,7 @@ async function checkWindow() {
   const base = process.env.MAKO_UI_TEST_URL
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
-  const window = new BrowserWindow({ width: 1280, height: 900, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
+  const window = new BrowserWindow({ width: 1600, height: 900, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
   const page = window.webContents
   page.debugger.attach("1.3")
   const watchdog = setTimeout(() => {

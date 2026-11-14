@@ -9,7 +9,7 @@ import {
   settingsForSend,
   type ComposerTarget,
 } from "@/state/composer-settings"
-import { applyLiveSnapshot } from "@/state/live-recovery"
+import { applyLiveSnapshot, readLive } from "@/state/live-recovery"
 import { getMako } from "@/lib/bridge"
 import type { Entry } from "@mako/sessions/entries"
 import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
@@ -249,6 +249,12 @@ const startRetries = new Map<string, ReturnType<typeof setTimeout>>()
 const startDeliveries = new Map<string, Promise<boolean>>()
 const retryDelays = new Map<string, number>()
 
+/** A durable start receipt confirms acceptance even when its state was overtaken while the read was out. */
+function startAccepted(snapshot: LiveSnapshot | null, input: LiveStartOptions): boolean {
+  return Boolean(snapshot && (!input.initialRequest || snapshot.requests.some((request) => request.id === input.initialRequest?.id) ||
+    snapshot.control?.transfers.some((transfer) => transfer.input.id === input.initialRequest?.id)))
+}
+
 export async function restorePendingStart(command: Extract<OutboxCommand, { kind: "start" }>): Promise<void> {
   const [harness, cwd, input] = command.args
   const starting: StartingAcpConversation = { kind: "starting", key: input.conversationId, draftKey: command.draftKey,
@@ -256,9 +262,10 @@ export async function restorePendingStart(command: Extract<OutboxCommand, { kind
     blocks: [], queued: [], hiddenUserPrompt: null, createdAt: Date.now(), updatedAt: Date.now(), unconfirmedStart: input }
   const existing = acpStore.get().conversations[input.conversationId]
   if (existing?.kind === "live") {
-    const snapshot = await readLiveSnapshot(existing.key).catch(() => null)
-    if (snapshot && (!input.initialRequest || snapshot.requests.some((request) => request.id === input.initialRequest?.id))) {
-      adoptStart(starting, snapshot, input)
+    const snapshot = await readLive(existing.key, () => readLiveSnapshot(existing.key).catch(() => null), (snapshot) => {
+      if (startAccepted(snapshot, input)) adoptStart(starting, snapshot, input)
+    })
+    if (startAccepted(snapshot, input)) {
       settleMessage(commandId(command))
       return
     }
@@ -307,23 +314,25 @@ async function attemptStart(starting: StartingAcpConversation, input: LiveStartO
   clearTimeout(startRetries.get(starting.key))
   startRetries.delete(starting.key)
   try {
-    adoptStart(starting, await getMako().liveStart(starting.harness, starting.cwd, input), input)
+    await readLive(input.conversationId, () => getMako().liveStart(starting.harness, starting.cwd, input), (snapshot) => adoptStart(starting, snapshot, input))
     settleMessage(input.initialRequest?.id ?? input.conversationId)
     retryDelays.delete(starting.key)
     return true
   } catch (error) {
-    let accepted = await readLiveSnapshot(starting.key).catch(() => null)
-    if (accepted && input.initialRequest && !accepted.requests.some((request) => request.id === input.initialRequest?.id) &&
-        !accepted.control?.transfers.some((transfer) => transfer.input.id === input.initialRequest?.id)) accepted = null
-    if (!accepted && input.resume && input.threadPath) {
-      const resolved = await getMako().resolveContinuation(input.threadPath).catch(() => null)
-      if (resolved?.transport === "attached" && (!input.initialRequest ||
-          resolved.snapshot.requests.some((request) => request.id === input.initialRequest?.id) ||
-          resolved.snapshot.control?.transfers.some((transfer) => transfer.input.id === input.initialRequest?.id)))
-        accepted = resolved.snapshot
+    // The receipt confirms the operation separately from whether its snapshot can update the window's state.
+    // A newer batch may overtake it while it is out; that must not turn a durably accepted start into a failure.
+    const adopt = (snapshot: LiveSnapshot) => {
+      if (startAccepted(snapshot, input)) adoptStart(starting, snapshot, input)
     }
-    if (accepted) {
-      adoptStart(starting, accepted, input)
+    let snapshot = await readLive(starting.key, () => readLiveSnapshot(starting.key).catch(() => null), adopt)
+    if (!startAccepted(snapshot, input) && input.resume && input.threadPath) {
+      const path = input.threadPath
+      snapshot = await readLive(undefined, async () => {
+        const resolved = await getMako().resolveContinuation(path).catch(() => null)
+        return resolved?.transport === "attached" ? resolved.snapshot : null
+      }, adopt)
+    }
+    if (startAccepted(snapshot, input)) {
       settleMessage(input.initialRequest?.id ?? input.conversationId)
       retryDelays.delete(starting.key)
       return true

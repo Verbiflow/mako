@@ -6,9 +6,8 @@ import type { Attachment } from "../attachments"
 import { tokenize } from "../mentions"
 import { proposedPlanTitle } from "../proposed-plan"
 import { mediaTypeForPath } from "../transcript-media"
-import type { PreparedThreadReference } from "../thread-references"
+import { writeReference, type PreparedThreadReference } from "@mako/sessions/thread-references"
 import {
-  writeConversation,
   writeDetail,
   writeFile,
   writePlan,
@@ -103,14 +102,7 @@ export function writeDraft({ draft, records, conversations = new Map(), plans = 
     else if (segment.kind === "thread" && tokens) body += segment.raw
     else if (segment.kind === "thread") {
       const prepared = conversations.get(segment.raw)
-      const written = writeConversation(
-        {
-          ref: prepared?.ref ?? segment.raw.slice(1),
-          harness: prepared?.thread?.harness ?? segment.harness,
-          title: prepared?.thread?.title ?? "Untitled conversation",
-        },
-        prepared?.context ?? null
-      )
+      const written = writeReference(segment, prepared)
       body += add(`thread:${prepared?.ref ?? segment.raw}`, written)
     } else if (segment.kind === "context") {
       const record = byId.get(segment.id)

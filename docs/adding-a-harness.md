@@ -125,12 +125,13 @@ List what no other harness has in the definition's `unique`: its name, what carr
 | Session flows | `npm run test:session-flows -- <harness>` passes every flow its declarations call for on the real CLI, and `--record` then `--continue` passes. `test:seventh-harness` runs the same flows against a scripted ACP agent. | `test:session-flows`, `test:seventh-harness` | – | – | – | – | – | – |
 | A real planning turn | One planning turn on the real CLI with `npm run probe:plan-turn`, then a review of the fixtures it records. | review | – | – | – | – | – | – |
 | Cloud sign-in | Where the sign-in lives on Linux, whether it rotates, which credential the cloud gets, how it is installed on a machine and who refreshes it. Not built; Wayfinder's secrets page has the plan. | not built: a run that resumes a laptop session on a fresh Linux machine and checks the laptop is still signed in | – | – | – | – | – | – |
+| Conformance | `npm run test:harness-conformance` passes: a silent peer names its stalled step, a whole-file write goes through the publisher, two conversations' process trees are charged apart, and, where the CLI is installed, cancel, the heap, and a steer behave as `docs/harness-conformance.md` says. | `test:harness-conformance` | – | – | – | – | – | – |
 | Development desk | Its modes and plan approval in `src/dev/mock-bridge.ts` (`MOCK_MODES`, `MOCK_PLAN_APPROVALS`), copied from the real wire, so `?mock` shows what the harness shows. | review | – | – | – | – | – | – |
 
 - OpenCode, models: no default model: OpenCode's models are the person's own providers, so it starts on the model they configured.
-- Claude Code, versions: tested 2.1.314, no oldest proven, bundled @anthropic-ai/claude-agent-sdk
-- Codex, versions: tested 0.166.0, oldest 0.142.0
-- Cursor, versions: tested 1.2.0, no oldest proven, bundled @cursor/sdk
-- OpenCode, versions: tested 2.2.3, oldest 2.0.0
-- Grok, versions: tested 1.0.70, oldest 0.2.97
-- Devin, versions: tested 3000.11.234, no oldest proven
+- Claude Code, versions: tested 2.1.322, no oldest proven, bundled @anthropic-ai/claude-agent-sdk
+- Codex, versions: tested 0.167.0, oldest 0.142.0
+- Cursor, versions: tested 1.3.1, no oldest proven, bundled @cursor/sdk
+- OpenCode, versions: tested 2.2.7, oldest 2.0.0
+- Grok, versions: tested 1.0.77, oldest 0.2.97
+- Devin, versions: tested 3000.12.43, no oldest proven

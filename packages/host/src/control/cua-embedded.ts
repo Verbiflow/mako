@@ -1,4 +1,5 @@
-import { spawn, type ChildProcess } from "node:child_process"
+import { hostSpawn } from "../base/host-command.js"
+import type { ChildProcess } from "node:child_process"
 import { access, chmod, mkdir, readdir, unlink } from "node:fs/promises"
 import { createConnection } from "node:net"
 import { homedir } from "node:os"
@@ -274,7 +275,7 @@ export class CuaEmbedded {
   ): Promise<Daemon> {
     const socket = endpoint.path
     this.#stderr = ""
-    const child = spawn(command, args, {
+    const child = hostSpawn(command, args, {
       env,
       stdio: ["ignore", "ignore", "pipe"],
       windowsHide: true,

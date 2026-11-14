@@ -9,6 +9,7 @@ import type { Entry } from "@mako/sessions/entries"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { LiveHistoryReader } from "@mako/host/conversations/live-history-reader"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
+import { JournalReaders } from "@mako/host/conversations/journal-readers"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
@@ -54,14 +55,17 @@ const heapMB = () => {
 }
 
 /** The longest the loop went without turning, sampled every few milliseconds while `watch` runs. */
-async function watch<Value>(work: () => Promise<Value>): Promise<{ value: Value; maxHoldMs: number; ms: number; peakMB: number }> {
+async function watch<Value>(work: () => Promise<Value>): Promise<{ value: Value; maxHoldMs: number; busyMs: number; ms: number; peakMB: number }> {
   let maxHoldMs = 0
+  let busyMs = 0
   let peak = 0
   let last = performance.now()
   let running = true
   const tick = () => {
     const now = performance.now()
     maxHoldMs = Math.max(maxHoldMs, now - last)
+    // Past the 2 ms the tick waits for, the loop was at work: what it spent on the step.
+    busyMs += Math.max(0, now - last - 3)
     peak = Math.max(peak, getHeapStatistics().used_heap_size)
     last = now
     if (running) setTimeout(tick, 2)
@@ -73,7 +77,7 @@ async function watch<Value>(work: () => Promise<Value>): Promise<{ value: Value;
   // What the step left to run after it answered (the hold, rows written ahead) counts as the step's.
   await new Promise((resolve) => setTimeout(resolve, 200))
   running = false
-  return { value, maxHoldMs: Math.max(maxHoldMs, performance.now() - last), ms, peakMB: peak / 1_048_576 }
+  return { value, maxHoldMs: Math.max(maxHoldMs, performance.now() - last), busyMs, ms, peakMB: peak / 1_048_576 }
 }
 
 let seed = 0
@@ -228,6 +232,25 @@ try {
   results.set("readPeakAboveSettledMB", Math.round(readPeak - settled))
   results.set("retainedMB", Math.round(retained))
   results.set("worstReadMaxHoldMs", Math.round(worstRead))
+  // The same journal read in as a window or a report reads a conversation not in memory (`LiveRecords.loadSliced`):
+  // on the loop a slice at a time, then on a reader (`JournalReaders`), its snapshot made here.
+  const offLoopRead = async () => {
+  const sliced = await watch(() => new LiveJournal(join(root, "conversations-flip"), id).readSliced())
+  assert.equal(sliced.value?.base?.entries.length, native.entries.length)
+  results.set("journalReadSlicedMs", Math.round(sliced.ms))
+  results.set("journalReadSlicedMaxHoldMs", Math.round(sliced.maxHoldMs))
+  results.set("journalReadSlicedLoopBusyMs", Math.round(sliced.busyMs))
+  const readers = new JournalReaders()
+  await readers.read(join(root, "conversations-flip", `${randomUUID()}.sqlite`), false).catch(() => undefined)
+  const offLoop = await watch(() => new LiveJournal(join(root, "conversations-flip"), id).readSliced(undefined, (file, withLog) => readers.read(file, withLog)))
+  assert.equal(offLoop.value?.base?.entries.length, native.entries.length, "a reader reads the same journal")
+  assert.deepEqual(offLoop.value, sliced.value, "a reader's rows make the snapshot the loop's do")
+  results.set("journalReadReaderMs", Math.round(offLoop.ms))
+  results.set("journalReadReaderMaxHoldMs", Math.round(offLoop.maxHoldMs))
+  results.set("journalReadReaderLoopBusyMs", Math.round(offLoop.busyMs))
+  await readers.stop()
+  }
+  await offLoopRead()
   console.log(JSON.stringify(Object.fromEntries(results), null, 2))
   await live.stop()
   assert.ok(worstRead <= MAX_HOLD_MS, `a read held the loop ${Math.round(worstRead)}ms; at most ${MAX_HOLD_MS}ms`)

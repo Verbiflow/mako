@@ -11,6 +11,8 @@ import { actions, useSession } from "@/state/session"
 import { threads, useThreads } from "@/state/threads"
 import { modelKey, noteModelUse, usePrefs } from "@/state/prefs"
 import { useWorkspaceFiles } from "@/state/files"
+import { workspaceFiles } from "@/state/file-tree"
+import type { FileFindResults } from "@mako/host/contracts/file-index"
 import { viewer } from "@/state/viewer"
 import { cn } from "@/lib/utils"
 import { SearchIcon } from "lucide-react"
@@ -20,6 +22,7 @@ interface Entry {
   section: string
   title: string
   hint?: string
+  keywords?: string
   keys?: string[]
   run: () => void
 }
@@ -48,6 +51,21 @@ export function CommandPalette() {
 
   const fileIndex = useWorkspaceFiles(open && mode === "files")
   const { files } = fileIndex
+  // Typed, a file is found by the host's index of the workspace, as the Files panel finds it.
+  const cwd = useSession((state) => state.meta?.cwd)
+  const finder = useMemo(() => (cwd ? workspaceFiles(cwd) : undefined), [cwd])
+  const [found, setFound] = useState<FileFindResults>()
+  const term = query.trim()
+  useEffect(() => {
+    if (!open || mode !== "files" || !term || !finder) return
+    let current = true
+    void finder.find(term, 60).then((next) => {
+      if (current) setFound(next)
+    }, () => undefined)
+    return () => {
+      current = false
+    }
+  }, [open, mode, term, finder])
   const deskCommands = useCommands()
   const keybindings = usePrefs((prefs) => prefs.keybindings)
   const favoriteModels = usePrefs((prefs) => prefs.favoriteModels)
@@ -88,9 +106,10 @@ export function CommandPalette() {
    * useful rather than arbitrary.
    */
   const fileEntries = useMemo<Entry[]>(() => {
-    const term = query.trim()
     const ordered = term
-      ? rank(files, term, (file) => file.path).slice(0, 60)
+      ? found && (found.query === term || term.startsWith(found.query))
+        ? found.hits.map((hit) => ({ path: hit.path }))
+        : rank(files, term, (file) => file.path).slice(0, 60)
       : [...files].sort((a, b) => Number(Boolean(b.changed)) - Number(Boolean(a.changed))).slice(0, 60)
     return ordered.map((file) => ({
       id: `file:${file.path}`,
@@ -99,9 +118,11 @@ export function CommandPalette() {
       hint: file.path,
       run: () => void viewer.open(file.path),
     }))
-  }, [files, query])
+  }, [files, found, term])
 
+  // Read as it opens: closed, the palette lists nothing, and asks no command whether it applies.
   const entries = useMemo<Entry[]>(() => {
+    if (!open) return []
     const list: Entry[] = deskCommands
       .filter((command) => command.when?.() !== false)
       .map((command) => toEntry(command, keybindings))
@@ -147,6 +168,7 @@ export function CommandPalette() {
 
     return list
   }, [
+    open,
     activeModel,
     deskCommands,
     favoriteModels,
@@ -172,7 +194,7 @@ export function CommandPalette() {
     }
     const scored: Array<{ entry: Entry; score: number }> = []
     for (const entry of entries) {
-      const match = fuzzy(term, `${entry.title} ${entry.section} ${entry.hint ?? ""}`)
+      const match = fuzzy(term, `${entry.title} ${entry.section} ${entry.hint ?? ""} ${entry.keywords ?? ""}`)
       if (match) scored.push({ entry, score: match.score })
     }
     scored.sort((a, b) => b.score - a.score)
@@ -237,7 +259,7 @@ export function CommandPalette() {
     >
       <div
         onKeyDown={onKeyDown}
-        className="overlay-panel w-full max-w-dialog overflow-hidden rounded-xl"
+        className="overlay-panel w-full max-w-dialog overflow-hidden"
       >
         <div className="flex h-11 items-center gap-2.5 border-b border-hairline px-3.5">
           <SearchIcon className="size-3.5 shrink-0 text-faint" aria-hidden />
@@ -271,7 +293,7 @@ export function CommandPalette() {
                       entry.run()
                     }}
                     className={cn(
-                      "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left",
+                      "flex w-full items-center gap-2 px-2 py-1.5 text-left",
                       index === cursor && "bg-fill-selected"
                     )}
                   >
@@ -300,6 +322,7 @@ function toEntry(
     section: command.section,
     title: command.title,
     hint: command.hint,
+    keywords: command.keywords,
     keys: formatChord(keysFor(command, keybindings)),
     run: () => void command.run(),
   }

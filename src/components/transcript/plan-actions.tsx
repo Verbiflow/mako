@@ -40,7 +40,7 @@ export function PlanMenu({
   const [saving, setSaving] = useState(false)
   const trigger = useRef<HTMLButtonElement>(null)
   const focus = useWorkspaceFocus()
-  const item = "pressable block w-full rounded px-2 py-1.5 text-left text-ui hover:bg-fill-hover disabled:opacity-40"
+  const item = "pressable block w-full px-2 py-1.5 text-left text-ui hover:bg-fill-hover disabled:opacity-40"
   const close = (then: () => void) => () => {
     setOpen(false)
     then()
@@ -121,7 +121,7 @@ function SavePlanDialog({
         <div className="mb-4 flex items-center justify-between gap-3">
           <DialogTitle>Save plan to workspace</DialogTitle>
           <DialogClose asChild>
-            <button type="button" aria-label="Close save plan" className="pressable rounded p-1 text-faint hover:bg-fill-hover">
+            <button type="button" aria-label="Close save plan" className="pressable p-1 text-faint hover:bg-fill-hover">
               <XIcon className="size-4" />
             </button>
           </DialogClose>
@@ -147,7 +147,7 @@ function SavePlanDialog({
             <input
               ref={input}
               aria-label="Plan file path"
-              className="rounded-md border border-hairline bg-surface px-3 py-2 outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="border border-hairline bg-surface px-3 py-2 outline-none focus-visible:ring-1 focus-visible:ring-ring"
               value={path}
               onChange={(event) => setPath(event.target.value)}
             />
@@ -161,7 +161,7 @@ function SavePlanDialog({
           <button
             type="submit"
             disabled={!path.trim() || saving}
-            className="pressable self-end rounded-md border border-hairline px-3 py-2 text-ui hover:bg-fill-hover disabled:opacity-40"
+            className="pressable self-end border border-hairline px-3 py-2 text-ui hover:bg-fill-hover disabled:opacity-40"
           >
             {saving ? "Saving…" : "Save plan"}
           </button>

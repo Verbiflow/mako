@@ -1,13 +1,14 @@
 import { cn } from "@/lib/utils"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useState, type ComponentProps, type ReactNode } from "react"
+import { CheckIcon } from "lucide-react"
 
 /* ------------------------------------------------------------------ */
 /* Buttons                                                             */
 /* ------------------------------------------------------------------ */
 
 const base =
-  "pressable no-drag inline-flex shrink-0 select-none items-center justify-center gap-1.5 rounded-md " +
+  "pressable no-drag inline-flex shrink-0 select-none items-center justify-center gap-1.5 " +
   "text-ui font-medium whitespace-nowrap " +
   "[transition:transform_var(--duration-press)_var(--ease-out),background-color_120ms_ease,color_120ms_ease,opacity_120ms_ease] " +
   "disabled:pointer-events-none disabled:opacity-40 " +
@@ -113,7 +114,7 @@ export function Chip({
   return (
     <span
       className={cn(
-        "inline-flex h-[18px] items-center gap-1 rounded px-1.5 text-label font-medium ring-1 ring-inset",
+        "inline-flex h-[18px] items-center gap-1 px-1.5 text-label font-medium ring-1 ring-inset",
         palette,
         className
       )}
@@ -199,6 +200,53 @@ export function Toggle({
   )
 }
 
+/** A field's look: the raised plane, no outline until the keyboard is on it (`docs/design.md`). */
+export const FIELD = "h-8 min-w-0 bg-raised px-2.5 text-ui text-foreground placeholder:text-faint focus:outline-none focus-visible:ring-1 focus-visible:ring-border disabled:opacity-60"
+
+/** A line of text to type: Settings', a sheet's, a dialog's. */
+export function Field({ className, ...props }: ComponentProps<"input">) {
+  return <input {...props} className={cn(FIELD, className)} />
+}
+
+/** One of a few named choices, as the platform's own menu: the same plane as a field. */
+export function Select({ className, ...props }: ComponentProps<"select">) {
+  return <select {...props} className={cn(FIELD, "pr-7", className)} />
+}
+
+/**
+ * One choice of several that can all be on (a model kept, a place chosen): a square of the text colour with a check
+ * when on, the raised plane when off. A single setting that's on or off is a `Toggle`.
+ */
+export function Check({
+  label,
+  checked,
+  onChange,
+  disabled,
+}: {
+  label: string
+  checked: boolean
+  onChange: () => void
+  disabled?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-label={label}
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={onChange}
+      className={cn(
+        "pressable flex size-3.5 shrink-0 items-center justify-center",
+        "[transition:background-color_120ms_ease] disabled:pointer-events-none disabled:opacity-40",
+        checked ? "bg-foreground text-background" : "bg-foreground/15"
+      )}
+    >
+      {checked ? <CheckIcon aria-hidden className="size-2.5" strokeWidth={3} /> : null}
+    </button>
+  )
+}
+
 export function Segmented<T extends string>({
   value,
   options,
@@ -206,14 +254,15 @@ export function Segmented<T extends string>({
   label,
   disabled = false,
 }: {
-  value: T
+  /** Undefined while it isn't known: neither shows chosen. */
+  value: T | undefined
   options: Array<{ value: T; label: string }>
   onChange: (next: T) => void
   label?: string
   disabled?: boolean
 }) {
   return (
-    <div role="group" aria-label={label} className="flex h-6 shrink-0 items-center rounded-md bg-raised p-[2px]">
+    <div role="group" aria-label={label} className="flex h-6 shrink-0 items-center bg-raised p-[2px]">
       {options.map((option) => (
         <button
           key={option.value}
@@ -239,11 +288,14 @@ export function Segmented<T extends string>({
 /** One setting: a name and an explanation on the left, its control on the right. */
 export function SettingRow({
   title,
+  warning,
   description,
   htmlFor,
   children,
 }: {
   title: string
+  /** What's wrong now, when the control alone would read as all's well. */
+  warning?: string
   description?: string
   htmlFor?: string
   children?: ReactNode
@@ -258,6 +310,7 @@ export function SettingRow({
         ) : (
           <div className="text-ui font-medium">{title}</div>
         )}
+        {warning ? <p className="mt-0.5 max-w-[34rem] text-label leading-relaxed text-caution">{warning}</p> : null}
         {description ? (
           <p className="mt-0.5 max-w-[34rem] text-label leading-relaxed text-muted-foreground">
             {description}
@@ -274,7 +327,7 @@ export function ListCard({ className, children }: ComponentProps<"div">) {
   return (
     <div
       className={cn(
-        "rounded-lg bg-shell/55 px-4 [box-shadow:inset_0_0_0_0.5px_var(--hairline)] divide-y divide-hairline",
+        "bg-shell/55 px-4 [box-shadow:inset_0_0_0_0.5px_var(--hairline)] divide-y divide-hairline",
         className
       )}
     >
@@ -283,9 +336,9 @@ export function ListCard({ className, children }: ComponentProps<"div">) {
   )
 }
 
-export function ListCardRow({ className, children }: ComponentProps<"div">) {
+export function ListCardRow({ className, children, ...props }: ComponentProps<"div">) {
   return (
-    <div className={cn("py-3 first:pt-3.5 last:pb-3.5", className)}>
+    <div className={cn("py-3 first:pt-3.5 last:pb-3.5", className)} {...props}>
       {children}
     </div>
   )
@@ -322,7 +375,7 @@ export function Blank({
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 px-8 py-12 text-center">
       {icon ? (
-        <div className="mb-1 flex size-8 items-center justify-center rounded-lg bg-raised text-faint [&_svg]:size-4">
+        <div className="mb-1 flex size-8 items-center justify-center bg-raised text-faint [&_svg]:size-4">
           {icon}
         </div>
       ) : null}
@@ -336,7 +389,7 @@ export function Blank({
               key={hint.label}
               type="button"
               onClick={hint.onSelect}
-              className="pressable flex h-9 items-center justify-between rounded-md px-2.5 text-ui text-muted-foreground transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
+              className="pressable flex h-9 items-center justify-between px-2.5 text-ui text-muted-foreground transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
             >
               {hint.label}
               {hint.keys ? <Keys keys={hint.keys} /> : null}

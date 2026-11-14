@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, rm, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * Answering a tool approval, against the production composer and transcript
@@ -26,9 +26,9 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const { createServer } = await import("vite")
-  const root = await mkdtemp(join(tmpdir(), "mako-approval-answer-ui-"))
-  const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false, watch: { ignored: ["**"] } } })
+  const { uiVite } = await import("./lib/ui-vite.mjs")
+  const root = testScratch("mako-approval-answer-ui-")
+  const server = await uiVite({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false, watch: { ignored: ["**"] } } })
   await server.listen()
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-approval-answer-check", main: fileURLToPath(import.meta.url) }))
   const env = { ...process.env, MAKO_UI_TEST_ROOT: root, MAKO_UI_TEST_URL: server.resolvedUrls.local[0] }
@@ -133,7 +133,7 @@ async function checkWindow() {
       window.__answers = []
       window.__receipt = undefined
       window.mako.livePermission = async (_conversation, requestId, response) => {
-        window.__answers.push({ requestId, response })
+        window.__answers.push({ requestId, response, at: performance.now() })
         const receipt = { id, origin, digest: 'a'.repeat(64), nativeAnswerDigest: 'b'.repeat(64), createdAt: Date.now(), state: { kind: 'dispatching' } }
         batch({ ...receipts(receipt), permissions: [permission] })
         // Each save reaches the window as its own event, as the host's batches do.
@@ -206,13 +206,12 @@ async function checkWindow() {
     for (const harness of asking) {
       await ask(harness, true)
       await answer("Allow once")
-      const sent = Date.now()
-      await new Promise((resolveWait) => setTimeout(resolveWait, 500))
-      assert.deepEqual(await evaluate("window.__stacks"), [], `${harness}: an answer half a second on its way draws nothing`)
       await until("document.querySelector('[data-approval-recovery]')?.textContent.includes('Sending your answer')", `${harness}: a slow answer says so`)
-      assert.ok(Date.now() - sent >= 900, `${harness}: said after the hold, not before`)
       const [arrived, ...more] = await evaluate("window.__stacks")
       assert.equal(more.length, 0)
+      // Both read in the page, from when the answer reached the bridge: a slow click or a slow look can't move them.
+      const sent = await evaluate("window.__answers[0].at")
+      assert.ok(arrived.at - sent >= 900, `${harness}: said after the hold, not before: ${Math.round(arrived.at - sent)} ms`)
       assert.match(arrived.words, /Sending your answer/, `${harness}: the bar arrives with its words`)
       assert.equal(arrived.row, "1", `${harness}: the words are never fainter than their bar`)
       if (harness === "claude") await capture("approval-bar-after-slow-sending-dark")

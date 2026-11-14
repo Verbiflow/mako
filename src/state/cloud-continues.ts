@@ -4,6 +4,7 @@ import type { ThreadContinueOffer, ThreadContinueOutcome, ThreadContinueStep } f
 import { getMako, hasBridge } from "@/lib/bridge"
 import { acpStore, updateAcpConversation } from "@/state/acp-state"
 import { CLOUD_WHERE } from "@/state/cloud-moves"
+import { receiveLive } from "@/state/live-door"
 import { hydrateLive } from "@/state/live-recovery"
 import { createHook, createStore } from "@/state/store"
 
@@ -65,7 +66,7 @@ export function threadContinueStepped(conversationId: string, op: string, step: 
   const device = (conversation?.kind === "live" && conversation.copy && conversation.elsewhere) || "its computer"
   toast.success(continueTitle("continued"), { id: `continue:${op}`, description: continuedWords(device) })
   // Nothing of it is read from its device's copy now: its window reads it from its machine.
-  updateAcpConversation(conversationId, (conversation) => (conversation.kind === "live" ? { ...conversation, elsewhere: CLOUD_WHERE, copy: undefined, quietSince: undefined, cloudContinue: undefined } : conversation))
+  receiveLive(conversationId, { from: "said" }, () => updateAcpConversation(conversationId, (conversation) => (conversation.kind === "live" ? { ...conversation, elsewhere: CLOUD_WHERE, copy: undefined, quietSince: undefined, cloudContinue: undefined } : conversation)))
   void hydrateLive(conversationId, true)
 }
 

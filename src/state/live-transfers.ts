@@ -1,24 +1,23 @@
 import { readLiveSnapshot } from "@/state/live-history"
 import { toast } from "sonner"
 import { getMako } from "@/lib/bridge"
-import type { TransferInput } from "@/lib/types"
+import type { LiveSnapshot, TransferInput } from "@/lib/types"
 import { describeTransferRecovery } from "@mako/host/contracts/operation-recovery"
 import { acpStore } from "./acp-state"
-import { applyLiveSnapshot } from "./live-recovery"
+import { applyLiveSnapshot, readLive } from "./live-recovery"
 import { leaveViewerForLive } from "./thread-viewing"
 
 export async function submitTransfer(id: string, input: TransferInput): Promise<boolean> {
   try {
-    const snapshot = await getMako().liveTransfer(id, input)
-    applyLiveSnapshot(snapshot, null)
+    await readLive(id, () => getMako().liveTransfer(id, input), (snapshot) => applyLiveSnapshot(snapshot, null))
     if (acpStore.get().activeKey === id) leaveViewerForLive(input.provider)
     return true
   } catch (error) {
-    const snapshot = await readLiveSnapshot(id).catch(() => null)
-    if (snapshot?.control?.transfers.some((transfer) => transfer.input.id === input.id)) {
-      applyLiveSnapshot(snapshot)
-      return true
-    }
+    const tookIt = (snapshot: LiveSnapshot | null) => Boolean(snapshot?.control?.transfers.some((transfer) => transfer.input.id === input.id))
+    const snapshot = await readLive(id, () => readLiveSnapshot(id).catch(() => null), (read) => {
+      if (tookIt(read)) applyLiveSnapshot(read)
+    })
+    if (tookIt(snapshot)) return true
     toast.error(error instanceof Error ? error.message : String(error))
     return false
   }

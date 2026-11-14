@@ -7,7 +7,7 @@ import { Git } from "@mako/git"
 import { ThreadFileHistorySchema } from "@mako/protocol"
 import { MOVE_OUTSIDE_FILE_BYTES } from "@mako/protocol/moves"
 import {
-  captureCarry, carriable, carriedPath, currentSha256, homeOf, openCarry, placeOutside, planOutsideReturn, readOutside, returnOutside,
+  captureCarry, carriable, carriedPath, cloneFailureSaid, currentSha256, homeOf, openCarry, placeOutside, planOutsideReturn, readOutside, returnOutside,
 } from "@mako/host/workspaces/move-carry"
 
 /**
@@ -31,7 +31,7 @@ try {
   assert.equal(carriable("/Users/ada/.mako/x", "/Users/ada/work/app"), "elsewhere")
   assert.equal(carriable("/Users/ada/other/.git/config", "/Users/ada/work/app"), "elsewhere")
   assert.equal(carriable("/Users/bob/x", "/Users/ada/work/app"), "elsewhere")
-  assert.equal(carriable("/var/folders/x/T/y", "/Users/ada/work/app"), "elsewhere")
+  assert.equal(carriable("/private/var/tmp/x/y", "/Users/ada/work/app"), "elsewhere")
 
   // The carry itself, on files under /tmp: the one place the rule takes that a test may write.
   const tmp = await mkdtemp("/tmp/mako-move-carry-")
@@ -181,6 +181,11 @@ try {
   } finally {
     await rm(tmp, { recursive: true, force: true })
   }
+  // A clone the machine couldn't make says why in the machine's words, which Git follows with its own last line.
+  const refused = "Mako can't read acme/private on GitHub yet: give Mako's GitHub App access to it for acme at https://github.com/apps/mako/installations/new.\nremote: Repository not found.\nfatal: repository 'https://github.com/acme/private.git/' not found\n"
+  assert.equal(cloneFailureSaid(refused), "Mako can't read acme/private on GitHub yet: give Mako's GitHub App access to it for acme at https://github.com/apps/mako/installations/new.")
+  assert.equal(cloneFailureSaid("remote: Repository not found.\nfatal: repository 'https://github.com/acme/private.git/' not found\n"), "fatal: repository 'https://github.com/acme/private.git/' not found", "with none, Git's own last line")
+  assert.equal(cloneFailureSaid(""), "git clone failed")
   console.log("move carry: what may go, captured the same twice, opened and placed, and the way back keeps the person's newer files, writes only what this side sent, keeps the rest apart through no link, and writes each file on its own: ok")
 } finally {
   await rm(root, { recursive: true, force: true })

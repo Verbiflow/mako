@@ -186,14 +186,14 @@ export function ApplicationDialog() {
           </p>
         </div>
         {work.length > 0 && (
-          <div className="mx-6 overflow-hidden rounded-lg border border-hairline bg-surface">
-            <div className="flex items-center justify-between border-b border-hairline px-3 py-2 text-label text-faint">
+          <div className="mx-6 overflow-hidden bg-raised">
+            <div className="flex items-center justify-between px-3 py-2 text-label text-faint">
               <span>Across all Mako windows</span>
               <span>{work.length} active</span>
             </div>
             <ul className="max-h-48 overflow-y-auto overscroll-contain px-3">
               {rows.apexes.map((apex) => (
-                <li key={`apex:${apex.id}`} data-apex-fins={apex.fins} className="contain-turn flex items-center gap-3 border-b border-hairline py-3 last:border-0">
+                <li key={`apex:${apex.id}`} data-apex-fins={apex.fins} className="contain-turn flex items-center gap-3 py-3">
                   <span className="mx-1 size-1.5 shrink-0 rounded-full bg-foreground/45" aria-hidden />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-ui" title={apex.title}>
@@ -213,7 +213,7 @@ export function ApplicationDialog() {
                   <li
                     key={item.id}
                     data-handoff={handing ? (handing.done ? "moved" : handing.reason ? "stayed" : "going") : candidate && !candidate.refusal ? "can" : undefined}
-                    className="contain-turn flex items-center gap-3 border-b border-hairline py-3 last:border-0"
+                    className="contain-turn flex items-center gap-3 py-3"
                   >
                     {canHandOff && candidate && !candidate.refusal ? (
                       <CloudIcon className="size-3.5 shrink-0 text-faint" aria-label="Can go to the cloud" />
@@ -271,12 +271,12 @@ export function ApplicationDialog() {
         {error && (
           <p
             role="alert"
-            className="mx-6 mb-4 rounded-md bg-negative/10 p-3 text-ui text-negative"
+            className="mx-6 mb-4 bg-negative/10 p-3 text-ui text-negative"
           >
             {error}
           </p>
         )}
-        <div className="flex flex-col gap-2 border-t border-hairline bg-surface p-4">
+        <div className="flex flex-col gap-2 bg-surface p-4">
           <Action
             ref={safeAction}
             tone="solid"

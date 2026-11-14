@@ -17,6 +17,7 @@ export interface TranscriptReading {
   anchor?: { turn: string; offset: number; block?: TranscriptBlockBookmark }
   following: boolean
   moving: boolean
+  /** A selection stands in the transcript, which may span any turn. */
   interacting: boolean
   /** Earliest coordinates needed to reacquire this pane after whole-view eviction. */
   window?: { blocks: number; base: number }
@@ -109,7 +110,7 @@ export class TranscriptReaders {
   }
 
   /** Undefined means no trustworthy viewport report yet: retain everything.
-   * A moving/interactive pane postpones structural cleanup altogether. */
+   * A moving pane, or one with a selection, postpones structural cleanup altogether. */
   protected(source: string): Set<string> | undefined {
     const result = new Set<string>()
     for (const operation of this.operations.values())

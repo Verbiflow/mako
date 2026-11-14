@@ -1,10 +1,10 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 // Harness versions in the window, against the mock bridge, light and dark:
 //
@@ -30,7 +30,7 @@ if (process.versions.electron) {
 } else {
   const { createServer } = await import("vite")
   const { default: electronPath } = await import("electron")
-  const root = process.argv[2] ?? await mkdtemp(join(tmpdir(), "mako-versions-ui-"))
+  const root = testScratch("mako-versions-ui-", { given: process.argv[2] })
   await mkdir(root, { recursive: true })
   const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, watch: null, fs: { strict: false } } })
   await server.listen()
@@ -46,7 +46,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`Harness versions UI evidence: ${root}`)
 }
 
 async function check() {
@@ -88,10 +87,20 @@ async function check() {
     await mouse("mousePressed", point)
     await mouse("mouseReleased", point)
   }
-  const bounds = (selector, pad = 12) => evaluate(`(() => { const r = (${selector}).getBoundingClientRect(); return { x: Math.max(0, Math.floor(r.x - ${pad})), y: Math.max(0, Math.floor(r.y - ${pad})), width: Math.ceil(r.width + ${pad * 2}), height: Math.ceil(r.height + ${pad * 2}) } })()`)
+  /** `selector` brought into view, and what the window shows of it: a capture past its edge fails. */
+  const bounds = (selector, pad = 12) => evaluate(`(() => { const shown = ${selector}; shown.scrollIntoView({ block: "nearest" }); const r = shown.getBoundingClientRect(); const x = Math.max(0, Math.floor(r.x - ${pad})), y = Math.max(0, Math.floor(r.y - ${pad})); return { x, y, width: Math.min(innerWidth - x, Math.ceil(r.width + ${pad} * 2)), height: Math.min(innerHeight - y, Math.ceil(r.height + ${pad} * 2)) } })()`)
   const rowOf = (title) => `[...document.querySelectorAll('[data-thread-row]')].find((row) => row.textContent.includes(${JSON.stringify(title)}))`
   const field = "[data-composer] textarea"
   const notice = "document.querySelector('[data-restore-version-notice]')"
+  const offersUpdate = () => evaluate(`Array.from(${notice}.querySelectorAll('button')).some((button) => button.textContent.startsWith('Update'))`)
+  /** The notice is one line: the rest of what it says is behind its info button. */
+  const heldBehindInfo = async (words) => {
+    const more = `${notice}.querySelector('button[aria-label="More about this"]')`
+    await click(more)
+    await until(`document.querySelector('[data-slot="popover-content"]')?.textContent.includes(${JSON.stringify(words)})`, words)
+    await click(more)
+    await until(`!document.querySelector('[data-slot="popover-content"]')`, "the detail closed")
+  }
   const open = async (query, theme) => {
     await window.loadURL(`${process.env.MAKO_VERSIONS_CHECK_URL}?mock&${query}`)
     await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width: 1280, height: 860, deviceScaleFactor: 2, mobile: false })
@@ -114,8 +123,8 @@ async function check() {
       await until(`Boolean(${notice})`, "the restore plan's offer above the composer")
       const line = await evaluate(`${notice}.textContent`)
       assert.match(line, /Codex 0\.163\.0 wrote this session; this Mac has 0\.159\.3\./, `the offer names both versions: ${line}`)
-      assert.match(line, /Update Codex to resume it here, or reply now to go on from its transcript\./)
-      assert.equal(await evaluate(`${notice}.querySelector('button')?.textContent`), "Update Codex")
+      assert.equal(await offersUpdate(), true, `it offers the update: ${line}`)
+      await heldBehindInfo("Update Codex to resume it here, or reply now to go on from its transcript.")
       assert.match(await evaluate(`document.querySelector(${JSON.stringify(field)}).placeholder`), /^Reply — continues from its transcript in a new Codex session$/, "the composer says where a reply goes before the update")
       await capture(`restore-offer-${theme}.png`)
       await capture(`restore-offer-composer-${theme}.png`, await bounds(`${notice}.closest('[data-composer]') ?? ${notice}.parentElement`, 16))
@@ -133,8 +142,8 @@ async function check() {
       await until(`Boolean(${notice})`, "the uncertain offer")
       const uncertain = await evaluate(`${notice}.textContent`)
       assert.match(uncertain, /Mako can't tell which Codex version wrote this session; this Mac has 0\.159\.3\./, uncertain)
-      assert.match(uncertain, /A reply goes on from its transcript in a new session\./)
-      assert.equal(await evaluate(`${notice}.querySelector('button')`), null, "no Update that couldn't settle it")
+      await heldBehindInfo("A reply goes on from its transcript in a new session.")
+      assert.equal(await offersUpdate(), false, "no Update that couldn't settle it")
       await capture(`restore-unknown-writer-${theme}.png`, await bounds(notice, 16))
 
       // A cursor-agent store newer than the SDK Mako ships, which would import it: which build reads it, and no Update for cursor-agent.
@@ -145,8 +154,8 @@ async function check() {
       await until(`Boolean(${notice})`, "the import's offer")
       const imported = await evaluate(`${notice}.textContent`)
       assert.match(imported, /Mako can't tell which cursor-agent version wrote this session, only that it was 2026\.10\.15 or older; Mako's @cursor\/sdk 1\.0\.31, published 2026.09.03, may not read it\./, imported)
-      assert.match(imported, /It resumes here once Mako ships a build that reads cursor-agent 2026\.10\.15; a reply now goes on from its transcript\./)
-      assert.equal(await evaluate(`${notice}.querySelector('button')`), null, "no Update: updating cursor-agent doesn't change what Mako's SDK reads")
+      await heldBehindInfo("It resumes here once Mako ships a build that reads cursor-agent 2026.10.15; a reply now goes on from its transcript.")
+      assert.equal(await offersUpdate(), false, "no Update: updating cursor-agent doesn't change what Mako's SDK reads")
       await capture(`restore-import-${theme}.png`, await bounds(notice, 16))
 
       // Settings › Diagnostics: unread records by version.

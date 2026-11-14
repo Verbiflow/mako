@@ -56,7 +56,7 @@ window.mako = {
   gitCommitFileDiff: async (_hash, path) => diff(path),
 }
 
-prefsStore.set({ theme: "dark", changesLayout: "files", autoOpenDiff: true, diffStyle: "unified", selectedDiffs: { [ROOT]: PATH } })
+prefsStore.set({ theme: "dark", changesView: "files", autoOpenDiff: true, diffStyle: "unified", selectedDiffs: { [ROOT]: PATH } })
 bindTheme()
 store.set({ phase: "ready", meta: { ...META, cwd: ROOT }, git: status })
 workspaceTransitionStore.set({ kind: "ready" })
@@ -71,7 +71,7 @@ export function openCommitDiff() {
 }
 
 export function layout(value: "files" | "review") {
-  setPref("changesLayout", value)
+  setPref("changesView", value)
 }
 
 const node = document.getElementById("root")

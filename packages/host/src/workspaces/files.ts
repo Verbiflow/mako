@@ -9,7 +9,6 @@ import {
   mkdir,
   open,
   readFile,
-  readdir,
   realpath,
   stat,
   writeFile,
@@ -27,6 +26,7 @@ import {
 import type { FileContents, FileReadPurpose, StagedFile, WorkspaceFile } from "../contracts/git-workspace-search.js"
 import { WorkspaceGit } from "../git/index.js"
 import { workspaceWrites } from "../base/workspace-writes.js"
+import { FolderIndex, type FolderIndexOptions } from "./file-index.js"
 
 /**
  * The most of a file the viewer will render.
@@ -47,98 +47,58 @@ type FileReadOptions = { relativeTo: "cwd"; dataDir?: ConversationDataDir; previ
 /** Larger than this on its longer side, a picture gets a thumbnail for grid tiles; smaller, the tile draws it. */
 const THUMBNAIL_ABOVE = 960
 
-/** The `@` picker re-queries per keystroke; the file set does not move that fast. */
-const FILE_CACHE_MS = 5_000
-
-/** Ceilings for the non-git walk, so a stray home directory cannot hang the picker. */
-const WALK_MAX_DEPTH = 8
-const WALK_MAX_FILES = 20_000
-const WALK_SKIP = new Set([
-  "node_modules",
-  ".git",
-  "dist",
-  "build",
-  "out",
-  "target",
-  ".next",
-  ".venv",
-  "venv",
-  "__pycache__",
-  ".cache",
-  "vendor",
-  "Pods",
-  ".turbo",
-  "coverage",
-])
+/** How long a conversation's folder index is kept, and its folder watched, after the last look at it. */
+const INDEX_KEPT_MS = 3 * 60_000
+/** Conversation folders whose indexes are kept at once. */
+const INDEXES_KEPT = 6
+/** How long a reader of a conversation's files is kept between reads. */
+const READER_KEPT_MS = 5_000
 
 export class WorkspaceFiles {
   private cwdValue: string
-  private fileCache: { at: number; files: WorkspaceFile[] } | null = null
-  private fileLoad: { cwd: string; promise: Promise<WorkspaceFile[]> } | undefined
   private readonly git: WorkspaceGit
   private readonly previews: ArtifactPreviews
+  private readonly watch: FolderIndexOptions["watch"]
+  private indexValue: FolderIndex
 
-  constructor(cwd: string, git: WorkspaceGit, previews: ArtifactPreviews) {
+  /** `watch`: how the index hears its folder when nobody passes it changes (a conversation's folder read from elsewhere). */
+  constructor(cwd: string, git: WorkspaceGit, previews: ArtifactPreviews, watch?: FolderIndexOptions["watch"]) {
     this.cwdValue = cwd
     this.git = git
     this.previews = previews
+    this.watch = watch
+    this.indexValue = this.indexOf(cwd)
   }
 
   get cwd(): string {
     return this.cwdValue
   }
 
+  /** The folder's files in memory: the Files view's tree and searches, and the `@` list. */
+  get index(): FolderIndex {
+    return this.indexValue
+  }
+
   setCwd(cwd: string) {
+    if (cwd === this.cwdValue) return
     this.cwdValue = cwd
-    this.fileCache = null
+    this.indexValue.close()
+    this.indexValue = this.indexOf(cwd)
+  }
+
+  private indexOf(cwd: string): FolderIndex {
+    return new FolderIndex({ folder: cwd, git: this.git.runner, changed: () => this.git.status(), watch: this.watch })
   }
 
   /**
-   * The workspace file list backing the composer's `@` picker.
-   *
-   * `git ls-files` is the right source: it already respects .gitignore, so we
-   * never walk node_modules. The result is cached for a few seconds because
-   * the picker re-queries on every keystroke and the file set does not move
-   * that fast.
+   * The workspace file list backing the composer's `@` picker: Git's list, ignored files left out. One asked while
+   * the workspace moves answers for where it moved.
    */
   async list(): Promise<WorkspaceFile[]> {
-    if (this.fileCache && Date.now() - this.fileCache.at < FILE_CACHE_MS)
-      return this.fileCache.files
-    if (this.fileLoad?.cwd === this.cwdValue) return this.fileLoad.promise
-    const load = { cwd: this.cwdValue, promise: this.loadList() }
-    this.fileLoad = load
-    try {
-      return await load.promise
-    } finally {
-      if (this.fileLoad === load) this.fileLoad = undefined
-    }
-  }
-
-  private async loadList(): Promise<WorkspaceFile[]> {
     for (;;) {
-      const now = Date.now()
-      if (this.fileCache && now - this.fileCache.at < FILE_CACHE_MS)
-        return this.fileCache.files
-
-      const cwd = this.cwdValue
-      const gitPaths = await this.git.listFiles()
-      const paths = gitPaths
-        ? gitPaths
-        : // Not a repo: a bounded walk, skipping the usual heavy directories.
-          await walkWorkspace(cwd, cwd, 0, (dir) => this.git.at(dir).listFiles())
-      const status = await this.git.status().catch(() => null)
-      const changed = new Set(
-        status?.files.map((file) =>
-          status.root ? relative(cwd, join(status.root, file.path)) : file.path
-        ) ?? []
-      )
-      const files = paths
-        .sort((a, b) => a.localeCompare(b))
-        .map((path) => (changed.has(path) ? { path, changed: true } : { path }))
-
-      if (this.cwdValue !== cwd) continue
-      this.fileCache = { at: now, files }
-      return files
+      const index = this.indexValue
+      const files = await index.list()
+      if (index === this.indexValue) return files
     }
   }
 
@@ -190,7 +150,6 @@ export class WorkspaceFiles {
         )
       throw error
     }
-    this.fileCache = null
     return target
   }
 
@@ -457,31 +416,75 @@ export class WorkspaceFiles {
   }
 }
 
-/** Reads files a conversation names, sharing short-lived indexes across reply cards without sharing mutable active-workspace state. */
+/**
+ * Reads files a conversation names, sharing short-lived readers across reply cards without sharing mutable
+ * active-workspace state, and keeps the indexes a window browses a conversation's folder through (another device's
+ * Files view), each with a watch of its folder while it's looked at.
+ */
 export class ConversationFiles {
   private readonly git: Git
   private readonly previews: ArtifactPreviews
+  private readonly watch: FolderIndexOptions["watch"]
   private readonly held = new Map<string, { files: WorkspaceFiles; at: number }>()
+  private readonly indexes = new Map<string, { index: FolderIndex; idle: ReturnType<typeof setTimeout> }>()
 
-  constructor(git: Git, previews: ArtifactPreviews) {
+  constructor(git: Git, previews: ArtifactPreviews, watch?: FolderIndexOptions["watch"]) {
     this.git = git
     this.previews = previews
+    this.watch = watch
   }
 
   read(cwd: string, path: string, dataDir?: ConversationDataDir, purpose?: FileReadPurpose): Promise<FileContents> {
     const key = resolve(cwd)
     const now = Date.now()
     for (const [folder, held] of this.held)
-      if (now - held.at >= FILE_CACHE_MS) this.held.delete(folder)
+      if (now - held.at >= READER_KEPT_MS) {
+        held.files.index.close()
+        this.held.delete(folder)
+      }
     const held = this.held.get(key) ?? { files: new WorkspaceFiles(key, new WorkspaceGit(this.git, key), this.previews), at: now }
     held.at = now
     this.held.delete(key)
     this.held.set(key, held)
     if (this.held.size > 8) {
-      const oldest = this.held.keys().next().value
+      const [oldest, reader] = this.held.entries().next().value ?? []
+      reader?.files.index.close()
       if (oldest !== undefined) this.held.delete(oldest)
     }
     return held.files.read(path, { relativeTo: "cwd", dataDir, preview: purpose === "preview" })
+  }
+
+  /** The index of a conversation's folder, kept and watched until nobody has looked at it for `INDEX_KEPT_MS`. */
+  index(cwd: string): FolderIndex {
+    const key = resolve(cwd)
+    const kept = this.indexes.get(key)
+    if (kept) clearTimeout(kept.idle)
+    const workspaceGit = new WorkspaceGit(this.git, key)
+    const index = kept?.index ?? new FolderIndex({ folder: key, git: this.git, changed: () => workspaceGit.status(), watch: this.watch })
+    const idle = setTimeout(() => this.dropIndex(key), INDEX_KEPT_MS)
+    idle.unref()
+    this.indexes.delete(key)
+    this.indexes.set(key, { index, idle })
+    if (this.indexes.size > INDEXES_KEPT) {
+      const oldest = this.indexes.keys().next().value
+      if (oldest !== undefined) this.dropIndex(oldest)
+    }
+    return index
+  }
+
+  /** Every kept index and its watch, for a host that is stopping. */
+  close(): void {
+    for (const key of this.indexes.keys()) this.dropIndex(key)
+    for (const held of this.held.values()) held.files.index.close()
+    this.held.clear()
+  }
+
+  private dropIndex(key: string): void {
+    const kept = this.indexes.get(key)
+    if (!kept) return
+    clearTimeout(kept.idle)
+    kept.index.close()
+    this.indexes.delete(key)
   }
 }
 
@@ -493,37 +496,4 @@ export async function readText(path: string): Promise<string | null> {
   } catch {
     return null
   }
-}
-
-export async function walkWorkspace(
-  root: string,
-  dir: string,
-  depth: number,
-  listRepository?: (dir: string) => Promise<string[] | null>
-): Promise<string[]> {
-  if (depth > WALK_MAX_DEPTH) return []
-  let entries
-  try {
-    entries = await readdir(dir, { withFileTypes: true })
-  } catch {
-    return []
-  }
-  // A workspace can contain several repositories. Use each repository's own
-  // ignore-aware index instead of spending the walk budget on ignored output.
-  if (depth > 0 && listRepository && entries.some((entry) => entry.name === ".git")) {
-    const paths = await listRepository(dir)
-    if (paths) return paths.slice(0, WALK_MAX_FILES).map((path) => relative(root, join(dir, path)))
-  }
-  const out: string[] = []
-  for (const entry of entries) {
-    if (entry.name.startsWith(".") || WALK_SKIP.has(entry.name)) continue
-    const full = join(dir, entry.name)
-    if (entry.isDirectory()) {
-      out.push(...(await walkWorkspace(root, full, depth + 1, listRepository)))
-    } else if (entry.isFile()) {
-      out.push(relative(root, full))
-    }
-    if (out.length > WALK_MAX_FILES) break
-  }
-  return out.slice(0, WALK_MAX_FILES)
 }

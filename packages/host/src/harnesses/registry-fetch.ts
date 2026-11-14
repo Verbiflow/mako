@@ -1,3 +1,4 @@
+import { hostFetch } from "../base/host-stopping.js"
 import { z } from "zod"
 
 /**
@@ -11,7 +12,7 @@ import { z } from "zod"
 export const REGISTRY_TIMEOUT_MS = 4_000
 
 export async function registryJson<T>(url: string, schema: z.ZodType<T>, options: { limit: number; headers?: Record<string, string>; what: string }): Promise<T> {
-  const response = await fetch(url, { headers: options.headers ?? { accept: "application/json" }, signal: AbortSignal.timeout(REGISTRY_TIMEOUT_MS) })
+  const response = await hostFetch(url, { headers: options.headers ?? { accept: "application/json" }, signal: AbortSignal.timeout(REGISTRY_TIMEOUT_MS) })
   if (!response.ok) throw new Error(`${options.what} answered ${response.status}`)
   if (Number(response.headers.get("content-length") ?? 0) > options.limit) throw new Error(`${options.what} answer too large`)
   const reader = response.body?.getReader()

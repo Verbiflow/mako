@@ -40,7 +40,7 @@ const lifetime = new HostCallLifetime(), reading = deferred()
 let storeOpen = true, completed = false
 const read = lifetime.run(async () => { await reading.promise; assert.ok(storeOpen); completed = true })
 const drained = lifetime.close().then(() => { storeOpen = false })
-await assert.rejects(lifetime.run(async () => { throw Error("must not start") }), /shutting down/)
+await assert.rejects(lifetime.run(async () => { throw Error("must not start") }), /host is stopping/)
 await tick(); assert.equal(storeOpen, true)
 reading.resolve(); await read; await drained
 assert.equal(completed, true); assert.equal(storeOpen, false)

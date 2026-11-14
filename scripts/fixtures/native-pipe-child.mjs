@@ -7,6 +7,7 @@ if (mode === "leader") {
   const child = spawn(process.execPath, [import.meta.filename, "descendant", root], { stdio: ["ignore", process.stdout, process.stderr] })
   child.unref()
   writeFileSync(join(root, "leader-pid"), String(process.pid))
+  writeFileSync(join(root, "descendant-pid"), String(child.pid))
   process.stdout.write("leader\n")
 } else {
   const deadline = Date.now() + 15_000

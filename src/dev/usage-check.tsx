@@ -51,7 +51,7 @@ function Popover({ title, usage, harness, requests, sideQuestions, changes }: { 
   return (
     <figure className="flex w-80 flex-col gap-2" data-fixture={harness}>
       <figcaption className="text-label text-faint">{title}</figcaption>
-      <div className="rounded-lg bg-popover ring-1 ring-hairline shadow-md">
+      <div className="bg-popover ring-1 ring-hairline shadow-md">
         <UsageDetails usage={usage} harness={harness} conversationId={`fixture-${harness}`} requests={requests} sideQuestions={sideQuestions} changes={changes} />
       </div>
     </figure>
@@ -166,7 +166,7 @@ function Fixture() {
         <section className="w-[720px]" data-fixture-settings>
           <UsageSection />
         </section>
-        <section className="fixed right-6 bottom-6 flex items-center gap-2 rounded-lg bg-surface py-1 pr-1 pl-3 ring-1 ring-hairline" data-fixture-bounded>
+        <section className="fixed right-6 bottom-6 flex items-center gap-2 bg-surface py-1 pr-1 pl-3 ring-1 ring-hairline" data-fixture-bounded>
           <span className="text-label text-faint">A long Claude Code session&rsquo;s meter</span>
           <ConversationScopeContext.Provider value={{ kind: "live", key: longClaude.key }}>
             <ContextMeter />

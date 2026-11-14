@@ -5,7 +5,7 @@ import type { ThreadRef } from "./format.js"
 import { LockUnavailableError, takeLock } from "./record-locks.js"
 import type { BackfillOutcome, RecordCapture } from "./record-capture.js"
 import type { RecordStore } from "./record-store.js"
-import type { RepackReport } from "./record-repack.js"
+import { LAYOUT_EVERY_MS, type RepackReport } from "./record-repack.js"
 import type { ArchiveMigration, ArchiveMigrationReport } from "./archive-migration.js"
 import { totals, type AttachmentSweepControl, type AttachmentSweepReport } from "./attachment-sweep.js"
 import { pruneStreams, PruneMemory, type PruneReport } from "./record-stream-prune.js"
@@ -425,7 +425,7 @@ export class RecordBackfill {
   /** The store's packs, compacted and laid out by session (`record-repack.ts`), once the pass has taken every session. */
   private async repack(): Promise<RepackReport | null> {
     try {
-      return await this.store.repack()
+      return await this.store.repack({ layoutEveryMs: LAYOUT_EVERY_MS })
     } catch (error) {
       this.log("Session records repack failed", { error: error instanceof Error ? error.message : String(error) })
       return null

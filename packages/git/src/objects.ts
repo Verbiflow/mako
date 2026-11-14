@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessByStdio } from "node:child_process"
+import type { ChildProcessByStdio } from "node:child_process"
 import type { Readable, Writable } from "node:stream"
 import type { Git } from "./run.js"
 
@@ -60,6 +60,7 @@ export class ObjectReader {
     const child = this.child
     this.child = undefined
     child?.stdin.end()
+    if (child) void this.git.processes.close(child).catch(() => {})
     this.fail(new Error("The object reader closed."))
   }
 
@@ -86,7 +87,7 @@ export class ObjectReader {
 
   private process(): ChildProcessByStdio<Writable, Readable, null> {
     if (this.child) return this.child
-    const child = spawn(this.git.executable, ["--no-optional-locks", "cat-file", "--batch-command"], {
+    const child = this.git.processes.spawn(this.git.executable, ["--no-optional-locks", "cat-file", "--batch-command"], {
       cwd: this.root,
       env: this.env ? { ...this.git.environment(), ...this.env } : this.git.environment(),
       stdio: ["pipe", "pipe", "ignore"],

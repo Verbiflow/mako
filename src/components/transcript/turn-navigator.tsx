@@ -178,7 +178,7 @@ function Flyout({
             onClick={() => onJump(exchange.id)}
             aria-current={exchange.id === activeId ? "true" : undefined}
             className={cn(
-              "pressable flex w-full items-baseline gap-2 rounded px-2 py-2 text-left text-ui hover:bg-fill-hover focus-visible:outline focus-visible:outline-ring",
+              "pressable flex w-full items-baseline gap-2 px-2 py-2 text-left text-ui hover:bg-fill-hover focus-visible:outline focus-visible:outline-ring",
               exchange.id === activeId && "bg-fill-selected"
             )}
           >

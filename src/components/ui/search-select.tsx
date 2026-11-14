@@ -113,7 +113,7 @@ export function SearchSelect({
           aria-haspopup="listbox"
           disabled={disabled}
           className={cn(
-            "pressable flex h-7 min-w-0 items-center gap-1.5 rounded-md bg-raised px-2 text-ui text-foreground/90 ring-1 ring-hairline",
+            "pressable flex h-7 min-w-0 items-center gap-1.5 bg-raised px-2 text-ui text-foreground/90 ring-1 ring-hairline",
             "hover:bg-fill-hover aria-expanded:bg-fill-selected",
             className
           )}
@@ -188,7 +188,7 @@ export function SearchSelect({
                   onMouseEnter={() => setHighlighted(index)}
                   onClick={() => choose(option.value)}
                   className={cn(
-                    "pressable flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left",
+                    "pressable flex w-full items-center gap-2 px-2 py-1.5 text-left",
                     active
                       ? "bg-fill-selected"
                       : index === activeIndex

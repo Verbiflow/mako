@@ -1,9 +1,7 @@
-import { execFile } from "node:child_process"
+import { hostProbe } from "./host-command.js"
 import { readdir, readFile, readlink } from "node:fs/promises"
-import { promisify } from "node:util"
 import { onLinux, onMac } from "./platform.js"
 
-const run = promisify(execFile)
 
 /** A process whose environment names a value, as `markedProcesses` finds it. */
 export interface MarkedProcess {
@@ -22,7 +20,7 @@ const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
 export async function markedProcesses(variable: string, signal: AbortSignal): Promise<MarkedProcess[]> {
   if (!NAME.test(variable)) throw new Error(`${variable} is not an environment variable's name`)
   if (onMac()) {
-    const { stdout } = await run("ps", ["-x", "-E", "-ww", "-o", "pid=,command="], { maxBuffer: 64 * 1024 * 1024, timeout: 5_000, signal })
+    const { stdout } = await hostProbe("ps", ["-x", "-E", "-ww", "-o", "pid=,command="], { maxBuffer: 64 * 1024 * 1024, timeout: 5_000, signal })
     const marked = new RegExp(`(?:^|\\s)${variable}=(\\S+)`)
     const found: MarkedProcess[] = []
     for (const line of stdout.split("\n")) {
@@ -57,7 +55,7 @@ export async function processFolders(pids: readonly number[], signal: AbortSigna
     return folders
   }
   if (!onMac()) return folders
-  const { stdout } = await run("/usr/sbin/lsof", ["-nP", "-a", "-d", "cwd", "-Fpn", "-p", pids.join(",")], { maxBuffer: 1024 * 1024, timeout: 3_000, signal })
+  const { stdout } = await hostProbe("/usr/sbin/lsof", ["-nP", "-a", "-d", "cwd", "-Fpn", "-p", pids.join(",")], { maxBuffer: 1024 * 1024, timeout: 3_000, signal })
     .catch((error: { stdout?: string }) => ({ stdout: error.stdout ?? "" }))
   let pid: number | undefined
   for (const line of stdout.split("\n")) {
@@ -71,7 +69,7 @@ export async function processFolders(pids: readonly number[], signal: AbortSigna
 export async function processesHolding(file: string, pids: readonly number[], signal: AbortSignal): Promise<Set<number>> {
   const holding = new Set<number>()
   if (!pids.length || !(onMac() || onLinux())) return holding
-  const { stdout } = await run("lsof", ["-nP", "-a", "-Fp", "-p", pids.join(","), "--", file], { maxBuffer: 1024 * 1024, timeout: 3_000, signal })
+  const { stdout } = await hostProbe("lsof", ["-nP", "-a", "-Fp", "-p", pids.join(","), "--", file], { maxBuffer: 1024 * 1024, timeout: 3_000, signal })
     .catch((error: { stdout?: string }) => ({ stdout: error.stdout ?? "" }))
   for (const line of stdout.split("\n")) if (line.startsWith("p")) holding.add(Number(line.slice(1)))
   return holding

@@ -44,15 +44,16 @@ const RUN_LOST: StreamDifference = {
 export const CURSOR_VOCABULARY = defineVocabulary({
   harness: "cursor",
   checked: {
-    version: "SDK 1.2.0",
-    on: "2026-10-30",
-    against: "@cursor/sdk ToolType and its tool-call schema (scripts/fixtures/native-tools; 1.0.40 added computerUse, 1.2.0 nothing), and Cursor's SDK, CLI and Desktop stores through audit:tools",
+    version: "SDK 1.3.1",
+    on: "2026-11-07",
+    against: "@cursor/sdk ToolType and its tool-call schema (scripts/fixtures/native-tools; 1.0.40 added computerUse, 1.2.0 and 1.3.1 nothing), and Cursor's SDK, CLI and Desktop stores through audit:tools",
   },
   mcp: ["s-t"],
   // `cursorUnfinishedToolNote` for a call the SDK's hooks refused: it reports no result of its own.
   refusals: [/^Cursor did not run this call/],
   tools: {
-    shell: { kind: "shell", effects: { cwd: ["workingDirectory", "working_directory"], exitCode: "result.value.exitCode" } },
+    // Its answer ends `exit 2` after stdout and stderr when the command failed (`cursor-sdk-content.ts`).
+    shell: { kind: "shell", effects: { cwd: ["workingDirectory", "working_directory"], exitCode: "result.value.exitCode", exitText: /(?:^|\n)exit (-?\d+)\s*$/ } },
     read: { kind: "read", aliases: ["ReadFile"] },
     write: { kind: "write", effects: { content: ["fileText", "contents", "content"] } },
     edit: {
@@ -83,9 +84,9 @@ export const CURSOR_VOCABULARY = defineVocabulary({
   },
   concepts: {
     checked: {
-      version: "SDK 1.2.0",
-      on: "2026-10-30",
-      against: "@cursor/sdk 1.2.0 types and bundle (settingSources loaders, hook enum, skill and agent folders), cursor.com/docs (rules, hooks, skills, subagents), and the request context its agent sends, through harness:self-report",
+      version: "SDK 1.3.1",
+      on: "2026-11-07",
+      against: "@cursor/sdk 1.3.1 types and bundle (settingSources loaders, hook enum, skill and agent folders; 1.3.1's types add only an internal hostMcpBridgeUrls option), cursor.com/docs (rules, hooks, skills, subagents), and the request context its agent sends, through harness:self-report",
     },
     instructions: {
       files: ["AGENTS.md", "CLAUDE.md", "CLAUDE.local.md", ".cursorrules"],

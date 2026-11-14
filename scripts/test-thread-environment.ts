@@ -165,8 +165,9 @@ function processEnvironment(): void {
   const cloud = controlNote([CLOUD_MACHINE_INSTRUCTIONS, threadEnvironmentInstructions(environment, "cloud")])!
   assert.match(cloud, /^<mako-local-control>\nYou run in Mako's cloud, not on the person's computer/)
   assert.match(cloud, /keeps that computer's path for it, but nothing else of that computer is here/)
-  assert.match(cloud, /Run `mako-access`/)
-  assert.match(cloud, /never set user\.name, user\.email, --author or GIT_AUTHOR_\*, and never copy an identity from another commit/, "agents are told who commits name, and not to guess")
+  assert.match(cloud, /Settings › Apps › this project › In Mako Cloud/)
+  assert.match(cloud, /Commits made here name who the person chose in Settings › Git, themselves or Mako's bot with them as co-author, as Mako set Git's identity before you started/, "both authorship modes are named")
+  assert.match(cloud, /never set user\.name, user\.email, --author or GIT_AUTHOR_\*, and never copy an identity from another commit; keep your harness's co-author trailer\. A push of commits naming anyone else is refused\./, "agents are told who commits name, and not to guess")
   assert.match(cloud, /This machine is this Thread's alone/)
   assert.ok(!cloud.includes("Other Threads' agents share this machine"), "a machine isn't shared with other Threads")
   assert.equal(withoutMakoFraming(`${cloud}\n\nDeploy the worker`), "Deploy the worker", "history readers strip the cloud's note too")

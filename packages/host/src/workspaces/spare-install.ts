@@ -89,8 +89,8 @@ export function spareInstaller(deps: Deps): SpareInstall {
 }
 
 /** The install run an app holds, if any. */
-export async function installStatus(processes: ThreadProcesses, app: AppKey): Promise<RunStatus | undefined> {
-  return (await processes.status(app)).find((entry) => runKey(entry.kind, entry.name) === PREPARE_KEY)
+export async function installStatus(processes: ThreadProcesses, app: AppKey, options: { shown?: boolean } = {}): Promise<RunStatus | undefined> {
+  return (await processes.status(app, options)).find((entry) => runKey(entry.kind, entry.name) === PREPARE_KEY)
 }
 
 /**

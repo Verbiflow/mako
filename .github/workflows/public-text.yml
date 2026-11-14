@@ -1,0 +1,38 @@
+name: Public text
+
+# Everything here is public: the files, the commit messages and the pull
+# request. A pull request fails when what it adds names a machine (a home
+# folder, macOS's temporary folder), a person's address, or the hosted
+# service (scripts/public-text-denylist.txt); it reruns when its title or
+# body is edited. The log says where and what kind, never the value.
+#
+# Locally: node scripts/check-public-text.mjs origin/main HEAD
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-text-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  public-text:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: node scripts/test-public-text.mjs
+      # The title and body are read from the event's file: a step's env is printed in its log.
+      - name: What this pull request adds
+        run: node scripts/check-public-text.mjs --event "$GITHUB_EVENT_PATH"

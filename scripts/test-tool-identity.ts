@@ -34,7 +34,7 @@ console.log("tool identity: retained live blocks resolve")
 // The SDK clips large arguments for live display but keeps its native route in
 // the title. Only a declared wrapper may use that exact route as fallback.
 const clipped = identifyTool({ harness: "cursor", name: "mcp", title: "mako: app_status", input: '{"providerIdentifier":"mako","toolName":"app_status","args":{"large":"' })
-assert.equal(clipped.label, "App status")
+assert.equal(clipped.label, "Read the app's status")
 assert.equal(clipped.server, "mako")
 assert.equal(clipped.tool, "app_status")
 assert.equal(identifyTool({ harness: "cursor", name: "mcp", title: "Check my app please", input: "{" }).label, "MCP tool")

@@ -1,8 +1,12 @@
-import { randomBytes, randomUUID } from "node:crypto"
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { stoppingSignal } from "../base/host-stopping.js"
+import { hostFetch } from "../base/host-stopping.js"
+import { randomBytes } from "node:crypto"
+import { readFile } from "node:fs/promises"
+import { join } from "node:path"
 import { z } from "zod"
 import type { Secrets } from "../base/secrets.js"
+import { GrantedSecrets } from "../base/secret-grants.js"
+import { publishFile } from "../base/published-files.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import {
   MODEL_CONNECTION_PROVIDERS,
@@ -107,7 +111,7 @@ export async function listConnectionModels(
 ): Promise<{ models: ConnectionModel[]; truncated: boolean }> {
   const headers = new Headers({ Accept: "application/json" })
   if (apiKey) headers.set("Authorization", `Bearer ${apiKey}`)
-  const signal = AbortSignal.timeout(timeoutMs)
+  const signal = stoppingSignal(AbortSignal.timeout(timeoutMs))
   let body: unknown
   try {
     const response = await request(`${baseUrl}/models`, { headers, signal, redirect: "error" })
@@ -176,7 +180,7 @@ export class ModelConnections {
   constructor(path: string, secrets: Secrets, options: ModelConnectionsOptions = {}) {
     this.path = path
     this.secrets = secrets
-    this.request = options.request ?? fetch
+    this.request = options.request ?? hostFetch
     this.harnesses = options.harnesses ?? (() => [])
   }
 
@@ -196,14 +200,21 @@ export class ModelConnections {
    * each key opened for that launch alone. A connection whose key won't open
    * is left out; the rest still go.
    */
-  async routes(capability: ModelRoutesCapability): Promise<RoutedLaunch> {
+  async routes(capability: ModelRoutesCapability, launch?: { thread: string; repository: string; correlationId: string }): Promise<RoutedLaunch> {
     const routes: ModelRoute[] = []
     const keys = new Map<string, string>()
     for (const connection of await this.read().catch(() => [])) {
       if (!connection.enabled || !routeAccepted(capability, connection.kind, connection.wire)) continue
       if (connection.credential) {
         try {
-          const record = await this.secrets.read("saved-key", connection.credential.name)
+          const lent = launch && this.secrets instanceof GrantedSecrets
+            ? await this.secrets.lend("saved-key", connection.credential.name, { thread: launch.thread, repository: launch.repository }, `the ${connection.name ?? connection.id} connection's key for a launch`, `${launch.correlationId}:${connection.id}`)
+            : undefined
+          if (lent && "refusal" in lent) {
+            hostWarn("model-connections", "a connection's key wasn't lent", { id: connection.id, refused: lent.refusal.refused })
+            continue
+          }
+          const record = lent ? lent.record : await this.secrets.read("saved-key", connection.credential.name)
           if (!record) {
             hostWarn("model-connections", "a connection's key is missing", { id: connection.id })
             continue
@@ -363,14 +374,7 @@ export class ModelConnections {
   private change<T>(edit: (connections: ModelConnection[]) => Promise<{ next: ModelConnection[]; result: T }>): Promise<T> {
     const write = this.writes.then(async () => {
       const { next, result } = await edit(await this.read())
-      await mkdir(dirname(this.path), { recursive: true, mode: 0o700 })
-      const temporary = `${this.path}.${randomUUID()}.tmp`
-      try {
-        await writeFile(temporary, JSON.stringify({ connections: next }), { mode: 0o600, flag: "wx" })
-        await rename(temporary, this.path)
-      } finally {
-        await rm(temporary, { force: true })
-      }
+      await publishFile(this.path, JSON.stringify({ connections: next }), { mode: 0o600, dirMode: 0o700 })
       return result
     })
     this.writes = write.catch(() => {})

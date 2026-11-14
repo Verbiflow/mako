@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { HEAP_PRESSURE, HeapWatch, heapLevel, readHeap, type HeapChange, type HeapLevel, type HeapReading } from "@mako/host/base/heap-watch"
+import { HEAP_PRESSURE, HEAP_SAID_EVERY_MS, HeapWatch, heapLevel, readHeap, type HeapChange, type HeapLevel, type HeapReading } from "@mako/host/base/heap-watch"
 
 /**
  * The host's heap watch: it says once when the heap crosses a pressure line,
@@ -38,6 +38,15 @@ test("each crossing is said once, rising and easing, with room to spare before a
   share = 0.45
   assert.equal(watch.tick(), 0)
   assert.deepEqual(said, [["rising", 1, 2_600], ["rising", 2, 3_400], ["easing", 1, 2_760], ["easing", 0, 1_800]])
+})
+
+test("the heap is said every few minutes at any level, and no more often", () => {
+  let now = 0
+  const steady: number[] = []
+  const watch = new HeapWatch(() => reading(0.2), () => assert.fail("no line is crossed"), (read) => steady.push(read.used), () => now)
+  for (; now <= 3 * HEAP_SAID_EVERY_MS; now += 10_000) watch.tick()
+  assert.equal(steady.length, 4, "at the first tick, then once each period")
+  assert.ok(steady.every((used) => used === 800), "below every line, it's still said")
 })
 
 test("this process's heap reads as a share under one", () => {

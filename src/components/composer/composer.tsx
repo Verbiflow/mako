@@ -499,6 +499,8 @@ export function Composer() {
       // the new one until the next keystroke.
       setMention(mentionAt(body, body.length))
       focusComposerSoon(textarea, body.length, viewRef)
+      // Taken: whoever wrote it learns a composer has the words.
+      event.preventDefault()
     }
     const insert = (event: ComposerTextEvent) => {
       const { detail } = event
@@ -1216,20 +1218,26 @@ export function Composer() {
   return (
     <div data-composer inert={!draftReady} aria-busy={!draftReady} className={cn("flex min-h-0 shrink-0 flex-col bg-surface", expanded ? "max-h-[80dvh]" : "max-h-[55dvh]")}>
       <div className="flex min-h-0 w-full flex-col">
-        <GoalBar />
+        <div data-composer-row className="mx-3">
+          <GoalBar />
+        </div>
         <FinAsks />
-        <SidePanel />
-        <ReviewPicker cwd={cwd} />
-        <PromptQueue />
+        <div data-composer-row className="mx-3">
+          <SidePanel />
+          <ReviewPicker cwd={cwd} />
+        </div>
+        <div data-composer-row className="mx-3">
+          <PromptQueue />
+        </div>
 
         {status.queued > 0 ? (
-          <div className="mb-1.5 flex items-center gap-2 px-1 text-label text-faint">
+          <div className="mx-3 mb-1.5 flex items-center gap-2 text-label text-faint">
             <Chip>{status.queued} queued</Chip>
             <span>will be sent when this turn ends</span>
             <button
               type="button"
               onClick={() => void actions.clearQueue()}
-              className="pressable ml-auto flex items-center gap-1 rounded px-1 hover:text-foreground"
+              className="pressable ml-auto flex items-center gap-1 px-1 hover:text-foreground"
             >
               <XIcon className="size-3" />
               Clear
@@ -1237,7 +1245,11 @@ export function Composer() {
           </div>
         ) : null}
 
-        {planDecision ? <PlanDecisionBar key={planDecision.plan.id} decision={planDecision} /> : null}
+        {planDecision ? (
+          <div data-composer-row className="mx-3">
+            <PlanDecisionBar key={planDecision.plan.id} decision={planDecision} />
+          </div>
+        ) : null}
         <ComposerNotices meta={meta} draftKey={draftKey} />
 
         <input
@@ -1269,7 +1281,7 @@ export function Composer() {
         >
           {referencing ? (
             <div aria-live="polite" className="pointer-events-none absolute inset-x-0 top-1 z-10 flex justify-center">
-              <span className="rounded-md bg-raised px-2 py-1 text-label text-muted-foreground ring-1 ring-hairline">
+              <span className="bg-raised px-2 py-1 text-label text-muted-foreground ring-1 ring-hairline">
                 Drop to reference this conversation
               </span>
             </div>

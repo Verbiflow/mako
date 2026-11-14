@@ -5,6 +5,7 @@ import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { once } from "node:events"
+import { setTimeout as delay } from "node:timers/promises"
 import { claudeProcessProbeFor } from "@mako/host/harnesses/claude/process-probe"
 import { grokProcessProbe } from "@mako/host/harnesses/grok/process-probe"
 import { createCodexProcessProbe } from "@mako/host/harnesses/codex/process-probe"
@@ -14,11 +15,16 @@ import { fileResumeEvidence, resumeVerdict } from "@mako/host/harnesses/native-c
 const codexProcessProbe = createCodexProcessProbe()
 const run = promisify(execFile)
 
-/** `/bin/sleep` under another name. macOS kills a copy whose signature no longer matches within a second, so it's signed again here. */
+/**
+ * Node under another name, a native executable that stays up. macOS kills a copy whose signature no longer matches
+ * within a second, so it's signed again here; `/bin/sleep`'s copy was gone before its kill on CI's Mac all the same.
+ */
 async function standIn(path: string): Promise<void> {
-  await copyFile("/bin/sleep", path)
+  await copyFile(process.execPath, path)
   if (process.platform === "darwin") await run("codesign", ["--sign", "-", "--force", path])
 }
+
+const STAY = ["-e", "setInterval(() => {}, 1000)"]
 
 const root = await mkdtemp(join(tmpdir(), "mako-probe-scope-"))
 const id = "recovery-scope-fixture"
@@ -75,15 +81,15 @@ try {
     await writeFile(join(grok, "active_sessions.json"), "[]")
     const unrelated = join(root, "Grok Bot")
     await standIn(unrelated)
-    child = spawn(unrelated, ["300"], { stdio: "ignore" })
+    child = spawn(unrelated, STAY, { stdio: "ignore" })
     await once(child, "spawn")
     assert.equal((await resumeVerdict({ ...binding, provider: "grok", path: grokPath }, grokProcessProbe)).kind, "resumable", "an unrelated Grok Bot prefix match is not a CLI owner")
     child.kill("SIGTERM")
     await once(child, "exit")
     const grokExecutable = join(root, "grok-native")
     await standIn(grokExecutable)
-    child = spawn(grokExecutable, ["300"], { stdio: "ignore", detached: true })
     const spawnedAt = Date.now()
+    child = spawn(grokExecutable, STAY, { stdio: "ignore", detached: true })
     await once(child, "spawn")
     assert.equal((await resumeVerdict({ ...binding, provider: "grok", path: grokPath }, grokProcessProbe)).kind, "unavailable", "an unregistered live Grok process cannot be cleared by an empty registry")
     // An agent a Mako host recorded with the session it holds (`readMakoProcesses`), as another host's discovery is:
@@ -99,10 +105,16 @@ try {
     child.kill("SIGTERM")
     await once(child, "exit")
     // A native binary under its wrapper: placed by the wrapper's record, which leads the process group Mako started.
-    child = spawn("/bin/sh", ["-c", '"$0" 300; :', grokExecutable], { stdio: "ignore", detached: true })
     const wrapperAt = Date.now()
+    child = spawn("/bin/sh", ["-c", '"$0" "$@"; :', grokExecutable, ...STAY], { stdio: "ignore", detached: true })
     await once(child, "spawn")
     const wrapper = child.pid!
+    // The shell starts it a moment later: until the binary shows as unknown, there's nothing for the wrapper to place.
+    const hung = Date.now() + 10_000
+    while ((await inspect(recorded(process.pid, null))).kind !== "unavailable") {
+      assert.ok(Date.now() < hung, "the native binary under its wrapper started")
+      await delay(20)
+    }
     assert.equal((await inspect(recorded(wrapper, "another-session", wrapperAt))).kind, "available", "the native binary is placed by its wrapper's record")
     process.kill(-wrapper, "SIGTERM")
     await once(child, "exit")

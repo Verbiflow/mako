@@ -62,7 +62,7 @@ export function LineCommentField({
         }}
         aria-label={`Comment on ${label}`}
         placeholder="Comment (optional)"
-        className="h-6 min-w-40 flex-1 rounded-md bg-raised px-2 text-ui placeholder:text-faint focus:outline-none focus-visible:ring-1 focus-visible:ring-border"
+        className="h-6 min-w-40 flex-1 bg-raised px-2 text-ui placeholder:text-faint focus:outline-none focus-visible:ring-1 focus-visible:ring-border"
       />
       <Action size="xs" tone="outline" aria-label={`Add ${label} to message`} onClick={() => onAdd(comment)}>
         <MessageSquarePlusIcon />

@@ -1,6 +1,5 @@
-import { execFile } from "node:child_process"
+import { hostCommand } from "../base/host-command.js"
 import { hostname } from "node:os"
-import { promisify } from "node:util"
 import { devicePlatform, onMac } from "../base/platform.js"
 
 /** How a device names itself on its account's device list. */
@@ -15,7 +14,7 @@ export async function describeThisDevice(appVersion: string, name?: string): Pro
   if (name?.trim()) return { name: name.trim(), platform, appVersion }
   const fallback = hostname().replace(/\.local$/, "")
   const named = onMac()
-    ? await promisify(execFile)("/usr/sbin/scutil", ["--get", "ComputerName"], { timeout: 2_000 }).then(
+    ? await hostCommand("/usr/sbin/scutil", ["--get", "ComputerName"], { timeout: 2_000 }).then(
         ({ stdout }) => stdout.trim() || fallback,
         () => fallback
       )

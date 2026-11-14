@@ -5,6 +5,7 @@ import type { DiscoveryProcesses } from "../discovery-process.js"
 import { withDevinProbeWorkspace } from "./probe-workspace.js"
 import { devinEnvironment } from "./environment.js"
 import { heavy } from "../../base/heavy-packages.js"
+import { childInput } from "@mako/sessions/child-input"
 
 /** Devin reports its effective model when opening a session, not in models/list. */
 export async function devinDefaultModel(
@@ -29,7 +30,7 @@ export async function devinDefaultModel(
               outcome: { outcome: "cancelled" },
             }),
           }),
-          ndJsonStream(acpWritable(child.stdin), acpReadable(child.stdout))
+          ndJsonStream(acpWritable(childInput(child)), acpReadable(child.stdout))
         )
         phase("initialize")
         await connection.initialize({

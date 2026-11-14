@@ -44,6 +44,12 @@ export default defineConfig([
     languageOptions: { globals: { ...globals.browser, chrome: "readonly" } },
   },
   {
+    // The generated start schedules (`test:start-interleavings`) guard the engine's admission; they're linted as code.
+    files: ["scripts/test-start-interleavings.ts", "scripts/test-followed-stop-crash.ts"],
+    extends: [js.configs.recommended, tseslint.configs.recommended],
+    languageOptions: { globals: globals.node },
+  },
+  {
     files: ["packages/control-runtime/src/**/*.ts", "packages/git/src/**/*.ts"],
     extends: [js.configs.recommended, tseslint.configs.recommended],
     languageOptions: {
@@ -137,6 +143,31 @@ export default defineConfig([
           selector: "Literal[value=/text-\\[[0-9.]+px\\]/]",
           message:
             "Literal pixel type sizes are banned; use the scale (text-label, text-ui, text-title) or prose/code styles.",
+        },
+        {
+          selector: "Literal[value=/(?:^|[\\s:])rounded(?:-(?:t|b|l|r|s|e|tl|tr|bl|br|ss|se|es|ee))?(?:-(?:xs|sm|md|lg|xl|2xl|3xl|4xl|\\[[^\\]]*\\]))?(?=\\s|$)/]",
+          message:
+            "Every corner is square (docs/design.md): the radius tokens are 0, so a radius class draws nothing. Leave it out; only what means a dot is rounded-full.",
+        },
+        {
+          selector: "TemplateElement[value.raw=/(?:^|[\\s:])rounded(?:-(?:t|b|l|r|s|e|tl|tr|bl|br|ss|se|es|ee))?(?:-(?:xs|sm|md|lg|xl|2xl|3xl|4xl|\\[[^\\]]*\\]))?(?=\\s|$)/]",
+          message:
+            "Every corner is square (docs/design.md): the radius tokens are 0, so a radius class draws nothing. Leave it out; only what means a dot is rounded-full.",
+        },
+        {
+          selector: "BinaryExpression[operator='+'][left.type='Literal'][left.value=/\\S$/][right.type='Literal'][right.value=/^\\S/]",
+          message:
+            "Two strings joined with no space between them: a class list split over lines reads as one class there ('gap-1.5text-ui'). End the first with a space.",
+        },
+        {
+          selector: "BinaryExpression[operator='+'][left.type='BinaryExpression'][left.right.type='Literal'][left.right.value=/\\S$/][right.type='Literal'][right.value=/^\\S/]",
+          message:
+            "Two strings joined with no space between them: a class list split over lines reads as one class there ('gap-1.5text-ui'). End the first with a space.",
+        },
+        {
+          selector: "Literal[value=/(?:^|[\\s:])(?:bg|text|border|ring|fill|stroke|from|to|via|shadow|outline|decoration|caret|accent)-\\[(?:#|rgb|hsl|oklch|oklab)/]",
+          message:
+            "Colour comes from the tokens (docs/design.md): no literal colour in a class; use a token, or color-mix of tokens.",
         },
         {
           selector: "Literal[value=/(?:^|\\s)animate-(?:spin|pulse|ping|bounce)(?:\\s|$)/]",

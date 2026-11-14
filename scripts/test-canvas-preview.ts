@@ -24,15 +24,14 @@ assert.equal(previews.of("src/plan.tsx"), undefined)
 
 // Reopening an unchanged canvas reuses its build; an edited one builds again.
 const source = 'import { H1 } from "cursor/canvas"; export default function Reopened(){return <H1>Reopened</H1>}'
-let started = performance.now()
-const cold = await previews.document(cursorCanvasPreview, source)
-const coldMs = performance.now() - started
-started = performance.now()
-const warm = await previews.document(cursorCanvasPreview, source)
-const warmMs = performance.now() - started
+let renders = 0
+const canvas: ProviderArtifactPreview = { ...cursorCanvasPreview, render: (text) => (renders++, cursorCanvasPreview.render(text)) }
+const cold = await previews.document(canvas, source)
+const warm = await previews.document(canvas, source)
 assert.equal(warm, cold)
-assert.ok(warmMs < coldMs / 10, `a reopen reuses the build (${warmMs.toFixed(2)} ms against ${coldMs.toFixed(1)} ms)`)
-assert.notEqual(await previews.document(cursorCanvasPreview, source.replace("Reopened</H1>", "Edited</H1>")), cold)
+assert.equal(renders, 1, "a reopen reuses the build")
+assert.notEqual(await previews.document(canvas, source.replace("Reopened</H1>", "Edited</H1>")), cold)
+assert.equal(renders, 2, "an edited one builds again")
 
 // Two reads of one source share a build in flight; a failed build is tried again.
 let builds = 0
@@ -52,4 +51,4 @@ const before = builds
 await previews.document(counted, "a")
 assert.equal(builds, before + 1, "the cache keeps the newest documents and lets the oldest go")
 
-console.log(`Canvas compiles without executing source in the host; disk imports, oversized input, and script escapes are blocked; a reopen reuses its build (${coldMs.toFixed(0)} ms cold, ${warmMs.toFixed(2)} ms again)`)
+console.log(`Canvas compiles without executing source in the host; disk imports, oversized input, and script escapes are blocked; a reopen reuses its build`)

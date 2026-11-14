@@ -1,3 +1,4 @@
+import { retryWords } from "@mako/host/contracts/delivery-retry"
 import { describePromptRecovery } from "@mako/host/contracts/prompt-recovery"
 import type { InterruptionReason, LiveRequest } from "@/lib/types"
 import { turnStopLabel, type TurnStop } from "@/state/prompt-delivery"
@@ -67,7 +68,7 @@ export function usageLimitReset(request: Pick<LiveRequest, "status" | "failure">
 }
 
 /** A new thread opens in the same folder over the same transport, so it can't escape these. */
-const NO_FRESH_ESCAPE = new Set<LiveRequest["failure"]>(["auth", "transport-limit", "missing-folder", "launch-failed"])
+const NO_FRESH_ESCAPE = new Set<LiveRequest["failure"]>(["auth", "permission", "sign-in-check", "transport-limit", "missing-folder", "launch-failed"])
 
 /**
  * The recovery a request offers, from what the host decided about it (its
@@ -76,18 +77,28 @@ const NO_FRESH_ESCAPE = new Set<LiveRequest["failure"]>(["auth", "transport-limi
  * makes is kept; only where they're said changes.
  */
 export function requestRecovery(
-  request: Pick<LiveRequest, "status" | "failure" | "nativeDelivery" | "interruption">,
+  request: Pick<LiveRequest, "status" | "failure" | "nativeDelivery" | "interruption" | "retry">,
   context: RecoveryContext
 ): RequestRecovery {
   const now = context.now ?? Date.now()
   const recovery = describePromptRecovery(request, context.provider, context.compacted)
+  // A turn its harness failed for now that Mako continues by itself: a wait, said once, with nothing to press.
+  if (request.status === "failed" && request.retry && request.retry.at > now)
+    return {
+      title: "Continues by itself",
+      description: `at ${clockText(request.retry.at, now)}`,
+      guidance: `The turn stopped because ${retryWords(request.retry, context.provider)}. What it did so far stands, and Mako picks it up then.`,
+      tone: "caution",
+      delivery: recovery.delivery,
+      more: [{ kind: "copy" }],
+    }
   const failed = request.status === "failed"
   const reset = usageLimitReset(request, context.resetAt, now)
   const resend: RecoveryAction | undefined = recovery.resendLabel ? { kind: "resend", label: recovery.resendLabel } : undefined
   const fresh: RecoveryAction | undefined = failed && !NO_FRESH_ESCAPE.has(request.failure) ? { kind: "fresh" } : undefined
   const settings: RecoveryAction | undefined =
     failed && request.failure === "launch-stalled" ? { kind: "settings", section: "mcp" }
-      : failed && (request.failure === "auth" || request.failure === "wrong-account" || request.failure === "plan" || request.failure === "launch-failed")
+      : failed && (request.failure === "auth" || request.failure === "permission" || request.failure === "sign-in-check" || request.failure === "wrong-account" || request.failure === "plan" || request.failure === "launch-failed")
         ? { kind: "settings", section: "agents" }
         : undefined
 
@@ -102,7 +113,8 @@ export function requestRecovery(
   let primary: RecoveryAction | undefined
   if (reset !== undefined) primary = { kind: "resume-at", at: reset, label: `${evidence === "never" ? "Resume" : "Send a copy"} at ${clockText(reset, now)}` }
   else if (carryOn) primary = carryOn
-  else if (failed && request.failure === "auth") primary = { kind: "sign-in" }
+  else if (failed && (request.failure === "auth" || request.failure === "sign-in-check")) primary = { kind: "sign-in" }
+  else if (failed && request.failure === "permission") primary = settings
   else if (failed && request.failure === "context-exhausted") primary = resend ?? (context.canCompact ? { kind: "compact" } : fresh)
   else if (failed && request.failure === "transcript-rejected") primary = fresh
   else if (resend) primary = resend
@@ -196,6 +208,10 @@ function recoveryGuidance(
       return `${agent} went quiet while starting, often on a slow MCP server; it never got the message, so sending it again is safe.`
     case "auth":
       return delivered === "received" ? `${agent} signed out after it got this; sign in again, then continue the turn.` : `${agent} is signed out; sign in again, then send it.`
+    case "permission":
+      return `${agent} refused this account's permission, scope or organisation access; choose an authorised account or ask its administrator for access.`
+    case "sign-in-check":
+      return "Mako could not confirm sign-in after an hour of automatic retries; sign in again in Settings › Agents, then resume the work."
     case "context-exhausted":
       return context.compacted
         ? "The conversation is compacted now, so the message may fit."

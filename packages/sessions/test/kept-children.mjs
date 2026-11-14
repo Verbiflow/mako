@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { existsSync } from "node:fs"
-import { appendFile, cp, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises"
+import { appendFile, cp, mkdtemp, open, readFile, readdir, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { createHash } from "node:crypto"
 import { dirname, join, relative } from "node:path"
@@ -149,10 +149,16 @@ for (const harness of HARNESSES) {
         const held = (await stat(join(readBack, relative(home, path)).replace(/\.zst$/, ""))).size
         assert.ok(held <= first && (first < size || held === size), `${harness}: ${path} waits to be opened (${held} of ${size} bytes)`)
       }
+      // Children read together: each reads the home's mark as another replaces it, whole. Written in place, one finds it empty.
+      const mark = join(readBack, ".mako-restored.json")
+      const before = await open(mark)
+      const marked = (await before.stat()).ino
       // A transcript of the kept parent carries its children, each read from the same records.
       const opened = await catalog.open(parent.ref.path, false)
       const carried = await new ChildSidecars(join(root, "bundles", "children")).bundle({ children: (path) => catalog.children(path), open: (path) => catalog.open(path, false) }, [{ path: parent.ref.path, toolIds: toolIdsOf(opened.entries), whole: true }])
       for (const child of parent.located) assert.ok(carried.children.find((each) => each.nativeId === child.nativeId)?.transcript?.entries, `${harness}: a transcript carries ${child.nativeId}`)
+      if (parent.sizes.size) assert.notEqual((await stat(mark)).ino, marked, `${harness}: ${parent.ref.nativeId}'s mark is replaced whole`)
+      await before.close()
       for (const child of parent.located) {
         const thread = await catalog.open(child.path, false)
         assert.ok(thread, `${harness}: ${child.nativeId} opens from its parent's records`)

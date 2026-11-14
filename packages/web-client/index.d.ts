@@ -17,6 +17,8 @@ export interface WebConnection {
   expiresAt: number
   deviceId: string
   account: WebAccount
+  /** The Mako cloud's own address, as the gateway says it of itself, where a machine joins the account. Absent from a gateway before it said so. */
+  cloud?: string
 }
 
 /** What the page hosting the client gives it. */

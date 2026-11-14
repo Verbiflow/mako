@@ -72,7 +72,8 @@ export function releaseSignIn(requests: readonly LiveRequest[], continuation?: L
     if (request.status === "held") {
       if (!placed && continuation) released.push(continuation)
       placed = true
-      released.push({ ...rest, status: "queued" })
+      // Resume is the deliberate word a Stop waits for, so it lifts a Stop's mark too.
+      released.push({ ...rest, status: "queued", pause: undefined })
     } else released.push(rest)
   }
   if (!placed && continuation) released.push(continuation)

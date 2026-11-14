@@ -13,6 +13,8 @@ async function prune(sourceRoot, outputRoot, relative = "") {
   })
   for (const entry of entries) {
     const path = join(relative, entry.name)
+    // The packaged main process's bundle is scripts/bundle-main.mjs's, not the compiler's.
+    if (outputRoot === "dist-electron" && path === "main") continue
     if (entry.isDirectory()) await prune(sourceRoot, outputRoot, path)
     else if (entry.isFile() && /(?:\.js|\.d\.ts)(?:\.map)?$/.test(entry.name)) {
       const source = join(root, sourceRoot, path.replace(/(?:\.js|\.d\.ts)(?:\.map)?$/, ".ts"))

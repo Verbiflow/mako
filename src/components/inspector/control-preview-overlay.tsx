@@ -182,7 +182,7 @@ function PreviewCard({
       aria-label={paused ? "Control preview, last view" : "Live control preview"}
       className={cn(
         "control-preview-card glass-panel pointer-events-auto relative overflow-hidden text-popover-foreground",
-        zoomed ? "w-full max-w-5xl rounded-2xl" : "rounded-xl"
+        zoomed ? "w-full max-w-5xl" : ""
       )}
     >
       {/* The image sets its own height; no letterbox band around it. */}
@@ -284,7 +284,7 @@ function PreviewCard({
         {error && (
           <p
             role="status"
-            className="glass-control pointer-events-none absolute inset-x-2 bottom-2 truncate rounded-md px-2 py-1 text-label text-muted-foreground"
+            className="glass-control pointer-events-none absolute inset-x-2 bottom-2 truncate px-2 py-1 text-label text-muted-foreground"
             title={error}
           >
             {error}

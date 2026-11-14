@@ -7,13 +7,14 @@ import { DIRECT_MESSAGES, RETRY_MARKERS, SETUP_NOTICES, STOP_MARKER } from "../s
 export const OPENCODE_VOCABULARY = defineVocabulary({
   harness: "opencode",
   checked: {
-    version: "2.2.3",
-    on: "2026-10-30",
-    against: "the model request of 2.2.3's native API per agent on an Anthropic and an OpenAI model (scripts/fixtures/native-tools; 2.2.3 adds experimental_image_generate where a provider has an image model, OpenAI's here, and rewords shell and execute), opencode.db and opencode-next.db through audit:tools as of 2026-10-12, and the permission names Mako launches with",
+    version: "2.2.7",
+    on: "2026-11-11",
+    against: "the model request of 2.2.7's native API per agent on an Anthropic and an OpenAI model (scripts/fixtures/native-tools; 2.2.3 adds experimental_image_generate where a provider has an image model, OpenAI's here, and rewords shell and execute; 2.2.6 rewords shell again; 2.2.7 changes no tool), opencode.db and opencode-next.db through audit:tools as of 2026-10-12, and the permission names Mako launches with",
   },
   mcp: [],
   tools: {
-    shell: { kind: "shell", aliases: ["bash"], effects: { cwd: "workdir", background: "background", exitCode: "result.exit" } },
+    // Its answer closes with `Exited with code 1` (`OPENCODE_CLOSING`).
+    shell: { kind: "shell", aliases: ["bash"], effects: { cwd: "workdir", background: "background", exitCode: "result.exit", exitText: /(?:^|\n)(?:Command )?[Ee]xited with code (-?\d+)\.?\s*$/ } },
     read: { kind: "read" },
     edit: { kind: "edit", aliases: ["multiedit"], effects: { edits: { old: "oldString", new: "newString", all: "replaceAll", list: "edits" }, reported: { form: "files", key: "files" } } },
     patch: { kind: "edit", aliases: ["apply_patch"], effects: { patch: "patchText", reported: { form: "files", key: "files" } } },
@@ -34,9 +35,9 @@ export const OPENCODE_VOCABULARY = defineVocabulary({
   },
   concepts: {
     checked: {
-      version: "2.2.3",
-      on: "2026-10-30",
-      against: "the 2.2.3 binary's bundled loaders through harness:self-report (every declared name, and every skill and MCP place listed), and @opencode/schema and @opencode/protocol 2.0.27 types as read on 2026-10-12 (opencode.ai/docs still describe 1.x)",
+      version: "2.2.7",
+      on: "2026-11-11",
+      against: "the 2.2.7 binary's bundled loaders through harness:self-report (every declared name, and every skill and MCP place listed), and @opencode/schema and @opencode/protocol 2.0.27 types as read on 2026-10-12 (opencode.ai/docs still describe 1.x)",
     },
     instructions: {
       files: ["AGENTS.md"],

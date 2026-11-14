@@ -74,6 +74,33 @@ launch. Configuration and OS prerequisites are described in the deployment
 recipe `docs/local-control-runtime.md` in the source repository. The supervisor
 cleans up its process group after crashes, cancellation and lost parent IPC.
 
+Desktop worker pools default to `cleanup: { scope: "same-user-global" }`.
+This starts abandoned-launch cleanup once per pool across the OS temp directory
+and `/tmp`; it is not Thread-local. Long socket paths can also start the global
+abandoned-socket sweep. Startup does not wait for these sweeps, and pool close
+does not join them.
+
+An isolated caller can instead create a private mode-0700 directory and configure
+`new ControlWorkers({ cleanup: { scope: "owned", root } })`, then pass that pool
+to `startDesktopControlSession`. A standalone session accepts the same `cleanup`
+option without a pool. Owned mode starts neither sweep, creates launch files
+under that root, and refuses paths too long for their sockets instead of falling
+back to `/tmp`. The caller owns removal of its root after all sessions close.
+
+Abandoned-launch cleanup opens root/session directories without following their
+final symlinks, validates expected file types, ownership and modes before any
+unlink, and rechecks identities before each mutation. It does not read session
+credentials. Only a no-PID legacy launch's primary `session.sock` may retain the
+ordinary permission bits from a raw bind without chmod; special bits are refused.
+Its root and session directories must still be private mode-0700 directories of
+this user, the leaf must be this user's socket, and its connection must be refused
+before cleanup. PID-bearing sockets, staging sockets and all other leaves retain
+their exact mode checks. These checks are conservative, not an atomic directory-relative
+unlink: same-user replacement after the final path check remains possible, and
+a partial failure cannot undo earlier unlinks. Unknown entries or observed
+changes stop further cleanup. Use owned mode when global stale cleanup is outside
+the caller's authority.
+
 ## Integration contracts
 
 - Root: `createControlRuntime`, explicit standalone ownership and configuration.

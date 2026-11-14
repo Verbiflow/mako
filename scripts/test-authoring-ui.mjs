@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * Settings › Hooks and commands and › MCP servers over the authoring fixture,
@@ -23,10 +23,10 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const { createServer } = await import("vite")
-  const root = await mkdtemp(join(tmpdir(), "mako-authoring-ui-"))
+  const { uiVite } = await import("./lib/ui-vite.mjs")
+  const root = testScratch("mako-authoring-ui-")
   const out = process.argv.includes("--out") ? resolve(process.argv[process.argv.indexOf("--out") + 1]) : root
-  const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false, watch: { ignored: ["**"] } } })
+  const server = await uiVite({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false, watch: { ignored: ["**"] } } })
   await server.listen()
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-authoring-ui", main: fileURLToPath(import.meta.url) }))
   const env = { ...process.env, MAKO_AUTHORING_TEST_ROOT: root, MAKO_AUTHORING_TEST_OUT: out, MAKO_AUTHORING_TEST_URL: server.resolvedUrls.local[0] }

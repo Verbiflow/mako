@@ -79,6 +79,8 @@ export interface SimulatorFrameSource {
   keyFrame(): void
   /** The largest box any viewer draws in, so the host encodes no more than that. */
   resize(box: { width: number; height: number }): void
+  /** A viewer's decoder drew this stream's picture `sequence`: until one does, a host may switch to a format it can show. */
+  decoded?(sequence: number): void
   stop(): Promise<void>
 }
 

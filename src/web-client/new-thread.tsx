@@ -230,7 +230,7 @@ export function StartForm({ onStarted, adding, startIn, desk = false }: { onStar
       <span aria-hidden className="text-label text-faint/60">/</span>
       <Chip label="Project" disabled={Boolean(adding)} onClick={pick("project")}>
         <FolderIcon className="size-3.5" />
-        {projectName ? <span>{projectName}</span> : projects === undefined && place && startable(place) ? <span className="skeleton h-3 w-12 rounded" /> : <span>Choose</span>}
+        {projectName ? <span>{projectName}</span> : projects === undefined && place && startable(place) ? <span className="skeleton h-3 w-12" /> : <span>Choose</span>}
       </Chip>
     </div>
   )
@@ -239,11 +239,11 @@ export function StartForm({ onStarted, adding, startIn, desk = false }: { onStar
     <>
       <Chip label="Harness and model" onClick={pick("loadout")} shrinks>
         {preferred ? <WebHarnessIcon harness={preferred.harness} className="size-3.5" /> : null}
-        {chosenHarness ? <span>{modelLabel ?? webHarnessLabel(chosenHarness.harness)}</span> : preferred?.pending || !catalog ? <span className="skeleton h-3 w-16 rounded" /> : <span>Choose</span>}
+        {chosenHarness ? <span>{modelLabel ?? webHarnessLabel(chosenHarness.harness)}</span> : preferred?.pending || !catalog ? <span className="skeleton h-3 w-16" /> : <span>Choose</span>}
       </Chip>
       <Chip label={access ? `Access: ${access.label}` : "Access"} disabled={!harness} onClick={pick("access")}>
         {access?.tier === "full" ? <TriangleAlertIcon className="size-3.5 text-caution" /> : <ShieldIcon className="size-3.5" />}
-        {access ? <span>{access.label}</span> : <span className="skeleton h-3 w-14 rounded" />}
+        {access ? <span>{access.label}</span> : <span className="skeleton h-3 w-14" />}
       </Chip>
     </>
   )

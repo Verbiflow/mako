@@ -17,7 +17,7 @@ const GLINTS: ReadonlySet<LiveMarkState> = new Set(["working", "background", "st
  * with what it does, one calm gesture a state, as a character would rather than a spinner beside it:
  *
  * - working: a glint of the brand's sea crosses the fin itself, the sign that reads at 20 px down a list, and by
- *   `motion` thinking it bobs, writing it glides with a short wake behind it, running a tool it braces in two steps;
+ *   `motion` thinking it bobs, writing it glides side to side, running a tool it braces in two steps;
  *   `background` (its turn done, work it waits on still running) bobs and glints at half speed, dimmer;
  * - needs you: it turns the attention hue over a waterline that breathes, never below 40%;
  * - asking its Apex: it drifts, dimmed; queued: faint and still; starting: it fades in and out;
@@ -76,7 +76,6 @@ export function LiveMark({
       {state === "needs" || (kind === "thread" && (state === "working" || state === "background")) ? (
         <span key={`water:${state}`} aria-hidden ref={state === "needs" ? observePhaseLockedAnimation : undefined} className="live-mark-water" />
       ) : null}
-      {state === "working" && motion === "writing" ? <span key="wake" aria-hidden ref={observePhaseLockedAnimation} className="live-mark-wake" /> : null}
       <span key={`body:${gesture}`} aria-hidden ref={moving ? observePhaseLockedAnimation : undefined} className="live-mark-body">
         <svg viewBox="2 2 28 28" aria-hidden>
           <path d={FIN} fill="currentColor" />

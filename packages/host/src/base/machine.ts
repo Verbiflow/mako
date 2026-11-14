@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process"
+import { hostExecFile } from "./host-command.js"
 import { constants } from "node:fs"
 import { access, mkdtemp, readFile, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -6,6 +6,7 @@ import { basename, delimiter, dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
 import type { MachineOffer } from "../contracts/machine-offer.js"
 import { nodePlatform } from "./platform.js"
+import { endChildInput } from "@mako/sessions/child-input"
 
 /**
  * What a person sitting at the host's machine sees: its file manager, its
@@ -72,11 +73,11 @@ export type FindCommand = (command: string) => Promise<boolean>
 
 const runCommand: RunCommand = (command, args, options = {}) =>
   new Promise((resolve, reject) => {
-    const child = execFile(command, args, { timeout: options.timeoutMs ?? 15_000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
+    const child = hostExecFile(command, args, { timeout: options.timeoutMs ?? 15_000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
       if (error && !Number.isInteger(error.code)) reject(error)
       else resolve({ code: error ? Number(error.code) : 0, stdout })
     })
-    if (options.input !== undefined) child.stdin?.end(options.input)
+    if (options.input !== undefined) endChildInput(child, options.input)
   })
 
 export function commandsOnPath(env: NodeJS.ProcessEnv): FindCommand {

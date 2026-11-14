@@ -18,6 +18,8 @@ export interface HostWork {
    * or none.
    */
   current(): string | undefined
+  /** The named work open now, longest first, each with how long it has run: what a slow stop waits on. */
+  openWork?(): string[]
 }
 
 /** For a part built without a host around it, such as in a test. */
@@ -159,6 +161,14 @@ export class EventLoopWatch implements HostWork {
 
   current(): string | undefined {
     return this.names.current()
+  }
+
+  openWork(): string[] {
+    const now = performance.now()
+    return [...this.open.values()]
+      .sort((a, b) => a.since - b.since)
+      .slice(0, NAMED_PER_HOLD)
+      .map((span) => `${span.label} (${Math.round(now - span.since)} ms)`)
   }
 
   /** An event went out: the loop stays watched for `lingerMs`. */

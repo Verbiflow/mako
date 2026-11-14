@@ -4,6 +4,7 @@ import { join } from "node:path"
 import {
   LOCAL_HOST,
   type ListedSimulator,
+  type SimulatorArtifact,
   type SimulatorCaller,
   type SimulatorHostSummary,
   type SimulatorRefused,
@@ -51,14 +52,17 @@ export class RemoteMacSimulators implements RemoteSimulatorHost {
   readonly #shots: string
   readonly #listMs: number
   readonly #callMs: number
+  readonly #artifact: ((artifact: SimulatorArtifact) => Promise<string>) | undefined
 
-  constructor(options: { id: string; label: string; call: SimulatorHostCall; shots: string; listMs?: number; callMs?: number }) {
+  /** `artifact`: a file that Mac gave this caller's session lease (a large picture, a recording), fetched here; its path. */
+  constructor(options: { id: string; label: string; call: SimulatorHostCall; shots: string; listMs?: number; callMs?: number; artifact?: (artifact: SimulatorArtifact) => Promise<string> }) {
     this.id = options.id
     this.label = options.label
     this.#call = options.call
     this.#shots = options.shots
     this.#listMs = options.listMs ?? REMOTE_LIST_MS
     this.#callMs = options.callMs ?? REMOTE_CALL_MS
+    this.#artifact = options.artifact
   }
 
   async list(caller: SimulatorCaller): Promise<{ hosts: SimulatorHostSummary[]; simulators: ListedSimulator[] }> {
@@ -96,6 +100,7 @@ export class RemoteMacSimulators implements RemoteSimulatorHost {
     const asked: SimulatorsShotInput = { ...input, inline: true }
     const shot = await this.#verb<SimulatorsShotResult>("shot", caller, asked)
     if ("refused" in shot) return shot
+    if (!shot.inline && shot.artifact && this.#artifact) return { path: await this.#artifact(shot.artifact), width: shot.width, height: shot.height }
     if (!shot.inline) return { refused: "unsupported", why: `${this.label}'s picture is too large to send here; watch the simulator instead.` }
     await mkdir(this.#shots, { recursive: true })
     const path = join(this.#shots, `${randomUUID()}.${shot.inline.type === "image/jpeg" ? "jpg" : "png"}`)
@@ -103,8 +108,11 @@ export class RemoteMacSimulators implements RemoteSimulatorHost {
     return { path, width: shot.width, height: shot.height }
   }
 
-  record(caller: SimulatorCaller, input: SimulatorsRecordInput): Promise<SimulatorsRecordResult> {
-    return this.#verb("record", caller, input)
+  /** A stopped recording that Mac gave this caller's lease comes here as a file; without a lease it stays there. */
+  async record(caller: SimulatorCaller, input: SimulatorsRecordInput): Promise<SimulatorsRecordResult> {
+    const recorded = await this.#verb<SimulatorsRecordResult>("record", caller, input)
+    if ("refused" in recorded || !recorded.artifact || !this.#artifact) return recorded
+    return { path: await this.#artifact(recorded.artifact) }
   }
 
   release(caller: SimulatorCaller, input: SimulatorsReleaseInput): Promise<SimulatorsReleaseResult> {

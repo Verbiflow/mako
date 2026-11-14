@@ -27,8 +27,11 @@ import { createLiveEngine, type LiveEngineApi } from "../live-engine.js"
 import { deliverDecoded, type Decoded, type DecodedSink } from "../../contracts/native-decoding.js"
 import { nativeStream, streamRuntime, withFrame, type NativeStream } from "../native-stream.js"
 import { errorMessage } from "../../base/error-message.js"
-import { preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "../prompt-dispatch.js"
+import { handOff, preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "../prompt-dispatch.js"
+import { SHOW_MEDIA_LINE } from "@mako/sessions/turn-media"
 import { SHUTDOWN_GRACE_MS, type ProviderLiveDriver, type ProviderStartOptions } from "../live-driver.js"
+import { configureOpenCodePrimer } from "./primer-file.js"
+import { instructionText } from "../../contracts/mako-layer.js"
 import { startOpenCodeApi } from "./native-api.js"
 import { discoverOpenCodeCatalog } from "./profile.js"
 import { openCodeBinaryTarget } from "./updates.js"
@@ -121,6 +124,8 @@ interface Live {
   childSettling: Map<string, Array<() => void>>
   /** The latest notice OpenCode enqueued while no turn ran: the cause of the turn it starts on it. */
   providerTurnCause?: ProviderTurnCause & { source?: NativeEventSource }
+  /** Each notice OpenCode queued while a turn ran, by its inbox item: it opens its own turn once delivered between steps. */
+  queuedNotices: Map<string, ProviderTurnCause & { source?: NativeEventSource }>
   /** Shells and subagent sessions Stop ended. OpenCode notifies the root of each end. */
   stopped: Set<string>
   /** Those notices, by inbox item. A turn OpenCode starts on one is stopped too. */
@@ -206,6 +211,21 @@ export async function openCodeSessionMessages(list: MessagePage, sessionID: stri
   }
 }
 
+/**
+ * The pages and the fork are separate startup steps. The page read used to
+ * finish before its step began, so a silence there had no watch and no name:
+ * one fork of a long session sat in that gap (2026-11-04).
+ */
+export async function openCodeForkUnderWatch<Session>(
+  step: <Value>(name: string, work: Promise<Value>) => Promise<Value>,
+  list: MessagePage,
+  fork: (before: string | undefined) => Promise<Session>,
+  source: { nativeId: string; runId: string; steers?: number },
+): Promise<Session> {
+  const messages = await step("fork history", openCodeSessionMessages(list, source.nativeId))
+  return step("session", fork(openCodeForkBoundary(messages, source.runId, source.steers ?? 0)))
+}
+
 /** OpenCode's ascending identifiers: a 48-bit time and counter, then 14 random base62 characters. */
 export class OpenCodeMessageIds {
   private time = 0
@@ -277,6 +297,8 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
   const messageIds = new OpenCodeMessageIds()
   // A start not yet a session: Close cancels it here, including the API launch.
   const starting = new Map<string, AbortController>()
+  /** Servers of failed starts that outlived being ended; their binding's close fails until one proves them gone. */
+  const unclosed = new Map<string, () => Promise<void>>()
   function cancellable<T>(id: string, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
     const startup = new AbortController()
     starting.set(id, startup)
@@ -420,7 +442,10 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
   function observeNotice(live: Live, inbox: string, notice: OpenCodeNotice): void {
     if (notice.ended && live.stopped.delete(notice.ended)) live.stopNotices.add(inbox)
     // The notice is the inbox item OpenCode saves as the line that opens the turn: the turn cites it, as saved history does.
-    if (!live.turn && notice.cause) live.providerTurnCause = { ...notice.cause, source: { harness: "opencode", record: inbox } }
+    if (!notice.cause) return
+    const cause = { ...notice.cause, source: { harness: "opencode", record: inbox } }
+    if (!live.turn) live.providerTurnCause = cause
+    else live.queuedNotices.set(inbox, cause)
   }
 
   function mark(live: Live, markers: readonly TranscriptEvent[]): void {
@@ -499,7 +524,16 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         if (turn.kind !== "compaction") engine.patch(live, { nativeRunId: fact.inbox })
         return
       }
-      case "delivered":
+      case "delivered": {
+        // OpenCode 2.2.7 runs a notice queued during a turn in that same execution, once its last step ended: the turn
+        // ends there, and the notice opens its own, as it does when it comes after the turn (`started`).
+        const queued = live.queuedNotices.get(fact.inbox)
+        live.queuedNotices.delete(fact.inbox)
+        if (queued && fact.between && live.turn?.delivered && live.turn.inboxId !== fact.inbox) {
+          finish(live, { kind: "succeeded" })
+          live.providerTurnCause = queued
+          openProviderTurn(live)
+        }
         if (live.turn?.inboxId === fact.inbox) live.turn.delivered = true
         if (live.stopNotices.delete(fact.inbox) && live.turn?.kind === "provider") {
           live.turn.stopRequested = true
@@ -507,6 +541,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
             hostWarn("opencode", "The turn started on a stopped task's notice was not interrupted", { conversation: live.state.id, error: errorText({ error }) }))
         }
         return
+      }
       case "started":
         if (!live.turn && (live.state.status === "ready" || live.state.status === "failed")) openProviderTurn(live)
         return
@@ -671,7 +706,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         if (live.closed || live.api.signal.aborted) return
         if (++attempts > 5) {
           hostWarn("opencode", "event stream could not be restored", { conversation: live.state.id })
-          await live.api.close()
+          await live.api.close().catch(() => {})
           return
         }
         await new Promise(resolve => setTimeout(resolve, 100 * 2 ** attempts))
@@ -714,6 +749,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
   return {
     provider: "opencode",
     launchEnvironment: { kind: "prepared", via: "Native API launch consumes AdmittedStartOptions.accountLaunch." },
+    makoInstructions: { via: "An instructions file named in `OPENCODE_CONFIG_CONTENT`, which OpenCode appends. Never an agent's `prompt`, which replaces the provider's own." },
     nativeIdentity: OPENCODE_NATIVE_IDENTITY,
     nativeExclusion: NO_NATIVE_EXCLUSION,
     nativePromptIdentity: { kind: "accepted-message-id", evidence: "OpenCode v2 session.prompt returns the accepted inbox ID; the native user message stores that same ID. Commands without that receipt remain uncorrelated." },
@@ -730,6 +766,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     nativeRouting: { kind: "at-launch", via: "A deny on the `subagent` permission, last in the Build and Plan agents' rules in `OPENCODE_CONFIG_CONTENT`, which removes the tool.", verified: { version: "2.2.3", how: "harness:native-tools records Build and Plan as a lead without `subagent`, where a deny on `task` left it (2026-11-01); test:native-routing-live: a lead offered none, an ordinary Thread's child ran and was observed" } },
     layer: opencodeLayer.capabilities,
     modelRoutes: openCodeModelRoutes,
+    accountContinuation: { kind: "new-session", reason: "Mako reads OpenCode's logins and never chooses one (its accounts are observed), so there is no other account of it to go on under." },
     questions: { kind: "request", via: "The `question` tool's form, answered with `form.reply`." },
     contextBreakdown: { kind: "unavailable", reason: "OpenCode reports token totals per message, not what fills the context." },
     modeSwitching: { kind: "native", via: "Each mode is an OpenCode agent, switched on the running session with `session.switchAgent`." },
@@ -816,6 +853,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const launchAccess = openCodeLaunchAccess(options.modeId, options.launchModeId)
       configureOpenCodePermissions(env, launchAccess)
       configureOpenCodeRouting(env, options.conversationId, options.nativeRouting)
+      await configureOpenCodePrimer(env, instructionText(layerOf(options)) ?? SHOW_MEDIA_LINE)
       const tools = options.conversationTools
       await configureOpenCodeCalls(env, options.conversationId, options.nativeCalls && tools?.makoUrl ? { url: tools.makoUrl.replace(/\/mako$/, "/calls"), token: tools.token } : undefined)
       applyControlEnvironment(env, options.conversationTools?.control)
@@ -827,13 +865,13 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const preparing = trace.step("mcp-preparation", () => mcpServers(options))
       const rooting = dependencies.approvalRoot()
       void Promise.allSettled([preparing, rooting])
-      const api = await startOpenCodeApi({ command: installation.command, cwd, env, conversationId: options.conversationId, trace, servers: dependencies.servers, signal, fetch: dependencies.fetch })
+      const api = await startOpenCodeApi({ command: installation.command, cwd, env, conversationId: options.conversationId, trace, servers: dependencies.servers, signal, fetch: dependencies.fetch, unclosed: close => unclosed.set(options.conversationId, close) })
       const context = launchContext("opencode-native-api", OPENCODE_NATIVE_IDENTITY, options.accountLaunch.account, installation.command)
       context.runtime = reportedRuntime(api.info.version, "launched native API info.version")
       const live: Live = {
         api, cwd, env, emit: options.emit, launchAccess, nativeStream: null, bounds: new OpenCodeCallBounds(options.conversationId), catalogGeneration: 0, turn: null, queue: Promise.resolve(),
         mcp: new OpenCodeMcpHealth(), mcpReads: Promise.resolve(),
-        settling: [], childSettling: new Map(), stopped: new Set(), stopNotices: new Set(), stream: new AbortController(), closed: false,
+        settling: [], childSettling: new Map(), stopped: new Set(), stopNotices: new Set(), queuedNotices: new Map(), stream: new AbortController(), closed: false,
         state: {
           executionContext: context,
           id: options.conversationId, harness: "opencode", cwd, title: options.title, nativeId: options.resume, nativePath,
@@ -865,17 +903,18 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         // Added while the catalog is read: an MCP server's commands come with the catalog change it causes, which
         // the generation the catalog was read at tells apart.
         let loadedAt = live.catalogGeneration
-        const [catalog] = await Promise.all([
-          trace.step("model-discovery", () => api.watch.step("catalog", loadCatalog(live).then((read) => {
+        // One step for both: the watch runs one at a time, and an add that never answers holds the launch as a catalog read would.
+        const [catalog] = await api.watch.step("catalog and MCP servers", Promise.all([
+          trace.step("model-discovery", () => loadCatalog(live).then((read) => {
             loadedAt = live.catalogGeneration
             return read
-          }))),
+          })),
           trace.step("mcp-preparation", () => Promise.all(servers.map(server =>
             api.client.mcp.add({ server: server.name, location, config: server.config }).catch(error => {
               hostWarn("opencode", "an MCP server could not be added", { conversation: live.state.id, server: server.name, error: errorText({ error }) })
               refused.push({ name: server.name, error: errorText({ error }) })
             })))),
-        ])
+        ]))
         const modes = openCodeSessionModes(catalog.agents)
         const requested = options.modeId && modes.some(mode => mode.id === options.modeId) ? options.modeId : OPENCODE_DEFAULT_MODE
         const agent = openCodeAgentForMode(requested, launchAccess)
@@ -883,20 +922,22 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         const fork = options.fork
         if (options.resume || fork) {
           session = fork
-            ? await trace.step("session-open", async () => api.watch.step("session", api.client.session.fork({
-                sessionID: fork.nativeId,
-                before: openCodeForkBoundary(await openCodeSessionMessages((input) => api.client.message.list(input), fork.nativeId), fork.runId, fork.steers),
-              })))
+            ? await trace.step("session-fork", () => openCodeForkUnderWatch(
+                (name, work) => api.watch.step(name, work),
+                (input) => api.client.message.list(input),
+                (before) => api.client.session.fork({ sessionID: fork.nativeId, before }),
+                fork,
+              ))
             : await trace.step("session-resume", () => api.watch.step("session", api.client.session.get({ sessionID: options.resume! })))
           // A session resumed in another folder, as a Thread's move into its worktree does, goes on there: OpenCode keeps its folder on the session.
           if (!fork && !sameFolder(session.location.directory, cwd)) {
-            await trace.step("session-resume", () => api.client.session.move({ sessionID: session!.id, directory: cwd }))
+            await trace.step("session-resume", () => api.watch.step("session move", api.client.session.move({ sessionID: session!.id, directory: cwd })))
             session = { ...session, location: { ...session.location, directory: cwd } }
           }
           const current = session.model ? { id: session.model.id, providerID: session.model.providerID, variant: session.model.variant } : undefined
           const ref = openCodeRequestedModel(catalog, options.tuning, current ?? catalog.defaultModel)
-          if (session.agent !== agent) await trace.step("settings", () => api.client.session.switchAgent({ sessionID: session!.id, agent }))
-          if (!sameOpenCodeModel(current, ref)) await trace.step("settings", () => api.client.session.switchModel({ sessionID: session!.id, model: ref }))
+          if (session.agent !== agent) await trace.step("settings", () => api.watch.step("agent switch", api.client.session.switchAgent({ sessionID: session!.id, agent })))
+          if (!sameOpenCodeModel(current, ref)) await trace.step("settings", () => api.watch.step("model switch", api.client.session.switchModel({ sessionID: session!.id, model: ref })))
           live.model = ref
           live.modelFromDefault = !options.tuning?.model && !current
         } else {
@@ -950,8 +991,8 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         return live.state
       } catch (error) {
         stop(live)
-        sessions.delete(live.state.id)
-        await api.close()
+        // One that outlives this stays for the next close; what the start reports is why it failed.
+        await api.close().then(() => sessions.delete(live.state.id), () => undefined)
         throw error
       }
     }),
@@ -962,7 +1003,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         return live
       })
       if (text.trim() === "/compact" && attachments.length === 0) {
-        dispatch.report({ kind: "submitted", source: "transport-call" })
+        handOff(dispatch, { kind: "submitted", source: "transport-call" })
         await startCompaction(live, randomUUID(), dispatch)
         return
       }
@@ -979,17 +1020,18 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         if (live.closed || live.turn) throw new Error("The session changed while preparing the prompt")
         return slashInvocation(text, live.catalog)
       })
-      const files = promptFiles(attachments)
+      const files = preparePrompt(dispatch, () => promptFiles(attachments))
       const inboxId = slash?.kind === "command" ? undefined : messageIds.next()
       const turn: Turn = { kind: slash?.kind === "command" ? "command" : "prompt", inboxId, enqueued: false, delivered: false, dispatch }
+      handOff(dispatch, { kind: "submitted", source: "transport-call", correlationId: inboxId })
       live.turn = turn
       live.providerTurnCause = undefined
       live.stopped.clear()
       live.stopNotices.clear()
+      live.queuedNotices.clear()
       engine.patch(live, { status: "running", nativeRunId: inboxId, lastStop: undefined, error: undefined })
       engine.emitUpdate(live, { kind: "user", text })
       live.nativeStream?.prompted({ text, shown: dispatch.shown, shownAt: dispatch.shownAt, run: inboxId, attachments })
-      dispatch.report({ kind: "submitted", source: "transport-call", correlationId: inboxId })
       try {
         if (slash?.kind === "command") {
           await live.api.client.session.command({ sessionID: live.root, name: slash.name, text: slash.rest, files })
@@ -1070,13 +1112,17 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     },
     async close(id) {
       starting.get(id)?.abort(new Error("OpenCode was closed during startup"))
+      const server = unclosed.get(id)
+      if (server) { await server(); unclosed.delete(id) }
       const live = sessions.get(id)
       if (!live) return
-      sessions.delete(id)
-      if (live.closed) return
-      await endBackgroundWithinGrace(live)
-      stop(live)
+      if (!live.closed) {
+        await endBackgroundWithinGrace(live)
+        stop(live)
+      }
+      // Kept until its server is gone: a close that can't say so rejects, and the next one tries again.
       await live.api.close()
+      if (sessions.get(id) === live) sessions.delete(id)
     },
   }
 }

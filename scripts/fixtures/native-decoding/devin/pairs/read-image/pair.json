@@ -1,18 +1,18 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.11.234"
+    "version": "3000.12.43"
   },
   "about": "Open swatch.png with your file read tool and tell me its colour. Don't run commands. A file read whose result is an image, then the answer.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#loud-baseball",
+      "path": ".local/share/devin/cli/sessions.db#thoracic-share",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/9cef1ee6-28df-4f7e-a6db-1dae8eabed1f.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/65fba4b5-900b-4a85-bfe2-ecc097ea12e6.db",
       "known": [
         {
           "side": "-",

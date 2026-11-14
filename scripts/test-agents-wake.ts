@@ -6,6 +6,7 @@ import { join } from "node:path"
 import { z } from "zod"
 import { AFTER_START, AGENT_TOOLS, WAIT_LIMIT_MS, type AgentsStarted, type AgentsStartInput, type AgentsStartResult } from "@mako/host/contracts/agent-tools"
 import { childState, ReportSchema, ReportStatusSchema, reportRoute, StartModeSchema, ThreadParentSchema, WakeOnSchema, type ReportStatus, type StartMode, type WakeOn } from "@mako/host/contracts/agents"
+import { actionNotice } from "@mako/host/contracts/operation-recovery"
 import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
 import { agentToolSchema } from "@mako/host/conversations/agent-tools"
 import { FROM_AGENTS, WAKE_COALESCE_MS } from "@mako/host/conversations/agent-wakes"
@@ -37,8 +38,12 @@ function world(name: string, script: Script): AgentsWorld {
   return new AgentsWorld({ root: join(root, name), script })
 }
 
+function spoken(text: string): string {
+  return text.replace(/^<mako-local-control>[\s\S]*?<\/mako-local-control>\n\n/, "")
+}
+
 function wakesOf(w: AgentsWorld, conversation: string) {
-  return w.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.startsWith(FROM_AGENTS))
+  return w.prompts.filter((prompt) => prompt.conversation === conversation && spoken(prompt.text).startsWith(FROM_AGENTS)).map((prompt) => ({ ...prompt, text: spoken(prompt.text) }))
 }
 
 function started(answer: AgentsStartResult | undefined): AgentsStarted {
@@ -187,7 +192,7 @@ function waitingApex(input: Omit<AgentsStartInput, "cwd" | "clientKey"> & { clie
       await after?.(turn)
       return "Noted."
     }
-    if (turn.text.startsWith(FROM_AGENTS)) return "Going on."
+    if (spoken(turn.text).startsWith(FROM_AGENTS)) return "Going on."
     return child(turn)
   }
   return { answers, script }
@@ -199,16 +204,18 @@ async function waitSettles(): Promise<void> {
     if (!turn.text.includes("You're fin:")) return "ok"
     await delay(300)
     await turn.world.agents.report(turn.caller, { status: "done", summary: RESULT, artifacts: [{ kind: "file", ref: "counts.txt" }], clientKey: "r" })
+    // Its turn goes on after the report: an answer that waited for the turn's end never comes.
+    await turn.world.hold(turn.conversation)
     return "Reported."
   })
   const w = world("wait-settles", script)
   try {
     const apex = await w.apex("claude")
-    const began = Date.now()
     w.say(apex.conversation, "go")
-    await until("the answer", () => answers.length === 1)
+    await until("the answer while the child's turn goes on", () => answers.length === 1)
     const answer = started(answers[0])
-    assert.ok(Date.now() - began < 3_000, "it answered as the result came")
+    assert.equal(w.live.session(answer.conversation!)?.status, "running", "it answered as the result came, while the child's turn went on")
+    w.release(answer.conversation!)
     assert.deepEqual(answer.waited, { outcome: "result", report: { status: "done", summary: RESULT, artifacts: [{ kind: "file", ref: "counts.txt" }] } }, "the whole report, not its first line")
     assert.match(answer.next, /its report is above/)
     await w.settle()
@@ -222,12 +229,10 @@ async function waitSettles(): Promise<void> {
 /** A question ends the wait at once, its words in the answer; once answered, the result is the Apex's next turn. */
 async function waitAsks(wake: "decisions" | "finish"): Promise<void> {
   const children = new Set<string>()
-  let asked = 0
   const { answers, script } = waitingApex({ brief: { objective: "Merge the fix" }, harness: "cursor", mode: "wait", wake }, async (turn) => {
     if (turn.text.includes("You're fin:")) {
       children.add(turn.conversation)
       await delay(150)
-      asked = Date.now()
       await turn.world.agents.report(turn.caller, { status: "needs-input", summary: "The branch isn't named.", question: "Main or next?", clientKey: "q" })
       return "I asked."
     }
@@ -237,10 +242,10 @@ async function waitAsks(wake: "decisions" | "finish"): Promise<void> {
   try {
     const apex = await w.apex("codex")
     w.say(apex.conversation, "go")
-    await until("the answer", () => answers.length === 1)
+    // A wait the question didn't end answers "pending" at its limit.
+    await until("the answer", () => answers.length === 1, WAIT_LIMIT_MS + 10_000)
     const answer = started(answers[0])
-    assert.ok(Date.now() - asked < 500, `the question ended the wait at once (${Date.now() - asked} ms)`)
-    assert.equal(answer.waited?.outcome, "question")
+    assert.equal(answer.waited?.outcome, "question", "the question ended the wait, not its limit")
     assert.ok(answer.waited?.outcome === "question")
     assert.equal(answer.waited.question, "Main or next?")
     assert.equal(answer.waited.answers, wake === "decisions" ? "you" : "the person")
@@ -256,35 +261,48 @@ async function waitAsks(wake: "decisions" | "finish"): Promise<void> {
   }
 }
 
-/** The window ends first: the answer says the turn ends, and the result starts the Apex's next turn, in full, soon after it comes. */
+/**
+ * The window ends first: the answer says the turn ends, and the result starts the Apex's next turn, in full, soon after
+ * it comes: alone, ahead of a background report 500 ms behind it, which `WAKE_COALESCE_MS` would have joined to it.
+ */
 async function waitTimesOut(): Promise<void> {
-  let reported = 0
-  const { answers, script } = waitingApex({ brief: { objective: "Count the files" }, harness: "grok", mode: "wait", timeoutMs: 300 }, async (turn) => {
+  const kids = new Map<string, string>()
+  const { answers, script } = waitingApex({ brief: { objective: "Count the files" }, harness: "grok", name: "count", mode: "wait", timeoutMs: 300 }, async (turn) => {
     if (!turn.text.includes("You're fin:")) return "ok"
+    const name = turn.text.includes("You're fin:count") ? "count" : "lint"
+    kids.set(name, turn.conversation)
     await turn.world.hold(turn.conversation)
-    reported = Date.now()
+    if (name === "lint") return "Lint is clean."
     await turn.world.agents.report(turn.caller, { status: "done", summary: RESULT, clientKey: "r" })
     return "Reported."
+  }, async (turn) => {
+    started(await turn.world.agents.start(turn.caller, { brief: { objective: "Run lint" }, harness: "codex", name: "lint", clientKey: "l", cwd: turn.world.root }))
   })
   const w = world("wait-times-out", script)
   try {
     const apex = await w.apex("devin")
     const began = Date.now()
     w.say(apex.conversation, "go")
-    await until("the answer", () => answers.length === 1)
+    // Past `WAIT_LIMIT_MS` the window was the limit's, not its own.
+    await until("the answer, before the wait's limit", () => answers.length === 1, WAIT_LIMIT_MS - 1_000)
+    assert.ok(Date.now() - began >= 300, "the window held its 300 ms")
     const answer = started(answers[0])
-    assert.ok(Date.now() - began < 1_500, "the window held 300 ms, not the limit")
     assert.deepEqual(answer.waited, { outcome: "pending" })
     assert.match(answer.next, /End your turn now: its result starts your next turn/)
     assert.equal(w.live.session(answer.conversation!)?.status, "running", "a timeout never stops the child")
-    await until("the Apex's turn to end", () => w.live.session(apex.conversation)?.status === "ready")
-    w.release(answer.conversation!)
-    await until("the wake", () => wakesOf(w, apex.conversation).length === 1)
-    const wake = wakesOf(w, apex.conversation)[0]!
-    assert.ok(wake.at - reported < 1_000, `the result started the next turn ${wake.at - reported} ms after it came`)
-    assert.match(wake.text, /The result you waited for:\n {2}• "[^"]+" \(Grok\) done:\n {4}There are 12 files\.\n {4}src holds 9 and test holds 3\.\n {4}Nothing else is tracked\./)
+    await until("the Apex's turn to end", () => w.live.session(apex.conversation)?.status === "ready" && kids.size === 2)
+    w.release(kids.get("count")!)
+    await until("the result waiting to wake the Apex", () => w.agents.wakes.pending() > 0 || wakesOf(w, apex.conversation).length > 0)
+    setTimeout(() => w.release(kids.get("lint")!), 500)
+    // The report may reach the Apex as a wake or, while the woken turn runs, a steer.
+    const heard = () => [...wakesOf(w, apex.conversation), ...w.steers.filter((steer) => steer.conversation === apex.conversation)]
+    await until("lint's report reaching the Apex", () => heard().some((each) => /Lint is clean/.test(each.text)))
+    const waited = wakesOf(w, apex.conversation)[0]
+    assert.match(waited!.text, /The result you waited for:\n {2}• "count" \(Grok\) done:\n {4}There are 12 files\.\n {4}src holds 9 and test holds 3\.\n {4}Nothing else is tracked\./)
+    assert.doesNotMatch(waited!.text, /Lint is clean/, "the result went alone, ahead of a report 500 ms behind it")
+    assert.ok(heard().some((each) => /"lint" \(Codex\) done: Lint is clean\./.test(each.text)))
     await w.settle()
-    assert.equal(wakesOf(w, apex.conversation).length, 1)
+    assert.equal(wakesOf(w, apex.conversation).filter((wake) => /waited for/.test(wake.text)).length, 1)
   } finally {
     await w.close()
   }
@@ -300,7 +318,7 @@ async function refusedSteer(): Promise<void> {
       await turn.world.hold(turn.conversation)
       return "Noted."
     }
-    if (turn.text.startsWith(FROM_AGENTS)) return "Going on."
+    if (spoken(turn.text).startsWith(FROM_AGENTS)) return "Going on."
     child = turn.conversation
     return "Lint is clean."
   } })
@@ -311,6 +329,9 @@ async function refusedSteer(): Promise<void> {
     await delay(WAKE_COALESCE_MS + 500)
     assert.equal(wakesOf(w, apex.conversation).length, 0, "no turn starts while the Apex's runs")
     assert.equal(w.agents.wakes.pending(), 1, "the refused digest still waits")
+    const held = w.live.snapshot(apex.conversation)?.control?.actions ?? []
+    assert.equal(held.at(-1)?.state.kind, "not-accepted", "the harness refused it")
+    assert.equal(actionNotice(held, []), undefined, "and the person hears nothing of a steer Mako sent by itself")
     w.release(apex.conversation)
     await until("the next turn", () => wakesOf(w, apex.conversation).length === 1)
     assert.match(wakesOf(w, apex.conversation)[0]!.text, /"lint" \(Codex\) done: Lint is clean\./)
@@ -367,11 +388,10 @@ async function waitOnApproval(): Promise<void> {
   const w = world("wait-approval", script)
   try {
     const apex = await w.apex("opencode", "auto")
-    const began = Date.now()
     w.say(apex.conversation, "go")
-    await until("the answer", () => answers.length === 1)
+    // The child holds its turn: a wait the approval didn't end would answer "pending" at its limit.
+    await until("the answer", () => answers.length === 1, WAIT_LIMIT_MS + 10_000)
     const answer = started(answers[0])
-    assert.ok(Date.now() - began < 3_000)
     assert.ok(answer.waited?.outcome === "question", JSON.stringify(answer.waited))
     assert.equal(answer.waited.answers, "the person")
     assert.match(answer.waited.question, /npm ci/)
@@ -469,9 +489,12 @@ async function backgroundAnswersAtOnce(): Promise<void> {
   const w = world("background", (turn) => turn.text.includes("You're fin:") ? turn.world.hold(turn.conversation).then(() => "ok") : "ok")
   try {
     const apex = await w.apex("codex")
-    const began = Date.now()
-    const answer = started(await w.agents.start(apex.caller, { brief: { objective: "Hold" }, harness: "claude", clientKey: "b", cwd: w.root }))
-    assert.ok(Date.now() - began < 1_000)
+    // The child holds its turn, so a start that waited for it would answer "pending" at the wait's limit, or never.
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const never = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("a background start still waited on its child past the wait's limit")), WAIT_LIMIT_MS + 10_000)
+    })
+    const answer = started(await Promise.race([w.agents.start(apex.caller, { brief: { objective: "Hold" }, harness: "claude", clientKey: "b", cwd: w.root }), never]).finally(() => clearTimeout(timer)))
     assert.equal(answer.waited, undefined)
     assert.equal(answer.next, AFTER_START)
     w.release(answer.conversation!)

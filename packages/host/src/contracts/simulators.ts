@@ -27,11 +27,13 @@ export type SimulatorBlocker =
   | "no-xcode"
   /** Xcode without a simulator runtime for the platform. */
   | "no-runtime"
+  /** The tools Mako streams and drives a simulator with aren't installed yet. */
+  | "no-tools"
   /** The host is there, but Mako's driving of it isn't built yet: it lists, and it refuses to act. */
   | "not-built"
   /** Another Mac of the person's that isn't connected now, or didn't answer in time. */
   | "unreachable"
-  /** Another Mac of the person's that doesn't offer its simulators to the account's other devices. */
+  /** Another Mac of the person's that lends this caller no simulator: its Thread holds no lease of one there. */
   | "not-offered"
 
 export type SimulatorAvailability = { ready: true } | { ready: false; blocker: SimulatorBlocker; why: string; fix?: string }
@@ -85,6 +87,8 @@ export interface SimulatorSummary {
   state: SimulatorState
   /** The screen in points, when the host knows it. */
   screen?: { width: number; height: number; scale: number }
+  /** How it's turned now, when it's running and the host knows: the screen's picture is drawn upright for it. */
+  orientation?: SimulatorOrientation
   /** A stand-in: a desktop engine at this size, not the platform. */
   standIn?: true
 }
@@ -104,6 +108,8 @@ export interface SimulatorClaim {
   /** When its holder last acted: a claim idle for `CLAIM_IDLE_MS` lets go. */
   lastAt: number
   generation: number
+  /** The lease another place's agent holds it under: only that lease drives it, and its end lets it go. */
+  lease?: string
 }
 
 export interface ListedSimulator extends SimulatorSummary {
@@ -131,10 +137,10 @@ export interface SimulatorVia {
  * another Thread or another project. The person may take any simulator over; an agent may act only on one its
  * Thread holds.
  *
- * A call from another of the person's devices carries `via` (stamped here) and, for an agent, the Thread the calling
- * Mac already resolved (`agent`): that Session isn't on this Mac, so the calling Mac's word of who it is is what this
- * Mac trusts, under the gateway's account check. Project consent was that Mac's to check; this Mac checks that it
- * offers its simulators at all.
+ * A call from another place (one of the person's devices, or a cloud Thread's machine) carries `via` (stamped here)
+ * and, for an agent, the Thread the calling place already resolved (`agent`): that Session isn't on this Mac. This Mac
+ * answers an agent's call only under a live session lease it serves for that Thread, borrowed from that same place
+ * (`via`), checked on every call: the person's grant is the consent, and the lease is the offer.
  */
 export type SimulatorCaller =
   | { kind: "agent"; session: string; via?: SimulatorVia; agent?: SimulatorAgent }
@@ -167,6 +173,11 @@ export type SimulatorOrientation = "portrait" | "landscape-left" | "landscape-ri
 export type SimulatorAction =
   | { kind: "open-url"; url: string }
   | { kind: "tap"; at: SimulatorPoint }
+  /**
+   * One finger's touch as it goes, as the panel sends a drag: down, its moves as they happen, and up. iOS reads the
+   * speed of the last moves, so a drag flings as it would on a phone. A gesture an agent makes is a tap or a swipe.
+   */
+  | { kind: "touch"; phase: "begin" | "move" | "end"; at: SimulatorPoint }
   | { kind: "swipe"; from: SimulatorPoint; to: SimulatorPoint; ms?: number }
   | { kind: "pinch"; at: SimulatorPoint; scale: number; ms?: number }
   | { kind: "type"; text: string }
@@ -199,7 +210,7 @@ export type SimulatorRefusalReason =
   | "unsupported"
   /** The simulator's Mac isn't connected now, or didn't answer in time. */
   | "unreachable"
-  /** The simulator's Mac doesn't offer its simulators to the account's other devices. */
+  /** The simulator's Mac lends this caller no simulator: its Thread holds no session lease there. */
   | "not-offered"
 
 export interface SimulatorRefused {
@@ -271,6 +282,15 @@ export interface SimulatorsShot {
   height: number
   /** The picture, base64, when `inline` was asked and it's within `SHOT_INLINE_LIMIT`. */
   inline?: { type: "image/png" | "image/jpeg"; data: string }
+  /** A picture too large to go inline, given to the caller's session lease as an artifact, for a caller under one. */
+  artifact?: SimulatorArtifact
+}
+
+/** A file a lent simulator session made, as its lease lists it: by name, the SHA-256 of its bytes, and size. */
+export interface SimulatorArtifact {
+  name: string
+  hash: string
+  size: number
 }
 export type SimulatorsShotResult = SimulatorsShot | SimulatorRefused
 
@@ -285,6 +305,8 @@ export interface SimulatorsRecordInput {
 export interface SimulatorsRecorded {
   /** The recording's file, once stopped. */
   path?: string
+  /** For a caller under a session lease, the stopped recording given to its lease (the file stays on its Mac). */
+  artifact?: SimulatorArtifact
 }
 export type SimulatorsRecordResult = SimulatorsRecorded | SimulatorRefused
 
@@ -307,6 +329,13 @@ export interface SimulatorsWatchInput {
   /** The box it draws in, in pixels, so the host never sends more than it shows. */
   box?: { width: number; height: number }
   waitMs?: number
+  /**
+   * The sequence of the newest picture this viewer's decoder drew, when it drew one since its last read: how the host
+   * learns its H.264 really decodes, and which capture it was that did.
+   */
+  decoded?: number
+  /** This viewer is done: it stops watching at once, and a screen nobody else watches stops streaming. */
+  leave?: boolean
 }
 export interface SimulatorsWatched {
   /** False once the screen stopped streaming: nothing more comes until a viewer watches again. */

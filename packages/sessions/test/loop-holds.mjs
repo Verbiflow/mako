@@ -18,29 +18,66 @@ import { largeCursorChat } from "./large-cursor-chat.mjs"
 // Session kept the host's pings and status reads waiting, past their timeouts
 // on a large one. Each is timed here on a Cursor chat of 25MB, as a headless
 // agent writes one: one exchange holding the whole conversation.
-const HOLD_MS = 50
+/**
+ * The longest a step may hold the loop, in CPU time: half again what parsing a JSON document the chat's size takes on
+ * this runner, now, which is about 55 ms on an M-series Mac. A runner with a slower CPU is slower at both, so this
+ * scales with it where a fixed time wouldn't; a step that holds the loop for the whole chat (unsliced) takes several times
+ * the parse. The parse is the middle of five.
+ */
+const HOLD_MS = (() => {
+  const text = JSON.stringify(Array.from({ length: 120_000 }, (_, index) => ({ id: `m${index}`, role: index % 2 ? "assistant" : "user", text: "word ".repeat(30), at: index })))
+  const parses = Array.from({ length: 5 }, () => {
+    const { user, system } = process.threadCpuUsage()
+    JSON.parse(text)
+    const after = process.threadCpuUsage()
+    return (after.user - user + after.system - system) / 1000
+  }).sort((a, b) => a - b)
+  return Math.round(parses[2] * 1.5)
+})()
+/** How many turns the loop takes through a store lock's wait before the lock goes. */
+const TURNS_THROUGH_WAIT = 20
+/** What releases the store's lock if the loop never turns through its wait. */
+const LOCK_HANG_MS = 30_000
 
-/** The longest the loop went without a turn while `work` ran. */
-async function longestHold(work) {
+/**
+ * The longest the loop went without a turn while `work` ran, in this thread's own CPU time: a runner that takes the
+ * CPU away mid-slice stretches the slice's wall time (117 ms once on CI, unchanged code), not the work it held.
+ */
+async function longestHold(work, onTurn = () => {}) {
+  const cpu = () => {
+    const { user, system } = process.threadCpuUsage()
+    return (user + system) / 1000
+  }
   let longest = 0
-  let last = performance.now()
-  const timer = setInterval(() => {
-    const now = performance.now()
+  let longestWall = 0
+  let turns = 0
+  let last = cpu()
+  const began = performance.now()
+  let lastWall = began
+  const turn = () => {
+    const now = cpu()
+    const wall = performance.now()
     longest = Math.max(longest, now - last)
+    longestWall = Math.max(longestWall, wall - lastWall)
     last = now
-  }, 1)
+    lastWall = wall
+    turns++
+    onTurn(turns)
+  }
+  const timer = setInterval(turn, 1)
   try {
     const result = await work()
-    return { result, ms: Math.max(longest, performance.now() - last) }
+    turn()
+    return { result, ms: longest, wallMs: longestWall, turns, tookMs: performance.now() - began }
   } finally {
     clearInterval(timer)
   }
 }
 
 const measured = []
-function held(what, ms) {
-  measured.push(`${what}: ${Math.round(ms)} ms`)
-  assert.ok(ms <= HOLD_MS, `${what} held the loop ${Math.round(ms)} ms (at most ${HOLD_MS})`)
+function held(what, { ms, wallMs }) {
+  measured.push(`${what}: ${Math.round(ms)} ms (${Math.round(wallMs)} ms on the clock)`)
+  assert.ok(ms <= HOLD_MS, `${what} held the loop ${Math.round(ms)} ms of its CPU (at most ${HOLD_MS}; ${Math.round(wallMs)} ms on the clock)`)
 }
 
 /** A `cursor-agent` chat of `count` short messages under one root: a version each in the record store. */
@@ -161,7 +198,7 @@ try {
   const provider = new CursorProvider(stores, home)
   const read = await longestHold(() => provider.read(path))
   assert.ok(read.result && read.result.entries.length > 100, "the chat reads whole")
-  held("a read whole", read.ms)
+  held("a read whole", read)
 
   const follower = provider.createFollower(path, 0)
   await follower.next()
@@ -169,11 +206,11 @@ try {
   const moved = await longestHold(() => follower.next())
   assert.equal(moved.result.replace, true)
   assert.ok(moved.result.entries.length < 10, `a step replaces what moved (${moved.result.entries.length} entries), not its exchange`)
-  held("a follow through one more step", moved.ms)
+  held("a follow through one more step", moved)
 
   const views = new ViewCache(join(home, "views"), () => "loop-holds")
   const wrote = await longestHold(() => views.write(path, { bytes: 1, mtimeMs: 1 }, read.result, 100))
-  held("its view written", wrote.ms)
+  held("its view written", wrote)
   views.close()
 
   // A backfill pass's process holds the record store's write lock until its next commit.
@@ -182,24 +219,40 @@ try {
   const ref = { harness: "cursor", nativeId: agentId }
   const captured = await longestHold(async () => store.capture({ ...ref, home, path, records: await provider.records(path) }))
   assert.ok(captured.result.taken > rows.length / 2, `the chat's rows are captured (${captured.result.taken})`)
-  held("a capture of the whole chat", captured.ms)
+  held("a capture of the whole chat", captured)
+  // The lock goes only once the loop has turned through the write's wait, so a write that sleeps in the lock's wait,
+  // holding the loop without using the CPU, keeps it until the hang guard. No clock judges this: a runner that takes
+  // the CPU away mid-wait, as the stall here does, delays those turns and fails nothing.
+  const turnedThrough = new Int32Array(new SharedArrayBuffer(4))
   const holder = new Worker(
     `const { DatabaseSync } = require("node:sqlite")
     const { parentPort, workerData } = require("node:worker_threads")
-    const db = new DatabaseSync(workerData)
+    const db = new DatabaseSync(workerData.path)
     db.exec("BEGIN IMMEDIATE")
     parentPort.postMessage("locked")
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000)
+    const waited = Atomics.wait(workerData.turnedThrough, 0, 0, ${LOCK_HANG_MS})
     db.exec("COMMIT")
-    db.close()`,
-    { eval: true, workerData: join(records, "records.sqlite") }
+    db.close()
+    parentPort.postMessage(waited)`,
+    { eval: true, workerData: { path: join(records, "records.sqlite"), turnedThrough } }
   )
-  const released = new Promise((resolve) => holder.once("exit", resolve))
+  const released = new Promise((resolve) => holder.once("message", (first) => {
+    assert.equal(first, "locked")
+    holder.once("message", resolve)
+  }))
   await new Promise((resolve) => holder.once("message", resolve))
-  const pushed = await longestHold(() => store.notePushed("account", ref.harness, ref.nativeId, 1, Date.now()))
-  await released
+  let written = false
+  const pushed = await longestHold(() => store.notePushed("account", ref.harness, ref.nativeId, 1, Date.now()).then(() => { written = true }), (turn) => {
+    if (turn === 1) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300)
+    if (turn === TURNS_THROUGH_WAIT) {
+      assert.equal(written, false, "the write can't have gone in while the lock is held")
+      Atomics.store(turnedThrough, 0, 1)
+      Atomics.notify(turnedThrough, 0)
+    }
+  })
+  assert.notEqual(await released, "timed-out", `the loop turned ${pushed.turns} times in the write's wait, and the lock never went`)
   assert.equal(store.pushed("account").get(`${ref.harness}\n${ref.nativeId}`)?.capture, 1, "the write waited for the lock, then went in")
-  held("a write the store's lock kept waiting", pushed.ms)
+  held("a write the store's lock kept waiting", pushed)
 
   // A push of a chat of 30,000 messages: its batches of 10,000 versions read from the store, to a remote that takes them all.
   const many = manyMessages(home, 30_000)
@@ -222,7 +275,7 @@ try {
   }
   const sent = await longestHold(() => new RecordSync(store, remote).push(manyRef.harness, manyRef.nativeId))
   assert.ok(sent.result.versions > 20_000, `the chat's versions went (${sent.result.versions})`)
-  held(`a push of ${sent.result.versions} versions`, sent.ms)
+  held(`a push of ${sent.result.versions} versions`, sent)
   await store.close()
   db.close()
 
@@ -231,13 +284,13 @@ try {
   const sdkFollower = new CursorProvider(stores, home).createFollower(sdk.path, 0)
   const whole = await longestHold(() => sdkFollower.next())
   assert.ok(whole.result.entries.length > sdk.steps, `the agent's run is drawn (${whole.result.entries.length} entries)`)
-  held(`an SDK agent's run of ${sdk.events} events folded`, whole.ms)
+  held(`an SDK agent's run of ${sdk.events} events folded`, whole)
   sdk.step()
   const checkpointed = await longestHold(() => sdkFollower.next())
   assert.equal(checkpointed.result.replace, true)
-  held("its follow through one more checkpoint", checkpointed.ms)
+  held("its follow through one more checkpoint", checkpointed)
   sdk.close()
-  console.log(`loop holds ok: ${measured.join("; ")}`)
+  console.log(`loop holds ok, each at most ${HOLD_MS} ms: ${measured.join("; ")}`)
 } finally {
   await rm(home, { recursive: true, force: true })
 }

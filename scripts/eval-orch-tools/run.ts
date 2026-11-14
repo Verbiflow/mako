@@ -9,7 +9,7 @@ import "../lib/scratch-git.mjs"
 //     built and checked at $0 (CI runs this on every change).
 //   npm run eval:orch-tools -- --replay claude|codex --model <id> [--case <ids>] [--samples 2] [--routing on|off|both] [--out <dir>] [--baseline <results.jsonl>]
 //     the replay against the model's own API (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` from the environment).
-//   npm run eval:orch-tools:live -- <harness...> [--model <id>] [--case <ids>] [--samples 2] [--routing on|off|both] [--turn-seconds 180] [--out <dir>]
+//   npm run eval:orch-tools:live -- <harness...> [--model <id>] [--case <ids>] [--samples 2] [--routing on|off|both] [--primer on|off|both] [--mako http|sdk|both] [--turn-seconds 180] [--out <dir>]
 //     each real harness through Mako's driver (the host's build: Cursor's runs from its dist) in a scratch
 //     home on the person's sign-in for it, against the `mako` stub. Each turn is on that harness's plan.
 //   npm run eval:orch-tools -- --template <kept request.json> claude|codex|codex-lead
@@ -60,6 +60,10 @@ const cases = loadCases().filter((orchCase) => !only.size || only.has(orchCase.i
 assert.ok(cases.length, `no case named ${[...only].join(", ")}`)
 const routingFlag = z.enum(["on", "off", "both"]).parse(option("--routing") ?? "both")
 const routings = routingFlag === "both" ? ["on", "off"] as const : [routingFlag]
+const primerFlag = z.enum(["on", "off", "both"]).parse(option("--primer") ?? "on")
+const primers = primerFlag === "both" ? ["on", "off"] as const : [primerFlag]
+const makoFlag = z.enum(["http", "sdk", "both"]).parse(option("--mako") ?? "sdk")
+const makoServers = makoFlag === "both" ? ["sdk", "http"] as const : [makoFlag]
 const samplesWanted = Number(option("--samples") ?? 2)
 const out = option("--out")
 
@@ -92,12 +96,20 @@ async function gitHistory(project: string): Promise<void> {
 
 /** Two samples, and a third when they disagree. */
 async function sampled(run: () => Promise<Sample & { seconds?: number; tokens?: { input: number; output: number } }>, orchCase: OrchCase) {
-  const passes: boolean[] = [], failures: string[][] = [], samples: Sample[] = []
+  const passes: boolean[] = [], failures: string[][] = [], samples: Sample[] = [], errored: string[] = []
   const tokens = { input: 0, output: 0 }
   let seconds = 0
-  while (passes.length < samplesWanted || needsThird(passes)) {
+  while (passes.length + errored.length < samplesWanted || needsThird(passes)) {
     const began = Date.now()
-    const { steps, shell, ran, text, ended, ...measured } = await run()
+    // A sample that errors (a turn that didn't settle) is left out; the others still count.
+    const outcome = await run().catch((error: Error) => error)
+    if (outcome instanceof Error) {
+      errored.push(outcome.message)
+      seconds += Math.round((Date.now() - began) / 1000)
+      if (passes.length + errored.length >= 3) break
+      continue
+    }
+    const { steps, shell, ran, text, ended, ...measured } = outcome
     seconds += measured.seconds ?? Math.round((Date.now() - began) / 1000)
     tokens.input += measured.tokens?.input ?? 0
     tokens.output += measured.tokens?.output ?? 0
@@ -105,18 +117,19 @@ async function sampled(run: () => Promise<Sample & { seconds?: number; tokens?: 
     passes.push(!failed.length)
     failures.push(failed)
     samples.push({ steps, shell, ...ran && { ran }, text: text.slice(0, 2000), ended })
-    if (passes.length >= 3) break
+    if (passes.length + errored.length >= 3) break
   }
-  return { passes, failures, seconds, tokens, samples }
+  if (!passes.length) throw new Error(errored.at(-1) ?? "no sample ran")
+  return { passes, failures, seconds, tokens, samples, ...errored.length && { errored } }
 }
 
 async function summarize(results: CaseResult[]) {
   const groups = new Map<string, CaseResult[]>()
   for (const result of results) {
-    const name = `${result.harness} · ${result.model} · routing ${result.routing}`
+    const name = `${result.harness} · ${result.model} · routing ${result.routing} · primer ${result.primer ?? "on"}${result.mako === "http" ? " · mako http" : ""}`
     groups.set(name, [...groups.get(name) ?? [], result])
   }
-  const lines = ["| run | route | front door | don't spawn | no polling | stay native | mako tools | time | cost |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+  const lines = ["| run | route | front door | don't spawn | no polling | stay native | mako tools | reports | time | cost |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
   for (const [name, group] of groups) {
     const rates = budget(group)
     const cell = (line: string) => {
@@ -124,7 +137,7 @@ async function summarize(results: CaseResult[]) {
       return entry.rate === undefined ? "–" : `${Math.round(entry.rate * 100)}% (${entry.passed}/${entry.of})${entry.met ? "" : " ✗"}`
     }
     const usd = group.reduce((sum, result) => sum + (result.usd ?? 0), 0)
-    lines.push(`| ${name} | ${cell("route")} | ${cell("front door")} | ${cell("don't spawn")} | ${cell("no polling")} | ${cell("stay native")} | ${cell("mako tools")} | ${group.reduce((sum, result) => sum + result.seconds, 0)} s | ${group.some((result) => result.usd !== undefined) ? `$${usd.toFixed(2)}` : "not priced"} |`)
+    lines.push(`| ${name} | ${cell("route")} | ${cell("front door")} | ${cell("don't spawn")} | ${cell("no polling")} | ${cell("stay native")} | ${cell("mako tools")} | ${cell("reports")} | ${group.reduce((sum, result) => sum + result.seconds, 0)} s | ${group.some((result) => result.usd !== undefined) ? `$${usd.toFixed(2)}` : "not priced"} |`)
   }
   const failing = results.filter((result) => !result.error && result.passes.filter(Boolean).length * 2 <= result.passes.length)
   const errors = results.filter((result) => result.error)
@@ -207,6 +220,9 @@ try {
       ["fd-finished-wake-carries-refs", { ...sample([[{ tool: "agents_read", args: { child: "alarm-fix" } }]]), text: "It landed: https://git.example.com/acme/app/pull/292, and the report is reports/alarm-loop.md." }, false],
       ["fin-reads-crew-before-shared-files", sample([[{ tool: "agents_list", args: { scope: "crew" } }], [{ tool: "edit", args: {} }]]), true],
       ["fin-reads-crew-before-shared-files", sample([[{ tool: "edit", args: {} }]]), false],
+      ["done-asks-merge", sample([[{ tool: "pull_request_status", args: {} }], [{ tool: "agents_report", args: { status: "done", summary: "PR #371 is green.", question: "Merge #371?", options: [{ label: "Merge" }, { label: "Leave open" }], decides: "person", clientKey: "k" } }]]), true],
+      ["done-asks-merge", sample([[{ tool: "pull_request_status", args: {} }], [{ tool: "agents_report", args: { status: "needs-input", summary: "PR #371 is green.", question: "Merge #371?", clientKey: "k" } }]]), false],
+      ["done-asks-merge", sample([[{ tool: "agents_report", args: { status: "done", summary: "PR #371 is green; merge it when you like.", clientKey: "k" } }]]), false],
       ["fin-solo-no-crew", sample([[{ tool: "edit", args: {} }]]), true],
       ["fin-solo-no-crew", sample([[{ tool: "agents_list", args: { scope: "crew" } }]]), false],
       ["apex-reads-digest-not-message", { ...sample([[{ tool: "agents_list", args: { scope: "apexes" } }]]), text: "Not quite: the migration is in PR #12, waiting on review." }, true],
@@ -323,18 +339,19 @@ try {
         const env = { ...scratch.env, PATH: `${await agentCliStubs(root, harness)}:${scratch.env.PATH}` }
         const model = option("--model") ?? "default"
         // A native child's words can't be set up from a prompt: those cases run in the replay.
-        for (const orchCase of cases.filter((each) => runsOn(each, harness) && each.setup.role !== "native-subagent")) for (const routing of routings) {
-          const result: CaseResult = { id: orchCase.id, area: orchCase.area, kind: orchCase.kind, harness, model, routing, passes: [], failures: [], seconds: 0, tokens: { input: 0, output: 0 } }
+        const servers = harness === "claude" ? makoServers : ["sdk" as const]
+        for (const orchCase of cases.filter((each) => runsOn(each, harness) && each.setup.role !== "native-subagent")) for (const routing of routings) for (const primer of primers) for (const mako of servers) {
+          const result: CaseResult = { id: orchCase.id, area: orchCase.area, kind: orchCase.kind, harness, model, routing, primer, ...mako === "http" && { mako }, passes: [], failures: [], seconds: 0, tokens: { input: 0, output: 0 } }
           const began = Date.now()
           try {
-            Object.assign(result, await sampled(() => liveSample({ harness, driver, stub, orchCase, routing, env, project, ...option("--model") && { model: option("--model") }, ...option("--turn-seconds") && { turnSeconds: Number(option("--turn-seconds")) } }), orchCase))
+            Object.assign(result, await sampled(() => liveSample({ harness, driver, stub, orchCase, routing, primer: primer === "on", ...mako === "http" && { inProcessMako: false }, env, project, ...option("--model") && { model: option("--model") }, ...option("--turn-seconds") && { turnSeconds: Number(option("--turn-seconds")) } }), orchCase))
           } catch (error) {
             result.error = error instanceof Error ? error.message : String(error)
             result.seconds = Math.round((Date.now() - began) / 1000)
           }
           results.push(result)
           await record(result)
-          console.log(`${harness} ${routing} ${orchCase.id}: ${result.error ? `error ${result.error}` : result.passes.map((pass) => pass ? "pass" : "fail").join(" ")} (${result.seconds} s)`)
+          console.log(`${harness} ${routing} primer ${primer}${mako === "http" ? " mako http" : ""} ${orchCase.id}: ${result.error ? `error ${result.error}` : result.passes.map((pass) => pass ? "pass" : "fail").join(" ")}${result.errored ? `, ${result.errored.length} errored` : ""} (${result.seconds} s)`)
         }
       }
     } finally {
@@ -342,6 +359,8 @@ try {
       await removeScratch(root)
     }
     if (!await summarize(results)) process.exitCode = 1
+    // A harness's child or socket can outlive its session; the results are written, so the run ends.
+    setTimeout(() => process.exit(), 10_000).unref()
   } else {
     throw new Error("--dry-run, --replay <harness>, --live <harness...> or --template <file> <name>")
   }

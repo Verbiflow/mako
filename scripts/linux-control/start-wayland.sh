@@ -25,7 +25,8 @@ exec dbus-run-session -- sh -c '
    sleep .1
  done
  [ "$ready" = 1 ] || { cat /tmp/sway.log /tmp/sway-ready.log; exit 1; }
- python3 /repo/scripts/linux-control/recording-fixture.py "Mako Wayland target" /tmp/wayland-target.json 2b5f8f >/tmp/fixture.log 2>&1 &
+ # The app is held 300 ms mid-drag once, as a busy runner held it on 2026-11-05, so the drag is judged on what that leaves.
+ MAKO_FIXTURE_DRAG_STALL_MS=300 python3 /repo/scripts/linux-control/recording-fixture.py "Mako Wayland target" /tmp/wayland-target.json 2b5f8f >/tmp/fixture.log 2>&1 &
  "$MAKO_RECORDING_DRIVER" serve --no-overlay --dangerously-bypass-approvals --socket /tmp/mako-driver.sock >/tmp/driver.log 2>&1 &
  node /repo/scripts/linux-control/wayland-probe.mjs
 '

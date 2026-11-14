@@ -2,13 +2,17 @@ import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { DatabaseSync } from "node:sqlite"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
 import { Git } from "@mako/git"
+import { SLICE_MS } from "@mako/sessions/slices"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import type { LiveBatch } from "@mako/host/contracts/live-conversations"
 import { openAttribution, type TreeWatcher } from "@mako/host/attribution/index"
+import { JournalStore, type StoredActivity } from "@mako/host/attribution/journal-store"
+import { ThreadFiles } from "@mako/host/attribution/thread-files"
 import { resolveSpelling, type Place, type ReferenceContext, type Touch } from "@mako/host/files/resolve"
 import { SuffixIndex } from "@mako/host/files/suffix-index"
 import { RenameHistory } from "@mako/host/files/git-renames"
@@ -373,5 +377,154 @@ test("through a real journal: renames from before tracking come from Git, an ans
     await journal.close()
     rmSync(repo, { recursive: true, force: true })
     rmSync(userRoot, { recursive: true, force: true })
+  }
+})
+
+test("a Thread's work is read once and then only what moved, in slices: another Thread's writes cost it nothing", async (t) => {
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "mako-thread-work-")))
+  const store = JournalStore.open(join(folder, "journal.sqlite"), { device: "d-1" })
+  const files = new ThreadFiles({ git: new Git(), home: folder })
+  try {
+    const call = (thread: string, at: number, end: number | null = at + 1) =>
+      ({ kind: "call" as const, id: `${thread}-${at}`, session: `s-${thread}`, thread, cwd: folder, named: [join(folder, `f-${at % 7}.ts`)], start: at, end })
+    for (let at = 1; at <= 6_000; at += 1) store.saveActivity(call("busy", at))
+    store.saveActivity(call("busy", 6_001, null))
+    let read = 0
+    let elapsed = 0
+    let turns = 0
+    const readTurns: number[] = []
+    const page = store.activityFrom.bind(store)
+    store.activityFrom = (thread, from, limit) => {
+      const rows = page(thread, from, limit)
+      read += rows.length
+      readTurns.push(turns)
+      // A real SQLite page consumes one slice in this test, however fast the runner reads it.
+      elapsed += SLICE_MS
+      return rows
+    }
+    const changed = store.activityChanged.bind(store)
+    store.activityChanged = (thread, after, limit) => {
+      const rows = changed(thread, after, limit)
+      read += rows.length
+      return rows
+    }
+    const turn = () => { turns += 1; pending = setImmediate(turn) }
+    let pending = setImmediate(turn)
+    const clock = t.mock.method(performance, "now", () => elapsed)
+    const first = await files.context(store, { thread: "busy", current: [] }).finally(() => {
+      clearImmediate(pending)
+      clock.mock.restore()
+    })
+    assert.ok(first.touched.has(join(folder, "f-3.ts")), "it reads what the Thread touched")
+    assert.ok(read >= 6_001, `its whole history is read once (${read})`)
+    assert.ok(turns > 3, `with other work running between slices (${turns} turns)`)
+    assert.ok(readTurns.slice(1).every((turn, index) => turn > readTurns[index]!), "other work runs before each next page once the slice budget is spent")
+
+    read = 0
+    store.saveActivity(call("other", 1))
+    await files.context(store, { thread: "busy", current: [] })
+    assert.equal(read, 0, "another Thread writing doesn't read this one again")
+
+    await files.context(store, { thread: "busy", current: [] })
+    assert.equal(read, 0, "nor does asking twice")
+
+    store.saveActivity(call("busy", 6_002))
+    const moved = await files.context(store, { thread: "busy", current: [] })
+    assert.ok(read > 0 && read <= 8, `its own new work reads only what's new and what was still open (${read})`)
+    assert.ok(moved.touched.has(join(folder, "f-6.ts")))
+
+    read = 0
+    store.saveActivity({ ...call("busy", 6_001), named: [join(folder, "finished.ts")] })
+    const ended = await files.context(store, { thread: "busy", current: [] })
+    assert.ok(read > 0 && read <= 8, `a call that was open is read again when it ends (${read})`)
+    assert.ok(ended.touched.has(join(folder, "finished.ts")), "with what it did")
+  } finally {
+    store.close()
+    rmSync(folder, { recursive: true, force: true })
+  }
+})
+
+for (const [name, change] of Object.entries({
+  "effects reach a call still open": (store, call, late) => store.saveActivity({ ...call("old", 100, null), effects: [{ kind: "write", path: late }] }),
+  "effects reach a call already ended": (store, call, late) => store.saveActivity({ ...call("old", 100, 101), effects: [{ kind: "write", path: late }] }),
+  "a finished call arrives older than the newest": (store, call, late) => store.saveActivity({ ...call("late", 150, 151), named: [late] }),
+  "a late report is followed by newer work": (store, call, late) => {
+    store.saveActivity({ ...call("old", 100, 101), effects: [{ kind: "write", path: late }] })
+    store.saveActivity(call("later", 300, 301))
+  },
+} satisfies Record<string, (store: JournalStore, call: (id: string, start: number, end: number | null) => StoredActivity, late: string) => void>)) {
+  test(`what a Thread read stays true when ${name}`, async () => {
+    const folder = realpathSync(mkdtempSync(join(tmpdir(), "mako-thread-late-")))
+    const store = JournalStore.open(join(folder, "journal.sqlite"), { device: "d-1" })
+    const call = (id: string, start: number, end: number | null): StoredActivity => ({ kind: "call", id, session: "s", thread: "t", cwd: folder, named: [], start, end })
+    const read = (files: ThreadFiles) => files.context(store, { thread: "t", current: [] })
+    const late = join(folder, "late.ts")
+    try {
+      store.saveActivity(call("old", 100, name.includes("open") ? null : 101))
+      store.saveActivity(call("new", 200, 201))
+      const files = new ThreadFiles({ git: new Git(), home: folder })
+      await read(files)
+      const before = store.threadVersion("t").key
+      change(store, call, late)
+      assert.notEqual(store.threadVersion("t").key, before, "the Thread's version moves")
+      assert.equal((await read(files)).touched.has(late), true, "and what's cached sees it")
+      assert.deepEqual([...(await read(files)).touched.keys()].sort(), [...(await read(new ThreadFiles({ git: new Git(), home: folder }))).touched.keys()].sort(), "exactly as a fresh read does")
+    } finally {
+      store.close()
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+}
+
+test("a Thread's writes follow its entries as they're settled, and a call moved away leaves it", async () => {
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "mako-thread-moved-")))
+  const store = JournalStore.open(join(folder, "journal.sqlite"), { device: "d-1" })
+  const rows = new DatabaseSync(join(folder, "journal.sqlite"))
+  const call = (thread: string, id: string, path: string): StoredActivity => ({ kind: "call", id, session: "s", thread, cwd: folder, named: [join(folder, path)], start: 100, end: 101 })
+  try {
+    store.saveActivity(call("t", "moves", "moved.ts"))
+    store.saveActivity(call("t", "stays", "stayed.ts"))
+    const files = new ThreadFiles({ git: new Git(), home: folder })
+    const read = () => files.context(store, { thread: "t", current: [] })
+    assert.equal((await read()).touched.has(join(folder, "moved.ts")), true)
+    store.saveActivity(call("elsewhere", "moves", "moved.ts"))
+    const after = await read()
+    assert.equal(after.touched.has(join(folder, "moved.ts")), false, "a call given to another Thread is gone from this one")
+    assert.equal(after.touched.has(join(folder, "stayed.ts")), true, "and the rest stay")
+    const before = store.threadVersion("t").key
+    const seq = rows.prepare("INSERT INTO entries (at, changed_at, root, path, kind, size, text, stored, observed, certainty, thread, author, settled) VALUES (1, 1, 'r', 'p', 'modify', 0, 0, 0, 'x', 'guess', 't', '{}', 0)").run().lastInsertRowid
+    const inserted = store.threadVersion("t").key
+    assert.notEqual(inserted, before, "a new entry moves the Thread's version")
+    rows.prepare("UPDATE entries SET certainty='exact' WHERE seq=?").run(seq)
+    assert.notEqual(store.threadVersion("t").key, inserted, "and so does one being settled, which decides whether it's a certain write")
+  } finally {
+    rows.close()
+    store.close()
+    rmSync(folder, { recursive: true, force: true })
+  }
+})
+
+test("a journal without change tracking, as an older owner leaves it, reads exactly and in full", async () => {
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "mako-thread-untracked-")))
+  const path = join(folder, "journal.sqlite")
+  const store = JournalStore.open(path, { device: "d-1" })
+  const call = (id: string, start: number, end: number | null): StoredActivity => ({ kind: "call", id, session: "s", thread: "t", cwd: folder, named: [], start, end })
+  const late = join(folder, "late.ts")
+  try {
+    store.saveActivity(call("old", 100, 101))
+    const rows = new DatabaseSync(path)
+    for (const trigger of ["activity_inserted", "activity_updated", "activity_deleted", "entries_inserted", "entries_updated", "entries_deleted"]) rows.exec(`DROP TRIGGER ${trigger}`)
+    rows.exec("DROP TABLE activity_changes; DROP TABLE thread_changes")
+    rows.close()
+    const view = JournalStore.open(path, { device: "d-1", readOnly: true })
+    const files = new ThreadFiles({ git: new Git(), home: folder })
+    const read = () => files.context(view, { thread: "t", current: [] })
+    await read()
+    store.saveActivity({ ...call("old", 100, 101), effects: [{ kind: "write", path: late }] })
+    assert.equal((await read()).touched.has(late), true, "any write reads the Thread again, as before tracking")
+    view.close()
+  } finally {
+    store.close()
+    rmSync(folder, { recursive: true, force: true })
   }
 })

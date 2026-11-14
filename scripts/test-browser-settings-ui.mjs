@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtemp, writeFile, mkdir } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { writeFile, mkdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { testScratch } from "./lib/test-scratch.mjs"
 
 if (!process.versions.electron) {
   const { createServer } = await import('vite')
-  const root = await mkdtemp(join(tmpdir(), 'mako-browser-settings-ui-'))
+  const root = testScratch('mako-browser-settings-ui-')
   const server = await createServer({ cacheDir: join(root, 'cache'), server: {host:'127.0.0.1',port:0} })
   await server.listen()
   await writeFile(join(root,'package.json'),JSON.stringify({main:fileURLToPath(import.meta.url)}))
@@ -77,7 +77,7 @@ async function checkWindow() {
     await until("document.querySelector('input[aria-label=\"Browser extension folder\"]')!==null")
     assert.equal(await evaluate("document.querySelector('[role=status]').innerText.includes('Open Chrome')"),true)
     await capture('chrome-setup.png')
-    await evaluate("(async()=>{const {mcpStore}=await import('/src/state/mcp.ts');mcpStore.set({browserSetup:undefined,browsers:mcpStore.get().browsers.map(b=>b.id==='chrome'?{...b,profileName:'Kashyab',connection:{status:'disconnected'}}:b)})})()")
+    await evaluate("(async()=>{const {mcpStore}=await import('/src/state/mcp.ts');mcpStore.set({browserSetup:undefined,browsers:mcpStore.get().browsers.map(b=>b.id==='chrome'?{...b,profileName:'Ana',connection:{status:'disconnected'}}:b)})})()")
     await click('section[aria-label="Browser use"] > div:has([role=status]) button')
     await until("document.querySelector('[role=status]').innerText.includes('Ready for browser tasks')")
     await click('section[aria-label="Browser use"] > div:has([role=status]) button')

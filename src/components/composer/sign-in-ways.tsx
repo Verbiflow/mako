@@ -16,7 +16,7 @@ export function SignInWays({ loginCommand, onResumeAnyway }: { loginCommand?: st
       {loginCommand ? (
         <p className="flex flex-wrap items-center gap-1">
           <span>Run</span>
-          <code className="rounded bg-fill-hover px-1 py-0.5 font-mono text-foreground">{loginCommand}</code>
+          <code className="bg-fill-hover px-1 py-0.5 font-mono text-foreground">{loginCommand}</code>
           <span>in a terminal, then come back here.</span>
           <Action size="xs" aria-label="Copy the login command" onClick={() => void copyCommand()}>
             {copied ? <CheckIcon className="text-positive" /> : <CopyIcon />}

@@ -80,7 +80,7 @@ export function SpendOverview() {
         </IconAction>
       </div>
       {read.error && !read.summary ? (
-        <p className="rounded-lg bg-surface px-3 py-4 text-ui text-faint ring-1 ring-hairline" data-usage-error>
+        <p className="bg-surface px-3 py-4 text-ui text-faint ring-1 ring-hairline" data-usage-error>
           {read.error}
         </p>
       ) : read.summary === null ? (
@@ -113,7 +113,7 @@ function WindowSpend({ window, metric, truncated }: { window: UsageWindow; metri
 
   return (
     <div className="flex flex-col gap-3" data-usage-window={window.id}>
-      <div className="flex flex-col gap-5 rounded-lg bg-surface px-4 pt-4 pb-3 ring-1 ring-hairline">
+      <div className="flex flex-col gap-5 bg-surface px-4 pt-4 pb-3 ring-1 ring-hairline">
         <div className="flex flex-col gap-0.5">
           <div className="flex flex-wrap items-baseline gap-x-2">
             <span className="tabular-nums text-title font-semibold" data-usage-total>
@@ -140,7 +140,7 @@ function WindowSpend({ window, metric, truncated }: { window: UsageWindow; metri
                 key={source.source}
                 onMouseEnter={() => setFocus(entry?.key ?? null)}
                 title={[outside?.state === "absent" ? outside.reason : undefined, unpriced ? `${formatTokens(source.unpricedTokens ?? 0)} tokens have no known price` : undefined].filter(Boolean).join(" ") || undefined}
-                className="flex items-center gap-2 rounded-md px-1.5 py-1 transition-colors duration-100 hover:bg-fill-hover"
+                className="flex items-center gap-2 px-1.5 py-1 transition-colors duration-100 hover:bg-fill-hover"
               >
                 <span aria-hidden className={cn("size-2 shrink-0", entry?.ink)} />
                 {source.harness ? <HarnessIcon harness={source.harness} className="size-3.5" /> : <span aria-hidden className="size-3.5 shrink-0" />}
@@ -178,7 +178,7 @@ function Totals({ window }: { window: UsageWindow }) {
   const { total } = window
   const input = total.input + total.cacheRead + total.cacheWrite
   return (
-    <div className="grid grid-cols-3 gap-px overflow-hidden rounded-lg bg-hairline ring-1 ring-hairline" data-usage-totals>
+    <div className="grid grid-cols-3 gap-px overflow-hidden bg-hairline ring-1 ring-hairline" data-usage-totals>
       <Figure label="Total tokens" value={formatTokens(meteredTokens(total))} detail={plural(total.messages, "model call")} />
       <Figure label="Cache read" value={formatTokens(total.cacheRead)} detail={input ? `${share(total.cacheRead, input)} of input` : undefined} />
       <Figure label="Output" value={formatTokens(total.output)} />
@@ -317,7 +317,7 @@ function BreakdownRow({
 function SpendSkeleton() {
   return (
     <div aria-busy className="flex flex-col gap-3" data-usage-loading>
-      <div className="flex flex-col gap-5 rounded-lg bg-surface px-4 pt-4 pb-3 ring-1 ring-hairline">
+      <div className="flex flex-col gap-5 bg-surface px-4 pt-4 pb-3 ring-1 ring-hairline">
         <div className="flex flex-col gap-1.5">
           <Skeleton className="h-5 w-40" />
           <Skeleton className="h-3.5 w-56" />
@@ -329,13 +329,13 @@ function SpendSkeleton() {
           <Skeleton className="h-4 w-2/3" />
         </div>
       </div>
-      <Skeleton className="h-36 w-full rounded-lg" />
+      <Skeleton className="h-36 w-full" />
     </div>
   )
 }
 
 function Empty({ children }: { children: ReactNode }) {
-  return <p className="rounded-lg bg-surface px-3 py-4 text-center text-ui text-faint ring-1 ring-hairline">{children}</p>
+  return <p className="bg-surface px-3 py-4 text-center text-ui text-faint ring-1 ring-hairline">{children}</p>
 }
 
 function amountOf(totals: UsageTotals): UsageAmount {

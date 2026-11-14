@@ -1,3 +1,4 @@
+import { approvalWords } from "@mako/host/contracts/children"
 import { memo, useEffect, useRef, useState } from "react"
 import { CheckIcon, ChevronRightIcon, XIcon } from "lucide-react"
 import { childStateOf } from "@mako/host/contracts/children"
@@ -10,8 +11,10 @@ import { harnessLabel } from "@/components/rail/harness-meta"
 import { formatRelative } from "@/lib/format"
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
-import { acpStore } from "@/state/acp-state"
+import { agentAskCard } from "@/state/agent-asks"
 import { answerFin, type FinAnswer } from "@/state/fin-asks"
+import { ASK_TOUCH, runChoice, type AskCard as AskWords } from "@/lib/ask-card"
+import { setupAskCard } from "@/state/setup"
 import {
   answerApproval,
   inboxView,
@@ -25,7 +28,6 @@ import {
   type InboxModel,
   type ReadInboxItem,
 } from "@/state/inbox"
-import { threadsStore } from "@/state/thread-store"
 
 function sameModel(left: InboxModel, right: InboxModel): boolean {
   return sameItems(left.asks, right.asks) && sameItems(left.toRead, right.toRead)
@@ -39,25 +41,6 @@ function useMinute(): number {
     return () => window.clearInterval(timer)
   }, [])
   return now
-}
-
-/** Leaves when the person opens something else: a row, a tab, a new Thread. */
-function useCloseOnNavigate(open: boolean) {
-  useEffect(() => {
-    if (!open) return
-    const where = () => [acpStore.get().activeKey, threadsStore.get().viewing?.ref.path ?? threadsStore.get().opening?.ref.path] as const
-    const at = where()
-    const check = () => {
-      const now = where()
-      if (now[0] !== at[0] || now[1] !== at[1]) inboxView.close()
-    }
-    const offAcp = acpStore.subscribe(check)
-    const offThreads = threadsStore.subscribe(check)
-    return () => {
-      offAcp()
-      offThreads()
-    }
-  }, [open])
 }
 
 function summary(model: InboxModel): string {
@@ -77,7 +60,6 @@ function summary(model: InboxModel): string {
  */
 export function InboxView() {
   const open = useInboxView((state) => state.open)
-  useCloseOnNavigate(open)
   useEffect(() => {
     if (!open) return
     const onKey = (event: KeyboardEvent) => {
@@ -146,7 +128,7 @@ function InboxPane() {
 function Crumb({ item }: { item: InboxAsk }) {
   const apex = item.kind === "fin" || item.kind === "approval" ? item.apex : undefined
   return (
-    <span className="flex min-w-0 flex-1 items-center gap-1.5 text-label text-faint">
+    <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-label text-faint">
       {apex ? (
         <>
           <ApexMark className="size-3 shrink-0" />
@@ -154,14 +136,31 @@ function Crumb({ item }: { item: InboxAsk }) {
           <ChevronRightIcon aria-hidden className="size-3 shrink-0 opacity-60" />
         </>
       ) : null}
-      <span className="min-w-0 shrink-[0.5] truncate font-medium text-foreground/90">{item.title}</span>
+      <span className="min-w-0 flex-1 truncate font-medium text-foreground/90">{item.title}</span>
       <span aria-hidden className="shrink-0 opacity-60">·</span>
-      <span className="shrink-0">{harnessLabel(item.harness)}</span>
+      {item.harness ? <span className="shrink-0">{harnessLabel(item.harness)}</span> : null}
     </span>
   )
 }
 
-const BUTTON = "pressable flex h-7 items-center gap-1.5 rounded-md px-2.5 text-label transition-colors disabled:opacity-50"
+/**
+ * An ask's answers as the Inbox draws every ask (`AskCard`): what can't be given here said first, the one to take
+ * filled. An answer that didn't land frees them again (`runChoice`).
+ */
+function AskChoices({ card, sending, setSending }: { card: AskWords; sending: boolean; setSending: (held: boolean) => void }) {
+  return (
+    <>
+      {card.note ? <span className="text-label text-muted-foreground">{card.note}</span> : null}
+      {card.choices.map((choice) => (
+        <button key={choice.answer} type="button" data-inbox-answer={choice.answer} disabled={sending} onClick={() => void runChoice(choice, setSending)} className={cn(BUTTON, ASK_TOUCH, choice.primary ? PRIMARY : QUIET)}>
+          {choice.label}
+        </button>
+      ))}
+    </>
+  )
+}
+
+const BUTTON = "pressable flex h-7 items-center gap-1.5 px-2.5 text-label transition-colors disabled:opacity-50"
 const PRIMARY = "bg-foreground text-background hover:opacity-90"
 const QUIET = "bg-fill-hover text-foreground hover:bg-fill-selected"
 
@@ -189,7 +188,7 @@ const AskCard = memo(function AskCard({ item }: { item: InboxAsk }) {
         event.preventDefault()
         openInboxItem(item)
       }}
-      className="flex flex-col gap-2 rounded-lg bg-raised px-3.5 py-3 outline-none focus-visible:ring-2 focus-visible:ring-foreground/20"
+      className="flex flex-col gap-2 bg-raised px-3.5 py-3 outline-none focus-visible:ring-2 focus-visible:ring-foreground/20"
     >
       <div className="flex h-5 min-w-0 items-center gap-2">
         <AskMark item={item} />
@@ -203,9 +202,13 @@ const AskCard = memo(function AskCard({ item }: { item: InboxAsk }) {
           <FinAnswers item={item} sending={sending} send={(answer) => settle(answerFin(item.apex.conversation, item.ask, answer))} />
         ) : item.kind === "approval" && item.answerable ? (
           <ApprovalAnswers item={item} sending={sending} send={(option) => settle(answerApproval(item, option))} />
+        ) : item.kind === "agent-ask" ? (
+          <AskChoices card={agentAskCard(item.conversation, item.ask, harnessLabel(item.harness))} sending={sending} setSending={setSending} />
+        ) : item.kind === "setup" ? (
+          <AskChoices card={setupAskCard(item.folder, item.ask, item.away)} sending={sending} setSending={setSending} />
         ) : null}
         <span className="flex-1" />
-        <button type="button" data-inbox-open onClick={() => openInboxItem(item)} className="pressable rounded-md px-1.5 py-1 text-label text-faint hover:bg-fill-hover hover:text-foreground">
+        <button type="button" data-inbox-open onClick={() => openInboxItem(item)} className="pressable px-1.5 py-1 text-label text-faint hover:bg-fill-hover hover:text-foreground">
           Open
         </button>
       </div>
@@ -215,6 +218,12 @@ const AskCard = memo(function AskCard({ item }: { item: InboxAsk }) {
 
 function AskMark({ item }: { item: InboxAsk }) {
   if (item.kind === "fin") return <FinMark agent={item.agent} state={childStateOf(item.agent)} read />
+  if (item.kind === "setup")
+    return (
+      <LiveMark state="needs" kind={item.ask.by.fin ? "fin" : "thread"} label="Needs you">
+        {item.harness ? <HarnessIcon harness={item.harness} /> : null}
+      </LiveMark>
+    )
   return (
     <LiveMark state="needs" label={`Needs you in ${harnessLabel(item.harness)}`}>
       <HarnessIcon harness={item.harness} />
@@ -228,11 +237,11 @@ function FinAnswers({ item, sending, send }: { item: FinInboxItem; sending: bool
       <>
         <button type="button" data-inbox-answer="allow" disabled={sending} onClick={() => send({ allow: true })} className={cn(BUTTON, PRIMARY)}>
           <CheckIcon className="size-3" />
-          Allow once
+          {approvalWords(item.ask.ask).allow}
         </button>
         <button type="button" data-inbox-answer="refuse" disabled={sending} onClick={() => send({ allow: false })} className={cn(BUTTON, QUIET)}>
           <XIcon className="size-3" />
-          Refuse
+          {approvalWords(item.ask.ask).refuse}
         </button>
       </>
     )
@@ -271,7 +280,7 @@ function ReadRow({ item }: { item: ReadInboxItem }) {
       data-inbox-item={item.key}
       data-inbox-kind={item.kind}
       onClick={() => openInboxItem(item)}
-      className="pressable flex h-8 w-full min-w-0 items-center gap-2.5 rounded-md px-2 text-left transition-colors duration-100 hover:bg-fill-hover"
+      className="pressable flex h-8 w-full min-w-0 items-center gap-2.5 px-2 text-left transition-colors duration-100 hover:bg-fill-hover"
     >
       <LiveMark state={item.kind === "failed" ? "failed" : "unread"} label={item.kind === "failed" ? "Failed" : "Answer to read"}>
         <HarnessIcon harness={item.harness} />

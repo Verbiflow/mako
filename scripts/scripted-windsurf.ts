@@ -247,6 +247,7 @@ export async function scriptedWindsurf(options: Pick<ScriptedModelOptions, "repl
   waits?: (heard: string) => boolean
 }) {
   const requests: ScriptedRequest[] = []
+  const heardLog: string[] = []
   /** Requests held by `waits`, each checked again once any reply has been sent. */
   const held = new Set<() => void>()
   const recheck = () => {
@@ -278,7 +279,8 @@ export async function scriptedWindsurf(options: Pick<ScriptedModelOptions, "repl
       const scripted = !titling && (windsurfTools(body).length > 0 || compacting)
       const heard = JSON.stringify({ system, messages })
       if (scripted) await free(heard)
-      const reply = scripted ? options.reply(heard) : { text: options.aside ?? "Notes" }
+      if (scripted) heardLog.push(heard)
+      const reply = scripted ? await options.reply(heard) : { text: options.aside ?? "Notes" }
       requests.push({ path: `POST ${path}`, conversation: scripted, ...!reply && { unscripted: true } })
       response.writeHead(200, { "content-type": "application/connect+proto" })
       const answer = reply ?? { text: "The script has no more steps." }
@@ -292,6 +294,11 @@ export async function scriptedWindsurf(options: Pick<ScriptedModelOptions, "repl
   return {
     url: `http://127.0.0.1:${port}`,
     requests,
+    heard: heardLog,
+    release() {
+      heardLog.length = 0
+      requests.length = 0
+    },
     close: () => new Promise<void>((resolve) => {
       server.closeAllConnections()
       server.close(() => resolve())

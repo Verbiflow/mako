@@ -61,6 +61,8 @@ export class LiveSources {
   // it must not hold shutdown open while waiting on an external native store.
   private readonly refreshes = new Map<string, Promise<LiveSnapshot>>()
   private readonly baseReads = new WeakMap<Resident, Promise<void>>()
+  /** A history page read from its session whose merge was overtaken: the next `readBase` merges it without reading again. */
+  private readonly pagesRead = new WeakMap<Resident, { source: BaseSource; page: ThreadPage }>()
   private readonly baseHolds = new WeakMap<Resident, Promise<void>>()
   /** Why a history that went on in several sessions keeps its copy though its first session is held: its reading wasn't found exact. */
   private readonly unspanned = new WeakMap<Resident, string>()
@@ -208,9 +210,12 @@ export class LiveSources {
     const source = resident.snapshot.baseSource
     if (!source) return
     const started = performance.now()
-    let page: ThreadPage | null = null
+    // A page read before and not yet merged (its merge kept being overtaken) is merged again, not read again: a queued
+    // message waited on a whole history read on every drain.
+    const kept = this.pagesRead.get(resident)
+    let page: ThreadPage | null = kept?.source === source ? kept.page : null
     let failure: string | undefined
-    for (const wait of [...BASE_READ_RETRIES, undefined]) {
+    for (const wait of page ? [] : [...BASE_READ_RETRIES, undefined]) {
       try {
         const path = this.located(source)
         page = (dependencies.staleHistory && await captureNativeHistory(path, dependencies.staleHistory)) ||
@@ -263,10 +268,12 @@ export class LiveSources {
         const now = resident.snapshot
         if (now !== snapshot && !sameMergeInputs(snapshot, now)) {
           if (attempt < MERGE_ATTEMPTS) continue
-          // Merged when the history is next needed (`readBase`).
+          // Merged when the history is next needed (`readBase`), from the page read now.
+          this.pagesRead.set(resident, { source, page })
           hostLog("live", "what a conversation's history merges with kept changing while it merged", { conversation: id, attempts: attempt })
           return
         }
+        this.pagesRead.delete(resident)
         resident.snapshot = {
           ...now, base: merged.base, historyFailure: undefined,
           // Read again, the inherited turns hold what the parent's history gives them now, or nothing when it gives none.
@@ -723,9 +730,14 @@ export class LiveSources {
   }
 
   /** Native identity belongs to the host, including sessions never opened in a renderer. */
-  discoverNativePaths(): void {
+  discoverNativePaths(only?: { harness: string; nativeId: string }): void {
     for (const resident of this.access.residents()) {
       if (resident.opening || resident.transferring) continue
+      // A catalog row's change moves only its own session's file: every other resident would only be worked out again.
+      if (only) {
+        const binding = activeBinding(resident)
+        if (binding?.provider !== only.harness || binding.nativeId !== only.nativeId) continue
+      }
       this.discoverNativePath(resident)
     }
   }

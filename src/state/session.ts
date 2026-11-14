@@ -1,6 +1,7 @@
 import { accounts } from "@/state/accounts"
 import { handOff } from "@/state/handoff"
 import { conversationSettings } from "@/state/conversation-settings"
+import { keepAwake } from "@/state/keep-awake"
 import { revealWorkedProject } from "@/state/prefs"
 import { playFeedback } from "@/state/feedback"
 import { workspaceTransitionStore } from "@/state/workspace-transition"
@@ -12,10 +13,9 @@ import { applyThreadPurposes, loadThreadPurposes } from "@/state/thread-purposes
 import { applyStoreFormats, loadStoreFormats } from "@/state/store-formats"
 import { applyFileEvents, loadFileEvents } from "@/state/file-events"
 import { applyThreadTitles, loadThreadTitles } from "@/state/thread-titles"
-import { refreshWorktrees, refreshWorktreeSummaries } from "@/state/worktrees"
+import { applyWorktreeSummaries, refreshWorktrees, refreshWorktreeSummaries } from "@/state/worktrees"
 import { github, githubStore } from "@/state/github"
 import { applyWorkspaceMoves, loadWorkspaceMoves, workspaceMoved } from "@/state/workspace-moves"
-import { applyThreadMoveAsks, loadThreadMoveAsks } from "@/state/thread-move-asks"
 import { applyPlanBuilds, loadPlanBuilds } from "@/state/plan-builds"
 import { applyAccessChoices, loadAccessChoices } from "@/state/access-choices"
 import { chatFoldersStore, chatGroupOf, followChatFolders, refreshChatFolders } from "@/state/chat-folders"
@@ -39,6 +39,7 @@ import { applyLiveBatch, hydrateLiveSummaries, hydrateLive, listLive, markLiveOw
 import { replayUnconfirmedPrompts, restorePendingMessages } from "@/state/acp-queue"
 import { watchPendingMessages } from "@/state/message-outbox"
 import { createHook, createStore, shallowEqual } from "@/state/store"
+import { inboxView } from "@/state/inbox-view"
 import type {
   Capabilities,
   BootPayload,
@@ -91,7 +92,7 @@ import {
 } from "@/state/threads"
 import { acp, acpStore, activeAcp, activeLiveAcp } from "@/state/acp"
 import { cloudStepped, worktreeMade, worktreeStepped } from "@/state/acp-start"
-import { followStopped, threadMoveStepped, threadReturnStepped } from "@/state/cloud-moves"
+import { awayHeld, checkoutStayed, followStopped, threadMoveStepped, threadReturnStepped } from "@/state/cloud-moves"
 import { threadContinueStepped } from "@/state/cloud-continues"
 import { machineNoticed } from "@/state/cloud-machines"
 import { cloudArchiveStepped } from "@/state/cloud-archive"
@@ -251,6 +252,10 @@ function apply(event: HostEvent) {
     applyCheckoutHeads(event.heads)
     return
   }
+  if (event.type === "worktree-summaries") {
+    applyWorktreeSummaries(event.summaries)
+    return
+  }
   if (event.type === "worktree-ready") {
     worktreeMade(event.conversationId)
     return
@@ -277,6 +282,14 @@ function apply(event: HostEvent) {
   }
   if (event.type === "thread-continue-step") {
     threadContinueStepped(event.conversationId, event.op, event.step)
+    return
+  }
+  if (event.type === "away-held") {
+    awayHeld(event.conversations)
+    return
+  }
+  if (event.type === "checkout-stayed") {
+    checkoutStayed(event)
     return
   }
   if (event.type === "thread-follow-stopped") {
@@ -315,10 +328,6 @@ function apply(event: HostEvent) {
     applyWorkspaceMoves(event.moves)
     return
   }
-  if (event.type === "thread-move-asks") {
-    applyThreadMoveAsks(event.asks)
-    return
-  }
   if (event.type === "plan-builds") {
     applyPlanBuilds(event.builds)
     return
@@ -352,6 +361,9 @@ function apply(event: HostEvent) {
     return
   }
   if (event.type === "host-reconnected") {
+    // The stream attached, so the host is there. The boot brings the window up to date; on a busy host that took 18 s,
+    // and it isn't an outage. One that fails says so itself.
+    hostConnectionStore.set({ kind: "connected" })
     void actions.reconnect()
     return
   }
@@ -416,6 +428,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "conversation-settings") {
     conversationSettings.settled(event.settings)
+    return
+  }
+  if (event.type === "keep-awake") {
+    keepAwake.settled(event.state)
     return
   }
   if (event.type === "runtime-updates") {
@@ -756,7 +772,6 @@ function adoptBoot(boot: BootPayload) {
   void loadGroups()
   void loadWorktrees()
   void loadWorkspaceMoves().catch(() => {})
-  void loadThreadMoveAsks().catch(() => {})
   void loadPlanBuilds().catch(() => {})
   void loadAccessChoices().catch(() => {})
   followChatFolders()
@@ -902,6 +917,7 @@ export const actions = {
    * screen rather than replacing it.
    */
   async switchTab(id: string) {
+    inboxView.close()
     const { activeId } = tabsStore.get()
     if (id === activeId) return
     workspaceGeneration += 1
@@ -938,6 +954,7 @@ export const actions = {
 
   /** Open another conversation beside this one. */
   async openTab(options: { cwd?: string; sessionPath?: string } = {}) {
+    const currentOpen = inboxView.beginOpen()
     workspaceGeneration += 1
     workspaceTransitionStore.set({ kind: "ready" })
     const current = store.get()
@@ -953,7 +970,7 @@ export const actions = {
       })
     }
     const tab = await guard(() => getMako().openTab(options))
-    if (!tab) return false
+    if (!tab || !currentOpen()) return false
     threads.closeViewer()
     if (
       !tab.session.meta.sessionFile ||
@@ -1098,7 +1115,9 @@ export const actions = {
 
   /** A new Thread outside any project; its first send gives it a folder of its own under Chats. */
   async newChat() {
+    const currentOpen = inboxView.pendingOpen()
     if (!chatFoldersStore.get().root) await guard(() => refreshChatFolders())
+    if (!currentOpen()) return false
     const root = chatFoldersStore.get().root
     return root ? actions.newConversationIn(root) : false
   },
@@ -1116,13 +1135,14 @@ export const actions = {
       .tabs.find((tab) => sessionFileOf(tab.id) === path)
     if (existing) return actions.switchTab(existing.id)
     if (inNewTab) return actions.openTab({ sessionPath: path })
+    const currentOpen = inboxView.beginOpen()
     acp.deactivate()
     threads.closeViewer()
     // Picking a thread means "show me that thread" — so any full-window view
     // standing in front of the transcript steps aside first.
     window.dispatchEvent(new CustomEvent("mako:close-settings"))
     const next = await guard(() => getMako().openSession(path))
-    if (!next) return
+    if (!next || !currentOpen()) return
     adoptState(next)
   },
 
@@ -1132,8 +1152,9 @@ export const actions = {
       toast(machine.missing ?? "No folder chooser is available here.", { id: "machine-missing" })
       return
     }
+    const currentOpen = inboxView.pendingOpen()
     const folder = await guard(() => getMako().pickFolder())
-    if (folder) await actions.newConversationIn(folder)
+    if (folder && currentOpen()) await actions.newConversationIn(folder)
   },
 
   /**

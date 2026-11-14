@@ -1,10 +1,11 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { manualDevUpdates } from "../electron/dev-updates.mjs"
+import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 /**
  * Mako Cloud in Settings › Account and the sidebar, against the production components and the mock bridge: an
@@ -25,12 +26,12 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const { createServer } = await import("vite")
-  const root = await mkdtemp(join(tmpdir(), "mako-turn-on-ui-"))
+  const { uiVite } = await import("./lib/ui-vite.mjs")
+  const root = testScratch("mako-turn-on-ui-")
   const shotsAt = process.argv.indexOf("--shots")
   const shots = shotsAt > 0 ? resolve(process.argv[shotsAt + 1]) : root
   await mkdir(shots, { recursive: true })
-  const server = await createServer({
+  const server = await uiVite({
     cacheDir: join(root, "cache"),
     define: { "import.meta.env.MAKO_MANUAL_RELOAD": "true" },
     plugins: [manualDevUpdates()],
@@ -49,7 +50,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`UI evidence: ${shots}`)
 }
 
 async function checkWindow() {
@@ -58,8 +58,10 @@ async function checkWindow() {
   const shots = process.env.MAKO_UI_TEST_SHOTS
   const base = process.env.MAKO_UI_TEST_URL
   app.setPath("userData", join(root, "profile"))
+  withMotion(app)
   await app.whenReady()
   const window = new BrowserWindow({ width: 1280, height: 1000, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
+  atSize(window, 1280, 1000)
   const page = window.webContents
   const watchdog = setTimeout(() => {
     console.error("Turn-on UI verification exceeded its 300-second limit")

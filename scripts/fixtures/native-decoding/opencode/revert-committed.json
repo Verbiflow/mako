@@ -814,7 +814,8 @@
             "type": "turn",
             "turn": {
               "type": "delivered",
-              "inbox": "msg_11542a7ac001Uhsz47hBaXL8E2"
+              "inbox": "msg_11542a7ac001Uhsz47hBaXL8E2",
+              "between": true
             }
           }
         }
@@ -1200,7 +1201,8 @@
             "type": "turn",
             "turn": {
               "type": "delivered",
-              "inbox": "msg_11542a7cd001m54fBCBZmE3Mpp"
+              "inbox": "msg_11542a7cd001m54fBCBZmE3Mpp",
+              "between": true
             }
           }
         }

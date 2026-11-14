@@ -1,5 +1,5 @@
 import { settingsForSend, threadSettingsTarget, currentSettingsTarget } from "@/state/composer-settings"
-import { applyLiveSnapshot } from "@/state/live-recovery"
+import { applyLiveSnapshot, readContinuation, readLive } from "@/state/live-recovery"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type {
   ContinuationResolution,
@@ -64,7 +64,7 @@ export const threadContinuationActions = {
     // carries its reason, and a handoff names the provider it lands on.
     let plan: ContinuationResolution
     try {
-      plan = await getMako().resolveContinuation(ref.path)
+      plan = await readContinuation(ref.path)
     } catch (error) {
       if (echoed) removeOptimisticReply(ref, prompt)
       toast.error(error instanceof Error ? error.message : String(error))
@@ -126,9 +126,9 @@ export const threadContinuationActions = {
   ): Promise<boolean> {
     if (!hasBridge()) return false
     try {
-      const snapshot = await getMako().liveCapture(crypto.randomUUID(), ref.path)
       const { acp } = await import("@/state/acp")
-      applyLiveSnapshot(snapshot, null)
+      const captured = crypto.randomUUID()
+      const snapshot = await readLive(captured, () => getMako().liveCapture(captured, ref.path), (taken) => applyLiveSnapshot(taken, null))
       acp.activate(snapshot.session.id)
       return snapshot.session.harness === harness
         ? acp.send(prompt, attachments)
@@ -154,9 +154,13 @@ export const threadContinuationActions = {
   ): Promise<boolean> {
     if (!hasBridge()) return false
     try {
-      const source = await getMako().liveCapture(crypto.randomUUID(), ref.path)
-      const fork = await getMako().liveFork(source.session.id, {
-        id: crypto.randomUUID(),
+      const { acp } = await import("@/state/acp")
+      // The capture is read only to fork from: the window takes the fork, never the capture.
+      const captured = crypto.randomUUID()
+      const source = await readLive(captured, () => getMako().liveCapture(captured, ref.path), () => {})
+      const forked = crypto.randomUUID()
+      const fork = await readLive(forked, () => getMako().liveFork(source.session.id, {
+        id: forked,
         provider: harness,
         point: {
           kind: "native",
@@ -165,9 +169,7 @@ export const threadContinuationActions = {
           anchor,
         },
         thread,
-      })
-      const { acp } = await import("@/state/acp")
-      applyLiveSnapshot(fork)
+      }))
       acp.activate(fork.session.id)
       threadsStore.set({ composerHarness: harness })
       return true
@@ -263,9 +265,9 @@ export const threadContinuationActions = {
   async continueWith(ref: ThreadRef, harness: string, label: string) {
     if (!hasBridge()) return false
     try {
-      const snapshot = await getMako().liveCapture(crypto.randomUUID(), ref.path)
       const { acp } = await import("@/state/acp")
-      applyLiveSnapshot(snapshot, null)
+      const captured = crypto.randomUUID()
+      const snapshot = await readLive(captured, () => getMako().liveCapture(captured, ref.path), (taken) => applyLiveSnapshot(taken, null))
       acp.activate(snapshot.session.id)
       threadsStore.set({ composerHarness: harness })
       if (snapshot.session.harness !== harness)

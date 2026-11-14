@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { dirname, join } from "node:path"
-import { CURSOR_SDK_PATCHES } from "./patch-cursor-sdk.mjs"
+import { CURSOR_SDK_PATCHES, TRANSCRIPT_BUILDS } from "./patch-cursor-sdk.mjs"
 
 /**
  * The SDK's retry loop, as `scripts/patch-cursor-sdk.mjs` patches it, asks the
@@ -21,10 +21,10 @@ class Message {
 }
 const proto = { QFf: class extends Message {}, Vtf: class extends Message {}, RGk: class extends Message {}, qKo: class extends Message {}, xyI: { AGENT: 1, PLAN: 2 } }
 
-for (const target of ["dist/esm/336.js", "dist/cjs/336.js"]) {
+for (const target of [TRANSCRIPT_BUILDS.esm.target, TRANSCRIPT_BUILDS.cjs.target]) {
   const { replacements } = CURSOR_SDK_PATCHES.find((patch) => patch.target === target)
   const [original, patched] = replacements.find(([from]) => from.startsWith("try{return await s.runAttempt("))
-  const name = target.includes("esm") ? "jr" : "Ur"
+  const name = target.includes("esm") ? "qr" : "Gr"
   assert.ok(patched.startsWith(original.slice(0, -"action:g,".length)), `${target}: the patch keeps the attempt's call`)
   // The loop's names: `w` the attempt, `g` the action the SDK would send, `m` the checkpoint state, `a` the run's request id.
   const attempt = new Function("w", "g", "m", "a", "s", name, `return (async()=>{${patched}x:0})}catch(e){throw e}})()`)
@@ -69,7 +69,7 @@ for (const target of ["dist/esm/336.js", "dist/cjs/336.js"]) {
 }
 
 const installed = join(dirname(createRequire(import.meta.url).resolve("@cursor/sdk")), "../..")
-for (const target of ["dist/esm/336.js", "dist/cjs/336.js"]) {
+for (const target of [TRANSCRIPT_BUILDS.esm.target, TRANSCRIPT_BUILDS.cjs.target]) {
   const { replacements } = CURSOR_SDK_PATCHES.find((patch) => patch.target === target)
   const [, patched] = replacements.find(([from]) => from.startsWith("try{return await s.runAttempt("))
   assert.equal(readFileSync(join(installed, target), "utf8").split(patched).length - 1, 1, `${target}: the installed SDK asks the resume hook`)

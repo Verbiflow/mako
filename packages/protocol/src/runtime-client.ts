@@ -10,11 +10,12 @@ import { type LiveForm, WHOLE_LIVE_FORM } from "./live-form.js"
 import { type MediaHandler, type MediaSender, type MediaStreamId, decodeMediaMessage, encodeMediaMessage } from "./media.js"
 import type { Payload } from "./payload.js"
 import type { PortHandler, PortRequest } from "./ports.js"
-import type { GatewayFrame, GoingQuietReason, RuntimeFrame } from "./runtime-frames.js"
+import type { Lease, LeaseEnd, Progress, SourceAsk, Stream } from "./borrow.js"
+import type { Advertisement, GatewayFrame, GoingQuietReason, RuntimeFrame } from "./runtime-frames.js"
 import { RuntimeThreads, type ThreadClaim } from "./runtime-outbox.js"
 import { type SshHandler, type SshSender, SshIncoming } from "./ssh.js"
 import type { SessionsReport } from "./thread-listing.js"
-import { ACTIVITY_VERSION, COMPACT_LIVE_VERSION, MEDIA_VERSION, NUMBERED_LIVE_VERSION, PORTS_VERSION, PROTOCOL_VERSION, QUIET_VERSION, SESSIONS_VERSION, SSH_VERSION, SUPPORTED_VERSIONS } from "./version.js"
+import { ACTIVITY_VERSION, ADVERTISE_LINK_VERSION, COMPACT_LIVE_VERSION, LEND_LINK_VERSION, MEDIA_VERSION, NUMBERED_LIVE_VERSION, PORTS_VERSION, PROTOCOL_VERSION, QUIET_VERSION, SESSIONS_VERSION, SSH_VERSION, SUPPORTED_VERSIONS } from "./version.js"
 import { WireError } from "./wire-error.js"
 
 export class RuntimeRefusedError extends Error {
@@ -60,6 +61,15 @@ export type RuntimeOptions = {
    * where that's above 1 (`live-form.ts`).
    */
   watch?: (conversations: readonly string[], after?: Readonly<Record<string, number>>, forms?: Readonly<Record<string, LiveForm>>) => void
+  /**
+   * What this device lends (version 24 on, `borrow.ts`): what it's asked as a source, and the leases it serves as
+   * they're issued and end. Without it, those frames are dropped.
+   */
+  lending?: {
+    asked(ask: SourceAsk): void
+    lent(lease: Lease): void
+    ended(lease: string, why: LeaseEnd): void
+  }
 }
 
 export type ServedRuntime = {
@@ -97,6 +107,16 @@ export type ServedRuntime = {
    * as down at once. False on an older gateway, which finds out from the missed heartbeats, or on a closed link.
    */
   goingQuiet(reason: GoingQuietReason): boolean
+  /**
+   * Says what this device can serve and its room (`advertise`, version 23 on). False on an older gateway, which routes
+   * nothing to it by capability, or on a closed link. Not kept: each new link is told again.
+   */
+  advertise(advertisement: Advertisement): boolean
+  /**
+   * Says a session this device serves is alive, with its progress when that changed (`lease-beat`, version 24 on).
+   * False on an older gateway, which lends nothing through this device, or on a closed link.
+   */
+  beat(lease: string, progress?: Progress, streams?: Stream[]): boolean
   /** Settles when the link closes. */
   done: Promise<void>
   /** Why the link ended: the gateway's refusal, or undefined when the connection just closed. */
@@ -295,6 +315,9 @@ export async function serveRuntime(
       else if (frame.type === "port-open") opened(frame)
       else if (frame.type === "ssh-open") sshOpened(frame)
       else if (frame.type === "watch") options.watch?.(frame.conversations, frame.after, frame.forms)
+      else if (frame.type === "source-ask") options.lending?.asked(frame.ask)
+      else if (frame.type === "lent") options.lending?.lent(frame.lease)
+      else if (frame.type === "lent-ended") options.lending?.ended(frame.lease, frame.why)
       else if (frame.type === "media-ack") {
         const sender = streams.get(frame.stream)
         if (sender?.kind === "port") options.ports?.acked(frame.stream, frame.received)
@@ -355,6 +378,16 @@ export async function serveRuntime(
     goingQuiet: (reason) => {
       if (first.version < QUIET_VERSION || link.closed) return false
       link.send({ type: "going-quiet", reason })
+      return true
+    },
+    advertise: (advertisement) => {
+      if (first.version < ADVERTISE_LINK_VERSION || link.closed) return false
+      link.send({ type: "advertise", ...advertisement })
+      return true
+    },
+    beat: (lease, progress, streams) => {
+      if (first.version < LEND_LINK_VERSION || link.closed) return false
+      link.send({ type: "lease-beat", lease, ...(progress && { progress }), ...(streams && { streams }) })
       return true
     },
     done,

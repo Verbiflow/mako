@@ -1,6 +1,5 @@
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
-import { useAcp, type AcpState } from "@/state/acp-state"
-import { threadChildren } from "@/state/apex-fins"
+import { threadChildren, useAcp, type AcpState } from "@/state/acp-state"
 import { personAsks, type PersonAsk } from "@/state/fin-asks"
 import type { WebThread } from "./threads"
 
@@ -49,7 +48,12 @@ export function webFinAsks(state: AcpState): readonly WebFinAsk[] {
     asks.push(...finAsksOfApex(children, { thread: conversation.threadId, title, conversation: conversation.key }))
   }
   if (!asks.length) return NONE
-  return asks.sort((left, right) => left.agent.observedAt - right.agent.observedAt)
+  return asks.sort(longestWaitingFirst)
+}
+
+/** The longest waiting first; asks of the same moment by their key, so the list reads the same each time. */
+export function longestWaitingFirst(left: WebFinAsk, right: WebFinAsk): number {
+  return left.agent.observedAt - right.agent.observedAt || (left.key < right.key ? -1 : left.key > right.key ? 1 : 0)
 }
 
 function sameAsks(left: readonly WebFinAsk[], right: readonly WebFinAsk[]): boolean {
@@ -61,14 +65,31 @@ export function useWebFinAsks(): readonly WebFinAsk[] {
   return useAcp(webFinAsks, sameAsks)
 }
 
+/**
+ * The Fins placed on other devices that wait on the person, each as the row the device running it writes: what it
+ * asks is answered in its own Thread there, so each is a row of its own under Needs you, and its Apex's row doesn't
+ * stand in for it. Their devices' quiet ones aren't waiting on anyone.
+ */
+export function placedWaiting(placed: readonly WebThread[]): readonly WebThread[] {
+  return placed.filter((thread) => thread.standing === "waiting" && !thread.quietSince)
+}
+
+/** The Fins' asks less those a placed Fin's own row says: that row is the one that opens where it's answered. */
+export function asksBesidePlaced(fins: readonly WebFinAsk[], placed: readonly WebThread[]): readonly WebFinAsk[] {
+  const own = new Set(placedWaiting(placed).map((thread) => thread.id))
+  return own.size ? fins.filter((fin) => !own.has(fin.ask.fin)) : fins
+}
+
 /** The Threads the account lists as waiting on the person, but an Apex whose asks are its Fins', said by them. */
-export function waitingThreads(threads: readonly WebThread[], fins: readonly WebFinAsk[]): readonly WebThread[] {
-  const apexes = new Set(fins.map((fin) => fin.apex.thread))
+export function waitingThreads(threads: readonly WebThread[], fins: readonly WebFinAsk[], placed: readonly WebThread[] = []): readonly WebThread[] {
+  const waiting = placedWaiting(placed)
+  // An Apex whose waiting Fin has a row of its own: that row says it, and opens where it's answered.
+  const apexes = new Set([...fins.map((fin) => fin.apex.thread), ...waiting.flatMap((thread) => (thread.apex ? [thread.apex.thread] : []))])
   const fin = new Set(fins.map((ask) => ask.ask.fin))
-  return threads.filter((thread) => thread.standing === "waiting" && !apexes.has(thread.id) && !fin.has(thread.id))
+  return [...waiting, ...threads.filter((thread) => thread.standing === "waiting" && !apexes.has(thread.id) && !fin.has(thread.id))]
 }
 
 /** The Inbox's count: every Fin and Thread waiting on the person, the phone's chip and the desk's row alike. */
-export function webInboxCount(threads: readonly WebThread[], fins: readonly WebFinAsk[]): number {
-  return fins.length + waitingThreads(threads, fins).length
+export function webInboxCount(threads: readonly WebThread[], fins: readonly WebFinAsk[], placed: readonly WebThread[] = []): number {
+  return asksBesidePlaced(fins, placed).length + waitingThreads(threads, fins, placed).length
 }

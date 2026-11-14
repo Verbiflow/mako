@@ -68,7 +68,7 @@ export function SkillMatrix({
       role="grid"
       aria-label="Skills by provider"
       data-skill-matrix
-      className="rounded-lg bg-surface ring-1 ring-hairline"
+      className="bg-surface ring-1 ring-hairline"
     >
       <div
         role="row"
@@ -185,7 +185,7 @@ function Cell({
           // `data-state` is Radix's (open/closed) and styles the open cell.
           data-cell-state={cell.state}
           className={cn(
-            "pressable group/cell inline-flex size-6 items-center justify-center justify-self-center rounded-md",
+            "pressable group/cell inline-flex size-6 items-center justify-center justify-self-center",
             "hover:bg-fill-hover data-[state=open]:bg-fill-selected"
           )}
         >
@@ -391,7 +391,7 @@ function PendingPreview({
 }) {
   const actionable = preview.action === "add" || preview.action === "replace" || preview.action === "remove"
   return (
-    <div className="flex flex-col gap-2 rounded-lg bg-raised p-2" data-skill-preview={preview.action}>
+    <div className="flex flex-col gap-2 bg-raised p-2" data-skill-preview={preview.action}>
       <p className="text-label text-foreground/90">{preview.summary}</p>
       {preview.blockReason ? (
         <p className="text-label text-faint">{preview.blockReason}</p>

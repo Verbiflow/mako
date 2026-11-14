@@ -76,6 +76,8 @@ const Meta = z.object({
     agent_role: z.string().nullish(),
     agent_path: z.string().nullish(),
     source: z.unknown().optional(),
+    thread_source: z.string().nullish(),
+    originator: z.string().nullish(),
     history_base: HistoryBase.nullish(),
   }),
 })

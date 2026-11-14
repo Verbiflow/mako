@@ -1,5 +1,5 @@
 import { appendFileSync, mkdirSync, renameSync, statSync } from "node:fs"
-import { appendFile, mkdir, rename, stat } from "node:fs/promises"
+import { mkdir } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { makoUserRoot } from "./mako-root.js"
 
@@ -83,15 +83,26 @@ export function openProcessLog(
   const pending: string[] = []
   let queue: Promise<void> = Promise.resolve()
 
+  const appendNow = (text: string) => {
+    let size = 0
+    try {
+      size = statSync(path).size
+    } catch {
+      // No file yet.
+    }
+    if (size > 0 && size + text.length > maxBytes) renameSync(path, `${path}.1`)
+    appendFileSync(path, text, "utf8")
+  }
+
   const appendNext = async () => {
+    if (!pending.length) return
+    await mkdir(dirname(path), { recursive: true })
+    // Keep the line pending across every await: writeNow may take it while the
+    // directory is prepared. Removing it and appending it must be one synchronous
+    // step, so exit cannot lose a line or write it after the process's last words.
     const line = pending.shift()
     if (line === undefined) return
-    await mkdir(dirname(path), { recursive: true })
-    const size = await stat(path)
-      .then((entry) => entry.size)
-      .catch(() => 0)
-    if (size > 0 && size + line.length > maxBytes) await rename(path, `${path}.1`)
-    await appendFile(path, line, "utf8")
+    appendNow(line)
   }
 
   return {
@@ -105,14 +116,7 @@ export function openProcessLog(
       const text = pending.splice(0).join("")
       try {
         mkdirSync(dirname(path), { recursive: true })
-        let size = 0
-        try {
-          size = statSync(path).size
-        } catch {
-          // No file yet.
-        }
-        if (size > 0 && size + text.length > maxBytes) renameSync(path, `${path}.1`)
-        appendFileSync(path, text, "utf8")
+        appendNow(text)
       } catch {
         // Last words that can't be written are lost, never thrown.
       }

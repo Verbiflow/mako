@@ -28,10 +28,12 @@ const reads = [
   "mako:launch-prewarm",
   /** The Threads at work here a handoff would take, and the person's choice for sleep, as they stand. */
   "mako:handoff-candidates",
-  /** Agents' asks to move their Thread, as they stand. */
-  "mako:thread-move-asks",
   "mako:handoff-settings",
+  /** The conversations held since this Mac went away; reads what `AwayNotes` holds. */
+  "mako:handoff-away-held",
   "mako:conversation-settings",
+  /** Where keeping this Mac awake stands; reads what `KeepAwake` holds. */
+  "mako:keep-awake",
   "mako:git-status",
   "mako:git-diff",
   "mako:git-diff-all",
@@ -114,6 +116,13 @@ const reads = [
   "mako:thread-continuation-resolve",
   "mako:thread-owner-resolve",
   "mako:list-files",
+  "mako:files-folders",
+  "mako:files-find",
+  "mako:live-files-folders",
+  "mako:live-files-find",
+  /** A text search changes nothing; a newer one in the same folder stops the last. */
+  "mako:files-grep",
+  "mako:live-files-grep",
   "mako:read-file",
   "mako:capabilities",
   "mako:live-snapshot",
@@ -121,6 +130,8 @@ const reads = [
   "mako:agents-list",
   "mako:agents-read",
   "mako:agents-wait",
+  /** What this host offers as a place for Fins, as it stands. */
+  "mako:agents-capabilities",
   /** Simulators' setup line as it stands, re-read when asked; changes nothing on this Mac. */
   "mako:simulator-setup",
   /** What the hosts run, who holds each simulator, a page or console read, and a screenshot (`contracts/simulators.ts`). */
@@ -163,8 +174,12 @@ const reads = [
   "mako:cloud-sign-ins",
   /** A project's carried files and where each stands in the cloud, read, never sent. */
   "mako:cloud-carried-files",
+  /** A project's Setup: what each place reads of itself and what the broker grants, read, never changed. */
+  "mako:setup",
   /** Who the account's own GitHub token belongs to, read from the cloud; never the token. */
   "mako:github-token",
+  /** Who the account's cloud commits and pull requests are authored as, read from the cloud. */
+  "mako:github-authorship",
   /** Waits on a sign-in the host finishes by itself, whoever is waiting. */
   "mako:account-login-wait",
   "mako:native-authoring-catalog",
@@ -196,6 +211,7 @@ const reads = [
   "mako:skills-discover",
   "mako:skills-resolve",
   "mako:automations",
+  "mako:automation-context",
   "mako:external-editors",
   "mako:default-commit-prompt",
   "mako:native-requests",
@@ -245,17 +261,27 @@ const replays = [
   "mako:native-submit",
   /** A spawn, a link, a report, a message and an answer are settled by the caller's key; stopping a stopped child stops nothing. */
   "mako:agents-start",
+  "mako:agents-move",
   "mako:agents-link",
   "mako:agents-report",
   "mako:agents-send",
   "mako:agents-answer",
+  "mako:agents-settle",
   "mako:agents-stop",
+  /** A start for an Apex on another device is settled by its op: a repeat answers the same Fin. */
+  "mako:agents-place",
+  /** A placed Fin's notice is kept once by its report's ID: a repeat is heard as the same one. */
+  "mako:agents-notice",
+  /** A stop of a placed start is kept by the start's op: a repeat stops nothing more and answers the same. */
+  "mako:agents-cancel",
   /** The moved message's id names the one it becomes; a message already moved is withdrawn once. */
   "mako:agents-redirect",
   /** The person's message to a Fin is settled by its request id: a repeat answers the first delivery. */
   "mako:agents-direct",
   /** The person's answer to a Fin's ask is settled by its request id: a repeat answers once. */
   "mako:agents-respond",
+  /** A move is settled by its id: a repeat is the same move. */
+  "mako:agents-continue-next",
   /** Cancelling a turn that has already stopped stops nothing. */
   "mako:live-cancel",
   /** Stopping a background task that has already ended stops nothing. */
@@ -278,8 +304,14 @@ const replays = [
   "mako:thread-return",
   /** `ThreadMoveTool.move`: the move is named by the caller's key, so a repeat joins it or answers how it went. */
   "mako:threads-move",
-  /** `ThreadMoveTool.answer`: the ask's id; an answered ask ignores a repeat. */
-  "mako:thread-move-ask-answer",
+  /** `ThreadActTool.act`: named by the caller's key, as Rename and Archive are by their operation. */
+  "mako:threads-act",
+  /** `SettingsTool.call`: a read, or a setting set to a value; asked twice, the same end state. */
+  "mako:settings-act",
+  /** `HarnessTool.act`: a repeat under its key gets the first outcome (`OnceByKey`), and after a restart an install under way refuses a second and one done is the same end state. */
+  "mako:harnesses-act",
+  /** `AgentAskGate.answer`: the ask's id; an answered ask ignores a repeat. */
+  "mako:agent-ask-answer",
   /** Whether a machine has its folder for a move only reads. */
   "mako:move-ready",
   /** A move staged again stages the same, or what the device sent since: nothing of it is the machine's own yet. */
@@ -307,6 +339,8 @@ const replays = [
   /** The same token saved twice is kept once; removing it twice leaves it off. */
   "mako:github-token-save",
   "mako:github-token-remove",
+  /** Choosing who cloud commits are authored as a second time is the same choice. */
+  "mako:github-authorship-save",
   /** Setting the mode a session already has is a no-op. */
   "mako:live-mode",
   /** The ledger keeps one mode per thread; the same write twice is one write. */
@@ -317,8 +351,12 @@ const replays = [
   "mako:handoff",
   /** Setting the same choice again leaves the same choice. */
   "mako:handoff-settings-set",
+  /** Sessions let go once are let go: a repeat lets go of none. */
+  "mako:handoff-run-here",
   /** The same settings saved twice are one choice. */
   "mako:conversation-settings-set",
+  /** The same choice saved twice is one choice. */
+  "mako:keep-awake-set",
   /** `LiveAutoContinue.continueNow`: the request id is the continuation's; a repeat finds it and changes nothing. */
   "mako:live-continue-turn",
   /** `ThreadStore.renameThread` and `clearThreadTitle`: the operation id is receipted. */
@@ -333,6 +371,14 @@ const replays = [
   "mako:fin-default-choose",
   /** `FinDefaultsStore.savePolicy`: the whole policy replaces the last, so saving it twice is saving it once. */
   "mako:fin-policy-save",
+  /** `FinDefaultsStore.saveRoleRules`: the same words for a role saved twice are saved once. */
+  "mako:fin-role-rules-save",
+  /** `FinDefaultsStore.setLimit`: the same number saved twice is one choice. */
+  "mako:fin-limit-set",
+  /** `FinDefaultsStore.setCeiling`: the same number saved twice is one choice. */
+  "mako:fin-ceiling-set",
+  /** `FinDefaultsStore.chooseMoveOnLimit`: the same switch set twice is set once. */
+  "mako:fin-move-on-limit",
   /** `Telemetry.choose`: the same choice saved twice is one choice. */
   "mako:telemetry-choose",
   /** `ThreadWorktreeService.want`: stamps the project wanted and tops its spares up to a fixed count. */

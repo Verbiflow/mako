@@ -1,6 +1,6 @@
 # Mako audio pilot: source findings and recommendation
 
-Investigation date: 2026-09-07 America/Los_Angeles. Read-only against `/Users/kashyab/pi-ui`; clones, dependency installation, builds, measurements and probes are confined to `/tmp/mako-ui-pilot-audio/run-QaGb8b0U/`. No sound was played. FFmpeg decoded samples into memory for numerical measurement only. No Mako source was edited and no provider prompt was sent.
+Investigation date: 2026-09-07 America/Los_Angeles. Read-only against the repository's working tree; clones, dependency installation, builds, measurements and probes are confined to `/tmp/mako-ui-pilot-audio/run-QaGb8b0U/`. No sound was played. FFmpeg decoded samples into memory for numerical measurement only. No Mako source was edited and no provider prompt was sent.
 
 ## Decision
 
@@ -81,7 +81,7 @@ Original alternatives under `assets/kenney_interface-sounds/`: click_001.ogg 4,8
 
 ## Mako architecture and integration points
 
-All paths here are relative to `/Users/kashyab/pi-ui` and refer to the inspected working tree.
+All paths here are relative to the repository root and refer to the inspected working tree.
 
 - `src/state/prefs.ts`: Prefs/defaults/parsePrefs/setPref, localStorage key mako.prefs.v1 with legacy migration, microtask-batched persistence. No audio preference today. Add validated audio settings here; do not add a second storage owner. Include migration/default tests, finite clamped gain and a discriminated mode such as off/attention/full. Web and desktop origins need not share this localStorage.
 - `src/components/settings/settings-dialog.tsx` and `src/components/settings/sections/manifest.ts`: searchable section descriptors. Add a Sound section under Desk with keywords, explicit preview controls and clear playback status. Follow existing typography/tokens and pressable controls.

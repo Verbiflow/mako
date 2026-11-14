@@ -110,6 +110,17 @@ try {
     await writeFile(path("one"), lines(10), { flag: "a" })
     await capture(store, "one")
     assert.equal((await store.repack({ quietMs })).skipped?.group, false, "a new version has grouping look again")
+    // The backfill's pass lays out at most every `layoutEveryMs`: a new version waits for the next layout, a drop doesn't.
+    const layoutEveryMs = 60_000
+    assert.deepEqual((await store.repack({ quietMs, layoutEveryMs })).skipped, { group: true, compact: true }, "laid out by the last repack: nothing new to judge")
+    await writeFile(path("two"), lines(10), { flag: "a" })
+    await capture(store, "two")
+    assert.deepEqual((await store.repack({ quietMs, layoutEveryMs })).skipped, { group: true, compact: true }, "laid out lately: a new version waits")
+    assert.equal((await store.repack({ quietMs })).skipped?.group, false, "a repack asked for now looks at it")
+    await writeFile(path("three"), lines(10))
+    await capture(store, "three")
+    await store.forget("fixture", "three")
+    assert.deepEqual((await store.repack({ quietMs, layoutEveryMs })).skipped, { group: false, compact: false }, "a drop lays out and compacts however lately")
     assert.deepEqual(await store.verify(), [])
     await store.close()
   }

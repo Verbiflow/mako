@@ -1,13 +1,13 @@
 {
   "harness": "cursor",
   "native": {
-    "version": "1.2.0"
+    "version": "1.3.1"
   },
   "about": "Read notes.md, then tell me in one sentence what its second line says, citing the file and that line. An answer that cites a file and a line of it, which Devin 3000.10.23's model marks up for its client to link.",
   "stores": [
     {
       "reader": "cursor",
-      "path": ".mako/cursor-sdk/agents/agent-2801d4d5d95dbf3b07bf32bf408e05bd1efc1d2aabf9bc3bca20049ae3b1df86/store.db",
+      "path": ".mako/cursor-sdk/agents/agent-74232bc650a28b49a995eb3144e6ce02061ee469c96bf3c9fcb5620ed1bd4605/store.db",
       "known": []
     }
   ]

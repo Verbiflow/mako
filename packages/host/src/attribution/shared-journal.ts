@@ -1,3 +1,4 @@
+import { ThreadIdSchema } from "@mako/protocol/ids"
 import { createHash, randomUUID } from "node:crypto"
 import { chmodSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs"
 import { readFile, rm, writeFile } from "node:fs/promises"
@@ -14,13 +15,12 @@ import {
   ReportedCallSchema,
   SessionRefSchema,
   ThreadFileHistorySchema,
-  ThreadIdSchema,
   type ActivityMark,
   type MakoWrite,
   type PathMap,
   type ReportedCall,
   type ThreadFileHistory,
-} from "@mako/protocol"
+} from "@mako/protocol/attribution"
 import { acquireHostLock, type HostLock } from "../base/host-lock.js"
 import { nodePlatform } from "../base/platform.js"
 import type { LostVersion } from "../contracts/thread-changes.js"
@@ -71,6 +71,10 @@ export function ownerAddress(folder: string, platform: NodeJS.Platform = nodePla
 export const PlacedSessionSchema = z.object({ path: AbsolutePathSchema, thread: ThreadIdSchema, session: SessionRefSchema }).strict()
 export type PlacedSession = z.infer<typeof PlacedSessionSchema>
 
+export interface SettledOptions {
+  rescans?: boolean
+}
+
 export type LostTarget = { thread: string } | { path: string }
 
 /** Every write a host makes into the journal, wherever the journal is. */
@@ -88,7 +92,8 @@ export interface JournalWrites {
   /** A follower's Threads' sessions; the owner's own are in its catalog. */
   sessions(sessions: readonly PlacedSession[]): void
   track(root: string): Promise<void>
-  settled(): Promise<void>
+  /** Every change heard journaled; `rescans: false` (a turn's count) leaves rescans for lost events to their own pace. */
+  settled(options?: SettledOptions): Promise<void>
   readBack(checkout?: string, budgetMs?: number): Promise<BackfillResult | undefined>
   lost(target: LostTarget): Promise<LostVersion[]>
   restore(root: string, entry: number): Promise<{ path: string }>
@@ -130,7 +135,8 @@ type OneWay = z.infer<typeof OneWaySchema>
 const LostTargetSchema = z.union([z.object({ thread: ThreadIdSchema }).strict(), z.object({ path: AbsolutePathSchema }).strict()])
 const RequestSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("track"), root: AbsolutePathSchema }),
-  z.object({ kind: z.literal("settled") }),
+  // `rescans` is new: an owner from before it reads every `settled` as a full one, and this one reads a follower's without it so.
+  z.object({ kind: z.literal("settled"), rescans: z.boolean().optional() }),
   z.object({ kind: z.literal("read-back"), checkout: AbsolutePathSchema.optional(), budgetMs: z.number().int().positive().optional() }),
   z.object({ kind: z.literal("lost"), target: LostTargetSchema }),
   z.object({ kind: z.literal("restore"), root: z.string().min(1).max(200), entry: z.number().int().positive() }),
@@ -213,8 +219,16 @@ const PATIENCE = {
   carry: { ms: 60_000, retry: true },
 } as const satisfies Record<Request["kind"], { ms: number; retry: boolean }>
 
+/** Fast initial recovery, then fewer idle retries: 25ms through 1s, doubling thereafter to 30s. */
+export function writerRetryDelay(attempt: number, retryMs = 25, maxRetryMs = 30_000): number {
+  let ms = Math.min(retryMs, maxRetryMs)
+  for (let i = 0; i < Math.min(attempt, 32) && ms < maxRetryMs; i++) ms = Math.min(maxRetryMs, ms < 1_000 ? Math.min(1_000, ms * 2) : ms * 2)
+  return ms
+}
+
 export type JournalRole =
   | { kind: "starting" }
+  | { kind: "failed"; why: string }
   | { kind: "owner" }
   | { kind: "follower"; owner: JournalHost }
   | { kind: "private"; why: string }
@@ -235,6 +249,7 @@ export interface SharingStatus {
   followers: JournalHost[]
   /** Messages a follower holds that the owner hasn't applied yet. */
   unsent: number
+  failure?: string
 }
 
 export interface SharedJournalOptions {
@@ -251,6 +266,12 @@ export interface SharedJournalOptions {
   timing?: { retryMs?: number; maxRetryMs?: number; unansweredMs?: number }
   /** For tests: the format this host speaks. */
   format?: string
+  /** Start or find a writing owner elsewhere. This client never takes the lock or opens a writer itself. */
+  startOwner?(privateReason?: string): Promise<string>
+  /** A private writing owner may still serve its own host, on an address other hosts never discover. */
+  privateAddress?: string
+  /** An isolated owner for this host, after its sharing attempt was refused. */
+  privateReason?: string
 }
 
 type HeldLock = Extract<HostLock, { kind: "held" }>
@@ -321,7 +342,7 @@ function tryConnect(address: string): Promise<Socket | null> {
 export class SharedJournal {
   private readonly options: SharedJournalOptions
   private readonly format: string
-  private readonly address: string
+  private address: string
   private current: JournalRole = { kind: "starting" }
   private owned?: OwnedJournal
   private lock?: HeldLock
@@ -329,6 +350,11 @@ export class SharedJournal {
   private readonly connections = new Set<Connection>()
   /** The owner, while following. */
   private link?: Socket
+  private following?: Socket
+  private recoveryLog?: { why: string; at: number }
+  private retrying?: { started: number; finish(): void }
+  private earlyRetryAt?: number
+  private privateReason?: string
   private sent = 0
   /** What the owner hasn't applied yet, oldest first. */
   private unsent: { n: number; m: OneWay }[] = []
@@ -342,6 +368,8 @@ export class SharedJournal {
   private electing?: Promise<void>
   private closed = false
   private readonly listeners = new Set<(role: JournalRole) => void>()
+  private readonly followerListeners = new Set<() => void>()
+  private readonly acknowledgements = new Set<() => void>()
 
   readonly writes: JournalWrites
 
@@ -379,8 +407,8 @@ export class SharedJournal {
       track: async (root) => {
         answer(await this.request({ kind: "track", root }), "track")
       },
-      settled: async () => {
-        answer(await this.request({ kind: "settled" }), "settled")
+      settled: async (options) => {
+        answer(await this.request({ kind: "settled", ...(options?.rescans === false && { rescans: false }) }), "settled")
       },
       readBack: async (checkout, budgetMs) => answer(await this.request({ kind: "read-back", checkout, budgetMs }), "read-back").result ?? undefined,
       lost: async (target) => answer(await this.request({ kind: "lost", target }), "lost").versions,
@@ -404,8 +432,22 @@ export class SharedJournal {
     mkdirSync(options.folder, { recursive: true, mode: 0o700 })
     sweepCarried(join(options.folder, CARRY_FOLDER), Date.now() - CARRIED_STALE_MS)
     const shared = new SharedJournal(options)
-    await shared.elect()
-    return shared
+    try {
+      if (options.privateReason) await shared.keepOwn(options.privateReason)
+      else if (options.startOwner) {
+        // Return a visible failed client while recovery continues; accepting marks must not depend on startup succeeding.
+        let failed!: () => void
+        const unavailable = new Promise<void>(resolve => { failed = resolve })
+        const off = shared.onRole(role => { if (role.kind === "failed") failed() })
+        try { await Promise.race([shared.elect(), unavailable]) }
+        finally { off() }
+      } else await shared.elect()
+      return shared
+    } catch (error) {
+      const [cleanup] = await Promise.allSettled([shared.close()])
+      if (cleanup.status === "rejected") throw new AggregateError([error, cleanup.reason], "The record of changes failed to open and close", { cause: error })
+      throw error
+    }
   }
 
   role(): JournalRole {
@@ -415,6 +457,22 @@ export class SharedJournal {
   onRole(listener: (role: JournalRole) => void): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
+  }
+
+  /** Explicit person actions only: never journal traffic or automatic polling. */
+  retryFromPerson(): void {
+    const wait = this.retrying
+    const now = performance.now()
+    if (this.closed || this.current.kind !== "failed" || !wait || now - wait.started < 1_000) return
+    if (this.earlyRetryAt !== undefined && now - this.earlyRetryAt < 30_000) return
+    this.earlyRetryAt = now
+    wait.finish()
+  }
+
+  /** The metadata a writing child sends back to its host; never an acknowledgement of journal writes. */
+  onFollowers(listener: () => void): () => void {
+    this.followerListeners.add(listener)
+    return () => { this.followerListeners.delete(listener) }
   }
 
   /** The hosts following this one, while it owns the journal. */
@@ -435,12 +493,38 @@ export class SharedJournal {
       ...(role.kind === "follower" && { owner: role.owner }),
       followers: this.followers().map((follower) => follower.host),
       unsent: this.unsent.length,
+      ...(role.kind === "failed" && { failure: role.why }),
     }
+  }
+
+  /** The messages already sent have been applied. This does not wait for a root's watch or rescan. */
+  applied(): Promise<void> {
+    if (!this.unsent.length) return Promise.resolve()
+    const through = this.sent
+    return new Promise((resolve, reject) => {
+      const finish = (error?: Error) => {
+        clearTimeout(timer)
+        this.acknowledgements.delete(check)
+        if (error) reject(error)
+        else resolve()
+      }
+      const check = () => {
+        if (this.closed) finish(new Error("The journal closed before acknowledging its writes."))
+        else if (!this.unsent.some(message => message.n <= through)) finish()
+      }
+      const timer = setTimeout(() => finish(new Error("The journal owner did not acknowledge its writes before closing.")), 15_000)
+      timer.unref()
+      this.acknowledgements.add(check)
+      check()
+    })
   }
 
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
+    this.retrying?.finish()
+    this.following?.destroy()
+    for (const check of this.acknowledgements) check()
     for (const call of this.calls.values()) {
       clearTimeout(call.timer)
       call.reject(new Error("Mako is closing."))
@@ -456,7 +540,7 @@ export class SharedJournal {
     await closing
     // The journal is closed before the lock goes, so the next owner never opens it while this one still writes.
     await this.lock?.release()
-    if (onFileSystem(this.address)) rmSync(this.address, { force: true })
+    if (server && onFileSystem(this.address)) rmSync(this.address, { force: true })
   }
 
   private setRole(role: JournalRole): void {
@@ -465,13 +549,17 @@ export class SharedJournal {
   }
 
   private elect(): Promise<void> {
-    this.electing ??= this.electOnce().finally(() => {
+    this.electing ??= (async () => {
+      do { await this.electOnce() }
+      while (!this.closed && !this.link && !this.owned)
+    })().finally(() => {
       this.electing = undefined
     })
     return this.electing
   }
 
   private async electOnce(): Promise<void> {
+    if (this.options.startOwner) return this.electWriter(this.options.startOwner)
     const retry = this.options.timing?.retryMs ?? 25
     const maxRetry = this.options.timing?.maxRetryMs ?? 1_000
     const unanswered = this.options.timing?.unansweredMs ?? 30_000
@@ -489,6 +577,43 @@ export class SharedJournal {
       if (lock.kind === "held") return this.own(lock)
       if (Date.now() - began > unanswered) return this.keepOwn(`another Mako (pid ${lock.holder ?? "unknown"}) holds it but doesn't answer`)
       await new Promise((done) => setTimeout(done, Math.min(maxRetry, retry * 2 ** Math.min(attempt, 6))))
+    }
+  }
+
+  /** An off-thread owner may fail repeatedly; keep the same numbered outbox through every bounded attempt. */
+  private async electWriter(start: NonNullable<SharedJournalOptions["startOwner"]>): Promise<void> {
+    const retry = this.options.timing?.retryMs ?? 25
+    const maxRetry = this.options.timing?.maxRetryMs ?? 30_000
+    for (let attempt = 0; !this.closed; attempt++) {
+      try {
+        // The first connection can follow an existing host without starting a local worker.
+        let socket = attempt === 0 && !this.privateReason ? await tryConnect(this.address) : null
+        if (!socket) {
+          this.address = await start(this.privateReason)
+          if (this.closed) return
+          socket = await tryConnect(this.address)
+        }
+        if (this.closed) { socket?.destroy(); return }
+        if (!socket) throw new Error("The record of changes' writing owner is not reachable.")
+        const outcome = await this.follow(socket)
+        if (outcome === "following" || this.closed) return
+        if (outcome !== "lost") this.privateReason = outcome.why
+        throw new Error(outcome === "lost" ? "The record of changes' writing owner did not answer." : outcome.why)
+      } catch (error) {
+        if (this.closed) return
+        const why = error instanceof Error ? error.message : String(error)
+        this.setRole({ kind: "failed", why })
+        const now = Date.now()
+        if (!this.recoveryLog || this.recoveryLog.why !== why || now - this.recoveryLog.at >= 60_000) {
+          this.options.log("the record of changes is unavailable; retrying its writing owner", { error: why })
+          this.recoveryLog = { why, at: now }
+        }
+      }
+      await new Promise<void>(resolve => {
+        const done = () => { clearTimeout(timer); this.retrying = undefined; resolve() }
+        const timer = setTimeout(done, writerRetryDelay(attempt, retry, maxRetry))
+        this.retrying = { started: performance.now(), finish: done }
+      })
     }
   }
 
@@ -534,6 +659,7 @@ export class SharedJournal {
     socket.on("error", () => undefined)
     socket.on("close", () => {
       this.connections.delete(connection)
+      for (const listener of this.followerListeners) listener()
       if (connection.host) this.options.log("a follower left", { pid: connection.host.pid, label: connection.host.label })
     })
     readLines(socket, (text) => {
@@ -555,6 +681,7 @@ export class SharedJournal {
         return
       }
       connection.host = message.host
+      for (const listener of this.followerListeners) listener()
       if (this.owned) this.welcome(connection)
       return
     }
@@ -566,6 +693,7 @@ export class SharedJournal {
       if (message.m.kind === "activity" && message.m.mark.record) connection.live.set(message.m.mark.record, Date.now())
       if (message.m.kind === "sessions") connection.placed = new Map(message.m.sessions.map((session) => [session.path, { thread: session.thread, session: session.session }]))
       else this.apply(owned.writes, message.m)
+      if (message.m.kind === "sessions" || message.m.kind === "activity") for (const listener of this.followerListeners) listener()
       connection.applied = message.n
       if (!connection.ackQueued) {
         connection.ackQueued = true
@@ -618,7 +746,7 @@ export class SharedJournal {
         await writes.track(request.root)
         return { kind: "track" }
       case "settled":
-        await writes.settled()
+        await writes.settled(request.rescans === false ? { rescans: false } : undefined)
         return { kind: "settled" }
       case "read-back": return { kind: "read-back", result: (await writes.readBack(request.checkout, request.budgetMs)) ?? null }
       case "lost": return { kind: "lost", versions: await writes.lost(request.target) }
@@ -635,17 +763,26 @@ export class SharedJournal {
   // The follower's side.
 
   private follow(socket: Socket): Promise<"following" | "lost" | { why: string }> {
+    this.following = socket
     return new Promise((settle) => {
+      const finish = (outcome: "following" | "lost" | { why: string }) => {
+        clearTimeout(timer)
+        if (this.following === socket) this.following = undefined
+        settle(outcome)
+      }
+      const timer = setTimeout(() => { socket.destroy(); finish("lost") }, this.options.timing?.unansweredMs ?? 30_000)
+      timer.unref()
       let welcomed = false
       socket.on("error", () => undefined)
       socket.on("close", () => {
-        if (!welcomed) return settle("lost")
+        if (!welcomed) return finish("lost")
         if (this.link !== socket) return
         this.link = undefined
+        for (const check of this.acknowledgements) check()
         if (this.closed) return
         this.setRole({ kind: "starting" })
         this.options.log("the owner of the record of changes left; finding the next", { unsent: this.unsent.length })
-        void this.elect()
+        void this.elect().catch((error: Error) => this.options.log("the record of changes' writing owner could not be found", { error: error.message }))
       })
       readLines(socket, (text) => {
         const parsed = parseLine(ToFollowerSchema, text)
@@ -658,24 +795,26 @@ export class SharedJournal {
         if (message.t === "refuse") {
           welcomed = true
           socket.destroy()
-          settle({ why: `the owner refused this Mako: ${message.why}` })
+          finish({ why: `the owner refused this Mako: ${message.why}` })
         } else if (message.t === "welcome") {
           welcomed = true
           try {
             this.options.follow(message.host)
           } catch (error) {
             socket.destroy()
-            settle({ why: `the shared journal couldn't be read: ${error instanceof Error ? error.message : String(error)}` })
+            finish({ why: `the shared journal couldn't be read: ${error instanceof Error ? error.message : String(error)}` })
             return
           }
           this.link = socket
+          this.recoveryLog = undefined
           this.replay((oneWay) => this.transmit(socket, oneWay, false))
           this.setRole({ kind: "follower", owner: message.host })
           this.options.log("follows the owner of the record of changes", { pid: message.host.pid, label: message.host.label })
           for (const call of this.calls.values()) this.run(call)
-          settle("following")
+          finish("following")
         } else if (message.t === "ack") {
           while (this.unsent.length && this.unsent[0]!.n <= message.n) this.unsent.shift()
+          for (const check of this.acknowledgements) check()
         } else this.replied(message)
       })
       send(socket, { t: "hello", format: this.format, host: this.options.host })
@@ -733,6 +872,7 @@ export class SharedJournal {
       timer.unref?.()
       const call: Call = { id, request, timer, resolve: resolveCall, reject: rejectCall }
       this.calls.set(id, call)
+      if (request.kind === "restore" || request.kind === "lost") this.retryFromPerson()
       this.run(call)
     })
   }
@@ -769,6 +909,12 @@ export class SharedJournal {
 
   private async keepOwn(why: string): Promise<void> {
     this.link = undefined
+    if (this.options.startOwner) {
+      this.address = await this.options.startOwner(why)
+      const socket = await tryConnect(this.address)
+      if (!socket || (await this.follow(socket)) !== "following") throw new Error("The private record of changes' writing owner did not answer.")
+      return
+    }
     this.options.log("keeps a record of changes of its own", { why })
     const owned = await this.options.alone(why)
     if (this.closed) {
@@ -776,6 +922,10 @@ export class SharedJournal {
       return
     }
     this.owned = owned
+    if (this.options.privateAddress) {
+      this.address = this.options.privateAddress
+      await this.listen()
+    }
     this.replay((message) => this.apply(owned.writes, message))
     this.setRole({ kind: "private", why })
     for (const call of this.calls.values()) this.run(call)

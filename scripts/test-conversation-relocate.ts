@@ -6,6 +6,10 @@ import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { setTimeout as delay } from "node:timers/promises"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { WorkspaceMoves } from "@mako/host/workspaces/moves"
+import { moveSource } from "@mako/host/workspaces/thread-worktree-moves"
+import { ThreadStore } from "@mako/host/threads/store"
+import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
 import type { ProviderLiveDriver, ProviderStartOptions } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
@@ -45,7 +49,7 @@ class HeldSnapshots extends WorkspaceSnapshots {
   }
 }
 
-function fixture(provider: string, elsewhere: boolean, refuses?: string, projectFolderOfRemoved?: (cwd: string) => string | undefined, workspaceSnapshots?: WorkspaceSnapshots) {
+function fixture(provider: string, elsewhere: boolean, refuses?: string, projectFolderOfRemoved?: (cwd: string) => string | undefined, workspaceSnapshots?: WorkspaceSnapshots, hooks: { children?: () => readonly NativeAgent[]; settled?: (id: string) => void; threads?: ThreadStore; backgroundStop?: ProviderLiveDriver["backgroundStop"] } = {}) {
   const settled: string[] = []
   const starts: { cwd: string; options: ProviderStartOptions }[] = []
   let closes = 0
@@ -61,7 +65,7 @@ function fixture(provider: string, elsewhere: boolean, refuses?: string, project
     nativeExclusion: NO_NATIVE_EXCLUSION,
     nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
     planning: { via: "setting", option: "plan", proposal: "Injected driver fixture", feedback: { kind: "next-message", reason: "Injected driver fixture" } },
-    backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+    backgroundStop: hooks.backgroundStop ?? { kind: "ends-with-turn", evidence: "Injected driver fixture" },
     turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
     provider, available: () => true,
     start: async (cwd, options) => {
@@ -85,7 +89,12 @@ function fixture(provider: string, elsewhere: boolean, refuses?: string, project
     checkpoint: async () => "checkpoint",
     resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
     projectFolderOfRemoved, workspaceSnapshots,
-    settled: (id) => settled.push(id),
+    threads: hooks.threads,
+    agents: hooks.children ? () => ({
+      roster: hooks.children!, stopChild: async () => false, settled() {}, isApex: () => true,
+      frontDoor: () => [], ruleLines: () => ({}),
+    }) : undefined,
+    settled: (id) => { settled.push(id); hooks.settled?.(id) },
   })
   return { owner, starts, settled, closes: () => closes, hold: (value: boolean) => { running = value } }
 }
@@ -125,6 +134,84 @@ try {
   moving.owner.submit(id, randomUUID(), "the next message")
   await until(() => moving.owner.snapshot(id)?.requests[1]?.status === "completed")
   assert.equal(moving.starts.length, 2, "the next message goes to the session already resumed there")
+
+  // Independent Fins own their providers and folders. Pausing this provider for a local checkout move must not stop them.
+  const store = new ThreadStore(join(root, "local-move-children.sqlite"))
+  let pending: WorkspaceMoves | undefined
+  let children: readonly NativeAgent[] = []
+  const withFins = fixture("apex-with-fins", true, undefined, undefined, undefined, {
+    threads: store, children: () => children, settled: (id) => pending?.settled(id),
+    backgroundStop: { kind: "ends-on-stop", how: "Injected provider work can outlive its turn" },
+  })
+  owners.push(withFins.owner)
+  try {
+    const apex = randomUUID()
+    await withFins.owner.start("apex-with-fins", main, { conversationId: apex })
+    withFins.owner.submit(apex, randomUUID(), "seed the provider's resume record")
+    await until(() => withFins.owner.snapshot(apex)?.requests[0]?.status === "completed" && withFins.owner.lifecycleWork().length === 0)
+    const thread = store.journalPlacement(apex)!.thread
+    const child: NativeAgent = {
+      nativeId: "independent-fin", title: "Independent Fin", bindingId: "children", provider: "mako", observedAt: Date.now(),
+      child: { thread: randomUUID(), origin: "started" }, state: { kind: "working" },
+    }
+    children = [child]
+    withFins.owner.childrenChanged(apex)
+    assert.deepEqual(withFins.owner.relocation(apex), { kind: "now" }, "an independent working Fin cannot pin its Apex to the main checkout")
+    assert.match(withFins.owner.moves.blockers(thread).join("; "), /has background agents running on this device/, "cloud departure keeps the wider child barrier")
+    children = [{ ...child, state: { kind: "waiting" } }]
+    withFins.owner.childrenChanged(apex)
+    assert.deepEqual(withFins.owner.relocation(apex), { kind: "now" }, "an independent Fin waiting for input also outlives its Apex's provider")
+
+    const failures: string[] = []
+    let moves = 0, finished = false
+    pending = new WorkspaceMoves({
+      file: join(root, "approved-move-policy.json"), source: (id) => moveSource(withFins.owner, id), companions: () => [],
+      place: async () => ({ project: main, changed: 0 }), announce() {}, failed: (_id, message) => failures.push(message),
+      move: async (id) => {
+        moves++
+        assert.equal(await withFins.owner.relocate(id, worktree), main)
+        assert.equal(await withFins.owner.resumeMoved(id, main), undefined)
+        finished = true
+        return id
+      }, follow: async () => {},
+    })
+    withFins.hold(true)
+    withFins.owner.submit(apex, randomUUID(), "ask to move during this turn")
+    await until(() => withFins.owner.session(apex)?.status === "running")
+    const binding = withFins.owner.snapshot(apex)!.control!.activeBindingId!
+    withFins.owner.observe({ type: "live-agent", id: binding, agent: { nativeId: "owned-subagent", title: "Provider subagent", state: { kind: "working" } } })
+    assert.ok(withFins.owner.snapshot(apex)!.nativeAgents!.agents.some((agent) => agent.nativeId === "owned-subagent" && agent.state.kind === "working"), "the genuine provider-owned blocker was observed")
+    await pending.ask(apex)
+    const request = pending.state().requests[0]!.id
+    pending.answer(request, "allow")
+    assert.equal(moves, 0, "approval does not move a running turn")
+    withFins.owner.observe({ type: "live-session", session: { ...withFins.owner.session(apex)!, status: "ready" } })
+    withFins.hold(false)
+    await until(() => {
+      const held = withFins.owner.relocation(apex)
+      return held.kind === "wait" && held.reason === "has subagents running"
+    })
+    assert.deepEqual(withFins.owner.relocation(apex), { kind: "wait", reason: "has subagents running" }, "provider-owned work still prevents a local move")
+    assert.match(pending.state().requests[0]!.waiting ?? "", /has subagents running/)
+    pending.answer(request, "allow")
+    assert.equal(moves, 0, "reconsidering the same allowed request does not bypass its provider hold")
+    withFins.owner.observe({ type: "live-agent", id: binding, agent: { nativeId: "owned-subagent", title: "Provider subagent", state: { kind: "completed" } } })
+    await until(() => finished)
+    pending.answer(request, "allow")
+    pending.settled(apex)
+    assert.equal(moves, 1, "the original approval executes once after the actual service's settling callback")
+    assert.equal(pending.state().requests.length, 0)
+    assert.deepEqual(failures, [])
+    assert.equal(withFins.owner.session(apex)?.cwd, worktree)
+    assert.equal(withFins.starts.at(-1)!.options.resume, "native-apex-with-fins")
+    assert.equal(children[0]!.state.kind, "waiting", "the independent Fin is neither canceled nor resumed by the Apex's local move")
+    assert.match(withFins.owner.moves.blockers(thread).join("; "), /has background agents running on this device/, "local relocation did not weaken cloud release")
+    console.log("Conversation relocate: independent working/waiting Fins survive one approved after-turn local move; genuine provider subagents still hold it, and cloud release still waits")
+  } finally {
+    await withFins.owner.stop()
+    owners.splice(owners.indexOf(withFins.owner), 1)
+    store.close()
+  }
 
   const refusing = fixture("refuses-elsewhere", true, worktree)
   owners.push(refusing.owner)

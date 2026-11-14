@@ -103,6 +103,10 @@ export interface ToolCall {
   isCanceled?: boolean
   /** See the `toolResult` block's `isCutOff`. */
   isCutOff?: boolean
+  /** See the `toolResult` block's `exitCode`. */
+  exitCode?: number
+  /** See the `toolResult` block's `cwd`. */
+  cwd?: string
   pending: boolean
   /** When the host saw the call start, and finish: a live call's, on the host's clock. */
   startedAt?: number

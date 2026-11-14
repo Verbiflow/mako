@@ -9,7 +9,7 @@ import { returnNotice } from "@/lib/restore-plan"
 import { MoveSteps as Steps } from "./move-steps"
 import { activeAcp, useAcp } from "@/state/acp"
 import { application } from "@/state/application"
-import { askReturnAgain, bringBack, bringBackFromChosenProject, checkHarnesses, dismissFollowStopped, dismissHarnessUpdate, dismissMissingProject, dismissOutdatedReturn, moveToCloud, updateThen, useCloudMoves, whileAwaySentence, type HarnessUpdating } from "@/state/cloud-moves"
+import { askReturnAgain, bringBack, bringBackFromChosenProject, checkHarnesses, checkMoveAgain, dismissCheckoutStayed, dismissFailedMove, dismissFollowStopped, loadAwayHeld, runHereAnyway, dismissHarnessUpdate, dismissMissingProject, dismissOutdatedReturn, moveToCloud, retryFailedMove, updateThen, useCloudMoves, whileAwaySentence, type HarnessUpdating } from "@/state/cloud-moves"
 
 /** A move's steps in the order they're taken, each in the words its step says. */
 const STEPS = [
@@ -76,10 +76,17 @@ export function useThreadMoveNotice(): ComposerNotice | null {
   useHarnessIdentity()
   const key = useAcp((state) => activeAcp(state)?.key)
   const moving = useCloudMoves((state) => (key ? state.moving[key] : undefined))
+  const failed = useCloudMoves((state) => (key ? state.failedMoves[key] : undefined))
   const returning = useCloudMoves((state) => (key ? state.returning[key] : undefined))
   const outdated = useCloudMoves((state) => (key ? state.outdated[key] : undefined))
   const missing = useCloudMoves((state) => (key ? state.missing[key] : undefined))
   const stopped = useCloudMoves((state) => (key ? state.followStopped[key] : undefined))
+  const held = useCloudMoves((state) => (key ? state.awayHeld[key] === true : false))
+  const stayed = useCloudMoves((state) => (key ? state.checkoutStayed[key] : undefined))
+  // A window opened after this Mac came back hears which Threads still wait for the account.
+  useEffect(() => {
+    void loadAwayHeld()
+  }, [])
   const updating = useCloudMoves((state) => (key ? state.updating[key] : undefined))
   const check = useCloudMoves((state) => (key ? state.harnesses[key] : undefined))
   // A harness the person updates outside Mako (another app's, a command) is weighed again as they come back to the window.
@@ -109,18 +116,33 @@ export function useThreadMoveNotice(): ComposerNotice | null {
     return {
       id: "thread-move",
       tone: unsettled ? "caution" : "progress",
-      title: unsettled ? "Waiting for the cloud's answer" : handOff ? "Handing off to the cloud" : "Moving to the cloud",
+      title: unsettled ? "Move not confirmed" : handOff ? "Handing off to the cloud" : "Moving to the cloud",
       description: unsettled ? undefined : steps[at]?.words,
       detail: (
         <>
           <p>{detail(moving.step, handOff)}</p>
+          {unsettled && <p>Keep this Mac awake until the move is confirmed.</p>}
           {!unsettled && <Steps steps={steps} at={at} />}
         </>
       ),
+      actions: unsettled ? [{ label: moving.checking ? "Checking status…" : "Check status", disabled: moving.checking, primary: true, onClick: () => void checkMoveAgain(key) }] : undefined,
       data: { "data-thread-move": moving.step.kind, "data-thread-handoff": handOff || undefined },
     }
   }
+  if (held) return awayHeldNotice(key)
   if (!returning) {
+    if (stayed) return checkoutStayedNotice(key, stayed)
+    if (failed) return {
+      id: "thread-move",
+      tone: "caution",
+      title: "Still on this Mac",
+      description: failed.reason,
+      detail: <p>{failed.continued ? "Its turn continues here. Keep this Mac awake while it works." : "Its work and sessions remain here. Keep this Mac awake while its agents are running."}</p>,
+      actions: [{ label: "Retry move", primary: true, onClick: () => void retryFailedMove(key, failed.move) }],
+      onDismiss: () => dismissFailedMove(key, failed.move),
+      dismissLabel: "Dismiss move failure",
+      data: { "data-thread-move": "kept-here", "data-thread-move-failed": true },
+    }
     if (missing) return missingProject(key, missing)
     if (stopped) return followStoppedNotice(key, stopped)
     return outdated ? outdatedReturn(key, outdated, check) : null
@@ -159,6 +181,44 @@ export function useThreadMoveNotice(): ComposerNotice | null {
  * laid over their changes, and bringing it back merges both. Put away, it stays in the cloud; its Cloud chip still
  * brings it back.
  */
+/**
+ * A Thread paused as this Mac went away, which Mako Cloud may have gone on with meanwhile: it runs nowhere here until
+ * the account says whether it did, however long that takes. "Run it here" is the person's way past.
+ */
+function awayHeldNotice(conversationId: string): ComposerNotice {
+  return {
+    id: "thread-move",
+    tone: "caution",
+    title: "Waiting to hear from Mako Cloud",
+    description: "Paused while this Mac was away",
+    detail: <p>Mako Cloud may have gone on with it while this Mac was away, so it doesn't run here until Mako Cloud says whether it did. Running it here anyway could leave two copies going.</p>,
+    actions: [{ label: "Run it here", onClick: () => void runHereAnyway(conversationId) }],
+    data: { "data-thread-away": "held" },
+  }
+}
+
+/**
+ * A Thread Mako Cloud went on with while this Mac was away: its own files that stayed in the project folder, since they
+ * weren't as the cloud has them, and the commits not yet pushed that went with it. Never silent about either.
+ */
+function checkoutStayedNotice(conversationId: string, stayed: { paths: string[]; unpushed: number }): ComposerNotice {
+  const files = stayed.paths.length === 1 ? "1 of its files" : `${stayed.paths.length} of its files`
+  const pushed = stayed.unpushed === 1 ? "1 unpushed commit" : `${stayed.unpushed} unpushed commits`
+  const named = stayed.paths.slice(0, 5).join(", ") + (stayed.paths.length > 5 ? ` and ${stayed.paths.length - 5} more` : "")
+  const commits = stayed.unpushed ? `It includes ${stayed.unpushed === 1 ? "1 commit" : `${stayed.unpushed} commits`} not yet pushed from this Mac.` : ""
+  const here = stayed.paths.length ? `${named} ${stayed.paths.length === 1 ? "isn't" : "aren't"} as Mako Cloud has ${stayed.paths.length === 1 ? "it" : "them"}, so ${stayed.paths.length === 1 ? "it stays" : "they stay"} here as ${stayed.paths.length === 1 ? "it is" : "they are"}.` : ""
+  return {
+    id: "thread-move",
+    tone: stayed.paths.length ? "caution" : "progress",
+    title: stayed.paths.length ? `${files} stayed in your project folder` : "Continued in the cloud",
+    description: stayed.unpushed ? `${pushed} went to Mako Cloud` : stayed.paths.length ? "Mako Cloud went on with it" : "While this Mac was away",
+    detail: <p>{[here, commits].filter(Boolean).join(" ")}</p>,
+    onDismiss: () => dismissCheckoutStayed(conversationId),
+    dismissLabel: "Dismiss",
+    data: { "data-thread-away": "stayed" },
+  }
+}
+
 function followStoppedNotice(conversationId: string, stopped: { folders: string[] }): ComposerNotice {
   const where = stopped.folders.length > 1 ? `${stopped.folders.length} of its repositories` : "its worktree"
   return {

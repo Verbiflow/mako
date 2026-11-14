@@ -1,7 +1,15 @@
-import { chmod, lstat, mkdtemp, readdir, rename, rm, rmdir } from "node:fs/promises"
+import { constants } from "node:fs"
+import { chmod, lstat, mkdtemp, open, readdir, rename, rm, rmdir } from "node:fs/promises"
 import { createConnection, createServer } from "node:net"
 import { tmpdir } from "node:os"
-import { basename, dirname, isAbsolute, join } from "node:path"
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path"
+
+/** Global cleanup crosses tasks. Owned roots never sweep abandoned launches or fall back to global /tmp. */
+export type ControlCleanupPolicy =
+  | { readonly scope: "same-user-global" }
+  | { readonly scope: "owned"; readonly root: string }
+
+export const GLOBAL_CONTROL_CLEANUP: ControlCleanupPolicy = Object.freeze({ scope: "same-user-global" })
 
 // sockaddr_un.sun_path includes a terminating NUL: macOS permits 103 bytes.
 // Use the smaller Mac limit on Linux too. JavaScript string length is not bytes.
@@ -76,10 +84,24 @@ async function sweepUnusedSocketDirectories(): Promise<void> {
 }
 
 /** Allocate an owned runtime root with room for its nested Unix sockets. */
-export async function createControlDirectory(prefix: string): Promise<string> {
+export async function createControlDirectory(prefix: string, cleanup: ControlCleanupPolicy = GLOBAL_CONTROL_CLEANUP): Promise<string> {
   if (!/^[a-z][a-z0-9-]{0,40}$/.test(prefix))
     throw new Error("Invalid private runtime directory prefix")
-  const preferred = join(tmpdir(), prefix)
+  if (cleanup.scope === "owned") {
+    if (!isAbsolute(cleanup.root)) throw new Error("An owned control root must be absolute")
+    const handle = await open(cleanup.root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
+    try {
+      const info = await handle.stat()
+      const current = await lstat(cleanup.root)
+      if (!info.isDirectory() || info.uid !== process.getuid?.() || (info.mode & 0o7777) !== 0o700 || info.dev !== current.dev || info.ino !== current.ino || info.uid !== current.uid || info.mode !== current.mode || !current.isDirectory())
+        throw new Error("An owned control root must be a private directory of this user")
+    } finally {
+      await handle.close()
+    }
+  }
+  const preferred = join(cleanup.scope === "owned" ? cleanup.root : tmpdir(), prefix)
+  if (cleanup.scope === "owned" && Buffer.byteLength(preferred) + 6 + RUNTIME_SOCKET_RESERVE > MAX_SOCKET_BYTES)
+    throw new Error("The owned control root is too long for its sockets; use a shorter private root")
   const root =
     Buffer.byteLength(preferred) + 6 + RUNTIME_SOCKET_RESERVE <=
     MAX_SOCKET_BYTES
@@ -93,13 +115,19 @@ export async function createControlDirectory(prefix: string): Promise<string> {
 /** The owner closes this endpoint on startup failure, exit or cancellation. */
 export async function createPrivateControlSocket(
   directory: string,
-  name: string
+  name: string,
+  cleanup: ControlCleanupPolicy = GLOBAL_CONTROL_CLEANUP
 ) {
   if (!isAbsolute(directory) || !/^[a-zA-Z0-9.-]+\.sock$/.test(name))
     throw new Error(
       "A private socket needs an absolute directory and a socket filename"
     )
   const desired = join(directory, name)
+  if (cleanup.scope === "owned") {
+    const within = relative(cleanup.root, directory)
+    if (!isAbsolute(cleanup.root) || isAbsolute(within) || within === ".." || within.startsWith(`..${sep}`) || Buffer.byteLength(desired) > MAX_SOCKET_BYTES)
+      throw new Error("A control socket must stay inside its short owned root")
+  }
   // Caller-owned metadata may live at a long path. Keep only the socket in an
   // independently random, mode-0700 directory; never hash/truncate its identity.
   let temporary: string | undefined
@@ -131,8 +159,8 @@ export function stagingPath(path: string): string {
  * renames the socket into place; the first owner releasing its copy after a
  * handover leaves the socket file to the process that took it.
  */
-export async function listenPrivateControlSocket(directory: string, name: string) {
-  const endpoint = await createPrivateControlSocket(directory, name)
+export async function listenPrivateControlSocket(directory: string, name: string, cleanup: ControlCleanupPolicy = GLOBAL_CONTROL_CLEANUP) {
+  const endpoint = await createPrivateControlSocket(directory, name, cleanup)
   const staging = stagingPath(endpoint.path)
   const server = createServer({ pauseOnConnect: true })
   try {

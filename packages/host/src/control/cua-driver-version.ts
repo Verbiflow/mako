@@ -1,9 +1,8 @@
-import { execFile } from "node:child_process"
+import { hostCommand } from "../base/host-command.js"
 import { stat } from "node:fs/promises"
-import { promisify } from "node:util"
 import type { CuaDriverStatus } from "../contracts/mcp-skills-integrations.js"
 
-const execute = promisify(execFile)
+const execute = hostCommand
 
 /**
  * The driver release whose embedded contract Mako last verified end to end:

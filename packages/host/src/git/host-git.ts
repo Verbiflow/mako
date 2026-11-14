@@ -1,7 +1,10 @@
+import { hostStopping } from "../base/host-stopping.js"
+import { hostSpawn, closeHostChild } from "../base/host-command.js"
 import { Git, type GitTrace } from "@mako/git"
 import { belowAgents } from "../base/background-priority.js"
 import { hostLog } from "../base/host-log.js"
 import { workspaceWrites } from "../base/workspace-writes.js"
+import { GitHelper } from "./git-helper.js"
 
 /** A Git process slower than this is logged. */
 const GIT_SLOW_MS = 2_000
@@ -25,17 +28,29 @@ function reportWrite(run: GitTrace): void {
 /**
  * The host's Git: background work runs below agents, and the slow processes
  * and those stopped for time are logged under `git` to explain a stall, or
- * every process with `traceAll` (`MAKO_GIT_TRACE=1`). Failures alone are
- * routine: probes such as `rev-parse --verify` fail by design.
+ * every process with `traceAll` (`MAKO_GIT_TRACE=1`). A read's failure alone is
+ * routine: probes such as `rev-parse --verify` fail by design. A write's isn't:
+ * one to what a repository's checkouts share that failed is always logged
+ * with Git's own words, so a branch left behind says why.
+ *
+ * Its processes start in the Git helper (`GitHelper`), off the host's thread, and directly while the helper is down;
+ * `MAKO_GIT_HELPER=0` starts them all directly.
  */
 export function hostGit(traceAll: boolean): Git {
+  const direct = { spawn: hostSpawn, close: closeHostChild }
+  const stopping = hostStopping()?.signal
+  const helper = process.env.MAKO_GIT_HELPER === "0" ? undefined : new GitHelper(direct)
+  if (helper) stopping?.addEventListener("abort", () => { void helper.stop() }, { once: true })
   return new Git({
+    processes: helper?.runner() ?? direct,
+    signal: stopping,
     background: belowAgents,
     trace: (run) => {
       reportWrite(run)
-      if (!traceAll && run.ms < GIT_SLOW_MS && run.outcome !== "timeout") return
+      const failedWrite = run.write && run.outcome !== "ok"
+      if (!traceAll && !failedWrite && run.ms < GIT_SLOW_MS && run.outcome !== "timeout") return
       // A remote URL in Git's error output can carry a token.
-      const stderr = traceAll && run.stderr ? { stderr: run.stderr.replace(/\/\/[^/@\s]+@/g, "//***@") } : {}
+      const stderr = (traceAll || failedWrite) && run.stderr ? { stderr: run.stderr.replace(/\/\/[^/@\s]+@/g, "//***@") } : {}
       hostLog("git", `${run.command} ${run.outcome}`, { args: run.args.slice(0, 6).join(" ").slice(0, 200), cwd: run.cwd, ms: Math.round(run.ms), queuedMs: Math.round(run.queuedMs), code: run.code ?? -1, bytes: run.bytes, ...stderr })
     },
   })

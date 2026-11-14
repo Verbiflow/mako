@@ -1,3 +1,4 @@
+import { HostStopping } from "./base/host-stopping.js"
 import { Foreground } from "./base/foreground.js"
 import { lstat, mkdir, unlink } from "node:fs/promises"
 import { homedir } from "node:os"
@@ -29,6 +30,8 @@ export interface HostOwner {
   crashes: CrashReports
   /** Where the process keeps the lines the host logs. */
   logPath: string
+  /** This start of the host on its data root, taken while it holds the data root's lock (`takeHostStart`). */
+  start?: import("./base/host-start.js").HostStart
 }
 
 export interface Host {
@@ -117,7 +120,9 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
   let socketClosed = false
   let stopped: Promise<void> | undefined
 
+  const stopping = new HostStopping()
   const methods = new HostMethods({
+    stopping,
     fixtureDesk,
     route: async (channel, args) => core.current()?.route(channel, args) ?? { handled: false },
     presentHistory: (value) => core.current()?.presentHistory(value) ?? value,
@@ -150,8 +155,8 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       }
       stillStarting()
       const { openCore } = await import("./core.js")
-      const opened = await openCore({
-        config, owner, methods, jobs, foreground, subscribed, secrets, terminals,
+      const opened = await stopping.run(() => openCore({
+        config, owner, methods, jobs, foreground, subscribed, secrets, terminals, stopping,
         retryMachineWorkspace: () => machine?.retryWorkspace() ?? false,
         refreshMachineCarried: async () => {
           await machine?.refreshCarried()
@@ -162,7 +167,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         closing: () => closing,
         closeSocket,
         work: loop,
-      })
+      }))
       return declared(opened, CORE)
     },
   })
@@ -300,6 +305,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       const drained = methods.close()
       closeSocket()
       terminals.current()?.dispose()
+      await stopping.stop()
       await drained
       hostLog("lifecycle", "stopped")
     } finally {

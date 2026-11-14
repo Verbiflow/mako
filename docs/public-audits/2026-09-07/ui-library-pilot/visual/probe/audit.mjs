@@ -1,4 +1,4 @@
-import { build } from '/Users/kashyab/pi-ui/node_modules/esbuild/lib/main.js';
+import { build } from '../../../../../../node_modules/esbuild/lib/main.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
 import path from 'node:path';
@@ -13,7 +13,7 @@ const candidates={
 };
 const sizes=[];
 for(const [name,entry] of Object.entries(candidates)){
- const result=await build({entryPoints:[path.join(root,entry)],bundle:true,write:false,minify:true,format:'esm',platform:'browser',jsx:'automatic',nodePaths:[path.join(root,'probe/node_modules')],external:['react','react-dom','react/*','react-dom/*'],alias:{'@/lib/utils':'/Users/kashyab/pi-ui/src/lib/utils.ts'},logLevel:'silent'});
+ const result=await build({entryPoints:[path.join(root,entry)],bundle:true,write:false,minify:true,format:'esm',platform:'browser',jsx:'automatic',nodePaths:[path.join(root,'probe/node_modules')],external:['react','react-dom','react/*','react-dom/*'],alias:{'@/lib/utils':path.resolve(import.meta.dirname,'../../../../../../src/lib/utils.ts')},logLevel:'silent'});
  const bytes=result.outputFiles[0].contents;
  sizes.push({name,minifiedBytes:bytes.length,gzipBytes:gzipSync(bytes).length});
 }

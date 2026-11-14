@@ -47,7 +47,7 @@ The user reported lag during testing. A process snapshot showed the full ESLint 
 
 `test-control-preview-state.ts` verifies independent task state, one subscription for two consumers, zero idle polling, event-triggered wakeup, zero hidden polling and release cleanup. `test-control-previews.ts` verifies hidden capture suppression, one in-flight capture, task ownership, revocation, idle video-source expiry and retention limits.
 
-The production overlay rendered two independent task previews and advancing native video in an Electron fixture while preserving the frontmost application. Evidence: `/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-chat-preview-WLF5mP/result.json`. That run preceded the subsequent idle and visibility fixes, which are covered by the lifecycle regression checks. It is functional evidence, not a comparative performance benchmark.
+The production overlay rendered two independent task previews and advancing native video in an Electron fixture while preserving the frontmost application. Evidence: `$TMPDIR/mako-chat-preview-WLF5mP/result.json`. That run preceded the subsequent idle and visibility fixes, which are covered by the lifecycle regression checks. It is functional evidence, not a comparative performance benchmark.
 
 There is no measured basis yet for claiming equal or better CPU use, latency or reliability than Codex, CUA, Screenpipe or Peekaboo. A matched short capture benchmark is still needed before making that claim.
 

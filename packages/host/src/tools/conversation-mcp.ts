@@ -23,6 +23,21 @@ export interface ToolGrant {
   token: string
   computerUrl: string
   makoUrl?: string
+  /**
+   * The same `mako` server built in this process, for an SDK that runs a
+   * server instance beside its agent (Claude's `type: "sdk"`). Each call is
+   * held to the grant as an HTTP call is.
+   */
+  makoServer?: () => Promise<McpServer>
+}
+
+/** `conversationId` for a scope's calls, throwing once its grant no longer holds. */
+function scopeAuthorizer(owner: AgentOwner, scope: Scope): () => string {
+  return () => {
+    if (scope.revoked || scope.expiresAt < Date.now()) throw new Error("This task grant has expired")
+    owner.authorizeAgent(scope.conversationId, scope.bindingId)
+    return scope.conversationId
+  }
 }
 
 interface Scope {
@@ -205,15 +220,25 @@ export async function startConversationMcp(
           scopes.delete(token)
         }
       const token = randomBytes(32).toString("base64url")
-      scopes.set(token, {
+      const scope: Scope = {
         bindingId,
         conversationId,
         expiresAt: Date.now() + 24 * 60 * 60 * 1_000,
         revoked: false,
         controlRequests: new Map(),
-      })
+      }
+      scopes.set(token, scope)
       const grant: ToolGrant = { token, computerUrl }
-      if (makoUrl) grant.makoUrl = makoUrl
+      if (makoUrl) {
+        grant.makoUrl = makoUrl
+        grant.makoServer = async () => {
+          const { McpServer } = await heavy.mcpServer.load("an agent's in-process mako server")
+          const mako = new McpServer({ name: "mako", version: "1.0.0" }, { instructions: MAKO_INSTRUCTIONS })
+          const authorized = scopeAuthorizer(owner, scope)
+          for (const register of makoTools) register(mako, authorized)
+          return mako
+        }
+      }
       return grant
     },
     revoke(bindingId: string, conversationId: string): void {

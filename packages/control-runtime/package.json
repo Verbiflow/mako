@@ -20,7 +20,8 @@
     "./cli": "./dist/control-cli.js",
     "./mcp": "./dist/control-mcp.js",
     "./heavy-packages": "./dist/heavy-packages.js",
-    "./media": "./dist/control-media.js"
+    "./media": "./dist/control-media.js",
+    "./processes": "./dist/processes.js"
   },
   "bin": {
     "mako-control": "dist/control-cli.js"

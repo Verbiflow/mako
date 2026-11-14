@@ -14,13 +14,14 @@ import { cutOffTurn, DIRECT_MESSAGES, RETRY_MARKERS, SETUP_NOTICES, STOP_MARKER 
 export const GROK_VOCABULARY = defineVocabulary({
   harness: "grok",
   checked: {
-    version: "1.0.70",
-    on: "2026-10-25",
-    against: "the model request of grok agent stdio 1.0.70 in every Mako mode (scripts/fixtures/native-tools; unchanged since 1.0.46), and ~/.grok/sessions updates.jsonl through audit:tools as of 2026-10-06",
+    version: "1.0.77",
+    on: "2026-11-07",
+    against: "the model request of grok agent stdio 1.0.77 in every Mako mode (scripts/fixtures/native-tools; unchanged from 1.0.46 to 1.0.70; 1.0.77 rewords spawn_subagent and use_tool, and lets use_tool take its arguments or its whole call from a JSON file, `tool_input_file` or `file`, which Grok reads and then reports as the call inline, live and in updates.jsonl alike (the mcp-call-file decode pair); until it does, the call names its file; Anthropic models see only the inline form), and ~/.grok/sessions updates.jsonl through audit:tools as of 2026-10-06",
   },
   mcp: ["s__t"],
   tools: {
-    run_terminal_command: { kind: "shell", effects: { cwd: "result.current_dir", exitCode: "result.exit_code", background: "is_background" } },
+    // Its words for a failed command's result (`output_for_prompt`) end `exit: 1`.
+    run_terminal_command: { kind: "shell", effects: { cwd: "result.current_dir", exitCode: "result.exit_code", background: "is_background", exitText: /(?:^|\n)exit: (-?\d+)\s*$/ } },
     monitor: { kind: "shell", effects: { background: true } },
     get_command_or_subagent_output: { kind: "shell-output", label: "Command output" },
     kill_command_or_subagent: { kind: "shell-stop" },
@@ -39,11 +40,13 @@ export const GROK_VOCABULARY = defineVocabulary({
     enter_plan_mode: { kind: "mode", label: "Plan mode" },
     exit_plan_mode: { kind: "plan-exit" },
     ask_user_question: { kind: "question" },
-    use_tool: { kind: "mcp", wraps: { form: "arguments", tool: "tool_name", args: "tool_input" } },
+    // From 1.0.77 the call or its arguments may come from a file, which Grok reads and then reports the call inline.
+    use_tool: { kind: "mcp", wraps: { form: "arguments", tool: "tool_name", args: "tool_input", files: { args: "tool_input_file", call: "file" } } },
     workflow: { kind: "agent", label: "Workflow" },
     scheduler_create: { kind: "other", label: "Schedule" },
     scheduler_delete: { kind: "other", label: "Remove schedule" },
     scheduler_list: { kind: "other", label: "Schedules" },
+    update_goal: { kind: "other", label: "Update goal" },
     send_feedback: { kind: "other", label: "Send feedback" },
     image_gen: { kind: "image" },
     image_edit: { kind: "image", label: "Edit image" },
@@ -52,8 +55,8 @@ export const GROK_VOCABULARY = defineVocabulary({
   },
   concepts: {
     checked: {
-      version: "1.0.70",
-      on: "2026-10-25",
+      version: "1.0.77",
+      on: "2026-11-07",
       against: "the binary through harness:self-report (every declared name, and every skill and MCP place listed), and the user guide grok 1.0.46 ships in ~/.grok/docs, grok --help and an initialize-only ACP call as read on 2026-10-06",
     },
     instructions: {

@@ -9,10 +9,10 @@ import {
   processExecutableMatches,
   processIdentityMatches,
   observeProcessIdentity,
-  processStartMatches,
-} from "./process-liveness.js"
+  processStartMatches, START_READING_TOLERANCE_MS } from "./process-liveness.js"
 import { onWindows } from "./platform.js"
 import { topic } from "./topic.js"
+
 
 /**
  * Provider processes the host has spawned and would otherwise orphan.
@@ -106,6 +106,11 @@ export class ProviderChildren {
     })
   }
 
+  /** This host's provider processes running now, each with the conversation or engine that owns it. */
+  processes(): ReadonlyArray<Pick<ProviderChildRecord, "pid" | "kind" | "owner">> {
+    return this.records
+  }
+
   /** A recorded process taken over by another owner (a child spawned ahead, adopted by a session); its birth stays. */
   reown(info: { pid: number; owner: string }): void {
     if (!this.records.some((entry) => entry.pid === info.pid && entry.owner !== info.owner)) return
@@ -191,7 +196,7 @@ export class ProviderChildren {
           !processStartMatches(
             record.processStartedAt ?? record.startedAt,
             identity.startedAt,
-            record.processStartedAt === undefined ? 1_500 : 0
+            record.processStartedAt === undefined ? START_READING_TOLERANCE_MS : 0
           )
         )
           return
@@ -303,7 +308,7 @@ export class ProviderChildren {
           startedAt: entry.processStartedAt ?? entry.startedAt,
           signal,
           exact: entry.processStartedAt !== undefined,
-          toleranceMs: entry.processStartedAt === undefined ? 1_500 : undefined,
+          toleranceMs: entry.processStartedAt === undefined ? START_READING_TOLERANCE_MS : undefined,
         }))
       )
         return "gone"

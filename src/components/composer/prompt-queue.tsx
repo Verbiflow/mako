@@ -1,4 +1,7 @@
 import { clockText } from "@/state/request-recovery"
+import { retryWords, waitsForReset } from "@mako/host/contracts/delivery-retry"
+import { DIGEST_WAITS } from "@mako/host/contracts/children"
+import { harnessLabel } from "@/lib/harness-label"
 import { savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { draftText, rememberDraft, clearSubmittedDraft } from "@/state/drafts"
 import { useThreads } from "@/state/threads"
@@ -49,6 +52,7 @@ export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body
           item.text === right[index]?.text &&
           item.status === right[index]?.status &&
           item.signIn === right[index]?.signIn &&
+          item.retry === right[index]?.retry &&
           item.waiting === right[index]?.waiting &&
           item.steering === right[index]?.steering &&
           item.attachments === right[index]?.attachments
@@ -132,6 +136,8 @@ export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body
               ? "Sends after Resume"
               : delivery[0] && "wake" in delivery[0] && delivery[0].wake
                 ? `Sends at ${clockText(delivery[0].wake.at)}`
+              : delivery[0]?.status === "held" && "retry" in delivery[0] && delivery[0].retry
+                ? `Trying again at ${clockText(delivery[0].retry.at)}`
               : delivery[0]?.status === "held"
                 ? "Paused"
                 : delivery[0] && "waiting" in delivery[0] && delivery[0].waiting
@@ -166,7 +172,7 @@ export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body
           <button
             type="button"
             disabled={page === 0}
-            className="pressable rounded px-2 py-1 hover:bg-fill-hover disabled:opacity-30"
+            className="pressable px-2 py-1 hover:bg-fill-hover disabled:opacity-30"
             onClick={() => setPageIndex(page - 1)}
           >
             Previous
@@ -178,7 +184,7 @@ export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body
           <button
             type="button"
             disabled={(page + 1) * 20 >= delivery.length}
-            className="pressable rounded px-2 py-1 hover:bg-fill-hover disabled:opacity-30"
+            className="pressable px-2 py-1 hover:bg-fill-hover disabled:opacity-30"
             onClick={() => setPageIndex(page + 1)}
           >
             Next
@@ -215,10 +221,10 @@ function OutboxLine({ conversation, request }: { conversation: string; request: 
       <span className="min-w-0 flex-1 truncate" title={words}>{words}</span>
       {request.waiting ? (
         <>
-          <button type="button" data-outbox-action="send" className="pressable rounded px-2 py-0.5 text-foreground hover:bg-fill-hover" onClick={() => void sendWaitingNow(conversation)}>
+          <button type="button" data-outbox-action="send" className="pressable px-2 py-0.5 text-foreground hover:bg-fill-hover" onClick={() => void sendWaitingNow(conversation)}>
             Send now
           </button>
-          <button type="button" data-outbox-action="remove" className="pressable rounded px-2 py-0.5 hover:bg-fill-hover hover:text-foreground" onClick={() => discardWaiting(conversation, request.id)}>
+          <button type="button" data-outbox-action="remove" className="pressable px-2 py-0.5 hover:bg-fill-hover hover:text-foreground" onClick={() => discardWaiting(conversation, request.id)}>
             Remove
           </button>
         </>
@@ -261,6 +267,7 @@ function QueueRow({
   }, [editing])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
+  const harness = useAcp((state) => activeLiveAcp(state)?.harness)
   const canSteer = useAcp(
     (state) =>
       target.kind === "live" &&
@@ -342,14 +349,14 @@ function QueueRow({
               }
             }}
             rows={3}
-            className="w-full resize-none rounded-md bg-surface px-2 py-1.5 text-ui leading-relaxed text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className="w-full resize-none bg-surface px-2 py-1.5 text-ui leading-relaxed text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
           />
           <div className="flex items-center justify-end gap-2 text-label">
             <button
               type="button"
               disabled={busy}
               onClick={() => void change("resume")}
-              className="pressable rounded px-2 py-1 text-faint hover:bg-fill-hover hover:text-foreground"
+              className="pressable px-2 py-1 text-faint hover:bg-fill-hover hover:text-foreground"
             >
               Cancel
             </button>
@@ -357,7 +364,7 @@ function QueueRow({
               type="button"
               disabled={busy || (!draft.trim() && !request.attachments.length)}
               onClick={() => void change("edit")}
-              className="pressable flex items-center gap-1 rounded bg-fill-selected px-2 py-1 text-foreground disabled:opacity-40"
+              className="pressable flex items-center gap-1 bg-fill-selected px-2 py-1 text-foreground disabled:opacity-40"
             >
               <CheckIcon className="size-3" />
               Save message
@@ -370,7 +377,7 @@ function QueueRow({
             {continuation ? "Continues the turn where it stopped" : body || `${request.attachments.length} attachments`}
           </p>
           <div className="flex shrink-0 items-center gap-0.5 text-faint">
-            {request.status === "held" && !request.signIn ? <button type="button" data-queued-action="resume" aria-label={request.wake ? "Send this message now" : "Resume queued message"} disabled={busy} onClick={() => void change("resume")} className="pressable h-6 rounded px-2 text-label text-foreground hover:bg-fill-hover disabled:opacity-40">{request.wake ? "Send now" : "Resume"}</button> : null}
+            {request.status === "held" && !request.signIn ? <button type="button" data-queued-action="resume" aria-label={request.wake ? "Send this message now" : "Resume queued message"} disabled={busy} onClick={() => void change("resume")} className="pressable h-6 px-2 text-label text-foreground hover:bg-fill-hover disabled:opacity-40">{request.wake ? "Send now" : "Resume"}</button> : null}
             {canSteer ? (
               <button
                 type="button"
@@ -378,7 +385,7 @@ function QueueRow({
                 aria-label="Send now, into the running turn"
                 title="Send now, into the running turn"
                 disabled={!editable || busy}
-                className="pressable grid size-6 place-items-center rounded hover:bg-fill-hover hover:text-foreground disabled:opacity-30"
+                className="pressable grid size-6 place-items-center hover:bg-fill-hover hover:text-foreground disabled:opacity-30"
                 onClick={() => void sendNow()}
               >
                 <ArrowUpIcon className="size-3.5" />
@@ -390,7 +397,7 @@ function QueueRow({
               aria-label="Edit queued message"
               title="Edit queued message"
               disabled={!editable || busy || continuation}
-              className="pressable grid size-6 place-items-center rounded hover:bg-fill-hover hover:text-foreground disabled:opacity-30"
+              className="pressable grid size-6 place-items-center hover:bg-fill-hover hover:text-foreground disabled:opacity-30"
               ref={editButton}
               onClick={() => (onEdit ? onEdit(request, body) : void change("pause"))}
             >
@@ -402,7 +409,7 @@ function QueueRow({
               aria-label="Remove queued message"
               title="Remove queued message"
               disabled={!editable || busy}
-              className="pressable grid size-6 place-items-center rounded hover:bg-fill-hover hover:text-foreground disabled:opacity-30"
+              className="pressable grid size-6 place-items-center hover:bg-fill-hover hover:text-foreground disabled:opacity-30"
               onClick={() => void change("remove")}
             >
               <XIcon className="size-3.5" />
@@ -411,8 +418,20 @@ function QueueRow({
         </div>
       )}
       {request.status === "held" && !editing && !request.signIn ? (
-        <p className="mt-1 text-label text-faint" data-queue-wake={request.wake?.at}>
-          {request.wake ? `Sends by itself at ${clockText(request.wake.at)}, when the usage limit resets` : "Paused until you resume or edit this message"}
+        <p className="mt-1 text-label text-faint" data-queue-wake={request.wake?.at ?? request.retry?.at} data-queue-retry={request.retry?.cause}>
+          {request.wake?.after === DIGEST_WAITS
+            ? "Your Fins' news, going in a moment with whatever else they say."
+            : request.wake
+            ? `Sends by itself at ${clockText(request.wake.at)}, when the usage limit resets`
+            : request.retry
+              ? `Sends again by itself${waitsForReset(request.retry) ? "" : ` at ${clockText(request.retry.at)}`}: ${retryWords(request.retry, harness ? harnessLabel(harness) : "the agent")}`
+              : request.digest?.resting
+                ? request.digest.nextTry === undefined ? "Your Fins' news, going with your next message." : `Your Fins' news, going with your next message or at ${clockText(request.digest.nextTry)}.`
+              : request.editing
+                ? "Held while you edit it. Nothing behind it goes until you save or resume it."
+                : request.pause === "stop"
+                  ? "Paused by Stop. Messages you send now go ahead of it; Resume sends it."
+                  : "Paused when Mako stopped. Resume sends it, then what waits behind it."}
         </p>
       ) : null}
       {target.kind === "live" && !editable && !editing && !request.status ? (

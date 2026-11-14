@@ -13,9 +13,9 @@ const SETTINGS_ONLY = "3000.10.23 doesn't define it for the capture's account, w
 export const DEVIN_VOCABULARY = defineVocabulary({
   harness: "devin",
   checked: {
-    version: "3000.11.234",
-    on: "2026-10-30",
-    against: "Devin's CLI store and IDE journal through audit:tools as of 2026-10-08, and its 3000.11.234 tool definitions through harness:native-tools (no tool added or removed since 3000.10.23, and none reworded since 3000.11.205; Ask mode offers the MCP tools)",
+    version: "3000.12.43",
+    on: "2026-11-11",
+    against: "Devin's CLI store and IDE journal through audit:tools as of 2026-10-08, and its 3000.12.43 tool definitions through harness:native-tools (no tool added or removed since 3000.10.23; grep reworded in 3000.12.17, read's image_size added in 3000.12.28, none changed in 3000.12.43; Ask mode offers the MCP tools; Smart mode, recorded since 3000.12.17, offers Bypass's)",
   },
   mcp: ["s.t"],
   tools: {
@@ -54,8 +54,8 @@ export const DEVIN_VOCABULARY = defineVocabulary({
   },
   concepts: {
     checked: {
-      version: "3000.11.234",
-      on: "2026-10-30",
+      version: "3000.12.43",
+      on: "2026-11-11",
       against: "the binary through harness:self-report (every declared name, and every skill and MCP place listed), and the docs devin 3000.10.23 ships (extensibility, subagents, permissions, mcp) and devin skills paths as read on 2026-10-06",
     },
     instructions: {
@@ -96,6 +96,11 @@ export const DEVIN_VOCABULARY = defineVocabulary({
       RETRY_MARKERS,
       DIRECT_MESSAGES,
       ...cutOffTurn(["tool", "text", "thinking"], "Devin resumes without a call cut off before its result (history.branches), and sessions.db keeps none of the node it began: the flows of 2026-10-16 stream a killed turn's call and the words before it (bead-night) that the record lacks."),
+      {
+        holds: "stream",
+        entry: { type: "user", cutOff: true },
+        why: "From 3000.12.17 (3000.12.28 and 3000.12.43 too), Devin keeps nothing of a turn that failed before its model answered, its prompt included: neither sessions.db nor Devin.app's acp-messages holds it, and its revert lists no step for it (the server-error and rewound-past-marker decode pairs, 2026-11-07). Earlier builds kept the prompt.",
+      },
       {
         holds: "order",
         entry: { type: "tool" },
@@ -202,6 +207,10 @@ export function devinStoredTokens(metrics: DevinCallMetrics): HarnessTokens {
  * `failed` with `_meta["cognition.ai/canceled"]`. A `write_plan` call
  * (`cognition.ai/isPlanFileEdit`) sends the plan as `rawInput.content` beside
  * a diff of the whole file; its saved `tool_call_state` keeps only the path.
+ * A stopped call's end says only "Canceled due to user interrupt", which the
+ * row's canceled status already says: from 3000.12.43 a stopped command
+ * streams its output first, which `tool_call_state` doesn't keep, so the notice
+ * is no output of the call's, and the stream's output stands.
  */
 export const DEVIN_TOOL_READING: AcpToolReading = {
   input: (update) => update._meta?.["cognition.ai/isPlanFileEdit"] === true ? PlanFileInputSchema.safeParse(update.rawInput).data : undefined,
@@ -211,8 +220,13 @@ export const DEVIN_TOOL_READING: AcpToolReading = {
 
 const PlanFileInputSchema = z.object({ file_path: z.string() })
 
-function devinPreview(part: { type: string; content?: { type: string; resource?: { uri?: string } } }): boolean {
-  return part.type === "content" && part.content?.type === "resource" && part.content.resource?.uri === "tool://preview"
+/** Devin's words for a call the person stopped, on its end (`cognition.ai/canceled`). */
+const DEVIN_CANCELED = "Canceled due to user interrupt"
+
+function devinPreview(part: { type: string; content?: { type: string; resource?: { uri?: string }; text?: string } }): boolean {
+  if (part.type !== "content") return false
+  return (part.content?.type === "resource" && part.content.resource?.uri === "tool://preview") ||
+    (part.content?.type === "text" && part.content.text === DEVIN_CANCELED)
 }
 
 /*

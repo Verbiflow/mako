@@ -1,3 +1,4 @@
+import { hostFetch } from "../base/host-stopping.js"
 import { z } from "zod"
 import type { FileOwner } from "../workspaces/index.js"
 import { runtimeFile } from "../transport/index.js"
@@ -34,7 +35,7 @@ export class OwnerFiles {
     const headers = new Headers(init.range ? { range: init.range } : {})
     if (owner.kind === "socket") return runtimeFile(owner.socket, new Request(url, { headers, signal: init.signal }))
     const origin = await this.#origin(owner)
-    const fetchFile = this.#options.fetch ?? fetch
+    const fetchFile = this.#options.fetch ?? hostFetch
     const answer = await fetchFile(`${origin}file/asset/${url.slice(SIGNED_FILES.length)}`, { headers, signal: init.signal })
     // The address ended (its grant ran out early, the account signed out): asked anew next time.
     if (answer.status === 401 || answer.status === 410) this.#addresses.delete(keyOf(owner))
@@ -56,7 +57,7 @@ export class OwnerFiles {
     const token = await this.#options.token()
     if (!gateway || !token) throw new Error("This Mac isn't signed in to Mako, so another computer's files can't be reached")
     const body = owner.kind === "thread" ? { threadId: owner.threadId, files: true } : { deviceId: owner.deviceId, files: true }
-    const fetchFile = this.#options.fetch ?? fetch
+    const fetchFile = this.#options.fetch ?? hostFetch
     const answer = await fetchFile(new URL("/v1/previews", gateway), {
       method: "POST",
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json", accept: "application/json" },

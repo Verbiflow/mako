@@ -19,8 +19,11 @@ import "./lib/scratch-git.mjs"
 //
 // Cursor has no stand-in for its model: `--cursor` runs it on the person's
 // sign-in, copied into a scratch home, against its real model. `--lands` runs
-// only that kind, and fails a message heard more than `LANDS_BUDGET_MS` after
-// it was sent; CI runs it on the harnesses it installs.
+// only that kind, and fails a message the model hears only once the command
+// returned: with its output, or after the sleep would have ended. That's what
+// a message waiting behind the turn does, 11 s after it was sent; one landed
+// in the turn is heard in under a second. CI runs it on the harnesses it
+// installs.
 //
 //   npx tsx --tsconfig tsconfig.app.json scripts/probe-steer-semantics.ts [<harness>...] [--cursor] [--lands] [--evidence <dir>]
 import { randomUUID } from "node:crypto"
@@ -51,8 +54,6 @@ const named = args.filter((arg) => !arg.startsWith("--"))
 
 const SLEEP_S = 15
 const STEER_AFTER_MS = 4000
-/** How soon after the person sends it a landed message must reach the model (`--lands`): `STEER_LANDS_MS`, and slack for a slow runner. */
-const LANDS_BUDGET_MS = 2_000
 /** What only the command's output says: its own text, which the history echoes, says `$((40+2))`. */
 const DONE = "SLEPT-42"
 const ECHO_DONE = "SLEPT-$((40+2))"
@@ -236,9 +237,10 @@ function verdict(run: Probe): string {
   if (run.kind === "stop")
     return `stop at ${seconds(run.acted)}: answered ${seconds(run.answered)}, turn ended ${seconds(run.turnEnded)}; the command ${run.heard.some((heard) => heard.slept) ? "finished and its output reached the model" : "never reported its output"}`
   if (run.kind === "lands") {
-    const heard = run.heard.find((candidate) => candidate.steered)
-    const late = !heard || heard.at - run.acted! > LANDS_BUDGET_MS
-    return `${late ? `FAILED over ${LANDS_BUDGET_MS} ms: ` : ""}sent at ${seconds(run.acted)} (${run.outcome}): the model heard it ${heard ? `at ${seconds(heard.at)}, ${seconds(heard.at - run.acted!)} after it was sent` : "never"}`
+    const index = run.heard.findIndex((candidate) => candidate.steered)
+    const heard = run.heard[index]
+    const waited = !heard || heard.at >= SLEEP_S * 1000 || run.heard.slice(0, index + 1).some((candidate) => candidate.slept)
+    return `${waited ? "FAILED, not heard while the command ran: " : ""}sent at ${seconds(run.acted)} (${run.outcome}): the model heard it ${heard ? `at ${seconds(heard.at)}, ${seconds(heard.at - run.acted!)} after it was sent, ${heard.slept ? "with" : "without"} the command's output` : "never"}`
   }
   const firstSteered = run.heard.findIndex((heard) => heard.steered)
   const where = firstSteered === -1 ? "never in this turn" : firstSteered === 0 ? "in the very next model request" : `in model request ${firstSteered + 1} after the command`

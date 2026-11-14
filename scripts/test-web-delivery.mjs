@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, writeFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
@@ -10,8 +9,9 @@ import { preview } from 'vite'
 import { webHostProxy } from '../electron/web-dev-proxy.mjs'
 import { PREVIEW_MEDIA_TYPE, encodePreviewMedia } from '@mako/control-runtime/contracts'
 import { invokeRuntime } from '@mako/host/transport/connection'
+import { testScratch } from "./lib/test-scratch.mjs"
 
-const root = await mkdtemp(join(tmpdir(), 'mako-browser-delivery-'))
+const root = testScratch('mako-browser-delivery-')
 const socket = join(root, 'host.sock')
 const requests = new Map()
 const streams = new Set()

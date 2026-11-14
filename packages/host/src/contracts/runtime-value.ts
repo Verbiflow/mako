@@ -1,5 +1,5 @@
 import type { Json } from "@mako/protocol"
-import { COMPACT_LIVE_FORM, WHOLE_LIVE_FORM, readsLiveForm, type LiveForm } from "@mako/protocol/live-form"
+import { COMPACT_LIVE_FORM, ROSTER_LIVE_FORM, WHOLE_LIVE_FORM, readsLiveForm, type LiveForm, type WindowLiveForm } from "@mako/protocol/live-form"
 import type { HostEvent } from "./host-events-boot.js"
 import type { TerminalEvent } from "./terminal.js"
 
@@ -49,6 +49,8 @@ export interface RuntimeEvent extends RuntimeEventRouting {
   payload: string
   /** The same event in the compact live form, where it has one (a batch its host emitted): for a reader of that form. */
   compact?: string
+  /** The same event for a host's own windows, its roster as what changed, where it has that form (`ROSTER_LIVE_FORM`). */
+  rostered?: string
   /**
    * The live form `payload` is in, when above 1: a batch heard so from another device, which this host has in no other.
    * A reader of an older form is told to read the conversation again in its place.
@@ -60,7 +62,8 @@ export interface RuntimeEvent extends RuntimeEventRouting {
  * What a reader of live form `reads` is sent of `event`: its payload in the newest form the reader reads, or undefined
  * when it has none the reader reads, where the notice that its conversation changed goes instead (`historyChangedNotice`).
  */
-export function payloadFor(event: RuntimeEvent, reads: LiveForm): string | undefined {
+export function payloadFor(event: RuntimeEvent, reads: WindowLiveForm): string | undefined {
+  if (event.rostered !== undefined && reads >= ROSTER_LIVE_FORM) return event.rostered
   if (event.compact !== undefined && reads >= COMPACT_LIVE_FORM) return event.compact
   return readsLiveForm(reads, event.form) ? event.payload : undefined
 }
@@ -70,13 +73,14 @@ export type RuntimeEventChannel = "event" | "terminal"
 /** An event encoded once, for every subscriber of every host and window it reaches. */
 export function encodeRuntimeEvent(event: HostEvent | TerminalEvent): RuntimeEvent {
   if (event.type !== "live-batch") return { type: event.type, conversation: undefined, payload: JSON.stringify(event) }
-  const { compact, ...whole } = event
+  const { compact, rostered, ...whole } = event
   return {
     type: event.type,
     conversation: event.batch.id,
     ...(event.batch.trace && { trace: event.batch.trace }),
     payload: JSON.stringify(whole),
     ...(compact && { compact: JSON.stringify({ type: event.type, batch: compact }) }),
+    ...(rostered && { rostered: JSON.stringify({ type: event.type, batch: rostered }) }),
   }
 }
 

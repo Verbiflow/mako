@@ -1,3 +1,4 @@
+import { AgentAskSchema } from "./agent-asks.js"
 import { LiveQuestionSchema } from "./live-questions.js"
 import { ApprovalResponseSchema, NativeApprovalDecisionSchema, NativeApprovalIdentitySchema, sameNativeApproval } from "./approval-response.js"
 import { SessionSettingsSchema } from "@mako/sessions/settings"
@@ -22,6 +23,11 @@ export const TransferInputSchema = z.object({
   attachments: z.array(PromptAttachmentSchema).max(100),
   tuning: ProviderSelectionSchema.optional(),
   modeId: z.string().optional(),
+  /** The account it goes on, for a Thread moved to another account of its harness: its binding's pin. */
+  account: z.string().optional(),
+  /** What its message may attach (`LiveRequest.grants`), kept with the words it carries. */
+  grants: z.array(z.string().max(1024)).max(100).optional(),
+  notification: z.literal(true).optional(),
 })
 export type TransferInput = z.infer<typeof TransferInputSchema>
 /** A harness's running totals for one native session, as `NativeTotals`. */
@@ -38,6 +44,8 @@ export const ProviderBindingSchema = z.object({
   path: z.string().optional(),
   tuning: ProviderSelectionSchema.optional(),
   modeId: z.string().optional(),
+  /** The account this binding runs on whatever is selected, for a Thread moved to it: a Fin's or an Apex's alike (`LiveConversations.pinnedAccount`). */
+  account: z.string().optional(),
   coveredBlocks: z.number().int().nonnegative(),
   includesBase: z.boolean(),
   /**
@@ -75,7 +83,11 @@ export type ResumeVerdict =
   | { kind: "resumable"; record: "same" | "moved" | "unknown" }
   /** Something else has the session open; `by` names it for the user. */
   | { kind: "held"; by: string }
-  | { kind: "unavailable"; reason: string }
+  /**
+   * It can't be reopened. `lost`: its harness has no record of it here (its identity or source was never located), so
+   * nothing could ever resume it: a message goes on in a new session of that harness, handed the whole conversation.
+   */
+  | { kind: "unavailable"; reason: string; lost?: true }
   /**
    * The harness keeps this record closed to resumes (a Codex archive, a
    * Cursor desktop chat) and the catalog says so; continuing it starts a new
@@ -139,6 +151,8 @@ export const TransferStateSchema = z.discriminatedUnion("kind", [
     error: z.string(),
     /** What `error` means; see `provider-failure.ts`. */
     failure: z.enum(PROVIDER_FAILURE_KINDS).optional(),
+    /** Its message left the queue before it went (`withdrawGone`): nothing went wrong with the switch, and nothing is left to retry. */
+    removed: z.literal(true).optional(),
   }),
   z.object({ kind: z.literal("uncertain"), error: z.string() }),
 ])
@@ -152,6 +166,16 @@ export function readStoredReason<Fields extends { reason: InterruptionReason; ex
   return { ...fields, reason: readReason(fields.reason, exactReason) }
 }
 
+/** A message's next attempt after a failure that clears by itself (`RequestRetry`, `delivery-retry.ts`), as the journal keeps it. */
+export const RequestRetrySchema = z.object({
+  at: z.number(),
+  attempt: z.number().int().positive(),
+  since: z.number(),
+  cause: z.enum(["rate-limited", "provider-unavailable", "network", "launch-stalled", "busy"]),
+  reason: z.string(),
+  until: z.number().optional(),
+})
+
 export const ContextTransferSchema = z.object({
   inputDigest: z.string().optional(),
   input: TransferInputSchema,
@@ -162,11 +186,37 @@ export const ContextTransferSchema = z.object({
     requestId: z.string(),
     ...StoredReason,
     auto: z.boolean(),
+    brief: z.string().optional(),
+    since: z.number().optional(),
   }).transform(readStoredReason).optional(),
   createdAt: z.number(),
   state: TransferStateSchema,
+  /** A reconnect that failed for a cause that clears by itself: it stays queued and goes again at `at` (`nextRetry`). */
+  retry: RequestRetrySchema.optional(),
+  /**
+   * Asked for while the switch `behind` was committing: it waits for that one to finish and for that one's message
+   * (`LiveDispatch.drain`), across a restart too, and reads so until it starts.
+   */
+  behind: z.string().optional(),
+  /** A move's row to go first at its commit, ahead of what waited longer (`arriving`). */
+  first: z.string().optional(),
 })
 export type ContextTransfer = z.infer<typeof ContextTransferSchema>
+/** A switch with no message of its own: the Thread moves, and what next goes there carries its history. */
+export function quietSwitch(transfer: Pick<ContextTransfer, "input">): boolean {
+  return !transfer.input.text.trim() && !transfer.input.attachments.length
+}
+/** A switch's input saying what its message in the queue says now. */
+export function carryingWords(input: TransferInput, message: Pick<TransferInput, "text" | "displayText" | "attachments">): TransferInput {
+  return { ...input, text: message.text, displayText: message.displayText, attachments: message.attachments }
+}
+/** What a quiet switch a Stop reached before it committed, or a restart, leaves, for whoever asked to ask again. */
+export const STOP_RETIRED_MOVE = "A Stop reached it before it moved. Nothing changed; ask again to move it."
+export const RESTART_RETIRED_MOVE = "Mako restarted before it moved. Nothing changed; ask again to move it."
+/** A quiet switch over before it committed: `removed` keeps it from offering a retry, and it has no message to lose. */
+export function retiredMove(transfer: ContextTransfer, error: string): ContextTransfer {
+  return { ...transfer, retry: undefined, state: { kind: "failed", error, removed: true } }
+}
 export const ConversationControlSchema = z.object({
   questions: z.array(LiveQuestionSchema).max(2000).optional(),
   approvalResponses: z.array(ApprovalResponseSchema).optional(),
@@ -174,6 +224,8 @@ export const ConversationControlSchema = z.object({
   approvalObservations: z.array(z.object({ bindingId: z.string(), identity: NativeApprovalIdentitySchema, decision: NativeApprovalDecisionSchema.optional() })
     .refine(item => !item.decision || sameNativeApproval(item.identity, item.decision.identity), "Native decision belongs to another question")).max(2000).optional(),
   actions: z.array(LiveActionSchema).optional(),
+  /** What its agent asked the person to let it do through Mako's tools, until they answer (`LiveAsks`). */
+  asks: z.array(AgentAskSchema).max(32).optional(),
   merges: z
     .array(
       z.object({

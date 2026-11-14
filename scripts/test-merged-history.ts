@@ -384,6 +384,93 @@ try {
   }
   console.log("PASS: a failed turn is covered as it ended, and keeps what it streamed that its record never kept")
 
+  // Devin, from 3000.12.17, keeps nothing of a turn that failed before its model answered, its prompt included, and Devin.app's
+  // journal keeps no call's output. Mako's own history stays whole: the journal's blocks supply both, on refresh, held by
+  // its session, and read back from it after a reload, with no mismatch logged for what Devin declares it drops.
+  {
+    const id = randomUUID()
+    const at = `/tmp/devin/sessions.db#devin-${id}`
+    const failedAsk = randomUUID()
+    const devinRecord: Entry[] = [
+      { type: "user", id: "u1", text: "Read notes.md", record: { ranges: [[0, 90]] } },
+      { type: "tool", id: "call_1", name: "read", status: "completed", input: "{\"file_path\":\"notes.md\"}", record: { ranges: [[90, 180]] } },
+      { type: "text", id: "t1", text: "It ships on Friday.", record: { ranges: [[180, 270]] } },
+    ]
+    const turns: Entry[] = [
+      { type: "user", requestId: randomUUID(), text: "Read notes.md" },
+      { type: "tool", id: "call_1", name: "read", status: "completed", input: "{\"file_path\":\"notes.md\"}", output: "The release ships on Friday." },
+      { type: "text", text: "It ships on Friday." },
+      { type: "user", requestId: failedAsk, text: "Say hello." },
+    ]
+    const devinPage = (): ThreadPage => ({ ref: { harness: "devin", nativeId: at, path: at, bytes: 1 }, entries: devinRecord, start: 0, total: devinRecord.length, hasEarlier: false, checkpoint: 1 })
+    const devinHost = (hold = false) => new LiveConversations({
+      root, appPath: root, driver: () => undefined, emit: () => {},
+      history: async (path) => (path === at ? devinPage() : null),
+      ...hold && { holdHistory: async () => true },
+    })
+    const snapshot = journalled(id)
+    const journal = new LiveJournal(root, id)
+    journal.commit({
+      ...snapshot, blocks: turns, threadPath: at,
+      session: { ...snapshot.session, harness: "devin", nativeId: at, executionContext: { ...snapshot.session.executionContext!, transport: "acp", runtime: { kind: "reported", version: "3000.12.28", via: "fixture" } } },
+      requests: [{ id: failedAsk, text: "Say hello.", attachments: [], status: "failed" }],
+      control: { ...snapshot.control!, bindings: [{ id, provider: "devin", nativeId: at, path: at, includesBase: true, coveredBlocks: turns.length }] },
+    })
+    journal.close()
+    const drawn = (entries: readonly Entry[]) => entries.map((entry) => entry.type === "user" || entry.type === "text" ? `${entry.type} ${entry.text}` : entry.type === "tool" ? `tool ${entry.name} -> ${entry.output ?? ""}` : entry.type)
+    const whole = ["user Read notes.md", "tool read -> The release ships on Friday.", "text It ships on Friday.", "user Say hello."]
+    const findings = () => mismatches.kinds().filter((kind) => kind.harness === "devin").length
+    const holding = devinHost(true)
+    assert.deepEqual(drawn((await holding.refreshedSnapshot(id))!.base!.entries), whole, "the failed turn's prompt and the call's result, which Devin's record lacks, from the journal")
+    const heldBy = Date.now() + 3_000
+    while (!holding.snapshot(id)?.baseSource && Date.now() < heldBy) await new Promise((resolve) => setTimeout(resolve, 5))
+    assert.ok(holding.snapshot(id)?.baseSource, "held by its session")
+    assert.equal(copiedBaseBytes(root, id), 0, "the journal keeps no copy of what its session holds")
+    await holding.stop()
+    const reopened = devinHost(true)
+    assert.equal(reopened.snapshot(id)!.base, null, "unread until its session answers")
+    await reopened.refreshedSnapshot(id)
+    assert.deepEqual(drawn(reopened.snapshot(id)!.base!.entries), whole, "read back from its session after a reload, still whole")
+    const shown = JSON.stringify(projectLive(reopened.snapshot(id)!).messages)
+    assert.ok(shown.includes("Say hello.") && shown.includes("The release ships on Friday."), "and shown")
+    await reopened.stop()
+    await mismatches.flush()
+    assert.equal(findings(), 0, "what Devin declares it drops is no mismatch")
+
+    // The same words sent again after the failure: the record's one prompt is the retry's, never the failed request's.
+    const again = randomUUID()
+    const retried = randomUUID()
+    const retryRecord: Entry[] = [...devinRecord, { type: "user", id: "u-retry", text: "Say hello.", record: { ranges: [[270, 300]] } }, { type: "text", id: "t-retry", text: "Hello.", record: { ranges: [[300, 330]] } }]
+    const retryTurns: Entry[] = [...turns, { type: "user", requestId: retried, text: "Say hello." }, { type: "text", text: "Hello." }]
+    const retryAt = `${at}-again`
+    const retryJournal = new LiveJournal(root, again)
+    retryJournal.commit({
+      ...snapshot, session: { ...snapshot.session, id: again, harness: "devin", nativeId: retryAt }, blocks: retryTurns, threadPath: retryAt,
+      requests: [{ id: failedAsk, text: "Say hello.", attachments: [], status: "failed" }],
+      control: { ...snapshot.control!, activeBindingId: again, bindings: [{ id: again, provider: "devin", nativeId: retryAt, path: retryAt, includesBase: true, coveredBlocks: retryTurns.length }] },
+    })
+    retryJournal.close()
+    const retryHost = (hold = false) => new LiveConversations({
+      root, appPath: root, driver: () => undefined, emit: () => {},
+      history: async (path) => (path === retryAt ? { ref: { harness: "devin", nativeId: retryAt, path: retryAt, bytes: 1 }, entries: retryRecord, start: 0, total: retryRecord.length, hasEarlier: false, checkpoint: 1 } : null),
+      ...hold && { holdHistory: async () => true },
+    })
+    const retriedWhole = [...whole, "user Say hello.", "text Hello."]
+    const retrying = retryHost(true)
+    assert.deepEqual(drawn((await retrying.refreshedSnapshot(again))!.base!.entries), retriedWhole, "both prompts: the failed one from the journal, the retry from Devin's record")
+    const retryHeldBy = Date.now() + 3_000
+    while (!retrying.snapshot(again)?.baseSource && Date.now() < retryHeldBy) await new Promise((resolve) => setTimeout(resolve, 5))
+    assert.ok(retrying.snapshot(again)?.baseSource, "held by its session")
+    await retrying.stop()
+    const retryReopened = retryHost(true)
+    await retryReopened.refreshedSnapshot(again)
+    assert.deepEqual(drawn(retryReopened.snapshot(again)!.base!.entries), retriedWhole, "and both after a reload")
+    await retryReopened.stop()
+    await mismatches.flush()
+    assert.equal(findings(), 0, "with nothing to report")
+  }
+  console.log("PASS: a Devin turn that failed, which its record drops, and a call's result keep their place in Mako's history after the journal hands its history to the session and reloads")
+
   // Show original reads an entry of the window's view by its address: the record's bytes and the stream lines it names.
   const lines = [{ method: "item/agentMessage/delta", delta: "Looking at " }, { method: "item/agentMessage/delta", delta: "them." }].map((line) => `${JSON.stringify(line)}\n`)
   // The launch's file took the session's id once the harness named it.

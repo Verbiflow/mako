@@ -1,5 +1,6 @@
 import { getMako } from "@/lib/bridge"
 import { acpStore, replaceAcpConversation } from "@/state/acp-state"
+import { receiveLive, unlistedSince, unplacedReadAnswered, unplacedReadGoesOut } from "@/state/live-door"
 import { projectAcp, projectLive } from "@/state/live-projection"
 import { responseText, type Exchange } from "@/lib/exchanges"
 import type { LiveSnapshot } from "@/lib/types"
@@ -151,12 +152,29 @@ export function loadReleasedLiveTurn(id: string, turnId: string): Promise<void> 
   const key = JSON.stringify([id, turnId])
   const loading = turnLoads.get(key)
   if (loading) return loading
+  const owner = acpStore.get().conversations[id]
+  if (owner?.kind !== "live" || !owner.releasedTurns?.some(turn => turn.id === turnId)) return Promise.resolve()
   const work = (async () => {
+    // Keep the door's retirement record through the import and any existing hydration, including unlist/relist of
+    // the same Session and epoch. Equality with the eventual owner alone cannot distinguish that new incarnation.
+    const since = unplacedReadGoesOut()
     const release = transcriptReaders.protect(liveReadingSource(id), turnId)
-    // A view the host let go is renewed and the turn read again from the new one; a renewal that read the whole
-    // window back has brought the turn with it.
-    try { await (await import("@/state/live-recovery")).withLiveView(id, () => restoreReleasedTurn(id, turnId)) }
-    finally { release() }
+    const isCurrent = () => {
+      const current = acpStore.get().conversations[id]
+      return !unlistedSince(id, since) && current?.kind === "live" && current.epoch === owner.epoch && current.sessionId === owner.sessionId
+    }
+    try {
+      const { recaptureLive, withLiveView } = await import("@/state/live-recovery")
+      // Streaming can complete a turn after the held view was captured. A conditional refresh keeps that old view;
+      // recapture it over the loaded window before reading coordinates the old view may never have held.
+      if (!isCurrent()) return
+      await recaptureLive(id, isCurrent)
+      await withLiveView(id, async () => {
+        if (!isCurrent()) return
+        await restoreReleasedTurn(id, turnId)
+      })
+    }
+    finally { release(); unplacedReadAnswered() }
   })().finally(() => turnLoads.delete(key))
   turnLoads.set(key, work)
   return work
@@ -169,7 +187,8 @@ async function restoreReleasedTurn(id: string, turnId: string): Promise<void> {
   const page = await readLiveValue<LiveHistoryPage>(id, { kind: "range", token: held.history.token,
     from: { blocks: turn.blocks.start, base: turn.base.start }, to: { blocks: turn.blocks.end, base: turn.base.end } })
   const current = acpStore.get().conversations[id]
-  if (current?.kind !== "live" || current.history?.token !== held.history.token ||
+  if (current?.kind !== "live" || current.epoch !== held.epoch || current.sessionId !== held.sessionId ||
+      current.history?.token !== held.history.token ||
       current.releasedTurns?.find(item => item.id === turnId) !== turn) return
   if (page.history.token !== held.history.token || page.history.blockStart !== turn.blocks.start ||
       page.history.blockEnd !== turn.blocks.end || page.blocks.length !== turn.blocks.end - turn.blocks.start ||
@@ -177,7 +196,7 @@ async function restoreReleasedTurn(id: string, turnId: string): Promise<void> {
         page.base.entries.length !== turn.base.end - turn.base.start)))
     throw new Error("The reloaded turn did not match this conversation view.")
   const next = restoreTurn(current, turn, page)
-  replaceAcpConversation(id, { ...next, projection: projectAcp(next) })
+  receiveLive(id, { from: "answer" }, () => replaceAcpConversation(id, { ...next, projection: projectAcp(next) }))
 }
 
 function restoreTurn<T extends { blocks: Entry[]; base?: LiveSnapshot["base"]; history?: LiveSnapshot["history"]; releasedTurns?: ReleasedTurn[] }>(
@@ -213,7 +232,7 @@ export function loadLiveHistoryDetail(id: string, token: string, at: LiveHistory
       const blocks = current.blocks.slice()
       blocks[local] = value
       const next = { ...current, blocks }
-      replaceAcpConversation(id, { ...next, projection: projectAcp(next) })
+      receiveLive(id, { from: "answer" }, () => replaceAcpConversation(id, { ...next, projection: projectAcp(next) }))
     } else {
       const base = current.base
       if (!base) return
@@ -222,7 +241,7 @@ export function loadLiveHistoryDetail(id: string, token: string, at: LiveHistory
       const entries = base.entries.slice()
       entries[local] = value
       const next = { ...current, base: { ...base, entries } }
-      replaceAcpConversation(id, { ...next, projection: projectAcp(next) })
+      receiveLive(id, { from: "answer" }, () => replaceAcpConversation(id, { ...next, projection: projectAcp(next) }))
     }
     } finally { release() }
   })().finally(() => loading.delete(key))

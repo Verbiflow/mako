@@ -21,6 +21,7 @@ export {
   type DecodedBlock,
   type DecodedEntry,
   type Harness,
+  type NativeAgentOrigin,
   type Thread,
   type ThreadOrigin,
   type ThreadPage,
@@ -112,6 +113,7 @@ export {
   cursorSdkAgentIdForDirectory,
   cursorSdkDirectoryName,
   readCursorSdkAgent,
+  readCursorSdkAgentRoot,
   type CursorSdkAgentRecord,
   type CursorSdkImport,
 } from "./providers/cursor-sdk-index.js"

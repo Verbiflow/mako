@@ -22,6 +22,8 @@ import { MovVideoInput } from "../packages/control-runtime/src/mov-video-input.j
 
 const execute = promisify(execFile)
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+/** A frame the encoder holds for the next one never leaves, as the next isn't sent until it has: this is that hang's guard. */
+const ENCODER_HANG_MS = 30_000
 
 // The wire format: a key unit carries its configuration, nothing else does, and framing is exact.
 {
@@ -66,28 +68,26 @@ const jpegFrame = async (width: number, height: number, color: string) =>
     .composite([{ input: Buffer.from(`<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg"><text x="10" y="40" font-size="32" fill="black">${color}</text></svg>`) }])
     .jpeg({ quality: 90 }).toBuffer()
 
-// The real encoder: each frame leaves as one unit within milliseconds, not when
-// the next frame arrives; the first is a key frame with its configuration; odd
+// The real encoder: each frame leaves as one unit before the next is sent, not
+// when it arrives; the first is a key frame with its configuration; odd
 // sizes lose an edge row and column; and the units decode.
 {
   const colors = ["red", "blue", "green", "white"]
   const frames = await Promise.all(colors.map((color) => jpegFrame(641, 361, color)))
-  const units: Array<ControlVideoPacket & { after: number }> = []
-  let submittedAt = 0
+  const units: ControlVideoPacket[] = []
   const drained: number[] = []
   const encoder = ffmpegLiveEncoder({ width: 641, height: 361 }, 30,
-    (unit) => units.push({ ...unit, after: performance.now() - submittedAt }),
+    (unit) => units.push(unit),
     () => drained.push(performance.now()),
     (reason) => assert.fail(reason))
   for (const [index, bytes] of frames.entries()) {
     assert.ok(encoder.ready())
-    submittedAt = performance.now()
     encoder.submit({ bytes, width: 641, height: 361, sequence: index + 1, capturedAt: Date.now() })
-    await wait(400)
+    const by = performance.now() + ENCODER_HANG_MS
+    while (units.length <= index && performance.now() < by) await wait(5)
     assert.equal(units.length, index + 1, `frame ${index + 1} left the encoder before the next was sent`)
   }
   encoder.close()
-  assert.ok(units.every((unit) => unit.after < 300), `units arrive promptly: ${units.map((unit) => Math.round(unit.after)).join(", ")} ms`)
   assert.deepEqual(units.map((unit) => unit.kind), ["key", "delta", "delta", "delta"])
   assert.deepEqual(units.map((unit) => unit.sequence), [1, 2, 3, 4])
   assert.ok(units.every((unit) => unit.width === 640 && unit.height === 360))

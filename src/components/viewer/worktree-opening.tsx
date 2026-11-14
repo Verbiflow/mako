@@ -25,7 +25,7 @@ export function WorktreeOpening({ worktree, start }: { worktree: ThreadWorktree;
       <span aria-hidden className="h-px min-w-0 flex-1 bg-hairline" />
       <Tooltip>
         <TooltipTrigger asChild>
-          <span tabIndex={0} className="animate-enter flex min-w-0 max-w-[80%] items-center gap-1.5 rounded-md px-1 outline-none focus-visible:ring-1 focus-visible:ring-ring">
+          <span tabIndex={0} className="animate-enter flex min-w-0 max-w-[80%] items-center gap-1.5 px-1 outline-none focus-visible:ring-1 focus-visible:ring-ring">
             <GitBranchIcon aria-hidden className="size-3 shrink-0" />
             <span className="min-w-0 truncate">
               On <span className="text-muted-foreground">{worktree.branch}</span>

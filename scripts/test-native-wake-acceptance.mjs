@@ -3,18 +3,18 @@
 import { execFile, spawn } from "node:child_process"
 import { once } from "node:events"
 import { randomUUID } from "node:crypto"
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
 import { processResources, summarizeProcessResources } from "./lib/control-process-resources.mjs"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 const nativeStores = new NativeStores(false)
 
 if (!process.versions.electron) {
-  const root = await mkdtemp(join(tmpdir(), "mako-native-wake-"))
+  const root = testScratch("mako-native-wake-")
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-native-wake", main: fileURLToPath(import.meta.url) }))
   console.log(`Native acceptance artifacts: ${root}`)
   // A person of its own (`scratchHostHome`): the harnesses keep their sessions in `<root>/home`, never in the person's stores.

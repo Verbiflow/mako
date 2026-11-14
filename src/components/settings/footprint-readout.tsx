@@ -14,7 +14,7 @@ const DROPPED_BY = [["client", "by Mako's watcher"], ["kernel", "by macOS"], ["c
 export function FootprintReadout({ footprint }: { footprint: MakoFootprint }) {
   const { watching, rescans } = footprint
   return (
-    <div data-footprint-readout="" className="mt-2 rounded-lg bg-surface ring-1 ring-hairline">
+    <div data-footprint-readout="" className="mt-2 bg-raised">
       <div className="flex items-start gap-2 px-3 py-2">
         <div className="min-w-0 flex-1">
           <p className="text-ui">Mako's footprint</p>
@@ -26,7 +26,8 @@ export function FootprintReadout({ footprint }: { footprint: MakoFootprint }) {
           Copy the readings
         </Action>
       </div>
-      <div className="divide-y divide-hairline border-t border-hairline">
+      <div className="">
+        {footprint.attributionFailure !== undefined ? <Line title="File attribution" detail={`Unavailable; Mako is retrying. ${footprint.attributionFailure}`} caution /> : null}
         <Line title="Processes" detail={describeProcesses(footprint)} />
         <Line title="File watching" detail={describeWatching(watching)} caution={!watching.delivery.ok} />
         <Line title="Dropped file events" detail={describeDrops(watching)} />

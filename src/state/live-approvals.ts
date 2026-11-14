@@ -1,6 +1,5 @@
-import { readLiveSnapshot } from "@/state/live-history"
 import { getMako } from "@/lib/bridge"
-import { applyLiveSnapshot } from "@/state/live-recovery"
+import { readBackLive } from "@/state/live-recovery"
 import { ANSWERED_DIFFERENTLY } from "@mako/host/contracts/approval-response"
 import type { LivePermissionResponse } from "@mako/host/contracts/providers-acp"
 import { toast } from "sonner"
@@ -14,8 +13,8 @@ import { toast } from "sonner"
 export async function answerLiveApproval(id: string, requestId: string, response: LivePermissionResponse): Promise<boolean> {
   let failure: unknown
   try { await getMako().livePermission(id, requestId, response) } catch (error) { failure = error }
-  const snapshot = await readLiveSnapshot(id).catch(() => null)
-  if (snapshot) applyLiveSnapshot(snapshot)
+  // Read back as it lands, which may be after newer batches: one older than what this window took meanwhile is past.
+  const snapshot = await readBackLive(id)
   if (!failure) return true
   const message = failure instanceof Error ? failure.message : String(failure)
   if (message.includes(ANSWERED_DIFFERENTLY)) {

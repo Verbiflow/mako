@@ -79,4 +79,5 @@ export const openCodeModelRoutes: ModelRouteAdapter = {
   kinds: ["gateway", "local", "custom"],
   via: "Each connection is a provider of its own (`mako-<id>`, `@ai-sdk/openai-compatible`) in `OPENCODE_CONFIG_CONTENT`, its key in a variable the provider names in `env`; OpenCode's discovery lists its models.",
   apply: applyOpenCodeRoutes,
+  model: (connection, model) => `${openCodeConnectionProvider(connection)}/${model}`,
 }

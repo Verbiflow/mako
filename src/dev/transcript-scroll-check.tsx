@@ -1,6 +1,6 @@
 // Explicit fixture page: /scripts/transcript-scroll-browser.html. Never imported by Mako.
 import { createRoot } from "react-dom/client"
-import { useEffect, useState } from "react"
+import { Profiler, useEffect, useState } from "react"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
 import { toExchanges } from "@/lib/exchanges"
 import type { ChatMessage } from "@/lib/types"
@@ -93,6 +93,8 @@ const params = new URL(location.href).searchParams
 const TURNS = Number(params.get("turns") ?? 90)
 /** With `paged=N`, the source holds back all but the newest N turns and serves 20 per request. */
 const PAGED = Number(params.get("paged") ?? 0)
+/** How long the paged source takes to answer, `answer` milliseconds when given: long enough, a finger that asked rests first. */
+const ANSWER_MS = Number(params.get("answer") ?? 300)
 // A history page can begin inside one long answer, before its prompt loads.
 const base = conversation(TURNS).filter((message) =>
   message.role !== "user" ||
@@ -100,6 +102,8 @@ const base = conversation(TURNS).filter((message) =>
 )
 
 interface ProbeState {
+  /** The Thread shown: `open` switches the one timeline to another, as the desk does. */
+  identity: string
   messages: ChatMessage[]
   earlier: ChatMessage[]
   loading: boolean
@@ -110,6 +114,7 @@ let setProbe: (update: (state: ProbeState) => ProbeState) => void = () => {}
 
 export function Probe() {
   const [state, set] = useState<ProbeState>(() => ({
+    identity: "scroll-probe",
     messages: PAGED ? base.slice(-2 * PAGED) : base,
     earlier: PAGED ? base.slice(0, -2 * PAGED) : [],
     loading: false,
@@ -121,7 +126,7 @@ export function Probe() {
   const exchanges = toExchanges(state.messages)
   const loadEarlier = async () => {
     set((current) => ({ ...current, loading: true }))
-    await new Promise((resolve) => setTimeout(resolve, 300))
+    await new Promise((resolve) => setTimeout(resolve, ANSWER_MS))
     set((current) => ({
       ...current,
       loading: false,
@@ -132,15 +137,20 @@ export function Probe() {
   return (
     <TooltipProvider>
       <main className="agent-surface relative isolate flex h-screen flex-col overflow-hidden">
-        <ConversationTimeline
-          identity="scroll-probe"
-          exchanges={exchanges}
-          streamingId={state.streamingId}
-          hasEarlier={state.earlier.length > 0}
-          loadingEarlier={state.loading}
-          onLoadEarlier={PAGED ? loadEarlier : undefined}
-          empty={null}
-        />
+        <Profiler id="timeline" onRender={() => {
+          const node = document.querySelector("[data-transcript-viewport]")
+          window.__commits.push({ identity: state.identity, virtualized: !!node?.hasAttribute("data-virtualized"), rows: node?.querySelectorAll("[data-exchange]").length ?? 0 })
+        }}>
+          <ConversationTimeline
+            identity={state.identity}
+            exchanges={exchanges}
+            streamingId={state.streamingId}
+            hasEarlier={state.earlier.length > 0}
+            loadingEarlier={state.loading}
+            onLoadEarlier={PAGED ? loadEarlier : undefined}
+            empty={null}
+          />
+        </Profiler>
       </main>
     </TooltipProvider>
   )
@@ -148,6 +158,8 @@ export function Probe() {
 
 declare global {
   interface Window {
+    /** Each commit of the timeline: the Thread it drew, whether windowed, and the turns mounted. */
+    __commits: { identity: string; virtualized: boolean; rows: number }[]
     probe: {
       /** Starts a new turn that streams until `finishTurn`. */
       startTurn: () => string
@@ -160,11 +172,28 @@ declare global {
        * and `uneven` adds a prompt near the end and drops an early one.
        */
       checkpoint: (variant?: "renamed" | "retold" | "reworded" | "uneven") => void
+      /** Switches the timeline to another Thread of `turns` finished turns, as opening one does. */
+      open: (identity: string, turns: number) => void
+      /** Keeps the first `turns` turns, as a rewind does. */
+      rewind: (turns: number) => void
     }
   }
 }
 
+window.__commits = []
+
 window.probe = {
+  open(identity, turns) {
+    const messages = conversation(turns).map((message) => ({ ...message, id: `${identity}-${message.id}` }))
+    setProbe((state) => ({ ...state, identity, messages, earlier: [], streamingId: undefined }))
+  },
+  rewind(turns) {
+    setProbe((state) => {
+      let kept = 0
+      const messages = state.messages.filter((message) => (message.role !== "user" || (kept += 1) <= turns) && kept <= turns)
+      return { ...state, messages, streamingId: undefined }
+    })
+  },
   startTurn() {
     const index = Date.now()
     setProbe((state) => ({

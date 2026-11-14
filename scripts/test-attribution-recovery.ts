@@ -1,7 +1,8 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync, chmodSync } from "node:fs"
+import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync, chmodSync } from "node:fs"
+import { stampFile } from "./lib/file-stamp.ts"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
@@ -40,7 +41,7 @@ test("work thrown away is listed, restored by a rename as the person's, and coun
   await tracker.track({ id: "repo", path: repo, kind: "workspace" })
   const view: JournalView = { store: tracker.store, roots: () => tracker.rootStates().values(), author: (seq) => tracker.authorOf(seq) }
   const heard = (path: string) => {
-    utimesSync(path, clock.now() / 1000, clock.now() / 1000)
+    stampFile(path, clock.now())
     events.changed(path)
   }
   const call = async (id: string, effects: ReportedEffect[], act: () => void) => {

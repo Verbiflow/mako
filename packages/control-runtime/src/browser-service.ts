@@ -346,6 +346,8 @@ export interface BrowserServiceOptions {
   /** The browser preferred until someone chooses one, such as a machine's own; it needs no setup. */
   defaultBrowser?: string
   focusPolicy?: BrowserFocusPolicy
+  /** How long a browser has to acknowledge a capture's stop before its attachment is released; a test that holds that acknowledgement sets it. */
+  captureStopMs?: number
 }
 const FOCUS_INPUT_ACTIONS: ReadonlySet<BrowserCommand["action"]> = new Set([
   "click",
@@ -456,6 +458,7 @@ export class BrowserService {
   private readonly discover: () => Promise<LocalBrowser[]>
   private refreshing: Promise<BrowserControlStatus[]> | undefined
   private readonly focusPolicy: BrowserFocusPolicy
+  private readonly captureStopMs: number | undefined
   /**
    * Applications attached at run time (`attach`): an Electron or Chromium
    * app Mako launched with a private debugging port. They live beside the
@@ -493,6 +496,7 @@ export class BrowserService {
     this.defaultApplication = options.defaultApplication
     this.defaultBrowser = options.defaultBrowser
     this.focusPolicy = options.focusPolicy ?? "action"
+    this.captureStopMs = options.captureStopMs
     this.browsers = new Map(
       (Array.isArray(definitions) ? definitions : []).map((definition) => [
         definition.id,
@@ -1150,7 +1154,7 @@ export class BrowserService {
       if (this.focusPolicy === "lease") await focus.acquire(signal)
       this.bindings.set(key, {
         capture: new BrowserCapture(
-          connection, sessionId, this.focusPolicy === "off" ? undefined : focus
+          connection, sessionId, this.focusPolicy === "off" ? undefined : focus, this.captureStopMs
         ),
         owner,
         target,

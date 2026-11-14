@@ -1,10 +1,10 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 // Shared stores a newer Mako changed, in the window, against the mock bridge, light and dark:
 //
@@ -30,7 +30,7 @@ if (process.versions.electron) {
 } else {
   const { createServer } = await import("vite")
   const { default: electronPath } = await import("electron")
-  const root = process.argv[2] ?? await mkdtemp(join(tmpdir(), "mako-store-formats-ui-"))
+  const root = testScratch("mako-store-formats-ui-", { given: process.argv[2] })
   await mkdir(root, { recursive: true })
   const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, watch: null, fs: { strict: false } } })
   await server.listen()
@@ -46,7 +46,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`Shared store formats UI evidence: ${root}`)
 }
 
 async function check() {
@@ -131,11 +130,14 @@ async function check() {
       }
       await until(`Boolean(${notice})`, "the ledger line above the composer")
       assert.equal(await evaluate(`${notice}.dataset.ledgerNotice`), "handoff")
-      assert.deepEqual(await evaluate(`[...${notice}.querySelectorAll('span')].map((span) => span.textContent)`), [
-        "A newer Mako (0.163.0) updated how Mako keeps track of sessions; this one can show this session but can't resume it.",
-        "A reply goes on from its transcript in a new session.",
-      ], "what changed, then what a reply does, as the version notice says them")
-      assert.ok(["Update", "Install update"].includes(await evaluate(`${notice}.querySelector('[data-update-mako]').textContent`)), "with Update")
+      assert.ok((await evaluate(`${notice}.textContent`)).includes("A newer Mako (0.163.0) updated how Mako keeps track of sessions; this one can show this session but can't resume it."), "what changed, on its one line")
+      // What a reply does is behind the line's info button, as the version notice's is.
+      const more = `${notice}.querySelector('button[aria-label="More about this"]')`
+      await click(more)
+      await until(`document.querySelector('[data-slot="popover-content"]')?.textContent.includes("A reply goes on from its transcript in a new session.")`, "what a reply does")
+      await click(more)
+      await until(`!document.querySelector('[data-slot="popover-content"]')`, "the detail closed")
+      assert.ok(await evaluate(`Array.from(${notice}.querySelectorAll('button')).some((button) => ["Update", "Install update"].includes(button.textContent))`), "with Update")
       await capture(`composer-ledger-${theme}.png`, await bounds(`${notice}.closest('[data-composer]') ?? ${notice}.parentElement`, 16))
 
       // Settings › Diagnostics: one line for each store a newer Mako changed.

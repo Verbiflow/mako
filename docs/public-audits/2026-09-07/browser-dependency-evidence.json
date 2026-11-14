@@ -6,11 +6,11 @@
   },
   "sources": {
     "browser_harness.daemon": {
-      "path": "/Users/kashyab/.local/share/uv/tools/browser-use/lib/python3.12/site-packages/browser_harness/daemon.py",
+      "path": "~/.local/share/uv/tools/browser-use/lib/python3.12/site-packages/browser_harness/daemon.py",
       "sha256": "7f7e4a6dcbeb86774bb6a66be44aeac86e149d4fe20cec2a5d15ae2f39a63193"
     },
     "browser_harness.helpers": {
-      "path": "/Users/kashyab/.local/share/uv/tools/browser-use/lib/python3.12/site-packages/browser_harness/helpers.py",
+      "path": "~/.local/share/uv/tools/browser-use/lib/python3.12/site-packages/browser_harness/helpers.py",
       "sha256": "d04296715d97c50f26e2a5b0d8419fc863644e94f773917e82a2d691384054de"
     }
   },

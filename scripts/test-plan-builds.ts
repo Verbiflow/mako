@@ -1,11 +1,11 @@
 import assert from "node:assert/strict"
-import { mkdtempSync, rmSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { rmSync } from "node:fs"
 import { join } from "node:path"
 import { MAX_PLAN_BUILDS, type PlanBuilds as PlanBuildsState } from "@mako/host/contracts/plan-builds"
 import { PlanBuilds } from "@mako/host/workspaces/plan-builds"
+import { testScratch } from "./lib/test-scratch.mjs"
 
-const dir = mkdtempSync(join(tmpdir(), "mako-plan-builds-"))
+const dir = testScratch("mako-plan-builds-")
 try {
   const file = join(dir, "plan-builds.json")
   const announced: PlanBuildsState[] = []

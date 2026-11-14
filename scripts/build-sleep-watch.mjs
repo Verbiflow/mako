@@ -3,7 +3,8 @@
 //
 // The helper (native/sleep-watch-macos/main.swift) hears the Mac's sleep before it happens and holds it briefly while
 // the host hands agents at work to the cloud (`SleepHandOff` in packages/host/src/conversations/sleep-handoff.ts). It
-// ships beside the executable in Contents/MacOS, where the host looks for it; a checkout builds its own on first use.
+// ships beside the executable in Contents/MacOS, where the host looks for it; a checkout's hosts share this build, which
+// `build:electron` makes.
 //
 // Output: build/mako-sleep-watch (arm64, matching the app target).
 // Skipped on other platforms and when swiftc is missing, unless --require.

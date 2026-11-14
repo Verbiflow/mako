@@ -126,13 +126,19 @@ const initialState: ViewerState = {
 export const viewerStore = createStore<ViewerState>(initialState)
 export const useViewer = createHook(viewerStore)
 
+// Whatever writes the panes, a restore included, they're settled to what can be shown before a frame draws them.
+viewerStore.subscribe(() => {
+  const state = viewerStore.get()
+  if (shownPanes(state.documents, state.panes) !== state.panes) commit(state.documents, state.panes, state.focusedPaneId)
+})
+
 /** Bumped per document read so a slow result for a closed tab cannot land. */
 let generation = 0
 let documentSequence = 0
 let watchGeneration = 0
 const requests = new Map<string, number>()
 
-function activeDocument(
+export function activeDocument(
   documents: Record<string, ViewerDocument>,
   panes: ViewerPane[],
   focusedPaneId: string
@@ -142,12 +148,36 @@ function activeDocument(
   return pane?.activeId ? documents[pane.activeId] : undefined
 }
 
+/**
+ * The panes the workbench may show: each holds only the chat and documents it can draw, and a pane left with neither
+ * is gone, so no split is ever left with a blank half under it (seen on 2026-11-11, the transcript squeezed into the
+ * top of the window above an empty pane). The same panes when nothing had to go.
+ */
+export function shownPanes(documents: Record<string, ViewerDocument>, panes: ViewerPane[]): ViewerPane[] {
+  let changed = false
+  const kept = panes.flatMap((pane) => {
+    const tabIds = pane.tabIds.filter((id) => id === AGENT_TAB_ID || id in documents)
+    if (!tabIds.length) {
+      changed = true
+      return []
+    }
+    const activeId = pane.activeId !== undefined && tabIds.includes(pane.activeId) ? pane.activeId : tabIds.at(-1)
+    if (tabIds.length === pane.tabIds.length && activeId === pane.activeId) return [pane]
+    changed = true
+    return [{ ...pane, tabIds, activeId }]
+  })
+  if (!kept.length) return [{ id: PRIMARY_PANE, tabIds: [AGENT_TAB_ID], activeId: AGENT_TAB_ID }]
+  return changed ? kept : panes
+}
+
 function commit(
   documents: Record<string, ViewerDocument>,
-  panes: ViewerPane[],
-  focusedPaneId: string,
+  given: ViewerPane[],
+  focusedPane: string,
   split = viewerStore.get().split
 ) {
+  const panes = shownPanes(documents, given)
+  const focusedPaneId = panes.some((pane) => pane.id === focusedPane) ? focusedPane : panes[0]!.id
   const active = activeDocument(documents, panes, focusedPaneId)
   viewerStore.set({
     documents,

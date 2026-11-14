@@ -95,7 +95,7 @@ export function PlanDecisionBar({ decision }: { decision: PlanDecision }) {
                   <button
                     key={option.optionId}
                     type="button"
-                    className="pressable block w-full rounded px-2 py-1.5 text-left text-ui hover:bg-fill-hover"
+                    className="pressable block w-full px-2 py-1.5 text-left text-ui hover:bg-fill-hover"
                     onClick={() => acp.answerPermission(option.optionId)}
                   >
                     {option.name}

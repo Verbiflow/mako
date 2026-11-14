@@ -204,7 +204,7 @@ function CommitEditor({
   return (
     <div data-commit-box data-busy={drafting || busy || pushState.kind === "pushing" || undefined} data-drafting={drafting || undefined} className="shrink-0 px-2.5 pt-2.5 pb-0.5">
       <BorderBeam size="md" colorVariant="mono" theme={theme} active={drafting} brightness={1.8} borderRadius={0}>
-      <div className="commit-editor relative overflow-hidden rounded-lg bg-raised ring-1 ring-hairline focus-within:ring-border">
+      <div className="commit-editor relative overflow-hidden bg-raised ring-1 ring-hairline focus-within:ring-border">
         <textarea
           aria-label="Commit message"
           ref={field}
@@ -329,7 +329,7 @@ function CommitEditor({
               for the chord the padding evens back out. */}
           {/* Commit, and behind its chevron the two motions that follow it
               most: push, or open the pull request form. */}
-          <span className={cn("flex items-stretch rounded-md transition-colors duration-150", !armed && "bg-foreground/[0.06]")}>
+          <span className={cn("flex items-stretch transition-colors duration-150", !armed && "bg-foreground/[0.06]")}>
             <Action
               tone={armed ? "solid" : "ghost"}
               size="xs"

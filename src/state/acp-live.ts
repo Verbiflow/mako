@@ -4,12 +4,15 @@ import { harnessLabel } from "@/lib/harness-label"
 import { workspaceName } from "@/lib/format"
 import {
   acpStore,
+  conversationRoster,
   updateAcpConversation,
   type LiveAcpConversation,
 } from "@/state/acp-state"
 import {
   liveSubjectIds,
   noteOutcome,
+  noticeId,
+  retireNotice,
   retireSubject,
   subjectId,
   subjectWorkspace,
@@ -19,9 +22,11 @@ import { setThreadAttention, setThreadRunning, threadsStore } from "@/state/thre
 import { describeProviderFailure } from "@mako/host/contracts/provider-failure"
 import { autoContinuePending } from "@/state/prompt-delivery"
 import { signInPause } from "@mako/host/contracts/sign-in-hold"
+import { agentAskLine } from "@mako/host/contracts/agent-asks"
+import { agentAskOf } from "@/state/agent-asks"
 import { asks, requestWaiting, type Waiting } from "@mako/host/contracts/notifications"
 import { bareCommand } from "@mako/sessions/tool-identity"
-import { rosterChildren } from "@mako/host/contracts/children"
+import { askWords, finAskWaiting, rosterChildren } from "@mako/host/contracts/children"
 import { personAsks } from "@/state/fin-asks"
 
 export function updateLive(
@@ -83,10 +88,15 @@ function permissionWaiting(permission: LivePermissionRequest): Waiting {
   return requestWaiting(permission, bareCommand)
 }
 
-/** The permission each conversation was last asked about, to retire it once answered. */
-const askedPermissions = new Map<string, string>()
-/** The sign-out each conversation was last announced for, by when it began. */
-const announcedSignIns = new Map<string, number>()
+/**
+ * The asks each conversation said itself, by what each is (its provider or agent ask's id, a sign-out's start), with the notice it
+ * was said as: each is taken back by that notice alone once it no longer waits (`retireNotice`), whatever else waits on
+ * the same subject, its Fins' asks included.
+ */
+const announcedOwnAsks = new Map<string, string>()
+const announcedSignIns = new Map<string, { at: number; notice: string }>()
+/** What a Session another device runs last asked here (`noteListedOutcome`), by the notice it was said as. */
+const listedAsks = new Map<string, string>()
 
 /** A session paused on a sign-out waits on the person, like a question; it hasn't failed. */
 function signedOutDetail(conversation: LiveAcpConversation): string {
@@ -109,36 +119,37 @@ function noteLiveOutcome(
   const wasBusy = previousStatus === "running" || previousStatus === "starting"
   if (busy && !wasBusy)
     for (const id of liveSubjectIds(conversation.key, conversation.threadPath)) retireSubject(id)
-  const asked = askedPermissions.get(conversation.key)
-  if (permission) {
-    // A Fin's ask is said on its Apex once it's the person's (`noteFinAsks`): one its Apex answers is never theirs.
-    if (asked !== permission.id && !conversation.parent) {
-      askedPermissions.set(conversation.key, permission.id)
-      const waiting = permissionWaiting(permission)
-      noteOutcome({
-        kind: waiting.for,
-        subject,
-        marker: permission.id,
-        detail: waiting.line,
-        quiet,
-      })
-    }
-    return
+  // A provider's permission or the agent's tool ask: retire only the notice for the ask that stopped waiting.
+  // A Fin's ask is announced on its Apex once it belongs to the person (`noteFinAsks`).
+  const agentAsk = agentAskOf(conversation)
+  const own = permission ?? agentAsk
+  const waiting = permission ? permissionWaiting(permission) : agentAsk ? { for: "needs-you" as const, line: agentAskLine(agentAsk.want) } : undefined
+  const notice = own && waiting ? noticeId(subject, waiting.for, own.id) : undefined
+  const asked = announcedOwnAsks.get(conversation.key)
+  if (asked && asked !== notice) {
+    announcedOwnAsks.delete(conversation.key)
+    retireNotice(asked)
   }
-  if (asked !== undefined) {
-    askedPermissions.delete(conversation.key)
-    for (const id of liveSubjectIds(conversation.key, conversation.threadPath))
-      retireSubject(id, "asks")
+  if (own && waiting && notice && asked !== notice && !conversation.parent) {
+    announcedOwnAsks.set(conversation.key, notice)
+    noteOutcome({ kind: waiting.for, subject, marker: own.id, detail: waiting.line, quiet })
   }
+  const pause = own ? undefined : signInPause(conversation.requests ?? [])
+  const signIn = announcedSignIns.get(conversation.key)
+  if (signIn && signIn.at !== pause?.hold.at) {
+    announcedSignIns.delete(conversation.key)
+    retireNotice(signIn.notice)
+  }
+  if (own) return
   if (session.status === "closed") {
     for (const id of liveSubjectIds(conversation.key, conversation.threadPath)) retireSubject(id)
     return
   }
-  const pause = signInPause(conversation.requests ?? [])
   if (pause) {
-    if (announcedSignIns.get(conversation.key) !== pause.hold.at) {
-      announcedSignIns.set(conversation.key, pause.hold.at)
-      noteOutcome({ kind: "needs-you", subject, marker: `sign-in:${pause.hold.at}`, detail: signedOutDetail(conversation), quiet })
+    if (signIn?.at !== pause.hold.at) {
+      const marker = `sign-in:${pause.hold.at}`
+      announcedSignIns.set(conversation.key, { at: pause.hold.at, notice: noticeId(subject, "needs-you", marker) })
+      noteOutcome({ kind: "needs-you", subject, marker, detail: signedOutDetail(conversation), quiet })
     }
     return
   }
@@ -184,41 +195,66 @@ export function noteListedOutcome(
   attention: LiveSummary["attention"]
 ): void {
   const ids = liveSubjectIds(conversation.key, conversation.threadPath)
-  if (previous.waitingOn && conversation.waitingOn !== previous.waitingOn)
-    for (const id of ids) retireSubject(id, "asks")
+  // What it asked, answered or asked otherwise since, goes by its notice alone.
+  const asked = listedAsks.get(conversation.key)
+  if (asked && conversation.waitingOn !== previous.waitingOn) {
+    listedAsks.delete(conversation.key)
+    retireNotice(asked)
+  }
   if (conversation.session.status === "running" && !conversation.waitingOn && previous.session.status !== "running")
     for (const id of ids) retireSubject(id)
   if (!attention) return
+  const subject = liveSubject(conversation)
   noteOutcome({
     kind: attention.kind,
-    subject: liveSubject(conversation),
+    subject,
     marker: attention.key,
     detail: asks(attention.kind) ? conversation.waitingOn : undefined,
   })
+  if (asks(attention.kind)) listedAsks.set(conversation.key, noticeId(subject, attention.kind, attention.key))
 }
 
-/** Each Apex's Fins' asks said to the person so far, by Fin and ask. */
-const announcedFinAsks = new Map<string, ReadonlySet<string>>()
+/**
+ * Each Apex Thread's Fins' asks said to the person so far, by Fin and ask, with the notice each was said as: kept by the
+ * Thread, so each is taken back by its own state whichever of its Sessions said it, held here or not.
+ */
+const announcedFinAsks = new Map<string, Map<string, string>>()
+
+/** The Thread a conversation's Fins are said for: its Thread, else the conversation alone. */
+const asksKey = (conversation: Pick<LiveAcpConversation, "key" | "threadId">) => conversation.threadId ?? conversation.key
+
+/** The asks of a conversation's Thread's Fins that are the person's, as they stand (`conversationRoster`), by id. */
+function openFinAsks(conversation: LiveAcpConversation) {
+  const asks = personAsks(rosterChildren(conversationRoster(acpStore.get(), conversation)))
+  return new Map(asks.map((ask) => [`${ask.fin}:${ask.ask.id}`, ask]))
+}
 
 /**
- * What an Apex's Fins ask the person, said on the Apex as its own ask would
- * be: once per ask, the Fin's name before its line, and taken back from the
- * attention centre once each is answered, on this device or another.
+ * What an Apex's Fins ask the person, each said once for its Thread, the Fin's name before its line, and each taken back
+ * by its own notice once its Fins no longer ask it, on this device or another: whichever of the Thread's Sessions said
+ * it and wherever the answer is heard, a batch or a snapshot read in recovery (a gap, a Session this window didn't hold).
+ * Its Thread's Fins as they stand (`conversationRoster`), since only its newest Session hears them move (`finReaders`).
+ * An ask still open that a snapshot shows unsaid (it came while this window held none of the Thread) is said quietly.
  */
 export function noteFinAsks(conversation: LiveAcpConversation, quiet = false): void {
-  const asks = personAsks(rosterChildren(conversation.nativeAgents))
-  const before = announcedFinAsks.get(conversation.key)
-  const now = new Set(asks.map((ask) => `${ask.fin}:${ask.ask.id}`))
-  if (!before && !now.size) return
-  if (before && [...before].some((id) => !now.has(id)))
-    for (const id of liveSubjectIds(conversation.key, conversation.threadPath)) retireSubject(id, "asks")
-  for (const ask of asks) {
-    const id = `${ask.fin}:${ask.ask.id}`
-    if (before?.has(id)) continue
-    noteOutcome({ kind: ask.ask.kind === "approval" ? "approval" : "question", subject: liveSubject(conversation), marker: `fin:${id}`, detail: `${ask.title}: ${ask.question}`, quiet })
+  const key = asksKey(conversation)
+  const said = announcedFinAsks.get(key) ?? new Map<string, string>()
+  const open = openFinAsks(conversation)
+  for (const [id, notice] of said) {
+    if (open.has(id)) continue
+    said.delete(id)
+    retireNotice(notice)
   }
-  if (now.size) announcedFinAsks.set(conversation.key, now)
-  else announcedFinAsks.delete(conversation.key)
+  const subject = liveSubject(conversation)
+  for (const [id, ask] of open) {
+    if (said.has(id)) continue
+    const words = finAskWaiting(ask.ask, ask.title, askWords(ask))
+    const marker = `fin:${id}`
+    noteOutcome({ kind: words.for, subject, marker, detail: words.line, quiet })
+    said.set(id, noticeId(subject, words.for, marker))
+  }
+  if (said.size) announcedFinAsks.set(key, said)
+  else announcedFinAsks.delete(key)
 }
 
 export function syncThreadStatus(

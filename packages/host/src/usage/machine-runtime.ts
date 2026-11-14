@@ -567,7 +567,8 @@ export class MachineRuntime {
         hostLog("machine", frame.type === "assign" ? "runs a Thread" : "fenced from a Thread", { threadId: frame.threadId, generation: frame.generation })
         // After the outbox has taken it, so the state says what it now runs.
         queueMicrotask(() => this.#publish())
-      } else if (frame.type !== "operation" && !MEDIA_FRAMES.has(frame.type)) this.#changed()
+      } else if (frame.type === "borrow") this.#send({ type: "borrow", threadId: frame.threadId, seq: frame.seq, push: frame.push })
+      else if (frame.type !== "operation" && !MEDIA_FRAMES.has(frame.type)) this.#changed()
     }
     // A phone reaches this machine's Threads' apps and signed files through the same link, as it does a Mac's.
     const ports = new PortRelay({ allowed: () => appPorts(this.#options.invoke), signedFiles: this.#options.signedFiles })

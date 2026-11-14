@@ -4,7 +4,7 @@
 
 Mako has demonstrable session correctness problems beneath the UI. The main cause is that native history and live activity use different, lossy representations and become separate sources for the same displayed conversation. Storage revisions, message identity, attachment ownership, and run outcomes need explicit contracts before further transcript polish.
 
-This review covers the current working tree, including the existing uncommitted session-reader, tool-output, and file-citation work. No application source was changed. Fresh Codex, MonoCode, and T3 Code references were fetched into `/tmp/mako-audit-2026-09-06`. The project's existing `ignore/` checkouts were preserved. There is no `repo_ignore` directory here; I interpreted that as the reference-clone request. Exact revisions are in [references.json](/Users/kashyab/pi-ui/docs/public-audits/2026-09-06/references.json).
+This review covers the current working tree, including the existing uncommitted session-reader, tool-output, and file-citation work. No application source was changed. Fresh Codex, MonoCode, and T3 Code references were fetched into `/tmp/mako-audit-2026-09-06`. The project's existing `ignore/` checkouts were preserved. There is no `repo_ignore` directory here; I interpreted that as the reference-clone request. Exact revisions are in [references.json](../../../docs/public-audits/2026-09-06/references.json).
 
 The findings below combine code inspection, synthetic native stores, and actual renderer state actions against a mocked host. They establish specific failures. They do not constitute a real-provider compatibility certification or an Electron rendering benchmark.
 
@@ -12,31 +12,31 @@ The findings below combine code inspection, synthetic native stores, and actual 
 
 ### 1. P1: archived content can be stale or never captured
 
-[archive.ts:181](/Users/kashyab/pi-ui/packages/sessions/src/archive.ts:181) rewrites `entries.jsonl` only when the entry count changes. Completing a tool or extending an assistant message often changes an existing entry. The archive then writes new metadata and state while retaining old content.
+[archive.ts:181](../../../packages/sessions/src/archive.ts#L181) rewrites `entries.jsonl` only when the entry count changes. Completing a tool or extending an assistant message often changes an existing entry. The archive then writes new metadata and state while retaining old content.
 
 The reproduction archives a user prompt and pending tool call, adds its output, and archives again. The saved revision advances from 100 to 200 bytes, but the result is still missing. Once the native store disappears, the archived conversation cannot recover that output.
 
-There is a separate coverage gap. [catalog.ts:193](/Users/kashyab/pi-ui/packages/sessions/src/catalog.ts:193) emits discovery events only when `emitChanges` is enabled. Archival scheduling happens only through those events at [catalog.ts:695](/Users/kashyab/pi-ui/packages/sessions/src/catalog.ts:695). Startup discovery and opening an unchanged session do not schedule capture. `scan()` followed by `open()` and a settle delay produced no archive.
+There is a separate coverage gap. [catalog.ts:193](../../../packages/sessions/src/catalog.ts#L193) emits discovery events only when `emitChanges` is enabled. Archival scheduling happens only through those events at [catalog.ts:695](../../../packages/sessions/src/catalog.ts#L695). Startup discovery and opening an unchanged session do not schedule capture. `scan()` followed by `open()` and a settle delay produced no archive.
 
 Use a content revision or hash, and commit content, source checkpoint, and metadata as one generation. Reconcile archive coverage from discovered revisions in a bounded background queue. Catalog notifications should not determine whether history survives provider pruning. The current archive is also a normalized, bounded copy, so it should not be described as a lossless native backup.
 
 ### 2. P1: normalization erases real user content before rendering
 
-[ThreadEntry and EntryBlock](/Users/kashyab/pi-ui/packages/sessions/src/format.ts:36) retain user text and assistant text, thinking, and flattened tools. They cannot express native attachments, rich tool output, native item identity, or distinct assistant phases.
+[ThreadEntry and EntryBlock](../../../packages/sessions/src/format.ts#L36) retain user text and assistant text, thinking, and flattened tools. They cannot express native attachments, rich tool output, native item identity, or distinct assistant phases.
 
-An image-only Claude user message disappears entirely through [claude.ts:443](/Users/kashyab/pi-ui/packages/sessions/src/providers/claude.ts:443). Cursor's text-content parser, OpenCode's user parsing, and Devin's ACP content extraction likewise retain text rather than complete media references. Reopening, archiving, or moving the conversation inherits this loss.
+An image-only Claude user message disappears entirely through [claude.ts:443](../../../packages/sessions/src/providers/claude.ts#L443). Cursor's text-content parser, OpenCode's user parsing, and Devin's ACP content extraction likewise retain text rather than complete media references. Reopening, archiving, or moving the conversation inherits this loss.
 
-The live path loses content independently. [acp-notifications.ts:34](/Users/kashyab/pi-ui/electron/acp-notifications.ts:34) converts message chunks through a text-only helper. Image and resource-link chunks produce no visible event. Standard ACP tool `content` is ignored when `rawOutput` is absent. The diagnostic supplies a completed tool with text in its standard content field; the resulting update has no output.
+The live path loses content independently. [acp-notifications.ts:34](../../../electron/acp-notifications.ts#L34) converts message chunks through a text-only helper. Image and resource-link chunks produce no visible event. Standard ACP tool `content` is ignored when `rawOutput` is absent. The diagnostic supplies a completed tool with text in its standard content field; the resulting update has no output.
 
-Codex's replay parser keeps only `type` and `text` from user content at [codex-app-parse.ts:425](/Users/kashyab/pi-ui/electron/codex-app-parse.ts:425). A `localImage` survives as a type label while its path is erased. `imageView` becomes `unsupported`, which the protocol handler ignores. The shared [Block contract](/Users/kashyab/pi-ui/electron/contracts/conversation-session.ts:63) names an image kind but has no image source; [Response](/Users/kashyab/pi-ui/src/components/transcript/exchange.tsx:387) renders text, thinking, and tools only.
+Codex's replay parser keeps only `type` and `text` from user content at [codex-app-parse.ts:425](../../../electron/codex-app-parse.ts#L425). A `localImage` survives as a type label while its path is erased. `imageView` becomes `unsupported`, which the protocol handler ignores. The shared [Block contract](../../../electron/contracts/conversation-session.ts#L63) names an image kind but has no image source; [Response](../../../src/components/transcript/exchange.tsx#L387) renders text, thinking, and tools only.
 
-There is also a direct prompt-loss bug. [userTextFrom:136](/Users/kashyab/pi-ui/packages/sessions/src/format.ts:136) returns nothing for an entire message beginning with a recognized injected envelope. A message containing `<recommended_plugins>…</recommended_plugins>` followed by a genuine request loses that request. The actual Codex reader reproduction retains the assistant answer but zero user turns. Title filtering and faithful transcript extraction must be separate operations.
+There is also a direct prompt-loss bug. [userTextFrom:136](../../../packages/sessions/src/format.ts#L136) returns nothing for an entire message beginning with a recognized injected envelope. A message containing `<recommended_plugins>…</recommended_plugins>` followed by a genuine request loses that request. The actual Codex reader reproduction retains the assistant answer but zero user turns. Title filtering and faithful transcript extraction must be separate operations.
 
 Preserve typed content references and native item IDs before projecting a compact display. Provider-specific decoding belongs with the provider. Unknown content should remain an explicit unavailable or unsupported item with a source reference, rather than silently disappearing. This does not require putting every provider's private schema into one union.
 
 ### 3. P1: live and saved history can display the same turn twice
 
-[acp-panel.tsx:198](/Users/kashyab/pi-ui/src/components/viewer/acp-panel.tsx:198) concatenates native-history exchanges and live exchanges. The native follower stays subscribed after a viewed thread is resumed through ACP or app-server. When the provider persists the same turn, both copies remain.
+[acp-panel.tsx:198](../../../src/components/viewer/acp-panel.tsx#L198) concatenates native-history exchanges and live exchanges. The native follower stays subscribed after a viewed thread is resumed through ACP or app-server. When the provider persists the same turn, both copies remain.
 
 The reproduction uses the real `view` and `resumeAndSend` actions with a mocked host, then delivers live updates and native entries. It confirms that no `unfollowThread` happens, the active and viewed thread paths match, and the selected panel projects two identical prompts and answers. This is an actual state-route failure, not merely an example of concatenating duplicate arrays.
 
@@ -44,7 +44,7 @@ Use one conversation projection keyed by native item identity and run identity. 
 
 ### 4. P1: renderer reconnect cannot recover live controls
 
-[acp-state.ts](/Users/kashyab/pi-ui/src/state/acp-state.ts:50) starts with an empty conversation map. Boot does not enumerate and hydrate the host's live provider sessions. [applyAcpSession:95](/Users/kashyab/pi-ui/src/state/acp-live.ts:95) ignores events for an unknown live session, and updates only enter a bounded buffer.
+[acp-state.ts](../../../src/state/acp-state.ts#L50) starts with an empty conversation map. Boot does not enumerate and hydrate the host's live provider sessions. [applyAcpSession:95](../../../src/state/acp-live.ts#L95) ignores events for an unknown live session, and updates only enter a bounded buffer.
 
 The synthetic reset clears renderer state while the host-side session is assumed to remain alive. Subsequent running-state and text events restore zero conversations. Reading a native transcript later cannot restore a process-bound approval, queued user submission, or stop control.
 
@@ -52,17 +52,17 @@ Add a host-owned live-session snapshot with provider binding, active attempt, pe
 
 ### 5. P2: a file size is not a valid provider checkpoint
 
-[ClaudeProvider.read:379](/Users/kashyab/pi-ui/packages/sessions/src/providers/claude.ts:379) discards the offset returned by the JSONL reader. [catalog.ts:274](/Users/kashyab/pi-ui/packages/sessions/src/catalog.ts:274) instead follows from `ref.bytes`. Codex and Devin-local share the pattern.
+[ClaudeProvider.read:379](../../../packages/sessions/src/providers/claude.ts#L379) discards the offset returned by the JSONL reader. [catalog.ts:274](../../../packages/sessions/src/catalog.ts#L274) instead follows from `ref.bytes`. Codex and Devin-local share the pattern.
 
 Opening one complete record plus the first 20 bytes of another, then appending the remainder, produces two entries on a fresh read but only one through open-plus-follow. The follower intentionally skips a partial record when asked to begin inside it. It was given the wrong checkpoint. A reload may heal the omission, but the live view is incorrect until then.
 
-Cursor exposes the same mistaken assumption differently. Its discovery stamps the main `store.db` at [cursor.ts:279](/Users/kashyab/pi-ui/packages/sessions/src/providers/cursor.ts:279). [catalog.ts:478](/Users/kashyab/pi-ui/packages/sessions/src/catalog.ts:478) skips an unselected session if that size and mtime remain unchanged. A WAL-only rename produces a fresh title through direct `peek`, while the actual watcher rescan leaves the catalog's old title. This gate also prevents scheduling archive updates for such changes.
+Cursor exposes the same mistaken assumption differently. Its discovery stamps the main `store.db` at [cursor.ts:279](../../../packages/sessions/src/providers/cursor.ts#L279). [catalog.ts:478](../../../packages/sessions/src/catalog.ts#L478) skips an unselected session if that size and mtime remain unchanged. A WAL-only rename produces a fresh title through direct `peek`, while the actual watcher rescan leaves the catalog's old title. This gate also prevents scheduling archive updates for such changes.
 
 Return a snapshot and opaque provider checkpoint from the same read. Keep byte size as metadata. JSONL can use a complete-record offset; SQLite needs a revision or dirty-session mechanism that accounts for WAL and other native metadata.
 
 ### 6. P2: live updates rebuild completed conversation structure
 
-[acp-panel.tsx:188](/Users/kashyab/pi-ui/src/components/viewer/acp-panel.tsx:188) converts all live blocks into new messages and exchanges whenever blocks change. The live reducer copies the block array, and the projection recreates even completed messages. A one-token update retained zero of 499 completed exchange and response identities in a synthetic 500-turn session.
+[acp-panel.tsx:188](../../../src/components/viewer/acp-panel.tsx#L188) converts all live blocks into new messages and exchanges whenever blocks change. The live reducer copies the block array, and the projection recreates even completed messages. A one-token update retained zero of 499 completed exchange and response identities in a synthetic 500-turn session.
 
 The host also emits each ACP/app-server chunk directly through IPC. The existing bulk `acp-updates` path supports replay, but does not establish frame coalescing for ordinary token notifications. Coalescing after IPC would still pay serialization and bridge delivery for each chunk.
 
@@ -74,21 +74,21 @@ Apply updates by item ID, preserve completed object identity, and coalesce delta
 
 ### 7. P2: output presence and process readiness masquerade as success
 
-[acp-blocks.ts:80](/Users/kashyab/pi-ui/src/lib/acp-blocks.ts:80) treats any tool output as a finished tool. The reproduction sends the first output chunk while source status remains `in_progress`; projection already emits `toolResult`, causing the downstream tool pairing to lose its pending state. Partial output must coexist with a running tool.
+[acp-blocks.ts:80](../../../src/lib/acp-blocks.ts#L80) treats any tool output as a finished tool. The reproduction sends the first output chunk while source status remains `in_progress`; projection already emits `toolResult`, causing the downstream tool pairing to lose its pending state. Partial output must coexist with a running tool.
 
-Failed turns have a related modeling problem. [acp.ts:583](/Users/kashyab/pi-ui/electron/acp.ts:583) catches a provider failure and reports a ready session with an error. [acp-live.ts:73](/Users/kashyab/pi-ui/src/state/acp-live.ts:73) recognizes failure only through `status === "failed"`; ready sessions can be marked for review and drain queued prompts. [LiveStatus](/Users/kashyab/pi-ui/src/components/viewer/acp-panel.tsx:107) displays Ready. The reducer reproduction produces `review` attention after a failed turn.
+Failed turns have a related modeling problem. [acp.ts:583](../../../electron/acp.ts#L583) catches a provider failure and reports a ready session with an error. [acp-live.ts:73](../../../src/state/acp-live.ts#L73) recognizes failure only through `status === "failed"`; ready sessions can be marked for review and drain queued prompts. [LiveStatus](../../../src/components/viewer/acp-panel.tsx#L107) displays Ready. The reducer reproduction produces `review` attention after a failed turn.
 
 Separate process readiness from turn outcome. Give each tool an explicit lifecycle and incremental content. Preserve the failed turn visibly while allowing the provider process to remain ready for another request.
 
 ### 8. P2: hyperlinks and attachments are inferred from presentation text
 
-The new citation parser handles `#L12-L18` and two Codex citation forms, but [file-citations.ts:75](/Users/kashyab/pi-ui/src/lib/file-citations.ts:75) does not split colon-based line suffixes. `/work/src/a.ts:42` becomes a filename ending in `:42`; `a.ts:42` is not recognized as a local target. The default Markdown URL transform strips `file:` and editor schemes before link handling. [linkFileCitations:45](/Users/kashyab/pi-ui/src/lib/file-citations.ts:45) also rewrites literal citation examples inside fenced code, changing their displayed and copied contents.
+The new citation parser handles `#L12-L18` and two Codex citation forms, but [file-citations.ts:75](../../../src/lib/file-citations.ts#L75) does not split colon-based line suffixes. `/work/src/a.ts:42` becomes a filename ending in `:42`; `a.ts:42` is not recognized as a local target. The default Markdown URL transform strips `file:` and editor schemes before link handling. [linkFileCitations:45](../../../src/lib/file-citations.ts#L45) also rewrites literal citation examples inside fenced code, changing their displayed and copied contents.
 
-All recognized file citations route through a workspace file viewer. [readThreadFile](/Users/kashyab/pi-ui/electron/threads.ts:450) enforces that thread's workspace root through `WorkspaceFiles`. An agent-generated artifact outside the repo needs an explicit artifact route, not a blanket removal of the workspace boundary. Markdown media similarly needs a resolved media source rather than treating an absolute filesystem path as a browser URL.
+All recognized file citations route through a workspace file viewer. [readThreadFile](../../../electron/threads.ts#L450) enforces that thread's workspace root through `WorkspaceFiles`. An agent-generated artifact outside the repo needs an explicit artifact route, not a blanket removal of the workspace boundary. Markdown media similarly needs a resolved media source rather than treating an absolute filesystem path as a browser URL.
 
-Attachments have a separate demonstrated display loss. [parseAttachmentAppendix:390](/Users/kashyab/pi-ui/src/lib/attachments.ts:390) removes the whole appendix once it finds any staged file. A prompt with an inline text attachment and a staged image returns only the image chip; the text attachment's name and contents disappear from the display projection.
+Attachments have a separate demonstrated display loss. [parseAttachmentAppendix:390](../../../src/lib/attachments.ts#L390) removes the whole appendix once it finds any staged file. A prompt with an inline text attachment and a staged image returns only the image chip; the text attachment's name and contents disappear from the display projection.
 
-[composer.tsx:293](/Users/kashyab/pi-ui/src/components/composer/composer.tsx:293) catches image staging failure and still constructs a sendable prompt. On the Codex path, the missing staged path also means no `localImage` input. The composer can therefore clear after sending a request whose screenshot never arrived. Text attachments are truncated at 200,000 characters without preserving their original file through the text path.
+[composer.tsx:293](../../../src/components/composer/composer.tsx#L293) catches image staging failure and still constructs a sendable prompt. On the Codex path, the missing staged path also means no `localImage` input. The composer can therefore clear after sending a request whose screenshot never arrived. Text attachments are truncated at 200,000 characters without preserving their original file through the text path.
 
 Use a durable attachment record with ID, name, MIME type, byte size, source/blob reference, and staging state. Keep prompt text separate. Provider adapters should report exactly how each attachment can be delivered. A failed required attachment should preserve the draft and show the failure before a send is accepted.
 

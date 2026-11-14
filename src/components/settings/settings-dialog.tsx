@@ -30,6 +30,7 @@ import { section as skills } from "@/components/settings/sections/skills"
 import { section as nativeAuthoring } from "@/components/settings/sections/native-authoring"
 import { section as plugins } from "@/components/settings/sections/plugins"
 import { section as account } from "@/components/settings/sections/account"
+import { section as devices } from "@/components/settings/sections/devices"
 import { section as updates } from "@/components/settings/sections/updates"
 import { section as storage } from "@/components/settings/sections/storage"
 import { section as privacy } from "@/components/settings/sections/privacy"
@@ -58,6 +59,7 @@ const SECTIONS: readonly SettingsSection[] = [
   plugins,
   simulators,
   account,
+  devices,
   updates,
   storage,
   privacy,
@@ -123,9 +125,10 @@ export function SettingsDialog({
     const nextTerm = next.trim().toLowerCase()
     if (!nextTerm) return
     const hits = SECTIONS.filter((entry) => matches(entry, nextTerm, descriptors))
-    const first = hits[0]
-    if (first && !hits.some((entry) => entry.id === active.id))
-      onSectionChange(first.id)
+    const destination = hits.find((entry) => entry.id === active.id) ?? hits[0]
+    if (!destination) return
+    destination.onSearch?.(nextTerm)
+    if (destination.id !== active.id) onSectionChange(destination.id)
   }
 
   return (
@@ -157,9 +160,9 @@ export function SettingsDialog({
           )}
         >
           <DialogPrimitive.Title className="sr-only">Settings</DialogPrimitive.Title>
-          <header className="drag-region flex h-[38px] shrink-0 items-center border-b border-hairline">
-            <div className="flex h-full w-64 shrink-0 items-center border-r border-hairline pr-2 pl-[86px]">
-              <DialogPrimitive.Close className="pressable no-drag flex h-7 items-center gap-1.5 rounded-md px-2 text-ui text-muted-foreground transition-colors duration-100 hover:bg-fill-hover hover:text-foreground">
+          <header className="drag-region flex h-[38px] shrink-0 items-center">
+            <div className="flex h-full w-64 shrink-0 items-center border-r pr-2 pl-[86px]">
+              <DialogPrimitive.Close className="pressable no-drag flex h-7 items-center gap-1.5 px-2 text-ui text-muted-foreground transition-colors duration-100 hover:bg-fill-hover hover:text-foreground">
                 <ArrowLeftIcon className="size-3.5" />
                 Back
               </DialogPrimitive.Close>
@@ -168,9 +171,9 @@ export function SettingsDialog({
           </header>
 
           <div className="flex min-h-0 flex-1">
-            <nav className="flex w-64 shrink-0 flex-col border-r border-hairline">
+            <nav className="flex w-64 shrink-0 flex-col border-r">
               <div className="p-3 pb-1">
-                <label className="flex h-8 items-center gap-2 rounded-md bg-raised/70 px-2.5 [box-shadow:inset_0_0_0_0.5px_var(--hairline)] focus-within:[box-shadow:inset_0_0_0_1px_var(--border)]">
+                <label className="flex h-8 items-center gap-2 bg-raised px-2.5 focus-within:[box-shadow:inset_0_0_0_1px_var(--border)]">
                   <SearchIcon className="size-3.5 shrink-0 text-faint" />
                   <input
                     ref={searchRef}
@@ -212,10 +215,14 @@ export function SettingsDialog({
                             <button
                               key={entry.id}
                               type="button"
+                              data-settings-section={entry.id}
                               aria-current={selected ? "page" : undefined}
-                              onClick={() => onSectionChange(entry.id)}
+                              onClick={() => {
+                                if (term) entry.onSearch?.(term)
+                                onSectionChange(entry.id)
+                              }}
                               className={cn(
-                                "pressable flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-left text-ui transition-colors duration-100",
+                                "pressable flex h-8 w-full items-center gap-2.5 px-2 text-left text-ui transition-colors duration-100",
                                 selected
                                   ? "bg-fill-selected font-medium text-foreground"
                                   : "text-muted-foreground hover:bg-fill-hover hover:text-foreground"
@@ -242,7 +249,7 @@ export function SettingsDialog({
                 )}
               </div>
 
-              <p className="shrink-0 border-t border-hairline px-5 py-2.5 text-label text-faint">
+              <p className="shrink-0 px-5 py-2.5 text-label text-faint">
                 {version ? `Mako ${version}` : "Mako"}
               </p>
             </nav>

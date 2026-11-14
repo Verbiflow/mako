@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 import { Action } from "@/components/ui/kit"
 import { IfCanReveal } from "@/components/ui/machine-gate"
 import { pluginFiles } from "@/state/plugins"
-import { plugins } from "@/extend/plugin-host"
+import { plugins } from "@/extend/plugin-registry"
 import { useRegistry } from "@/extend/registry"
 import { cn } from "@/lib/utils"
 import { AlertTriangleIcon, CheckIcon, ChevronRightIcon, FolderOpenIcon, PlusIcon, Trash2Icon } from "lucide-react"
@@ -91,7 +91,7 @@ export function PluginsSection() {
         Trusted local UI code that hot-loads into this window. Extensions can
         read and change the open session, preferences, and thread state, so use
         only code you control. Ask the agent to write one in{" "}
-        <code className="rounded bg-raised px-1 text-label">{dir || "the extensions folder"}</code>{" "}
+        <code className="bg-raised px-1 text-label">{dir || "the extensions folder"}</code>{" "}
         and the window picks it up without a reload.
       </p>
 
@@ -101,7 +101,7 @@ export function PluginsSection() {
         loaded.map((plugin) => {
           const editing = open === plugin.id
           return (
-            <div key={plugin.id} className="border-b border-hairline last:border-b-0">
+            <div key={plugin.id} className="">
               <button
                 type="button"
                 onClick={() => edit(plugin.id, plugin.source)}
@@ -137,7 +137,7 @@ export function PluginsSection() {
                     void pluginFiles.remove(plugin.id)
                     if (open === plugin.id) setOpen(null)
                   }}
-                  className="shrink-0 rounded p-1 text-faint transition-colors hover:text-negative"
+                  className="shrink-0 p-1 text-faint transition-colors hover:text-negative"
                 >
                   <Trash2Icon className="size-3" />
                 </span>
@@ -156,7 +156,7 @@ export function PluginsSection() {
                     }}
                     spellCheck={false}
                     rows={Math.min(24, Math.max(10, draft.split("\n").length + 1))}
-                    className="w-full resize-y rounded-md bg-surface p-2.5 font-mono text-label leading-relaxed text-foreground/90 focus:ring-1 focus:ring-hairline focus:outline-none"
+                    className="w-full resize-y bg-raised p-2.5 font-mono text-label leading-relaxed text-foreground/90 focus-visible:ring-1 focus-visible:ring-border focus:outline-none"
                   />
                   <div className="flex items-center gap-2 pt-1.5">
                     <Action disabled={saving || draft === plugin.source} onClick={() => void save(plugin.id)}>

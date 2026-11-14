@@ -1,32 +1,39 @@
+import type { BuildSlots } from "./build-slots.js"
 import { sessionAccessTier } from "../contracts/access.js"
 import type { GitHubPerson } from "../contracts/github-person.js"
+import type { PullRequestsAs } from "../contracts/github-authorship.js"
 import type { Git } from "@mako/git"
 import { realpathSync } from "node:fs"
 import { rm, stat } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import { declareSessionMethods, type SessionMethodsDeps } from "./session-methods.js"
 import type { MethodTable } from "../base/methods.js"
-import type { HostJobs } from "../base/host-jobs.js"
+import type { HostJobs, JobDemand } from "../base/host-jobs.js"
+import { SUMMARY_PASS_MS } from "./thread-worktrees.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { ThreadStore, ThreadLifecycle } from "../threads/index.js"
 import { portListening, ThreadEnvironments } from "./thread-environment.js"
 import { ThreadProcesses } from "./thread-processes.js"
+import { SAMPLER_TICK_MS, ThreadAppSampler } from "./app-sampler.js"
 import type { MoveLedger } from "./worktree-move.js"
+export type { PlannedCheckout } from "./thread-worktrees.js"
 import { ThreadWorktreeService, type CheckoutConversations } from "./thread-worktrees.js"
 import { moveHold, moveSource, ThreadWorktreeMoves } from "./thread-worktree-moves.js"
 import { WorkspaceMoves } from "./moves.js"
 import { WorktreeLeaves } from "./worktree-leaves.js"
 import { moveablePlace, registerWorkspaceTools, repositoryPlace, workspaceTools } from "./tools.js"
 import { projectRecipe, type RecipeAccounts, type RecipeWhere } from "./thread-recipe.js"
+export { BuildSlots } from "./build-slots.js"
 export { RecipeAccounts } from "./thread-recipe.js"
 import { CheckoutHeadService } from "./checkout-heads.js"
 import { PlanBuilds } from "./plan-builds.js"
-import { beginTrace, SAMPLE_EVERY_MS, TraceRefresh } from "./app-probe.js"
-import { childHistory, type DaemonRestarts } from "./watch-backend.js"
+import { beginTrace, TraceRefresh } from "./app-probe.js"
+import { childHistory, childProcessReader, type DaemonRestarts, type ProcessReader } from "./watch-backend.js"
 import type { WatchReadings } from "./watch-readings.js"
 import { commandEnvironment, environmentTools, registerEnvironmentTools, type EnvironmentTools } from "./environment-tools.js"
 import { spareInstaller } from "./spare-install.js"
 import { isSpareCheckout } from "./worktree-carry.js"
+import { CheckoutBorrowing } from "./checkout-borrowing.js"
 import { AppKeySchema, type AppKey } from "../contracts/thread-environments.js"
 import { ThreadIdSchema } from "../contracts/thread-identity.js"
 import { listExternalEditors, openInExternalEditor } from "./editors.js"
@@ -49,13 +56,17 @@ import type { ThreadWorktreeMoveDeps } from "./thread-worktree-moves.js"
 
 export { ArtifactPreviews, type ProviderArtifactPreview } from "./artifact-previews.js"
 export { Automations } from "./automations.js"
+export { AutomationLaunches, AutomationNotStartedError } from "./automation-launches.js"
 export { checkoutConversations } from "./checkout-conversations.js"
 export { WorkspaceClients } from "./clients.js"
 export { applyMoveCheckpoint, captureMoveCheckpoint, MoveCheckpointError, verifyMoveCheckpoint } from "./move-checkpoint.js"
+export { CheckoutLeave, cloudHasAll, type LeaveLedger, type LeaveOutcome, type LeftRepository } from "./leave-checkout.js"
+export { captureThreadCheckpoint, threadFingerprint, ThreadCheckpointRefused, type ThreadCheckpoint, type ThreadCheckpointInput } from "./thread-checkpoint.js"
 export { captureCarry, cloneRepository, openCarry, placeOutside, planOutsideReturn, readOutside, returnOutside, type OpenedCarry, type OutsideCandidate, type OutsideReturned } from "./move-carry.js"
 export { mergeReturned, unchangedSince } from "./move-merge.js"
 export { ProjectMissingError } from "./worktree-reattach.js"
 export { CloudCarriedFiles, declareCarriedFilesMethods } from "./cloud-carried-files.js"
+export { declareSetupMethods, SetupViews, type SetupViewDeps } from "./setup-view.js"
 export { projectRecipe, readProjectRecipe, type ProjectRecipeRead } from "./thread-recipe.js"
 export { answeredElsewhere, elsewhereRefusal, type ElsewhereFolder } from "./elsewhere.js"
 export type { Relocation, WorkspaceConversations } from "./conversations.js"
@@ -70,6 +81,7 @@ export { WorkspaceSnapshots, type CheckpointComparison } from "./snapshots.js"
 export { applyThreadEnvironment, CLOUD_MACHINE_INSTRUCTIONS, threadEnvironmentInstructions } from "./thread-environment.js"
 export { childBackend, probeDelivery, type FileHistory } from "./watch-backend.js"
 export { administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd } from "./file-events-service.js"
+export { childProcessReader, type ProcessReader } from "./watch-backend.js"
 export { WatchReadings } from "./watch-readings.js"
 export { watchTree } from "./tree-watcher.js"
 export { watchOutsideGitDir } from "./git-dir-watch.js"
@@ -113,11 +125,15 @@ export interface WorkspacesDeps {
   readOnly: boolean
   store: ThreadStore | null
   jobs: HostJobs
+  /** On while a client is subscribed: the summaries' own pass runs only for someone who'd hear it. */
+  subscribed?: JobDemand
   emit(event: HostEvent): void
   /** What holds a worktree: its conversations and terminals, as a person would name them. */
   inUse(path: string): Promise<string[]>
   /** Conversations mid-turn in a worktree. */
   working(path: string): Promise<string[]>
+  /** Every folder a conversation is mid-turn in. */
+  workingFolders(): Promise<string[]>
   /** What holds a removed worktree, and its conversations going on in the main checkout. */
   conversations: CheckoutConversations
   /** The recipe's cleanup for a worktree about to be removed, once the app tools exist. */
@@ -128,6 +144,8 @@ export interface WorkspacesDeps {
   watchReadings?: WatchReadings
   /** When fseventsd started over, so a read of history across it is reported lost. */
   daemonRestarts?: DaemonRestarts
+  /** The host's probe child (`childProcessReader`), which reads the apps' processes too; one of its own without it. */
+  probes?: ProcessReader
 }
 
 export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
@@ -159,12 +177,18 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     const found = thread.success ? store?.thread(thread.data) : undefined
     return found ? { id: found.id, title: found.title || "Untitled Thread" } : undefined
   }
+  // Starts its child at the first ask.
+  const reader = deps.probes ?? childProcessReader()
   const processes = shared
     ? new ThreadProcesses({
         root: join(shared, "thread-environments"),
         listening: portListening,
         whose: whoseApp,
         cameUp: (folder, at) => beginTrace(folder, at, fileHistory),
+        // `ps` in a child of its own, for the sampler's looks (`ThreadAppSampler`), so its spawn leaves the loop, and
+        // the matching of its rows to the apps' runs with it (`readMembers`).
+        readTable: () => reader.table(),
+        readMembers: (runs, self) => reader.members(runs, self),
       })
     : null
   if (processes) {
@@ -173,9 +197,9 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
         const stopped = await processes.stopIdle(THREAD_APP_IDLE_MS)
         if (stopped.length) hostLog("threads", "stopped apps unused for six hours", { threads: stopped.join(", ") })
       })
-    /** Each running copy's peak counts toward its project's "about N at once"; with nothing running a look reads no process table. */
-    deps.jobs.every("measure thread apps' memory", 30_000, async () => { await processes.memory() })
   }
+  const borrowing = shared ? CheckoutBorrowing.open(git, deps.readOnly ? undefined : join(shared, "borrowing")) : undefined
+  if (borrowing && !deps.readOnly) deps.jobs.every("keep what worktrees borrowed", 60 * 60_000, () => borrowing.keep())
   const worktrees = store && shared
     ? new ThreadWorktreeService(git, join(shared, "worktrees"), store, deps.inUse, deps.working, processes && environments ? {
         stop: async (thread) => { await processes.stop(AppKeySchema.parse(thread)) },
@@ -193,14 +217,22 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
         prepared: (checkout) => processes.prepared(checkout),
         savePrepared: (checkout, prepared) => processes.savePrepared(checkout, prepared),
         forgetPrepared: (checkout) => processes.forgetPrepared(checkout),
+        borrowing,
         spareInstall: spareInstaller({
           git,
           processes,
           recipe: (checkout) => projectRecipe(git, checkout, recipes),
           env: (values) => ({ ...commandEnvironment(), ...values }),
         }),
-      } : undefined, deps.conversations, deps.ledger)
+      } : undefined, deps.conversations, deps.ledger, deps.workingFolders)
     : null
+  // Windows hear the summaries as they change, rather than each asking every half minute. What no event of its own
+  // says (a pull request on GitHub, an edit outside a turn) a pass of the host's says, each worktree read only once
+  // its index, pull request, status's freshness or age moved (`current`).
+  if (worktrees) {
+    worktrees.followSummaries((summaries) => emit({ type: "worktree-summaries", summaries }))
+    deps.jobs.every("say the worktrees' summaries as they change", SUMMARY_PASS_MS, () => void worktrees.summaries().catch(() => undefined), deps.subscribed ? { needs: [deps.subscribed] } : {})
+  }
   if (worktrees) {
     const tidy = () => worktrees.tidy()
     void tidy().catch((error: Error) => hostWarn("threads", "spare worktrees could not be tidied", { error: error.message }))
@@ -218,7 +250,10 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     whoseApp,
     appOwner,
     fileHistory,
-    close: () => checkoutHeads.close(),
+    close: () => {
+      checkoutHeads.close()
+      worktrees?.closeSummaries()
+    },
   }
 }
 
@@ -228,6 +263,8 @@ export interface WorkspaceMovers {
   moves: WorkspaceMoves
   leaves: WorktreeLeaves
   appTools: EnvironmentTools | undefined
+  /** The apps' marks, looked at once for every window and pushed when they change. */
+  sampler: ThreadAppSampler | undefined
   /** The `mako` server's tools: the Thread's worktree, its app and recipe, and its pull request. */
   agentTools: MakoTools[]
 }
@@ -250,11 +287,15 @@ export interface WorkspaceMoversDeps {
   movedPaths: NonNullable<ThreadWorktreeMoveDeps["movedPaths"]>
   /** How long a harness's MCP calls may wait, for an app check to fit inside one. */
   checkWaitMs(harness: string): number | undefined
+  /** The host's build slots, which every check run takes one of while it runs. */
+  buildSlots?: BuildSlots
   jobs: HostJobs
   emit(event: HostEvent): void
   warn(message: string, facts: Record<string, string | number | boolean | undefined>): void
   /** On a cloud machine: whether its pull requests go as its person, asked now; undefined elsewhere. */
   person?(): Promise<GitHubPerson | undefined>
+  /** On a cloud machine: who its pull requests go as, as its agent last wrote it; undefined elsewhere. */
+  pullRequestsAs?(): Promise<PullRequestsAs | undefined>
 }
 
 export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers {
@@ -282,7 +323,7 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     companions: (id) => worktreeMoves?.companions(id) ?? [],
     place: (id, cwd) => moveablePlace(git, worktrees, id, worktreeMoves?.project(id) ?? cwd),
     move: async (id, bring) => (await worktreeMove().carry(id, { lead: true, tell: true, bring })).session.id,
-    follow: async (id, told, lead) => { await worktreeMove().carry(id, { lead: false, tell: told, after: lead }) },
+    follow: async (id, told, lead, haste) => { await worktreeMove().carry(id, { lead: false, tell: told, after: lead, ...haste && { haste } }) },
     announce: (state) => emit({ type: "workspace-moves", moves: state }),
     failed: (_id, message) => emit({ type: "notice", level: "error", message }),
   })
@@ -295,8 +336,12 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     removed: () => worktreesChanged(worktrees, emit),
     failed: (message) => emit({ type: "notice", level: "error", message }),
   })
+  // The sampler is made from the tools, which tell it when the line for memory moves.
+  const sampling: SamplerSlot = {}
   const appTools = environments && processes ? environmentTools({
     git,
+    changed: () => sampling.sampler?.changed(),
+    borrowing: worktrees?.borrowing,
     cwd: (id) => live.session(id)?.cwd,
     environment: (id, cwd) => environments.forConversation(id, live.session(id)?.title, cwd),
     launchedWith: (id) => environments.launchedWith(id),
@@ -311,6 +356,7 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     },
     folder: (cwd, claim) => environments.forFolder(cwd, claim),
     processes,
+    ...(deps.buildSlots && { buildSlots: deps.buildSlots }),
     traces: new TraceRefresh(),
     recipesRoot: workspaces.recipes,
     where: workspaces.where,
@@ -320,8 +366,25 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     history: workspaces.fileHistory,
     owner: workspaces.appOwner,
   }) : undefined
-  if (appTools) deps.jobs.every("trace running thread apps", SAMPLE_EVERY_MS, appTools.traceApps)
-  return { worktreeMoves, moves, leaves, appTools, agentTools: agentTools(deps, moves, leaves, appTools) }
+  // One look at every app for every window, pushed when it changes, with the trace and each running copy's memory peak
+  // (toward its project's "about N at once") on the same looks.
+  const sampler = appTools && processes ? new ThreadAppSampler({
+    look: () => appTools.look(),
+    trace: appTools.traceApps,
+    memory: async () => { await processes.memory() },
+    publish: (marks) => emit({ type: "thread-app-marks", marks }),
+  }) : undefined
+  if (sampler) sampling.sampler = sampler
+  if (sampler && processes) {
+    processes.onChange(() => sampler.changed())
+    deps.jobs.every("sample thread apps", SAMPLER_TICK_MS, sampler.tick)
+  }
+  return { worktreeMoves, moves, leaves, appTools, sampler, agentTools: agentTools(deps, moves, leaves, appTools) }
+}
+
+/** Where the apps' sampler is kept once made, for the tools made before it. */
+interface SamplerSlot {
+  sampler?: ThreadAppSampler
 }
 
 /** An agent's tool changed a branch or its pull request, or a worktree went: windows read both again at once. */
@@ -331,7 +394,7 @@ function worktreesChanged(worktrees: Workspaces["worktrees"], emit: (event: Host
   emit({ type: "github-changed" })
 }
 
-function agentTools({ git, workspaces, live, emit, person }: WorkspaceMoversDeps, moves: WorkspaceMoves, leaves: WorktreeLeaves, appTools: EnvironmentTools | undefined): MakoTools[] {
+function agentTools({ git, workspaces, live, store, emit, person, pullRequestsAs }: WorkspaceMoversDeps, moves: WorkspaceMoves, leaves: WorktreeLeaves, appTools: EnvironmentTools | undefined): MakoTools[] {
   const { worktrees } = workspaces
   const cwd = (id: string) => live.session(id)?.cwd
   const changed = () => worktreesChanged(worktrees, emit)
@@ -345,6 +408,8 @@ function agentTools({ git, workspaces, live, emit, person }: WorkspaceMoversDeps
     },
     changed,
     person,
+    pullRequestsAs,
+    threadOf: (id) => store?.journalPlacement(id)?.thread,
   })
   return [
     (server, conversationId) => registerWorkspaceTools(server, workspace, conversationId),
@@ -391,16 +456,17 @@ export function declareWorkspaceMethods(methods: MethodTable, { workspaces, move
     })
   )
   methods.handle("mako:automations", () => automations.list())
+  methods.handle("mako:automation-context", () => automations.context())
   methods.handle("mako:save-automations", (next: Automation[]) =>
     withHost((h) => automations.save(h.workspace, next))
   )
-  methods.handle("mako:automation-enabled", (id: string, enabled: boolean) => automations.setEnabled(id, enabled))
-  methods.handle("mako:run-automation", (id: string) => automations.fire(id, "manual"))
+  methods.handle("mako:automation-enabled", (id: string, enabled: boolean, cwd?: string) => automations.setEnabled(id, enabled, cwd))
+  methods.handle("mako:run-automation", (id: string, operation?: string, cwd?: string) => automations.fire(id, "manual", operation, cwd))
   methods.handle("mako:reload-automations", () => withHost((h) => automations.load(h.workspace)))
   declareWorktreeMethods(methods, workspaces.worktrees, { heads: listPullHeads, branches: listBranchPulls })
   declareMoveMethods(methods, movers.moves, (target) => moveHold(live, movers.worktreeMoves, movers.moves, target), workspaces.worktrees)
   declarePlanBuildMethods(methods, workspaces.planBuilds)
   declareCheckoutHeadMethods(methods, workspaces.checkoutHeads)
-  declareThreadAppMethods(methods, movers.appTools?.desk)
+  declareThreadAppMethods(methods, movers.appTools?.desk, movers.sampler)
   return files
 }

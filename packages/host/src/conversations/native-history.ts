@@ -39,6 +39,15 @@ export async function captureNativeHistory(
 }
 
 /**
+ * Whether a harness's own transcript holds a prompt Mako sent: a user message under the attempt's id, where the
+ * harness keeps the one Mako gave it (Claude's), or else one carrying `marker`, a line of the prompt's own words.
+ */
+export function transcriptHolds(entries: readonly Entry[], prompt: { attemptId?: string; marker: string }): boolean {
+  return entries.some((entry) => entry.type === "user" &&
+    ((prompt.attemptId !== undefined && entry.messageId === prompt.attemptId) || (prompt.marker.length > 0 && entry.text.includes(prompt.marker))))
+}
+
+/**
  * Entries by what they say, leaving out what a reader stamps on them (ids,
  * times, usage), so the same records read again give the same digest.
  */

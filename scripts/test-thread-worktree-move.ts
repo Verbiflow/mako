@@ -277,7 +277,31 @@ try {
   assert.equal(agent.conversations.snapshot(mateEvent.to)?.session.cwd, join(agent.worktree, "web"))
   assert.ok(agent.archived.has(mate))
 
-  for (const each of [person, busy, agent]) await each.conversations.stop()
+  // A handoff's move goes as the same session or not at all: a fork would leave the turn it paused behind. Where the
+  // harness can't go on in another folder, nothing moves and nothing is archived.
+  const handed = world("as-itself")
+  const going = await handed.session("goes", handed.project, "Going")
+  await until(() => handed.conversations.lifecycleWork().length === 0, "the turns settled")
+  assert.equal((await handed.thread.carry(going, { lead: true, tell: false, asItself: true })).session.id, going, "the same conversation")
+  assert.equal(handed.conversations.session(going)?.cwd, handed.worktree, "in the worktree")
+  // In a handoff's haste, the moved Session isn't resumed here to prove it: nothing starts until the cloud resumes it.
+  const hurried = world("hasty")
+  const hasty = await hurried.session("goes", hurried.project, "Hasty")
+  await until(() => hurried.conversations.lifecycleWork().length === 0, "the turns settled")
+  const startedBefore = hurried.starts.length
+  assert.equal((await hurried.thread.carry(hasty, { lead: true, tell: false, asItself: true, haste: { by: Date.now() + 1_000 } })).session.id, hasty)
+  assert.equal(hurried.conversations.session(hasty)?.cwd, hurried.worktree, "moved into the worktree")
+  assert.equal(hurried.starts.length, startedBefore, "and not started here")
+  assert.ok(handed.starts.some((start) => start.cwd === handed.worktree), "where without haste it's resumed there to prove it")
+  const staying = world("as-itself-refused")
+  const stuck = await staying.session("stays", staying.project, "Stuck")
+  await until(() => staying.conversations.lifecycleWork().length === 0, "the turns settled")
+  await assert.rejects(staying.thread.carry(stuck, { lead: true, tell: false, asItself: true }), /couldn't go onto its own branch as the same session/)
+  assert.equal(staying.conversations.session(stuck)?.cwd, staying.project, "it stays where it was")
+  assert.ok(!staying.archived.has(stuck), "not archived")
+  assert.deepEqual(staying.events, [], "and no fork was made")
+
+  for (const each of [person, busy, agent, handed, hurried, staying]) await each.conversations.stop()
 
   // After a restart a Session is only on disk; asked about, it isn't read in, since it runs nothing.
   const reopened = new LiveConversations({

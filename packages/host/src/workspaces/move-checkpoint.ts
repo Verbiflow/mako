@@ -42,7 +42,7 @@ const FIXED = {
 const TIMEOUT_MS = 5 * 60_000
 
 async function run(git: Git, options: RunOptions): Promise<string> {
-  const result = await git.run({ timeoutMs: TIMEOUT_MS, maxBytes: 16 * 1024 * 1024, ...options, args: ["-c", "core.fsmonitor=false", ...options.args] })
+  const result = await git.run({ timeoutMs: TIMEOUT_MS, maxBytes: 16 * 1024 * 1024, ...options, args: ["-c", "core.fsmonitor=false", "-c", "core.splitIndex=false", ...options.args] })
   if (result.truncated) throw new Error(`git ${options.args[0] ?? ""} wrote more than 16 MB`)
   return result.stdout.toString("utf8").trim()
 }
@@ -53,6 +53,51 @@ async function fileSha256(path: string): Promise<string> {
   return hash.digest("hex")
 }
 
+/** Where capture writes: a private bare repository that reads the checkout's objects through an alternate. */
+export interface PrivateStore {
+  carry: string
+  /** Capture's environment: its own object directory, the checkout's as an alternate, and the fixed author. */
+  env: Record<string, string>
+  /** The checkout's own index file, which capture copies and never writes. */
+  index: string
+}
+
+/** Opens a private store under `scratch` for `checkout`. */
+export async function privateStore(git: Git, checkout: string, scratch: string): Promise<PrivateStore> {
+  const [index = "", objects = "", format = ""] = (await run(git, { cwd: checkout, args: ["rev-parse", "--path-format=absolute", "--git-path", "index", "--git-path", "objects", "--show-object-format"] })).split("\n")
+  const carry = join(scratch, "carry.git")
+  await run(git, { cwd: scratch, args: ["init", "--bare", "--quiet", "--template=", `--object-format=${format}`, carry] })
+  await writeFile(join(carry, "objects", "info", "alternates"), `${objects}\n`)
+  return { carry, index, env: { ...FIXED, GIT_OBJECT_DIRECTORY: join(carry, "objects"), GIT_ALTERNATE_OBJECT_DIRECTORIES: objects } }
+}
+
+/** Commits `tree` on `head` in the private store, with the fixed author and date. */
+export function commitIn(git: Git, store: PrivateStore, tree: string, head: string, message: "index" | "work", background = false): Promise<string> {
+  return run(git, { cwd: store.carry, args: ["commit-tree", tree, "-p", head, "-m", message], env: store.env, background })
+}
+
+/**
+ * Bundles a checkpoint's three commits into `<folder>/checkpoint.bundle`, less what the checkout's remotes have, which
+ * the other end clones from there. A bundle past `maxBytes` is refused.
+ */
+export async function writeCheckpoint(git: Git, checkout: string, store: PrivateStore, folder: string, commits: { head: string; index: string; work: string; branch?: string }, maxBytes: number, background = false): Promise<{ checkpoint: MoveCheckpoint; file: string }> {
+  const { carry, env } = store
+  for (const [ref, value] of [[REFS.head, commits.head], [REFS.index, commits.index], [REFS.work, commits.work]] as const)
+    await run(git, { cwd: carry, args: ["update-ref", ref, value], env, background })
+  const remote = (await run(git, { cwd: checkout, args: ["for-each-ref", "--format=%(objectname)", "refs/remotes"], background })).split("\n").filter(Boolean)
+  const file = join(folder, "checkpoint.bundle")
+  const revisions = [REFS.head, REFS.index, REFS.work, ...[...new Set(remote)].map((tip) => `^${tip}`)].join("\n") + "\n"
+  await run(git, { cwd: carry, args: ["bundle", "create", "--quiet", file, "--stdin"], input: revisions, env, background })
+  const bytes = (await stat(file)).size
+  if (bytes > maxBytes) {
+    await rm(file, { force: true })
+    throw new MoveCheckpointError("too-large", `This checkout's changes come to ${Math.ceil(bytes / 1024 / 1024)} MB, past the ${Math.floor(maxBytes / 1024 / 1024)} MB a move carries. Files Git doesn't ignore count too: ignore build output, or commit and push what's large.`)
+  }
+  const read: MoveCheckpoint = { version: 1, sha256: await fileSha256(file), bytes, head: commits.head, index: commits.index, work: commits.work }
+  if (commits.branch) read.branch = commits.branch
+  return { checkpoint: MoveCheckpointSchema.parse(read), file }
+}
+
 /**
  * Captures `checkout` into `<folder>/checkpoint.bundle`, `folder` being a directory the caller owns and removes. A
  * repository with no commits, or an index with conflicts, is refused with the reason; so is a bundle past the limit.
@@ -61,43 +106,23 @@ export async function captureMoveCheckpoint(git: Git, checkout: string, folder: 
   const head = await run(git, { cwd: checkout, args: ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], codes: [0, 1] })
   if (!head) throw new MoveCheckpointError("no-commits", "This checkout has no commits yet, so there's nothing to start a clone from.")
   const branch = await run(git, { cwd: checkout, args: ["symbolic-ref", "--short", "--quiet", "HEAD"], codes: [0, 1] })
-  const [index = "", objects = "", format = ""] = (await run(git, { cwd: checkout, args: ["rev-parse", "--path-format=absolute", "--git-path", "index", "--git-path", "objects", "--show-object-format"] })).split("\n")
   const scratch = await mkdtemp(join(folder, "capture-"))
   try {
-    // A private repository: its objects are capture's own, and it reads the checkout's through an alternate.
-    const carry = join(scratch, "carry.git")
-    await run(git, { cwd: scratch, args: ["init", "--bare", "--quiet", "--template=", `--object-format=${format}`, carry] })
-    await writeFile(join(carry, "objects", "info", "alternates"), `${objects}\n`)
-    const env = { ...FIXED, GIT_OBJECT_DIRECTORY: join(carry, "objects"), GIT_ALTERNATE_OBJECT_DIRECTORIES: objects }
+    const store = await privateStore(git, checkout, scratch)
+    const { index } = store
     const tree = async (indexFile: string, stage: boolean): Promise<string> => {
-      const at = { ...env, GIT_INDEX_FILE: indexFile }
+      const at = { ...store.env, GIT_INDEX_FILE: indexFile }
       // A checkout with no index yet reads as HEAD.
       if (existsSync(index)) await copyGitIndex(index, indexFile)
       else await run(git, { cwd: checkout, args: ["read-tree", head], env: at })
       if (stage) await run(git, { cwd: checkout, args: ["add", "--all", "--", "."], env: at })
-      const written = await git.run({ cwd: checkout, args: ["-c", "core.fsmonitor=false", "write-tree"], env: at, timeoutMs: TIMEOUT_MS, codes: [0, 128] })
+      const written = await git.run({ cwd: checkout, args: ["-c", "core.fsmonitor=false", "-c", "core.splitIndex=false", "write-tree"], env: at, timeoutMs: TIMEOUT_MS, codes: [0, 128] })
       if (written.code !== 0) throw new MoveCheckpointError("conflicts", "This checkout has conflicts to resolve first: Git can't record an index with unmerged files.")
       return written.stdout.toString("utf8").trim()
     }
-    const commit = (of: string, message: string) => run(git, { cwd: carry, args: ["commit-tree", of, "-p", head, "-m", message], env })
-    const indexCommit = await commit(await tree(join(scratch, "index"), false), "index")
-    const workCommit = await commit(await tree(join(scratch, "work"), true), "work")
-    for (const [ref, value] of [[REFS.head, head], [REFS.index, indexCommit], [REFS.work, workCommit]] as const)
-      await run(git, { cwd: carry, args: ["update-ref", ref, value], env })
-    // What the remote has is left out: the other end clones it from there.
-    const remote = (await run(git, { cwd: checkout, args: ["for-each-ref", "--format=%(objectname)", "refs/remotes"] })).split("\n").filter(Boolean)
-    const file = join(folder, "checkpoint.bundle")
-    const revisions = [REFS.head, REFS.index, REFS.work, ...[...new Set(remote)].map((tip) => `^${tip}`)].join("\n") + "\n"
-    await run(git, { cwd: carry, args: ["bundle", "create", "--quiet", file, "--stdin"], input: revisions, env })
-    const bytes = (await stat(file)).size
-    if (bytes > maxBytes) {
-      await rm(file, { force: true })
-      throw new MoveCheckpointError("too-large", `This checkout's changes come to ${Math.ceil(bytes / 1024 / 1024)} MB, past the ${Math.floor(maxBytes / 1024 / 1024)} MB a move carries. Files Git doesn't ignore count too: ignore build output, or commit and push what's large.`)
-    }
-    const read: MoveCheckpoint = { version: 1, sha256: await fileSha256(file), bytes, head, index: indexCommit, work: workCommit }
-    if (branch) read.branch = branch
-    const checkpoint = MoveCheckpointSchema.parse(read)
-    return { checkpoint, file }
+    const indexCommit = await commitIn(git, store, await tree(join(scratch, "index"), false), head, "index")
+    const workCommit = await commitIn(git, store, await tree(join(scratch, "work"), true), head, "work")
+    return await writeCheckpoint(git, checkout, store, folder, { head, index: indexCommit, work: workCommit, ...branch && { branch } }, maxBytes)
   } finally {
     await rm(scratch, { recursive: true, force: true })
   }

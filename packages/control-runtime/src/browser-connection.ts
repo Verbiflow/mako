@@ -220,7 +220,7 @@ export class BrowserConnection {
           new BrowserFault({
             code: "cancelled",
             message:
-              "Browser request cancelled after dispatch. Its outcome is unknown; observe before retrying.",
+              `Browser request ${method} cancelled after dispatch. Its outcome is unknown; observe before retrying.`,
             outcome: "unknown",
           })
         )
@@ -230,7 +230,7 @@ export class BrowserConnection {
             new BrowserFault({
               code: "timed-out",
               message:
-                "Browser request timed out after dispatch. Its outcome is unknown; observe before retrying.",
+                `Browser request ${method} timed out after dispatch. Its outcome is unknown; observe before retrying.`,
               outcome: "unknown",
             })
           ),

@@ -53,6 +53,7 @@ export function createDevinAcpSource(stores: NativeStores): ProviderAcpSource {
     nativeRouting: { kind: "at-launch", via: "`subagents_enabled: false` in the copy of the person's `config.json` its launch's own config folder holds, which removes `run_subagent` and `read_subagent`; leaving out `cognition.ai/subagentSupport` doesn't.", verified: { version: "3000.11.234", how: "harness:native-tools records each mode as a lead without them on 3000.11.234 and 3000.10.23, and with them when the capability is left out (2026-11-01); test:native-routing-live: a lead's call was refused as unavailable, an ordinary Thread's child ran and was observed" } },
     layer: DEVIN_LAYER,
     modelRoutes: { kind: "absent", reason: "Devin runs its models through Devin's own service and takes no endpoint of the person's." },
+    accountContinuation: { kind: "new-session", reason: "A session runs on Devin's own service under the seat that started it; Mako hasn't seen one reopened under another seat, so another account starts a session of its own." },
     agents: { kind: "observed", via: "`run_subagent` calls, whose usage arrives tagged with the subagent's ID.", child: devinChildUpdate, observe: input => new DevinAgents(input) },
     observeBackground: devinBackground,
     providerTurns: devinProviderTurns,

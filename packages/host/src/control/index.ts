@@ -33,13 +33,17 @@ import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { HostEnvironment } from "../base/host-environment.js"
 import type { HostJobs } from "../base/host-jobs.js"
 import { SimulatorSetupFollower } from "./simulators/setup.js"
-import { Simulators } from "./simulators/simulators.js"
-import { LocalSimulatorHost } from "./simulators/local-host.js"
+import { Simulators, type SimulatorLeases } from "./simulators/simulators.js"
+import { BorrowedSimulators, KEEP_ALIVE_MS } from "./simulators/borrowed.js"
+import { LocalSimulatorHost, localDriving } from "./simulators/local-host.js"
 import { declareSimulatorMethods } from "./simulators/methods.js"
 import type { SimulatorAgent } from "../contracts/simulators.js"
+import { SimulatorTools } from "./simulators/mcp.js"
 
 export { applyControlEnvironment, controlLine, controlNote } from "./launch.js"
 export { ControlResidency } from "./residency.js"
+export type { SimulatorLeases } from "./simulators/simulators.js"
+export { accountBorrowing, BorrowedSimulators, LeaseEnded, type SimulatorBorrowing } from "./simulators/borrowed.js"
 export { controlVideoMedia } from "./video-media.js"
 
 /** Browser and computer use, and the desktop app that does what only Electron can. */
@@ -63,6 +67,8 @@ export interface Control {
   simulatorSetup: SimulatorSetupFollower
   /** The simulators every host here runs, and the one Thread that drives each. */
   simulators: Simulators
+  /** The simulator tools on each Thread's `mako` server, offered as the setup line allows. */
+  simulatorTools: SimulatorTools
   /** The renderer a development host's windows load now; another checkout's dev server can register while it runs. */
   devServerUrl(): string | null
   /** Mako's own computer-use driver, started once and shared. */
@@ -77,7 +83,8 @@ export interface Control {
   computerPermissions(): Promise<MakoComputerPermissions>
   /** Agents' browser access, once the conversations exist to authorize them. */
   startService(authorize: (conversationId: string, bindingId: string) => void): Promise<ControlService>
-  stop(): void
+  /** Stops what control runs; settles once the simulators closed, their borrowed leases released (`Simulators.close`). */
+  stop(): Promise<void>
 }
 
 export type ControlService = Awaited<ReturnType<typeof startControlService>>
@@ -107,7 +114,11 @@ export function openControl(
   jobs: HostJobs,
   emit: (event: HostEvent) => void,
   updated: () => void,
-  simulatorAgent: (session: string) => SimulatorAgent | undefined
+  simulatorAgent: (session: string) => SimulatorAgent | undefined,
+  /** The session leases this Mac serves, which another place's agent's every simulator call must be under. */
+  simulatorLeases?: SimulatorLeases,
+  /** On a cloud Thread's machine: its simulators, a Mac of the person's borrowed under a lease. */
+  borrowedSimulators?: BorrowedSimulators
 ): Control {
   const { environment, fixtureDesk } = config
   const configuredDevServerUrl = config.development?.devServerUrl ?? null
@@ -259,14 +270,32 @@ export function openControl(
     (bindingId) => driver.revoke(`agent ${bindingId}`)
   )
   const unsubscribe = browser.subscribe((browsers) => emit({ type: "browser-control", browsers }))
-  const simulatorSetup = new SimulatorSetupFollower({ dataRoot: environment.dataRoot, jobs, emit: (setup) => emit({ type: "simulator-setup", setup }) })
+  const localSimulators: LocalSimulatorHost = new LocalSimulatorHost({
+    setup: (refresh) => simulatorSetup.read(refresh),
+    folder: join(environment.dataRoot, "simulators"),
+    driving: localDriving({ dataRoot: environment.dataRoot, hub: { entry: join(environment.appRoot, "dist-electron", "simulator-hub-entry.js") } }),
+  })
+  const simulatorTools = new SimulatorTools(simulatorAgent, borrowedSimulators !== undefined)
+  const simulatorSetup = new SimulatorSetupFollower({
+    dataRoot: environment.dataRoot,
+    jobs,
+    emit: (setup) => {
+      simulatorTools.heard(setup)
+      emit({ type: "simulator-setup", setup })
+    },
+    tryIt: () => localSimulators.tryIt(),
+  })
+  void simulatorSetup.read().catch(() => undefined)
   const simulatorHeld = jobs.demand("A simulator is held")
   const simulators = new Simulators({
-    hosts: [new LocalSimulatorHost(() => simulatorSetup.read())],
+    hosts: borrowedSimulators ? [] : [localSimulators],
     consent: () => simulatorSetup.consent(),
     agent: simulatorAgent,
     holding: (on) => simulatorHeld.set(on),
+    ...(simulatorLeases && { leases: simulatorLeases }),
+    ...(borrowedSimulators && { remotes: () => borrowedSimulators.remotes(), borrowing: borrowedSimulators }),
   })
+  const stopKeepingAlive = borrowedSimulators ? jobs.every("keep a borrowed simulator's claim", KEEP_ALIVE_MS, () => borrowedSimulators.keepAlive()) : undefined
   const stopSimulatorSweep = jobs.every("simulator-claims", 60_000, () => simulators.sweep(), { needs: [simulatorHeld] })
   let service: ControlService | undefined
   return {
@@ -279,6 +308,7 @@ export function openControl(
     sessions,
     simulatorSetup,
     simulators,
+    simulatorTools,
     devServerUrl: () => activeDevServerUrl,
     ensureLocalControl,
     driverStatus: () => driverVersions.status(resolveExecutable("cua-driver")),
@@ -317,7 +347,8 @@ export function openControl(
       unsubscribe?.()
       simulatorSetup.stop()
       stopSimulatorSweep()
-      void simulators.close()
+      stopKeepingAlive?.()
+      return simulators.close()
     },
   }
 }

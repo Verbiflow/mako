@@ -8,6 +8,7 @@ import type { ProviderConnectionCapability } from "../connection-capability.js"
 import type { DiscoveryProcesses } from "../discovery-process.js"
 import type { ProviderProfileLoader } from "../profile-loader.js"
 import { heavy } from "../../base/heavy-packages.js"
+import { childInput, endChildInput } from "@mako/sessions/child-input"
 
 /** Grok refreshes its own credentials before advertising cached_token at initialize.
  * Never call authenticate during a status check: upstream can fall through to a browser.
@@ -59,7 +60,7 @@ export async function readGrokConnection(
           }),
           sessionUpdate: async () => {},
         }),
-        ndJsonStream(acpWritable(child.stdin), acpReadable(child.stdout))
+        ndJsonStream(acpWritable(childInput(child)), acpReadable(child.stdout))
       )
       return grokConnectionState(
         await connection.initialize({
@@ -91,7 +92,7 @@ async function runLoginCommand(
     async ({ child, exited }) => {
       // The provider opens its browser and owns credential persistence. Do not relay auth output.
       child.stdout.resume()
-      child.stdin.end()
+      endChildInput(child)
       const result = await exited
       if (result.code !== 0)
         throw new Error(

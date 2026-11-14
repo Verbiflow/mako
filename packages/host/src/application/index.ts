@@ -52,7 +52,8 @@ export interface ApplicationDependencies {
   finish(action: LifecycleAction, install?: () => void): void
   wake: WakeWatch
   /** The Mac is going to sleep (`suspend`) or shutting down, as the desktop app hears it: said to the cloud while it can be. */
-  leaving(source: "suspend" | "shutdown"): void
+  /** Answers once what this Mac does as it goes is done: a shutdown's handoff, its hold at most (`machineLeaving`). */
+  leaving(source: "suspend" | "shutdown"): Promise<void>
   jobs: HostJobs
   /** On while any client is subscribed to events; the lifecycle is published only to subscribers. */
   subscribed: JobDemand
@@ -177,10 +178,8 @@ export function declareApplicationMethods(methods: MethodTable, dependencies: Ap
   methods.handle("mako:machine-woke", (source: "resume" | "unlock-screen") => {
     dependencies.wake.notify(source)
   })
-  /** The desktop app heard the Mac start to sleep or shut down. */
-  methods.handle("mako:machine-leaving", (source: "suspend" | "shutdown") => {
-    dependencies.leaving(source)
-  })
+  /** The desktop app heard the Mac start to sleep or shut down; a shutdown waits for the answer, its hold at most. */
+  methods.handle("mako:machine-leaving", (source: "suspend" | "shutdown") => dependencies.leaving(source))
   const { crashes } = dependencies
   methods.handle("mako:crashes", () => crashes.list())
   methods.handle("mako:crashes-dir", () => crashes.directory)

@@ -1,9 +1,13 @@
+import type { ProviderFailureEvidence } from "./provider-failure-evidence.js"
 import type { PromptDelivery } from "./prompt-delivery.js"
-import type { ReportedSession } from "@mako/protocol/thread-listing"
+import type { RequestRetry } from "./delivery-retry.js"
+import type { Notice } from "./agents.js"
+import type { ListedFin, ReportedSession } from "@mako/protocol/thread-listing"
 import { TRACE_PREFIX } from "@mako/protocol/live-tail"
 import { COMPACT_LIVE_FORM } from "@mako/protocol/live-form"
 import type { AttentionKind, WaitingFor } from "@mako/protocol/attention"
 import type {
+  NativeAgent,
   NativeAgentObservation,
   NativeAgentRoster,
 } from "./native-agents.js"
@@ -34,7 +38,7 @@ import type { Entry } from "@mako/sessions/entries"
 import type { Rollup } from "./children.js"
 
 export interface LiveStartOptions {
-  initialRequest?: { id: string; text: string; attachments: PromptAttachment[] }
+  initialRequest?: { id: string; text: string; attachments: PromptAttachment[]; grants?: string[] }
   conversationId: string
   resume?: string
   title?: string
@@ -44,6 +48,8 @@ export interface LiveStartOptions {
   /** The access level to launch at when `modeId` is a native mode a launch-only harness enters live, such as Plan. */
   launchModeId?: string
   tuning?: SessionSettings
+  /** The account its binding runs on whatever is selected: a Fin's start placed on another account (`Agents.placeFor`). */
+  account?: string
   /** The Thread-store Session this conversation starts in: an empty one a window's `+` tab created. */
   session?: string
   /** Start a new Thread in its own Git worktree of `cwd`'s repository, made on this first send. */
@@ -229,6 +235,17 @@ export interface TurnContinuation {
   requestId: string
   reason: InterruptionReason
   auto: boolean
+  /**
+   * The Fin's brief this continuation carries again, by its request's id: a crash cut it with nothing to say its
+   * harness had it. Kept through every continuation of it, so a crash of the brief sent again sends it again too;
+   * whether its words or a Continue go is decided as it's sent (`LiveDispatch`).
+   */
+  brief?: string
+  /**
+   * When the turn was cut (epoch ms): the message that continues it says what moved in its checkout since, read as it's
+   * sent (`cutAccount`, `LiveDispatch`), so the read sits behind its place in the queue.
+   */
+  since?: number
 }
 
 /**
@@ -267,6 +284,11 @@ export interface LiveRequest {
    * and the journal cannot say which.
    */
   actor?: Actor
+  /**
+   * The threads the host checked and let this message attach (`Agents.reachOf`), as their refs. An agent's text is never
+   * read as a grant, whatever it spells out: this is what its message gives its receiver. A person's chips are theirs.
+   */
+  grants?: string[]
   /** Native send evidence, independent of execution outcome; absent in older journals. */
   nativeDelivery?: PromptDelivery
   /** Exact request/native-message correspondence from a declared native receipt. */
@@ -289,11 +311,23 @@ export interface LiveRequest {
    * dispatch, for a session without modes, and in older journals.
    */
   mode?: string
+  /**
+   * The person's standing rules its prompt carried, by their line's name (`ROLE_RULE_LINES`), kept from dispatch on:
+   * a conversation that ever read one is told when the person clears them, in every later process. Absent when it
+   * carried none.
+   */
+  ruleLines?: string[]
   inputDigest?: string
   nativeRun?: { bindingId: string; runId: string; forkId?: string }
   id: string
   /** When the host admitted it (epoch ms); absent in journals written before it was kept. */
   createdAt?: number
+  /** Admission order within this conversation, independent of queue priority and wall clocks. Absent in older journals. */
+  admissionOrder?: number
+  /** An agent's informational message, whose successful turn needs no synthetic completion report. */
+  notification?: true
+  /** When it was sent to its harness, which is when its turn began: a message can wait long after it's admitted. */
+  dispatchedAt?: number
   text: string
   attachments: PromptAttachment[]
   /**
@@ -325,6 +359,18 @@ export interface LiveRequest {
    */
   ownerCheck?: { since: number }
   /**
+   * A `held` request the person paused to edit it (`editQueued` `pause`): it keeps its place and waits for them,
+   * whatever resumes what a stop or an exit paused. Gone once they resume, edit or remove it.
+   */
+  editing?: true
+  /**
+   * A Stop's latch on a request it found waiting or being sent: the person's Stop, or an Apex's of its Fin. Whatever
+   * comes back for it later (a refusal, a retry, a time), it's held as the Stop's pause and never goes by itself,
+   * across a restart too, until a deliberate resume clears the mark: Resume, or for a Fin its next message. What is
+   * sent after it goes ahead. One an exit, a crash or a lost steer paused carries none and keeps its place in line.
+   */
+  pause?: "stop"
+  /**
    * The sign-out this request waits on. A `held` request is unsent and goes
    * when the user resumes; the turn the sign-out cut short keeps its own
    * outcome and is continued, or left for review, on Resume.
@@ -338,6 +384,27 @@ export interface LiveRequest {
    * releases it when the time comes, across restarts, since the journal keeps it.
    */
   wake?: RequestWake
+  /**
+   * A message that didn't reach its harness for a cause that clears by itself (`RetryCause`): `held` until `at`,
+   * when the held-wakes job sends it again, as often as it takes (`nextRetry`). It isn't a failure: the queue says
+   * why it waits and when it goes, a Resume sends it now, and removing it cancels it. Kept once it goes, so a
+   * second failure counts on from this one; gone once it's sent.
+   */
+  retry?: RequestRetry
+  /** A digest of an Apex's Fins' news (`AgentWakes`): the notices it carries, which a notice arriving before it's sent joins. */
+  digest?: {
+    notices: Notice[]
+    /** What rides with its notices and is nobody's report (a Fin's move), said once: it stays with the digest until it goes. */
+    lines?: string[]
+    /** When it went to the harness, for the minute's budget (`WAKES_PER_MINUTE`), which counts what was sent. */
+    sentAt?: number
+    /** A model answered during its turn: the only proof it was heard, as nothing else proves it either way. */
+    heard?: true
+    /** Past Mako's retries and no model heard it: it waits for the next turn that can run. */
+    resting?: true
+    /** When a resting digest tries by itself: a limit's only, once an hour for the Thread, however many reports it holds. */
+    nextTry?: number
+  }
   /** Present on an `interrupted` or `uncertain` request that a Stop or a host exit cut short. */
   interruption?: Interruption
   /**
@@ -346,6 +413,7 @@ export interface LiveRequest {
    * retriability alone does not establish safe replay.
    */
   failure?: ProviderFailureKind
+  failureEvidence?: ProviderFailureEvidence
   /** Where this request's spend counts from: the meter at the last turn's end (`spentThrough`), else when it was dispatched. */
   usageFrom?: UsageMark
   /**
@@ -399,6 +467,13 @@ export interface LiveSummary {
    */
   elsewhere?: string
   /**
+   * The kind of the account's device `elsewhere` names (`desktop`, `runtime`), where whoever listed it knows: a
+   * machine of the person's own is marked apart from a Mac. Absent for the cloud, and from a host before it.
+   */
+  elsewhereKind?: string
+  /** `ReportedSession.order`: its Session's place among its Thread's Sessions as its owner keeps them, from a row listed from elsewhere. */
+  order?: number
+  /**
    * What a conversation listed from another device waits on, in a line ("Approve: npm test"), while it waits on a
    * person there: the row asks for them as a local one would.
    */
@@ -443,6 +518,12 @@ export interface LiveSummary {
    * batch brings it, says the same. Absent from a conversation with no Fins.
    */
   children?: Rollup
+  /**
+   * An Apex's Fins as another device's row lists them (`ListedFin`, link version 19 on), for a window that holds no
+   * roster of it: `finsAsChildren` makes them the entries its roster would be, so every selector reads them the same.
+   * Absent from this host's own conversations, whose roster says them.
+   */
+  fins?: readonly ListedFin[]
   /**
    * Its Thread's name, for a conversation listed from another device: the name the person or Mako gave the Thread
    * there, which titles the Thread's row as this Mac's own Threads' names title theirs.
@@ -848,13 +929,106 @@ function bindingPatches(held: ConversationControl, next: ConversationControl): F
  * - `requestPatches`: each changed request a reader holds, as the fields that changed; new ones stay in `requestChanges`;
  * - `bindingPatches`: the control's bindings that changed, likewise, when nothing else of the control did;
  * - no `changedFrom` when only the last block changed (it's `blockCount - 1`), and neither it nor `blockCount` when no
- *   block did.
+ *   block did;
+ * - `rosterPatch`, in place of `nativeAgents`, only as a host's own windows hear it (`rosteredLiveBatch`).
  */
 export type CompactLiveBatch = Omit<LiveBatch, "updates"> & {
   form: typeof COMPACT_LIVE_FORM
   updates: CompactLiveUpdate[]
   requestPatches?: FieldPatch<LiveRequest>[]
   bindingPatches?: FieldPatch<ConversationBinding>[]
+  rosterPatch?: RosterPatch
+}
+
+/**
+ * What changed of a roster: each entry new or changed, whole, and the entries gone. An Apex with 81 entries sent all of
+ * them for each one that moved: on 2026-11-06 that was 202 MB of a window's 203 MB in five minutes, 199 KB a batch.
+ * `seal` is the whole roster it makes, every field of every entry, which its reader checks: a held roster that isn't the
+ * one the host wrote this against (a conversation read back from its journal holds only its provider's entries, or one
+ * entry's title moved without a batch it heard) reads as a gap, never as a wrong roster.
+ */
+export type RosterPatch = { agents?: NativeAgent[]; gone?: string[]; limited?: boolean; seal: number }
+
+const agentKey = (agent: NativeAgent) => `${agent.bindingId}\0${agent.nativeId}`
+
+/** Each entry's seal, kept by the entry: an entry is never changed in place, and a roster keeps the ones that didn't move. */
+const entrySeals = new WeakMap<NativeAgent, [number, number]>()
+
+/** Every field of an entry, as two independent hashes (FNV-1a and djb2) of its JSON with its keys in order. */
+function entrySeal(agent: NativeAgent): [number, number] {
+  const held = entrySeals.get(agent)
+  if (held) return held
+  const text = canonicalJson(agent) ?? ""
+  let fnv = 0x811c9dc5, djb = 5381
+  for (let at = 0; at < text.length; at += 1) {
+    const code = text.charCodeAt(at)
+    fnv = Math.imul(fnv ^ code, 0x01000193)
+    djb = (Math.imul(djb, 33) + code) | 0
+  }
+  const seal: [number, number] = [fnv >>> 0, djb >>> 0]
+  entrySeals.set(agent, seal)
+  return seal
+}
+
+/**
+ * A roster as one number: every field of every entry, in order, and whether it reached its limit, so a held roster that
+ * differs anywhere a surface reads fails it. 53 bits; only an entry that moved is hashed again.
+ */
+function rosterSeal(roster: NativeAgentRoster): number {
+  let low = 0x811c9dc5 ^ (roster.limited ? 1 : 0), high = 5381 + roster.agents.length
+  for (const agent of roster.agents) {
+    const [fnv, djb] = entrySeal(agent)
+    low = Math.imul(low ^ fnv, 0x01000193)
+    high = (Math.imul(high, 33) + djb) | 0
+  }
+  return ((high >>> 0) % 0x200000) * 0x100000000 + (low >>> 0)
+}
+
+/** `held` with `patch` applied: new entries land last. Undefined when that isn't the roster `patch` was written to make. */
+export function applyRosterPatch(held: NativeAgentRoster, patch: RosterPatch): NativeAgentRoster | undefined {
+  const changed = new Map((patch.agents ?? []).map((agent) => [agentKey(agent), agent]))
+  const gone = new Set(patch.gone)
+  const agents: NativeAgent[] = []
+  for (const agent of held.agents) {
+    const key = agentKey(agent)
+    if (gone.has(key)) continue
+    agents.push(changed.get(key) ?? agent)
+    changed.delete(key)
+  }
+  agents.push(...changed.values())
+  const roster = { ...held, agents, ...(patch.limited !== undefined && { limited: patch.limited }) }
+  return rosterSeal(roster) === patch.seal ? roster : undefined
+}
+
+/** `next` as what changed of `held`, where that makes `next` exactly, order included, in fewer characters than `next` whole. */
+function rosterPatch(held: NativeAgentRoster, next: NativeAgentRoster): RosterPatch | undefined {
+  const heldEntries = new Map(held.agents.map((agent) => [agentKey(agent), agent]))
+  const stays = new Set(next.agents.map(agentKey))
+  const agents = next.agents.filter((agent) => {
+    const was = heldEntries.get(agentKey(agent))
+    return agent !== was && (!was || canonicalJson(agent) !== canonicalJson(was))
+  })
+  const gone = held.agents.map(agentKey).filter((key) => !stays.has(key))
+  const patch: RosterPatch = {
+    ...(agents.length && { agents }),
+    ...(gone.length && { gone }),
+    ...(next.limited !== held.limited && { limited: next.limited }),
+    seal: rosterSeal(next),
+  }
+  if (applyRosterPatch(held, patch)?.agents.length !== next.agents.length) return undefined
+  return JSON.stringify(patch).length < JSON.stringify(next).length ? patch : undefined
+}
+
+/**
+ * `batch` as a host's own windows hear it, where its roster goes as what changed of `held`, the one they hold at the
+ * revision before; undefined where it has no roster to say so or a whole one says it better. A window that can't read it
+ * reads the conversation again through its guarded snapshot path.
+ */
+export function rosteredLiveBatch(batch: CompactLiveBatch, held: NativeAgentRoster | undefined): CompactLiveBatch | undefined {
+  const { nativeAgents, ...rest } = batch
+  if (!held || !nativeAgents) return undefined
+  const patch = rosterPatch(held, nativeAgents)
+  return patch && { ...rest, rosterPatch: patch }
 }
 
 /** A batch as a reader hears it: whole, or in the compact form where it said it reads that. */
@@ -898,15 +1072,16 @@ export function compactLiveBatch(batch: LiveBatch, before: LiveBatchBase): Compa
 }
 
 /** A compact batch as its reader read it (`expandLiveBatch`). */
-export type ExpandedLiveBatch = { batch: LiveBatch; unread: boolean; unheld: FieldPatch<LiveRequest>[] }
+export type ExpandedLiveBatch = { batch: LiveBatch; unread: boolean; unheld: FieldPatch<LiveRequest>[]; unreadRoster?: RosterPatch }
 
 /**
  * A compact batch read against what its reader holds (`held`), as the whole batch its owner wrote it from. What `held`
  * doesn't hold to read it against is left out and `unread`: a reader that holds the conversation reads it again; one that
- * only lists it takes the rest. `unheld` are the patches of requests `held` doesn't hold.
+ * only lists it takes the rest. `unheld` are the patches of requests `held` doesn't hold; `unreadRoster`, the change to a
+ * roster it can't read, which one that only lists it reads whole, since the rail draws from it.
  */
-export function expandLiveBatch(batch: CompactLiveBatch, held: { blocks: Entry[]; requests?: readonly LiveRequest[]; control?: ConversationControl }): ExpandedLiveBatch {
-  const { updates, changedFrom, requestChanges, requestPatches, control, bindingPatches: bindings, ...rest } = batch
+export function expandLiveBatch(batch: CompactLiveBatch, held: { blocks: Entry[]; requests?: readonly LiveRequest[]; control?: ConversationControl; nativeAgents?: NativeAgentRoster }): ExpandedLiveBatch {
+  const { updates, changedFrom, requestChanges, requestPatches, control, bindingPatches: bindings, rosterPatch: roster, ...rest } = batch
   const expanded = expandLiveUpdates(held.blocks, updates)
   let unread = expanded === undefined
   const whole: LiveBatch = { ...rest, updates: expanded ?? [] }
@@ -934,6 +1109,9 @@ export function expandLiveBatch(batch: CompactLiveBatch, held: { blocks: Entry[]
       }) }
     else unread = true
   }
+  const nativeAgents = roster && held.nativeAgents && applyRosterPatch(held.nativeAgents, roster)
+  if (nativeAgents) whole.nativeAgents = nativeAgents
+  else if (roster) return { batch: whole, unread: true, unheld, unreadRoster: roster }
   return { batch: whole, unread, unheld }
 }
 

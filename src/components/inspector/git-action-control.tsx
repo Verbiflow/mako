@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react"
-import { ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronDownIcon, GitMergeIcon, GitPullRequestDraftIcon, GitPullRequestIcon, MessageSquareTextIcon, RefreshCwIcon, Trash2Icon, Undo2Icon, XIcon, type LucideIcon } from "lucide-react"
+import { ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronDownIcon, CircleSlashIcon, GitMergeIcon, GitPullRequestDraftIcon, GitPullRequestIcon, MessageSquareTextIcon, RefreshCwIcon, Trash2Icon, Undo2Icon, XIcon, type LucideIcon } from "lucide-react"
 import { Spinner } from "@/components/ui/spinner"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
@@ -48,7 +48,7 @@ export function Explained({ reason, children }: { reason: string | null | undefi
   if (!reason) return children
   return (
     <Tooltip>
-      <TooltipTrigger asChild><span tabIndex={0} className="inline-flex rounded-md">{children}</span></TooltipTrigger>
+      <TooltipTrigger asChild><span tabIndex={0} className="inline-flex">{children}</span></TooltipTrigger>
       <TooltipContent side="bottom" className="max-w-64">{reason}</TooltipContent>
     </Tooltip>
   )
@@ -59,6 +59,7 @@ function ChecksGlyph({ pull }: { pull: PullRequest }) {
   if (!checks.total) return null
   if (checks.failed) return <XIcon className="text-removed" />
   if (checks.running) return <span className="size-1.5 animate-live rounded-full bg-caution" />
+  if (checks.cancelled) return <CircleSlashIcon className="text-caution" />
   return <CheckIcon className="text-added" />
 }
 
@@ -67,6 +68,7 @@ function pullTip(pull: PullRequest): string[] {
   const ran = !checks.total ? null
     : checks.failed ? `${plural(checks.failed, "check")} failing`
     : checks.running ? `${plural(checks.running, "check")} running`
+    : checks.cancelled ? `${plural(checks.cancelled, "check")} cancelled`
     : "Checks pass"
   const review = pull.reviewDecision === "approved" ? "Approved"
     : pull.reviewDecision === "changes" ? "Changes requested"
@@ -266,7 +268,7 @@ export function GitActionControl({ cwd, branch }: { cwd: string; branch: string 
         <Spinner icon={RefreshCwIcon} turning={state.kind === "syncing" && state.action === "fetch"} />
       </IconAction>
       {primary ? (
-        <span data-git-next={primary.kind} className="inline-flex items-stretch rounded-md bg-foreground/[0.06]">
+        <span data-git-next={primary.kind} className="inline-flex items-stretch bg-foreground/[0.06]">
           {button(primary)}
           {more.length ? <>
             <span aria-hidden className="my-1.5 w-px bg-foreground/10" />

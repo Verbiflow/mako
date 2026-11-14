@@ -26,8 +26,9 @@ const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 300))
 
 const owned: ChildProcess[] = []
 try {
-  // An earlier host (pid 4242) records two children and dies without cleanup.
-  const earlier = new ProviderChildren(dir, 4242)
+  // An earlier host records two children and dies without cleanup. Its pid is past any system's, so no process has it.
+  const goneHost = 9_999_999
+  const earlier = new ProviderChildren(dir, goneHost)
   const orphan = spawn("sleep", ["120"], { stdio: "ignore", detached: true })
   owned.push(orphan)
   orphan.unref()
@@ -68,7 +69,10 @@ try {
   earlier.track(wrapper, { kind: "acp:test", owner: "conv-wrapper" })
   earlier.track(finished, { kind: "acp:test", owner: "conv-2" })
   await new Promise<void>((resolve) => finished.once("exit", () => resolve()))
-  const deadline = Date.now() + 10_000
+  // As long as the host's observations may take (`ProviderChildren.observe`): looks after 0, 250, 1,000 and 5,000 ms,
+  // each allowed 4.5 s, so 24.25 s at most. 10 s held only while the OS answered at once, which a loaded runner
+  // didn't (#635).
+  const deadline = Date.now() + 25_000
   const wrappedExecutable = await realpath("/bin/sleep")
   while (true) {
     const records = JSON.parse(await readFile(earlier.path, "utf8")).children
@@ -129,7 +133,7 @@ try {
     executable: "sleep",
     kind: "acp:test",
     owner: "gone",
-    host: 4242,
+    host: goneHost,
   })
   await rm(join(dir, "runtime", "provider-children.json"))
   await writeFile(
@@ -211,10 +215,16 @@ try {
     ),
     "tracking new children retains unresolved foreign ownership"
   )
+  // This host stops writing before the test edits its registry, as the abandoned host did above: the first
+  // identity read of `mine` can land while the edit is half written, read no records and replace the file.
+  next.untrackPid(mine.pid!)
   const retry = JSON.parse(await readFile(next.path, "utf8"))
   retry.children.find((entry: { owner: string }) => entry.owner === "uncertain-image").executableIdentity = wrappedExecutable
   await writeFile(next.path, JSON.stringify(retry))
-  assert.deepEqual((await next.reap()).map((entry) => entry.owner), ["uncertain-image"])
+  // A process read that runs past its limit proves nothing, so its record waits for the next look.
+  let reaped: string[] = []
+  for (let look = 0; look < 10 && !reaped.length; look++) reaped = (await next.reap()).map((entry) => entry.owner)
+  assert.deepEqual(reaped, ["uncertain-image"])
   await settle()
   assert.equal(alive(uncertain.pid!), false)
 
@@ -284,8 +294,11 @@ try {
   stopping.track(stubborn.child, { kind: "acp:test", owner: "conv-stubborn" })
   const leftAt = [await polite.grandchild, await stubborn.grandchild]
   const endedAt = performance.now()
-  assert.deepEqual((await stopping.end(300)).map((entry) => entry.owner), ["grok", "conv-stubborn"])
-  assert.ok(performance.now() - endedAt < 2_000, "ending waits for the exits, not out a fixed time")
+  assert.deepEqual((await stopping.end(50)).map((entry) => entry.owner), ["grok", "conv-stubborn"])
+  const endMs = performance.now() - endedAt
+  // Ending waits for the exits: the shortest fixed wait it has is the second after SIGKILL, which the exits it waits
+  // for take a small part of. A grace it ignored would show the default two seconds on top.
+  assert.ok(endMs < 1_000, `ending waits for the exits, not out a fixed time: ${Math.round(endMs)} ms`)
   await settle()
   for (const pid of [polite.child.pid!, stubborn.child.pid!, ...leftAt]) assert.equal(alive(pid), false, `${pid} ended with the host`)
   assert.deepEqual(JSON.parse(await readFile(stopping.path, "utf8")).children, [], "nothing is left for the next host to reap")
@@ -293,6 +306,18 @@ try {
   owned.push(late)
   stopping.track(late, { kind: "discovery", owner: "late" })
   await new Promise<void>((resolve) => late.once("exit", () => resolve()))
+
+  // The OS reads a start in whole seconds, up to 2 s before the spawn the host recorded (Linux truncates both the
+  // boot time and the process's ticks): the child is still the one it spawned, and its identity is taken.
+  const floored = new ProviderChildren(join(dir, "floored"), process.pid, async () => ({ startedAt: Date.now() - 1_950, executable: "/bin/floored" }))
+  const reading = spawn("sleep", ["120"], { stdio: "ignore", detached: true })
+  owned.push(reading)
+  floored.track(reading, { kind: "acp:test", owner: "conv-floored" })
+  const flooredBy = Date.now() + 3_000
+  while (!JSON.parse(await readFile(floored.path, "utf8")).children.some((entry: { owner: string; executableIdentity?: string }) => entry.owner === "conv-floored" && entry.executableIdentity === "/bin/floored")) {
+    assert.ok(Date.now() < flooredBy, "a start read to the whole second, before the recorded spawn, still takes the child's identity")
+    await settle()
+  }
 } finally {
   await Promise.all(
     owned.map(

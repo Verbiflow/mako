@@ -1,8 +1,8 @@
-import { execFile, execFileSync } from "node:child_process"
-import { promisify } from "node:util"
+import { command } from "./processes.js"
+import { execFileSync } from "node:child_process"
 import { onWindows } from "./platform.js"
 
-const run = promisify(execFile)
+const run = command
 
 /** Stable enough to distinguish a reused pid; `ps lstart` is second-granular. */
 function processStartCommand(pid: number): {

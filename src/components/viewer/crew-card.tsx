@@ -1,5 +1,6 @@
 import {
   memo,
+  use,
   useCallback,
   useLayoutEffect,
   useMemo,
@@ -8,7 +9,9 @@ import {
   type ReactNode,
 } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
+import { finMoved } from "@/state/fin-moved"
 import {
+  ArrowRightLeftIcon,
   CheckIcon,
   ChevronRightIcon,
   CornerUpLeftIcon,
@@ -16,20 +19,13 @@ import {
   SquareIcon,
   XIcon,
 } from "lucide-react"
-import {
-  CHILD_GROUPS,
-  childGroup,
-  childLine,
-  childStateOf,
-  rollup,
-  rollupLabel,
-  rollupLine,
-  type ChildGroup,
-  type Rollup,
-} from "@mako/host/contracts/children"
-import { APEX_WORD, FIN_WORD, finsWord } from "@mako/host/contracts/agents"
+import { approvalWords, CHILD_GROUPS, askWords, childGroup, childLine, childStateOf, openAsk, rollup, rollupLabel, rollupLine, stoodFor, timeWords, type ChildGroup, type Rollup } from "@mako/host/contracts/children"
+import { APEX_WORD, FIN_WORD, finsWord, type ChildState } from "@mako/host/contracts/agents"
+import { isLimitAsk } from "@mako/host/contracts/fin-fallback"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { FinMark } from "@/components/stage/child-tabs"
+import { NOT_OPENABLE } from "@/components/rail/apex-asks"
+import { RoutedOpenContext } from "@/components/transcript/routed-open"
 import { LiveMark } from "@/components/ui/live-mark"
 import { Shimmer } from "@/components/ui/shimmer"
 import { useTickingText } from "@/components/ui/second-clock"
@@ -42,10 +38,12 @@ import { useThreads } from "@/state/threads"
 import {
   apexConversation,
   openFinInApex,
+  useFinOpenable,
   threadChildren,
+  useThreadAsks,
   useThreadChildren,
 } from "@/state/apex-fins"
-import { answerFin, type FinAnswer } from "@/state/fin-asks"
+import { answerFin, type FinAnswer, type PersonAsk } from "@/state/fin-asks"
 import { mountCrewCard, unmountCrewCard } from "@/state/crew-card-view"
 
 const HEADINGS = {
@@ -77,28 +75,35 @@ const SETTLED: ReadonlySet<ChildGroup> = new Set(["idle", "done"])
 
 /**
  * What needs the person and what's live (needs you, working, queued, failed) as headed groups, then the settled ones
- * as one "24 done · 1 idle" line, their groups under it once it's open.
+ * as one "24 done · 1 idle" line, their groups under it once it's open. A done Fin with a decision still open, its
+ * Apex's to make, is never folded: it stays listed under its own Done heading.
  */
 function buildRows(children: readonly NativeAgent[], settledOpen: boolean): CrewRow[] {
   const live: CrewRow[] = []
   const settled: CrewRow[] = []
   const counts = { done: 0, idle: 0 }
-  let group: ChildGroup | undefined
-  let heading: Extract<CrewRow, { kind: "heading" }> | undefined
+  const headings = new Map<CrewRow[], Extract<CrewRow, { kind: "heading" }>>()
   for (const agent of children) {
-    const next = childGroup(childStateOf(agent))
-    const out = SETTLED.has(next) ? settled : live
-    if (next === "done" || next === "idle") counts[next] += 1
-    if (next !== group) {
-      group = next
+    const state = childStateOf(agent)
+    const next = childGroup(state)
+    const out = SETTLED.has(next) && !openAsk(state) && !waitsOutside(state) ? settled : live
+    if (out === settled && (next === "done" || next === "idle")) counts[next] += 1
+    let heading = headings.get(out)
+    if (heading?.group !== next) {
       heading = { kind: "heading", group: next, count: 0 }
+      headings.set(out, heading)
       out.push(heading)
     }
-    heading!.count += 1
+    heading.count += 1
     out.push({ kind: "child", agent, group: next })
   }
   if (!settled.length) return live
   return [...live, { kind: "settled", ...counts, open: settledOpen }, ...(settledOpen ? settled : [])]
+}
+
+/** An idle Fin waiting on what its report named, such as a pull request's checks, which Mako wakes it on: listed, never folded. */
+function waitsOutside(state: ChildState): boolean {
+  return state.kind === "idle" && Boolean(state.waitingOn?.length)
 }
 
 /** An Apex's name as its Thread's title, read the same way the Agents panel does. */
@@ -169,8 +174,10 @@ const NeedsRow = memo(function NeedsRow({
   useHarnessIdentity()
   const [sent, setSent] = useState<FinAnswer | undefined>(undefined)
   const state = childStateOf(agent)
-  if (state.kind !== "blocked" || !agent.child) return null
-  const ask = state.ask
+  const openable = useFinOpenable(agent)
+  const open = openAsk(state)
+  if (!open || !agent.child) return null
+  const ask = open.ask
   const approval = ask?.kind === "approval"
   const options = ask?.options ?? []
   const order = options
@@ -187,8 +194,9 @@ const NeedsRow = memo(function NeedsRow({
         fin: agent.child.thread,
         title: agent.title,
         harness: agent.provider,
-        question: state.question,
+        question: open.question,
         ask,
+        ...(open.done && { done: true as const }),
       },
       answer
     ).then((answered) => {
@@ -200,6 +208,7 @@ const NeedsRow = memo(function NeedsRow({
       data-crew-row={agent.child.thread}
       data-child-group="needs"
       data-fin-ask={ask?.kind}
+      data-fin-decision={open.done || undefined}
       data-fin={agent.child.thread}
       aria-busy={sent ? true : undefined}
       className="bg-[color-mix(in_oklab,var(--attention)_8%,var(--raised))] px-3 py-2.5 shadow-[inset_2px_0_0_var(--attention)]"
@@ -209,7 +218,10 @@ const NeedsRow = memo(function NeedsRow({
         <button
           type="button"
           onClick={() => onOpen(agent)}
-          className="pressable min-w-0 truncate text-ui font-medium text-foreground hover:underline"
+          data-openable={openable}
+          aria-disabled={openable ? undefined : true}
+          title={openable ? undefined : NOT_OPENABLE}
+          className={cn("pressable min-w-0 truncate text-ui font-medium text-foreground hover:underline", !openable && "cursor-default opacity-60 hover:no-underline")}
         >
           {agent.title}
         </button>
@@ -224,7 +236,7 @@ const NeedsRow = memo(function NeedsRow({
         <span className="flex-1" />
         <CrewElapsed agent={agent} className="text-label text-faint" />
       </div>
-      <p className="mt-1.5 pl-7 text-ui text-foreground/90">{state.question}</p>
+      <p className="mt-1.5 pl-7 text-ui text-foreground/90">{askWords(open)}</p>
       {ask ? (
         <div className="mt-2 flex flex-wrap items-center gap-1.5 pl-7">
           {approval ? (
@@ -236,12 +248,12 @@ const NeedsRow = memo(function NeedsRow({
                 data-chosen={sent?.allow === true || undefined}
                 onClick={() => send({ allow: true })}
                 className={cn(
-                  "pressable flex items-center gap-1.5 rounded-md bg-foreground px-2.5 text-label font-medium text-background hover:bg-foreground/90 disabled:opacity-50",
+                  "pressable flex items-center gap-1.5 bg-foreground px-2.5 text-label font-medium text-background hover:bg-foreground/90 disabled:opacity-50",
                   compact ? "h-9" : "h-7"
                 )}
               >
                 <CheckIcon className="size-3.5" />
-                Allow once
+                {approvalWords(ask ?? {}).allow}
               </button>
               <button
                 type="button"
@@ -255,7 +267,7 @@ const NeedsRow = memo(function NeedsRow({
                 )}
               >
                 <XIcon className="size-3.5" />
-                Refuse
+                {approvalWords(ask ?? {}).refuse}
               </button>
             </>
           ) : (
@@ -273,7 +285,7 @@ const NeedsRow = memo(function NeedsRow({
                   data-chosen={sent?.option === index || undefined}
                   onClick={() => send({ option: index })}
                   className={cn(
-                    "pressable flex items-center gap-1.5 rounded-md px-2.5 text-label font-medium disabled:opacity-50",
+                    "pressable flex items-center gap-1.5 px-2.5 text-label font-medium disabled:opacity-50",
                     compact ? "h-9" : "h-7",
                     primary
                       ? "bg-foreground text-background hover:bg-foreground/90"
@@ -298,7 +310,7 @@ const NeedsRow = memo(function NeedsRow({
           {!compact ? (
             <span className="ml-auto text-label text-faint">
               {approval
-                ? `${agent.title} waits on this command`
+                ? ask?.named ? `${agent.title} waits on your answer` : `${agent.title} waits on this command`
                 : `Answer here or tell ${apexTitle}`}
             </span>
           ) : null}
@@ -308,22 +320,11 @@ const NeedsRow = memo(function NeedsRow({
   )
 })
 
-/** How long a Fin has run, one unit: "25s", "18m", "1h 4m". Nothing under a second. */
-function took(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1000))
-  if (seconds < 1) return ""
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m`
-  const hours = Math.floor(minutes / 60)
-  const rest = minutes % 60
-  return rest ? `${hours}h ${rest}m` : `${hours}h`
-}
-
 /**
- * The time on a row. The shared clock ticks once a second only while the Fin
- * works; a minute or an hour is the same string for that whole stretch, so
- * the row's label doesn't repaint on the seconds in between.
+ * The time on a row: how long the Fin has stood as it does (`since`), a working
+ * one's current turn and never its age. The shared clock ticks once a second; a
+ * minute or an hour is the same string for that whole stretch, so the row's
+ * label doesn't repaint on the seconds in between.
  */
 const CrewElapsed = memo(function CrewElapsed({
   agent,
@@ -332,15 +333,13 @@ const CrewElapsed = memo(function CrewElapsed({
   agent: NativeAgent
   className?: string
 }) {
-  const state = childStateOf(agent)
-  const working = state.kind === "working" || state.kind === "starting"
-  const start = agent.startedAt ?? agent.observedAt
-  const frozen = (agent.settledAt ?? agent.observedAt) - start
-  const text = useTickingText(working, (now) =>
-    took(working ? now - start : frozen)
+  const since = agent.since
+  const stood = useTickingText(since !== undefined, (now) =>
+    since === undefined ? "" : stoodFor(now - since)
   )
-  if (!text) return null
-  return <span className={cn("tabular shrink-0", className)}>{text}</span>
+  const { time, title } = timeWords(childStateOf(agent), stood)
+  if (!time) return null
+  return <span title={title} className={cn("tabular shrink-0", className)}>{time}</span>
 })
 
 /** Working, queued, failed or done: one line, its mark, title, current line and time. */
@@ -355,10 +354,15 @@ const CrewLineRow = memo(function CrewLineRow({
 }) {
   useHarnessIdentity()
   const state = childStateOf(agent)
+  const openable = useFinOpenable(agent)
   const group = childGroup(state)
-  const line = childLine(state)
+  const waiting = waitsOutside(state)
+  // "Waiting on acme/app#371 checks · 12m": the same string for a whole minute, so the row repaints once a minute.
+  const waited = useTickingText(waiting, (now) => (waiting ? childLine(state, now) ?? "" : ""))
+  const line = waiting ? waited : childLine(state)
   const live = state.kind === "working" || state.kind === "starting"
-  const lead = state.kind === "blocked" && state.on === "lead"
+  const lead = openAsk(state)?.on === "lead"
+  const moved = finMoved(agent)
   // `childState()` keeps a reason for a failed Fin but drops it for one that succeeded (`agents.ts`, not this
   // card's own), so the glyph only ever has a failure's line to read on real data today.
   const pr =
@@ -369,17 +373,21 @@ const CrewLineRow = memo(function CrewLineRow({
       data-crew-row={agent.child?.thread}
       data-child-group={group}
       data-child-state={state.kind}
+      data-openable={openable}
+      aria-disabled={openable ? undefined : true}
+      title={openable ? undefined : NOT_OPENABLE}
       onClick={() => onOpen(agent)}
       className={cn(
-        "pressable group flex w-full items-center gap-2 rounded-md px-1.5 text-left hover:bg-fill-hover",
-        compact ? "min-h-11 py-1.5" : "h-8"
+        "pressable group flex w-full items-center gap-2 px-1.5 text-left hover:bg-fill-hover",
+        compact ? "min-h-11 py-1.5" : "h-8",
+        !openable && "cursor-default opacity-60 hover:bg-transparent",
       )}
     >
       <FinMark agent={agent} state={state} cut="var(--surface)" />
       <span
         className={cn(
           "flex min-w-0 flex-1",
-          compact ? "flex-col items-start" : "items-center gap-2"
+          compact ? "flex-col" : "items-center gap-2"
         )}
       >
         <span
@@ -395,25 +403,69 @@ const CrewLineRow = memo(function CrewLineRow({
           {lead ? (
             <CornerUpLeftIcon className="size-3 shrink-0" aria-hidden />
           ) : null}
+          {moved ? (
+            <span data-fin-moved title={moved} className="flex min-w-0 items-center gap-1">
+              <ArrowRightLeftIcon className="size-3 shrink-0" aria-hidden />
+              <span className="min-w-0 truncate">
+                {moved.split(":")[0]}
+                {line ? " ·" : null}
+              </span>
+            </span>
+          ) : null}
           {pr ? (
             <GitPullRequestIcon className="size-3 shrink-0" aria-hidden />
           ) : null}
           {live && line ? (
             <Shimmer text={line} className="min-w-0 truncate" />
           ) : (
-            <span className="min-w-0 truncate">
+            <span className="min-w-0 truncate" title={line}>
               {lead ? `Asking its Apex: ${line}` : line}
             </span>
           )}
         </span>
       </span>
-      <CrewElapsed
-        agent={agent}
-        className="min-w-8 shrink-0 text-right text-label text-faint"
-      />
+      {waiting ? null : (
+        <CrewElapsed
+          agent={agent}
+          className="min-w-8 shrink-0 text-right text-label text-faint"
+        />
+      )}
     </button>
   )
 })
+
+/** A limit's one notice, heading its tree's card: the tree's, so no Fin's row, and "Got it" ends it everywhere. */
+function LimitNoticeRow({ apex, ask, compact }: { apex: string; ask: PersonAsk; compact: boolean }) {
+  const [sent, setSent] = useState(false)
+  const seen = () => {
+    if (sent) return
+    setSent(true)
+    void answerFin(apex, ask, { option: 0 }).then((answered) => {
+      if (!answered) setSent(false)
+    })
+  }
+  return (
+    <div
+      data-limit-notice={ask.ask.id}
+      aria-busy={sent || undefined}
+      className="mb-1.5 bg-[color-mix(in_oklab,var(--attention)_8%,var(--raised))] px-3 py-2.5 shadow-[inset_2px_0_0_var(--attention)]"
+    >
+      <p className="text-ui text-foreground/90">{ask.question}</p>
+      <button
+        type="button"
+        data-limit-seen
+        disabled={sent}
+        onClick={seen}
+        className={cn(
+          "pressable mt-2 flex items-center bg-foreground px-2.5 text-label font-medium text-background hover:bg-foreground/90 disabled:opacity-50",
+          compact ? "h-9" : "h-7"
+        )}
+      >
+        {ask.ask.options?.[0]?.label ?? "Got it"}
+      </button>
+    </div>
+  )
+}
 
 /** The settled Fins, folded: "24 done · 1 idle", which opens their list and closes it again. */
 function SettledLine({ row, onToggle }: { row: Extract<CrewRow, { kind: "settled" }>; onToggle: () => void }) {
@@ -424,7 +476,7 @@ function SettledLine({ row, onToggle }: { row: Extract<CrewRow, { kind: "settled
       data-crew-settled={row.open ? "open" : "folded"}
       aria-expanded={row.open}
       onClick={onToggle}
-      className="pressable flex h-7 w-full items-center gap-1.5 rounded-md px-1.5 text-left text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
+      className="pressable flex h-7 w-full items-center gap-1.5 px-1.5 text-left text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
     >
       <ChevronRightIcon aria-hidden className={cn("size-3 shrink-0 transition-transform duration-150 ease-[var(--ease-out)]", row.open && "rotate-90")} />
       <span className="tabular">{words}</span>
@@ -436,24 +488,36 @@ function SettledLine({ row, onToggle }: { row: Extract<CrewRow, { kind: "settled
  * An Apex's crew, at the end of its transcript: what needs the person and what's live, needs-you first, the settled
  * ones folded into one line, its asks answered in place through the
  * same action the Agents panel and the dock use. Replaces `BackgroundWorkLine` while the Thread has Fins; `fallback`
- * (the background-work line) draws instead for a Thread with none. Past about twenty rows it scrolls inside itself;
+ * (the background-work line) draws instead for a Thread with none. It stays through whatever its Apex's session does
+ * (a turn, starting, waking, reconnecting): the Fins are theirs, not the session's. Past about twenty rows it scrolls inside itself;
  * rows are drawn as they scroll into view, so a crew of forty costs what a screenful does. Each row reads its own
  * Fin's entry alone, so a step changing repaints that row, not this card.
+ *
+ * Memoized by hand: `useVirtualizer` keeps the React Compiler off this file, so without it the card drew again with
+ * every batch its transcript streamed, its virtualizer's options set anew each time, as long a stretch of a phone's
+ * frame as the streamed words were.
  */
-export function CrewCard({
+export const CrewCard = memo(CrewCardBody)
+
+function CrewCardBody({
   compact = false,
   fallback = null,
+  thread: shownThread,
 }: {
   compact?: boolean
   fallback?: ReactNode
+  /** The Thread whose Fins it shows, where that isn't the conversation in scope: a saved transcript's own. */
+  thread?: string
 }) {
   const scope = useConversationScope()
-  const thread = useAcp((state) => scopedAcp(state, scope)?.threadId)
+  const scoped = useAcp((state) => scopedAcp(state, scope)?.threadId)
+  const thread = shownThread ?? scoped
   const conversation = useAcp((state) =>
     thread ? apexConversation(state, thread)?.key : undefined
   )
   const apexTitle = useApexCardTitle(thread)
   const children = useThreadChildren(thread)
+  const notice = useThreadAsks(thread).find((ask) => isLimitAsk(ask.ask.id))
   const scroller = useRef<HTMLDivElement>(null)
   const card = useRef<HTMLElement>(null)
   // In view until the observer says otherwise, so the dock doesn't also draw the asks for the frame before it reports.
@@ -495,10 +559,14 @@ export function CrewCard({
           : index
     },
   })
+  // A Fin opens in place on the desk; the web's Thread screen opens it by its own address.
+  const routed = use(RoutedOpenContext)
   const onOpen = useCallback(
-    (agent: NativeAgent) =>
-      thread ? openFinInApex(thread, apexTitle, agent) : undefined,
-    [thread, apexTitle]
+    (agent: NativeAgent) => {
+      if (routed) routed(agent)
+      else if (thread) openFinInApex(thread, apexTitle, agent)
+    },
+    [routed, thread, apexTitle]
   )
   const stoppable = children.filter((agent) => agent.stoppable).length
   const stopAll = useCallback(() => {
@@ -534,13 +602,14 @@ export function CrewCard({
             type="button"
             onClick={stopAll}
             title={`Stop ${finsWord(stoppable)} under ${apexTitle}; the ${APEX_WORD} keeps running`}
-            className="pressable flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-label text-faint hover:bg-fill-hover hover:text-foreground"
+            className="pressable flex h-7 shrink-0 items-center gap-1.5 px-2 text-label text-faint hover:bg-fill-hover hover:text-foreground"
           >
             <SquareIcon className="size-2.5 fill-current" aria-hidden />
             Stop all
           </button>
         ) : null}
       </header>
+      {notice && conversation ? <LimitNoticeRow key={notice.ask.id} apex={conversation} ask={notice} compact={compact} /> : null}
       <div
         ref={scroller}
         data-crew-scroller

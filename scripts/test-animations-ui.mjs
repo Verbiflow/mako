@@ -1,9 +1,10 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 // Every mark of work in progress moves for as long as its work runs, in
 // production components on the isolated live workflow fixture: the sweep
@@ -17,17 +18,42 @@ import { fileURLToPath } from "node:url"
 if (process.versions.electron) {
   void check().catch(async (error) => {
     console.error(error)
-    const { app } = await import("electron")
+    const { app, BrowserWindow } = await import("electron")
+    const window = BrowserWindow.getAllWindows()[0]
+    try {
+      if (window) {
+        const out = join(process.env.MAKO_TEST_EVIDENCE ?? process.env.MAKO_ANIMATIONS_UI_ROOT, "animations")
+        await mkdir(out, { recursive: true })
+        await writeFile(join(out, "failure.png"), (await window.webContents.capturePage()).toPNG())
+        await writeFile(join(out, "failure.json"), JSON.stringify(await window.webContents.executeJavaScript(`({
+          samples: window.animationSamples,
+          visibility: document.visibilityState,
+          reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
+          viewport: [innerWidth, innerHeight],
+          marks: [...document.querySelectorAll('.shimmer-text, [data-spinner], .live-mark-body')].map((element) => ({
+            text: element.textContent.trim().slice(0, 60),
+            name: getComputedStyle(element).animationName,
+            state: getComputedStyle(element).animationPlayState,
+            gate: getComputedStyle(element).getPropertyValue('--visible-animation-state'),
+            clock: element.getAnimations()[0]?.currentTime,
+            pending: element.getAnimations()[0]?.pending,
+          })),
+        })`), null, 2))
+        console.error(`Animation evidence: ${out}`)
+      }
+    } catch (evidenceError) {
+      console.error("Could not capture animation evidence:", evidenceError)
+    }
     app.exit(1)
   })
 } else {
-  const root = await mkdtemp(join(tmpdir(), "mako-animations-ui-"))
+  const root = testScratch("mako-animations-ui-")
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-animations-ui", main: fileURLToPath(import.meta.url) }))
   const given = process.argv[2]
   let server
   if (!given) {
-    const { createServer } = await import("vite")
-    server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false, watch: { ignored: ["**"] } } })
+    const { uiVite } = await import("./lib/ui-vite.mjs")
+    server = await uiVite({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false, watch: { ignored: ["**"] } } })
     await server.listen()
   }
   const env = { ...process.env, MAKO_ANIMATIONS_UI_ROOT: root, MAKO_ANIMATIONS_UI_URL: given ?? server.resolvedUrls.local[0] }
@@ -48,8 +74,10 @@ async function check() {
   const root = process.env.MAKO_ANIMATIONS_UI_ROOT
   app.setPath("userData", join(root, "profile"))
   app.dock?.hide()
+  withMotion(app)
   await app.whenReady()
   const window = new BrowserWindow({ width: 1440, height: 900, show: false, webPreferences: { backgroundThrottling: false } })
+  atSize(window, 1440, 900)
   const page = window.webContents
   const evaluate = (code) => page.executeJavaScript(code)
   const pause = (ms) => new Promise((done) => setTimeout(done, ms))
@@ -69,22 +97,44 @@ async function check() {
   /**
    * The marks `selector` finds, each as the browser runs it: its first
    * animation's name and play state, and how far its clock moved over 400 ms.
+   * A paused animation's ready promise resolves before its intersection gate
+   * has opened. Wait for the requested state on every mark before sampling;
+   * reduced-motion samples pass null because their animations may be absent.
    */
-  const read = (selector) => evaluate(`(async () => {
+  const read = async (selector, state = "running") => {
+    if (state) await until(`(() => {
+      const elements = [...document.querySelectorAll(${JSON.stringify(selector)})]
+      return elements.length > 0 && elements.every((element) => {
+        const style = getComputedStyle(element)
+        const animation = element.getAnimations()[0]
+        return style.animationPlayState === ${JSON.stringify(state)} && !animation?.pending
+      })
+    })()`, `${selector} ready to be ${state}`)
+    return evaluate(`(async () => {
     const elements = [...document.querySelectorAll(${JSON.stringify(selector)})]
     const clock = (element) => element.getAnimations()[0]?.currentTime ?? null
     // Styles first, so a gate set just now applies; a pause or play takes hold on the next frame (\`ready\`).
     for (const element of elements) getComputedStyle(element).animationPlayState
     await Promise.all(elements.map((element) => element.getAnimations()[0]?.ready))
+    const snapshot = (element) => {
+      const animation = element.getAnimations()[0]
+      const style = getComputedStyle(element)
+      const rect = element.getBoundingClientRect()
+      return { clock: clock(element), timeline: document.timeline.currentTime, state: style.animationPlayState, gate: style.getPropertyValue("--visible-animation-state"), pending: animation?.pending, start: animation?.startTime, connected: element.isConnected, rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } }
+    }
+    const initial = elements.map(snapshot)
     const before = elements.map(clock)
     await new Promise((done) => setTimeout(done, 400))
-    return elements.map((element, index) => {
+    const marks = elements.map((element, index) => {
       const style = getComputedStyle(element)
       const animation = element.getAnimations()[0]
       const after = clock(element)
-      return { text: element.textContent.trim().slice(0, 60), name: style.animationName, state: style.animationPlayState, running: animation?.playState, moved: before[index] === null || after === null ? 0 : after - before[index] }
+      return { initial: initial[index], final: snapshot(element), text: element.textContent.trim().slice(0, 60), name: style.animationName, state: style.animationPlayState, running: animation?.playState, moved: before[index] === null || after === null ? 0 : after - before[index] }
     })
+    ;(window.animationSamples ??= []).push({ selector: ${JSON.stringify(selector)}, expected: ${JSON.stringify(state)}, marks })
+    return marks
   })()`)
+  }
   const moving = (marks, what, name) => {
     assert.ok(marks.length > 0, `${what}: on screen`)
     for (const mark of marks) {
@@ -132,9 +182,9 @@ async function check() {
 
   // Covered or minimized, they rest; shown again, every one moves again.
   await visibility("hidden")
-  resting(await read(rows), "a running call, hidden")
-  resting(await read(spinner), "a spinner, hidden")
-  resting(await read(fin), "the working fin, hidden")
+  resting(await read(rows, "paused"), "a running call, hidden")
+  resting(await read(spinner, "paused"), "a spinner, hidden")
+  resting(await read(fin, "paused"), "the working fin, hidden")
   await visibility("visible")
   moving(await read(rows), "a running call, shown again", "shimmer-sweep")
   moving(await read(spinner), "a spinner, shown again", "spinner-turn")
@@ -145,7 +195,7 @@ async function check() {
   const scroller = "document.querySelector('[data-live-step]').closest('.scroll-fade-scroller')"
   await evaluate(`(() => { const spacer = document.createElement("div"); spacer.id = "animations-spacer"; spacer.style.height = "4000px"; ${scroller}.firstElementChild.append(spacer); ${scroller}.scrollTop = ${scroller}.scrollHeight; return true })()`)
   await until(`getComputedStyle(document.querySelector(${JSON.stringify(rows)})).animationPlayState === "paused"`, "the rows resting out of view")
-  resting(await read(rows), "a running call, scrolled away")
+  resting(await read(rows, "paused"), "a running call, scrolled away")
   await evaluate(`(() => { document.getElementById("animations-spacer").remove(); document.querySelector('[data-live-step]').scrollIntoView({ block: "center" }); return true })()`)
   await until(`getComputedStyle(document.querySelector(${JSON.stringify(rows)})).animationPlayState === "running"`, "the rows moving again in view")
   moving(await read(rows), "a running call, scrolled back", "shimmer-sweep")
@@ -159,8 +209,8 @@ async function check() {
   // Reduced motion: the words stand still in their own colours, the spinner and the fin stand still.
   await reduceMotion(true)
   await pause(200)
-  for (const mark of await read("[data-agent-group] .shimmer-text")) assert.equal(mark.name, "none", "reduced motion: the words stand still")
-  for (const mark of await read(spinner)) assert.ok(mark.running !== "running" || mark.moved === 0, "reduced motion: the spinner stands still")
+  for (const mark of await read("[data-agent-group] .shimmer-text", null)) assert.equal(mark.name, "none", "reduced motion: the words stand still")
+  for (const mark of await read(spinner, null)) assert.ok(mark.running !== "running" || mark.moved === 0, "reduced motion: the spinner stands still")
   assert.equal(await pictures(fin), 1, "reduced motion: the fin stands still")
   await reduceMotion(false)
 

@@ -1,4 +1,4 @@
-import gi, json, sys, os
+import gi, json, sys, os, time
 from pathlib import Path
 gi.require_version('Gtk','3.0')
 from gi.repository import Gtk, GLib, Gdk
@@ -18,11 +18,16 @@ def draw(widget,ctx):
     return False
 area.connect('draw',draw)
 area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK | Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.SCROLL_MASK)
+# A runner that keeps the app off the CPU mid-drag, played on purpose: the first drag's loop is held this long once.
+stall=int(os.environ.get('MAKO_FIXTURE_DRAG_STALL_MS','0'));dragging={'moves':0}
 def pointer(kind):
     def receive(widget,event):
         offset=area.translate_coordinates(window,0,0)
         state['points'].append({'kind':kind,'event_ms':event.time,'x':event.x,'y':event.y,'window_x':event.x+offset[0],'window_y':event.y+offset[1],'root_x':event.x_root,'root_y':event.y_root})
         state['points']=state['points'][-1000:]
+        if kind=='move' and event.state & Gdk.ModifierType.BUTTON1_MASK and stall and 'stalledMs' not in state:
+            dragging['moves']+=1
+            if dragging['moves']==2:time.sleep(stall/1000);state['stalledMs']=stall
         return False
     return receive
 for signal,kind in [('button-press-event','down'),('motion-notify-event','move'),('button-release-event','up'),('scroll-event','scroll')]:area.connect(signal,pointer(kind))
@@ -31,6 +36,9 @@ def save(_):state['saves']+=1
 button.connect('clicked',save)
 for view in [entry,button,area]:box.pack_start(view,view==area,view==area,0)
 window.add(box);window.show_all();entry.grab_focus()
+# GDK merges the motions queued behind a busy frame into the last one: a runner that held the app 300 ms mid-drag
+# left 8 of a drag's 22 in its log. The log is of every motion the compositor sent.
+for view in (window,area):view.get_window().set_event_compression(False)
 def tick():
     command=Path(output+'.command')
     if command.exists():

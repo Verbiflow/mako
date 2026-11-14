@@ -452,7 +452,7 @@
           "name": "read",
           "status": "running",
           "args": {
-            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-Ukp2iw/work/f1.txt"
+            "path": "/tmp/mako-live-test-cursor-context-Ukp2iw/work/f1.txt"
           }
         }
       },
@@ -465,7 +465,7 @@
             "title": "Read f1.txt",
             "name": "read",
             "status": "running",
-            "input": "{\n  \"path\": \"/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-Ukp2iw/work/f1.txt\"\n}"
+            "input": "{\n  \"path\": \"/tmp/mako-live-test-cursor-context-Ukp2iw/work/f1.txt\"\n}"
           }
         }
       ]
@@ -483,7 +483,7 @@
           "name": "read",
           "status": "completed",
           "args": {
-            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-Ukp2iw/work/f1.txt"
+            "path": "/tmp/mako-live-test-cursor-context-Ukp2iw/work/f1.txt"
           },
           "result": {
             "status": "success",
@@ -506,7 +506,7 @@
             "effects": [
               {
                 "kind": "read",
-                "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-Ukp2iw/work/f1.txt"
+                "path": "/tmp/mako-live-test-cursor-context-Ukp2iw/work/f1.txt"
               }
             ]
           }
@@ -743,7 +743,7 @@
           "name": "read",
           "status": "running",
           "args": {
-            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-Ukp2iw/work/f2.txt"
+            "path": "/tmp/mako-live-test-cursor-context-Ukp2iw/work/f2.txt"
           }
         }
       },
@@ -756,7 +756,7 @@
             "title": "Read f2.txt",
             "name": "read",
             "status": "running",
-            "input": "{\n  \"path\": \"/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-Ukp2iw/work/f2.txt\"\n}"
+            "input": "{\n  \"path\": \"/tmp/mako-live-test-cursor-context-Ukp2iw/work/f2.txt\"\n}"
           }
         }
       ]
@@ -774,7 +774,7 @@
           "name": "read",
           "status": "completed",
           "args": {
-            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-Ukp2iw/work/f2.txt"
+            "path": "/tmp/mako-live-test-cursor-context-Ukp2iw/work/f2.txt"
           },
           "result": {
             "status": "success",
@@ -797,7 +797,7 @@
             "effects": [
               {
                 "kind": "read",
-                "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-Ukp2iw/work/f2.txt"
+                "path": "/tmp/mako-live-test-cursor-context-Ukp2iw/work/f2.txt"
               }
             ]
           }
@@ -1034,7 +1034,7 @@
           "name": "read",
           "status": "running",
           "args": {
-            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-Ukp2iw/work/f3.txt"
+            "path": "/tmp/mako-live-test-cursor-context-Ukp2iw/work/f3.txt"
           }
         }
       },
@@ -1047,7 +1047,7 @@
             "title": "Read f3.txt",
             "name": "read",
             "status": "running",
-            "input": "{\n  \"path\": \"/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-Ukp2iw/work/f3.txt\"\n}"
+            "input": "{\n  \"path\": \"/tmp/mako-live-test-cursor-context-Ukp2iw/work/f3.txt\"\n}"
           }
         }
       ]
@@ -1065,7 +1065,7 @@
           "name": "read",
           "status": "completed",
           "args": {
-            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-Ukp2iw/work/f3.txt"
+            "path": "/tmp/mako-live-test-cursor-context-Ukp2iw/work/f3.txt"
           },
           "result": {
             "status": "success",
@@ -1088,7 +1088,7 @@
             "effects": [
               {
                 "kind": "read",
-                "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-Ukp2iw/work/f3.txt"
+                "path": "/tmp/mako-live-test-cursor-context-Ukp2iw/work/f3.txt"
               }
             ]
           }

@@ -8,10 +8,12 @@ import { classifyProviderFailure, type ProviderFailureKind } from "../contracts/
 
 export { declareTelemetryMethods } from "./telemetry-methods.js"
 export { declareStorageMethods } from "./storage-methods.js"
-export { declareFootprintMethods } from "./mako-footprint.js"
+export { declareFootprintMethods, readProcessTable, type ProcessRow } from "./mako-footprint.js"
 export { MakoStorage, type HarnessStorage } from "./storage.js"
 export { LeftoverFiles, RecordRepacks } from "./storage-collectors.js"
 export { declareCloudAccountMethods, type CloudAccount } from "./cloud-account-methods.js"
+export { LEND_BEAT_MS, Lending } from "./lending.js"
+export { describeThisDevice } from "./device-description.js"
 export type { CloudThreadMaking } from "./cloud-account.js"
 export type { MachineRuntime, MachineGatewayLink } from "./machine-runtime.js"
 export { MachineWorkspace, WORKSPACE_RETRY_MS, type MachineWorkspaceOutcome } from "./machine-workspace.js"

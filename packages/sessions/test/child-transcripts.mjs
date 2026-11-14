@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
-import { appendFile, chmod, cp, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
+import fsPromises, { appendFile, chmod, cp, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
+import { syncBuiltinESMExports } from "node:module"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -229,13 +230,28 @@ try {
     // Unreadable: a listing that opened a transcript would fail here.
     await chmod(join(folder, `agent-${agent}.jsonl`), 0o000)
   }
-  const started = performance.now()
-  const wideChildren = await wideReader.children(wideParent)
-  const elapsed = performance.now() - started
+  // And counted: a listing that opened one and let its refusal go would show here.
+  const openedBodies = []
+  const { open: realOpen, readFile: realReadFile } = fsPromises
+  const counting = (real) => (path, ...rest) => {
+    if (/agent-a\d{16}\.jsonl$/.test(String(path))) openedBodies.push(String(path))
+    return real(path, ...rest)
+  }
+  fsPromises.open = counting(realOpen)
+  fsPromises.readFile = counting(realReadFile)
+  syncBuiltinESMExports()
+  let wideChildren
+  try {
+    wideChildren = await wideReader.children(wideParent)
+  } finally {
+    fsPromises.open = realOpen
+    fsPromises.readFile = realReadFile
+    syncBuiltinESMExports()
+  }
   assert.equal(wideChildren.length, 21, "twenty unreadable transcripts list from their links alone")
-  assert.ok(elapsed < 500, `listing twenty children took ${Math.round(elapsed)} ms`)
+  assert.deepEqual(openedBodies, [], "listing opens none of the twenty transcripts")
   for (const name of await readdir(folder)) await chmod(join(folder, name), 0o644)
-  console.log(`child transcripts: every harness lists, links and reads its children; a kept copy of a dropped one lists under its parent; a follow reads only the appended line; twenty 2 MB children list in ${Math.round(elapsed)} ms without a read`)
+  console.log("child transcripts: every harness lists, links and reads its children; a kept copy of a dropped one lists under its parent; a follow reads only the appended line; twenty 2 MB children list without a read")
 } finally {
   await rm(root, { recursive: true, force: true })
 }

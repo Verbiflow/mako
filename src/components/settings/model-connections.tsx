@@ -56,7 +56,7 @@ export function CommitKeys() {
       {commit && !commit.resolved && connections.length > 0 && commit.reason ? (
         <p role="alert" className="text-label text-caution">{commit.reason}</p>
       ) : null}
-      <div role="radiogroup" aria-label="API key that writes commit messages" className="rounded-lg bg-shell/55 [box-shadow:inset_0_0_0_0.5px_var(--hairline)] divide-y divide-hairline">
+      <div role="radiogroup" aria-label="API key that writes commit messages" className="bg-raised">
         {connections.length === 0 ? (
           <div className="flex items-center gap-4 px-4 py-4">
             <KeyTile />
@@ -82,9 +82,9 @@ export function CommitKeys() {
                   aria-checked={used}
                   aria-label={`${connection.name ?? connection.model}, ${provider?.name ?? connection.provider}`}
                   onClick={() => { if (!used) void chooseCommitModel(id) }}
-                  className={cn("pressable flex min-w-0 flex-1 items-center gap-3 rounded-md text-left outline-none focus-visible:ring-1 focus-visible:ring-border", used && "cursor-default")}
+                  className={cn("pressable flex min-w-0 flex-1 items-center gap-3 text-left outline-none focus-visible:ring-1 focus-visible:ring-border", used && "cursor-default")}
                 >
-                  <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-raised [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
+                  <span className="flex size-7 shrink-0 items-center justify-center bg-fill-hover">
                     <ProviderIcon provider={connection.provider} tinted={false} className="size-3.5" />
                   </span>
                   <span className="min-w-0 flex-1">
@@ -177,7 +177,7 @@ export function CommitKeys() {
 
 function KeyTile() {
   return (
-    <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-raised text-faint [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
+    <span className="flex size-8 shrink-0 items-center justify-center bg-fill-hover text-faint">
       <KeyRoundIcon className="size-4" />
     </span>
   )

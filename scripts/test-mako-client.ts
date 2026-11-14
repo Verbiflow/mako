@@ -53,6 +53,8 @@ exit 2
     PATH: [standIn, process.env.PATH].filter(Boolean).join(delimiter),
     // A turn of the stand-in: two and a half seconds of words, a thought, and a command with its output at two.
     MEASURE_STREAM_MS: "2500",
+    // The turn stopped below runs until it's stopped: however long two CLIs take to start, it's still running.
+    MEASURE_UNTIL_CANCELLED: "Once more",
   }
   for (const key of ["ELECTRON_RUN_AS_NODE", "VITE_DEV_SERVER_URL", "CLAUDE_CONFIG_DIR", "NODE_OPTIONS"]) delete env[key]
   host = spawn(process.execPath, [join(repo, "packages/host/dist/mako-host.js")], { env, stdio: ["ignore", "ignore", "pipe"] })
@@ -60,7 +62,10 @@ exit 2
   host.stderr?.on("data", (data: Buffer) => (errors = (errors + data.toString()).slice(-4_000)))
   for (const deadline = Date.now() + 60_000; ; ) {
     assert.ok(host.exitCode === null, `The host exited while starting: ${errors}`)
-    if ((await probeRuntime(location.socket, { timeoutMs: 500 })).state === "ready") break
+    // A starting host holds its loop for a few hundred ms at a time as it loads its domains, and its health answer
+    // waits behind them (up to 910 ms here, on a Mac): a probe that gives up at 500 ms threw from inside the
+    // start-up, which the minute's deadline below is for.
+    if ((await probeRuntime(location.socket)).state === "ready") break
     assert.ok(Date.now() < deadline, `The host answered within a minute: ${errors}`)
     await new Promise((settle) => setTimeout(settle, 50))
   }
@@ -95,7 +100,7 @@ exit 2
   assert.deepEqual(history.filter((line) => line.kind === "user").length, 3, "each message, read back in order")
   assert.ok(text(history).length > text(first).length, "the turns' words, read back")
   const statuses = new Map(history.flatMap((line) => (line.kind === "request" ? [[z.string().parse(line.id), z.string().parse(line.status)] as const] : [])))
-  assert.deepEqual([statuses.get(started.requestId), statuses.get(requestId)].map((status) => status === "completed"), [true, false], `the stopped turn didn't complete: ${statuses.get(requestId)}`)
+  assert.deepEqual([statuses.get(started.requestId), statuses.get(requestId)], ["completed", "interrupted"], "the first turn completed, and the stopped one was stopped")
 
   console.log(`PASS: the headless client started a conversation (first turn ${Math.round(firstMs)} ms end to end), sent to it, stopped it and read it back, through a real host's own calls and events`)
 } finally {

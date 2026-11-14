@@ -18,6 +18,7 @@ import type { Actor } from "../contracts/thread-identity.js"
 import type { DriverGoalCommand, GoalDelivery, GoalsCapability } from "../harnesses/index.js"
 import { spendBetween } from "../harnesses/index.js"
 import { isTurnStart, reduceLiveUpdates } from "@mako/sessions/live-content"
+import type { UsageLimit } from "@mako/sessions/events"
 import { activeBinding, conversationControl, type LiveAccess, type Resident } from "./live-runtime.js"
 
 type GoalsAccess = Pick<LiveAccess, "dependencies" | "admission" | "resident" | "load" | "flush" | "pending" | "reopens" | "wake" | "snapshot">
@@ -450,6 +451,11 @@ function isQueuedContinuation(request: LiveRequest): boolean {
 export interface TurnReply {
   text: string
   worked: boolean
+  /**
+   * The usage limit that refused the turn, as its harness's decoder read it from the native message's own fields
+   * (`usageLimitEvent`), never from words; a limit that stopped only a subagent is its cause's, not this.
+   */
+  limit?: UsageLimit
 }
 
 export function turnReply(resident: Resident, requestId: string): TurnReply {
@@ -461,5 +467,6 @@ export function turnReply(resident: Resident, requestId: string): TurnReply {
   const turn = next < 0 ? rest : rest.slice(0, next)
   const lastTool = lastIndex(turn, (block) => block.type === "tool")
   const text = turn.slice(lastTool + 1).flatMap((block) => (block.type === "text" ? [block.text] : [])).join("")
-  return { text, worked: lastTool >= 0 || text.trim().length > 0 }
+  const limit = turn[lastIndex(turn, (block) => block.type === "event" && block.limit !== undefined)]
+  return { text, worked: lastTool >= 0 || text.trim().length > 0, ...(limit?.type === "event" && limit.limit && { limit: limit.limit }) }
 }

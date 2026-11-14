@@ -1,13 +1,13 @@
 {
   "harness": "cursor",
   "native": {
-    "version": "1.2.0"
+    "version": "1.3.1"
   },
   "about": "Read notes.md and tell me the release day. Don't run commands. / (resumed) / Without reading anything, which day did notes.md name? Answer with just the day. A turn with a tool, the harness's process closed and the session resumed in a new one, then a turn that leans on the first. What the harness replays while it opens is history.",
   "stores": [
     {
       "reader": "cursor",
-      "path": ".mako/cursor-sdk/agents/agent-11a20d723a2a21a98c371d080823c6eb2048d24db535875c58cee584ac5fb0fc/store.db",
+      "path": ".mako/cursor-sdk/agents/agent-25bdc03440a6924ffcd7a24a29f86e07e18896bacadfbb7a9c92ed1b352e9155/store.db",
       "known": []
     }
   ]

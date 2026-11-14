@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { execFile, spawn } from "node:child_process"
 import { promisify } from "node:util"
-import { access, appendFile, cp, mkdtemp, rm } from "node:fs/promises"
+import { access, appendFile, cp, mkdir, mkdtemp, rm } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
@@ -113,6 +113,7 @@ const numbers = {}
 // A host older than the code on disk: the worker loads the newer code, so it's refused.
 {
   const root = resolve("node_modules/.cache")
+  await mkdir(root, { recursive: true })
   const copy = await mkdtemp(join(root, "mako-control-stale-"))
   try {
     await cp(resolve("packages/control-runtime/dist"), join(copy, "dist"), { recursive: true })

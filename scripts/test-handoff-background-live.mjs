@@ -2,12 +2,12 @@ import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 const nativeStores = new NativeStores(false)
 
@@ -17,7 +17,7 @@ const nativeStores = new NativeStores(false)
 // it, whatever the harness does about the command it finds stopped. Spends a few model calls:
 //   npm run test:handoff-background-live -- claude
 if (!process.versions.electron) {
-  const root = await mkdtemp(join(tmpdir(), "mako-handoff-background-live-"))
+  const root = testScratch("mako-handoff-background-live-")
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-handoff-background-live", main: fileURLToPath(import.meta.url) }))
   const providers = process.argv.slice(2).filter((argument) => !argument.startsWith("-"))
   // A person of its own (`scratchHostHome`): the harnesses keep their sessions in `<root>/home`, never in the person's stores.

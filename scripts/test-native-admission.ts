@@ -164,6 +164,26 @@ try {
   assert.equal(drained.text, "leader\ndescendant:" + "🦉".repeat(16_384))
   assert.equal(releases, 3, "closed pipes release the claim exactly once")
   assert.equal(runs.lifecycleWork().length, 0)
+  // After the leader exits, explicit Stop still owns the descendant's group.
+  for (const file of ["leader-pid", "descendant-pid", "release-pipes"]) await rm(join(root, file), { force: true })
+  await runs.resume(ref, "stop the descendant after leader exit", { captureOutput: true })
+  let descendant = 0
+  for (const deadline = Date.now() + 5_000; ; await delay(10)) {
+    const leader = Number(await readFile(join(root, "leader-pid"), "utf8").catch(() => "0"))
+    descendant = Number(await readFile(join(root, "descendant-pid"), "utf8").catch(() => "0"))
+    if (leader && descendant) {
+      try { process.kill(leader, 0) } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === "ESRCH") break
+        throw error
+      }
+    }
+    assert.ok(Date.now() < deadline, "the next leader exited with its descendant still holding output")
+  }
+  assert.equal(releases, 3, "the descendant still holds the exact writer claim")
+  runs.abort(ref.path, runs.stopToken(ref.path)!)
+  assert.equal((await runs.wait(ref.path, 5_000)).state.status, "stopped")
+  assert.throws(() => process.kill(descendant, 0), { code: "ESRCH" })
+  assert.equal(releases, 4, "explicit Stop reaps the tree before releasing its claim")
   console.log("Native admission: refusal, concurrent preparation, exact claims, leader exit with inherited pipes and lossless descendant output verified")
 } finally {
   await writeFile(join(root, "release-pipes"), "release").catch(() => {})

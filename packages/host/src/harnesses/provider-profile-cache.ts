@@ -3,11 +3,12 @@ import {
   SessionSettingsSchema,
 } from "@mako/sessions/settings"
 import { createHash } from "node:crypto"
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
+import { readFile } from "node:fs/promises"
 import { makoUserRoot } from "@mako/sessions/mako-root"
-import { dirname, join } from "node:path"
+import { join } from "node:path"
 import { z } from "zod"
 import type { HarnessProfile } from "../contracts/providers-acp.js"
+import { publishFile } from "../base/published-files.js"
 import { JsonValueSchema, jsonStoreAccess } from "@mako/sessions/store-format"
 
 const profileSchema = z.object({
@@ -129,13 +130,6 @@ export class ProviderProfileCache {
 
   private async persist(): Promise<void> {
     if (this.declined) return
-    const dir = dirname(this.path)
-    const temp = `${this.path}.${process.pid}.tmp`
-    await mkdir(dir, { recursive: true, mode: 0o700 })
-    await writeFile(temp, JSON.stringify(this.file), {
-      encoding: "utf8",
-      mode: 0o600,
-    })
-    await rename(temp, this.path)
+    await publishFile(this.path, JSON.stringify(this.file), { mode: 0o600, dirMode: 0o700 })
   }
 }

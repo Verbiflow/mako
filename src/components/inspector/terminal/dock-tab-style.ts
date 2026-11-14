@@ -21,7 +21,7 @@ export const dockTool =
 /** A text button inside one of the dock's bars: nearly square, no icon. */
 export function dockButton(tone: "primary" | "plain"): string {
   return cn(
-    "pressable inline-flex h-7 shrink-0 items-center rounded-xs px-3 text-ui font-medium whitespace-nowrap transition-[background-color,color,opacity] duration-150 disabled:pointer-events-none disabled:opacity-40",
+    "pressable inline-flex h-7 shrink-0 items-center px-3 text-ui font-medium whitespace-nowrap transition-[background-color,color,opacity] duration-150 disabled:pointer-events-none disabled:opacity-40",
     tone === "primary"
       ? "bg-foreground text-terminal hover:bg-foreground/88"
       : "text-foreground shadow-[inset_0_0_0_1px_var(--border)] hover:bg-fill-hover"

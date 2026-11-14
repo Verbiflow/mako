@@ -93,7 +93,8 @@ import {
   type DriverSuperseded,
 } from "./computer-driver-client.js"
 import { connectBrokeredDriver, type BrokeredDriverEndpoint } from "./driver-broker-client.js"
-import { execFile } from "node:child_process"
+import { execFile } from "./processes.js"
+
 import { realpath } from "node:fs/promises"
 import { createServer } from "node:net"
 import { basename } from "node:path"
@@ -641,7 +642,11 @@ function runCommand(
         })
       }
     )
-    if (options.input !== undefined) child.stdin?.end(options.input)
+    if (options.input !== undefined) {
+      // A command that exits before reading its input fails the write; its own result says how it ended.
+      child.stdin?.on("error", () => {})
+      child.stdin?.end(options.input)
+    }
   })
 }
 

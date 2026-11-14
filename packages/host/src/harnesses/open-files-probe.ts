@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process"
+import { z } from "zod"
+import { hostProbe } from "../base/host-command.js"
 import type { ProviderActivityResult } from "../threads/index.js"
 import { onMac, onWindows } from "../base/platform.js"
 
@@ -28,77 +29,45 @@ export async function probeOpenFiles({
   if (onWindows())
     return { kind: "unavailable", reason: "unsupported" }
   const command = onMac() ? "/usr/sbin/lsof" : "lsof"
-  return new Promise((resolve) => {
-    const child = spawn(
-      command,
-      sourcePath ? ["-Fpgn", "--", sourcePath] : ["-Fpgn", ...processNames.flatMap((name) => ["-c", name])],
-      { signal, stdio: ["ignore", "pipe", "pipe"] }
-    )
-    let diagnostic = ""
-    child.stderr.setEncoding("utf8")
-    child.stderr.on("data", (chunk: string) => {
-      diagnostic = (diagnostic + chunk).slice(0, 4096)
-    })
-    const paths = new Set<string>()
-    const pids = new Set<number>()
-    const groups = new Map<number, number>()
-    let pid: number | undefined
-    const field = (line: string) => {
-      if (/^p\d+$/.test(line)) {
-        pid = Number(line.slice(1))
-        pids.add(pid)
-      } else if (/^g\d+$/.test(line) && pid !== undefined) groups.set(pid, Number(line.slice(1)))
+  const args = sourcePath ? ["-Fpgn", "--", sourcePath] : ["-Fpgn", ...processNames.flatMap((name) => ["-c", name])]
+  // In the host's probe child (`hostProbe`): lsof's spawn held the host's loop 0.5 s in a 600 s run (2026-11-12).
+  const answer = await lsofAnswer(command, args, signal)
+  const paths = new Set<string>()
+  const pids = new Set<number>()
+  const groups = new Map<number, number>()
+  let pid: number | undefined
+  let incomplete = false
+  for (const line of answer.stdout.split("\n")) {
+    if (line.length > LINE_BYTES) {
+      incomplete = true
+      continue
     }
-    let carry = ""
-    let incomplete = false
-    let bytes = 0
-    child.stdout.setEncoding("utf8")
-    child.stdout.on("data", (chunk: string) => {
-      bytes += Buffer.byteLength(chunk)
-      if (bytes > 16 * 1024 * 1024) {
-        incomplete = true
-        child.kill()
-        return
-      }
-      carry += chunk
-      const lines = carry.split("\n")
-      carry = lines.pop() ?? ""
-      if (carry.length > 64 * 1024) {
-        incomplete = true
-        carry = ""
-      }
-      for (const line of lines) {
-        field(line)
-        if (!line.startsWith("n")) continue
-        const path = line.slice(1)
-        if (accept(path)) paths.add(path)
-      }
-    })
-    child.once("error", () =>
-      resolve({
-        kind: "unavailable",
-        reason: signal.aborted ? "timeout" : "failed",
-      })
-    )
-    child.once("close", (code) => {
-      field(carry)
-      if (carry.startsWith("n")) {
-        const path = carry.slice(1)
-        if (accept(path)) paths.add(path)
-      }
-      if (!incomplete && !signal.aborted && !diagnostic.trim() && (code === 1 || (code === 0 && pids.size > 0)))
-        resolve({
-          kind: "available",
-          paths: [...paths],
-          processFound: code === 0,
-          pids: [...pids],
-          groups,
-        })
-      else
-        resolve({
-          kind: "unavailable",
-          reason: signal.aborted ? "timeout" : "failed",
-        })
-    })
-  })
+    if (/^p\d+$/.test(line)) {
+      pid = Number(line.slice(1))
+      pids.add(pid)
+    } else if (/^g\d+$/.test(line) && pid !== undefined) groups.set(pid, Number(line.slice(1)))
+    else if (line.startsWith("n") && accept(line.slice(1))) paths.add(line.slice(1))
+  }
+  // lsof exits 1 when it finds nothing; anything it says on stderr, or output past the limit, leaves the answer unknown.
+  if (!incomplete && !signal.aborted && !answer.stderr.trim() && (answer.code === 1 || (answer.code === 0 && pids.size > 0)))
+    return { kind: "available", paths: [...paths], processFound: answer.code === 0, pids: [...pids], groups }
+  return { kind: "unavailable", reason: signal.aborted ? "timeout" : "failed" }
 }
+
+/** lsof's exit code and output; no code when it couldn't run or printed past the limit, which leaves the answer unknown. */
+const LsofAnswerSchema = z.object({ code: z.number().int().optional(), stdout: z.string(), stderr: z.string() })
+type LsofAnswer = z.infer<typeof LsofAnswerSchema>
+
+async function lsofAnswer(command: string, args: string[], signal: AbortSignal): Promise<LsofAnswer> {
+  try {
+    return { code: 0, ...await hostProbe(command, args, { signal, maxBuffer: OUTPUT_BYTES }) }
+  } catch (error) {
+    const exited = LsofAnswerSchema.safeParse(error)
+    return exited.success ? exited.data : { stdout: "", stderr: "" }
+  }
+}
+
+/** At most this much of lsof's output; more is an answer cut short. */
+const OUTPUT_BYTES = 16 * 1024 * 1024
+/** A line this long isn't one lsof's fields make. */
+const LINE_BYTES = 64 * 1024

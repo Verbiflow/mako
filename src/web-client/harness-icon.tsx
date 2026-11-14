@@ -7,5 +7,5 @@ import { harnessFaces } from "@/dev/harness-faces"
  */
 export function WebHarnessIcon({ harness, className }: { harness: string; className?: string }) {
   const mark = harnessFaces.find((face) => face.provider === harness)?.presentation?.mark
-  return mark ? <DeclaredMark mark={mark} tinted className={className} /> : <Initials name={harness} className={className} />
+  return mark ? <DeclaredMark mark={mark} tinted={false} className={className} /> : <Initials name={harness} className={className} />
 }

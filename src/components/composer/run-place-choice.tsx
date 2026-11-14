@@ -1,15 +1,17 @@
 import { useState, type ReactNode } from "react"
 import type { CarriedFilesView } from "@mako/host/contracts/cloud-carried-files"
-import { CloudDownloadIcon, CloudIcon, CloudUploadIcon, LaptopIcon } from "lucide-react"
+import { CloudDownloadIcon, CloudIcon, CloudUploadIcon, LaptopIcon, TriangleAlertIcon } from "lucide-react"
 import { Spinner } from "@/components/ui/spinner"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { backgroundWork } from "@mako/host/contracts/background-work"
+import { conversationWork } from "@/state/acp-state"
 import { Action } from "@/components/ui/kit"
 import { cn } from "@/lib/utils"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { useCloudAccount } from "@/state/cloud-account"
 import { decideCarriedFiles, readCarriedFiles, useCarriedFiles } from "@/state/carried-files"
-import { bringBack, checkHarnesses, moveToCloud, updateThen, useCloudMoves } from "@/state/cloud-moves"
+import { bringBack, checkHarnesses, CLOUD_WHERE, moveToCloud, updateThen, useCloudMoves } from "@/state/cloud-moves"
+import { PlaceMark } from "@/components/ui/place-mark"
+import { runPlace } from "@mako/host/contracts/account-devices"
 import { HarnessesBehind } from "./harnesses-behind"
 import { runPlaceStore, useRunPlace } from "@/state/run-place"
 import { shallowEqual } from "@/state/store"
@@ -17,7 +19,7 @@ import { useSession } from "@/state/session"
 import { useOnScreen } from "@/state/thread-sessions"
 import { useWorktrees } from "@/state/worktrees"
 
-const triggerClass = "pressable flex h-7 min-w-0 items-center gap-1.5 rounded-md px-2 text-ui text-faint hover:bg-fill-hover hover:text-foreground aria-pressed:text-foreground"
+const triggerClass = "pressable flex h-7 min-w-0 items-center gap-1.5 px-2 text-ui text-faint hover:bg-fill-hover hover:text-foreground aria-pressed:text-foreground"
 
 /**
  * The composer's Local/Cloud choice for a new Thread in a Git project, for an
@@ -29,6 +31,12 @@ export function RunPlaceChoice() {
   const cloud = useRunPlace((state) => state.cloud)
   const inRepository = useSession((state) => Boolean(state.git?.root))
   const invited = useCloudAccount((state) => state.account?.state.status === "signed-in" && state.account.state.account.entitlements.includes("cloud"))
+  // On another of the account's devices: its kind and name, as one line so the chip wakes only when either changes.
+  const device = useAcp((state) => {
+    const active = activeLiveAcp(state)
+    return active?.elsewhere && active.elsewhere !== CLOUD_WHERE ? `${active.elsewhereKind ?? ""}\n${active.elsewhere}` : undefined
+  })
+  if (device !== undefined) return <DeviceRunPlace kind={device.slice(0, device.indexOf("\n")) || undefined} name={device.slice(device.indexOf("\n") + 1)} />
   if (here.thread && invited) return <ThreadRunPlace thread={here.thread} />
   if (here.thread || here.draft || here.cwd || !inRepository || !invited) return null
   const describe = cloud ? "Runs in the cloud, in a clone of this project's GitHub repository" : "Runs on this Mac"
@@ -51,6 +59,22 @@ export function RunPlaceChoice() {
 }
 
 /**
+ * Where an open Thread runs when that's another of the account's devices: its name under its kind's glyph, a server
+ * for a machine of the person's own and a laptop for a Mac. It says where and offers nothing: a Thread moves between
+ * this Mac and the cloud, not yet between devices.
+ */
+function DeviceRunPlace({ name, kind }: { name: string; kind: string | undefined }) {
+  return (
+    <span data-run-place="device" title={`Runs on ${name}`} className="flex h-7 min-w-0 items-center gap-1.5 px-2 text-ui text-faint">
+      <PlaceMark place={runPlace(false, kind)} />
+      <span data-collapse="1" className="truncate">
+        {name}
+      </span>
+    </span>
+  )
+}
+
+/**
  * Where an open Thread runs, and the way to move it: a Thread on this Mac moves to the cloud, all of its sessions,
  * from its own worktree; one in the project folder goes onto its own branch first, in the same move, taking only its
  * own changes, which waits for its turn to end. A Thread in the cloud comes back the same way.
@@ -58,10 +82,12 @@ export function RunPlaceChoice() {
 function ThreadRunPlace({ thread }: { thread: string }) {
   const live = useAcp((state) => {
     const active = activeLiveAcp(state)
-    return active ? { key: active.key, cwd: active.cwd, elsewhere: Boolean(active.elsewhere), running: active.session.status === "running", background: backgroundWork(active.session, active.nativeAgents) !== null, started: Boolean(active.session.nativeId) } : null
+    return active ? { key: active.key, cwd: active.cwd, elsewhere: Boolean(active.elsewhere), running: active.session.status === "running", background: conversationWork(state, active) !== null, started: Boolean(active.session.nativeId) } : null
   }, shallowEqual)
   const worktree = useWorktrees((state) => state.worktrees.find((entry) => entry.thread === thread)?.path)
-  const moving = useCloudMoves((state) => (live ? Boolean(state.moving[live.key]) : false))
+  const moveStep = useCloudMoves((state) => (live ? state.moving[live.key]?.step.kind : undefined))
+  const moving = moveStep !== undefined
+  const unconfirmed = moveStep === "unsettled"
   const returning = useCloudMoves((state) => (live ? Boolean(state.returning[live.key]) : false))
   const check = useCloudMoves((state) => (live ? state.harnesses[live.key] : undefined))
   const [open, setOpen] = useState(false)
@@ -149,10 +175,10 @@ function ThreadRunPlace({ thread }: { thread: string }) {
       }}
     >
       <PopoverTrigger asChild>
-        <button type="button" data-run-place="local" disabled={moving} aria-label={moving ? "Moving to the cloud" : "Runs on this Mac. Move it to the cloud"} title={moving ? "Moving to the cloud" : "Runs on this Mac"} className={triggerClass}>
-          {moving ? <Spinner className="size-3 shrink-0" /> : <LaptopIcon className="size-3 shrink-0" />}
+        <button type="button" data-run-place="local" disabled={moving} aria-label={unconfirmed ? "Move not confirmed. Check its status above the composer." : moving ? "Moving to the cloud" : "Runs on this Mac. Move it to the cloud"} title={unconfirmed ? "Move not confirmed" : moving ? "Moving to the cloud" : "Runs on this Mac"} className={triggerClass}>
+          {unconfirmed ? <TriangleAlertIcon className="size-3 shrink-0 text-caution" /> : moving ? <Spinner className="size-3 shrink-0" /> : <LaptopIcon className="size-3 shrink-0" />}
           <span data-collapse="1" className="truncate">
-            {moving ? "Moving…" : "Local"}
+            {unconfirmed ? "Move not confirmed" : moving ? "Moving…" : "Local"}
           </span>
         </button>
       </PopoverTrigger>
@@ -205,7 +231,7 @@ function OfferRow({ data, icon, title, detail, disabled, onClick }: { data: Reco
   )
   if (!onClick) return <div {...data} aria-disabled={disabled || undefined} className={cn("flex w-full items-start gap-2 px-2 py-1.5", disabled && "opacity-60")}>{body}</div>
   return (
-    <button type="button" {...data} disabled={disabled} onClick={onClick} className="pressable flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-fill-hover disabled:pointer-events-none disabled:opacity-60">
+    <button type="button" {...data} disabled={disabled} onClick={onClick} className="pressable flex w-full items-start gap-2 px-2 py-1.5 text-left hover:bg-fill-hover disabled:pointer-events-none disabled:opacity-60">
       {body}
     </button>
   )

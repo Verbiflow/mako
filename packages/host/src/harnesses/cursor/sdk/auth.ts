@@ -1,3 +1,4 @@
+import { HostStoppingError, untilStopped } from "../../../base/host-stopping.js"
 import { hostLog, hostWarn } from "../../../base/host-log.js"
 import { errorMessage } from "../../../base/error-message.js"
 import { readCursorCliApiKey } from "./cli-keychain.js"
@@ -95,6 +96,10 @@ interface ResolvedKey {
 export class CursorSdkAuth {
   private snapshot: CursorSdkAuthSnapshot | null = null
   private inflight: Promise<CursorSdkAuthSnapshot> | null = null
+  /** The children its checks started and haven't closed: `stop` ends them. */
+  private readonly probes = new Set<CursorSdkProbeClient>()
+  private readonly stopping = new AbortController()
+  private stopped: Promise<void> | undefined
   private readonly listeners = new Set<(snapshot: CursorSdkAuthSnapshot) => void>()
   private readonly options: CursorSdkAuthOptions
 
@@ -109,6 +114,19 @@ export class CursorSdkAuth {
 
   get signedIn(): boolean {
     return this.snapshot?.state.status === "signed-in"
+  }
+
+  /**
+   * The host is stopping: a check under way ends now, its child gone and its
+   * request failed, and none starts. The host waits for the calls it's
+   * answering as it stops, and Cursor's `authStatus` waits up to a minute for
+   * a child that never answers.
+   */
+  stop(): Promise<void> {
+    if (this.stopped) return this.stopped
+    this.stopping.abort(new HostStoppingError())
+    this.stopped = Promise.all([...this.probes].map((client) => client.close(0))).then(() => {})
+    return this.stopped
   }
 
   onChange(listener: (snapshot: CursorSdkAuthSnapshot) => void): () => void {
@@ -147,13 +165,14 @@ export class CursorSdkAuth {
    * it (0.03–0.57 s of a start on a 2-vCPU copy, 2026-10-21).
    */
   async status(force = false, on?: { client: CursorSdkProbeClient; apiKey: string | undefined }): Promise<CursorSdkAuthSnapshot> {
+    this.stopping.signal.throwIfAborted()
     const now = this.now()
     if (!force && this.snapshot) {
       const ttl = this.snapshot.state.status === "signed-in" ? CURSOR_SDK_AUTH_TTL_MS : CURSOR_SDK_AUTH_RETRY_MS
       if (now - this.snapshot.checkedAt < ttl) return this.snapshot
     }
     if (this.inflight) return this.inflight
-    this.inflight = this.probe(on).finally(() => {
+    this.inflight = untilStopped(this.probe(on), this.stopping.signal).finally(() => {
       this.inflight = null
     })
     return this.inflight
@@ -166,6 +185,7 @@ export class CursorSdkAuth {
    */
   async signInWithBrowser(signal?: AbortSignal): Promise<CursorSdkAuthSnapshot> {
     const credential = await this.mintBrowserKey((url) => void this.options.openUrl(url), signal)
+    this.stopping.signal.throwIfAborted()
     await this.options.credentials.save(credential)
     hostLog("cursor-sdk", "signed in through the browser", { email: credential.email ?? "" })
     return this.record(this.stateOf("mako", credential))
@@ -177,18 +197,15 @@ export class CursorSdkAuth {
    * Accounts added in Mako each keep their own.
    */
   async mintBrowserKey(page: (url: string) => void, signal?: AbortSignal): Promise<StoredCursorCredential> {
+    if (signal?.aborted) throw new Error("Cursor sign-in was cancelled")
     const env = await this.options.env()
     const client = await this.spawn(env, (event) => {
       if (event.event === "login-url") page(event.url)
     })
+    const stop = signal ? AbortSignal.any([signal, this.stopping.signal]) : this.stopping.signal
     try {
-      await client.hello()
-      const cancelled = () => new Error("Cursor sign-in was cancelled")
-      if (signal?.aborted) throw cancelled()
-      const aborted = new Promise<never>((_, reject) => {
-        signal?.addEventListener("abort", () => reject(cancelled()), { once: true })
-      })
-      const result = await Promise.race([client.request("login", undefined), aborted])
+      await untilStopped(client.hello(), stop)
+      const result = await untilStopped(client.request("login", undefined), stop)
       return {
         version: 1,
         apiKey: result.apiKey,
@@ -198,8 +215,12 @@ export class CursorSdkAuth {
         expiresAt: new Date(result.apiKeyExpiresAtMs).toISOString(),
         savedAt: new Date(this.now()).toISOString(),
       }
+    } catch (error) {
+      this.stopping.signal.throwIfAborted()
+      if (signal?.aborted) throw new Error("Cursor sign-in was cancelled", { cause: error })
+      throw error
     } finally {
-      await client.close(2_000)
+      await this.release(client)
     }
   }
 
@@ -220,6 +241,7 @@ export class CursorSdkAuth {
       keyName: identity.apiKeyName,
       savedAt: new Date(this.now()).toISOString(),
     }
+    this.stopping.signal.throwIfAborted()
     await this.options.credentials.save(credential)
     hostLog("cursor-sdk", "signed in with a pasted key", { email: identity.email ?? "", keyName: identity.apiKeyName })
     return this.record(this.stateOf("mako", credential))
@@ -231,16 +253,18 @@ export class CursorSdkAuth {
    * the next status says so and the row shows which is in use.
    */
   async signOut(): Promise<CursorSdkAuthSnapshot> {
+    this.stopping.signal.throwIfAborted()
     await this.options.credentials.clear()
     const env = await this.options.env()
     const client = await this.spawn(env, () => undefined)
     try {
-      await client.hello()
-      await client.request("logout", undefined)
+      await untilStopped(client.hello(), this.stopping.signal)
+      await untilStopped(client.request("logout", undefined), this.stopping.signal)
     } catch (error) {
+      this.stopping.signal.throwIfAborted()
       hostWarn("cursor-sdk", "the SDK's own sign-out failed", { error: errorMessage({ error }) })
     } finally {
-      await client.close(2_000)
+      await this.release(client)
     }
     hostLog("cursor-sdk", "signed out")
     return this.status(true)
@@ -279,19 +303,32 @@ export class CursorSdkAuth {
   }
 
   private async spawn(env: NodeJS.ProcessEnv, onEvent: (event: SdkEvent) => void): Promise<CursorSdkProbeClient> {
+    if (this.stopping.signal.aborted) throw new HostStoppingError()
     const spawn = { owner: "cursor-sdk-auth", cwd: process.cwd(), env, onEvent }
-    return this.options.client ? this.options.client(spawn) : new CursorSdkClient(spawn)
+    const client = this.options.client ? this.options.client(spawn) : new CursorSdkClient(spawn)
+    this.probes.add(client)
+    return client
+  }
+
+  /** A check's own child, closed and let go. */
+  private async release(client: CursorSdkProbeClient): Promise<void> {
+    try {
+      await client.close(this.stopping.signal.aborted ? 0 : 2_000)
+    } finally {
+      this.probes.delete(client)
+    }
   }
 
   /** Who a key belongs to, by Cursor's answer; throws the SDK's own error when it is refused. */
   private async verify(env: NodeJS.ProcessEnv, on?: CursorSdkProbeClient): Promise<{ email?: string; apiKeyName: string }> {
-    if (on) return on.request("me", undefined)
+    this.stopping.signal.throwIfAborted()
+    if (on) return untilStopped(on.request("me", undefined), this.stopping.signal)
     const client = await this.spawn(env, () => undefined)
     try {
-      await client.hello()
-      return await client.request("me", undefined)
+      await untilStopped(client.hello(), this.stopping.signal)
+      return await untilStopped(client.request("me", undefined), this.stopping.signal)
     } finally {
-      await client.close(2_000)
+      await this.release(client)
     }
   }
 
@@ -315,6 +352,7 @@ export class CursorSdkAuth {
       if (!(error instanceof CursorCredentialStoreError)) throw error
       return this.record({ status: "signed-out", problem: { source: "mako", message: error.message } })
     }
+    this.stopping.signal.throwIfAborted()
     // A running child answers only for the key it runs under.
     const running = on && on.apiKey === resolved.apiKey ? on.client : undefined
     try {
@@ -325,8 +363,8 @@ export class CursorSdkAuth {
       // No key of Mako's, the host's or the CLI's: the SDK's own file decides.
       const client = running ?? await this.spawn(env, () => undefined)
       try {
-        if (!running) await client.hello()
-        const status = await client.request("authStatus", undefined)
+        if (!running) await untilStopped(client.hello(), this.stopping.signal)
+        const status = await untilStopped(client.request("authStatus", undefined), this.stopping.signal)
         if (status.status === "logged-in") {
           const state: CursorSdkAuthState = { status: "signed-in", source: "sdk" }
           if (status.email) state.email = status.email
@@ -334,10 +372,11 @@ export class CursorSdkAuth {
           return this.record(state)
         }
       } finally {
-        if (!running) await client.close(2_000)
+        if (!running) await this.release(client)
       }
       return this.record({ status: "signed-out" })
     } catch (error) {
+      this.stopping.signal.throwIfAborted()
       if (error instanceof CursorSdkError && error.kind === "authentication") {
         hostWarn("cursor-sdk", "Cursor rejected the key", { source: resolved.source, error: error.message })
         return this.record({
@@ -361,6 +400,7 @@ export class CursorSdkAuth {
   }
 
   private record(state: CursorSdkAuthState): CursorSdkAuthSnapshot {
+    this.stopping.signal.throwIfAborted()
     const snapshot = { state, checkedAt: this.now() }
     const changed = JSON.stringify(this.snapshot?.state) !== JSON.stringify(state)
     this.snapshot = snapshot

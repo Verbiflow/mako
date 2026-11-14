@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 if (process.versions.electron) {
   void review().catch(async (error) => {
@@ -12,9 +12,9 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const { createServer } = await import("vite")
-  const root = await mkdtemp(join(tmpdir(), "mako-provider-ui-"))
-  const server = await createServer({
+  const { uiVite } = await import("./lib/ui-vite.mjs")
+  const root = testScratch("mako-provider-ui-")
+  const server = await uiVite({
     cacheDir: join(root, "cache"),
     server: {
       host: "127.0.0.1",
@@ -49,7 +49,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`Provider settings evidence: ${root}`)
 }
 
 async function review() {

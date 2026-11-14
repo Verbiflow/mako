@@ -64,7 +64,7 @@ function UncommittedFiles({ uncommitted, label, className, left }: { uncommitted
   const more = uncommitted.count - uncommitted.files.length
   return (
     <details className={cn("group/uncommitted", className)} data-testid="uncommitted">
-      <summary className="pressable -mx-1 flex w-fit cursor-pointer list-none items-center gap-1 rounded-sm px-1 py-0.5 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground [&::-webkit-details-marker]:hidden">
+      <summary className="pressable -mx-1 flex w-fit cursor-pointer list-none items-center gap-1 px-1 py-0.5 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground [&::-webkit-details-marker]:hidden">
         <ChevronRightIcon aria-hidden className="size-3 shrink-0 transition-transform duration-150 ease-(--ease-out) group-open/uncommitted:rotate-90" />
         {left ? `Leaves out ${uncommittedCount(uncommitted.count)}` : `Includes ${uncommittedCount(uncommitted.count)}`}
       </summary>
@@ -90,7 +90,7 @@ function UncommittedFiles({ uncommitted, label, className, left }: { uncommitted
 function MeasuredPerformance({ performance }: { performance: UnsurePerformance }) {
   const at = new Date(performance.measuredAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
   return (
-    <div className="mx-4 mb-4 flex flex-col gap-2 rounded-lg border border-hairline bg-background/40 p-3 text-label" data-testid="update-performance">
+    <div className="mx-4 mb-4 flex flex-col gap-2 bg-background/40 p-3 text-label" data-testid="update-performance">
       <p className="leading-relaxed text-muted-foreground">
         Measured {at}
         {performance.busy.length ? `: ${performance.busy.join("; ")}.` : "."}
@@ -125,7 +125,7 @@ function FailureDetails({ failure }: { failure: BuildFailure }) {
           <summary className="pressable w-fit cursor-pointer list-none text-label text-negative/80 hover:text-negative [&::-webkit-details-marker]:hidden">
             What it printed
           </summary>
-          <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-background/60 p-2 font-mono text-label whitespace-pre-wrap text-muted-foreground">{failure.details}</pre>
+          <pre className="mt-1 max-h-48 overflow-auto bg-background/60 p-2 font-mono text-label whitespace-pre-wrap text-muted-foreground">{failure.details}</pre>
         </details>
       )}
     </div>
@@ -284,7 +284,7 @@ export function UpdatesSection() {
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-lg border border-hairline bg-surface">
+      <div className="overflow-hidden bg-raised">
         <div className="flex items-start justify-between gap-4 p-4">
           <div className="min-w-0">
             <h4 className="text-ui font-medium" data-testid="update-title">
@@ -317,7 +317,7 @@ export function UpdatesSection() {
         </div>
 
         {local && (
-          <div className="mx-4 mb-4 rounded-lg border border-hairline bg-background/40">
+          <div className="mx-4 mb-4 bg-background/40">
             <div className="flex items-center gap-3 p-3">
               <FolderIcon className="size-4 shrink-0 text-faint" />
               <div className="min-w-0 flex-1">
@@ -345,7 +345,7 @@ export function UpdatesSection() {
                 </Action>
               </IfCanChooseFolder>
             </div>
-            <p className="border-t border-hairline px-3 py-2 text-label leading-relaxed text-faint">
+            <p className="px-3 py-2 text-label leading-relaxed text-faint">
               Only choose a checkout you trust. Building runs its scripts in a
               private copy, and Mako never moves or changes the checkout. A
               build of the checkout as it is takes every uncommitted change in
@@ -390,7 +390,7 @@ export function UpdatesSection() {
         )}
         {nextBuild && (
           <div className="mx-4 mb-4 flex flex-col gap-2">
-            <div className="flex flex-wrap items-center gap-2 rounded-md bg-raised px-3 py-2 text-label" data-testid="update-transition">
+            <div className="flex flex-wrap items-center gap-2 bg-raised px-3 py-2 text-label" data-testid="update-transition">
               <span className="font-mono text-faint">
                 {build?.revision ? shortRevision(build.revision) : `Build ${build?.id.slice(0, 8) ?? "unknown"}`}
               </span>
@@ -436,12 +436,12 @@ export function UpdatesSection() {
         {failed && (
           <div
             role="alert"
-            className="mx-4 mb-4 flex flex-col gap-2 rounded-lg bg-negative/10 p-3 text-ui leading-relaxed text-negative"
+            className="mx-4 mb-4 flex flex-col gap-2 bg-negative/10 p-3 text-ui leading-relaxed text-negative"
           >
             {failure ? <FailureDetails failure={failure} /> : <p>{failed}</p>}
             {fix && (
               <code
-                className="block rounded-md bg-background/60 px-2.5 py-1.5 font-mono text-label break-all text-foreground select-all"
+                className="block bg-background/60 px-2.5 py-1.5 font-mono text-label break-all text-foreground select-all"
                 data-testid="update-command"
               >
                 {fix}
@@ -449,7 +449,7 @@ export function UpdatesSection() {
             )}
           </div>
         )}
-        <div className="flex flex-wrap items-center gap-2 border-t border-hairline px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2 px-4 py-3">
           {unsure && (
             <Action
               tone="solid"

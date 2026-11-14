@@ -211,7 +211,7 @@ window.mako = {
     return { path, binary: false, oldFile: null, newFile: null, preview: { kind: "patch", contents: "diff --git a/large.ts b/large.ts\n@@ -1 +1 @@\n-old\n+new\n", limited: true } } },
 }
 
-prefsStore.set({ theme: "dark", autoOpenDiff: false, changesLayout: "files" })
+prefsStore.set({ theme: "dark", autoOpenDiff: false, changesView: "files" })
 bindTheme()
 selectProject(cwd)
 

@@ -203,6 +203,8 @@
    * every one of them is 0. (Until November 2026 corners grew with depth, 4
    * to 18 px; the person asked for the sharp look in most places.)
    */
+  --radius: 0px;
+  --radius-xs: 0px;
   --radius-asset: 0px;
   --radius-media: 0px;
   --radius-sm: 0px;
@@ -386,17 +388,23 @@
   --removed: var(--negative);
 
   /*
-   * Syntax: warm greys with three quiet accents. No red or green, so in a
-   * diff the only hue that says "changed" is the added or removed line.
+   * Syntax: one hue for each kind of word, at one lightness so none shouts,
+   * and enough chroma to be read at a glance. Keywords take the violet next to
+   * the brand's sea, calls the sea itself, types its cyan, strings a warm sand
+   * and constants apricot. No red or green, so in a diff the only hue that
+   * says "changed" is the added or removed line.
    */
   --syntax-text: var(--foreground);
-  --syntax-keyword: oklch(0.71 0.014 60);
-  --syntax-function: oklch(0.86 0.055 72);
-  --syntax-string: oklch(0.8 0.04 200);
-  --syntax-constant: oklch(0.81 0.045 300);
-  --syntax-parameter: oklch(0.85 0.012 60);
-  --syntax-punctuation: oklch(0.62 0.008 55);
-  --syntax-comment: oklch(0.58 0.008 55);
+  --syntax-keyword: oklch(0.76 0.1 300);
+  --syntax-function: oklch(0.8 0.09 245);
+  --syntax-type: oklch(0.82 0.08 200);
+  --syntax-tag: oklch(0.8 0.08 220);
+  --syntax-string: oklch(0.83 0.075 85);
+  --syntax-constant: oklch(0.8 0.1 55);
+  --syntax-property: oklch(0.84 0.035 245);
+  --syntax-parameter: oklch(0.88 0.03 60);
+  --syntax-punctuation: oklch(0.64 0.012 55);
+  --syntax-comment: oklch(0.6 0.012 55);
 
   /* shadcn contract — vendored components keep compiling untouched. */
   --background: var(--shell);
@@ -479,13 +487,16 @@
   --terminal-magenta: #80528e;
   --terminal-bright-magenta: #9461a3;
 
-  --syntax-keyword: oklch(0.44 0.012 50);
-  --syntax-function: oklch(0.47 0.08 58);
-  --syntax-string: oklch(0.46 0.06 215);
-  --syntax-constant: oklch(0.47 0.075 305);
-  --syntax-parameter: oklch(0.33 0.008 50);
-  --syntax-punctuation: oklch(0.56 0.005 45);
-  --syntax-comment: oklch(0.6 0.004 45);
+  --syntax-keyword: oklch(0.48 0.15 300);
+  --syntax-function: oklch(0.47 0.12 250);
+  --syntax-type: oklch(0.5 0.1 205);
+  --syntax-tag: oklch(0.48 0.11 225);
+  --syntax-string: oklch(0.52 0.1 75);
+  --syntax-constant: oklch(0.55 0.13 50);
+  --syntax-property: oklch(0.42 0.05 250);
+  --syntax-parameter: oklch(0.36 0.03 50);
+  --syntax-punctuation: oklch(0.55 0.01 45);
+  --syntax-comment: oklch(0.6 0.01 45);
 
   --primary: var(--foreground);
   --primary-foreground: var(--surface);
@@ -1212,7 +1223,7 @@ diffs-container {
  * The live mark (`LiveMark`): Mako's fin, the two-tone fin of the app icon for
  * a Thread and the plain fin for a Fin, with its harness as a square badge in
  * the corner. The fin itself carries the state, one calm gesture a state: it
- * bobs while thinking, glides with a wake while writing, braces in two steps
+ * bobs while thinking, glides while writing, braces in two steps
  * on a tool, turns the attention hue over a breathing waterline when it needs you,
  * drifts while asking its Apex and lists over when it failed. Square, like
  * every mark of Mako's. Every moving part is a box of its own that moves on
@@ -1286,8 +1297,7 @@ diffs-container {
   background: none;
 }
 /* The line the fin rides: a Thread at work, or anyone waiting on the person. */
-.live-mark-water,
-.live-mark-wake {
+.live-mark-water {
   position: absolute;
   bottom: 4%;
   height: max(1px, calc(var(--lm-size) * 0.07));
@@ -1298,23 +1308,11 @@ diffs-container {
   right: 6%;
   background: color-mix(in oklab, var(--foreground) 20%, transparent);
 }
-.live-mark-wake {
-  left: -12%;
-  width: 62%;
-  overflow: hidden;
-  background: repeating-linear-gradient(to right, color-mix(in oklab, var(--foreground) 55%, transparent) 0 18%, transparent 18% 34%);
-}
-.live-mark[data-lit] .live-mark-wake {
-  background: repeating-linear-gradient(to right, var(--sea) 0 18%, transparent 18% 34%);
-}
 .live-mark[data-live-mark="working"][data-motion="thinking"] .live-mark-body {
   animation: live-mark-bob 2s ease-in-out infinite;
 }
 .live-mark[data-live-mark="working"][data-motion="writing"] .live-mark-body {
   animation: live-mark-glide 1.4s ease-in-out infinite;
-}
-.live-mark-wake {
-  animation: live-mark-wake 0.7s linear infinite;
 }
 /*
  * Work in progress, on the fin itself: a band of the brand's sea (`--fin-glint`) crosses it, clipped to its outline,
@@ -1411,7 +1409,6 @@ diffs-container {
  * reset it: the gate's play state.
  */
 .live-mark[data-live-mark][data-kind] .live-mark-body,
-.live-mark[data-live-mark][data-kind] .live-mark-wake,
 .live-mark[data-live-mark][data-kind] .live-mark-water,
 .live-mark[data-live-mark][data-kind] .live-mark-glint > i {
   animation-play-state: var(--visible-animation-state, running);
@@ -1442,14 +1439,6 @@ diffs-container {
   }
   50% {
     transform: translateX(5%);
-  }
-}
-@keyframes live-mark-wake {
-  from {
-    transform: translateX(0);
-  }
-  to {
-    transform: translateX(-34%);
   }
 }
 @keyframes live-mark-brace {
@@ -2691,15 +2680,6 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 :root {
   --shiki-foreground: var(--syntax-text);
   --shiki-background: var(--raised);
-  --shiki-token-constant: var(--syntax-constant);
-  --shiki-token-string: var(--syntax-string);
-  --shiki-token-comment: var(--syntax-comment);
-  --shiki-token-keyword: var(--syntax-keyword);
-  --shiki-token-parameter: var(--syntax-parameter);
-  --shiki-token-function: var(--syntax-function);
-  --shiki-token-string-expression: var(--syntax-string);
-  --shiki-token-punctuation: var(--syntax-punctuation);
-  --shiki-token-link: var(--syntax-string);
 }
 
 /* Keep xterm's scrolling inside the dock and match the surrounding chrome. */
@@ -2714,7 +2694,7 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 .terminal-viewport .xterm .xterm-viewport { overscroll-behavior: contain; background-color: transparent; }
 .terminal-viewport .xterm .xterm-scrollable-element > .scrollbar > .slider {
   background: var(--fill-selected);
-  border-radius: 4px;
+  border-radius: 0;
 }
 
 /*
@@ -2925,3 +2905,33 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 
 /* While the Inbox fills the main pane it is the open place, so the Thread under it gives up its lit row. */
 [data-inbox-open] [data-thread-row][data-active]:not(:hover) { background-color: transparent; }
+
+/*
+ * Files (`files-browser.tsx`). Rows are tints of the text colour: hover and the
+ * keyboard's row one step, the file on screen two. The field is the raised
+ * plane with no outline until it has focus.
+ */
+.files-field { transition: box-shadow 100ms var(--ease-out); }
+.files-field:focus-within { box-shadow: inset 0 0 0 1px var(--border); }
+.files-row { color: var(--muted-foreground); transition: background-color 80ms var(--ease-out); }
+.files-row:hover,
+.files-row[data-cursor] { background-color: var(--fill-hover); }
+.files-row[data-active] { background-color: var(--fill-selected); }
+.files-rows:focus-visible .files-row[data-cursor] { box-shadow: inset 0 0 0 1px var(--border); }
+.files-row .files-icon { color: var(--faint); }
+.files-row .files-name { color: color-mix(in oklab, var(--foreground) 88%, transparent); }
+.files-row[data-active] .files-name { color: var(--foreground); font-weight: 530; }
+.files-row[data-active] .files-icon { color: var(--muted-foreground); }
+.files-hit { background: none; color: var(--foreground); font-weight: 640; }
+.files-chevron { transition: transform 120ms var(--ease-out); }
+/* A listing that's quick never shows its bar; one that isn't fades it in once. */
+.files-pending { opacity: 0; animation: files-pending 200ms var(--ease-out) 160ms both; }
+@keyframes files-pending {
+  from { opacity: 0; }
+  to { opacity: 0.6; }
+}
+.files-touch .files-field { height: 40px; }
+@media (prefers-reduced-motion: reduce) {
+  .files-chevron, .files-row { transition: none; }
+  .files-pending { animation: none; opacity: 0.5; }
+}

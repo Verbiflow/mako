@@ -25,6 +25,9 @@ and confirm the code BCDF-GHJK there (or go to https://api.runmako.co/device and
 Waiting for the code to be confirmed…
 ```
 
+Settings › Devices › Add a machine, in the app and on the web, shows these
+lines with your account's cloud filled in, and says so when the machine joins.
+
 Open the page anywhere you're signed in to Mako, check the code matches, and
 approve. The machine is named by its hostname; `--name <name>` names it
 otherwise. Once joined, `mako-host` runs as that device, against the same
@@ -32,7 +35,7 @@ cloud, with nothing more to set:
 
 ```sh
 mako-host          # the host, as this device
-mako-host status   # the device, its account, and whether its links are connected
+mako-host status   # the device, its account, and whether its links are connected; takes no lock, so it's safe while the host starts
 mako-host leave    # sign out, and remove the device from the account
 ```
 
@@ -71,7 +74,10 @@ docker exec mako-device mako-host status
 ```
 
 On its first start the container joins and then runs the host; after that it
-starts as the device it joined as. The image is x64: Node's pointer-compressed
+starts as the device it joined as. A code that runs out before it's confirmed
+ends the join, and the container stops and keeps its name, so `docker run`
+can't run again; `docker start mako-device` starts it with a new code, which
+`docker logs` shows. The image is x64: Node's pointer-compressed
 build, which the host runs on, is published for x64 only.
 
 ## As a service

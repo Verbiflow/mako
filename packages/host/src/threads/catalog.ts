@@ -94,7 +94,8 @@ import {
 import type { ExternalThreadActivity, HostEvent } from "../contracts/host-events-boot.js"
 import type { FileContents, FileReadPurpose } from "../contracts/git-workspace-search.js"
 import type { ThreadFileContext } from "../contracts/conversation-session.js"
-import { listedAsThread, THREAD_LIST_CAP, threadList, unlistedThreadSessions } from "../contracts/thread-list.js"
+import { internalReviewSession, listedAsThread, THREAD_LIST_CAP, threadList, unlistedThreadSessions } from "../contracts/thread-list.js"
+import { listedUnderApex } from "../contracts/agents.js"
 
 const TEMPORARY_ROOTS = [
   tmpdir(),
@@ -197,6 +198,18 @@ function transcriptsRoot(userRoot: string): string {
 /** Beside the transcripts; one links a child as `../children/…`. */
 const CHILDREN_FOLDER = "children"
 
+/**
+ * The row a harness's session names among `rows`: the newest by `updatedAt`, as the catalog's list orders them, when
+ * one native id names two stores (two rows of one session that may differ, archived in one and not the other).
+ */
+export function newestSessionRow(rows: Iterable<ThreadRef>, session: { harness: string; nativeId: string }): ThreadRef | undefined {
+  let newest: ThreadRef | undefined
+  for (const ref of rows)
+    if (ref.harness === session.harness && ref.nativeId === session.nativeId && (!newest || (ref.updatedAt ?? "").localeCompare(newest.updatedAt ?? "") > 0))
+      newest = ref
+  return newest
+}
+
 /** Where each Thread's environment keeps the files its conversations link to; Workspaces has them. */
 export interface ThreadFileHomes {
   fileDataDir(owner: { cwd?: string; thread?: ThreadId }): Promise<string | undefined>
@@ -274,6 +287,11 @@ export interface ThreadCatalog {
   rail(filter?: { cwd?: string; harness?: string }): ThreadRef[]
   /** A catalogued row by path, past the list's cap. */
   ref(path: string): ThreadRef | undefined
+  /**
+   * The one row a path or a harness's session names, placed as `list` places every row, past the list's cap: what a
+   * look at one Thread reads, without annotating the whole catalog as `list` does.
+   */
+  thread(target: { path: string } | { harness: string; nativeId: string }): ThreadRef | undefined
   /** The session's ref as reading it now gives it, without moving its entries here. */
   readRef(path: string): Promise<ThreadRef | null>
   /** Recovery must not depend on the sidebar's ordering or visible result cap. */
@@ -486,10 +504,14 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     }
   }
 
-  /** A child's row names its parent's Thread, so it shows inside it and never as a row (`listedAsThread`). */
+  /** A child's row names its parent's Thread, so it shows inside it and never as a row (`listedAsThread`); one whose Apex is on another device is a row of its own (`listedUnderApex`). */
   function withParent(ref: ThreadRef, edges: ThreadEdges | undefined): ThreadRef {
+    // A retained discovered identity stays internal even while an older
+    // catalog ref lacks origin metadata. Keep the native record readable.
+    const internal = edges?.internalRuns.find((edge) => edge.run?.harness === ref.harness && edge.run.nativeId === ref.nativeId)?.run?.nativeAgent
+    if (internal) return { ...ref, nativeAgent: internal }
     const edge = ref.threadId ? edges?.of(ref.threadId) : undefined
-    return edge ? { ...ref, parent: { thread: edge.parent, session: edge.parentSession } } : ref
+    return listedUnderApex(edge) ? { ...ref, parent: { thread: edge.parent, session: edge.parentSession } } : ref
   }
 
   function annotate(ref: ThreadRef): ThreadRef {
@@ -500,7 +522,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   function annotateAll(refs: readonly ThreadRef[]): ThreadRef[] {
     const edges = threadEdges()
     const placed = withThreadPlacements(refs.map(annotated))
-    return edges?.all.length ? placed.map((ref) => withParent(ref, edges)) : placed
+    return edges && (edges.all.length || edges.internalRuns.length) ? placed.map((ref) => withParent(ref, edges)) : placed
   }
 
   function catalogued(path: string): ThreadRef | undefined {
@@ -1330,7 +1352,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     filter: { cwd?: string; harness?: string } = {}
   ): ThreadRef[] {
     const edges = threadEdges()
-    const refs = edges?.all.length ? catalogRefs(filter).filter((ref) => !edges.childNative(ref.harness, ref.nativeId)) : catalogRefs(filter)
+    const refs = catalogRefs(filter).filter((ref) => !edges?.childNative(ref.harness, ref.nativeId) && !internalReviewSession(withParent(ref, edges)))
     const listed = annotateAll(threadList(refs)).filter(listedAsThread)
     if (!threadStore || refs.length <= listed.length) return listed
     const missing = unlistedThreadSessions(listed, threadStore.groups())
@@ -1338,7 +1360,12 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     const paths = new Set(listed.map((ref) => ref.path))
     const companions = withThreadPlacements(refs.filter((ref) => !paths.has(ref.path)))
       .filter((ref) => ref.sessionId !== undefined && missing.has(ref.sessionId))
-    return [...listed, ...annotateAll(companions)]
+    return [...listed, ...annotateAll(companions).filter((ref) => !internalReviewSession(ref))]
+  }
+
+  function catalogThread(target: { path: string } | { harness: string; nativeId: string }): ThreadRef | undefined {
+    const found = "path" in target ? catalogued(target.path) : newestSessionRow(daemon ? mirror.values() : (catalog?.list() ?? []), target)
+    return found && annotate(found)
   }
 
   function catalogRef(path: string): ThreadRef | undefined {
@@ -1772,6 +1799,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     list: listThreads,
     rail: railThreads,
     ref: catalogRef,
+    thread: catalogThread,
     readRef: readThreadRef,
     nativePath: nativePathForSession,
     keepsNative,

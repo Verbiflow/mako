@@ -108,6 +108,22 @@ export async function screenSessionUpdates(
   return { readable, writable: stream.writable }
 }
 
+/**
+ * Hands the SDK one message at a time, each once the last has run. The SDK starts a message's handlers and reads the next
+ * without waiting, and an extension notification tries more handlers than a `session/update`, so a later update
+ * overtook an earlier notification: an answer arrived ahead of the retry it followed, and read as one that never came.
+ * A turn of the event loop lets what a message does at once finish first; one that waits on a person doesn't hold the rest.
+ */
+export function inWireOrder(stream: Stream): Stream {
+  const readable = stream.readable.pipeThrough(new TransformStream<AnyMessage, AnyMessage>({
+    async transform(message, controller) {
+      controller.enqueue(message)
+      await new Promise((resolve) => setImmediate(resolve))
+    },
+  }))
+  return { readable, writable: stream.writable }
+}
+
 /** Distinct places a lossy update names; the rest of a huge update is not walked. */
 const MAX_LOST_PATHS = 8
 

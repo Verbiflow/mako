@@ -78,7 +78,7 @@ const SavedComment = memo(function SavedComment({
         aria-label="Add this note to the message"
         title="Add to message"
         onClick={() => addReviewToMessage([comment], target.cwd(), target.conversation)}
-        className="pressable shrink-0 rounded p-1 text-faint opacity-0 transition-opacity duration-100 group-hover:opacity-100 focus-visible:opacity-100 hover:text-foreground"
+        className="pressable shrink-0 p-1 text-faint opacity-0 transition-opacity duration-100 group-hover:opacity-100 focus-visible:opacity-100 hover:text-foreground"
       >
         <MessageSquarePlusIcon className="size-3" />
       </button>
@@ -86,7 +86,7 @@ const SavedComment = memo(function SavedComment({
         type="button"
         aria-label="Edit"
         onClick={() => review.edit(comment)}
-        className="pressable shrink-0 rounded p-1 text-faint opacity-0 transition-opacity duration-100 group-hover:opacity-100 hover:text-foreground"
+        className="pressable shrink-0 p-1 text-faint opacity-0 transition-opacity duration-100 group-hover:opacity-100 hover:text-foreground"
       >
         <PencilIcon className="size-3" />
       </button>
@@ -94,7 +94,7 @@ const SavedComment = memo(function SavedComment({
         type="button"
         aria-label="Delete"
         onClick={() => review.remove(comment.id)}
-        className="pressable shrink-0 rounded p-1 text-faint opacity-0 transition-opacity duration-100 group-hover:opacity-100 hover:text-removed"
+        className="pressable shrink-0 p-1 text-faint opacity-0 transition-opacity duration-100 group-hover:opacity-100 hover:text-removed"
       >
         <Trash2Icon className="size-3" />
       </button>
@@ -130,7 +130,7 @@ function Editor({ initial }: { initial: string }) {
           }
         }}
         placeholder="What is wrong with this line?"
-        className="w-full resize-none rounded-md bg-raised px-2 py-1.5 text-ui leading-relaxed placeholder:text-faint focus:outline-none focus-visible:ring-1 focus-visible:ring-border"
+        className="w-full resize-none bg-raised px-2 py-1.5 text-ui leading-relaxed placeholder:text-faint focus:outline-none focus-visible:ring-1 focus-visible:ring-border"
       />
       <div className="mt-1 flex items-center gap-2">
         <Action tone="outline" onClick={() => review.save(body)}>
@@ -171,7 +171,7 @@ export function GutterAdd({ onClick }: { onClick: () => void }) {
       onClick={onClick}
       className={cn(
         "pressable absolute top-1/2 left-1/2 flex size-4 -translate-x-1/2 -translate-y-1/2",
-        "items-center justify-center rounded bg-raised text-faint ring-1 ring-hairline",
+        "items-center justify-center bg-raised text-faint ring-1 ring-hairline",
         "transition-colors duration-100 hover:text-foreground"
       )}
     >
@@ -224,7 +224,7 @@ export function ReviewBar({ workspace }: { workspace: string }) {
       <button
         type="button"
         onClick={() => review.clear(workspace)}
-        className="pressable rounded px-1 text-label text-faint hover:text-foreground"
+        className="pressable px-1 text-label text-faint hover:text-foreground"
       >
         Discard
       </button>

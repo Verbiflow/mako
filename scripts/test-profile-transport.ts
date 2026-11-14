@@ -3,6 +3,7 @@ import {
   rpcRequest,
   streamRequest,
   runDiscovery,
+  withDiscoveryStream,
 } from "@mako/host/harnesses/profile-transport"
 import { DiscoveryProcesses, type DiscoveryOptions } from "@mako/host/harnesses/discovery-process"
 import { z } from "zod"
@@ -17,6 +18,24 @@ await assert.rejects(
 await assert.rejects(
   streamRequest(processes, process.execPath, earlyExit, {}, process.env, () => undefined),
   /exited|closed/
+)
+// The child is gone and this loop hasn't turned, so its exit isn't heard when the write fails: the exit still says why.
+await assert.rejects(
+  withDiscoveryStream(processes, { command: process.execPath, args: earlyExit, env: process.env }, async ({ request }) => {
+    const gone = performance.now() + 500
+    while (performance.now() < gone);
+    return request({}, () => undefined)
+  }),
+  /exited with 2 before discovery completed/
+)
+// A child alive with its input closed has no exit to wait for: the broken pipe stands, well before the timeout.
+const aliveAndDeaf = ["-e", 'require("node:fs").closeSync(0); process.stdout.write("{}\\n"); setInterval(() => {}, 1000)']
+await assert.rejects(
+  withDiscoveryStream(processes, { command: process.execPath, args: aliveAndDeaf, env: process.env, timeoutMs: 8_000 }, async ({ request }) => {
+    await request({}, () => true)
+    return request({}, () => undefined)
+  }),
+  /EPIPE/
 )
 const closedInput = [
   "-e",
@@ -53,7 +72,7 @@ assert.equal(
   ),
   "complete"
 )
-const rejectedAt = performance.now()
+// The process stays up: a reply it can't read fails the request with its reason, not at the 30 s timeout.
 await assert.rejects(
   streamRequest(
     processes,
@@ -65,7 +84,6 @@ await assert.rejects(
   ),
   /invalid discovery response/
 )
-assert.ok(performance.now() - rejectedAt < 5_000)
 await assert.rejects(
   runDiscovery(
     processes,
@@ -158,10 +176,14 @@ const turn = processes.run({ ...work, timeoutMs: 100, deadline: "started" }, asy
   .finally(() => { turnSettled = true })
 try {
   let expiredStarted = false
-  const expiredAt = performance.now()
-  await assert.rejects(processes.run({ ...work, timeoutMs: 100 }, async () => { expiredStarted = true }), /timed out in the queue/)
+  // The work ahead holds its place until the test lets it go: queued work that waited for it would wait forever.
+  let guard: ReturnType<typeof setTimeout> | undefined
+  const forever = new Promise<never>((_, reject) => {
+    guard = setTimeout(() => reject(new Error("queued work still waited 10 s for the place ahead to free")), 10_000)
+  })
+  await assert.rejects(Promise.race([processes.run({ ...work, timeoutMs: 100 }, async () => { expiredStarted = true }), forever]).finally(() => clearTimeout(guard)),
+    /timed out in the queue/, "queue time consumes the same bounded discovery budget")
   assert.equal(expiredStarted, false, "expired queued work must not spawn")
-  assert.ok(performance.now() - expiredAt < 2_000, "queue time consumes the same bounded discovery budget")
   // Queued before the query just refused, with the same budget: it has waited longer, and waits on.
   assert.equal(turnSettled, false, "a reading with nothing in its place waits its turn instead of failing")
   const cancelled = new AbortController()

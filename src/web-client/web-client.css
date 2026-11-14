@@ -110,7 +110,7 @@
   /* Under a pointer, the desk's size: a 36px square with soft corners, not a thumb's circle. */
   @media (pointer: fine) {
     .web-icon-button:not(.web-composer-add) {
-      @apply size-9 rounded-lg;
+      @apply size-9;
     }
   }
 
@@ -181,7 +181,7 @@
     @apply bg-surface;
   }
   [data-list="rail"] .web-swipe {
-    @apply rounded-lg;
+    
   }
   [data-list="rail"] .web-swipe[data-swiping] > .web-row {
     @apply bg-shell;
@@ -210,7 +210,7 @@
     @apply px-4;
   }
   [data-list="rail"] .web-row {
-    @apply gap-2.5 rounded-lg py-2 pr-2.5 pl-2;
+    @apply gap-2.5 py-2 pr-2.5 pl-2;
     min-height: 0;
   }
   [data-list="rail"] .web-row[aria-current="page"] {
@@ -235,7 +235,7 @@
     --pips-over: var(--fill-selected);
   }
   .web-account {
-    @apply flex h-10 w-full items-center gap-2.5 rounded-lg px-2 text-ui text-muted-foreground;
+    @apply flex h-10 w-full items-center gap-2.5 px-2 text-ui text-muted-foreground;
   }
   .web-account[aria-current="page"] {
     @apply bg-raised text-foreground;
@@ -247,7 +247,7 @@
   }
 
   .web-button {
-    @apply inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-primary px-5 text-ui font-medium text-primary-foreground;
+    @apply inline-flex h-11 items-center justify-center gap-2 bg-primary px-5 text-ui font-medium text-primary-foreground;
   }
   .web-button:disabled {
     @apply opacity-40;
@@ -256,7 +256,7 @@
     @apply bg-negative text-white;
   }
   .web-quiet-button {
-    @apply inline-flex h-11 items-center justify-center rounded-xl px-4 text-ui text-muted-foreground;
+    @apply inline-flex h-11 items-center justify-center px-4 text-ui text-muted-foreground;
   }
   .web-quiet-button:active {
     @apply bg-fill-selected;
@@ -334,7 +334,7 @@
   }
 
   .web-field {
-    @apply w-full rounded-xl bg-raised px-3.5 text-ui text-foreground ring-1 ring-hairline outline-none placeholder:text-faint;
+    @apply w-full bg-raised px-3.5 text-ui text-foreground ring-1 ring-hairline outline-none placeholder:text-faint;
     min-height: 44px;
     /* 16px or more, or iOS zooms the page into a field it focuses. */
     font-size: max(16px, var(--text-ui));
@@ -452,7 +452,7 @@
     @apply px-1.5 pb-0;
   }
   .web-sheet[data-form="pop"] .web-choice {
-    @apply min-h-9 rounded-md px-2 text-ui;
+    @apply min-h-9 px-2 text-ui;
   }
   .web-sheet[data-form="dialog"] .web-sheet-title {
     @apply pt-3;
@@ -463,7 +463,7 @@
    * pointer. In a picker, a harness's tab is the same chip, lit when it's the one shown.
    */
   .web-chip {
-    @apply relative inline-flex h-8 min-w-0 shrink-0 items-center gap-1 rounded-lg px-2 text-label font-medium text-muted-foreground;
+    @apply relative inline-flex h-8 min-w-0 shrink-0 items-center gap-1 px-2 text-label font-medium text-muted-foreground;
   }
   @media (pointer: coarse) {
     .web-chip {
@@ -493,7 +493,7 @@
     box-shadow: inset 0 0 0 1px var(--border);
   }
   .web-choice {
-    @apply flex min-h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-ui;
+    @apply flex min-h-12 w-full items-center gap-3 px-3 text-left text-ui;
     transition: background-color 220ms ease;
   }
   .web-choice:active:not(:disabled) {
@@ -511,7 +511,7 @@
 
   /* The Session the composer sends to, under the Thread's bar; pressed, all of them (`SessionSwitcher`). */
   .web-session-current {
-    @apply flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg px-2 text-label;
+    @apply flex h-9 min-w-0 flex-1 items-center gap-2 px-2 text-label;
   }
   .web-session-current:active:not(:disabled) {
     @apply bg-fill-selected;
@@ -525,10 +525,6 @@
     @apply min-h-14 py-2;
   }
 
-  .web-live {
-    /* The renderer's conversation reads its column; on a phone it is the screen's width less a margin. */
-    --container-content: 760px;
-  }
   .web-dock {
     @apply bg-surface;
     /* The home indicator's room, not taken twice while the keyboard covers it. */
@@ -636,10 +632,10 @@
     @apply w-auto shrink;
   }
   .web-composer[data-desk] .web-chip {
-    @apply h-7 rounded-md px-2 text-ui font-normal;
+    @apply h-7 px-2 text-ui font-normal;
   }
   .web-composer[data-desk] .web-composer-add {
-    @apply size-7 rounded-md;
+    @apply size-7;
   }
 
   /* New in a laptop's browser, over the desk's ocean: the water holds still while the person types, as it does over the
@@ -669,7 +665,7 @@
     @apply px-1 pt-1 pb-1.5;
   }
   .web-attachment {
-    @apply relative size-16 shrink-0 overflow-hidden rounded-xl bg-surface ring-1 ring-hairline;
+    @apply relative size-16 shrink-0 overflow-hidden bg-surface ring-1 ring-hairline;
     animation: web-pop 200ms var(--ease-out) both;
   }
   .web-attachment-remove {
@@ -944,8 +940,15 @@
   flex-direction: column;
   gap: 8px;
 }
+.web-ask-options[data-row] {
+  flex-direction: row;
+}
+.web-ask-options[data-row] .web-ask-option:not([data-primary]) {
+  width: auto;
+  flex-shrink: 0;
+}
 .web-ask-option {
-  @apply flex w-full items-center justify-center gap-2 rounded-xl bg-fill-hover px-3.5 py-2.5 text-ui text-foreground;
+  @apply flex w-full items-center justify-center gap-2 bg-fill-hover px-3.5 py-2.5 text-ui text-foreground;
   min-height: 44px;
   transition:
     transform 160ms var(--ease-out),
@@ -975,12 +978,12 @@
   box-shadow: inset 0 0 0 1.5px var(--foreground);
 }
 .web-ask-input {
-  @apply h-11 w-full rounded-xl bg-surface px-3 text-ui text-foreground outline-none placeholder:text-faint;
+  @apply h-11 w-full bg-surface px-3 text-ui text-foreground outline-none placeholder:text-faint;
   font-size: max(16px, var(--text-ui));
   box-shadow: inset 0 0 0 1px var(--hairline);
 }
 .web-ask-typed {
-  @apply flex items-start gap-2 rounded-xl bg-fill-selected px-3.5 py-2.5 text-ui text-foreground;
+  @apply flex items-start gap-2 bg-fill-selected px-3.5 py-2.5 text-ui text-foreground;
 }
 .web-ask-typed > svg {
   margin-top: 4px;
@@ -993,11 +996,11 @@
   gap: 8px;
 }
 .web-ask-dismiss {
-  @apply rounded-xl px-3.5 text-ui text-muted-foreground;
+  @apply px-3.5 text-ui text-muted-foreground;
   min-height: 44px;
 }
 .web-ask-send {
-  @apply flex-1 rounded-xl bg-foreground px-3.5 text-ui font-medium text-background;
+  @apply flex-1 bg-foreground px-3.5 text-ui font-medium text-background;
   min-height: 44px;
   transition: opacity 160ms ease;
 }
@@ -1016,7 +1019,7 @@
 
 /* A message the host refused while the field held other words, with Retry. */
 .web-unsent {
-  @apply flex items-center gap-2 rounded-2xl bg-raised py-1 pr-1 pl-3.5;
+  @apply flex items-center gap-2 bg-raised py-1 pr-1 pl-3.5;
   box-shadow: inset 0 0 0 1px var(--hairline);
 }
 .web-unsent-action {
@@ -1066,7 +1069,7 @@
   animation: web-choices-in 180ms var(--ease-out) both;
 }
 .web-send-choice {
-  @apply flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left text-foreground;
+  @apply flex w-full items-start gap-3 px-3 py-2.5 text-left text-foreground;
   min-height: 52px;
   transition: background-color 160ms ease;
 }
@@ -1159,7 +1162,7 @@
  * words change in place, rising in only when they're new.
  */
 .web-steps-line {
-  @apply relative -mx-1.5 flex h-9 max-w-[calc(100%+12px)] min-w-0 items-center gap-1.5 self-start rounded-lg px-1.5 text-ui;
+  @apply relative -mx-1.5 flex h-9 max-w-[calc(100%+12px)] min-w-0 items-center gap-1.5 self-start px-1.5 text-ui;
   transition: background-color 160ms ease;
 }
 /* It reads 36 px tall and takes a 44 px touch, reaching into the space around it. */
@@ -1205,7 +1208,7 @@
   @apply flex shrink-0 items-center gap-2 px-5 pt-0.5 pb-2;
 }
 .web-settings-search {
-  @apply mx-3 mb-1.5 flex h-11 shrink-0 items-center gap-2 rounded-xl bg-fill-hover px-3 text-ui;
+  @apply mx-3 mb-1.5 flex h-11 shrink-0 items-center gap-2 bg-fill-hover px-3 text-ui;
 }
 .web-settings-search input {
   /* 16px or more, or iOS zooms the page into a field it focuses. */
@@ -1233,10 +1236,10 @@
 
 /* A segmented control, as iOS draws one: a tinted track, the chosen segment raised on a thumb that slides. */
 .web-segmented {
-  @apply relative flex h-11 items-stretch rounded-xl bg-fill-hover p-[3px];
+  @apply relative flex h-11 items-stretch bg-fill-hover p-[3px];
 }
 .web-segmented-thumb {
-  @apply absolute top-[3px] bottom-[3px] left-0 rounded-[9px];
+  @apply absolute top-[3px] bottom-[3px] left-0;
   background: color-mix(in oklab, var(--foreground) 13%, var(--popover));
   box-shadow:
     0 0 0 0.5px var(--hairline),
@@ -1252,7 +1255,7 @@
     0 2px 6px -1px rgb(0 0 0 / 0.12);
 }
 .web-segment {
-  @apply relative flex min-w-0 flex-auto items-center justify-center rounded-[9px] px-2 text-label font-medium whitespace-nowrap text-muted-foreground;
+  @apply relative flex min-w-0 flex-auto items-center justify-center px-2 text-label font-medium whitespace-nowrap text-muted-foreground;
   transition: color 160ms ease;
 }
 .web-segment[aria-checked="true"] {
@@ -1298,7 +1301,7 @@
 
 /* Under a Thread's other levels: what every new session of its harness starts with, the account's choice, apart from it. */
 .web-access-new {
-  @apply mx-1 mt-1 mb-1 flex min-h-12 flex-wrap items-center gap-x-2 rounded-xl bg-fill-hover py-1 pr-1.5 pl-3.5;
+  @apply mx-1 mt-1 mb-1 flex min-h-12 flex-wrap items-center gap-x-2 bg-fill-hover py-1 pr-1.5 pl-3.5;
 }
 
 /* Copy and Branch under the newest reply, a thumb's size; every reply keeps them under a long press. */
@@ -1306,7 +1309,7 @@
   @apply -ml-2 flex items-center gap-1;
 }
 .web-reply-action {
-  @apply flex h-9 items-center gap-1.5 rounded-lg px-2 text-label font-medium text-muted-foreground;
+  @apply flex h-9 items-center gap-1.5 px-2 text-label font-medium text-muted-foreground;
   transition: background-color 160ms ease, color 160ms ease;
 }
 .web-reply-action:active:not(:disabled) {
@@ -1329,7 +1332,7 @@
    * that failed is in the error ink; one reached is the text's own; one not checked is faint, never painted as off.
    */
   .web-trouble {
-    @apply rounded-2xl bg-raised p-4 ring-1 ring-hairline;
+    @apply bg-raised p-4 ring-1 ring-hairline;
   }
   .web-trouble-head {
     @apply flex w-full items-start gap-3 text-left;
@@ -1448,7 +1451,7 @@
 
   /* A Mac to connect: three steps that tick themselves as the Mac signs in and connects. */
   .web-connect {
-    @apply rounded-2xl bg-raised p-5 ring-1 ring-hairline;
+    @apply bg-raised p-5 ring-1 ring-hairline;
   }
   .web-connect-step {
     @apply relative flex items-start gap-3 pb-4;
@@ -1479,13 +1482,13 @@
     scrollbar-width: none;
   }
   .web-server {
-    @apply flex min-h-14 w-full items-center gap-3 rounded-xl bg-raised px-3.5 py-2.5 ring-1 ring-hairline;
+    @apply flex min-h-14 w-full items-center gap-3 bg-raised px-3.5 py-2.5 ring-1 ring-hairline;
   }
   .web-server-compact {
     @apply min-h-12 w-auto max-w-[260px] min-w-[200px] shrink-0 py-2;
   }
   .web-server-mark {
-    @apply flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface text-muted-foreground ring-1 ring-hairline;
+    @apply flex size-8 shrink-0 items-center justify-center bg-surface text-muted-foreground ring-1 ring-hairline;
   }
   .web-server[data-state="ready"] .web-server-mark {
     @apply text-foreground;
@@ -1505,11 +1508,11 @@
     touch-action: none;
   }
   .web-viewports {
-    @apply mx-3 mb-2 grid shrink-0 grid-cols-3 gap-1 rounded-xl bg-fill-hover p-1;
+    @apply mx-3 mb-2 grid shrink-0 grid-cols-3 gap-1 bg-fill-hover p-1;
   }
   /* A preset reads 32 px tall and takes a 44 px touch: its target reaches into the group's padding and gap. */
   .web-viewport {
-    @apply relative h-8 rounded-lg text-label font-medium text-muted-foreground;
+    @apply relative h-8 text-label font-medium text-muted-foreground;
   }
   .web-viewport::after {
     @apply absolute inset-x-0 -inset-y-1.5;
@@ -1532,7 +1535,7 @@
    * that only moves forward; what the step means a tap away.
    */
   .web-move {
-    @apply mx-3 mt-2 shrink-0 rounded-2xl bg-raised px-3 pt-1 pb-3 ring-1 ring-hairline;
+    @apply mx-3 mt-2 shrink-0 bg-raised px-3 pt-1 pb-3 ring-1 ring-hairline;
   }
   .web-move-head {
     @apply flex min-h-12 w-full items-center gap-3 text-left;
@@ -1541,7 +1544,7 @@
     @apply cursor-default opacity-100;
   }
   .web-move-mark {
-    @apply flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface text-foreground ring-1 ring-hairline;
+    @apply flex size-8 shrink-0 items-center justify-center bg-surface text-foreground ring-1 ring-hairline;
   }
   .web-move:not([data-move-step="done"]):not([data-move-step="failed"]):not([data-move-step="unsettled"]):not([data-move-step="unconfirmed"]) .web-move-mark > svg {
     animation: web-move-blink 1.4s ease-in-out infinite;
@@ -1587,12 +1590,12 @@
     @apply pt-3 pb-4;
   }
   .web-move-mac {
-    @apply flex min-h-11 items-center gap-2.5 rounded-xl px-3 text-ui;
+    @apply flex min-h-11 items-center gap-2.5 px-3 text-ui;
   }
 
   /* Continue in the cloud beside a Thread whose Mac is off: drawn as a move's strip is, the press at its end. */
   .web-continue {
-    @apply mx-3 mt-2 shrink-0 rounded-2xl bg-raised px-3 py-1.5 ring-1 ring-hairline;
+    @apply mx-3 mt-2 shrink-0 bg-raised px-3 py-1.5 ring-1 ring-hairline;
   }
   .web-continue .web-move-head {
     @apply py-1.5;
@@ -1610,7 +1613,7 @@
     @apply text-faint;
   }
   .web-continue-behind {
-    @apply mt-4 flex items-start gap-2.5 rounded-xl bg-fill-hover p-3 text-label text-caution;
+    @apply mt-4 flex items-start gap-2.5 bg-fill-hover p-3 text-label text-caution;
   }
   .web-move-mac:disabled {
     @apply opacity-60;

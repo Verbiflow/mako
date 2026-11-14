@@ -164,7 +164,7 @@ const asked = views
 await wait(1_500)
 assert.equal(views, asked)
 
-// The sidebar's marks: one look at every app while the rail shows them, and none after.
+// The sidebar's marks: read once while the rail shows them, then as the host pushes them, and none after.
 failing = false
 assert.equal(markLooks, 0, "nothing asks for marks until the rail does")
 const unwatchMarks = driver.watchMarks!()
@@ -178,7 +178,11 @@ assert.deepEqual(appMarkOf(threadAppStore.get(), CWD), { state: "running", port:
 unwatchAgain()
 assert.equal(appMarkOf(threadAppStore.get(), CWD)?.state, "crashed", "once the strip lets go, its view may be old, and the sidebar's look stands")
 hostMarks = [{ checkout: WORKTREE, state: "starting" }]
-await until(() => appMarkOf(threadAppStore.get(), WORKTREE)?.state === "starting", "a later look")
+const lookedOnce = markLooks
+await wait(1_500)
+assert.equal(markLooks, lookedOnce, "the marks aren't polled: the host says when they change")
+for (const listener of hostListeners) listener({ type: "thread-app-marks", marks: hostMarks })
+await until(() => appMarkOf(threadAppStore.get(), WORKTREE)?.state === "starting", "the host's pushed marks")
 assert.equal(appMarkOf(threadAppStore.get(), CWD), undefined, "an app that stopped loses its mark")
 unwatchMarks()
 const looked = markLooks

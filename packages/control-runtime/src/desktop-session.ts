@@ -11,7 +11,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { ControlFault } from "@mako/control/control"
-import { listenPrivateControlSocket } from "./private-socket.js"
+import { listenPrivateControlSocket, type ControlCleanupPolicy } from "./private-socket.js"
 import { createLaunchFolder } from "./launch-folders.js"
 import { ControlWorkers, type ControlWorker, type ControlWorkerOptions } from "./control-workers.js"
 import type { DesktopSessionConfig } from "./desktop-session-config.js"
@@ -35,15 +35,16 @@ const quote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`
 export async function startDesktopControlSession(
   input: DesktopSessionConfig,
   options: ControlWorkerOptions & {
-    /** Where workers come from; without it, each session spawns its own. */
-    workers?: ControlWorkers
     /** The task's grant on the host's driver broker, resolved when the session first starts, in place of `input.native`. */
     native?: () => Promise<NativeDriver | undefined>
-  } = {}
+  } & (
+    | { workers: ControlWorkers; cleanup?: never }
+    | { workers?: undefined; cleanup?: ControlCleanupPolicy }
+  ) = {}
 ) {
   const workers = options.workers ?? new ControlWorkers({ ...options, spare: false })
   workers.sweepAbandonedLaunches()
-  const directory = await createLaunchFolder()
+  const directory = await createLaunchFolder(workers.cleanup)
   const files = join(directory, "session")
   const command = join(directory, "mako-control")
   const sessionFile = join(files, "session.json")
@@ -101,7 +102,7 @@ export async function startDesktopControlSession(
 
   try {
     await mkdir(files, { mode: 0o700 })
-    listener = await listenPrivateControlSocket(files, "session.sock")
+    listener = await listenPrivateControlSocket(files, "session.sock", workers.cleanup)
     descriptor = {
       protocol: CONTROL_SESSION_PROTOCOL,
       build: await workers.build,

@@ -67,8 +67,8 @@ async function failureCase(Cache, failure, partial) {
 
 try {
   for (const bundle of [
-    { target: "dist/esm/336.js", name: "rI", queue: "P", next: "nI" },
-    { target: "dist/cjs/336.js", name: "sI", queue: "R", next: "iI" },
+    { target: "dist/esm/305.js", name: "FI", queue: "P", next: "NI" },
+    { target: "dist/cjs/305.js", name: "LI", queue: "R", next: "UI" },
   ]) {
     const module = bundle.target.includes("/esm/")
       ? await import(pathToFileURL(join(sdk, bundle.target)).href)

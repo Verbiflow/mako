@@ -1,10 +1,11 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
+import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 // Sending to a conversation while it opens, against the mock bridge's kept
 // scene (`?mock&app=kept`) with its page reads held by the check. A
@@ -25,11 +26,11 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const { createServer } = await import("vite")
+  const { uiVite } = await import("./lib/ui-vite.mjs")
   const { default: electronPath } = await import("electron")
-  const root = process.argv[2] ?? await mkdtemp(join(tmpdir(), "mako-opening-send-ui-"))
+  const root = testScratch("mako-opening-send-ui-", { given: process.argv[2] })
   await mkdir(root, { recursive: true })
-  const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, watch: null, fs: { strict: false } } })
+  const server = await uiVite({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, watch: null, fs: { strict: false } } })
   await server.listen()
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-opening-send-ui-check", main: fileURLToPath(import.meta.url) }))
   const env = { ...process.env, MAKO_OPENING_CHECK_ROOT: root, MAKO_OPENING_CHECK_URL: server.resolvedUrls.local[0] }
@@ -43,15 +44,16 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`Opening send UI evidence: ${root}`)
 }
 
 async function check() {
   const { app, BrowserWindow } = await import("electron")
   const root = process.env.MAKO_OPENING_CHECK_ROOT
   app.setPath("userData", join(root, "profile"))
+  withMotion(app)
   await app.whenReady()
   const window = new BrowserWindow({ width: 1280, height: 860, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
+  atSize(window, 1280, 860)
   const guard = guardElectronCheck({ app, page: window.webContents, name: "The opening send UI check", ms: 150_000 })
   const page = window.webContents
   page.debugger.attach("1.3")

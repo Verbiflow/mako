@@ -17,7 +17,7 @@ export function ElementPickButton({ disabled, dismiss }: ComposerControlSlotProp
     <button
       type="button"
       aria-label="Pick an element in the browser"
-      className="pressable flex min-h-9 w-full items-center gap-3 rounded-md px-3 py-2 text-left text-ui text-foreground hover:bg-fill-hover focus-visible:bg-fill-hover disabled:opacity-40"
+      className="pressable flex min-h-9 w-full items-center gap-3 px-3 py-2 text-left text-ui text-foreground hover:bg-fill-hover focus-visible:bg-fill-hover disabled:opacity-40"
       disabled={disabled}
       onClick={() => {
         dismiss?.()

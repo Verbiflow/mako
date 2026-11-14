@@ -8,10 +8,10 @@ import { once } from "node:events"
 import { chmod } from "node:fs/promises"
 import { packageLoads } from "@mako/lazy"
 import { z } from "zod"
-import { saidLiveForm, type LiveForm } from "@mako/protocol/live-form"
+import { saidWindowForm, type WindowLiveForm } from "@mako/protocol/live-form"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { TerminalEvent } from "../contracts/terminal.js"
-import { CORRELATION_HEADER, CorrelationIdSchema, LIVE_FORM_HEADER, RuntimeCallSchema, decodeRuntimeArgs, runtimeFailure, type RuntimeInfo } from "../contracts/runtime.js"
+import { CORRELATION_HEADER, CorrelationIdSchema, LIVE_FORM_HEADER, RuntimeCallSchema, decodeRuntimeArgs, runtimeEventRouting, runtimeFailure, type RuntimeInfo } from "../contracts/runtime.js"
 import { encodeRuntimeEvent, payloadFor, runtimeEventLine, runtimeSuccessBody, type EncodedValue, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
 import { HOST_CLOSED_CODE, HOST_RECONNECTING_MESSAGE, HOST_RESTARTING_CODE } from "../contracts/host-connection.js"
 import { historyChangedNotice } from "./gateway.js"
@@ -24,6 +24,36 @@ import { CONTROL_VIDEO_BATCH_TYPE, PREVIEW_MEDIA_TYPE, encodePreviewMedia, type 
 
 /** How the host runs one call: the encoded value of `channel(...args)`, on behalf of `client`. */
 export type HostInvoke = (channel: string, args: unknown[], client?: string, history?: boolean, correlationId?: string) => Promise<EncodedValue>
+
+/**
+ * What an event stream may hold unsent before its live batches wait. A burst passes this with the reader reading as
+ * fast as it can: 8 MB is under a second of a busy host's traffic. What it misses, it reads again (`fallBehind`).
+ */
+const STREAM_BEHIND_BYTES = 8 * 1024 * 1024
+/**
+ * What it may hold at all: what's queued and the notices it has missed together, the write about to go included. Live
+ * batches add only a notice, so only a reader that has stopped reading gets here.
+ */
+const STREAM_LOST_BYTES = 64 * 1024 * 1024
+const WorkspaceClientSchema = z.string().uuid().optional()
+
+/** One client's subscription to `/events`. */
+type EventStream = {
+  client: string
+  observer: boolean
+  history: boolean
+  eventLimit: number
+  live: WindowLiveForm
+  openedAt: number
+  /**
+   * Past `STREAM_BEHIND_BYTES`, until it catches up: the notice to read each conversation again, at the latest revision
+   * it missed. Never the batch itself: a stream's memory is only what `heldBy` counts.
+   */
+  missed?: Map<string, string>
+  missedBytes: number
+  /** Why the host let it go, and what it held. */
+  ending?: { why: string; queuedBytes: number }
+}
 
 /** Sent to every call still waiting when the host closes, so no client is left to infer a reset. */
 const FAREWELL = JSON.stringify({ ok: false, error: HOST_RECONNECTING_MESSAGE, code: HOST_RESTARTING_CODE })
@@ -84,7 +114,7 @@ export async function startWebHost(
 ) {
   const info = () => (runtime instanceof Function ? runtime() : runtime)
   /** Each subscriber, and the live form it reads (`x-mako-live`, `live-form.ts`): one that says none reads form 1. */
-  const streams = new Map<ServerResponse, { client: string; observer: boolean; history: boolean; eventLimit: number; live: LiveForm }>()
+  const streams = new Map<ServerResponse, EventStream>()
   // A cloud machine's Thread hears every event through the outlet, so the work done for subscribers runs for it too.
   const subscribersChanged = () => subscribed.set(streams.size > 0 || outlet !== undefined)
   subscribersChanged()
@@ -166,7 +196,7 @@ export async function startWebHost(
       else desktop(request, response)
       return
     }
-    const client = z.string().uuid().optional().safeParse(request.headers["x-mako-window"] ?? new URL(request.url ?? "/", "http://localhost").searchParams.get("client") ?? undefined)
+    const client = WorkspaceClientSchema.safeParse(request.headers["x-mako-window"] ?? new URL(request.url ?? "/", "http://localhost").searchParams.get("client") ?? undefined)
     if (!client.success) { response.writeHead(400).end("Invalid workspace client"); return }
     const clientId = client.data ? `web:${client.data}` : "web"
     if (request.method === "GET" && request.url?.startsWith("/file/")) {
@@ -210,12 +240,19 @@ export async function startWebHost(
       const requestedLimit = Number(request.headers["x-mako-event-limit"])
       const eventLimit = Number.isSafeInteger(requestedLimit) && requestedLimit >= 64 * 1024 && requestedLimit <= 32 * 1024 * 1024
         ? requestedLimit : 512 * 1024
-      streams.set(response, { client: clientId, observer: request.headers["x-mako-observer"] === "1",
+      const stream: EventStream = { client: clientId, observer: request.headers["x-mako-observer"] === "1",
         history: request.headers["x-mako-history"] === "1", eventLimit,
-        live: saidLiveForm(request.headers[LIVE_FORM_HEADER]?.toString()) })
+        live: saidWindowForm(request.headers[LIVE_FORM_HEADER]?.toString()), openedAt: Date.now(), missedBytes: 0 }
+      streams.set(response, stream)
       subscribersChanged()
       response.once("close", () => {
         streams.delete(response)
+        // After the host's close it's the host leaving, which every client hears; any other end is a window re-attaching.
+        const said = { client: clientId, observer: stream.observer, livedMs: Date.now() - stream.openedAt,
+          why: stream.ending?.why ?? (closed ? "the host closed" : "the client left"),
+          queuedBytes: stream.ending?.queuedBytes ?? response.writableLength, ...stream.missed && { missedConversations: stream.missed.size } }
+        if (stream.ending) hostWarn("stream", "a client's event stream ended", said)
+        else hostLog("stream", "a client's event stream ended", said)
         subscribersChanged()
         if (!closed && client.data && ![...streams.values()].some((entry) => entry.client === clientId)) {
           const timer = setTimeout(() => { releases.delete(clientId); disconnected?.(clientId) }, 5_000)
@@ -309,6 +346,32 @@ export async function startWebHost(
     const notice = historyChangedNotice(event)
     return notice ? runtimeEventLine("event", notice) : null
   }
+  /**
+   * `stream` holds more than it should: its live batches wait, and once it has taken what it holds it hears, for each
+   * conversation it missed, the notice to read that conversation again, at its latest revision. So a burst costs each
+   * conversation one read, in place of the stream and a whole window's boot. Everything else still goes, in order.
+   */
+  const fallBehind = (response: ServerResponse, stream: EventStream) => {
+    const missed = new Map<string, string>()
+    const since = Date.now()
+    stream.missed = missed
+    hostWarn("stream", "a client's stream fell behind", { client: stream.client, queuedBytes: response.writableLength })
+    response.once("drain", () => {
+      const missedBytes = stream.missedBytes
+      stream.missed = undefined
+      stream.missedBytes = 0
+      for (const notice of missed.values()) response.write(notice)
+      hostLog("stream", "a client's stream caught up", { client: stream.client, behindMs: Date.now() - since, conversations: missed.size, missedBytes })
+    })
+  }
+  /** Whether `stream` can hold `bytes` more; one that can't is let go, so it never holds past `STREAM_LOST_BYTES`. */
+  const holds = (response: ServerResponse, stream: EventStream, bytes: number) => {
+    const queuedBytes = response.writableLength + stream.missedBytes
+    if (queuedBytes + bytes <= STREAM_LOST_BYTES) return true
+    stream.ending = { why: "it stopped reading", queuedBytes }
+    response.destroy(new Error("Web client stopped consuming host events"))
+    return false
+  }
   const send = (channel: RuntimeEventChannel, event: RuntimeEvent, client?: string) => {
     if (!client) outlet?.(channel, event)
     // Each subscriber gets the event in the newest live form it reads, each line encoded once.
@@ -325,23 +388,32 @@ export async function startWebHost(
     const notice = () => (invalidation === undefined ? (invalidation = invalidated(event)) : invalidation)
     for (const [stream, owner] of streams) {
       if (client && client !== owner.client) continue
-      if (stream.writableLength > 8 * 1024 * 1024) {
-        stream.destroy(new Error("Web client stopped consuming host events"))
-        continue
+      if (stream.destroyed) continue
+      if (stream.writableLength > STREAM_BEHIND_BYTES && !owner.missed) fallBehind(stream, owner)
+      if (owner.missed) {
+        const { type, conversation } = runtimeEventRouting(event)
+        const line = type === "live-batch" && conversation ? notice() : null
+        if (line && conversation) {
+          const grown = Buffer.byteLength(line) - Buffer.byteLength(owner.missed.get(conversation) ?? "")
+          if (!holds(stream, owner, grown)) continue
+          owner.missed.set(conversation, line)
+          owner.missedBytes += grown
+          continue
+        }
       }
       const payload = payloadFor(event, owner.live)
       // Heard in a form this subscriber doesn't read: it reads the conversation again instead.
       if (payload === undefined) {
         const line = notice()
-        if (line) stream.write(line)
+        if (line && holds(stream, owner, Buffer.byteLength(line))) stream.write(line)
         continue
       }
       const { line, bytes } = lineOf(payload)
       if (owner.history && channel === "event" && bytes > owner.eventLimit && notice()) {
-        stream.write(notice()!)
+        if (holds(stream, owner, Buffer.byteLength(notice()!))) stream.write(notice()!)
         continue
       }
-      stream.write(line)
+      if (holds(stream, owner, bytes)) stream.write(line)
     }
   }
   return {

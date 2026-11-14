@@ -316,7 +316,7 @@ export class LiveActions {
         // Its words go as a message of their own, which retains its attachments; the receipt is the retry's answer.
         this.restart(id, running, input)
         hostLog("live", "a steer went as the next message, its turn stopped for it", { conversation: id, landing, provider: this.provider(resident) })
-        return this.receipt(resident, { input, digest, bindingId, createdAt: Date.now(), state: { kind: "accepted" } })
+        return this.receipt(resident, { input, digest, bindingId, createdAt: Date.now(), sender, state: { kind: "accepted" } })
       }
       const expectedRunId = request.nativeRun.runId
       const attachments = this.host.retainAttachments(input.attachments)
@@ -385,6 +385,7 @@ export class LiveActions {
       digest,
       bindingId,
       createdAt: Date.now(),
+      sender,
       queueStatus: queued?.status === "queued" || queued?.status === "held" ? queued.status : undefined,
       state: { kind: "dispatching" },
     }
@@ -434,6 +435,11 @@ export class LiveActions {
       // this input was sent. A question answer is not an ordinary follow-up.
       resident.snapshot = { ...resident.snapshot,
         control: retireQuestionsForInput(this.host.control(resident), input.id, control.questions ?? []),
+      }
+      if (input.kind === "steer" || input.kind === "steer-queued") {
+        const id = input.kind === "steer-queued" ? input.queuedRequestId : input.id
+        const steered = resident.snapshot.requests.find((request) => request.id === id)
+        this.host.dependencies.agents?.()?.inputDelivered?.(resident.snapshot.session.id, { id, text: input.text, ...steered?.actor && { actor: steered.actor } }, "steer")
       }
       resident.updates.push({
         kind: "user",

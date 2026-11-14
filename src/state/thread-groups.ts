@@ -3,6 +3,7 @@ import type { ThreadGroup, ThreadGroupChange } from "@mako/host/contracts/thread
 import { getMako, hasBridge } from "@/lib/bridge"
 import { readAttachmentDrafts, readDraftStorage, writeDraftStorage } from "@/lib/draft-persistence"
 import { draftsStore } from "@/state/drafts"
+import { acpStore } from "@/state/acp-state"
 import { createHook, createStore } from "@/state/store"
 
 /**
@@ -150,6 +151,13 @@ export function applyThreadGroupChange(change: ThreadGroupChange): void {
     const groups = withChange(state.groups, change)
     return { groups, threadOf: indexSessions(groups) }
   })
+  orderSessions()
+}
+
+/** Each group's Sessions in order, where the conversations' selectors read them (`AcpState.threadSessions`). */
+function orderSessions(): void {
+  const { groups } = threadGroupsStore.get()
+  acpStore.set({ threadSessions: Object.fromEntries(Object.values(groups).map((group) => [group.id, group.sessions.map((session) => session.id)])) })
 }
 
 export async function loadThreadGroups(): Promise<void> {
@@ -161,6 +169,7 @@ export async function loadThreadGroups(): Promise<void> {
     let groups: Record<string, ThreadGroup> = Object.fromEntries(list.map((group) => [group.id, group]))
     for (const change of arrived) groups = withChange(groups, change)
     threadGroupsStore.set({ groups, threadOf: indexSessions(groups) })
+    orderSessions()
   } finally {
     loads.delete(arrived)
   }

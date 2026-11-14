@@ -90,7 +90,7 @@ export function AccessModeList({
           <RadioGroup.Item
             key={mode.id}
             value={mode.id}
-            className="pressable flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-fill-hover data-[state=checked]:bg-fill-selected"
+            className="pressable flex w-full items-start gap-2 px-2 py-1.5 text-left hover:bg-fill-hover data-[state=checked]:bg-fill-selected"
           >
             <span className="flex min-w-0 flex-1 flex-col gap-0.5">
               <span className="flex items-center gap-1.5 text-ui">

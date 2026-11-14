@@ -63,6 +63,10 @@ console.log("PASS: older host/preload compatibility errors retain queued input a
 const { retryTransfer, submitTransfer } = await import("../src/state/live-transfers")
 const { applyLiveSnapshot } = await import("../src/state/live-recovery")
 const { acpStore } = await import("../src/state/acp-state")
+// What the window's own code writes of a conversation goes through the door (`receiveLive`), or the suite fails.
+const { failAroundTheDoor } = await import("./live-door-watch")
+const { receivingLive: receivingThroughTheDoor, readingLive: readingThroughTheDoor } = await import("../src/state/live-door")
+failAroundTheDoor(acpStore, receivingThroughTheDoor, readingThroughTheDoor)
 const transferId = "22222222-2222-4222-8222-222222222222"
 const bindingId = "33333333-3333-4333-8333-333333333333"
 const transfer = { input: { id: transferId, provider: "fixture", bindingId, modeId: "plan", text: "Keep the selected session", attachments: [], tuning: { model: "fixture-model" } }, createdAt: 1, state: { kind: "uncertain", error: "Reply lost" } } as const

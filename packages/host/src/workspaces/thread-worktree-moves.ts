@@ -6,9 +6,10 @@ import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { LiveSnapshot } from "../contracts/live-conversations.js"
 import { moveIntoWorktree, type ConversationMoveDeps, type MovedConversation } from "./conversation-move.js"
 import type { WorkspaceConversations } from "./conversations.js"
-import type { WorkspaceMoveHold, WorkspaceMoveTarget } from "../contracts/workspace-moves.js"
+import type { MoveHaste, WorkspaceMoveHold, WorkspaceMoveTarget } from "../contracts/workspace-moves.js"
 import { outcomeSentences } from "./worktree-move.js"
 import type { MoveSource, WorkspaceMoves } from "./moves.js"
+import type { PlannedCheckout } from "./thread-worktrees.js"
 
 type WorkspaceMoved = Extract<HostEvent, { type: "workspace-moved" }>
 
@@ -17,6 +18,8 @@ export interface ThreadWorktreeMoveDeps {
   worktrees: ConversationMoveDeps["worktrees"] & {
     /** The Thread's checkout, once its worktree is made (`ThreadWorktreeService`). */
     threadCheckout(conversationId: string): { path: string } | undefined
+    /** The worktree a move onto its own branch would make now, with nothing made (`ThreadWorktreeService.plannedCheckout`). */
+    plannedCheckout?(conversationId: string, cwd: string, name: string | undefined): Promise<PlannedCheckout | undefined>
     ofConversation(conversationId: string): { branch: string } | undefined
   }
   /** The Thread a conversation's journal is placed in. */
@@ -130,9 +133,19 @@ export class ThreadWorktreeMoves {
       .reduce((outer, folder) => holds(folder, outer) ? folder : outer, cwd)
   }
 
+  /**
+   * The worktree this conversation's move onto its own branch, as the Session it begins with, would make now: from the
+   * folder around it and its companions (`project`), named by its title, as `carry` makes it. Nothing is made.
+   */
+  planned(id: string): Promise<PlannedCheckout | undefined> {
+    const session = this.deps.conversations.session(id)
+    if (!session || !this.deps.worktrees.plannedCheckout) return Promise.resolve(undefined)
+    return this.deps.worktrees.plannedCheckout(id, this.project(id) ?? session.cwd, session.title)
+  }
+
   /** Move one conversation into its Thread's worktree (`conversation-move.ts`); `bring` takes the changes that stay otherwise too. */
-  move(id: string, input: ForkInput | undefined, project?: string, bring = false): Promise<MovedConversation> {
-    return moveIntoWorktree(this.deps, id, input, project, bring)
+  move(id: string, input: ForkInput | undefined, project?: string, bring = false, haste?: MoveHaste): Promise<MovedConversation> {
+    return moveIntoWorktree(this.deps, id, input, project, bring, haste)
   }
 
   /**
@@ -144,14 +157,15 @@ export class ThreadWorktreeMoves {
    * to move, a message to carry on there; the rest start no turn. The
    * person's own move (`input`) is announced by the window that made it,
    * which also archives what it leaves. `bring`: the person chose to bring
-   * what might be the Thread's and what nobody can be named for too.
+   * what might be the Thread's and what nobody can be named for too. `asItself`: it goes as the same session or not
+   * at all, never as a fork, as a handoff's paused turn needs to go on in that session.
    */
-  async carry(id: string, how: { lead: boolean; tell: boolean; after?: string; input?: ForkInput; bring?: boolean }): Promise<LiveSnapshot> {
+  async carry(id: string, how: { lead: boolean; tell: boolean; after?: string; input?: ForkInput; bring?: boolean; asItself?: boolean; haste?: MoveHaste }): Promise<LiveSnapshot> {
     const source = this.deps.conversations.snapshot(id)
     if (!source) throw new Error("The conversation closed before it could move onto its own branch.")
     const title = source.session.title || "Untitled conversation"
     const last = source.requests.filter((request) => request.status === "completed").at(-1)
-    const input = how.input ?? (last && {
+    const input = how.input ?? (how.asItself || !last ? undefined : {
       id: randomUUID(),
       provider: source.session.harness,
       point: { kind: "run", requestId: last.id },
@@ -160,8 +174,9 @@ export class ThreadWorktreeMoves {
       move: true,
     } satisfies ForkInput)
     // With no answer to fork from, it can still go as itself.
-    const { conversation, moved, outcome, relocated } = await this.move(id, input, how.lead ? this.project(id) : undefined, how.bring).catch((error: Error) => {
+    const { conversation, moved, outcome, relocated } = await this.move(id, input, how.lead ? this.project(id) : undefined, how.bring, how.haste).catch((error: Error) => {
       if (input) throw error
+      if (how.asItself) throw new Error(`It couldn't go onto its own branch as the same session. ${error.message}`)
       throw new Error(how.lead
         ? `The agent's turn didn't finish, so it didn't move onto its own branch. ${error.message} Move it from the composer once it has an answer.`
         : `“${title}” stayed in the main checkout. ${error.message}`)

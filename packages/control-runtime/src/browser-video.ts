@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process"
+import { spawn } from "./processes.js"
+
 import type { BrowserFrame, CaptureSize } from "./browser-capture.js"
 import { liveVideoEncoding, mediaExecutable } from "./control-media.js"
 import { encodeControlVideo, type ControlVideoPacket } from "./contracts/control-video.js"

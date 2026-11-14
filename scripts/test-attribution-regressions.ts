@@ -2,6 +2,7 @@ import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { stampFile } from "./lib/file-stamp.ts"
 import { tmpdir } from "node:os"
 import { setFlagsFromString } from "node:v8"
 import { runInNewContext } from "node:vm"
@@ -11,6 +12,7 @@ import { Git } from "@mako/git"
 import type { ActivityMark, Attribution, MakoWrite, ReportedCall, ReportedEffect, TrackerFileSystem } from "@mako/protocol"
 import { FakeClock, FakeEventSource, FakeFileSystem } from "@mako/protocol/attribution-conformance"
 import type { ChildSource } from "@mako/sessions"
+import { atOnce, inSlices, StepsStopped } from "@mako/sessions/slices"
 import type { Entry } from "@mako/sessions/entries"
 import { Backfill } from "@mako/host/attribution/backfill"
 import { ChildCalls } from "@mako/host/attribution/child-calls"
@@ -19,7 +21,7 @@ import { gitRepository, nodeFileSystem, watcherEvents } from "@mako/host/attribu
 import { readOnlyCommand } from "@mako/host/attribution/read-only"
 import { untrackable } from "@mako/host/attribution/paths"
 import { ranTexts, SCRIPT_LIMIT } from "@mako/host/attribution/scripts"
-import { partition, shares, side, storedView, turnChanges, type JournalView } from "@mako/host/attribution/queries"
+import { countingTurn, fileGroups, partition, readingTurnChain, shares, side, storedView, turnChain, turnChanges, type JournalView } from "@mako/host/attribution/queries"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { JournalStore } from "@mako/host/attribution/journal-store"
 import { contentRef } from "@mako/host/attribution/content"
@@ -46,6 +48,8 @@ async function world(
     fs?: TrackerFileSystem
     log?: (message: string, facts: Readonly<Record<string, string | number | boolean>>) => void
     deliveryLagMs?: () => number
+    sleepAfterMs?: number
+    storage?: string
   } = {},
 ) {
   const project = realpathSync(mkdtempSync(join(tmpdir(), "mako-attribution-regression-")))
@@ -74,18 +78,19 @@ async function world(
   git(repo, "commit", "-q", "-m", "base")
   const clock = new FakeClock(Date.now())
   const events = new FakeEventSource()
-  const storage = mkdtempSync(join(tmpdir(), "mako-attribution-regression-journal-"))
-  const tracker = await LaptopTracker.open(
+  const storage = options.storage ?? mkdtempSync(join(tmpdir(), "mako-attribution-regression-journal-"))
+  const open = () => LaptopTracker.open(
     { fs: options.fs ?? nodeFileSystem(), events, clock, storage, device: "regression" },
-    { repository: async (path) => gitRepository(runner, path), uncertain: options.uncertain, outsider: options.outsider, log: options.log, deliveryLagMs: options.deliveryLagMs },
+    { repository: async (path) => gitRepository(runner, path), uncertain: options.uncertain, outsider: options.outsider, log: options.log, deliveryLagMs: options.deliveryLagMs, sleepAfterMs: options.sleepAfterMs },
   )
+  const tracker = await open()
   await tracker.track({ id: "repo", path: repo, kind: "workspace" })
   const view: JournalView = { store: tracker.store, roots: () => tracker.rootStates().values(), author: (seq) => tracker.authorOf(seq) }
   const write = (path: string, text: string) => {
     const absolute = join(repo, path)
     mkdirSync(join(absolute, ".."), { recursive: true })
     writeFileSync(absolute, text)
-    utimesSync(absolute, clock.now() / 1000, clock.now() / 1000)
+    stampFile(absolute, clock.now())
     events.changed(absolute)
   }
   const mark = (kind: ActivityMark["kind"], thread: string, id: string, edge: "start" | "end", extra: Partial<ActivityMark> = {}) =>
@@ -93,7 +98,7 @@ async function world(
   const report = (thread: string, call: string, effects: ReportedEffect[], startedAt: number) =>
     tracker.reported({ thread, session: `${thread}-session`, call, status: "completed", startedAt, endedAt: clock.now(), checkout: project, effects })
   const last = () => tracker.changes(0).at(-1)!
-  return { project, repo, storage, clock, events, tracker, view, write, mark, report, last }
+  return { project, repo, storage, clock, events, tracker, view, write, mark, report, last, open }
 }
 
 const certainty = (author: Attribution) => ("author" in author ? `${author.certainty}:${author.author.thread}` : author.certainty)
@@ -703,7 +708,7 @@ test("what a rescan finds after a long gap is put on a Thread only by when its f
   w.clock.advance(5 * 60_000)
   // Nothing runs when this one is written.
   writeFileSync(join(w.repo, "shots/new.png"), image("mid-gap"))
-  utimesSync(join(w.repo, "shots/new.png"), w.clock.now() / 1000, w.clock.now() / 1000)
+  stampFile(join(w.repo, "shots/new.png"), w.clock.now())
   w.clock.advance(5 * 60_000)
   w.mark("turn", "T1", "t1", "start")
   w.mark("call", "T1", "c1", "start", { turn: "t1" })
@@ -795,6 +800,174 @@ test("while losses keep coming, a root is rescanned at most every ten minutes, a
   await w.tracker.close()
 })
 
+test("a turn's count journals what was heard and never forces or waits on a rescan for lost events", async () => {
+  // On 2026-11-12 the person's host lost events in worktrees of 7,754 and 5,300 files every minute or so. Each turn's end
+  // asked the journal to settle, which rescanned every such root at once with no rest between them and waited until
+  // none was left: the shared journal's caller gave up after 15 s about once a minute, and the walks held the host's loop.
+  const rescans: number[] = []
+  const w = await world({ "src/a.ts": "export const a = 1\n" }, { log: (message) => message === "rescan" && rescans.push(Date.now()) })
+  w.events.restore()
+  await w.tracker.settled()
+  assert.equal(rescans.length, 1)
+  // Another loss right after: its rescan waits out its spacing.
+  w.events.restore()
+  w.clock.advance(1_000)
+  w.write("src/a.ts", "export const a = 2\n")
+  await w.tracker.settled({ rescans: false })
+  assert.equal(rescans.length, 1, "a turn's count leaves the rescan waiting")
+  assert.equal(w.last().path, "src/a.ts", "what the watch heard is journaled")
+  assert.equal(w.last().observed, "event")
+  // A rescan running now isn't waited for.
+  w.clock.advance(20 * 60_000)
+  let release: (() => void) | undefined
+  const walk = nodeFileSystem().walk
+  let held = false
+  const slow: TrackerFileSystem = {
+    ...nodeFileSystem(),
+    walk: async (root, skip) => {
+      if (held) await new Promise<void>((resolve) => (release = resolve))
+      return walk(root, skip)
+    },
+  }
+  const v = await world({ "src/b.ts": "export const b = 1\n" }, { fs: slow })
+  await v.tracker.settled()
+  held = true
+  v.events.restore()
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.ok(release, "the rescan is walking")
+  const started = performance.now()
+  await v.tracker.settled({ rescans: false })
+  assert.ok(performance.now() - started < 1_000, "a turn's count doesn't wait for a rescan under way")
+  held = false
+  release!()
+  await v.tracker.settled()
+  await v.tracker.close()
+  await w.tracker.close()
+})
+
+test("a quiet root sleeps, and what changed while it slept is attributed when a turn wakes it, as after a restart", async () => {
+  // On 2026-11-12 the person's tracker held 154 roots' stat caches, a million rows, most of them finished Threads'
+  // worktrees. A root asleep lets its cache go and stays tracked: its wake reads what changed as a restart does.
+  const HOUR = 3_600_000
+  const asleep = await world({ "src/a.ts": "export const a = 1\n" }, { sleepAfterMs: HOUR })
+  const roots = () => [...asleep.tracker.rootStates().values()]
+  asleep.clock.advance(2 * HOUR)
+  assert.deepEqual(await asleep.tracker.sleepIdle(), [asleep.repo])
+  assert.ok(asleep.tracker.asleep(asleep.repo))
+  assert.equal(roots()[0]!.stats.size, 0, "its stat cache went")
+  assert.deepEqual(asleep.tracker.blame("repo", "src/a.ts"), [], "a clean file still reads as known")
+  // The person edits it while it sleeps; nothing hears it.
+  asleep.clock.advance(1_000)
+  asleep.write("src/a.ts", "export const a = 2\n")
+  asleep.write("src/b.ts", "export const b = 1\n")
+  await asleep.tracker.settled()
+  assert.equal(asleep.tracker.changes(0).length, 0)
+  // A turn there wakes it.
+  await asleep.tracker.track({ id: "repo", path: asleep.repo, kind: "workspace" })
+  await asleep.tracker.settled()
+  assert.ok(!asleep.tracker.asleep(asleep.repo))
+  assert.ok(roots()[0]!.stats.size > 0, "its stat cache came back")
+  const woken = new Map(asleep.tracker.changes(0).map((entry) => [entry.path, certainty(entry.author)]))
+  assert.deepEqual([...woken.keys()].sort(), ["src/a.ts", "src/b.ts"], "both changes it slept through are journaled")
+  await asleep.tracker.close()
+
+  // The same, the host stopped instead of the root asleep: the answers are the same.
+  const restarted = await world({ "src/a.ts": "export const a = 1\n" }, { sleepAfterMs: 1_000 * HOUR })
+  restarted.clock.advance(2 * HOUR)
+  await restarted.tracker.close()
+  restarted.clock.advance(1_000)
+  restarted.write("src/a.ts", "export const a = 2\n")
+  restarted.write("src/b.ts", "export const b = 1\n")
+  const reopened = await restarted.open()
+  await reopened.settled()
+  assert.deepEqual(new Map(reopened.changes(0).map((entry) => [entry.path, certainty(entry.author)])), woken)
+  await reopened.close()
+})
+
+test("a turn that starts on a root while it's falling asleep keeps it awake, and what changed then is found", async () => {
+  // pr-review on #620: \`sleep\` closes the watch, then waits for the root's queue. A \`track\` in that wait found the
+  // root awake and returned; the sleep then went ahead, and the turn's edits went unheard until the next wake.
+  const HOUR = 3_600_000
+  const w = await world({ "src/a.ts": "export const a = 1\n" }, { sleepAfterMs: HOUR })
+  // The watch's close is where the sleep's wait begins: a turn starts there and writes, unheard.
+  let closing: (() => void) | undefined
+  const watch = w.events.watch.bind(w.events)
+  w.events.watch = async (root, listener) => {
+    const handle = await watch(root, listener)
+    return {
+      close: () => {
+        handle.close()
+        const once = closing
+        closing = undefined
+        once?.()
+      },
+    }
+  }
+  await w.tracker.untrack("repo")
+  await w.tracker.track({ id: "repo", path: w.repo, kind: "workspace" })
+  await w.tracker.settled()
+  w.clock.advance(2 * HOUR)
+  let tracked: Promise<void> | undefined
+  closing = () => {
+    tracked = w.tracker.track({ id: "repo", path: w.repo, kind: "workspace" })
+    w.clock.advance(1_000)
+    w.write("src/a.ts", "export const a = 2\n")
+  }
+  assert.deepEqual(await w.tracker.sleepIdle(), [], "it doesn't sleep")
+  await tracked
+  assert.ok(!w.tracker.asleep(w.repo))
+  await w.tracker.settled()
+  assert.deepEqual(w.tracker.changes(0).map((entry) => entry.path), ["src/a.ts"], "the write made while the watch was closed is found")
+  // Its watch is open again: the next write is heard as it lands.
+  w.clock.advance(1_000)
+  w.write("src/b.ts", "export const b = 1\n")
+  await w.tracker.settled({ rescans: false })
+  assert.equal(w.last().path, "src/b.ts")
+  assert.equal(w.last().observed, "event")
+  await w.tracker.close()
+})
+
+test("a root a Thread works in or around never sleeps", async () => {
+  const HOUR = 3_600_000
+  const w = await world({ "src/a.ts": "export const a = 1\n" }, { sleepAfterMs: HOUR })
+  w.clock.advance(2 * HOUR)
+  w.mark("turn", "T1", "t1", "start")
+  assert.deepEqual(await w.tracker.sleepIdle(), [])
+  assert.ok(!w.tracker.asleep(w.repo))
+  await w.tracker.close()
+})
+
+test("a root unseen longer than a root stays awake starts asleep, and a turn there wakes it", async () => {
+  const HOUR = 3_600_000
+  const w = await world({ "src/a.ts": "export const a = 1\n" }, { sleepAfterMs: HOUR })
+  await w.tracker.close()
+  w.clock.advance(2 * HOUR)
+  w.write("src/a.ts", "export const a = 2\n")
+  const reopened = await w.open()
+  await reopened.settled()
+  assert.ok(reopened.asleep(w.repo), "it starts asleep")
+  assert.equal([...reopened.rootStates().values()][0]!.stats.size, 0, "with no stat cache read")
+  assert.equal(reopened.changes(0).length, 0)
+  await reopened.track({ id: "repo", path: w.repo, kind: "workspace" })
+  await reopened.settled()
+  assert.ok(!reopened.asleep(w.repo))
+  assert.deepEqual(reopened.changes(0).map((entry) => entry.path), ["src/a.ts"], "what changed while the host was away is journaled on waking")
+  await reopened.close()
+})
+
+test("a root asleep whose folder went is let go when it wakes or the host opens", async () => {
+  const HOUR = 3_600_000
+  const w = await world({ "src/a.ts": "export const a = 1\n" }, { sleepAfterMs: HOUR })
+  await w.tracker.close()
+  w.clock.advance(2 * HOUR)
+  rmSync(w.repo, { recursive: true, force: true })
+  const reopened = await w.open()
+  await reopened.settled()
+  assert.equal(reopened.rootStates().size, 0)
+  assert.ok(!reopened.store.roots().some((root) => root.active))
+  await reopened.close()
+})
+
 test("a watch polling because delivery went quiet is rescanned once, when it listens again", async () => {
   const heard: string[] = []
   let says: ((why: "dropped" | "polling" | "listening") => void) | undefined
@@ -843,11 +1016,12 @@ test("rescans of different roots take turns, each next one resting while it's be
   const [first, second] = walks.sort((a, b) => a.start - b.start)
   assert.ok(second!.start - first!.end >= 15 * (first!.end - first!.start), `the second waited out a rest (${second!.start - first!.end} ms after a ${first!.end - first!.start} ms walk)`)
   walks.length = 0
-  const settling = Date.now()
   w.events.restore()
   await w.tracker.settled()
   assert.equal(walks.length, 2)
-  assert.ok(Date.now() - settling < 15 * 60, "settled rescans both without resting between them")
+  const [settledFirst, settledSecond] = walks.sort((a, b) => a.start - b.start)
+  const walked = settledFirst!.end - settledFirst!.start
+  assert.ok(settledSecond!.start - settledFirst!.end < 15 * walked, `settled rescans both without resting between them (${settledSecond!.start - settledFirst!.end} ms after a ${walked} ms walk)`)
   await w.tracker.close()
 })
 
@@ -858,7 +1032,7 @@ test("a write heard as late as the watcher now delivers is dated by when it was 
   w.clock.advance(500)
   const path = join(w.repo, "a.ts")
   writeFileSync(path, "export const a = 2\n")
-  utimesSync(path, w.clock.now() / 1000, w.clock.now() / 1000)
+  stampFile(path, w.clock.now())
   const written = w.clock.now()
   w.clock.advance(500)
   w.mark("call", "T1", "c1", "end", { turn: "t1" })
@@ -991,7 +1165,7 @@ test("the journal opens before its roots catch up, and a turn while one catches 
   const started = clock.now()
   tracker.activity({ kind: "call", id: "c1", edge: "start", at: started, ...thread })
   writeFileSync(join(repo, "a.ts"), "export const a = 2\n")
-  utimesSync(join(repo, "a.ts"), clock.now() / 1000, clock.now() / 1000)
+  stampFile(join(repo, "a.ts"), clock.now())
   events.changed(join(repo, "a.ts"))
   clock.advance(100)
   tracker.reported({ thread: "T1", session: "T1-session", call: "c1", status: "completed", startedAt: started, endedAt: clock.now(), checkout: project, effects: [{ kind: "modify", path: join(repo, "a.ts"), edits: [{ old: "export const a = 1\n", new: "export const a = 2\n" }] }] })
@@ -1215,7 +1389,7 @@ test("in a project folder of several repositories, a Thread counts for a change 
   const writeBackend = (text: string) => {
     const absolute = join(backend, "app.py")
     writeFileSync(absolute, text)
-    utimesSync(absolute, w.clock.now() / 1000, w.clock.now() / 1000)
+    stampFile(absolute, w.clock.now())
     w.events.changed(absolute)
   }
   w.mark("turn", "T1", "t1", "start")
@@ -1308,7 +1482,7 @@ test("files a command's own text spells out are its turn's; a new file it doesn'
   const make = (path: string, bytes: string | Uint8Array) => {
     const absolute = join(w.repo, path)
     writeFileSync(absolute, bytes)
-    utimesSync(absolute, w.clock.now() / 1000, w.clock.now() / 1000)
+    stampFile(absolute, w.clock.now())
     w.events.changed(absolute)
   }
   // As the live stream reports a call: under its turn.
@@ -1441,7 +1615,7 @@ async function scripted(files: Record<string, string>) {
     const absolute = path.startsWith("/") ? path : join(w.repo, path)
     mkdirSync(join(absolute, ".."), { recursive: true })
     writeFileSync(absolute, content)
-    utimesSync(absolute, w.clock.now() / 1000, w.clock.now() / 1000)
+    stampFile(absolute, w.clock.now())
     w.events.changed(absolute)
   }
   /** One call of `thread`'s turn: it starts, `act` writes as it runs, then its effects are reported and it ends. */
@@ -2098,5 +2272,64 @@ test("attributing again only what new evidence reaches gives every change the au
         assert.deepEqual(item.author, full, `trial ${trial}, step ${step}: change ${index} on ${item.change.path} at ${item.change.changedAt} is stale`)
       }
     }
+  }
+})
+
+test("counting a long renamed file chain yields between bounded indexed reads", async () => {
+  const folder = mkdtempSync(join(tmpdir(), "mako-turn-chain-"))
+  const store = JournalStore.open(join(folder, "journal.sqlite"), { device: "turn-chain" })
+  try {
+    const started = 1_800_000_000_000
+    store.saveRoot({ id: "root", path: "/work", kind: "workspace", repository: false, head: null, mark: null, seenAt: started, trackedAt: started, active: true })
+    const refs = ["first\n", "second\n"].map((text) => {
+      const bytes = Buffer.from(text)
+      const ref = contentRef(bytes)
+      store.putBlob(ref, bytes, started)
+      return ref
+    })
+    const own: Attribution = { certainty: "exact", author: { thread: "T", session: "S", turn: "turn" }, effect: "modify" }
+    const other: Attribution = { certainty: "exact", author: { thread: "other", session: "other", turn: "other" }, effect: "modify" }
+    let path = "a.txt"
+    const append = (index: number) => {
+      const from = index > 0 && index % 31 === 0 ? path : undefined
+      if (from) path = path === "a.txt" ? "b.txt" : path === "b.txt" ? "c.txt" : "a.txt"
+      return store.insertEntry({ at: started + index, changedAt: started + index, root: "root", path, ...(from && { from }), kind: from ? "rename" : "modify",
+        before: refs[index % 2]!, after: refs[(index + 1) % 2]!, text: true, added: 1, removed: 1, stored: true, observed: "event", author: from || index % 7 ? own : other, settled: true })
+    }
+    store.transaction(() => {
+      for (let index = 0; index < 2_048; index++) append(index)
+      store.saveActivity({ kind: "turn", id: "turn", session: "S", thread: "T", turn: "turn", checkout: "/work", named: [], start: started, end: started + 2_048 })
+    })
+    const view = storedView(store)
+    const withoutMaps = (entries: ReturnType<typeof turnChain>) => entries.map(({ map: _map, ...entry }) => entry)
+    for (const group of fileGroups(store.entriesOfTurn("T", "turn")).values())
+      assert.deepEqual(withoutMaps(atOnce(readingTurnChain(view, group))), withoutMaps(turnChain(view, group)), "paged rename merge matches the original whole-chain read in all metadata and order")
+    const expected = turnChanges(view, "T", "turn", "settled", 0)
+    const pages: number[] = []
+    const readPage = store.chainPage.bind(store)
+    store.chainPage = (...args) => {
+      const page = readPage(...args)
+      pages.push(page.length)
+      return page
+    }
+    store.chain = () => { throw new Error("the count must not read a whole file chain between yields") }
+    const steps = countingTurn(view, "T", "turn", "settled", 0)
+    assert.equal(steps.next().done, false)
+    append(2_048)
+    assert.deepEqual(atOnce(steps), expected, "the original through bound, renamed paths, other writers and final line counts are unchanged")
+    assert.ok(pages.length > 3, "each path's long chain is paged")
+    assert.ok(Math.max(...pages) <= 256, "no native query returns more than one bounded page")
+    const first = countingTurn(view, "T", "turn", "settled", 0)
+    const second = countingTurn(view, "T", "turn", "settled", 0)
+    assert.equal(first.next().done, false)
+    assert.equal(second.next().done, false)
+    assert.deepEqual(atOnce(first), atOnce(second), "concurrent counts share no live SQLite iterator")
+    const stopping = inSlices(countingTurn(view, "T", "turn", "settled", 0), 0, () => store.closed)
+    await new Promise((resolve) => setImmediate(resolve))
+    store.close()
+    await assert.rejects(stopping, StepsStopped, "closing between slices cancels before another SQL read")
+  } finally {
+    if (!store.closed) store.close()
+    rmSync(folder, { recursive: true, force: true })
   }
 })

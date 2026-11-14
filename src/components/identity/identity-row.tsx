@@ -45,7 +45,7 @@ export function IdentityRow() {
         <PopoverTrigger asChild>
           <button
             type="button"
-            className="pressable flex w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1.5 text-left transition-colors duration-100 hover:bg-fill-hover aria-expanded:bg-fill-selected"
+            className="pressable flex w-full min-w-0 items-center gap-2 px-1.5 py-1.5 text-left transition-colors duration-100 hover:bg-fill-hover aria-expanded:bg-fill-selected"
           >
             {identity.kind !== "none" ? (
               <Avatar src={identity.avatar} name={identity.name} size={5} />

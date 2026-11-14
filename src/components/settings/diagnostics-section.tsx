@@ -97,13 +97,13 @@ export function DiagnosticsSection() {
       </ListCard>
 
       {changed.length ? (
-        <div data-store-formats="" className="mb-2 divide-y divide-hairline rounded-lg bg-surface ring-1 ring-hairline">
+        <div data-store-formats="" className="mb-2 bg-raised">
           {changed.map((row, index) => <StoreFormatLine key={row.store} row={row} update={index === 0} className="px-3 py-2" />)}
         </div>
       ) : null}
 
       {crashes.length === 0 ? (
-        <p className="rounded-lg bg-surface px-3 py-4 text-center text-ui text-faint ring-1 ring-hairline">
+        <p className="bg-raised px-3 py-4 text-center text-ui text-faint">
           Nothing has crashed. This stays empty unless something does.
         </p>
       ) : (
@@ -111,7 +111,7 @@ export function DiagnosticsSection() {
           {crashes.map((crash) => (
             <div
               key={crash.id}
-              className="rounded-lg bg-surface ring-1 ring-hairline"
+              className="bg-raised"
             >
               <button
                 type="button"
@@ -120,7 +120,7 @@ export function DiagnosticsSection() {
                 }
                 className="flex w-full items-center gap-2 px-3 py-2 text-left"
               >
-                <span className="shrink-0 rounded bg-raised px-1.5 py-px text-label text-faint">
+                <span className="shrink-0 bg-raised px-1.5 py-px text-label text-faint">
                   {crash.kind.replace("-", " ")}
                 </span>
                 <span className="min-w-0 flex-1 truncate text-ui">
@@ -131,7 +131,7 @@ export function DiagnosticsSection() {
                 </span>
               </button>
               {openId === crash.id ? (
-                <div className="border-t border-hairline px-3 py-2">
+                <div className="px-3 py-2">
                   <pre className="max-h-56 overflow-auto font-mono text-label leading-relaxed text-faint">
                     {crash.stack ?? "No stack was captured."}
                   </pre>
@@ -159,7 +159,7 @@ export function DiagnosticsSection() {
       )}
 
       {hostLog ? (
-        <div className="mt-2 flex items-center justify-between gap-3 rounded-lg bg-surface px-3 py-2 ring-1 ring-hairline">
+        <div className="mt-2 flex items-center justify-between gap-3 bg-raised px-3 py-2">
           <div className="min-w-0">
             <p className="text-ui">Host log</p>
             <p className="truncate text-label text-faint" title={hostLog}>
@@ -195,7 +195,7 @@ export function DiagnosticsSection() {
       {routing.length ? <NativeRoutingReadout readings={routing} /> : null}
 
       {residency ? (
-        <div className="mt-2 rounded-lg bg-surface ring-1 ring-hairline">
+        <div className="mt-2 bg-raised">
           <div className="px-3 py-2">
             <p className="text-ui">Provider residency</p>
             <p className="text-label text-faint">
@@ -233,11 +233,11 @@ export function DiagnosticsSection() {
             ) : null}
           </div>
           {residency.entries.length > 0 ? (
-            <div className="max-h-56 overflow-auto border-t border-hairline">
+            <div className="max-h-56 overflow-auto">
               {residency.entries.slice(0, 20).map((entry) => (
                 <div
                   key={entry.conversationId}
-                  className="flex items-start gap-3 border-b border-hairline px-3 py-1.5 last:border-b-0"
+                  className="flex items-start gap-3 px-3 py-1.5"
                 >
                   <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                     <span className="flex min-w-0 items-center gap-3">
@@ -313,7 +313,7 @@ function SessionReaderRow({ history }: { history: SessionReaderHistory }) {
   const recent = history.events.filter((event) => event.event !== "adopted").slice(0, 5)
   const since = copyAge(new Date(history.since).getTime())
   return (
-    <div data-session-reader="" className="mt-2 rounded-lg bg-surface ring-1 ring-hairline">
+    <div data-session-reader="" className="mt-2 bg-raised">
       <div className="flex items-center justify-between gap-3 px-3 py-2">
         <div className="min-w-0">
           <p className="text-ui">Session sync</p>
@@ -332,9 +332,9 @@ function SessionReaderRow({ history }: { history: SessionReaderHistory }) {
         ) : null}
       </div>
       {recent.length > 0 ? (
-        <div className="border-t border-hairline">
+        <div className="">
           {recent.map((event) => (
-            <div key={`${event.at}-${event.event}-${event.pid ?? ""}`} className="flex items-baseline gap-3 border-b border-hairline px-3 py-1.5 last:border-b-0">
+            <div key={`${event.at}-${event.event}-${event.pid ?? ""}`} className="flex items-baseline gap-3 px-3 py-1.5">
               <span className="min-w-0 flex-1 truncate text-label" title={event.reason}>
                 {READER_EVENT[event.event]}, {READER_KIND[event.kind]}
                 {event.reason ? <span className="text-faint"> · {event.reason}</span> : null}
@@ -377,7 +377,7 @@ function BackgroundWorkReadout({ work }: { work: NonNullable<ProviderResidencySn
 function FinsReadout({ agents }: { agents: AgentsDiagnostics }) {
   const fullest = [...agents.trees].sort((a, b) => b.running - a.running || b.started - a.started).slice(0, 5)
   return (
-    <div data-agents-diagnostics="" className="mt-2 rounded-lg bg-surface px-3 py-2 ring-1 ring-hairline">
+    <div data-agents-diagnostics="" className="mt-2 bg-raised px-3 py-2">
       <p className="text-ui">{FIN_WORD}s</p>
       <p className="text-label text-faint">
         {finsWord(agents.fins)} · {agents.running} running
@@ -423,14 +423,14 @@ function routingState(reading: NativeRoutingReading): string {
  */
 function NativeRoutingReadout({ readings }: { readings: NativeRoutingReading[] }) {
   return (
-    <div data-native-routing="" className="mt-2 rounded-lg bg-surface ring-1 ring-hairline">
+    <div data-native-routing="" className="mt-2 bg-raised">
       <div className="px-3 py-2">
         <p className="text-ui">Native subagents</p>
         <p className="text-label text-faint">An {APEX_WORD} starts its {FIN_WORD}s through Mako.</p>
       </div>
-      <div className="border-t border-hairline">
+      <div className="">
         {readings.map((reading) => (
-          <div key={reading.harness} className="flex items-baseline gap-3 border-b border-hairline px-3 py-1.5 last:border-b-0">
+          <div key={reading.harness} className="flex items-baseline gap-3 px-3 py-1.5">
             <span className="min-w-0 flex-1 truncate text-label" title={reading.via}>
               {harnessLabel(reading.harness)}
               <span className="text-faint"> · {routingState(reading)}</span>

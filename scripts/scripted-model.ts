@@ -119,7 +119,7 @@ export interface ScriptedModelOptions {
   /** GETs whose path starts with a key, answered with its JSON. */
   answers?: ReadonlyMap<string, string>
   /** The reply to a conversation request, one that carries tools, given the request's text and, where its wire says, the model it names. */
-  reply: (heard: string, request?: { model: string | undefined }) => ScriptedReply | undefined
+  reply: (heard: string, request?: { model: string | undefined }) => ScriptedReply | undefined | Promise<ScriptedReply | undefined>
   /** What a side request (a title, a summary) gets. */
   aside?: string
   /** A side request that carries the conversation's tools without forcing one, told apart by what it asks. */
@@ -133,6 +133,8 @@ export interface ScriptedModelOptions {
    * (a local cloud machine in Docker) reaches it at an address this computer has on its network.
    */
   host?: string
+  /** A caller-owned listening port; omitted to let the OS choose. */
+  port?: number
   /**
    * Milliseconds before each streamed delta of an OpenAI Responses or Anthropic Messages reply, so it arrives at a
    * model's pace rather than all at once (20 is 50 tokens a second): `npm run bench:sync-latency` times each word from
@@ -165,7 +167,7 @@ export async function scriptedModel(options: ScriptedModelOptions) {
     }
     const chunks: Buffer[] = []
     request.on("data", (chunk: Buffer) => chunks.push(chunk))
-    request.on("end", () => {
+    request.on("end", () => void (async () => {
       const path = request.url ?? "/"
       const route = new URL(path, "http://scripted").pathname
       if (request.method === "GET") {
@@ -186,7 +188,7 @@ export async function scriptedModel(options: ScriptedModelOptions) {
         response.statusCode = 400
         return void json(response, JSON.stringify({ error: { type: "invalid_request_error", message: "The scripted model answers Chat Completions, Anthropic Messages and OpenAI Responses only" } }))
       }
-      const reply = compacting(body.input, answer(`${request.method} ${path}`, { tools: offeredTools(body), tool_choice: body.tool_choice, model: body.model }, text))
+      const reply = compacting(body.input, await answer(`${request.method} ${path}`, { tools: offeredTools(body), tool_choice: body.tool_choice, model: body.model }, text))
       if (reply.fail) {
         response.statusCode = reply.fail.status
         return void json(response, JSON.stringify(failure(wire, reply.fail.message)))
@@ -199,7 +201,7 @@ export async function scriptedModel(options: ScriptedModelOptions) {
         const named = wire === "chat" ? "" : `event: ${z.object({ type: z.string() }).parse(event).type}\n`
         response.write(`${named}data: ${JSON.stringify(event)}\n\n`)
       }, reply.pace ?? options.pace).then(() => response.end(wire === "chat" ? "data: [DONE]\n\n" : ""))
-    })
+    })())
   })
   /** Writes a reply's events in order, each delta `pace` ms after the event before it, telling `options.sent` of each. */
   const paced = async (events: JsonObject[], write: (event: JsonObject) => void, pace = options.pace) => {
@@ -210,11 +212,13 @@ export async function scriptedModel(options: ScriptedModelOptions) {
     }
   }
   /** The script's next step for a conversation request, the aside for any other. */
-  const answer = (path: string, body: { tools?: JsonValue[]; tool_choice?: JsonValue; model?: string | undefined }, heard: string): ScriptedReply => {
+  const heard: string[] = []
+  const answer = async (path: string, body: { tools?: JsonValue[]; tool_choice?: JsonValue; model?: string | undefined }, text: string): Promise<ScriptedReply> => {
     const aside = options.aside ?? "Notes"
     const forced = forcedReply(body.tool_choice, body.tools, aside)
-    const conversation = Boolean(body.tools?.length) && !forced && !options.side?.(heard)
-    const scripted = conversation ? options.reply(heard, { model: body.model }) : forced ?? { text: aside }
+    const conversation = Boolean(body.tools?.length) && !forced && !options.side?.(text)
+    if (conversation) heard.push(text)
+    const scripted = conversation ? await options.reply(text, { model: body.model }) : forced ?? { text: aside }
     requests.push({ path, conversation, ...!scripted && { unscripted: true } })
     return scripted ? namespaced(scripted, body.tools) : { text: "The script has no more steps." }
   }
@@ -237,18 +241,28 @@ export async function scriptedModel(options: ScriptedModelOptions) {
       const id = responseId()
       chains.set(`resp_${id}`, chain)
       if (body.generate === false) return void warmUpAnswer(id).forEach(send)
-      const reply = compacting(body.input, answer(`WS ${path}`, { tools: chain.tools, tool_choice: body.tool_choice, model: chain.model }, chain.heard))
-      if (reply.fail) return void send(JSON.stringify({ type: "error", status: reply.fail.status, error: { type: "server_error", message: reply.fail.message } }))
-      void paced(responsesStreamed(reply, id).map((event) => served(event, { model: body.model, usage: options.usage })), (event) => send(JSON.stringify(event)), reply.pace ?? options.pace)
+      void (async () => {
+        const reply = compacting(body.input, await answer(`WS ${path}`, { tools: chain.tools, tool_choice: body.tool_choice, model: chain.model }, chain.heard))
+        if (reply.fail) return void send(JSON.stringify({ type: "error", status: reply.fail.status, error: { type: "server_error", message: reply.fail.message } }))
+        void paced(responsesStreamed(reply, id).map((event) => served(event, { model: body.model, usage: options.usage })), (event) => send(JSON.stringify(event)), reply.pace ?? options.pace)
+      })()
     })
   })
   const host = options.host ?? "127.0.0.1"
-  await new Promise<void>((resolve) => server.listen(0, host, resolve))
+  await new Promise<void>((resolve) => server.listen(options.port ?? 0, host, resolve))
   // SAFETY: a server listening on a TCP port reports its address as an AddressInfo.
   const { port } = server.address() as AddressInfo
   return {
     url: `http://${host}:${port}`,
     requests,
+    /** What each conversation request carried, in order. `release` drops it, so a heap check sees the driver rather than this server. */
+    heard,
+    /** Drops the conversation text this server kept, including a websocket chain's copy of earlier turns. */
+    release() {
+      heard.length = 0
+      requests.length = 0
+      chains.clear()
+    },
     bearers,
     close: () => new Promise<void>((resolve) => {
       for (const socket of sockets) socket.destroy()

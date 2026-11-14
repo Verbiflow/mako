@@ -2,15 +2,15 @@ import { build } from "esbuild"
 import { spawn } from "node:child_process"
 import { once } from "node:events"
 import { randomUUID } from "node:crypto"
-import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
+import { copyFile, mkdir, rm, symlink, writeFile } from "node:fs/promises"
 import { createServer } from "node:http"
-import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { startWebHost } from "@mako/host/transport/server"
 import { runtimeLocation } from "@mako/host/transport/service"
 import { z } from "zod"
+import { testScratch } from "./lib/test-scratch.mjs"
 
-const root = await mkdtemp(join(tmpdir(), "mako-desktop-crashes-"))
+const root = testScratch("mako-desktop-crashes-")
 await symlink(resolve("node_modules"), join(root, "node_modules"))
 await copyFile(resolve("dist-electron/preload.cjs"), join(root, "preload.cjs"))
 await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-crash-fixture", version: "0.0.1", type: "module", main: "check.mjs" }))
@@ -69,4 +69,3 @@ try {
   page.close()
   await rm(location.directory, { recursive: true, force: true })
 }
-console.log(`Desktop crash evidence: ${root}`)

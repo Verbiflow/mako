@@ -147,10 +147,10 @@ try {
     'const answer = "proof" // retained'
   )
   assert.ok(
-    tokens.flat().some((token) => token.color === "var(--shiki-token-comment)")
+    tokens.flat().some((token) => token.color === "var(--syntax-comment)")
   )
   assert.ok(
-    tokens.flat().some((token) => token.color === "var(--shiki-token-string)")
+    tokens.flat().some((token) => token.color === "var(--syntax-string)")
   )
   console.log(
     "ACP media and typed details survive journal reopen, archive, renderer projection, and replay; syntax tokens retain source and theme variables"

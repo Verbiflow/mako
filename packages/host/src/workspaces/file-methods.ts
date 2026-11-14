@@ -2,6 +2,7 @@ import { watch, type FSWatcher } from "node:fs"
 import type { AgentHost } from "./agent-host.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { SearchOptions } from "../contracts/git-workspace-search.js"
+import type { FileFoldersOptions, FileGrepOptions } from "../contracts/file-index.js"
 import type { MethodTable } from "../base/methods.js"
 import type { MachineCapability } from "../base/machine.js"
 
@@ -35,6 +36,9 @@ export function declareFileMethods(methods: MethodTable, context: FileMethodsDep
       withHost((host) => host.createWorkspaceText(cwd, path, text))
   )
   methods.handle("mako:list-files", () => withHost((host) => host.listFiles()))
+  methods.handle("mako:files-folders", (paths: string[], options?: FileFoldersOptions) => withHost((host) => host.filesFolders(paths, options)))
+  methods.handle("mako:files-find", (query: string, limit?: number) => withHost((host) => host.filesFind(query, limit)))
+  methods.handle("mako:files-grep", (query: string, options?: FileGrepOptions) => withHost((host) => host.filesGrep(query, options)))
   methods.handle("mako:read-file", (path: string) =>
     withHost(async (host) => {
       const file = await host.readWorkspaceFile(path)

@@ -27,10 +27,10 @@ export function ProposedPlanCard({ plan, streaming }: { plan: ProposedPlan; stre
     <section aria-label={`Plan: ${state.title}`} className="group/plan flex flex-col gap-1.5">
       <PlanLead state={state} folded={folded} onFold={state.superseded ? () => setOpened(folded) : undefined} />
       {folded ? null : (
-        <div className="relative rounded-lg border border-hairline bg-card">
+        <div className="relative border border-hairline bg-card">
           <div
             className={cn(
-              "absolute top-2 right-2 z-10 flex items-center gap-0.5 rounded-md bg-card p-0.5 ring-1 ring-hairline",
+              "absolute top-2 right-2 z-10 flex items-center gap-0.5 bg-card p-0.5 ring-1 ring-hairline",
               "opacity-0 transition-opacity duration-150 group-hover/plan:opacity-100 focus-within:opacity-100 has-[[data-state=open]]:opacity-100"
             )}
           >
@@ -80,7 +80,7 @@ function PlanLead({ state, folded, onFold }: { state: PlanState; folded: boolean
           type="button"
           aria-expanded={!folded}
           onClick={onFold}
-          className="pressable -mx-1 flex min-w-0 items-center gap-1.5 rounded px-1 hover:text-foreground"
+          className="pressable -mx-1 flex min-w-0 items-center gap-1.5 px-1 hover:text-foreground"
         >
           <ChevronDownIcon className={cn("size-3.5 shrink-0 transition-transform", folded && "-rotate-90")} />
           {lead}
@@ -92,8 +92,8 @@ function PlanLead({ state, folded, onFold }: { state: PlanState; folded: boolean
       {state.openBuild ? (
         <button
           type="button"
-          onClick={() => acp.activate(state.openBuild!)}
-          className="pressable rounded px-1 text-faint underline-offset-2 hover:text-foreground hover:underline"
+          onClick={() => acp.open(state.openBuild!)}
+          className="pressable px-1 text-faint underline-offset-2 hover:text-foreground hover:underline"
         >
           Open that session
         </button>

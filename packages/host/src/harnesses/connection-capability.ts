@@ -28,6 +28,12 @@ export interface ProviderConnectionCapability extends ProviderCapability {
   ): Promise<ProviderConnectionState>
   /** Fires when the state changes for any reason, including a sign-in from Settings. */
   onChange?(listener: () => void): () => void
+  /**
+   * The host is stopping: a check under way ends now and none starts. The
+   * host waits for the calls it's answering before it exits, so a check
+   * waiting on a process that never answers would keep it from stopping.
+   */
+  stop?(): void | Promise<void>
 }
 
 export async function describeConnection(

@@ -1,3 +1,4 @@
+import { stoppingSignal } from "../base/host-stopping.js"
 import { createWriteStream, existsSync } from "node:fs"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
@@ -8,6 +9,7 @@ import { z } from "zod"
 import type { Git } from "@mako/git"
 import { CORRELATION_HEADER, describeGatewayFailure } from "@mako/protocol/gateway-http"
 import type { ThreadFileHistory } from "@mako/protocol"
+import { QUIET_OTHERS_MAX, QuietRepositorySchema, type QuietRepository } from "@mako/protocol/handoff"
 import { MoveCarryRefSchema, MoveCheckpointSchema, type MoveCarry, type MoveCarryRef, type MoveCheckpoint } from "@mako/protocol/moves"
 import { RecordSessionSchema } from "@mako/protocol/records"
 import type { InstalledReading } from "@mako/sessions/record-writers"
@@ -59,6 +61,12 @@ export const MoveArrivalInputSchema = z.object({
    * its files outside its folder, its file history. Sent only to a machine whose `mako:move-ready` said it takes one.
    */
   carry: MoveCarryRefSchema.optional(),
+  /**
+   * A project folder's other repositories, each with its own checkpoint, as a Thread its device left as it went away
+   * names them (handoff v2's `QuietRepository`): applied after the first, before the mark, as a carry's are, cloned
+   * first where this machine lacks one. All or nothing with the first. Absent from a sender before it.
+   */
+  others: z.array(QuietRepositorySchema).max(QUIET_OTHERS_MAX).optional(),
 }).strict()
 export type MoveArrivalInput = z.infer<typeof MoveArrivalInputSchema>
 /** What a device sends: its IDs plain strings, which `MoveArrivalInputSchema` parses into the branded ones. */
@@ -207,7 +215,7 @@ function pullAhead(deps: Partial<Pick<MoveArrivalDeps, "records" | "stage" | "ah
 
 /** The sessions the Thread's records hold in the cloud. */
 async function remoteSessions(link: RecordsLink): Promise<ReceivingSession[]> {
-  const response = await fetchWith(`${link.base}/sessions`, { headers: { authorization: link.authorization }, signal: AbortSignal.timeout(30_000) })
+  const response = await fetchWith(`${link.base}/sessions`, { headers: { authorization: link.authorization }, signal: stoppingSignal(AbortSignal.timeout(30_000)) })
   if (!response.ok) throw new Error(`The Thread's sessions couldn't be listed (GET /sessions answered ${response.status})`)
   return z.object({ sessions: RecordSessionSchema.array() }).parse(await response.json()).sessions.map(({ harness, nativeId }) => ({ harness, nativeId }))
 }
@@ -238,7 +246,7 @@ export type MoveStage = { checkpointMs: number; recordsMs: number; staged: Array
 /** Reads the move's checkpoint from the cloud into `file`. */
 async function readCheckpoint(link: RecordsLink, sha256: string, file: string): Promise<void> {
   const sent = crypto.randomUUID()
-  const response = await fetchWith(`${link.base}/checkpoints/${sha256}`, { headers: { authorization: link.authorization, [CORRELATION_HEADER]: sent }, signal: AbortSignal.timeout(10 * 60_000) })
+  const response = await fetchWith(`${link.base}/checkpoints/${sha256}`, { headers: { authorization: link.authorization, [CORRELATION_HEADER]: sent }, signal: stoppingSignal(AbortSignal.timeout(10 * 60_000)) })
   if (!response.ok || !response.body) {
     // The gateway's own words and correlation ID, so a refusal leads to its log line.
     const problem = z.object({ title: z.string(), correlationId: z.string() }).partial().safeParse(await response.json().catch(() => undefined)).data
@@ -405,14 +413,14 @@ async function startFromClone(deps: ArrivalCheckoutDeps, folder: string, link: R
  */
 export async function applyArrivalCheckout(
   deps: ArrivalCheckoutDeps,
-  input: Pick<MoveArrivalInput, "move" | "folder" | "checkpoint" | "carry"> & { restoring?: true },
+  input: Pick<MoveArrivalInput, "move" | "folder" | "checkpoint" | "carry" | "others"> & { restoring?: true },
   link: RecordsLink,
   timed: <Value>(part: string, work: () => Promise<Value>) => Promise<Value> = (_part, work) => work()
 ): Promise<{ checkout: MoveArrival["checkout"]; carried?: MoveArrival["carried"]; start?: MoveCheckpoint }> {
   const gitDir = (await deps.git.output(input.folder, ["rev-parse", "--path-format=absolute", "--git-dir"])).trim()
   const mark = join(gitDir, `mako-move-${input.move}.json`)
   if (!input.checkpoint) {
-    if (input.carry) throw new Error("A carry comes with a checkout, and this arrival has none.")
+    if (input.carry || input.others?.length) throw new Error("A carry, or another repository's checkout, comes with a checkout, and this arrival has none.")
     const arrived = existsSync(mark) ? ArrivedMarkSchema.parse(JSON.parse(await readFile(mark, "utf8"))).start : undefined
     if (arrived) return { checkout: "arrived", start: arrived }
     const start = await timed("startCaptured", () => part("Its clone couldn't be taken as the Thread's start", () => startFromClone(deps, input.folder, link)))
@@ -442,11 +450,37 @@ export async function applyArrivalCheckout(
     // The carry before the mark: a repeat that finds the mark has had all of it, and never lays it over the agent's work.
     const carry = input.carry
     if (carry) carried = await timed("carry", () => part("What it carries couldn't be placed here", () => arriveCarry(deps, link, { ...input, checkpoint }, carry, gitDir)))
+    const others = input.others ?? []
+    if (others.length) await timed("others", () => part("The project's other repositories couldn't be laid out here", async () => {
+      await mkdir(deps.scratch, { recursive: true })
+      const scratch = await mkdtemp(join(deps.scratch, "others-"))
+      try {
+        await applyRepositories(deps, link, others, scratch)
+      } finally {
+        await rm(scratch, { recursive: true, force: true })
+      }
+    }))
     await writeFile(mark, JSON.stringify(ArrivedMarkSchema.parse({ move: input.move, sha256: checkpoint.sha256, at: Date.now() })))
     await rm(stagedMark, { force: true })
     checkout = unchanged ? "staged" : "applied"
   }
   return { checkout, ...carried && { carried } }
+}
+
+/**
+ * Other repositories of a project, each laid out at its path: cloned first where this machine lacks it, then its
+ * checkpoint read by its hash and applied over what's there. A carry's and a going-away's alike.
+ */
+async function applyRepositories(deps: ArrivalCheckoutDeps, link: RecordsLink, repositories: ReadonlyArray<Pick<QuietRepository, "path" | "checkpoint"> & { url?: string; branch?: string }>, scratch: string): Promise<void> {
+  for (const repository of repositories) {
+    if (!existsSync(repository.path)) {
+      if (!repository.url || !deps.clone) throw new Error(`${repository.path} isn't on this machine, and it can't be cloned here.`)
+      await deps.clone({ path: repository.path, url: repository.url, ...repository.branch && { branch: repository.branch } })
+    }
+    const bundle = join(scratch, `${repository.checkpoint.sha256}.bundle`)
+    await readCheckpoint(link, repository.checkpoint.sha256, bundle)
+    await applyMoveCheckpoint(deps.git, repository.path, bundle, repository.checkpoint, { replace: true })
+  }
 }
 
 /** Where a machine keeps the carry that arrived, in the first repository's Git folder: what its departure weighs against. */
@@ -470,15 +504,7 @@ async function arriveCarry(deps: ArrivalCheckoutDeps, link: RecordsLink, input: 
     const first = carry.repositories[0]
     // A move's carry names its checkout; a save's may be a turn older than its checkpoint, which governs the first.
     if (!input.restoring && first?.checkpoint.sha256 !== input.checkpoint.sha256) throw new Error("The carry names another checkout than the move's.")
-    for (const repository of carry.repositories.slice(1)) {
-      if (!existsSync(repository.path)) {
-        if (!repository.url || !deps.clone) throw new Error(`${repository.path} isn't on this machine, and it can't be cloned here.`)
-        await deps.clone({ path: repository.path, url: repository.url, ...repository.branch && { branch: repository.branch } })
-      }
-      const bundle = join(scratch, `${repository.checkpoint.sha256}.bundle`)
-      await readCheckpoint(link, repository.checkpoint.sha256, bundle)
-      await applyMoveCheckpoint(deps.git, repository.path, bundle, repository.checkpoint, { replace: true })
-    }
+    await applyRepositories(deps, link, carry.repositories.slice(1), scratch)
     const placed = await placeOutside(opened)
     if (placed.failed.length) hostWarn("moves", "files outside the Thread's folder couldn't be placed here", { move: input.move, paths: placed.failed.map((each) => `${each.path}: ${each.error}`).join("; ") })
     const history = opened.history ? (await deps.carryHistory?.(opened.history)) ?? false : false

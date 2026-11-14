@@ -34,10 +34,12 @@ try {
   catalog.startWatching()
   await delay(200)
 
-  // The first name makes session_index.jsonl; later ones append to it.
+  // The first name makes session_index.jsonl; later ones append to it. Each is heard by the catalog's look at its
+  // files, about a second apart, so twelve seconds is room for a slow runner while still before the 15 s reconcile
+  // that would find the name without hearing it.
   const titled = async (title) => {
     const at = Date.now()
-    while (!events.some((event) => event.type === "updated" && event.ref.title === title) && Date.now() - at < 6000) await delay(25)
+    while (!events.some((event) => event.type === "updated" && event.ref.title === title) && Date.now() - at < 12_000) await delay(25)
     return Date.now() - at
   }
   const rename = async (title) => {
@@ -46,9 +48,9 @@ try {
     return titled(title)
   }
   const named = await rename("Renamed in Codex")
-  assert.ok(named < 6000, `the first name reaches the row (${named} ms)`)
+  assert.ok(named < 12_000, `the first name reaches the row, heard rather than reconciled (${named} ms)`)
   const renamed = await rename("Renamed again")
-  assert.ok(renamed < 6000, `a later rename reaches the row (${renamed} ms)`)
+  assert.ok(renamed < 12_000, `a later rename reaches the row, heard rather than reconciled (${renamed} ms)`)
   const sweep = await new SessionCatalog([new CodexProvider(nativeStores, home)]).scan()
   assert.equal(sweep[0].title, "Renamed again")
   await catalog.stop()

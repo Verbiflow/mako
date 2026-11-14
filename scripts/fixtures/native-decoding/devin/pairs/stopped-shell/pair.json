@@ -1,39 +1,39 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.11.234"
+    "version": "3000.12.43"
   },
   "about": "Run `tail -f notes.md` in the shell. A long shell command the person stops while it runs.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#vigorous-month",
+      "path": ".local/share/devin/cli/sessions.db#spurious-jumper",
       "known": [
         {
           "side": "-",
           "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\"} canceled -> The release ships on Friday.\\nQA signs off on Thursday.",
-          "reason": "Devin 3000.11.205 records a call the person stopped with the result \"Canceled due to user interrupt\", not the output it had streamed before (the file's two lines, which live shows)."
+          "reason": "From 3000.12.43 Devin streams a stopped command's output before it cancels it, and tool_call_state keeps only its cancel notice, which the row's canceled status says: the record has no output, and Mako's merge keeps the output that streamed."
         },
         {
           "side": "+",
-          "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\"} canceled -> Canceled due to user interrupt",
-          "reason": "Devin 3000.11.205 records a call the person stopped with the result \"Canceled due to user interrupt\", not the output it had streamed before (the file's two lines, which live shows)."
+          "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\"} canceled -> ",
+          "reason": "The record's stopped call has no output of its own: Devin keeps only its cancel notice, which the row's canceled status already says."
         }
       ]
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/902cec75-8200-4fc4-9439-ad99e26e628d.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/cdb60535-1aac-4058-8081-2bd8f74754b2.db",
       "known": [
         {
           "side": "-",
           "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\"} canceled -> The release ships on Friday.\\nQA signs off on Thursday.",
-          "reason": "Devin 3000.11.205 records a call the person stopped with the result \"Canceled due to user interrupt\", not the output it had streamed before (the file's two lines, which live shows)."
+          "reason": "From 3000.12.43 Devin streams a stopped command's output before it cancels it, and tool_call_state keeps only its cancel notice, which the row's canceled status says: the record has no output, and Mako's merge keeps the output that streamed."
         },
         {
           "side": "+",
-          "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\"} canceled -> Canceled due to user interrupt",
-          "reason": "Devin 3000.11.205 records a call the person stopped with the result \"Canceled due to user interrupt\", not the output it had streamed before (the file's two lines, which live shows)."
+          "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\"} canceled -> ",
+          "reason": "The record's stopped call has no output of its own: Devin keeps only its cancel notice, which the row's canceled status already says."
         }
       ]
     }
@@ -43,12 +43,12 @@
       {
         "side": "-",
         "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\"} canceled -> The release ships on Friday.\\nQA signs off on Thursday.",
-        "reason": "Devin 3000.11.205 replays a call the person stopped, when the session loads again, with the result it recorded, \"Canceled due to user interrupt\", not the output it had streamed live (the file's two lines)."
+        "reason": "From 3000.12.43 Devin streams a stopped command's output before it cancels it, and tool_call_state keeps only its cancel notice, which the row's canceled status says: the record has no output, and Mako's merge keeps the output that streamed."
       },
       {
         "side": "+",
-        "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\"} canceled -> Canceled due to user interrupt",
-        "reason": "Devin 3000.11.205 replays a call the person stopped, when the session loads again, with the result it recorded, \"Canceled due to user interrupt\", not the output it had streamed live (the file's two lines)."
+        "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\"} canceled -> ",
+        "reason": "The record's stopped call has no output of its own: Devin keeps only its cancel notice, which the row's canceled status already says."
       }
     ]
   }

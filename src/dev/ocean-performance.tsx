@@ -13,7 +13,7 @@ export function PerformanceScene() {
   return (
     <main className="agent-surface relative isolate h-full p-8">
       <OceanScene animated />
-      <button data-perf-open className="pressable rounded-md bg-raised p-3" onClick={() => setOpen(true)}>Open settings</button>
+      <button data-perf-open className="pressable bg-raised p-3" onClick={() => setOpen(true)}>Open settings</button>
       <SettingsDialog open={open} section={section} onOpenChange={setOpen} onSectionChange={setSection} />
     </main>
   )

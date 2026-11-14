@@ -1,14 +1,19 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.11.234"
+    "version": "3000.12.43"
   },
   "about": "Say hello. The model fails with a server error, the harness retries once and the turn fails.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#splashy-gastonia",
+      "path": ".local/share/devin/cli/sessions.db#showy-paneer",
       "known": [
+        {
+          "side": "-",
+          "line": "user: Say hello.",
+          "reason": "Devin 3000.12.17 keeps nothing of a turn that failed before its model answered, its prompt included; Mako's history keeps it from the stream (DEVIN_VOCABULARY.storage.stream, scoped to the failed turn)."
+        },
         {
           "side": "-",
           "line": "note: Retried 2 times — Connection lost",
@@ -23,8 +28,13 @@
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/ce2abe64-934b-4488-b855-75da4d249b42.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/99e3ba65-d740-47fa-baae-470a4efd56bb.db",
       "known": [
+        {
+          "side": "-",
+          "line": "user: Say hello.",
+          "reason": "Devin 3000.12.17 keeps nothing of a turn that failed before its model answered, its prompt included; Mako's history keeps it from the stream (DEVIN_VOCABULARY.storage.stream, scoped to the failed turn)."
+        },
         {
           "side": "-",
           "line": "note: Retried 2 times — Connection lost",
@@ -37,19 +47,5 @@
         }
       ]
     }
-  ],
-  "replay": {
-    "known": [
-      {
-        "side": "-",
-        "line": "note: Retried 2 times — Connection lost",
-        "reason": "Mako sums up the retries it watched on the wire (Devin's `_cognition.ai/connection_retry` notices) in one marker; Devin 3000.11.205 keeps none of those notices in its stores and its replay sends none, so only the live drawing has the measure (RETRY_MARKERS, declared stream-only)."
-      },
-      {
-        "side": "-",
-        "line": "note: Turn failed",
-        "reason": "Devin 3000.11.205 keeps nothing of a turn its model failed: its store holds the prompt with no reply, error or stop, and its replay sends none. The failure reached its client only live, as `_cognition.ai/agent_stopped` with cause `error` once its retries ran out."
-      }
-    ]
-  }
+  ]
 }

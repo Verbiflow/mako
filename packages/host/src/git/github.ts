@@ -1,17 +1,18 @@
-import { execFile } from "node:child_process"
+import { hostCommand } from "../base/host-command.js"
+import { hostFetch } from "../base/host-stopping.js"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { promisify } from "node:util"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import { resolveExecutable } from "../base/executable.js"
 import { MACHINE_GITHUB_ENV } from "../contracts/machine-agent.js"
 import type { PullRequest, GitHubStatus, CheckSummary, ReviewSummary } from "../contracts/git-workspace-search.js"
 import type { PullRequestListing } from "../contracts/pull-request-search.js"
+import type { PullReading } from "../contracts/pull-waits.js"
 import type { WorktreeBranchPull, WorktreePull } from "../contracts/thread-worktrees.js"
 import { MERGE_METHODS, type MergeMethod } from "../contracts/git-actions.js"
 import type { Git } from "@mako/git"
 
-const run = promisify(execFile)
+const run = hostCommand
 
 /**
  * GitHub, through the `gh` CLI.
@@ -152,17 +153,22 @@ export async function githubStatus(cwd: string): Promise<GitHubStatus> {
 
 interface RawCheck {
   name?: string
+  /** The workflow its run is a job of: two workflows may name a job alike. */
+  workflowName?: string
   context?: string
   state?: string
   conclusion?: string
   status?: string
   detailsUrl?: string
   targetUrl?: string
+  completedAt?: string
+  startedAt?: string
 }
 
 interface RawReview {
   state?: string
   author?: GitHubUser
+  submittedAt?: string
 }
 
 interface RawPull {
@@ -211,12 +217,15 @@ function parseRawCheck(value: JsonValue): RawCheck | null {
   if (!isJsonObject(value)) return null
   return {
     name: stringValue(value.name),
+    workflowName: stringValue(value.workflowName),
     context: stringValue(value.context),
     state: stringValue(value.state),
     conclusion: stringValue(value.conclusion),
     status: stringValue(value.status),
     detailsUrl: stringValue(value.detailsUrl),
     targetUrl: stringValue(value.targetUrl),
+    completedAt: stringValue(value.completedAt),
+    startedAt: stringValue(value.startedAt),
   }
 }
 
@@ -227,6 +236,7 @@ function parseRawReview(value: JsonValue): RawReview | null {
   return {
     state: stringValue(value.state),
     author: author ?? undefined,
+    submittedAt: stringValue(value.submittedAt),
   }
 }
 
@@ -311,6 +321,29 @@ function parseJsonArray<TResult>(
  * downstream of here sees one shape, because "is CI green" should not require
  * the reader to know which system a repo happens to use.
  */
+/**
+ * A check's runs less those cancelled because another replaced them: a push twice or a retarget runs the same head
+ * again and GitHub cancels the older run, which failed nothing. A cancelled run goes when another run of the same check
+ * (its workflow and name) didn't end cancelled, or when a later cancelled one did; a lone cancelled run stays, and says
+ * so (`toCheck`). Every other run stays as GitHub lists it: gh's rollup doesn't say which event started a run, so a
+ * workflow run on both push and pull_request reads as two runs of one check, and neither's outcome may hide the other's.
+ */
+export function withoutSuperseded<Check extends { name?: string; workflowName?: string; context?: string; conclusion?: string; startedAt?: string; completedAt?: string }>(checks: readonly Check[]): Check[] {
+  const key = (check: Check) => `${check.workflowName ?? ""}\0${check.name ?? check.context ?? ""}`
+  const cancelled = (check: Check) => check.conclusion?.toUpperCase() === "CANCELLED"
+  const at = (check: Check) => timeOf(check.startedAt ?? check.completedAt) ?? Number.NEGATIVE_INFINITY
+  const groups = new Map<string, Check[]>()
+  for (const check of checks) groups.set(key(check), [...(groups.get(key(check)) ?? []), check])
+  const kept = new Set<Check>()
+  for (const runs of groups.values()) {
+    const others = runs.filter((run) => !cancelled(run))
+    // Of cancelled runs alone, the latest started (a tie, the one listed later) says the check's cancelled.
+    const latest = runs.reduce<Check | undefined>((held, run) => (cancelled(run) && (!held || at(run) >= at(held)) ? run : held), undefined)
+    for (const run of others.length ? others : latest ? [latest] : []) kept.add(run)
+  }
+  return checks.filter((check) => kept.has(check))
+}
+
 function toCheck(raw: RawCheck): CheckSummary {
   const name = raw.name ?? raw.context ?? "check"
   const url = raw.detailsUrl ?? raw.targetUrl
@@ -328,14 +361,11 @@ function toCheck(raw: RawCheck): CheckSummary {
   if (verdict === "SUCCESS" || verdict === "NEUTRAL" || verdict === "SKIPPED") {
     return { name, state: "passed", url }
   }
-  if (
-    verdict === "FAILURE" ||
-    verdict === "ERROR" ||
-    verdict === "TIMED_OUT" ||
-    verdict === "CANCELLED"
-  ) {
+  if (verdict === "FAILURE" || verdict === "ERROR" || verdict === "TIMED_OUT") {
     return { name, state: "failed", url }
   }
+  // A cancelled run nothing replaced (`withoutSuperseded` drops one that was): it didn't fail, and didn't pass.
+  if (verdict === "CANCELLED") return { name, state: "cancelled", url }
   return { name, state: "unknown", url }
 }
 
@@ -385,7 +415,7 @@ function toPull(raw: RawPull): PullRequest {
             : "none",
     author: raw.author?.login,
     updatedAt: raw.updatedAt ?? raw.createdAt,
-    checks: (raw.statusCheckRollup ?? []).map(toCheck),
+    checks: withoutSuperseded(raw.statusCheckRollup ?? []).map(toCheck),
     reviews: toReviews(raw.latestReviews),
   }
 }
@@ -414,6 +444,62 @@ export async function listPulls(
 
 /** Runs `gh` with arguments in a folder and returns what it printed; a test hands in its own. */
 export type GitHubRunner = (cwd: string, args: string[]) => Promise<string>
+
+/** `gh api`, for what this file has no reading of its own. */
+export function githubApi(cwd: string, path: string): Promise<string> {
+  return gh(cwd, ["api", path])
+}
+
+/** A pull request a Fin waits on, as the watch asks for it: by repository and number, or by number in the Fin's folder. */
+export interface PullTarget {
+  repository?: string
+  number: number
+  cwd: string
+}
+
+const READING_FIELDS = "state,url,headRefOid,author,statusCheckRollup,latestReviews"
+
+function timeOf(text: string | undefined): number | undefined {
+  const at = text ? Date.parse(text) : Number.NaN
+  return Number.isFinite(at) ? at : undefined
+}
+
+/**
+ * One pull request's state, checks and reviews for the watch (`PullReading`), with the same `gh pr view` and the same
+ * normalising of checks and reviews `pull_request_status` reads with. Null when `gh` can't say.
+ */
+export async function readPull(target: PullTarget, runner: GitHubRunner = gh): Promise<PullReading | null> {
+  const args = ["pr", "view", String(target.number), ...(target.repository ? ["--repo", target.repository] : []), "--json", READING_FIELDS]
+  let value: JsonValue
+  try {
+    value = JSON.parse(await runner(target.cwd, args))
+  } catch {
+    return null
+  }
+  if (!isJsonObject(value)) return null
+  const state = stringValue(value.state)
+  const url = stringValue(value.url)
+  if (!state || !url) return null
+  const checks = withoutSuperseded(parseJsonArray(value.statusCheckRollup, parseRawCheck) ?? [])
+  const reviews = parseJsonArray(value.latestReviews, parseRawReview) ?? []
+  const author = parseOptionalUser(value.author)?.login
+  const head = stringValue(value.headRefOid)
+  return {
+    state: state === "MERGED" ? "merged" : state === "CLOSED" ? "closed" : "open",
+    url,
+    ...(head && /^[a-f0-9]{40,64}$/.test(head) && { head }),
+    ...(author && { author }),
+    checks: checks.map((raw) => {
+      const check = toCheck(raw)
+      const at = timeOf(raw.completedAt ?? raw.startedAt)
+      return { name: check.name, state: check.state, ...(at !== undefined && { at }) }
+    }),
+    reviews: reviews.map((raw) => {
+      const at = timeOf(raw.submittedAt)
+      return { ...toReviews([raw])[0]!, ...(at !== undefined && { at }) }
+    }),
+  }
+}
 
 /** What `PullRequestSearch` asks GitHub: the folder's repository, a search of its pull requests, and one by number. */
 export interface PullRequestSource {
@@ -505,7 +591,7 @@ export async function listBranchPulls(cwd: string): Promise<WorktreeBranchPull[]
         const head = stringValue(entry.headRefOid)
         const state = stringValue(entry.state)
         if (number === undefined || title === undefined || url === undefined || !branch || !head || !state) continue
-        const checks = (parseJsonArray(entry.statusCheckRollup, parseRawCheck) ?? []).map(toCheck)
+        const checks = withoutSuperseded(parseJsonArray(entry.statusCheckRollup, parseRawCheck) ?? []).map(toCheck)
         pulls.push({
           number,
           title,
@@ -515,7 +601,8 @@ export async function listBranchPulls(cwd: string): Promise<WorktreeBranchPull[]
           state: state === "MERGED" ? "merged" : state === "CLOSED" ? "closed" : booleanValue(entry.isDraft) ? "draft" : "open",
           checks: checks.length === 0
             ? null
-            : checks.some((check) => check.state === "failed")
+            // A lone cancelled check didn't pass either: the list's mark has no word of its own for it.
+            : checks.some((check) => check.state === "failed" || check.state === "cancelled")
               ? "failed"
               : checks.some((check) => check.state === "running")
                 ? "running"
@@ -632,14 +719,19 @@ export interface FailedRun {
 export async function failedRuns(cwd: string, branch: string, commit: string): Promise<FailedRun[]> {
   const runs = await ghJson(cwd, ["run", "list", "--branch", branch, "--limit", "30", "--json", "databaseId,headSha,conclusion,workflowName,url"], (value) => {
     if (!Array.isArray(value)) return null
+    const runs = value.filter(isJsonObject).filter((entry) => stringValue(entry.headSha) === commit)
+    // A run cancelled because another of its workflow ran this commit again failed nothing: its checks say so too
+    // (`withoutSuperseded`). gh lists runs newest first, so of cancelled runs alone the first is the latest.
+    const replaced = (entry: JsonObject, index: number) =>
+      stringValue(entry.conclusion) === "cancelled" &&
+      runs.some((other, at) => other !== entry && stringValue(other.workflowName) === stringValue(entry.workflowName) && (stringValue(other.conclusion) !== "cancelled" || at < index))
     const failed: FailedRun[] = []
-    for (const entry of value) {
-      if (!isJsonObject(entry) || stringValue(entry.headSha) !== commit) continue
+    runs.forEach((entry, index) => {
       const conclusion = stringValue(entry.conclusion)
       const id = numberValue(entry.databaseId)
-      if (id === undefined || !conclusion || !["failure", "timed_out", "cancelled", "startup_failure"].includes(conclusion)) continue
+      if (id === undefined || !conclusion || !["failure", "timed_out", "cancelled", "startup_failure"].includes(conclusion) || replaced(entry, index)) return
       failed.push({ id, workflow: stringValue(entry.workflowName) ?? "workflow", url: stringValue(entry.url) ?? "" })
-    }
+    })
     return failed
   })
   return runs ?? []
@@ -726,7 +818,7 @@ export async function repoAvatar(
       await gh(cwd, ["api", `repos/${repo}`, "--jq", ".owner.avatar_url"])
     ).trim()
     if (!url.startsWith("https://")) return undefined
-    const response = await fetch(`${url}${url.includes("?") ? "&" : "?"}s=128`)
+    const response = await hostFetch(`${url}${url.includes("?") ? "&" : "?"}s=128`)
     if (!response.ok) return undefined
     const bytes = Buffer.from(await response.arrayBuffer())
     // A logo is a few kilobytes; anything much larger is not one.
@@ -757,7 +849,7 @@ export async function userAvatar(cwd: string, dir: string): Promise<string | und
     }
     const url = (await gh(cwd, ["api", "user", "--jq", ".avatar_url"])).trim()
     if (!url.startsWith("https://")) return undefined
-    const response = await fetch(`${url}${url.includes("?") ? "&" : "?"}s=128`)
+    const response = await hostFetch(`${url}${url.includes("?") ? "&" : "?"}s=128`)
     if (!response.ok) return undefined
     const bytes = Buffer.from(await response.arrayBuffer())
     // An avatar is a few kilobytes; anything much larger is not one.

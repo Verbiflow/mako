@@ -594,7 +594,7 @@ this repair. The prior failed installer remains a separate release gate below.
 
 ## Linux implementation and durable browser recovery
 
-2026-09-22: source work is in `/Users/kashyab/mako-control-rollout`; native source
+2026-09-22: source work is in `~/mako-control-rollout`; native source
 is `/private/tmp/mako-control-driver-platform` on the pinned upstream base.
 [Implementation and evidence](audits/2026-09-22/linux-control-implementation/README.md).
 
@@ -690,7 +690,7 @@ Historical 0.3.0 release record. Candidate `89c04a9f9814da4b` is superseded by
 `f3562d64e9ea18dc` above; disposable-profile forced reload is now proven on both
 platforms. Regular Aside upgrade and concurrent typing remain unproven.
 
-2026-09-22: implementation is in `/Users/kashyab/mako-control-rollout`.
+2026-09-22: implementation is in `~/mako-control-rollout`.
 The public API now has strict semantic locators and target-specific capabilities;
 help can return one topic. Locators resolve fresh refs and dispatch once. The
 public native/page integration test passed a repeated-label form using the new
@@ -832,7 +832,7 @@ owns provider/runtime work; the remote-control map (since removed with the
 Slack relay) owned remote channels. Neither is a Local Control implementation ledger.
 
 Writer: current Local Control refactor conversation, working in
-`/Users/kashyab/makomono/mako`. Existing unrelated changes are present. Keep
+the main checkout. Existing unrelated changes are present. Keep
 changes scoped and inspect overlapping edits before migrating consumers.
 
 ## Evidence and its limits

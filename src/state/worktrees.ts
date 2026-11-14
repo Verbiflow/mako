@@ -160,8 +160,6 @@ export async function refreshWorktrees(): Promise<void> {
   if (mine === reads) worktreesStore.set(stateOf(worktrees))
 }
 
-const SUMMARIES_EVERY_MS = 30_000
-
 /** How each of Mako's worktrees' branches stands, by path, for the rail's marks. */
 export const worktreeSummariesStore = createStore<{ byPath: Readonly<Record<string, WorktreeSummary>> }>({ byPath: {} })
 export const useWorktreeSummaries = createHook(worktreeSummariesStore)
@@ -172,20 +170,22 @@ export async function refreshWorktreeSummaries(): Promise<void> {
   if (!hasBridge()) return
   const mine = ++summaryReads
   const summaries = await getMako().worktreeSummaries()
-  if (mine === summaryReads) worktreeSummariesStore.set({ byPath: Object.fromEntries(summaries.map((summary) => [summary.path, summary])) })
+  if (mine === summaryReads) applyWorktreeSummaries(summaries)
+}
+
+/** The host's word on every worktree's summary: an answer, or its `worktree-summaries` event when one changed. */
+export function applyWorktreeSummaries(summaries: readonly WorktreeSummary[]): void {
+  summaryReads++
+  worktreeSummariesStore.set({ byPath: Object.fromEntries(summaries.map((summary) => [summary.path, summary])) })
 }
 
 /**
- * Keeps the summaries current while the rail shows: when the window comes
- * back, when the worktrees change, and every half minute while it's
- * visible. The host asks GitHub at most once a minute.
+ * Asks for the summaries when the rail shows, when the window comes back and when the worktrees change; the host says
+ * each change after that itself (`worktree-summaries`), read on each worktree's own events, so no window polls.
  */
 export function useKeepWorktreeSummaries(): void {
   useEffect(() => {
     const refresh = () => void refreshWorktreeSummaries().catch(() => {})
-    const tick = () => {
-      if (document.visibilityState === "visible") refresh()
-    }
     refresh()
     let listed = worktreesStore.get().worktrees
     const unsubscribe = worktreesStore.subscribe(() => {
@@ -194,14 +194,10 @@ export function useKeepWorktreeSummaries(): void {
       listed = worktrees
       refresh()
     })
-    const timer = window.setInterval(tick, SUMMARIES_EVERY_MS)
     window.addEventListener("focus", refresh)
-    document.addEventListener("visibilitychange", tick)
     return () => {
       unsubscribe()
-      window.clearInterval(timer)
       window.removeEventListener("focus", refresh)
-      document.removeEventListener("visibilitychange", tick)
     }
   }, [])
 }

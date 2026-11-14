@@ -80,6 +80,7 @@ const second = await profile("mako-dev", {
   "google.enc": { text: "google@dev", age: 10 },
   "openai.enc": { text: "openai@dev", age: 900 },
 })
+const googleTime = (await stat(join(second, "google.enc"))).mtimeMs
 assert.deepEqual(await migrateUtilityModels(second, shared), {
   moved: [],
   replaced: ["google"],
@@ -90,8 +91,7 @@ assert.equal(await readFile(join(shared, "openai.enc"), "utf8"), "openai@mako")
 await assert.rejects(stat(second), /ENOENT/, "an emptied profile directory is removed")
 
 // The move keeps the file's own time, so the order hosts start in does not decide.
-const googleTime = (await stat(join(shared, "google.enc"))).mtimeMs
-assert.ok(Date.now() - googleTime > 5_000 && Date.now() - googleTime < 60_000)
+assert.equal((await stat(join(shared, "google.enc"))).mtimeMs, googleTime)
 
 // Nothing to do: no legacy directory, or the store is the legacy directory.
 assert.deepEqual(await migrateUtilityModels(join(root, "never"), shared), { moved: [], replaced: [], dropped: [] })

@@ -7,6 +7,6 @@ export const section = {
   title: "Account",
   group: "Application",
   icon: CircleUserRoundIcon,
-  keywords: ["sign in", "sign out", "log in", "mako account", "devices", "cloud", "github", "google"],
+  keywords: ["sign in", "sign out", "log in", "mako account", "browsers", "cloud", "github", "google"],
   Component: AccountSection,
 } as const satisfies SettingsSection

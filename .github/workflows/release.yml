@@ -21,7 +21,7 @@ jobs:
           node-version: 24
           cache: npm
 
-      - run: npm ci
+      - uses: ./.github/actions/install-dependencies
       - run: npm run lint
       - run: npm run typecheck:all
       - run: npm test --workspace @mako/sessions
@@ -112,7 +112,7 @@ jobs:
           > from that copied app. Install it only if you trust this repository.
 
           ```bash
-          curl -fsSL https://github.com/Verbiflow/mako/releases/latest/download/install-macos.sh | bash
+          curl --retry 5 --retry-max-time 180 -fsSLo install-macos.sh https://github.com/Verbiflow/mako/releases/latest/download/install-macos.sh && bash install-macos.sh
           ```
 
           To inspect the installer before running it, download `install-macos.sh`

@@ -13,5 +13,12 @@ export const DISABLED_HOST_WARNINGS = [
   },
 ] as const
 
+/**
+ * How far the host's heap grows past what's live before it's collected. Left to itself V8 lets it run on: with a limit
+ * of 4 GB and no pressure, a host with 130 MB of conversations sat at 2.7 GB, then held its loop 4.7 s. This leaves the
+ * limit alone, so a burst can still reach it and can't run the host out of memory, as a lower limit could.
+ */
+export const HOST_HEAP_GROWTH = "--heap-growing-percent=30"
+
 /** Node's options for the host process, before its program. */
-export const HOST_NODE_OPTIONS: readonly string[] = DISABLED_HOST_WARNINGS.map(({ code }) => `--disable-warning=${code}`)
+export const HOST_NODE_OPTIONS: readonly string[] = [...DISABLED_HOST_WARNINGS.map(({ code }) => `--disable-warning=${code}`), HOST_HEAP_GROWTH]

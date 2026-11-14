@@ -1,3 +1,4 @@
+import { hostFetch } from "../base/host-stopping.js"
 import { encodePortHead, problem, type MediaSender, type MediaStreamId, type PortHandler, type PortRequest } from "@mako/protocol"
 import { hostLog, hostWarn } from "../base/host-log.js"
 
@@ -97,7 +98,7 @@ export class PortRelay implements PortHandler {
           return sender.end(problem("not-found", "No Thread's app serves that port here", correlationId, "not-applied", { status: 404 }))
         const init: RequestInit = { method: request.method, headers, redirect: "manual", signal: serving.abort.signal }
         if (request.body !== undefined) init.body = Buffer.from(request.body, "base64")
-        response = await fetch(`http://127.0.0.1:${request.to.port}${request.path}`, init)
+        response = await hostFetch(`http://127.0.0.1:${request.to.port}${request.path}`, init)
       }
     } catch (error) {
       if (serving.abort.signal.aborted) return

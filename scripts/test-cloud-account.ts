@@ -9,6 +9,7 @@ import type { AccountEvent } from "@mako/protocol/account-events"
 import assert from "node:assert/strict"
 import { createHash, randomUUID } from "node:crypto"
 import { once } from "node:events"
+import { existsSync } from "node:fs"
 import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises"
 import { createServer, type IncomingMessage } from "node:http"
 import { connect, createServer as createTcpServer, Socket } from "node:net"
@@ -17,6 +18,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { after, test } from "node:test"
 import diagnosticsChannel from "node:diagnostics_channel"
+import { setTimeout as delay } from "node:timers/promises"
 import { Pool, fetch as undiciFetch } from "undici"
 import { WebSocketServer, type WebSocket as ServerSocket } from "ws"
 import { z } from "zod"
@@ -25,6 +27,8 @@ import {
   PONG,
   PROTOCOL_VERSION,
   Payload,
+  QUIET_OTHERS_LINK_VERSION,
+  QUIET_PROJECT_LINK_VERSION,
   QUIET_VERSION,
   type RuntimeFrame,
   SUBPROTOCOL,
@@ -39,6 +43,7 @@ import {
   SILENT_WHILE_WORKING_MS,
 } from "@mako/protocol"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
+import { QuietNoteSchema, type QuietNote } from "@mako/protocol/handoff"
 import { MOVE_REASON_MAX, MoveHandOverRequestSchema, MoveRefuseRequestSchema } from "@mako/protocol/moves"
 import { HandoffSchema, type Handoff } from "@mako/host/contracts/thread-execution"
 import { CloudAccounts, type CloudAccountOptions, type CloudRuntime } from "@mako/host/usage/cloud-account"
@@ -56,8 +61,10 @@ import type { Machine } from "@mako/host/base/machine"
 import type { CloudSignInsState } from "@mako/host/contracts/cloud-sign-ins"
 import type { CloudAccount, CloudAccountState, CloudBrowserSession, CloudDevice } from "@mako/host/contracts/cloud-account"
 import type { DiagnosticEvents } from "@mako/host/contracts/telemetry"
+import type { CommitAuthor } from "@mako/host/contracts/github-authorship"
 import { aesSealer, fileSecrets, wrappedKey, type Secrets } from "@mako/host/base/secrets"
 import type { SecretEncryption } from "@mako/host/base/secure-storage"
+import { ranOut } from "./lib/ran-out.ts"
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-cloud-account-"))
 after(() => rm(scratch, { recursive: true, force: true }))
@@ -77,7 +84,7 @@ const recordPath = (name: string) => join(vault, "mako-sign-in", ...`${name}.jso
 type FakeDevice = CloudDevice & { credential: string; removed: boolean; successor?: string | undefined; retired: string[] }
 
 /** The gateway's identity API, in memory. */
-async function fakeCloud() {
+async function fakeCloud({ runtimeEnrolled }: { runtimeEnrolled?: Promise<void> } = {}) {
   const codes = new Map<string, { challenge: string; device: Pick<CloudDevice, "name" | "platform" | "appVersion"> }>()
   const devices = new Map<string, FakeDevice>()
   /** Every live socket: whose device, and whether it's the account's connection or the device's runtime's link. */
@@ -85,7 +92,7 @@ async function fakeCloud() {
   const calls: string[] = []
   const correlations: (string | string[] | undefined)[] = []
   /** What each ask to make a Thread sent. */
-  const threads: Array<{ threadId: string; prepare?: boolean }> = []
+  const threads: Array<{ threadId: string; prepare?: boolean; standby?: boolean; standsByFor?: string }> = []
   /** Repositories asked for project bases. */
   const bases: unknown[] = []
   /** What each move's claim and refusal carried, as the cloud took them. */
@@ -102,12 +109,17 @@ async function fakeCloud() {
     encodeGatewayClientFrame({ type: "event", event: { v: PROTOCOL_VERSION, stream: `account:${account.id}`, seq: event.seq, at: event.at, event: Payload.encoded(event.text) } })
   /** The credential each refresh came with, in order. */
   const refreshedWith: string[] = []
+  let authorship: CommitAuthor = "you"
+  let authorshipAnswers: number | undefined
+  let authorshipUnreadable = false
   const account = { id: "u1", name: "Ada Lovelace", email: "ada@example.com", image: null, entitlements: ["cloud"] }
   /** The gateway a runtime's link reaches: the protocol's fake, which answers renewals with the same check. */
   const gateway = createFakeGateway({ renew: (value) => (verify(value) ? Math.floor(Date.now() / 1000) + options.tokenSeconds : undefined) })
   const enrolments: Extract<RuntimeFrame, { type: "enroll" }>[] = []
   /** Why each runtime link said it was going quiet, in order. */
   const quiets: string[] = []
+  /** Each going-away note a device sent, as it came. */
+  const notes: unknown[] = []
   const token = (deviceId: string) => {
     const iat = Math.floor(Date.now() / 1000) + options.clockSkewSeconds
     const exp = iat + options.tokenSeconds
@@ -196,6 +208,17 @@ async function fakeCloud() {
       return send(204, "")
     }
     if (request.method === "GET" && url.pathname === `/v1/accounts/${account.id}/sign-ins`) return send(200, JSON.stringify({ signIns: [], kept: [] }))
+    // Who the account's cloud commits are authored as, answered as the gateway answers it, with no token saved.
+    if (url.pathname === `/v1/accounts/${account.id}/github-authorship`) {
+      if (authorshipAnswers !== undefined) return send(authorshipAnswers, JSON.stringify({ title: "No such route" }))
+      if (request.method === "PUT") {
+        const checked = z.object({ as: z.enum(["you", "mako"]) }).strict().safeParse(await json(request))
+        if (!checked.success) return send(400, JSON.stringify({ title: "The request body isn't valid" }))
+        authorship = checked.data.as
+        if (authorshipUnreadable) return send(200, "not the answer")
+      }
+      return send(200, JSON.stringify({ as: authorship, pullRequests: authorship === "mako" ? "mako" : "mako-fallback", login: null }))
+    }
     if (request.method === "POST" && url.pathname === "/v1/bases") {
       const { repositories } = z.object({ repositories: z.array(z.object({ url: z.string(), branch: z.string().optional() })) }).parse(await json(request))
       bases.push(...repositories)
@@ -206,6 +229,11 @@ async function fakeCloud() {
       // A private repository the cloud's GitHub App isn't on, and one whose link would lead anywhere but GitHub.
       const standing = (url: string) => ({ state: "waiting", message: "could not read Username", reason: "no-access", install: url.endsWith("/shop") ? "https://github.com/apps/mako/installations/new" : "https://elsewhere.example/install" })
       return send(200, JSON.stringify({ bases: repositories.map((repository) => ({ repository, standing: standing(repository.url) })) }))
+    }
+    if (request.method === "POST" && /^\/v1\/devices\/[\w-]+\/quiet$/.test(url.pathname)) {
+      const body = await json(request)
+      notes.push(body)
+      return send(200, JSON.stringify({ note: body.note, threads: body.threads.map((each: { thread: string }) => ({ thread: each.thread, accepted: true })) }))
     }
     if (request.method === "POST" && url.pathname === "/v1/threads") {
       const body = await json(request)
@@ -305,7 +333,10 @@ async function fakeCloud() {
         link.close()
       })
       void (async () => {
-        for await (const frame of link.frames()) if (ws.readyState === ws.OPEN) ws.send(encodeGatewayFrame(frame))
+        for await (const frame of link.frames()) {
+          if (frame.type === "enrolled" && runtimeEnrolled) await runtimeEnrolled
+          if (ws.readyState === ws.OPEN) ws.send(encodeGatewayFrame(frame))
+        }
         if (ws.readyState === ws.OPEN) ws.close(1000)
       })()
     })
@@ -339,6 +370,8 @@ async function fakeCloud() {
     server.close()
   })
   return {
+    answerAuthorship: (status: number) => { authorshipAnswers = status },
+    loseAuthorshipAnswers: (lost: boolean) => { authorshipUnreadable = lost },
     url,
     moves,
     browsers,
@@ -381,6 +414,7 @@ async function fakeCloud() {
     gateway,
     enrolments,
     quiets,
+    notes,
     /** The account connections; `runtimes` are the devices' runtime links. */
     sockets: () => [...sockets].filter(([, held]) => held.kind === "account").map(([socket]) => socket),
     runtimes: () => [...sockets].filter(([, held]) => held.kind === "runtime").map(([socket]) => socket),
@@ -497,11 +531,14 @@ test("after a sleep, a call to the cloud never waits on a pooled connection the 
   const stalled = mac.accounts.signIns().then(() => "answered", () => "dropped")
   assert.equal(await Promise.race([stalled, new Promise((resolve) => setTimeout(() => resolve("waiting"), 1_500))]), "waiting", "on the dropped connection, a call waits")
   const woke = performance.now()
-  mac.accounts.wake()
-  await mac.accounts.signIns()
+  // What the call waited for rather than the runner's clock: one sent on the stalled connection waits out a probe.
+  const { waits: wokeWaits } = await ranOut(async () => {
+    mac.accounts.wake()
+    await mac.accounts.signIns()
+  })
   const ms = performance.now() - woke
   console.log(`  a call to the cloud right after waking: ${ms.toFixed(0)} ms`)
-  assert.ok(ms < 1_000, `answered on a new connection in ${ms.toFixed(0)} ms`)
+  assert.ok(wokeWaits.every((wait) => wait < 1_000), `answered on a new connection in ${ms.toFixed(0)} ms; ran out: ${wokeWaits.join(", ")}`)
   assert.equal(await stalled, "dropped", "the call stranded before the wake ends rather than hanging")
   // Its log line says how far it got, which the cloud can't: it went out, on a connection kept from earlier calls, and
   // nothing came back.
@@ -512,7 +549,9 @@ test("after a sleep, a call to the cloud never waits on a pooled connection the 
 test("a call that fails says whether it ever left this Mac, and on which connection", async () => {
   // A server that takes connections and never answers, behind a pool of one connection: the first call goes out on a
   // new connection and hears nothing; the second never goes out at all.
-  const silent = createTcpServer((socket) => socket.on("data", () => undefined))
+  let heard = (): void => undefined
+  const wentOut = new Promise<void>((resolve) => { heard = resolve })
+  const silent = createTcpServer((socket) => socket.on("data", () => heard()))
   silent.listen(0, "127.0.0.1")
   await once(silent, "listening")
   const sockets = new Set<Socket>()
@@ -526,10 +565,10 @@ test("a call that fails says whether it ever left this Mac, and on which connect
   const pool = new Pool(new URL(url).origin, { connections: 1 })
   after(() => pool.destroy())
   const traces = new RequestTraces("x-test-correlation")
-  const call = async (id: string) => {
+  const call = async (id: string, signal: AbortSignal) => {
     const trace = traces.follow(id)
     try {
-      await undiciFetch(url, { method: "HEAD", headers: { "x-test-correlation": id }, dispatcher: pool, signal: AbortSignal.timeout(400) })
+      await undiciFetch(url, { method: "HEAD", headers: { "x-test-correlation": id }, dispatcher: pool, signal })
       return "answered"
     } catch {
       return trace.describe()
@@ -537,9 +576,18 @@ test("a call that fails says whether it ever left this Mac, and on which connect
       trace.end()
     }
   }
-  const [first, second] = await Promise.all([call(randomUUID()), call(randomUUID())])
-  assert.match(first, /^went out after \d+ ms on a new connection; no answer in \d+ ms$/)
-  assert.match(second, /^waited \d+ ms and never went out: no connection took it$/)
+  // Each stops in turn, not on a timer of its own: the first's abort frees the connection, and a second still waiting
+  // goes out on a new one.
+  const [stopFirst, stopSecond] = [new AbortController(), new AbortController()]
+  const first = call(randomUUID(), stopFirst.signal)
+  const second = call(randomUUID(), stopSecond.signal)
+  await Promise.race([wentOut, first])
+  // Long enough for the second to have gone, had a connection been free.
+  await delay(50)
+  stopSecond.abort()
+  assert.match(await second, /^waited \d+ ms and never went out: no connection took it$/)
+  stopFirst.abort()
+  assert.match(await first, /^went out after \d+ ms on a new connection; no answer in \d+ ms$/)
   // A call no trace follows is left alone, and nothing listens once none is on its way.
   assert.equal(diagnosticsChannel.channel("undici:request:create").hasSubscribers, false)
 })
@@ -652,11 +700,13 @@ test("a dropped connection comes back by itself; an expired token reconnects at 
   await mac.until(connected, "reconnected after a drop")
 
   const refreshes = cloud.calls.filter((call) => call === "POST /v1/devices/token").length
-  const started = Date.now()
   const before = cloud.sockets()[0]
-  cloud.closeAll(4001)
-  while (cloud.sockets().length !== 1 || cloud.sockets()[0] === before) await sleep(10)
-  assert.ok(Date.now() - started < 500, "no backoff for an expired token")
+  const { waits: expiredWaits } = await ranOut(async () => {
+    cloud.closeAll(4001)
+    while (cloud.sockets().length !== 1 || cloud.sockets()[0] === before) await sleep(10)
+  })
+  // A backoff's step is a second or more; the test's own look every 10 ms is the rest.
+  assert.ok(expiredWaits.every((ms) => ms < 1_000), `no backoff for an expired token: ${expiredWaits.join(", ")}`)
   assert.ok(connected(mac.accounts.account().state), "and no flicker to offline while it reconnects")
   assert.equal(cloud.calls.filter((call) => call === "POST /v1/devices/token").length, refreshes + 1, "after exactly one refresh")
 })
@@ -866,7 +916,8 @@ test("a sign-out the cloud didn't hear is kept sealed and finished, here or afte
   await again.accounts.ready()
   await waitFor(() => device.removed, "the device removed once the cloud answers")
   assert.deepEqual(again.accounts.account().state, { status: "signed-out" }, "not said to be finishing")
-  await assert.rejects(stat(recordPath(`${secretName}.signing-out`)), "and the credential it kept is gone")
+  // It goes once the cloud has answered, after the cloud has removed the device.
+  await waitFor(() => !existsSync(recordPath(`${secretName}.signing-out`)), "the credential it kept gone")
   again.accounts.close()
 })
 
@@ -899,6 +950,34 @@ test("the browsers signed in to the account are listed, and signed out one at a 
   assert.equal(await mac.accounts.endBrowserSessions(), 2)
   assert.deepEqual(await mac.accounts.browserSessions(), [])
   assert.equal(mac.accounts.account().state.status, "signed-in", "this Mac stays signed in")
+})
+
+test("who cloud commits are authored as is read and chosen through the account, As you until chosen otherwise", async () => {
+  const cloud = await fakeCloud()
+  const mac = await signedIn(cloud, { secretName: "cloud/authorship" })
+  assert.deepEqual(await mac.accounts.githubAuthorship(), { as: "you", pullRequests: "mako-fallback", login: null }, "As you by default; without a token the App opens pull requests")
+  assert.deepEqual(await mac.accounts.saveGitHubAuthorship("mako"), { as: "mako", pullRequests: "mako", login: null })
+  assert.deepEqual(await mac.accounts.githubAuthorship(), { as: "mako", pullRequests: "mako", login: null }, "kept by the account")
+  assert.deepEqual(await mac.accounts.saveGitHubAuthorship("you"), { as: "you", pullRequests: "mako-fallback", login: null })
+  assert.deepEqual(cloud.calls.filter((call) => call.endsWith("/github-authorship")), ["GET", "PUT", "GET", "PUT"].map((method) => `${method} /v1/accounts/u1/github-authorship`))
+})
+
+test("a save that landed with its answer lost fails, and reading the account says it landed", async () => {
+  const cloud = await fakeCloud()
+  const mac = await signedIn(cloud, { secretName: "cloud/authorship-unanswered" })
+  cloud.loseAuthorshipAnswers(true)
+  await assert.rejects(mac.accounts.saveGitHubAuthorship("mako"))
+  cloud.loseAuthorshipAnswers(false)
+  assert.deepEqual(await mac.accounts.githubAuthorship(), { as: "mako", pullRequests: "mako", login: null })
+})
+
+test("a cloud without who commits are authored as says so with no error, and any other failure stays one", async () => {
+  const cloud = await fakeCloud()
+  const mac = await signedIn(cloud, { secretName: "cloud/authorship-missing" })
+  cloud.answerAuthorship(404)
+  assert.equal(await mac.accounts.githubAuthorship(), null, "a gateway before the route")
+  cloud.answerAuthorship(500)
+  await assert.rejects(mac.accounts.githubAuthorship(), "a gateway that has it and failed isn't one without it")
 })
 
 test("a move handed over goes as JSON carries its handoff, and its refusal within what the cloud keeps, so neither is lost", async () => {
@@ -995,6 +1074,14 @@ test("a cloud Thread made ahead is asked for as one, reported apart from a start
   assert.deepEqual(await mac.accounts.createThread("t-fedcba9876543210", repository), { ready: false })
   assert.deepEqual(cloud.threads.map((made) => made.prepare === true), [true, true, false], "only a Thread made ahead says so")
   assert.deepEqual(reported.filter((call) => call.route.startsWith("threads.")).map((call) => call.route), ["threads.prepare", "threads.prepare", "threads.create"])
+  // One kept ready for a Thread of this Mac's names that Thread, so the account can trust it as its standby.
+  const thread = "0b6f1f2a-3c4d-4e5f-8a9b-1c2d3e4f5a6b"
+  await mac.accounts.createThread("t-00112233aabbccdd", repository, { standby: true, folder: "/Users/ada/worktrees/fix", standsByFor: thread })
+  assert.equal(cloud.threads.at(-1)?.standsByFor, thread)
+  assert.equal(cloud.threads.at(-1)?.standby, true)
+  // Never on a Thread that doesn't stand by.
+  await mac.accounts.createThread("t-99887766aabbccdd", repository, { standsByFor: thread })
+  assert.equal(cloud.threads.at(-1)?.standsByFor, undefined)
 })
 
 test("project bases are asked for with the repositories only, reported as their own route", async () => {
@@ -1105,9 +1192,12 @@ test("a runtime link silent while it sends what another device watches is asked 
   z.object({ _socket: z.instanceof(Socket) }).loose().parse(socket)._socket.pause()
   const stalled = Date.now()
   await sleep(SILENT_WHILE_WORKING_MS + 100)
-  mac.accounts.liveSent()
-  await waitFor(() => cloud.enrolments.length === 2, "replaced by a new link")
-  assert.ok(Date.now() - stalled < SILENT_WHILE_WORKING_MS + PROBE_ANSWER_MS + 1_500, `found in ${Date.now() - stalled} ms`)
+  const { waits: stallWaits } = await ranOut(async () => {
+    mac.accounts.liveSent()
+    await waitFor(() => cloud.enrolments.length === 2, "replaced by a new link")
+  })
+  // Found by its probe going unanswered (1.5 s), and by no longer wait: what ran out, not the runner's clock.
+  assert.deepEqual(stallWaits.filter((ms) => ms >= 1_000), [1_500], `found in ${Date.now() - stalled} ms, by its probe`)
 })
 
 test("a device removed while its runtime is connected signs out, and its runtime stops", async () => {
@@ -1124,9 +1214,17 @@ test("a device removed while its runtime is connected signs out, and its runtime
 })
 
 test("a Mac going to sleep says so on its runtime's link first, which stays closed until the wake; shutting down, quitting and signing out say it too", async () => {
-  const cloud = await fakeCloud()
-  const mac = await signedIn(cloud, { runtime: laptop })
+  // Receiving enroll at the gateway is not the host having received enrolled.
+  // Hold that answer to prove the test waits for the host's own readiness.
+  const enrolled = Promise.withResolvers<void>()
+  after(() => enrolled.resolve())
+  const cloud = await fakeCloud({ runtimeEnrolled: enrolled.promise })
+  let linked = 0
+  const mac = await signedIn(cloud, { runtime: laptop, onRuntimeLinked: () => { linked += 1 } })
   while (cloud.enrolments.length === 0) await sleep(10)
+  assert.equal(linked, 0, "the gateway's answer has not reached the host")
+  enrolled.resolve()
+  await waitFor(() => linked === 1, "this Mac's runtime finished enrollment")
   mac.accounts.leaving("sleep")
   await waitFor(() => cloud.runtimes().length === 0, "the runtime's link closed at once")
   assert.deepEqual(cloud.quiets, ["sleep"], "said before it closed, so the cloud takes the device as quiet now")
@@ -1135,20 +1233,19 @@ test("a Mac going to sleep says so on its runtime's link first, which stays clos
   assert.equal(cloud.enrolments.length, 1, "not opened again before the wake")
   assert.ok(connected(mac.accounts.account().state), "and nothing shown for it")
   mac.accounts.wake()
-  await waitFor(() => cloud.enrolments.length === 2 && cloud.runtimes().length === 1, "back at the wake")
+  await waitFor(() => linked === 2 && cloud.enrolments.length === 2 && cloud.runtimes().length === 1, "back at the wake")
 
   mac.accounts.leaving("quit")
   await waitFor(() => cloud.runtimes().length === 0, "shutting down")
   mac.accounts.wake()
-  await waitFor(() => cloud.enrolments.length === 3 && cloud.runtimes().length === 1, "back")
-  await sleep(50)
+  await waitFor(() => linked === 3 && cloud.enrolments.length === 3 && cloud.runtimes().length === 1, "back")
   await mac.accounts.signOut()
   await waitFor(() => cloud.quiets.length === 3, "signing out")
   assert.deepEqual(cloud.quiets, ["sleep", "quit", "sign-out"])
 
-  const other = await signedIn(cloud, { runtime: laptop })
-  await waitFor(() => cloud.runtimes().length === 1, "the other Mac's runtime")
-  await sleep(50)
+  let otherLinked = 0
+  const other = await signedIn(cloud, { runtime: laptop, onRuntimeLinked: () => { otherLinked += 1 } })
+  await waitFor(() => otherLinked === 1 && cloud.runtimes().length === 1, "the other Mac's runtime")
   other.accounts.close()
   await waitFor(() => cloud.quiets.length === 4, "quitting Mako")
   assert.equal(cloud.quiets.at(-1), "quit")
@@ -1160,14 +1257,119 @@ test("a Mac on a gateway older than the frame closes its runtime's link for the 
     serve: (link, { runtimeId, credential, threads }) =>
       serveRuntime(link, { runtimeId, build: "test", credential, threads, versions: { min: 1, max: QUIET_VERSION - 1 }, handle: async (operation) => ({ v: PROTOCOL_VERSION, id: operation.id, ok: true }) }),
   }
-  const mac = await signedIn(cloud, { runtime: older })
-  while (cloud.enrolments.length === 0) await sleep(10)
-  await sleep(50)
+  let linked = 0
+  const mac = await signedIn(cloud, { runtime: older, onRuntimeLinked: () => { linked += 1 } })
+  await waitFor(() => linked === 1, "the older gateway's runtime finished enrollment")
   mac.accounts.leaving("sleep")
   await waitFor(() => cloud.runtimes().length === 0, "closed cleanly, which any gateway hears")
   assert.deepEqual(cloud.quiets, [], "no frame it doesn't know")
   mac.accounts.wake()
-  await waitFor(() => cloud.enrolments.length === 2, "back at the wake")
+  await waitFor(() => linked === 2 && cloud.enrolments.length === 2, "back at the wake")
+})
+
+test("a quiet note names a project folder's project worktree only to a gateway whose link agreed it", async () => {
+  const note = (project: string): QuietNote => ({ note: randomUUID(), reason: "sleep", at: 1, threads: [{ thread: "t-device", project, sessions: [{ session: randomUUID(), generation: 1 }] }] })
+  const project = "/Users/ada/.mako/worktrees/shop/both-sides"
+  const cloud = await fakeCloud()
+  /** The last note the gateway took, as its schema reads it. */
+  const last = () => QuietNoteSchema.parse(cloud.notes.at(-1)).threads[0]!
+  // Before any runtime link has agreed a version, nothing says the gateway takes it.
+  const unlinked = await signedIn(cloud)
+  await unlinked.accounts.quiet(note(project))
+  assert.equal(cloud.notes.length, 1)
+  assert.equal(last().project, undefined, "never sent blind")
+  unlinked.accounts.close()
+  // A gateway whose link agrees one before it: left out, and the rest of the note goes as it was.
+  const before: CloudRuntime = {
+    serve: (link, { runtimeId, credential, threads }) =>
+      serveRuntime(link, { runtimeId, build: "test", credential, threads, versions: { min: 1, max: QUIET_PROJECT_LINK_VERSION - 1 }, handle: async (operation) => ({ v: PROTOCOL_VERSION, id: operation.id, ok: true }) }),
+  }
+  let linked = 0
+  const older = await signedIn(cloud, { runtime: before, onRuntimeLinked: () => { linked += 1 } })
+  await waitFor(() => linked === 1, "the older link enrolled")
+  const sent = note(project)
+  const recorded: QuietNote[] = []
+  await older.accounts.quiet(sent, async (each) => void recorded.push(each))
+  const { project: _left, ...rest } = sent.threads[0]!
+  assert.deepEqual(cloud.notes.at(-1), { ...sent, threads: [rest] }, "only the project left out")
+  assert.deepEqual(recorded, [cloud.notes.at(-1)], "what a going-away records is the note as it went")
+  older.accounts.close()
+  // A gateway whose link agreed it: named, and still once the link has dropped (a Mac going away often has none).
+  let agreed = 0
+  const mac = await signedIn(cloud, { runtime: laptop, onRuntimeLinked: () => { agreed += 1 } })
+  await waitFor(() => agreed === 1, "the link enrolled")
+  await mac.accounts.quiet(note(project))
+  assert.equal(last().project, project)
+  mac.accounts.leaving("sleep")
+  await waitFor(() => cloud.runtimes().length === 0, "the link closed for the sleep")
+  await mac.accounts.quiet(note(project))
+  assert.equal(last().project, project, "the version its link last agreed")
+  mac.accounts.close()
+})
+
+test("a quiet note names a project folder's other repositories only to a gateway whose link agreed them", async () => {
+  const project = "/Users/ada/.mako/worktrees/shop/both-sides"
+  const checkpoint = { version: 1 as const, sha256: "e".repeat(64), bytes: 300, head: "f".repeat(40), branch: "mako/both-sides", index: "1".repeat(40), work: "2".repeat(40) }
+  const others = [{ path: `${project}/web`, url: "https://github.com/acme/web", branch: "mako/both-sides", checkpoint }]
+  const projectFrom = "/Users/ada/shop"
+  const note = (): QuietNote => ({ note: randomUUID(), reason: "sleep", at: 1, threads: [{ thread: "t-device", project, projectFrom, others, sessions: [{ session: randomUUID(), generation: 1 }] }] })
+  const cloud = await fakeCloud()
+  const last = () => QuietNoteSchema.parse(cloud.notes.at(-1)).threads[0]!
+  // A gateway whose link agrees the project's version but not the others': the project goes, the others don't.
+  const projectOnly: CloudRuntime = {
+    serve: (link, { runtimeId, credential, threads }) =>
+      serveRuntime(link, { runtimeId, build: "test", credential, threads, versions: { min: 1, max: QUIET_OTHERS_LINK_VERSION - 1 }, handle: async (operation) => ({ v: PROTOCOL_VERSION, id: operation.id, ok: true }) }),
+  }
+  let linked = 0
+  const older = await signedIn(cloud, { runtime: projectOnly, onRuntimeLinked: () => { linked += 1 } })
+  await waitFor(() => linked === 1, "the older link enrolled")
+  await older.accounts.quiet(note())
+  assert.equal(last().project, project, "the project, which it takes")
+  assert.equal(last().others, undefined, "never the others sent blind")
+  assert.equal(last().projectFrom, undefined, "nor the folder the project mirrors")
+  older.accounts.close()
+  // A gateway whose link agreed them: both named.
+  let agreed = 0
+  const mac = await signedIn(cloud, { runtime: laptop, onRuntimeLinked: () => { agreed += 1 } })
+  await waitFor(() => agreed === 1, "the link enrolled")
+  await mac.accounts.quiet(note())
+  assert.equal(last().project, project)
+  assert.deepEqual(last().others, others)
+  assert.equal(last().projectFrom, projectFrom)
+  mac.accounts.close()
+})
+
+test("a going-away records the very note that goes, though the link agreed a lower version after the note was made", async () => {
+  const project = "/Users/ada/.mako/worktrees/shop/both-sides"
+  const checkpoint = { version: 1 as const, sha256: "e".repeat(64), bytes: 300, head: "f".repeat(40), branch: "mako/both-sides", index: "1".repeat(40), work: "2".repeat(40) }
+  const note: QuietNote = { note: randomUUID(), reason: "sleep", at: 1, threads: [{ thread: "t-device", project, projectFrom: "/Users/ada/shop", others: [{ path: `${project}/web`, url: "https://github.com/acme/web", checkpoint }], sessions: [{ session: randomUUID(), generation: 1 }] }] }
+  const cloud = await fakeCloud()
+  // A gateway that agrees 26, then, on the link's next enrolment, 25: as one rolled back between the note and its send.
+  let max = QUIET_OTHERS_LINK_VERSION
+  const rolling: CloudRuntime = {
+    serve: (link, { runtimeId, credential, threads }) =>
+      serveRuntime(link, { runtimeId, build: "test", credential, threads, versions: { min: 1, max }, handle: async (operation) => ({ v: PROTOCOL_VERSION, id: operation.id, ok: true }) }),
+  }
+  let linked = 0
+  const mac = await signedIn(cloud, { runtime: rolling, onRuntimeLinked: () => { linked += 1 } })
+  await waitFor(() => linked === 1, "enrolled at 26")
+  // The note is made while the link agrees 26 (readiness names the others); the link then agrees 25 before it goes.
+  max = QUIET_OTHERS_LINK_VERSION - 1
+  mac.accounts.leaving("sleep")
+  await waitFor(() => cloud.runtimes().length === 0, "the link closed")
+  mac.accounts.wake()
+  await waitFor(() => linked === 2 && cloud.runtimes().length === 1, "enrolled again, at 25")
+  const recorded: QuietNote[] = []
+  await mac.accounts.quiet(note, async (each) => void recorded.push(each))
+  const went = QuietNoteSchema.parse(cloud.notes.at(-1))
+  assert.equal(went.threads[0]!.others, undefined, "the others left out, as a gateway at 25 takes it")
+  assert.equal(went.threads[0]!.project, project, "the project, which 25 takes")
+  assert.deepEqual(recorded, [cloud.notes.at(-1)], "recorded is exactly what went: no others the record would claim")
+  // A record that can't be kept sends nothing: the way back would have no word of what went.
+  const before = cloud.notes.length
+  await assert.rejects(mac.accounts.quiet(note, async () => { throw new Error("disk full") }), /disk full/)
+  assert.equal(cloud.notes.length, before, "nothing sent")
+  mac.accounts.close()
 })
 
 /** Another device's call to `runtimeId` through its session, as that device. */

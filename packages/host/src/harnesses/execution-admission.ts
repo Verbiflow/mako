@@ -10,9 +10,9 @@ import { preparePrompt, preparePromptAsync } from "./prompt-dispatch.js"
 import type { RuntimeFloor } from "./runtime-floor.js"
 
 export interface AccountAdmission {
-  /** Holds the account for `binding` until the launch's `hold` is released. */
-  resolve(provider: string, binding: string): Promise<AccountLaunch>
-  assertCurrent(provider: string, launch: AccountLaunch): Promise<void>
+  /** Holds the account for `binding` until the launch's `hold` is released; `pinned` runs it on that account instead of the selected one. */
+  resolve(provider: string, binding: string, pinned?: string): Promise<AccountLaunch>
+  assertCurrent(provider: string, launch: AccountLaunch, pinned?: string): Promise<void>
   /** The email listed for the launch account, compared with what the native process reports. */
   principal(provider: string, launch: AccountLaunch): Promise<string | undefined>
   mismatch(principal: string, expected: string): Error
@@ -23,8 +23,8 @@ export interface AccountAdmission {
 /** Admission as the host's accounts decide it. */
 export function accountAdmission(accounts: HarnessAccounts): AccountAdmission {
   return {
-    resolve: (provider, binding) => accounts.launch(provider, process.env, { holder: { kind: "session", binding } }),
-    assertCurrent: (provider, launch) => accounts.assertLaunch(provider, launch),
+    resolve: (provider, binding, pinned) => accounts.launch(provider, process.env, { holder: { kind: "session", binding }, ...(pinned !== undefined && { account: pinned }) }),
+    assertCurrent: (provider, launch, pinned) => accounts.assertLaunch(provider, launch, pinned),
     principal: async (provider, launch) => launch.selection.kind === "unavailable" ? undefined : accounts.principal(provider, launch.account.name),
     mismatch: (principal, expected) => new ExecutionIdentityMismatch(principal, expected),
     observeUsage: (provider, launch, amend) => accounts.usage.observe(provider, launch.account.name, amend),
@@ -32,6 +32,8 @@ export function accountAdmission(accounts: HarnessAccounts): AccountAdmission {
 }
 
 interface Owner {
+  /** The account the conversation runs on instead of the selected one, read at launch and before each input. */
+  pinned?: () => string | undefined
   opening: Promise<LiveSessionState>
   launch?: AccountLaunch
   closing?: Promise<void>
@@ -78,17 +80,17 @@ export function withExecutionAdmission(driver: ProviderLiveDriver, admission: Ac
     if (owners.has(id)) return Promise.reject(new Error("This binding already has an execution owner."))
     const emit = (event: LiveDriverEvent) =>
       options.emit(event.type === "live-session" && owners.get(id) === owner ? { ...event, session: confirmed(owner, event.session) } : event)
-    const owner: Owner = { opening: Promise.resolve().then(() => traceProviderLaunch(driver.provider, id, async (trace) => {
+    const owner: Owner = { pinned: options.pinnedAccount, opening: Promise.resolve().then(() => traceProviderLaunch(driver.provider, id, async (trace) => {
       // An installation already read as below its harness's oldest version starts nothing.
       const tooOld = floor && await trace.step("runtime-discovery", () => floor.before(driver.provider))
       if (tooOld) throw new Error(tooOld)
-      const launch = await trace.step("account", () => admission.resolve(driver.provider, id))
+      const launch = await trace.step("account", () => admission.resolve(driver.provider, id, options.pinnedAccount?.()))
       // Kept before any check can throw, so a superseded open still releases its hold.
       owner.launch = launch
       current(id, owner)
       if (driver.launchEnvironment.kind === "unavailable" && launch.selection.kind === "selectable" && launch.selection.name !== null)
         throw new Error("This agent cannot apply the selected account environment. No native session was started.")
-      await admission.assertCurrent(driver.provider, launch)
+      await admission.assertCurrent(driver.provider, launch, options.pinnedAccount?.())
       current(id, owner)
       owner.expected = admission.principal(driver.provider, launch).catch(() => undefined).then(email => {
         owner.known = { email }
@@ -132,7 +134,7 @@ export function withExecutionAdmission(driver: ProviderLiveDriver, admission: Ac
         throw new Error(reported)
       }
       try {
-        await admission.assertCurrent(driver.provider, launch)
+        await admission.assertCurrent(driver.provider, launch, options.pinnedAccount?.())
         current(id, owner)
       } catch (error) {
         if (!owner.closing) {
@@ -183,7 +185,7 @@ export function withExecutionAdmission(driver: ProviderLiveDriver, admission: Ac
     await owner.opening
     current(id, owner)
     if (!owner.launch) throw new Error("The agent launch account is unavailable. Reconnect before sending.")
-    await admission.assertCurrent(driver.provider, owner.launch)
+    await admission.assertCurrent(driver.provider, owner.launch, owner.pinned?.())
     const expected = await owner.expected
     current(id, owner)
     const confirmation = owner.identity && confirmAccount(owner.identity, expected)

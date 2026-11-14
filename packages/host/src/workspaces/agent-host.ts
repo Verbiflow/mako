@@ -4,6 +4,7 @@ import { homedir } from "node:os"
 import { ensureChatsRoot } from "../threads/index.js"
 import { type GitTab, WorkspaceGit } from "../git/index.js"
 import { searchWorkspace } from "./search.js"
+import type { FileFindResults, FileFolders, FileFoldersOptions, FileGrepOptions, FileGrepResults } from "../contracts/file-index.js"
 import { WorkspaceFiles } from "./files.js"
 import type { ArtifactPreviews } from "./artifact-previews.js"
 import type { ElsewhereFolder } from "./elsewhere.js"
@@ -139,6 +140,7 @@ export class AgentHost implements GitTab {
         if (this.workspaceWatcherGeneration !== generation) return
         let moves = false
         for (const path of paths) if (this.workspaceGit.noteChange(path)) moves = true
+        this.workspaceFiles.index.noteChanges(paths)
         // A background tab only notes what changed; coming forward reads Git once.
         if (moves && this.foreground) this.scheduleGitRefresh(generation)
       },
@@ -148,11 +150,13 @@ export class AgentHost implements GitTab {
       () => {
         if (this.workspaceWatcherGeneration !== generation) return
         this.workspaceGit.noteChange(undefined)
+        this.workspaceFiles.index.noteChanges(undefined)
         if (this.foreground) this.scheduleGitRefresh(generation)
       }
     ) ?? null
     if (!this.workspaceWatcher) return
     this.workspaceGit.trackChanges(true)
+    this.workspaceFiles.index.feed(true)
     this.gitDirWatch = watchOutsideGitDir(this.workspace, () => {
       if (this.workspaceWatcherGeneration !== generation) return
       this.workspaceGit.noteChange(undefined, "this checkout's index or HEAD changed in its Git folder")
@@ -174,6 +178,7 @@ export class AgentHost implements GitTab {
     this.backgroundStop = null
     this.workspaceWatcherGeneration += 1
     this.workspaceGit.trackChanges(false)
+    this.workspaceFiles.index.feed(false)
     this.workspaceWatcher?.close()
     this.workspaceWatcher = null
     this.gitDirWatch?.close()
@@ -332,6 +337,19 @@ export class AgentHost implements GitTab {
     return this.workspaceFiles.list()
   }
 
+  /** The Files view's folders, as the index holds them now. */
+  filesFolders(paths: string[], options?: FileFoldersOptions): Promise<FileFolders> {
+    return this.workspaceFiles.index.folders(paths, options)
+  }
+
+  filesFind(query: string, limit?: number): Promise<FileFindResults> {
+    return this.workspaceFiles.index.find(query, limit)
+  }
+
+  filesGrep(query: string, options?: FileGrepOptions): Promise<FileGrepResults> {
+    return this.workspaceFiles.index.grep(query, options)
+  }
+
   async stageFile(name: string, base64: string): Promise<StagedFile> {
     return this.workspaceFiles.stage(this.attachments, name, base64)
   }
@@ -484,6 +502,7 @@ export class AgentHost implements GitTab {
 
   async dispose(): Promise<void> {
     this.stopWorkspaceWatcher()
+    this.workspaceFiles.index.close()
   }
 }
 

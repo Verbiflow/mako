@@ -21,6 +21,11 @@ export const section = {
     "restart",
     "update",
     "interrupted",
+    "sleep",
+    "awake",
+    "lid",
+    "battery",
+    "power",
   ],
   Component: ConversationSection,
 } as const satisfies SettingsSection

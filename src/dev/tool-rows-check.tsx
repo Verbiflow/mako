@@ -21,6 +21,7 @@ import { installBuiltins } from "@/desk/builtins"
 import { listedFacts, type WebSession } from "@/web-client/threads"
 import { fixtureHarnesses } from "./harness-fixtures"
 import { installMockBridge } from "./mock-bridge"
+import { wordsBlocks } from "./tool-words-fixture"
 
 /**
  * A Cursor turn's file edits streaming as the host's batches bring them, for `test-tool-rows-ui.mjs`: each call opens
@@ -33,7 +34,9 @@ import { installMockBridge } from "./mock-bridge"
 const search = new URLSearchParams(location.search)
 const surface = search.get("surface") === "phone" ? "phone" : "desk"
 const theme = search.get("theme") === "light" ? "light" : "dark"
-const TURNS = Number(search.get("turns") ?? 12)
+// `?rows=words` draws one turn of every tool of Mako's own server and the row facts (`tool-words-fixture.ts`) instead.
+const words = search.get("rows") === "words"
+const TURNS = Number(search.get("turns") ?? (words ? 0 : 12))
 await (surface === "phone" ? import("../web-client/style.css") : import("../index.css"))
 applyTheme(theme)
 
@@ -42,7 +45,7 @@ installBuiltins()
 const conversation = "eeeeeeee-5555-4555-8555-555555555555"
 const cwd = "/fixture/mako"
 // Notes outside the conversation's folder read with their folder, as a sibling checkout's do.
-const NOTES = "/srv/agents/thread-data/folder-f6c41fc1/workers"
+const NOTES = "/srv/agents/thread-data/folder-0a1b2c3d/workers"
 const FILES = [
   `${NOTES}/orch-design.md`,
   `${NOTES}/inline-preview.md`,
@@ -73,9 +76,14 @@ for (let index = 0; index < TURNS; index += 1) {
   blocks.push({ type: "text", text: `Part ${index} of the notes is up to date.` })
 }
 const live = requestId(TURNS + 1)
-requests.push({ id: live, text: "Write the design notes, then the preview's", attachments: [], status: "completed" })
-blocks.push({ type: "user", text: "Write the design notes, then the preview's", requestId: live })
-blocks.push({ type: "text", id: "lead", text: "Writing both notes now, one after the other." })
+if (words) {
+  requests.push({ id: live, text: "Start the Fins, open the PR and check the app", attachments: [], status: "completed" })
+  blocks.push(...wordsBlocks(live))
+} else {
+  requests.push({ id: live, text: "Write the design notes, then the preview's", attachments: [], status: "completed" })
+  blocks.push({ type: "user", text: "Write the design notes, then the preview's", requestId: live })
+  blocks.push({ type: "text", id: "lead", text: "Writing both notes now, one after the other." })
+}
 
 const snapshot: LiveSnapshot = {
   session: {
@@ -131,16 +139,22 @@ const check = {
     opened += calls
     const step = () => {
       const next = phases.shift()
-      if (!next) return
+      if (!next) {
+        playing = undefined
+        return
+      }
       batch(next)
       playing = setTimeout(step, everyMs)
     }
     step()
-    return phases.length * everyMs
+  },
+  get streaming() {
+    return playing !== undefined
   },
   /** Settles the newest call and ends the turn's answer. */
   settle() {
     clearTimeout(playing)
+    playing = undefined
     batch([
       { kind: "tool-update", id: `live-${opened - 1}`, status: "completed", output: "ok" },
       { kind: "text", id: "done", text: "Both notes are written." },

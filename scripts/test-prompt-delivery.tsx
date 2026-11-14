@@ -2,16 +2,22 @@ import assert from "node:assert/strict"
 import { renderToStaticMarkup } from "react-dom/server"
 import { applyLiveSnapshot, applyLiveBatch } from "../src/state/live-recovery"
 import { acpStore, activeLiveAcp } from "../src/state/acp-state"
+import { readingLive, receivingLive } from "../src/state/live-door"
+import { failAroundTheDoor } from "./live-door-watch"
 import { stagePrompt, removePendingPrompt } from "../src/state/acp-pending"
 import { beginStart } from "../src/state/acp-start"
 import { autoContinuePending, continueTurnPrompt, promptDelivery, recoverableRequests, makoPrompts, savedMakoPrompt, turnStopLabel, turnStops, turnWords } from "../src/state/prompt-delivery"
 import { autoContinueCandidate, crashedChildTurn, savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { classifyProviderFailure } from "@mako/host/contracts/provider-failure"
+import { failureAfterRetry, GIVE_UP_MS, nextRetry } from "@mako/host/contracts/delivery-retry"
+import { FailureRow } from "../src/components/transcript/failure-row"
 import { PromptQueue } from "../src/components/composer/prompt-queue"
 import { projectLive } from "../src/state/live-projection"
 import { agentActivity } from "../src/state/agent-activity"
 import type { LiveSnapshot, LiveRequest } from "../src/lib/types"
 import type { Entry } from "@mako/sessions/entries"
+// What the window's own code writes of a conversation goes through the door (`receiveLive`), or the suite fails.
+failAroundTheDoor(acpStore, receivingLive, readingLive)
 
 const id = "11111111-1111-4111-8111-111111111111"
 const request: LiveRequest = {
@@ -123,27 +129,28 @@ assert.equal(
 )
 // Epochs: a batch numbered by another host generation is not merged onto
 // state built by this one, whatever its revision says; a snapshot from the
-// new epoch replaces the state outright and later batches follow it.
+// new epoch replaces the state outright and later batches follow it. Host
+// starts as a host names them: a generation one past the last on one data root.
 acpStore.set({ activeKey: id })
-applyLiveSnapshot({ ...snapshot, revision: 3, epoch: "host-a", requests: [{ ...request, status: "dispatching" }] })
-assert.equal(current().epoch, "host-a")
+applyLiveSnapshot({ ...snapshot, revision: 3, epoch: "g1.promptroot.a", requests: [{ ...request, status: "dispatching" }] })
+assert.equal(current().epoch, "g1.promptroot.a")
 applyLiveBatch({
   id,
   revision: 4,
-  epoch: "host-b",
+  epoch: "g2.promptroot.b",
   updates: [{ kind: "text", text: "from another host" }],
 })
 assert.equal(current().revision, 3, "a batch from another epoch is ignored, not merged")
-assert.equal(current().epoch, "host-a")
+assert.equal(current().epoch, "g1.promptroot.a")
 applyLiveSnapshot({
   ...snapshot,
   revision: 1,
-  epoch: "host-b",
+  epoch: "g2.promptroot.b",
   requests: [{ ...request, status: "uncertain", interruption: { reason: "host-crashed", at: 5 } }],
 })
-assert.equal(current().epoch, "host-b", "a snapshot from a new epoch replaces the state even at a lower revision")
+assert.equal(current().epoch, "g2.promptroot.b", "a snapshot from a new epoch replaces the state even at a lower revision")
 assert.equal(current().revision, 1)
-applyLiveBatch({ id, revision: 2, epoch: "host-b", updates: [{ kind: "text", text: "continues" }] })
+applyLiveBatch({ id, revision: 2, epoch: "g2.promptroot.b", updates: [{ kind: "text", text: "continues" }] })
 assert.equal(current().revision, 2, "the new epoch's own batches apply")
 applyLiveBatch({ id, revision: 3, updates: [{ kind: "text", text: "unstamped" }] })
 assert.equal(current().revision, 3, "an unstamped batch (an older host) still applies by revision")
@@ -250,6 +257,7 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   const crashedFin = crashedAt("22222222-2222-4222-8222-000000000001", now - 1_000)
   assert.equal(crashedChildTurn([crashedFin], now), crashedFin, "a Fin's turn a crash cut short is continued")
   assert.equal(crashedChildTurn([crashedFin, { ...request, status: "held" }], now), crashedFin, "a message the crash held behind it doesn't hide it")
+  assert.equal(crashedChildTurn([{ ...crashedFin, pause: "stop" }], now), undefined, "a turn a Stop reached before the crash stays stopped")
   assert.equal(crashedChildTurn([quitAt], now), undefined, "Mako's exit is the restart setting's, not this")
   assert.equal(crashedChildTurn([crashedFin, { ...continuation, continues: { requestId: crashedFin.id, reason: "host-crashed", auto: true } }], now), undefined, "a turn already continued is not continued again")
   const crashes = [crashedFin]
@@ -427,6 +435,8 @@ console.log(
 
 // A resumed submission can be represented by a transfer rather than a prompt
 // request. Its receipt (including refusal) must retire only its optimistic row.
+// Each case on a host start of its own, as a host names them: a generation one past the last on one data root.
+let promptStarts = 2
 for (const kind of ["queued", "preparing", "failed", "uncertain"] as const) {
   const control = {
     activeBindingId: id, bindings: [], merges: [], transfers: [{
@@ -437,12 +447,13 @@ for (const kind of ["queued", "preparing", "failed", "uncertain"] as const) {
     }],
   }
   for (const viaBatch of [false, true]) {
-    applyLiveSnapshot({ ...snapshot, revision: 1000, epoch: `${kind}-${viaBatch}`, control: undefined })
+    const epoch = `g${(promptStarts += 1)}.promptroot.${kind}`
+    applyLiveSnapshot({ ...snapshot, revision: 1000, epoch, control: undefined })
     stagePrompt(id, request)
     const other = { ...request, id: "33333333-3333-4333-8333-333333333333" }
     stagePrompt(id, other)
-    if (viaBatch) applyLiveBatch({ id, revision: 1001, epoch: `${kind}-${viaBatch}`, updates: [], control })
-    else applyLiveSnapshot({ ...snapshot, revision: 1001, epoch: `${kind}-${viaBatch}`, control })
+    if (viaBatch) applyLiveBatch({ id, revision: 1001, epoch, updates: [], control })
+    else applyLiveSnapshot({ ...snapshot, revision: 1001, epoch, control })
     assert.deepEqual(current().pendingPrompts?.map((prompt) => prompt.id), [other.id])
     assert.equal(current().control?.transfers[0]?.state.kind, kind)
     assert.ok(!current().projection?.messages.some((message) => message.id === request.id))
@@ -478,3 +489,61 @@ console.log("PASS: native coverage reaches renderer through snapshot and coverag
   assert.deepEqual(agentActivity({ blocks: [], waiting: false, connecting: false, preparing: true, checkingOwner: true }), { kind: "connecting", label: "Checking with your account" })
 }
 console.log("PASS: a message waiting for this Mac to hear its account is the one being sent, and says so once it's a wait")
+
+// The same gateway result used by the scratch host is a visible automatic wait, with no sign-in or Resume action.
+{
+  const outageId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+  const error = "Failed to authenticate. API Error: 403 <html><title>Temporary access check</title></html>"
+  const failureEvidence = { kind: "provider-unavailable", source: "credential-current" } as const
+  assert.equal(classifyProviderFailure(error, undefined, failureEvidence).kind, "provider-unavailable")
+  const retry = nextRetry(undefined, "provider-unavailable", error, Date.now())!
+  const failed: LiveRequest = { ...request, status: "failed", failure: "provider-unavailable", failureEvidence, error, retry }
+  const continuation: LiveRequest = { ...second, status: "held", text: continueTurnPrompt("connection-lost", "mako"), retry, continues: { requestId: failed.id, reason: "connection-lost", auto: true } }
+  acpStore.set({ activeKey: outageId })
+  applyLiveSnapshot({ ...snapshot, revision: 1, session: { ...snapshot.session, id: outageId }, requests: [failed, continuation] })
+  const pending = renderToStaticMarkup(<PromptQueue />)
+  assert.match(pending, /data-queue-retry="provider-unavailable"/)
+  assert.match(pending, /Sends again by itself at/)
+  assert.match(pending, /service failed on its side/)
+  const ended = renderToStaticMarkup(<FailureRow conversationId={outageId} request={failed} />)
+  assert.match(ended, /Continues by itself/)
+  assert.doesNotMatch(ended, /data-recovery-primary|Sign in|Continue turn/)
+}
+console.log("PASS: a gateway outage shows its automatic retry time and reason, without a sign-in or Resume button")
+
+{
+  const conversationId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+  const error = "Failed to authenticate"
+  const now = Date.now()
+  const retry = { at: now - 1, attempt: 10, since: now - GIVE_UP_MS["provider-unavailable"], cause: "provider-unavailable" as const, reason: error }
+  let revision = 0
+  for (const evidence of [
+    { kind: "permission", source: "provider-permission-error" },
+    { kind: "provider-unavailable", source: "unconfirmed-auth" },
+    { kind: "unknown", source: "provider-error" },
+  ] as const) {
+    const detail = evidence.kind === "unknown" ? 'API Error: 401 {"error":{"type":"some_new_error"}}' : error
+    const ended: LiveRequest = { ...request, status: "failed", retry: undefined, error: detail, failureEvidence: evidence,
+      failure: failureAfterRetry(classifyProviderFailure(detail, undefined, evidence).kind, evidence, retry, now) }
+    acpStore.set({ activeKey: conversationId })
+    applyLiveSnapshot({ ...snapshot, revision: ++revision, session: { ...snapshot.session, id: conversationId }, requests: [ended] })
+    const markup = renderToStaticMarkup(<FailureRow conversationId={conversationId} request={ended} />)
+    assert.doesNotMatch(markup, /Continues by itself|Send again|Send another copy|Start a new/)
+    if (evidence.kind === "permission") {
+      assert.equal(ended.failure, "permission")
+      assert.match(markup, /Access refused/)
+      assert.match(markup, /permission, scope or organisation access/)
+      assert.doesNotMatch(markup, /Sign in|signed out/)
+    } else if (evidence.kind === "unknown") {
+      assert.equal(ended.failure, "auth")
+      assert.match(markup, /Sign-in required/)
+      assert.match(markup, /Sign in/)
+    } else {
+      assert.equal(ended.failure, "sign-in-check")
+      assert.match(markup, /Check your sign-in/)
+      assert.match(markup, /Sign in/)
+      assert.doesNotMatch(markup, /signed out/)
+    }
+  }
+}
+console.log("PASS: explicit access refusal is immediate; exhausted ambiguous authentication offers a sign-in check without claiming sign-out")

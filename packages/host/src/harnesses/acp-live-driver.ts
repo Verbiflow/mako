@@ -70,6 +70,7 @@ export function createAcpLiveDriver(
     nativeRouting: source.nativeRouting,
     layer: source.layer,
     modelRoutes: source.modelRoutes,
+    ...(source.accountContinuation && { accountContinuation: source.accountContinuation }),
     questions: source.questions,
     fork: fork.kind === "native" ? { kind: fork.kind, point: fork.point, via: fork.via } : fork,
     contextBreakdown: { kind: "unavailable", reason: "ACP's `usage_update` carries the context used and its size, nothing itemized." },

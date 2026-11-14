@@ -1,0 +1,10 @@
+{
+  "trace": [
+    {
+      "at": 1059.9000000953674,
+      "type": "thread-move-step",
+      "kind": "kept-here"
+    }
+  ],
+  "place": "local"
+}

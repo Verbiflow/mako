@@ -213,6 +213,11 @@ export interface ArgumentWrapper {
   builtin?: string
   /** This native projection retains the exact server/tool title when input is clipped. */
   titleRoute?: true
+  /**
+   * Keys naming a JSON file that holds the arguments (`args`) or the whole call (`call`) in their place. The harness
+   * reads it and reports the call it ran; until it does, the call says where its arguments are.
+   */
+  files?: { args?: string; call?: string }
 }
 
 /** A script calls the real tools; the script is under `key`, or is the whole input. */

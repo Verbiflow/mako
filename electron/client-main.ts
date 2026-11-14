@@ -1,5 +1,6 @@
 import { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, powerMonitor, protocol, shell, type IpcMainInvokeEvent } from "electron"
 import { WindowShutdown } from "@mako/host/application/window-shutdown"
+import { SHUTDOWN_HOLD_MS } from "@mako/host/contracts/cloud-threads"
 import { createHash, randomUUID } from "node:crypto"
 import { cp, mkdir, access, mkdtemp, rename, rm } from "node:fs/promises"
 import { homedir } from "node:os"
@@ -15,7 +16,7 @@ import { AGENT_VIEWS_CLIENT, clientRoot, ensureRuntime, runtimeDataRoot, runtime
 import { invokeRuntime, invokeRuntimeEncoded, invokeRuntimePreview, invokeRuntimeVideo, probeRuntime, runtimeFile, settleRuntime, subscribeRuntime } from "@mako/host/transport/connection"
 import { decodeRuntimeValue, encodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 import { runtimeEventRouting } from "@mako/host/contracts/runtime"
-import { LIVE_FORM } from "@mako/protocol/live-form"
+import { WINDOW_LIVE_FORM } from "@mako/protocol/live-form"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { invokeWithRecovery } from "@mako/host/contracts/host-call-recovery"
 import { HostLiveness, type HostProbe } from "@mako/host/contracts/host-liveness"
@@ -26,7 +27,7 @@ import { serveDesk } from "./desk-protocol.js"
 import { adoptDeskOrigin } from "./renderer-storage.js"
 import { installCrashReporting } from "@mako/host/base/crash"
 import { electronNativeCrashes } from "./crash-electron.js"
-import { hostLog, installHostLog, logsRoot } from "@mako/host/base/host-log"
+import { hostLog, hostWarn, installHostLog, logsRoot } from "@mako/host/base/host-log"
 import { watchRendererHealth } from "./renderer-health.js"
 import { buildMetadataAt } from "@mako/host/base/build-identity"
 import { userRootFor } from "@mako/host/base/host-environment"
@@ -67,9 +68,22 @@ protocol.registerSchemesAsPrivileged(privilegedSchemes())
 const rendererBundle = join(directory, "../dist")
 
 const launch = { dataRoot, executable: process.execPath, args: app.isPackaged ? [] : [app.getAppPath()], cwd: process.cwd(), env: process.env }
-const clients = new Map<number, { id: string; link: HostLiveness; dispose(): void }>()
+const clients = new Map<number, { id: string; link: HostLiveness; sent: () => number; dispose(): void }>()
 const DISCONNECTED_MESSAGE = HOST_OUTAGE_MESSAGE
 let runtime: Awaited<ReturnType<typeof ensureRuntime>>
+/**
+ * Settles once `runtime` answers and, for the desktop, its secret keys are attached. The first
+ * window opens while the host starts (`start`), so a window's calls, stream and files wait on it.
+ */
+let attachHost: () => void = () => undefined
+const hostReady = new Promise<void>((resolve) => { attachHost = resolve })
+/**
+ * The first window's `mako:boot`, asked the moment the host answers rather than once the window
+ * has loaded and asks, so its first paint has its Threads. `heard` is how many events the window
+ * had been sent when it was asked: one sent since makes the answer older than the window's state,
+ * and the window's own call asks again.
+ */
+const earlyBoots = new Map<string, { answer: Promise<Awaited<ReturnType<typeof invokeRuntimeEncoded>>>; heard: number }>()
 let secretKeys: SecretKeyLink | undefined
 let desktopLink: DesktopLink | undefined
 let updates: DesktopUpdates | undefined
@@ -262,9 +276,9 @@ const isDeskUrl = (url: string) => deskUrlPolicy({ devServerUrl: isDev ? devServ
  * through the host (`desktop-answers-electron.ts`). It keeps painting, never
  * shows, and doesn't hold a profile host awake.
  */
-async function openWindow(options: { preview?: boolean; agentView?: string } = {}) {
+async function openWindow(options: { preview?: boolean; agentView?: string; id?: string } = {}) {
   if (closingLocally || shutdownAction || shuttingDown) throw new Error("Mako is closing safely. Open another window after it finishes.")
-  const id = randomUUID()
+  const id = options.id ?? randomUUID()
   const agentView = options.agentView
   const webPreferences = { preload: join(directory, "preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: true, additionalArguments: [`--mako-client=${id}`] }
   const window = agentView
@@ -302,13 +316,15 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
   let subscription: (() => void) | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
   let closed = false
+  let sent = 0
   // The window's connection follows its event stream, the proof the host is there; a dropped call only asks (`host-liveness.ts`).
   const link = new HostLiveness({
     message: DISCONNECTED_MESSAGE,
     announce: (event) => { if (!closed && !window.isDestroyed()) sendEvent(window.webContents, event) },
     probe: (timeoutMs) => askHost(timeoutMs),
+    log: (message, fields) => hostWarn("stream", message, { window: id, ...fields }),
   })
-  const client = { id, link, dispose() { closed = true; clearTimeout(timer); subscription?.(); link.dispose() } }
+  const client = { id, link, sent: () => sent, dispose() { closed = true; clearTimeout(timer); subscription?.(); link.dispose(); earlyBoots.delete(id) } }
   const rendererId = window.webContents.id
   clients.set(rendererId, client)
   const connect = () => {
@@ -327,10 +343,11 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
         if (type === "application-lifecycle" && z.object({ lifecycle: z.object({ operation: z.object({ kind: z.literal("error") }) }) }).safeParse(JSON.parse(packet.payload)).success) shutdownAction = null
         // Event names only: never retain prompts, tool output or arguments.
         if (type !== undefined) crashes.breadcrumb(`window=${window.id} event ${type}`)
+        sent += 1
         window.webContents.send(packet.channel === "event" ? "mako:event" : "mako:terminal-event", packet.payload)
       }
-    }, () => {
-      stream.ended()
+    }, (end) => {
+      stream.ended(end)
       // The agent views app never starts a host; its link ends with this one and it leaves.
       if (closed || window.isDestroyed() || role === "agent-views") return
       const retry = () => {
@@ -338,9 +355,10 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
         void ensureRuntime(launch).then(async (next) => { runtime = next; await secretKeys?.attached(); connect() }).catch(() => { if (!closed) timer = setTimeout(retry, 2_000) })
       }
       timer = setTimeout(retry, 500)
-    }, { history: true, observer: Boolean(agentView), heard: stream.heard, live: LIVE_FORM })
+    }, { history: true, observer: Boolean(agentView), heard: stream.heard, live: WINDOW_LIVE_FORM })
   }
-  connect()
+  // The window loads while the host starts; its stream opens once the host answers.
+  void hostReady.then(connect)
   window.once("closed", () => { client.dispose(); clients.delete(rendererId); agentViews.delete(rendererId); watchAgentViewsIdle(); finishClientShutdown() })
   window.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:\/\//i.test(url)) void shell.openExternal(url); return { action: "deny" } })
   if (!agentView) installAutomation(window, isDev)
@@ -375,7 +393,10 @@ async function start() {
   if (role === "agent-views") return startAgentViews()
   app.on("second-instance", () => { if (runtime) void openWindow() })
   app.on("browser-window-focus", (_event, window) => { if (!agentViews.has(window.webContents.id)) lastPersonWindow = window.webContents.id })
-  runtime = await ensureRuntime(launch)
+  // The host starts now and the first window opens while it does: Chromium's start and the renderer's load overlap
+  // the host's start rather than follow it. Its failure is `start`'s, awaited below.
+  const attaching = ensureRuntime(launch)
+  attaching.catch(() => undefined)
   if (!isDev) {
     const target = join(uiRoot, "Local Storage")
     const exists = await access(target).then(() => true, () => false)
@@ -392,9 +413,20 @@ async function start() {
   }
   await app.whenReady()
   closeOnSignals()
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    { label: "Mako", submenu: [{ role: "about" }, { label: "Updates…", click: () => requestCommand("app.updates") }, { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, { role: "quit" }] },
+    { role: "editMenu" }, { role: "viewMenu" }, { role: "windowMenu" },
+  ]))
+  await serveWindows()
+  const first = randomUUID()
+  const opening = openWindow({ id: first })
+  opening.catch(() => undefined)
+  runtime = await attaching
   // Before any window reads a secret: the host runs as Node and has no `safeStorage` of its own.
   secretKeys = new SecretKeyLink(runtime.socket, dataKeyPath(userRootFor({ dataRoot, appData: app.getPath("appData"), home: homedir() })), electronSecretEncryption())
   await secretKeys.attached()
+  attachHost()
+  bootEarly(first)
   const updater = desktopUpdates({
     version: app.getVersion(),
     supported: app.isPackaged && packagedDistribution(app.getAppPath()) === "signed",
@@ -414,13 +446,26 @@ async function start() {
   powerMonitor.on("resume", woke("resume"))
   powerMonitor.on("unlock-screen", woke("unlock-screen"))
   // Said before the Mac goes, while the network is still up: the cloud takes this Mac as quiet at once, not a minute on.
-  const leaving = (source: "suspend" | "shutdown") => () => {
-    void invokeRuntime(runtime.socket, desktopClient, "mako:machine-leaving", [source]).catch((error) =>
-      hostLog("desktop", "leaving not delivered", { source, reason: error instanceof Error ? error.message : String(error) }))
-  }
-  powerMonitor.on("suspend", leaving("suspend"))
-  powerMonitor.on("shutdown", leaving("shutdown"))
-  await serveWindows()
+  const leaving = (source: "suspend" | "shutdown") => invokeRuntime(runtime.socket, desktopClient, "mako:machine-leaving", [source]).catch((error) =>
+    hostLog("desktop", "leaving not delivered", { source, reason: error instanceof Error ? error.message : String(error) }))
+  powerMonitor.on("suspend", () => void leaving("suspend"))
+  // A shutdown hands agents at work to the cloud in the host (`machineLeaving`), which outlives this app and holds its
+  // own stop for it. Electron delays the shutdown while the event is prevented, where the system lets it, until Mako
+  // quits once the host answered, its hold at most. A quit's Apple event, which the shutdown sends too, isn't held:
+  // held there, the system would take the shutdown as refused.
+  const shutdowns: NodeJS.EventEmitter = powerMonitor
+  let goingOff = false
+  shutdowns.on("shutdown", (event: Electron.Event) => {
+    shuttingDown = true
+    event.preventDefault()
+    if (goingOff) return
+    goingOff = true
+    let held: ReturnType<typeof setTimeout> | undefined
+    void Promise.race([leaving("shutdown"), new Promise((resolve) => { held = setTimeout(resolve, SHUTDOWN_HOLD_MS + 1_000) })]).finally(() => {
+      clearTimeout(held)
+      app.quit()
+    })
+  })
   // What only this process can do for the host: Mako.app's grants, window capture, agents' windows and its own update.
   const pages = deskPageAnswers({ agentView: (previewId) => openWindow({ agentView: previewId }), frame: (frame) => desktopLink?.frame(frame) })
   desktopLink = new DesktopLink({
@@ -436,11 +481,7 @@ async function start() {
     detached: pages.forget,
   })
   desktopLink.start()
-  Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { label: "Mako", submenu: [{ role: "about" }, { label: "Updates…", click: () => requestCommand("app.updates") }, { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, { role: "quit" }] },
-    { role: "editMenu" }, { role: "viewMenu" }, { role: "windowMenu" },
-  ]))
-  await openWindow()
+  await opening
   app.on("activate", () => { if (!personWindows().length) void openWindow() })
 }
 
@@ -455,6 +496,7 @@ async function startAgentViews() {
     return
   }
   runtime = { ...location, info: probe.info }
+  attachHost()
   await app.whenReady()
   closeOnSignals()
   await serveWindows()
@@ -470,17 +512,35 @@ async function startAgentViews() {
   watchAgentViewsIdle()
 }
 
+/** Asks the host for a window's boot before the window asks (`earlyBoots`). */
+function bootEarly(id: string): void {
+  const client = [...clients.values()].find((entry) => entry.id === id)
+  if (!client || !runtime.info.methods.includes("mako:boot")) return
+  const answer = invokeRuntimeEncoded(runtime.socket, id, "mako:boot", [], 0, { history: true, correlationId: randomUUID() })
+  answer.catch(() => undefined)
+  earlyBoots.set(id, { answer, heard: client.sent() })
+}
+
+/** The boot asked early for this window, while nothing sent to it since could be newer than its answer. */
+function takeEarlyBoot(client: { id: string; sent: () => number }) {
+  const early = earlyBoots.get(client.id)
+  earlyBoots.delete(client.id)
+  return early && early.heard === client.sent() ? early.answer : undefined
+}
+
 /** What every window of this process is served: the host's files, and its calls through the socket. */
 async function serveWindows() {
-  protocol.handle("mako-file", (request) => runtimeFile(runtime.socket, request))
+  const hostFile = async (request: Request) => { await hostReady; return runtimeFile(runtime.socket, request) }
+  protocol.handle("mako-file", hostFile)
   if (!isDev) {
-    serveDesk(rendererBundle, (request) => runtimeFile(runtime.socket, request))
+    serveDesk(rendererBundle, hostFile)
     const moved = await adoptDeskOrigin({ userData: uiRoot, dist: rendererBundle })
     if (moved.kind === "failed") console.warn(`[mako-client] renderer storage move failed: ${moved.error}`)
   }
   const inputs = new HostCallInputs()
   for (const channel of hostChannels) {
     ipcMain.handle(channel, async (event, ...raw: unknown[]) => {
+      await hostReady
       // A window is a page: a fixture desk refuses it what it refuses a page in a browser, before its arguments are read (`fixture-desk-policy.ts`).
       const refusal = runtime.info.fixture ? fixtureDeskRefusal(channel) : undefined
       if (refusal) throw new FixtureDeskRefusedError(refusal)
@@ -514,7 +574,8 @@ async function serveWindows() {
       if (channel === "mako:control-video")
         return invokeWithRecovery(channel, () => invokeRuntimeVideo(runtime.socket, client.id, args), client.link)
       const correlationId = randomUUID()
-      const encoded = await invokeWithRecovery(channel, (attempt) => invokeRuntimeEncoded(runtime.socket, client.id, channel, args, attempt, { history: true, correlationId }), client.link)
+      const early = channel === "mako:boot" ? takeEarlyBoot(client) : undefined
+      const encoded = (early && await early.catch(() => undefined)) ?? await invokeWithRecovery(channel, (attempt) => invokeRuntimeEncoded(runtime.socket, client.id, channel, args, attempt, { history: true, correlationId }), client.link)
       if (channel === "mako:boot") {
         if (pendingCommand) { sendEvent(event.sender, { type: "app-command", command: pendingCommand }); pendingCommand = null }
         const boot = z.looseObject({ machine: MachineOfferSchema.optional() }).parse(decodeRuntimeValue(encoded))

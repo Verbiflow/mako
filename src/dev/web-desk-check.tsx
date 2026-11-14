@@ -1,22 +1,28 @@
 // Explicit isolated fixture for the web app's desk form; never imported by the application entry point.
-import { useState } from "react"
+import { lazy, Suspense, useState } from "react"
 import { createRoot } from "react-dom/client"
 import type { ListedSession } from "@mako/protocol/thread-listing"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import { nativeStartedAt, personPromptedAt } from "@mako/host/contracts/worked-at"
 import { Toaster } from "@/components/ui/sonner"
 import { acp, acpStore } from "@/state/acp"
-import { applyLiveSnapshot } from "@/state/live-recovery"
+import { getMako } from "@/lib/bridge"
+import { applyLiveBatch, applyLiveSnapshot } from "@/state/live-recovery"
 import { store } from "@/state/session"
 import { threadsStore } from "@/state/thread-store"
+import { setSetupSource } from "@/state/setup"
+import { openSetup } from "@/web-client/setup-open"
 import { accountListStore } from "@/web-client/account-list"
 import { WebClient, WebClientContext } from "@/web-client/client"
-import Desk from "@/web-client/desk"
+import { WebApp } from "@/web-client/app"
 import type { WebRoute } from "@/web-client/route"
+import { webSetup } from "@/web-client/setup-source"
 import { applyTheme } from "@/web-client/theme"
 import type { WebSession } from "@/web-client/threads"
 import { fixtureHarnesses } from "./harness-fixtures"
 import { BUSY_CWD, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE, busyActivity, busySnapshot } from "./mock-busy-thread"
+import { apexFins, apexSnapshot, placedSnapshot, APEX_CONVERSATION, APEX_CWD, APEX_SESSION, APEX_THREAD, APEX_TITLE, PLACED_ASKS, PLACED_CONVERSATION, PLACED_DEVICE, PLACED_SCENE, PLACED_SESSION, PLACED_THREAD, PLACED_TITLE, PLACED_WHERE } from "./mock-apex-thread"
+import { listedFins } from "@mako/host/contracts/children"
 import { installMockBridge, MOCK_HEADS } from "./mock-bridge"
 import { mockThreads } from "./mock-runtime-fixtures"
 import "../web-client/style.css"
@@ -25,7 +31,9 @@ import "../web-client/style.css"
  * The web app in a laptop's browser (`Desk`) through its production pieces, on the mock bridge: the account's list
  * holds the threads the desktop's `?mock&app=busy` desk lists (the same titles, agents and folders, run on one Mac),
  * and opening one draws its conversation from the same fixtures. `test-web-desk-ui.mjs` drives it beside the desktop.
- * `?thread=busy` opens the busy Thread; `?theme=light` draws it light.
+ * `?thread=busy` opens the busy Thread, `?thread=apex` the mock Apex (`&turns=260` for a long one), `?settings` the
+ * Settings pane, and `?setup=<project>` that project's Setup in it, on an account broker with nothing to list;
+ * `?theme=light` draws it light; `?machine` runs the Threads on a Linux machine of the person's own.
  */
 
 const search = new URLSearchParams(location.search)
@@ -110,18 +118,36 @@ const busy = BUSY_SESSIONS.map((entry, index) => {
   })
 })
 
+// The Apex's host answering, as its owner's batches reach the browser: a message sent to it gets its turn.
+getMako().onEvent((event) => {
+  if (event.type === "live-batch" && event.batch.id === APEX_CONVERSATION) applyLiveBatch(event.batch)
+})
+const apex = row({ session: APEX_SESSION, thread: APEX_THREAD, threadTitle: APEX_TITLE, conversation: APEX_CONVERSATION, harness: "claude", title: APEX_TITLE, folder: APEX_CWD, createdAt: now, activityAt: now })
+
+// `?placed=loft|off`: a Fin of the Apex's placed on Loft, which lists it to the account under its Apex; `off` leaves the
+// Apex's own device quiet, the Fin's row still saying what it asks.
+if (PLACED_SCENE) apex.fins = listedFins(apexFins())
+const placedRow = row({ session: PLACED_SESSION, thread: PLACED_THREAD, conversation: PLACED_CONVERSATION, harness: "opencode", title: PLACED_TITLE, state: "waiting", waitingOn: PLACED_ASKS, waitingFor: "approval", runsOn: { kind: "device", deviceId: PLACED_DEVICE }, createdAt: now, activityAt: now })
 threadsStore.set({ composerHarness: "claude", descriptors: fixtureHarnesses })
 store.set({ messages: [], stream: null })
 accountListStore.set({
   phase: "live",
-  rows: [...busy, ...native],
-  devices: new Map([[STUDIO, { id: STUDIO, kind: "desktop", name: "Studio", platform: "darwin" }]]),
+  ...(PLACED_SCENE === "off" && { quiet: new Map([[STUDIO, new Date(Date.now() - 25 * 60_000).toISOString()]]) }),
+  rows: [...busy, apex, ...(placedSnapshot() ? [placedRow] : []), ...native],
+  // `?machine`: the Threads run on a machine of the person's own, so the rail, the strip and the chip wear its server.
+  devices: new Map([
+    [STUDIO, search.has("machine") ? { id: STUDIO, kind: "runtime", name: "build-box", platform: "Linux x64 · Ubuntu 24.04" } : { id: STUDIO, kind: "desktop", name: "Studio", platform: "darwin" }],
+    [PLACED_DEVICE, { id: PLACED_DEVICE, kind: "runtime", name: PLACED_WHERE, platform: "Linux x64 · Debian GNU/Linux 12" }],
+  ]),
 })
 
 /** What another Session's owner answers when it's opened: its record, a short exchange. */
 function opened(session: WebSession): LiveSnapshot {
   const index = BUSY_SESSIONS.findIndex((entry) => entry.conversation === session.row.conversation)
   if (index >= 0) return busySnapshot(index)
+  if (session.row.conversation === APEX_CONVERSATION) return apexSnapshot()
+  const placed = placedSnapshot()
+  if (placed && session.row.conversation === PLACED_CONVERSATION) return placed
   const request = { id: uuid(session.row.conversation, 4), text: session.row.title ?? "Go on", attachments: [], status: "completed" as const }
   return {
     ...session.summary,
@@ -141,9 +167,10 @@ function opened(session: WebSession): LiveSnapshot {
 const client: WebClient = Object.assign(Object.create(WebClient.prototype), {
   account: { id: "account-check", name: "You", email: "you@example.com", image: null, entitlements: [] },
   deviceId: "browser-check",
-  options: { origin: location.origin, base: "/", build: "fixture" },
-  gateway: { wake: () => undefined, rest: async () => Promise.reject(new Error("The fixture has no gateway")) },
-  push: { seen: async () => undefined },
+  options: { origin: location.origin, base: search.get("webapp") !== null ? "/scripts/web-desk.html/" : "/", build: "fixture" },
+  gateway: { wake: () => undefined, connection: async () => ({ cloud: location.origin }), rest: async (_method: string, path: string) => ((search.get("setup") || search.get("side") === "setup") && path.startsWith("/v1/borrow/") ? { grants: [], leases: [], events: [], asks: [] } : Promise.reject(new Error("The fixture has no gateway"))) },
+  list: { refreshDevices: async () => undefined },
+  push: { seen: async () => undefined, standing: async () => ({ standing: "unsupported", quietHours: null, timeZone: "UTC" }) },
   conversations: async () => ({
     open: (session: WebSession) => {
       const snapshot = opened(session)
@@ -169,22 +196,48 @@ Reflect.set(window, "webDeskCheck", {
   },
 })
 
+// `&side=setup` opens Setup in the right rail over the Thread on screen.
+if (search.get("side") === "setup") openSetup()
+// The mock bridge would answer the page's first read; a real browser has only the account broker's source.
+if (search.get("setup")) setSetupSource(webSetup(client.gateway, "acct", () => []))
+
 function initialRoute(): WebRoute {
   if (search.get("thread") === "busy") return { kind: "thread", thread: BUSY_THREAD, session: BUSY_SESSIONS[0].session }
+  if (search.get("thread") === "apex") return { kind: "thread", thread: APEX_THREAD, session: APEX_SESSION }
+  if (search.get("setup")) return { kind: "setup", project: search.get("setup")! }
+  if (search.get("settings") !== null) return { kind: "settings" }
   return { kind: "list" }
 }
+
+/**
+ * The desk, read as the app reads it: a module of its own, so `?webapp` keeps the app's own chunks (the desk, a Thread, New)
+ * apart from the page's first code, as `test-lazy-pieces-ui.mjs` needs to hold and fail them.
+ */
+const Desk = lazy(() => import("@/web-client/desk"))
 
 /** The desk at its route, as the app holds it. */
 export function WebDeskPage() {
   const [route, setRoute] = useState<WebRoute>(initialRoute)
-  return <Desk route={route} navigate={(next) => setRoute(next)} back={() => setRoute({ kind: "list" })} onStarted={() => undefined} />
+  return (
+    <Suspense fallback={null}>
+      <Desk route={route} navigate={(next) => setRoute(next)} back={() => setRoute({ kind: "list" })} onStarted={() => undefined} />
+    </Suspense>
+  )
 }
 
+// `?webapp` mounts the web app itself (`WebApp`) on the same stand-in client (`app=` names the scene, as before), in whatever form the page's input and width
+// ask for, with its screens read as code of their own: what `test-lazy-pieces-ui.mjs` holds and fails.
 createRoot(document.getElementById("root")!).render(
-  <WebClientContext value={client}>
-    <div className="web-app flex w-full overflow-hidden bg-shell text-foreground" data-form="desk">
-      <WebDeskPage />
-    </div>
-    <Toaster />
-  </WebClientContext>
+  search.get("webapp") !== null ? (
+    <WebClientContext value={client}>
+      <WebApp />
+    </WebClientContext>
+  ) : (
+    <WebClientContext value={client}>
+      <div className="web-app flex w-full overflow-hidden bg-shell text-foreground" data-form="desk">
+        <WebDeskPage />
+      </div>
+      <Toaster />
+    </WebClientContext>
+  )
 )

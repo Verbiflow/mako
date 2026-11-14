@@ -36,6 +36,26 @@ function window(probe: (timeoutMs: number) => Promise<HostProbe>, proofMs = 200)
 const answers = (answer: HostProbe) => async () => answer
 const never = () => new Promise<HostProbe>(() => {})
 
+// Every banner says why it went up and how long it stayed, with what its stream heard.
+{
+  const said: { message: string; fields: Record<string, string | number> }[] = []
+  const events: HostConnectionEvent["type"][] = []
+  const link = new HostLiveness({ message: MESSAGE, announce: (event) => events.push(event.type), probe: answers("absent"), log: (message, fields) => said.push({ message, fields }) })
+  const first = link.stream()
+  first.ready()
+  first.ended({ why: "reset: aborted", livedMs: 340, heardBytes: 2_500_000, quietMs: 1 })
+  link.stream().ready()
+  assert.deepEqual(events, ["host-disconnected", "host-reconnected"])
+  assert.equal(said.length, 2, "one line for each")
+  assert.match(String(said[0]!.fields.why), /reset: aborted/)
+  assert.equal(said[0]!.fields.heardBytes, 2_500_000)
+  assert.ok(Number(said[1]!.fields.outageMs) >= 0, "and the outage's length")
+  said.length = 0
+  await link.dropped(100)
+  assert.match(String(said[0]?.fields.why), /no host answered/, "and one a dropped call raised says that")
+  link.dispose()
+}
+
 // A dropped call while the stream is open: the host answers the probe, so no banner, the window stays connected and
 // the call may run again at once. Calls dropping together share one probe.
 {

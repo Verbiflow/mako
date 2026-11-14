@@ -58,7 +58,7 @@ const ThreadTab = memo(function ThreadTab({
       role="tab"
       aria-selected={active}
       className={cn(
-        "group/tab flex min-w-0 items-center gap-1 rounded-md px-2 py-0.5 text-ui",
+        "group/tab flex min-w-0 items-center gap-1 px-2 py-0.5 text-ui",
         active
           ? "bg-fill-selected text-foreground"
           : "text-muted-foreground hover:bg-fill-hover"
@@ -76,7 +76,7 @@ const ThreadTab = memo(function ThreadTab({
         type="button"
         aria-label={`Close ${title}`}
         onClick={close}
-        className="pressable rounded p-0.5 text-faint opacity-0 transition-opacity duration-100 hover:text-foreground focus-visible:opacity-100 group-hover/tab:opacity-100"
+        className="pressable p-0.5 text-faint opacity-0 transition-opacity duration-100 hover:text-foreground focus-visible:opacity-100 group-hover/tab:opacity-100"
       >
         <XIcon className="size-3" />
       </button>

@@ -1,8 +1,8 @@
-import type { AcpState } from "@/state/acp-state"
+import { conversationWork, type AcpState } from "@/state/acp-state"
+import { agentAskOf } from "@/state/agent-asks"
 import type { ThreadPurposeKind } from "@mako/host/contracts/thread-purposes"
 import { autoContinuePending } from "@/state/prompt-delivery"
 import { signInPause } from "@mako/host/contracts/sign-in-hold"
-import { backgroundWork } from "@mako/host/contracts/background-work"
 import { finAskLine } from "@/state/fin-asks"
 import { workedAt } from "@mako/host/contracts/worked-at"
 
@@ -27,6 +27,8 @@ export interface AcpPresence {
   background?: number
   /** Where it runs when not on this Mac, in words ("Studio", "a cloud machine"). */
   elsewhere?: string
+  /** The kind of device `elsewhere` names (`LiveSummary.elsewhereKind`): a machine's rows wear a server, a Mac's a laptop. */
+  elsewhereKind?: string
   /** What a conversation on another device waits on there, in a line ("Approve: npm test"). */
   waitingOn?: string
   /** Its Thread's name as the device it runs on has it, when it runs elsewhere. */
@@ -71,7 +73,7 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
       if (conversation.session.status === "closed") return []
       // Listed from another device and not opened here: the account's list says what its ended turn waits on.
       const listedBackground = conversation.session.connection === "hibernated" ? conversation.rail?.background : undefined
-      const work = backgroundWork(conversation.session, conversation.nativeAgents) ?? (listedBackground ? { count: listedBackground } : null)
+      const work = conversationWork(state, conversation) ?? (listedBackground ? { count: listedBackground } : null)
       const presence: AcpPresence = {
         key: conversation.key,
         harness: conversation.harness,
@@ -91,7 +93,8 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
           // Waiting on a person on the device it runs on: they're needed here too.
           Boolean(conversation.waitingOn) ||
           // One of its Fins asking them, as an ask of its own would.
-          (conversation.session.status !== "failed" && finAskLine(conversation) !== undefined) ||
+          (conversation.session.status !== "failed" && finAskLine(state, conversation) !== undefined) ||
+          (conversation.session.status !== "failed" && agentAskOf(conversation) !== undefined) ||
           (conversation.session.status !== "running" && signInPause(conversation.requests ?? []))
             ? "needs-permission"
             : conversation.session.status === "failed" && autoContinuePending(conversation.requests)
@@ -105,6 +108,7 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
       if (presence.status === "background" && work) presence.background = work.count
       if (conversation.parent) presence.apex = conversation.parent.thread
       if (conversation.elsewhere) presence.elsewhere = conversation.elsewhere
+      if (conversation.elsewhereKind) presence.elsewhereKind = conversation.elsewhereKind
       if (conversation.waitingOn) presence.waitingOn = conversation.waitingOn
       if (conversation.threadTitle) presence.threadTitle = conversation.threadTitle
       if (conversation.quietSince !== undefined) presence.quietSince = conversation.quietSince
@@ -145,6 +149,7 @@ export function sameAcpPresence(
           (presence.nativePaths ?? []).join("\0") &&
         candidate.status === presence.status &&
         candidate.elsewhere === presence.elsewhere &&
+        candidate.elsewhereKind === presence.elsewhereKind &&
         candidate.waitingOn === presence.waitingOn &&
         candidate.threadTitle === presence.threadTitle &&
         candidate.quietSince === presence.quietSince &&

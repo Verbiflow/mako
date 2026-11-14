@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn, spawnSync } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 // Side questions in the window, against the mock bridge: `/btw` in the `/`
 // menu, a question asked while a turn runs, its answer streaming in the
@@ -19,7 +19,7 @@ if (process.versions.electron) {
 } else {
   const { createServer } = await import("vite")
   const { default: electronPath } = await import("electron")
-  const root = process.env.MAKO_SIDE_CHECK_OUT ?? await mkdtemp(join(tmpdir(), "mako-side-ui-"))
+  const root = testScratch("mako-side-ui-", { given: process.env.MAKO_SIDE_CHECK_OUT })
   await mkdir(root, { recursive: true })
   const threadUrl = process.env.MAKO_THREAD_URL
   const server = threadUrl ? undefined : await createServer({
@@ -44,7 +44,6 @@ if (process.versions.electron) {
     if (server) await server.close()
   }
   if (process.exitCode === 0) encode(root)
-  console.log(`Side question UI evidence: ${root}`)
 }
 
 /** The screencast's frames, each held for as long as it was on screen, as one video. */

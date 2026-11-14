@@ -1,14 +1,13 @@
-import { execFile } from "node:child_process"
+import { command } from "./processes.js"
 import { createHash } from "node:crypto"
 import { access, readdir, realpath, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, join } from "node:path"
-import { promisify } from "node:util"
 import { z } from "zod"
 import type { LocalBrowser } from "./browser-discovery.js"
 import { onMac } from "./platform.js"
 
-const execute = promisify(execFile)
+const execute = command
 const applicationInfo = z.object({
   CFBundleDisplayName: z.string().optional(),
   CFBundleName: z.string().optional(),

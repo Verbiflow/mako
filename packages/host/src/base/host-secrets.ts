@@ -3,8 +3,10 @@ import { heavy } from "./heavy-packages.js"
 import type { HostEnvironment } from "./host-environment.js"
 import { processKeychain } from "./keychain.js"
 import { onMac } from "./platform.js"
-import { adoptingLegacy, aesSealer, fileKey, fileSecrets, handedKey, legacyFiles, memorySecrets, wrappedKey, type LegacyFiles, type SecretKey, type Secrets } from "./secrets.js"
+import { adoptingLegacy, aesSealer, fileKey, fileSecrets, handedKey, legacyFiles, memorySecrets, wrappedKey, type LegacyFiles, type SecretKey, type SecretKind, type Secrets } from "./secrets.js"
 import { chromiumSafeStorage, type SecretEncryption } from "./secure-storage.js"
+import { GrantedSecrets } from "./secret-grants.js"
+import type { LocalBorrowing } from "./local-borrowing.js"
 
 /** How long the host waits after it starts for the desktop's handover before reading the keychain itself. */
 const HANDOVER_GRACE_MS = 5_000
@@ -89,10 +91,10 @@ export function openHostSecrets({ userRoot, keychain, legacy, handoverUntil = 0,
         },
       }
   return {
-    secrets: adoptingLegacy(fileSecrets(join(userRoot, "secrets"), aesSealer(key)), {
+    secrets: new GrantedSecrets(adoptingLegacy(fileSecrets(join(userRoot, "secrets"), aesSealer(key)), {
       encryption: keychain,
       ...legacyFiles(legacy),
-    }),
+    }), join(userRoot, "borrowing")),
     handover: {
       wanted: async () => !handed.held(),
       offer: (value) => handed.offer(value),
@@ -110,6 +112,10 @@ export interface DomainSecrets {
 /** A host's secrets: every domain's, and the desktop's handover of the key that opens them. */
 export interface HostSecretStore extends DomainSecrets {
   readonly handover: SecretKeyHandover
+  /** The broker the saved records stand as grants of (`GrantedSecrets`), seeded with every record saved before grants were kept. */
+  borrowing(): Promise<LocalBorrowing | undefined>
+  /** A saved record's version as its grant's leases name it (`GrantedSecrets.version`), never its value. */
+  secretVersion(kind: SecretKind, name: string): Promise<string | undefined>
 }
 
 /**
@@ -137,6 +143,16 @@ export function hostSecretStore({ userRoot, appName }: Pick<HostEnvironment, "us
     handover: {
       wanted: () => host().handover.wanted(),
       offer: (key) => host().handover.offer(key),
+    },
+    borrowing: async () => {
+      const { secrets } = host()
+      if (!(secrets instanceof GrantedSecrets)) return undefined
+      await secrets.seed()
+      return secrets.broker
+    },
+    secretVersion: async (kind, name) => {
+      const { secrets } = host()
+      return secrets instanceof GrantedSecrets ? secrets.version(kind, name) : undefined
     },
     adoptLegacy: (files) => {
       legacy.push(files)

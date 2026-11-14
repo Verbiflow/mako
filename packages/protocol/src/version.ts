@@ -32,9 +32,17 @@ export const PROTOCOL_VERSION = 1
  * its owner is off clones (`continues.ts`), and says a runtime that agreed it takes such a continue back as a move when
  * it returns. 17 lets a `sessions` row say the Session it was forked from (`forkOf`). 18 lets a `sessions` row say
  * what one of its Session's Fins asks the person (`asking`), which the row waits on, and where the Session stands
- * under it. Every envelope stays at `PROTOCOL_VERSION` on every link version.
+ * under it. 19 lets a `sessions` row say its Session's Fins (`fins`): every device shows an Apex's tree as its owner
+ * does. 20 lets a row's Fins say all their selectors read of them (`FIN_STATES_VERSION`). 21 takes `borrow` frames,
+ * what the runtime's Thread borrows as it changes. 22 lets a `sessions` row say its Session's place among its
+ * Thread's Sessions (`order`, `SESSION_ORDER_VERSION`). 23 takes a device runtime's `advertise`: what it can serve
+ * and its room. 24 carries the sessions a device lends: `source-ask`, `lent` and `lent-ended` to it, and its
+ * `lease-beat`. 25 says the gateway takes a project folder Thread's `project` in a device's quiet note
+ * (`QUIET_PROJECT_LINK_VERSION`). 26 says it takes a project folder Thread's other repositories there too
+ * (`others`, `QUIET_OTHERS_LINK_VERSION`), and the device folder its project worktree mirrors (`projectFrom`,
+ * `QUIET_PROJECT_FROM_LINK_VERSION`). Every envelope stays at `PROTOCOL_VERSION` on every link version.
  */
-export const LINK_VERSION = 18
+export const LINK_VERSION = 26
 
 /** The first link version a runtime may send `activity` on; a gateway that agreed less never sees one. */
 export const ACTIVITY_VERSION = 2
@@ -107,6 +115,66 @@ export const FORKS_VERSION = 17
  * agreed less hears the row as it stands under the ask, and none of it.
  */
 export const ASKING_VERSION = 18
+
+/**
+ * The first link version whose `sessions` rows may say their Session's Fins (`fins`): a link that agreed less hears the
+ * row without them, as before.
+ */
+export const FINS_VERSION = 19
+
+/**
+ * The first link version whose `sessions` rows may say all of a Fin's state: `refused`, `apexStopped`, `answered`,
+ * `unfinished`, and what an idle one waits on (`waitingOn`, `since`). A gateway that agreed 19 refuses a row saying any
+ * of them, so it hears each Fin as 19 knew it.
+ */
+export const FIN_STATES_VERSION = 20
+
+/**
+ * The first link version that takes `borrow` frames: what the runtime's Thread borrows changed (`borrow.ts`'s pushes),
+ * said as it changes. A link that agreed less reads the same pushes by asking for them.
+ */
+export const BORROW_LINK_VERSION = 21
+
+/**
+ * The first link version whose `sessions` rows may say their Session's place in its Thread (`order`). A gateway that
+ * agreed 21 or before refuses a row saying it, so such a gateway hears the row without, and a device showing that
+ * Thread ranks its rows as it did before: the first listed first.
+ */
+export const SESSION_ORDER_VERSION = 22
+
+/**
+ * The first link version a device's runtime may send `advertise` on: its capabilities and slots as it probed them
+ * (`borrow.ts`), on enrolment, on each change and hourly. A gateway that agreed less hears none, and routes nothing to it.
+ */
+export const ADVERTISE_LINK_VERSION = 23
+
+/**
+ * The first link version that carries the sessions a device lends (`borrow.ts`): what it's asked as a source, the leases
+ * it serves as they're issued and end, and its heartbeats for them. A device on an older link answers asks by polling
+ * for them, and serves no session, since nothing could keep one alive.
+ */
+export const LEND_LINK_VERSION = 24
+
+/**
+ * The first link version whose gateway takes a quiet note's Thread naming its `project` (`handoff.ts`), where its
+ * Sessions open on the machine. Nothing on the link itself changes: the note goes over HTTP, and a gateway before it
+ * refuses a note carrying one (its schema is strict), so a device sends it only once its link agreed this.
+ */
+export const QUIET_PROJECT_LINK_VERSION = 25
+
+/**
+ * The first link version whose gateway takes a quiet note's Thread naming its project folder's other repositories, each
+ * with its checkpoint (`others`, `handoff.ts`). As with `project`, nothing on the link changes, and a gateway before it
+ * refuses a note carrying them, so a device sends them only once its link agreed this.
+ */
+export const QUIET_OTHERS_LINK_VERSION = 26
+
+/**
+ * The first link version whose gateway takes a quiet note's Thread naming the device folder its `project` mirrors
+ * (`projectFrom`, `handoff.ts`), where it places each Session by its path from there. A gateway before it refuses a note
+ * carrying one, and places every Session outside the standby's folder at `project` itself.
+ */
+export const QUIET_PROJECT_FROM_LINK_VERSION = 26
 
 /**
  * The link versions this build can speak. A gateway keeps older versions working for runtimes that wake

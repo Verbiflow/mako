@@ -26,9 +26,9 @@ function fin(index: number, state: ChildState, roster: NativeAgent["state"]): Na
 
 const working = (step: string) => fin(0, { kind: "working", step }, { kind: "working", activity: step })
 const crew = [
-  working("Shell cd /Users/kashyab/.mako/worktrees/makomono-f6c41fc1/dogfood && npm run typecheck"),
+  working("Shell cd /Users/someone/.mako/worktrees/makomono-0a1b2c3d/dogfood && npm run typecheck"),
   { ...working("Shell gh pr checks 340 -R Verbiflow/mako 2>&1 | awk '{print $1, $2}'"), nativeId: "mako-child:1" },
-  { ...working("Read /Users/kashyab/makomono/mako/src/web-client/desk.tsx"), nativeId: "mako-child:2" },
+  { ...working("Read /Users/someone/makomono/mako/src/web-client/desk.tsx"), nativeId: "mako-child:2" },
   fin(3, { kind: "idle" }, { kind: "waiting" }),
 ]
 
@@ -52,19 +52,23 @@ assert.equal(work?.count, 3, "an idle Fin is open, not running")
 assert.equal(backgroundWorkText(work!), "3 Fins")
 
 // Steps read as phrases, without home folders or the shell's plumbing; old recorded steps read the same.
-assert.equal(readableStep("Shell cd /Users/kashyab/.mako/worktrees/makomono-f6c41fc1/dogfood && npm run typecheck"), "Running npm run typecheck")
+assert.equal(readableStep("Shell cd /Users/someone/.mako/worktrees/makomono-0a1b2c3d/dogfood && npm run typecheck"), "Running npm run typecheck")
 assert.equal(readableStep("Shell gh pr checks 340 -R Verbiflow/mako 2>&1 | awk '{print $1, $2}'"), "Running gh pr checks 340")
-assert.equal(readableStep("Shell cd /Users/kashyab/.mako/worktrees/makomono-f6c4…"), "Running a command")
+assert.equal(readableStep("Shell cd /Users/someone/.mako/worktrees/makomono-0a1b…"), "Running a command")
 assert.equal(readableStep("Shell zsh -lc 'npm run lint'"), "Running npm run lint")
-assert.equal(readableStep("Shell node /Users/kashyab/mako/scripts/test-inbox-ui.mjs --url http://x"), "Running node test-inbox-ui.mjs")
-assert.equal(readableStep("Read /Users/kashyab/makomono/mako/src/web-client/desk.tsx"), "Reading desk.tsx")
+assert.equal(readableStep("Shell node /Users/someone/mako/scripts/test-inbox-ui.mjs --url http://x"), "Running node test-inbox-ui.mjs")
+assert.equal(readableStep("Read /Users/someone/makomono/mako/src/web-client/desk.tsx"), "Reading desk.tsx")
 assert.equal(readableStep("Edit src/components/rail/fin-pips.tsx"), "Editing fin-pips.tsx")
-assert.equal(readableStep("Search live-mark in /Users/kashyab/makomono"), "Searching live-mark in ~/makomono")
+assert.equal(readableStep("Search live-mark in /Users/someone/makomono"), "Searching live-mark in ~/makomono")
 assert.equal(readableStep("Writing the report"), "Writing the report")
 assert.equal(readableStep(readableStep("Read /Users/a/b/c.ts")), "Reading c.ts", "a phrase read twice stays the phrase")
 for (const agent of crew.slice(0, 3)) {
   const line = childLine(agent.child!.state!)!
   assert.doesNotMatch(line, /\/Users\/|2>&1|&&/, `a Fin's line is a phrase: ${line}`)
 }
+
+assert.equal(childLine({ kind: "queued", reason: "place-full", ahead: 2 }), "Queued: 2 ahead")
+assert.equal(childLine({ kind: "queued", reason: "tree-running", ahead: 0, after: ["build", "lint"] }), "Starts after build, lint", "a Fin started after others says which")
+assert.equal(childLine({ kind: "queued", reason: "tree-running", ahead: 0, after: ["build"], held: "lint" }), "Not started: lint didn't finish")
 
 console.log("Fin words: one count and one vocabulary for every surface, an idle Fin never counted as work, steps as phrases")

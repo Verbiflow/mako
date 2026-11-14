@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process"
+import { hostExecFile } from "../base/host-command.js"
 import { createHash } from "node:crypto"
 import { mkdir, readdir, rename, rm, stat } from "node:fs/promises"
 import { join } from "node:path"
@@ -114,6 +114,6 @@ export class MediaRenditions {
 
 function run(executable: string, args: string[]): Promise<boolean> {
   return new Promise((resolve) => {
-    execFile(executable, args, { timeout: RENDER_TIMEOUT_MS, maxBuffer: 64 * 1024 }, (error) => resolve(!error))
+    hostExecFile(executable, args, { timeout: RENDER_TIMEOUT_MS, maxBuffer: 64 * 1024 }, (error) => resolve(!error))
   })
 }

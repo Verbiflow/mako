@@ -49,13 +49,17 @@ const summary = async (lines: string[]) => {
 let outcome = "passed"
 try {
   const changed = base ? git("diff", "--name-only", "--no-renames", base, revision, "--").split("\n").filter(Boolean) : null
-  const env = environmentForExecutable(node, updateEnvironment(updaterInherited(process.env), {
-    identity: "0".repeat(40),
-    revision,
-    uncommitted: { count: 0, files: [] },
-    source: root,
-    ...changed && { changed: await writeChanged(folder, changed) },
-  }))
+  const env = environmentForExecutable(node, {
+    ...updateEnvironment(updaterInherited(process.env), {
+      identity: "0".repeat(40),
+      revision,
+      uncommitted: { count: 0, files: [] },
+      source: root,
+      ...changed && { changed: await writeChanged(folder, changed) },
+    }),
+    // Where a check keeps what says why it failed (a host's logs when it was slow to stop), for the job's artifacts.
+    ...process.env.MAKO_TEST_EVIDENCE && { MAKO_TEST_EVIDENCE: process.env.MAKO_TEST_EVIDENCE },
+  })
   const scripts = await checkScripts(root)
   const unsure = await runUpdateChecks({ npm, checkout: root, env, folder, revision, performance: scripts.performance, phase })
   if (unsure) outcome = `passed, but the runner was too busy to settle ${unsure.rows.length} ${unsure.rows.length === 1 ? "timing" : "timings"} (${unsure.busy.join("; ")}): ${unsure.rows.join("; ")}`

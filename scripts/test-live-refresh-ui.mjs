@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtemp, writeFile, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { writeFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { testScratch } from "./lib/test-scratch.mjs"
+import { atSize, withMotion } from "./lib/test-window.mjs"
 
 if (!process.versions.electron) {
   const { createServer } = await import('vite')
-  const root = await mkdtemp(join(tmpdir(), 'mako-live-refresh-ui-'))
+  const root = testScratch('mako-live-refresh-ui-')
   const server = await createServer({ cacheDir: join(root, 'cache'), server: {host:'127.0.0.1',port:0,hmr:false,watch:{ignored:['**']}} })
   await server.listen()
   await writeFile(join(root,'package.json'),JSON.stringify({main:fileURLToPath(import.meta.url)}))
@@ -24,12 +25,14 @@ if (!process.versions.electron) {
 async function check() {
   const {app,BrowserWindow}=await import('electron')
   app.setPath('userData',join(process.env.MAKO_REFRESH_ROOT,'profile'))
+  withMotion(app)
   await app.whenReady()
   const w=new BrowserWindow({show:false,width:1200,height:850,webPreferences:{contextIsolation:true,nodeIntegration:false}})
+  atSize(w, 1200, 850)
   const page=w.webContents
   const evaluate=s=>page.executeJavaScript(s)
   const until=async(s)=>{const end=Date.now()+15000;while(!await evaluate(s)){if(Date.now()>end)throw Error(s);await new Promise(r=>setTimeout(r,40))}}
-  const evidence=await mkdtemp(join(tmpdir(),'mako-live-refresh-evidence-'))
+  const evidence=testScratch('mako-live-refresh-evidence-')
   const capture=async(name)=>{
     w.showInactive()
     await evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>r(true))))')
@@ -83,6 +86,5 @@ async function check() {
     await evaluate(`(async()=>{const {hydrateLive}=await import('/src/state/live-recovery.ts');for(let i=0;i<5;i++)await hydrateLive(window.refreshFixture[0].session.id)})()`)
     assert.equal(await evaluate("document.querySelectorAll('[data-sonner-toast]').length"),0)
     console.log('PASS: all-six outages create zero restore toasts; one shared banner, successful restoration, genuine size error once, no per-batch refetch and dismissal preserved')
-    console.log('Evidence: '+evidence)
   } finally { clearTimeout(timer);w.destroy();app.quit() }
 }

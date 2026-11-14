@@ -79,7 +79,7 @@ export function GoalBar() {
           aria-expanded={expanded}
           aria-label={expanded ? "Show less of the goal" : "Show the whole goal"}
           onClick={() => setExpanded(!expanded)}
-          className="pressable flex min-w-0 flex-1 items-center gap-1 rounded px-1 text-left text-ui text-muted-foreground hover:text-foreground"
+          className="pressable flex min-w-0 flex-1 items-center gap-1 px-1 text-left text-ui text-muted-foreground hover:text-foreground"
         >
           <span className="truncate">{goal.objective}</span>
           <ChevronDownIcon className={cn("size-3 shrink-0", expanded && "rotate-180")} aria-hidden />
@@ -122,7 +122,7 @@ function GoalButton({ disabled, onClick, children }: { disabled: boolean; onClic
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className="pressable h-6 rounded px-2 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground disabled:opacity-40"
+      className="pressable h-6 px-2 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground disabled:opacity-40"
     >
       {children}
     </button>

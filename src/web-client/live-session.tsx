@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react"
 import { AcpPanel } from "@/components/viewer/acp-panel"
+import { ConversationSkeleton } from "@/components/viewer/conversation-skeleton"
 import { ShowAgentsContext } from "@/components/viewer/show-agents"
-import { Composer as DeskComposer } from "@/components/composer/composer"
 import { TranscriptEndContext, type TranscriptEnd } from "@/components/transcript/transcript-end"
 import { ExchangeNoteContext, PromptNoteContext } from "@/components/transcript/transcript-notes"
 import { CompactPresentationContext, type CompactPresentation } from "@/components/transcript/compact-presentation"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { acpStore } from "@/state/acp-state"
 import { AgentsSheet } from "./agents"
+import { deskComposerChunk } from "./chunks"
+import { CodeLine, CodeSlowLine } from "./code-unavailable"
 import { useWebClient } from "./client"
 import { openingThread } from "./probe"
 import { useSyncing } from "./syncing"
@@ -26,8 +28,12 @@ import { useReplyHold } from "./replies"
 import { useWide } from "./route"
 import { PhoneSteps } from "./steps"
 import { SwitchLines } from "./thread-chips"
+import { TranscriptLoading } from "./transcript-loading"
 
 const NO_RECORDS: never[] = []
+
+/** The desk's composer at rest (an empty draft and its chips), the room held for it while its code arrives. */
+const DESK_COMPOSER_HEIGHT = 104
 
 /**
  * A Session live: opened on its owner through the gateway, drawn by the renderer's own conversation (`AcpPanel`: the
@@ -58,9 +64,17 @@ export default function LiveSession({ session, desk = false, thread, openedBy = 
   useEffect(() => {
     if (hydrated) resumeOutbox(conversation)
   }, [hydrated, conversation])
+  // What it held paints before it's read again: a conversation listed anew is no longer `hydrated`, but keeps its turns.
+  const drawn = useAcp((state) => state.activeKey === conversation && (state.conversations[conversation]?.projection?.exchanges.length ?? 0) > 0)
+  const syncing = useSyncing((state) => state.conversation === conversation)
+  // Nothing of it on this page yet, while it's opened and first read from its owner: the transcript's loader over it,
+  // never an empty column under the bar. Over it, not instead of it: the transcript is mounted when its turns arrive, as
+  // a held one is, so it lands them at its end as it always has. Once read, an empty conversation is its own empty
+  // transcript.
+  const loading = !active || (!drawn && !hydrated && syncing)
   const live = useRef<HTMLDivElement>(null)
   const deskLive = useRef<HTMLDivElement>(null)
-  useOpenReading(conversation, desk ? deskLive : live, hydrated)
+  useOpenReading(conversation, desk ? deskLive : live, hydrated, drawn, syncing)
   const [away, setAway] = useState(false)
   const [jump, setJump] = useState<{ to: (() => void) | null }>({ to: null })
   const end = useMemo<TranscriptEnd>(() => ({ away: setAway, bind: (to) => setJump({ to }) }), [])
@@ -100,12 +114,37 @@ export default function LiveSession({ session, desk = false, thread, openedBy = 
   const [agents, setAgents] = useState(false)
   const showAgents = useCallback(() => setAgents(true), [])
   const elsewhere = useSendElsewhere(session, thread, openedBy, onSession)
+  const deskComposer = deskComposerChunk.use()
+  const composerFailed = deskComposerChunk.useFailed()
+  const composerSlow = deskComposerChunk.useSlow()
+  const readComposer = useCallback(() => deskComposerChunk.read().then(() => undefined), [])
+  useEffect(() => {
+    if (desk && !deskComposer) void readComposer().catch(() => undefined)
+  }, [desk, deskComposer, readComposer])
   if (desk)
     return (
       <PromptNoteContext value={note}>
         <div ref={deskLive} className="desk-live flex min-h-0 flex-1 flex-col" data-conversation={conversation}>
-          {active ? <AcpPanel /> : <div className="flex-1" />}
-          {active ? <DeskComposer /> : null}
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            {active ? <AcpPanel /> : null}
+            {/* The desktop's own placeholder, in the transcript's column, as the desktop opens a conversation. */}
+            {loading ? (
+              <div className="absolute inset-0" aria-busy aria-label="Opening the conversation">
+                <ConversationSkeleton />
+              </div>
+            ) : null}
+          </div>
+          {active ? (
+            deskComposer ? (
+              <deskComposer.Composer />
+            ) : (
+              // The composer's room while its code arrives, so the transcript above doesn't move when it does; a line
+              // saying so with Retry if it can't.
+              <div data-composer-pending="" aria-busy={!composerFailed} aria-label="Loading the composer" className="flex shrink-0 items-center bg-surface" style={{ height: DESK_COMPOSER_HEIGHT }}>
+                {composerFailed ? <CodeLine what="The composer" retry={readComposer} className="w-full" /> : <CodeSlowLine what="the composer" slow={composerSlow} className="px-4" />}
+              </div>
+            )
+          ) : null}
         </div>
       </PromptNoteContext>
     )
@@ -116,7 +155,10 @@ export default function LiveSession({ session, desk = false, thread, openedBy = 
           <CompactPresentationContext value={compact}>
           <ShowAgentsContext value={showAgents}>
           <div ref={live} className="web-live flex min-h-0 flex-1 flex-col" data-conversation={conversation}>
-            {active ? <AcpPanel asks={false} compact /> : <div className="flex-1" />}
+            <div className="relative flex min-h-0 flex-1 flex-col">
+              {active ? <AcpPanel asks={false} compact /> : null}
+              {loading ? <TranscriptLoading className="absolute inset-0" /> : null}
+            </div>
             <WebDock
               conversation={conversation}
               harness={harness}
@@ -143,16 +185,13 @@ export default function LiveSession({ session, desk = false, thread, openedBy = 
  * How long opening the conversation took to show its newest turn, and to catch up with it, for the page's readings:
  * from what this page already held of it, or from the network.
  */
-function useOpenReading(conversation: string, live: RefObject<HTMLDivElement | null>, hydrated: boolean): void {
+function useOpenReading(conversation: string, live: RefObject<HTMLDivElement | null>, hydrated: boolean, drawn: boolean, syncing: boolean): void {
   const reading = useRef<{ opened: ReturnType<typeof openingThread>; kept: boolean } | null>(null)
   useEffect(() => {
     const opened = openingThread()
     reading.current = { opened, kept: (acpStore.get().conversations[conversation]?.projection?.exchanges.length ?? 0) > 0 }
     return () => opened.close()
   }, [conversation])
-  // What it held paints before it's read again: a conversation listed anew is no longer `hydrated`, but keeps its turns.
-  const drawn = useAcp((state) => state.activeKey === conversation && (state.conversations[conversation]?.projection?.exchanges.length ?? 0) > 0)
-  const syncing = useSyncing((state) => state.conversation === conversation)
   useEffect(() => {
     const held = reading.current
     if (!held || !(drawn || hydrated)) return
@@ -207,7 +246,7 @@ function useDeliveryNote(conversation: string) {
           <span data-delivery={state} className="flex items-center gap-1 text-caution">
             {DELIVERY_WORDS[state]}
             <span aria-hidden>·</span>
-            <button type="button" className="pressable -mx-1 rounded px-1 font-medium text-foreground" onClick={() => void retryUnconfirmed(conversation)}>
+            <button type="button" className="pressable -mx-1 px-1 font-medium text-foreground" onClick={() => void retryUnconfirmed(conversation)}>
               Retry
             </button>
           </span>

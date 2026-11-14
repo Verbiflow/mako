@@ -79,7 +79,7 @@ function LoadoutSlots() {
               key={`empty-${index}`}
               {...events}
               className={cn(
-                "flex h-[5.5rem] flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed text-label text-faint transition-colors duration-150",
+                "flex h-[5.5rem] flex-col items-center justify-center gap-1.5 border border-dashed text-label text-faint transition-colors duration-150",
                 target ? "border-foreground/40 bg-fill-hover text-muted-foreground" : "border-border"
               )}
             >
@@ -119,8 +119,8 @@ function LoadoutTile({
       onDragEnd={() => setDragging(false)}
       {...events}
       className={cn(
-        "group/tile relative flex h-[5.5rem] cursor-grab flex-col justify-between rounded-lg bg-shell/55 p-3 active:cursor-grabbing",
-        "[box-shadow:inset_0_0_0_0.5px_var(--hairline)] transition-[background-color,opacity,box-shadow] duration-150",
+        "group/tile relative flex h-[5.5rem] cursor-grab flex-col justify-between bg-raised p-3 active:cursor-grabbing",
+        "transition-[background-color,opacity,box-shadow] duration-150",
         target && "bg-fill-hover [box-shadow:inset_0_0_0_1px_var(--border)]",
         dragging && "opacity-40"
       )}
@@ -131,7 +131,7 @@ function LoadoutTile({
           type="button"
           aria-label={`Remove ${model?.label ?? entry.model} from the loadout`}
           onClick={() => removeFromLoadout(index)}
-          className="pressable -mt-1 -mr-1 rounded p-1 text-faint opacity-0 transition-opacity duration-150 group-hover/tile:opacity-100 hover:text-foreground focus-visible:opacity-100"
+          className="pressable -mt-1 -mr-1 p-1 text-faint opacity-0 transition-opacity duration-150 group-hover/tile:opacity-100 hover:text-foreground focus-visible:opacity-100"
         >
           <XIcon className="size-3.5" />
         </button>

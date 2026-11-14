@@ -92,7 +92,7 @@ function LauncherRow({
       // where waiting becomes perceptible.
       style={{ animationDelay: `${60 + index * 45}ms` }}
       onClick={onRun}
-      className="pressable group animate-enter flex h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-left text-ui text-muted-foreground [transition:transform_var(--duration-press)_var(--ease-out),color_120ms_ease,background-color_120ms_ease] hover:bg-fill-hover hover:text-foreground"
+      className="pressable group animate-enter flex h-9 w-full items-center gap-2.5 px-2.5 text-left text-ui text-muted-foreground [transition:transform_var(--duration-press)_var(--ease-out),color_120ms_ease,background-color_120ms_ease] hover:bg-fill-hover hover:text-foreground"
     >
       {Icon ? (
         <Icon className="size-3.5 shrink-0 text-faint transition-colors duration-100 group-hover:text-foreground/80" />

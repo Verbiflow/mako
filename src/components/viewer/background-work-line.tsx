@@ -3,9 +3,10 @@ import { HourglassIcon } from "lucide-react"
 import { acp, useAcp } from "@/state/acp"
 import { stage } from "@/state/stage"
 import { scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
-import { backgroundWork, backgroundWorkText } from "@mako/host/contracts/background-work"
+import { backgroundWorkText } from "@mako/host/contracts/background-work"
+import { conversationWork } from "@/state/acp-state"
 import { readableStep } from "@mako/host/contracts/children"
-import { WorkGlyph } from "@/components/inspector/agents-panel"
+import { WorkGlyph } from "@/components/inspector/work-glyph"
 import { Elapsed } from "@/components/inspector/elapsed"
 import { Shimmer } from "@/components/ui/shimmer"
 import { ShowAgentsContext } from "./show-agents"
@@ -41,7 +42,7 @@ export function BackgroundWorkLine() {
   const showAgents = useContext(ShowAgentsContext)
   const work = useAcp((state): Waiting | null => {
     const live = scopedLiveAcp(state, scope)
-    const found = live ? backgroundWork(live.session, live.nativeAgents) : null
+    const found = live ? conversationWork(state, live) : null
     return found && live
       ? { key: live.key, text: backgroundWorkText(found), named: found.named, unnamed: found.unnamed, stopping: live.canceling }
       : null
@@ -58,7 +59,7 @@ export function BackgroundWorkLine() {
           <button
             type="button"
             onClick={() => (showAgents ? showAgents() : stage.open("agents"))}
-            className="pressable rounded-md px-1.5 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground"
+            className="pressable px-1.5 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground"
           >
             Show in Agents
           </button>
@@ -67,7 +68,7 @@ export function BackgroundWorkLine() {
             disabled={work.stopping}
             title="Stop ends every background task of this session"
             onClick={() => void acp.stopBackground(work.key)}
-            className="pressable rounded-md px-1.5 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground disabled:opacity-40"
+            className="pressable px-1.5 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground disabled:opacity-40"
           >
             {work.stopping ? "Stopping" : "Stop all"}
           </button>

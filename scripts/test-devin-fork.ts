@@ -131,7 +131,7 @@ await withPair("rewound-turn", async ({ env, agent, fork }) => {
     }
     assert.deepEqual(await holder.steps(SOURCE), turns, "the source session is untouched")
     await assert.rejects(fork(SOURCE, "head"), /Devin could not fork the session: "head" is not one of its nodes/)
-    await assert.rejects(fork("no-such-session", second.after), /Devin could not fork the session: /)
+    await assert.rejects(fork("no-such-session", second.after), /Devin could not fork the session during session fork: /)
     await assert.rejects(fork(SOURCE, second.after, AbortSignal.abort()), /Devin could not fork the session: the conversation closed/)
   } finally {
     await holder.close()

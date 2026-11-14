@@ -46,13 +46,13 @@ NOTICE
 
 mkdir -p "$mount"
 if [[ "$base_url" == https://* ]]; then
-  curl --proto '=https' --tlsv1.2 -fsSLo "$temporary/Mako-arm64.dmg" \
+  curl --retry 5 --retry-max-time 180 --connect-timeout 20 --max-time 120 --proto '=https' --tlsv1.2 -fsSLo "$temporary/Mako-arm64.dmg" \
     "$base_url/Mako-arm64.dmg"
-  curl --proto '=https' --tlsv1.2 -fsSLo "$temporary/SHA256SUMS.txt" \
+  curl --retry 5 --retry-max-time 180 --connect-timeout 20 --max-time 120 --proto '=https' --tlsv1.2 -fsSLo "$temporary/SHA256SUMS.txt" \
     "$base_url/SHA256SUMS.txt"
 else
-  curl -fsSLo "$temporary/Mako-arm64.dmg" "$base_url/Mako-arm64.dmg"
-  curl -fsSLo "$temporary/SHA256SUMS.txt" "$base_url/SHA256SUMS.txt"
+  curl --retry 5 --retry-max-time 180 --connect-timeout 20 --max-time 120 -fsSLo "$temporary/Mako-arm64.dmg" "$base_url/Mako-arm64.dmg"
+  curl --retry 5 --retry-max-time 180 --connect-timeout 20 --max-time 120 -fsSLo "$temporary/SHA256SUMS.txt" "$base_url/SHA256SUMS.txt"
 fi
 
 expected="$(awk '$2 == "Mako-arm64.dmg" { print $1; exit }' "$temporary/SHA256SUMS.txt")"

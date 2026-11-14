@@ -1,6 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react"
-import { activeAcp, useAcp } from "@/state/acp"
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
+import { activeAcp, useAcp } from "@/state/acp-state"
 import { openTurnReviewWith } from "@/state/review-scope"
+import { CodeLoading, CodeUnavailable } from "./code-unavailable"
 import { EASE_OUT, EASE_SWIFT, reducedMotion } from "./motion"
 import { closeReview, deskReviewCode, followReviewHistory, leftReview, openReview, touchReviewCode, useReviewOpen, type ReviewOpen } from "./review-open"
 import type { WebForm } from "./route"
@@ -16,6 +17,9 @@ export function ReviewLayer({ form, place }: { form: WebForm; place: string | un
   const reader = form === "desk" ? deskReviewCode : touchReviewCode
   const code = reader.useCode()
   const readReviewCode = reader.read
+  const failed = reader.useFailed()
+  const slow = reader.useSlow()
+  const retry = useCallback(() => readReviewCode(), [readReviewCode])
   useEffect(() => followReviewHistory(), [])
   useEffect(
     () =>
@@ -39,12 +43,6 @@ export function ReviewLayer({ form, place }: { form: WebForm; place: string | un
   useEffect(() => {
     if (open && !code) void readReviewCode().catch(() => undefined)
   }, [open, code, readReviewCode])
-  // A Thread on screen: its Changes code is read while nothing else is, so Review opens at once.
-  useEffect(() => {
-    if (code || !place?.startsWith("thread:")) return
-    const idle = window.requestIdleCallback ?? ((then: () => void) => window.setTimeout(then, 1_200))
-    idle(() => void readReviewCode().catch(() => undefined))
-  }, [code, place, readReviewCode])
   const [shown, setShown] = useState<ReviewOpen | null>(open)
   const layer = useRef<HTMLDivElement>(null)
   if (open && shown !== open) setShown(open)
@@ -68,7 +66,7 @@ export function ReviewLayer({ form, place }: { form: WebForm; place: string | un
   if (!shown) return null
   return (
     <div ref={layer} className="rv-layer" data-form={form} data-closing={open ? undefined : ""}>
-      {!code ? <div className="rv-screen" /> : "DeskReview" in code ? <code.DeskReview key={shown.conversation} open={shown} onClose={closeReview} /> : <code.ReviewScreen key={shown.conversation} open={shown} onClose={closeReview} />}
+      {!code ? failed ? <CodeUnavailable what="Changes" retry={retry} onClose={closeReview} /> : <CodeLoading what="Changes" slow={slow} /> : "DeskReview" in code ? <code.DeskReview key={shown.conversation} open={shown} onClose={closeReview} /> : <code.ReviewScreen key={shown.conversation} open={shown} onClose={closeReview} />}
     </div>
   )
 }

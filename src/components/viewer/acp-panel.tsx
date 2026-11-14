@@ -3,7 +3,7 @@ import { latestPendingQuestion } from "@mako/host/contracts/live-questions"
 import { carriedHistories, promptDelivery, recoveriesByPlace, makoPrompts, turnStops } from "@/state/prompt-delivery"
 import { FailureRow } from "@/components/transcript/failure-row"
 import { FailedRequestsContext } from "@/components/transcript/failed-requests"
-import { agentActivity, startLabel } from "@/state/agent-activity"
+import { agentActivity, startLabel, switchLabel } from "@/state/agent-activity"
 import { shallowEqual } from "@/state/store"
 import { ActivityMark } from "@/components/ui/activity-mark"
 import { useLasting } from "@/components/ui/use-lasting"
@@ -273,7 +273,8 @@ function Blocks({ starting = false, continued = false, compact = false }: { star
             preparing={preparing && session?.status !== "running"}
             hosted={exchanges.length > 0}
           />
-          {running ? null : <CrewCard compact={compact} fallback={<BackgroundWorkLine />} />}
+          {/* The Fins stand through every turn and transition; only the background line waits for the turn's end. */}
+          <CrewCard compact={compact} fallback={running ? null : <BackgroundWorkLine />} />
         </>
       }
     />
@@ -325,6 +326,10 @@ function AcpActivity({
     if (current?.kind === "starting") return startLabel(labels[current.harness], current.cloudStep)
     return current?.kind === "live" ? startLabel(labels[current.session.harness]) : undefined
   })
+  const switching = useAcp((state) => {
+    const live = scopedLiveAcp(state, scope)
+    return live ? switchLabel(live, (harness) => labels[harness]) : undefined
+  })
   const activity = useAcp((state) => {
     const live = scopedLiveAcp(state, scope)
     const approval = live?.control?.approvalResponses?.find(receipt => receipt.id === live.permission?.id)
@@ -332,7 +337,7 @@ function AcpActivity({
     // status; do not repeat it in the transcript.
     if (approval || live?.permission?.implementsPlan) return { kind: "idle" as const, label: "" }
     const switchingAccount = Boolean(live?.requests?.some((request) => request.status === "queued" && request.accountSwitch))
-    return agentActivity({ blocks: live?.blocks ?? EMPTY_QUEUE, waiting: Boolean(live?.permission), connecting: starting, starting: startingAs, makingWorktree, worktreeStep, preparing, checkingOwner, switchingAccount, quietForMs, native: live?.nativeActivity, harness: live?.session.harness })
+    return agentActivity({ blocks: live?.blocks ?? EMPTY_QUEUE, waiting: Boolean(live?.permission), connecting: starting, starting: startingAs, switching, makingWorktree, worktreeStep, preparing, checkingOwner, switchingAccount, quietForMs, native: live?.nativeActivity, harness: live?.session.harness })
   }, shallowEqual)
   const waiting = running && activity.kind === "connecting"
   // The wait ended (it started, or the send went): the next one is timed afresh.
@@ -350,7 +355,7 @@ function AcpActivity({
             <button
               type="button"
               onClick={() => skipWorktree(making)}
-              className="pressable ml-1 shrink-0 rounded-md px-1.5 py-0.5 text-label text-faint animate-in fade-in-0 duration-200 ease-[var(--ease-out)] hover:bg-fill-hover hover:text-foreground"
+              className="pressable ml-1 shrink-0 px-1.5 py-0.5 text-label text-faint animate-in fade-in-0 duration-200 ease-[var(--ease-out)] hover:bg-fill-hover hover:text-foreground"
             >
               Use the project folder instead
             </button>
@@ -501,7 +506,7 @@ export function GonePermission({ permission }: { permission: LivePermissionReque
             setContinuing(true)
             void continueTurn(key, "provider-exited").finally(() => setContinuing(false))
           }}
-          className="pressable flex items-center gap-1.5 rounded-md border border-hairline bg-foreground px-2 py-1 text-label text-background hover:opacity-90 disabled:opacity-50"
+          className="pressable flex items-center gap-1.5 border border-hairline bg-foreground px-2 py-1 text-label text-background hover:opacity-90 disabled:opacity-50"
         >
           <PlayIcon className="size-3 fill-current" strokeWidth={0} />
           {continuing ? "Continuing…" : "Continue turn"}
@@ -510,7 +515,7 @@ export function GonePermission({ permission }: { permission: LivePermissionReque
           type="button"
           disabled={canceling}
           onClick={() => void acp.cancel()}
-          className="pressable rounded-md border border-hairline px-2 py-1 text-label text-muted-foreground hover:text-foreground disabled:opacity-50"
+          className="pressable border border-hairline px-2 py-1 text-label text-muted-foreground hover:text-foreground disabled:opacity-50"
         >
           Stop
         </button>
@@ -556,7 +561,7 @@ function PermissionInput({ permission }: { permission: LivePermissionRequest }) 
               data-permission-option={option.kind ?? "other"}
               onClick={() => acp.answerPermission(option.optionId)}
               className={cn(
-                "pressable flex items-center gap-1.5 rounded-md border px-2 py-1 text-label transition-colors",
+                "pressable flex items-center gap-1.5 border px-2 py-1 text-label transition-colors",
                 allow && !always
                   ? "border-hairline bg-foreground text-background hover:opacity-90"
                   : always
@@ -576,7 +581,7 @@ function PermissionInput({ permission }: { permission: LivePermissionRequest }) 
           )
         })}
         {permission.kind === "authentication" ? (
-          <button type="button" onClick={() => acp.answerPermission(null)} className="pressable rounded-md border border-hairline px-2 py-1 text-label text-muted-foreground hover:text-foreground">
+          <button type="button" onClick={() => acp.answerPermission(null)} className="pressable border border-hairline px-2 py-1 text-label text-muted-foreground hover:text-foreground">
             Cancel sign-in
           </button>
         ) : null}
@@ -667,7 +672,7 @@ function QuestionPermission({
                         }))
                       }
                       className={cn(
-                        "pressable rounded-md border px-2 py-1 text-label",
+                        "pressable border px-2 py-1 text-label",
                         selected
                           ? "border-foreground/20 bg-fill-selected text-foreground"
                           : "border-hairline text-muted-foreground hover:bg-fill-hover hover:text-foreground"
@@ -700,7 +705,7 @@ function QuestionPermission({
                     [question.id]: [event.target.value],
                   }))
                 }
-                className="h-8 w-full rounded-md border border-hairline bg-surface px-2 text-ui text-foreground placeholder:text-faint focus:outline-none"
+                className="h-8 w-full border border-hairline bg-surface px-2 text-ui text-foreground placeholder:text-faint focus:outline-none"
               />
             ) : null}
           </fieldset>
@@ -711,7 +716,7 @@ function QuestionPermission({
           type="button"
           disabled={submitting}
           onClick={() => answer(null)}
-          className="pressable rounded-md border border-hairline px-2 py-1 text-label text-muted-foreground hover:text-foreground"
+          className="pressable border border-hairline px-2 py-1 text-label text-muted-foreground hover:text-foreground"
         >
           {dismissLabel}
         </button>
@@ -731,7 +736,7 @@ function QuestionPermission({
               )
             )
           }
-          className="pressable rounded-md bg-foreground px-2 py-1 text-label text-background disabled:opacity-40"
+          className="pressable bg-foreground px-2 py-1 text-label text-background disabled:opacity-40"
         >
           Send answers
         </button>

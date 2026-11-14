@@ -17,7 +17,7 @@ export function SyncReadout({ readings, sending }: { readings: SyncReadings; sen
   const checks = describeOwnerChecks(readings.list.ownerChecks)
   const checked = readings.list.ownerChecks?.at(-1)
   return (
-    <div data-sync-readout="" className="mt-2 rounded-lg bg-surface ring-1 ring-hairline">
+    <div data-sync-readout="" className="mt-2 bg-raised">
       <div className="flex items-start gap-2 px-3 py-2">
         <div className="min-w-0 flex-1">
           <p className="text-ui">Sync</p>
@@ -29,7 +29,7 @@ export function SyncReadout({ readings, sending }: { readings: SyncReadings; sen
           Copy the readings
         </Action>
       </div>
-      <div className="divide-y divide-hairline border-t border-hairline">
+      <div className="">
         {sending ? <Line title="This Mac's Sessions" detail={describeSending(sending)} /> : null}
         <Line title="Account list" detail={describeList(readings.list)} />
         {checks && checked ? <Line title="Checked with your account before running here" detail={checks} when={formatRelative(new Date(checked.at).toISOString())} /> : null}

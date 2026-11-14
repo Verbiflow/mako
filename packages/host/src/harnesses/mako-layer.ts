@@ -1,7 +1,7 @@
 import { hostLog } from "../base/host-log.js"
 import { TOOL_FAMILIES, replacement, type LayerServer, type MakoLayer, type Replacement, type ToolFamily } from "../contracts/mako-layer.js"
 import { nativeSpawnsOff } from "../contracts/native-routing.js"
-import { conversationInstructions, conversationServers, type ProviderStartOptions } from "./live-driver.js"
+import { conversationServers, launchBlocks, type ProviderStartOptions } from "./live-driver.js"
 
 /**
  * The layer for one launch, from what the host already decides for it: its
@@ -9,10 +9,9 @@ import { conversationInstructions, conversationServers, type ProviderStartOption
  * from the harness. Read where a driver reads its launch options, so a
  * Thread that becomes an Apex mid-session has its layer from its next launch.
  */
-export function layerOf(options: Pick<ProviderStartOptions, "conversationTools" | "nativeRouting">): MakoLayer {
+export function layerOf(options: Pick<ProviderStartOptions, "conversationTools" | "nativeRouting" | "primer" | "nativeCalls" | "threadEnvironment">): MakoLayer {
   const thread = options.nativeRouting?.()
   const tools = options.conversationTools
-  const instructions = conversationInstructions(tools)
   const replaces: Replacement[] = []
   if (thread) {
     replaces.push({ native: "spawn-subagent", strength: nativeSpawnsOff(thread) ? "remove" : "intercept" })
@@ -20,7 +19,7 @@ export function layerOf(options: Pick<ProviderStartOptions, "conversationTools" 
   }
   return {
     role: thread?.role ?? "thread",
-    instructions: instructions ? [{ id: "show-media", text: instructions }] : [],
+    instructions: launchBlocks(options),
     servers: tools ? conversationServers(tools).map(({ name, url }) => ({ name, url, token: tools.token, families: familiesOf(name) })) : [],
     replaces,
     keepsPersonSetup: true,

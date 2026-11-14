@@ -1,7 +1,7 @@
 {
   "url": "http://127.0.0.1:5186/",
-  "root": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-rewind-e2e-iaCgSk",
-  "cwd": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-rewind-e2e-iaCgSk/workspace",
+  "root": "$TMPDIR/mako-rewind-e2e-iaCgSk",
+  "cwd": "$TMPDIR/mako-rewind-e2e-iaCgSk/workspace",
   "provider": "codex",
   "sourceId": "1496640c-0e3e-4c76-9fd3-950244980f15",
   "forkId": "b0536752-e539-4dad-bd0e-74c1bff03085",
@@ -31,13 +31,13 @@
   "preview": {
     "target": {
       "id": "0d8dab1a-a7e7-4ae4-9923-5f3ec694f321",
-      "scope": "/private/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-rewind-e2e-iaCgSk/workspace",
+      "scope": "$TMPDIR/mako-rewind-e2e-iaCgSk/workspace",
       "createdAt": 1788902342171,
       "files": 1
     },
     "current": {
       "id": "6d002ab0-9f6d-4153-84a6-b19afb2f440c",
-      "scope": "/private/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-rewind-e2e-iaCgSk/workspace",
+      "scope": "$TMPDIR/mako-rewind-e2e-iaCgSk/workspace",
       "createdAt": 1788902351726,
       "files": 1
     },

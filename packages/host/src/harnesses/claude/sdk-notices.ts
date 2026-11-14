@@ -98,6 +98,8 @@ export class ClaudeNotices {
         return this.once(`notification\0${message.key}\0${message.text}`) ? notice(messageEvent("Notice", message.text)) : NOTHING
       case "local_command_output":
         return notice(messageEvent("Notice", message.content))
+      case "session_writes_lost":
+        return notice(warning(writesLost(message.lost, message.error_code)))
       case "hook_response":
         return message.outcome === "error"
           ? notice({ ...event("Warning", `${message.hook_name} hook failed`, message.stderr || message.output), tone: "warning", setup: true })
@@ -214,6 +216,15 @@ function notice(marker: TranscriptEvent): NativeNotice[] {
 
 function warning(text: string): TranscriptEvent {
   return messageEvent("Warning", text, "warning")
+}
+
+/** What Claude Code couldn't save as it exited (`session_writes_lost`), and why, in Mako's words. */
+function writesLost(lost: readonly string[], code: string): string {
+  const why = code === "EDQUOT" ? "the disk quota is used up" : code === "ENOSPC" ? "the disk is full" : `it couldn't write (${code})`
+  const what = lost.includes("transcript")
+    ? "part of this conversation, so resuming it may miss what it said"
+    : "its settings changes"
+  return `Claude Code couldn't save ${what}: ${why}.`
 }
 
 function refusalText(content: string, explanation: string | null | undefined): string {

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { mkdirSync } from "node:fs"
 import { dirname } from "node:path"
 import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqlite"
+import type { Steps } from "@mako/sessions/slices"
 import { z } from "zod"
 import {
   AttributionSchema,
@@ -18,9 +19,10 @@ import {
   type ObservedBy,
   type ThreadHistoryPart,
   type TrackedRoot,
-} from "@mako/protocol"
+} from "@mako/protocol/attribution"
 import { TurnChangesSchema, type TurnChanges } from "../contracts/turn-changes.js"
 import { compress, decompress } from "./content.js"
+import { StatCache } from "./stat-cache.js"
 import { FootprintTurnSchema, type FootprintTurn } from "./footprint.js"
 import type { NoiseRow } from "./noise-baseline.js"
 import { decodeMap, encodeMap, type Run } from "./line-map.js"
@@ -187,9 +189,60 @@ const ActivityRow = z.object({
   // A journal opened read-only from before these columns has neither.
   status: CallStatusSchema.nullable().optional(), run: z.string().nullable().optional(),
 })
+const ActivityTimesRow = z.object({ session: z.string(), kind: z.enum(["turn", "call", "background"]), id: z.string(), started_at: z.number(), ended_at: z.number().nullable() })
 const Count = z.object({ count: z.number() })
+const ThreadChangeRow = z.object({ seq: z.number(), moved: z.number() })
+const ChangeSeqRow = z.object({ change_seq: z.number() })
+const ThreadWriteRow = z.object({ seq: z.number(), root: z.string(), path: z.string(), at: z.number(), kind: z.string(), certainty: z.string() })
 const TurnChangesRow = z.object({ summary: z.string() })
 const TurnSeqRow = z.object({ turn: z.string(), seq: z.number() })
+const SeqRow = z.object({ seq: z.number() })
+const NullableSeqRow = SeqRow.extend({ seq: z.number().nullable() })
+const AuthorRow = z.object({ author: z.string() })
+const ProvenanceRow = z.object({ git: z.number().nullable(), gap: z.number().nullable() })
+const NamedPathsSchema = z.array(z.string())
+const ActivitySessionRow = z.object({ session: z.string() })
+const RootAtRow = z.object({ root: z.string(), at: z.number() })
+const WorkedRow = z.object({ checkout: z.string().nullable(), cwd: z.string().nullable(), at: z.number() })
+const WorkedKeyRow = WorkedRow.extend({ session: z.string(), kind: z.string(), id: z.string() })
+const ThreadRow = z.object({ thread: z.string() })
+
+/** Entries `JournalStore.recency` reads a step: a window of the journal's numbering. */
+const RECENT_ENTRIES = 4_096
+/** Calls `JournalStore.recency` reads a step. */
+const RECENT_CALLS = 2_048
+
+/** A page of a turn's entries (`JournalStore.entriesOfTurnPage`), and where the next starts; none after the last. */
+export interface TurnEntriesPage {
+  entries: StoredEntry[]
+  next?: number
+}
+
+/** When each root last changed and each folder was last worked in, by its root's ID or its path (`JournalStore.recency`). */
+export interface Recency {
+  changed: ReadonlyMap<string, number>
+  /** Read only when `recency`'s caller wants it; empty otherwise. */
+  worked: ReadonlyMap<string, number>
+  /** Where it read through, for `recencySince`. */
+  mark: RecencyMark
+}
+
+/** How far a `Recency` read: the newest entry, and the change clock as its reading of work began (none without change tracking). */
+export interface RecencyMark {
+  seq: number
+  clock?: number
+}
+
+/** `at` into `into` under `key`, when it's later than what's there. */
+function later(into: Map<string, number>, key: string, at: number): void {
+  if (at > (into.get(key) ?? Number.NEGATIVE_INFINITY)) into.set(key, at)
+}
+
+/** A call's folders, as checkout and as working folder, into `worked`. */
+function workedIn(worked: Map<string, number>, row: z.infer<typeof WorkedRow>): void {
+  if (row.checkout) later(worked, row.checkout, row.at)
+  if (row.cwd) later(worked, row.cwd, row.at)
+}
 const ChoiceRow = z.object({ spelling: z.string(), path: z.string(), at: z.number() })
 const CarriedRow = z.object({ journal: z.string(), device: z.string(), through: z.number(), at: z.number(), received: z.number(), roots: z.string() })
 const CarriedActivityRow = z.object({
@@ -198,6 +251,13 @@ const CarriedActivityRow = z.object({
 })
 const CarriedPathRow = z.object({ journal: z.string(), kind: z.enum(["write", "name"]), seq: z.number(), at: z.number(), path: z.string(), to_path: z.string().nullable() })
 const Size = z.object({ bytes: z.number().nullable(), count: z.number() })
+
+/** A call's, turn's or background work's key in the journal. */
+export interface ActivityKey {
+  session: string
+  kind: StoredActivity["kind"]
+  id: string
+}
 
 export interface StoredActivity {
   kind: "turn" | "call" | "background"
@@ -342,8 +402,128 @@ function lineAuthors(row: z.infer<typeof BlobRow> | undefined): Int32Array | und
  */
 export const JOURNAL_FORMAT = createHash("sha256").update(`${SCHEMA_VERSION}\n${MIGRATION}\n${JSON.stringify(ADDED_COLUMNS)}`).digest("hex").slice(0, 16)
 
+/** At most this many blobs go in one pass collected off the host's thread: the rest go on the next. */
+export const COLLECT_MOST = 20_000
+
+/** Blobs a pass of collection drops, oldest first, and what the store held before it. */
+export interface CollectPlan {
+  refs: { ref: string; bytes: number }[]
+  before: { count: number; bytes: number }
+}
+
+/**
+ * Which kept content `JournalStore.collect` drops, read in one transaction on any connection to the journal, a
+ * read-only one included (a worker's): blobs behind no uncommitted line and no entry younger than `retainAfter`,
+ * then, while the store is past `budget` bytes, the oldest of the younger ones. At most `most`.
+ */
+export function collectPlan(db: DatabaseSync, retainAfter: number, budget: number, most = Infinity): CollectPlan {
+  const size = () => {
+    const row = Size.parse(db.prepare("SELECT sum(length(data)) AS bytes, count(*) AS count FROM blobs").get())
+    return { count: row.count, bytes: row.bytes ?? 0 }
+  }
+  // One snapshot throughout; inside a caller's transaction, that one.
+  const own = !db.isTransaction
+  if (own) db.exec("BEGIN")
+  try {
+    const before = size()
+    db.exec(`CREATE TEMP TABLE IF NOT EXISTS live_refs (ref TEXT PRIMARY KEY) WITHOUT ROWID; DELETE FROM live_refs; INSERT OR IGNORE INTO live_refs ${LIVE_REFS};`)
+    const limit = Number.isFinite(most) ? most : -1
+    const refs = db.prepare(`SELECT ref, length(data) AS bytes FROM blobs WHERE ref NOT IN (SELECT ref FROM live_refs) AND ref NOT IN (
+      SELECT before FROM entries WHERE at >= ?1 AND before IS NOT NULL UNION SELECT after FROM entries WHERE at >= ?1 AND after IS NOT NULL) ORDER BY at LIMIT ?2`)
+      .all(retainAfter, limit).map((row) => RefBytes.parse(row))
+    let left = before.bytes - refs.reduce((sum, item) => sum + item.bytes, 0)
+    if (left > budget && refs.length < (Number.isFinite(most) ? most : Infinity)) {
+      const doomed = new Set(refs.map((item) => item.ref))
+      for (const value of db.prepare("SELECT ref, length(data) AS bytes FROM blobs WHERE ref NOT IN (SELECT ref FROM live_refs) ORDER BY at").iterate()) {
+        if (left <= budget || refs.length >= most) break
+        const row = RefBytes.parse(value)
+        if (doomed.has(row.ref)) continue
+        refs.push(row)
+        left -= row.bytes
+      }
+    }
+    return { refs, before }
+  } finally {
+    if (own) db.exec("ROLLBACK")
+  }
+}
+
+/** Content behind an uncommitted line: never collected. */
+const LIVE_REFS = `SELECT base FROM files WHERE base IS NOT NULL UNION SELECT current FROM files WHERE current IS NOT NULL
+    UNION SELECT e.before FROM entries e JOIN files f ON f.root = e.root AND f.path = e.path AND e.seq > f.base_seq WHERE e.before IS NOT NULL
+    UNION SELECT e.after FROM entries e JOIN files f ON f.root = e.root AND f.path = e.path AND e.seq > f.base_seq WHERE e.after IS NOT NULL
+    UNION SELECT ref FROM stats WHERE ref IS NOT NULL`
+/** The same, without the stat cache's (a million rows): what a drop checks again, the stat cache's being in `touched`. */
+const LIVE_FILE_REFS = `SELECT base FROM files WHERE base IS NOT NULL UNION SELECT current FROM files WHERE current IS NOT NULL
+    UNION SELECT e.before FROM entries e JOIN files f ON f.root = e.root AND f.path = e.path AND e.seq > f.base_seq WHERE e.before IS NOT NULL
+    UNION SELECT e.after FROM entries e JOIN files f ON f.root = e.root AND f.path = e.path AND e.seq > f.base_seq WHERE e.after IS NOT NULL`
+const RefBytes = z.object({ ref: z.string(), bytes: z.number() })
+
+/**
+ * What changed for each Thread, kept by triggers so every writer is counted, a host of another build and a bulk update
+ * alike. Not in `MIGRATION`: the shared journal's folder is named for that (`SHARED_FORMAT`), so a change there would
+ * leave every host on a new, empty journal. Nothing needs these to read true, only to read less: where they're missing,
+ * as under an older owner, `threadVersion` says so and a Thread is read whole on any write.
+ */
+const CHANGE_TRACKING = `
+  CREATE TABLE IF NOT EXISTS change_clock (id INTEGER PRIMARY KEY CHECK (id = 1), seq INTEGER NOT NULL);
+  INSERT OR IGNORE INTO change_clock (id, seq) VALUES (1, 0);
+  CREATE TABLE IF NOT EXISTS thread_changes (thread TEXT PRIMARY KEY, seq INTEGER NOT NULL, moved INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
+  CREATE TABLE IF NOT EXISTS activity_changes (
+    session TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, thread TEXT NOT NULL, seq INTEGER NOT NULL, PRIMARY KEY (session, kind, id)
+  ) WITHOUT ROWID;
+  CREATE INDEX IF NOT EXISTS activity_changes_thread ON activity_changes(thread, seq);
+  CREATE TRIGGER IF NOT EXISTS activity_inserted AFTER INSERT ON activity BEGIN
+    UPDATE change_clock SET seq = seq + 1;
+    INSERT INTO activity_changes VALUES (NEW.session, NEW.kind, NEW.id, NEW.thread, (SELECT seq FROM change_clock))
+      ON CONFLICT (session, kind, id) DO UPDATE SET thread = excluded.thread, seq = excluded.seq;
+    INSERT INTO thread_changes (thread, seq) VALUES (NEW.thread, (SELECT seq FROM change_clock))
+      ON CONFLICT (thread) DO UPDATE SET seq = excluded.seq;
+  END;
+  CREATE TRIGGER IF NOT EXISTS activity_updated AFTER UPDATE ON activity BEGIN
+    UPDATE change_clock SET seq = seq + 1;
+    INSERT INTO activity_changes VALUES (NEW.session, NEW.kind, NEW.id, NEW.thread, (SELECT seq FROM change_clock))
+      ON CONFLICT (session, kind, id) DO UPDATE SET thread = excluded.thread, seq = excluded.seq;
+    INSERT INTO thread_changes (thread, seq) VALUES (NEW.thread, (SELECT seq FROM change_clock))
+      ON CONFLICT (thread) DO UPDATE SET seq = excluded.seq;
+    INSERT INTO thread_changes (thread, seq, moved) SELECT OLD.thread, (SELECT seq FROM change_clock), 1 WHERE OLD.thread <> NEW.thread
+      ON CONFLICT (thread) DO UPDATE SET seq = excluded.seq, moved = moved + 1;
+  END;
+  CREATE TRIGGER IF NOT EXISTS activity_deleted AFTER DELETE ON activity BEGIN
+    UPDATE change_clock SET seq = seq + 1;
+    DELETE FROM activity_changes WHERE session = OLD.session AND kind = OLD.kind AND id = OLD.id;
+    INSERT INTO thread_changes (thread, seq, moved) VALUES (OLD.thread, (SELECT seq FROM change_clock), 1)
+      ON CONFLICT (thread) DO UPDATE SET seq = excluded.seq, moved = moved + 1;
+  END;
+  CREATE TRIGGER IF NOT EXISTS entries_inserted AFTER INSERT ON entries WHEN NEW.thread IS NOT NULL BEGIN
+    UPDATE change_clock SET seq = seq + 1;
+    INSERT INTO thread_changes (thread, seq) VALUES (NEW.thread, (SELECT seq FROM change_clock))
+      ON CONFLICT (thread) DO UPDATE SET seq = excluded.seq;
+  END;
+  CREATE TRIGGER IF NOT EXISTS entries_updated AFTER UPDATE OF thread, certainty, root, path, kind, at ON entries BEGIN
+    UPDATE change_clock SET seq = seq + 1;
+    INSERT INTO thread_changes (thread, seq) SELECT NEW.thread, (SELECT seq FROM change_clock) WHERE NEW.thread IS NOT NULL
+      ON CONFLICT (thread) DO UPDATE SET seq = excluded.seq;
+    INSERT INTO thread_changes (thread, seq) SELECT OLD.thread, (SELECT seq FROM change_clock) WHERE OLD.thread IS NOT NULL
+      ON CONFLICT (thread) DO UPDATE SET seq = excluded.seq;
+  END;
+  CREATE TRIGGER IF NOT EXISTS entries_deleted AFTER DELETE ON entries WHEN OLD.thread IS NOT NULL BEGIN
+    UPDATE change_clock SET seq = seq + 1;
+    INSERT INTO thread_changes (thread, seq) VALUES (OLD.thread, (SELECT seq FROM change_clock))
+      ON CONFLICT (thread) DO UPDATE SET seq = excluded.seq;
+  END;
+`
+
+/** What a Thread's work has reached: `key` moves with anything that could change it; `seq` and `moved` are only there when changes are tracked. */
+export interface ThreadVersion {
+  key: string
+  seq?: number
+  moved?: number
+}
+
 /** A row as SQLite returns it, before its schema reads it. */
-type Row = Record<string, SQLOutputValue>
+/** A row as SQLite gives it, here or on another connection (a worker's). */
+export type Row = Record<string, SQLOutputValue>
 
 /** Content kept by address: how many versions, and their compressed bytes. */
 export interface BlobSize {
@@ -362,9 +542,13 @@ export interface JournalCounts {
 
 export class JournalStore {
   readonly path: string
+  /** Refs written while a collection planned off this connection runs (`touching`). */
+  private touched: Set<string> | undefined
   readonly id: string
   readonly device: string
   private readonly db: DatabaseSync
+  /** Whether this journal keeps `CHANGE_TRACKING`: once it does, it always will. */
+  private tracked = false
   private readonly statements = new Map<string, StatementSync>()
 
   private constructor(path: string, db: DatabaseSync, id: string, device: string) {
@@ -390,6 +574,7 @@ export class JournalStore {
       const columns = db.prepare(`PRAGMA table_info(${added.table})`).all().map((row) => z.object({ name: z.string() }).parse(row).name)
       if (!columns.includes(added.column)) db.exec(added.add)
     }
+    db.exec(CHANGE_TRACKING)
     const meta = new Map(db.prepare("SELECT key, value FROM meta").all().map((row) => MetaRow.parse(row)).map((row) => [row.key, row.value]))
     let id = meta.get("journal")
     if (!id || meta.get("schema") !== SCHEMA_VERSION) {
@@ -441,6 +626,7 @@ export class JournalStore {
   }
 
   insertEntry(entry: Omit<StoredEntry, "seq">): number {
+    if (this.touched) for (const ref of [entry.before, entry.after]) if (ref) this.touched.add(ref)
     const named = "author" in entry.author ? entry.author.author : null
     const result = this.statement(`INSERT INTO entries (at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores,
       certainty, thread, session, turn, author, settled, git, map) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
@@ -495,14 +681,14 @@ export class JournalStore {
 
   author(seq: number): Attribution | undefined {
     const row = this.statement("SELECT author FROM entries WHERE seq=?").get(seq)
-    return row ? AttributionSchema.parse(JSON.parse(z.object({ author: z.string() }).parse(row).author)) : undefined
+    return row ? AttributionSchema.parse(JSON.parse(AuthorRow.parse(row).author)) : undefined
   }
 
   /** Whether Git wrote the entry, and whether it was found after lost events (a rescan or a restart's catch-up). */
   provenance(seq: number): { git: boolean; lost: boolean } | undefined {
     const row = this.statement("SELECT git, gap FROM entries WHERE seq=?").get(seq)
     if (!row) return undefined
-    const { git, gap } = z.object({ git: z.number().nullable(), gap: z.number().nullable() }).parse(row)
+    const { git, gap } = ProvenanceRow.parse(row)
     return { git: Boolean(git), lost: gap !== null }
   }
 
@@ -521,9 +707,18 @@ export class JournalStore {
       .all(after, limit).map((row) => this.entryOf(row))
   }
 
-  /** A file's entries after `after`, oldest first, with their line maps; a rename away from it counts. */
-  chain(root: string, path: string, after = 0): StoredEntry[] {
-    return this.statement("SELECT * FROM entries WHERE root=?1 AND (path=?2 OR from_path=?2) AND seq > ?3 ORDER BY seq").all(root, path, after).map((row) => this.entryOf(row))
+  /** A file's entries after `after` through `upTo`, oldest first, with their line maps; a rename away from it counts. */
+  chain(root: string, path: string, after = 0, upTo = Number.MAX_SAFE_INTEGER): StoredEntry[] {
+    return this.statement("SELECT * FROM entries WHERE root=?1 AND (path=?2 OR from_path=?2) AND seq > ?3 AND seq <= ?4 ORDER BY seq").all(root, path, after, upTo).map((row) => this.entryOf(row))
+  }
+
+  /** A bounded page of a file's chain, without line maps; both paths use their index before the bounded merge. */
+  chainPage(root: string, path: string, after: number, upTo: number, limit: number): StoredEntry[] {
+    return this.statement(`SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, git, NULL AS map
+      FROM entries WHERE seq IN (
+        SELECT seq FROM (SELECT seq FROM entries WHERE root=?1 AND path=?2 AND seq > ?3 AND seq <= ?4 ORDER BY seq LIMIT ?5)
+        UNION SELECT seq FROM (SELECT seq FROM entries WHERE root=?1 AND from_path=?2 AND seq > ?3 AND seq <= ?4 ORDER BY seq LIMIT ?5)
+        ORDER BY seq LIMIT ?5) ORDER BY seq`).all(root, path, after, upTo, limit).map((row) => this.entryOf(row))
   }
 
   /** A file's entries after `after` that changed it after `since`, oldest first, without line maps; a rename away from it counts. */
@@ -573,11 +768,37 @@ export class JournalStore {
       .all(thread, turn).map((row) => this.entryOf(row))
   }
 
+  /**
+   * `entriesOfTurn` a page at a time: up to `limit` of them after `after`
+   * through `upTo`, and where the next page starts, until the last.
+   */
+  entriesOfTurnPage(thread: string, turn: string, after: number, upTo: number, limit: number): TurnEntriesPage {
+    const seqs = this.statement(`SELECT seq FROM (SELECT seq FROM entries WHERE thread=?1 AND turn=?2 AND seq > ?3 AND seq <= ?4 ORDER BY seq LIMIT ?5)
+      UNION SELECT seq FROM (SELECT seq FROM entry_candidates WHERE thread=?1 AND turn=?2 AND seq > ?3 AND seq <= ?4 ORDER BY seq LIMIT ?5) ORDER BY seq LIMIT ?5`)
+      .all(thread, turn, after, upTo, limit).map((row) => SeqRow.parse(row).seq)
+    if (!seqs.length) return { entries: [] }
+    const entries = this.statement(`SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, git, NULL AS map
+      FROM entries WHERE seq IN (SELECT value FROM json_each(?)) AND git IS NULL ORDER BY seq`).all(JSON.stringify(seqs)).map((row) => this.entryOf(row))
+    return { entries, ...(seqs.length === limit && { next: seqs.at(-1)! }) }
+  }
+
   /** The Thread's turns with an entry after `after` (as `entriesOfTurn` reads them), each with its newest: a summary counted before then is behind. */
   turnsChangedAfter(thread: string, after: number): Map<string, number> {
     const rows = this.statement(`SELECT turn, max(seq) AS seq FROM (SELECT turn, seq FROM entries WHERE thread=?1 AND turn IS NOT NULL AND seq > ?2 AND git IS NULL
       UNION ALL SELECT c.turn, c.seq FROM entry_candidates c JOIN entries e ON e.seq = c.seq WHERE c.thread=?1 AND c.turn IS NOT NULL AND c.seq > ?2 AND e.git IS NULL) GROUP BY turn`).all(thread, after)
     return new Map(rows.map((row) => TurnSeqRow.parse(row)).map((row) => [row.turn, row.seq]))
+  }
+
+  /** The first entry journaled at `at` or after; undefined when none was. */
+  firstSeqFrom(at: number): number | undefined {
+    // Through the times' index: by the numbering, SQLite walked every entry older than `at` first.
+    return NullableSeqRow.parse(this.statement("SELECT min(seq) AS seq FROM entries INDEXED BY entries_at WHERE at >= ?").get(at)).seq ?? undefined
+  }
+
+  /** `entriesBetween` over a window of the journal's numbering, `after` to `upTo`: up to `limit` of them. */
+  entriesBetweenIn(from: number, to: number, after: number, upTo: number, limit: number): StoredEntry[] {
+    return this.statement("SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, git, NULL AS map FROM entries WHERE seq > ? AND seq <= ? AND at >= ? AND at <= ? ORDER BY seq LIMIT ?")
+      .all(after, upTo, from, to, limit).map((row) => this.entryOf(row))
   }
 
   /** Entries journaled between two instants, without line maps, oldest first. */
@@ -616,6 +837,7 @@ export class JournalStore {
   }
 
   saveFile(state: FileState): void {
+    if (this.touched) for (const ref of [state.base, state.current]) if (ref) this.touched.add(ref)
     this.statement("INSERT OR REPLACE INTO files (root, path, base, base_seq, current, text, map) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .run(state.root, state.path, state.base, state.baseSeq, state.current, state.text ? 1 : 0, encodeMap(state.map))
   }
@@ -624,10 +846,10 @@ export class JournalStore {
     this.statement("DELETE FROM files WHERE root=? AND path=?").run(root, path)
   }
 
-  stats(root: string): Map<string, StatRow> {
+  stats(root: string): StatCache {
     const statement = this.statement("SELECT path, dev, ino, size, mode, mtime_ns, ctime_ns, ref, checked_ns FROM stats WHERE root=?")
     statement.setReadBigInts(true)
-    const out = new Map<string, StatRow>()
+    const out = new StatCache()
     for (const value of statement.all(root)) {
       const row = StatRowSchema.parse(value)
       out.set(row.path, {
@@ -638,7 +860,13 @@ export class JournalStore {
     return out
   }
 
+  /** Whether the stat cache knows a path of a root, for a root whose cache isn't in memory (one asleep). */
+  hasStat(root: string, path: string): boolean {
+    return this.statement("SELECT 1 FROM stats WHERE root=? AND path=?").get(root, path) !== undefined
+  }
+
   saveStat(root: string, path: string, row: StatRow): void {
+    if (row.ref) this.touched?.add(row.ref)
     this.statement("INSERT OR REPLACE INTO stats (root, path, dev, ino, size, mode, mtime_ns, ctime_ns, ref, checked_ns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run(root, path, row.dev, row.ino, row.size, row.mode, row.mtimeNs, row.ctimeNs, row.ref, row.checkedNs)
   }
@@ -657,6 +885,7 @@ export class JournalStore {
 
   /** Keep `bytes` by address, compressed; a second write of the same content costs a lookup. */
   putBlob(ref: ContentRef, bytes: Uint8Array, at: number): void {
+    this.touched?.add(ref)
     if (this.hasBlob(ref)) return
     this.statement("INSERT OR IGNORE INTO blobs (ref, size, at, data) VALUES (?, ?, ?, ?)").run(ref, bytes.byteLength, at, compress(bytes))
   }
@@ -685,7 +914,7 @@ export class JournalStore {
     const row = ActivityRow.parse(value)
     return {
       kind: row.kind, id: row.id, session: row.session, thread: row.thread, turn: optional(row.turn), checkout: optional(row.checkout), cwd: optional(row.cwd),
-      label: optional(row.label), named: z.array(z.string()).parse(JSON.parse(row.named)), record: optional(row.record), start: row.started_at, end: row.ended_at,
+      label: optional(row.label), named: NamedPathsSchema.parse(JSON.parse(row.named)), record: optional(row.record), start: row.started_at, end: row.ended_at,
       effects: row.effects ? StoredEffectSchema.parse(JSON.parse(row.effects)) : undefined,
       ...(row.status && { status: row.status }),
       ...(row.run && { run: row.run }),
@@ -694,13 +923,44 @@ export class JournalStore {
 
   /** A Thread's turn, by its id. */
   turn(thread: string, turn: string): StoredActivity | undefined {
-    const row = this.statement("SELECT * FROM activity WHERE thread=? AND kind='turn' AND id=? ORDER BY started_at DESC LIMIT 1").get(thread, turn)
-    return row ? this.activityOf(row) : undefined
+    // Found by the Thread's index alone, then read: read whole as it went, a Thread of 85,000 calls took 140 ms.
+    const key = this.statement("SELECT session FROM activity WHERE thread=? AND kind='turn' AND id=? ORDER BY started_at DESC LIMIT 1").get(thread, turn)
+    return key ? this.activity(ActivitySessionRow.parse(key).session, "turn", turn) : undefined
   }
 
   /** Activity that overlaps `[from, to]`. */
   activityBetween(from: number, to: number): StoredActivity[] {
     return this.statement("SELECT * FROM activity WHERE started_at <= ? AND (ended_at IS NULL OR ended_at >= ?)").all(to, from).map((row) => this.activityOf(row))
+  }
+
+  /**
+   * Up to `limit` activity keys after `after` in key order, with when each started and ended: a page of a scan of
+   * the whole table that reads no row's text. Nothing indexes when activity ended, and building an index on the
+   * person's journal (175,857 rows, 152 MB) held the loop 3.3 s, so a stretch of time is found by scanning in pages.
+   */
+  activityTimes(after: ActivityKey | undefined, limit: number): (ActivityKey & { start: number; end: number | null })[] {
+    const rows = after
+      ? this.statement("SELECT session, kind, id, started_at, ended_at FROM activity WHERE (session, kind, id) > (?, ?, ?) ORDER BY session, kind, id LIMIT ?")
+          .all(after.session, after.kind, after.id, limit)
+      : this.statement("SELECT session, kind, id, started_at, ended_at FROM activity ORDER BY session, kind, id LIMIT ?").all(limit)
+    return rows.map((row) => {
+      const parsed = ActivityTimesRow.parse(row)
+      return { session: parsed.session, kind: parsed.kind, id: parsed.id, start: parsed.started_at, end: parsed.ended_at }
+    })
+  }
+
+  /** Activity rows read elsewhere (`JournalReader`), as this store reads its own. */
+  activityOfRows(rows: readonly Row[]): StoredActivity[] {
+    return rows.map((row) => this.activityOf(row))
+  }
+
+  /** The activity of these keys still in the journal, in their order. */
+  activityOfKeys(keys: readonly ActivityKey[]): StoredActivity[] {
+    const read = this.statement("SELECT * FROM activity WHERE session=? AND kind=? AND id=?")
+    return keys.flatMap((key) => {
+      const row = read.get(key.session, key.kind, key.id)
+      return row ? [this.activityOf(row)] : []
+    })
   }
 
   /** One call's, turn's or background work's activity. */
@@ -718,22 +978,118 @@ export class JournalStore {
     return this.statement("SELECT * FROM activity WHERE thread=? ORDER BY started_at").all(thread).map((row) => this.activityOf(row))
   }
 
-  /** When each root's newest entry was journaled. */
-  lastChanged(): Map<string, number> {
-    const rows = this.statement("SELECT root, MAX(at) AS at FROM entries GROUP BY root").all()
-    return new Map(rows.map((row) => {
-      const { root, at } = z.object({ root: z.string(), at: z.number() }).parse(row)
-      return [root, at]
-    }))
+  /** Up to `limit` of a Thread's activity from `from` on, oldest first: a page of a history too long to read in one go. */
+  activityFrom(thread: string, from: number, limit: number): StoredActivity[] {
+    return this.statement("SELECT * FROM activity WHERE thread=? AND started_at>=? ORDER BY started_at LIMIT ?").all(thread, from, limit).map((row) => this.activityOf(row))
   }
 
-  /** Each folder Threads worked in, as checkout and as working folder, with when they last did; work still open counts as `now`. */
-  lastWorked(now: number): { folder: string; at: number }[] {
-    const rows = this.statement("SELECT checkout, cwd, MAX(coalesce(ended_at, ?)) AS at FROM activity GROUP BY checkout, cwd").all(now)
-    return rows.flatMap((row) => {
-      const { checkout, cwd, at } = z.object({ checkout: z.string().nullable(), cwd: z.string().nullable(), at: z.number() }).parse(row)
-      return [checkout, cwd].flatMap((folder) => (folder ? [{ folder, at }] : []))
-    })
+  /**
+   * What moves when a Thread's own work does, however busy the journal, and costs one lookup for a Thread of 84,000
+   * calls. Without change tracking, the journal's own version: any write by anyone, as true and far less often still.
+   */
+  threadVersion(thread: string): ThreadVersion {
+    if (!this.changesTracked()) return { key: `all:${this.version()}:${this.carriedVersion(thread)}` }
+    const row = ThreadChangeRow.parse(this.statement("SELECT coalesce(max(seq), 0) AS seq, coalesce(max(moved), 0) AS moved FROM thread_changes WHERE thread=?").get(thread))
+    return { key: `${row.seq}:${row.moved}:${this.carriedVersion(thread)}`, seq: row.seq, moved: row.moved }
+  }
+
+  private changesTracked(): boolean {
+    this.tracked ||= Count.parse(this.statement("SELECT count(*) AS count FROM sqlite_master WHERE name IN ('thread_changes', 'activity_changes', 'activity_updated')").get()).count === 3
+    return this.tracked
+  }
+
+  /** Up to `limit` of a Thread's calls changed after `seq`, in the order they changed. */
+  activityChanged(thread: string, seq: number, limit: number): { seq: number; activity: StoredActivity }[] {
+    return this.statement(`SELECT a.*, c.seq AS change_seq FROM activity_changes c JOIN activity a ON a.session = c.session AND a.kind = c.kind AND a.id = c.id
+      WHERE c.thread = ? AND c.seq > ? ORDER BY c.seq LIMIT ?`).all(thread, seq, limit)
+      .map((row) => ({ seq: ChangeSeqRow.parse(row).change_seq, activity: this.activityOf(row) }))
+  }
+
+  /** Up to `limit` of a Thread's writes after `seq`: where and when, no more, for a walk over all of them. */
+  threadWrites(thread: string, seq: number, limit: number): { seq: number; root: string; path: string; at: number; kind: string; certainty: string }[] {
+    return this.statement("SELECT seq, root, path, at, kind, certainty FROM entries WHERE thread=? AND seq>? ORDER BY seq LIMIT ?").all(thread, seq, limit).map((row) => ThreadWriteRow.parse(row))
+  }
+
+  /**
+   * When each root's newest entry was journaled and, when `wanted` says so
+   * of those, each folder Threads worked in (as checkout and as working
+   * folder) when they last did, work still open counting as `now`. Read a
+   * window of entries or a page of calls a step: read at once, a journal of
+   * 100,000 entries and 137,000 calls held the host's loop for 1.6 s. Its
+   * last step takes in what was journaled and what work changed while it
+   * read, so it returns the journal as it stands then. An entry never moves
+   * to another root or time; a call read before it changed may still count
+   * where it was, which only keeps a root longer.
+   */
+  *recency(now: number, wanted: (changed: ReadonlyMap<string, number>) => boolean): Steps<Recency> {
+    const changed = new Map<string, number>()
+    const worked = new Map<string, number>()
+    let read = 0
+    const readEntries = (upTo: number) => {
+      this.changedIn(changed, read, upTo)
+      read = upTo
+    }
+    for (let last = this.lastSeq(); read < last; ) {
+      readEntries(Math.min(read + RECENT_ENTRIES, last))
+      yield
+    }
+    const clock = this.changesTracked() ? this.changeClock() : undefined
+    if (!wanted(changed)) {
+      readEntries(this.lastSeq())
+      return { changed, worked, mark: { seq: read, ...(clock !== undefined && { clock }) } }
+    }
+    if (clock !== undefined) {
+      for (let key = { session: "", kind: "", id: "" }; ;) {
+        const rows = this.statement("SELECT session, kind, id, checkout, cwd, coalesce(ended_at, ?) AS at FROM activity WHERE (session, kind, id) > (?, ?, ?) ORDER BY session, kind, id LIMIT ?")
+          .all(now, key.session, key.kind, key.id, RECENT_CALLS).map((row) => WorkedKeyRow.parse(row))
+        for (const row of rows) workedIn(worked, row)
+        if (rows.length < RECENT_CALLS) break
+        key = rows.at(-1)!
+        yield
+      }
+    }
+    // The last step: no stop from here to the return.
+    readEntries(this.lastSeq())
+    this.workedSince(worked, clock, now)
+    return { changed, worked, mark: { seq: read, ...(clock !== undefined && { clock }) } }
+  }
+
+  /**
+   * What a `recency` reading through `mark` lacks: each root's newest entry
+   * journaled since, and the folders of work changed since. Without change
+   * tracking, all work, read at once.
+   */
+  recencySince(mark: RecencyMark, now: number): Recency {
+    const changed = new Map<string, number>()
+    const worked = new Map<string, number>()
+    const seq = this.lastSeq()
+    const clock = this.changesTracked() ? this.changeClock() : undefined
+    this.changedIn(changed, mark.seq, seq)
+    this.workedSince(worked, mark.clock, now)
+    return { changed, worked, mark: { seq, ...(clock !== undefined && { clock }) } }
+  }
+
+  private changeClock(): number {
+    return SeqRow.parse(this.statement("SELECT seq FROM change_clock WHERE id=1").get()).seq
+  }
+
+  /** Each root's newest entry after `after` through `upTo`, into `changed`. */
+  private changedIn(changed: Map<string, number>, after: number, upTo: number): void {
+    for (const row of this.statement("SELECT root, MAX(at) AS at FROM entries WHERE seq > ? AND seq <= ? GROUP BY root").all(after, upTo)) {
+      const { root, at } = RootAtRow.parse(row)
+      later(changed, root, at)
+    }
+  }
+
+  /** The folders of work changed since `clock`, into `worked`; of all work, read at once, without one. */
+  private workedSince(worked: Map<string, number>, clock: number | undefined, now: number): void {
+    if (clock === undefined) {
+      for (const row of this.statement("SELECT checkout, cwd, MAX(coalesce(ended_at, ?)) AS at FROM activity GROUP BY checkout, cwd").all(now)) workedIn(worked, WorkedRow.parse(row))
+      return
+    }
+    for (const { thread } of this.statement("SELECT thread FROM thread_changes WHERE seq > ?").all(clock).map((row) => ThreadRow.parse(row)))
+      for (const row of this.statement(`SELECT a.checkout, a.cwd, coalesce(a.ended_at, ?) AS at FROM activity_changes c JOIN activity a ON a.session = c.session AND a.kind = c.kind AND a.id = c.id
+        WHERE c.thread = ? AND c.seq > ?`).all(now, thread, clock)) workedIn(worked, WorkedRow.parse(row))
   }
 
   /** Close what a host that stopped left open: it ran until the host was last seen. */
@@ -952,34 +1308,58 @@ export class JournalStore {
    * Drop kept content no one needs: blobs behind no uncommitted line and no
    * entry younger than `retainAfter`; then, while the store is past
    * `budget` bytes, the oldest of those younger ones too. Content behind an
-   * uncommitted line is never dropped.
+   * uncommitted line is never dropped. On this connection, all at once:
+   * `collectPlan` on a worker's and `dropPlanned` here leave this thread free.
    */
   collect(retainAfter: number, budget: number): Collected {
-    const live = `SELECT base FROM files WHERE base IS NOT NULL UNION SELECT current FROM files WHERE current IS NOT NULL
-      UNION SELECT e.before FROM entries e JOIN files f ON f.root = e.root AND f.path = e.path AND e.seq > f.base_seq WHERE e.before IS NOT NULL
-      UNION SELECT e.after FROM entries e JOIN files f ON f.root = e.root AND f.path = e.path AND e.seq > f.base_seq WHERE e.after IS NOT NULL
-      UNION SELECT ref FROM stats WHERE ref IS NOT NULL`
-    const before = this.blobSize()
     this.statement("DELETE FROM footprint_turns WHERE at < ?").run(retainAfter)
     this.statement("DELETE FROM moves WHERE at < ?").run(retainAfter)
-    this.transaction(() => {
-      this.db.exec(`CREATE TEMP TABLE IF NOT EXISTS live_refs (ref TEXT PRIMARY KEY) WITHOUT ROWID; DELETE FROM live_refs; INSERT OR IGNORE INTO live_refs ${live};`)
-      this.statement(`DELETE FROM blobs WHERE ref NOT IN (SELECT ref FROM live_refs) AND ref NOT IN (
-        SELECT before FROM entries WHERE at >= ?1 AND before IS NOT NULL UNION SELECT after FROM entries WHERE at >= ?1 AND after IS NOT NULL)`).run(retainAfter)
-      let size = this.blobSize().bytes
-      if (size > budget) {
-        const candidates = this.statement("SELECT ref, length(data) AS bytes FROM blobs WHERE ref NOT IN (SELECT ref FROM live_refs) ORDER BY at").all()
-        const drop = this.statement("DELETE FROM blobs WHERE ref=?")
-        for (const value of candidates) {
-          if (size <= budget) break
-          const row = z.object({ ref: z.string(), bytes: z.number() }).parse(value)
-          drop.run(row.ref)
-          size -= row.bytes
+    return this.transaction(() => {
+      const plan = collectPlan(this.db, retainAfter, budget)
+      const drop = this.statement("DELETE FROM blobs WHERE ref=?")
+      for (const { ref } of plan.refs) drop.run(ref)
+      return { dropped: plan.refs.length, bytes: plan.refs.reduce((sum, item) => sum + item.bytes, 0) }
+    })
+  }
+
+  /**
+   * Note every ref written from now until `untouched`: content a collection planned on an older snapshot (a worker's)
+   * may drop only if nothing here wrote it since. Every write that names content goes through `putBlob`, `saveStat`,
+   * `saveFile` or `insertEntry`, and only the owner's connection writes.
+   */
+  touching(): void {
+    this.touched = new Set()
+  }
+
+  untouched(): void {
+    this.touched = undefined
+  }
+
+  /** Drop planned blobs nothing wrote since `touching` began and no uncommitted line holds now; the count and bytes dropped. */
+  dropPlanned(refs: readonly { ref: string; bytes: number }[]): Collected {
+    const touched = this.touched ?? new Set<string>()
+    const candidates = refs.filter((item) => !touched.has(item.ref))
+    if (!candidates.length) return { dropped: 0, bytes: 0 }
+    return this.transaction(() => {
+      const live = new Set(this.statement(LIVE_FILE_REFS).all().map((row) => Object.values(row)[0]))
+      const drop = this.statement("DELETE FROM blobs WHERE ref=?")
+      let dropped = 0
+      let bytes = 0
+      for (const item of candidates) {
+        if (live.has(item.ref)) continue
+        if (Number(drop.run(item.ref).changes)) {
+          dropped++
+          bytes += item.bytes
         }
       }
+      return { dropped, bytes }
     })
-    const after = this.blobSize()
-    return { dropped: before.count - after.count, bytes: before.bytes - after.bytes }
+  }
+
+  /** What a collection deletes besides content: footprint turns and moves past retention. */
+  dropOld(retainAfter: number): void {
+    this.statement("DELETE FROM footprint_turns WHERE at < ?").run(retainAfter)
+    this.statement("DELETE FROM moves WHERE at < ?").run(retainAfter)
   }
 
   /** A number that changes whenever anything is written to the journal, by this connection or another: what a cache of what it holds is keyed by. */
@@ -996,5 +1376,10 @@ export class JournalStore {
   close(): void {
     this.statements.clear()
     this.db.close()
+  }
+
+  /** Whether `close` has run: work reading it in slices ends at its next step. */
+  get closed(): boolean {
+    return !this.db.isOpen
   }
 }

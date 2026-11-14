@@ -3,6 +3,7 @@ import { createInterface } from "node:readline"
 import { z } from "zod"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import type { DiscoveryOptions, DiscoveryProcesses } from "./discovery-process.js"
+import { endChildInput, writeChildInput } from "@mako/sessions/child-input"
 
 export async function readJson<TResult>(path: string): Promise<TResult | null> {
   try {
@@ -26,7 +27,7 @@ export function runDiscovery(
     async ({ child, exited }) => {
       const chunks: Buffer[] = []
       child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk))
-      child.stdin.end(input)
+      endChildInput(child, input)
       const result = await exited
       if (result.code !== 0)
         throw new Error(
@@ -109,14 +110,15 @@ export function withDiscoveryStream<TResult>(
               },
             }
             phase("control response")
-            child.stdin.write(`${JSON.stringify(request)}\n`)
+            // A child gone as it's written to fails the run, with its exit's reason first (`DiscoveryProcesses.run`).
+            writeChildInput(child, `${JSON.stringify(request)}\n`).catch(() => {})
           })
         },
         notify: (message) => {
           if (closed) throw closed
-          child.stdin.write(`${JSON.stringify(message)}\n`)
+          writeChildInput(child, `${JSON.stringify(message)}\n`).catch(() => {})
         },
-        endInput: () => child.stdin.end(),
+        endInput: () => endChildInput(child),
       })
     } finally {
       fail(new Error("Discovery stream closed"))

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * Every event the transcript draws between messages, through production
@@ -23,7 +23,7 @@ if (process.versions.electron) {
   })
 } else {
   const { createServer } = await import("vite")
-  const root = await mkdtemp(join(tmpdir(), "mako-transcript-events-"))
+  const root = testScratch("mako-transcript-events-")
   const args = process.argv.slice(2)
   const prefix = args.find((arg) => arg.startsWith("--prefix="))?.slice("--prefix=".length) ?? ""
   const target = args.find((arg) => !arg.startsWith("--"))
@@ -48,7 +48,6 @@ if (process.versions.electron) {
   } finally {
     await server?.close()
   }
-  console.log(`Transcript events evidence: ${evidence}`)
 }
 
 async function captureEvents() {

@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { FRONT_DOOR_LISTED, frontDoorNote, type FrontDoorChild } from "@mako/host/contracts/agent-tools"
+import { FRONT_DOOR_GUIDANCE, FRONT_DOOR_LISTED, frontDoorNote, type FrontDoorChild } from "@mako/host/contracts/agent-tools"
+import { CONTEXT_COMPACTED } from "@mako/host/contracts/native-activity"
 import { agentWords, PASSED_ON_NOTE, passedOn, routedCall, YOUR_APEX } from "@mako/host/contracts/children"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
@@ -249,7 +250,7 @@ async function addressedFromTheApex(): Promise<void> {
   try {
     const fin = world.store.journalPlacement(android)!.thread
     // The Fin's turn ends with a report that wakes the Apex, as any of its turns does; the message itself starts none.
-    const personTurns = () => promptsOf(world, apex.conversation).filter((prompt) => !prompt.text.startsWith(FROM_AGENTS)).length
+    const personTurns = () => promptsOf(world, apex.conversation).filter((prompt) => !spoken(prompt.text).startsWith(FROM_AGENTS)).length
     const apexTurns = personTurns()
     const words = "Use the new signing key from the vault, not the old keystore."
     const request = randomUUID()
@@ -441,10 +442,80 @@ function routedCalls(): void {
   assert.equal(call("mako", "agents_send", { forward: true }), undefined)
 }
 
+/** Only invariant routing paragraphs use cadence; facts and unresolved decisions still accompany every person message. */
+async function routingGuidanceCadence(): Promise<void> {
+  let rules = "Keep the original rule and every unanswered decision."
+  let refuse = false
+  const world = new AgentsWorld({
+    root: join(root, "routing-cadence"),
+    policy: () => ({ rules: [], forApexes: rules }),
+    refusePrompt: () => {
+      if (!refuse) return undefined
+      refuse = false
+      return "Fixture send refused; delivery unknown"
+    },
+    script: async () => "ok",
+  })
+  try {
+    const apex = await world.apex("codex")
+    const child = await world.agents.start(apex.caller, { name: "worker", clientKey: "worker", harness: "claude", brief: { objective: "Inspect the failing check." }, cwd: world.root })
+    assert.ok(!("refused" in child) && child.conversation)
+    await world.settle(40)
+    const report = await world.agents.report(world.caller(child.conversation), { clientKey: "decision", status: "done", summary: "The late check failed.", question: "Mutation outcome is unknown; do not retry. Which check should be repaired?" })
+    assert.ok(!("refused" in report))
+    await world.settle(40)
+    const count = () => world.prompts.filter(p => p.conversation === apex.conversation).reduce((n, p) => n + Number(p.text.includes(FRONT_DOOR_GUIDANCE[0])), 0)
+    const send = async (text: string) => {
+      world.say(apex.conversation, text)
+      await world.settle(30)
+      const prompt = promptsOf(world, apex.conversation).filter(p => p.text.endsWith(text)).at(-1)
+      assert.ok(prompt)
+      assert.equal(spoken(prompt.text), text, "person's message stays exact")
+      assert.ok(prompt.text.includes(report.id) && prompt.text.includes("Mutation outcome is unknown; do not retry."), "pending identity and unknown outcome are rebuilt every time")
+      assert.ok(prompt.text.includes("fin:worker"), "the dynamic roster is never deduplicated")
+      return prompt.text
+    }
+    const initial = count()
+    assert.equal(initial, 0, "a process handling only service reports needs no person-routing guidance")
+    for (let i = 0; i < 4; i++) {
+      assert.equal((await send(`Inspect current decision ${i}.`)).includes(FRONT_DOOR_GUIDANCE[0]), i === 0)
+    }
+    assert.equal(count(), initial + 1)
+    await world.agents.report(world.caller(child.conversation), { clientKey: "service-update", status: "done", summary: "An additional service report; the original decision is still open." })
+    await world.settle(40)
+    assert.ok(!(await send("After a service report.")).includes(FRONT_DOOR_GUIDANCE[0]), "service turns retain the standing key without adding or withdrawing its instructions")
+    assert.equal(count(), initial + 1)
+    rules = "The replacement rule applies; keep all unanswered decisions."
+    assert.ok((await send("Read the changed person rule.")).includes(rules))
+    assert.equal(count(), initial + 1, "changing other rules does not repeat routing guidance")
+    world.live.observe({ type: "live-update", id: apex.conversation, update: { kind: "event", label: CONTEXT_COMPACTED } })
+    const compacted = await send("After compaction.")
+    for (const line of FRONT_DOOR_GUIDANCE) assert.ok(compacted.includes(line))
+    assert.ok(!(await send("After that.")).includes(FRONT_DOOR_GUIDANCE[0]))
+    world.live.observe({ type: "live-rewound", id: apex.conversation, run: "fixture-rewind" })
+    assert.ok((await send("After rewind.")).includes(FRONT_DOOR_GUIDANCE[0]))
+    refuse = true
+    world.say(apex.conversation, "Refused fixture message.")
+    await world.settle(30, 20_000, "ignore")
+    assert.ok((await send("After failed delivery.")).includes(FRONT_DOOR_GUIDANCE[0]), "an uncertain send resets guidance just like other standing rules")
+    await world.restart()
+    assert.ok((await send("After host reconstruction.")).includes(FRONT_DOOR_GUIDANCE[0]))
+    assert.ok(!(await send("After reconstruction settles.")).includes(FRONT_DOOR_GUIDANCE[0]))
+    const full = world.agents.frontDoor(apex.conversation, {})
+    const facts = world.agents.frontDoor(apex.conversation, {}, false)
+    assert.deepEqual(full.filter(line => !FRONT_DOOR_GUIDANCE.some(guidance => guidance === line)), facts, "direct frontDoor readers keep full guidance by default")
+    const read = await world.agents.read(apex.caller, { child: "worker", report: report.id })
+    assert.ok(!("refused" in read) && read.text.includes("The late check failed."), "detail reading still recovers the original report")
+    assert.ok("refused" in await world.agents.read(world.caller(child.conversation), { child: apex.conversation }), "guidance cadence cannot grant access")
+  } finally {
+    await world.close()
+  }
+}
+
 try {
   noteListing()
   routedCalls()
-  for (const test of [forwardsToTheRightChild, repeatsStopsAndOwnWords, steerOrQueue, onlyThePersonsTurnsOfAnApex, directTalkAndRedirect, addressedFromTheApex, frontSessionHears, waitedResultWakesNoSession]) {
+  for (const test of [forwardsToTheRightChild, repeatsStopsAndOwnWords, steerOrQueue, onlyThePersonsTurnsOfAnApex, directTalkAndRedirect, addressedFromTheApex, frontSessionHears, waitedResultWakesNoSession, routingGuidanceCadence]) {
     await test()
     console.log(`ok ${test.name}`)
   }
@@ -452,3 +523,5 @@ try {
 } finally {
   rmSync(root, { recursive: true, force: true })
 }
+
+await import("./test-orch-action-cadence.ts")

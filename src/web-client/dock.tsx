@@ -1,8 +1,9 @@
 import { use, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
 import { FinOfApexNote } from "./apex-fins"
-import { FinAskCard } from "./fin-ask"
+import { FinAskCard, LimitContinueCard } from "./fin-ask"
 import { FinsNeedYou } from "@/components/composer/fin-asks"
 import { sendDirect, useAddressee, useThreadAsks, useThreadRollup } from "@/state/apex-fins"
+import type { AgentAsk } from "@mako/host/contracts/agent-asks"
 import { FIN_WORD } from "@mako/host/contracts/agents"
 import { useCrewCardVisible } from "@/state/crew-card-view"
 import { ArrowDownIcon, CheckCheckIcon, CheckIcon, CornerDownLeftIcon, RotateCwIcon, ShieldQuestionIcon, XIcon } from "lucide-react"
@@ -23,6 +24,9 @@ import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import { acpStore } from "@/state/acp-state"
+import { agentAskCard } from "@/state/agent-asks"
+import { runChoice, wantLine, type AskChoice } from "@/lib/ask-card"
+import { askBringBack } from "./moves"
 import { shallowEqual } from "@/state/store"
 import { record, type AnsweredRecord } from "./answered"
 import { Composer, type EditingQueued, type Outgoing, type Steering } from "./composer"
@@ -59,6 +63,7 @@ import { ReviewTray } from "./review-tray"
 type Ask =
   | { kind: "approval"; permission: LivePermissionRequest }
   | { kind: "gone"; permission: LivePermissionRequest }
+  | { kind: "agent"; ask: AgentAsk }
   | { kind: "question"; id: string; questions: LiveInputQuestion[]; answer: (answers: Record<string, string[]> | null) => Promise<void> | void; dismiss: string }
 
 function lastExchange(): string | undefined {
@@ -147,11 +152,12 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
     <div className="web-dock shrink-0" data-asking={ask ? ask.kind : fin ? "fin" : undefined}>
       <div aria-hidden className="web-dock-fade" />
       <StatusCapsule conversation={conversation} cloudThread={target.cloudThread} asking={Boolean(ask ?? fin)} away={away} jump={jump} reconnect={reconnect} />
-      {ask ? <AskCard key={ask.kind === "question" ? ask.id : ask.permission.id} ask={ask} conversation={conversation} harness={harness} answerTyped={answerTyped} /> : null}
+      {ask ? <AskCard key={ask.kind === "question" ? ask.id : ask.kind === "agent" ? ask.ask.id : ask.permission.id} ask={ask} conversation={conversation} harness={harness} answerTyped={answerTyped} /> : null}
       {card !== null ? <FinsNeedYou thread={threadId} compact /> : null}
       {fin ? <FinAskCard key={`${fin.fin}:${fin.ask.id}`} apex={conversation} ask={fin} more={finAsks.length - 1} answerTyped={answerTyped} /> : null}
+      {!ask && !fin ? <LimitContinueCard /> : null}
       {unsent.length ? (
-        <ul role="list" aria-label="Messages not sent" className="mx-auto flex w-full max-w-content flex-col gap-1.5 px-3 pb-1">
+        <ul role="list" aria-label="Messages not sent" className="mx-auto flex w-full max-w-content flex-col gap-1.5 px-2 pb-1">
           {unsent.map((message) => (
             <li key={message.id} className="web-unsent">
               <p className="min-w-0 flex-1 truncate text-ui">{message.text}</p>
@@ -166,7 +172,7 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
           ))}
         </ul>
       ) : null}
-      <div className="mx-auto w-full max-w-content px-3">
+      <div data-dock-queue className="mx-auto w-full max-w-content px-2">
         <PromptQueue onEdit={editing.begin} />
       </div>
       <ReviewTray conversation={conversation} />
@@ -302,6 +308,7 @@ function useAsk(): Ask | undefined {
   const control = useAcp((state) => activeLiveAcp(state)?.control)
   const requests = useAcp((state) => activeLiveAcp(state)?.requests)
   const question = useMemo(() => (control && !permission ? latestPendingQuestion(control, requests ?? []) : undefined), [control, requests, permission])
+  const agentAsk = control?.asks?.[0]
   return useMemo((): Ask | undefined => {
     if (permission) {
       if (gone) return { kind: "gone", permission }
@@ -317,8 +324,9 @@ function useAsk(): Ask | undefined {
         answer: (answers) => acp.answerQuestion(question.id, answers),
         dismiss: "Dismiss",
       }
+    if (agentAsk) return { kind: "agent", ask: agentAsk }
     return undefined
-  }, [permission, gone, question])
+  }, [permission, gone, question, agentAsk])
 }
 
 /** The card above the composer: an approval's answers, a question's, or an agent that went before it was answered. */
@@ -327,8 +335,10 @@ type AnswerTyped = (answer: ((text: string) => boolean) | null) => void
 
 function AskCard({ ask, conversation, harness, answerTyped }: { ask: Ask; conversation: string; harness: string; answerTyped: AnswerTyped }) {
   return (
-    <div className="web-ask" data-ask={ask.kind} data-permission-card={ask.kind === "question" ? ask.id : ask.permission.id}>
-      {ask.kind === "gone" ? (
+    <div className="web-ask" data-ask={ask.kind} data-permission-card={ask.kind === "question" ? ask.id : ask.kind === "agent" ? ask.ask.id : ask.permission.id}>
+      {ask.kind === "agent" ? (
+        <AgentAskCard ask={ask.ask} conversation={conversation} harness={harness} />
+      ) : ask.kind === "gone" ? (
         <GonePermission permission={ask.permission} />
       ) : ask.kind === "approval" ? (
         <ApprovalCard permission={ask.permission} conversation={conversation} harness={harness} />
@@ -344,6 +354,50 @@ function primaryOption(options: LivePermissionRequest["options"]): string | unde
   return (options.find((option) => option.kind === "allow_once") ?? options.find((option) => option.kind === "allow") ?? options.find((option) => option.kind?.startsWith("allow")))?.optionId
 }
 
+/** What the agent asked through Mako's tools, in the desk's words; the answer goes to the conversation's owner. */
+function AgentAskCard({ ask, conversation, harness }: { ask: AgentAsk; conversation: string; harness: string }) {
+  // Its machine can't reach the Mac: allowing it to come back is the person's Bring it back, on the sheet that picks the Mac.
+  const card = agentAskCard(conversation, ask, harness, askBringBack)
+  const [chosen, setChosen] = useState<string | undefined>(undefined)
+  const choose = (choice: AskChoice) => {
+    if (chosen !== undefined) return
+    noteAnswered()
+    setChosen(choice.answer)
+    void runChoice(choice, (held) => {
+      if (!held) setChosen(undefined)
+    })
+  }
+  const busy = chosen !== undefined
+  return (
+    <div className="web-ask-body" aria-busy={busy || undefined} data-busy={busy || undefined}>
+      <p className="web-ask-asker">{`${card.who} asks`}</p>
+      <p className="web-ask-title">
+        <ShieldQuestionIcon className="size-4 shrink-0 text-attention" />
+        <span className="min-w-0 break-words">{wantLine(card)}</span>
+      </p>
+      <div className="web-ask-scroll">
+        <p className="web-ask-hint">{card.detail}</p>
+      </div>
+      <div className="web-ask-options" role="group" aria-label="Answers">
+        {card.choices.map((choice) => (
+          <button
+            key={choice.answer}
+            type="button"
+            data-agent-answer={choice.answer}
+            data-primary={choice.primary || undefined}
+            disabled={busy}
+            data-chosen={chosen === choice.answer || undefined}
+            onClick={() => choose(choice)}
+            className="web-ask-option"
+          >
+            {choice.primary ? <CheckIcon className="size-4 shrink-0" /> : <XIcon className="size-4 shrink-0" />}
+            {choice.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
 function ApprovalCard({ permission, conversation, harness }: { permission: LivePermissionRequest; conversation: string; harness: string }) {
   const [chosen, setChosen] = useState<string | undefined>(undefined)
   const inFlight = useAcp((state) => Boolean(activeLiveAcp(state)?.control?.approvalResponses?.some((receipt) => receipt.id === permission.id)))

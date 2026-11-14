@@ -15,6 +15,7 @@ import { listedOwner, listedSummary } from "@mako/host/contracts/listed-conversa
 import { WebClient, WebClientContext } from "@/web-client/client"
 import LiveSession from "@/web-client/live-session"
 import { readingsStore } from "@/web-client/probe"
+import { syncingStore } from "@/web-client/syncing"
 import { applyTheme } from "@/web-client/theme"
 import { listedFacts, type WebSession } from "@/web-client/threads"
 import { fixtureHarnesses } from "./harness-fixtures"
@@ -27,7 +28,7 @@ import "../web-client/style.css"
  * read from its owner). `window.openCheck.forget()` lets the transcript go, as a reload does, so the next open reads
  * it from its owner, whose answer takes `?answer=` ms (default 300); otherwise the next open paints what's held.
  * `?turns=` sets how many turns it has; `?theme=light` draws it light; `?form=desk` draws it as a laptop's browser
- * does, with the desktop's own composer.
+ * does, with the desktop's own composer; `?machine` has it run on a machine of the person's own rather than a Mac.
  */
 
 const search = new URLSearchParams(location.search)
@@ -39,6 +40,7 @@ const cwd = "/fixture/payments"
 const TURNS = Number(search.get("turns") ?? 40)
 const ANSWER_MS = Number(search.get("answer") ?? 300)
 const DESK = search.get("form") === "desk"
+const WHERE = search.has("machine") ? "build-box" : "Studio"
 
 let seed = 7
 const random = () => {
@@ -127,7 +129,7 @@ const listed: ListedSession = {
   runsOn: { kind: "device", deviceId: "00000000-0000-4000-8000-0000000000b3" },
   listedAt: new Date().toISOString(),
 }
-const session: WebSession = { row: listed, owner: listedOwner(listed), summary: listedSummary(listed, "Studio", undefined), where: "Studio", waiting: [], facts: listedFacts(listed, false) }
+const session: WebSession = { row: listed, owner: listedOwner(listed), summary: listedSummary(listed, WHERE, undefined), where: WHERE, waiting: [], facts: listedFacts(listed, false) }
 // A stand-in for the started client, without its constructor's gateway: its conversations open as the browser's do.
 const client: WebClient = Object.assign(Object.create(WebClient.prototype), {
   account: { id: "account-check" },
@@ -136,7 +138,9 @@ const client: WebClient = Object.assign(Object.create(WebClient.prototype), {
     open: () => {
       listLive([session.summary])
       acp.activate(conversation, false)
-      void hydrateLive(conversation)
+      // Read from its owner, "Syncing…" meanwhile, as `WebConversations.open` reads it.
+      syncingStore.set({ conversation })
+      void hydrateLive(conversation).finally(() => syncingStore.set({ conversation: undefined }))
       return () => {
         if (acpStore.get().activeKey === conversation) acp.deactivate()
       }
@@ -163,7 +167,7 @@ function Screen() {
       <button
         type="button"
         data-open-thread
-        className="m-6 rounded-lg border border-hairline px-4 py-3 text-left"
+        className="m-6 border border-hairline px-4 py-3 text-left"
         onClick={() => {
           screenStore.set({ open: true })
           // As the app does: a Thread opened again lands on its newest message.

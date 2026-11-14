@@ -33,6 +33,7 @@ function lane(name, command, args) {
 }
 
 await lane("cursor-sdk", process.execPath, ["scripts/patch-cursor-sdk.mjs"])
+await lane("zod", process.execPath, ["scripts/patch-zod.mjs"])
 await lane("prune", process.execPath, ["scripts/prune-host-output.mjs"])
 
 await lane("packages", process.execPath, [tsgo, "-b", "packages/sessions", "packages/git", "packages/lazy", "packages/control"])
@@ -51,3 +52,6 @@ if (failed.length > 0) {
   for (const failure of failed) console.error(failure.reason.message)
   process.exit(1)
 }
+
+// The packaged main process: what tsgo just emitted, bundled (scripts/bundle-main.mjs).
+await lane("main-bundle", process.execPath, ["scripts/bundle-main.mjs"])

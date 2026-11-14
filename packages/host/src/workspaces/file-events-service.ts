@@ -1,8 +1,7 @@
-import { execFile } from "node:child_process"
+import { hostCommand, hostProbe } from "../base/host-command.js"
 import { appendFile, copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { promisify } from "node:util"
 import { z } from "zod"
 import {
   DEGRADED_LAG_MS, DEGRADED_MEMORY_BYTES, DEGRADED_SILENCE_MS, EPISODE_GAP_MS, LAG_BEATS, LAG_BEATS_NEEDED, MEMORY_READINGS_NEEDED, SAMPLE_EVERY_MS, SETTLE_MS, WORSE_BY,
@@ -12,7 +11,7 @@ import type { MethodTable } from "../base/methods.js"
 import type { DaemonRestarts, FileHistory } from "./watch-backend.js"
 import type { DeliveryListener } from "./watch-readings.js"
 
-const execute = promisify(execFile)
+const execute = hostCommand
 
 const DAY_MS = 24 * 3_600_000
 /** Samples the file keeps: a week. */
@@ -41,7 +40,7 @@ export interface DaemonReading {
  */
 export async function readFseventsd(known?: number): Promise<DaemonReading | undefined> {
   const resident = async (pid: number) => {
-    const { stdout } = await execute("ps", ["-o", "rss=", "-p", String(pid)], { timeout: 5_000 }).catch(() => ({ stdout: "" }))
+    const { stdout } = await hostProbe("ps", ["-o", "rss=", "-p", String(pid)], { timeout: 5_000 }).catch(() => ({ stdout: "" }))
     const kb = Number(stdout.trim())
     return stdout.trim() && Number.isFinite(kb) ? { pid, residentBytes: kb * 1024 } : undefined
   }
@@ -49,7 +48,7 @@ export async function readFseventsd(known?: number): Promise<DaemonReading | und
     const reading = await resident(known)
     if (reading) return reading
   }
-  const { stdout } = await execute("pgrep", ["-x", "fseventsd"], { timeout: 5_000 }).catch(() => ({ stdout: "" }))
+  const { stdout } = await hostProbe("pgrep", ["-x", "fseventsd"], { timeout: 5_000 }).catch(() => ({ stdout: "" }))
   const pid = Number(stdout.trim().split("\n")[0])
   return Number.isInteger(pid) && pid > 0 ? resident(pid) : undefined
 }
@@ -511,7 +510,7 @@ export class FileEventsServiceWatch implements DeliveryListener, DaemonRestarts 
     }
     const sample = await readFile(join(folder, "sample.txt"), "utf8").catch(() => "")
     const clients = await Promise.all(clientPids(sample).map(async (pid) => {
-      const { stdout } = await execute("ps", ["-o", "command=", "-p", String(pid)], { timeout: 5_000 }).catch(() => ({ stdout: "" }))
+      const { stdout } = await hostProbe("ps", ["-o", "command=", "-p", String(pid)], { timeout: 5_000 }).catch(() => ({ stdout: "" }))
       return `${pid}\t${stdout.trim().split(" ")[0] || "(exited)"}`
     }))
     await writeFile(join(folder, "clients.txt"), `${clients.join("\n")}\n`)

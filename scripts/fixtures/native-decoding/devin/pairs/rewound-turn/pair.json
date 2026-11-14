@@ -1,18 +1,18 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.11.234"
+    "version": "3000.12.43"
   },
   "about": "Read notes.md and tell me the release day. Don't run commands. / Which day does QA sign off? Answer without reading anything. / /rewind / Without reading anything, how many lines does notes.md have? Two turns, a rewind to before the second, then a turn that replaces it.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#jumbled-cobweb",
+      "path": ".local/share/devin/cli/sessions.db#resisted-hair",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/a00fcf8b-7ac4-40ee-8b96-0c7aad6443f3.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/56064d52-6d90-4227-a5c3-3c32a40b66a9.db",
       "known": [
         {
           "side": "-",

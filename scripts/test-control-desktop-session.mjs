@@ -1,13 +1,16 @@
 import assert from "node:assert/strict"
 import { spawn, execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { access, chmod, mkdir, mkdtemp, stat } from "node:fs/promises"
+import { access, chmod, mkdir, mkdtemp, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { setTimeout as delay } from "node:timers/promises"
 import { pathToFileURL } from "node:url"
 import { join, resolve } from "node:path"
 import { startDesktopControlSession } from "../packages/control-runtime/dist/session.js"
 const run = promisify(execFile)
+// A launch sweeps the temp folder from the top for 25 ms, so a shared one's other folders can use it all, every launch.
+const temp = await mkdtemp("/tmp/mako-desktop-")
+process.env.TMPDIR = temp
 async function absent(path) {
   const deadline = Date.now() + 20000
   while (
@@ -137,13 +140,18 @@ await new Promise((done) => listening.stdout.once("data", done))
 listening.kill("SIGKILL")
 await new Promise((done) => listening.once("exit", done))
 await access(join(legacy, "session", "session.sock"))
-await run(process.execPath, [
-  "--input-type=module",
-  "-e",
-  `import {startDesktopControlSession} from ${JSON.stringify(module)};const owner=await startDesktopControlSession({taskId:'sweeper'});await new Promise(r=>setTimeout(r,200));await owner.close();`,
-])
+// What a launch's budget leaves goes to the next one.
+const left = (path) => access(path).then(() => true, () => false)
+for (let launches = 0; launches < 10 && ((await left(abandoned.bin)) || (await left(legacy))); launches++) {
+  await run(process.execPath, [
+    "--input-type=module",
+    "-e",
+    `import {startDesktopControlSession} from ${JSON.stringify(module)};const owner=await startDesktopControlSession({taskId:'sweeper'});await new Promise(r=>setTimeout(r,200));await owner.close();`,
+  ])
+}
 await absent(abandoned.bin)
 await absent(legacy)
+await rm(temp, { recursive: true, force: true })
 console.log(
   "Desktop lifecycle: no worker until the first command; exact values survive separate CLI processes; offline command help, explicit stop, worker crash and parent crash clean up private launch files, and a launch whose parent died unused, or an unnamed one whose socket is dead, is swept by the next"
 )

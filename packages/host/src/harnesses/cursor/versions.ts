@@ -18,11 +18,11 @@ import type { HarnessVersions } from "../../contracts/harness-versions.js"
  * with 10.14).
  */
 export const CURSOR_VERSIONS: HarnessVersions = {
-  tested: "1.2.0",
-  bundled: { package: "@cursor/sdk", version: "1.2.0", released: "2026-10-27T23:43:55.066Z", imports: "cursor-agent" },
+  tested: "1.3.1",
+  bundled: { package: "@cursor/sdk", version: "1.3.1", released: "2026-11-03T23:02:13.090Z", imports: "cursor-agent" },
   feed: { npm: "@cursor/sdk" },
   checked: {
-    on: "2026-10-30",
-    how: "@cursor/sdk 1.2.0 in Mako's lockfile, which the vocabulary, native-tools/cursor-1.2.0.json, the decoder fixtures and cursor-concepts.json name",
+    on: "2026-11-04",
+    how: "@cursor/sdk 1.3.1 in Mako's lockfile, which the vocabulary, native-tools/cursor-1.3.1.json, the decoder fixtures and cursor-concepts.json name",
   },
 }

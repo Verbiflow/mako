@@ -6,12 +6,12 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 
 | Harness | Checked on | Version | Places confirmed by |
 | --- | --- | --- | --- |
-| Claude Code | 2026-10-30 | 2.1.314 | its own listing (MCP) |
-| Codex | 2026-10-30 | 0.166.0 | its own listing (skills) |
-| Cursor | 2026-10-30 | SDK 1.2.0 | its own listing (skills, MCP) |
-| OpenCode | 2026-10-30 | 2.2.3 | its own listing (skills, MCP) |
-| Grok | 2026-10-25 | 1.0.70 | its own listing (skills, MCP) |
-| Devin | 2026-10-30 | 3000.11.234 | its own listing (skills, MCP) |
+| Claude Code | 2026-11-11 | 2.1.322 | its own listing (MCP) |
+| Codex | 2026-11-07 | 0.167.0 | its own listing (skills) |
+| Cursor | 2026-11-07 | SDK 1.3.1 | its own listing (skills, MCP) |
+| OpenCode | 2026-11-11 | 2.2.7 | its own listing (skills, MCP) |
+| Grok | 2026-11-07 | 1.0.77 | its own listing (skills, MCP) |
+| Devin | 2026-11-11 | 3000.12.43 | its own listing (skills, MCP) |
 
 ## Instructions
 
@@ -135,12 +135,12 @@ Each harness's tools as it defines them, recorded per version by `npm run harnes
 
 | Harness | Version | Recorded | Tools | Configurations | Declared, unlisted | Source |
 | --- | --- | --- | --- | --- | --- | --- |
-| Claude Code | 2.1.314 | 2026-10-30 | 27 (15 deferred) | 6 | 16 | the tools in the model request of Claude Code as Mako's SDK driver launches it (claudeSdkOptions), once per Mako mode; deferred tools' schemas from a second run with tool search off |
-| Codex | 0.166.0 | 2026-11-02 | 25 (12 called from a script) | 27 | 16 | the tools in the model request of Codex's app-server with Mako's thread config (codexInteractiveConfig, codexCollaborationMode), per listed model, with and without plan, and as a lead (codexRoutingConfig) |
-| Cursor | 1.2.0 | 2026-10-28 | 17 | 1 | 8 | the tool-call schema in @cursor/sdk (ConversationStepSchema's toolCall message): the arguments Cursor reports each tool with, not its model's definitions |
-| OpenCode | 2.2.3 | 2026-11-02 | 14 | 8 | 3 | the tools in the model request of OpenCode's native API as Mako starts it (startOpenCodeApi), per agent Mako's modes use, on an Anthropic and an OpenAI model, and as a lead (configureOpenCodeRouting) |
-| Grok | 1.0.70 | 2026-11-02 | 27 | 8 | 2 | the tools in the model request of grok agent stdio as Mako's ACP source launches it, once per Mako mode, and as a lead (nativeSpawnsOff) |
-| Devin | 3000.11.234 | 2026-11-02 | 24 | 8 | 3 | the tools in Devin's GetChatMessage request to a stand-in Windsurf API, devin acp launched as Mako's ACP source launches it, once per Mako mode and as a lead (nativeSpawnsOff); not smart, which Devin offers only to an account whose settings allow it |
+| Claude Code | 2.1.322 | 2026-11-10 | 27 (15 deferred) | 6 | 16 | the tools in the model request of Claude Code as Mako's SDK driver launches it (claudeSdkOptions), once per Mako mode; deferred tools' schemas from a second run with tool search off |
+| Codex | 0.167.0 | 2026-11-06 | 25 (12 called from a script) | 27 | 16 | the tools in the model request of Codex's app-server with Mako's thread config (codexInteractiveConfig, codexCollaborationMode), per listed model, with and without plan, and as a lead (codexRoutingConfig) |
+| Cursor | 1.3.1 | 2026-11-04 | 17 | 1 | 8 | the tool-call schema in @cursor/sdk (ConversationStepSchema's toolCall message): the arguments Cursor reports each tool with, not its model's definitions |
+| OpenCode | 2.2.7 | 2026-11-10 | 14 | 8 | 3 | the tools in the model request of OpenCode's native API as Mako starts it (startOpenCodeApi), per agent Mako's modes use, on an Anthropic and an OpenAI model, and as a lead (configureOpenCodeRouting) |
+| Grok | 1.0.77 | 2026-11-06 | 27 | 8 | 2 | the tools in the model request of grok agent stdio as Mako's ACP source launches it, once per Mako mode, and as a lead (nativeSpawnsOff) |
+| Devin | 3000.12.43 | 2026-11-10 | 24 | 10 | 3 | the tools in Devin's GetChatMessage request to a stand-in Windsurf API, devin acp launched as Mako's ACP source launches it, once per Mako mode and as a lead (nativeSpawnsOff) |
 
 ## Plan, questions and subagents
 

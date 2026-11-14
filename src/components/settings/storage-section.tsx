@@ -76,7 +76,7 @@ export function StorageSection() {
         </p>
 
         {disk ? (
-          <div className="mb-3 rounded-lg bg-surface px-3 py-2.5 ring-1 ring-hairline">
+          <div className="mb-3 bg-raised px-3 py-2.5">
             <div className="flex items-baseline gap-2">
               <span className="flex-1 text-ui text-foreground">{formatBytes(disk.freeBytes)} free of {formatBytes(disk.totalBytes)}</span>
               {total ? <span className="text-label text-faint">Mako keeps {formatBytes(total)}</span> : null}

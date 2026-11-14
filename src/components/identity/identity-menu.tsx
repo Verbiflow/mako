@@ -55,7 +55,7 @@ export function IdentityMenu() {
         <button
           type="button"
           onClick={() => openSettings("agents")}
-          className="pressable flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui text-muted-foreground transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
+          className="pressable flex w-full items-center gap-2 px-2 py-1.5 text-left text-ui text-muted-foreground transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
         >
           <SettingsIcon className="size-3.5" />
           <span className="flex-1">Accounts and settings</span>
@@ -83,7 +83,7 @@ function Person({ identity }: { identity: Exclude<DeskIdentity, { kind: "none" }
     <button
       type="button"
       onClick={() => openSettings("account")}
-      className="pressable group flex w-full items-center gap-2.5 rounded-md px-2 pt-1 pb-1.5 text-left transition-colors duration-100 hover:bg-fill-hover"
+      className="pressable group flex w-full items-center gap-2.5 px-2 pt-1 pb-1.5 text-left transition-colors duration-100 hover:bg-fill-hover"
     >
       {face}
       <div className="min-w-0 flex-1">
@@ -250,7 +250,7 @@ function CopyCommand({ command }: { command: string }) {
           () => toast.error("The command wasn't copied")
         )
       }
-      className="pressable flex items-center gap-1.5 rounded-md bg-raised px-2 py-1 font-mono text-label whitespace-nowrap text-muted-foreground hover:text-foreground"
+      className="pressable flex items-center gap-1.5 bg-raised px-2 py-1 font-mono text-label whitespace-nowrap text-muted-foreground hover:text-foreground"
     >
       {command}
       <CopyIcon className="size-3" />
@@ -276,7 +276,7 @@ function Connection({
   return (
     <div className="flex items-center gap-2.5 px-2 py-1.5">
       <span
-        className={cn("flex size-8 shrink-0 items-center justify-center rounded-lg bg-raised text-foreground", markClassName)}
+        className={cn("flex size-8 shrink-0 items-center justify-center bg-raised text-foreground", markClassName)}
         aria-hidden
       >
         {mark}

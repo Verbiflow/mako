@@ -1,6 +1,8 @@
 import { defineRule } from "@oxlint/plugins";
 import type { ESTree } from "@oxlint/plugins";
 
+import { isReviewedDecoderInput, reviewedDataDecoderSchema } from "../shared/reviewed-data-decoder.ts";
+
 type Parameter = ESTree.ParamPattern;
 type ParameterOwner =
   | ESTree.ArrowFunctionExpression
@@ -47,6 +49,7 @@ export const noUnknownParametersRule = defineRule({
       description:
         "Disallow explicitly unknown function parameters except `cause`; decode unknown input at its I/O boundary instead.",
     },
+    schema: [{ type: "object", properties: { reviewedDataDecoder: reviewedDataDecoderSchema }, additionalProperties: false }],
     messages: {
       unknownParameter:
         "Parameter `{{parameter}}` leaves input unparsed. Accept a named domain type; run the expected schema or parser at the I/O boundary before calling this function.",
@@ -58,7 +61,7 @@ export const noUnknownParametersRule = defineRule({
         const annotation = parameterAnnotation(parameter);
         if (annotation?.typeAnnotation.type !== "TSUnknownKeyword") continue;
         const name = parameterName(parameter, context.sourceCode.getText(parameter));
-        if (name === "cause") continue;
+        if (name === "cause" || isReviewedDecoderInput(context, node, parameter)) continue;
         context.report({
           node: annotation.typeAnnotation,
           messageId: "unknownParameter",

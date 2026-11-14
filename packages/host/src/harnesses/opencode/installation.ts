@@ -1,3 +1,4 @@
+import { hostCommand } from "../../base/host-command.js"
 import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { openCodeDatabasePaths } from "@mako/sessions"
 export { openCodeDatabasePaths } from "@mako/sessions"
@@ -5,12 +6,10 @@ import { existsSync } from "node:fs"
 import { stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import { execFile } from "node:child_process"
-import { promisify } from "node:util"
 import { z } from "zod"
 import { resolveExecutable } from "../../base/executable.js"
 import { OPENCODE_OLDEST, openCodeVersionProblem } from "./version.js"
-import { openCodeStoreHoldsSession, readOpenCodeRecord } from "./resume.js"
+import { openCodeSessionOpening, openCodeStoreHoldsSession } from "./resume.js"
 
 export interface OpenCodeInstallation {
   command: string
@@ -34,7 +33,7 @@ export function openCodeExecutable(env: NodeJS.ProcessEnv = process.env): string
   return executableCandidates(env).find(command => existsSync(command)) ?? null
 }
 
-const run = promisify(execFile)
+const run = hostCommand
 
 /** A machine still starting its harnesses can take seconds to start one more process. */
 const VERSION_TIMEOUT_MS = 8_000
@@ -131,9 +130,7 @@ export async function verifyOpenCodeSession(
   if (nativePath && !openCodeDatabasePaths(env).some(database => nativePath.startsWith(`${database}#`)))
     throw new Error("The saved OpenCode session belongs to a different native store configuration.")
   const path = nativePath ?? await locateOpenCodeSession(stores, sessionId, env)
-  const record = await readOpenCodeRecord(stores, {
-    id: "runtime-resolution", provider: "opencode", nativeId: sessionId, path, coveredBlocks: 0, includesBase: false,
-  })
-  if (record.kind === "unavailable") throw new Error(record.reason)
+  const opening = await openCodeSessionOpening(stores, path, sessionId)
+  if (opening.kind === "unavailable") throw new Error(opening.reason)
   return path
 }

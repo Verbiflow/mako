@@ -207,7 +207,8 @@ const icon = renderToStaticMarkup(createElement(HarnessIcon, { harness: "seventh
 assert.match(icon, /viewBox="0 0 16 16"/)
 assert.match(icon, /d="M0 0h16v16H0zM4 4v8h8V4z"/)
 assert.match(icon, /fill-rule="evenodd"/)
-assert.match(icon, /stop-color="#9BD3B5"/)
+assert.doesNotMatch(icon, /stop-color/, "a mark is one ink unless its brand colour is asked for")
+assert.match(renderToStaticMarkup(createElement(HarnessIcon, { harness: "seventh", tinted: true })), /stop-color="#9BD3B5"/)
 assert.match(renderToStaticMarkup(createElement(ProviderIcon, { provider: "seventh" })), /M0 0h16v16H0z/, "a model the harness serves itself wears its mark")
 const agents: SettingsSection = { id: "agents", title: "Agents", group: "Providers", icon: BotIcon, keywords: ["login"], perHarness: true, Component: () => null }
 assert.ok(sectionKeywords(agents, [described]).includes("Seventh Agent"))

@@ -10,7 +10,7 @@ import type { MoveCheckpoint } from "@mako/protocol/moves"
 import type { ThreadHandOff, ThreadMoveOutcome } from "@mako/host/contracts/cloud-threads"
 import type { SessionExecution } from "@mako/host/contracts/thread-execution"
 import { SessionIdSchema, ThreadIdSchema, type SessionId, type ThreadPlacement } from "@mako/host/contracts/thread-identity"
-import { CloudHandOffs, workingThreads, type WorkingSnapshot, type WorkingThread } from "@mako/host/conversations/cloud-handoffs"
+import { CloudHandOffs, machineLeaving, workingThreads, type WorkingSnapshot, type WorkingThread } from "@mako/host/conversations/cloud-handoffs"
 import { CloudReadiness, type ReadinessAccount } from "@mako/host/conversations/cloud-readiness"
 import type { CloudRepository } from "@mako/host/contracts/cloud-threads"
 import type { LivePermissionRequest, LiveSessionState } from "@mako/host/contracts/providers-acp"
@@ -62,9 +62,8 @@ try {
     const read: string[] = []
     const working = workingThreads({
       live: {
-        summaries: () => [...byId.values()].map((each) => each.summary),
-        loaded: (id) => id !== unloaded.summary.session.id,
-        snapshot: (id) => (read.push(id), byId.get(id)?.snapshot ?? null),
+        listed: () => [...byId.values()].map((each) => each.summary),
+        held: (id) => (read.push(id), id === unloaded.summary.session.id ? undefined : byId.get(id)?.snapshot),
       },
       threads: {
         journalPlacement: (id) => byId.get(id)?.placement,
@@ -77,7 +76,7 @@ try {
     })
     assert.deepEqual(working.map((each) => each.thread).sort(), [threadA, threadB].sort(), "Threads at work, each once")
     assert.equal(working.find((each) => each.thread === threadA)?.conversationId, all[1]?.summary.session.id, "the running conversation is the one asked from")
-    assert.ok(!read.includes(unloaded.summary.session.id), "a conversation only on disk isn't read back in")
+    assert.ok(read.includes(unloaded.summary.session.id), "the resident lookup sees an unloaded conversation without loading its journal")
   }
 
   // A handoff: one move per Thread, named by the handoff and the Thread (asked again, the same moves); a Thread that
@@ -136,6 +135,70 @@ try {
     assert.deepEqual(changed, [{ onSleep: false }], "windows hear the change")
     const again = new CloudHandOffs({ file: join(root, "handoff.json"), working: () => [], moves: { move: async () => ({ kind: "moved", cloudThread: "" }), refusal: async () => undefined, leaving: () => false, settled: async () => 0 }, unavailable: async () => undefined, changed: () => {} })
     assert.equal(await again.onSleep(), false, "kept across a restart")
+  }
+
+  // This Mac shutting down hands every Thread at work to the cloud, as a sleep does, within its hold, and the cloud hears
+  // it go quiet only once that handoff answered: a quiet Mac's link carries no move. A sleep's quiet waits for the
+  // sleep's handoff under way the same way. With the person's choice off, nothing moves and the Mac goes quiet at once.
+  {
+    const order: string[] = []
+    const asked: Array<ThreadHandOff | undefined> = []
+    let answers = true
+    let finish: () => void = () => undefined
+    const handOffs = new CloudHandOffs({
+      file: join(root, "shutdown.json"),
+      working: () => [{ conversationId: "c-1", thread: "t-1", harness: "codex" }],
+      moves: {
+        move: async (_conversationId, _move, handOff, options): Promise<ThreadMoveOutcome> => {
+          asked.push(handOff)
+          order.push(`move ${handOff?.why ?? ""} ${options?.answer ?? ""}`)
+          if (answers) await new Promise<void>((resolve) => { finish = resolve })
+          else await new Promise(() => undefined)
+          return { kind: "moved", cloudThread: "t-cloud" }
+        },
+        refusal: async () => undefined,
+        leaving: () => false,
+        settled: async () => (order.push("settled"), 0),
+      },
+      unavailable: async () => undefined,
+      changed: () => {},
+    })
+    const quiet = (why: "sleep" | "quit") => void order.push(`quiet ${why}`)
+    const until = async (done: () => boolean) => {
+      for (let tries = 0; !done() && tries < 500; tries++) await new Promise((resolve) => setTimeout(resolve, 5))
+      assert.ok(done())
+    }
+    const began = Date.now()
+    const shutdown = machineLeaving("shutdown", { handOffs, enabled: async () => true, quiet, holdMs: 5_000 })
+    await until(() => order.length > 0)
+    assert.deepEqual(order, ["move shutdown handed"], "each Thread at work moves, waited for until the cloud has it, before the Mac goes quiet")
+    const releaseBy = asked[0]?.releaseBy ?? 0
+    assert.ok(releaseBy > began && releaseBy <= began + 5_000, "released within the hold")
+    finish()
+    await shutdown
+    assert.deepEqual(order, ["move shutdown handed", "settled", "quiet quit"], "then every move in flight, then quiet")
+    // A move that never answers holds the shutdown no longer than its hold.
+    order.splice(0)
+    answers = false
+    const held = Date.now()
+    await machineLeaving("shutdown", { handOffs, enabled: async () => true, quiet, holdMs: 300 })
+    assert.deepEqual(order, ["move shutdown handed", "quiet quit"])
+    assert.ok(Date.now() - held < 2_000, "held no longer than its hold")
+    // A sleep's handoff under way: the cloud hears the Mac go quiet once it answered.
+    order.splice(0)
+    answers = true
+    const sleeping = handOffs.handOff(randomUUID(), "sleep", Date.now() + 5_000)
+    await until(() => order.length > 0)
+    const suspend = machineLeaving("suspend", { handOffs, enabled: async () => true, quiet, holdMs: 5_000 })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.deepEqual(order, ["move sleep handed"], "not quiet while the sleep's handoff runs")
+    finish()
+    await Promise.all([sleeping, suspend])
+    assert.deepEqual(order, ["move sleep handed", "settled", "quiet sleep"])
+    // The person's choice off: nothing moves.
+    order.splice(0)
+    await machineLeaving("shutdown", { handOffs, enabled: async () => false, quiet, holdMs: 5_000 })
+    assert.deepEqual(order, ["quiet quit"])
   }
 
   // The sleep watch, against a stand-in for the native helper: told the Mac will sleep, it hands off with a deadline
@@ -198,14 +261,14 @@ try {
     writeFileSync(join(folder, "a.txt"), "one\n")
     sh(folder, "add", ".")
     sh(folder, "commit", "--quiet", "-m", "base")
-    const made: Array<{ threadId: string; standby?: boolean }> = []
+    const made: Array<{ threadId: string; standby?: boolean; standsByFor?: string }> = []
     const checkpoints: string[] = []
     const records: string[][] = []
     /** Cloud Threads the cloud ended unused, as it says when one is made again. */
     const ended = new Set<string>()
     const account: ReadinessAccount = {
-      createThread: async (threadId: string, _repository: CloudRepository, making?: { standby?: boolean }) => {
-        made.push({ threadId, ...making?.standby && { standby: true } })
+      createThread: async (threadId: string, _repository: CloudRepository, making?: { standby?: boolean; standsByFor?: string }) => {
+        made.push({ threadId, ...making?.standby && { standby: true }, ...making?.standsByFor && { standsByFor: making.standsByFor } })
         return ended.has(threadId) ? { ready: false, ended: true as const } : { ready: false }
       },
       sendCheckpoint: async (_threadId: string, checkpoint: MoveCheckpoint) => {
@@ -240,6 +303,11 @@ try {
     await readiness.refresh()
     await readiness.refresh()
     assert.equal(new Set(made.map((each) => each.threadId)).size, 1, "one cloud Thread stands by")
+    // What a going-away names for it: the worktree's checkpoint the cloud acknowledged, whole, on that cloud Thread.
+    const named = await readiness.noteCheckpoint("local-1")
+    assert.equal(named?.sha256, checkpoints.at(-1), "the last checkpoint the cloud acknowledged")
+    assert.ok(named?.head && named.work && named.standby === made[0]!.threadId, "whole, on the cloud Thread standing by")
+    assert.ok(made.every((each) => each.standsByFor === "local-1"), "made naming the Thread of this Mac's it stands by for, so the account can trust it")
     assert.ok(made.every((each) => each.standby), "standing by: no machine until a move")
     assert.equal(checkpoints.length, 1, "the checkout goes once while it's unchanged")
     assert.equal(records.length, 2, "records each round, only what's new")
@@ -247,6 +315,7 @@ try {
     await readiness.refresh()
     assert.equal(checkpoints.length, 2, "changed, it goes again")
     assert.equal(await readiness.take("local-1", folder, { url: "https://github.com/someone/else" }), undefined, "another repository's move doesn't take it")
+    assert.equal(await readiness.take("local-1", folder, { ...repository, branch: "another-branch" }), undefined, "nor another branch's: the cloud would refuse it")
     // The cloud ended it unused (nobody kept it ready for a while): the next round stands by with a new one.
     const first = made.at(-1)!.threadId
     ended.add(first)
@@ -263,6 +332,27 @@ try {
     writeFileSync(join(root, "stale.json"), JSON.stringify({ version: 1, threads: { "local-1": { ...kept.threads["local-1"], at: Date.now() - 25 * 60_000 } } }))
     assert.equal(await stale.take("local-1", folder, repository), undefined, "not taken: the move makes its own")
     assert.equal(JSON.parse(readFileSync(join(root, "stale.json"), "utf8")).threads["local-1"], undefined, "and forgotten here")
+    // A cloud Thread a build before `standsByFor` made stands by unnamed: the next round, a host's first included, names
+    // that same one, rather than making another in its place.
+    writeFileSync(join(root, "unnamed.json"), JSON.stringify({ version: 1, threads: { "local-1": { ...kept.threads["local-1"], cloudThread: "t-unnamed", at: Date.now() } } }))
+    const unnamed = new CloudReadiness({ file: join(root, "unnamed.json"), git, scratch: join(root, "unnamed-scratch"), account: () => account, enabled: async () => true, working: () => [{ conversationId: "c-1", thread: "local-1", harness: "codex" }], leaving: () => false, plan: async () => ({ thread: "local-1", folder, repository, paths: [], harness: "codex" }), sendRecords: async () => [], newCloudThread: () => "t-minted" })
+    const asked = made.length
+    await unnamed.refresh()
+    assert.deepEqual(made.slice(asked), [{ threadId: "t-unnamed", standby: true, standsByFor: "local-1" }], "the standby there is named, and no other made")
+    assert.equal(JSON.parse(readFileSync(join(root, "unnamed.json"), "utf8")).threads["local-1"].cloudThread, "t-unnamed")
+    assert.equal(await unnamed.noteProject("local-1"), undefined, "a Thread in one repository's checkout names no project")
+    // A project folder's Thread: kept ready at its first repository's worktree, its Sessions in the project worktree around
+    // it, which a going-away names; once its plan names none, neither does the note.
+    let projectFolder: string | undefined = join(root, "worktrees", "shop", "both-sides")
+    const inProject = new CloudReadiness({ file: join(root, "project.json"), git, scratch: join(root, "project-scratch"), account: () => account, enabled: async () => true, working: () => [{ conversationId: "c-2", thread: "local-2", harness: "codex" }], leaving: () => false, plan: async () => ({ thread: "local-2", folder, repository, paths: [], harness: "codex", ...projectFolder && { project: projectFolder, projectFrom: join(root, "shop") } }), sendRecords: async () => [], newCloudThread: () => "t-project" })
+    await inProject.refresh()
+    assert.equal(await inProject.noteProject("local-2"), projectFolder)
+    assert.equal(await inProject.noteProjectFrom("local-2"), join(root, "shop"), "and the folder of this Mac's it mirrors")
+    assert.equal(await inProject.noteProject("local-9"), undefined, "nothing for a Thread not kept ready")
+    projectFolder = undefined
+    await inProject.refresh()
+    assert.equal(await inProject.noteProject("local-2"), undefined)
+    assert.equal(await inProject.noteProjectFrom("local-2"), undefined)
     assert.deepEqual(await readiness.take("local-1", folder, repository), { cloudThread: standing, checkpoint: checkpoints.at(-1) }, "the move takes the cloud Thread standing by, with the checkpoint last sent, which the cloud keeps")
     assert.equal(await readiness.take("local-1", folder, repository), undefined, "once")
     const before = made.length
@@ -273,6 +363,20 @@ try {
     const quiet = new CloudReadiness({ file: join(root, "quiet.json"), git, scratch: join(root, "quiet-scratch"), account: () => account, enabled: async () => enabled, working: () => [{ conversationId: "c-9", thread: "local-9", harness: "codex" }], leaving: () => false, plan: async () => ({ thread: "local-9", folder, repository, paths: [], harness: "codex" }), sendRecords: async () => [], newCloudThread: () => "t-quiet" })
     await quiet.refresh()
     assert.ok(!made.some((each) => each.threadId === "t-quiet"), "with handing off on sleep off, nothing of a Thread goes to the cloud")
+    // A Thread whose conversation hasn't moved since its last round is passed over: no capture, no renewal, no send.
+    let revision = 1
+    let rounds = 0
+    const still = new CloudReadiness({ file: join(root, "still.json"), git, scratch: join(root, "still-scratch"), account: () => account, enabled: async () => true,
+      working: () => [{ conversationId: "c-7", thread: "local-7", harness: "codex" }], revision: () => revision, leaving: () => false,
+      plan: async () => { rounds += 1; return { thread: "local-7", folder, repository, paths: [], harness: "codex" } }, sendRecords: async () => [], newCloudThread: () => "t-still" })
+    await still.refresh()
+    assert.equal(rounds, 1, "its first round brings it up")
+    await still.refresh()
+    await still.refresh()
+    assert.equal(rounds, 1, "unmoved, it isn't brought up again")
+    revision = 2
+    await still.refresh()
+    assert.equal(rounds, 2, "moved, it is")
   }
   console.log("PASS: agents at work are handed off one move per Thread, named by the handoff; the sleep is held until the handoff answers or its deadline; Threads at work stand by in the cloud with only what changed, taken once by their move")
 } finally {

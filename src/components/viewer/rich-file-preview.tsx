@@ -182,7 +182,7 @@ function FileMediaPreview({
     return (
       <div className={`bg-shell/40 ${expanded ? "flex h-full min-h-0 flex-col" : ""}`}>
         {expanded ? <div className="flex shrink-0 items-center gap-1 border-b border-hairline px-4 py-2 text-label">
-          {([false, true] as const).map((actual) => <button key={String(actual)} type="button" aria-pressed={actualSize === actual} onClick={() => setActualSize(actual)} className={`pressable rounded-md px-2 py-1 ${actualSize === actual ? "bg-fill-selected text-foreground" : "text-muted-foreground hover:bg-fill-hover"}`}>
+          {([false, true] as const).map((actual) => <button key={String(actual)} type="button" aria-pressed={actualSize === actual} onClick={() => setActualSize(actual)} className={`pressable px-2 py-1 ${actualSize === actual ? "bg-fill-selected text-foreground" : "text-muted-foreground hover:bg-fill-hover"}`}>
             {actual ? "Actual size" : "Fit"}
           </button>)}
         </div> : null}

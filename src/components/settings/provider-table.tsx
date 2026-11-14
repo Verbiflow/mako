@@ -68,7 +68,7 @@ export function ProviderTable({
       <div
         role="list"
         aria-label="Agent connections"
-        className="divide-y divide-hairline overflow-hidden rounded-lg border border-hairline"
+        className="overflow-hidden bg-raised"
       >
         {harnesses.map((agent) => (
           <ProviderRow
@@ -150,7 +150,7 @@ function ProviderRow({
     <div role="listitem" aria-label={agent.name}>
       <div className="px-4 py-3">
         <div className="flex items-center gap-3">
-          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-fill-hover text-muted-foreground">
+          <span className="flex size-8 shrink-0 items-center justify-center bg-fill-hover text-muted-foreground">
             <HarnessIcon harness={agent.id} className="size-4" />
           </span>
           <div className="min-w-0 flex-1">
@@ -235,7 +235,7 @@ function ProviderRow({
       {expanded ? (
         <div
           id={detailsId}
-          className="space-y-4 border-t border-hairline bg-surface px-4 py-4"
+          className="space-y-4 bg-surface px-4 py-4"
         >
           {connection || accountProvider ? (
             <div className="space-y-3">
@@ -295,7 +295,7 @@ function ProviderRow({
           )}
           {primary ? <InstallationDetails info={primary[1]} /> : null}
           {runtimes.length > 1 ? (
-            <div className="space-y-3 border-t border-hairline pt-3">
+            <div className="space-y-3 pt-3">
               <p className="text-label font-medium">Other installations</p>
               <p className="text-label text-faint">
                 New conversations use the version shown above. These copies may
@@ -309,7 +309,7 @@ function ProviderRow({
               ))}
             </div>
           ) : null}
-          <div className="border-t border-hairline pt-3">
+          <div className="pt-3">
             <HarnessCapabilities harness={agent.id} />
           </div>
         </div>

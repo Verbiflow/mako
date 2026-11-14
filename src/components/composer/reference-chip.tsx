@@ -306,7 +306,7 @@ function DetailChip({
 
 function DetailCode({ text }: { text: string }) {
   return text ? (
-    <pre className="max-h-64 overflow-auto rounded-md bg-surface p-2 font-mono text-code leading-relaxed whitespace-pre-wrap text-foreground">{text}</pre>
+    <pre className="max-h-64 overflow-auto bg-surface p-2 font-mono text-code leading-relaxed whitespace-pre-wrap text-foreground">{text}</pre>
   ) : null
 }
 

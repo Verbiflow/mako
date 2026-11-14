@@ -1,0 +1,70 @@
+name: Install dependencies
+description: Restore the installed packages by lockfile, or install and keep them, then fetch Electron with a versioned cache and bounded retries.
+inputs:
+  electron:
+    description: Whether this job needs the Electron binary.
+    default: "true"
+  cache:
+    description: Whether to restore and keep the installed tree; "false" installs cold, as main's `install-cold` checks.
+    default: "true"
+runs:
+  using: composite
+  steps:
+    # What the installed tree was built by and for: Node, npm and the runner's image.
+    - id: node
+      shell: bash
+      run: |
+        echo "version=$(node -p process.versions.node)" >> "$GITHUB_OUTPUT"
+        echo "npm=$(npm --version)" >> "$GITHUB_OUTPUT"
+        # The image's OS, not its weekly version: GitHub rolls a new image out over days, and runners on two versions
+        # at once missed each other's cache (#635). Node and npm, above, are what a version change could alter.
+        echo "image=${ImageOS:-none}" >> "$GITHUB_OUTPUT"
+        echo "dependencies=$(node scripts/ci-dependency-key.mjs)" >> "$GITHUB_OUTPUT"
+    - id: electron
+      if: inputs.electron == 'true'
+      shell: bash
+      run: echo "version=$(node -p 'require("./package-lock.json").packages["node_modules/electron"].version')" >> "$GITHUB_OUTPUT"
+    - id: cache
+      if: inputs.electron == 'true'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/electron-cache
+        key: electron-${{ runner.os }}-${{ runner.arch }}-${{ steps.electron.outputs.version }}
+    # The installed tree, keyed by everything that decides it (`scripts/ci-dependency-key.mjs`): the lockfile, every
+    # package.json's dependency fields (a hit skips `npm ci` and with it the check that they agree with the lockfile, so a
+    # dependency changed without its lockfile misses and fails as a cold install would; a script's edit keeps the
+    # cache), the patches its postinstall applies, and the runner image, Node and npm it was
+    # built with. A hit skips `npm ci` (about 75 s on Linux, 2 minutes on a Mac); a miss installs and saves the tree
+    # before Electron's binary is added below, so every job saves and restores the same one. Main's `install-cold`
+    # installs without it, so a tree the cache would hide still has to install.
+    - id: modules
+      if: inputs.cache == 'true'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          node_modules
+          packages/*/node_modules
+        key: node-modules-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.image }}-node-${{ steps.node.outputs.version }}-npm-${{ steps.node.outputs.npm }}-${{ steps.node.outputs.dependencies }}
+    - if: steps.modules.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      run: npm ci
+    - if: inputs.cache == 'true' && steps.modules.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          node_modules
+          packages/*/node_modules
+        key: ${{ steps.modules.outputs.cache-primary-key }}
+    - if: inputs.electron == 'true'
+      shell: bash
+      env:
+        electron_config_cache: ${{ runner.temp }}/electron-cache
+      run: node scripts/ci-install-electron.mjs
+    # Keep a verified download even when a later test fails.
+    - if: inputs.electron == 'true' && steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/electron-cache
+        key: ${{ steps.cache.outputs.cache-primary-key }}

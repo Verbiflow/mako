@@ -1,3 +1,6 @@
+import { LazyBoundary } from "@/components/ui/lazy-boundary"
+import { LazyFailed } from "@/components/ui/lazy-failed"
+import { PatientFallback } from "@/components/ui/patient-fallback"
 import { BinaryDiff } from "@/components/inspector/binary-diff"
 import {
   Fragment,
@@ -21,7 +24,7 @@ import { GitLoading } from "@/components/inspector/git-loading"
 import { StageStrip } from "@/components/stage/stage-strip"
 import { PlanDocumentView } from "@/components/viewer/plan-view"
 import { TranscriptControls } from "@/components/viewer/transcript-controls"
-import { engageWorkbenchPane, focusWorkbenchPane } from "@/state/session-panes"
+import { closeWorkbenchPane, engageWorkbenchPane, focusWorkbenchPane } from "@/state/session-panes"
 import { useTabDrag, type DropSide } from "@/state/tab-drag"
 import { desktop } from "@/state/desktop"
 import { prefsStore } from "@/state/prefs"
@@ -36,6 +39,8 @@ import {
   type ViewerPane,
 } from "@/state/viewer"
 import { cn } from "@/lib/utils"
+import { fileKind } from "@/lib/file-kinds"
+import { FileIcon } from "@/components/ui/file-icon"
 import {
   AtSignIcon,
   BookOpenIcon,
@@ -157,6 +162,7 @@ export function FileViewer({
   return (
     <div
       ref={workspaceRef}
+      data-workbench
       style={style}
       className={cn(
         "relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-surface",
@@ -280,10 +286,25 @@ const FilePane = memo(function FilePane({
         </div>
       ) : null}
       {!agent && document ? <DocumentView document={document} /> : null}
+      {!agent && !document ? <EmptyPane paneId={pane.id} canClose={canClosePane} /> : null}
       <PaneDropOverlay paneId={pane.id} />
     </section>
   )
 })
+
+/** A pane with nothing of its own to show says so, and closes: never a blank half of the window. */
+function EmptyPane({ paneId, canClose }: { paneId: string; canClose: boolean }) {
+  return (
+    <div data-pane-empty className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-ui text-faint">
+      <p>Nothing is open in this pane.</p>
+      {canClose ? (
+        <Action tone="outline" size="md" onClick={() => closeWorkbenchPane(paneId)}>
+          Close pane
+        </Action>
+      ) : null}
+    </div>
+  )
+}
 
 const DROP_LABELS = {
   left: "Open on the left",
@@ -306,7 +327,7 @@ function PaneDropOverlay({ paneId }: { paneId: string }) {
   )
 }
 
-function DocumentView({ document }: { document: ViewerDocument }) {
+export function DocumentView({ document }: { document: ViewerDocument }) {
   if (document.kind === "plan" && document.plan) return <PlanDocumentView document={document} of={document.plan} />
   const previewable =
     document.kind === "transcript" ||
@@ -318,15 +339,10 @@ function DocumentView({ document }: { document: ViewerDocument }) {
         {document.kind === "transcript" ? (
           <TranscriptControls document={document} />
         ) : (
-          <span
-            className="min-w-0 flex-1 truncate px-1 font-mono text-label text-faint"
-            title={document.path}
-          >
-            {document.path}
-          </span>
+          <DocumentTitle path={document.path} file={document.kind === "file" ? document.file : undefined} />
         )}
         {document.file?.truncated ? (
-          <span className="shrink-0 rounded bg-raised px-1.5 py-px text-label text-caution">
+          <span className="shrink-0 bg-raised px-1.5 py-px text-label text-caution">
             first 2 MB
           </span>
         ) : null}
@@ -402,14 +418,16 @@ function DocumentView({ document }: { document: ViewerDocument }) {
         ) : document.kind === "diff" && document.diff ? (
           <CenterDiff diff={document.diff} />
         ) : (document.kind === "file" || document.kind === "transcript") && document.file ? (
-          <Suspense fallback={<GitLoading kind="diff" label={`Opening ${document.title}`} />}>
-            <View
-              file={document.file}
-              line={document.line}
-              mode={document.renderMode}
-              commentPath={document.kind === "file" ? document.path : undefined}
-            />
-          </Suspense>
+          <LazyBoundary fallback={() => <LazyFailed what="The file" />}>
+            <Suspense fallback={<PatientFallback what="the file"><GitLoading kind="diff" label={`Opening ${document.title}`} /></PatientFallback>}>
+              <View
+                file={document.file}
+                line={document.line}
+                mode={document.renderMode}
+                commentPath={document.kind === "file" ? document.path : undefined}
+              />
+            </Suspense>
+          </LazyBoundary>
         ) : (
           <GitLoading kind="diff" label={`Reading ${document.path}`} />
         )}
@@ -514,10 +532,40 @@ const LazyDiff = lazy(async () => {
 
 function CenterDiff({ diff }: { diff: ViewerDiff }) {
   return (
-    <Suspense fallback={<GitLoading kind="diff" label="Loading diff" />}>
-      <LazyDiff diff={diff} />
-    </Suspense>
+    <LazyBoundary fallback={() => <LazyFailed what="The diff" />}>
+      <Suspense fallback={<PatientFallback what="the diff"><GitLoading kind="diff" label="Loading diff" /></PatientFallback>}>
+        <LazyDiff diff={diff} />
+      </Suspense>
+    </LazyBoundary>
   )
+}
+
+/** A file's name with its icon, its folder after it, and what it is: `TypeScript · 412 lines`. */
+function DocumentTitle({ path, file }: { path: string; file?: ViewerDocument["file"] }) {
+  const slash = path.lastIndexOf("/")
+  const kind = fileKind(path)
+  const lines = file && !file.binary && file.contents ? lineCount(file.contents) : undefined
+  return (
+    <span className="flex min-w-0 flex-1 items-center gap-1.5 px-1" title={path}>
+      <FileIcon path={path} className="size-3.5 text-faint" />
+      <span className="shrink-0 truncate text-label font-medium text-foreground">{path.slice(slash + 1)}</span>
+      {slash > 0 ? (
+        <span className="min-w-0 truncate text-label text-faint" dir="rtl">
+          <bdi>{path.slice(0, slash)}</bdi>
+        </span>
+      ) : null}
+      <span className="ml-auto shrink-0 pl-2 text-label text-faint">
+        {kind.label}
+        {lines !== undefined ? ` · ${lines.toLocaleString()} ${lines === 1 ? "line" : "lines"}` : ""}
+      </span>
+    </span>
+  )
+}
+
+function lineCount(text: string): number {
+  let lines = 1
+  for (let at = text.indexOf("\n"); at >= 0; at = text.indexOf("\n", at + 1)) lines += 1
+  return text.endsWith("\n") ? lines - 1 : lines
 }
 
 function hasRichPreview(path: string) {

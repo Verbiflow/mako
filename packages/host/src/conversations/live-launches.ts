@@ -2,6 +2,7 @@ import { z } from "zod"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { AdmittedLiveDriver } from "../harnesses/index.js"
+import { retriesBegun } from "../contracts/delivery-retry.js"
 import type { LiveSnapshot, LiveStartOptions } from "../contracts/live-conversations.js"
 import type { LiveSessionState } from "../contracts/providers-acp.js"
 import type { Actor } from "../contracts/thread-identity.js"
@@ -11,13 +12,13 @@ import { promptFingerprint } from "./live-assets.js"
 import { LiveJournal, LiveRequestSchema } from "./live-journal.js"
 import { releaseHold } from "./live-ledger.js"
 import { snapshotFacts } from "./live-moves.js"
-import { launchCalls, launchRouting, residentOf, revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
+import { activeBinding, launchAccount, launchCalls, launched, launchRouting, residentOf, revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
 import { updateBinding } from "./live-sources.js"
 import { captureNativeHistory } from "./native-history.js"
 
 type LaunchAccess = Pick<LiveAccess,
   "dependencies" | "admission" | "load" | "add" | "bindingOwners" | "startingSession" | "register" | "markPurpose" | "markParent" |
-  "actor" | "retainAttachments" | "moves" | "flush" | "drain" | "scheduleHibernation" | "failedStart" | "driverEvents">
+  "actor" | "retainAttachments" | "moves" | "flush" | "noteWork" | "drain" | "scheduleHibernation" | "failedStart" | "driverEvents">
 
 /** New conversations, from their journal's first write to their provider's first native session. */
 export class LiveLaunches {
@@ -135,6 +136,7 @@ export class LiveLaunches {
             path: options.threadPath,
             tuning,
             modeId,
+            ...options.account !== undefined && { account: options.account },
           },
         ],
         transfers: [],
@@ -216,7 +218,36 @@ export class LiveLaunches {
     return snapshot.session
   }
 
-  /** Start the conversation's first native session; its outcome lands on the resident. */
+  /**
+   * Starts again a conversation whose first launch failed before any native session existed, as it was asked to
+   * start, for the messages that waited for it (`LiveRequest.retry`): nothing to resume, so a launch, not a wake.
+   * False when there's nothing to start: its harness isn't here, or it has a session or a start already.
+   */
+  relaunch(resident: Resident): boolean {
+    const { dependencies } = this.access
+    const binding = activeBinding(resident)
+    const { session } = resident.snapshot
+    const driver = dependencies.driver(session.harness)
+    if (!binding || launched(binding) || resident.driver || resident.opening || resident.closing || !driver?.available(dependencies.appPath)) return false
+    resident.driver = driver
+    resident.opening = true
+    resident.snapshot = { ...resident.snapshot, session: { ...session, status: "starting", connection: "starting", error: undefined } }
+    hostLog("residency", "a conversation whose first start failed for now starts again", { conversation: session.id, harness: session.harness, binding: binding.id })
+    // Under its active binding's ID, which every message is sent to: a binding a move made isn't the conversation's own,
+    // and one started under the conversation's ID took no message (2026-11-11: "The agent execution owner is unavailable").
+    this.launch(resident, driver, session.harness, session.cwd, {
+      conversationId: binding.id,
+      ...session.title !== undefined && { title: session.title },
+      ...binding.modeId !== undefined && { modeId: binding.modeId },
+    }, binding.modeId, binding.tuning ?? session.settings)
+    return true
+  }
+
+  /**
+   * Start the conversation's first native session, or its active binding's when it never ran (`relaunch`); its outcome
+   * lands on the resident. `options.conversationId` names the binding the driver runs it under; what the conversation
+   * is handed (its tools, routing and calls) stays the conversation's.
+   */
   launch(
     resident: Resident,
     driver: AdmittedLiveDriver,
@@ -228,13 +259,14 @@ export class LiveLaunches {
   ): void {
     const { dependencies } = this.access
     const id = options.conversationId
+    const conversation = resident.snapshot.session.id
     const generation = resident.generation
     // A start is what a person waits on: the host's routine work waits for it (`base/foreground.ts`).
     const releaseForeground = dependencies.foreground?.hold(`start ${provider} ${id.slice(0, 8)}`)
     const openingOperation = Promise.resolve()
       .then(async () => {
-        const conversationTools = await dependencies.tools?.(id, id)
-        const threadEnvironment = await dependencies.threadEnvironment?.(id, options.title, cwd)
+        const conversationTools = await dependencies.tools?.(id, conversation)
+        const threadEnvironment = await dependencies.threadEnvironment?.(conversation, options.title, cwd)
         // Preparation may finish after Close or an execution-ownership move.
         // Check and start without yielding so a stale owner never spawns.
         if (resident.generation !== generation || resident.closing || !this.access.moves.executes(resident))
@@ -249,8 +281,9 @@ export class LiveLaunches {
             : undefined,
           conversationTools,
           threadEnvironment,
-          nativeRouting: launchRouting(dependencies, id, conversationTools),
-          nativeCalls: launchCalls(dependencies, id, cwd, conversationTools, threadEnvironment),
+          nativeRouting: launchRouting(dependencies, conversation, conversationTools),
+          nativeCalls: launchCalls(dependencies, conversation, cwd, conversationTools, threadEnvironment),
+          pinnedAccount: launchAccount(resident, provider),
           unattended: dependencies.unattended,
         }))
       })
@@ -258,9 +291,10 @@ export class LiveLaunches {
         if (resident.generation !== generation) {
           try {
             await driver.close(id)
-            await revokeTools(dependencies, id, id)
+            await revokeTools(dependencies, id, conversation)
             resident.opening = false
             resident.driver = null
+            this.access.noteWork(resident)
           } catch (error) {
             resident.driver = driver
             resident.connections.set(id, { driver, session })
@@ -268,15 +302,16 @@ export class LiveLaunches {
           }
           return
         }
-        resident.snapshot = {
-          ...resident.snapshot,
-          session: {
-            ...session,
-            title: session.title ?? resident.snapshot.session.title,
-          },
+        // The driver reports its session under the binding it runs (a relaunched one isn't the conversation's own);
+        // the conversation keeps its ID, as a wake's and a transfer's do.
+        const connected = {
+          ...session,
+          id: conversation,
+          title: session.title ?? resident.snapshot.session.title,
         }
-        resident.connections.set(id, { driver, session })
-        updateBinding(dependencies, resident, session)
+        resident.snapshot = { ...resident.snapshot, session: connected }
+        resident.connections.set(id, { driver, session: { ...connected, id } })
+        updateBinding(dependencies, resident, connected)
         // A host- or launch-enforced tier is already current when the session
         // reports; a provider's own mode (Cursor's plan) is applied here. An
         // explicit choice must apply or fail; the ledger's memory applies only
@@ -300,24 +335,27 @@ export class LiveLaunches {
           () => true,
           () => false
         )
-        await revokeTools(dependencies, id, id)
+        await revokeTools(dependencies, id, conversation)
         resident.opening = !closed
         resident.driver = closed ? null : driver
         if (closed) resident.connections.clear()
+        const requests = this.access.failedStart(resident, { error }, options.resume !== undefined)
+        // A message that goes again by itself leaves the session to reopen then, not failed.
+        const waits = retriesBegun(resident.snapshot.requests, requests)
         resident.snapshot = {
           ...resident.snapshot,
           permissions: [],
           session: {
             ...resident.snapshot.session,
-            status: "failed",
+            status: waits ? "ready" : "failed",
             connection: closed ? "disconnected" : "connected",
-            error: errorMessage({ error }),
+            error: waits ? undefined : errorMessage({ error }),
           },
-          requests: this.access.failedStart(resident, { error }, options.resume !== undefined),
+          requests,
         }
         this.access.flush(resident)
         if (closed && options.resume)
-          releaseHold(dependencies.memory, provider, options.resume, id)
+          releaseHold(dependencies.memory, provider, options.resume, conversation)
       })
     resident.openingOperation = openingOperation
     void openingOperation.finally(() => {

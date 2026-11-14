@@ -1,6 +1,14 @@
 import { z } from "zod"
 
 /** Changed files and lines of one kind; `paths` relative to the project folder, the first of them when there are many. */
+/**
+ * A move onto a Thread's own branch made as its Mac goes off (a sleep's or a shutdown's handoff), with a deadline
+ * (`by`, wall-clock ms): the attribution journal is waited for only until then and nothing is read back, so what it
+ * hasn't caught up with stays in the main checkout for "Bring these"; and a moved Session isn't resumed here, since the
+ * cloud resumes it (and, if the Thread stays, its next start here does).
+ */
+export type MoveHaste = { by: number }
+
 export interface MoveShare {
   files: number
   /** Lines added plus lines removed; 0 when Mako couldn't count them. */

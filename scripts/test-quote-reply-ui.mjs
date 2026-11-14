@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * Quoting an earlier reply, through production components (`AcpPanel`, the
@@ -22,7 +22,7 @@ if (process.versions.electron) {
   })
 } else {
   const { createServer } = await import("vite")
-  const root = await mkdtemp(join(tmpdir(), "mako-quote-reply-ui-"))
+  const root = testScratch("mako-quote-reply-ui-")
   const evidence = process.argv[2] ? resolve(process.argv[2]) : root
   await mkdir(evidence, { recursive: true })
   const server = await createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false } })
@@ -39,7 +39,6 @@ if (process.versions.electron) {
   } finally {
     await server.close()
   }
-  console.log(`Quote reply UI evidence: ${evidence}`)
 }
 
 async function checkQuotes() {

@@ -17,7 +17,7 @@ import { updates, updatesStore } from "@/state/updates"
 import { application, applicationStore } from "@/state/application"
 import { openInterfacePreview, reloadInterface } from "@/state/development"
 import { stage } from "@/state/stage"
-import { hiddenAppProject } from "@/state/project-setup"
+import { hiddenAppProject, openProjectSetup } from "@/state/project-setup"
 import { showSetupFor } from "@/state/thread-app"
 import { surfaces } from "@/extend/surfaces"
 import { tabsStore } from "@/state/tabs"
@@ -573,6 +573,14 @@ const DESK_COMMANDS: DeskCommand[] = [
     section: "View",
     keys: "mod+,",
     run: () => window.dispatchEvent(new CustomEvent("mako:settings")),
+  },
+  {
+    id: "view.project-setup",
+    title: "Project setup",
+    section: "View",
+    hint: "Files, accounts, tools and environments",
+    keywords: "drive secrets credentials packages grants environment carry",
+    run: openProjectSetup,
   },
   {
     id: "session.improve-mako",

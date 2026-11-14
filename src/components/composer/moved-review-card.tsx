@@ -16,7 +16,7 @@ export function MovedReviewDetail({ conversationId, review, description }: { con
       <div className="flex flex-col gap-2">
         <p>{description}</p>
         {rows.length ? (
-          <ul className="max-h-36 divide-y divide-hairline overflow-y-auto rounded-lg [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
+          <ul className="max-h-36 divide-y divide-hairline overflow-y-auto [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
             {rows.map(({ path, back }) => (
               <FileRow
                 key={path}
@@ -39,7 +39,7 @@ export function MovedReviewDetail({ conversationId, review, description }: { con
               type="button"
               disabled={working}
               onClick={() => void moveReviews.bring(conversationId)}
-              className="pressable shrink-0 rounded text-label text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:opacity-45"
+              className="pressable shrink-0 text-label text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:opacity-45"
             >
               {busy === "bring" ? "Bringing…" : stayed === 1 ? "Bring it" : "Bring them"}
             </button>

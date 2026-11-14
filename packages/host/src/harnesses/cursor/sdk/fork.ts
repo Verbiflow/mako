@@ -8,6 +8,7 @@ import { CURSOR_SDK_IMPORT_METADATA_KEY } from "@mako/sessions/cursor-sdk-index"
 import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import type { NativeForkSource } from "../../live-driver.js"
 import { onMac } from "../../../base/platform.js"
+import { syncFolderSync } from "../../../base/published-files.js"
 import type { LocalAgentDocument } from "@cursor/sdk"
 
 /** The SDK's own metadata on an agent's index row, which stores keep as they were given it. */
@@ -198,6 +199,7 @@ export function cloneCursorForkStore(stores: NativeStores, fork: { source: strin
       throw new CursorForkError("The cloned Cursor store kept part of itself in its WAL.")
     for (const suffix of ["-wal", "-shm"]) rmSync(`${staged}${suffix}`, { force: true })
     renameSync(staged, target)
+    syncFolderSync(dirname(target))
   } catch (error) {
     copy?.close()
     discard()

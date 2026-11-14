@@ -14,6 +14,7 @@ import { threadChildren, useThreadChildren } from "@/state/apex-fins"
 import { Elapsed } from "@/components/inspector/elapsed"
 import { finTuningLine } from "@mako/host/contracts/fin-tuning"
 import { SignpostIcon } from "lucide-react"
+import { FinMovedLine } from "./fin-moved-line"
 
 const HEADINGS = {
   needs: "Needs you",
@@ -88,16 +89,14 @@ export function ApexFinsSection({
   }
   return (
     <section data-apex-fins={children.length} data-fin-counts={rollupLabel(counts)} aria-label={`${apexTitle}'s ${FIN_WORD}s`} className="mb-2">
-      <div className="flex h-7 items-center gap-1.5 px-2.5 text-label text-faint">
-        <ApexMark className="size-3" />
-        <span className="min-w-0 truncate text-muted-foreground">{apexTitle}'s {FIN_WORD}s</span>
-        <span className="tabular min-w-0 shrink truncate">· {finsWord(counts.total)} · {rollupLine(counts)}</span>
+      <div className="flex h-7 items-center gap-1.5 px-1.5 text-label text-faint">
+        <span className="tabular min-w-0 shrink truncate">{finsWord(counts.total)} · {rollupLine(counts)}</span>
         {stoppable && conversation ? (
           <button
             type="button"
             onClick={stopAll}
             title={`Stop ${finsWord(stoppable)} under ${apexTitle}; the ${APEX_WORD} keeps running`}
-            className="pressable ml-auto shrink-0 rounded-md px-1.5 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground"
+            className="pressable ml-auto shrink-0 px-1.5 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground"
           >
             Stop all
           </button>
@@ -115,8 +114,8 @@ export function ApexFinsSection({
               style={{ transform: `translateY(${item.start - virtualizer.options.scrollMargin}px)` }}
             >
               {row.kind === "heading" ? (
-                <div data-child-group={row.group} className="flex h-7 items-end gap-1.5 px-2.5 pb-1 text-label text-faint">
-                  <span className={row.group === "needs" ? "text-caution" : undefined}>{HEADINGS[row.group]}</span>
+                <div data-child-group={row.group} className="flex h-7 items-end gap-1.5 px-1.5 pb-1 text-label text-faint">
+                  <span className={row.group === "needs" ? "text-attention" : undefined}>{HEADINGS[row.group]}</span>
                   <span className="tabular">{row.count}</span>
                 </div>
               ) : (
@@ -150,7 +149,7 @@ const ChildRow = memo(function ChildRow({ agent, onOpen, nested = false, lit = f
         data-child-state={state.kind}
         aria-current={lit || undefined}
         onClick={() => onOpen?.(agent)}
-        className={cn("pressable flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors duration-100 hover:bg-fill-hover", lit && "bg-fill-selected")}
+        className={cn("pressable flex w-full items-start gap-2.5 px-1.5 py-2 text-left transition-colors duration-100 hover:bg-fill-hover", lit && "bg-fill-selected")}
       >
         <span className="flex h-5 shrink-0 items-center">
           <FinMark agent={agent} state={state} read cut={lit ? "var(--raised)" : undefined} />
@@ -158,7 +157,7 @@ const ChildRow = memo(function ChildRow({ agent, onOpen, nested = false, lit = f
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex h-5 min-w-0 items-center gap-2">
             <span className="min-w-0 flex-1 truncate text-ui font-medium text-foreground">{agent.title}</span>
-            <span className={cn("flex shrink-0 items-center gap-1.5 text-label", group === "needs" ? "text-caution" : group === "failed" ? "text-negative" : "text-faint")}>
+            <span className={cn("flex shrink-0 items-center gap-1.5 text-label", group === "needs" ? "text-attention" : group === "failed" ? "text-negative" : "text-faint")}>
               {childWord(state)}
               <Elapsed agent={agent} />
             </span>
@@ -178,6 +177,7 @@ const ChildRow = memo(function ChildRow({ agent, onOpen, nested = false, lit = f
               <span className="truncate">{agent.runsOn.rule}</span>
             </span>
           ) : null}
+          <FinMovedLine agent={agent} />
           {agent.runsOn?.note ? (
             <span data-fin-fell-back className="line-clamp-2 text-label text-caution" title={agent.runsOn.note}>
               {agent.runsOn.note}
@@ -201,7 +201,7 @@ function SubApexFold({ thread, onOpen }: { thread: string; onOpen?: (agent: Nati
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className="pressable ml-[2.375rem] flex items-center gap-1 rounded-md px-1.5 py-0.5 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground"
+        className="pressable ml-[2.375rem] flex items-center gap-1 px-1.5 py-0.5 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground"
       >
         <ChevronRightIcon className={cn("size-3 transition-transform duration-150", open && "rotate-90")} />
         <ApexMark className="size-3" />

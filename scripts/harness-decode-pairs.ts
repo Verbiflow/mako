@@ -132,11 +132,15 @@ interface Recorder {
   takesBuild?: true
   /** Credential values the run had, which nothing recorded may contain. Read here, never printed or kept. */
   secrets?: () => Promise<string[]>
+  /** Scenarios the build Mako tests can't play out, each with why: what the harness no longer does. */
+  cannot?: Readonly<Record<string, string>>
 }
 
 /** Why `recorder` can't record `scenario`, or undefined when it can. */
 function unrecordable(recorder: Recorder, scenario: Scenario): string | undefined {
   if (scenario.captured) return scenario.captured
+  const cannot = recorder.cannot?.[scenario.name]
+  if (cannot) return cannot
   for (const control of scenario.controls ?? []) {
     const driven = recorder.controls[control]
     if (driven !== "driven") return driven.absent
@@ -899,7 +903,7 @@ const DevinReverted = z.object({ outcomes: z.array(z.json()) }).loose()
 async function devinRewind(call: AcpCall, sessionId: string, target: number): Promise<void> {
   const { steps } = DevinSteps.parse(await call("_cognition.ai/revert/listSteps", { sessionId }))
   const step = steps.filter((candidate) => candidate.kind === "prompt")[target]
-  if (!step) throw new Error(`Devin lists no prompt step ${target}`)
+  if (!step) throw new Error(`Devin lists no prompt step ${target}: ${JSON.stringify(steps).slice(0, 1_500)}`)
   const reply = DevinReverted.safeParse(await call("_cognition.ai/revert/execute", { sessionId, stepId: step.stepId }))
   if (!reply.success || reply.data.outcomes.length) throw new Error(`Devin did not revert to step ${target} cleanly: ${JSON.stringify(reply.data ?? null)?.slice(0, 300)}`)
 }
@@ -966,6 +970,10 @@ const devin: Recorder = {
   keeps: (file) => file.endsWith("/devin/cli/sessions.db") || /\/Devin\/User\/(acp-messages\/[^/]+\.db|globalStorage\/state\.vscdb)$/.test(file),
   storeFolder: (store) => store.includes(`/${DEVIN_APP_USER}/`) ? store.slice(0, store.indexOf(`/${DEVIN_APP_USER}/`) + DEVIN_APP_USER.length + 1) : dirname(store),
   unavailable: () => existsSync(DEVIN_APP) ? undefined : `a Devin pair keeps Devin.app's journal of the session, which only Devin.app's own message store writes, and ${DEVIN_APP} isn't installed here`,
+  cannot: {
+    // The declared stream-only prompt (`DEVIN_VOCABULARY.storage.stream`) is what keeps such a turn in Mako's history.
+    "rewound-past-marker": "From 3000.12.17, Devin keeps no turn that failed before its model answered, so its revert lists no step to go back to",
+  },
   async record(sandbox, scenario) {
     const config = sandbox.env.XDG_CONFIG_HOME
     if (!config) throw new Error("The sandbox has no config home")

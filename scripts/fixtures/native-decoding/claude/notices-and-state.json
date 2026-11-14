@@ -483,6 +483,29 @@
           }
         }
       ]
+    },
+    {
+      "message": {
+        "type": "system",
+        "subtype": "session_writes_lost",
+        "error_code": "EDQUOT",
+        "lost": [
+          "global_config"
+        ],
+        "uuid": "uuid-writes-lost",
+        "session_id": "session-1"
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Warning",
+            "detail": "Claude Code couldn't save its settings changes: the disk quota is used up.",
+            "tone": "warning"
+          },
+          "source": "uuid-writes-lost"
+        }
+      ]
     }
   ]
 }

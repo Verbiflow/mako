@@ -23,7 +23,7 @@ import type {
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { McpRegistrySnapshot } from "../contracts/mcp-skills-integrations.js"
 import type { ChildSource, ThreadPage } from "@mako/sessions"
-import type { SessionSettings } from "@mako/sessions/settings"
+import type { SessionModel, SessionSettings } from "@mako/sessions/settings"
 import type {
   ProviderBinding,
   ResumeVerdict,
@@ -35,6 +35,8 @@ import type {
   AdmittedLiveDriver,
   ConversationTools,
 } from "../harnesses/index.js"
+import type { ControlInstructions, ControlSaid } from "./control-cadence.js"
+import type { RoleRuleLines } from "../contracts/fin-tuning.js"
 import type { LiveJournal } from "./live-journal.js"
 import type { JournalReclaims } from "./journal-reclaim.js"
 import type { LiveMoves } from "./live-moves.js"
@@ -89,6 +91,13 @@ export interface Resident {
   connections: Map<string, ProviderConnection>
   bindingGenerations: Map<string, number>
   transferring: boolean
+  /**
+   * Where the transfer under way stands, by its id. A Stop holds it back only while it's `preparing` or `opening`;
+   * once its destination is `committed` (the conversation's state, written, names it the binding), it completes
+   * through `closing` the source to `done`, and a Stop pauses its message with the rest of the queue, so the
+   * conversation always has a binding it can use (`docs/delivery-queue.md`).
+   */
+  transferPhase?: { id: string; phase: "preparing" | "opening" | "committed" | "closing" | "done" }
   transferOperation?: Promise<void>
   /**
    * The binding a transfer is opening, which the conversation doesn't listen
@@ -125,6 +134,11 @@ export interface Resident {
   idleTimer?: ReturnType<typeof setTimeout>
   /** Intentional transport teardown; prompts accepted during it wake afterwards. */
   hibernating?: Promise<void>
+  /**
+   * A model, reasoning or fast its own harness's session takes from the next message on (a move to the harness it's on,
+   * `moveOn`): the process running now was started on what it had, so the next message that names none carries this.
+   */
+  retuned?: SessionSettings
   /** One coalesced resume for every prompt that arrives while hibernated. */
   waking?: Promise<void>
   /** At most one automatic account reopen for an input proven unsent. */
@@ -164,6 +178,11 @@ export interface Resident {
   stoppingWork?: string[]
   /** The running turn's steps and results in the order they arrived; see `TurnSteps`. */
   steps?: TurnSteps
+  /**
+   * The standing lines of Mako's note its process last heard (`standingLines`). Forgotten when the harness compacts
+   * or rewinds its history and when a send fails, so the next prompt carries them all again.
+   */
+  controlSaid?: ControlSaid
 }
 
 
@@ -179,13 +198,13 @@ export function launchRouting(dependencies: Pick<Dependencies, "agents">, sessio
  * given Mako's tools has them to route to. Read at each call, so a
  * worktree_move or a recipe published mid-session counts from then on.
  */
-export function launchCalls(dependencies: Pick<Dependencies, "threads">, conversation: string, cwd: string, tools: ConversationTools | undefined, environment: ThreadEnvironment | undefined): (() => CallThread) | undefined {
+export function launchCalls(dependencies: Pick<Dependencies, "threads" | "builds">, conversation: string, cwd: string, tools: ConversationTools | undefined, environment: ThreadEnvironment | undefined): (() => CallThread) | undefined {
   if (!tools?.makoUrl) return undefined
-  return () => callThreadOf(dependencies.threads, conversation, cwd, environment)
+  return () => callThreadOf(dependencies.threads, conversation, cwd, environment, dependencies.builds?.())
 }
 
 /** The Thread a conversation's calls run in, as routing reads it now: its folder, its worktree and main checkout, its recipe. */
-export function callThreadOf(store: Pick<ThreadStore, "journalPlacement" | "worktrees"> | undefined, conversation: string, cwd: string, environment: ThreadEnvironment | undefined): CallThread {
+export function callThreadOf(store: Pick<ThreadStore, "journalPlacement" | "worktrees"> | undefined, conversation: string, cwd: string, environment: ThreadEnvironment | undefined, builds?: CallThread["builds"]): CallThread {
   const recipe = environment?.recipe
   const thread = store?.journalPlacement(conversation)?.thread
   const found = thread ? worktreeAt(store!.worktrees().filter((worktree) => worktree.thread === thread), cwd) : undefined
@@ -196,23 +215,55 @@ export function callThreadOf(store: Pick<ThreadStore, "journalPlacement" | "work
     ...recipe?.kind === "ready" && { recipe: { kind: "ready" as const, processes: recipe.processes.map((process) => process.name) } },
     ...recipe?.kind === "none" && { recipe: { kind: "none" as const } },
     computer: true,
+    ...builds && { builds },
   }
 }
 
 /** What a conversation's Fins are to its turns and its roster (`Agents`). */
 export interface ConversationChildren {
+  /** A Fin's edge was just written, under the op its start named: it leaves the line of those waiting (`queueRefresh`). */
+  edgeWritten?(op: string): void
   /** The conversation's Fins as roster entries, the same array until one of them changes. */
   roster(conversation: string): readonly import("../contracts/native-agents.js").NativeAgent[]
+  /** Whether the conversation hears its Thread's Fins move: its Thread's newest Session's. Its Fins hold no other. */
+  showsFins?(conversation: string): boolean
   /** Stops one of them, by its Thread: false when it isn't the conversation's or has nothing running. */
   stopChild(conversation: string, child: string): Promise<boolean>
   /** One of the conversation's requests settled. */
   settled(conversation: string, request: string): void
+  /** Its harness took input: a message as its turn, or a steer into the turn it runs. */
+  inputDelivered?(conversation: string, input: Pick<LiveRequest, "id" | "text" | "actor"> & Partial<Pick<LiveRequest, "digest" | "continues" | "goal">>, delivery: "turn" | "steer"): void
   /** Whether the conversation's Thread is an Apex: it has Fins or queued spawns, or was started as one. */
   isApex(conversation: string): boolean
-  /** What an Apex hears before a message the person sends it: its Fins as they stand and how to route it (`frontDoorNote`); nothing for any other message or Thread. */
-  frontDoor(conversation: string, request: Pick<LiveRequest, "actor">): string[]
+  /** The person's front door, or the precedence of newer instructions that overtook an agent's queued message. */
+  frontDoor(conversation: string, request: Pick<LiveRequest, "actor"> & Partial<Pick<LiveRequest, "id">>, includeGuidance?: boolean): string[]
+  /** The person's standing rules the conversation reads, as standing lines of Mako's note by name (`roleRuleLines`). */
+  ruleLines(conversation: string): RoleRuleLines
+  /** Whether a turn of the conversation a usage limit cut may go on now: a Fin's takes a place as anything else does. */
+  mayWake?(conversation: string): boolean
+  /**
+   * At a request's handoff: whether a message Mako sent a Fin by itself (a pull request's outcome) still holds. False
+   * refuses it with nothing sent; any other request is always admitted.
+   */
+  admits?(conversation: string, request: Pick<LiveRequest, "id" | "actor">): boolean
+}
+
+/** What a launch on `harness` reads its account from, each time: the binding's pin (`LiveConversations.pinnedAccount`), else the selected account. */
+export function launchAccount(resident: Resident, harness: string): () => string | undefined {
+  return () => {
+    const binding = activeBinding(resident)
+    return binding?.provider === harness ? binding.account : undefined
+  }
 }
 export interface Dependencies {
+  /** The models a harness offers as its catalog last read them; undefined while it hasn't been read. */
+  heldModels?(harness: string): readonly SessionModel[] | undefined
+  /** This host's start on its data root (`takeHostStart`), which its epoch carries; none, an epoch no window orders. */
+  start?: import("../base/host-start.js").HostStart
+  /** The host has begun to stop, though these conversations haven't yet (a stop while the host still starts): reads in slices end. */
+  stopping?(): boolean
+  /** This machine's build slots now, for the note a heavy suite started while each is in use hears (`build-slots-full`). */
+  builds?(): CallThread["builds"]
   /** Nobody is at this host to sign a harness in: every start is unattended (`ProviderStartOptions.unattended`). */
   unattended?: boolean
   /** Held while a harness starts, so the host's routine work waits for it (`base/foreground.ts`). */
@@ -221,6 +272,8 @@ export interface Dependencies {
   work?: Pick<HostWork, "current">
   mcpSnapshot?(cwd: string): Promise<McpRegistrySnapshot>
   workspaceSnapshots?: WorkspaceSnapshots
+  /** How long a turn waits for its checkpoint to hold the workspace before it goes without (`BEFORE_CHECKPOINT_WAIT_MS`). */
+  checkpointWaitMs?: number
   /** Who changed each of these files (absolute) since `since`, as the attribution journal knows; undefined while it isn't open. */
   rewindWriters?(paths: readonly string[], since: number): FileWriters | undefined
   appPath: string
@@ -233,11 +286,12 @@ export interface Dependencies {
   /** The Threads each conversation's Thread leads (`Agents`). */
   agents?(): ConversationChildren | undefined
   /**
-   * The lines of Mako's note sent ahead of each prompt: Local Control and the
-   * values the conversation's process started with. The note wraps them with
-   * anything Mako has to tell about the conversation itself.
+   * The lines of Mako's note ahead of a prompt: Local Control and the values
+   * the conversation's process started with, which its process hears once
+   * and then as they change (`standingLines`), and notices, each said once.
+   * The note wraps them with anything Mako has to tell about the conversation itself.
    */
-  controlInstructions?(bindingId: string, conversationId: string): string[]
+  controlInstructions?(bindingId: string, conversationId: string, thread: Pick<RoutedThread, "role">): ControlInstructions
   revokeTools?(bindingId: string, conversationId: string): void | Promise<void>
   /** The provider hibernates: its grants end, and what its agent built in Local Control waits for it to wake. Without this, `revokeTools`. */
   suspendTools?(bindingId: string, conversationId: string): void | Promise<void>
@@ -255,6 +309,8 @@ export interface Dependencies {
   projectFolderOfRemoved?(cwd: string): string | undefined
   /** The conversation changed in a way that may let a waiting move go ahead (`LiveConversations.relocation`); called on the write path. */
   settled?(conversationId: string): void
+  /** A turn ended in `cwd`, failed or stopped included. */
+  turnEnded?(conversationId: string, cwd: string): void
   /** The attribution journal, which counts what each turn changed (`LiveTurnChanges`); undefined until it opens. */
   turnLedger?(): TurnLedger | undefined
   /** The attribution journal as a turn's review and its undo read it (`LiveTurnReview`); undefined until it opens. */
@@ -346,6 +402,8 @@ export interface Dependencies {
   historyReleased?(id: string): void
   /** Test clock for deterministic residency decisions. */
   now?: () => number
+  /** A conversation's work moved (running, waiting, finishing, none), with or without a batch: its row is told now. */
+  workMoved?(conversation: string): void
 }
 
 /**
@@ -377,6 +435,11 @@ export interface LiveAccess {
   add(resident: Resident): void
   control(resident: Resident): ConversationControl
   flush(resident: Resident): void
+  /**
+   * Its work may have moved without a write (a checkpoint released, a start or a close settled, a driver let go): the
+   * account's row of it hears so (`Dependencies.workMoved`) when its work's status did move.
+   */
+  noteWork(resident: Resident): void
   /**
    * A flush of what the conversation observed, which goes on whether or not the journal takes it: when it can't, memory
    * keeps it for the next commit that works (`storageFailed`). A flush that must be saved before Mako acts (a prompt
@@ -457,8 +520,9 @@ export interface LiveAccess {
   retireFromAccount(resident: Resident): Promise<void>
   switchAccount(resident: Resident, request: LiveRequest): Promise<void>
   accountSwitchWait(resident: Resident): AccountSwitchWait | undefined
+  /** A turn ended: Mako continues it after a dropped connection, or when its next attempt is due after a failure that clears by itself. */
   scheduleAutoContinue(resident: Resident, settled: string): void
-  declineAutoContinue(resident: Resident): void
+  declineAutoContinue(resident: Resident, keepServiceRetry?: boolean): void
   /** A turn ended; Mako's goal loop decides whether the agent keeps going. */
   goalSettled(resident: Resident, settled: string): void
   /** A turn ended: a child's end is its parent's to hear, and a parent's end delivers what waited for it. */
@@ -499,6 +563,16 @@ export function activeBinding(resident: Resident): ProviderBinding | undefined {
 /** Whether a binding's native session exists, stored against the folder it ran in. */
 export function launched(binding: ProviderBinding | undefined): binding is ProviderBinding & { nativeId: string; path: string } {
   return Boolean(binding?.nativeId && binding.path)
+}
+
+/**
+ * A binding whose session Mako started and that never ran a turn: never resumed nor seeded, never located, never
+ * checkpointed, and no request of the conversation ran on it (`nativeRun`, stamped as its harness reports a run). Its
+ * harness may have written nothing (Claude writes a session's file with its first turn), so there's no record to
+ * resume, and nothing of it to lose.
+ */
+export function neverRan(binding: ProviderBinding, requests: readonly LiveRequest[]): boolean {
+  return !binding.resumed && !binding.seeded && !binding.path && !binding.checkpoint && !requests.some((request) => request.nativeRun?.bindingId === binding.id)
 }
 
 /** A conversation as it is held in memory once its journal is open, with nothing connected. */

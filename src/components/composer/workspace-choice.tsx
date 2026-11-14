@@ -33,8 +33,8 @@ const OPTIONS = [
   { value: "own-branch", label: "Own branch", Icon: GitBranchIcon },
 ] as const
 
-const optionClass = "pressable flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-fill-hover data-[state=checked]:bg-fill-selected data-[disabled]:pointer-events-none data-[disabled]:opacity-50"
-const triggerClass = "pressable flex h-7 max-w-48 min-w-0 items-center gap-1.5 rounded-md px-2 text-ui text-faint hover:bg-fill-hover hover:text-foreground disabled:opacity-60"
+const optionClass = "pressable flex w-full items-start gap-2 px-2 py-1.5 text-left hover:bg-fill-hover data-[state=checked]:bg-fill-selected data-[disabled]:pointer-events-none data-[disabled]:opacity-50"
+const triggerClass = "pressable flex h-7 max-w-48 min-w-0 items-center gap-1.5 px-2 text-ui text-faint hover:bg-fill-hover hover:text-foreground disabled:opacity-60"
 const OWN_BRANCH_COMMAND = "workspace.own-branch"
 const OWN_BRANCH = "A worktree with its own checkout and branch, so your folder and other threads aren't touched. Your .env files and installed packages come along"
 
@@ -190,7 +190,7 @@ function StartPoint({ point, choice, onSearch, onReset }: {
   if (!place) return null
   return (
     <div data-start-point={start?.kind ?? point?.standing.kind} className="mt-1 flex items-start border-t border-hairline pt-1">
-      <button type="button" onClick={onSearch} aria-label={`${verb} ${place}. Choose another branch or a pull request`} className="pressable group flex min-w-0 flex-1 items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-fill-hover">
+      <button type="button" onClick={onSearch} aria-label={`${verb} ${place}. Choose another branch or a pull request`} className="pressable group flex min-w-0 flex-1 items-start gap-2 px-2 py-1.5 text-left hover:bg-fill-hover">
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 items-center gap-1.5 text-ui">
             <span className="shrink-0 text-faint">{verb}</span>
@@ -214,7 +214,7 @@ function StartPoint({ point, choice, onSearch, onReset }: {
         <ChevronRightIcon className="mt-0.5 size-3.5 shrink-0 text-faint transition-transform duration-150 ease-[var(--ease-out)] group-hover:translate-x-0.5" />
       </button>
       {choice && (
-        <button type="button" onClick={onReset} aria-label="Start from the newest instead" title="Start from the newest instead" className="pressable mt-1 ml-0.5 flex size-6 shrink-0 items-center justify-center rounded-md text-faint hover:bg-fill-hover hover:text-foreground">
+        <button type="button" onClick={onReset} aria-label="Start from the newest instead" title="Start from the newest instead" className="pressable mt-1 ml-0.5 flex size-6 shrink-0 items-center justify-center text-faint hover:bg-fill-hover hover:text-foreground">
           <XIcon className="size-3" />
         </button>
       )}

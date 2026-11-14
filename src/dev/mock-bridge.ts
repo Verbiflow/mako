@@ -1,4 +1,5 @@
 import { fixtureHarnesses } from "./harness-fixtures"
+import { FileIndexCore, type FileFoldersOptions, type FileGrepResults } from "@mako/host/contracts/file-index"
 import { mockAppshots } from "./mock-appshots"
 import { mockAuthoring } from "./mock-authoring"
 import { encodeControlVideoBatch } from "@mako/control-runtime/contracts"
@@ -11,6 +12,7 @@ import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
 import type { HandOffCandidate, HandOffResult, HandOffSettings, MoveCarried, ThreadContinueOffer, ThreadContinueOutcome, ThreadContinueStep, ThreadHandOff, ThreadMoveStep, ThreadReturnOptions, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
 import { ContinueRecorder } from "@mako/host/contracts/cloud-continues"
 import type { ConversationSettings } from "@mako/host/contracts/turn-continuation"
+import { KEEP_AWAKE_BATTERY_FLOOR, type KeepAwakeHold, type KeepAwakeSettings, type KeepAwakeState } from "@mako/host/contracts/keep-awake"
 import type { TurnUndoScope } from "@mako/host/contracts/turn-review"
 import type { WorkspaceMoves } from "@mako/host/contracts/workspace-moves"
 import type { PlanBuilds } from "@mako/host/contracts/plan-builds"
@@ -54,6 +56,7 @@ import { ENVIRONMENT_SETUP_PROMPT } from "@mako/host/contracts/thread-environmen
 import { playSetupTurn } from "./mock-setup-turn"
 import { MOCK_GITHUB_USER_ID, mockCloudAccount } from "./mock-cloud-account"
 import { mockCarriedFiles } from "./mock-carried-files"
+import { mockSetup } from "./mock-setup"
 import { mockSimulators } from "./mock-simulators"
 import { mockGitHubToken } from "./mock-github-token"
 import { mockModelConnections } from "./mock-model-connections"
@@ -88,7 +91,8 @@ import {
   mockThreads,
 } from "./mock-runtime-fixtures"
 import { agedGroup, busyRefs, busySnapshot, busySummaries, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE } from "./mock-busy-thread"
-import { benchChild, benchApexes, CHURN, apexRefs, apexSnapshots, apexSummaries, APEX_CONVERSATION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
+import { openAsk } from "@mako/host/contracts/children"
+import { benchChild, benchApexes, CHURN, apexRefs, apexSnapshots, apexSummaries, placedSnapshot, APEX_CONVERSATION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
 
 /** The repository's pull requests as the `#` menu finds them. */
 const MOCK_PULLS: PullRequestListing[] = [
@@ -138,6 +142,24 @@ const STAGED_MEDIA = new Map<string, string>()
 const utilityChoices: UtilityWorkChoices = { commit: "auto" }
 /** Whether a fixture hands agents to the cloud as the Mac sleeps. */
 const mockHandOffOnSleep = { value: true }
+/**
+ * Keeping the fixture's Mac awake: on, as on a new Mac. `?awake=3` has three agents at work, `?awake=lid:3` with the lid
+ * held too, `?awake=battery:3` on a battery below the floor, `?awake=failed:3` with nothing held; nothing works without it.
+ */
+interface MockKeepAwake { settings: KeepAwakeSettings }
+const mockKeepAwakeScene = new URLSearchParams(globalThis.location?.search).get("awake") ?? ""
+const mockKeepAwake: MockKeepAwake = { settings: { on: true, lidClosed: mockKeepAwakeScene.startsWith("lid:") } }
+function mockKeepAwakeState(): KeepAwakeState {
+  const agents = Number(mockKeepAwakeScene.split(":").at(-1) || 0)
+  const hold: KeepAwakeHold = !mockKeepAwake.settings.on || agents === 0
+    ? { kind: "rest" }
+    : mockKeepAwakeScene.startsWith("battery:")
+      ? { kind: "low-battery", agents, percent: 14, floor: KEEP_AWAKE_BATTERY_FLOOR }
+      : mockKeepAwakeScene.startsWith("failed:")
+        ? { kind: "failed", agents }
+        : { kind: mockKeepAwake.settings.lidClosed ? "lid" : "idle", agents }
+  return { settings: mockKeepAwake.settings, hold }
+}
 /** The fixture's conversation settings, off as on a new Mac. */
 interface MockConversationSettings { value: ConversationSettings }
 const mockConversationSettings: MockConversationSettings = { value: { continueAfterRestart: false } }
@@ -295,6 +317,27 @@ export function installMockBridge() {
     listeners.forEach((listener) => listener(event))
   // `?events`: a UI check sends host events as the host would (another device's Thread listed), through the window's own path.
   if (new URLSearchParams(globalThis.location?.search).has("events")) Reflect.set(globalThis, "makoMockHost", { emit })
+  // A screenshot check can hold a move's phase until both themes have drawn it, rather than racing its timer.
+  let holdMovePhase = false
+  let releaseMovePhase: (() => void) | undefined
+  const nextMovePhase = () => {
+    if (!releaseMovePhase) throw new Error("No mock move phase is waiting")
+    const release = releaseMovePhase
+    releaseMovePhase = undefined
+    release()
+  }
+  const waitMovePhase = () => new Promise<void>((resolve) => {
+    if (holdMovePhase) releaseMovePhase = resolve
+    else setTimeout(resolve, 900)
+  })
+  if (new URLSearchParams(globalThis.location?.search).has("move-steps")) Reflect.set(globalThis, "mockMovePhases", {
+    hold: () => { holdMovePhase = true },
+    next: nextMovePhase,
+    run: () => {
+      holdMovePhase = false
+      if (releaseMovePhase) nextMovePhase()
+    },
+  })
   const emitTerminal = (event: TerminalEvent) =>
     terminalListeners.forEach((listener) => listener(event))
   /**
@@ -345,7 +388,15 @@ export function installMockBridge() {
   const nativeRequests: NativeRequest[] = []
   const liveSnapshots = new Map<string, LiveSnapshot>()
   const directCalls: Array<AgentsDirectInput & { conversation: string }> = []
+  /** `?app=apex&resting=1`: the Apex's session rests, as a hibernated one does, until the composer's first keys wake it. */
+  let apexResting = false
+  let apexPrewarms = 0
+  let wakeApex: (() => void) | undefined
   const respondCalls: Array<AgentsRespondInput & { conversation: string }> = []
+  const agentAskAnswers: Array<{ conversationId: string; ask: string; allow: boolean }> = []
+  const returnCalls: string[] = []
+  let refuseNextAgentAnswer = false
+  const continueCalls: string[] = []
   /** Sessions whose work is paused because the account signed out mid-turn, as the host pauses them. */
   const signInPauses = new Map<string, SignInHold>()
   /** Messages that already waited for this Mac to hear its account. */
@@ -440,11 +491,15 @@ export function installMockBridge() {
    * `churn` moves one Fin a tick. `&apexes=50` adds that many more Apexes of twenty Fins each, for the rail's bench.
    */
   if (scene === "apex") {
+    apexResting = new URLSearchParams(window.location.search).get("resting") === "1"
     for (const snapshot of [...apexSnapshots(), ...benchScene.snapshots]) {
       liveSnapshots.set(snapshot.session.id, snapshot)
       acpSessions.set(snapshot.session.id, snapshot.session)
     }
     boot.live.push(...apexSummaries(), ...benchScene.summaries)
+    // The placed Fin's conversation, as Loft would answer it when opened from here.
+    const placed = placedSnapshot()
+    if (placed) liveSnapshots.set(placed.session.id, placed)
     const setChildren = (agents: NativeAgent[]) => {
       const snapshot = liveSnapshots.get(APEX_CONVERSATION)
       if (!snapshot) return
@@ -453,6 +508,19 @@ export function installMockBridge() {
       liveSnapshots.set(APEX_CONVERSATION, next)
       // Through JSON, as the host's batch crosses to the window: every entry a new object, unchanged ones equal.
       emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: APEX_CONVERSATION, revision: next.revision, updates: [], nativeAgents })) })
+    }
+    const setApexSession = (patch: Partial<Pick<LiveSessionState, "status" | "connection" | "error" | "harness">>) => {
+      const snapshot = liveSnapshots.get(APEX_CONVERSATION)
+      if (!snapshot) return
+      const session: LiveSessionState = { ...(acpSessions.get(APEX_CONVERSATION) ?? snapshot.session), ...patch }
+      acpSessions.set(APEX_CONVERSATION, session)
+      const next = { ...snapshot, session, revision: snapshot.revision + 1 }
+      liveSnapshots.set(APEX_CONVERSATION, next)
+      emit({ type: "live-batch", batch: { id: APEX_CONVERSATION, revision: next.revision, updates: [], session } })
+    }
+    wakeApex = () => {
+      setApexSession({ connection: "starting", status: "starting" })
+      setTimeout(() => setApexSession({ connection: "connected", status: "ready" }), 1_200)
     }
     Reflect.set(window, "apexScene", {
       setChildren,
@@ -476,11 +544,30 @@ export function installMockBridge() {
       directs: () => [...directCalls],
       /** The person's answers to Fins' asks, as the Apex's host heard them. */
       responds: () => [...respondCalls],
+      agentAsks: () => [...agentAskAnswers],
+      /** The moves back this window asked of its host. */
+      returns: () => [...returnCalls],
+      /** The host refuses the next answer to an agent's ask, as one whose allowed action failed. */
+      refuseNextAgentAnswer: () => void (refuseNextAgentAnswer = true),
+      /** The Apex's own agent asks now, as the host's control-only batch says it. */
+      raiseAgentAsk: () => {
+        const snapshot = liveSnapshots.get(APEX_CONVERSATION)
+        if (!snapshot?.control) return
+        const control = { ...snapshot.control, asks: [{ id: "1ead1ead-7000-4000-8000-0000000000a7", at: Date.now(), want: { kind: "move" as const, move: "1ead1ead-7000-4000-8000-0000000000a8", handsOff: true } }] }
+        const next = { ...snapshot, revision: snapshot.revision + 1, control }
+        liveSnapshots.set(APEX_CONVERSATION, next)
+        emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: APEX_CONVERSATION, revision: next.revision, updates: [], control })) })
+      },
+      continues: () => [...continueCalls],
       /**
        * The Apex's own turn starts or ends, as a wake or a settle would: ending it also settles its own still-
        * dispatching request (the digest it was reading), so the crew card draws in its place, the Fins in the
        * roster untouched.
        */
+      /** The Apex's session goes through a transition as its host would say it: starting, reconnecting, hibernated, failed. */
+      setSession: setApexSession,
+      /** How many times writing in the composer woke the Apex (`livePrewarm`). */
+      prewarms: () => apexPrewarms,
       setRunning(running: boolean) {
         const snapshot = liveSnapshots.get(APEX_CONVERSATION)
         if (!snapshot) return
@@ -842,6 +929,9 @@ export function installMockBridge() {
       ],
       otherwise: { harness: "claude" },
     },
+    capacity: { atOnce: 17, auto: 17, why: "14 cores, 36 GB · a Fin ≈ 0.35 core, 0.8 GB · room for 1 build", measured: false },
+    ceiling: 64,
+    moveOnLimit: true,
   }
   let mockTelemetry = { usage: true, errors: true }
   window.mako = {
@@ -944,7 +1034,7 @@ export function installMockBridge() {
       const ago = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString()
       return [
         { number: 812, title: "Fix the login redirect after SSO", branch: "fix/login-redirect", draft: false, author: "ann", updatedAt: ago(2), cross: false },
-        { number: 809, title: "Billing webhooks retry with backoff", branch: "billing-webhooks", draft: true, author: "kashyab", updatedAt: ago(26), cross: false },
+        { number: 809, title: "Billing webhooks retry with backoff", branch: "billing-webhooks", draft: true, author: "ana", updatedAt: ago(26), cross: false },
         { number: 801, title: "Typo in the README", branch: "patch-1", draft: false, author: "outside-contributor", updatedAt: ago(120), cross: true },
       ]
     },
@@ -1001,8 +1091,21 @@ export function installMockBridge() {
     bringStayedChanges: async () => { throw new Error("Worktrees are unavailable in the mock bridge") },
     putBackMovedFiles: async () => { throw new Error("Worktrees are unavailable in the mock bridge") },
     workspaceMoveOutcome: async () => null,
-    threadMoveAsks: async () => [],
-    answerThreadMoveAsk: async () => {},
+    answerAgentAsk: async (conversationId: string, ask: string, allow: boolean) => {
+      if (refuseNextAgentAnswer) {
+        refuseNextAgentAnswer = false
+        throw new Error("The host refused that answer.")
+      }
+      agentAskAnswers.push({ conversationId, ask, allow })
+      const snapshot = liveSnapshots.get(conversationId)
+      const pending = snapshot?.control?.asks?.find((each) => each.id === ask)
+      if (!snapshot?.control || !pending) return { outcome: "missing", ask } as const
+      const control = { ...snapshot.control, asks: snapshot.control.asks?.filter((each) => each.id !== ask) }
+      const next = { ...snapshot, revision: snapshot.revision + 1, control }
+      liveSnapshots.set(conversationId, next)
+      emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: conversationId, revision: next.revision, updates: [], control })) })
+      return { outcome: "answered", ask, allow, want: pending.want } as const
+    },
     threadChanges: async () => null,
     changeUsage: async () => null,
     resolveFileReferences: async () => null,
@@ -1028,8 +1131,28 @@ export function installMockBridge() {
       finChoices = { ...finChoices, chosen }
       return finChoices
     },
-    saveFinPolicy: async (policy) => {
-      finChoices = { ...finChoices, policy }
+    saveFinPolicy: async ({ rules, otherwise }) => {
+      const { forFins, forApexes } = finChoices.policy
+      finChoices = { ...finChoices, policy: { rules, ...(otherwise && { otherwise }), ...(forFins && { forFins }), ...(forApexes && { forApexes }) } }
+      return finChoices
+    },
+    saveRoleRules: async (role, text) => {
+      finChoices = { ...finChoices, policy: { ...finChoices.policy, [role]: text.trim() || undefined } }
+      return finChoices
+    },
+    setFinLimit: async (limit) => {
+      const next = { ...finChoices }
+      if (limit === null) delete next.limit
+      else next.limit = limit
+      finChoices = next
+      return finChoices
+    },
+    setFinCeiling: async (ceiling) => {
+      finChoices = { ...finChoices, ceiling }
+      return finChoices
+    },
+    chooseFinMoveOnLimit: async (on) => {
+      finChoices = { ...finChoices, moveOnLimit: on }
       return finChoices
     },
     planBuilds: async () => planBuilds,
@@ -1177,6 +1300,9 @@ export function installMockBridge() {
       binary: false,
       truncated: false,
     }),
+    filesFolders: async (paths: string[], options?: FileFoldersOptions) => mockFileIndex().folders(paths, options),
+    filesFind: async (query: string, limit?: number) => mockFileIndex().find(query, limit),
+    filesGrep: async (query: string) => mockGrep(query),
     listFiles: async () =>
       [
         "src/components/composer/composer.tsx",
@@ -1672,6 +1798,7 @@ export function installMockBridge() {
     ...mockCloudAccount(emit),
     ...mockSimulators(emit),
     ...mockCarriedFiles(),
+    ...mockSetup(),
     ...mockGitHubToken(),
     ...mockModelConnections(),
     providerConnections: async () => [],
@@ -2608,6 +2735,9 @@ export function installMockBridge() {
       if (!snapshot) throw new Error("Missing mock session")
       return { ...snapshot, threadPath: path }
     },
+    liveFilesFolders: async (_id: string, paths: string[], options?: FileFoldersOptions) => mockFileIndex().folders(paths, options),
+    liveFilesFind: async (_id: string, query: string, limit?: number) => mockFileIndex().find(query, limit),
+    liveFilesGrep: async (_id: string, query: string) => mockGrep(query),
     readLiveFile: async (_id: string, path: string) => ({
       path,
       contents: "Mock file",
@@ -2991,7 +3121,14 @@ export function installMockBridge() {
         }
       }
     },
-    livePrewarm: async () => "unchanged" as const,
+    livePrewarm: async (id: string) => {
+      // The Apex rests until written to: the first keys wake it as its host would, starting, then ready.
+      if (id !== APEX_CONVERSATION || !wakeApex || !apexResting) return "unchanged" as const
+      apexResting = false
+      apexPrewarms += 1
+      wakeApex()
+      return "waking" as const
+    },
     launchPrewarm: async () => {},
     cloudPrepare: async () => "none" as const,
     cloudOfferProjects: async () => "none" as const,
@@ -3014,7 +3151,7 @@ export function installMockBridge() {
       const steps: ThreadMoveStep[] = handOff ? [{ kind: "packing" }, { kind: "pausing" }, { kind: "handing-over" }, { kind: "resuming" }] : [...main ? [{ kind: "own-branch" } as const] : [], { kind: "packing" }, { kind: "handing-over" }, { kind: "resuming" }]
       for (const next of steps) {
         step(next)
-        await pause(900)
+        await waitMovePhase()
       }
       const carried: MoveCarried | undefined = main ? { repositories: 2, outside: 3, left: [{ path: "/Users/you/.aws/credentials", why: "secret" }] } : undefined
       step({ kind: "moved", conversations: [conversationId], ...handOff && { continued: true }, ...carried && { carried } })
@@ -3071,15 +3208,28 @@ export function installMockBridge() {
       emit({ type: "conversation-settings", settings })
       return settings
     },
+    keepAwake: async (): Promise<KeepAwakeState> => mockKeepAwakeState(),
+    setKeepAwake: async (change: Partial<KeepAwakeSettings>): Promise<KeepAwakeState> => {
+      mockKeepAwake.settings = { ...mockKeepAwake.settings, ...change }
+      const state = mockKeepAwakeState()
+      emit({ type: "keep-awake", state })
+      return state
+    },
     handOffSettings: async (): Promise<HandOffSettings> => ({ onSleep: mockHandOffOnSleep.value }),
     setHandOffOnSleep: async (onSleep: boolean): Promise<HandOffSettings> => {
       mockHandOffOnSleep.value = onSleep
       emit({ type: "handoff-settings", settings: { onSleep } })
       return { onSleep }
     },
+    /** A Thread held for the account's word since this Mac went away runs here: nothing waits any more. */
+    awayHeldConversations: async (): Promise<string[]> => [],
+    runHandedOffHere: async (): Promise<number> => {
+      emit({ type: "away-held", conversations: [] })
+      return 1
+    },
     /** A fixture's way back: its steps a moment apart, as a real one takes them. */
     threadReturn: async (conversationId: string, move: string, options?: ThreadReturnOptions) => {
-      const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+      returnCalls.push(conversationId)
       const step = (next: ThreadReturnStep) => emit({ type: "thread-return-step", conversationId, move, step: next })
       if (mockReturnOutdated.value === "project-gone") {
         // Refused before the cloud is asked anything, until the person chooses where the project is now.
@@ -3093,7 +3243,7 @@ export function installMockBridge() {
       }
       for (const next of [{ kind: "packing" }, { kind: "bringing" }] as const) {
         step(next)
-        await pause(900)
+        await waitMovePhase()
       }
       if (mockReturnOutdated.value === "outdated") {
         mockReturnOutdated.value = ""
@@ -3396,21 +3546,37 @@ export function installMockBridge() {
       }
       return { to: direct.to, fin: direct.fin, delivery: direct.delivery }
     },
+    agentsNextPlace: async () => ({ label: "Codex", harness: "codex" }),
+    agentsContinueNext: async (conversation: string) => {
+      continueCalls.push(conversation)
+      return true
+    },
     // As the host answers it: the Fin goes on, and its entry says so in the Apex's next batch.
     agentsRespond: async (conversation: string, input: AgentsRespondInput): Promise<AgentsAnswered | AgentRefused> => {
       respondCalls.push({ conversation, ...input })
       const snapshot = liveSnapshots.get(conversation)
       const agent = snapshot?.nativeAgents?.agents.find((each) => each.child?.thread === input.fin)
-      const state = agent?.child?.state
+      const open = agent?.child?.state && openAsk(agent.child.state)
       if (!snapshot?.nativeAgents || !agent?.child) return { refused: "unknown-child", why: "That isn't one of this Thread's Fins." }
-      if (state?.kind !== "blocked" || state.ask?.id !== input.ask) return { refused: "conflict", why: `${agent.child.name ?? agent.title} no longer waits on that: it was answered.` }
-      const going: ChildState = { kind: "working", step: "Read your answer" }
+      // A limit's notice goes no further than the person having seen it (`Agents.respond`).
+      if (input.ask.startsWith("limit:")) {
+        const child = { ...agent.child }
+        delete child.limitNotice
+        const nativeAgents = { ...snapshot.nativeAgents, agents: snapshot.nativeAgents.agents.map((each) => (each === agent ? { ...agent, child } : each)) }
+        const next = { ...snapshot, revision: snapshot.revision + 1, nativeAgents }
+        liveSnapshots.set(conversation, next)
+        emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: conversation, revision: next.revision, updates: [], nativeAgents })) })
+        return { answered: "person", child: agent.child.thread, name: agent.child.name ?? agent.title }
+      }
+      if (!open?.ask || open.ask.id !== input.ask) return { refused: "conflict", why: `${agent.child.name ?? agent.title} no longer waits on that: it was answered.` }
+      const picked = input.option === undefined ? input.answer : open.ask.options?.[input.option]?.label
+      const going: ChildState = { kind: "working", step: "Read your answer", ...(open.ask.kind === "report" && picked && { answered: { by: "person" as const, answer: picked } }) }
       const moved: NativeAgent = { ...agent, state: { kind: "working" }, child: { ...agent.child, state: going } }
       const nativeAgents = { ...snapshot.nativeAgents, agents: snapshot.nativeAgents.agents.map((each) => (each === agent ? moved : each)) }
       const next = { ...snapshot, revision: snapshot.revision + 1, nativeAgents }
       liveSnapshots.set(conversation, next)
       emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: conversation, revision: next.revision, updates: [], nativeAgents })) })
-      return { child: agent.child.thread, name: agent.child.name ?? agent.title, answered: state.ask.kind, ...(state.ask.kind === "report" && { delivery: "turn" as const }) }
+      return { child: agent.child.thread, name: agent.child.name ?? agent.title, answered: open.ask.kind, ...(open.ask.kind === "report" && { delivery: "turn" as const }) }
     },
     nativeRouting: async () => [
       { harness: "claude", state: "control", via: "The PreToolUse callback Mako registers denies a routed `Agent` or `Workflow` call with a message naming `agents_start`.", verified: { version: "2.1.314", how: "test:native-routing-live" }, installed: "2.1.314" },
@@ -3963,4 +4129,15 @@ function mockFileEventsService(scene: string | null): FileEventsService {
       context: { ...context, turnsRunning: index % 4 },
     })),
   }
+}
+
+/** The browser mock's project: the paths its `listFiles` names, browsable and searchable as a host's index is. */
+const MOCK_PATHS = ["src/components/composer/composer.tsx", "src/components/rail/session-rail.tsx", "src/components/transcript/turn.tsx", "src/state/store.ts", "src/state/session.ts", "src/index.css", "electron/host.ts", "electron/shared.ts", "package.json", "README.md"]
+let mockIndex: FileIndexCore | undefined
+function mockFileIndex(): FileIndexCore {
+  mockIndex ??= new FileIndexCore(MOCK_PATHS)
+  return mockIndex
+}
+function mockGrep(query: string): FileGrepResults {
+  return { query, files: [{ path: "src/state/session.ts", lines: [{ line: 1, text: `// ${query}` }], more: 0 }], total: 1, more: false, ms: 1 }
 }

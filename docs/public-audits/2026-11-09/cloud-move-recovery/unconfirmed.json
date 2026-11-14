@@ -1,0 +1,11 @@
+{
+  "trace": [],
+  "calls": [
+    {
+      "conversationId": "31190106-df68-4bce-b416-c68133317ef1",
+      "move": "4e194fb5-8bbf-4dcf-af91-78f0d12b1c65"
+    }
+  ],
+  "move": "unsettled",
+  "place": "local"
+}

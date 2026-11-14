@@ -47,6 +47,9 @@ try {
 
     const last = openProcessLog(join(home, "unit", "last.log"))
     last.write("info", "syncd", "queued")
+    // Let its async append start, then stop before filesystem preparation ends.
+    // The exit writer must still take that line, in order and exactly once.
+    await Promise.resolve()
     last.writeNow("error", "syncd", "uncaught exception", { error: "boom" })
     const now = await readFile(last.path, "utf8")
     assert.match(now, /info  syncd queued\n.*error syncd uncaught exception error=boom\n$/, "the queued line goes first, synchronously")

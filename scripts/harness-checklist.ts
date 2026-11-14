@@ -166,6 +166,11 @@ export const BESIDE_THE_DEFINITION: readonly Step[] = [
     enforcedBy: "not built: a run that resumes a laptop session on a fresh Linux machine and checks the laptop is still signed in",
   },
   {
+    title: "Conformance",
+    what: "`npm run test:harness-conformance` passes: a silent peer names its stalled step, a whole-file write goes through the publisher, two conversations' process trees are charged apart, and, where the CLI is installed, cancel, the heap, and a steer behave as `docs/harness-conformance.md` says.",
+    enforcedBy: "`test:harness-conformance`",
+  },
+  {
     title: "Development desk",
     what: "Its modes and plan approval in `src/dev/mock-bridge.ts` (`MOCK_MODES`, `MOCK_PLAN_APPROVALS`), copied from the real wire, so `?mock` shows what the harness shows.",
     enforcedBy: "review",

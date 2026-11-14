@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils"
 import type { GitHubStatus, PullRequest as Pull } from "@/lib/types"
 import {
   CheckIcon,
+  CircleSlashIcon,
   ExternalLinkIcon,
   GitPullRequestIcon,
   MessageSquarePlusIcon,
@@ -102,7 +103,7 @@ function ConnectGitHubRow({ status }: { status: GitHubStatus }) {
         type="button"
         onClick={status.installed && !status.authenticated ? copy : undefined}
         className={cn(
-          "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-label text-faint",
+          "flex w-full items-center gap-2 px-2 py-1.5 text-left text-label text-faint",
           status.installed && !status.authenticated &&
             "pressable transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
         )}
@@ -151,7 +152,7 @@ function BehindBranch({ behind, upstream }: { behind: number; upstream?: string 
   }
   return (
     <div className="shrink-0 px-2.5 py-2">
-      <div className="flex items-center gap-2 rounded-md bg-caution/10 px-2 py-1.5 ring-1 ring-caution/20">
+      <div className="flex items-center gap-2 bg-caution/10 px-2 py-1.5 ring-1 ring-caution/20">
         <GitPullRequestIcon className="size-3.5 shrink-0 text-caution" />
         <span className="min-w-0 flex-1 text-label leading-relaxed text-muted-foreground">
           This branch is {behind} {behind === 1 ? "commit" : "commits"} behind {upstream ?? "its upstream"}. Update it before opening a pull request; Mako will never force-push it.
@@ -411,13 +412,15 @@ function PullSummary({ pull, loading, root }: { pull: Pull; loading: boolean; ro
           <span
             className={cn(
               "flex items-center gap-1",
-              checks.failed > 0 ? "text-removed" : checks.running > 0 ? "text-caution" : "text-added"
+              checks.failed > 0 ? "text-removed" : checks.running > 0 || checks.cancelled > 0 ? "text-caution" : "text-added"
             )}
           >
             {checks.failed > 0 ? (
               <XIcon className="size-2.5" />
             ) : checks.running > 0 ? (
               <span className="size-1.5 animate-live rounded-full bg-caution" />
+            ) : checks.cancelled > 0 ? (
+              <CircleSlashIcon className="size-2.5" />
             ) : (
               <CheckIcon className="size-2.5" />
             )}
@@ -425,7 +428,9 @@ function PullSummary({ pull, loading, root }: { pull: Pull; loading: boolean; ro
               ? `${checks.failed} failing`
               : checks.running > 0
                 ? `${checks.running} running`
-                : "checks pass"}
+                : checks.cancelled > 0
+                  ? `${checks.cancelled} cancelled`
+                  : "checks pass"}
           </span>
         ) : null}
 

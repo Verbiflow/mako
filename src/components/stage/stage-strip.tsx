@@ -2,7 +2,7 @@ import { IconAction } from "@/components/ui/kit"
 import { StillMark } from "@/components/transcript/message-avatar"
 import { MakoMark } from "@/components/ui/mako-mark"
 import { SessionTabList } from "@/components/stage/session-tabs"
-import { ApexFinTabs } from "@/components/stage/child-tabs"
+import { OpenFinTab } from "@/components/stage/child-tabs"
 import { useApexView } from "@/state/apex-fins"
 import { Fragment, useMemo, type ReactNode } from "react"
 import { CheckoutChip } from "@/components/stage/checkout-chip"
@@ -129,7 +129,7 @@ export function StageStrip({
                 paneId={pane.id}
                 agentActive={active}
               />
-              {here.thread && !bound ? <ApexFinTabs thread={here.thread} apexTitle={inApex?.apexTitle ?? here.title ?? "this Thread"} /> : null}
+              {here.thread && !bound ? <OpenFinTab thread={here.thread} /> : null}
             </Fragment>
           )
         const title = agent ? agentTitle : document.title
@@ -140,7 +140,7 @@ export function StageStrip({
             key={id}
             data-active={active || undefined}
             className={cn(
-              "group relative flex h-7 w-56 min-w-16 max-w-56 shrink items-center gap-0.5 overflow-hidden rounded-md",
+              "group relative flex h-7 w-56 min-w-16 max-w-56 shrink items-center gap-0.5 overflow-hidden",
               active
                 ? "bg-raised text-foreground"
                 : "bg-shell text-faint hover:bg-fill-hover hover:text-muted-foreground"
@@ -226,7 +226,7 @@ export function StageStrip({
                 aria-label={`Close ${title}`}
                 onClick={() => viewer.closeTab(pane.id, id)}
                 className={cn(
-                  "pressable -ml-1 flex size-5 shrink-0 items-center justify-center rounded text-faint hover:bg-fill-hover hover:text-foreground",
+                  "pressable -ml-1 flex size-5 shrink-0 items-center justify-center text-faint hover:bg-fill-hover hover:text-foreground",
                   active
                     ? "opacity-80"
                     : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-80"

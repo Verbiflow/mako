@@ -85,6 +85,8 @@ export class ClaudeApprovalObserver {
     return identity
   }
   observe(message: SDKMessage): void {
+    // Every message comes through here: only a user message can match, and a failed parse would build an error.
+    if (message.type !== "user") return
     const parsed = liveSchema.safeParse(message)
     if (!parsed.success || parsed.data.session_id !== this.sessionId) return
     const results = parsed.data.message.content.filter(b => b.type === "tool_result" && b.tool_use_id && !b.is_error)

@@ -2,6 +2,8 @@ import { defineRule } from "@oxlint/plugins";
 
 import type { ESTree } from "@oxlint/plugins";
 
+import { isReviewedDecoderTypeof, reviewedDataDecoderSchema } from "../shared/reviewed-data-decoder.ts";
+
 type RuntimeFunction = ESTree.ArrowFunctionExpression | ESTree.Function;
 
 function isRuntimeFunction(node: ESTree.Node): node is RuntimeFunction {
@@ -40,6 +42,7 @@ export const noRuntimeTypeofRule = defineRule({
 				type: "object",
 				properties: {
 					allowInTypeGuards: { type: "boolean" },
+					reviewedDataDecoder: reviewedDataDecoderSchema,
 				},
 				additionalProperties: false,
 			},
@@ -57,6 +60,7 @@ export const noRuntimeTypeofRule = defineRule({
 					option.allowInTypeGuards === true;
 				if (
 					node.operator === "typeof" &&
+					!isReviewedDecoderTypeof(context, node) &&
 					(!allowInTypeGuards || !isInsideTypeGuard(node))
 				) {
 					context.report({ node, messageId: "runtimeTypeof" });

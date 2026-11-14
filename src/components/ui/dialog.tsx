@@ -56,7 +56,7 @@ function DialogContent({
         data-slot="dialog-content"
         aria-describedby={undefined}
         className={cn(
-          "overlay-panel fixed top-1/2 left-1/2 z-40 -translate-x-1/2 -translate-y-1/2 rounded-xl outline-hidden duration-200 ease-(--ease-out) data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-[0.98] data-closed:duration-120 data-closed:ease-(--ease-swift)",
+          "overlay-panel fixed top-1/2 left-1/2 z-40 -translate-x-1/2 -translate-y-1/2 outline-hidden duration-200 ease-(--ease-out) data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-[0.98] data-closed:duration-120 data-closed:ease-(--ease-swift)",
           sizes[size],
           className
         )}

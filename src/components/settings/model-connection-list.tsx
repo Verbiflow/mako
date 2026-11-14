@@ -14,7 +14,7 @@ import {
 import { AddConnection, ConnectionMark, MarkTile } from "./add-connection"
 import { SignInCard } from "./provider-accounts"
 
-const ROWS = "rounded-lg bg-shell/55 [box-shadow:inset_0_0_0_0.5px_var(--hairline)] divide-y divide-hairline"
+const ROWS = "bg-raised"
 
 function providerOf(id: string): ModelConnectionProvider | undefined {
   return MODEL_CONNECTION_PROVIDERS.find((provider) => provider.id === id)

@@ -18,12 +18,13 @@ import "./lib/scratch-git.mjs"
  */
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { existsSync } from "node:fs"
+import { existsSync, realpathSync } from "node:fs"
 import { appendFile, chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, relative, resolve } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { setTimeout as delay } from "node:timers/promises"
+import { fileURLToPath } from "node:url"
 import { PackagedApp } from "./lib/packaged-app.mjs"
 
 const sourceFlag = process.argv.find((arg) => arg.startsWith("--source="))
@@ -32,8 +33,9 @@ assert.ok(kind === "web" || kind === "desktop", "kind is web or desktop")
 assert.ok(harness === "claude" || harness === "codex", "harness is claude or codex")
 /** A built checkout of Mako, run with its own Electron as a production host would, in place of the packaged app. */
 const source = sourceFlag ? resolve(sourceFlag.slice("--source=".length)) : undefined
-const app = source ?? resolve(appArg ?? "/Users/kashyab/.mako/thread-data/folder-f6c41fc142b185e0/pkg-oct3/mac-arm64/Mako.app")
-const MAIN_CHECKOUT_ELECTRON = "/Users/kashyab/makomono/mako/node_modules/electron"
+const app = source ?? resolve(appArg ?? fileURLToPath(new URL("../release/mac-arm64/Mako.app", import.meta.url)))
+/** A worktree's `node_modules/electron` links to the main checkout's; `cp -R` copies a link as a link. */
+const MAIN_CHECKOUT_ELECTRON = realpathSync(fileURLToPath(new URL("../node_modules/electron", import.meta.url)))
 const TURN_LIMIT_MS = 20 * 60_000
 /** Blocks the user's real Threads could take; the copy's Threads get one above them. */
 const SEEDED_FIRST = 20_000

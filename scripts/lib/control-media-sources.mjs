@@ -35,7 +35,7 @@ const execute = promisify(execFile)
 
 /** One attempt at one URL. Unreachable hosts fail within seconds, so the next URL is tried promptly. */
 async function curl(url, file) {
-  await execute("curl", ["--fail", "--silent", "--show-error", "--location", "--connect-timeout", "20", "--max-time", "120", url, "--output", file])
+  await execute("curl", ["--retry", "5", "--retry-max-time", "180", "--fail", "--silent", "--show-error", "--location", "--connect-timeout", "20", "--max-time", "120", url, "--output", file])
     .catch((error) => {
       throw new Error(error.stderr?.trim() || error.message)
     })

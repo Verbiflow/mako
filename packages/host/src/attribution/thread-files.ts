@@ -2,12 +2,15 @@ import { existsSync } from "node:fs"
 import { stat } from "node:fs/promises"
 import { basename, isAbsolute, join, relative, sep } from "node:path"
 import type { Git } from "@mako/git"
+import { inSlices, type Steps } from "@mako/sessions/slices"
 import type { CarriedEffect, CarriedName } from "@mako/protocol"
+import { homedir } from "node:os"
+import { otherAppsData } from "../base/other-apps-data.js"
 import { QUIET_FOLDERS } from "../base/quiet-folders.js"
 import type { FileResolution, MovedPaths, Touch, TouchKind } from "../contracts/file-references.js"
 import { candidatesOf, RENAME_LOG, RenameHistory, resolveSpelling, spellingLine, SuffixIndex, type Place, type ReferenceContext } from "../files/index.js"
 import { decodeText } from "./content.js"
-import type { JournalStore, StoredActivity, StoredEffect, StoredRoot } from "./journal-store.js"
+import type { JournalStore, StoredActivity, StoredEffect, StoredRoot, ThreadVersion } from "./journal-store.js"
 import { diffLines, splitLines } from "./line-diff.js"
 
 /** Whose message the spellings are in: its Thread, and the folders it works in now. */
@@ -42,6 +45,8 @@ const RENAMES_TIMEOUT_MS = 20_000
 const CARRIED_THREADS = 32
 /** Threads whose work is kept read, until the journal changes. */
 const WORK_THREADS = 16
+/** A Thread's calls or writes read at a time, between which other work runs: one Apex has 84,000 calls. */
+const WORK_PAGE = 500
 /** Renames a line is followed through, at most. */
 const LINE_HOPS = 16
 
@@ -106,8 +111,10 @@ const STRENGTH = { wrote: 0, read: 1, named: 2 } as const satisfies Record<Touch
  */
 export class ThreadFiles {
   private readonly indexes = new Map<string, Indexed>()
-  /** Each Thread's work as last read, with the journal's version then. */
-  private readonly work = new Map<string, { version: string; work: ThreadWork }>()
+  /** Each Thread's work as last read, with what it had reached: its own calls by their key, which later changes replace. */
+  private readonly work = new Map<string, { version: ThreadVersion; work: ThreadWork; own: Map<string, Worked> }>()
+  /** The reads under way, which a second question for the same Thread shares. */
+  private readonly reading = new Map<string, Promise<ThreadWork>>()
   private readonly repositories = new Map<string, Promise<string | undefined>>()
   private readonly renames = new Map<string, Reading>()
   private readonly carried = new Map<string, Carried>()
@@ -149,8 +156,8 @@ export class ThreadFiles {
     const [old, next] = await Promise.all([this.toplevel(from), this.toplevel(to)])
     if (!old || !next || within(old, next) || within(next, old)) return undefined
     const roots = store.roots()
-    const work = this.workOf(store, roots, thread)
-    const touched = touchesOf(work.activity, work.writes)
+    const work = await this.workOf(store, roots, thread)
+    const touched = await inSlices(touchesOf(work.activity, work.writes))
     const used = [...touched]
       .filter(([path]) => within(path, old) && path !== old && !relative(old, path).split(sep).some((part) => QUIET.has(part)))
       .sort((a, b) => b[1].at - a[1].at)
@@ -190,12 +197,12 @@ export class ThreadFiles {
     const until = source.asOf === undefined ? Number.POSITIVE_INFINITY : source.asOf + AS_OF_SLACK_MS
     // Every root the journal has known: a file renamed in a checkout since forgotten still followed.
     const roots = store.roots()
-    const work = source.thread ? this.workOf(store, roots, source.thread) : NO_WORK
+    const work = source.thread ? await this.workOf(store, roots, source.thread) : NO_WORK
     const activity = work.activity.filter((item) => item.start <= until).sort((a, b) => b.start - a.start)
     const folders: string[] = []
     for (const item of activity) if (item.cwd && !folders.includes(item.cwd) && folders.length < MAX_FOLDERS) folders.push(item.cwd)
     if (source.cwd && !folders.includes(source.cwd)) folders.push(source.cwd)
-    const touched = touchesOf(activity, work.writes, until)
+    const touched = await inSlices(touchesOf(activity, work.writes, until))
     // Only where the Thread has been: the roots its work ran in or touched, and where it works now.
     const been = new Set(source.current)
     for (const item of work.activity) {
@@ -216,35 +223,77 @@ export class ThreadFiles {
     }
   }
 
-  /** The Thread's activity and certain writes in this journal, with the parts other journals carried here; read again once anything is written. */
-  private workOf(store: JournalStore, roots: readonly StoredRoot[], thread: string): ThreadWork {
+  /**
+   * The Thread's activity and certain writes in this journal, with the parts other journals carried here: read in
+   * slices, once, then from where it left off once this Thread moves. Anyone else's write doesn't touch it.
+   */
+  private async workOf(store: JournalStore, roots: readonly StoredRoot[], thread: string): Promise<ThreadWork> {
     if (store.id !== this.journal) {
       this.indexes.clear()
       this.carried.clear()
       this.work.clear()
+      this.reading.clear()
       this.journal = store.id
     }
-    const version = store.version()
+    const version = store.threadVersion(thread)
     const known = this.work.get(thread)
-    if (known?.version === version) return known.work
-    const work = this.readWork(store, roots, thread)
-    this.work.delete(thread)
-    this.work.set(thread, { version, work })
-    if (this.work.size > WORK_THREADS) this.work.delete(this.work.keys().next().value!)
-    return work
+    if (known?.version.key === version.key) return known.work
+    const under = this.reading.get(thread)
+    if (under) return under
+    const read = inSlices(this.readWork(store, roots, thread, version)).finally(() => this.reading.delete(thread))
+    this.reading.set(thread, read)
+    return read
   }
 
-  private readWork(store: JournalStore, roots: readonly StoredRoot[], thread: string): ThreadWork {
+  private *readWork(store: JournalStore, roots: readonly StoredRoot[], thread: string, version: ThreadVersion): Steps<ThreadWork> {
+    const known = this.work.get(thread)
     const carried = this.carriedOf(store, thread)
     const byId = new Map(roots.map((root) => [root.id, root.path]))
     const writes = [...carried.writes]
     // Only writes the journal ties to one of the Thread's calls; one credited only because a turn was running is a guess.
-    for (const entry of store.entriesBy("thread", thread)) {
-      const root = byId.get(entry.root)
-      const certain = entry.author.certainty === "exact" || entry.author.certainty === "named"
-      if (root && certain && entry.kind !== "delete") writes.push({ path: join(root, entry.path), at: entry.at })
+    for (let seq = 0; ;) {
+      const page = store.threadWrites(thread, seq, WORK_PAGE)
+      for (const entry of page) {
+        const root = byId.get(entry.root)
+        const certain = entry.certainty === "exact" || entry.certainty === "named"
+        if (root && certain && entry.kind !== "delete") writes.push({ path: join(root, entry.path), at: entry.at })
+      }
+      if (page.length < WORK_PAGE) break
+      seq = page.at(-1)!.seq
+      yield
     }
-    return { activity: [...store.activityOfThread(thread), ...carried.activity], writes, names: carried.names, roots: carried.roots }
+    // Only what changed since, any call of any age, when all that happened can be known; else all of it.
+    const after = known?.version.seq
+    const keeps = known && after !== undefined && known.version.moved === version.moved
+    const own = keeps ? known.own : new Map<string, Worked>()
+    if (keeps) {
+      for (let seq = after; ;) {
+        const page = store.activityChanged(thread, seq, WORK_PAGE)
+        for (const change of page) own.set(activityKey(change.activity), worked(change.activity))
+        if (page.length < WORK_PAGE) break
+        seq = page.at(-1)!.seq
+        yield
+      }
+    } else {
+      // Calls that began together can straddle a page: the next starts at their time and leaves out those it had.
+      let edge = new Set<string>()
+      for (let at = 0, limit = WORK_PAGE; ;) {
+        const page = store.activityFrom(thread, at, limit)
+        for (const item of page) if (!edge.has(activityKey(item))) own.set(activityKey(item), worked(item))
+        if (page.length < limit) break
+        const last = page.at(-1)!.start
+        if (last !== at) edge = new Set()
+        for (const item of page) if (item.start === last) edge.add(activityKey(item))
+        limit = last === at ? limit * 2 : WORK_PAGE
+        at = last
+        yield
+      }
+    }
+    const work = { activity: [...own.values(), ...carried.activity], writes, names: carried.names, roots: carried.roots }
+    this.work.delete(thread)
+    this.work.set(thread, { version, work, own })
+    if (this.work.size > WORK_THREADS) this.work.delete(this.work.keys().next().value!)
+    return work
   }
 
   /** The carried parts, read again only once another is carried. */
@@ -390,12 +439,20 @@ export class ThreadFiles {
   }
 }
 
+function activityKey(item: StoredActivity): string {
+  return `${item.session}\n${item.kind}\n${item.id}`
+}
+
+function worked(item: StoredActivity): Worked {
+  return { start: item.start, cwd: item.cwd, checkout: item.checkout, status: item.status, named: item.named, effects: item.effects }
+}
+
 /**
  * Each file the Thread touched, by absolute path, with its strongest touch
  * and when. A call that failed or was refused wrote nothing it said it
  * would: its effects only name their paths.
  */
-function touchesOf(activity: readonly Worked[], writes: ThreadWork["writes"], until = Number.POSITIVE_INFINITY): Map<string, Touch> {
+function* touchesOf(activity: readonly Worked[], writes: ThreadWork["writes"], until = Number.POSITIVE_INFINITY): Steps<Map<string, Touch>> {
   const touched = new Map<string, Touch>()
   const touch = (path: string | undefined, kind: TouchKind, at: number, cwd?: string) => {
     if (!path) return
@@ -404,7 +461,9 @@ function touchesOf(activity: readonly Worked[], writes: ThreadWork["writes"], un
     const seen = touched.get(absolute)
     if (!seen || STRENGTH[kind] < STRENGTH[seen.kind] || (kind === seen.kind && at > seen.at)) touched.set(absolute, { kind, at })
   }
+  let walked = 0
   for (const item of activity) {
+    if (++walked % WORK_PAGE === 0) yield
     for (const path of item.named) touch(path, "named", item.start, item.cwd)
     const wrote = item.status === "failed" || item.status === "refused" ? "named" : "wrote"
     for (const effect of item.effects ?? []) {
@@ -506,11 +565,16 @@ function renamedInGit(histories: ReadonlyMap<string, RenameHistory>, path: strin
 
 const within = (path: string, root: string) => path === root || path.startsWith(root + sep)
 
-/** Which of `paths` are files now, `PARALLEL` `stat`s at a time. */
+/**
+ * Which of `paths` are files now, `PARALLEL` `stat`s at a time. A path in another app's container is never one: a
+ * stat there makes macOS ask the person to let Mako read that app's data, for a link nobody clicked.
+ */
 async function existing(paths: readonly string[]): Promise<Set<string>> {
   const files = new Set<string>()
+  const home = homedir()
   for (let i = 0; i < paths.length; i += PARALLEL)
     await Promise.all(paths.slice(i, i + PARALLEL).map(async (path) => {
+      if (otherAppsData(path, home)) return
       if ((await stat(path).catch(() => undefined))?.isFile()) files.add(path)
     }))
   return files

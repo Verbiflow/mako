@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
+import { readFinReports } from "@mako/host/contracts/fin-reports"
 import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
 
 /**
@@ -78,13 +79,21 @@ async function childrenMidTurn(): Promise<void> {
 async function reportsUnheard(): Promise<void> {
   const { world, apex } = await tree("unheard", (turn) => (turn.text.includes("You're fin:") ? `Done: ${turn.harness} reviewed its part.` : "ok"))
   try {
-    await until("the reports", () => world.store.undeliveredReports().length === CHILDREN.length)
+    // Each report is in the Apex's queue, in the one digest still gathering its burst, when the update comes.
+    const gathered = () => world.live.snapshot(apex.conversation)?.requests.find((request) => request.digest && request.status === "held")?.digest?.notices.length ?? 0
+    await until("the reports", () => gathered() === CHILDREN.length)
     assert.equal(digests(world, apex.conversation).length, 0, "still coalescing when the update comes")
+    assert.equal(world.store.undeliveredReports().length, 0, "heard once they're in the Apex's queue")
     await world.restart()
     await world.settle()
     const woken = digests(world, apex.conversation)
     assert.equal(woken.length, 1, "one wake, from the new host")
-    for (const harness of CHILDREN) assert.equal(woken[0]!.text.split(`"review-${harness}"`).length - 1, 1, `${harness}'s report once`)
+    // The words name each report once; the same report rides after them as data, for the person's card of it.
+    const { text: words, reports } = readFinReports(woken[0]!.text)
+    for (const harness of CHILDREN) {
+      assert.equal(words.split(`"review-${harness}"`).length - 1, 1, `${harness}'s report once`)
+      assert.equal(reports.filter((card) => card.name === `review-${harness}`).length, 1, `${harness}'s report once as data`)
+    }
     assert.equal(world.store.undeliveredReports().length, 0)
   } finally {
     await world.close()
@@ -152,7 +161,8 @@ async function launchCut(): Promise<void> {
 async function sixLeads(): Promise<void> {
   let host = 1
   let burst = 1
-  const world = new AgentsWorld({ root: join(root, "six"), script: async (turn) => {
+  // The second burst's 18 Fins are at work at once, past the default limit.
+  const world = new AgentsWorld({ root: join(root, "six"), finLimit: () => HARNESSES.length * 3, script: async (turn) => {
     if (!turn.text.includes("You're fin:") && !turn.text.includes("Continue")) return "Noted."
     if (burst === 2 && host === 1) await turn.world.hold(turn.conversation)
     return `Done: ${turn.harness} finished burst ${burst}.`

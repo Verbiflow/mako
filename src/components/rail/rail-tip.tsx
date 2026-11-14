@@ -119,7 +119,7 @@ export function RailTip({ scroller }: { scroller: RefObject<HTMLElement | null> 
       ref={node}
       role="tooltip"
       data-rail-tip
-      className="pointer-events-none fixed top-0 left-0 z-50 max-w-xs rounded-md bg-foreground px-3 py-1.5 text-label wrap-anywhere text-background"
+      className="pointer-events-none fixed top-0 left-0 z-50 max-w-xs bg-foreground px-3 py-1.5 text-label wrap-anywhere text-background"
     >
       <p className="font-medium">{title}</p>
       {rest.map((line, index) => (

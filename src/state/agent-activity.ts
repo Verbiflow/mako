@@ -43,6 +43,21 @@ export function startLabel(harnessName: string | undefined, cloudStep?: { step: 
   return harnessName ? `Starting ${harnessName}` : "Starting"
 }
 
+/** A conversation as `switchLabel` reads it: its harness, and the switches it has asked for. */
+interface Switching {
+  session: { harness: string }
+  control?: { transfers: readonly { input: { provider: string }; state: { kind: string } }[] }
+}
+
+/**
+ * What a conversation going on to another harness says while it waits for that, "Switching to Codex", whatever the
+ * harness it leaves is doing meanwhile; undefined when no such switch is under way.
+ */
+export function switchLabel(live: Switching, harnessName: (harness: string) => string | undefined): string | undefined {
+  const to = live.control?.transfers.findLast((transfer) => (transfer.state.kind === "queued" || transfer.state.kind === "preparing") && transfer.input.provider !== live.session.harness)
+  return to && `Switching to ${harnessName(to.input.provider) ?? to.input.provider}`
+}
+
 /**
  * What a running step is doing, as the verb its live row sweeps: "Running"
  * a command, "Reading" a file. What it acts on follows in the row's own
@@ -88,17 +103,17 @@ export function liveVerb(kind: ToolKind): string {
   return LIVE_VERBS[kind]
 }
 
-export function agentActivity({ blocks, waiting, connecting, starting, makingWorktree = false, worktreeStep, preparing, checkingOwner = false, switchingAccount = false, quietForMs = 0, native, harness }: { blocks: readonly Entry[]; waiting: boolean; connecting: boolean; /** What a start says while `connecting`. */ starting?: string; makingWorktree?: boolean; worktreeStep?: WorktreeStep; preparing: boolean; /** The message being sent waits, and has a while, for this Mac to hear its account (`LiveRequest.ownerCheck`). */ checkingOwner?: boolean; switchingAccount?: boolean; quietForMs?: number; native?: NativeActivity; harness?: string }): AgentActivity {
+export function agentActivity({ blocks, waiting, connecting, starting, switching, makingWorktree = false, worktreeStep, preparing, checkingOwner = false, switchingAccount = false, quietForMs = 0, native, harness }: { blocks: readonly Entry[]; waiting: boolean; connecting: boolean; /** What a start says while `connecting`. */ starting?: string; /** A switch to another harness under way (`switchLabel`): said over the start and the send it waits on. */ switching?: string; makingWorktree?: boolean; worktreeStep?: WorktreeStep; preparing: boolean; /** The message being sent waits, and has a while, for this Mac to hear its account (`LiveRequest.ownerCheck`). */ checkingOwner?: boolean; switchingAccount?: boolean; quietForMs?: number; native?: NativeActivity; harness?: string }): AgentActivity {
   if (waiting) return { kind: "waiting", label: "Waiting for your approval" }
-  if (connecting) return { kind: "connecting", label: makingWorktree ? WORKTREE_STEPS[worktreeStep ?? "checkout"] : (starting ?? "Starting") }
+  if (connecting) return { kind: "connecting", label: makingWorktree ? WORKTREE_STEPS[worktreeStep ?? "checkout"] : (switching ?? starting ?? "Starting") }
   if (switchingAccount) return { kind: "waiting", label: "Waiting to switch account" }
-  if (preparing) return { kind: "connecting", label: checkingOwner ? "Checking with your account" : "Sending" }
+  if (preparing) return { kind: "connecting", label: checkingOwner ? "Checking with your account" : (switching ?? "Sending") }
   if (native) return nativeAgentActivity(native)
   const quiet = quietForMs >= QUIET_AFTER_MS ? `No output for ${quietDuration(quietForMs)}` : undefined
   const tool = blocks.findLast((block) => block.type === "tool" && block.status === "pending")
   if (tool?.type === "tool") {
     const identity = entryToolIdentity(tool, harness)
-    const label = !identity.target ? identity.label : identity.kind === "shell" ? identity.target : `${identity.label} · ${identity.target}`
+    const label = identity.running ?? (!identity.target ? identity.label : identity.kind === "shell" ? identity.target : `${identity.label} · ${identity.target}`)
     return { kind: toolKindActivity(identity.kind), label: quiet ? `${quiet} · ${label}` : label }
   }
   const last = blocks.at(-1)

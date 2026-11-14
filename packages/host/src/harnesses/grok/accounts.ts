@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs"
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, readdir, readFile, rm } from "node:fs/promises"
 import { z } from "zod"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -21,6 +21,7 @@ import {
   type AccountRoot,
 } from "../accounts-common.js"
 import { childProcessEnv } from "../../base/child-environment.js"
+import { publishFile } from "../../base/published-files.js"
 import { acpReadable, acpWritable } from "../acp-stream.js"
 import type { JsonValue } from "../../contracts/json.js"
 import { resolveExecutable } from "../../base/executable.js"
@@ -29,6 +30,7 @@ import type { DiscoveryProcesses } from "../discovery-process.js"
 import { chainFingerprint, instant, objectValue, placeSecret, removeSecret, replaceFile, withFlock, without, type CloudSignInCapability, type CloudSignInMirror } from "../cloud-sign-in.js"
 import { grokHome } from "@mako/sessions"
 import { heavy } from "../../base/heavy-packages.js"
+import { childInput } from "@mako/sessions/child-input"
 
 /** Grok rotates an entry's `key`, `refresh_token` and `expires_at` in place; a key with no refresh token is the login itself. */
 const GrokPrincipal = z.record(z.string(), z.object({
@@ -150,7 +152,7 @@ async function readGrokBilling(processes: DiscoveryProcesses, env: NodeJS.Proces
           }),
           sessionUpdate: async () => {},
         }),
-        ndJsonStream(acpWritable(child.stdin), acpReadable(child.stdout))
+        ndJsonStream(acpWritable(childInput(child)), acpReadable(child.stdout))
       )
       await connection.initialize({
         protocolVersion: PROTOCOL_VERSION,
@@ -252,7 +254,7 @@ async function prepareAccountLogin(root: AccountRoot, { name, renew }: AccountLo
 async function confirmAccountLogin(root: AccountRoot, { name }: AccountLoginTarget): Promise<void> {
   const email = await fileEmail(accountAuthPath(root, name))
   if (email === undefined) throw new Error("Grok finished, but no login was saved. Try again.")
-  await writeFile(identityPath(root, name), JSON.stringify({ email }), { mode: 0o600 })
+  await publishFile(identityPath(root, name), JSON.stringify({ email }), { mode: 0o600 })
 }
 
 async function accountUsage(root: AccountRoot, processes: DiscoveryProcesses, name: string): Promise<AccountUsage> {

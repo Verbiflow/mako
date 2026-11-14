@@ -1,3 +1,4 @@
+import { hostCommand } from "../base/host-command.js"
 /**
  * Start the sync daemon at login by default, unless explicitly disabled.
  *
@@ -13,12 +14,10 @@
  * the app or changed the daemon runtime contract.
  */
 
-import { execFile } from "node:child_process"
 import { existsSync } from "node:fs"
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import { promisify } from "node:util"
 import { DAEMON_NODE_ARGS } from "./daemon-command.js"
 import { buildTag } from "../base/build-identity.js"
 import { storeWriter } from "@mako/sessions/store-format"
@@ -27,7 +26,7 @@ import type { HostEnvironment } from "../base/host-environment.js"
 import { hostLog } from "../base/host-log.js"
 import { onMac } from "../base/platform.js"
 
-const run = promisify(execFile)
+const run = hostCommand
 
 const LABEL = "com.mako.syncd"
 

@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises"
+import { basename } from "node:path"
 import { encodeControlVideoBatch } from "@mako/control-runtime/contracts"
 import { z } from "zod"
 import type { SetupConsent } from "../../contracts/simulator-setup.js"
@@ -30,10 +31,13 @@ import {
   type SimulatorsShotResult,
   type SimulatorsWatchInput,
   type SimulatorsWatchResult,
+  type SimulatorVia,
+  type SimulatorArtifact,
 } from "../../contracts/simulators.js"
 import { hostLog, hostWarn } from "../../base/host-log.js"
+import { MACHINE_CLIENT, NOT_THE_PERSON } from "../../base/host-client.js"
 import { SimulatorUnsupported, type RemoteSimulatorHost, type SimulatorHost } from "./host.js"
-import { SimulatorStreams } from "./stream.js"
+import { SimulatorStreams, type ViewerOwner } from "./stream.js"
 
 /** The person, when they take a simulator from the panel: a holder like any Thread, so an agent's late action is stale. */
 const PERSON = "person"
@@ -44,7 +48,18 @@ type Who = ({ kind: "agent" } & SimulatorAgent) | { kind: "person" }
 /** Which Thread ended, by whichever of its names the ending knows. */
 export type EndedThread = { thread?: string; conversation?: string; session?: string }
 
-const NOT_OFFERED = "This Mac doesn't offer its simulators to your other devices. Turn it on in Settings › Simulators on this Mac."
+const NOT_LEASED = "This Mac lends its simulators only under a lease of your Thread. Borrow an iOS simulator first; it's routed to a Mac that has one free."
+const OTHER_LEASE = "This simulator is held under another of your Thread's leases; each lease drives only the simulator it opened."
+
+/** A call from another place under a lease this Mac serves: the lease, and what it heard of it, for its session's progress. */
+export interface SimulatorLeases {
+  /** The live lease the call is under: one of the calling Thread's, from where the gateway says it came. */
+  leaseOf(via: SimulatorVia, thread: string): string | undefined
+  /** A verb ran under the lease, for its session's progress. */
+  used?(lease: string, verb: string): void
+  /** A file made under the lease (a large picture, a recording), given to it for its borrower: sealed, by hash. */
+  artifact?(lease: string, file: string, name: string): Promise<SimulatorArtifact>
+}
 
 /**
  * The simulators every host here can run, and who drives each: one Thread at a time, everyone else watching. Each
@@ -54,14 +69,24 @@ const NOT_OFFERED = "This Mac doesn't offer its simulators to your other devices
  *
  * Another Mac's simulators (`remotes`) are that Mac's to decide: a call for one is checked against this Mac's
  * project consent, then handed on whole with the Thread this Mac already resolved, and its claim is kept there. A
- * call that came here from another device (`via`) is answered only for this Mac's own simulators, and only while
- * this Mac offers them (`offered`).
+ * call that came here from another place (`via`) is answered only for this Mac's own simulators: the person's from
+ * another of their devices, and an agent's only under a live session lease of its Thread that this Mac serves
+ * (`leases`), checked on every call.
  */
+/** A cloud Thread's borrowed simulators, as the list asks for one and a stopping host lets them go (`BorrowedSimulators`). */
+export interface SimulatorsBorrowing {
+  ensure(why: string): Promise<SimulatorHostSummary | undefined>
+  close?(): Promise<void>
+}
+
 export class Simulators {
   readonly #hosts: ReadonlyMap<string, SimulatorHost>
   readonly #remotes: () => readonly RemoteSimulatorHost[]
+  readonly #borrowing: SimulatorsBorrowing | undefined
   readonly #consent: () => Promise<SetupConsent[]>
-  readonly #offered: () => Promise<boolean>
+  /** The one simulator each lease lends, from its first open until its claim ends. */
+  readonly #leased = new Map<string, string>()
+  readonly #leases: SimulatorLeases | undefined
   readonly #agent: (session: string) => SimulatorAgent | undefined
   readonly #now: () => number
   readonly #holding: (on: boolean) => void
@@ -78,8 +103,13 @@ export class Simulators {
     agent: (session: string) => SimulatorAgent | undefined
     /** The person's other Macs, as they are now: the account's devices come and go. */
     remotes?: () => readonly RemoteSimulatorHost[]
-    /** Whether this Mac offers its simulators to the account's other devices; never, unless the person said so. */
-    offered?: () => Promise<boolean>
+    /** The leases this Mac serves, which an agent's call from another place must be under; without them, none is. */
+    leases?: SimulatorLeases
+    /**
+     * On a cloud Thread's machine: its simulators are a Mac of the person's borrowed under a session lease. The first
+     * look asks for one, and how that stands is a host in the list; the person's grant is the consent there.
+     */
+    borrowing?: SimulatorsBorrowing
     now?: () => number
     /** Whether any simulator is held, as it changes: the idle sweep runs only while one is. */
     holding?: (on: boolean) => void
@@ -88,7 +118,8 @@ export class Simulators {
     this.#hosts = new Map(options.hosts.map((host) => [host.id, host]))
     this.#remotes = options.remotes ?? (() => [])
     this.#consent = options.consent
-    this.#offered = options.offered ?? (async () => false)
+    this.#leases = options.leases
+    this.#borrowing = options.borrowing
     this.#agent = options.agent
     this.#now = options.now ?? Date.now
     this.#holding = options.holding ?? (() => undefined)
@@ -101,6 +132,7 @@ export class Simulators {
     const consent = await this.#consentFor(who, caller)
     if (caller.via && consent !== "allowed") return { hosts: await this.#notOffered(), simulators: [], consent }
     const hosts = [...this.#hosts.values()]
+    const waiting = !caller.via && who.kind === "agent" ? await this.#borrowing?.ensure(`${who.title ?? "This Thread"} looks for a simulator`) : undefined
     // Another device hears this Mac's own simulators alone: it reaches the account's other Macs itself.
     const remotes = caller.via ? [] : this.#remotes()
     const [summaries, lists, others] = await Promise.all([
@@ -112,7 +144,7 @@ export class Simulators {
       const claim = this.#claim(key(simulator.hostId, simulator.id))
       return claim ? { ...simulator, claim } : simulator
     })
-    return { hosts: [...summaries, ...others.flatMap((other) => other.hosts)], simulators: [...simulators, ...others.flatMap((other) => other.simulators)], consent }
+    return { hosts: [...summaries, ...others.flatMap((other) => other.hosts), ...(waiting ? [waiting] : [])], simulators: [...simulators, ...others.flatMap((other) => other.simulators)], consent }
   }
 
   async open(caller: SimulatorCaller, input: SimulatorsOpenInput): Promise<SimulatorsOpenResult> {
@@ -120,10 +152,13 @@ export class Simulators {
     if (remote) return "refused" in remote ? remote : remote.host.open(remote.caller, input)
     const found = await this.#find(caller, "open", input)
     if ("refused" in found) return found
-    const { who, host, simulator } = found
+    const { who, host, simulator, lease } = found
     const id = key(host.id, simulator.id)
     const holder = this.#claim(id)
     const thread = threadOf(who)
+    const bound = lease ? this.#leased.get(lease) : undefined
+    if (lease && bound && bound !== id) return this.#refuse("open", who, id, { refused: "not-offered", why: `A lease lends one simulator, and this one's is ${unkey(bound)[1]}. Release it before opening another.` })
+    if (lease && holder?.thread === thread && holder.lease !== lease) return this.#refuse("open", who, id, { refused: "not-offered", why: OTHER_LEASE })
     if (holder && holder.thread !== thread && who.kind === "agent") return this.#refuse("open", who, id, { refused: "held", why: `${holder.title ?? "Another Thread"} drives this simulator. Wait for it to be released, or ask the person to hand it over.`, holder })
     const done = await this.#perform("open", who, id, async () => {
       await host.boot(simulator.id)
@@ -142,8 +177,10 @@ export class Simulators {
             since: now,
             lastAt: now,
             generation: ++this.#generation,
+            ...(lease && { lease }),
           }
     this.#claims.set(id, claim)
+    if (lease) this.#leased.set(lease, id)
     this.#holding(true)
     this.#lost.get(id)?.delete(thread)
     hostLog("simulators", "open", { ...whoLog(who, caller), simulator: id, generation: claim.generation, ...(holder && holder.thread !== thread && { took: holder.thread }) })
@@ -153,11 +190,19 @@ export class Simulators {
   async act(caller: SimulatorCaller, input: SimulatorsActInput): Promise<SimulatorsActResult> {
     const remote = await this.#remote(caller, "act", input)
     if (remote) return "refused" in remote ? remote : remote.host.act(remote.caller, input)
-    return this.#held(caller, "act", input, async (host, simulator) => {
-      const started = this.#now()
-      await host.act(simulator, input.action)
-      return { ms: this.#now() - started }
-    })
+    // A drag's moves come at the display's rate: its begin and end are logged, not each move.
+    const quiet = input.action.kind === "touch" && input.action.phase === "move"
+    return this.#held(
+      caller,
+      "act",
+      input,
+      async (host, simulator) => {
+        const started = this.#now()
+        await host.act(simulator, input.action)
+        return { ms: this.#now() - started }
+      },
+      quiet
+    )
   }
 
   async read(caller: SimulatorCaller, input: SimulatorsReadInput): Promise<SimulatorsReadResult> {
@@ -176,6 +221,8 @@ export class Simulators {
     const refused = await this.#perform("shot", found.who, key(found.host.id, found.simulator.id), async () => {
       shot = await found.host.screenshot(found.simulator.id)
       if (input.inline) shot = await inlined(shot)
+      // Too large to go inline to a caller under a lease: the picture goes to the lease, and the caller fetches it.
+      if (input.inline && shot && !shot.inline && found.lease && this.#leases?.artifact) shot = { ...shot, artifact: await this.#leases.artifact(found.lease, shot.path, basename(shot.path)) }
     })
     return refused ?? shot ?? { refused: "unsupported", why: "The host took no picture." }
   }
@@ -183,7 +230,12 @@ export class Simulators {
   async record(caller: SimulatorCaller, input: SimulatorsRecordInput): Promise<SimulatorsRecordResult> {
     const remote = await this.#remote(caller, "record", input)
     if (remote) return "refused" in remote ? remote : remote.host.record(remote.caller, input)
-    return this.#held(caller, "record", input, (host, simulator) => host.record(simulator, input.recording))
+    return this.#held(caller, "record", input, async (host, simulator, lease) => {
+      const recorded = await host.record(simulator, input.recording)
+      // A recording for a caller under a lease goes to that lease: its file on this Mac means nothing there.
+      if (!lease || !recorded.path || !this.#leases?.artifact) return recorded
+      return { artifact: await this.#leases.artifact(lease, recorded.path, basename(recorded.path)) }
+    })
   }
 
   async release(caller: SimulatorCaller, input: SimulatorsReleaseInput): Promise<SimulatorsReleaseResult> {
@@ -192,39 +244,57 @@ export class Simulators {
     const who = this.#who(caller, "release")
     if ("refused" in who) return who
     const id = key(input.host, input.simulator)
+    // Another place's agent names its Thread itself (the gateway stamps only where it came from): it releases only
+    // under a live lease of that Thread from there, and only that lease's own claim.
+    const lease = caller.via && who.kind === "agent" ? this.#leases?.leaseOf(caller.via, who.thread) : undefined
+    if (caller.via && who.kind === "agent" && !lease) return this.#refuse("release", who, id, { refused: "not-offered", why: NOT_LEASED })
     const holder = this.#claim(id)
     const thread = threadOf(who)
     if (!holder) return { released: false }
     if (holder.thread !== thread && who.kind === "agent") return this.#refuse("release", who, id, { refused: "held", why: `${holder.title ?? "Another Thread"} drives this simulator, not this Thread.`, holder })
+    if (lease && holder.lease !== lease) return this.#refuse("release", who, id, { refused: "not-offered", why: OTHER_LEASE })
     this.#end(id, holder, { ...whoLog(who, caller) })
     return { released: true }
   }
 
   /**
    * A viewer's next packets of a simulator's screen, which anyone may watch. Its name is scoped by where it called
-   * from, so a phone's viewer and a panel's can't take each other's stream.
+   * from and by whose it is, so a phone's viewer and a panel's, or two Threads', can't take each other's stream.
    */
   async watch(caller: SimulatorCaller, input: SimulatorsWatchInput): Promise<SimulatorsWatchResult> {
     const remote = await this.#remote(caller, "watch", input)
     if (remote) return "refused" in remote ? remote : remote.host.watch(remote.caller, input)
     const found = await this.#find(caller, "watch", input)
     if ("refused" in found) return found
-    const { host, simulator } = found
+    const { who, host, simulator } = found
     const frames = host.frames?.bind(host)
-    if (!frames) return this.#refuse("watch", found.who, key(host.id, simulator.id), { refused: "unsupported", why: `${host.label} can't stream a simulator's screen yet; simulator_shot takes a picture of it.` })
-    const viewer = `${caller.via?.from ?? "here"}/${input.viewer}`
+    if (!frames) return this.#refuse("watch", who, key(host.id, simulator.id), { refused: "unsupported", why: `${host.label} can't stream a simulator's screen yet; simulator_shot takes a picture of it.` })
+    const viewer = `${caller.via?.from ?? "here"}/${threadOf(who)}/${input.viewer}`
+    if (input.leave) {
+      this.#streams.leave(key(host.id, simulator.id), viewer)
+      return { live: false, batch: Buffer.from(encodeControlVideoBatch({ live: false, packets: [] })).toString("base64") }
+    }
     const read = await this.#streams.read(key(host.id, simulator.id), viewer, (sink) => frames(simulator.id, sink), {
       ...(input.box && { box: input.box }),
+      ...(input.decoded !== undefined && { decoded: input.decoded }),
+      ...(who.kind === "agent" && { owner: { thread: who.thread, session: who.session, ...(who.conversation && { conversation: who.conversation }) } }),
       waitMs: Math.min(Math.max(input.waitMs ?? WATCH_WAIT_MS, 0), WATCH_WAIT_MS),
     })
     return { live: read.live, batch: Buffer.from(encodeControlVideoBatch(read)).toString("base64") }
   }
 
-  /** A Thread archived lets go of whatever it holds. */
+  /** A Thread archived lets go of whatever it holds, and stops watching: a screen nobody else watches stops streaming. */
   releaseThread(ended: EndedThread): void {
-    for (const [id, claim] of this.#claims)
-      if ((ended.thread && claim.thread === ended.thread) || (ended.conversation && claim.conversation === ended.conversation) || (ended.session && claim.session === ended.session))
-        this.#end(id, claim, { thread: claim.thread, why: "thread ended" })
+    const owned = (owner: ViewerOwner) =>
+      Boolean((ended.thread && owner.thread === ended.thread) || (ended.conversation && owner.conversation === ended.conversation) || (ended.session && owner.session === ended.session))
+    for (const [id, claim] of this.#claims) if (owned(claim)) this.#end(id, claim, { thread: claim.thread, why: "thread ended" })
+    this.#streams.leaveOwned(owned)
+  }
+
+  /** A lease this Mac served ended: the claim made under it lets go, and no other, the same Thread's included. */
+  releaseLease(lease: string): void {
+    for (const [id, claim] of this.#claims) if (claim.lease === lease) this.#end(id, claim, { thread: claim.thread, lease, why: "lease ended" })
+    this.#leased.delete(lease)
   }
 
   /** Ends every claim idle past `CLAIM_IDLE_MS`, so a billed host stops on time and not when someone next looks. */
@@ -232,8 +302,9 @@ export class Simulators {
     for (const id of this.#claims.keys()) this.#claim(id)
   }
 
-  /** Every screen stops streaming, and every host stops what it started. */
+  /** Every screen stops streaming, every host stops what it started, and what this host borrowed is released. */
   async close(): Promise<void> {
+    await this.#borrowing?.close?.()
     await this.#streams.close()
     await Promise.all([...this.#hosts.values()].map((host) => host.close().catch((error) => hostWarn("simulators", "host close failed", { host: host.id, error: error instanceof Error ? error.message : String(error) }))))
   }
@@ -270,7 +341,8 @@ export class Simulators {
     caller: SimulatorCaller,
     verb: string,
     input: { simulator: string; host: string },
-    work: (host: SimulatorHost, simulator: string) => Promise<Result>
+    work: (host: SimulatorHost, simulator: string, lease?: string) => Promise<Result>,
+    quiet = false
   ): Promise<Result | SimulatorRefused> {
     const found = await this.#find(caller, verb, input)
     if ("refused" in found) return found
@@ -283,11 +355,18 @@ export class Simulators {
       if (holder && who.kind === "agent") return this.#refuse(verb, who, id, { refused: "held", why: `${holder.title ?? "Another Thread"} drives this simulator.`, holder })
       if (!holder) return this.#refuse(verb, who, id, { refused: "not-open", why: "Open it with simulator_open first; that takes it for this Thread." })
     }
+    if (found.lease && holder?.lease !== found.lease) return this.#refuse(verb, who, id, { refused: "not-offered", why: OTHER_LEASE })
     if (holder?.thread === thread) this.#claims.set(id, { ...holder, lastAt: this.#now() })
     let result: Result | undefined
-    const refused = await this.#perform(verb, who, id, async () => {
-      result = await work(found.host, found.simulator.id)
-    })
+    const refused = await this.#perform(
+      verb,
+      who,
+      id,
+      async () => {
+        result = await work(found.host, found.simulator.id, found.lease)
+      },
+      quiet
+    )
     return refused ?? result ?? { refused: "unsupported", why: "The host answered nothing." }
   }
 
@@ -295,7 +374,12 @@ export class Simulators {
     const who = this.#who(caller, verb)
     if ("refused" in who) return who
     const id = key(input.host, input.simulator)
-    if (caller.via && !(await this.#offered())) return this.#refuse(verb, who, id, { refused: "not-offered", why: NOT_OFFERED })
+    let lease: string | undefined
+    if (caller.via && who.kind === "agent") {
+      lease = this.#leases?.leaseOf(caller.via, who.thread)
+      if (!lease) return this.#refuse(verb, who, id, { refused: "not-offered", why: NOT_LEASED })
+      this.#leases?.used?.(lease, verb)
+    }
     if (who.kind === "agent" && !caller.via && (await this.#consentFor(who, caller)) !== "allowed")
       return this.#refuse(verb, who, id, { refused: "not-allowed", why: "The person hasn't allowed simulators in this project. They can in Settings › Simulators." })
     const host = this.#hosts.get(input.host)
@@ -305,7 +389,7 @@ export class Simulators {
       const ios = (await host.summary()).platforms.ios
       return this.#refuse(verb, who, id, ios.ready ? { refused: "not-found", why: `${host.label} has no simulator ${input.simulator}; simulator_list names them.` } : { refused: "unavailable", why: ios.why })
     }
-    return { who, host, simulator }
+    return { who, host, simulator, ...(lease && { lease }) }
   }
 
   /**
@@ -314,6 +398,11 @@ export class Simulators {
    */
   #who(caller: SimulatorCaller, verb: string): Who | SimulatorRefused {
     if (caller.via) {
+      // A machine runtime is never the person, whatever its payload says; it reaches a simulator as its Thread, leased.
+      if (caller.kind === "person" && `gateway:${caller.via.from}`.startsWith(MACHINE_CLIENT)) {
+        hostLog("simulators", "refused", { verb, reason: "machine-as-person", via: caller.via.from })
+        return { refused: "not-offered", why: NOT_THE_PERSON }
+      }
       if (caller.kind === "person") return { kind: "person" }
       if (caller.agent) return { kind: "agent", ...caller.agent }
       hostLog("simulators", "refused", { verb, session: caller.session, reason: "no-thread", via: caller.via.from })
@@ -327,11 +416,11 @@ export class Simulators {
   }
 
   /** Runs a host's operation, its refusal (`SimulatorUnsupported`) said as one; anything else is a failure and thrown. */
-  async #perform(verb: string, who: Who, id: string, work: () => Promise<void>): Promise<SimulatorRefused | undefined> {
+  async #perform(verb: string, who: Who, id: string, work: () => Promise<void>, quiet = false): Promise<SimulatorRefused | undefined> {
     const started = this.#now()
     try {
       await work()
-      hostLog("simulators", verb, { ...whoLog(who), simulator: id, ms: this.#now() - started })
+      if (!quiet) hostLog("simulators", verb, { ...whoLog(who), simulator: id, ms: this.#now() - started })
       return undefined
     } catch (error) {
       if (error instanceof SimulatorUnsupported) return this.#refuse(verb, who, id, { refused: "unsupported", why: error.message })
@@ -362,6 +451,8 @@ export class Simulators {
   }
 
   #lose(id: string, thread: string): void {
+    const lease = this.#claims.get(id)?.lease
+    if (lease && this.#leased.get(lease) === id) this.#leased.delete(lease)
     this.#claims.delete(id)
     if (this.#claims.size === 0) this.#holding(false)
     const lost = this.#lost.get(id) ?? new Set<string>()
@@ -370,24 +461,21 @@ export class Simulators {
   }
 
   /**
-   * An agent here by its project's consent; a call from another device by whether this Mac offers its simulators. The
-   * most specific answer for where it works, else for its worktree's project: a subfolder decided on overrides its
-   * project's.
+   * An agent here by its project's consent; an agent's call from another place by a live lease of its Thread that this
+   * Mac serves, which the person granted for that project; the person from any of their devices. The most specific
+   * answer for where it works, else for its worktree's project: a subfolder decided on overrides its project's.
    */
   async #consentFor(who: Who, caller?: SimulatorCaller): Promise<SimulatorConsent> {
-    // Via callers skip project consent: that was the calling Mac's to check; this Mac offers or it doesn't.
-    if (caller?.via) return (await this.#offered()) ? "allowed" : "refused"
     if (who.kind === "person") return "allowed"
-    const consent = await this.#consent()
-    const answerFor = (folder: string) =>
-      consent.filter((entry) => folder === entry.folder || folder.startsWith(`${entry.folder}/`)).sort((left, right) => right.folder.length - left.folder.length)[0]
-    const answer = answerFor(who.folder) ?? (who.project ? answerFor(who.project) : undefined)
-    return answer ? (answer.allowed ? "allowed" : "refused") : "unasked"
+    if (caller?.via) return this.#leases?.leaseOf(caller.via, who.thread) ? "allowed" : "refused"
+    // A cloud Thread's simulators are borrowed: the person's grant, decided at the broker, is the consent.
+    if (this.#borrowing) return "allowed"
+    return consentFor(await this.#consent(), who)
   }
 
-  /** This Mac's hosts as another device hears them while it doesn't offer them: there, and not offered. */
+  /** This Mac's hosts as a caller without a lease hears them: there, and not lent to it. */
   async #notOffered(): Promise<SimulatorHostSummary[]> {
-    const blocked = { ready: false as const, blocker: "not-offered" as const, why: NOT_OFFERED }
+    const blocked = { ready: false as const, blocker: "not-offered" as const, why: NOT_LEASED }
     return Promise.all([...this.#hosts.values()].map(async (host) => ({ ...(await host.summary()), platforms: { ios: blocked, android: blocked } })))
   }
 }
@@ -398,6 +486,14 @@ async function inlined(shot: SimulatorsShot): Promise<SimulatorsShot> {
   if (bytes.byteLength > SHOT_INLINE_LIMIT) return shot
   const type = /\.jpe?g$/i.test(shot.path) ? "image/jpeg" : "image/png"
   return { ...shot, inline: { type, data: bytes.toString("base64") } }
+}
+
+/** The person's answer for where an agent works: the nearest folder they answered for, then its worktree's project. */
+export function consentFor(consent: readonly SetupConsent[], agent: Pick<SimulatorAgent, "folder" | "project">): SimulatorConsent {
+  const answerFor = (folder: string) =>
+    consent.filter((entry) => folder === entry.folder || folder.startsWith(`${entry.folder}/`)).sort((left, right) => right.folder.length - left.folder.length)[0]
+  const answer = answerFor(agent.folder) ?? (agent.project ? answerFor(agent.project) : undefined)
+  return answer ? (answer.allowed ? "allowed" : "refused") : "unasked"
 }
 
 /** A host ID may hold colons (`mac:<device>`), so the pair is kept as JSON. */

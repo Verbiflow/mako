@@ -34,10 +34,11 @@ import {
   mediaStreamOf,
 } from "./media.js"
 import { Payload } from "./payload.js"
-import type { GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
+import type { Progress } from "./borrow.js"
+import type { Advertisement, GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
 import { type SshClient, SshIncoming, SshOutgoing, SshRefusedError, type SshStream } from "./ssh.js"
 import type { SessionsReport } from "./thread-listing.js"
-import { COMPACT_LIVE_VERSION, MEDIA_VERSION, NUMBERED_LIVE_VERSION, PROTOCOL_VERSION, SESSIONS_VERSION, SSH_VERSION, SUPPORTED_VERSIONS, negotiate } from "./version.js"
+import { COMPACT_LIVE_VERSION, LEND_LINK_VERSION, MEDIA_VERSION, NUMBERED_LIVE_VERSION, PROTOCOL_VERSION, SESSIONS_VERSION, SSH_VERSION, SUPPORTED_VERSIONS, negotiate } from "./version.js"
 import { LINGER_MS, LiveTail, frameFor, logFor, streamNoticeText } from "./live-tail.js"
 import { type LiveForm, WHOLE_LIVE_FORM, readersForm, readsLiveForm } from "./live-form.js"
 import {
@@ -148,6 +149,12 @@ export type FakeGateway = Omit<GatewayUnderTest, "connectClient"> & {
   activity(threadId: string): { busy: boolean; work: string[]; at: Date } | undefined
   /** Each report of its Sessions a runtime sent, in order, for a test of what it says and when. */
   reports(runtimeId: string): SessionsReport[]
+  /** Every advertisement a device's runtime sent (`advertise`), oldest first. */
+  advertisements(runtimeId: string): Advertisement[]
+  /** Every heartbeat a device's runtime sent for a session it serves (`lease-beat`), oldest first. */
+  beats(runtimeId: string): Array<{ lease: string; progress?: Progress }>
+  /** Sends a runtime what it lends (`source-ask`, `lent`, `lent-ended`), as the account's broker does; false while it isn't connected. */
+  lend(runtimeId: string, frame: Extract<GatewayFrame, { type: "source-ask" | "lent" | "lent-ended" }>): boolean
   /** The operations waiting for the Thread's runtime (`whenAsleep: "defer"`). */
   deferred(threadId: string): string[]
 }
@@ -166,6 +173,8 @@ export function createFakeGateway(
   const admissions = new Map<string, number>()
   const activity = new Map<string, { busy: boolean; work: string[]; at: Date }>()
   const reports = new Map<string, SessionsReport[]>()
+  const advertised = new Map<string, Advertisement[]>()
+  const beaten = new Map<string, Array<{ lease: string; progress?: Progress }>>()
   /**
    * By session stream: who watches it, and its numbering and last few updates (`LiveTail`), as a gateway keeps them. A
    * stream nobody watches lingers `LINGER_MS` (`idleSince`), its runtime still sending, so a watcher back from a dropped
@@ -545,6 +554,15 @@ export function createFakeGateway(
     if (frame.type === "listing") return
     if (frame.type === "sessions") {
       reports.set(connection.runtimeId, [...(reports.get(connection.runtimeId) ?? []), frame.report])
+      return
+    }
+    if (frame.type === "lease-beat") {
+      beaten.set(connection.runtimeId, [...(beaten.get(connection.runtimeId) ?? []), frame.progress ? { lease: frame.lease, progress: frame.progress } : { lease: frame.lease }])
+      return
+    }
+    if (frame.type === "advertise") {
+      const { type: _type, ...advertisement } = frame
+      advertised.set(connection.runtimeId, [...(advertised.get(connection.runtimeId) ?? []), advertisement])
       return
     }
     if (frame.type === "live") {
@@ -955,6 +973,14 @@ export function createFakeGateway(
 
     activity: (threadId) => activity.get(threadId),
     reports: (runtimeId) => reports.get(runtimeId) ?? [],
+    advertisements: (runtimeId) => advertised.get(runtimeId) ?? [],
+    beats: (runtimeId) => beaten.get(runtimeId) ?? [],
+    lend: (runtimeId, frame) => {
+      const runtime = runtimes.get(runtimeId)
+      if (!runtime || runtime.closed || (runtime.version ?? 0) < LEND_LINK_VERSION) return false
+      runtime.deliver(frame)
+      return true
+    },
     deferred: (threadId) => thread(threadId).deferred.map((operation) => operation.id),
   }
 }

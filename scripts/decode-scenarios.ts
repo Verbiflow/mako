@@ -740,6 +740,26 @@ export const SCENARIOS: Scenario[] = [
       },
     ],
   },
+  {
+    name: "mcp-call-file",
+    about: "A large MCP call passed through a file: the model writes the call to a JSON file and calls use_tool with only that file, which Grok reads, reporting the call it ran inline.",
+    files: {},
+    turns: [{
+      prompt: "The file big.txt in this folder holds about 41,000 characters. Save it as a note with the notes MCP server's save_note tool, title \"big\", body the whole text of big.txt. The arguments are large, so pass them through a file as your use_tool instructions describe for large MCP arguments: write the complete invocation JSON to a file under /tmp and call use_tool with only its file. Then reply with what the tool answered.",
+      steps: [],
+    }],
+    captured: "Grok's model chooses use_tool's file form (1.0.77) itself, through an MCP server of the run's own: recorded from a real session with the probe's --prompt, --files and --keep, its home's ~/.grok/config.toml naming a one-tool notes server",
+  },
+  {
+    name: "mcp-args-file",
+    about: "A large MCP call's arguments passed through a file: the model writes only the arguments to a JSON file and calls use_tool with the tool's name and that file, which Grok reads, reporting the call it ran inline.",
+    files: {},
+    turns: [{
+      prompt: "The file big.txt in this folder holds about 41,000 characters. Save it as a note with the notes MCP server's save_note tool, title \"big\", body the whole text of big.txt. The arguments are large: write only the arguments object ({\"title\": ..., \"body\": ...}) to a JSON file under /tmp, then call use_tool with tool_name set to the tool and tool_input_file set to that file, as your use_tool instructions describe. Then reply with what the tool answered.",
+      steps: [],
+    }],
+    captured: "Grok's model chooses use_tool's tool_input_file (1.0.77) itself, through an MCP server of the run's own: recorded as mcp-call-file is",
+  },
 ]
 
 /**

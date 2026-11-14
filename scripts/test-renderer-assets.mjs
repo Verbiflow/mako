@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, writeFile, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { writeFile, rm } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 if (process.versions.electron) {
   // A failure before checkElectron's own try (a module that won't import) must end the run, not leave Electron open.
@@ -17,7 +17,7 @@ if (process.versions.electron) {
 
 async function buildAndCheck() {
   const { build, preview } = await import("vite")
-  const directory = await mkdtemp(join(tmpdir(), "mako-renderer-assets-"))
+  const directory = testScratch("mako-renderer-assets-")
   let server
   try {
     const outDir = join(directory, "dist")

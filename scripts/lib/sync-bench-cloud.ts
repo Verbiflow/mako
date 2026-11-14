@@ -39,6 +39,8 @@ export interface BenchCloud {
   readonly name: string
   /** Whether it runs on this computer, so the local budgets apply rather than a network's. */
   readonly local: boolean
+  /** What the account took of runtimes' Sessions reports so far, counted as they arrive: the fake gateway's alone. */
+  reported?(): AccountReports
   /** Whether it says when a device goes quiet: the fake gateway keeps no presence, so the quiet phase needs a real one. */
   readonly presence: boolean
   /** An account with the cloud, made before any device signs in, so every token carries the entitlement from the start. */
@@ -50,6 +52,14 @@ export interface BenchCloud {
   /** A cloud Thread with a machine assigned, for an in-process machine runtime to link as; undefined to skip that hop. */
   cloudThread(): Promise<CloudThreadPlace | undefined>
   close(): Promise<void>
+}
+
+/** Runtimes' Sessions reports as the account took them: frames, rows they listed and said gone, and their bytes. */
+export interface AccountReports {
+  frames: number
+  rows: number
+  gone: number
+  bytes: number
 }
 
 /** A cloud Thread, what its machine's runtime links with (`machine-agent.ts`'s `link`), and where its watchers subscribe. */
@@ -142,6 +152,7 @@ export async function fakeCloud(): Promise<BenchCloud> {
   const following = new Set<ServerSocket>()
   const sockets = new Set<ServerSocket>()
   const threadWatch = new Set<string>()
+  const counted: AccountReports = { frames: 0, rows: 0, gone: 0, bytes: 0 }
 
   const token = (deviceId: string) => {
     const exp = Math.floor(Date.now() / 1000) + TOKEN_SECONDS
@@ -178,6 +189,10 @@ export async function fakeCloud(): Promise<BenchCloud> {
       return
     }
     if (frame.type !== "sessions") return
+    counted.frames += 1
+    counted.rows += frame.report.listed.length
+    counted.gone += frame.report.gone.length
+    counted.bytes += Buffer.byteLength(text)
     const deviceId = /^d-(.+)$/.exec(runtimeId)?.[1]
     if (!deviceId) return
     const runsOn = { kind: "device" as const, deviceId }
@@ -334,6 +349,7 @@ export async function fakeCloud(): Promise<BenchCloud> {
     url,
     name: "fake",
     local: true,
+    reported: () => ({ ...counted }),
     presence: false,
     account: async () => ({ email: account.email }),
     async signIn(page) {

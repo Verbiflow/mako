@@ -89,7 +89,7 @@ interface FakePull {
   state: "OPEN" | "MERGED" | "CLOSED"
   reviewDecision: string
   latestReviews: { state: string; author: { login: string } }[]
-  statusCheckRollup: { name: string; conclusion: string; detailsUrl?: string }[]
+  statusCheckRollup: { name: string; conclusion: string; detailsUrl?: string; workflowName?: string; startedAt?: string }[]
 }
 interface GitHubState {
   calls: string[]
@@ -249,6 +249,32 @@ try {
   assert.equal(await rerunFailedChecks(gitRunner, project), 2)
   assert.deepEqual(github().reruns, ["1 --failed", "4 --failed"])
 
+  // Pushed twice: GitHub ran the head again and cancelled the older runs. Those were replaced, not failed: no check
+  // failing, no log, nothing to re-run. A cancelled run nothing replaced says cancelled, and holds the merge.
+  setGithub((db) => {
+    Object.assign(db.pulls[0]!, {
+      reviewDecision: "APPROVED",
+      statusCheckRollup: [
+        { workflowName: "CI", name: "test", conclusion: "CANCELLED", startedAt: "2026-11-13T10:00:00Z" },
+        { workflowName: "CI", name: "test", conclusion: "SUCCESS", startedAt: "2026-11-13T10:02:00Z" },
+        { workflowName: "Docs", name: "build", conclusion: "CANCELLED", startedAt: "2026-11-13T10:00:00Z" },
+      ],
+    })
+    db.runs = [
+      { databaseId: 12, headSha: pushed, conclusion: "success", workflowName: "CI", url: "https://ci/12", branch: "mako/feature" },
+      { databaseId: 11, headSha: pushed, conclusion: "cancelled", workflowName: "CI", url: "https://ci/11", branch: "mako/feature" },
+      { databaseId: 10, headSha: pushed, conclusion: "cancelled", workflowName: "Docs", url: "https://ci/10", branch: "mako/feature" },
+    ]
+    db.logs = { "10": "build\tBuild\t2026-11-13T10:00:01.000Z The operation was canceled.\n", "11": "test\tRun\t2026-11-13T10:00:01.000Z The operation was canceled.\n" }
+  })
+  const pushedTwice = await pullRequestReport(gitRunner, project, { logs: true })
+  assert.deepEqual(pushedTwice.pullRequest?.checks, [{ name: "test", state: "passed" }, { name: "build", state: "cancelled" }], "the run a newer run replaced isn't read; the lone cancelled one says cancelled")
+  assert.equal(pushedTwice.pullRequest?.merge, "Run the cancelled checks again first")
+  assert.deepEqual(pushedTwice.pullRequest?.failedLogs, [{ workflow: "Docs", url: "https://ci/10", log: "build\tBuild\tThe operation was canceled." }], "no log of the replaced run")
+  assert.equal(await rerunFailedChecks(gitRunner, project), 1)
+  assert.deepEqual(github().reruns.slice(2), ["10 --failed"], "only the cancelled run nothing replaced is run again")
+  setGithub((db) => Object.assign(db.pulls[0]!, { reviewDecision: "CHANGES_REQUESTED", statusCheckRollup: [{ name: "test", conclusion: "FAILURE" }] }))
+
   // Merge: the shared guard, then a method the repository allows.
   await assert.rejects(mergePullRequest(project), /^Error: #100 can't merge yet\. Fix failing checks first\.$/)
   setGithub((db) => Object.assign(db.pulls[0]!, { reviewDecision: "APPROVED", statusCheckRollup: [{ name: "test", conclusion: "SUCCESS" }] }))
@@ -366,10 +392,29 @@ try {
   assert.equal(await project2.open("c", { repository: `${multi}/api/` }), "api: #102 was already open; pushed 1 commit: https://github.com/o/r/pull/102.", "a repository is named by its folder, absolute or from the project")
   await assert.rejects(project2.status("c", { repository: "nope" }), /^Error: .*multi has no repository named "nope"\. Pass one of: api, web\.$/)
   assert.equal(parseYaml(await project2.status("c", { repository: " ./web/ " })).repository, "web", "a name from the project folder may start with ./ and end with /")
-  const slashes = "/".repeat(100_000) + "x"
-  const started = performance.now()
-  await assert.rejects(project2.status("c", { repository: slashes }), /has no repository named/)
-  assert.ok(performance.now() - started < 1000, "a hostile name is refused in linear time")
+  // Linear, judged against a pass that plainly is over the same name, timed here: counting its slashes. Whatever the
+  // runner's speed does to one it does to the other, so refusing costs a few times the count, where a cost that grows
+  // with the name's square costs thousands. Each the quickest of five, past a first.
+  const hostile = "/".repeat(200_000) + "x"
+  const quickest = async (work: () => Promise<void> | void) => {
+    let best = Infinity
+    for (let run = 0; run < 5; run++) {
+      const began = performance.now()
+      await work()
+      best = Math.min(best, performance.now() - began)
+    }
+    return best
+  }
+  await assert.rejects(project2.status("c", { repository: hostile }), /has no repository named/)
+  const refusing = await quickest(() => assert.rejects(project2.status("c", { repository: hostile }), /has no repository named/))
+  let counted = 0
+  const counting = await quickest(() => {
+    let slashes = 0
+    for (const character of hostile) if (character === "/") slashes++
+    counted = slashes
+  })
+  assert.equal(counted, 200_000)
+  assert.ok(refusing < counting * 50, `a hostile name is refused in linear time: ${refusing.toFixed(2)} ms for 200,000 slashes, against ${counting.toFixed(2)} ms to count them`)
 
   const onlyApi = parseYaml(await project2.status("c", { repository: "api" }))
   assert.deepEqual([onlyApi.repository, onlyApi.pullRequest.number, onlyApi.otherRepositories], ["api", 102, ["web"]], "one repository's report names it and its siblings")

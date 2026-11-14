@@ -13,7 +13,11 @@ export interface RoutedLaunch {
  * environment it launches with, on every start and discovery.
  */
 export type ModelRouteAdapter =
-  | (Extract<ModelRoutesCapability, { kind: "accepts" }> & { apply(env: NodeJS.ProcessEnv, launch: RoutedLaunch): NodeJS.ProcessEnv })
+  | (Extract<ModelRoutesCapability, { kind: "accepts" }> & {
+    apply(env: NodeJS.ProcessEnv, launch: RoutedLaunch): NodeJS.ProcessEnv
+    /** The id the harness lists a connection's model under, so a Fin can be moved onto it (`contracts/fin-fallback.ts`). */
+    model?(connection: string, model: string): string
+  })
   | Exclude<ModelRoutesCapability, { kind: "accepts" }>
 
 /** The declaration alone, as a window reads it. */

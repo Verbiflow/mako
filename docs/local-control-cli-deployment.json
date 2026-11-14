@@ -3,6 +3,6 @@
   "updatedAt": "2026-09-24T11:37:01.761Z",
   "candidateBuild": "a0c8c955359372bb",
   "previousBuild": "345bfd91c64009c6",
-  "candidate": "/Users/kashyab/makomono/mako/release/control-native-20260924/mac-arm64/Mako.app",
+  "candidate": "release/control-native-20260924/mac-arm64/Mako.app",
   "message": "The shared host changed while waiting. Nothing was installed."
 }

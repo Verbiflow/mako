@@ -21,6 +21,8 @@ export interface HostLivenessOptions {
   message: string
   /** How long a dropped call waits for the host to show itself before the window hears of an outage. */
   proofMs?: number
+  /** Every time the banner goes up or comes down, with why, so a window's outages can be read back. */
+  log?(message: string, fields: Record<string, string | number>): void
 }
 
 /** One event stream's say. A stream a newer one replaced says nothing more. */
@@ -29,13 +31,13 @@ export interface HostStream {
   ready(): void
   /** Any bytes on it, the heartbeat included. */
   heard(): void
-  /** It ended: the host left, or the connection to it did. */
-  ended(): void
+  /** It ended: the host left, or the connection to it did. `end` says how, in the log. */
+  ended(end?: { why: string } & Record<string, string | number>): void
 }
 
 interface Check {
   result: Promise<boolean>
-  finish(alive: boolean): void
+  finish(alive: boolean, why?: string): void
 }
 
 /**
@@ -58,6 +60,8 @@ export class HostLiveness implements RecoveryLink {
   /** The generation of the stream that said `ready` and hasn't ended, or null. */
   private open: number | null = null
   private check: Check | undefined
+  /** When the banner went up. */
+  private downAt: number | undefined
   private readonly waiters = new Set<(connected: boolean) => void>()
   private readonly options: HostLivenessOptions
 
@@ -92,10 +96,10 @@ export class HostLiveness implements RecoveryLink {
         // The host said nothing for a while, or a probe missed it, and now it speaks on the same stream.
         if (!this.live) this.up(this.announced)
       },
-      ended: () => {
+      ended: (end) => {
         if (!current()) return
         this.open = null
-        this.down()
+        this.down(end ? { ...end, why: `the event stream ended: ${end.why}` } : { why: "the event stream ended" })
         this.check?.finish(false)
       },
     }
@@ -139,13 +143,13 @@ export class HostLiveness implements RecoveryLink {
     let done = false
     const check: Check = {
       result,
-      finish: (alive) => {
+      finish: (alive, why = "a call dropped and the stream didn't speak in time") => {
         if (done) return
         done = true
         clearTimeout(deadline)
         if (this.check === check) this.check = undefined
         // No host where the stream's was, or nothing heard in time: the window hears of the outage now.
-        if (!alive) this.down()
+        if (!alive) this.down({ why })
         settle(alive)
       },
     }
@@ -155,7 +159,7 @@ export class HostLiveness implements RecoveryLink {
     const deadline = setTimeout(() => check.finish(false), proofMs)
     void this.options.probe(proofMs).then((answer) => {
       if (answer === "alive") check.finish(true)
-      else if (answer === "absent") check.finish(false)
+      else if (answer === "absent") check.finish(false, "a call dropped and no host answered")
       // Unknown: the stream still has until the deadline to be heard.
     }, () => {})
     return result
@@ -165,14 +169,18 @@ export class HostLiveness implements RecoveryLink {
     this.live = true
     this.announced = false
     this.settle(true)
-    if (announce) this.options.announce({ type: "host-reconnected" })
+    if (!announce) return
+    this.options.log?.("the host's back", { outageMs: this.downAt === undefined ? 0 : Date.now() - this.downAt })
+    this.options.announce({ type: "host-reconnected" })
   }
 
   /** Once per outage, whichever notices it first. */
-  private down(): void {
+  private down(reason: { why: string } & Record<string, string | number>): void {
     this.live = false
     if (this.announced || this.disposed) return
     this.announced = true
+    this.downAt = Date.now()
+    this.options.log?.("the host's gone from this window", reason)
     this.options.announce({ type: "host-disconnected", message: this.options.message })
   }
 

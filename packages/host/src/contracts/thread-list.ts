@@ -3,14 +3,26 @@ import type { ThreadRef } from "@mako/sessions"
 /** Rows the window's rail holds. Nobody scrolls ten years of history. */
 export const THREAD_LIST_CAP = 600
 
-type ListedRef = Pick<ThreadRef, "harness" | "nativeId" | "identity" | "archived" | "updatedAt" | "threadId" | "parent">
+type ListedRef = Pick<ThreadRef, "harness" | "nativeId" | "identity" | "archived" | "updatedAt" | "threadId" | "parent" | "nativeAgent">
+
+/** Provider-owned safety work has native history, but is not a conversation to open or reply to. */
+export function internalReviewSession(ref: Pick<ThreadRef, "nativeAgent">): boolean {
+  return ref.nativeAgent?.kind === "internal-review"
+}
+
+/** A record path can be reused; a placed Session further distinguishes otherwise identical native refs. */
+export function sameNativeSession(left: Pick<ThreadRef, "harness" | "nativeId" | "identity" | "sessionId">, right: Pick<ThreadRef, "harness" | "nativeId" | "identity" | "sessionId">): boolean {
+  return left.harness === right.harness && left.nativeId === right.nativeId && left.identity === right.identity &&
+    left.sessionId === right.sessionId
+}
 
 /**
  * Whether a session is a row of its own: a child's (`parent`) shows inside
- * its parent's Thread, never as a Thread.
+ * its parent's Thread, never as a Thread. Provider internal reviews are
+ * native history rather than person-facing conversations.
  */
-export function listedAsThread(ref: Pick<ThreadRef, "parent">): boolean {
-  return ref.parent === undefined
+export function listedAsThread(ref: Pick<ThreadRef, "parent" | "nativeAgent">): boolean {
+  return ref.parent === undefined && !internalReviewSession(ref)
 }
 
 /**

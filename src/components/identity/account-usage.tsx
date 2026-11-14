@@ -61,7 +61,7 @@ export function AccountLimits({ density }: { density: Density }) {
       </p>
     ) : (
       <div className="flex flex-col gap-2 px-2 py-2" aria-hidden>
-        <Skeleton className="h-3.5 w-24 rounded" />
+        <Skeleton className="h-3.5 w-24" />
         <Skeleton className="h-1 w-full rounded-full" />
       </div>
     )
@@ -132,8 +132,8 @@ export function HarnessAccounts({
  * rows so a hovered row's fill cannot cover the edge.
  */
 const LIST =
-  "relative overflow-hidden rounded-lg bg-shell/55 divide-y divide-hairline " +
-  "after:pointer-events-none after:absolute after:inset-0 after:rounded-[inherit] " +
+  "relative overflow-hidden bg-shell/55 divide-y divide-hairline " +
+  "after:pointer-events-none after:absolute after:inset-0 " +
   "after:[box-shadow:inset_0_0_0_0.5px_var(--hairline)]"
 
 /**
@@ -396,7 +396,7 @@ function MenuChoice({ account, label }: { account: ProviderAccount; label: strin
   return (
     <div
       className={cn(
-        "relative flex h-7 items-center gap-3 rounded-md px-2 transition-colors duration-100 hover:bg-fill-hover has-[>button:active:not(:disabled)]:bg-fill-selected",
+        "relative flex h-7 items-center gap-3 px-2 transition-colors duration-100 hover:bg-fill-hover has-[>button:active:not(:disabled)]:bg-fill-selected",
         busy && busy !== key && "opacity-60"
       )}
     >
@@ -460,7 +460,7 @@ function SwitchButton({
       }}
       // The press covers the whole row; actions in the row sit above it.
       className={cn(
-        "block w-full text-left after:absolute after:inset-0 after:rounded-[inherit] disabled:cursor-default",
+        "block w-full text-left after:absolute after:inset-0 disabled:cursor-default",
         className
       )}
     >
@@ -503,7 +503,7 @@ export function UsageLines({
   if (!usage)
     return (
       <span className={cn("flex h-5 items-center gap-3", className)} aria-label="Loading usage">
-        <Skeleton className={cn("h-3 rounded", density === "page" ? "w-32" : "w-13")} />
+        <Skeleton className={cn("h-3", density === "page" ? "w-32" : "w-13")} />
         <Skeleton className="h-1 flex-1 rounded-full" />
       </span>
     )

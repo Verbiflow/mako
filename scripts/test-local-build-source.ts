@@ -3,7 +3,6 @@ import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import {
   mkdir,
-  mkdtemp,
   readdir,
   readFile,
   realpath,
@@ -13,15 +12,15 @@ import {
   utimes,
   writeFile,
 } from "node:fs/promises"
-import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { execFileSync } from "node:child_process"
 import { uninstalledPackages } from "@mako/host/application/local-update-dependencies"
 import { copyBuildSource, syncBuildCheckout, LocalUpdates, ensureBuildSpace, buildCopyBytes, PACKAGED_APP_BYTES, DISK_MARGIN_BYTES } from "@mako/host/application/local-updates"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 const gitRunner = new Git()
 
-const root = await mkdtemp(join(tmpdir(), "mako-source-copy-"))
+const root = testScratch("mako-source-copy-")
 try {
   const source = join(root, "source")
   const isolated = join(root, "isolated")

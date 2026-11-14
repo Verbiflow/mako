@@ -1,16 +1,16 @@
 // Opt-in real-provider probe: permitted writes are nonce files in its disposable workspace.
 import { spawn } from "node:child_process"
 import { randomInt, randomUUID } from "node:crypto"
-import { mkdtemp, mkdir, writeFile, readFile, symlink } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { mkdir, writeFile, readFile, symlink } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { testScratch } from "./lib/test-scratch.mjs"
 
 const nativeStores = new NativeStores(false)
 
 if (!process.versions.electron) {
-  const root = await mkdtemp(join(tmpdir(), "mako-provider-e2e-approval-"))
+  const root = testScratch("mako-provider-e2e-approval-")
   await writeFile(
     join(root, "package.json"),
     JSON.stringify({ main: fileURLToPath(import.meta.url) })
@@ -546,7 +546,6 @@ async function run() {
       }
     }
     await writeFile(join(root, "result.json"), JSON.stringify(result, null, 2))
-    console.log("Native evidence: " + join(root, "result.json"))
     process.exitCode = result.error || result.cases.some(item => item.status === "failed") ? 1
       : result.inconclusive || result.cases.some(item => item.status !== "passed") ? 2 : 0
   }

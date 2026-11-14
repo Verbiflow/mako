@@ -960,7 +960,8 @@
             "type": "turn",
             "turn": {
               "type": "delivered",
-              "inbox": "msg_0004"
+              "inbox": "msg_0004",
+              "between": true
             }
           }
         }
@@ -991,7 +992,8 @@
             "type": "turn",
             "turn": {
               "type": "delivered",
-              "inbox": "msg_0005"
+              "inbox": "msg_0005",
+              "between": true
             }
           }
         }

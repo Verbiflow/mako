@@ -63,7 +63,7 @@ const panel =
   "data-closed:animate-out data-closed:fade-out-0 data-closed:duration-100"
 
 const row =
-  "relative flex min-h-8 cursor-default select-none items-center gap-2 rounded-md px-2 outline-none " +
+  "relative flex min-h-8 cursor-default select-none items-center gap-2 px-2 outline-none " +
   "transition-colors duration-100 data-[highlighted]:bg-fill-hover " +
   "data-[disabled]:pointer-events-none data-[disabled]:opacity-45"
 
