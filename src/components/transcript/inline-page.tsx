@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils"
 import { MediaUnavailable } from "./media-preview"
 import { LazyBoundary } from "@/components/ui/lazy-boundary"
 import { LazyFailed } from "@/components/ui/lazy-failed"
+import { PatientFallback } from "@/components/ui/patient-fallback"
 
 const RichFilePreview = lazy(() => import("@/components/viewer/rich-file-preview"))
 
@@ -79,7 +80,7 @@ export function InlinePage({ hostRef, path, name, file, error, openPath, onExpan
       {source && file ? (
         <div className="media-surface overflow-hidden border border-hairline bg-surface">
           <LazyBoundary fallback={() => <LazyFailed what="The page" />}>
-            <Suspense fallback={<Skeleton className="block h-40 w-full" />}>
+            <Suspense fallback={<PatientFallback what="the page"><Skeleton className="block h-40 w-full" /></PatientFallback>}>
               <RichFilePreview file={file} mode="source" name={name} />
             </Suspense>
           </LazyBoundary>
