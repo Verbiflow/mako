@@ -121,7 +121,9 @@ jobs:
           node-version: 24
           package-manager-cache: false
       - uses: ./.github/actions/install-dependencies
-      - run: npm run build:control-runtime
+      - uses: ./.github/actions/build-control-runtime
+        with:
+          save: ${{ matrix.shard == 1 }}
       # Electron's sandbox helper must be root's and setuid on Linux, which an npm install can't make it.
       - run: sudo chown root:root node_modules/electron/dist/chrome-sandbox && sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
       # Ubuntu 24.04 lets no unprivileged process make a user namespace, which Chrome's own sandbox needs.
@@ -159,7 +161,9 @@ jobs:
           node-version: 24
           package-manager-cache: false
       - uses: ./.github/actions/install-dependencies
-      - run: npm run build:control-runtime
+      - uses: ./.github/actions/build-control-runtime
+        with:
+          save: ${{ matrix.shard == 1 }}
       - run: node scripts/ci-gate.mjs --mac ${{ matrix.shard }} 2
         env:
           MAKO_TEST_EVIDENCE: ${{ runner.temp }}/test-evidence
@@ -190,7 +194,7 @@ jobs:
       - uses: ./.github/actions/install-dependencies
         with:
           electron: "false"
-      - run: npm run build:control-runtime
+      - uses: ./.github/actions/build-control-runtime
       - run: npx tsx --tsconfig tsconfig.scripts.json scripts/test-file-index.ts
       - run: npx tsx --tsconfig tsconfig.scripts.json scripts/test-file-kinds.ts
       - run: npx tsx --tsconfig tsconfig.scripts.json scripts/bench-file-search.ts --files 100000
@@ -219,7 +223,7 @@ jobs:
         with:
           electron: "false"
       # The rows read `@mako/*` from the packages' builds.
-      - run: npm run build:control-runtime
+      - uses: ./.github/actions/build-control-runtime
       # How a row is judged, on simulated machines: unchanged code as noisy as this runner is never slower, twice as slow always is.
       - run: npx tsx scripts/test-perf-reference.ts
       - run: npm run perf:decoders -- --reference HEAD^1
@@ -285,7 +289,7 @@ jobs:
           node-version: 24
           package-manager-cache: false
       - uses: ./.github/actions/install-dependencies
-      - run: npm run build:control-runtime
+      - uses: ./.github/actions/build-control-runtime
       # One Vite dev server for the job's checks and one for those that reload by hand (#662's `ui-vite-server.mjs`), at
       # the addresses the job's env gives them, where each check started a server of its own and compiled every page it
       # opened cold. A check needing anything else of a dev server still starts its own.
@@ -355,7 +359,7 @@ jobs:
           # Homebrew's own update and cleanup, not ffmpeg, were most of this step (29 s to 105 s).
           HOMEBREW_NO_AUTO_UPDATE: "1"
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
-      - run: npm run build:control-runtime
+      - uses: ./.github/actions/build-control-runtime
       # One Vite dev server for the job's checks and one for those that reload by hand (#662's `ui-vite-server.mjs`), at
       # the addresses the job's env gives them, where each check started a server of its own and compiled every page it
       # opened cold. A check needing anything else of a dev server still starts its own.
@@ -433,7 +437,7 @@ jobs:
       - uses: ./.github/actions/install-dependencies
         with:
           electron: "false"
-      - run: npm run build:control-runtime
+      - uses: ./.github/actions/build-control-runtime
       - uses: ./.github/actions/codex-sandbox
       - name: Steer latency on Claude Code and Codex
         run: |
