@@ -192,8 +192,8 @@ export class LiveDispatch {
     if (!this.access.moves.executes(resident)) return
     // Nor while this Mac checks with its account after it was away: its Session may have continued in the cloud.
     if (this.access.moves.ownerCheck(resident, true) !== undefined) return this.holdForOwner(resident)
+    // Closing file checkpoints still protect relocation/residency, but they never hold a new send.
     if (
-      resident.checkpointing ||
       resident.rewinding ||
       resident.closing ||
       resident.hibernating ||
@@ -377,6 +377,9 @@ export class LiveDispatch {
     const cwd = resident.snapshot.session.cwd
     void checkpoints
       .prompt(resident, current, async () => {
+        // A removed worktree that could resume elsewhere was moved before dispatch. A pinned native session
+        // still needs its original folder; detect that independently of whether a checkpoint could be saved.
+        if (dependencies.projectFolderOfRemoved?.(cwd)) throw new Error(`The folder ${cwd} no longer exists. Open this in a folder that exists.`)
         const active = this.access.control(resident).activeBindingId
         if (review) return review.run(active, review.target, request.tuning, dispatch)
         // A Fin's brief carried again: a Continue goes in its place when the harness's own transcript shows the brief.

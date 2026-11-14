@@ -24,6 +24,8 @@ export const BEFORE_CHECKPOINT_WAIT_MS = 10_000
  * historical fork so no irreversible provider rollback participates in recovery. */
 export class LiveCheckpoints {
   private readonly preparing = new Map<string, () => void>()
+  /** Protect relocation and residency while closing snapshots; dispatch deliberately does not wait on this flag. */
+  private readonly capturing = new WeakMap<Resident, number>()
   /** The turns last read, newest last, by their two checkpoints. */
   private readonly turns = new Map<string, CheckpointComparison>()
   private readonly host: LiveAccess
@@ -37,6 +39,20 @@ export class LiveCheckpoints {
     this.host = host
     this.fork = fork
     this.changes = changes
+  }
+
+  private hold(resident: Resident): () => void {
+    this.capturing.set(resident, (this.capturing.get(resident) ?? 0) + 1)
+    resident.checkpointing = true
+    let held = true
+    return () => {
+      if (!held) return
+      held = false
+      const remaining = (this.capturing.get(resident) ?? 1) - 1
+      this.capturing.set(resident, remaining)
+      resident.checkpointing = remaining > 0
+      this.host.noteWork(resident)
+    }
   }
 
   /** A prepared checkpoint is a flag read; a missing one keeps its independent bounded capture opportunity. */
@@ -136,6 +152,7 @@ export class LiveCheckpoints {
     this.changes.ended(resident, requestId)
     const snapshots = this.host.dependencies.workspaceSnapshots
     if (!snapshots) return
+    const release = this.hold(resident)
     void snapshots
       .endRun(requestId)
       .then(
@@ -164,6 +181,7 @@ export class LiveCheckpoints {
       })
       .catch((error) => this.host.storageFailed(resident, { error }))
       .finally(() => {
+        release()
         // Finishing a checkpoint only refreshes background state; it never holds the next send.
         this.host.drain(resident)
         this.host.residencyChanged(resident)

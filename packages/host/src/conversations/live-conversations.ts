@@ -105,8 +105,8 @@ const MAX_TIMER_MS = 2_147_483_647
  * after every flush of every working conversation (`noteWork`).
  */
 function residentWorkStatus(resident: Resident): LifecycleWork["status"] | undefined {
-  if (resident.transferring || resident.opening || resident.checkpointing || resident.rewinding || resident.closing) return "finishing"
-  if (!resident.driver) return undefined
+  if (resident.transferring || resident.opening || resident.rewinding || resident.closing) return "finishing"
+  if (!resident.driver) return resident.checkpointing ? "finishing" : undefined
   const { snapshot } = resident
   if (snapshot.permissions.length) return "waiting"
   let busy = false
@@ -119,7 +119,7 @@ function residentWorkStatus(resident: Resident): LifecycleWork["status"] | undef
   }
   if (snapshot.session.status === "running" || snapshot.session.backgroundTasks || working) return "running"
   if (busy || snapshot.requests.some((request) => request.status === "dispatching" || request.status === "queued")) return "queued"
-  return undefined
+  return resident.checkpointing ? "finishing" : undefined
 }
 
 function residentWork(resident: Resident): LifecycleWork | undefined {

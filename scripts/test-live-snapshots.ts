@@ -554,6 +554,7 @@ try {
       finish(queuedId, "first done")
       await until(() => entered)
       await until(() => sent.length === before + 2, 500)
+      assert.equal(owner.workOf(queuedId)?.status, "running", "an old closing snapshot cannot hide the new running turn")
       await until(() => owner.snapshot(queuedId)?.requests[1].snapshots?.before.kind === "ready")
       release()
       await until(() => owner.snapshot(queuedId)?.requests[0].snapshots?.after !== undefined)
