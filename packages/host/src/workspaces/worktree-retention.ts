@@ -73,11 +73,12 @@ export class WorktreeRetention {
 
   close(): void { this.#closed = true; clearTimeout(this.#event); this.#event = undefined }
 
+  /** Read-only: checkout proof uses refs as of their last fetch, never fetching or pruning here. */
   async preview(): Promise<WorktreeRetentionReport> {
-    return this.#preview(await this.settings(), new Map(), true)
+    return this.#preview(await this.settings(), new Map(), true, false)
   }
 
-  async #preview(settings: WorktreeRetentionSettings, fetches: FetchPass, checkout: boolean): Promise<WorktreeRetentionReport> {
+  async #preview(settings: WorktreeRetentionSettings, fetches: FetchPass, checkout: boolean, refresh: boolean): Promise<WorktreeRetentionReport> {
     const rows = this.#deps.worktrees()
     const groups = new Map<string, ThreadWorktree[]>()
     for (const row of rows) {
@@ -87,7 +88,7 @@ export class WorktreeRetention {
     // Keep the rejection observed for every row without pretending an incomplete snapshot is empty.
     const open = await this.#deps.openFiles().then(paths => ({ paths }), () => null)
     const checkouts: WorktreeRetirement[] = []
-    for (const [path, members] of groups) checkouts.push(await this.#inspect(path, members, rows, settings, fetches, checkout, open?.paths))
+    for (const [path, members] of groups) checkouts.push(await this.#inspect(path, members, rows, settings, fetches, checkout, open?.paths, refresh))
     checkouts.sort((a, b) => a.path.localeCompare(b.path))
     return { settings, everyMs: WORKTREE_RETENTION_MS, minimumPassMs: MIN_RETIREMENT_PASS_MS, repositoryFetches: fetches.size, at: this.#now(), checkouts }
   }
@@ -104,7 +105,7 @@ export class WorktreeRetention {
     if (this.#lastStart !== undefined && this.#now() - this.#lastStart < MIN_RETIREMENT_PASS_MS) return this.#last ?? empty
     this.#lastStart = this.#now()
     const fetches: FetchPass = new Map()
-    const report = await this.#preview(settings, fetches, settings.mode === "checkout")
+    const report = await this.#preview(settings, fetches, settings.mode === "checkout", true)
     const lockPath = `${this.#deps.file}.lock`
     await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 })
     const lock = await mkdir(lockPath, { mode: 0o700 }).then(() => true).catch((error: NodeJS.ErrnoException) => {
@@ -165,7 +166,7 @@ export class WorktreeRetention {
     return work
   }
 
-  async #inspect(path: string, members: ThreadWorktree[], rows: ThreadWorktree[], settings: WorktreeRetentionSettings, fetches: FetchPass, checkout: boolean, open: string[] | undefined): Promise<WorktreeRetirement> {
+  async #inspect(path: string, members: ThreadWorktree[], rows: ThreadWorktree[], settings: WorktreeRetentionSettings, fetches: FetchPass, checkout: boolean, open: string[] | undefined, refresh = true): Promise<WorktreeRetirement> {
     const first = members[0]!
     const result: WorktreeRetirement = { path, thread: first.thread, branch: first.branch, heads: [], packages: [], packageIdentities: [], packageSkip: null, checkoutSkip: null, owners: members.map(({ path, thread, createdAt }) => ({ path, thread, createdAt })), skip: null }
     try {
@@ -215,7 +216,7 @@ export class WorktreeRetention {
           for (const member of members) {
             if (member.path !== path && !inside(path, member.path)) throw new Error("A repository is outside its checkout.")
             if (await realpath(member.path) !== member.path) throw new Error("A repository uses a link.")
-            const facts = await this.#deps.repository(member, common => this.#fetch(fetches, common))
+            const facts = await this.#deps.repository(member, common => refresh ? this.#fetch(fetches, common) : Promise.resolve())
             result.heads.push(facts.head)
             if (facts.blocked) throw new Error(facts.blocked)
             if (!facts.remote) throw new Error("Its current HEAD is not reachable from a fetched remote ref.")
@@ -223,7 +224,7 @@ export class WorktreeRetention {
               throw new Error("Ignored private files or folders keep this checkout.")
           }
           for (const [index, member] of members.entries()) {
-            const facts = await this.#deps.repository(member, common => this.#fetch(fetches, common))
+            const facts = await this.#deps.repository(member, common => refresh ? this.#fetch(fetches, common) : Promise.resolve())
             if (facts.blocked || !facts.remote || privateIgnored(member, facts.ignored) || facts.head !== result.heads[index]) throw new Error("The repository changed during inspection.")
           }
           if ((this.#deps.finished(first.thread) ?? Infinity) > cutoff) throw new Error(`The Thread finished within ${settings.days} days.`)
