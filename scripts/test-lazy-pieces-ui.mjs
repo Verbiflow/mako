@@ -54,7 +54,7 @@ async function check() {
   await app.whenReady()
   const window = new BrowserWindow({ width: 1440, height: 900, show: false, webPreferences: { backgroundThrottling: false } })
   const page = window.webContents
-  const guard = guardElectronCheck({ app, page, name: "The lazy pieces UI check", ms: 300_000 })
+  const guard = guardElectronCheck({ app, page, name: "The lazy pieces UI check", ms: 600_000 })
   page.debugger.attach("1.3")
   const consoleLines = []
   page.on("console-message", (event) => consoleLines.push(String(event.message ?? "").slice(0, 300)))
@@ -81,7 +81,8 @@ async function check() {
       await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] })
     }
   }
-  const evaluate = (code) => page.executeJavaScript(code)
+  // A page that stops answering (a render that never ends) fails the check with what it last drew, never hangs it.
+  const evaluate = (code) => Promise.race([page.executeJavaScript(code), new Promise((_, fail) => setTimeout(() => fail(new Error(`The page stopped answering: ${code.slice(0, 80)}`)), 10_000))])
   /**
    * A function run in the page with `args` passed as its arguments (`Runtime.callFunctionOn`), never spliced into
    * script text: a selector or words reach the page as values.
@@ -107,9 +108,12 @@ async function check() {
   /** Until a page script of fixed text holds. */
   const until = (code, label = code) => untilCheck(() => evaluate(code), label)
   const load = async (path) => {
-    await window.loadURL(`${base}${path}`).catch((error) => {
+    guard.at(`loading ${path}`)
+    // A page whose own first code is held never finishes loading: that fails the check, never hangs it.
+    const loading = window.loadURL(`${base}${path}`).catch((error) => {
       if (!/ERR_ABORTED|ERR_FAILED/.test(String(error))) throw error
     })
+    await Promise.race([loading, new Promise((_, fail) => setTimeout(() => fail(new Error(`${path} didn't finish loading`)), 30_000))])
   }
   const capture = async (name) => {
     await evaluate("new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(true))))")
@@ -190,7 +194,10 @@ async function check() {
     else await evaluate("window.dispatchEvent(new Event('online')); true")
     await untilCheck(async () => (await evaluate(drawn)) || (await evaluate("Boolean(document.querySelector('[data-code-unavailable=stuck]'))")), `${what} back, or offering Reload`)
     if (await evaluate("Boolean(document.querySelector('[data-code-unavailable=stuck]'))")) {
+      // Nothing is asked of the page until the reload has loaded: a script sent mid-navigation can go unanswered.
+      const reloaded = new Promise((done) => page.once("did-finish-load", done))
       await clickText(scope, "Reload")
+      await reloaded
       await reopen()
     }
     await until(drawn, `${what} drawn`)
@@ -205,7 +212,7 @@ async function check() {
   await hold(COMPOSER)
   await load(desk)
   await held(COMPOSER)
-  await seen("[data-composer-pending][aria-busy=true]")
+  await until("document.querySelector('[data-composer-pending][aria-busy=true] [data-code-loading]')?.innerText.includes('Loading the composer')", "the composer loading")
   const pending = await evaluate("document.querySelector('[data-composer-pending]').getBoundingClientRect().height")
   await capture("composer-loading.png")
   await release(COMPOSER, "continue")
@@ -242,7 +249,7 @@ async function check() {
     await untilCheck(() => says(".rv-layer [data-code-loading]", `Loading ${what}`), `${what} loading`)
     await capture(`${what.toLowerCase()}-loading.png`)
     await release(pattern, "continue")
-    await until("Boolean(document.querySelector('.rv-layer [data-side-rail]')) && !document.querySelector('[data-code-loading]')", `${what} drawn`)
+    await until("Boolean(document.querySelector('.rv-layer [data-side-rail]')) && !document.querySelector('.rv-layer [data-code-loading]')", `${what} drawn`)
   }
   await letGo()
 
@@ -264,13 +271,19 @@ async function check() {
   assert.equal(paused.get(FILES).length > 0, true, "its code still held, neither arrived nor failed")
   await capture("files-slow.png")
   await release(FILES, "continue")
-  await until("Boolean(document.querySelector('.rv-layer [data-side-rail]')) && !document.querySelector('[data-code-loading]')", "Files drawn once its late code landed")
+  await until("Boolean(document.querySelector('.rv-layer [data-side-rail]')) && !document.querySelector('.rv-layer [data-code-loading]')", "Files drawn once its late code landed")
   await letGo()
   // Past its patience a read follows the network: offline it's a failure, and given up, so going back online starts a
   // new read, which says it's still loading past its own patience. Handed back the stalled read, Retry would end on
   // "This page won't fetch it again". The browser shares one in-flight fetch per module, so the new read joins the
   // held request rather than asking again: the page's count of reads started (`noteReadStarted`) tells it apart.
   const readsStarted = () => evaluate("Number(globalThis.__makoCodeReads ?? 0)")
+  /** How many listeners the window holds for `type`, as DevTools counts them. */
+  const windowListeners = async (type) => {
+    const { result } = await send("Runtime.evaluate", { expression: "window" })
+    const { listeners } = await send("DOMDebugger.getEventListeners", { objectId: result.objectId })
+    return listeners.filter((listener) => listener.type === type).length
+  }
   const network = async (online) => {
     await send("Network.enable")
     await send("Network.emulateNetworkConditions", { offline: !online, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
@@ -278,15 +291,18 @@ async function check() {
   await hold(FILES)
   await filesOpen("the web desk, Files' code slow, then the network gone")
   await untilCheck(() => says(".rv-layer [data-code-slow]", "Still loading Files"), "Files slow")
+  const watchingOffline = await windowListeners("offline")
   await network(false)
   await untilCheck(() => says(".rv-layer [data-code-unavailable]", "Files couldn't load"), "Files slow, then offline: it couldn't load")
+  // Given up, the read stops watching the network: a module Safari leaves pending for good keeps no listeners.
+  assert.equal(await windowListeners("offline"), watchingOffline - 1, "the given-up read's offline listener is gone")
   const filesReads = await readsStarted()
   await network(true)
   await untilCheck(async () => (await readsStarted()) > filesReads, "back online, a new read of Files' code started")
   await untilCheck(() => says(".rv-layer [data-code-slow]", "Still loading Files"), "back online, Files loading again in a new read")
   assert.equal(await evaluate("Boolean(document.querySelector('.rv-layer [data-code-unavailable]'))"), false, "back online and loading, not a failure")
   await release(FILES, "continue")
-  await until("Boolean(document.querySelector('.rv-layer [data-side-rail]')) && !document.querySelector('[data-code-loading]')", "Files drawn from its new load")
+  await until("Boolean(document.querySelector('.rv-layer [data-side-rail]')) && !document.querySelector('.rv-layer [data-code-loading]')", "Files drawn from its new load")
   await letGo()
   // Changes (`lazyCode`): offline when its patience runs out is a failure, and back online its code is asked for anew.
   const CHANGES = "src/web-client/desk-review.tsx"
@@ -303,7 +319,7 @@ async function check() {
   await untilCheck(() => says(".rv-layer [data-code-slow]", "Still loading Changes"), "back online, Changes loading again in a new read")
   assert.equal(await evaluate("Boolean(document.querySelector('.rv-layer [data-code-unavailable]'))"), false, "back online and loading, not a failure")
   await release(CHANGES, "continue")
-  await until("Boolean(document.querySelector('.rv-layer [data-side-rail]')) && !document.querySelector('[data-code-unavailable]') && !document.querySelector('[data-code-loading]')", "Changes drawn from its new load")
+  await until("Boolean(document.querySelector('.rv-layer [data-side-rail]')) && !document.querySelector('.rv-layer [data-code-unavailable]') && !document.querySelector('.rv-layer [data-code-loading]')", "Changes drawn from its new load")
   await letGo()
   await hold(FILES)
   await filesOpen("the web desk, Files' code failing")
@@ -334,7 +350,7 @@ async function check() {
   await release(DIALOG, "fail")
   await until("Boolean(document.querySelector('[data-original-unavailable]'))", "Show original saying it couldn't open")
   assert.match(await evaluate("document.querySelector('[data-original-unavailable]').innerText"), /Couldn't open the original/)
-  assert.ok(await hasButton("[data-original-unavailable]", "Reload"), "Show original's Reload")
+  assert.ok((await hasButton("[data-original-unavailable]", "Retry")) && (await hasButton("[data-original-unavailable]", "Reload")), "Show original's Retry and Reload")
   await capture("original-unavailable.png")
   await notBroken("Show original")
   await letGo()
@@ -383,7 +399,130 @@ async function check() {
   await notBroken("the Agents sheet")
   await recovers("the Agents sheet", rosterDrawn, "[data-agents-sheet]", openSheet)
 
-  console.log(`Lazy pieces UI: the composer, Files, Changes, Show original and the Agents sheet each load, fail, run past their patience and come back without a blank or the error screen (${root})`)
+  // The web app's own screens (`?webapp` mounts `WebApp` on the desk fixture's client), as a phone draws them under a finger.
+  const phoneInput = async (on) => {
+    await send("Emulation.setEmulatedMedia", { features: on ? [{ name: "pointer", value: "coarse" }, { name: "hover", value: "none" }, { name: "any-pointer", value: "coarse" }, { name: "any-hover", value: "none" }] : [] })
+    await send("Emulation.setTouchEmulationEnabled", on ? { enabled: true, maxTouchPoints: 5 } : { enabled: false })
+  }
+  const appPage = "/scripts/web-desk.html?webapp&theme=dark"
+  const listed = "document.querySelectorAll('[data-thread]').length > 0"
+  await viewport(390, 844)
+  await phoneInput(true)
+  // A Thread tapped before its screen's code arrived: its bar and title at once, over the transcript's loader.
+  const THREAD = "src/web-client/thread.tsx"
+  await letGo()
+  await hold(THREAD)
+  await load(appPage)
+  await until(listed, "the phone's list")
+  const title = await evaluate("document.querySelector('[data-thread] [data-thread-title], [data-thread]')?.innerText.split('\\n')[0]")
+  await click("[data-thread]")
+  await until("Boolean(document.querySelector('[data-thread-loading] h1')) && Boolean(document.querySelector('[data-thread-loading] [aria-busy]'))", "the Thread's shell")
+  assert.ok((await evaluate("document.querySelector('[data-thread-loading] h1').textContent")).length > 0, `the shell names the Thread (${title})`)
+  await capture("thread-shell.png")
+  await held(THREAD)
+  await release(THREAD, "continue")
+  await until("Boolean(document.querySelector('[data-thread-screen]')) && !document.querySelector('[data-thread-loading]')", "the Thread's own screen")
+  await letGo()
+  await hold(THREAD)
+  await load(appPage)
+  await until(listed, "the phone's list again")
+  await click("[data-thread]")
+  await held(THREAD)
+  await release(THREAD, "fail")
+  await until("document.querySelector('[data-thread-loading] [data-code-unavailable]')?.innerText.includes(\"This Thread couldn't load\")", "the Thread saying it couldn't load")
+  assert.ok(await evaluate("Boolean([...document.querySelectorAll('[data-thread-loading] button')].find((button) => button.textContent.trim() === 'Reload'))"), "the Thread's Reload")
+  await capture("thread-unavailable.png")
+  await notBroken("the Thread")
+  // New: its sheet at once, saying it's loading, then its form in the same sheet; a line with Retry if it can't.
+  const START = "src/web-client/new-thread.tsx"
+  await letGo()
+  await hold(START)
+  await load(appPage)
+  await until(listed, "the list, New's code held")
+  await click("button.web-fab[aria-label='New thread']")
+  await until("document.querySelector('.web-start-sheet [data-code-loading]')?.innerText.includes('Loading New')", "New's sheet loading")
+  await capture("new-loading.png")
+  await held(START)
+  await release(START, "continue")
+  await until("Boolean(document.querySelector('.web-start-sheet')) && !document.querySelector('.web-start-sheet [data-code-loading]') && document.querySelector('.web-start-sheet').innerText.trim().length > 0", "New's form in its sheet")
+  // Settings, read with React.lazy: a loading line, and on a failure a line with Reload, never the window's error screen.
+  const SETTINGS = "src/web-client/settings.tsx"
+  await letGo()
+  await hold(SETTINGS)
+  await load(appPage)
+  await until(listed, "the list, Settings' code held")
+  await click("button[aria-label='Settings']")
+  await until("document.querySelector('[data-code-loading]')?.innerText.includes('Loading Settings')", "Settings loading")
+  await held(SETTINGS)
+  await release(SETTINGS, "fail")
+  await until("document.querySelector('[data-screen-unavailable] [data-lazy-failed]')?.innerText.includes(\"Settings couldn't load\")", "Settings saying it couldn't load")
+  await capture("settings-unavailable.png")
+  await notBroken("Settings")
+  // Past their patience, still on their way: a Thread's code says "Still loading this Thread…" over its shell, and
+  // Settings (read with React.lazy, timing its own wait) "Still loading Settings…", each with Reload, then draws.
+  await letGo()
+  await hold(THREAD)
+  await load(appPage)
+  await until(listed, "the phone's list, a Thread's code slow")
+  await click("[data-thread]")
+  await held(THREAD)
+  await untilCheck(() => says("[data-thread-loading] [data-code-slow]", "Still loading this Thread"), "the Thread past its patience, still loading")
+  assert.ok(await hasButton("[data-thread-loading]", "Reload"), "the Thread's Reload while it's slow")
+  await capture("thread-slow.png")
+  await release(THREAD, "continue")
+  await until("Boolean(document.querySelector('[data-thread-screen]')) && !document.querySelector('[data-thread-loading]')", "the Thread's screen once its late code landed")
+  await letGo()
+  await hold(SETTINGS)
+  await load(appPage)
+  await until(listed, "the list, Settings' code slow")
+  await click("button[aria-label='Settings']")
+  await held(SETTINGS)
+  await untilCheck(() => says("[data-code-slow]", "Still loading Settings"), "Settings past its patience, still loading")
+  assert.ok(await hasButton("[data-code-loading-screen]", "Reload"), "Settings' Reload while it's slow")
+  assert.equal(await evaluate("Boolean(document.querySelector('[data-screen-unavailable]'))"), false, "slow is not a failure")
+  await release(SETTINGS, "continue")
+  await until("!document.querySelector('[data-code-loading-screen]') && !document.querySelector('[data-screen-unavailable]')", "Settings drawn once its late code landed")
+  await letGo()
+  await phoneInput(false)
+
+  // A laptop's browser: the desk is a chunk of its own, and the page says it's loading until it arrives.
+  await viewport(1440, 900)
+  const DESK = "src/web-client/desk.tsx"
+  await hold(DESK)
+  await load(appPage)
+  await until("document.querySelector('[data-code-loading]')?.innerText.includes('Loading Mako')", "the desk loading")
+  await held(DESK)
+  await release(DESK, "fail")
+  await until("document.querySelector('[data-screen-unavailable] [data-code-unavailable]')?.innerText.includes(\"Mako couldn't load\")", "the desk saying it couldn't load")
+  await capture("desk-unavailable.png")
+  await notBroken("the desk")
+  await letGo()
+  await load(appPage)
+  await until("document.querySelectorAll('[data-thread-row]').length > 0", "the desk")
+
+  // A preview read with React.lazy (here Files' reader, `FileView`) still on its way past its patience: its own loading
+  // look with "Still loading the file…" and Reload, not a failure; drawn once its code lands.
+  const VIEW = "src/components/viewer/file-view.tsx"
+  await letGo()
+  await viewport(1440, 900)
+  await hold(VIEW)
+  await load(desk)
+  await until("document.querySelectorAll('[data-thread-row]').length > 0", "the web desk, the file viewer's code held")
+  await click("button[aria-label='Show the right sidebar']:not(:disabled)")
+  await press("[data-side-rail] [data-surface-id=files]")
+  await untilCheck(() => hasButton(".rv-layer", "package.json"), "Files listing package.json")
+  await clickText(".rv-layer", "package.json")
+  await held(VIEW)
+  await untilCheck(() => says("[data-lazy-slow]", "Still loading the file"), "the file's preview past its patience, still loading")
+  assert.ok(await hasButton("[data-lazy-slow]", "Reload"), "the preview's Reload while it's slow")
+  assert.equal(await evaluate("Boolean(document.querySelector('[data-lazy-failed]'))"), false, "slow is not a failure")
+  await capture("preview-slow.png")
+  await release(VIEW, "continue")
+  await until("!document.querySelector('[data-lazy-slow]')", "the file's preview drawn once its late code landed")
+  await notBroken("the file's preview")
+  await letGo()
+
+  console.log(`Lazy pieces UI: the composer, Files, Changes, Show original, the Agents sheet, a Thread, New, Settings, the desk and a preview each load, fail, run past their patience and come back without a blank or the error screen (${root})`)
   guard.done()
   app.exit(0)
 }

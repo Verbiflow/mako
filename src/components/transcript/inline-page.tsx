@@ -6,6 +6,9 @@ import { HtmlFrame, type PageReport } from "@/components/viewer/html-frame"
 import type { FileContents } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { MediaUnavailable } from "./media-preview"
+import { LazyBoundary } from "@/components/ui/lazy-boundary"
+import { LazyFailed } from "@/components/ui/lazy-failed"
+import { PatientFallback } from "@/components/ui/patient-fallback"
 
 const RichFilePreview = lazy(() => import("@/components/viewer/rich-file-preview"))
 
@@ -76,9 +79,11 @@ export function InlinePage({ hostRef, path, name, file, error, openPath, onExpan
     <div ref={hostRef} data-inline-file-preview={path} data-inline-page={empty ? "empty" : content === undefined ? "unmeasured" : "measured"} className="group/page not-prose relative my-3 w-full">
       {source && file ? (
         <div className="media-surface overflow-hidden border border-hairline bg-surface">
-          <Suspense fallback={<Skeleton className="block h-40 w-full" />}>
-            <RichFilePreview file={file} mode="source" name={name} />
-          </Suspense>
+          <LazyBoundary fallback={() => <LazyFailed what="The page" />}>
+            <Suspense fallback={<PatientFallback what="the page"><Skeleton className="block h-40 w-full" /></PatientFallback>}>
+              <RichFilePreview file={file} mode="source" name={name} />
+            </Suspense>
+          </LazyBoundary>
         </div>
       ) : (
         <div data-page-frame className={cn("media-surface relative overflow-hidden border border-hairline", long && !whole && "page-fade")} style={size}>
