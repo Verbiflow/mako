@@ -19,6 +19,7 @@ interface Reader {
   worker: Worker
   busy: number
   idle?: ReturnType<typeof setTimeout>
+  closing?: Promise<number>
 }
 
 interface Asked {
@@ -43,6 +44,8 @@ export class JournalReaders {
   private readonly asked = new Map<number, Asked>()
   private next = 0
   private stopped = false
+  private closing?: Promise<void>
+  private readonly retiring = new Set<Promise<number>>()
 
   private readonly entry: URL
 
@@ -67,10 +70,27 @@ export class JournalReaders {
   }
 
   /** Ends every reader; reads under way fail, and their journals are read on the loop. */
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    if (this.closing) return this.closing
     this.stopped = true
     for (const id of [...this.asked.keys()]) this.settle(id, { error: "the host is stopping" })
-    await Promise.all(this.readers.splice(0).map((reader) => reader.worker.terminate()))
+    for (const reader of [...this.readers]) this.retire(reader)
+    return this.closing = Promise.allSettled([...this.retiring]).then(results => {
+      const failed = results.flatMap(result => result.status === "rejected" ? [result.reason] : [])
+      if (failed.length) throw new AggregateError(failed, "Journal readers could not be released")
+    })
+  }
+
+  private retire(reader: Reader): Promise<number> {
+    if (reader.closing) return reader.closing
+    clearTimeout(reader.idle)
+    const at = this.readers.indexOf(reader)
+    if (at >= 0) this.readers.splice(at, 1)
+    const closing = reader.closing = reader.worker.terminate()
+    this.retiring.add(closing)
+    // An unknown failed termination stays owned for stop() to report; a completed one holds nothing.
+    void closing.then(() => this.retiring.delete(closing), () => {})
+    return closing
   }
 
   private reader(): Reader {
@@ -98,6 +118,7 @@ export class JournalReaders {
     worker.on("error", (error) => {
       hostWarn("journal", "a journal reader failed", { error: errorMessage({ error }) })
       gone(errorMessage({ error }))
+      this.retire(reader)
     })
     worker.on("exit", (code) => gone(`it exited with ${code}`))
     this.readers.push(reader)
@@ -115,8 +136,7 @@ export class JournalReaders {
       reader.idle = setTimeout(() => {
         const at = this.readers.indexOf(reader)
         if (reader.busy || at < 0) return
-        this.readers.splice(at, 1)
-        void reader.worker.terminate()
+        this.retire(reader)
       }, READER_IDLE_MS)
       reader.idle.unref?.()
     }

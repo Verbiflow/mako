@@ -142,8 +142,8 @@ function fixture(options: { autoContinueDelayMs?: number } = {}) {
     preparing,
     closed: () => closed,
     cancels: () => cancels,
-    cleanup: () => {
-      owner.stop()
+    cleanup: async () => {
+      await owner.stop()
       rmSync(root, { recursive: true, force: true })
     },
   }
@@ -177,7 +177,7 @@ async function workChecksLeaveBatchingAlone() {
     assert.equal(commit.mock.callCount(), 1, "the same64 updates commit as one batch")
   } finally {
     commit.mock.restore()
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -236,7 +236,7 @@ async function turnEndBatchSaysItsWorkEnded() {
     assert.equal(workAtBatch.at(-1), undefined, "and its last batch said so, not that it was still finishing")
     console.log("PASS: a new conversation is said before its harness starts, and a turn's last batch, after its checkpoint, says its work is over")
   } finally {
-    owner.stop()
+    await owner.stop()
     rmSync(root, { recursive: true, force: true })
   }
 }
@@ -293,7 +293,7 @@ async function compactsAfterHibernation() {
     assert.deepEqual(compacted, [owner.snapshot(id)?.control?.activeBindingId], "compaction runs on the resumed binding")
     console.log("PASS: compacting a hibernated conversation resumes it once, then compacts")
   } finally {
-    owner.stop()
+    await owner.stop()
     memory.close()
     rmSync(root, { recursive: true, force: true })
   }
@@ -465,7 +465,7 @@ async function resumedHibernatesBeforeATurn() {
     assert.equal(closes, 1)
     console.log("PASS: a resumed session can close before its first turn here; a fresh one waits for a turn")
   } finally {
-    owner.stop()
+    await owner.stop()
     rmSync(root, { recursive: true, force: true })
   }
 }
@@ -723,7 +723,7 @@ async function hibernatesAndWakesExactlyOnce(missingAssessment: boolean | "close
       "the wake was not tried again once the other host let go"
     )
   } finally {
-    owner.stop()
+    await owner.stop()
     workspaceSnapshots.close()
     observer.close()
     memory.close()
@@ -756,7 +756,7 @@ async function closeBeforeNativeSpawn() {
     } finally {
       released.resolve()
       await owner.stop()
-      f.cleanup()
+      await f.cleanup()
     }
   }
 }
@@ -846,7 +846,7 @@ async function boundsWarmProviders() {
       "Diagnostics distinguishes work from retained and hibernated processes"
     )
   } finally {
-    owner.stop()
+    await owner.stop()
     rmSync(root, { recursive: true, force: true })
   }
 }
@@ -1024,7 +1024,7 @@ async function unloadsHibernatedConversations() {
     assert.equal(starts, 2)
     console.log("PASS: a hibernated conversation leaves memory over budget, reloads exactly, and wakes")
   } finally {
-    owner.stop()
+    await owner.stop()
     rmSync(root, { recursive: true, force: true })
   }
 }
@@ -1103,7 +1103,7 @@ async function prewarmOverlapsTyping() {
     assert.equal(starts, 2)
     console.log("PASS: typing wakes a hibernated provider once, keeps a warm one past its deadline, and a closed one stays down")
   } finally {
-    owner.stop()
+    await owner.stop()
     rmSync(root, { recursive: true, force: true })
   }
 }
@@ -1183,7 +1183,7 @@ async function backgroundWorkKeepsProviderResident() {
     await waitFor(() => closed.includes(ids[0]), "the provider did not hibernate once its background work ended")
     assert.deepEqual(owner.lifecycleWork(), [])
   } finally {
-    owner.stop()
+    await owner.stop()
     rmSync(root, { recursive: true, force: true })
   }
 }
@@ -1270,7 +1270,7 @@ async function failedCloseKeepsOwnership() {
       "a failed close retains native ownership"
     )
   } finally {
-    owner.stop()
+    await owner.stop()
     observer.close()
     memory.close()
     rmSync(root, { recursive: true, force: true })
@@ -1325,7 +1325,7 @@ async function queuedSettings() {
     f.owner.observe({ type: "live-session", session: f.state })
     assert.deepEqual(f.settings, [first, second])
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -1381,7 +1381,7 @@ async function acceptanceAndRaces() {
     f.owner.submit(f.id, second, "second")
     assert.equal(f.sent.length, 2)
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -1434,7 +1434,7 @@ async function turnOfItsOwn() {
     for (let step = 0; step < 6; step++) await tick()
     assert.deepEqual(f.sent, ["continue", "and then"], "its turn's end sends it")
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -1459,7 +1459,7 @@ async function startedAheadTakesFirstMessage() {
     await tick()
     assert.equal(f.owner.snapshot(f.id)?.requests.length, 1, "a conversation with requests keeps its own")
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -1467,13 +1467,14 @@ async function closeDuringStartup() {
   const f = fixture()
   try {
     await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
-    f.owner.close(f.id)
+    const closing = f.owner.close(f.id)
     f.started.resolve(f.state)
+    await closing
     await tick()
     assert.equal(f.owner.snapshot(f.id)?.session.status, "closed")
     assert.ok(f.closed() >= 1)
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -1519,11 +1520,11 @@ async function unhandedMessageWaitsAfterCrash() {
         assert.equal(drawn.length, 1, "its message is drawn once")
         assert.deepEqual(f.sent, [], "nothing reached the harness")
       } finally {
-        afterCrash.stop()
+        await afterCrash.stop()
       }
     } finally {
       older?.mock.restore()
-      f.owner.stop()
+      await f.owner.stop()
       rmSync(f.root, { recursive: true, force: true })
     }
   }
@@ -1554,7 +1555,7 @@ async function unhandedMessageWaitsAfterQuit() {
       assert.equal(afterQuit.snapshot(f.id)!.blocks.filter((block) => block.type === "user" && block.requestId === brief).length, 1, "its message is drawn once")
       assert.deepEqual(f.sent, [], "nothing reached the harness")
     } finally {
-      afterQuit.stop()
+      await afterQuit.stop()
     }
   } finally {
     rmSync(f.root, { recursive: true, force: true })
@@ -1612,9 +1613,9 @@ async function durabilityAndBatching() {
       // will never end, nothing would send it.
       assert.equal(found.requests[1]?.status, "held")
     } finally {
-      afterCrash.stop()
+      await afterCrash.stop()
     }
-    f.owner.stop()
+    await f.owner.stop()
     const recovered = new LiveConversations(f.dependencies)
     try {
       const saved = recovered.snapshot(f.id)!
@@ -1652,14 +1653,14 @@ async function durabilityAndBatching() {
       )
       assert.equal(f.sent.length, 1)
     } finally {
-      recovered.stop()
+      await recovered.stop()
     }
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
-function identityAndToolLifecycle() {
+async function identityAndToolLifecycle() {
   const f = fixture()
   try {
     let blocks = reduceLiveUpdates(
@@ -1716,7 +1717,7 @@ function identityAndToolLifecycle() {
       499
     )
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -1768,7 +1769,7 @@ async function failureIsolationAndAssets() {
         .filter((event) => event.type === "live-batch")
         .every((event) => JSON.stringify(event.batch.updates).length < 256_000)
     )
-    f.owner.stop()
+    await f.owner.stop()
     writeFileSync(join(f.root, `${randomUUID()}.sqlite`), "corrupt journal")
     const recovered = new LiveConversations(f.dependencies)
     try {
@@ -1781,10 +1782,10 @@ async function failureIsolationAndAssets() {
         )
       )
     } finally {
-      recovered.stop()
+      await recovered.stop()
     }
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -1829,7 +1830,7 @@ async function makoStopsAreSaid() {
     assert.deepEqual(said.map((line) => [line.level, line.fields?.why, line.fields?.provider, line.fields?.request]), [["info", "person", "test-provider", request]])
   } finally {
     stopHearing()
-    f.cleanup()
+    await f.cleanup()
   }
   console.log("PASS: Mako stops a turn only for a reason its log names; a file the agent named that can't be read is an unavailable attachment, not a stop")
 }
@@ -1920,7 +1921,7 @@ async function unsavedTurnIsMakos() {
   } finally {
     disk?.restore()
     stopHearing()
-    f.cleanup()
+    await f.cleanup()
   }
   console.log("PASS: a journal Mako can't write stops the turn as Mako's (not-saved), live and reopened, and older builds still open it")
 }
@@ -1973,7 +1974,7 @@ async function otherFailuresDontStop() {
   } finally {
     chmodSync(assets, 0o700)
     stopHearing()
-    f.cleanup()
+    await f.cleanup()
   }
   console.log("PASS: a store copy Mako can't write and an event it can't read don't stop the turn; the journal keeps the output whole")
 }
@@ -1997,7 +1998,7 @@ async function unsavedConversationDoesntBlockStop() {
   } finally {
     disk?.restore()
     stopHearing()
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -2051,7 +2052,7 @@ async function quietTurnsCarryLastActivity() {
     assert.equal(snapshot?.session.status, "running", "a quiet turn is not ended")
   } finally {
     clock.mock.restore()
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -2106,7 +2107,7 @@ async function nativeActivityLastsItsTurn() {
     assert.equal(published().at(-1), null, "and the renderer hears it end")
   } finally {
     clock.mock.restore()
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -2138,7 +2139,7 @@ async function batchesLeadThenPace() {
     const text = f.events.flatMap((event) => (event.type === "live-batch" ? event.batch.updates : [])).map((update) => (update.kind === "text" ? update.text : "")).join("")
     assert.ok(text.startsWith("The w0 w1") && text.endsWith(" w79"), "every word, in order")
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -2179,7 +2180,7 @@ async function coalescedToolBursts() {
       16_384
     )
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -2260,7 +2261,7 @@ async function settledVerdicts() {
       reopened.close()
     }
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -2278,7 +2279,7 @@ async function refusedStartup() {
     f.owner.observe({ type: "live-session", session: { ...f.state, status: "failed", error: "late stderr noise" } })
     assert.equal(f.owner.snapshot(f.id)?.session.error, "Selected model is unavailable")
     assert.deepEqual(f.sent, [])
-  } finally { f.cleanup() }
+  } finally { await f.cleanup() }
 }
 
 /**
@@ -2341,7 +2342,7 @@ async function autoContinuedTurn() {
     await sleep(60)
     assert.equal(f.owner.snapshot(f.id)!.requests.length, 2, "nothing more was sent")
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 
   // The user's own prompt in the window supersedes the continuation.
@@ -2367,7 +2368,7 @@ async function autoContinuedTurn() {
       "the user's prompt tells the agent its turn was cut short"
     )
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 
   // Stop in the window is the user's answer: the turn stays where it stopped.
@@ -2385,7 +2386,7 @@ async function autoContinuedTurn() {
     assert.equal(f.owner.snapshot(f.id)!.requests.length, 1, "Stop declined the continuation")
     assert.deepEqual(f.sent, ["first"])
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 
   // The host leaving in the window takes the promise with it: the journal
@@ -2398,7 +2399,7 @@ async function autoContinuedTurn() {
     f.owner.submit(f.id, randomUUID(), "first")
     await tick()
     await dropTurn(f, 0)
-    f.owner.stop()
+    await f.owner.stop()
     await sleep(60)
     const reopened = new LiveJournal(f.root, f.id)
     try {
@@ -2481,7 +2482,7 @@ async function restartContinued() {
     const binding = emitters.at(-1)!
     binding.emit({ type: "live-agent", id: binding.binding, agent: server })
     await waitFor(() => owner.snapshot(id)?.nativeAgents?.agents.length === 1, "the dev server was not on the roster")
-    owner.stop()
+    await owner.stop()
 
     owner = open()
     assert.deepEqual(owner.conversationSettings(), { continueAfterRestart: true }, "the choice outlives the host")
@@ -2501,7 +2502,7 @@ async function restartContinued() {
     // Restarted again and again: Mako's continuations go on three times in a row, then the turn is the person's.
     for (const index of [1, 2, 3]) {
       await dispatched(owner, index)
-      owner.stop()
+      await owner.stop()
       owner = open()
       owner.continueRestarted()
       if (index < 3) await waitFor(() => prompts.length === index + 2, `continuation ${index + 1} was not sent`)
@@ -2516,7 +2517,7 @@ async function restartContinued() {
     owner.setConversationSettings({ continueAfterRestart: false })
     owner.submit(id, randomUUID(), "again")
     await dispatched(owner, requests.length)
-    owner.stop()
+    await owner.stop()
     owner = open()
     owner.continueRestarted()
     await new Promise<void>((resolve) => setTimeout(resolve, 60))
@@ -2536,7 +2537,7 @@ async function restartContinued() {
     assert.equal(handed?.reason, "handed-off")
     assert.deepEqual(handed?.stopped, paused?.stopped, "one list: what the request keeps is what the continuation names")
   } finally {
-    owner.stop()
+    await owner.stop()
     rmSync(root, { recursive: true, force: true })
   }
   console.log("PASS: after Mako restarts, a turn its exit cut short continues if the person chose so, naming what stopped, at most three times in five minutes; a handoff keeps the same list")
@@ -2636,7 +2637,7 @@ async function providerExitContinued() {
         heard: () => heard,
       })
     } finally {
-      owner.stop()
+      await owner.stop()
       rmSync(root, { recursive: true, force: true })
     }
   }
@@ -2877,7 +2878,7 @@ async function heldUntilReset() {
     assert.equal(f.sent.length, 1)
 
     // A new host finds the wait in the journal, without opening the conversation.
-    f.owner.stop()
+    await f.owner.stop()
     const recovered = new LiveConversations(f.dependencies)
     try {
       assert.equal(recovered.summaries().find((summary) => summary.session.id === f.id)?.wakeAt, at)
@@ -2887,10 +2888,10 @@ async function heldUntilReset() {
       assert.notEqual(released?.status, "held", "its time came, so it is no longer held")
       assert.equal(recovered.summaries().find((summary) => summary.session.id === f.id)?.wakeAt, undefined)
     } finally {
-      recovered.stop()
+      await recovered.stop()
     }
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -2921,7 +2922,7 @@ async function heldWakeResumes() {
     assert.equal(f.owner.snapshot(f.id)?.requests.find((request) => request.id === another)?.status, "canceled")
     assert.deepEqual(f.owner.wakeDue(Date.now() + 7_200_000), [], "a canceled wait never wakes")
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -2951,7 +2952,7 @@ async function approvalOfAGoneProcess() {
     await f.owner.cancel(f.id)
     assert.deepEqual(f.owner.snapshot(f.id)?.permissions, [], "Stop puts the unanswerable request away")
   } finally {
-    f.cleanup()
+    await f.cleanup()
   }
 }
 
@@ -2998,7 +2999,7 @@ await failedCloseKeepsOwnership()
 await heldUntilReset()
 await heldWakeResumes()
 await approvalOfAGoneProcess()
-identityAndToolLifecycle()
+await identityAndToolLifecycle()
 console.log(
   "Live conversations: durable deduplicated acceptance, a harness started ahead taking its first message, startup/terminal races, idle hibernation with one resume, recovery, batching, tool lifecycle, and 499/499 completed exchange identities passed"
 )

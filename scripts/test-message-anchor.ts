@@ -95,7 +95,7 @@ assert.throws(() => MessageAnchorSchema.parse({ index: 1, at: "2026-01-01T00:00:
       "a user entry is never a fork point"
     )
   } finally {
-    owner.stop()
+    await owner.stop()
     await rm(root, { recursive: true, force: true })
   }
 }
@@ -151,7 +151,7 @@ assert.throws(() => MessageAnchorSchema.parse({ index: 1, at: "2026-01-01T00:00:
     const earlier = owner.fork(id, { id: randomUUID(), provider: "claude", point: { kind: "native", index: 1, revision, anchor: { index: 1, id: "a1" } } })
     assert.deepEqual(earlier.base?.entries.map((entry) => entry.id), ["u1", "a1"], "the panel names an earlier covered answer by its native message")
   } finally {
-    owner.stop()
+    await owner.stop()
     await rm(root, { recursive: true, force: true })
   }
 }

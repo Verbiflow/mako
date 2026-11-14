@@ -138,13 +138,13 @@ const endsOnStop: BackgroundStop = { kind: "ends-on-stop", how: "A build that ne
     assert.equal(backgroundWork(snapshot?.session, snapshot?.nativeAgents), null, "the transcript waits on nothing")
     assert.deepEqual(live.lifecycleWork(), [], "an update or quit waits on nothing")
   } finally {
-    live.stop()
+    await live.stop()
   }
   const restarted = owner(root, driver)
   try {
     endedWithTheirTurns(restarted.snapshot(id)?.nativeAgents?.agents, "after a restart")
   } finally {
-    restarted.stop()
+    await restarted.stop()
     rmSync(root, { recursive: true, force: true })
   }
   console.log("PASS: ten Cursor subagents end with the stopped and the failed turn that started them, and stay ended across a restart")
@@ -164,7 +164,7 @@ for (const exit of ["killed", "quit for the update"] as const) {
     assert.equal(older.lifecycleWork()[0]?.status, "running", "and an update would have waited on them")
     if (exit === "quit for the update") await older.closeForExit()
   } finally {
-    older.stop()
+    await older.stop()
   }
   const upgraded = owner(root, harness(root, endsWithTurn))
   try {
@@ -172,7 +172,7 @@ for (const exit of ["killed", "quit for the update"] as const) {
     endedWithTheirTurns(snapshot?.nativeAgents?.agents, `read by this build after the older one was ${exit}`)
     assert.equal(backgroundWork(snapshot?.session, snapshot?.nativeAgents), null)
   } finally {
-    upgraded.stop()
+    await upgraded.stop()
     rmSync(root, { recursive: true, force: true })
   }
   console.log(`PASS: ten subagents an older build saved as working are read as ended with their turns, after it was ${exit}`)

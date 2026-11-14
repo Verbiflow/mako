@@ -206,7 +206,7 @@ try {
   console.log("move carry, on the machine: a project's other repository cloned as it gets ready (one it can't, said), both checkouts, outside files and history arrived once before any session opened in its folder; packed back, both checkouts, only what changed outside it, what it removed, its history; none for a device that didn't ask: ok")
 } finally {
   server.close()
-  git.close()
+  await git.close()
   rmSync(root, { recursive: true, force: true })
   rmSync(outsideRoot, { recursive: true, force: true })
 }

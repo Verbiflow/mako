@@ -124,8 +124,8 @@ function goalHost(goals: GoalsCapability, turns: (text: string, index: number) =
       owner.observe({ type: "live-session", session: state("ready") })
     },
     start: (goal?: StartGoal) => owner.start("test-provider", root, { conversationId: id, goal }),
-    cleanup: () => {
-      owner.stop()
+    cleanup: async () => {
+      await owner.stop()
       rmSync(root, { recursive: true, force: true })
     },
   }
@@ -154,7 +154,7 @@ async function makosLoopRunsToCompletion() {
     await settle()
     assert.equal(host.sent.length, 2, "a completed goal sends nothing more")
   } finally {
-    host.cleanup()
+    await host.cleanup()
   }
 }
 
@@ -168,7 +168,7 @@ async function makosLoopStopsWhenBlockedOrQuiet() {
     await settle()
     assert.equal(blocked.sent.length, 1, "a blocked goal waits for the person")
   } finally {
-    blocked.cleanup()
+    await blocked.cleanup()
   }
   const quiet = goalHost(MAKO, () => ({}))
   try {
@@ -178,7 +178,7 @@ async function makosLoopStopsWhenBlockedOrQuiet() {
     assert.equal(quiet.sent.length, 2, "the loop gives up after the second empty turn")
     assert.match(quiet.goal()?.note ?? "", /2 turns in a row without replying or doing anything/)
   } finally {
-    quiet.cleanup()
+    await quiet.cleanup()
   }
 }
 
@@ -197,7 +197,7 @@ async function stopPausesMakosLoop() {
     await waitFor(() => host.sent.length === 2, "resuming an idle goal did not continue it")
     assert.equal(host.sent[1], goalContinuePrompt(OBJECTIVE))
   } finally {
-    host.cleanup()
+    await host.cleanup()
   }
 }
 
@@ -225,7 +225,7 @@ async function anUnsavedTurnPausesTheGoal() {
     assert.equal(host.sent.length, 1, "nothing continues the goal on its own")
   } finally {
     disk.mock.restore()
-    host.cleanup()
+    await host.cleanup()
   }
 }
 
@@ -242,7 +242,7 @@ async function aUserMessageGoesFirst() {
     await host.owner.goal(host.id, { kind: "clear" })
     assert.equal(host.goal(), undefined)
   } finally {
-    host.cleanup()
+    await host.cleanup()
   }
 }
 
@@ -307,7 +307,7 @@ async function aHarnessGoalByMessages() {
     await waitFor(() => host.sent.length === 8, "the person's message never went")
     assert.equal(host.sent[7], `<mako-local-control>\n${CONTROL_NOTE}\n</mako-local-control>\n\nThanks`, "the person's own message carries Mako's note")
   } finally {
-    host.cleanup()
+    await host.cleanup()
   }
 }
 
@@ -328,7 +328,7 @@ async function stopPausesAHarnessGoalAfterTheTurn() {
     await waitFor(() => paused && host.goal()?.status === "paused", "Stop did not pause the harness's goal")
     assert.deepEqual(host.order, [`prompt /goal ${OBJECTIVE}`, "cancel", "prompt /goal pause"], "a pause sent as a message goes once the stopped turn has ended")
   } finally {
-    host.cleanup()
+    await host.cleanup()
   }
 }
 
@@ -363,7 +363,7 @@ async function stopPausesACallGoalFirst() {
     assert.deepEqual(order, ["call set", "prompt Also update the changelog", "call pause", "cancel"], "Codex pauses before the interrupt, so no continuation starts after it")
     assert.equal(host.goal()?.status, "paused")
   } finally {
-    host.cleanup()
+    await host.cleanup()
   }
 }
 
@@ -376,13 +376,13 @@ async function aConversationStartsWithAGoal() {
     assert.deepEqual(host.sent, [goalStartPrompt(OBJECTIVE)], "the goal is the conversation's first message")
     assert.equal(host.requests()[0]?.displayText, `/goal ${OBJECTIVE}`)
   } finally {
-    host.cleanup()
+    await host.cleanup()
   }
   const empty = goalHost(MAKO, () => ({}))
   try {
     await assert.rejects(empty.start({ objective: " " }), /too_small|at least 1/i, "an empty objective refuses the start")
   } finally {
-    empty.cleanup()
+    await empty.cleanup()
   }
 
   const calls: string[] = []
@@ -404,7 +404,7 @@ async function aConversationStartsWithAGoal() {
     await waitFor(() => native.goal()?.status === "active" && !native.goal()?.pending, "Codex's goal was never set on the new conversation")
     assert.deepEqual(calls, ["set while ready"], "a goal set by a call waits for the session to open")
   } finally {
-    native.cleanup()
+    await native.cleanup()
   }
 }
 
@@ -425,7 +425,7 @@ async function makosLoopStopsAtItsBudget() {
     assert.equal(host.sent.length, 3)
     await assert.rejects(host.owner.goal(host.id, { kind: "resume" }), /spent its token budget\. To keep going, set it again with a larger budget\./)
   } finally {
-    host.cleanup()
+    await host.cleanup()
   }
 }
 
@@ -445,7 +445,7 @@ async function aGoalSetMidTurnCountsFromThen() {
     await waitFor(() => host.goal()?.status === "complete", "the goal never ran after the earlier turn")
     assert.equal(host.goal()?.tokensUsed, 300, "the turn running when the goal was set counts only what it spends after")
   } finally {
-    host.cleanup()
+    await host.cleanup()
   }
 }
 
@@ -480,7 +480,7 @@ async function aHarnessGoalStopsMidTurnAtItsBudget() {
     assert.equal(OlderRequestSchema.parse(row).interruption?.reason, "stopped", "a build before goal-budget opens the journal")
     assert.equal(storedRequest(join(host.root, "journals"), host.id, stopped.id)?.interruption?.reason, "goal-budget", "read back, it's the budget")
   } finally {
-    host.cleanup()
+    await host.cleanup()
   }
 }
 
@@ -507,7 +507,7 @@ async function aHarnessBudgetGoesWithTheGoal() {
     await waitFor(() => host.requests()[0]?.status === "completed", "the turn never ran")
     assert.deepEqual([host.goal()?.status, host.goal()?.tokensUsed], ["active", 0], "a harness that keeps its own budget is the only one counting it")
   } finally {
-    host.cleanup()
+    await host.cleanup()
   }
 }
 

@@ -245,4 +245,4 @@ try {
   assert.ok(again.snapshot().keys.includes(cloudKey), "the last account's")
   again.close()
   console.log("Thread lifecycle: shared archive/restore receipts, duplicate commands, exact-run Stop, held queue and unrelated-run isolation verified; a Session its harness archived is archived here until restored here, and archived again once its harness unarchives and re-archives it")
-} finally { owner.stop(); archives.close(); await rm(root,{recursive:true,force:true}) }
+} finally { await owner.stop(); archives.close(); await rm(root,{recursive:true,force:true}) }

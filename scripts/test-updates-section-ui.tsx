@@ -267,7 +267,7 @@ try {
   assert.doesNotMatch(clean, /data-testid="uncommitted"/, "a clean build lists none")
   assert.match(clean, /Revision <span[^>]*>9a7a5c0c<\/span> · Build/, "and says none")
 } finally {
-  git.close()
+  await git.close()
   await rm(scratch, { recursive: true, force: true })
 }
 

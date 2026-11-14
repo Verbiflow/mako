@@ -99,7 +99,7 @@ try {
       await assert.rejects(owner.permission(id, newer, response), /disk full/)
       disk.mock.restore()
       assert.equal(calls, 1, "failed intent persistence cannot send an approval")
-      owner.stop()
+      await owner.stop()
       owner = new LiveConversations(dependencies)
       await owner.permission(id, first, response)
       assert.equal(calls, 1, "completed receipt remains idempotent after reopening")
@@ -141,7 +141,7 @@ try {
       const late = Promise.withResolvers<void>()
       answer = () => late.promise
       const oldOwnerResponse = owner.permission(id, stranded, response)
-      owner.stop()
+      await owner.stop()
       owner = new LiveConversations(dependencies)
       assert.equal(owner.snapshot(id)?.control?.approvalResponses?.at(-1)?.state.kind, "uncertain")
       late.resolve()
@@ -173,7 +173,7 @@ try {
       assert.equal(afterFailure?.state.kind, "dispatching")
       assert.ok(!JSON.stringify(afterFailure).includes("secret-fixture-answer"))
       const afterFailureCalls = calls
-      owner.stop()
+      await owner.stop()
       owner = new LiveConversations(dependencies)
       assert.equal(owner.snapshot(id)?.control?.approvalResponses?.at(-1)?.state.kind, "uncertain")
       await assert.rejects(owner.permission(id, secretId, secretAnswer), /already saved/)
@@ -239,7 +239,7 @@ try {
       await owner.permission(id, between, response)
       assert.equal(calls, answeredBefore + 1, "an approval raised between turns is still answerable once the next turn starts")
       console.log(`PASS ${provider}: durable intent, duplicate/conflicting answers, native-ID reuse, storage failure, lost reply, reopen, retired-owner fence and an approval raised between turns`)
-    } finally { owner.stop() }
+    } finally { await owner.stop() }
   }
 } finally { rmSync(root, { recursive: true, force: true }) }
 

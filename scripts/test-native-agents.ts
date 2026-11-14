@@ -436,7 +436,7 @@ try {
   assert.notEqual(lifecycle.snapshot().revision, oldRevision,
     "A new native run invalidates an old Stop confirmation even when its status stays running")
 
-  owner.stop()
+  await owner.stop()
   const recovered = new LiveConversations(dependencies)
   try {
     assert.equal(
@@ -444,10 +444,10 @@ try {
       "unknown"
     )
   } finally {
-    recovered.stop()
+    await recovered.stop()
   }
 } finally {
-  owner.stop()
+  await owner.stop()
   rmSync(root, { recursive: true, force: true })
 }
 console.log(
