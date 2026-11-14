@@ -98,7 +98,7 @@ export async function readProcessTable(): Promise<ProcessRow[]> {
 }
 
 /** Mako's footprint on this Mac now: its processes from `ps`, and the file watching and rescans this host reports. */
-export async function readMakoFootprint(deps: { watching: WatchFootprint; rescans: RescanFootprint | null }): Promise<MakoFootprint> {
+export async function readMakoFootprint(deps: { watching: WatchFootprint; rescans: RescanFootprint | null; attributionFailure?: string }): Promise<MakoFootprint> {
   const rows = await readProcessTable()
   const own = new Map<number, string>()
   if (deps.watching.child?.pid) own.set(deps.watching.child.pid, "file watcher")
@@ -108,9 +108,10 @@ export async function readMakoFootprint(deps: { watching: WatchFootprint; rescan
     ...makoProcesses(rows, { pid: process.pid, ppid: process.ppid, inApp: Boolean(process.versions.electron) }, own),
     watching: deps.watching,
     rescans: deps.rescans,
+    ...(deps.attributionFailure !== undefined && { attributionFailure: deps.attributionFailure }),
   }
 }
 
-export function declareFootprintMethods(methods: MethodTable, read: () => { watching: WatchFootprint; rescans: RescanFootprint | null }): void {
+export function declareFootprintMethods(methods: MethodTable, read: () => { watching: WatchFootprint; rescans: RescanFootprint | null; attributionFailure?: string }): void {
   methods.handle("mako:mako-footprint", () => readMakoFootprint(read()))
 }

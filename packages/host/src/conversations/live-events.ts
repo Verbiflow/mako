@@ -21,7 +21,7 @@ import { requestTurnEnd, sessionTurnEnd, settleRequest, turnSpendAt, usageMark }
 import { updateBinding } from "./live-sources.js"
 
 type EventsAccess = Pick<LiveAccess,
-  "dependencies" | "bindingOwners" | "resident" | "control" | "flush" | "keep" | "schedule" | "drain" | "storageFailed" | "signInHold" |
+  "dependencies" | "bindingOwners" | "resident" | "control" | "flush" | "noteWork" | "keep" | "schedule" | "drain" | "storageFailed" | "signInHold" |
   "scheduleAutoContinue" | "goalSettled" | "turnSettled" | "goalObserved" | "goalSpent" | "nativeRewound" | "scheduleHibernation" | "clearHibernationTimer">
 
 /** The parts a driver's events land in. */
@@ -168,6 +168,7 @@ export class LiveEvents {
           ),
         }
         resident.driver = null
+        this.access.noteWork(resident)
         resident.connections.delete(bindingId)
         // A request this process asked and nobody answered stays on screen, said to be unanswerable.
         const askedHere = (permission: LivePermissionRequest) => (permission.origin?.bindingId ?? permission.sessionId) === bindingId

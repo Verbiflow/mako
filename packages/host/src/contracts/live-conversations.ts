@@ -1,3 +1,4 @@
+import type { ProviderFailureEvidence } from "./provider-failure-evidence.js"
 import type { PromptDelivery } from "./prompt-delivery.js"
 import type { RequestRetry } from "./delivery-retry.js"
 import type { Notice } from "./agents.js"
@@ -412,6 +413,7 @@ export interface LiveRequest {
    * retriability alone does not establish safe replay.
    */
   failure?: ProviderFailureKind
+  failureEvidence?: ProviderFailureEvidence
   /** Where this request's spend counts from: the meter at the last turn's end (`spentThrough`), else when it was dispatched. */
   usageFrom?: UsageMark
   /**

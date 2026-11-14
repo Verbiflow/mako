@@ -352,6 +352,7 @@ const ThreadRowSchema = z.object({
 const OperationRowSchema = z.object({ kind: z.string(), digest: z.string(), result: z.string() })
 const PlacementSchema = z.object({ thread: ThreadIdSchema, session: SessionIdSchema })
 const CountSchema = z.object({ count: z.number() })
+const ReportPositionSchema = z.object({ position: z.number() })
 const FirstJournalSchema = z.object({ count: z.number(), first: z.number().nullable() })
 const VersionSchema = z.object({ data_version: z.number() })
 const TotalChangesSchema = z.object({ count: z.number() })
@@ -789,6 +790,8 @@ export class ThreadStore {
   /** The rows the last edges were read from, kept through commits: a read that finds the same keeps the same object. */
   private edgesKept: { records: string[]; native: Set<string>; edges: ThreadEdges } | undefined
   private worktreesSeen: { revision: number; worktrees: ThreadWorktree[] } | undefined
+  /** Who hears this device's worktrees change here (`onWorktrees`). */
+  private readonly worktreeListeners = new Set<() => void>()
   private changeSeq = 0
   private titleSeq = 0
   /** Threads whose name another host changed since `takeExternalTitles` last ran. */
@@ -1393,10 +1396,9 @@ export class ThreadStore {
   private reportActionPage(scope: string, args: string[], after?: string): ReportActionsPage {
     this.syncVersion()
     if (!this.sql("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_report_actions'").get()) return { items: [], total: 0 }
-    const count = z.object({ count: z.number() })
-    const total = count.parse(this.sql(`SELECT count(*) AS count FROM agent_report_actions WHERE (${scope}) AND pending = 1`).get(...args)).count
+    const total = CountSchema.parse(this.sql(`SELECT count(*) AS count FROM agent_report_actions WHERE (${scope}) AND pending = 1`).get(...args)).count
     const cursor = after === undefined ? undefined : this.sql(`SELECT rowid AS position FROM agent_report_actions WHERE report = ? AND (${scope})`).get(after, ...args)
-    const position = cursor ? z.object({ position: z.number() }).parse(cursor).position : undefined
+    const position = cursor ? ReportPositionSchema.parse(cursor).position : undefined
     if (after !== undefined && position === undefined) throw new ThreadOperationConflictError(after)
     const rows = this.sql(`SELECT record FROM agent_report_actions WHERE (${scope}) AND pending = 1 AND rowid > ? ORDER BY rowid LIMIT 9`).all(...args, position ?? 0)
     const items = rows.slice(0, 8).map(row => ReportActionSchema.parse(JSON.parse(RecordRowSchema.parse(row).record)))
@@ -1838,13 +1840,25 @@ export class ThreadStore {
   attachWorktree(input: Omit<ThreadWorktree, "createdAt">, repositories: readonly WorktreeRepository[] = []): void {
     const thread = this.thread(input.thread)
     if (!thread) throw new Error("This Thread no longer exists")
+    let added = false
     this.write(() => {
-      const added = this.sql("INSERT OR IGNORE INTO thread_worktrees (path, thread_id, device_id, repo_root, project, branch, base, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(input.path, thread.id, this.deviceId, input.repoRoot, input.project, input.branch, input.base, this.now())
-      if (!added.changes) return
+      added = this.sql("INSERT OR IGNORE INTO thread_worktrees (path, thread_id, device_id, repo_root, project, branch, base, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(input.path, thread.id, this.deviceId, input.repoRoot, input.project, input.branch, input.base, this.now()).changes > 0
+      if (!added) return
       for (const repository of repositories)
         this.sql("INSERT OR IGNORE INTO thread_worktree_repositories (path, checkout, repo_root, base) VALUES (?, ?, ?, ?)").run(repository.path, input.path, repository.repoRoot, repository.base)
     })
+    if (added) this.worktreesMoved()
+  }
+
+  /** Hears this device's worktrees change here (one added, moved home, forgotten); returns how to stop hearing. */
+  onWorktrees(listener: () => void): () => void {
+    this.worktreeListeners.add(listener)
+    return () => this.worktreeListeners.delete(listener)
+  }
+
+  private worktreesMoved(): void {
+    for (const listener of this.worktreeListeners) listener()
   }
 
   /**
@@ -2002,6 +2016,7 @@ export class ThreadStore {
     this.write(() => {
       this.sql("UPDATE thread_worktrees SET repo_root = ?, project = ? WHERE path = ? AND device_id = ?").run(repoRoot, project, path, this.deviceId)
     })
+    this.worktreesMoved()
   }
 
   /** Forget a worktree; a checkout of several repositories goes with the last of its worktrees, or at once by its own folder. */
@@ -2018,6 +2033,7 @@ export class ThreadStore {
       if (owner && !this.sql("SELECT 1 AS found FROM thread_worktrees WHERE thread_id = ?").get(MembershipRowSchema.parse(owner).thread_id))
         this.sql("DELETE FROM thread_places WHERE place_thread = ?").run(MembershipRowSchema.parse(owner).thread_id)
     })
+    this.worktreesMoved()
   }
 
   /**

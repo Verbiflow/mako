@@ -2,8 +2,10 @@ import { runSuite } from "./lib/run-suite.mjs"
 import { appendFile } from "node:fs/promises"
 
 /**
- * The npm test scripts no other job runs, whole or in part, on a Mac, where the tests' Electron runs: every suite in
- * turn however the last went, so one run shows all that fail, each once, with no second try. The job's three
+ * The npm test scripts that draw a window, on a Mac, where the tests' Electron runs: every suite in turn however the
+ * last went, so one run shows all that fail, each once, with no second try. The ones that need no window run in the
+ * pull request gate on Linux (`ci-gate.mjs`); these run on every push to main and on a pull request that touches what
+ * they draw (`ci-changes.mjs`). The job's three
  * shards take one suite in three. A script that needs a person's sign-in, a window or a real harness isn't here:
  * `test:shared-runtime` reads the Devin CLI, `test:opencode-native-forms` runs a real OpenCode, and
  * `test:simulators-ui` draws with Chrome, none of which works on this runner.
@@ -23,31 +25,37 @@ import { appendFile } from "node:fs/promises"
  *   node scripts/ci-suites.mjs <shard> <shards>     what CI runs, shards counted from 1
  */
 const SUITES = [
-  "test:acp-background-work", "test:action-recovery", "test:approval-answer-ui", "test:appshot-shortcut",
-  "test:attachment-sweep", "test:authoring-ui", "test:automations", "test:background-work", "test:background-work-ui",
-  "test:checkout-heads", "test:child-input", "test:client", "test:cloud-account", "test:codex-archived-resume",
-  "test:codex-background-work", "test:codex-protocol", "test:commit-generation", "test:control-cli",
-  "test:control-driver-install", "test:control-media-sources", "test:control-packages", "test:control-preview",
-  "test:control-recording-continuous", "test:cursor-child", "test:desktop-answers", "test:desktop-crashes",
-  "test:dev-updates", "test:execution-ownership", "test:file-previews", "test:fin-pips-ui", "test:git",
+  "test:approval-answer-ui",
+  "test:authoring-ui",
+  "test:background-work-ui",
+  "test:fin-pips-ui",
   "test:placed-fin-ui",
-  "test:git-remote", "test:host", "test:host-shutdown", "test:host-signals", "test:host-single", "test:lazy",
-  "test:listed-repositories", "test:live-actions", "test:live-approvals", "test:live-context-children",
-  "test:local-signing", "test:mcp", "test:message-queue", "test:mobile-behavior", "test:model-connections-ui",
-  "test:moves", "test:native-authoring", "test:node-host-secrets", "test:opencode-agents", "test:opencode-api",
-  "test:owner-check", "test:plugins", "test:proposed-plans", "test:provider-launch-options", "test:provider-ui",
-  "test:host-load-memory", "test:queued-steering", "test:zod-patch", "test:rail-list", "test:roster-delta", "test:recovery-admission", "test:scripted-model", "test:secrets-keychain", "test:side-rail-ui", "test:lazy-pieces-ui", "test:fin-transitions-ui",
-  "test:simulators-remote", "test:skills", "test:telemetry", "test:terminal", "test:terminal-ui",
-  "test:run-suite", "test:test-scratch", "test:thread-environment-launch", "test:thread-lifecycle", "test:thread-worktrees", "test:transfer-scheduling",
-  "test:tree-watcher", "test:update-local", "test:usage-worker", "test:web-delivery", "test:window-boot",
-  "test:follow-ui", "test:phone-scroll-ui",
-  "test:account-devices-ui", "test:account-threads-ui", "test:animations-ui", "test:appshot-ui", "test:carried-files-ui",
-  "test:cloud-turn-on-ui", "test:crew-card-ui", "test:fin-counts-ui", "test:fin-decision-ui", "test:fin-view-keeps-ui",
-  "test:fins-fresh-on-return-ui", "test:inbox-ui", "test:moves-ui", "test:opening-send-ui", "test:sync-status-ui",
-  "test:thread-app", "test:tool-rows-ui",
+  "test:model-connections-ui",
+  "test:provider-ui",
+  "test:side-rail-ui",
+  "test:lazy-pieces-ui",
+  "test:fin-transitions-ui",
+  "test:terminal-ui",
+  "test:follow-ui",
+  "test:phone-scroll-ui",
+  "test:account-devices-ui",
+  "test:account-threads-ui",
+  "test:animations-ui",
+  "test:appshot-ui",
+  "test:carried-files-ui",
+  "test:cloud-turn-on-ui",
+  "test:crew-card-ui",
+  "test:fin-counts-ui",
+  "test:fin-decision-ui",
+  "test:fin-view-keeps-ui",
+  "test:fins-fresh-on-return-ui",
+  "test:inbox-ui",
+  "test:moves-ui",
+  "test:opening-send-ui",
+  "test:sync-status-ui",
+  "test:tool-rows-ui",
   "test:composer-edges-ui",
   "test:agent-ask-ui",
-  "test:ci-downloads",
   "test:internal-review-ui",
 ]
 /** Past this a suite has hung: the slowest here takes about 4 minutes on a Mac at load 15. */

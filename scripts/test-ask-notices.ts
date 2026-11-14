@@ -30,7 +30,40 @@ import type { LiveBatch, LiveSnapshot, LiveSummary } from "@mako/host/contracts/
 /** The window's bridge: each read of a Session waits in the run's queue to be answered, late and in any order. */
 let readSnapshot: (id: string) => Promise<LiveSnapshot> = async () => { throw new Error("no run") }
 Object.defineProperty(globalThis, "window", { value: { mako: { liveSnapshot: (id: string) => readSnapshot(id), livePermission: async () => {}, answerAgentAsk: async () => {} } }, configurable: true })
-Object.assign(globalThis, { requestAnimationFrame: (run: () => void) => setTimeout(run, 16), cancelAnimationFrame: clearTimeout })
+/**
+ * The renderer's timers on a clock the run moves (a read's backoff, an animation frame), not the wall's: a step
+ * moves it a frame, and the end of a run moves it as far as the last backoff asks. On real time every run waited out
+ * its retries, and 300 of them took five minutes.
+ */
+const clock = (() => {
+  let now = 0, ids = 0
+  const due = new Map<number, { at: number; run: () => void }>()
+  return {
+    set: (run: () => void, ms = 0) => (due.set((ids += 1), { at: now + Math.max(0, ms), run }), ids),
+    clear: (id?: number) => {
+      if (id !== undefined) due.delete(id)
+    },
+    /** Runs every timer due by `ms` from now in the order it's due, each with its microtasks settled after it. */
+    async advance(ms: number) {
+      const until = now + ms
+      for (;;) {
+        const [id, next] = [...due].reduce<[number, { at: number; run: () => void }] | undefined>((first, each) => (!first || each[1].at < first[1].at ? each : first), undefined) ?? []
+        if (!next || next.at > until) break
+        due.delete(id!)
+        now = next.at
+        next.run()
+        for (let wait = 0; wait < 6; wait += 1) await turn()
+      }
+      now = until
+    },
+  }
+})()
+Object.assign(globalThis, {
+  setTimeout: (run: () => void, ms?: number) => clock.set(run, ms),
+  clearTimeout: clock.clear,
+  requestAnimationFrame: (run: () => void) => clock.set(run, 16),
+  cancelAnimationFrame: clock.clear,
+})
 const { acpStore } = await import("../src/state/acp-state")
 const { applyLiveBatch, applyLiveSnapshot, hydrateLive, hydrateLiveSummaries, listLive, recaptureLive, unlistLive, unloadLive } = await import("../src/state/live-recovery")
 const { installNotificationEnvironment, notificationsStore, reconcileVisible, subjectId } = await import("../src/state/notifications")
@@ -196,6 +229,7 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
   }
   const settle = async () => {
     for (let wait = 0; wait < 6; wait += 1) await turn()
+    await clock.advance(16)
   }
   const trail: string[] = []
 
@@ -438,7 +472,7 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
     const read = reads.shift()
     if (!read) {
       quiet += 1
-      await new Promise((waited) => setTimeout(waited, 300))
+      await clock.advance(8_000)
       await settle()
       continue
     }
@@ -619,7 +653,7 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
       const read = bridgeReads.shift()
       if (!read) {
         quiet += 1
-        await new Promise((waited) => setTimeout(waited, 600))
+        await clock.advance(600)
         continue
       }
       reads += 1

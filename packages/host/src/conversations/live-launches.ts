@@ -18,7 +18,7 @@ import { captureNativeHistory } from "./native-history.js"
 
 type LaunchAccess = Pick<LiveAccess,
   "dependencies" | "admission" | "load" | "add" | "bindingOwners" | "startingSession" | "register" | "markPurpose" | "markParent" |
-  "actor" | "retainAttachments" | "moves" | "flush" | "drain" | "scheduleHibernation" | "failedStart" | "driverEvents">
+  "actor" | "retainAttachments" | "moves" | "flush" | "noteWork" | "drain" | "scheduleHibernation" | "failedStart" | "driverEvents">
 
 /** New conversations, from their journal's first write to their provider's first native session. */
 export class LiveLaunches {
@@ -294,6 +294,7 @@ export class LiveLaunches {
             await revokeTools(dependencies, id, conversation)
             resident.opening = false
             resident.driver = null
+            this.access.noteWork(resident)
           } catch (error) {
             resident.driver = driver
             resident.connections.set(id, { driver, session })

@@ -495,6 +495,27 @@ function membership(): void {
 }
 
 /** A Thread has one worktree per device, even where two Threads with one each became one. */
+/** A worktree added, moved home or forgotten is heard (`onWorktrees`): the account's rows say the worktree they're in. */
+function worktreesHeard(): void {
+  const threads = new ThreadStore(join(root, "worktrees-heard.sqlite"), { now })
+  const { thread } = threads.registerJournal(journal({ harness: "claude" }), migration)
+  let heard = 0
+  const stop = threads.onWorktrees(() => (heard += 1))
+  const worktree = { path: "/repo/.worktrees/heard", thread, repoRoot: "/repo", project: "/repo", branch: "mako/heard", base: "main" }
+  threads.attachWorktree(worktree)
+  assert.equal(heard, 1, "an added worktree is heard")
+  threads.attachWorktree(worktree)
+  assert.equal(heard, 1, "one already there adds nothing, and isn't")
+  threads.rehomeWorktree(worktree.path, "/moved", "/moved")
+  assert.equal(heard, 2, "one moved home is heard")
+  threads.detachWorktree(worktree.path)
+  assert.equal(heard, 3, "one forgotten is heard")
+  stop()
+  threads.attachWorktree({ ...worktree, path: "/repo/.worktrees/unheard" })
+  assert.equal(heard, 3, "and nothing once it stopped listening")
+  threads.close()
+}
+
 function oneWorktreePerThread(): void {
   const path = join(root, "worktrees.sqlite")
   const threads = new ThreadStore(path, { now })
@@ -585,6 +606,7 @@ try {
   placementLog()
   membership()
   oneWorktreePerThread()
+  worktreesHeard()
   harnessForks()
   console.log("thread store: ok")
 } finally {

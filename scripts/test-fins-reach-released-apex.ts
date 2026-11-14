@@ -33,12 +33,17 @@ function heard(events: readonly HostEvent[], conversation: string): string | und
   return roster && groups(rosterChildren(roster))
 }
 
-/** A host short of memory, whose harnesses hibernate as soon as they rest; a Fin's turn holds until `release`. */
+/**
+ * A host short of memory, whose harnesses hibernate as soon as they rest; a Fin's turn holds until `release`. With no
+ * room watch (the engine's 10 s poll), only the Fin's own event can carry its start or finish to the Apex: so a wait
+ * here proves it went at once without a deadline that a loaded runner misses (#635, a 3 s one beside a disk-heavy suite).
+ */
 function world(name: string, fins: string[]): AgentsWorld {
   return new AgentsWorld({
     root: join(root, name),
     conversationMemory: { bytes: 0, recent: 0, sweepMs: 20 },
     providerIdleMs: 50,
+    noRoomWatch: true,
     script: async (turn) => {
       if (!turn.text.includes("You're fin:")) return "Hello."
       fins.push(turn.conversation)
@@ -72,7 +77,7 @@ async function workKeepsTheApex(): Promise<void> {
     assert.ok(w.live.loaded(apex), "an Apex whose Fin works stays in memory")
     const from = w.events.length
     w.release(fins[0]!)
-    await until("the Fin's finish in the Apex's roster", () => heard(w.events.slice(from), apex) === "done", 3_000)
+    await until("the Fin's finish in the Apex's roster", () => heard(w.events.slice(from), apex) === "done")
   } finally {
     await w.close()
   }
@@ -91,11 +96,11 @@ async function aMoveReadsTheApexIn(): Promise<void> {
     await until("the host letting go of the Apex at rest", () => !w.live.loaded(apex))
     const from = w.events.length
     await startFin(w, apex, "lint")
-    await until("the second Fin's start in the Apex's roster", () => heard(w.events.slice(from), apex) === "working,done", 3_000)
+    await until("the second Fin's start in the Apex's roster", () => heard(w.events.slice(from), apex) === "working,done")
     // A start counts as at work before its first turn reaches the harness; its turn is released once it holds.
     await until("the second Fin's turn", () => fins.length === 2)
     w.release(fins[1]!)
-    await until("the second Fin's finish in the Apex's roster", () => heard(w.events.slice(from), apex) === "done,done", 3_000)
+    await until("the second Fin's finish in the Apex's roster", () => heard(w.events.slice(from), apex) === "done,done")
   } finally {
     await w.close()
   }
