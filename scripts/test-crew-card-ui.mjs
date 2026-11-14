@@ -646,6 +646,10 @@ async function checkPage({ window, page, shots, base }) {
   assert.match(laptop, /Composer chips on iPad[\s\S]*?18m/, `its working row counts its turn: ${laptop}`)
   assert.doesNotMatch(laptop, /\b\d+h\b/, "no row in the browser says the Fin's age")
   window.setContentSize(390, 844)
+  // Through a blank page: straight from the browser's page to the phone's, a quarter second after it loaded, the
+  // renderer crashed (SIGTRAP) in 18 runs of 500 on the Mac runner and the load failed ERR_FAILED (-2); through
+  // about:blank at the same moment, in none of 100.
+  await window.loadURL("about:blank")
   await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
   await until("Boolean(document.querySelector('[data-thread] [data-fin-pips]'))", "the phone again")
   await click("[data-thread]")
