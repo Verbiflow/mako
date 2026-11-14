@@ -394,6 +394,13 @@ type ProviderChildEvent =
 /** Spawns and exits, published by whoever starts a provider process and kept by the host's registry. */
 const events = topic<ProviderChildEvent>("mako:provider-child")
 
+/** Hears each provider process Mako starts or sees end, whoever started it: what watches for harnesses at work looks then. */
+export function onProviderChildChange(listener: () => void): () => void {
+  return events.subscribe((event) => {
+    if ("spawned" in event || "exited" in event) listener()
+  })
+}
+
 /** Report a spawned provider process until it exits. */
 export function trackProviderChild(
   child: ChildProcess,

@@ -34,6 +34,8 @@ export type ProviderActivityResult =
 export interface ProviderProcessProbe {
   provider: string
   pollIntervalMs?: number
+  /** How often it looks while it finds nothing open (30 s unless set): a start Mako makes nudges it at once. */
+  idlePollMs?: number
   staleAfterMs?: number
   timeoutMs?: number
   probe(signal: AbortSignal, target?: ProviderProbeTarget): Promise<ProviderActivityResult>

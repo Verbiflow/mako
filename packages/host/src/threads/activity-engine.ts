@@ -3,6 +3,9 @@ import type {
   ProviderProcessProbe,
 } from "./harnesses.js"
 
+/** How often a harness with nothing open is looked at for one opening (`ProviderProcessProbe.idlePollMs`). */
+const IDLE_POLL_MS = 30_000
+
 export interface ProviderActivitySnapshot {
   provider: string
   sessions: ProviderActivitySession[]
@@ -98,6 +101,12 @@ export class ProviderActivityEngine {
     }
   }
 
+  /** Something may have started or ended (a provider process Mako started or saw exit): every harness looks now. */
+  nudge(): void {
+    if (!this.#running) return
+    for (const [provider, slot] of this.#slots) if (!slot.controller) this.#schedule(provider, 0)
+  }
+
   snapshot(): ProviderActivitySnapshot[] {
     return [...this.#slots.entries()].map(([provider, slot]) => ({
       provider,
@@ -154,8 +163,11 @@ export class ProviderActivityEngine {
       for (const listener of this.#listeners) listener(snapshot)
     }
     const base = slot.probe.pollIntervalMs ?? 5_000
+    // A harness with nothing open looks again in half a minute, not every few seconds: on an idle Mac that was a
+    // process table or an `lsof` every 3-5 s a harness. One Mako starts says so at once (`nudge`); one started in a
+    // terminal or its own app is seen within that half minute.
     const delay = available
-      ? base
+      ? sessions.length ? base : Math.max(base, slot.probe.idlePollMs ?? IDLE_POLL_MS)
       : Math.min(60_000, base * 2 ** Math.min(slot.failures, 4))
     this.#schedule(provider, delay)
   }

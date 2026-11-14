@@ -48,7 +48,8 @@ export class FinCapacity {
   async observe(working: number, mix: Readonly<Record<string, number>>, fins?: readonly FinAtWork[]): Promise<void> {
     const before = { fins: this.atOnce(), builds: this.builds() }
     this.#mix = { ...mix }
-    if (fins && this.#deps.sampler) {
+    // The whole process table is read only while there's a Fin in it to measure.
+    if (fins?.length && this.#deps.sampler) {
       const readings = await this.#deps.sampler.sample(fins).catch(() => undefined)
       for (const reading of readings ?? []) this.#deps.costs.add(reading)
       if (readings) this.#finCores = { cores: readings.reduce((sum, reading) => sum + reading.cores, 0), at: this.#now() }

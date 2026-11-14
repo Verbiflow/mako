@@ -5322,7 +5322,11 @@ export class Agents implements AgentOperations, ConversationChildren {
       mix[harness] = (mix[harness] ?? 0) + 1
       if (at) fins.push(at)
     }
-    await this.deps.observeCapacity(Object.values(mix).reduce((sum, count) => sum + count, 0), mix, sample ? fins : undefined).catch((error: Error) =>
+    const working = Object.values(mix).reduce((sum, count) => sum + count, 0)
+    // Nothing at work here and nothing waiting for room: the machine has nothing to say to anyone. A start reads it
+    // as it's admitted (`readMac`), so an idle host reads no load and no process table every 10 s.
+    if (!working && !this.store()?.queuedSpawns().length) return
+    await this.deps.observeCapacity(working, mix, sample ? fins : undefined).catch((error: Error) =>
       hostWarn("agents", "this device's capacity couldn't be read; it keeps its last", { error: errorMessage({ error }) }))
   }
 

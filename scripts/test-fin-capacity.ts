@@ -296,6 +296,8 @@ const GB = 1024 ** 3
   const fins = [{ conversation: "codex-fin", harness: "codex" }]
   await capacity.observe(1, { codex: 1 })
   assert.equal(reads, 0, "a start's look doesn't read every Fin's processes")
+  await capacity.observe(0, {}, [])
+  assert.equal(reads, 0, "the periodic look with no Fin at work reads no process table")
   for (let at = 0; at < 6; at += 1) {
     now += 10_000
     cpuSeconds += 1

@@ -229,6 +229,35 @@ await waitFor(() => activityUpdates.length === 3)
 activityEngine.stop()
 assert.deepEqual(activityUpdates, [["live:active"], ["live:needs-input"], []])
 
+// A harness with nothing open looks again only at its idle interval, not every few milliseconds of its cadence, and a
+// provider process Mako starts nudges it to look at once; once something is open it keeps its cadence.
+{
+  let looks = 0
+  let open = false
+  const quiet = new ProviderActivityEngine([{
+    provider: "quiet",
+    pollIntervalMs: 5,
+    idlePollMs: 60_000,
+    async probe() {
+      looks += 1
+      return { kind: "available", sessions: open ? [{ nativeId: "opened", status: "active" }] : [] }
+    },
+  } satisfies ProviderProcessProbe])
+  const seen: string[][] = []
+  quiet.onChange((snapshot) => seen.push(snapshot.sessions.map((session) => session.nativeId ?? "")))
+  quiet.start()
+  await waitFor(() => looks === 1)
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  assert.equal(looks, 1, "nothing open: no look at the 5 ms cadence, only at the idle minute")
+  open = true
+  quiet.nudge()
+  await waitFor(() => seen.length === 1)
+  assert.deepEqual(seen, [["opened"]], "a nudge looks at once and finds what opened")
+  const after = looks
+  await waitFor(() => looks >= after + 3)
+  quiet.stop()
+}
+
 const claudeProbeHome = await mkdtemp(join(tmpdir(), "mako-claude-probe-"))
 try {
   const registry = join(claudeProbeHome, ".claude", "sessions")
