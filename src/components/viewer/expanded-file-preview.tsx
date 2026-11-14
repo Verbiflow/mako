@@ -5,6 +5,7 @@ import { FileIcon } from "@/components/ui/file-icon"
 import type { FileContents } from "@/lib/types"
 import { LazyBoundary } from "@/components/ui/lazy-boundary"
 import { LazyFailed } from "@/components/ui/lazy-failed"
+import { PatientFallback } from "@/components/ui/patient-fallback"
 
 const RichFilePreview = lazy(() => import("./rich-file-preview"))
 
@@ -60,7 +61,7 @@ export function ExpandedFilePreview({ file, name, mode, open, onOpenChange, focu
         </DialogClose>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
-        {open ? <LazyBoundary fallback={() => <LazyFailed what="The preview" />}><Suspense fallback={<p role="status" className="p-4 text-ui text-faint">Loading preview…</p>}>
+        {open ? <LazyBoundary fallback={() => <LazyFailed what="The preview" />}><Suspense fallback={<PatientFallback what="the preview"><p role="status" className="p-4 text-ui text-faint">Loading preview…</p></PatientFallback>}>
           {file ? <RichFilePreview key={identity} file={file} name={name} mode={selectedMode} expanded /> : <p role="status" className="p-4 text-ui text-faint">{error ?? `Reading ${name}…`}</p>}
         </Suspense></LazyBoundary> : null}
       </div>
