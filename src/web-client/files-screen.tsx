@@ -11,6 +11,7 @@ import { closeFiles, readInFiles, type FilesOpen } from "./files-open"
 import { WebSideRail } from "./side-rail"
 import { LazyBoundary } from "@/components/ui/lazy-boundary"
 import { LazyFailed } from "@/components/ui/lazy-failed"
+import { PatientFallback } from "@/components/ui/patient-fallback"
 
 const FileView = lazy(() => import("@/components/viewer/file-view").then((module) => ({ default: module.FileView })))
 
@@ -108,7 +109,7 @@ function FileReader({ conversation, path, line }: { conversation: string; path: 
           <p className="p-4 text-ui text-faint">Reading {path.slice(slash + 1)}…</p>
         ) : (
           <LazyBoundary fallback={() => <LazyFailed what="The file" />}>
-            <Suspense fallback={<p className="p-4 text-ui text-faint">Opening…</p>}>
+            <Suspense fallback={<PatientFallback what="the file"><p className="p-4 text-ui text-faint">Opening…</p></PatientFallback>}>
               <FileView file={file} line={line} mode={mode} />
             </Suspense>
           </LazyBoundary>
