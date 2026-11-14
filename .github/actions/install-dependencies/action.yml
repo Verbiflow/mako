@@ -45,12 +45,32 @@ runs:
           node_modules
           packages/*/node_modules
         key: node-modules-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.image }}-node-${{ steps.node.outputs.version }}-npm-${{ steps.node.outputs.npm }}-${{ steps.node.outputs.dependencies }}
+    # A miss installs from npm's own cache of tarballs, restored for this lockfile or else the newest one kept: a changed
+    # lockfile (a harness's version bumped) missed the tree in every job at once, and each of the gate's 45 shards
+    # downloaded every package again, 75 s of `npm ci` on its 2-vCPU runner where the same install from a filled cache
+    # is a fraction of that. What the lockfile adds since that cache is fetched as `npm ci` would.
+    - id: tarballs
+      if: steps.modules.outputs.cache-hit != 'true'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.npm/_cacache
+        key: npm-tarballs-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
+        restore-keys: npm-tarballs-${{ runner.os }}-${{ runner.arch }}-
     - if: steps.modules.outputs.cache-hit != 'true'
       shell: bash
       env:
         ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
-      run: npm ci
-    - if: inputs.cache == 'true' && steps.modules.outputs.cache-hit != 'true'
+      run: npm ci --prefer-offline
+    # Saved from main's runs only, as the tree is: a pull request's entry serves that pull request alone.
+    - if: steps.modules.outputs.cache-hit != 'true' && steps.tarballs.outputs.cache-hit != 'true' && github.event_name != 'pull_request'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.npm/_cacache
+        key: ${{ steps.tarballs.outputs.cache-primary-key }}
+    # Only outside pull requests: a pull request's entry serves only its own reruns, while compressing the tree took a
+    # Mac 31 s, and every job of a lockfile change compressed it to have all but one refused the key. Main's run after
+    # the merge saves it for everyone.
+    - if: inputs.cache == 'true' && steps.modules.outputs.cache-hit != 'true' && github.event_name != 'pull_request'
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
