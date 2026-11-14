@@ -20,54 +20,75 @@ import { testScratch } from "./lib/test-scratch.mjs"
  * 137,000 calls), and for 1.2 s counting a turn of 337 files (`turnChanges`). Both now read a step at a time
  * (`JournalStore.recency`, `countingTurn`), run in slices.
  *
- * Each is held to the same work done at once in the same run (the yardstick): the longest hold in slices must stay
- * under a `TIMES`th of the one at once, and what it finds must be exactly what the reading at once finds. And since
+ * Three interleaved readings keep the work done at once as a positive control. The median of their paired
+ * sliced/unsliced longest-hold ratios must stay under a quarter; both find exactly the same work. Every raw
+ * sample is printed: one preemption on a shared runner cannot set the budget or alone fail the check. And since
  * other work runs between the reading and the letting go, a root a turn began on meanwhile, after the reading or
  * between two roots let go, stays. A count or a pass cut by the journal's close (its host stopping) ends at its next
- * step, under a `TIMES`th of the whole sliced work's time, quietly: nothing counted, nothing let go, nothing failed.
+ * step, before another queued loop turn, quietly: nothing counted, nothing let go, nothing failed.
  */
+const SAMPLES = 3
+const POSITIVE_HOLD_MS = 50
 const TIMES = 4
 const DAY = 86_400_000
 const root = realpathSync(testScratch("mako-attribution-holds-"))
-const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-/** The longest the loop went without turning while `work` ran, and a moment after, sampled every millisecond. */
+/** The longest gap between loop turns while `work` runs, including its final synchronous stretch. */
 async function longestHold<Value>(work: () => Promise<Value> | Value): Promise<{ value: Value; holdMs: number }> {
   let longest = 0
   let last = performance.now()
-  let running = true
+  let pending: ReturnType<typeof setImmediate>
   const tick = () => {
     const now = performance.now()
     longest = Math.max(longest, now - last)
     last = now
-    if (running) setTimeout(tick, 1)
+    pending = setImmediate(tick)
   }
-  setTimeout(tick, 1)
-  await pause(5)
-  const value = await work()
-  await pause(50)
-  running = false
-  return { value, holdMs: Math.max(longest, performance.now() - last) }
+  pending = setImmediate(tick)
+  try {
+    await new Promise((resolve) => setImmediate(resolve))
+    longest = 0
+    last = performance.now()
+    const value = await work()
+    // Let the observer see the final stretch; there is no setup or trailing idle window in the sample.
+    await new Promise((resolve) => setImmediate(resolve))
+    return { value, holdMs: longest }
+  } finally {
+    clearImmediate(pending)
+  }
 }
 
-/** How long `work` takes to end once `stop` runs, a slice into it, against `wholeMs`, the whole of it in slices. */
-async function stoppedMidway<Value>(what: string, work: () => Promise<Value>, stop: () => void, wholeMs: number): Promise<Value> {
+/** A stop ends at the pending slice boundary, before another queued loop turn, regardless of runner speed. */
+async function stoppedMidway<Value>(what: string, work: () => Promise<Value>, stop: () => void): Promise<Value> {
   const running = work()
   await new Promise((resolve) => setImmediate(resolve))
   const stopped = performance.now()
   stop()
-  const value = await running
-  const endMs = performance.now() - stopped
-  const limit = wholeMs / TIMES
-  console.log(`${what}: ended ${Math.round(endMs)} ms after its stop (limit ${Math.round(limit)} ms, a ${TIMES}th of the ${Math.round(wholeMs)} ms it takes whole in slices)`)
-  assert.ok(endMs < limit, `${what} took ${Math.round(endMs)} ms to end after its stop, not under ${Math.round(limit)} ms`)
-  return value
+  let anotherTurn = false
+  const pending = setImmediate(() => { anotherTurn = true })
+  try {
+    const value = await running
+    console.log(`${what}: ended ${Math.round(performance.now() - stopped)} ms after its stop`)
+    assert.equal(anotherTurn, false, `${what} must end at its pending slice, before another loop turn`)
+    return value
+  } finally {
+    clearImmediate(pending)
+  }
 }
 
-function judge(what: string, atOnce: number, sliced: number): void {
-  const limit = atOnce / TIMES
-  console.log(`${what}: at once the loop held ${Math.round(atOnce)} ms, in slices ${Math.round(sliced)} ms (limit ${Math.round(limit)} ms, a ${TIMES}th of at once)`)
-  assert.ok(sliced < limit, `${what} in slices held the loop ${Math.round(sliced)} ms, not under ${Math.round(limit)} ms, a ${TIMES}th of the ${Math.round(atOnce)} ms at once`)
+function median(samples: readonly number[]): number {
+  assert.equal(samples.length, SAMPLES)
+  assert.ok(samples.every(sample => Number.isFinite(sample) && sample >= 0))
+  return [...samples].sort((a, b) => a - b)[Math.floor(samples.length / 2)]!
+}
+
+function judge(what: string, atOnce: readonly number[], sliced: readonly number[]): void {
+  const baseline = median(atOnce)
+  const hold = median(sliced)
+  const ratio = median(sliced.map((sample, index) => sample / atOnce[index]!))
+  console.log(`${what}: longest holds at once [${atOnce.map(Math.round)}] ms, in slices [${sliced.map(Math.round)}] ms; medians ${Math.round(baseline)} / ${Math.round(hold)} ms, paired median ${(ratio * 100).toFixed(1)}% (under ${100 / TIMES}%)`)
+  assert.ok(baseline > POSITIVE_HOLD_MS, `${what}: the unsliced positive control must exceed ${POSITIVE_HOLD_MS} ms`)
+  assert.ok(ratio < 1 / TIMES, `${what} in slices held the loop a median ${(ratio * 100).toFixed(1)}% of its paired unsliced hold, not under ${100 / TIMES}%`)
 }
 
 /** A turn of `FILES` files, each written `VERSIONS` times by the turn, with another Thread's writes in the checkout meanwhile. */
@@ -108,15 +129,18 @@ async function countATurn(): Promise<void> {
     store.saveActivity({ kind: "turn", id: "R1", session: "S1", thread: "T1", turn: "R1", checkout, named: [], start: started, end: at + 1 })
   })
   const view = storedView(store)
-  const atOnce = await longestHold(() => turnChanges(view, "T1", "R1", "settled", 0))
-  const began = performance.now()
-  const sliced = await longestHold(() => inSlices(countingTurn(view, "T1", "R1", "settled", 0)))
-  const wholeMs = performance.now() - began
-  assert.equal(atOnce.value.own.files, FILES, "every file the turn wrote is counted")
-  assert.ok(atOnce.value.others.files > 0, "and the other Thread's writes meanwhile")
-  assert.deepEqual(sliced.value, atOnce.value, "counted in slices, the turn counts exactly as at once")
-  judge(`a turn of ${FILES} files written ${VERSIONS} times each`, atOnce.holdMs, sliced.holdMs)
-  const cut = await stoppedMidway("a count its journal closed under", () => countTurnInSlices(view, "T1", "R1", "settled"), () => store.close(), wholeMs)
+  const atOnceHolds: number[] = [], slicedHolds: number[] = []
+  for (let sample = 0; sample < SAMPLES; sample++) {
+    const atOnce = await longestHold(() => turnChanges(view, "T1", "R1", "settled", 0))
+    const sliced = await longestHold(() => inSlices(countingTurn(view, "T1", "R1", "settled", 0)))
+    assert.equal(atOnce.value.own.files, FILES, "every file the turn wrote is counted")
+    assert.ok(atOnce.value.others.files > 0, "and the other Thread's writes meanwhile")
+    assert.deepEqual(sliced.value, atOnce.value, "counted in slices, the turn counts exactly as at once")
+    atOnceHolds.push(atOnce.holdMs)
+    slicedHolds.push(sliced.holdMs)
+  }
+  judge(`a turn of ${FILES} files written ${VERSIONS} times each`, atOnceHolds, slicedHolds)
+  const cut = await stoppedMidway("a count its journal closed under", () => countTurnInSlices(view, "T1", "R1", "settled"), () => store.close())
   assert.equal(cut, undefined, "a count its journal closed under counts nothing, and fails nothing")
 }
 
@@ -148,32 +172,37 @@ async function letGoOfIdleRoots(): Promise<void> {
   }
   raw.exec("COMMIT")
   // The reading at once letGoIdle made before, on the same journal: the yardstick.
-  const now = clock.now() + 15 * DAY
-  const readAtOnce = () => {
+  const readAtOnce = (now: number) => {
     const changed = raw.prepare("SELECT root, MAX(at) AS at FROM entries GROUP BY root").all()
     const worked = raw.prepare("SELECT checkout, cwd, MAX(coalesce(ended_at, ?)) AS at FROM activity GROUP BY checkout, cwd").all(now)
     return changed.length + worked.length
   }
-  readAtOnce()
-  const atOnce = await longestHold(readAtOnce)
-
-  // Tracked a moment ago: nobody let go, and where Threads worked isn't read.
-  const began = performance.now()
-  const kept = await longestHold(() => tracker.letGoIdle())
-  const wholeMs = performance.now() - began
-  assert.deepEqual(kept.value, [], "a root tracked a moment ago stays")
-  // Fifteen days on, nothing changed there and nobody worked in or around it: let go.
-  clock.advance(15 * DAY)
-  const letGo = await longestHold(() => tracker.letGoIdle())
-  assert.deepEqual(letGo.value, [folder], "the root idle past retention is let go, and only it")
-  judge(`letting go of idle roots, no root idle (${ENTRIES.toLocaleString("en-US")} entries)`, atOnce.holdMs, kept.holdMs)
-  judge(`letting go of idle roots, one idle (${ENTRIES.toLocaleString("en-US")} entries, ${CALLS.toLocaleString("en-US")} calls)`, atOnce.holdMs, letGo.holdMs)
+  const atOnceHolds: number[] = [], keptHolds: number[] = [], letGoHolds: number[] = []
+  for (let sample = 0; sample < SAMPLES; sample++) {
+    if (sample) {
+      await tracker.track({ id: "idle", path: folder, kind: "workspace" })
+      await tracker.settled()
+    }
+    const atOnce = await longestHold(() => readAtOnce(clock.now() + 15 * DAY))
+    // Tracked a moment ago: nobody let go, and where Threads worked isn't read.
+    const kept = await longestHold(() => tracker.letGoIdle())
+    assert.deepEqual(kept.value, [], "a root tracked a moment ago stays")
+    // Fifteen days on, nothing changed there and nobody worked in or around it: let go.
+    clock.advance(15 * DAY)
+    const letGo = await longestHold(() => tracker.letGoIdle())
+    assert.deepEqual(letGo.value, [folder], "the root idle past retention is let go, and only it")
+    atOnceHolds.push(atOnce.holdMs)
+    keptHolds.push(kept.holdMs)
+    letGoHolds.push(letGo.holdMs)
+  }
+  judge(`letting go of idle roots, no root idle (${ENTRIES.toLocaleString("en-US")} entries)`, atOnceHolds, keptHolds)
+  judge(`letting go of idle roots, one idle (${ENTRIES.toLocaleString("en-US")} entries, ${CALLS.toLocaleString("en-US")} calls)`, atOnceHolds, letGoHolds)
   raw.close()
   // Cut by the tracker's close, as its host stops.
   let closed: Promise<void> | undefined
   const cut = await stoppedMidway("letting go of idle roots, its tracker closed under it", () => tracker.letGoIdle(), () => {
     closed = tracker.close()
-  }, wholeMs)
+  })
   assert.deepEqual(cut, [], "a pass its tracker closed under lets go of nothing, and fails nothing")
   await closed
 }

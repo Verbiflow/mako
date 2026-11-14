@@ -18,7 +18,7 @@ import { invokeRuntime, runtimeInfo } from "@mako/host/transport/connection"
 import { hostCommand, runtimeLocation } from "@mako/host/transport/service"
 import { PackagedApp } from "./lib/packaged-app.mjs"
 import { assertOwnHarnessStores } from "./lib/proof-host.ts"
-import { assertScratchEnvironment, scratchInstall, scratchKeychain, seedScratchHome } from "./scratch-harness-home.ts"
+import { assertScratchEnvironment, hostSafeStorage, scratchInstall, scratchKeychain, seedScratchHome } from "./scratch-harness-home.ts"
 import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
 import { ACCESS_TIER_NAMES, accessModeId } from "@mako/host/contracts/access"
 
@@ -317,6 +317,9 @@ if (values.window) {
 } else {
   dataRoot = join(home, "Library", "Application Support", "mako-continue-proof", "profile")
   const command = hostCommand({ executable: electron, args: [process.cwd()], env: { ...hostEnv, MAKO_DATA_ROOT: dataRoot, MAKO_WEB_SOCKET: runtimeLocation(dataRoot).socket } })
+  // A host in Node mode reads its data key from the scratch keychain but never makes it, so without this it keeps no
+  // secret, its cloud sign-in included ("Nothing can be kept securely on this host"). The desktop makes its own.
+  hostSafeStorage(home, command.executable, process.cwd())
   host = spawn(command.executable, command.args, { env: command.env, stdio: "ignore" })
   for (const deadline = Date.now() + 60_000; !(await runtimeInfo(runtimeLocation(dataRoot).socket).catch(() => null)); ) {
     if (Date.now() > deadline) throw new Error(`the host didn't start within a minute; its log is ${join(dataRoot, "logs", "host.log")}`)
