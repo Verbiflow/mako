@@ -178,7 +178,8 @@ export class WorktreeRetention {
             result.packages.push(file)
           } else if (!entry.isSymbolicLink()) {
             const info = await lstat(file)
-            if (info.mtimeMs > cutoff) recent = true
+            // Renaming an install changes its parent directory, not its source files.
+            if (!entry.isDirectory() && info.mtimeMs > cutoff) recent = true
             if (entry.isDirectory()) await walk(file)
           }
         }

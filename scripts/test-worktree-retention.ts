@@ -3,7 +3,7 @@ import { Git } from "@mako/git"
 import { ThreadStore } from "@mako/host/threads/store"
 import { ThreadWorktreeService } from "@mako/host/workspaces/thread-worktrees"
 import assert from "node:assert/strict"
-import { mkdtemp, mkdir, readFile, realpath, rm, rmdir, symlink, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, readFile, realpath, rm, rmdir, symlink, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
@@ -60,6 +60,7 @@ try {
   let repositoryReads = 0
   let changeHeadAt = Infinity
   let failInvalidation = false
+  let now = Date.now() + 10 * 86_400_000
   let failUsers = false
   let resumeDuringRead = false
   let reads = 0
@@ -86,7 +87,7 @@ try {
       invalidated++
       if (failInvalidation) throw new Error("Prepared receipt could not be invalidated")
     },
-    now: () => Date.now() + 10 * 86_400_000,
+    now: () => now,
   })
   const skip = async () => (await retention.preview()).checkouts[0]!.skip
   const configure = async (mode: "preview" | "packages" | "checkout") => retention.configure({ mode, days: 7, kept: [] })
@@ -164,6 +165,18 @@ try {
   assert.match(failed.checkouts[0]!.skip ?? "", /could not be invalidated/)
   assert.deepEqual(removed, [path], "a package failure cannot continue into checkout removal")
   failInvalidation = false
+  const nested = join(root, "checkouts", "nested")
+  await mkdir(join(nested, "web", "node_modules"), { recursive: true })
+  await writeFile(join(nested, "source.ts"), "export {}")
+  const old = new Date(Date.now() - 8 * 86_400_000)
+  await utimes(join(nested, "source.ts"), old, old)
+  await utimes(join(nested, "web"), old, old)
+  rows = [{ ...rows[0]!, path: nested }]
+  now = Date.now()
+  const beforeNested = removed.length
+  const nestedReport = await retention.run()
+  assert.equal(nestedReport.checkouts[0]!.skip, null, "retiring nested packages must not restart the quiet period through a directory timestamp")
+  assert.equal(removed.length, beforeNested + 1)
   assert.ok(reads > 0)
   head = "changed"
   await retention.configure({ mode: "preview", days: 3650, kept: [] })
