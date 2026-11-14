@@ -1,4 +1,3 @@
-import type { WalPrimer, WalCheckpoint } from "./wal-primer.js"
 import { ProviderFailureEvidenceSchema } from "../contracts/provider-failure-evidence.js"
 import { LiveInputQuestionSchema } from "../contracts/live-questions.js"
 import { ApprovalOriginSchema, NativeApprovalIdentitySchema } from "../contracts/approval-response.js"
@@ -648,8 +647,6 @@ export class JournalWriteError extends Error {
   }
 }
 
-const AutoCheckpointSchema = z.object({ wal_autocheckpoint: z.number().int().nonnegative() })
-
 /**
  * One independent journal per conversation. Only changed blocks and requests
  * are written.
@@ -697,9 +694,6 @@ export class LiveJournal {
   private stagedBase?: ThreadPage
   /** The pages a commit checkpoints the journal at when it isn't writing rows ahead (`STAGE_CHECKPOINT_PAGES`). */
   private checkpointPages?: number
-  private checkpoints?: WalCheckpoint
-  private foregroundPages = 1_000
-  private checkpointPolicyDirty = false
   /** Whether the base row names the rows; unknown until the journal is read or writes it. */
   private rowsNamed?: boolean
   private closed = false
@@ -720,9 +714,8 @@ export class LiveJournal {
     this.path = join(root, `${id}.sqlite`)
     this.db = new DatabaseSync(this.path)
     try {
-      // The checkpoint owner's final close may still hold the WAL lock. Install the existing wait before opening it.
       this.db
-        .exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
+        .exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS metadata (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS options (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS progress (id INTEGER PRIMARY KEY, revision INTEGER NOT NULL);
@@ -752,29 +745,6 @@ export class LiveJournal {
       throw error
     }
     this.pager = new EntryPager(journalRows(this.db, () => this.appends))
-  }
-
-  /** Live resident only: listings and independent read connections retain their original policy. */
-  checkpointWith(primer: WalPrimer): void {
-    if (this.closed || this.checkpoints) return
-    this.foregroundPages = AutoCheckpointSchema.parse(this.db.prepare("PRAGMA wal_autocheckpoint").get()).wal_autocheckpoint
-    this.checkpoints = primer.watch(this.path, () => {
-      if (this.closed) return
-      this.checkpointPolicyDirty = true
-      try { this.checkpointPolicy() }
-      catch (error) { hostWarn("journal", "foreground checkpoint policy will be retried before the next write", { error: errorMessage({ error }) }) }
-    })
-    this.checkpoints?.pages(this.foregroundPages)
-  }
-
-  private checkpointPolicy(): void {
-    this.db.exec(`PRAGMA wal_autocheckpoint=${this.checkpoints?.active() ? 0 : this.foregroundPages}`)
-    this.checkpointPolicyDirty = false
-  }
-
-  private beforeWrite(): void {
-    // A failed policy restoration must stop the next write, never leave a dead worker owning an unbounded WAL.
-    if (this.checkpointPolicyDirty) this.checkpointPolicy()
   }
 
   /**
@@ -994,12 +964,10 @@ export class LiveJournal {
     if (begun) hostWarn("journal", "Mako's log differed from its rows; took the rows' facts in", {
       conversation: snapshot.session.id, events: events.length, kinds: [...new Set(events.map((event) => event.kind))].join(","),
     })
-    this.beforeWrite()
     this.db.exec("BEGIN IMMEDIATE")
     try {
       this.appendLog(events, "journal")
       this.db.exec("COMMIT")
-      this.checkpoints?.committed()
     } catch (error) {
       if (this.db.isTransaction) this.db.exec("ROLLBACK")
       this.log = undefined
@@ -1021,7 +989,6 @@ export class LiveJournal {
   /** `grown`: tool blocks of `next` that differ from `previous` only by these appends (`deliverLiveUpdates`). */
   commit(next: LiveSnapshot, previous?: LiveSnapshot, grown?: ReadonlyMap<number, ToolGrowth>): void {
     try {
-      this.beforeWrite()
       this.db.exec("BEGIN IMMEDIATE")
     } catch (error) {
       throw new JournalWriteError(error)
@@ -1135,7 +1102,6 @@ export class LiveJournal {
         if (difference) throw new Error(`Mako's log lost a change to ${next.session.id}'s facts. ${difference}`)
       }
       this.db.exec("COMMIT")
-      this.checkpoints?.committed()
       if (writeOptions) this.optionsStored = true
       this.messageBase = false
       for (const [index, count] of counts) {
@@ -1243,19 +1209,8 @@ export class LiveJournal {
   private checkpointAt(pages: number | undefined): void {
     if (this.closed) return
     try {
-      if (this.checkpoints) {
-        if (pages !== undefined) {
-          this.checkpointPages ??= this.foregroundPages
-          this.foregroundPages = pages
-        } else if (this.checkpointPages !== undefined) {
-          this.foregroundPages = this.checkpointPages
-          this.checkpointPages = undefined
-        }
-        this.checkpoints.pages(this.foregroundPages)
-        this.checkpointPolicyDirty = true
-        this.checkpointPolicy()
-      } else if (pages !== undefined) {
-        this.checkpointPages ??= AutoCheckpointSchema.parse(this.db.prepare("PRAGMA wal_autocheckpoint").get()).wal_autocheckpoint
+      if (pages !== undefined) {
+        this.checkpointPages ??= z.object({ wal_autocheckpoint: z.number() }).parse(this.db.prepare("PRAGMA wal_autocheckpoint").get()).wal_autocheckpoint
         this.db.exec(`PRAGMA wal_autocheckpoint=${pages}`)
       } else if (this.checkpointPages !== undefined) {
         this.db.exec(`PRAGMA wal_autocheckpoint=${this.checkpointPages}`)
@@ -1306,7 +1261,6 @@ export class LiveJournal {
     }
     const { entries } = staging.base
     try {
-      this.beforeWrite()
       this.db.exec("BEGIN IMMEDIATE")
       const written = this.writeBaseRows(entries, staging.at, entries.length, performance.now() + (staging.waiting.length ? STAGE_SLICE_WAITED_MS : STAGE_SLICE_MS))
       const done = written.at >= entries.length
@@ -1315,7 +1269,6 @@ export class LiveJournal {
         this.db.prepare("DELETE FROM base_entries WHERE id >= ?").run(entries.length)
       }
       this.db.exec("COMMIT")
-      this.checkpoints?.committed()
       for (const [index, entry] of written.rows) this.baseRows[index] = entry
       if (!done) {
         staging.at = written.at
@@ -1361,9 +1314,7 @@ export class LiveJournal {
     const paged = this.pager.pagedCount() > 0
     if (ahead && !compact && !paged) {
       try {
-        this.beforeWrite()
         this.db.exec("DELETE FROM base_entries")
-        this.checkpoints?.committed()
       } catch (error) {
         hostWarn("journal", "a journal's history rows couldn't be dropped", { path: this.path, error: errorMessage({ error }) })
       }
@@ -1380,11 +1331,11 @@ export class LiveJournal {
       if (free) compact(this.path)
     }
     const freed = this.pager.release(readOnlyRows(this.path))
-    const checkpointsClosed = this.checkpoints?.close()
-    if (checkpointsClosed) {
-      this.closing = Promise.all([checkpointsClosed, paged && !abandon ? freed : undefined]).then(tidy)
-    } else if (!paged || abandon) tidy()
-    else this.closing = freed.then(tidy)
+    if (!paged || abandon) {
+      tidy()
+      return
+    }
+    this.closing = freed.then(tidy)
   }
 
   /**
@@ -1398,7 +1349,6 @@ export class LiveJournal {
     this.untidy = true
     this.stopStaging()
     this.db.close()
-    this.closing = this.checkpoints?.close()
   }
 
   /** Once the journal closed and what it waited on before tidying its file (`close`) is done. */
