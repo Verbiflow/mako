@@ -55,9 +55,15 @@ export function checkoutGrants(device: string, account: string, at: number): Gra
 
 /**
  * One thing Mako made at a placement, by its path inside the entry ("" for the entry itself), its device and inode,
- * and whether it's a folder. A placement's whole list is its manifest: what a removal may take, and nothing else.
+ * when it was made (`born`, where the file system says), and whether it's a folder. A placement's whole list is its
+ * manifest: what a removal may take, and nothing else. The inode alone doesn't say it's the same file: Linux gives a
+ * file written where another was deleted that one's inode, and a revoke took an agent's own `.env` for Mako's copy.
+ * A manifest from before `born` matches by device and inode.
  */
-type Owned = { path: string; dev: number; ino: number; folder: boolean }
+type Owned = { path: string; dev: number; ino: number; born?: number; folder: boolean }
+
+/** When `info`'s file was made, where its file system records it. */
+const bornOf = (info: { birthtimeMs: number }): { born?: number } => (info.birthtimeMs > 0 ? { born: info.birthtimeMs } : {})
 
 /** A placement: the lease, where it landed and what Mako made there; `removing` once its removal has begun. */
 type Placed = { lease: string; checkout: string; root: string; entry: string; link: boolean; thread: string; generation: number; removing?: true; placing?: true }
@@ -104,12 +110,12 @@ export function refusalText(entry: string, refusal: Refusal): string {
 async function survey(path: string): Promise<Owned[]> {
   const top = await lstat(path).catch(() => undefined)
   if (!top) return []
-  const owned: Owned[] = [{ path: "", dev: top.dev, ino: top.ino, folder: top.isDirectory() }]
+  const owned: Owned[] = [{ path: "", dev: top.dev, ino: top.ino, ...bornOf(top), folder: top.isDirectory() }]
   const walk = async (inner: string): Promise<void> => {
     for (const entry of await readdir(join(path, inner), { withFileTypes: true })) {
       const relative = inner ? `${inner}/${entry.name}` : entry.name
       const info = await lstat(join(path, relative))
-      owned.push({ path: relative, dev: info.dev, ino: info.ino, folder: info.isDirectory() })
+      owned.push({ path: relative, dev: info.dev, ino: info.ino, ...bornOf(info), folder: info.isDirectory() })
       if (info.isDirectory()) await walk(relative)
     }
   }
@@ -383,7 +389,7 @@ export class CheckoutBorrowing {
 
   /**
    * What a lease placed, taken away entry by entry from its manifest: each file and link only while it's still the
-   * one Mako made (same device and inode), and each folder only once it's empty, so anything the person or an agent
+   * one Mako made (same device, inode and birth), and each folder only once it's empty, so anything the person or an agent
    * added inside stays, with the folders holding it. The removal is written down first and crossed off after, so a
    * delete that fails or is cut short is done by the next `keep`.
    */
@@ -396,7 +402,7 @@ export class CheckoutBorrowing {
       const path = owned.path ? join(base, owned.path) : base
       try {
         const info = await lstat(path)
-        if (info.dev !== owned.dev || info.ino !== owned.ino) continue
+        if (info.dev !== owned.dev || info.ino !== owned.ino || (owned.born !== undefined && bornOf(info).born !== owned.born)) continue
         if (owned.folder) await rmdir(path)
         else await this.#remove(path, false)
       } catch (error) {

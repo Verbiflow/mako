@@ -168,6 +168,8 @@ export interface ConversationsDeps {
   settled(conversationId: string): void
   /** A turn ended in `cwd`, failed or stopped included. */
   turnEnded?(conversationId: string, cwd: string): void
+  /** A conversation's work moved (running, waiting, finishing, none), with or without a batch (`LiveConversations.noteWork`). */
+  workMoved?(conversationId: string): void
   /** Whether a conversation's agent asked to move into its worktree and the move hasn't happened yet. */
   movePending?(conversationId: string): boolean
   /** Whether the person archived a conversation's Thread, which ends a Fin's work for good. */
@@ -263,6 +265,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       agents?.moved(id)
     },
     turnEnded: (id, cwd) => deps.turnEnded?.(id, cwd),
+    workMoved: (id) => deps.workMoved?.(id),
     turnLedger: deps.turnLedger,
     turnReview: deps.turnReview,
     git: deps.git,

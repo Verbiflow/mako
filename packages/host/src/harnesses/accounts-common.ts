@@ -22,6 +22,13 @@ import { onMac } from "../base/platform.js"
 const run = hostCommand
 
 const credentialSalt = randomBytes(32)
+const CredentialJsonSchema = z.string().transform((text, context) => {
+  try { return JSON.parse(text) }
+  catch {
+    context.addIssue({ code: "custom", message: "not JSON" })
+    return z.NEVER
+  }
+})
 /** Host-only equality token; neither credentials nor an offline token hash crosses IPC. */
 export function credentialFingerprint(values: readonly (string | null)[]): string {
   return createHmac("sha256", credentialSalt).update(JSON.stringify(values)).digest("hex")
@@ -35,13 +42,7 @@ export function credentialFingerprint(values: readonly (string | null)[]): strin
  */
 export function principalFingerprint(contents: string | null, principal: z.ZodType): string {
   if (contents === null) return credentialFingerprint([null])
-  const parsed = z.string().transform((text, context) => {
-    try { return JSON.parse(text) }
-    catch {
-      context.addIssue({ code: "custom", message: "not JSON" })
-      return z.NEVER
-    }
-  }).pipe(principal).safeParse(contents)
+  const parsed = CredentialJsonSchema.pipe(principal).safeParse(contents)
   return credentialFingerprint([parsed.success ? JSON.stringify(parsed.data) : contents])
 }
 

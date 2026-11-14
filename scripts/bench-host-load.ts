@@ -8,11 +8,12 @@ import { z } from "zod"
 import { invokeRuntime, probeRuntime } from "@mako/host/transport/connection"
 import { runtimeLocation } from "@mako/host/transport/service"
 import { HOST_NODE_OPTIONS } from "@mako/host/base/process-warnings"
-import { heldBy, slices } from "./lib/cpu-slices.ts"
+import { heldBy, slices, timeIn } from "./lib/cpu-slices.ts"
 import { readResident, unmeasured, type ResidentMemory } from "./lib/host-load-memory.ts"
 import { claudeSessionPath, makeWorld, TODAY, type WorldScale } from "./lib/host-load-world.ts"
 import { removeScratch } from "./lib/scratch-processes.mjs"
 import { scriptedModel } from "./scripted-model.ts"
+import { fakeCloud, type AccountReports } from "./lib/sync-bench-cloud.ts"
 
 /**
  * Whether the host keeps answering while many Fins work: `npm run bench:host-load`.
@@ -76,6 +77,7 @@ const { values } = parseArgs({
     idle: { type: "boolean", default: false },
     "idle-only": { type: "boolean", default: false },
     "summaries-every": { type: "string", default: "30000" },
+    account: { type: "boolean", default: false },
   },
 })
 const say = (line: string) => process.stderr.write(`${line}\n`)
@@ -127,6 +129,7 @@ const finish = async (code: number) => {
   for (const child of children) child.kill("SIGKILL")
   world.release()
   await model?.close()
+  await cloud?.close()
   if (!values.keep) await removeScratch(root).catch((error: Error) => say(`scratch left: ${error.message}`))
   process.exit(code)
 }
@@ -140,6 +143,17 @@ const TOOL_TURNS = 13
 const LiveStateStatus = z.object({ status: z.string() }).loose()
 /** With `--fins <n>` (and `--send`): the Apex the sends go to starts this many Fins, each a Codex turn, before the probe. */
 const finCount = Number(values.fins)
+// `--account`: the host signs in to the protocol's fake gateway in this process, which counts what it reports of its
+// Sessions (frames, rows, bytes), so the account's message rate is measured beside the loop.
+const cloud = values.account ? await fakeCloud() : undefined
+if (cloud) {
+  await cloud.account()
+  mkdirSync(join(world.dataRoot, "cloud"), { recursive: true, mode: 0o700 })
+  // Signed in for the account only: no harness sign-ins shared, no login item installed.
+  writeFileSync(join(world.dataRoot, "cloud", "sign-ins.json"), JSON.stringify({ version: 2, sharing: false, accessOnly: true, inStep: {} }), { mode: 0o600 })
+  mkdirSync(join(world.home, ".mako"), { recursive: true })
+  writeFileSync(join(world.home, ".mako", "syncd-login-optout"), "")
+}
 const model = values.send || finCount > 0 ? await scriptedModel({
   ...values["model-port"] && { port: z.coerce.number().int().min(1).max(65535).parse(values["model-port"]) },
   reply: (heard) => {
@@ -180,7 +194,7 @@ try {
   if (snapshots) mkdirSync(snapshots, { recursive: true })
   const nodeArgs = [...HOST_NODE_OPTIONS, ...(values["node-arg"] ?? []), ...(values.gc ? ["--trace-gc"] : []), ...(snapshots ? ["--heapsnapshot-signal=SIGUSR2"] : [])]
   host = spawn("nice", ["-n", "5", process.execPath, ...nodeArgs, ...(profileDir ? ["--cpu-prof", "--cpu-prof-dir", profileDir, "--cpu-prof-interval", "1000"] : []), hostScript], {
-    env: { ...env, HOME: world.home, TMPDIR: world.temporary, MAKO_DATA_ROOT: world.dataRoot, MAKO_WEB_SOCKET: socket, MAKO_PROD: "1", MAKO_TELEMETRY: "off", ...finCount > 0 && { MAKO_FIN_SLOTS: "8" } },
+    env: { ...env, HOME: world.home, TMPDIR: world.temporary, MAKO_DATA_ROOT: world.dataRoot, MAKO_WEB_SOCKET: socket, MAKO_PROD: "1", MAKO_TELEMETRY: "off", ...finCount > 0 && { MAKO_FIN_SLOTS: "8" }, ...cloud && { MAKO_CLOUD_URL: cloud.url } },
     stdio: ["ignore", values.gc ? "pipe" : "ignore", "inherit"],
     ...profileDir && values["node-arg"]?.some((arg) => arg.startsWith("--heap-prof")) && { cwd: profileDir },
     ...snapshots && { cwd: snapshots },
@@ -224,6 +238,16 @@ try {
     if (Date.now() > deadline) throw new Error("the host hasn't read its catalog within three minutes")
   }
   say(`host ready in ${Math.round(performance.now() - began)} ms`)
+  if (cloud) {
+    const Account = z.object({ state: z.object({ status: z.string(), url: z.string().optional() }).loose() }).loose()
+    let account = Account.parse(await call("mako:cloud-sign-in"))
+    if (account.state.status === "signing-in") await cloud.signIn(z.string().parse(account.state.url))
+    for (const deadline = Date.now() + 120_000; account.state.status !== "signed-in"; await delay(300)) {
+      if (Date.now() > deadline) throw new Error(`the host isn't signed in to the fake account: ${account.state.status}`)
+      account = Account.parse(await call("mako:cloud-account"))
+    }
+    say("signed in to the fake account")
+  }
 
   // `--idle`: the host on this world with nothing at work and no window, settled 30 s, then its own CPU over 60 s, as
   // the perf proof of 2026-11-12 measured it; `--idle-only` stops there.
@@ -378,7 +402,9 @@ try {
   })()
   say(`probing for ${values.seconds} s`)
   const probedFrom = Date.now()
+  const reportsFrom = cloud?.reported?.()
   await delay(Number(values.seconds) * 1000)
+  const reportsTo = cloud?.reported?.()
   probing = false
   await reading
   await sending
@@ -426,11 +452,14 @@ try {
     scale: values.scale, host: hostScript, seconds: Number(values.seconds), fins: fins.length, windows, windowCalls, windowFailures,
     ...values["tool-heavy"] && { toolWorkload: { callsPerTurn: TOOL_CALLS, requestedTurns: TOOL_TURNS, steps: Object.fromEntries(toolSteps), completed: [...completedTools] } },
     ...answers, eventLoop: health.eventLoop, peakMb: unread ? null : peakMb, memoryReadings: memory.readings, memoryMisses: memory.misses,
-    nodeArgs, ...idle && { idle }, ...snapshotsTaken.length && { snapshots: snapshotsTaken }, ...rss && { rss }, ...gc && { gc },
+    nodeArgs, ...idle && { idle }, ...reportsFrom && reportsTo && { account: accountRate(reportsFrom, reportsTo, (probedTo - probedFrom) / 60_000) }, ...snapshotsTaken.length && { snapshots: snapshotsTaken }, ...rss && { rss }, ...gc && { gc },
     ...profile && {
       profile,
       slices: { count: found.length, totalMs: found.reduce((sum, slice) => sum + slice.ms, 0), longest: [...found].sort((a, b) => b.ms - a.ms).slice(0, 15) },
       heldBy: heldBy(found),
+      // What telling the account this host's Sessions cost the host's thread, its calls included: the report's rows
+      // (`session-report`), and keeping its Sessions' records in the account (`session-uploads`).
+      accountWork: timeIn(profile, ["conversations/session-report.js", "conversations/session-uploads.js"]),
     },
   }
   const text = JSON.stringify(report, null, 2)
@@ -479,4 +508,10 @@ try {
   say(`bench:host-load failed: ${error instanceof Error ? error.stack : String(error)}`)
   host?.kill("SIGKILL")
   await finish(1)
+}
+
+/** What the account took of the host's Sessions reports over the probed window, a minute's worth. */
+function accountRate(from: AccountReports, to: AccountReports, minutes: number) {
+  const per = (key: keyof AccountReports) => Math.round(((to[key] - from[key]) / minutes) * 10) / 10
+  return { frames: to.frames - from.frames, framesPerMin: per("frames"), rowsPerMin: per("rows"), gonePerMin: per("gone"), kbPerMin: Math.round(per("bytes") / 102.4) / 10 }
 }

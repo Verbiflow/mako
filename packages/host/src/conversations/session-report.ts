@@ -478,9 +478,20 @@ type KeptUpdate = { n: number; event: RuntimeEvent; text: string; compact?: stri
 /** The runtime link a host serves its Sessions on, while it's up: the link itself (one per connection), and what serves on it. */
 export type SessionLink = { link: RuntimeLink; served: Pick<ServedRuntime, "version" | "sessions" | "live"> }
 
+/** Some native sessions' rows as they are now, and every Session they stand for, a row or not (`rowsOfNative`). */
+export interface NativeRowsOf {
+  rows: readonly ReportedSession[]
+  sessions: ReadonlySet<string>
+}
+
 /** Recomputed at most this often while things change, and at least this often regardless (a rename, a move's step). */
 const REPORT_MS = 1_000
-const SWEEP_MS = 30_000
+/**
+ * The whole list is worked out again at least this often, the safety net for what changes without an event: every
+ * change that has one (a batch, a native session's write or row, a move, an archive, a rename) reworks its own rows, or
+ * the whole list for a structural one, as it comes.
+ */
+export const SWEEP_MS = 5 * 60_000
 /** A change is reported this soon after it, the first in a quiet stretch; the tick then paces the rest. */
 const SOON_MS = 200
 /** How long a change to a row's Fins alone waits for others with it: one report for a burst of steps. */
@@ -505,7 +516,7 @@ export const REPORT_WORK = "tell the account this host's Sessions"
 /**
  * What a host tells the cloud of its Sessions, on whichever link it serves: the list's rows when they change (a change a
  * list shows, on the next turn of the event loop; any other within `SOON_MS` of the first, then at most once a second;
- * nothing while nothing does; a sweep every half minute catches what moves without an event), and a conversation's live
+ * nothing while nothing does; a whole reconcile every `SWEEP_MS` catches what moves without an event), and a conversation's live
  * updates while another device watches it. A Mac and a cloud machine run the same one. What's watched belongs to the link it was
  * said on, so a reconnect never carries an old link's watchers onto a new one.
  */
@@ -513,6 +524,7 @@ export class SessionPublisher {
   readonly #reporter = new SessionReporter()
   readonly #rows: () => readonly ReportedSession[] | undefined
   readonly #rowsOf: ((conversations: ReadonlySet<string>) => readonly ReportedSession[] | undefined) | undefined
+  readonly #rowsOfNative: ((paths: ReadonlySet<string>) => NativeRowsOf | undefined) | undefined
   readonly #now: () => number
   #current: SessionLink | undefined
   /** The link the last report went out on: a link not reported on yet is told every row. */
@@ -525,12 +537,18 @@ export class SessionPublisher {
    * again (`rowsOf`). Every batch of every working conversation is one, so the whole list isn't rebuilt each second.
    */
   readonly #touched = new Set<string>()
+  /**
+   * Native sessions, by path, whose writes or catalog rows moved since the last report: only their rows are worked out
+   * again (`rowsOfNative`). A day of agents writes several a second; each once reworked the whole list.
+   */
+  readonly #touchedNative = new Set<string>()
   #reportedAt = Number.NEGATIVE_INFINITY
   /** When the whole list was last worked out: at least every `SWEEP_MS`, for what moves without an event. */
   #wholeAt = Number.NEGATIVE_INFINITY
   #listed: readonly ReportedSession[] | undefined
   readonly #reportNow: (() => void) | undefined
   readonly #sent: (() => void) | undefined
+  readonly #rowsSent: (() => void) | undefined
   readonly #work: Pick<HostWork, "run">
   readonly #schedule: (run: () => void, afterMs: number) => void
   #soonAsked = false
@@ -569,6 +587,13 @@ export class SessionPublisher {
      */
     rowsOf?: (conversations: ReadonlySet<string>) => readonly ReportedSession[] | undefined
     /**
+     * The rows of these native sessions alone, by path, as `rows` would make them (a native session's row, or the
+     * conversation of this host that opens it), and every Session they stand for, listed or not: a native session's write
+     * reworks its own rows, never the whole list. Undefined when it can't tell (a session gone from the sync window),
+     * and the whole list is worked out instead. Without it, each such change reworks the whole list.
+     */
+    rowsOfNative?: (paths: ReadonlySet<string>) => NativeRowsOf | undefined
+    /**
      * What a list shows of one conversation now (`conversationShown`), read when its batch comes: a batch that moved it
      * is reported on the next turn of the event loop. Without it, every batch waits for the tick.
      */
@@ -584,16 +609,20 @@ export class SessionPublisher {
      * while (`CloudLink.probeIfSilent`), so a stalled link the owner sends into is replaced in seconds.
      */
     sent?: () => void
+    /** Rows that changed went to the account: what follows the list (its Sessions' uploads) looks again now. */
+    rowsSent?: () => void
     /** Names the early report as the tick's job is named (`REPORT_WORK`), so what it reads in is counted to it. */
     work?: Pick<HostWork, "run">
     schedule?: (run: () => void, afterMs: number) => void
   }) {
     this.#rows = options.rows
     this.#rowsOf = options.rowsOf
+    this.#rowsOfNative = options.rowsOfNative
     this.#shown = options.shown
     this.#now = options.now ?? Date.now
     this.#reportNow = options.reportNow
     this.#sent = options.sent
+    this.#rowsSent = options.rowsSent
     this.#work = options.work ?? { run: (_label, fn) => fn() }
     this.#schedule = options.schedule ?? ((run, afterMs) => setTimeout(run, afterMs).unref?.())
     this.#n = this.#now()
@@ -610,6 +639,31 @@ export class SessionPublisher {
    */
   changed(): void {
     this.#dirty = true
+    const reportNow = this.#reportNow
+    if (this.#soonAsked || !reportNow || !this.#current) return
+    this.#soonAsked = true
+    this.#schedule(() => {
+      this.#soonAsked = false
+      this.#work.run(REPORT_WORK, reportNow)
+    }, SOON_MS)
+  }
+
+  /**
+   * A conversation of this host moved as a list shows it with no batch of its own (its work started, settled or ended):
+   * its row alone is worked out again, on the next turn of the event loop.
+   */
+  conversationMoved(conversation: string): void {
+    this.#touched.add(conversation)
+    this.#rowShowsChanged()
+  }
+
+  /**
+   * A native session moved (its file was written, its catalog row changed): its rows alone are reported soon, as
+   * `changed` reports, without working the whole list out again.
+   */
+  nativeChanged(path: string): void {
+    if (!this.#rowsOfNative) return this.changed()
+    this.#touchedNative.add(path)
     const reportNow = this.#reportNow
     if (this.#soonAsked || !reportNow || !this.#current) return
     this.#soonAsked = true
@@ -650,14 +704,17 @@ export class SessionPublisher {
     this.#current = current
     if (!current || current.served.version < SESSIONS_VERSION) return
     const now = this.#now()
-    const changed = this.#dirty || this.#touched.size > 0
+    const changed = this.#dirty || this.#touched.size > 0 || this.#touchedNative.size > 0
     if (!this.#urgent && (now - this.#reportedAt < REPORT_MS || (!changed && now - this.#reportedAt < SWEEP_MS))) return
-    const some = this.#dirty || now - this.#wholeAt >= SWEEP_MS ? undefined : this.#withRowsOf(this.#touched)
+    const whole = this.#dirty || now - this.#wholeAt >= SWEEP_MS
+    let some = whole ? undefined : this.#touched.size ? this.#withRowsOf(this.#touched) : this.#listed
+    if (some && this.#touchedNative.size) some = this.#withNativeRows(some, this.#touchedNative)
     const all = some ?? this.#rows()
     if (!all) return
     if (!some) this.#wholeAt = now
     this.#listed = all
     this.#touched.clear()
+    this.#touchedNative.clear()
     const rows = rowsForLink(all, current.served.version)
     this.#dirty = false
     this.#urgent = false
@@ -669,12 +726,35 @@ export class SessionPublisher {
     })
     if (!reports.length) return
     for (const report of reports) report.reportedAt = new Date(now).toISOString()
-    if (reports.every((report) => current.served.sessions(report))) this.#reporter.sent(rows)
-    else {
+    if (reports.every((report) => current.served.sessions(report))) {
+      this.#reporter.sent(rows)
+      this.#rowsSent?.()
+    } else {
       // Told again in full on the next tick, as a new link is.
       this.#reporter.forget()
       this.#reportedLink = undefined
     }
+  }
+
+  /**
+   * `listed` with the rows of these native sessions worked out again: every row of a Session they stand for goes, and
+   * their rows as they are now take its place. Undefined when it can't be (`rowsOfNative` can't tell), and the whole
+   * list is worked out instead.
+   */
+  #withNativeRows(listed: readonly ReportedSession[], paths: ReadonlySet<string>): readonly ReportedSession[] | undefined {
+    const fresh = this.#rowsOfNative?.(paths)
+    if (!fresh) return undefined
+    const bySession = new Map(fresh.rows.map((row) => [row.session, row]))
+    const rows: ReportedSession[] = []
+    for (const row of listed) {
+      const again = bySession.get(row.session)
+      if (again) {
+        rows.push(again)
+        bySession.delete(row.session)
+      } else if (!fresh.sessions.has(row.session)) rows.push(row)
+    }
+    rows.push(...bySession.values())
+    return rows
   }
 
   /**

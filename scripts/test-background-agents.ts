@@ -1,5 +1,5 @@
+import { runCases } from "./lib/cases.ts"
 import assert from "node:assert/strict"
-import "./test-internal-native-agents.ts"
 import { spawn } from "node:child_process"
 import { mock } from "node:test"
 import { randomUUID } from "node:crypto"
@@ -2202,51 +2202,53 @@ async function ownSessionIsNoChild(): Promise<void> {
 }
 
 try {
-  statesAndEntries()
-  rosterAndLists()
-  uploadsFollowParents()
-  storeKeeps()
-  readOnlyStoreVersion()
-  await startsAndWakes()
-  await explicitReports()
-  await refusals()
-  await finLimit()
-  await afterOrder()
-  await slotsGoAtOnce()
-  await launchesBeforeTheirEdge()
-  await stopHoldsUntilCancelled()
-  await followedStopHoldsUntilExit()
-  await linkTellsUnreadableFromGone()
-  await followedStopUnknownIdentity()
-  await followedStopStaleIdentity()
-  await followedStopStuck()
-  await queueProjection()
-  await edgeWriteMovesTheLine()
-  await harnessLadders()
-  await accessFits()
-  await stopAllUnqueues()
-  await unreadableQueuedStarts()
-  await finReadingsLoadNothing()
-  settingsFollowTheBinding()
-  await startedFinsOldQueueRow()
-  await finsAtWorkByBinding()
-  await stoppedApexHolds()
-  await listsReadNoJournal()
-  await activityTellsNoOne()
-  await progressGoesWhereItsRead()
-  await finsMoveInTheNewestSession()
-  await anySessionAsks()
-  await aSessionNeedsYou()
-  await followsShellRuns()
-  await relinkedRuns()
-  await messagesReachLinkedRuns()
-  await finModels()
-  await limitedHarnesses()
-  await finRules()
-  await apexStops()
-  await staleEndsStayOut()
-  await waitingFins()
-  await ownSessionIsNoChild()
+  await runCases([
+    statesAndEntries,
+    rosterAndLists,
+    uploadsFollowParents,
+    storeKeeps,
+    readOnlyStoreVersion,
+    startsAndWakes,
+    explicitReports,
+    refusals,
+    finLimit,
+    afterOrder,
+    slotsGoAtOnce,
+    launchesBeforeTheirEdge,
+    stopHoldsUntilCancelled,
+    followedStopHoldsUntilExit,
+    linkTellsUnreadableFromGone,
+    followedStopUnknownIdentity,
+    followedStopStaleIdentity,
+    followedStopStuck,
+    queueProjection,
+    edgeWriteMovesTheLine,
+    harnessLadders,
+    accessFits,
+    stopAllUnqueues,
+    unreadableQueuedStarts,
+    finReadingsLoadNothing,
+    settingsFollowTheBinding,
+    startedFinsOldQueueRow,
+    finsAtWorkByBinding,
+    stoppedApexHolds,
+    listsReadNoJournal,
+    activityTellsNoOne,
+    progressGoesWhereItsRead,
+    finsMoveInTheNewestSession,
+    anySessionAsks,
+    aSessionNeedsYou,
+    followsShellRuns,
+    relinkedRuns,
+    messagesReachLinkedRuns,
+    finModels,
+    limitedHarnesses,
+    finRules,
+    apexStops,
+    staleEndsStayOut,
+    waitingFins,
+    ownSessionIsNoChild,
+  ])
   console.log("agents engine: ok")
 } finally {
   rmSync(root, { recursive: true, force: true })
