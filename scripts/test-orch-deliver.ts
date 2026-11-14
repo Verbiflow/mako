@@ -1,3 +1,4 @@
+import { runCases } from "./lib/cases.ts"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -415,10 +416,7 @@ async function siblingRefusalNamesRelay(): Promise<void> {
 }
 
 try {
-  for (const test of [siblingRefusalNamesRelay, notificationDoesNotReportCompletion, notificationsAcrossApexes, oldQueuedKeepsNewerInstructions, aRowCountsItsTurn, idleTakesATurn, queueByDefault, steerAcrossHarnesses, refusedSteerQueues, cursorHoldsASteer, interruptGoesFirst, forwardTakesTheChoice]) {
-    await test()
-    console.log(`ok ${test.name}`)
-  }
+  await runCases([siblingRefusalNamesRelay, notificationDoesNotReportCompletion, notificationsAcrossApexes, oldQueuedKeepsNewerInstructions, aRowCountsItsTurn, idleTakesATurn, queueByDefault, steerAcrossHarnesses, refusedSteerQueues, cursorHoldsASteer, interruptGoesFirst, forwardTakesTheChoice], (name) => console.log(`ok ${name}`))
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

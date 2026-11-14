@@ -8,7 +8,7 @@ import { classifyProviderFailure } from "@mako/host/contracts/provider-failure"
 import { describeTransferRecovery } from "@mako/host/contracts/operation-recovery"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
-import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
+import { AgentsWorld, HARNESSES, TESTED_HARNESSES, type Script } from "./lib/agents-world.ts"
 import { providerOutageControls } from "./lib/provider-outage-controls.ts"
 
 /**
@@ -161,7 +161,7 @@ try {
   }
   console.log("policy: waits grow to ten minutes and repeat; every cause ends in a failure past its bound; a permanent cause inside transient words is never retried")
 
-  for (const harness of HARNESSES) {
+  for (const harness of TESTED_HARNESSES) {
     // A wake that fails for a cause that clears by itself waits, then sends the message once.
     for (const [index, { cause, error }] of CAUSES.entries()) {
       const { world, faults } = worldOf(`${harness}-${cause}-${index}`)

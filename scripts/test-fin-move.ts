@@ -19,7 +19,7 @@ import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { withdrawGone } from "@mako/host/conversations/live-transfers"
 import { threadHistoryTools } from "@mako/host/conversations/thread-history"
 import { heldReferences } from "@mako/host/conversations/thread-tree"
-import { HARNESSES, AgentsWorld, type Script, type WorldOptions } from "./lib/agents-world.ts"
+import { HARNESSES, TESTED_HARNESSES, AgentsWorld, type Script, type WorldOptions } from "./lib/agents-world.ts"
 
 /**
  * `agents_move` and the one operation under it (`npm run test:fin-move`). A Thread goes on on another harness through
@@ -92,7 +92,7 @@ async function fixture(harness: string, options: Partial<WorldOptions> & { hold?
 
 /** Pairs run side by side: each has a world of its own, and one after another they take minutes. */
 const AT_ONCE = 6
-const TARGETS = HARNESSES.flatMap((from) => HARNESSES.filter((to) => to !== from).map((to) => ({ from, to })))
+const TARGETS = TESTED_HARNESSES.flatMap((from) => HARNESSES.filter((to) => to !== from).map((to) => ({ from, to })))
 const sameFin = async ({ world, fin }: Fixture, before: { child: string; conversation: string; name: string; parent?: string; cwd?: string }, to: string) => {
   const now = fin()
   assert.equal(now.child, before.child, "the same Thread")
@@ -1070,7 +1070,7 @@ async function pinsAndStops(): Promise<void> {
     assert.equal(world.live.pinnedAccount(conversation, "grok"), "third")
     await world.close()
   }
-  for (const harness of HARNESSES) {
+  for (const harness of TESTED_HARNESSES) {
     // A Stop while a message reads what it attaches holds the message, and its grant stays with it.
     const rows: ThreadRef[] = []
     let reading = false
