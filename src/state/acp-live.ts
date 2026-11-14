@@ -22,7 +22,7 @@ import {
 import { setThreadAttention, setThreadRunning, threadsStore } from "@/state/threads"
 import { describeProviderFailure } from "@mako/host/contracts/provider-failure"
 import { autoContinuePending } from "@/state/prompt-delivery"
-import { signInPause } from "@mako/host/contracts/sign-in-hold"
+import { signInPause, signInResuming } from "@mako/host/contracts/sign-in-hold"
 import { agentAskLine } from "@mako/host/contracts/agent-asks"
 import { agentAskOf } from "@/state/agent-asks"
 import { asks, requestWaiting, type Waiting } from "@mako/host/contracts/notifications"
@@ -111,6 +111,7 @@ const listedAsks = new Map<string, string>()
 /** A session paused on a sign-out waits on the person, like a question; it hasn't failed. */
 function signedOutDetail(conversation: LiveAcpConversation): string {
   const pause = signInPause(conversation.requests ?? [])
+  if (pause?.hold.ready) return `${harnessLabel(conversation.harness)} signed in again. Resume when you want this work to continue.`
   if (pause?.hold.verification !== undefined && !conversation.requests?.some(request => request.signIn && request.pause === "stop"))
     return `${harnessLabel(conversation.harness)} signed out. Sign in once in Settings; held work resumes automatically.`
   return `${harnessLabel(conversation.harness)} signed out. Sign in again, then Resume.`
@@ -147,7 +148,8 @@ function noteLiveOutcome(
     announcedOwnAsks.set(conversation.key, notice)
     noteOutcome({ kind: waiting.for, subject, marker: own.id, detail: waiting.line, quiet })
   }
-  const pause = own ? undefined : signInPause(conversation.requests ?? [])
+  const heldSignIn = signInPause(conversation.requests ?? [])
+  const pause = own || heldSignIn?.hold.ready ? undefined : heldSignIn
   const signIn = announcedSignIns.get(conversation.key)
   const signInGeneration = pause && (pause.hold.id ?? String(pause.hold.at))
   if (signIn && signIn.generation !== signInGeneration) retireSignIn(conversation.key)
@@ -157,6 +159,7 @@ function noteLiveOutcome(
     for (const id of liveSubjectIds(conversation.key, conversation.threadPath)) retireSubject(id)
     return
   }
+  if (heldSignIn?.hold.ready) return
   if (pause) {
     if (signIn?.generation !== signInGeneration) {
       // One account owns one sign-in notice while any member still waits.
@@ -281,6 +284,8 @@ export function syncThreadStatus(
   origin: "event" | "hydrate" = "event"
 ): void {
   const { session, threadPath, queued } = conversation
+  const pause = signInPause(conversation.requests ?? [])
+  const resuming = session.status !== "closed" && signInResuming(pause, conversation.requests ?? [])
   noteLiveOutcome(conversation, previousStatus, origin === "hydrate")
   if (previousPath && previousPath !== threadPath) {
     setThreadRunning(previousPath, false)
@@ -291,7 +296,7 @@ export function syncThreadStatus(
     threadPath,
     session.status === "running" ||
       session.status === "starting" ||
-      autoContinuePending(conversation.requests)
+      autoContinuePending(conversation.requests) || resuming
   )
   if (session.status === "closed") {
     setThreadAttention(threadPath, null)
@@ -305,11 +310,10 @@ export function syncThreadStatus(
     })
     return
   }
-  if (session.status === "running" || autoContinuePending(conversation.requests)) {
+  if (session.status === "running" || autoContinuePending(conversation.requests) || pause?.hold.ready) {
     setThreadAttention(threadPath, null)
     return
   }
-  const pause = signInPause(conversation.requests ?? [])
   if (pause) {
     setThreadAttention(threadPath, { kind: "needs-permission", since: pause.hold.at, detail: signedOutDetail(conversation) })
     return

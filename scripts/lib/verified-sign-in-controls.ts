@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { mkdir, writeFile } from "node:fs/promises"
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { mock } from "node:test"
@@ -16,6 +16,10 @@ import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { VerifiedSignIn } from "@mako/host/harnesses"
 import { LiveJournal, JournalWriteError } from "@mako/host/conversations/live-journal"
 import { followHostLog, type HostLogLine } from "@mako/host/base/host-log"
+import { AccountLogins } from "@mako/host/harnesses/account-login"
+import { HostJobs } from "@mako/host/base/host-jobs"
+import { AgentsWorld } from "./agents-world.ts"
+import { LiveRecords } from "@mako/host/conversations/live-records"
 
 async function until(check: () => boolean, label: string): Promise<void> {
   const end = performance.now() + 5_000
@@ -24,10 +28,12 @@ async function until(check: () => boolean, label: string): Promise<void> {
 
 /** Real account verification, journal release and native dispatch; all credentials and transports are synthetic. */
 export async function verifiedSignInControls(root: string): Promise<void> {
+  await receiptFailureControl(root)
+  await finProjectionControl(root)
   const descriptors = createHarnessHost(detachedHarnessContext(new NativeStores(false)))
   const original = descriptors.liveDrivers.get("claude")
   assert.ok(original)
-  for (const control of ["cohort", "restart-gap", "stop", "close", "archive", "unknown", "empty", "new-generation", "wrong-account", "verification-fails", "room", "store-fault", "principal-changed", "unverified", "legacy-receipt", "reopening", "bad-listener", "manual-stop", "manual-overlap", "baseline-overlap", "start-restart-gap"] as const) {
+  for (const control of ["cohort", "restart-gap", "stop", "close", "archive", "unknown", "empty", "new-generation", "wrong-account", "verification-fails", "room", "store-fault", "principal-changed", "unverified", "legacy-receipt", "reopening", "bad-listener", "manual-stop", "manual-overlap", "baseline-overlap", "start-restart-gap", "ready-stop", "readmission"] as const) {
     const folder = join(root, `verified-${control}`)
     await mkdir(folder, { recursive: true })
     const nativePath = join(folder, "native")
@@ -79,13 +85,14 @@ export async function verifiedSignInControls(root: string): Promise<void> {
     })
     host.liveDrivers.register({ ...original, provider, available: () => true, nativeSource: undefined,
       start: async (_cwd, options) => {
-        if ((control === "baseline-overlap" || control === "start-restart-gap") && accountOut.has("one")) throw new Error("Failed to authenticate: OAuth session expired and could not be refreshed")
+        if ((control === "baseline-overlap" || control === "start-restart-gap" || control === "readmission") && accountOut.has("one")) throw new Error("Failed to authenticate: OAuth session expired and could not be refreshed")
         if (control === "reopening" && sent.length > 0) {
           reopening = true
           await new Promise<void>(resolve => { releaseOpen = resolve })
         }
         const account = options.accountLaunch.account
         const context = launchContext("fixture", { kind: "reported", via: "fixture" }, account)
+        if (control === "principal-changed") context.identity = { kind: "reported", principal: changedPrincipal ? "another@example.test" : "one@example.test", backend: "fixture-backend", via: "fixture" }
         context.store = { kind: "located", path: nativePath }
         const session: LiveSessionState = { id: options.conversationId, harness: provider, nativeId: options.resume ?? `native-${options.conversationId}`, nativePath, cwd: folder, status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [], executionContext: context }
         sessions.set(session.id, session)
@@ -135,12 +142,23 @@ export async function verifiedSignInControls(root: string): Promise<void> {
       signInAllowed: () => allowed,
       agents: () => ({ mayWake: () => room, roster: () => [], stopChild: async () => false, settled: () => {}, isApex: () => false, frontDoor: () => [], ruleLines: () => ({}) }),
     }
+    const load = LiveRecords.prototype.loadSliced
+    let replace = control === "readmission"
+    const admission = control === "readmission" ? mock.method(LiveRecords.prototype, "loadSliced", async function(this: LiveRecords, ...args: Parameters<typeof load>) {
+      const resident = await load.call(this, ...args)
+      if (replace && resident && host.accounts.signInProof(provider, "one")) {
+        replace = false
+        assert.equal(this.release(args[0]), true, "the actual memory owner can release an idle refused-start resident")
+        assert.notEqual(this.load(args[0]), resident, "the journal has a new resident generation")
+      }
+      return resident
+    }) : undefined
     let live = new LiveConversations(dependencies)
     const waits: { id: string; cut: string; queued: string[] }[] = []
     async function held(account = "one", existing?: string) {
       await host.accounts.select(provider, account)
       const id = existing ?? randomUUID()
-      if (control === "baseline-overlap" || control === "start-restart-gap") {
+      if (control === "baseline-overlap" || control === "start-restart-gap" || control === "readmission") {
         const cut = randomUUID()
         const queued = [cut, randomUUID(), randomUUID()]
         await live.start(provider, folder, { conversationId: id, initialRequest: { id: cut, text: `Held message ${cut} 0`, attachments: [] } })
@@ -175,7 +193,7 @@ export async function verifiedSignInControls(root: string): Promise<void> {
       if (control === "stop") for (const { id } of waits) live.stopHolds(id)
       if (control === "close") for (const { id } of waits) await live.close(id)
       if (control === "archive") { allowed = false; for (const { id } of waits) live.setArchived(id, true) }
-      if (control === "room") room = false
+      if (control === "room" || control === "ready-stop") room = false
       if (control === "verification-fails") {
         rejectVerification = true
         await assert.rejects(login(), /Fixture verification rejected/)
@@ -224,8 +242,15 @@ export async function verifiedSignInControls(root: string): Promise<void> {
         assert.equal(live.snapshot(item.id)!.requests.find(row => row.id === request)?.status, "queued", "input during reopen remains durable unsent work")
         releaseOpen!()
       }
-      if (control === "principal-changed" || control === "unverified") {
-        assert.equal(host.accounts.signInProof(provider, "one"), undefined, "a different principal or unverified listing grants no automatic release")
+      if (control === "principal-changed") {
+        assert.ok(host.accounts.signInProof(provider, "one"), "native login is a fact, not a grant to resume under another identity")
+        await until(() => live.session(waits[0]!.id)?.error?.includes("different native identity") === true, "the actual native recovery guard refuses the changed principal")
+        assert.equal(sent.length, 1, "the reopened process receives no model prompt under another native principal")
+        assert.ok(waits[0]!.queued.every(request => live.snapshot(waits[0]!.id)!.requests.find(row => row.id === request)?.status !== "completed"))
+        continue
+      }
+      if (control === "unverified") {
+        assert.equal(host.accounts.signInProof(provider, "one"), undefined, "an unverified listing grants no automatic release")
         await delay(30)
         assert.equal(sent.length, 1)
         assert.ok(signInPause(live.snapshot(waits[0]!.id)!.requests))
@@ -251,10 +276,24 @@ export async function verifiedSignInControls(root: string): Promise<void> {
         assert.equal(sent.length, 1, "the refusal survives restart")
         continue
       }
-      if (control === "room") {
+      if (control === "room" || control === "ready-stop") {
         await delay(30)
         assert.equal(sent.length, 1, "no execution place yet")
         assert.ok(signInPause(live.snapshot(waits[0]!.id)!.requests))
+        assert.equal(signInPause(live.snapshot(waits[0]!.id)!.requests)?.hold.ready, lastReceipt?.id, "verified sign-in is visible while execution capacity still holds work")
+        const stableRevision = live.snapshot(waits[0]!.id)!.revision
+        notify!(lastReceipt!); notify!(lastReceipt!)
+        await delay(30)
+        assert.equal(live.snapshot(waits[0]!.id)!.revision, stableRevision, "duplicate login receipts create no repeated status commits or wakes")
+        if (control === "ready-stop") {
+          live.stopHolds(waits[0]!.id); room = true; live.wakeDue()
+          await delay(30)
+          assert.equal(sent.length, 1, "a Stop after verification defeats later capacity recovery")
+          continue
+        }
+        await live.stop(); live = new LiveConversations(dependencies)
+        await delay(30)
+        assert.equal(signInPause(live.snapshot(waits[0]!.id)!.requests)?.hold.ready, lastReceipt?.id, "the verified pending phase survives restart")
         room = true; live.wakeDue()
       }
       if (control === "wrong-account") {
@@ -288,9 +327,81 @@ export async function verifiedSignInControls(root: string): Promise<void> {
           assert.equal(sent.filter(row => row.id === item.id && row.text === `Held message ${item.cut} ${index}`).length, 1)
         }
         const continuations = live.snapshot(item.id)!.requests.filter(row => row.continues?.requestId === item.cut)
-        assert.equal(continuations.length, control === "unknown" || control === "baseline-overlap" || control === "start-restart-gap" ? 0 : 1, "unknown acceptance is never replayed; an unsent first request is sent once")
+        assert.equal(continuations.length, control === "unknown" || control === "baseline-overlap" || control === "start-restart-gap" || control === "readmission" ? 0 : 1, "unknown acceptance is never replayed; an unsent first request is sent once")
       }
-    } finally { releaseRead?.(); releaseOpen?.(); await live.stop(); fault?.mock.restore(); stopLog(); stopBadListener?.(); unregister() }
+    } finally { releaseRead?.(); releaseOpen?.(); await live.stop(); fault?.mock.restore(); admission?.mock.restore(); stopLog(); stopBadListener?.(); unregister() }
   }
   console.log("PASS: one verified same-principal login recovers every matching held session once; reset/receipt generations, restart gap, unknown delivery, account, Stop/Close/archive and execution room are fenced")
+}
+
+async function finProjectionControl(root: string): Promise<void> {
+  const folder = join(root, "verified-fin-projection")
+  let wait = false
+  const options = { root: folder, script: async (turn: import("./agents-world.ts").ScriptedTurn) => {
+    if (!wait && turn.text.includes("Fin auth input")) { wait = true; await turn.world.hold(turn.conversation) }
+    return "Fixture result"
+  } }
+  let world = new AgentsWorld(options)
+  try {
+    const apex = await world.apex("codex")
+    const start = await world.agents.start(apex.caller, { brief: { objective: "Fixture work" }, harness: "claude", name: "worker", cwd: folder, clientKey: "start" })
+    assert.ok(!("refused" in start) && start.conversation && start.child)
+    const id = start.conversation
+    await until(() => world.live.snapshot(id)?.requests.at(-1)?.status === "completed", "Fin starts")
+    await world.agents.send(apex.caller, { to: "worker", text: "Fin auth input", clientKey: "auth" })
+    await until(() => world.live.session(id)?.status === "running", "Fin turn runs")
+    world.endWith(id, { fail: "Failed to authenticate: OAuth session expired and could not be refreshed" }); world.release(id)
+    await until(() => Boolean(signInPause(world.live.snapshot(id)!.requests)), "Fin has a sign-in hold without another queued message")
+    const state = () => world.agents.roster(apex.conversation).find(entry => entry.child?.thread === start.child)?.child?.state
+    assert.equal(state()?.kind, "blocked", "an accepted cut with no queued messages still needs sign-in")
+    await world.close()
+    const journal = new LiveJournal(join(folder, "journals"), id)
+    try {
+      const saved = journal.read()!
+      journal.commit({ ...saved, requests: saved.requests.map(request => request.signIn ? { ...request, signIn: { ...request.signIn, ready: randomUUID(), verification: 0 } } : request) }, saved)
+    } finally { journal.close() }
+    // A retained typed fixture, loaded through the actual reader. No proof dependency authorizes native execution here.
+    world = new AgentsWorld(options)
+    await world.live.readIn(id)
+    const restored = state()
+    assert.ok(restored?.kind === "working")
+    assert.match(restored.step ?? "", /execution place/)
+    assert.equal(world.live.atWork(id), false, "pending recovery holds no execution slot")
+  } finally { await world.close() }
+}
+
+/** A local recovery-record failure occurs after native authentication succeeded, so its caller must not undo that login. */
+async function receiptFailureControl(root: string): Promise<void> {
+  const folder = join(root, "verified-receipt-write-failure")
+  const host = createProviderHost({ userRoot: folder })
+  const provider = "receipt-failure-fixture"
+  let verified = 0, abandoned = 0, removed = 0
+  const unregister = host.accountCapabilities.register({
+    provider, mode: "selectable", label: "Fixture", loginCommand: "fixture", nativeLogin: true,
+    listAccounts: async () => [{ harness: provider, name: "one", dir: folder, active: true, source: "mako", route: "managed", email: "one@example.test" }],
+    accountEnv: async (_name, base) => ({ ...base, HOME: folder }), selectedAccount: name => ({ name: name ?? "one", dir: folder }),
+    credentialRevision: async () => "same-principal", accountUsage: async () => ({ status: "unavailable" }),
+    captureAccount: async () => {}, removeAccount: async () => { removed++; return {} },
+    prepareAccountLogin: async () => ({ kind: "task", run: async () => { verified++ } }),
+    confirmAccountLogin: async () => { verified++ }, abandonAccountLogin: async () => { abandoned++ },
+  })
+  // A directory at the metadata file path, only inside this fixture, makes its publication fail.
+  await mkdir(join(host.accounts.root.path, "sign-ins", `${provider}.json`), { recursive: true })
+  const jobs = new HostJobs()
+  const logins = new AccountLogins(host.accounts, jobs)
+  try {
+    for (const [index, renew] of ["one", undefined].entries()) {
+      await assert.rejects(async () => { const login = await logins.start(provider, renew); await logins.wait(login.id) }, /record|receipt/)
+      assert.equal(verified, index + 1, "the provider already verified each login")
+      assert.equal(abandoned, 0, "ancillary receipt failure cannot abandon verified credentials")
+      assert.equal(removed, 0, "a newly verified account is not deleted")
+    }
+    const path = join(host.accounts.root.path, "sign-ins", `${provider}.json`)
+    await rm(path, { recursive: true })
+    const future = JSON.stringify({ version: 2, sequence: 50, future: "preserve fixture", accounts: {} })
+    await writeFile(path, future)
+    await assert.rejects(async () => { const login = await logins.start(provider, "one"); await logins.wait(login.id) }, /receipt/)
+    assert.equal(await readFile(path, "utf8"), future, "a newer receipt store is preserved, never reset or overwritten")
+    assert.equal(abandoned + removed, 0)
+  } finally { await logins.stop(); jobs.stop(); unregister() }
 }

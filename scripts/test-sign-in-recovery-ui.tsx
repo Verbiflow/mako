@@ -162,6 +162,22 @@ syncThreadStatus({ ...cohortOne, session: { ...cohortOne.session, status: "ready
 syncThreadStatus(outage("third-outage"), "running")
 assert.equal(cohortNotices().length, 2, "a later sign-out is announced even after the prior notice was read and no verified receipt changed")
 
+const recoveredRequests = automatic.map(request => request.signIn ? { ...request, signIn: { ...request.signIn, ready: "00000000-0000-4000-8000-000000000001" } } : request)
+const recovered = { ...signedOut, key: "verified-room", threadPath: "/sessions/verified-room", session: { ...signedOut.session, id: "verified-room" }, requests: recoveredRequests }
+acpStore.set({ activeKey: undefined, conversations: { [recovered.key]: recovered } })
+syncThreadStatus(recovered, "failed")
+assert.equal(selectAcpPresence(acpStore.get()).find(item => item.key === recovered.key)?.status, "running", "verified recovery awaiting execution room no longer needs sign-in")
+assert.equal(threadsStore.get().attention[recovered.threadPath], undefined)
+assert.equal(notificationsStore.get().items.some(item => item.subject.id === `thread:${recovered.threadPath}` && (item.kind === "needs-you" || item.kind === "failed")), false)
+assert.match(render(recoveredRequests), /Held work resumes automatically as execution places become available/)
+assert.doesNotMatch(render(recoveredRequests), />Sign in again</)
+const stoppedRecovery = { ...recovered, requests: recoveredRequests.map(request => ({ ...request, pause: "stop" as const })) }
+acpStore.set({ activeKey: undefined, conversations: { [recovered.key]: stoppedRecovery } })
+syncThreadStatus(stoppedRecovery, "failed")
+assert.equal(selectAcpPresence(acpStore.get()).find(item => item.key === recovered.key)?.status, "ready", "a Stop after verification is paused work, not a new sign-in ask")
+assert.equal(notificationsStore.get().items.some(item => item.subject.id === `thread:${recovered.threadPath}` && (item.kind === "needs-you" || item.kind === "failed")), false)
+assert.match(render(stoppedRecovery.requests), />Resume</)
+
 // Removing an account whose key Cursor still accepts says so, with when it lapses.
 const removal = removalNotice("Cursor", { reason: "Cursor couldn't be reached (fetch failed)", expiresAt: "2026-11-03T12:00:00.000Z", manageUrl: "https://cursor.com/dashboard?tab=integrations" })
 assert.equal(removal.title, "Cursor still accepts this account's key")

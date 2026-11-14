@@ -134,6 +134,7 @@ import { KeyedAdmission } from "../base/keyed-admission.js"
 import type { FinAtWork } from "./fin-cost-sampler.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
 import { resetWords, type HarnessLimit } from "../contracts/account-usage.js"
+import { signInPause, signInResuming } from "../contracts/sign-in-hold.js"
 import { FIN_LIMIT, finPolicyNote, placeFull, roleRuleLines, type RoleRuleLines, type CloudFinLimits, type FinPlaceLimit, FinTuningSourceSchema, finTuningLine, finTuningWords, resolveFinTuning, type FinPolicy, type FinTarget, type FinTuningSource } from "../contracts/fin-tuning.js"
 import { AFTER_LIMIT, ASK_OPTIONS, type FinAsk, type NativeAgent } from "../contracts/native-agents.js"
 import type { PendingAsk } from "../contracts/live-questions.js"
@@ -4343,8 +4344,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     // A provider reset keeps logical work pending without taking an execution place.
     const reset = !busy && !waiting ? held?.requests.find(request => request.status === "held" && request.pause !== "stop" && request.retry?.cause === "rate-limited" && request.continues?.auto) : undefined
     const resetWait = reset?.retry && `${this.deps.harnessLabel(session.harness)}'s usage limit to reset at ${resetWords(reset.retry.until ?? reset.retry.at, this.now())}`
+    const signedInWait = !busy && !waiting && held && signInResuming(signInPause(held.requests), held.requests)
+      ? `${this.deps.harnessLabel(session.harness)} to resume after sign-in when an execution place opens` : undefined
     // A turn that ended on its own Fins' work or its move is still at work, on that.
-    const waits = resetWait || (!busy && !waiting && last?.status === "completed" ? this.waitsOn(edge, conversation) : undefined)
+    const waits = resetWait || signedInWait || (!busy && !waiting && last?.status === "completed" ? this.waitsOn(edge, conversation) : undefined)
     const working = busy || waits !== undefined
     const workSince = waits ? held?.activityAt : last && (last.dispatchedAt ?? last.createdAt)
     const thread = this.store()?.thread(edge.child)
@@ -6095,14 +6098,22 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /** A person's hold ahead of unsent work: a saved message is not a turn, nor the Fin's old completed task. */
   private messageHold(conversation: string): string | undefined {
-    for (const request of this.deps.live.held(conversation)?.requests ?? []) {
+    const requests = this.deps.live.held(conversation)?.requests ?? []
+    const signIn = signInPause(requests)
+    const resuming = signInResuming(signIn, requests)
+    // The accepted cut itself is pending work even when no later message was queued.
+    if (signIn && !resuming) {
+      if (signIn.hold.ready) return "its work is paused. Resume it in its Thread when you want it to continue."
+      return signIn.hold.verification !== undefined && !requests.some(request => request.signIn && request.pause === "stop")
+        ? "its account is signed out. Sign in once in Settings; held work resumes automatically."
+        : "its account is signed out. Sign in and Resume in its Thread."
+    }
+    for (const request of requests) {
       if (request.status === "queued") return undefined
       const hold = holdOf(request)
       if (!hold || !keepsLine(hold)) continue
       if (hold.kind === "edit") return "a message is paused for editing. Resume it in its Thread."
-      if (hold.kind === "sign-in") return hold.hold.verification !== undefined && request.pause !== "stop"
-        ? "its account is signed out. Sign in once in Settings; held work resumes automatically."
-        : "its account is signed out. Sign in and Resume in its Thread."
+      if (hold.kind === "sign-in" && resuming) return undefined
       if (hold.kind === "paused") return "a message is paused. Resume it in its Thread."
       return undefined
     }

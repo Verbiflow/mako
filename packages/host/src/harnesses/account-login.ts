@@ -23,6 +23,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { homedir } from "node:os"
 import type { AccountHarness, AccountLogin, AccountLoginResult } from "../contracts/accounts.js"
 import type { HarnessAccounts } from "./accounts.js"
+import { SignInRecoveryWriteError } from "./account-sign-ins.js"
 import { environmentForExecutable } from "../base/executable.js"
 import type { AccountLoginCommand, AccountLoginTarget, AccountLoginTask } from "./account-capability.js"
 import { endProviderProcess, spawnProviderProcess } from "./provider-process.js"
@@ -310,7 +311,7 @@ export class AccountLogins {
           return await this.accounts.finishLogin(harness, target, options)
         } catch (failure) {
           // A finish may already have published its credentials. A quit must never remove that result.
-          if (!this.closing) await this.accounts.discardLogin(harness, target).catch(() => {})
+          if (!this.closing && !(failure instanceof SignInRecoveryWriteError)) await this.accounts.discardLogin(harness, target).catch(() => {})
           throw this.closing ? signInStopped() : failure
         }
       } finally {

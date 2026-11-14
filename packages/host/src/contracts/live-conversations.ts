@@ -260,6 +260,8 @@ export interface SignInHold {
   id?: string
   /** The provider's verified login sequence when it failed, including before a first launch named its account. Absent is legacy/unmanaged. */
   verification?: number
+  /** A verified login already admitted recovery; the queue still waits for execution room. Never an admission credential. */
+  ready?: string
   harness: string
   account: string
   credential: string
@@ -269,7 +271,7 @@ export interface SignInHold {
 /** Whether a paused session can resume: the account was signed in again, or another one chosen. */
 export type SignInReadiness = "signed-out" | "ready"
 
-/** What Resume did: `resumed` also answers a pause that had already ended. */
+/** What Resume did: `resumed` includes verified automatic recovery waiting for execution room, and an already-ended pause. */
 export type SignInResume = "resumed" | "signed-out"
 
 /** What keeps a session on its old account while a message waits to switch it. */

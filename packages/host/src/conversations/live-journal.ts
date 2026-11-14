@@ -162,7 +162,7 @@ export const LiveRequestSchema = z.object({
   ownerCheck: z.object({ since: z.number() }).optional(),
   editing: z.literal(true).optional(),
   pause: z.literal("stop").optional(),
-  signIn: z.object({ id: z.string().uuid().optional(), verification: z.number().int().nonnegative().optional(), harness: z.string(), account: z.string(), credential: z.string(), at: z.number() }).optional(),
+  signIn: z.object({ id: z.string().uuid().optional(), verification: z.number().int().nonnegative().optional(), ready: z.string().uuid().optional(), harness: z.string(), account: z.string(), credential: z.string(), at: z.number() }).optional(),
   wake: z.object({ at: z.number(), after: z.string() }).optional(),
   retry: RequestRetrySchema.optional(),
   digest: z.object({ notices: z.array(NoticeSchema), lines: z.array(z.string()).optional(), sentAt: z.number().optional(), heard: z.literal(true).optional(), resting: z.literal(true).optional(), nextTry: z.number().optional() }).optional(),
