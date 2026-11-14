@@ -27,7 +27,7 @@ const OPEN_TURNS = 4
 /** Captures run boundaries before dispatch/queue drain; rewind creates an idle
  * historical fork so no irreversible provider rollback participates in recovery. */
 export class LiveCheckpoints {
-  private readonly preparing = new Set<string>()
+  private readonly preparing = new Map<string, () => void>()
   /** Checkpoints of each conversation under way, a turn's start and its end alike: `checkpointing` while any is. */
   private readonly capturing = new WeakMap<Resident, number>()
   /** The turns last read, newest last, by their two checkpoints. */
@@ -51,7 +51,7 @@ export class LiveCheckpoints {
     run: () => Promise<void>
   ): Promise<void> {
     const snapshots = this.host.dependencies.workspaceSnapshots
-    if (!snapshots && !this.host.dependencies.prepareTurn) return run()
+    if (!snapshots && !this.host.dependencies.workspaceTracking) return run()
     const generation = resident.generation
     return this.prepare(resident, request).then(() => {
       if (
@@ -86,44 +86,35 @@ export class LiveCheckpoints {
     }
   }
 
-  /**
-   * Confirm tracking, then read the baseline. Both share one deadline; a frozen checkpoint releases the send before
-   * it finishes saving, and a deadline releases it with explicit incomplete coverage.
-   */
-  private async prepare(
-    resident: Resident,
-    request: LiveRequest
-  ): Promise<void> {
+  /** Only the content freeze may hold a send, up to the deadline or Stop. Tracking is already under way. */
+  private async prepare(resident: Resident, request: LiveRequest): Promise<void> {
+    const tracking = this.host.dependencies.workspaceTracking?.(resident.snapshot.session.cwd)
+    if (tracking && tracking.kind !== "tracked") {
+      if (tracking.kind !== "outside") this.incomplete(resident, request.id, tracking.reason, tracking.kind === "incomplete" ? "incomplete" : "unavailable")
+      return
+    }
     const release = this.hold(resident)
     const generation = resident.generation
-    this.preparing.add(request.id)
     const began = Date.now()
     let wentAt: number | undefined
+    let canceled = false
     let timer: ReturnType<typeof setTimeout> | undefined
-    const deadline = new Promise<"late">((resolve) => {
+    const stopped = new Promise<"stopped">(resolve => this.preparing.set(request.id, () => { canceled = true; resolve("stopped") }))
+    const deadline = new Promise<"late">(resolve => {
       timer = setTimeout(() => resolve("late"), this.host.dependencies.checkpointWaitMs ?? BEFORE_CHECKPOINT_WAIT_MS)
     })
-    const prepared = (async () => {
-      let tracking: "tracked" | "outside" | undefined
-      try {
-        tracking = await this.host.dependencies.prepareTurn?.(resident.snapshot.session.cwd)
-      } catch (error) {
-        if (generation === resident.generation && wentAt === undefined)
-          this.incomplete(resident, request.id, `The checkout could not be tracked: ${errorMessage({ error })}`)
-        return
-      }
-      // Once sent without tracking, never capture its own edits as its before snapshot.
-      if (wentAt !== undefined) return
-      if (tracking !== undefined && (generation !== resident.generation || resident.snapshot.requests.find(item => item.id === request.id)?.status !== "dispatching")) return
-      await this.capture(resident, request, tracking === "tracked", () => wentAt)
-    })()
+    const prepared = this.capture(resident, request, tracking?.kind === "tracked", () => wentAt, () => canceled)
     void prepared.catch(() => {})
     try {
-      if (await Promise.race([prepared, deadline]) === "late") {
+      const outcome = await Promise.race([prepared, deadline, stopped])
+      if (outcome === "late") {
         wentAt = Date.now()
-        if (generation === resident.generation) this.incomplete(resident, request.id, "Tracking or the checkpoint was still waiting when the turn went")
+        if (generation === resident.generation) this.incomplete(resident, request.id, "The checkpoint was still waiting when the turn went")
         hostWarn("checkpoints", "a turn went before preparation finished", { conversation: resident.snapshot.session.id, request: request.id, waitedMs: wentAt - began })
       }
+    } catch (error) {
+      // Attribution and checkpoints record a send, never refuse it.
+      if (generation === resident.generation && !canceled) this.incomplete(resident, request.id, errorMessage({ error }))
     } finally {
       clearTimeout(timer)
       this.preparing.delete(request.id)
@@ -131,11 +122,11 @@ export class LiveCheckpoints {
     }
   }
 
-  private incomplete(resident: Resident, requestId: string, reason: string): void {
+  private incomplete(resident: Resident, requestId: string, reason: string, kind: "incomplete" | "unavailable" = "incomplete"): void {
     resident.snapshot = {
       ...resident.snapshot,
       requests: resident.snapshot.requests.map(item => item.id === requestId ? {
-        ...item, snapshots: { ...item.snapshots, before: { kind: "unavailable", reason }, coverage: { kind: "incomplete", reason } },
+        ...item, snapshots: { ...item.snapshots, before: { kind: "unavailable", reason }, coverage: { kind, reason } },
       } : item),
     }
     this.host.flush(resident)
@@ -145,7 +136,8 @@ export class LiveCheckpoints {
     resident: Resident,
     request: LiveRequest,
     tracked: boolean,
-    wentAt: () => number | undefined
+    wentAt: () => number | undefined,
+    canceled: () => boolean
   ): Promise<void> {
     const snapshots = this.host.dependencies.workspaceSnapshots
     if (!snapshots) {
@@ -162,9 +154,10 @@ export class LiveCheckpoints {
       resolve()
     }))
     const saved = (async () => {
-      await snapshots.assertAvailable(resident.snapshot.session.cwd)
       let before: RunSnapshots["before"]
       try {
+        await snapshots.assertAvailable(resident.snapshot.session.cwd)
+        if (canceled()) return
         const snapshot = await snapshots.beginRun(request.id, resident.snapshot.session.cwd, frozen)
         const sentAt = wentAt()
         const late = sentAt === undefined ? 0 : (heldAt ?? Date.now()) - sentAt
@@ -182,20 +175,21 @@ export class LiveCheckpoints {
         conversation, request: request.id, kind: before.kind, heldMs: heldAt === undefined ? null : heldAt - began,
         savedMs: Date.now() - began, ...sentAt !== undefined && { wentWithoutMs: sentAt - began },
       })
+      if (canceled()) { snapshots.abandonRun(request.id); return }
       if (generation !== resident.generation) return
       resident.snapshot = {
         ...resident.snapshot,
         requests: resident.snapshot.requests.map((item) =>
           item.id === request.id ? { ...item, snapshots: {
             ...item.snapshots, before,
-            coverage: item.snapshots?.coverage?.kind === "incomplete" ? item.snapshots.coverage
+            coverage: item.snapshots?.coverage && item.snapshots.coverage.kind !== "complete" ? item.snapshots.coverage
               : !tracked ? undefined : before.kind === "ready" ? { kind: "complete" } : { kind: "incomplete", reason: before.reason },
           } } : item
         ),
       }
       this.host.flush(resident)
     })()
-    // A failure after the turn went is the request's `before`, said above; one before it fails the start as ever.
+    // A save failure remains on the turn after dispatch; it never rejects the prompt.
     void saved.catch(() => undefined)
     await Promise.race([held, saved])
   }
@@ -218,6 +212,7 @@ export class LiveCheckpoints {
           : item
       ),
     }
+    this.preparing.get(request.id)?.()
     this.host.flush(resident)
     return true
   }

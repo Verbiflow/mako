@@ -20,6 +20,7 @@ import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
 import { GitHelper } from "@mako/host/git/git-helper"
 import { hostSpawn, closeHostChild } from "@mako/host/base/host-command"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+import type { WorkspaceTracking } from "@mako/host/contracts/workspace-snapshots"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
@@ -131,6 +132,16 @@ function finish(id: string, answer: string) {
   owner.observe({ type: "live-session", session: ready })
 }
 try {
+  // Opening the Thread starts tracking even if the person has not sent a message.
+  {
+    owner.stop()
+    const observed: string[] = []
+    owner = new LiveConversations({ ...dependencies, observeWorkspace: (folder: string) => { observed.push(folder) } })
+    await owner.start("test", cwd, { conversationId: randomUUID() })
+    assert.ok(observed.includes(cwd), "tracking starts at Thread open, before a send")
+    owner.stop()
+    owner = new LiveConversations(dependencies)
+  }
   const id = randomUUID(),
     first = randomUUID(),
     second = randomUUID()
@@ -274,10 +285,7 @@ try {
   )
   assert.equal(owner.snapshot(canceledId)?.requests[0].snapshots, undefined)
   await owner.cancelRequest(canceledId, canceledRequest)
-  await until(
-    () =>
-      owner.snapshot(canceledId)?.requests[0].snapshots?.before.kind === "ready"
-  )
+  await until(() => owner.workOf(canceledId) === undefined, 500)
   await new Promise((resolve) => setTimeout(resolve, 30))
   assert.equal(sent.length, 2)
   assert.equal(owner.snapshot(canceledId)?.requests[0].status, "interrupted")
@@ -285,49 +293,44 @@ try {
     "PASS: cancellation during baseline capture never dispatches the prompt"
   )
 
-  // Even tracking that never answers cannot hold a send beyond the shared preparation deadline.
-  {
+  // Pending or failed tracking never makes a send wait for the writer.
+  for (const state of [
+    { kind: "pending", reason: "Tracking has not answered" },
+    { kind: "unavailable", reason: "The writer worker is in failed recovery" },
+    { kind: "unavailable", reason: "track() timed out" },
+    { kind: "incomplete", reason: "Discovery holds more than 12 repositories" },
+  ] satisfies WorkspaceTracking[]) {
     owner.stop()
-    let release = () => {}, captures = 0
-    const tracking = new Promise<void>(resolve => { release = resolve })
-    owner = new LiveConversations({ ...dependencies, checkpointWaitMs: 25, prepareTurn: async () => {
-      await tracking
-      return "tracked" as const
-    } })
+    let captures = 0
+    owner = new LiveConversations({ ...dependencies, checkpointWaitMs: 10_000, workspaceTracking: () => state })
     const timedId = randomUUID(), timedRequest = randomUUID()
     await owner.start("test", cwd, { conversationId: timedId })
     const original = snapshots.beginRun.bind(snapshots)
     const beginRun = mock.method(snapshots, "beginRun", (...args: Parameters<typeof original>) => { captures++; return original(...args) })
     const before = sent.length
     try {
-      owner.submit(timedId, timedRequest, "send despite unavailable tracking")
+      owner.submit(timedId, timedRequest, "send without waiting for attribution")
       await until(() => sent.length === before + 1, 500)
-      assert.equal(owner.snapshot(timedId)?.requests[0].snapshots?.coverage?.kind, "incomplete")
+      const expected = state.kind === "incomplete" ? "incomplete" : "unavailable"
+      assert.equal(owner.snapshot(timedId)?.requests[0].snapshots?.coverage?.kind, expected)
       const reopened = new LiveJournal(dependencies.root, timedId)
-      try { assert.equal(reopened.read()?.requests[0].snapshots?.coverage?.kind, "incomplete", "coverage survives the conversation journal") }
+      try { assert.equal(reopened.read()?.requests[0].snapshots?.coverage?.kind, expected, "coverage survives the conversation journal") }
       finally { reopened.close() }
-      release()
-      await new Promise(resolve => setTimeout(resolve, 40))
-      assert.equal(captures, 0, "a late tracking acknowledgement cannot start a false before capture")
-      assert.equal(sent.length, before + 1, "a late acknowledgement cannot send twice")
-      finish(timedId, "coverage is incomplete")
-    } finally { release(); beginRun.mock.restore() }
-    console.log("PASS: an unending tracking wait has bounded dispatch and persistent incomplete coverage")
+      assert.equal(captures, 0, "untracked sends cannot capture a false before later")
+      finish(timedId, "coverage was unavailable")
+    } finally { beginRun.mock.restore() }
   }
+  console.log("PASS: pending, failed and limited tracking send immediately with persistent coverage reasons")
 
   // Tracking precedes the content read, but a frozen baseline does not hold a send while it finishes saving.
   {
     owner.stop()
     const directBefore = directGit.length
-    let tracked = () => {}, save = () => {}
-    const tracking = new Promise<void>(resolve => { tracked = resolve })
+    let save = () => {}
+    let tracking: WorkspaceTracking = { kind: "pending", reason: "background tracking" }
     const saving = new Promise<void>(resolve => { save = resolve })
     let enteredTracking = false, enteredCapture = false
-    owner = new LiveConversations({ ...dependencies, checkpointWaitMs: 500, prepareTurn: async () => {
-      enteredTracking = true
-      await tracking
-      return "tracked" as const
-    } })
+    owner = new LiveConversations({ ...dependencies, checkpointWaitMs: 500, observeWorkspace: () => { enteredTracking = true }, workspaceTracking: () => tracking })
     const trackedId = randomUUID(), trackedRequest = randomUUID()
     await owner.start("test", cwd, { conversationId: trackedId })
     const original = snapshots.beginRun.bind(snapshots)
@@ -340,13 +343,13 @@ try {
     })
     const before = sent.length
     try {
-      owner.submit(trackedId, trackedRequest, "first tool in a new checkout")
-      await until(() => enteredTracking)
+      assert.equal(enteredTracking, true, "tracking started while opening the Thread")
       await new Promise(resolve => setTimeout(resolve, 20))
       assert.equal(enteredCapture, false, "the baseline follows the tracking acknowledgement")
-      assert.equal(sent.length, before, "tracking holds dispatch within its budget")
+      assert.equal(sent.length, before, "there has been no send during background preparation")
       writeFileSync(file, "already dirty before dispatch")
-      tracked()
+      tracking = { kind: "tracked" }
+      owner.submit(trackedId, trackedRequest, "first tool in a new checkout")
       await until(() => sent.length === before + 1)
       assert.equal(owner.snapshot(trackedId)?.requests[0].snapshots, undefined, "a frozen checkpoint sends before its save returns")
       writeFileSync(file, "first tool changed it")
@@ -367,7 +370,6 @@ try {
         assert.equal(preview.after, "first tool changed it")
       } finally { comparison.close() }
     } finally {
-      tracked()
       save()
       beginRun.mock.restore()
     }
@@ -376,10 +378,7 @@ try {
 
   for (const failure of ["tracking", "baseline", "missing-baseline"] as const) {
     owner.stop()
-    owner = new LiveConversations({ ...dependencies, workspaceSnapshots: failure === "missing-baseline" ? undefined : snapshots, prepareTurn: async () => {
-      if (failure === "tracking") throw new Error("tracking acknowledgement failed")
-      return "tracked" as const
-    } })
+    owner = new LiveConversations({ ...dependencies, workspaceSnapshots: failure === "missing-baseline" ? undefined : snapshots, workspaceTracking: () => failure === "tracking" ? { kind: "unavailable", reason: "tracking acknowledgement failed" } : { kind: "tracked" } })
     const failedId = randomUUID(), failedRequest = randomUUID()
     await owner.start("test", cwd, { conversationId: failedId })
     const beginRun = failure === "baseline" ? mock.method(snapshots, "beginRun", async () => { throw new Error("baseline failed") }) : undefined
@@ -388,7 +387,7 @@ try {
       owner.submit(failedId, failedRequest, "cannot start without coverage")
       await until(() => sent.length === before + 1)
       const coverage = owner.snapshot(failedId)?.requests[0].snapshots?.coverage
-      assert.ok(coverage?.kind === "incomplete")
+      assert.ok(coverage?.kind === (failure === "tracking" ? "unavailable" : "incomplete"))
       assert.match(coverage.reason, failure === "missing-baseline" ? /baseline service is unavailable/ : new RegExp(`${failure}.*failed`))
       finish(failedId, "incomplete coverage")
     } finally { beginRun?.mock.restore() }
@@ -397,7 +396,7 @@ try {
 
   {
     owner.stop()
-    owner = new LiveConversations({ ...dependencies, prepareTurn: async () => "tracked" as const })
+    owner = new LiveConversations({ ...dependencies, workspaceTracking: () => ({ kind: "tracked" }) })
     const stoppedId = randomUUID(), stoppedRequest = randomUUID()
     await owner.start("test", cwd, { conversationId: stoppedId })
     let release = () => {}, entered = false
@@ -413,40 +412,19 @@ try {
       owner.submit(stoppedId, stoppedRequest, "stop before the baseline saves")
       await until(() => entered)
       await owner.cancelRequest(stoppedId, stoppedRequest)
+      await until(() => owner.workOf(stoppedId) === undefined, 500)
       release()
-      await until(() => owner.snapshot(stoppedId)?.requests[0].snapshots?.before.kind === "ready")
+      await new Promise(resolve => setTimeout(resolve, 40))
       assert.equal(sent.length, before, "saving a stopped turn's baseline cannot dispatch it")
       assert.equal(owner.snapshot(stoppedId)?.requests[0].status, "interrupted")
     } finally { release(); beginRun.mock.restore() }
     console.log("PASS: Stop during a required baseline never sends after it saves")
   }
 
-  {
-    owner.stop()
-    let release = () => {}, entered = false
-    const tracking = new Promise<void>(resolve => { release = resolve })
-    owner = new LiveConversations({ ...dependencies, prepareTurn: async () => {
-      entered = true
-      await tracking
-      return "tracked" as const
-    } })
-    const stoppedId = randomUUID(), stoppedRequest = randomUUID()
-    await owner.start("test", cwd, { conversationId: stoppedId })
-    const before = sent.length
-    owner.submit(stoppedId, stoppedRequest, "stop before tracking completes")
-    await until(() => entered)
-    await owner.cancelRequest(stoppedId, stoppedRequest)
-    release()
-    await new Promise(resolve => setTimeout(resolve, 80))
-    assert.equal(sent.length, before, "a late tracking acknowledgement cannot resurrect stopped input")
-    assert.equal(owner.snapshot(stoppedId)?.requests[0].status, "interrupted")
-    console.log("PASS: Stop during tracking never sends after its acknowledgement")
-  }
-
   // A checkpoint held past the deadline: the turn goes without it, says so, and takes it when it lands.
   {
     owner.stop()
-    owner = new LiveConversations({ ...dependencies, checkpointWaitMs: 200, prepareTurn: async () => "tracked" as const })
+    owner = new LiveConversations({ ...dependencies, checkpointWaitMs: 200, workspaceTracking: () => ({ kind: "tracked" }) })
     const lateId = randomUUID(), lateRequest = randomUUID()
     await owner.start("test", cwd, { conversationId: lateId })
     await until(() => owner.snapshot(lateId)?.session.status === "ready")

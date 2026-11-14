@@ -213,6 +213,7 @@ export class LiveConversations {
       flush: (resident) => this.flush(resident),
       storageFailed: (resident, boundary) => this.storageFailed(resident, boundary),
       loaded: (resident) => {
+        this.dependencies.observeWorkspace?.(resident.snapshot.session.cwd)
         void this.sources.readBase(resident)
         this.counts.loaded(resident)
         // A journal keeps no children: their engine says how they are now, and a window that holds the last revision
@@ -750,6 +751,7 @@ export class LiveConversations {
     if (options.review !== undefined) ReviewTargetSchema.parse(options.review)
     // A Fin's brief is its Apex's words, not the person's.
     const actor = by ?? (options.parent && !options.resume ? ActorSchema.parse(options.parent.startedBy) : undefined)
+    this.dependencies.observeWorkspace?.(cwd)
     const state = await this.launches.start(provider, cwd, options, actor, purpose)
     if (options.initialRequest) this.firstMessage(options, actor)
     if (options.goal !== undefined) this.goals.begin(options.conversationId, options.goal, { actor: this.threads.actor(actor), tuning: options.tuning })
@@ -998,7 +1000,10 @@ export class LiveConversations {
    * conversation loads.
    */
   journalOpened(): void {
-    for (const resident of this.records.values()) this.counts.loaded(resident)
+    for (const resident of this.records.values()) {
+      this.dependencies.observeWorkspace?.(resident.snapshot.session.cwd)
+      this.counts.loaded(resident)
+    }
   }
 
   /**

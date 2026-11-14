@@ -73,9 +73,9 @@ export function TurnChanges({ requestId }: { requestId: string | undefined }) {
   const saved = before?.kind === "ready" && request?.snapshots?.after?.kind === "ready" ? before.snapshot.scope : null
   if (!liveId || !requestId || !request) return null
   const coverage = request.snapshots?.coverage
-  const incomplete = coverage?.kind === "incomplete" ? (
-    <div role="note" data-turn-coverage="incomplete" title={coverage.reason} className="min-h-7 text-ui text-muted-foreground">
-      Some file changes may be missing
+  const incomplete = coverage && coverage.kind !== "complete" ? (
+    <div role="note" data-turn-coverage={coverage.kind} title={coverage.reason} className="min-h-7 text-ui text-muted-foreground">
+      {coverage.kind === "unavailable" ? "File attribution is unavailable" : "Some file changes may be missing"}
     </div>
   ) : null
   const recorded = recordedTurnChanges(request.changes)
