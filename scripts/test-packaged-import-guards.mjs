@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
-import { finished } from "node:stream/promises"
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createPackage, uncacheAll } from "@electron/asar"
+import { uncacheAll } from "@electron/asar"
+import { packArchive } from "./lib/pack-archive.mjs"
 import { assertPackagedImports } from "./test-packaged-imports.mjs"
 
 const root = await mkdtemp(join(tmpdir(), "mako-package-imports-"))
@@ -40,7 +40,7 @@ try {
     await mkdir(join(app, "Contents/Resources"), { recursive: true })
     await writeFile(join(source, "dist-electron/main.js"), importer)
     await writeFile(join(source, "dist-electron/values.js"), exports)
-    await finished(await createPackage(source, join(app, "Contents/Resources/app.asar")))
+    await packArchive(source, join(app, "Contents/Resources/app.asar"))
     // This ASAR version resolves with the stream before its final writes finish.
     uncacheAll()
     if (valid) assert.ok(assertPackagedImports(app) > 0)
