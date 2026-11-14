@@ -1,7 +1,9 @@
 import { hostCommand } from "../base/host-command.js"
-import { hostFetch } from "../base/host-stopping.js"
+import { hostFetch, hostStopping, type HostStopping } from "../base/host-stopping.js"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
+import { GitHubReads, GitHubRateLimitError, githubRateLimit } from "./github-reads.js"
+import { hostLog } from "../base/host-log.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import { resolveExecutable } from "../base/executable.js"
 import { MACHINE_GITHUB_ENV } from "../contracts/machine-agent.js"
@@ -10,7 +12,7 @@ import type { PullRequestListing } from "../contracts/pull-request-search.js"
 import type { PullReading } from "../contracts/pull-waits.js"
 import type { WorktreeBranchPull, WorktreePull } from "../contracts/thread-worktrees.js"
 import { MERGE_METHODS, type MergeMethod } from "../contracts/git-actions.js"
-import type { Git } from "@mako/git"
+import { commonDirOf, type Git } from "@mako/git"
 
 const run = hostCommand
 
@@ -37,7 +39,7 @@ async function githubExecutable(): Promise<string> {
 }
 
 /** `env`: added to `gh`'s environment, as on a cloud machine to open a pull request as Mako's App (`MACHINE_GITHUB_AS`). */
-async function gh(cwd: string, args: string[], env?: Readonly<Record<string, string>>): Promise<string> {
+async function directGh(cwd: string, args: string[], env?: Readonly<Record<string, string>>): Promise<string> {
   const { stdout } = await run(await githubExecutable(), args, {
     cwd,
     timeout: TIMEOUT,
@@ -45,6 +47,35 @@ async function gh(cwd: string, args: string[], env?: Readonly<Record<string, str
     ...env && { env: { ...process.env, ...env } },
   })
   return stdout
+}
+
+// Entries belong to the host that owns the key, not to the process; stopping a host releases its reader.
+const readers = new WeakMap<HostStopping, GitHubReads>()
+function gh(cwd: string, args: string[], env?: Readonly<Record<string, string>>, expectedHead?: string): Promise<string> {
+  const host = hostStopping()
+  if (!host) return directGh(cwd, args, env).catch(cause => { throw githubRateLimit(cause, Date.now()) ?? cause })
+  host.signal.throwIfAborted()
+  let reader = readers.get(host)
+  if (!reader) {
+    reader = new GitHubReads({
+      run: directGh,
+      common: async cwd => commonDirOf(cwd),
+      branch: async cwd => (await run("git", ["symbolic-ref", "--short", "HEAD"], { cwd, timeout: TIMEOUT })).stdout.trim(),
+      now: Date.now,
+      trace: (event, kind) => { if (event !== "cached") hostLog("github", event, { kind }) },
+    })
+    readers.set(host, reader)
+  }
+  return reader.run(cwd, args, env, expectedHead)
+}
+
+/** A write needs a fresh preflight; forgetting readings cannot bypass the login's rate-limit gate. */
+export async function forgetGitHubReads(cwd?: string): Promise<void> {
+  const host = hostStopping()
+  if (!host) return
+  const reader = readers.get(host)
+  if (cwd) await reader?.forgetRepository(cwd)
+  else reader?.forget()
 }
 
 type GitHubParser<TResult> = (value: JsonValue) => TResult | null
@@ -66,12 +97,14 @@ interface ProcessFailure {
 async function ghJson<TResult>(
   cwd: string,
   args: string[],
-  parse: GitHubParser<TResult>
+  parse: GitHubParser<TResult>,
+  expectedHead?: string,
 ): Promise<TResult | null> {
   try {
-    const value: JsonValue = JSON.parse(await gh(cwd, args))
+    const value: JsonValue = JSON.parse(await gh(cwd, args, undefined, expectedHead))
     return parse(value)
-  } catch {
+  } catch (cause) {
+    if (cause instanceof GitHubRateLimitError) throw cause
     return null
   }
 }
@@ -113,9 +146,8 @@ async function machineUser(): Promise<GitHubUser | undefined> {
 /**
  * Whether GitHub is usable here, and if not, exactly why.
  *
- * Three different "no"s that want three different answers from the UI —
- * install a tool, log in, or add a remote — so they are three different
- * fields rather than one boolean.
+ * Setup problems stay distinct from transient lookup failures: a rate limit
+ * retains the host's deadline instead of becoming a missing login or remote.
  */
 export async function githubStatus(cwd: string): Promise<GitHubStatus> {
   try {
@@ -127,27 +159,38 @@ export async function githubStatus(cwd: string): Promise<GitHubStatus> {
     return { installed: false, authenticated: false }
   }
 
-  const who = (await machineUser()) ?? (await ghJson(
-    cwd,
-    ["api", "user", "--jq", "{login: .login, id: .id}"],
-    parseGitHubUser
-  ))
-  const login = who?.login
-  if (!login) return { installed: true, authenticated: false }
+  let who: GitHubUser | null | undefined
+  try {
+    who = (await machineUser()) ?? (await ghJson(
+      cwd,
+      ["api", "user"],
+      parseGitHubUser
+    ))
+    const login = who?.login
+    if (!login) return { installed: true, authenticated: false }
 
-  const repo = await ghJson(
-    cwd,
-    ["repo", "view", "--json", "nameWithOwner,defaultBranchRef"],
-    parseGitHubRepository
-  )
+    const repo = await ghJson(
+      cwd,
+      ["repo", "view", "--json", "nameWithOwner,defaultBranchRef"],
+      parseGitHubRepository
+    )
 
-  return {
-    installed: true,
-    authenticated: true,
-    login,
-    userId: who?.id,
-    repo: repo?.nameWithOwner,
-    defaultBranch: repo?.defaultBranch,
+    return {
+      installed: true,
+      authenticated: true,
+      login,
+      userId: who?.id,
+      repo: repo?.nameWithOwner,
+      defaultBranch: repo?.defaultBranch,
+    }
+  } catch (cause) {
+    if (!(cause instanceof GitHubRateLimitError)) throw cause
+    return {
+      installed: true,
+      authenticated: Boolean(who?.login),
+      ...(who?.login && { login: who.login, userId: who.id }),
+      limited: { until: cause.retryAt },
+    }
   }
 }
 
@@ -575,10 +618,10 @@ export async function listPullHeads(cwd: string): Promise<WorktreePull[] | null>
 }
 
 /** Recent pull requests in any state, newest first, with the head commit and one word for their checks. Null when `gh` can't answer here. */
-export async function listBranchPulls(cwd: string): Promise<WorktreeBranchPull[] | null> {
-  return ghJson(
+export async function listBranchPulls(cwd: string, liveHeads: readonly string[] = [], liveBranches: ReadonlyMap<string, string> = new Map()): Promise<WorktreeBranchPull[] | null> {
+  const listed = await ghJson(
     cwd,
-    ["pr", "list", "--state", "all", "--limit", "60", "--json", "number,title,url,headRefName,headRefOid,state,isDraft,statusCheckRollup"],
+    ["pr", "list", "--state", "all", "--limit", "60", "--json", "number,title,url,headRefName,headRefOid,state,isDraft"],
     (value) => {
       if (!Array.isArray(value)) return null
       const pulls: WorktreeBranchPull[] = []
@@ -612,6 +655,23 @@ export async function listBranchPulls(cwd: string): Promise<WorktreeBranchPull[]
       return pulls
     }
   )
+  if (!listed) return null
+  const live = new Set(liveHeads)
+  return Promise.all(listed.map(async pull => {
+    const expected = liveBranches.get(pull.branch)
+    const staleBranch = expected && expected !== pull.head && (pull.state === "open" || pull.state === "draft")
+    if (!live.has(pull.head) && !staleBranch) return pull
+    const reading = await ghJson(cwd, ["pr", "view", String(pull.number), "--json", "number,title,url,headRefName,headRefOid,state,isDraft,statusCheckRollup"], value => {
+      if (!isJsonObject(value)) return null
+      const head = stringValue(value.headRefOid)
+      const checks = withoutSuperseded(parseJsonArray(value.statusCheckRollup, parseRawCheck) ?? []).map(toCheck)
+      const number = numberValue(value.number), branch = stringValue(value.headRefName), state = stringValue(value.state)
+      return { head, checks, number, branch, state, draft: booleanValue(value.isDraft) }
+    }, expected ?? pull.head)
+    if (!reading || reading.number !== pull.number || reading.branch !== pull.branch || reading.head !== (expected ?? pull.head)) return { ...pull, checks: null }
+    const checks = reading.checks
+    return { ...pull, head: reading.head, state: reading.state === "MERGED" ? "merged" as const : reading.state === "CLOSED" ? "closed" as const : reading.draft ? "draft" as const : "open" as const, checks: checks.length === 0 ? null : checks.some(check => check.state === "failed" || check.state === "cancelled") ? "failed" as const : checks.some(check => check.state === "running") ? "running" as const : "passed" as const }
+  }))
 }
 
 export async function listRemoteBranches(git: Git, cwd: string): Promise<string[]> {
@@ -814,9 +874,8 @@ export async function repoAvatar(
   }
 
   try {
-    const url = (
-      await gh(cwd, ["api", `repos/${repo}`, "--jq", ".owner.avatar_url"])
-    ).trim()
+    const url = await ghJson(cwd, ["api", `repos/${repo}`], value => isJsonObject(value) ? stringValue(objectValue(value.owner)?.avatar_url) ?? null : null)
+    if (!url) return undefined
     if (!url.startsWith("https://")) return undefined
     const response = await hostFetch(`${url}${url.includes("?") ? "&" : "?"}s=128`)
     if (!response.ok) return undefined
@@ -839,7 +898,7 @@ export async function repoAvatar(
  */
 export async function userAvatar(cwd: string, dir: string): Promise<string | undefined> {
   try {
-    const login = (await gh(cwd, ["api", "user", "--jq", ".login"])).trim()
+    const login = await ghJson(cwd, ["api", "user"], value => isJsonObject(value) ? stringValue(value.login) ?? null : null)
     if (!login) return undefined
     const file = join(dir, `user-${login.replace(/[^\w.-]/g, "-")}.png`)
     try {
@@ -847,7 +906,8 @@ export async function userAvatar(cwd: string, dir: string): Promise<string | und
     } catch {
       // Not cached yet.
     }
-    const url = (await gh(cwd, ["api", "user", "--jq", ".avatar_url"])).trim()
+    const url = await ghJson(cwd, ["api", "user"], value => isJsonObject(value) ? stringValue(value.avatar_url) ?? null : null)
+    if (!url) return undefined
     if (!url.startsWith("https://")) return undefined
     const response = await hostFetch(`${url}${url.includes("?") ? "&" : "?"}s=128`)
     if (!response.ok) return undefined

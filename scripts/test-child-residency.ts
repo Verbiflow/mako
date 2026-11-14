@@ -111,6 +111,6 @@ try {
   assert.deepEqual(revoked, [binding], "closing a hibernated conversation revokes what its binding still holds")
 } finally {
   releaseCheckpoint?.("cleanup")
-  observer.dispose(); owner.stop(); rmSync(root, { recursive: true, force: true })
+  observer.dispose(); await owner.stop(); rmSync(root, { recursive: true, force: true })
 }
 console.log("Native child residency: checkpoint race, ready-parent protection, newer run, restart release and idle retirement passed")

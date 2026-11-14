@@ -178,7 +178,7 @@ export async function readCheckoutUncommitted(project) {
   try {
     return await readUncommitted(git, project)
   } finally {
-    git.close()
+    await git.close()
   }
 }
 
@@ -229,7 +229,7 @@ export async function prepareSource({ project, installed, say, ask }) {
     say(`update:local builds this checkout in place: ${name} at ${shortRevision(reading.head)}${work}.${reading.behind && reading.upstream ? ` It's ${reading.behind} ${reading.behind === 1 ? "commit" : "commits"} behind ${reading.upstream.name}; Settings › Updates builds that clean without touching the checkout.` : ""}`)
     return true
   } finally {
-    git.close()
+    await git.close()
   }
 }
 
@@ -253,7 +253,7 @@ export async function prepareDependencies({ project, say, run, signal }) {
       installing: () => say(`Installing dependencies… ${missingDependenciesText(missingDependencies(missing))}`),
     })
   } finally {
-    git.close()
+    await git.close()
   }
 }
 

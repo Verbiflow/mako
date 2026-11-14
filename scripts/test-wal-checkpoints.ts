@@ -1,14 +1,20 @@
 import assert from "node:assert/strict"
+import { z } from "zod"
 import { mkdtempSync, rmSync, statSync, existsSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { test } from "node:test"
 import { once } from "node:events"
 import { DatabaseSync } from "node:sqlite"
+import { Worker } from "node:worker_threads"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
+import { LiveRecords } from "@mako/host/conversations/live-records"
+import { JournalReclaims } from "@mako/host/conversations/journal-reclaim"
+import { JournalReaders } from "@mako/host/conversations/journal-readers"
 import { WalPrimer, CHECKPOINT_WAL_LIMIT, type WalCheckpoint } from "@mako/host/conversations/wal-primer"
 import { auditSnapshot } from "./performance-audit-fixtures.ts"
 
+const ReleaseMessageSchema = z.object({ kind: z.literal("release") })
 const realTimeout = setTimeout
 async function until(check: () => boolean): Promise<void> {
   const end = performance.now() + 10_000
@@ -34,6 +40,338 @@ function opened(primer: WalPrimer) {
   }
   return { root, journal, db, policy, commit, snapshot: () => snapshot }
 }
+
+/** Hold the actual release message: the real worker keeps its SQLite connection until delivered. */
+function heldRelease(primer: WalPrimer) {
+  const thread = primer["generation"]!.thread
+  const original = thread.postMessage
+  let pending: Parameters<typeof original> | undefined
+  thread.postMessage = (...args) => {
+    const message: unknown = args[0]
+    if (ReleaseMessageSchema.safeParse(message).success) {
+      assert.equal(pending, undefined, "one old connection is held")
+      pending = args
+    } else original.apply(thread, args)
+  }
+  return {
+    held: () => pending !== undefined,
+    deliver() {
+      thread.postMessage = original
+      if (pending) {
+        const args = pending
+        pending = undefined
+        original.apply(thread, args)
+      }
+    },
+  }
+}
+
+/** A genuinely mostly-free SQLite file makes the old close eligible for compaction. */
+function freePages(journal: LiveJournal): void {
+  journal["db"].exec("CREATE TABLE release_fixture(value BLOB); INSERT INTO release_fixture VALUES (zeroblob(16777216)); DELETE FROM release_fixture")
+  assert.equal(journal["mostlyFree"](), true)
+}
+
+test("unload and immediate reopen cancel old tidy while a zero-paged checkpoint release is held", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mwc-reopen-"))
+  const snapshot = auditSnapshot(0)
+  const seed = new LiveJournal(root, snapshot.session.id)
+  seed.commit(snapshot)
+  seed.close()
+  const compacted: string[] = []
+  const records = new LiveRecords({ root, appPath: root, driver: () => undefined, history: async () => null, emit() {} }, {
+    busy: () => false, flush() {}, storageFailed() { assert.fail("fixture storage failed") }, loaded() {}, compact: path => { compacted.push(path) },
+  })
+  records.open()
+  const old = records.load(snapshot.session.id)!
+  const primer = records["primer"]
+  let release: ReturnType<typeof heldRelease> | undefined
+  try {
+    await until(() => old.journal["checkpoints"]?.active() === true)
+    assert.equal(old.journal.pagedCount(), 0)
+    freePages(old.journal)
+    release = heldRelease(primer)
+    assert.equal(records["unload"](old), true)
+    assert.equal(release.held(), true, "the old native connection is still open")
+    const reopened = records.load(snapshot.session.id)!
+    assert.notEqual(reopened.journal, old.journal)
+    release.deliver()
+    await old.journal.released()
+    assert.deepEqual(compacted, [], "the old close must not compact a journal reopened while it waited")
+    assert.equal(reopened.journal.read()?.session.id, snapshot.session.id)
+  } finally {
+    release?.deliver()
+    await records.stop()
+    for (const resident of records.values()) { resident.journal.close(); await resident.journal.released() }
+    await old.journal.released()
+    await records.stopCheckpoints()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("a different owner opening the same file fences a delayed checkpoint tidy", async () => {
+  const primer = new WalPrimer(), item = opened(primer)
+  const compacted: string[] = []
+  let release: ReturnType<typeof heldRelease> | undefined
+  let reopened: LiveJournal | undefined
+  try {
+    await until(() => item.policy() === 0)
+    freePages(item.journal)
+    release = heldRelease(primer)
+    item.journal.close(path => { compacted.push(path) })
+    assert.equal(release.held(), true)
+    reopened = new LiveJournal(item.root, item.snapshot().session.id)
+    const previous = reopened.read()!
+    reopened.commit({ ...previous, revision: previous.revision + 1, blocks: [{ type: "text", text: "new owner" }] }, previous)
+    release.deliver()
+    await item.journal.released()
+    assert.deepEqual(compacted, [], "old tidy cannot touch another owner's reopened file")
+    assert.deepEqual(reopened.read()?.blocks, [{ type: "text", text: "new owner" }])
+  } finally {
+    release?.deliver()
+    reopened?.close()
+    await reopened?.released()
+    item.journal.close()
+    await item.journal.released()
+    await primer.stop()
+    rmSync(item.root, { recursive: true, force: true })
+  }
+})
+
+test("an abandoned close joins its checkpoint connection without scheduling a new compaction", async () => {
+  const primer = new WalPrimer(), item = opened(primer)
+  const compacted: string[] = []
+  let release: ReturnType<typeof heldRelease> | undefined
+  try {
+    await until(() => item.policy() === 0)
+    freePages(item.journal)
+    release = heldRelease(primer)
+    const closed = item.journal.close(path => { compacted.push(path) }, true)
+    assert.ok(closed instanceof Promise, "close exposes the actual release completion")
+    assert.equal(release.held(), true)
+    release.deliver()
+    await closed
+    assert.deepEqual(compacted, [], "shutdown leaves compaction for a later owner")
+    assert.equal(existsSync(item.journal.file + "-wal"), false)
+  } finally {
+    release?.deliver()
+    await item.journal.close()
+    await primer.stop()
+    rmSync(item.root, { recursive: true, force: true })
+  }
+})
+
+test("close joins the compaction worker's termination promise before releasing the root", async context => {
+  const root = mkdtempSync(join(tmpdir(), "mwc-compact-join-"))
+  const journal = new LiveJournal(root, auditSnapshot(0).session.id)
+  journal.commit(auditSnapshot(0))
+  freePages(journal)
+  const reclaims = new JournalReclaims()
+  let deliver!: () => void
+  const gate = new Promise<void>(resolve => { deliver = resolve })
+  const terminate = Worker.prototype.terminate
+  let terminating = false
+  context.mock.method(Worker.prototype, "terminate", function (this: Worker) {
+    const ended = terminate.call(this)
+    terminating = true
+    return ended.then(async code => { await gate; return code })
+  })
+  let closed: Promise<void> | undefined
+  try {
+    closed = journal.close(async path => {
+      const result = await reclaims.reclaim(path)
+      assert.equal("error" in result, false, "the actual SQLite compaction completed")
+    })
+    let done = false
+    void closed.then(() => { done = true }, () => {})
+    await until(() => terminating)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(done, false, "a reply alone is not the worker's release")
+    deliver()
+    await closed
+    assert.equal(done, true)
+  } finally {
+    deliver()
+    await Promise.allSettled([closed, journal.close()])
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("a rejected worker termination leaves later compactions runnable", async context => {
+  const root = mkdtempSync(join(tmpdir(), "mwc-reclaim-recovery-"))
+  const snapshot = auditSnapshot(0)
+  const firstJournal = new LiveJournal(join(root, "first"), snapshot.session.id)
+  const nextJournal = new LiveJournal(join(root, "next"), snapshot.session.id)
+  firstJournal.commit(snapshot)
+  nextJournal.commit(snapshot)
+  await firstJournal.close()
+  await nextJournal.close()
+  const reclaims = new JournalReclaims()
+  const failed = new Error("fixture termination failed after native exit")
+  const terminate = Worker.prototype.terminate
+  let terminations = 0
+  context.mock.method(Worker.prototype, "terminate", function (this: Worker) {
+    return terminate.call(this).then(code => {
+      if (++terminations === 1) throw failed
+      return code
+    })
+  })
+  const first = reclaims.reclaim(firstJournal.file)
+  const next = reclaims.reclaim(nextJournal.file).then(
+    result => ({ kind: "done" as const, result }),
+    error => ({ kind: "failed" as const, error }),
+  )
+  try {
+    await assert.rejects(first, error => error === failed, "the first caller retains its actual failure")
+    const outcome = await next
+    assert.ok(outcome.kind === "done", "a failed completion must not poison the next queued compaction")
+    assert.equal("error" in outcome.result, false)
+    assert.equal("skipped" in outcome.result, false)
+    assert.equal(terminations, 2, "the next worker really ran and was joined")
+    assert.equal(reclaims["pending"].size, 0)
+  } finally {
+    await Promise.allSettled([first, next, reclaims.stop()])
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("a removed journal folder skips compaction without creating pending work", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mwc-reclaim-gone-"))
+  const reclaims = new JournalReclaims()
+  rmSync(root, { recursive: true, force: true })
+  try {
+    assert.deepEqual(await reclaims.reclaim(join(root, "missing.sqlite")), { skipped: true })
+    assert.equal(reclaims["pending"].size, 0)
+  } finally { await reclaims.stop() }
+})
+
+test("a compaction queued before reopen cannot delete the new owner's staged history", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mwc-queued-tidy-"))
+  const snapshot = auditSnapshot(0)
+  const journal = new LiveJournal(root, snapshot.session.id)
+  journal.commit(snapshot)
+  freePages(journal)
+  const reclaims = new JournalReclaims()
+  let deliver!: () => void
+  reclaims["queue"] = new Promise<void>(resolve => { deliver = resolve })
+  const closed = journal.close(path => reclaims.reclaim(path))
+  let reopened: LiveJournal | undefined
+  try {
+    reopened = new LiveJournal(root, snapshot.session.id)
+    reopened["db"].prepare("INSERT INTO base_entries(id,value) VALUES(1,?)").run(JSON.stringify({ type: "text", text: "new staged history" }))
+    deliver()
+    await closed
+    assert.equal(journal.tidyingCancelled, true, "an immediate close whose compaction was skipped cannot keep a settled-file stamp")
+    assert.equal(reopened["db"].prepare("SELECT count(*) AS n FROM base_entries").get()?.n, 1,
+      "a queued old compaction must not discard history staged after a new open")
+  } finally {
+    deliver()
+    await Promise.allSettled([closed, reopened?.close(undefined, true)])
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("stopping cancels queued compaction and joins it without starting another worker", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mwc-stop-queued-"))
+  const journal = new LiveJournal(root, auditSnapshot(0).session.id)
+  journal.commit(auditSnapshot(0))
+  freePages(journal)
+  const reclaims = new JournalReclaims()
+  let deliver!: () => void
+  reclaims["queue"] = new Promise<void>(resolve => { deliver = resolve })
+  let result: Awaited<ReturnType<JournalReclaims["reclaim"]>> | undefined
+  const closed = journal.close(async path => { result = await reclaims.reclaim(path) })
+  const stopped = reclaims.stop()
+  try {
+    deliver()
+    await Promise.all([closed, stopped])
+    assert.deepEqual(result, { skipped: true })
+    assert.equal(reclaims["pending"].size, 0)
+    assert.deepEqual(await reclaims.reclaim(journal.file), { skipped: true }, "a stopped owner never queues more work")
+  } finally {
+    deliver()
+    await Promise.allSettled([closed, stopped])
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("the actual compaction worker observes cancellation without deleting staged rows", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mwc-native-cancel-"))
+  const journal = new LiveJournal(root, auditSnapshot(0).session.id)
+  journal.commit(auditSnapshot(0))
+  await journal.close()
+  const db = new DatabaseSync(journal.file)
+  db.prepare("INSERT INTO base_entries(id,value) VALUES(1,?)").run(JSON.stringify({ type: "text", text: "new staged history" }))
+  const cancellation = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)
+  Atomics.store(new Int32Array(cancellation), 0, 1)
+  const worker = new Worker(new URL(import.meta.resolve("@mako/host/conversations/journal-reclaim-worker")), {
+    workerData: { path: journal.file, cancellation }, resourceLimits: { maxOldGenerationSizeMb: 64 },
+  })
+  const exited = new Promise<void>(resolve => worker.once("exit", () => resolve()))
+  try {
+    const [answer] = await once(worker, "message")
+    assert.deepEqual(answer, { skipped: true })
+    await exited
+    assert.equal(db.prepare("SELECT count(*) AS n FROM base_entries").get()?.n, 1)
+  } finally {
+    await worker.terminate()
+    await exited
+    db.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+const readerEntry = new URL("data:text/javascript," + encodeURIComponent("import{parentPort}from'node:worker_threads';parentPort.on('message',m=>parentPort.postMessage({id:m.id,rows:null}))"))
+
+test("journal reader stop calls share the actual termination completion", async context => {
+  const readers = new JournalReaders(readerEntry)
+  await readers.read("/unused-lifetime-fixture", false)
+  const thread = readers["readers"][0]!.worker
+  const terminate = thread.terminate.bind(thread)
+  let deliver!: () => void
+  const gate = new Promise<void>(resolve => { deliver = resolve })
+  context.mock.method(thread, "terminate", () => terminate().then(async code => { await gate; return code }))
+  const closed = readers.stop()
+  try {
+    assert.equal(readers.stop(), closed, "a second stop cannot return before the first termination")
+    let done = false
+    void closed.then(() => { done = true }, () => {})
+    await until(() => thread.threadId === -1)
+    assert.equal(done, false)
+    deliver()
+    await closed
+  } finally {
+    deliver()
+    await closed
+  }
+})
+
+test("idle journal reader termination is still joined by stop", async context => {
+  context.mock.timers.enable({ apis: ["setTimeout"] })
+  const readers = new JournalReaders(readerEntry)
+  let deliver!: () => void
+  const gate = new Promise<void>(resolve => { deliver = resolve })
+  let closed: Promise<void> | undefined
+  try {
+    await readers.read("/unused-lifetime-fixture", false)
+    const thread = readers["readers"][0]!.worker
+    const terminate = thread.terminate.bind(thread)
+    context.mock.method(thread, "terminate", () => terminate().then(async code => { await gate; return code }))
+    context.mock.timers.tick(60_000)
+    closed = readers.stop()
+    let done = false
+    void closed.then(() => { done = true }, () => {})
+    await until(() => thread.threadId === -1)
+    assert.equal(done, false, "removing the idle reader from the pool is not its termination")
+    deliver()
+    await closed
+  } finally {
+    deliver()
+    await closed
+    await readers.stop()
+    context.mock.timers.reset()
+  }
+})
 
 test("older SQLite or an unavailable version keeps foreground checkpoint ownership", async () => {
   const descriptor = Object.getOwnPropertyDescriptor(process.versions, "sqlite")

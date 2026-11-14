@@ -222,7 +222,7 @@ export class LiveConversations {
         // A switch that waited behind another when the last host ended goes on, as it was asked to.
         if (this.transfers.pending(resident)?.behind) queueMicrotask(() => this.dispatch.drain(resident))
       },
-      compact: (path) => { void this.reclaims.reclaim(path) },
+      compact: (path) => this.reclaims.reclaim(path),
       paged: (id) => this.dependencies.historyPaged?.(id),
       released: (id) => {
         // Let go of: its work is read again, from memory, when it's next loaded.
@@ -397,8 +397,9 @@ export class LiveConversations {
   }
 
   /** Once every compaction of a journal this host closed has ended. */
-  journalsCompacted(): Promise<void> {
-    return this.reclaims.settled()
+  async journalsCompacted(): Promise<void> {
+    await this.records.releasesSettled()
+    await this.reclaims.settled()
   }
 
   /** The host's sweep, now; `pauseMs` between journals. */
@@ -1964,6 +1965,7 @@ export class LiveConversations {
     return this.closing.close(id)
   }
 
+  /** Starts shutdown now; await completion before removing the root or handing it to another host. */
   stop(): Promise<void> {
     clearTimeout(this.settleTimer)
     this.wakesStopped = true

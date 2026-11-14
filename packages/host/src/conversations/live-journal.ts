@@ -21,7 +21,7 @@ import {
   PromptAttachmentSchema,
   RequestRetrySchema,
 } from "../contracts/conversation-control.js"
-import { existsSync, mkdirSync, readdirSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, realpathSync } from "node:fs"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
@@ -40,7 +40,7 @@ import type { LiveSessionMode } from "../contracts/providers-acp.js"
 import { hostWarn } from "../base/host-log.js"
 import { foldMakoLog, MAKO_LOG_SCHEMA, makoFacts, makoLogDifference, type MakoLogEvent, type MakoLogState } from "./mako-log.js"
 import { baseKeptBecause, baseKeptOnceHeld, refreshedFacts, sourceOfPage, storedBase } from "./base-source.js"
-import { RECLAIM_MIN_BYTES } from "./journal-reclaim.js"
+import { RECLAIM_MIN_BYTES, journalOpened, type Reclaimed } from "./journal-reclaim.js"
 import { cutOffRequests, mergedBaseSteps } from "./stream-merging.js"
 import { errorMessage } from "../base/error-message.js"
 import { EntrySchema, type Entry } from "@mako/sessions/entries"
@@ -709,6 +709,7 @@ export class LiveJournal {
   private closing?: Promise<void>
   /** `keepFile`: the tidying `closing` waits to do is no longer this journal's. */
   private untidy = false
+  private readonly releaseKey: string
   /** The journal's database file. */
   get file(): string {
     return this.path
@@ -718,6 +719,10 @@ export class LiveJournal {
     z.string().uuid().parse(id)
     mkdirSync(root, { recursive: true })
     this.path = join(root, `${id}.sqlite`)
+    this.releaseKey = join(realpathSync(root), `${id}.sqlite`)
+    journalOpened.publish(this.releaseKey)
+    // A different LiveRecords owner, or an independent opener, takes the same file too. Even a failed open keeps
+    // its data: an old close must not tidy a file another owner may already have begun opening.
     this.db = new DatabaseSync(this.path)
     try {
       // The checkpoint owner's final close may still hold the WAL lock. Install the existing wait before opening it.
@@ -1348,11 +1353,13 @@ export class LiveJournal {
    * may outlive it, in a window's view or a read under way: they read
    * through a connection of their own, and the rows written ahead stay, and
    * the file isn't compacted, until the last of them is collected
-   * (`released`). `abandon` doesn't wait: the host is stopping.
+   * (`released`). The returned promise joins checkpoint release and tidying; await it before removing the root.
+   * A later open cancels this close's delayed tidy synchronously. `abandon` skips tidy: the host is stopping.
    */
-  close(compact?: (path: string) => void, abandon = false): void {
-    if (this.closed) return
+  close(compact?: (path: string) => void | Promise<Reclaimed | void>, abandon = false): Promise<void> {
+    if (this.closed) return this.released()
     this.closed = true
+    if (abandon) this.keepFile()
     this.stopStaging()
     // Rows written ahead that the base row doesn't name go with the journal: dropped by the compaction, off this
     // thread, as 150MB of them take a few hundred milliseconds to free.
@@ -1377,14 +1384,21 @@ export class LiveJournal {
     const tidy = () => {
       if (this.untidy) return
       if (ahead && !compact && paged) dropRowsAhead(this.path)
-      if (free) compact(this.path)
+      if (free) return Promise.resolve(compact(this.path)).then(result => {
+        if (result && "skipped" in result) this.keepFile()
+      })
     }
     const freed = this.pager.release(readOnlyRows(this.path))
     const checkpointsClosed = this.checkpoints?.close()
-    if (checkpointsClosed) {
-      this.closing = Promise.all([checkpointsClosed, paged && !abandon ? freed : undefined]).then(tidy)
-    } else if (!paged || abandon) tidy()
-    else this.closing = freed.then(tidy)
+    if (checkpointsClosed || (paged && !abandon)) {
+      const unwatch = journalOpened.subscribe(opened => {
+        if (opened === this.releaseKey) this.keepFile()
+      })
+      this.closing = Promise.all([checkpointsClosed, paged && !abandon ? freed : undefined]).then(tidy).then(() => {}).finally(() => {
+        unwatch()
+      })
+    } else this.closing = Promise.resolve(tidy()).then(() => {})
+    return this.closing
   }
 
   /**
@@ -1413,6 +1427,11 @@ export class LiveJournal {
    */
   keepFile(): void {
     this.untidy = true
+  }
+
+  /** A later opener or shutdown took away this closed journal's right to tidy the file. */
+  get tidyingCancelled(): boolean {
+    return this.untidy
   }
 
   private rowsAhead(): boolean {

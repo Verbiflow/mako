@@ -479,10 +479,21 @@ export class LiveSources {
         keptBecause = errorMessage({ error })
         hostWarn("live", "a journal's history stays in it", { conversation: id, error: keptBecause })
       }
-      if (!loaded && !this.access.release(id)) hostLog("live", "a journal the sweep opened stays open; it compacts when it is let go", { conversation: id })
+      let unchanged = true
+      if (!loaded) {
+        if (!this.access.release(id)) hostLog("live", "a journal the sweep opened stays open; it compacts when it is let go", { conversation: id })
+        else if (!resident.journal.pagedCount()) {
+          // Checkpoint release can still change the DB/WAL timestamps. Stamp after it, as the old synchronous close
+          // did, but never remember an old reason if another opener took this file while we waited. Paged entries
+          // may still be held by this frame, so those keep their existing deferred-close behavior.
+          await resident.journal.released()
+          unchanged = !resident.journal.tidyingCancelled
+        }
+      }
       const settled: SettledBases["journals"][number] = { id, bytes, ms: Math.round(performance.now() - began) }
       if (keptBecause) settled.keptBecause = keptBecause
-      if (keptBecause && ownReason) this.settledAt.set(id, { journal: this.journalStamp(id) })
+      if (!unchanged) this.settledAt.delete(id)
+      else if (keptBecause && ownReason) this.settledAt.set(id, { journal: this.journalStamp(id) })
       else if (keptBecause && sessionReason && sessionBefore) this.settledAt.set(id, { journal: this.journalStamp(id), session: sessionBefore })
       journals.push(settled)
       if (pauseMs && index < copies.length - 1) await new Promise((resolve) => setTimeout(resolve, pauseMs))
