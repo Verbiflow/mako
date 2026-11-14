@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { performance } from "node:perf_hooks"
+import { mock } from "node:test"
 import { Git } from "@mako/git"
 import type { HistoryMark } from "@mako/host/contracts/watcher-child"
 import type { FileHistory, HistoryOptions } from "@mako/host/workspaces/watch-backend"
@@ -49,6 +50,8 @@ const edit = (path: string, content: string, told = true) => {
   if (told) heard.push({ at: ++count, path: join(cwd, path) })
 }
 
+let openedMonitors = 0, closedMonitors = 0
+let invalidateMonitor = () => {}
 const store = new WorkspaceSnapshots(new Git(), join(root, "store"))
 store.followHistory(history)
 const turn = async () => {
@@ -184,8 +187,86 @@ try {
   const again = await turn()
   assert.equal(again.before.id, settled.after.id)
   console.log(JSON.stringify({ captureMs: Math.round(settled.ms), reusedMs: Math.round(again.ms), historyReads: reads }))
+  store.followChanges((scope, repositories, changed) => {
+    assert.equal(scope, cwd)
+    assert.deepEqual(repositories, [cwd])
+    openedMonitors++
+    invalidateMonitor = changed
+    let active = true
+    return { ready: Promise.resolve(), alive: () => active, reliable: () => active, close: () => { active = false; closedMonitors++ } }
+  })
+
+  // Preparation happens before dispatch; consuming its flag performs no new capture or history/Git reads.
+  await store.prepare(cwd)
+  {
+    const original = store.capture.bind(store)
+    const capture = mock.method(store, "capture", original)
+    const historyReads = reads
+    const preparedId = randomUUID()
+    try {
+      const prepared = store.beginPreparedRun(preparedId, cwd)
+      assert.ok(prepared.kind === "ready", "background work leaves a usable checkpoint")
+      assert.equal(capture.mock.callCount(), 0, "consuming readiness must not start capture")
+      assert.equal(reads, historyReads, "consuming readiness must not read file history")
+    } finally { store.abandonRun(preparedId); capture.mock.restore() }
+  }
+
+  // Invalidated content cannot be used as a ready checkpoint; the replacement captures already-dirty content.
+  edit("a.txt", "dirty before background preparation\n")
+  invalidateMonitor()
+  const unavailableId = randomUUID()
+  assert.equal(store.beginPreparedRun(unavailableId, cwd).kind, "unavailable")
+  store.abandonRun(unavailableId)
+  await store.prepare(cwd)
+  const cleanId = randomUUID()
+  const warmed = store.beginPreparedRun(cleanId, cwd)
+  assert.ok(warmed.kind === "ready")
+  const expectedWarm = await store.capture(cwd)
+  assert.equal(treeOf(join(root, "store"), warmed.snapshot.id), treeOf(join(root, "store"), expectedWarm.id))
+  store.abandonRun(cleanId)
+
+  lost = true
+  store.changed(cwd, "Watcher events were lost")
+  await store.prepare(cwd)
+  const lostId = randomUUID()
+  assert.equal(store.beginPreparedRun(lostId, cwd).kind, "unavailable", "lost history never publishes readiness")
+  store.abandonRun(lostId)
+  lost = false
+
+  // An ordinary closing checkpoint seeds the next turn; no second capture runs at the next send.
+  await store.prepare(cwd)
+  const endingId = randomUUID()
+  assert.equal(store.beginPreparedRun(endingId, cwd).kind, "ready")
+  edit("a.txt", "the turn wrote this\n")
+  store.changed(cwd)
+  const ended = await store.endRun(endingId)
+  const nextId = randomUUID()
+  const next = store.beginPreparedRun(nextId, cwd)
+  assert.ok(next.kind === "ready")
+  assert.equal(next.snapshot.id, ended.id, "the previous after snapshot is the next prepared before")
+  store.abandonRun(nextId)
+
+  // A later turn never waits for an in-flight after snapshot, which is then not a valid earlier boundary.
+  await store.prepare(cwd)
+  const earlier = randomUUID(), later = randomUUID()
+  store.beginPreparedRun(earlier, cwd)
+  let entered = false, release = () => {}
+  const blocked = new Promise<void>(resolve => { release = resolve })
+  const original = store.capture.bind(store)
+  const capture = mock.method(store, "capture", async (...args: Parameters<typeof original>) => { entered = true; await blocked; return original(...args) })
+  const finishing = store.endRun(earlier)
+  void finishing.catch(() => {})
+  try {
+    for (const deadline = Date.now() + 1000; !entered; await new Promise(resolve => setTimeout(resolve, 5))) assert.ok(Date.now() < deadline)
+    assert.equal(store.beginPreparedRun(later, cwd).kind, "unavailable")
+    release()
+    await assert.rejects(finishing, /Another turn started/)
+  } finally { release(); store.abandonRun(later); capture.mock.restore() }
+  console.log("prepared baselines: no foreground capture/history, invalidation, dirty content, previous-end reuse and nonblocking overlap")
+
   console.log("checkpoint reuse: a quiet workspace's turn starts on its last checkpoint; a change, a staged path, a moved HEAD, a lost or unread history, or a shared workspace is captured")
 } finally {
   store.close()
+  assert.equal(closedMonitors, openedMonitors, "checkpoint-owned monitors are closed independently of attribution")
   rmSync(root, { recursive: true, force: true })
 }

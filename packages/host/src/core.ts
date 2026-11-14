@@ -267,6 +267,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const seenAttributionCheckouts = new Set<string>()
   const observeAttributionWorkspace = (cwd: string) => {
     if (fixtureDesk) return
+    late.conversations?.live.prepareCheckpoint(cwd)
     if (late.attribution) void late.attribution.prepareTurn(cwd)
     else seenAttributionCheckouts.add(cwd)
   }
@@ -1147,6 +1148,20 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     }),
     revokeTools: (bindingId, conversationId) => residency.revoke(bindingId, conversationId),
     rewindWriters: (paths, since) => late.attribution?.rewindWriters(paths, since),
+    watchSnapshots: (scope, repositories, changed) => {
+      let alive = true, reliable = true
+      const tree = watchTree(git, watchBackend, scope,
+        paths => { if (paths.some(path => !/(^|\/)\.git\/.*\.lock$/.test(path))) changed() },
+        () => { alive = false; reliable = false; changed() }, why => { reliable = why === "listening"; changed() })
+      if (!tree) return undefined
+      const metadata = repositories.map(root => watchOutsideGitDir(root, changed))
+      return {
+        ready: Promise.all([tree.ready, ...metadata.map(watch => watch.ready)]).then(() => {}),
+        alive: () => alive,
+        reliable: () => alive && reliable,
+        close: () => { alive = false; tree.close(); for (const watch of metadata) watch.close() },
+      }
+    },
     observeWorkspace: observeAttributionWorkspace,
     workspaceTracking: (cwd) => fixtureDesk ? { kind: "outside" } : late.attribution?.tracking(cwd) ?? { kind: "unavailable", reason: attributionFailure ?? "The file attribution journal has not opened yet" },
     suspendTools: (bindingId, conversationId) => residency.suspend(bindingId, conversationId),
@@ -1196,6 +1211,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     admission,
   })
   late.conversations = opened
+  for (const cwd of seenAttributionCheckouts) opened.live.prepareCheckpoint(cwd)
   // Reachable again (its runtime's link is back), this device asks the places holding its Fins how they stand, which
   // tells them it hears: the notices they kept for it come now, not at their next retry.
   late.cloud?.onRuntimeLinked?.(() => opened.agents?.knock())

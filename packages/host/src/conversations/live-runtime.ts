@@ -272,12 +272,12 @@ export interface Dependencies {
   work?: Pick<HostWork, "current">
   mcpSnapshot?(cwd: string): Promise<McpRegistrySnapshot>
   workspaceSnapshots?: WorkspaceSnapshots
+  /** Existing fallback budget when no prepared checkpoint is available. */
+  checkpointWaitMs?: number
   /** Start background tracking when a Thread opens or its checkout is first seen. */
   observeWorkspace?(cwd: string): void
-  /** Read held tracking state without discovery, Git work or a writer wait. */
+  /** Read held tracking state without awaiting discovery, Git work or the writer. */
   workspaceTracking?(cwd: string): WorkspaceTracking
-  /** How long a turn waits for its checkpoint to hold the workspace before it goes without (`BEFORE_CHECKPOINT_WAIT_MS`). */
-  checkpointWaitMs?: number
   /** Who changed each of these files (absolute) since `since`, as the attribution journal knows; undefined while it isn't open. */
   rewindWriters?(paths: readonly string[], since: number): FileWriters | undefined
   appPath: string

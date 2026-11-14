@@ -14,9 +14,9 @@ export const WorkspaceSnapshotSchema = z.object({
   shared: z.array(z.string().min(1).max(200)).max(64).optional(),
 })
 export type WorkspaceSnapshot = z.infer<typeof WorkspaceSnapshotSchema>
-/** Held tracking state; reading it never starts discovery or waits for the writer. */
+/** Held tracking state; an expired acknowledgment refreshes in the background without holding its read. */
 export type WorkspaceTracking =
-  | { kind: "tracked" }
+  | { kind: "tracked"; refreshing?: true; preparation?: { requestedAt: number; acknowledgedAt: number; queueMs?: number; discoveryMs: number; trackAckMs: number } }
   | { kind: "outside" }
   | { kind: "pending"; reason: string }
   | { kind: "incomplete"; reason: string }

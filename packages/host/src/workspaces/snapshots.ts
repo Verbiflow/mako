@@ -1,3 +1,4 @@
+import { hostLog } from "../base/host-log.js"
 import { createHash, randomUUID } from "node:crypto"
 import {
   existsSync,
@@ -76,6 +77,9 @@ async function changedBytes(scope: string, paths: readonly string[]): Promise<nu
 }
 /** A staging index kept with each checkpoint, at most. */
 const MAX_INDEX_BYTES = 64 * 1024 ** 2
+/** Idle prepared workspaces kept warm; active runs and in-flight preparation retain their own state. */
+const PREPARED_WORKSPACES = 64
+const PREPARE_QUIET_MS = 250
 interface ActiveRun {
   scope: string
   snapshotId?: string
@@ -83,7 +87,18 @@ interface ActiveRun {
   shared: Set<string>
   /** The turn is over and its closing checkpoint is being written. */
   ending?: boolean
+  superseded?: boolean
+  prepared?: boolean
 }
+type BaselineWatch = { ready: Promise<void>; alive(): boolean; reliable(): boolean; close(): void }
+type BaselineWatcher = (scope: string, repositories: readonly string[], changed: () => void) => BaselineWatch | undefined
+type PreparedBaseline = {
+  scope: string
+  revision: number
+  state: { kind: "unavailable"; reason: string } | { kind: "ready"; snapshot: WorkspaceSnapshot; preparedAt: number; captureMs: number }
+}
+export type PreparedRun = { kind: "ready"; snapshot: WorkspaceSnapshot; preparedAt: number; captureMs: number } | { kind: "unavailable"; reason: string }
+
 /** Workspace-wide Git checkpoints, with a separate index and a durable restore intent.
  * Restoring never moves HEAD. A retry completes the same fork, or refuses any edits
  * made since the interrupted operation. Native provider history is never rolled back.
@@ -131,6 +146,14 @@ export class WorkspaceSnapshots {
   /** Workspaces whose files a rewind is rewriting. */
   private readonly restoring = new Set<string>()
   private readonly runs = new Map<string, ActiveRun>()
+  private readonly prepared = new Map<string, PreparedBaseline>()
+  private readonly preparing = new Map<string, Promise<void>>()
+  private readonly baselineWatches = new Map<string, { key: string; watch: BaselineWatch }>()
+  private watchChanges: BaselineWatcher | undefined
+  private readonly prepareTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private closed = false
+  private preparationCount = 0
+  private readonly preparationQueue: (() => void)[] = []
   private readonly orphanBytes = new Map<string, number>()
   private readonly git: Git
   private readonly root: string
@@ -162,12 +185,146 @@ export class WorkspaceSnapshots {
   }
 
   close(): void {
+    this.closed = true
+    for (const timer of this.prepareTimers.values()) clearTimeout(timer)
+    this.prepareTimers.clear()
+    for (const held of this.baselineWatches.values()) held.watch.close()
+    this.baselineWatches.clear()
     this.db.close()
   }
 
   /** Follows the watcher's history, so a turn whose workspace nothing changed in since the last checkpoint takes that one. */
   followHistory(history: FileHistory): void {
     this.history = history
+  }
+
+  followChanges(watch: BaselineWatcher): void {
+    this.watchChanges = watch
+  }
+
+  /** Background work only: a send consumes the held result through `beginPreparedRun`. */
+  prepare(cwd: string): Promise<void> {
+    const active = this.preparing.get(cwd)
+    if (active) return active
+    const entry: PreparedBaseline = this.prepared.get(cwd) ?? { scope: resolve(cwd), revision: 0, state: { kind: "unavailable", reason: "The content baseline is still being prepared" } }
+    this.prepared.set(cwd, entry)
+    for (const [old, held] of this.prepared) {
+      if (this.prepared.size <= PREPARED_WORKSPACES) break
+      if (old !== cwd && !this.preparing.has(old) && !this.busy(held.scope)) {
+        this.prepared.delete(old)
+        this.baselineWatches.get(old)?.watch.close()
+        this.baselineWatches.delete(old)
+      }
+    }
+    if (this.closed || entry.state.kind === "ready" || this.busy(entry.scope)) return Promise.resolve()
+    const revision = entry.revision
+    const began = Date.now()
+    let captureStartedAt: number | undefined, capturedAt: number | undefined
+    const preparing = (async () => {
+      const release = await this.enterPreparation()
+      const enteredAt = Date.now()
+      try {
+        if (this.closed) return
+        if (this.watchChanges) {
+          const workspace = await this.workspace(cwd)
+          entry.scope = workspace.scope
+          const key = [workspace.scope, ...workspace.repositories].join("\0")
+          let held = this.baselineWatches.get(cwd)
+          if (!held || held.key !== key || !held.watch.alive()) {
+            held?.watch.close()
+            const watch = this.watchChanges(workspace.scope, workspace.repositories, () => this.changed(cwd))
+            if (!watch) throw new Error("The workspace monitor is unavailable")
+            held = { key, watch }
+            this.baselineWatches.set(cwd, held)
+          }
+          await held.watch.ready
+          if (!held.watch.alive() || !held.watch.reliable()) throw new Error("The workspace monitor is unavailable or lost events")
+        }
+        const mark = await this.history?.mark()
+        captureStartedAt = Date.now()
+        const snapshot = await this.capture(cwd, undefined, true)
+        capturedAt = Date.now()
+        // A history read catches changes held back by the stream during the capture. It never holds a send.
+        const changes = mark ? await this.history?.since(mark, [snapshot.scope], { exclude: [join(snapshot.scope, ".git")] }) : undefined
+        if (this.closed) return
+        if (entry.revision !== revision || this.busy(snapshot.scope) || changes?.paths.length || changes?.lost.length)
+          throw new Error("The workspace changed while its content baseline was prepared")
+        entry.scope = snapshot.scope
+        entry.state = { kind: "ready", snapshot, preparedAt: Date.now(), captureMs: capturedAt - captureStartedAt }
+      } catch (error) {
+        if (!this.closed && entry.revision === revision) entry.state = { kind: "unavailable", reason: error instanceof Error ? error.message : String(error) }
+      } finally {
+        release()
+        hostLog("checkpoints", "baseline preparation finished", { cwd, requestedAt: began, enteredAt, queueMs: enteredAt - began, preparedAt: Date.now(), captureStartedAt: captureStartedAt ?? null, capturedAt: capturedAt ?? null, elapsedMs: Date.now() - began, kind: entry.state.kind, revision, snapshot: entry.state.kind === "ready" ? entry.state.snapshot.id : null })
+      }
+    })().finally(() => {
+      this.preparing.delete(cwd)
+      if (!this.closed && entry.revision !== revision && !this.busy(entry.scope)) this.schedulePrepare(cwd)
+    })
+    this.preparing.set(cwd, preparing)
+    return preparing
+  }
+
+  private enterPreparation(): Promise<() => void> {
+    return new Promise(resolve => {
+      const enter = () => {
+        this.preparationCount++
+        resolve(() => { this.preparationCount--; this.preparationQueue.shift()?.() })
+      }
+      if (this.preparationCount < 4) enter()
+      else this.preparationQueue.push(enter)
+    })
+  }
+
+  /** Invalidate before recording the event; repeated events coalesce into one background recapture. */
+  changed(root: string, reason = "The workspace changed after its content baseline was prepared"): void {
+    for (const [cwd, entry] of this.prepared) {
+      if (!overlaps(entry.scope, root) && !overlaps(cwd, root)) continue
+      entry.revision++
+      entry.state = { kind: "unavailable", reason }
+      if (!this.busy(entry.scope)) this.schedulePrepare(cwd)
+    }
+  }
+
+  private schedulePrepare(cwd: string): void {
+    if (this.closed) return
+    clearTimeout(this.prepareTimers.get(cwd))
+    const timer = setTimeout(() => {
+      this.prepareTimers.delete(cwd)
+      void this.prepare(cwd)
+    }, PREPARE_QUIET_MS)
+    timer.unref()
+    this.prepareTimers.set(cwd, timer)
+  }
+
+  private busy(scope: string): boolean {
+    return [...this.restoring].some(root => overlaps(root, scope)) || [...this.runs.values()].some(run => overlaps(run.scope, scope))
+  }
+
+  /** A memory-only reservation: no discovery, Git, file history or capture is allowed on this path. */
+  beginPreparedRun(id: string, cwd: string): PreparedRun {
+    let entry = this.prepared.get(cwd)
+    if (!entry) {
+      entry = { scope: resolve(cwd), revision: 0, state: { kind: "unavailable", reason: "The content baseline has not been prepared" } }
+      this.prepared.set(cwd, entry)
+    }
+    const scope = entry.scope
+    const reliable = !this.watchChanges || this.baselineWatches.get(cwd)?.watch.reliable()
+    const ready = reliable && !this.busy(scope) ? entry.state : undefined
+    const run: ActiveRun = { scope, shared: new Set(), prepared: true }
+    for (const [otherId, other] of this.runs) {
+      if (!overlaps(other.scope, scope)) continue
+      if (other.ending) other.superseded = true
+      other.shared.add(id)
+      run.shared.add(otherId)
+    }
+    this.runs.set(id, run)
+    this.changed(scope, "A turn is using the workspace")
+    if (ready?.kind === "ready") {
+      run.snapshotId = ready.snapshot.id
+      return ready
+    }
+    return { kind: "unavailable", reason: ready?.kind === "unavailable" ? ready.reason : "The content baseline was not ready when the turn went" }
   }
 
   /** Rewinds a crash left unfinished; one across several repositories as the whole rewind, which `restore` finishes. */
@@ -223,21 +380,47 @@ export class WorkspaceSnapshots {
     return snapshot
   }
 
+  /** Capture for a run already reserved by beginPreparedRun, independent of attribution availability. */
+  async captureRun(id: string, frozen?: () => void): Promise<WorkspaceSnapshot> {
+    const run = this.runs.get(id)
+    if (!run) throw new Error("The turn no longer owns its checkpoint")
+    const began = Date.now()
+    let frozenAt: number | undefined
+    const tell = frozen ? () => { frozenAt ??= Date.now(); frozen() } : undefined
+    const snapshot = await this.capture(run.scope, run.shared, true, tell)
+    run.snapshotId = snapshot.id
+    hostLog("checkpoints", "turn baseline captured", { request: id, scope: run.scope, requestedAt: began, frozenAt: frozenAt ?? null, savedAt: Date.now(), captureMs: Date.now() - began, snapshot: snapshot.id })
+    return snapshot
+  }
+
   /** The checkpoint after a turn, naming every run that shared the workspace with it. */
   async endRun(id: string): Promise<WorkspaceSnapshot> {
     const run = this.runs.get(id)
-    if (!run)
-      throw new Error("No workspace checkpoint was captured before this turn")
+    if (!run) throw new Error("No workspace checkpoint was captured before this turn")
     run.ending = true
+    const began = Date.now()
+    const revisions = new Map([...this.prepared].map(([cwd, entry]) => [cwd, entry.revision]))
     try {
-      return await this.capture(run.scope, run.shared)
+      if (run.prepared && [...this.runs.values()].some(other => other !== run && !other.ending && overlaps(other.scope, run.scope)))
+        throw new Error("Other work is still using this workspace")
+      const snapshot = await this.capture(run.scope, run.shared)
+      if (run.superseded) throw new Error("Another turn started before this turn's after checkpoint finished")
+      hostLog("checkpoints", "after checkpoint prepared", { request: id, scope: run.scope, requestedAt: began, preparedAt: Date.now(), captureMs: Date.now() - began, snapshot: snapshot.id })
+      if (!snapshot.shared?.length) for (const [cwd, entry] of this.prepared) {
+        if (overlaps(entry.scope, run.scope) && entry.revision === revisions.get(cwd) && (!this.watchChanges || this.baselineWatches.get(cwd)?.watch.reliable()))
+          entry.state = { kind: "ready", snapshot, preparedAt: Date.now(), captureMs: Date.now() - began }
+      }
+      return snapshot
     } finally {
       this.runs.delete(id)
+      for (const [cwd, entry] of this.prepared) if (overlaps(entry.scope, run.scope) && entry.state.kind !== "ready" && !this.busy(entry.scope)) this.schedulePrepare(cwd)
     }
   }
 
   abandonRun(id: string): void {
+    const run = this.runs.get(id)
     this.runs.delete(id)
+    if (run) for (const [cwd, entry] of this.prepared) if (overlaps(entry.scope, run.scope) && !this.busy(entry.scope)) this.schedulePrepare(cwd)
   }
 
   private assertIdle(scope: string): void {
@@ -414,6 +597,7 @@ export class WorkspaceSnapshots {
     for (const run of this.runs.values()) {
       if (run.snapshotId) protectedIds.add(run.snapshotId)
     }
+    for (const entry of this.prepared.values()) if (entry.state.kind === "ready") protectedIds.add(entry.state.snapshot.id)
     for (const row of this.db.prepare("SELECT value FROM restores").iterate()) {
       const operation = OperationSchema.parse(
         JSON.parse(RowSchema.parse(row).value)
@@ -542,10 +726,12 @@ export class WorkspaceSnapshots {
     if (this.restoring.has(target.scope))
       throw new Error("Another rewind of this workspace is running")
     this.restoring.add(target.scope)
+    this.changed(target.scope, "A rewind is changing the workspace")
     try {
       await this.restoreLocked(plan, target, complete)
     } finally {
       this.restoring.delete(target.scope)
+      for (const [cwd, entry] of this.prepared) if (overlaps(entry.scope, target.scope) && !this.busy(entry.scope)) this.schedulePrepare(cwd)
     }
   }
 

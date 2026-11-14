@@ -213,7 +213,7 @@ export class LiveConversations {
       flush: (resident) => this.flush(resident),
       storageFailed: (resident, boundary) => this.storageFailed(resident, boundary),
       loaded: (resident) => {
-        this.dependencies.observeWorkspace?.(resident.snapshot.session.cwd)
+        this.prepareWorkspace(resident.snapshot.session.cwd)
         void this.sources.readBase(resident)
         this.counts.loaded(resident)
         // A journal keeps no children: their engine says how they are now, and a window that holds the last revision
@@ -746,12 +746,26 @@ export class LiveConversations {
     return this.sources.capture(id, path)
   }
 
+  /** Observing a Thread does background work; dispatch only consumes what it finished. */
+  private prepareWorkspace(cwd: string): void {
+    this.dependencies.observeWorkspace?.(cwd)
+    this.prepareCheckpoint(cwd)
+  }
+
+  prepareCheckpoint(cwd: string): void {
+    void this.dependencies.workspaceSnapshots?.prepare(cwd)
+  }
+
+  baselineChanged(root: string, reason?: string): void {
+    this.dependencies.workspaceSnapshots?.changed(root, reason)
+  }
+
   async start(provider: string, cwd: string, options: LiveStartOptions, by?: Actor, purpose?: StartPurpose): Promise<LiveSessionState> {
     if (options.goal !== undefined) GoalCommandSchema.parse({ kind: "set", ...options.goal })
     if (options.review !== undefined) ReviewTargetSchema.parse(options.review)
     // A Fin's brief is its Apex's words, not the person's.
     const actor = by ?? (options.parent && !options.resume ? ActorSchema.parse(options.parent.startedBy) : undefined)
-    this.dependencies.observeWorkspace?.(cwd)
+    this.prepareWorkspace(cwd)
     const state = await this.launches.start(provider, cwd, options, actor, purpose)
     if (options.initialRequest) this.firstMessage(options, actor)
     if (options.goal !== undefined) this.goals.begin(options.conversationId, options.goal, { actor: this.threads.actor(actor), tuning: options.tuning })
@@ -1001,7 +1015,7 @@ export class LiveConversations {
    */
   journalOpened(): void {
     for (const resident of this.records.values()) {
-      this.dependencies.observeWorkspace?.(resident.snapshot.session.cwd)
+      this.prepareWorkspace(resident.snapshot.session.cwd)
       this.counts.loaded(resident)
     }
   }

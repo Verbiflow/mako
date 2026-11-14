@@ -176,6 +176,7 @@ export interface ConversationsDeps {
   archived?(conversationId: string): boolean
   /** The attribution journal, for counting each turn's changes; undefined until it opens. */
   turnLedger?: LiveDependencies["turnLedger"]
+  watchSnapshots?: Parameters<WorkspaceSnapshots["followChanges"]>[0]
   observeWorkspace?: LiveDependencies["observeWorkspace"]
   workspaceTracking?: LiveDependencies["workspaceTracking"]
   /** The attribution journal, for reviewing and undoing a turn; undefined until it opens. */
@@ -247,6 +248,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       const snapshots = new WorkspaceSnapshots(deps.git, join(dataRoot, "workspace-snapshots"))
       // A turn whose workspace nothing changed in since the last checkpoint goes to its agent on that checkpoint.
       snapshots.followHistory(workspaces.fileHistory)
+      if (deps.watchSnapshots) snapshots.followChanges(deps.watchSnapshots)
       return snapshots
     })(),
     rewindWriters: deps.rewindWriters,

@@ -340,6 +340,7 @@ function outermost(folders: readonly string[]): string[] {
 
 /** A turn re-asks the owner to track its checkout at most this often: the owner may have let it go as idle. */
 const RETRACK_MS = 10 * 60_000
+const WORKSPACE_PREPARATIONS = 4
 
 /** The shared journal once it's open; what it calls while it opens reads it through this. */
 interface Sharing {
@@ -449,9 +450,26 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
   const repositories = new Map<string, readonly string[]>()
   const preparing = new Map<string, Promise<WorkspaceTracking>>()
   const tracking = new Map<string, WorkspaceTracking>()
+  let preparationCount = 0, preparationClosing = false
+  const preparationQueue: (() => void)[] = []
+  const enterPreparation = () => new Promise<() => void>(resolve => {
+    const enter = () => {
+      preparationCount++
+      let released = false
+      resolve(() => {
+        if (released) return
+        released = true
+        preparationCount--
+        preparationQueue.shift()?.()
+      })
+    }
+    if (preparationCount < WORKSPACE_PREPARATIONS) enter()
+    else preparationQueue.push(enter)
+  })
   /** When each repository was last asked to be tracked. */
   const asked = new Map<string, number>()
   const prepareWorkspace = (checkout: string): Promise<WorkspaceTracking> => {
+    if (preparationClosing) return Promise.resolve({ kind: "unavailable", reason: "The file attribution journal is closing" })
     const waiting = preparing.get(checkout)
     if (waiting) return waiting
     const failure = journal.status().failure
@@ -461,21 +479,28 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       return Promise.resolve(unavailable)
     }
     tracking.set(checkout, { kind: "pending", reason: "The checkout's tracking has not finished" })
+    const requestedAt = Date.now()
     const prepared = (async (): Promise<WorkspaceTracking> => {
+      const release = await enterPreparation()
+      const enteredAt = Date.now()
       try {
+        if (preparationClosing) return { kind: "unavailable", reason: "The file attribution journal is closing" }
         const found = await locate(deps.git, checkout)
         const project = found ? { roots: [found.root] } : await projectRepositories(deps.git, checkout)
         if ("refusal" in project) return project.reason === "outside" ? { kind: "outside" } : { kind: "incomplete", reason: project.refusal }
+        const discoveredAt = Date.now()
         for (const root of project.roots) {
           await journal.writes.track(root)
           asked.set(root, Date.now())
         }
         checkouts.set(checkout, found ? found.root : project.roots.length ? checkout : null)
         repositories.set(checkout, project.roots)
-        return project.roots.length ? { kind: "tracked" } : { kind: "outside" }
+        const preparation = { requestedAt, acknowledgedAt: Date.now(), queueMs: enteredAt - requestedAt, discoveryMs: discoveredAt - enteredAt, trackAckMs: Date.now() - discoveredAt }
+        hostLog("attribution", "workspace tracking prepared", { checkout, ...preparation, repositories: project.roots.length })
+        return project.roots.length ? { kind: "tracked", preparation } : { kind: "outside" }
       } catch (error) {
         return { kind: "unavailable", reason: error instanceof Error ? error.message : String(error) }
-      }
+      } finally { release() }
     })().then(result => { tracking.set(checkout, result); return result }).finally(() => preparing.delete(checkout))
     preparing.set(checkout, prepared)
     return prepared
@@ -599,7 +624,11 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       const failure = journal.status().failure
       if (failure) return { kind: "unavailable", reason: failure }
       const state = tracking.get(checkout)
-      if (state?.kind === "tracked" && !fresh(checkout)) return { kind: "pending", reason: "The checkout's tracking needs to be refreshed" }
+      if (state?.kind === "tracked" && !fresh(checkout)) {
+        // Its baseline remains acknowledged while a refresh is queued in the background.
+        void prepareWorkspace(checkout)
+        return { ...state, refreshing: true }
+      }
       return state ?? { kind: "pending", reason: "The checkout has not been tracked yet" }
     },
     readBack: (checkout, budgetMs) => journal.writes.readBack(checkout, budgetMs),
@@ -646,6 +675,7 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     }),
     rescans: () => { void writer.command({ kind: "snapshot" }).catch(() => {}); return writer.snapshot()?.rescans ?? null },
     async close() {
+      preparationClosing = true
       unwatch()
       offLoop?.reader.close()
       offLoop = undefined
