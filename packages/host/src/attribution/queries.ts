@@ -601,9 +601,9 @@ export function restorable(view: JournalView, target: { root: string; path: stri
 /** Files a turn's summary lists, at most; the rest are counted (`more`). */
 export const TURN_FILES = 500
 /** A turn's entries `countingTurn` reads a page. */
-const TURN_PAGE = 256
+const TURN_PAGE = 128
 /** Entries of the journal's numbering `othersDuring` reads a window, and how many of those in the turn's span it counts at most. */
-const OTHERS_WINDOW = 1_024
+const OTHERS_WINDOW = 512
 const OTHERS_LIMIT = 10_000
 
 /** Whose a line is in a turn's count: the Thread's, possibly its, or someone else's. */
