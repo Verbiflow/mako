@@ -2,7 +2,8 @@ import { execFileSync, spawn } from "node:child_process"
 
 /** Every process of `group`, one line each, with what it's running: a hang's name. */
 function groupProcesses(group) {
-  const table = execFileSync("ps", ["-axo", "pid=,pgid=,stat=,etime=,pcpu=,command="], { encoding: "utf8" })
+  // wchan: the kernel call each is blocked in, which is all a Linux runner can say of where it's stuck.
+  const table = execFileSync("ps", ["-axo", "pid=,pgid=,stat=,wchan=,etime=,pcpu=,command="], { encoding: "utf8" })
   return table.split("\n").flatMap((line) => {
     const [pid, pgid] = line.trim().split(/\s+/)
     return Number(pgid) === group && Number(pid) !== process.pid ? [{ pid: Number(pid), line: line.trim().slice(0, 240) }] : []
