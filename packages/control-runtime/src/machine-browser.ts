@@ -1,6 +1,7 @@
 import { spawn } from "./processes.js"
 import type { ChildProcess } from "node:child_process"
 import { statfsSync } from "node:fs"
+import { get } from "node:http"
 import { mkdir, rm } from "node:fs/promises"
 import { join } from "node:path"
 import type { LocalBrowser } from "./browser-discovery.js"
@@ -56,13 +57,28 @@ export class MachineBrowser {
     this.#child = undefined
   }
 
-  #endpoint(): Promise<string> {
-    if (this.#closed) return Promise.reject(new Error("The machine's browser is shutting down"))
+  /**
+   * The running Chromium's DevTools endpoint, launching one when none runs. One that announced its endpoint and no
+   * longer takes connections is gone even before its exit is heard: a killed Chromium's socket closes first, and a
+   * connect in between was handed its port and refused (ECONNREFUSED; 4 of 200 test runs on a loaded runner). So a
+   * kept endpoint is asked first (`accepts`), and one that doesn't answer starts Chromium again, once.
+   */
+  async #endpoint(again = true): Promise<string> {
+    if (this.#closed) throw new Error("The machine's browser is shutting down")
     this.#starting ??= this.#launch().catch((error: Error) => {
       this.#starting = undefined
       throw error
     })
-    return this.#starting
+    const starting = this.#starting
+    const endpoint = await starting
+    if (!again || (await accepts(endpoint))) return endpoint
+    if (this.#starting === starting) {
+      const child = this.#child
+      this.#child = undefined
+      this.#starting = undefined
+      child?.kill("SIGKILL")
+    }
+    return this.#endpoint(false)
   }
 
   async #launch(): Promise<string> {
@@ -127,6 +143,29 @@ export class MachineBrowser {
       child.stderr.resume()
     }
   }
+}
+
+/** Ways a DevTools port says nobody serves it: refused, or taken by a process going away and then reset. */
+const GONE = new Set(["ECONNREFUSED", "ECONNRESET", "EPIPE"])
+
+/**
+ * Whether DevTools answers at an endpoint's port: any HTTP answer is a live one. A bare TCP connect isn't, since a
+ * killed Chromium's listening socket can still take one while the process goes, and the WebSocket after it was reset
+ * (1 of 200 loaded runs). Only a refusal or a reset says no; a slow answer counts as live, so a busy one isn't dropped.
+ */
+function accepts(endpoint: string): Promise<boolean> {
+  const { hostname, port } = new URL(endpoint)
+  return new Promise((resolve) => {
+    const request = get({ host: hostname, port: Number(port), path: "/json/version", timeout: 1_000 }, (response) => {
+      response.resume()
+      resolve(true)
+    })
+    request.once("timeout", () => {
+      request.destroy()
+      resolve(true)
+    })
+    request.once("error", (error: NodeJS.ErrnoException) => resolve(!GONE.has(error.code ?? "")))
+  })
 }
 
 function sharedMemory(): number {
