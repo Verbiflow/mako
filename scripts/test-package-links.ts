@@ -220,7 +220,8 @@ try {
     await carryOutputs(gitRunner, main, proving, linking)
     const provingEnvironment = { ...environment(join(root, "data-prove")), app: AppKeySchema.parse("folder-00000000000000bb") }
     mkdirSync(provingEnvironment.dataDir, { recursive: true })
-    const inProve = environmentTools({ git: gitRunner, cwd: () => proving, environment: async () => provingEnvironment, launchedWith: () => undefined, processes, traces, recipesRoot: recipes, settleMs: 15_000, history })
+    // app_status is asserted on what the history says (here and below), so it waits for the read, not its 1.5 s budget.
+    const inProve = environmentTools({ git: gitRunner, cwd: () => proving, environment: async () => provingEnvironment, launchedWith: () => undefined, processes, traces, recipesRoot: recipes, settleMs: 15_000, history, linkWritesWaitMs: 60_000 })
     const server = (write: boolean) => RecipeSchema.parse({
       ...recipe,
       processes: { web: {
@@ -242,8 +243,12 @@ try {
     assert.match(parseYaml(await inProve.status("c3")).writesThroughLinks, /^Since this app came up, node_modules\/left-pad\/index\.js changed in the main checkout/, "app_status says so while the app runs")
     await inProve.stop("c3")
     // A history that lost events there, or a fseventsd restart since the app came up, can't prove nothing wrote: said, never passed.
-    const losing: FileHistory = { mark: () => history.mark(), since: async (mark, roots, options) => ({ ...(await history.since(mark, roots, options)), lost: [...roots] }) }
-    const inLost = environmentTools({ git: gitRunner, cwd: () => proving, environment: async () => provingEnvironment, launchedWith: () => undefined, processes, traces, recipesRoot: recipes, settleMs: 15_000, history: losing })
+    // Its reads take 2 s, past app_status's 1.5 s budget, as a loaded machine's did: app_status waits for what it's asserted on.
+    const losing: FileHistory = { mark: () => history.mark(), since: async (mark, roots, options) => {
+      await new Promise((settle) => setTimeout(settle, 2_000))
+      return { ...(await history.since(mark, roots, options)), lost: [...roots] }
+    } }
+    const inLost = environmentTools({ git: gitRunner, cwd: () => proving, environment: async () => provingEnvironment, launchedWith: () => undefined, processes, traces, recipesRoot: recipes, settleMs: 15_000, history: losing, linkWritesWaitMs: 60_000 })
     rmSync(join(provingEnvironment.dataDir, "up"), { force: true })
     await inLost.save("c4", RecipeSchema.parse({ ...server(false), verify: { run: "node -e \"require('@scope/ui')\"" } }), "Only reads its packages, with the history incomplete")
     const unproven = await inLost.publish("c4")
