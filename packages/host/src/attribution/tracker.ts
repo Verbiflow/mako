@@ -27,6 +27,7 @@ import {
 import { join } from "node:path"
 import { inSlices, StepsStopped } from "@mako/sessions/slices"
 import { HourCounts } from "../base/hour-counts.js"
+import { mapLimit } from "../base/map-limit.js"
 import type { RescanFootprint } from "../contracts/mako-footprint.js"
 import { contentRef, decodeText, hasher, isText, READ_LIMIT, secretPath, STORE_LIMIT } from "./content.js"
 import { attribute, authorOf, claim, Evidence, LEAD_MS, reaches as reachesChange, TRAIL_MS, type Interval, type ObservedChange, type Reach } from "./evidence.js"
@@ -278,16 +279,6 @@ interface Observed {
   bytes?: Uint8Array
   ref?: ContentRef
   text?: boolean
-}
-
-const mapLimit = async <T, R>(items: readonly T[], limit: number, run: (item: T) => Promise<R>): Promise<R[]> => {
-  const out: R[] = []
-  let next = 0
-  const worker = async () => {
-    for (let i = next++; i < items.length; i = next++) out[i] = await run(items[i]!)
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
-  return out
 }
 
 const sameFile = (one: TrackerFileStat, other: TrackerFileStat) =>
