@@ -317,7 +317,7 @@
     "test:fins-reach-released-apex": "tsx scripts/test-fins-reach-released-apex.ts",
     "test:fins-fresh-on-return-ui": "node scripts/test-fins-fresh-on-return-ui.mjs",
     "test:orch-front-door": "tsx scripts/test-orch-front-door.ts && tsx --tsconfig tsconfig.app.json scripts/test-routed-transcript.ts",
-    "test:orch-answer": "tsx scripts/test-orch-answer.ts",
+    "test:orch-answer": "tsx scripts/test-orch-answer.ts && tsx scripts/test-fin-obligations.ts && tsx scripts/test-report-actions.ts && tsx scripts/test-report-custody.ts",
     "test:fin-resume": "tsx scripts/test-fin-resume.ts",
     "test:git-helper": "tsx scripts/test-git-helper.ts && node --expose-gc --import tsx scripts/test-git-helper-release.ts",
     "test:git-helper-release": "node --expose-gc --import tsx scripts/test-git-helper-release.ts",
@@ -524,7 +524,7 @@
     "appId": "dev.mako.app",
     "productName": "Mako",
     "artifactName": "${productName}-${arch}.${ext}",
-    "copyright": "Copyright © 2026 Verbiflow",
+    "copyright": "Copyright \u00a9 2026 Verbiflow",
     "directories": {
       "output": "release",
       "buildResources": "build"
