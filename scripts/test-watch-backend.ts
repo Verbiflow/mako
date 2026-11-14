@@ -47,6 +47,9 @@ function watcherChildren(): number[] {
 // consumers answer with a rescan: a fresh marker is then the barrier. A watch
 // that goes quiet without saying so still fails, with what it did say.
 let markers = 0
+/** What a watch said while a drain waited, for a failure to name. */
+const whatItSaid = (watch: ReturnType<typeof recorder>) =>
+  `${watch.dropped()} dropped, muted ${JSON.stringify(watch.mutes)}, late ${JSON.stringify(watch.lates)}, watcher children ${JSON.stringify(watcherChildren())}`
 /** Resolves once the watch is drained, saying whether it dropped events meanwhile: then what was written before may be lost. */
 async function drained(folder: string, watch: ReturnType<typeof recorder>): Promise<boolean> {
   const deadline = Date.now() + 90_000
@@ -55,8 +58,7 @@ async function drained(folder: string, watch: ReturnType<typeof recorder>): Prom
   let marker = join(folder, `marker-${++markers}`)
   writeFileSync(marker, "")
   while (!watch.heard.includes(marker)) {
-    const said = () => `${watch.dropped()} dropped, muted ${JSON.stringify(watch.mutes)}, late ${JSON.stringify(watch.lates)}, watcher children ${JSON.stringify(watcherChildren())}`
-    assert.ok(Date.now() < deadline, `file events arrive (${marker}); the watch said ${said()}`)
+    assert.ok(Date.now() < deadline, `file events arrive (${marker}); the watch said ${whatItSaid(watch)}`)
     if (watch.dropped() > drops) {
       drops = watch.dropped()
       marker = join(folder, `marker-${++markers}`)
@@ -81,7 +83,9 @@ try {
   await drained(kept, a)
   // A drop during the drain may have taken these writes with it, as a consumer's rescan would find: they're made
   // again, and drained again, until a drain passes without one.
-  for (let lost = true; lost;) {
+  // Three drains at most: a watch that drops every time is broken, and says so here rather than at the step's limit.
+  for (let attempt = 1, lost = true; lost; attempt += 1) {
+    assert.ok(attempt <= 3, `file events arrive (index.ts): each of 3 drains saw a drop; the watch said ${whatItSaid(a)}`)
     mkdirSync(join(kept, "node_modules", "pkg"), { recursive: true })
     writeFileSync(join(kept, "node_modules", "pkg", "index.js"), "")
     writeFileSync(join(kept, "index.ts"), "")
