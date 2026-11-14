@@ -210,9 +210,11 @@ assert.ok(keptPath && existsSync(keptPath), "skipping after the worktree is read
 commit(moved.path, "thread work")
 writeFileSync(join(moved.path, "scratch.txt"), "not yet\n")
 const movedTip = git(moved.path, "rev-parse", "HEAD")
-let asked = 0
+// This fixture counts summary-to-pullsOf evaluations, not HTTP/gh calls. The reader's five-minute
+// list and minute per-PR caches are exercised with actual fake-gh calls in test-github-ref-refresh.ts.
+let pullEvaluations = 0
 const pulls = async (): Promise<WorktreeBranchPull[]> => {
-  asked++
+  pullEvaluations++
   return [
     { number: 9, title: "Here", url: "https://example.test/9", branch: moved.branch, state: "merged", head: movedTip, checks: "passed" },
     { number: 7, title: "Fork", url: "https://example.test/7", branch: "patch-1", state: "open", head: "abc", checks: "running" },
@@ -223,10 +225,12 @@ const squashed = await summaryOf(moved.path)
 assert.deepEqual([squashed?.into, squashed?.ahead, squashed?.changes, squashed?.landing.kind, squashed?.pull?.number], ["main", 1, 1, "merged", 9],
   "a pull request merged with the branch's tip as its head has landed, though main never got the commit")
 assert.equal((await summaryOf(onFork.path))?.pull?.number, 7, "a fork's pull request is found by its number")
+assert.equal(pullEvaluations, 1, "unchanged repository live points share one mapping evaluation")
 commit(moved.path, "after the merge")
 assert.equal((await summaryOf(moved.path))?.landing.kind, "open", "a commit after the merge isn't in it")
-assert.equal(asked, 1, "GitHub is asked once a minute per repository")
+assert.equal(pullEvaluations, 2, "a changed live HEAD re-evaluates the mapping once, even within the minute")
 assert.equal((await service.summaries()).find((summary) => summary.path === moved.path)?.pull?.number, 9, "within the minute the last answer stands")
+assert.equal(pullEvaluations, 2, "an unchanged-head repeat reuses the mapping; this counter is not network requests")
 
 // Update from main: what the start point has comes in as a merge; a conflict is left for resolving.
 const upId = placed()
@@ -239,9 +243,10 @@ const upSummary = await service.summary(up.path, pulls)
 assert.deepEqual([upSummary?.behind?.commits, upSummary?.startedFrom], [1, "origin/main"], "one worktree's summary says where its branch started")
 assert.equal(await service.startedFrom(up.path), "origin/main")
 assert.equal(await service.summary(join(project, "elsewhere")), undefined)
+const beforeForget = pullEvaluations
 service.forgetPulls()
 await summaryOf(up.path)
-assert.equal(asked, 2, "after something here opened or merged a pull request, GitHub is asked again at once")
+assert.equal(pullEvaluations, beforeForget + 1, "an explicit invalidation adds one mapping evaluation, independent of earlier live-point changes")
 assert.deepEqual(await service.update(up.path), { kind: "updated", from: "main", commits: 1 })
 assert.ok(await gitRunner.succeeds(up.path, ["merge-base", "--is-ancestor", "main", "HEAD"]))
 assert.deepEqual(await service.update(up.path), { kind: "current", from: "main" })

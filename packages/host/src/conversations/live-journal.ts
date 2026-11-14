@@ -1384,7 +1384,9 @@ export class LiveJournal {
     const tidy = () => {
       if (this.untidy) return
       if (ahead && !compact && paged) dropRowsAhead(this.path)
-      if (free) return compact(this.path)
+      if (free) return Promise.resolve(compact(this.path)).then(result => {
+        if (result && "skipped" in result) this.keepFile()
+      })
     }
     const freed = this.pager.release(readOnlyRows(this.path))
     const checkpointsClosed = this.checkpoints?.close()

@@ -1822,6 +1822,55 @@ describe("client frames", () => {
       clearTimeout(guard)
     }
   })
+  test("a connection gone quiet is probed at once, and ended when the probe goes unanswered, long before it's silent", async () => {
+    let answering = true
+    let pinged = 0
+    const session = clientSessionOverSockets(
+      () => {
+        const [near, far] = socketPair()
+        far.addEventListener("message", (event) => {
+          if (event.data !== PING) return
+          pinged++
+          if (answering) far.send(PONG)
+        })
+        return near
+      },
+      { heartbeatMs: 200, silentMs: 60_000, quietMs: 300, quietCheckMs: 50, quietProbeMs: 400 }
+    )
+    const subscription = session.subscribe({ stream: "thread:th-1", after: 0 })
+    while (pinged < 2) await new Promise((resolve) => setTimeout(resolve, 10))
+    // Half-open: the far end still holds the socket and never closes it, but nothing comes back.
+    answering = false
+    const stopped = Date.now()
+    await assert.rejects(Promise.race([subscription.next(), new Promise((_, reject) => setTimeout(() => reject(new Error("still open")), 5_000))]), (error) => !/still open/.test(error.message), "ended by its unanswered probe")
+    const after = Date.now() - stopped
+    assert.ok(after < 2_000, `ended about quiet + probe after the far end went quiet, not at the silent window (${after} ms)`)
+    session.close()
+  })
+  test("a slow link that answers its probe late, within the probe's time, is never ended for being quiet", async () => {
+    let pinged = 0
+    let far
+    const session = clientSessionOverSockets(
+      () => {
+        const [near, other] = socketPair()
+        far = other
+        // Every answer takes 350 ms: past the quiet window's check, inside the probe's time.
+        far.addEventListener("message", (event) => {
+          if (event.data !== PING) return
+          pinged++
+          setTimeout(() => far.readyState === 1 && far.send(PONG), 350)
+        })
+        return near
+      },
+      { heartbeatMs: 200, silentMs: 60_000, quietMs: 250, quietCheckMs: 50, quietProbeMs: 600 }
+    )
+    const subscription = session.subscribe({ stream: "thread:th-1", after: 0 })
+    const live = await Promise.race([subscription.next().then(() => "frame", () => "ended"), new Promise((resolve) => setTimeout(() => resolve("open"), 3_000))])
+    assert.equal(live, "open", "three seconds of late answers, never ended")
+    assert.ok(pinged >= 10, `probed and beaten throughout (${pinged} pings)`)
+    assert.equal(far.readyState, 1)
+    session.close()
+  })
   test("waking ends a connection not heard from within a heartbeat at once, and one that doesn't answer a ping soon", async () => {
     let answering = true
     const session = clientSessionOverSockets(
