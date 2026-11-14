@@ -76,5 +76,5 @@ try {
 } finally {
   Date.now = originalNow
   if (previous === undefined) delete process.env.GH_PATH; else process.env.GH_PATH = previous
-  service.closeSummaries(); await service.settled(); store.close(); await Promise.allSettled([host.stop(), git.close()]); await rm(root, { recursive: true, force: true })
+  await service.closeSummaries(); await service.settled(); store.close(); await Promise.allSettled([host.stop(), git.close()]); await rm(root, { recursive: true, force: true })
 }
