@@ -67,10 +67,12 @@ try {
   const switching = workspace.selectRepository(root, first)
   assert.equal((await switching).root, first)
   assert.equal((await reading).root, first, "An in-flight refresh follows the latest selection")
-  const host = new AgentHost("repository-test", () => {}, services)
+  const observed: string[] = []
+  const host = new AgentHost("repository-test", () => {}, { ...services, observeWorkspace: cwd => { observed.push(cwd) } })
   try {
     host.setForeground(false)
     await host.start(root)
+    assert.deepEqual(observed, [root], "opening the workspace starts attribution without a provider or send")
     const session = host.meta().sessionId
     await host.selectGitRepository(root, first)
     assert.equal(host.workspace, root)

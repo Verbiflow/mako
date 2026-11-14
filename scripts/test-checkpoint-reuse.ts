@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { performance } from "node:perf_hooks"
+import { mock } from "node:test"
 import { Git } from "@mako/git"
 import type { HistoryMark } from "@mako/host/contracts/watcher-child"
 import type { FileHistory, HistoryOptions } from "@mako/host/workspaces/watch-backend"
@@ -49,7 +50,10 @@ const edit = (path: string, content: string, told = true) => {
   if (told) heard.push({ at: ++count, path: join(cwd, path) })
 }
 
-const store = new WorkspaceSnapshots(new Git(), join(root, "store"))
+let openedMonitors = 0, closedMonitors = 0
+let invalidateMonitor = () => {}
+const snapshotGit = new Git()
+const store = new WorkspaceSnapshots(snapshotGit, join(root, "store"))
 store.followHistory(history)
 const turn = async () => {
   const id = randomUUID()
@@ -184,8 +188,188 @@ try {
   const again = await turn()
   assert.equal(again.before.id, settled.after.id)
   console.log(JSON.stringify({ captureMs: Math.round(settled.ms), reusedMs: Math.round(again.ms), historyReads: reads }))
+  store.followChanges((scope, repositories, changed) => {
+    assert.equal(scope, cwd)
+    assert.deepEqual(repositories, [cwd])
+    openedMonitors++
+    invalidateMonitor = changed
+    let active = true
+    return { ready: Promise.resolve(), alive: () => active, reliable: () => active, close: () => { active = false; closedMonitors++ } }
+  })
+
+  // Preparation happens before dispatch; consuming its flag performs no new capture or history/Git reads.
+  await store.prepare(cwd)
+  {
+    const original = store.capture.bind(store)
+    const capture = mock.method(store, "capture", original)
+    const historyReads = reads
+    const preparedId = randomUUID()
+    try {
+      const prepared = store.beginPreparedRun(preparedId, cwd)
+      assert.ok(prepared.kind === "ready", "background work leaves a usable checkpoint")
+      assert.equal(capture.mock.callCount(), 0, "consuming readiness must not start capture")
+      assert.equal(reads, historyReads, "consuming readiness must not read file history")
+    } finally { store.abandonRun(preparedId); capture.mock.restore() }
+  }
+
+  // Invalidated content cannot be used as a ready checkpoint; the replacement captures already-dirty content.
+  edit("a.txt", "dirty before background preparation\n")
+  invalidateMonitor()
+  const unavailableId = randomUUID()
+  assert.equal(store.beginPreparedRun(unavailableId, cwd).kind, "unavailable")
+  store.abandonRun(unavailableId)
+  const commands = mock.method(snapshotGit, "run", snapshotGit.run.bind(snapshotGit))
+  try {
+    await store.prepare(cwd)
+    assert.equal(commands.mock.calls.some(call => call.arguments[0].args.includes("ls-files") && call.arguments[0].args.includes("-v")), false, "background recapture must reuse changed paths instead of the full capture listing")
+  } finally { commands.mock.restore() }
+  const cleanId = randomUUID()
+  const warmed = store.beginPreparedRun(cleanId, cwd)
+  assert.ok(warmed.kind === "ready")
+  const expectedWarm = await store.capture(cwd)
+  assert.equal(treeOf(join(root, "store"), warmed.snapshot.id), treeOf(join(root, "store"), expectedWarm.id))
+  store.abandonRun(cleanId)
+
+  lost = true
+  store.changed(cwd, "Watcher events were lost")
+  await store.prepare(cwd)
+  const lostId = randomUUID()
+  assert.equal(store.beginPreparedRun(lostId, cwd).kind, "unavailable", "lost history never publishes readiness")
+  store.abandonRun(lostId)
+  lost = false
+
+  // An ordinary closing checkpoint seeds the next turn; no second capture runs at the next send.
+  await store.prepare(cwd)
+  const endingId = randomUUID()
+  assert.equal(store.beginPreparedRun(endingId, cwd).kind, "ready")
+  edit("a.txt", "the turn wrote this\n")
+  store.changed(cwd)
+  const ended = await store.endRun(endingId)
+  const nextId = randomUUID()
+  const next = store.beginPreparedRun(nextId, cwd)
+  assert.ok(next.kind === "ready")
+  assert.equal(next.snapshot.id, ended.id, "the previous after snapshot is the next prepared before")
+  store.abandonRun(nextId)
+
+  // A later turn never waits for an in-flight after snapshot, which is then not a valid earlier boundary.
+  await store.prepare(cwd)
+  const earlier = randomUUID(), later = randomUUID()
+  store.beginPreparedRun(earlier, cwd)
+  let entered = false, release = () => {}
+  const blocked = new Promise<void>(resolve => { release = resolve })
+  const original = store.capture.bind(store)
+  const capture = mock.method(store, "capture", async (...args: Parameters<typeof original>) => { entered = true; await blocked; return original(...args) })
+  const finishing = store.endRun(earlier)
+  void finishing.catch(() => {})
+  try {
+    for (const deadline = Date.now() + 1000; !entered; await new Promise(resolve => setTimeout(resolve, 5))) assert.ok(Date.now() < deadline)
+    assert.equal(store.beginPreparedRun(later, cwd).kind, "unavailable")
+    release()
+    await assert.rejects(finishing, /Another turn started/)
+  } finally { release(); store.abandonRun(later); capture.mock.restore() }
+  console.log("prepared baselines: no foreground capture/history, invalidation, dirty content, previous-end reuse and nonblocking overlap")
+
+  // A background job queued before a send must not capture once that workspace is in use.
+  {
+    const queued = new WorkspaceSnapshots(new Git(), join(root, "queued-store"))
+    const folders = Array.from({ length: 5 }, (_, index) => join(root, `queued-${index}`))
+    for (const folder of folders) {
+      mkdirSync(folder)
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: folder })
+      writeFileSync(join(folder, "file.txt"), "content\n")
+    }
+    let release = () => {}
+    const held = new Promise<void>(resolve => { release = resolve })
+    const original = queued.capture.bind(queued)
+    const entered: string[] = []
+    const capture = mock.method(queued, "capture", async (...args: Parameters<typeof original>) => {
+      entered.push(args[0])
+      await held
+      return original(...args)
+    })
+    const working = folders.slice(0, 4).map(folder => queued.prepare(folder))
+    const request = randomUUID()
+    let waiting: Promise<void> | undefined
+    try {
+      for (const deadline = Date.now() + 2000; entered.length < 4; await new Promise(resolve => setTimeout(resolve, 5))) assert.ok(Date.now() < deadline)
+      waiting = queued.prepare(folders[4])
+      queued.beginPreparedRun(request, folders[4])
+      release()
+      await Promise.all([...working, waiting])
+      assert.equal(entered.includes(folders[4]), false, "queued preparation must recheck activity before it starts capture")
+    } finally {
+      release()
+      await Promise.allSettled([...working, waiting])
+      capture.mock.restore()
+      queued.abandonRun(request)
+      queued.close()
+    }
+  }
+  console.log("queued preparation: a send supersedes background work before it captures")
+
+  // Each run has its own sharing metadata, while its repository parts can reuse unchanged content.
+  {
+    const folder = join(root, "shared-project")
+    const storeRoot = join(root, "shared-project-store")
+    const runner = new Git()
+    const grouped = new WorkspaceSnapshots(runner, storeRoot)
+    grouped.followHistory(history)
+    // App has no HEAD or user index; backend has tracked content. Both kinds must retain exact incremental content.
+    for (const name of ["app", "backend"]) {
+      const repository = join(folder, name)
+      mkdirSync(repository, { recursive: true })
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repository })
+      writeFileSync(join(repository, "file.txt"), `${name}\n`)
+      if (name === "backend") {
+        execFileSync("git", ["add", "file.txt"], { cwd: repository })
+        execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@localhost", "commit", "-qm", "first"], { cwd: repository })
+      }
+    }
+    const ids = [randomUUID(), randomUUID(), randomUUID()]
+    const original = runner.run.bind(runner)
+    const commands = mock.method(runner, "run", original)
+    const trees = (where: string, id: string) => {
+      const db = new DatabaseSync(join(where, "snapshots.sqlite"), { readOnly: true })
+      try {
+        const row = z.object({ value: z.string() }).parse(db.prepare("SELECT value FROM groups WHERE id=?").get(id))
+        const group = z.object({ parts: z.array(z.object({ path: z.string(), id: z.string() })) }).parse(JSON.parse(row.value))
+        return Object.fromEntries(group.parts.map(part => {
+          const saved = z.object({ value: z.string() }).parse(db.prepare("SELECT value FROM snapshots WHERE id=?").get(part.id))
+          return [part.path, z.object({ tree: z.string() }).parse(JSON.parse(saved.value)).tree]
+        }))
+      } finally { db.close() }
+    }
+    try {
+      const first = await grouped.beginRun(ids[0], folder)
+      commands.mock.resetCalls()
+      const second = await grouped.beginRun(ids[1], folder)
+      assert.notEqual(second.id, first.id, "sharing metadata is a fresh run boundary")
+      assert.deepEqual(second.shared, [ids[0]], "the group names the other run, not itself")
+      for (const name of ["app", "backend"]) {
+        const file = join(folder, name, "file.txt")
+        writeFileSync(file, "changed before the third turn\n")
+        heard.push({ at: ++count, path: file })
+      }
+      const third = await grouped.beginRun(ids[2], folder)
+      assert.deepEqual([...third.shared ?? []].sort(), ids.slice(0, 2).sort())
+      assert.equal(commands.mock.calls.some(call => call.arguments[0].args.includes("ls-files") && call.arguments[0].args.includes("-v")), false, "sharing a project folder must not force full repository-part captures")
+      const wholeRoot = join(root, "shared-project-whole")
+      const whole = new WorkspaceSnapshots(new Git(), wholeRoot)
+      try {
+        const expected = await whole.capture(folder)
+        assert.deepEqual(trees(storeRoot, third.id), trees(wholeRoot, expected.id), "shared incremental parts hold the full capture's exact content")
+      } finally { whole.close() }
+    } finally {
+      commands.mock.restore()
+      for (const id of ids) grouped.abandonRun(id)
+      grouped.close()
+    }
+  }
+  console.log("shared groups: distinct run metadata with reusable exact repository content")
+
   console.log("checkpoint reuse: a quiet workspace's turn starts on its last checkpoint; a change, a staged path, a moved HEAD, a lost or unread history, or a shared workspace is captured")
 } finally {
   store.close()
+  assert.equal(closedMonitors, openedMonitors, "checkpoint-owned monitors are closed independently of attribution")
   rmSync(root, { recursive: true, force: true })
 }

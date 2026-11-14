@@ -105,8 +105,8 @@ const MAX_TIMER_MS = 2_147_483_647
  * after every flush of every working conversation (`noteWork`).
  */
 function residentWorkStatus(resident: Resident): LifecycleWork["status"] | undefined {
-  if (resident.transferring || resident.opening || resident.checkpointing || resident.rewinding || resident.closing) return "finishing"
-  if (!resident.driver) return undefined
+  if (resident.transferring || resident.opening || resident.rewinding || resident.closing) return "finishing"
+  if (!resident.driver) return resident.checkpointing ? "finishing" : undefined
   const { snapshot } = resident
   if (snapshot.permissions.length) return "waiting"
   let busy = false
@@ -119,7 +119,7 @@ function residentWorkStatus(resident: Resident): LifecycleWork["status"] | undef
   }
   if (snapshot.session.status === "running" || snapshot.session.backgroundTasks || working) return "running"
   if (busy || snapshot.requests.some((request) => request.status === "dispatching" || request.status === "queued")) return "queued"
-  return undefined
+  return resident.checkpointing ? "finishing" : undefined
 }
 
 function residentWork(resident: Resident): LifecycleWork | undefined {
@@ -213,6 +213,7 @@ export class LiveConversations {
       flush: (resident) => this.flush(resident),
       storageFailed: (resident, boundary) => this.storageFailed(resident, boundary),
       loaded: (resident) => {
+        this.prepareWorkspace(resident.snapshot.session.cwd)
         void this.sources.readBase(resident)
         this.counts.loaded(resident)
         // A journal keeps no children: their engine says how they are now, and a window that holds the last revision
@@ -745,11 +746,26 @@ export class LiveConversations {
     return this.sources.capture(id, path)
   }
 
+  /** Observing a Thread does background work; dispatch only consumes what it finished. */
+  private prepareWorkspace(cwd: string): void {
+    this.dependencies.observeWorkspace?.(cwd)
+    this.prepareCheckpoint(cwd)
+  }
+
+  prepareCheckpoint(cwd: string): void {
+    void this.dependencies.workspaceSnapshots?.prepare(cwd)
+  }
+
+  baselineChanged(root: string, reason?: string): void {
+    this.dependencies.workspaceSnapshots?.changed(root, reason)
+  }
+
   async start(provider: string, cwd: string, options: LiveStartOptions, by?: Actor, purpose?: StartPurpose): Promise<LiveSessionState> {
     if (options.goal !== undefined) GoalCommandSchema.parse({ kind: "set", ...options.goal })
     if (options.review !== undefined) ReviewTargetSchema.parse(options.review)
     // A Fin's brief is its Apex's words, not the person's.
     const actor = by ?? (options.parent && !options.resume ? ActorSchema.parse(options.parent.startedBy) : undefined)
+    this.prepareWorkspace(cwd)
     const state = await this.launches.start(provider, cwd, options, actor, purpose)
     if (options.initialRequest) this.firstMessage(options, actor)
     if (options.goal !== undefined) this.goals.begin(options.conversationId, options.goal, { actor: this.threads.actor(actor), tuning: options.tuning })
@@ -998,7 +1014,10 @@ export class LiveConversations {
    * conversation loads.
    */
   journalOpened(): void {
-    for (const resident of this.records.values()) this.counts.loaded(resident)
+    for (const resident of this.records.values()) {
+      this.prepareWorkspace(resident.snapshot.session.cwd)
+      this.counts.loaded(resident)
+    }
   }
 
   /**

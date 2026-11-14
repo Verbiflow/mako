@@ -48,7 +48,7 @@ import { checkoutOf, worktreeAt } from "../contracts/worktree-paths.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import type { StartPurpose } from "../contracts/thread-purposes.js"
 import type { WorkspaceSnapshots } from "../workspaces/index.js"
-import type { FileWriters } from "../contracts/workspace-snapshots.js"
+import type { FileWriters, WorkspaceTracking } from "../contracts/workspace-snapshots.js"
 import type { TurnSteps } from "./interrupted-turn.js"
 import type { ContextBundles } from "./live-context.js"
 import type { PlanBuild } from "../contracts/plan-builds.js"
@@ -272,8 +272,12 @@ export interface Dependencies {
   work?: Pick<HostWork, "current">
   mcpSnapshot?(cwd: string): Promise<McpRegistrySnapshot>
   workspaceSnapshots?: WorkspaceSnapshots
-  /** How long a turn waits for its checkpoint to hold the workspace before it goes without (`BEFORE_CHECKPOINT_WAIT_MS`). */
+  /** Existing fallback budget when no prepared checkpoint is available. */
   checkpointWaitMs?: number
+  /** Start background tracking when a Thread opens or its checkout is first seen. */
+  observeWorkspace?(cwd: string): void
+  /** Read held tracking state without awaiting discovery, Git work or the writer. */
+  workspaceTracking?(cwd: string): WorkspaceTracking
   /** Who changed each of these files (absolute) since `since`, as the attribution journal knows; undefined while it isn't open. */
   rewindWriters?(paths: readonly string[], since: number): FileWriters | undefined
   appPath: string

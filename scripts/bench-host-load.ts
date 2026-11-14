@@ -194,6 +194,7 @@ try {
   if (snapshots) mkdirSync(snapshots, { recursive: true })
   const nodeArgs = [...HOST_NODE_OPTIONS, ...(values["node-arg"] ?? []), ...(values.gc ? ["--trace-gc"] : []), ...(snapshots ? ["--heapsnapshot-signal=SIGUSR2"] : [])]
   host = spawn("nice", ["-n", "5", process.execPath, ...nodeArgs, ...(profileDir ? ["--cpu-prof", "--cpu-prof-dir", profileDir, "--cpu-prof-interval", "1000"] : []), hostScript], {
+    cwd: world.project,
     env: { ...env, HOME: world.home, TMPDIR: world.temporary, MAKO_DATA_ROOT: world.dataRoot, MAKO_WEB_SOCKET: socket, MAKO_PROD: "1", MAKO_TELEMETRY: "off", ...finCount > 0 && { MAKO_FIN_SLOTS: "8" }, ...cloud && { MAKO_CLOUD_URL: cloud.url } },
     stdio: ["ignore", values.gc ? "pipe" : "ignore", "inherit"],
     ...profileDir && values["node-arg"]?.some((arg) => arg.startsWith("--heap-prof")) && { cwd: profileDir },
@@ -312,6 +313,7 @@ try {
   // A message the person sends, timed from the call until its harness asks the model: what waits behind the load
   // (its checkpoint's Git reads, the loop) is in it, the harness's own start isn't (it's running already).
   const sends: [number, number | null][] = []
+  const sendDetails: { tag: string; request: string; submittedAt: number; acceptedMs: number; modelMs: number | null }[] = []
   let conversation: string | undefined
   if (values.send || finCount > 0) {
     conversation = randomUUID()
@@ -383,8 +385,9 @@ try {
     for (let n = 1; probing && conversation && (!values["tool-heavy"] || n < TOOL_TURNS); n += 1) {
       await delay(3_000)
       const tag = `S${n}`
-      const began = performance.now()
-      await call("mako:live-prompt", conversation, randomUUID(), `BENCH-${tag} next`, []).catch(() => undefined)
+      const began = performance.now(), submittedAt = Date.now(), request = randomUUID()
+      await call("mako:live-prompt", conversation, request, `BENCH-${tag} next`, []).catch(() => undefined)
+      const acceptedMs = Math.round((performance.now() - began) * 10) / 10
       for (const deadline = Date.now() + 60_000; !heardAt.has(tag) && Date.now() < deadline; ) await delay(10)
       if (values["tool-heavy"]) {
         for (const deadline = Date.now() + 90_000; !completedTools.has(tag) && Date.now() < deadline; ) await delay(10)
@@ -396,7 +399,9 @@ try {
         }
       }
       const heard = heardAt.get(tag)
-      sends.push([Date.now(), heard === undefined ? null : Math.round((heard - began) * 10) / 10])
+      const modelMs = heard === undefined ? null : Math.round((heard - began) * 10) / 10
+      sends.push([Date.now(), modelMs])
+      sendDetails.push({ tag, request, submittedAt, acceptedMs, modelMs })
       if (snapshots && snapshotAt.has(n)) await heapSnapshot(snapshots, `after send ${n}`)
     }
   })()
@@ -431,7 +436,7 @@ try {
     const answered = times.map(([, ms]) => ms).filter((ms): ms is number => ms !== null).sort((a, b) => a - b)
     const at = (share: number) => answered[Math.min(answered.length - 1, Math.floor(share * answered.length))] ?? null
     const over = times.filter(([, ms]) => ms === null || ms > budget).length
-    return { n: times.length, failed: times.length - answered.length, p50: at(0.5), p99: at(0.99), p999: at(0.999), max: answered.at(-1) ?? null, overBudget: over, overShare: times.length ? over / times.length : 1 }
+    return { n: times.length, failed: times.length - answered.length, p50: at(0.5), p95: at(0.95), p99: at(0.99), p999: at(0.999), max: answered.at(-1) ?? null, overBudget: over, overShare: times.length ? over / times.length : 1 }
   }
   // One profile per thread: the main thread's is numbered 0 (`CPU.<date>.<time>.<pid>.0.<n>.cpuprofile`).
   const profile = profileDir && readdirSync(profileDir).filter((name) => /\.\d+\.0\.\d+\.cpuprofile$/.test(name)).map((name) => join(profileDir, name)).sort().at(-1)
@@ -451,7 +456,7 @@ try {
   const report = {
     scale: values.scale, host: hostScript, seconds: Number(values.seconds), fins: fins.length, windows, windowCalls, windowFailures,
     ...values["tool-heavy"] && { toolWorkload: { callsPerTurn: TOOL_CALLS, requestedTurns: TOOL_TURNS, steps: Object.fromEntries(toolSteps), completed: [...completedTools] } },
-    ...answers, eventLoop: health.eventLoop, peakMb: unread ? null : peakMb, memoryReadings: memory.readings, memoryMisses: memory.misses,
+    ...answers, ...model && { sendSamples: sends, sendDetails }, eventLoop: health.eventLoop, peakMb: unread ? null : peakMb, memoryReadings: memory.readings, memoryMisses: memory.misses,
     nodeArgs, ...idle && { idle }, ...reportsFrom && reportsTo && { account: accountRate(reportsFrom, reportsTo, (probedTo - probedFrom) / 60_000) }, ...snapshotsTaken.length && { snapshots: snapshotsTaken }, ...rss && { rss }, ...gc && { gc },
     ...profile && {
       profile,

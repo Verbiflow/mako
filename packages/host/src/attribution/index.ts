@@ -1,3 +1,4 @@
+import type { WorkspaceTracking } from "../contracts/workspace-snapshots.js"
 import type { CataloguedSession } from "./writer-paths.js"
 export { harnessStores, harnessScratch, sessionFolders, sessionIds, outsideFolders, rootId, type CataloguedSession } from "./writer-paths.js"
 import { locate, type Git } from "@mako/git"
@@ -247,6 +248,10 @@ export interface Attribution {
    * divide it; what it holds uncommitted then is journaled as before tracking.
    */
   track(checkout: string): Promise<void>
+  /** Prepare tracking in the background when a checkout is seen, never as a send prerequisite. */
+  prepareTurn(checkout: string): Promise<WorkspaceTracking>
+  /** The last tracking result; a failed writer overrides a previously ready checkout. */
+  tracking(checkout: string): WorkspaceTracking
   /** The commit the journal measures a repository from; undefined when it isn't tracked. */
   head(repository: string): string | null | undefined
   /** A version the journal keeps. */
@@ -335,6 +340,7 @@ function outermost(folders: readonly string[]): string[] {
 
 /** A turn re-asks the owner to track its checkout at most this often: the owner may have let it go as idle. */
 const RETRACK_MS = 10 * 60_000
+const WORKSPACE_PREPARATIONS = 4
 
 /** The shared journal once it's open; what it calls while it opens reads it through this. */
 interface Sharing {
@@ -442,34 +448,73 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
   /** Each folder a turn ran in, the checkout it's in once known, and its repositories. */
   const checkouts = new Map<string, string | null>()
   const repositories = new Map<string, readonly string[]>()
-  const resolving = new Map<string, Promise<void>>()
+  const preparing = new Map<string, Promise<WorkspaceTracking>>()
+  const tracking = new Map<string, WorkspaceTracking>()
+  let preparationCount = 0, preparationClosing = false
+  const preparationQueue: (() => void)[] = []
+  const enterPreparation = () => new Promise<() => void>(resolve => {
+    const enter = () => {
+      preparationCount++
+      let released = false
+      resolve(() => {
+        if (released) return
+        released = true
+        preparationCount--
+        preparationQueue.shift()?.()
+      })
+    }
+    if (preparationCount < WORKSPACE_PREPARATIONS) enter()
+    else preparationQueue.push(enter)
+  })
   /** When each repository was last asked to be tracked. */
   const asked = new Map<string, number>()
-  const ensure = (root: string) => {
-    const now = Date.now()
-    if (now - (asked.get(root) ?? 0) < RETRACK_MS) return
-    asked.set(root, now)
-    journal.writes.track(root).catch((error: Error) => {
-      asked.delete(root)
-      hostWarn("attribution", "a checkout could not be tracked", { root, error: error.message })
-    })
+  const prepareWorkspace = (checkout: string): Promise<WorkspaceTracking> => {
+    if (preparationClosing) return Promise.resolve({ kind: "unavailable", reason: "The file attribution journal is closing" })
+    const waiting = preparing.get(checkout)
+    if (waiting) return waiting
+    const failure = journal.status().failure
+    if (failure) {
+      const unavailable: WorkspaceTracking = { kind: "unavailable", reason: failure }
+      tracking.set(checkout, unavailable)
+      return Promise.resolve(unavailable)
+    }
+    tracking.set(checkout, { kind: "pending", reason: "The checkout's tracking has not finished" })
+    const requestedAt = Date.now()
+    const prepared = (async (): Promise<WorkspaceTracking> => {
+      const release = await enterPreparation()
+      const enteredAt = Date.now()
+      try {
+        if (preparationClosing) return { kind: "unavailable", reason: "The file attribution journal is closing" }
+        const found = await locate(deps.git, checkout)
+        const project = found ? { roots: [found.root] } : await projectRepositories(deps.git, checkout)
+        if ("refusal" in project) return project.reason === "outside" ? { kind: "outside" } : { kind: "incomplete", reason: project.refusal }
+        const discoveredAt = Date.now()
+        for (const root of project.roots) {
+          await journal.writes.track(root)
+          asked.set(root, Date.now())
+        }
+        checkouts.set(checkout, found ? found.root : project.roots.length ? checkout : null)
+        repositories.set(checkout, project.roots)
+        const preparation = { requestedAt, acknowledgedAt: Date.now(), queueMs: enteredAt - requestedAt, discoveryMs: discoveredAt - enteredAt, trackAckMs: Date.now() - discoveredAt }
+        hostLog("attribution", "workspace tracking prepared", { checkout, ...preparation, repositories: project.roots.length })
+        return project.roots.length ? { kind: "tracked", preparation } : { kind: "outside" }
+      } catch (error) {
+        return { kind: "unavailable", reason: error instanceof Error ? error.message : String(error) }
+      } finally { release() }
+    })().then(result => { tracking.set(checkout, result); return result }).finally(() => preparing.delete(checkout))
+    preparing.set(checkout, prepared)
+    return prepared
   }
+  const fresh = (cwd: string) => repositories.get(cwd)?.every(root => Date.now() - (asked.get(root) ?? 0) < RETRACK_MS)
   const working = (cwd: string) => {
     if (cwd === home || cwd === sep) return
-    const known = repositories.get(cwd)
-    if (known) return known.forEach(ensure)
-    if (resolving.has(cwd)) return
-    const done = (async () => {
-      const found = await locate(deps.git, cwd).catch(() => null)
-      const roots = found ? [found.root] : await projectRepositories(deps.git, cwd).then((result) => ("roots" in result ? result.roots : []), () => [])
-      checkouts.set(cwd, found ? found.root : roots.length ? cwd : null)
-      repositories.set(cwd, roots)
-      roots.forEach(ensure)
-    })().catch((error: Error) => {
-      hostWarn("attribution", "a checkout could not be tracked", { cwd, error: error.message })
-    }).finally(() => resolving.delete(cwd))
-    resolving.set(cwd, done)
+    if (tracking.get(cwd)?.kind === "tracked" && fresh(cwd)) return
+    void prepareWorkspace(cwd)
   }
+  journal.onRole(role => {
+    if (role.kind === "follower" || role.kind === "owner" || role.kind === "private")
+      for (const cwd of tracking.keys()) void prepareWorkspace(cwd)
+  })
   const activity = new LiveActivity({
     tracker: { activity: (mark) => journal.writes.activity(mark), reported: (call) => journal.writes.reported(call) },
     placement: deps.placement,
@@ -517,7 +562,11 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     if (removed?.length) hostLog("attribution", "removed journals nothing wrote for two weeks", { removed: removed.join(", ") })
   }, { firstAfterMs: 30 * 60_000 })
   return {
-    live: (batch) => activity.observe(batch),
+    live: (batch) => {
+      const cwd = batch.session?.cwd ?? batch.sessionChanges?.cwd
+      if (cwd && !tracking.has(cwd)) void prepareWorkspace(cwd)
+      activity.observe(batch)
+    },
     effects(conversation, call) {
       const placed = deps.placement(conversation)
       if (!placed || !call.effects.length) return
@@ -570,6 +619,18 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
         asked.set(root, Date.now())
       }
     },
+    prepareTurn: prepareWorkspace,
+    tracking: (checkout) => {
+      const failure = journal.status().failure
+      if (failure) return { kind: "unavailable", reason: failure }
+      const state = tracking.get(checkout)
+      if (state?.kind === "tracked" && !fresh(checkout)) {
+        // Its baseline remains acknowledged while a refresh is queued in the background.
+        void prepareWorkspace(checkout)
+        return { ...state, refreshing: true }
+      }
+      return state ?? { kind: "pending", reason: "The checkout has not been tracked yet" }
+    },
     readBack: (checkout, budgetMs) => journal.writes.readBack(checkout, budgetMs),
     head: (repository) => [...view().roots()].find((state) => state.root.path === repository)?.root.head,
     blob: (ref) => view().store.blob(ref),
@@ -607,13 +668,14 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     lost: (target) => journal.writes.lost(target),
     restore: (root, entry) => journal.writes.restore(root, entry),
     retryFromPerson: () => journal.retryFromPerson(),
-    failure: () => journal.status().failure,
+    failure: () => journal.status().failure ?? [...tracking.values()].find(state => state.kind === "unavailable")?.reason,
     status: () => ({
       ...attributionStatus(view(), { recent: writer.snapshot()?.recent, live: writer.snapshot()?.role.kind === "owner" || writer.snapshot()?.role.kind === "private" }),
       sharing: { ...(journal.role().kind === "failed" ? journal.status() : writer.snapshot()?.sharing ?? journal.status()), unsent: journal.status().unsent },
     }),
     rescans: () => { void writer.command({ kind: "snapshot" }).catch(() => {}); return writer.snapshot()?.rescans ?? null },
     async close() {
+      preparationClosing = true
       unwatch()
       offLoop?.reader.close()
       offLoop = undefined

@@ -336,7 +336,7 @@ try {
   await until(() => failing.owner.snapshot(failed)?.requests[1]?.status === "completed")
   assert.deepEqual([failing.starts.at(-1)!.cwd, failing.owner.session(failed)?.status, failing.owner.session(failed)?.error], [main, "ready", undefined])
 
-  // A harness that can't resume elsewhere is left to say its folder is gone.
+  // A native session that can't resume elsewhere needs its original folder, independent of checkpoint availability.
   const pinnedTree = join(root, "pinned-worktree")
   mkdirSync(pinnedTree)
   const pinned = fixture("pinned-there", false, undefined, (cwd) => cwd === pinnedTree && !existsSync(cwd) ? main : undefined, new WorkspaceSnapshots(gitRunner, join(root, "pinned-snapshots")))
@@ -349,6 +349,7 @@ try {
   rmSync(pinnedTree, { recursive: true })
   pinned.owner.submit(stays, randomUUID(), "after it was removed")
   await until(() => pinned.owner.snapshot(stays)?.requests[1]?.status === "failed")
+  assert.match(pinned.owner.snapshot(stays)!.requests[1]!.error!, /no longer exists/, "the removed workspace is diagnosed without relying on checkpoint failure")
   assert.deepEqual([pinned.closes(), pinned.starts.length, pinned.owner.session(stays)?.cwd], [0, 1, pinnedTree], "nothing restarts it")
 
   // A conversation closed in its worktree, reopened after the worktree was removed: its native session resumes in the project folder.

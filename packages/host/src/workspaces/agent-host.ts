@@ -43,6 +43,8 @@ export interface TabServices {
   watch: WatchBackend
   /** Where a prompt's attachments are staged: the user root's (`HostEnvironment.userRoot`), which an isolated host keeps its own. */
   attachments: string
+  /** Start background tracking at folder open, before a provider or prompt needs it. */
+  observeWorkspace?(cwd: string): void
 }
 
 /** Another host's `mako:git-status`, from this same contract: checked for the fields a window reads it by. */
@@ -54,6 +56,7 @@ export class AgentHost implements GitTab {
   private emit: (event: HostEvent) => void
   private readonly watch: WatchBackend
   private readonly attachments: string
+  private readonly observeWorkspace: TabServices["observeWorkspace"]
   private readonly workspaceGit: WorkspaceGit
   private readonly workspaceFiles: WorkspaceFiles
   private foreground = true
@@ -77,6 +80,7 @@ export class AgentHost implements GitTab {
     this.workspaceFiles = new WorkspaceFiles(cwd, this.workspaceGit, services.previews)
     this.watch = services.watch
     this.attachments = services.attachments
+    this.observeWorkspace = services.observeWorkspace
   }
 
   get ready(): boolean {
@@ -124,6 +128,7 @@ export class AgentHost implements GitTab {
     this.stopWorkspaceWatcher()
     this.workspaceGit.setCwd(cwd)
     this.workspaceFiles.setCwd(cwd)
+    this.observeWorkspace?.(cwd)
     if (this.foreground) this.startWorkspaceWatcher()
     // A caller may write immediately after start or a folder change resolves.
     await Promise.all([this.workspaceWatcher?.ready, this.gitDirWatch?.ready])

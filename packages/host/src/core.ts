@@ -263,6 +263,14 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const unknown = new NativeUnknown(logsRoot(environment.dataRoot))
   const mismatches = new StreamMismatches(logsRoot(environment.dataRoot), streams)
   const late: LateParts = {}
+  let attributionFailure: string | undefined
+  const seenAttributionCheckouts = new Set<string>()
+  const observeAttributionWorkspace = (cwd: string) => {
+    if (fixtureDesk) return
+    late.conversations?.live.prepareCheckpoint(cwd)
+    if (late.attribution) void late.attribution.prepareTurn(cwd)
+    else seenAttributionCheckouts.add(cwd)
+  }
   /** On a cloud machine, the gateway it's linked through; a laptop has none and reaches the account as itself. */
   let machineLink: MachineGatewayLink | null = null
   /** On a cloud machine: the Thread's folder its agent makes, asked for again by a move or a start that finds it unmade. */
@@ -351,7 +359,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   watchReadings.follow(fileEvents)
   if (onMac()) shell.jobs.every("read fseventsd's health", 60_000, () => fileEvents.tick(), { firstAfterMs: 5_000 })
   declareFileEventsMethods(methods, fileEvents)
-  const workspaceClients = new WorkspaceClients(emit, { git, previews, watch: watchBackend, attachments: join(environment.userRoot, "attachments") })
+  const workspaceClients = new WorkspaceClients(emit, { git, previews, observeWorkspace: observeAttributionWorkspace, watch: watchBackend, attachments: join(environment.userRoot, "attachments") })
   /** Start the first tab once, however many callers race for it. */
   const ready = (): Promise<HostPool> => workspaceClients.ready(hostClient())
   /**
@@ -519,7 +527,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     }
     return catalogued
   }
-  if (!fixtureDesk) void openAttribution({
+  const attributionReady = fixtureDesk ? undefined : openAttribution({
     dataRoot: environment.dataRoot,
     userRoot: environment.userRoot,
     defaultDataRoot: environment.defaultDataRoot,
@@ -544,12 +552,22 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       return session && { cwd: session.cwd, harness: session.harness, record: (live?.held(conversation) ?? live?.snapshot(conversation))?.threadPath ?? undefined }
     },
   }).then((attribution) => {
-    if (shell.closing()) void attribution.close()
-    else {
-      late.attribution = attribution
-      late.conversations?.live.journalOpened()
+    if (shell.closing()) {
+      void attribution.close()
+      return undefined
     }
-  }, (error: Error) => hostWarn("attribution", "the journal could not open; changes aren't attributed this run", { error: error.message }))
+    late.attribution = attribution
+    for (const cwd of seenAttributionCheckouts) void attribution.prepareTurn(cwd)
+    seenAttributionCheckouts.clear()
+    late.conversations?.live.journalOpened()
+    return attribution
+  }).catch((error: Error) => {
+    attributionFailure = error.message
+    hostWarn("attribution", "the journal could not open; turns send without file attribution", { error: error.message })
+    return undefined
+  })
+  // Attribution startup never rejects a send; Diagnostics and each affected turn retain the failure.
+  void attributionReady
   const wake = watchWake(shell.jobs, (source) => {
     hostLog("host", "woke", { source })
     fileEvents.woke()
@@ -1130,6 +1148,22 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     }),
     revokeTools: (bindingId, conversationId) => residency.revoke(bindingId, conversationId),
     rewindWriters: (paths, since) => late.attribution?.rewindWriters(paths, since),
+    watchSnapshots: (scope, repositories, changed) => {
+      let alive = true, reliable = true
+      const tree = watchTree(git, watchBackend, scope,
+        paths => { if (paths.some(path => !/(^|\/)\.git\/.*\.lock$/.test(path))) changed() },
+        () => { alive = false; reliable = false; changed() }, why => { reliable = why === "listening"; changed() })
+      if (!tree) return undefined
+      const metadata = repositories.map(root => watchOutsideGitDir(root, changed))
+      return {
+        ready: Promise.all([tree.ready, ...metadata.map(watch => watch.ready)]).then(() => {}),
+        alive: () => alive,
+        reliable: () => alive && reliable,
+        close: () => { alive = false; tree.close(); for (const watch of metadata) watch.close() },
+      }
+    },
+    observeWorkspace: observeAttributionWorkspace,
+    workspaceTracking: (cwd) => fixtureDesk ? { kind: "outside" } : late.attribution?.tracking(cwd) ?? { kind: "unavailable", reason: attributionFailure ?? "The file attribution journal has not opened yet" },
     suspendTools: (bindingId, conversationId) => residency.suspend(bindingId, conversationId),
     settled: (id) => {
       late.readiness?.settled(id)
@@ -1177,6 +1211,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     admission,
   })
   late.conversations = opened
+  for (const cwd of seenAttributionCheckouts) opened.live.prepareCheckpoint(cwd)
   // Reachable again (its runtime's link is back), this device asks the places holding its Fins how they stand, which
   // tells them it hears: the notices they kept for it come now, not at their next retry.
   late.cloud?.onRuntimeLinked?.(() => opened.agents?.knock())
@@ -1799,7 +1834,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // The fixture desk writes no store and stands in for no one's disk.
   if (!fixtureDesk) storage.schedule(shell.jobs)
   declareStorageMethods(methods, storage)
-  declareFootprintMethods(methods, () => ({ watching: watchReadings.reading(), rescans: late.attribution?.rescans() ?? null, attributionFailure: late.attribution?.failure() }))
+  declareFootprintMethods(methods, () => ({ watching: watchReadings.reading(), rescans: late.attribution?.rescans() ?? null, attributionFailure: late.attribution?.failure() ?? attributionFailure }))
   /** On a cloud machine: what a Thread arriving from a device needs (`mako:move-arrive`), and a lost machine's restore. */
   const arrival: MoveArrivalDeps | undefined = config.machineAgentFd === undefined ? undefined : {
     git,

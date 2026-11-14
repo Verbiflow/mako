@@ -72,13 +72,19 @@ export function TurnChanges({ requestId }: { requestId: string | undefined }) {
   const before = request?.snapshots?.before
   const saved = before?.kind === "ready" && request?.snapshots?.after?.kind === "ready" ? before.snapshot.scope : null
   if (!liveId || !requestId || !request) return null
+  const coverage = request.snapshots?.coverage
+  const incomplete = coverage && coverage.kind !== "complete" ? (
+    <div role="note" data-turn-coverage={coverage.kind} title={coverage.reason} className="min-h-7 text-ui text-muted-foreground">
+      {coverage.kind === "unavailable" ? "File attribution is unavailable" : "Some file changes may be missing"}
+    </div>
+  ) : null
   const recorded = recordedTurnChanges(request.changes)
-  if (recorded) return <TurnChangesRow summary={recorded} conversation={liveId} requestId={requestId} workspace={saved ?? recordRoots(request.changes)[0] ?? null} undoable undone={request.undone} />
+  if (recorded) return <>{incomplete}<TurnChangesRow summary={recorded} conversation={liveId} requestId={requestId} workspace={saved ?? recordRoots(request.changes)[0] ?? null} undoable undone={request.undone} /></>
   const workspace = saved
   // A count on its way, or none to make: nothing to read from the checkpoints.
-  if (request.changes || !workspace) return null
+  if (request.changes || !workspace) return incomplete
   // Mounted once the checkpoints are, so the line watches the viewport from its first frame.
-  return <CheckpointTurnChanges key={`${liveId}\0${requestId}`} conversation={liveId} requestId={requestId} workspace={workspace} />
+  return <>{incomplete}<CheckpointTurnChanges key={`${liveId}\0${requestId}`} conversation={liveId} requestId={requestId} workspace={workspace} /></>
 }
 
 /** An older turn's line, from the checkpoints either side of it. */

@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { test } from "node:test"
+import { mock, test } from "node:test"
 import { MessageChannel } from "node:worker_threads"
 import { execFileSync } from "node:child_process"
 import { once } from "node:events"
@@ -51,6 +51,138 @@ async function follower(writer: AttributionWriter, deps: AttributionDeps) {
     follow() {}, log() {},
   })
 }
+
+test("a turn confirms every repository's journal baseline, shares waits and retries failed preparation", async () => {
+  const root = scratch()
+  const project = join(root, "project")
+  const repos = [join(project, "a"), join(project, "b")]
+  for (const repo of repos) {
+    mkdirSync(repo, { recursive: true })
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo })
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: repo })
+    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: repo })
+    writeFileSync(join(repo, "before.txt"), "before\n")
+    execFileSync("git", ["add", "."], { cwd: repo })
+    execFileSync("git", ["commit", "-qm", "base"], { cwd: repo })
+    writeFileSync(join(repo, "before.txt"), "already dirty\n")
+  }
+  const watches: string[] = []
+  let release = () => {}
+  const ready = new Promise<void>(resolve => { release = resolve })
+  const deps = dependencies(root, folder => {
+    if (!repos.includes(folder)) return { ready: Promise.resolve(), close() {} }
+    watches.push(folder)
+    return { ready, close() {} }
+  })
+  const journal = await openAttribution(deps)
+  try {
+    const run = deps.git.run.bind(deps.git)
+    const failed = mock.method(deps.git, "run", async (options: Parameters<Git["run"]>[0]) => {
+      if (options.cwd === project) throw new Error("repository lookup failed")
+      return run(options)
+    })
+    try {
+      const failed = await journal.prepareTurn(project)
+      assert.equal(failed.kind, "unavailable")
+      assert.match(journal.failure() ?? "", /repository lookup failed/)
+    }
+    finally { failed.mock.restore() }
+    let acknowledged = false
+    const first = journal.prepareTurn(project).then(result => { acknowledged = true; return result })
+    const second = journal.prepareTurn(project)
+    await until(() => watches.length === 1)
+    await new Promise(resolve => setTimeout(resolve, 30))
+    assert.equal(acknowledged, false, "watch readiness and the baseline hold the acknowledgement")
+    assert.equal(journal.tracking(project).kind, "pending", "a send can read pending state while the real writer waits")
+    release()
+    assert.deepEqual((await Promise.all([first, second])).map(state => state.kind), ["tracked", "tracked"])
+    const heldTracking = journal.tracking(project)
+    assert.ok(heldTracking.kind === "tracked" && heldTracking.preparation)
+    assert.ok(heldTracking.preparation.acknowledgedAt >= heldTracking.preparation.requestedAt)
+    await journal.settled()
+    for (const repo of repos) assert.equal(journal.head(repo), execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim())
+    assert.deepEqual(watches, repos, "parallel turns do not install duplicate watchers")
+    assert.equal(journal.status().roots.reduce((sum, item) => sum + item.files, 0), 2, "both repositories' content baselines are committed")
+    assert.equal((await journal.prepareTurn(repos[0]!)).kind, "tracked")
+    assert.equal(journal.tracking(project).kind, "tracked", "dispatch reads an already confirmed result")
+    const status = SharedJournal.prototype.status
+    const recovery = mock.method(SharedJournal.prototype, "status", function(this: SharedJournal) {
+      return { ...status.call(this), failure: "The writer worker is in failed recovery" }
+    })
+    try {
+      assert.deepEqual(journal.tracking(project), { kind: "unavailable", reason: "The writer worker is in failed recovery" }, "writer failure overrides cached tracking")
+      assert.equal(journal.failure(), "The writer worker is in failed recovery", "Diagnostics has one current failure")
+      assert.equal((await journal.prepareTurn(project)).kind, "unavailable", "recovery never queues a send behind track")
+    } finally { recovery.mock.restore() }
+    await journal.prepareTurn(project)
+    const now = Date.now()
+    const expired = mock.method(Date, "now", () => now + 10 * 60_000 + 1)
+    try {
+      const stale = journal.tracking(project)
+      assert.ok(stale.kind === "tracked" && stale.refreshing, "a stale read keeps the acknowledgment and refreshes without awaiting it")
+    }
+    finally { expired.mock.restore() }
+    await journal.prepareTurn(project)
+    const outside = join(root, "outside")
+    mkdirSync(outside)
+    assert.deepEqual(await journal.prepareTurn(outside), { kind: "outside" }, "a non-Git conversation remains supported")
+    const large = join(root, "large-project")
+    for (let i = 0; i < 13; i++) {
+      const repo = join(large, String(i))
+      mkdirSync(repo, { recursive: true })
+      execFileSync("git", ["init", "-q", repo])
+    }
+    const limited = await journal.prepareTurn(large)
+    assert.equal(limited.kind, "incomplete", "limited discovery is coverage, never a send refusal")
+    assert.ok("reason" in limited && /holds 13 repositories/.test(limited.reason))
+  } finally {
+    release()
+    await journal.close()
+    deps.jobs.stop()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("eager discovery and role-change bursts prepare at most four checkouts at once", async () => {
+  const root = scratch(), deps = dependencies(root)
+  const folders = Array.from({ length: 50 }, (_, index) => join(root, `checkout-${index}`))
+  for (const folder of folders) mkdirSync(folder)
+  const listeners: Parameters<SharedJournal["onRole"]>[0][] = []
+  const onRole = SharedJournal.prototype.onRole
+  const observed = mock.method(SharedJournal.prototype, "onRole", function(this: SharedJournal, listener: Parameters<SharedJournal["onRole"]>[0]) {
+    listeners.push(listener)
+    return onRole.call(this, listener)
+  })
+  let release = () => {}, active = 0, peak = 0, started = 0
+  let held = new Promise<void>(resolve => { release = resolve })
+  const run = deps.git.run.bind(deps.git)
+  const reading = mock.method(deps.git, "run", async (options: Parameters<Git["run"]>[0]) => {
+    if (!folders.includes(options.cwd ?? "")) return run(options)
+    active++; started++; peak = Math.max(peak, active)
+    try { await held; return await run(options) } finally { active-- }
+  })
+  const journal = await openAttribution(deps)
+  try {
+    const preparing = folders.map(folder => journal.prepareTurn(folder))
+    await until(() => started >= 4)
+    assert.equal(started, 4, "fifty opens issue only four locates while the first batch is held")
+    release()
+    await Promise.all(preparing)
+    assert.equal(peak, 4)
+    started = 0; peak = 0
+    held = new Promise<void>(resolve => { release = resolve })
+    for (const listener of listeners) listener({ kind: "owner" })
+    await until(() => started >= 4)
+    assert.equal(started, 4, "role recovery uses the same limiter")
+    const recovered = folders.map(folder => journal.prepareTurn(folder))
+    release()
+    await Promise.all(recovered)
+    assert.equal(peak, 4)
+  } finally {
+    release(); observed.mock.restore(); reading.mock.restore()
+    await journal.close(); deps.jobs.stop(); rmSync(root, { recursive: true, force: true })
+  }
+})
 
 test("the host opens only committed read connections, even when it owns the journal", async () => {
   const root = scratch()
