@@ -237,7 +237,6 @@ export const STEPS = [
   [27, "tsx scripts/test-app-capacity.ts"],
   [4, "tsx scripts/test-app-overview-reads.ts"],
   [1, "esbuild scripts/test-app-probe-view.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-app-probe-view.mjs --log-level=warning"],
-  [22, "tsx scripts/test-app-probe.ts"],
   [1, "tsx scripts/test-app-sampler.ts"],
   [1, "tsx scripts/test-application-lifecycle.ts"],
   [2, "node scripts/test-application-runtime.mjs"],
@@ -249,7 +248,6 @@ export const STEPS = [
   [1, "node scripts/test-browser-extension-downloads.mjs"],
   [1, "node scripts/test-browser-extension-lifecycle.mjs"],
   [1, "node scripts/test-browser-extension-router.mjs"],
-  [1, "node scripts/test-browser-extension.mjs"],
   [2, "tsx scripts/test-browser-focus.ts"],
   [2, "tsx scripts/test-browser-preference.ts"],
   [1, "tsx scripts/test-browser-profile-name.ts"],
@@ -261,7 +259,6 @@ export const STEPS = [
   [3, "tsx scripts/test-child-residency.ts"],
   [1, "node scripts/test-claude-permission-settings.mjs"],
   [11, "tsx scripts/test-claude-runtime.ts"],
-  [30, "tsx scripts/test-claude-sdk-startup.ts"],
   [6, "tsx scripts/test-closed-record-handoff.ts"],
   [1, "tsx scripts/test-codex-activity.ts"],
   [3, "tsx scripts/test-codex-agent-status.ts"],
@@ -272,7 +269,6 @@ export const STEPS = [
   [1, "tsx scripts/test-context-wire.ts"],
   [3, "tsx scripts/test-continuation-plan.ts"],
   [2, "tsx scripts/test-control-optional.ts"],
-  [9, "tsx scripts/test-control-page-verbs.ts"],
   [18, "tsx scripts/test-control-recording-idle.ts"],
   [10, "tsx scripts/test-control-recording-stream.ts"],
   [3, "tsx scripts/test-control-recording.ts"],
@@ -280,13 +276,11 @@ export const STEPS = [
   [2, "node scripts/test-cursor-sdk-lifecycle.mjs"],
   [2, "tsx scripts/test-daemon-claim.ts"],
   [1, "node scripts/test-daemon-login.mjs"],
-  [5, "electron scripts/test-desk-browser-electron.mjs"],
   [3, "tsx scripts/test-device-cli.ts"],
   [1, "tsx scripts/test-devin-agents.ts"],
   [1, "tsx scripts/test-element-pick-state.ts"],
   [28, "tsx scripts/test-element-pick.ts"],
   [3, "tsx scripts/test-event-stream-limits.ts"],
-  [23, "node scripts/test-fixture-desk.mjs"],
   [3, "tsx scripts/test-git-stop.ts"],
   [4, "tsx scripts/test-grok-agents.ts"],
   [2, "tsx scripts/test-grok-connection.ts"],
@@ -296,7 +290,6 @@ export const STEPS = [
   [1, "tsx scripts/test-host-idle.ts"],
   [2, "tsx scripts/test-host-inputs.ts"],
   [2, "tsx scripts/test-host-log.ts"],
-  [2, "tsx scripts/test-host-probes.ts"],
   [1, "tsx scripts/test-idle-app-marks.ts"],
   [1, "tsx --tsconfig tsconfig.app.json scripts/test-incremental-projection.ts"],
   [1, "tsx scripts/test-interrupted-turn.ts"],
@@ -313,14 +306,12 @@ export const STEPS = [
   [3, "tsx --tsconfig tsconfig.app.json scripts/test-live-side-questions.ts"],
   [10, "tsx --tsconfig tsconfig.app.json scripts/test-live-view-recovery.ts"],
   [8, "tsx scripts/test-local-build-source.ts"],
-  [3, "tsx scripts/test-local-update-install.ts"],
   [5, "tsx scripts/test-machine-load.ts"],
   [2, "tsx --tsconfig tsconfig.app.json scripts/test-mako-log.ts"],
   [2, "tsx scripts/test-mcp-preflight.ts"],
   [13, "tsx --tsconfig tsconfig.app.json scripts/test-merged-history.ts"],
   [3, "tsx scripts/test-message-anchor.ts"],
   [1, "tsx scripts/test-native-agents.ts"],
-  [25, "tsx scripts/test-native-driver-death.ts"],
   [11, "tsx scripts/test-native-history-refresh.ts"],
   [1, "tsx scripts/test-native-history.ts"],
   [1, "tsx scripts/test-native-recording.ts"],
@@ -338,12 +329,10 @@ export const STEPS = [
   [2, "tsx --tsconfig tsconfig.app.json scripts/test-parsed-markdown.tsx"],
   [2, "tsx scripts/test-performance.ts"],
   [3, "tsx scripts/test-pinned-builds.ts"],
-  [1, "node scripts/test-preload.mjs"],
   [9, "tsx scripts/test-probe-child-edges.ts"],
   [1, "tsx scripts/test-prompt-clipboard.ts"],
   [1, "tsx scripts/test-provider-access.ts"],
   [2, "tsx scripts/test-provider-failure.ts"],
-  [2, "tsx scripts/test-providers.ts"],
   [1, "tsx scripts/test-pull-request-mentions.ts"],
   [1, "tsx scripts/test-pull-request-search.ts"],
   [1, "node scripts/test-question-history-worker.mjs"],
@@ -406,6 +395,19 @@ export const MAC_STEPS = [
   [8, "npm run -s test:desktop-crashes"],
   // It runs Claude's darwin-arm64 binary.
   [11, "npm run -s test:native-authoring"],
+  // Test files no CI ran until 2026-11-15 that pass on a Mac and not on Linux: they read macOS's ps and process titles,
+  // ~/Library, the native driver, or Electron's Mac behaviour (#783's Linux gate).
+  [22, "tsx scripts/test-app-probe.ts"],
+  [1, "node scripts/test-browser-extension.mjs"],
+  [30, "tsx scripts/test-claude-sdk-startup.ts"],
+  [9, "tsx scripts/test-control-page-verbs.ts"],
+  [5, "electron scripts/test-desk-browser-electron.mjs"],
+  [23, "node scripts/test-fixture-desk.mjs"],
+  [2, "tsx scripts/test-host-probes.ts"],
+  [3, "tsx scripts/test-local-update-install.ts"],
+  [25, "tsx scripts/test-native-driver-death.ts"],
+  [1, "node scripts/test-preload.mjs"],
+  [2, "tsx scripts/test-providers.ts"],
 ]
 
 /**
@@ -452,6 +454,8 @@ const NEEDS = {
  * test:mcp's parts on the Mac read MCP configurations and computer use, and record nothing (ffmpeg took 31 s there).
  */
 const NEEDS_NOTHING = [/scripts\/test-mcp\.ts\b/, /scripts\/test-computer-tools\.ts\b/]
+/** What a part run outside an npm script needs, by its file: recording reads ffmpeg and ffprobe. */
+const NEEDS_BY_FILE = [[/scripts\/test-(native-recording|control-recording|control-recording-idle|browser-video)\.ts\b/, "ffmpeg"]]
 const INSTALL = {
   // Recording reads ffmpeg and ffprobe on PATH; the runner's image has neither.
   ffmpeg: process.platform === "darwin" ? "command -v ffmpeg >/dev/null || HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install ffmpeg" : "command -v ffmpeg >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg)",
@@ -632,7 +636,8 @@ if (!Number.isInteger(shard) || !Number.isInteger(count) || shard < 1 || shard >
 }
 
 /** What a part needs installed first (`NEEDS`), unless `NEEDS_NOTHING` says it needs nothing. */
-const needOf = ({ script, command }) => (NEEDS[script] && !NEEDS_NOTHING.some((rule) => rule.test(command)) ? NEEDS[script] : undefined)
+const needOf = ({ script, command }) =>
+  NEEDS[script] && !NEEDS_NOTHING.some((rule) => rule.test(command)) ? NEEDS[script] : NEEDS_BY_FILE.find(([rule]) => rule.test(command))?.[1]
 // A part that needs an install goes last in its lane, so the lane's other parts run while it installs.
 const planned = lanesOf(count).slice((shard - 1) * LANES, shard * LANES).map((lane) => lane.steps)
 const first = planned.flat().filter(isAlone)
