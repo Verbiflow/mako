@@ -13,6 +13,7 @@ import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
 import { LiveJournal, readSnapshotSettlement, storedSnapshotSettlement } from "@mako/host/conversations/live-journal"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import type { WorkspaceSnapshot } from "@mako/host/contracts/workspace-snapshots"
+import { ConversationControlSchema } from "@mako/host/contracts/conversation-control"
 import { auditSnapshot } from "./performance-audit-fixtures"
 
 const root = await realpath(await mkdtemp(join(tmpdir(), "mako-global-rewind-")))
@@ -54,6 +55,28 @@ try {
   assert.deepEqual(plan.entries.map(row => row.id), residents.flatMap(row => [row.before.id, row.after.id]), "global age order crosses repository boundaries")
   const count = rows().length; await store.budget.run()
   assert.equal(rows().length, count, "preview does not evict")
+
+  const quiet = residents[1]!, bindingId = randomUUID()
+  const waiting = [
+    ConversationControlSchema.parse({ activeBindingId: bindingId, bindings: [], transfers: [], questions: [{
+      id: randomUUID(), bindingId, native: { sessionId: "fixture", turnId: "fixture", itemId: "fixture", questions: [{
+        id: "choice", header: "Fixture", question: "Continue?", isSecret: false, allowOther: false, options: [],
+      }] },
+    }] }),
+    ConversationControlSchema.parse({ activeBindingId: bindingId, bindings: [], transfers: [{
+      input: { id: randomUUID(), provider: "fixture", text: "", attachments: [] }, createdAt: Date.now(), state: { kind: "queued" },
+      retry: { at: Date.now() + 60_000, since: Date.now(), attempt: 1, cause: "network", reason: "fixture" },
+    }] }),
+  ]
+  for (const control of waiting) {
+    const pending = { ...quiet.snapshot, revision: quiet.snapshot.revision + 1, control }
+    quiet.journal.commit(pending, quiet.snapshot)
+    assert.ok((await store.budget.preview()).entries.filter(row => row.scope === quiet.cwd).every(row => !row.eligible), "a persisted question or scheduled reconnect keeps its scope despite completed request rows")
+    const settled = { ...quiet.snapshot, revision: pending.revision + 1 }
+    quiet.journal.commit(settled, pending)
+    quiet.snapshot = settled
+    assert.ok((await store.budget.preview()).entries.filter(row => row.scope === quiet.cwd).every(row => row.eligible), "only the current persisted hold protects that scope")
+  }
 
   const first = residents[0]!
   const running = randomUUID()

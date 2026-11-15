@@ -1906,7 +1906,7 @@ function* snapshotSettlementSteps(root: string, elsewhere: (id: string) => boole
         const metadata = metadataRow(db)
         if (!metadata) throw new Error("Conversation metadata is unavailable.")
         const summary = journalSummary(metadata)
-        let busy = elsewhere(id) || !["ready", "failed", "closed"].includes(summary.session.status)
+        let busy = elsewhere(id) || summary.hasSessionQuestions || summary.transferWakeAt !== undefined || !["ready", "failed", "closed"].includes(summary.session.status)
         const ids: string[] = []
         for (const row of db.prepare("SELECT json_extract(value, '$.status') AS status, json_extract(value, '$.snapshots') AS snapshots FROM requests").iterate()) {
           yield
