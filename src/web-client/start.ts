@@ -2,6 +2,7 @@ import type { ClientSession, Json } from "@mako/protocol"
 import { bootFolder, type CloudRepository } from "@mako/host/contracts/cloud-threads"
 import { gatewayHostCalls, sendWithRepeats } from "@mako/host/contracts/gateway-host-calls"
 import { harnessOrder as savedOrder } from "@mako/host/contracts/harness-defaults"
+import { webPreference } from "./account-preferences"
 import type { LiveSnapshot, LiveStartOptions } from "@mako/host/contracts/live-conversations"
 import type { HarnessProfile, PromptAttachment } from "@mako/host/contracts/providers-acp"
 import { decodeRuntimeValue } from "@mako/host/contracts/runtime-value"
@@ -62,11 +63,12 @@ function offered(profile: HarnessProfile): OfferedHarness {
 /**
  * A Mac's harnesses as its own composer lists them, each as the Mac knows it (`mako:harness-tuning` in the folder, the
  * call its composer makes for the harness it shows), told one by one as each is known: a harness still being asked is
- * listed as pending, and the slowest never holds the rest. With the person's harness order the Mac keeps.
+ * listed as pending, and the slowest never holds the rest. With the person's harness order, which follows their account:
+ * the account's at once, then the Mac's word on it (the same, once it has heard the account).
  */
 export function macCatalog(gateway: Gateway, webDeviceId: string, deviceId: string, folder: string | undefined, told: (catalog: Catalog) => void): Promise<void> {
   const harnesses = new Map<string, OfferedHarness>(WEB_HARNESSES.map((harness) => [harness, { harness, available: false, pending: true, models: [] }]))
-  let order: string[] = [...WEB_HARNESSES]
+  let order: string[] = savedOrder(webPreference("harnessOrder") ?? [], WEB_HARNESSES)
   const tell = () => told({ harnesses: [...harnesses.values()], order })
   tell()
   const asked = [
@@ -101,7 +103,7 @@ export function cloudCatalog(harnesses: readonly string[], mac: Catalog | undefi
       const listed = known.get(harness)
       return listed ? { ...listed, available: true, pending: false } : { harness, available: true, pending: false, models: [] }
     }),
-    order: mac?.order ?? [...WEB_HARNESSES],
+    order: mac?.order ?? savedOrder(webPreference("harnessOrder") ?? [], WEB_HARNESSES),
   }
 }
 

@@ -124,6 +124,8 @@ export type HostEventBody =
   | { type: "plan-builds"; builds: PlanBuilds }
   /** The person's access choices changed, here or on another device (`contracts/access-choices.ts`); window-wide. */
   | { type: "access-choices"; choices: import("./access-choices.js").AccessChoices }
+  /** The preferences that follow the person's account, as they're in effect now (`contracts/preferences.ts`). */
+  | { type: "preferences"; values: import("./preferences.js").PreferenceValues }
   /** An agent's allowed move happened: `from` is archived and `to` goes on in the worktree. */
   | {
       type: "workspace-moved"; from: string; to: string; branch?: string; changed: number
