@@ -1946,6 +1946,8 @@ const inputs = {
     z.tuple([z.union([z.literal("resume"), z.literal("unlock-screen")])]),
   "mako:mako-footprint": () => z.tuple([]),
   "mako:mcp-discover": () => z.tuple([]),
+  "mako:mcp-sign-in": () => z.tuple([z.string(), z.string()]),
+  "mako:mcp-sign-ins": () => z.tuple([]),
   "mako:mcp-sync-apply": () =>
     z.tuple([
       z.string(),
@@ -3640,6 +3642,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:machine-woke", "application"],
   ["mako:mako-footprint", "usage"],
   ["mako:mcp-discover", "tools"],
+  ["mako:mcp-sign-in", "tools"],
+  ["mako:mcp-sign-ins", "tools"],
   ["mako:mcp-sync-apply", "tools"],
   ["mako:mcp-sync-preview", "tools"],
   ["mako:measure-update-again", "application"],

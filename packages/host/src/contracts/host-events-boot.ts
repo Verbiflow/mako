@@ -8,6 +8,7 @@ import type { ThreadGroupChange } from "./thread-groups.js"
 import type { ThreadPurpose } from "./thread-purposes.js"
 import type { StoreFormats } from "./store-formats.js"
 import type { FileEventsService } from "./file-events-service.js"
+import type { McpSignIns } from "./mcp-sign-ins.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
 import type { Entry } from "@mako/sessions/entries"
 import type { WorktreeStep, WorktreeSummary } from "./thread-worktrees.js"
@@ -214,6 +215,8 @@ export type HostEventBody =
   | { type: "store-formats"; formats: StoreFormats }
   /** fseventsd's health changed, or a restart moved a step; window-wide. */
   | { type: "file-events-service"; service: FileEventsService }
+  /** The MCP servers that need the person's sign-in changed (`McpSignIns`); window-wide. */
+  | { type: "mcp-sign-ins"; reading: McpSignIns }
   /** These Threads' names changed, from any host; the rest are as they were. Window-wide. */
   | { type: "thread-titles"; titles: ThreadTitleEntry[] }
   /** Sessions were added to another Thread or split into a new one; window-wide. */
