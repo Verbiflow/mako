@@ -87,6 +87,7 @@ import { LiveRelocations } from "./live-relocations.js"
 import { LiveRestarts } from "./live-restarts.js"
 import { ContextBundles, prepareLiveContext } from "./live-context.js"
 import { activeBinding, conversationControl, launched, type Dependencies, type LiveAccess, type ProviderStop, type Resident, STOPPED_FOR } from "./live-runtime.js"
+import { flushFrameMs } from "./answer-pace.js"
 import { LiveSources, settled, updateBinding, type SettledBases } from "./live-sources.js"
 import { LiveThreads } from "./live-threads.js"
 import { holdSwitches, LiveTransfers, withdrawGone } from "./live-transfers.js"
@@ -1994,18 +1995,26 @@ export class LiveConversations {
   /**
    * A change goes out in the next batch: at once (the next turn of the event loop) when the conversation hasn't
    * flushed for a frame, else when the frame since its last flush has passed. So the first token of a burst isn't held,
-   * and a stream goes at most every `BATCH_MS`, in batches every window, watching device and the journal share.
+   * and a stream goes at most every `BATCH_MS`, in batches every window, watching device and the journal share. A long
+   * answer going on waits longer (`flushFrameMs`), and a change that can't wait brings its batch back to the frame.
    */
   private schedule(resident: Resident): void {
-    if (resident.timer) return
-    const wait = resident.flushedAt === undefined ? 0 : Math.max(0, resident.flushedAt + BATCH_MS - performance.now())
+    const now = performance.now()
+    // A long answer going on waits for a reader's pace; anything else comes back to the frame (`flushFrameMs`).
+    const frame = flushFrameMs(BATCH_MS, resident.snapshot.blocks, resident.updates, resident.snapshot !== resident.journalSnapshot)
+    const due = resident.flushedAt === undefined ? now : resident.flushedAt + frame
+    if (resident.timer) {
+      if (due >= (resident.timerDue ?? now)) return
+      clearTimeout(resident.timer)
+    }
+    resident.timerDue = due
     resident.timer = setTimeout(() => {
       try {
         this.flush(resident)
       } catch (error) {
         this.storageFailed(resident, { error })
       }
-    }, wait)
+    }, Math.max(0, due - now))
   }
 
   /** See `LiveAccess.keep`. */
@@ -2053,6 +2062,7 @@ export class LiveConversations {
     }
     if (resident.timer) clearTimeout(resident.timer)
     resident.timer = null
+    resident.timerDue = undefined
     // A Stop's latch holds whatever its requests became since, in the one place every change is written.
     const latched = latchedByStop(resident.snapshot.requests)
     if (latched !== resident.snapshot.requests) resident.snapshot = { ...resident.snapshot, requests: latched }

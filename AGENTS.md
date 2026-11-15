@@ -1786,7 +1786,11 @@ once, and the rest of a burst one flush per frame (`LIVE_FRAME_MS`, 50 ms, in
 `contracts/live-conversations.ts`): windows, watching devices and the journal
 get the same batches. The frame is the window's paint frame (`StreamFrames`
 takes it): on 33 ms the batches beat against the paints, a third of them were
-painted over unseen and a word waited longer for its paint. Status changes,
+painted over unseen and a word waited longer for its paint. A long answer going
+on (past `LONG_ANSWER_CHARS`, 1,500, with nothing else changed) waits up to
+`LONG_ANSWER_FLUSH_MS` (400 ms) or a paragraph's end instead
+(`conversations/answer-pace.ts`): sent each frame, its batches were mostly
+envelope, 156 bytes a token to a phone with 7 of them its words. Status changes,
 questions and approvals don't wait for it. A batch says `activityAt` only when
 it moved into another second, and carries a whole value (a control, a request,
 a roster) only when its content changed (`sharedFields`); a message whose
