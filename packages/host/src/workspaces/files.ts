@@ -43,7 +43,14 @@ type ConversationDataDir = () => Promise<string | undefined>
  * else comes back `withheld`, so an answer's `![](~/.ssh/id_rsa)` stays a
  * link rather than a key on screen.
  */
-type FileReadOptions = { relativeTo: "cwd"; dataDir?: ConversationDataDir; preview?: boolean }
+type FileReadOptions = { relativeTo: "cwd"; dataDir?: ConversationDataDir; preview?: boolean; confined?: boolean }
+
+/**
+ * Said of a file another device asked for that resolves, after its symlinks, outside the Thread's folders (its folder,
+ * its repository and its data folder). Only this Mac's own window reads a path anywhere on it; a device through the
+ * gateway reads the Thread's files, and nothing else is read or signed for it.
+ */
+export const OUTSIDE_THREAD_WORDS = "It's outside this Thread's folders, so it's only opened on the Mac it's on."
 /** Larger than this on its longer side, a picture gets a thumbnail for grid tiles; smaller, the tile draws it. */
 const THUMBNAIL_ABOVE = 960
 
@@ -198,7 +205,15 @@ export class WorkspaceFiles {
    * applied — a truncated file that does not say so is a lie about the code.
    */
   async read(requested: string, options?: FileReadOptions): Promise<FileContents> {
-    const { absolute, path } = await this.locate(requested, options)
+    const located = await this.locate(requested, options)
+    const { path } = located
+    let absolute = located.absolute
+    if (options?.confined) {
+      // Resolved once, and read from what was resolved: a link swapped after the check reads nothing new.
+      const real = await this.within(absolute, options.dataDir)
+      if (!real) return { path, contents: "", size: 0, binary: false, truncated: false, withheld: OUTSIDE_THREAD_WORDS }
+      absolute = real
+    }
     const info = await stat(absolute)
     if (info.isDirectory()) throw new Error(`${path} is a directory`)
     const prefixFile = await open(absolute, "r")
@@ -308,6 +323,18 @@ export class WorkspaceFiles {
       if (real === folder || real.startsWith(folder + sep)) return true
     }
     return false
+  }
+
+  /** `absolute` with every symlink resolved, when that lands inside the Thread's folders; else undefined. */
+  private async within(absolute: string, dataDir?: ConversationDataDir): Promise<string | undefined> {
+    const real = await realpath(absolute).catch(() => undefined)
+    if (!real) return undefined
+    for (const root of [this.cwdValue, await this.git.root().catch(() => null), await dataDir?.()]) {
+      if (!root) continue
+      const folder = await realpath(resolve(root)).catch(() => undefined)
+      if (folder && (real === folder || real.startsWith(folder + sep))) return real
+    }
+    return undefined
   }
 
   private async dimensions(absolute: string, prefix: Buffer, size: number, mimeType: string | undefined) {
@@ -434,7 +461,8 @@ export class ConversationFiles {
     this.watch = watch
   }
 
-  read(cwd: string, path: string, dataDir?: ConversationDataDir, purpose?: FileReadPurpose): Promise<FileContents> {
+  /** `confined`: the caller is another device, through the gateway, which reads only the Thread's folders. */
+  read(cwd: string, path: string, dataDir?: ConversationDataDir, purpose?: FileReadPurpose, confined = false): Promise<FileContents> {
     const key = resolve(cwd)
     const now = Date.now()
     for (const [folder, held] of this.held)
@@ -451,7 +479,7 @@ export class ConversationFiles {
       reader?.files.index.close()
       if (oldest !== undefined) this.held.delete(oldest)
     }
-    return held.files.read(path, { relativeTo: "cwd", dataDir, preview: purpose === "preview" })
+    return held.files.read(path, { relativeTo: "cwd", dataDir, preview: purpose === "preview", confined })
   }
 
   /** The index of a conversation's folder, kept and watched until nobody has looked at it for `INDEX_KEPT_MS`. */
