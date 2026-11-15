@@ -16,7 +16,7 @@ import type { SetupAct, SetupActOutcome, SetupView } from "./setup.js"
 import type { ThreadPurpose } from "./thread-purposes.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
 import type { ProjectAppSetup } from "./project-app.js"
-import type { ThreadWorktrees, WorktreeBranch, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStartPoint, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "./thread-worktrees.js"
+import type { WorktreeRetentionSettings, WorktreeRetentionReport, ThreadWorktrees, WorktreeBranch, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStartPoint, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "./thread-worktrees.js"
 import type { MergeMethod } from "./git-actions.js"
 import type { PullRequestSearchRequest, PullRequestSearchResult } from "./pull-request-search.js"
 import type { ChatFolders } from "./chat-folders.js"
@@ -202,6 +202,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     worktreeRemoval: (path: string) => invokeTrustedHost<WorktreeRemoval>("mako:worktree-removal", path),
     skipWorktree: (conversationId: string) => invokeTrustedHost<void>("mako:worktree-skip", conversationId),
     worktreeAhead: (path: string) => invokeTrustedHost<number | null>("mako:worktree-ahead", path),
+    worktreeRetention: () => invokeTrustedHost<WorktreeRetentionReport>("mako:worktree-retention"),
+    setWorktreeRetention: (settings: WorktreeRetentionSettings) => invokeTrustedHost<WorktreeRetentionReport>("mako:worktree-retention-set", settings),
     worktreeInventory: () => invokeTrustedHost<WorktreeInventory>("mako:worktree-inventory"),
     storage: (measure: boolean) => invokeTrustedHost<StorageReport>("mako:storage", measure),
     freeStorage: () => invokeTrustedHost<StorageReport>("mako:storage-free"),
