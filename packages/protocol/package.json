@@ -19,6 +19,7 @@
     "./saves": "./dist/saves.js",
     "./account-events": "./dist/account-events.js",
     "./access-choices": "./dist/access-choices.js",
+    "./preferences": "./dist/preferences.js",
     "./thread-listing": "./dist/thread-listing.js",
     "./attention": "./dist/attention.js",
     "./account-sessions": "./dist/account-sessions.js",

@@ -273,7 +273,7 @@ try {
     "PASS: cancellation during baseline capture never dispatches the prompt"
   )
 
-  // A checkpoint held past the deadline: the turn goes without it, and the notice survives a late save or failure.
+  // A checkpoint held past the deadline: the notice remains unless a real failure replaces the timeout reason.
   for (const failure of [false, true]) {
     await owner.stop()
     owner = new LiveConversations({ ...dependencies, checkpointWaitMs: 200 })
@@ -304,7 +304,7 @@ try {
       assert.equal(owner.snapshot(lateId)?.requests[0].snapshots?.before.kind, "unavailable", "a late checkpoint is never the turn's before")
       const late = owner.snapshot(lateId)?.requests[0].snapshots?.before
       assert.ok(late?.kind === "unavailable")
-      assert.equal(late.timedOut, true, "the notice remains when a late capture cannot safely be the before-point")
+      assert.equal(late.timedOut, failure ? undefined : true, "a real capture failure keeps its own reason, while an unsafe late point retains the timeout notice")
       finish(lateId, "late answer")
       await until(() => owner.snapshot(lateId)?.requests[0].snapshots?.after?.kind === (failure ? "unavailable" : "ready"))
       await assert.rejects(owner.previewRewind(lateId, lateRequest, "before"), failure ? /late checkpoint failed/ : /no workspace checkpoint at that point: The checkpoint held the workspace .* after the turn went/, "a rewind to before it refuses, and says why")
@@ -312,7 +312,7 @@ try {
       beginRun.mock.restore()
       release()
     }
-    console.log(failure ? "PASS: a failed late checkpoint retains the turn's timeout notice" : "PASS: a checkpoint held past the deadline lets the turn go; held late, it is never the turn's before, and a rewind to it refuses")
+    console.log(failure ? "PASS: a failed late checkpoint replaces the timeout notice with its actual stored failure reason" : "PASS: a checkpoint held past the deadline lets the turn go; held late, it is never the turn's before, and a rewind to it refuses")
   }
 } finally {
   await owner.stop()
