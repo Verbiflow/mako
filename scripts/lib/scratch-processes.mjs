@@ -17,13 +17,13 @@ import { setTimeout as delay } from "node:timers/promises"
  * that has it, or a path under it, as its working folder or an open file. On
  * Linux, `/proc` also gives a process's `HOME`.
  */
-export function processesUsingSync(folder) {
+export function processesUsingSync(folder, includeSelf = false) {
   const inside = (path) => path === folder || path.startsWith(`${folder}/`)
   const found = new Map()
   if (process.platform === "linux") {
     for (const name of readdirSync("/proc")) {
       const pid = Number(name)
-      if (!Number.isInteger(pid) || pid === process.pid) continue
+      if (!Number.isInteger(pid) || !includeSelf && pid === process.pid) continue
       try {
         if (statSync(`/proc/${pid}`).uid !== process.getuid()) continue
         const args = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").join(" ").trim()
@@ -46,7 +46,7 @@ export function processesUsingSync(folder) {
     if (!match || !Number.isSafeInteger(Number(match[1])) || Number(match[1]) <= 0) throw new Error("Scratch process inspection was malformed.")
     listed.set(Number(match[1]), match[2])
   }
-  for (const [pid, args] of listed) if (pid !== process.pid && args.includes(folder)) found.set(pid, args)
+  for (const [pid, args] of listed) if ((includeSelf || pid !== process.pid) && args.includes(folder)) found.set(pid, args)
   // List open files, not the whole scratch tree: a clone can have millions of tiny files.
   const lsof = spawnSync("lsof", ["-nP", "-F0pn", "-u", String(process.getuid?.())], { encoding: "utf8", timeout: 5_000, maxBuffer: 32 * 1024 * 1024 })
   const open = String(lsof.stdout ?? "")
@@ -61,7 +61,7 @@ export function processesUsingSync(folder) {
       pid = Number(field.slice(1))
     } else if (field.startsWith("n")) {
       if (!pid) throw new Error("Scratch open-file inspection had no process identity.")
-      if (pid !== process.pid && inside(field.slice(1).replace(/ \(deleted\)$/, ""))) found.set(pid, listed.get(pid) ?? "owned scratch open")
+      if ((includeSelf || pid !== process.pid) && inside(field.slice(1).replace(/ \(deleted\)$/, ""))) found.set(pid, listed.get(pid) ?? "owned scratch open")
     } else if (field.startsWith("f")) {
       if (field === "fNOFD") throw new Error("Scratch open-file inspection was incomplete.")
     } else if (field.trim()) throw new Error("Scratch open-file inspection was malformed.")
