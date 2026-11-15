@@ -115,7 +115,8 @@ async function checkWindow() {
   console.log("Startup composer refuses input until its draft target is known")
   await evaluate("document.fonts.ready.then(() => true)")
   const geometry = await evaluate(`(() => { const input = document.querySelector('.composer-input'); const send = document.querySelector('button[aria-label="Send"]'); return {height: input.getBoundingClientRect().height, width: send.getBoundingClientRect().width, radius: getComputedStyle(send).borderRadius}; })()`)
-  assert.ok(geometry.height >= 80)
+  // One line tall at rest (#367's calm composer: `min-h-12`, where it had been 80 px).
+  assert.ok(geometry.height >= 48 && geometry.height < 80, `the empty composer is one line tall, not ${geometry.height} px`)
   assert.equal(geometry.width, 32)
   assert.equal(geometry.radius, "0px")
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('.composer-input')).fontSize`), '16px')
@@ -125,7 +126,8 @@ async function checkWindow() {
   assert.ok(await evaluate(`document.querySelector('[aria-label="Attach a screenshot"]') !== null`))
   await capture('composer-add-menu.png')
   await click('[aria-label="Attach a screenshot"]')
-  await until(`document.body.textContent.includes('No visible windows to capture')`)
+  // The picker lists what the host's driver finds: nothing on a CI runner, a Mac's own windows where someone works.
+  await until(`document.body.textContent.includes('No visible windows to capture') || document.querySelector('button[aria-label^="Capture "]') !== null`)
   await capture('screenshot-picker.png')
   await page.debugger.sendCommand('Input.dispatchKeyEvent', {type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
   await page.debugger.sendCommand('Input.dispatchKeyEvent', {type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
@@ -135,8 +137,9 @@ async function checkWindow() {
   await evaluate(`window.dispatchEvent(new CustomEvent('mako:compose', {detail:{text:''}}))`)
   await click('button[aria-label="Add to message"]')
   await click('[data-add="skill"]')
-  await until(`document.querySelector('.composer-input').value === '$' && document.activeElement === document.querySelector('.composer-input')`)
-  await until(`document.querySelector('[data-mention-menu="$"]') !== null`)
+  // Skills and commands open on `/` since 2026-10-13 (470ea75a4), where they were `$`.
+  await until(`document.querySelector('.composer-input').value === '/' && document.activeElement === document.querySelector('.composer-input')`)
+  await until(`document.querySelector('[data-mention-menu="/"]') !== null`)
   await evaluate(`window.dispatchEvent(new CustomEvent('mako:compose', {detail:{text:''}})); window.addEventListener('mako:settings', event => {window.settingsSection = event.detail}, {once:true})`)
   // Replacing the draft from outside closes a menu opened for the old text.
   await until(`document.querySelector('[data-mention-menu]') === null`)
@@ -148,7 +151,9 @@ async function checkWindow() {
   await until(`document.querySelector('.composer-input').value === 'Keep this unfinished paragraph'`)
   await evaluate(`window.dispatchEvent(new CustomEvent('mako:compose', {detail: {text: 'Review [Screenshot.png]', attachments: [{id:'image', index:1, name:'Screenshot.png', reference:'[Screenshot.png]', kind:'image', mimeType:'image/png', size:42, stagedPath:'/retained/image.png', preview:${JSON.stringify(`${base}icons/app-icon.png`)}}]}}))`)
   await until(`document.querySelectorAll('[aria-label="Remove Screenshot.png"]').length === 1 && document.querySelector('[aria-label="Preview Screenshot.png"] canvas[data-ready]')?.width > 0`)
-  assert.equal(await evaluate(`document.querySelector('[data-attachment-reference]').querySelector('button')`), null)
+  // The attachment's place in the draft is a context chip with nothing to press in the field (since 2026-10-13; it was
+  // an inline token, `data-attachment-reference`, that nothing draws now).
+  assert.equal(await evaluate(`(() => { const chip = document.querySelector('[data-context-chip]'); return chip ? chip.querySelector('button') : 'no chip' })()`), null)
   await evaluate(`window.dispatchEvent(new CustomEvent('mako:compose', {detail: {text:'Review [Screenshot.png] [Second.png]', attachments:[{id:'second', index:2, name:'Second.png', reference:'[Second.png]', kind:'image', mimeType:'image/png', size:42, stagedPath:'/retained/second.png', preview:${JSON.stringify(`${base}icons/app-icon.png`)}}]}}))`)
   await until(`document.querySelectorAll('[aria-label="Attachments"] canvas[data-ready]').length === 2`)
   assert.equal(await evaluate(`(() => { const images = [...document.querySelectorAll('[aria-label="Attachments"] canvas')].map(image => image.getBoundingClientRect()); return images[0].top === images[1].top && images[1].left > images[0].right; })()`), true)
