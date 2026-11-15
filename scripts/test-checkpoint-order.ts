@@ -5,10 +5,12 @@ import { randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { setTimeout as delay } from "node:timers/promises"
 import { DatabaseSync } from "node:sqlite"
 import { Git, type RunOptions } from "@mako/git"
 import { z } from "zod"
 import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
+import type { RewindPlan } from "@mako/host/contracts/workspace-snapshots"
 
 class CaptureGit extends Git {
   gate?: { command: string; cwd?: string; entered: ReturnType<typeof Promise.withResolvers<string>>; resume: ReturnType<typeof Promise.withResolvers<void>> }
@@ -31,8 +33,8 @@ class CaptureGit extends Git {
       if (command === this.gate?.command && this.gate && (!this.gate.cwd || this.gate.cwd === options.cwd)) {
         const gate = this.gate
         this.gate = undefined
-        assert(store)
-        gate.entered.resolve(store)
+        assert(store || index)
+        gate.entered.resolve(store ?? index!)
         await gate.resume.promise
       }
       return await super.run(options)
@@ -45,6 +47,34 @@ class CaptureGit extends Git {
     const gate = { command, cwd, entered: Promise.withResolvers<string>(), resume: Promise.withResolvers<void>() }
     this.gate = gate
     return gate
+  }
+}
+
+class ReadGit extends CaptureGit {
+  readonly eighth = Promise.withResolvers<void>()
+  readonly ninth = Promise.withResolvers<void>()
+  readonly reads = Promise.withResolvers<void>()
+  readonly packed = Promise.withResolvers<void>()
+  readonly packs = Promise.withResolvers<void>()
+  private reading = 0
+  private packing = 0
+  peak = 0
+
+  override async run(options: RunOptions) {
+    if (options.args.includes("ls-files") && options.args.includes("-v")) {
+      this.peak = Math.max(this.peak, ++this.reading)
+      if (this.reading === 8) this.eighth.resolve()
+      if (this.reading === 9) this.ninth.resolve()
+      try {
+        await this.reads.promise
+        return await super.run(options)
+      } finally { this.reading-- }
+    }
+    if (options.args.includes("pack-objects")) {
+      if (++this.packing === 12) this.packed.resolve()
+      await this.packs.promise
+    }
+    return super.run(options)
   }
 }
 
@@ -79,6 +109,9 @@ function checkpoint(storage: string, id: string) {
     return z.object({ commit: z.string() }).parse(JSON.parse(row.value)).commit
   } finally { db.close() }
 }
+function plan(targetId: string, expectedId: string): RewindPlan {
+  return { sourceId: randomUUID(), targetId, expectedId, fork: { id: randomUUID(), provider: "test", point: { kind: "run", requestId: randomUUID() } } }
+}
 async function promptly<T>(value: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
@@ -87,6 +120,92 @@ async function promptly<T>(value: Promise<T>): Promise<T> {
 }
 
 try {
+  for (const kind of ["preview", "restore"] as const) {
+    const f = fixture("wait-" + kind), git = new CaptureGit(), store = new WorkspaceSnapshots(git, f.storage)
+    const pending: Promise<unknown>[] = []
+    const gates: ReturnType<CaptureGit["pause"]>[] = []
+    try {
+      const target = await store.capture(f.cwd)
+      writeFileSync(join(f.cwd, "file"), "newer\n")
+      const preview = await store.preview(target.id)
+      const sealing = git.pause(); gates.push(sealing)
+      const capture = store.capture(f.cwd); pending.push(capture)
+      await sealing.entered.promise
+      const rewinding = git.pause("update-index"); gates.push(rewinding)
+      let started = false
+      void rewinding.entered.promise.then(() => { started = true })
+      const rewind = kind === "preview" ? store.preview(target.id) : store.restore(plan(target.id, preview.current.id), () => {})
+      pending.push(rewind)
+      void rewind.catch(() => undefined)
+      await delay(100)
+      assert(!started, kind + " waits for an earlier capture to finish sealing")
+      assert(!existsSync(join(f.cwd, ".git/index.lock")), "waiting on sealing never reserves the live index")
+      assert.equal(readFileSync(join(f.cwd, "file"), "utf8"), "newer\n")
+      sealing.resume.resolve()
+      await promptly(rewinding.entered.promise)
+      rewinding.resume.resolve()
+      await rewind
+      assert.equal(readFileSync(join(f.cwd, "file"), "utf8"), kind === "restore" ? "before\n" : "newer\n")
+      console.log("PASS: " + kind + " waits for sealing before reading or changing the workspace")
+    } finally {
+      for (const gate of gates) gate.resume.resolve()
+      await Promise.allSettled(pending)
+      store.close(); await git.close()
+    }
+  }
+
+  for (const kind of ["preview", "restore"] as const) for (const fails of [false, true]) {
+    const f = fixture("pin-" + kind + "-" + fails), git = new CaptureGit()
+    const store = new WorkspaceSnapshots(git, f.storage, { maxSnapshots: 1, maxAgeMs: 1 })
+    const target = await store.capture(f.cwd), preview = await store.preview(target.id)
+    const borrowed = await store.capture(f.cwd), gate = git.pause()
+    const rewind = kind === "preview" ? store.preview(target.id) : store.restore(plan(target.id, preview.current.id), () => {})
+    const result = fails ? assert.rejects(rewind, /sealing failed/) : rewind
+    try {
+      await gate.entered.promise
+      await promptly(store.prune(f.cwd))
+      assert(existsSync(join(f.storage, borrowed.id)), kind + " pins its borrowed previous pack while sealing")
+      if (fails) gate.resume.reject(new Error("sealing failed"))
+      else gate.resume.resolve()
+      await result
+      await store.prune(f.cwd)
+      assert(!existsSync(join(f.storage, borrowed.id)), "the borrow is released after " + (fails ? "failure" : "success"))
+      console.log("PASS: " + kind + " protects borrowed packs and releases its lease after " + (fails ? "failure" : "success"))
+    } finally {
+      gate.resume.resolve()
+      await Promise.allSettled([result])
+      store.close(); await git.close()
+    }
+  }
+
+  for (const fails of [false, true]) {
+    const fixtures = [fixture("bounded-one-" + fails), fixture("bounded-two-" + fails)], git = new ReadGit()
+    const store = new WorkspaceSnapshots(git, fixtures[0]!.storage)
+    const captures = Array.from({ length: 12 }, (_, at) => store.capture(fixtures[at % 2]!.cwd))
+    const settled = Promise.allSettled(captures)
+    try {
+      await promptly(git.eighth.promise)
+      assert.equal(await Promise.race([git.ninth.promise.then(() => "overflow"), delay(1000, "bounded")]), "bounded", "at most eight private listing reads run across this host's scopes")
+      assert(fixtures.every((f) => !existsSync(join(f.cwd, ".git/index.lock"))), "waiting for a private read slot never reserves the live index")
+      if (fails) {
+        git.reads.reject(new Error("read failed"))
+        const results = await promptly(settled)
+        assert(results.every((result) => result.status === "rejected"), "read failures release slots for every queued capture")
+      } else {
+        git.reads.resolve()
+        await promptly(git.packed.promise)
+        assert.equal(git.peak, 8)
+        git.packs.resolve()
+        assert((await settled).every((result) => result.status === "fulfilled"))
+      }
+      console.log("PASS: private reads are bounded across scopes, release before sealing and survive " + (fails ? "failure" : "success"))
+    } finally {
+      git.reads.resolve(); git.packs.resolve()
+      await settled
+      store.close(); await git.close()
+    }
+  }
+
   const f = fixture("interleaved"), git = new CaptureGit()
   const store = new WorkspaceSnapshots(git, f.storage, { maxSnapshots: 1 })
   const first = randomUUID(), second = randomUUID()
