@@ -2,7 +2,7 @@ import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { performance } from "node:perf_hooks"
@@ -227,6 +227,37 @@ try {
     }
   }
   console.log(JSON.stringify({ captureMs: Math.round(settled.ms), reusedMs: Math.round(again.ms), historyReads: reads }))
+  // Without a user index, an incremental capture must retain its updated private index.
+  {
+    const folder = join(root, "unborn")
+    mkdirSync(folder)
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: folder })
+    const file = join(folder, "changed.txt")
+    writeFileSync(file, "first\n")
+    writeFileSync(join(folder, "unchanged.txt"), "keep me\n")
+    const storeRoot = join(root, "unborn-store")
+    const unborn = new WorkspaceSnapshots(new Git(), storeRoot)
+    unborn.followHistory(history)
+    const wholeRoot = join(root, "unborn-whole")
+    const whole = new WorkspaceSnapshots(new Git(), wholeRoot)
+    const first = randomUUID()
+    const second = randomUUID()
+    try {
+      await unborn.beginRun(first, folder)
+      unborn.abandonRun(first)
+      writeFileSync(file, "second\n")
+      heard.push({ at: ++count, path: file })
+      const incremental = await unborn.beginRun(second, folder)
+      const expected = await whole.capture(folder)
+      assert.equal(treeOf(storeRoot, incremental.id), treeOf(wholeRoot, expected.id), "an unborn incremental checkpoint retains both changed and unchanged content")
+      assert.equal(existsSync(join(folder, ".git", "index")), false, "checkpointing leaves the unborn repository's user index absent")
+    } finally {
+      unborn.abandonRun(first)
+      unborn.abandonRun(second)
+      unborn.close()
+      whole.close()
+    }
+  }
   console.log("checkpoint reuse: a quiet workspace's turn starts on its last checkpoint; a change, a staged path, a moved HEAD, a lost or unread history, or a shared workspace is captured")
 } finally {
   store.close()
