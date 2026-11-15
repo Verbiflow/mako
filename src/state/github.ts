@@ -82,7 +82,8 @@ export const github = {
     if (
       current.status &&
       (root === undefined || current.statusRoot === root) &&
-      (!current.status.limited || current.status.limited.until > Date.now())
+      (!current.status.limited || current.status.limited.until > Date.now()) &&
+      (!current.status.repoLookup || current.status.repoLookup.until > Date.now())
     )
       return
     if (statusLoad && (root === undefined || statusLoadRoot === root))

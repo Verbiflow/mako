@@ -12,6 +12,12 @@ import { pullRequestTools } from "@mako/host/git/pull-request-tools"
 import { ThreadStore } from "@mako/host/threads/store"
 import { ThreadWorktreeService } from "@mako/host/workspaces/thread-worktrees"
 import { repositoryPlace } from "@mako/host/workspaces/tools"
+import { declareToolMethods, openTools } from "@mako/host/tools"
+import type { Control } from "@mako/host/control"
+import type { MachineCapability } from "@mako/host/base/machine"
+import type { MethodTable } from "@mako/host/base/methods"
+import { pullSetupReason } from "@mako/host/contracts/git-actions"
+import type { IntegrationCatalogSnapshot, McpRegistrySnapshot } from "@mako/host/contracts/mcp-skills-integrations"
 
 // Real linked Git worktrees and repository/tool resolution; every gh answer and push destination is local.
 const root = await realpath(await mkdtemp(join(tmpdir(), "mako-worktree-remote-")))
@@ -85,12 +91,56 @@ else if(a[0]==='api'&&a[1]==='repos/{owner}/{repo}'){
   assert.ok(requests.every(row => place.repositories.some(repo => repo.root === row.cwd)))
   for (const failure of ["fail", "malformed"]) {
     await writeFile(mode, failure)
-    await assert.rejects(githubStatus(place.repositories[0]!.root), /GitHub could not read this repository/, "a failed read is not a missing remote")
-    await assert.rejects(tools.open(id, { repository: "api" }), error => error instanceof Error && !/PRIVATE-FIXTURE-DETAIL|Add a GitHub remote/.test(error.message))
+    let integrations: (() => Promise<IntegrationCatalogSnapshot>) | undefined
+    let discoveries = 0
+    const methods: MethodTable = { handle(channel, listener) {
+      if (channel === "mako:integrations") {
+        // SAFETY: this registered channel has no arguments and returns IntegrationCatalogSnapshot.
+        integrations = listener as () => Promise<IntegrationCatalogSnapshot>
+      }
+    } }
+    const snapshot: McpRegistrySnapshot = { cwd: place.repositories[0]!.root, generatedAt: 1, servers: [], providers: [] }
+    const empty = { get: () => undefined, list: () => [] }
+    const integrationTools = openTools({
+      mcpSources: empty, skillSources: empty, mcpEditing: empty, skillEditing: empty,
+      authoring: { hooks: empty, commands: empty, mcp: empty }, harnesses: empty,
+      label: provider => provider, account: async () => ({ env: {}, account: { name: "fixture" } }),
+    }, root)
+    integrationTools.mcp.discover = async () => { discoveries++; return snapshot }
+    // SAFETY: integrations uses only these control methods; browser/driver/permissions are explicit local fixtures.
+    const control = {
+      ensureLocalControl: async (): Promise<string | null> => null,
+      driverStatus: async () => ({ executable: "/fixture/driver", version: "fixture", verified: "fixture", outdated: false, detail: "fixture" }),
+      computerPermissions: async () => ({ supported: true, persistentAcrossUpdates: true, accessibility: true, screenRecording: "granted" as const }),
+      browser: { status: () => [{ id: "fixture", name: "Fixture", connection: { status: "connected" as const, generation: "fixture" } }] },
+    } as Control
+    // SAFETY: the machine capability belongs only to the uninvoked reveal-plugins handler; integrations never uses it.
+    declareToolMethods(methods, { tools: integrationTools, control, workspace: async () => snapshot.cwd, dataRoot: root, machine: {} as MachineCapability })
+    assert.ok(integrations)
+    const readIntegrations = integrations
+    const apiRoot = place.repositories[0]!.root
+    const repositoryReads = async () => (await readFile(calls, "utf8")).trim().split("\n").map(line => JSON.parse(line)).filter(row => row.cwd === apiRoot && row.args[1] === "repos/{owner}/{repo}").length
+    const before = await repositoryReads()
     const failedHost = new HostStopping()
     try {
-      await assert.rejects(failedHost.run(() => pullForBranch(place.repositories[0]!.root)), /GitHub could not read this repository/, "failure inside the cached PR reader cannot become no PR")
+      await failedHost.run(async () => {
+        const catalog = await readIntegrations()
+        assert.equal(discoveries, 1)
+        for (const name of ["github", "local-browser", "computer-use"]) assert.equal(catalog.integrations.find(row => row.id === name)?.connection.kind, "ready")
+        const failedStatus = await githubStatus(apiRoot)
+        assert.equal(failedStatus.authenticated, true)
+        assert.equal(failedStatus.repo, undefined)
+        assert.equal(failedStatus.repoLookup?.state, "failed")
+        assert.ok(failedStatus.repoLookup!.until > Date.now())
+        assert.match(pullSetupReason(failedStatus)!, /GitHub could not read this repository/)
+        assert.match(await tools.status(id), /GitHub could not read this repository/)
+        await assert.rejects(tools.open(id, { repository: "api" }), error => error instanceof Error && !/PRIVATE-FIXTURE-DETAIL|Add a GitHub remote/.test(error.message))
+        await assert.rejects(pullForBranch(apiRoot), /GitHub could not read this repository/, "failure inside the cached PR reader cannot become no PR")
+        await readIntegrations()
+        assert.equal(await repositoryReads() - before, 1, "catalog refresh, PR status/open and cached PR reading share one failed metadata lookup")
+      })
     } finally { await failedHost.stop() }
+    assert.equal((await githubStatus(apiRoot)).repoLookup?.state, "failed", "standalone status callers get the same typed result")
   }
   await writeFile(mode, "ok")
   const noRemote = join(root, "no-remote")

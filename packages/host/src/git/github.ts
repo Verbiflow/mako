@@ -3,7 +3,7 @@ import { hostCommand } from "../base/host-command.js"
 import { hostFetch, hostStopping, type HostStopping } from "../base/host-stopping.js"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { GitHubReads, GitHubRateLimitError, githubRateLimit } from "./github-reads.js"
+import { GitHubReads, GitHubRateLimitError, GitHubRepositoryLookupError, githubRateLimit } from "./github-reads.js"
 import { hostLog } from "../base/host-log.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import { resolveExecutable } from "../base/executable.js"
@@ -76,12 +76,8 @@ async function directGh(cwd: string, args: string[], env?: Readonly<Record<strin
     // Only gh's local remote-discovery refusal proves missing setup. HTTP/GraphQL/parse/timeout failures do not.
     const failure = CommandFailure.safeParse(cause)
     if (failure.success && /no git remotes found|none of the git remotes.*known GitHub host/i.test(failure.data.stderr)) throw cause
-    throw new RepositoryLookupError()
+    throw new GitHubRepositoryLookupError(Date.now() + 60_000)
   }
-}
-
-class RepositoryLookupError extends Error {
-  constructor() { super("GitHub could not read this repository. Check repository access or try again; this does not mean its Git remote is missing.") }
 }
 
 /** Keep gh's checkout/remote selection, but fetch repository metadata over REST instead of GraphQL repo view. */
@@ -90,7 +86,7 @@ function repositoryArgs(args: string[]): string[] {
   if (!target) return ["api", "repos/{owner}/{repo}"]
   const parts = (target.startsWith("https://") ? target.slice(8) : target).replace(/\/$/, "").split("/")
   const hostname = parts.length === 3 ? parts.shift() : undefined
-  if (parts.length !== 2 || parts.some(part => !/^[\w.-]+$/.test(part))) throw new RepositoryLookupError()
+  if (parts.length !== 2 || parts.some(part => !/^[\w.-]+$/.test(part))) throw new GitHubRepositoryLookupError(Date.now() + 60_000)
   return ["api", `repos/${parts.join("/")}`, ...(hostname ? ["--hostname", hostname] : [])]
 }
 
@@ -149,7 +145,7 @@ async function ghJson<TResult>(
     const value: JsonValue = JSON.parse(await gh(cwd, args, undefined, expectedHead))
     return parse(value)
   } catch (cause) {
-    if (cause instanceof GitHubRateLimitError || cause instanceof RepositoryLookupError) throw cause
+    if (cause instanceof GitHubRateLimitError || cause instanceof GitHubRepositoryLookupError) throw cause
     return null
   }
 }
@@ -229,6 +225,12 @@ export async function githubStatus(cwd: string): Promise<GitHubStatus> {
       defaultBranch: repo?.defaultBranch,
     }
   } catch (cause) {
+    if (cause instanceof GitHubRepositoryLookupError) return {
+      installed: true,
+      authenticated: Boolean(who?.login),
+      ...(who?.login && { login: who.login, userId: who.id }),
+      repoLookup: { state: "failed", until: cause.retryAt },
+    }
     if (!(cause instanceof GitHubRateLimitError)) throw cause
     return {
       installed: true,
