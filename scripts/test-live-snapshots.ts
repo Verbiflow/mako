@@ -276,7 +276,11 @@ try {
   // A checkpoint held past the deadline: the notice remains unless a real failure replaces the timeout reason.
   for (const failure of [false, true]) {
     await owner.stop()
-    owner = new LiveConversations({ ...dependencies, checkpointWaitMs: 200 })
+    const timeouts: number[] = []
+    owner = new LiveConversations({ ...dependencies, checkpointWaitMs: 200, checkpointTimedOut: (waitedMs) => {
+      timeouts.push(waitedMs)
+      if (failure) throw new Error("telemetry unavailable")
+    } })
     const lateId = randomUUID(), lateRequest = randomUUID()
     await owner.start("test", cwd, { conversationId: lateId })
     await until(() => owner.snapshot(lateId)?.session.status === "ready")
@@ -296,6 +300,8 @@ try {
       const missed = owner.snapshot(lateId)?.requests[0].snapshots?.before
       assert.ok(missed?.kind === "unavailable")
       assert.equal(missed.timedOut, true, "the turn can say its checkpoint missed the dispatch deadline")
+      assert.equal(timeouts.length, 1, "one timeout diagnostic per turn, even when telemetry throws")
+      assert.ok(timeouts[0] >= 200)
       writeFileSync(file, "the agent wrote before the delayed capture held the workspace")
       release()
       // Held after the turn went, it may hold the turn's own edits: it never becomes the turn's `before`.

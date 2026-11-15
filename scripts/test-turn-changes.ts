@@ -1,7 +1,9 @@
 import assert from "node:assert/strict"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import { CheckpointNotice } from "../src/components/transcript/checkpoint-notice.tsx"
+import { TurnChanges as TurnChangesView } from "../src/components/transcript/turn-changes.tsx"
+import { TranscriptSourceContext } from "../src/components/transcript/source-context.ts"
+import { acpStore, type LiveAcpConversation } from "../src/state/acp.ts"
 import { RunSnapshotsSchema } from "@mako/host/contracts/workspace-snapshots"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -17,14 +19,8 @@ import { writerLabel } from "../src/lib/turn-writers.ts"
 import { undoneWords } from "../src/lib/turn-undone.ts"
 import { requestedTurn, type TurnReviewRequest } from "../src/state/review-scope.ts"
 
-// The deadline is persisted data, not a guess from an error's words. A later valid point removes its notice.
+// A timeout remains stored for rewind, with no unsolicited transcript note.
 const timedOutPoint = RunSnapshotsSchema.parse({ before: { kind: "unavailable", reason: "still waiting", timedOut: true } }).before
-const checkpointNote = renderToStaticMarkup(createElement(CheckpointNotice, { before: timedOutPoint }))
-assert.match(checkpointNote, /role="note"/)
-assert.match(checkpointNote, /No rewind point: the checkpoint took too long/)
-assert.equal(renderToStaticMarkup(createElement(CheckpointNotice, { before: undefined })), "")
-assert.equal(renderToStaticMarkup(createElement(CheckpointNotice, { before: { kind: "unavailable", reason: "not a Git repository" } })), "")
-assert.equal(renderToStaticMarkup(createElement(CheckpointNotice, { before: { kind: "ready", snapshot: { id: "00000000-0000-4000-8000-000000000001", scope: "/workspace", createdAt: 1, files: 1 } } })), "")
 
 // The line's words carry their noun, one file or many.
 assert.equal(turnChangeWords(1), "Changed a file")
@@ -111,7 +107,22 @@ const snapshotOf = (requests: LiveRequest[]): LiveSnapshot => ({
   permissions: [],
   requests,
 })
+const drawTurn = (request: LiveRequest, streaming: boolean) => {
+  const conversation: LiveAcpConversation = {
+    key: id, draftKey: id, kind: "live", harness: "claude", cwd: "/repo", blocks: [], queued: [], hiddenUserPrompt: null,
+    createdAt: 1, updatedAt: 1, permission: null, sending: false, canceling: false,
+    session: snapshotOf([request]).session, requests: [request],
+    control: { activeBindingId: id, bindings: [], merges: [], transfers: [], actions: [] },
+  }
+  acpStore.set({ activeKey: id, conversations: { [id]: conversation } })
+  return renderToStaticMarkup(createElement(TranscriptSourceContext.Provider, { value: { liveId: id } }, createElement(TurnChangesView, { requestId: request.id, streaming })))
+}
 const live: LiveRequest = { id: summary.turn, text: "Add b.ts", attachments: [], status: "completed", changes: summary, snapshots: { before: timedOutPoint } }
+for (const streaming of [true, false]) {
+  const drawn = drawTurn(live, streaming)
+  assert.doesNotMatch(drawn, /data-turn-rewind-unavailable|No rewind point/)
+  if (!streaming) assert.match(drawn, /Changed 2 files/, "attributed changes remain visible")
+}
 try {
   const journal = new LiveJournal(root, id)
   journal.commit(snapshotOf([live]))
@@ -120,8 +131,9 @@ try {
   const saved = reopened.read()?.requests[0]
   await reopened.close()
   assert.deepEqual(saved?.changes, summary, "stored whole")
-  assert.deepEqual(saved?.snapshots?.before, timedOutPoint, "the timeout notice survives journal reload")
-  assert.equal(renderToStaticMarkup(createElement(CheckpointNotice, { before: saved?.snapshots?.before })), checkpointNote)
+  assert.deepEqual(saved?.snapshots?.before, timedOutPoint, "rewind unavailability survives journal reload")
+  assert.ok(saved)
+  assert.doesNotMatch(drawTurn(saved, false), /data-turn-rewind-unavailable|No rewind point/, "reopening does not show a timeout note")
   assert.deepEqual(recordedTurnChanges(saved?.changes), recordedTurnChanges(live.changes), "the reopened line is the live one")
   // An undo is kept on the request beside its record, and reads back the same.
   const undone = { at: 1_790_000_100_000, scope: "turn" as const, files: 1, left: 0, backup: "refs/mako/moves/undo" }

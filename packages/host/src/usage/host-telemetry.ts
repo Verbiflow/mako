@@ -93,6 +93,15 @@ export class HostTelemetry {
     }
   }
 
+  /** A nonfatal checkpoint timeout uses the existing diagnostic event, with no Thread text or paths. */
+  checkpointTimedOut(waitedMs: number): void {
+    this.telemetry.report("error.reported", {
+      kind: "checkpoint-timeout",
+      name: "CheckpointTimeout",
+      message: `A turn went without its rewind checkpoint after ${Math.round(waitedMs)} ms.`,
+    })
+  }
+
   threadCreated(props: ProductEvents["thread.created"]): void {
     if (harnessId(props.harness)) this.telemetry.record("thread.created", props)
   }

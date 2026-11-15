@@ -153,6 +153,11 @@ export class LiveCheckpoints {
         // Never a send waiting minutes on its checkpoint: the turn goes, said so, and the capture lands on it if it ends.
         wentAt = Date.now()
         hostWarn("checkpoints", "a turn went before its checkpoint held the workspace", { conversation, request: request.id, waitedMs: wentAt - began })
+        try {
+          this.host.dependencies.checkpointTimedOut?.(wentAt - began)
+        } catch {
+          // Diagnostics must never prevent or delay provider dispatch.
+        }
         if (generation === resident.generation) {
           const reason = "The checkpoint was still waiting when the turn went"
           resident.snapshot = {
