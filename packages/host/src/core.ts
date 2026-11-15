@@ -1967,8 +1967,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   if (plugins) {
     // Register before readiness: a stop during subscription still joins the late release.
     shell.stopping.register("plugin calls", () => plugins.close())
-    try { await plugins.ready }
-    catch (error) { hostWarn("plugins", "plugin changes could not be followed", { error: error instanceof Error ? error.message : String(error) }) }
+    void plugins.ready.catch((error) => {
+      if (!shell.closing()) hostWarn("plugins", "plugin changes could not be followed", { error: error instanceof Error ? error.message : String(error) })
+    })
   }
   const builds = config.development ? watchOwnBuild(devHostBuildDirectories(environment.appRoot), emit) : []
   appUpdates.start()
