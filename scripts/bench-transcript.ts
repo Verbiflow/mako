@@ -72,7 +72,7 @@ async function one(spec: string): Promise<void> {
       if (!read) throw new Error(`No reader opens ${spec}`)
       thread = read
     } finally {
-      catalog.stop()
+      await catalog.stop()
     }
   }
   const input = { entries: thread.entries, harness: thread.ref.harness, ...thread.ref.title !== undefined && { title: thread.ref.title } }

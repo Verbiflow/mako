@@ -307,6 +307,12 @@ export interface Dependencies {
   accountEnv?(binding: ProviderBinding): Promise<NodeJS.ProcessEnv>
   /** The account a harness has selected and a digest of `account`'s credentials. Without it, work paused on a sign-out waits to be resumed by hand. */
   signInState?(harness: string, account: string): Promise<{ selected: string; credential: string }>
+  /** Opaque, durable receipt of a provider-verified login. Principal equality alone is not renewed authentication. */
+  signInProof?(harness: string, account: string): import("../harnesses/index.js").VerifiedSignIn | undefined
+  signInSequence?(harness: string): number | undefined
+  signInEvents?(listener: (receipt: import("../harnesses/index.js").VerifiedSignIn) => void): () => void
+  /** The archive/ownership boundary, checked again before automatic release. */
+  signInAllowed?(id: string): boolean
   /** Who has a saved binding's native session and whether its record moved; see `ResumeVerdict`. */
   resumeVerdict?(binding: ProviderBinding): Promise<ResumeVerdict>
   /** The same folder in the project a since-removed worktree holding `cwd` was made from; undefined while `cwd` is there. */
@@ -416,6 +422,7 @@ export interface Dependencies {
  * what it depends on; `LiveConversations` wires them.
  */
 export interface LiveAccess {
+  stopMark(id: string): number
   dependencies: Dependencies
   /** Compacts the journals this host closes with much of them free. */
   reclaims: JournalReclaims
@@ -526,7 +533,7 @@ export interface LiveAccess {
   accountSwitchWait(resident: Resident): AccountSwitchWait | undefined
   /** A turn ended: Mako continues it after a dropped connection, or when its next attempt is due after a failure that clears by itself. */
   scheduleAutoContinue(resident: Resident, settled: string): void
-  declineAutoContinue(resident: Resident, keepServiceRetry?: boolean): void
+  declineAutoContinue(resident: Resident, keepProviderWait?: boolean): void
   /** A turn ended; Mako's goal loop decides whether the agent keeps going. */
   goalSettled(resident: Resident, settled: string): void
   /** A turn ended: a child's end is its parent's to hear, and a parent's end delivers what waited for it. */

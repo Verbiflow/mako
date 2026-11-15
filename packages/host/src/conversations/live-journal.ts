@@ -1,3 +1,4 @@
+import type { WalPrimer, WalCheckpoint } from "./wal-primer.js"
 import { ProviderFailureEvidenceSchema } from "../contracts/provider-failure-evidence.js"
 import { LiveInputQuestionSchema } from "../contracts/live-questions.js"
 import { ApprovalOriginSchema, NativeApprovalIdentitySchema } from "../contracts/approval-response.js"
@@ -20,7 +21,7 @@ import {
   PromptAttachmentSchema,
   RequestRetrySchema,
 } from "../contracts/conversation-control.js"
-import { existsSync, mkdirSync, readdirSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, realpathSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
@@ -39,7 +40,7 @@ import type { LiveSessionMode } from "../contracts/providers-acp.js"
 import { hostWarn } from "../base/host-log.js"
 import { foldMakoLog, MAKO_LOG_SCHEMA, makoFacts, makoLogDifference, type MakoLogEvent, type MakoLogState } from "./mako-log.js"
 import { baseKeptBecause, baseKeptOnceHeld, refreshedFacts, sourceOfPage, storedBase } from "./base-source.js"
-import { RECLAIM_MIN_BYTES } from "./journal-reclaim.js"
+import { RECLAIM_MIN_BYTES, journalOpened, type Reclaimed } from "./journal-reclaim.js"
 import { cutOffRequests, mergedBaseSteps } from "./stream-merging.js"
 import { errorMessage } from "../base/error-message.js"
 import { EntrySchema, type Entry } from "@mako/sessions/entries"
@@ -162,7 +163,7 @@ export const LiveRequestSchema = z.object({
   ownerCheck: z.object({ since: z.number() }).optional(),
   editing: z.literal(true).optional(),
   pause: z.literal("stop").optional(),
-  signIn: z.object({ harness: z.string(), account: z.string(), credential: z.string(), at: z.number() }).optional(),
+  signIn: z.object({ id: z.string().uuid().optional(), verification: z.number().int().nonnegative().optional(), ready: z.string().uuid().optional(), harness: z.string(), account: z.string(), credential: z.string(), at: z.number() }).optional(),
   wake: z.object({ at: z.number(), after: z.string() }).optional(),
   retry: RequestRetrySchema.optional(),
   digest: z.object({ notices: z.array(NoticeSchema), lines: z.array(z.string()).optional(), sentAt: z.number().optional(), heard: z.literal(true).optional(), resting: z.literal(true).optional(), nextTry: z.number().optional() }).optional(),
@@ -562,7 +563,7 @@ export type MakoLogEntry = Omit<z.infer<typeof LogRowSchema>, "value"> & MakoLog
  * router's word on a conversation it relays or reads from the account's copy, never a journal's. `parent` is its
  * Thread's edge, read from the Thread store whenever it's listed, and `children` its children's count, read from them.
  */
-type UnstoredMetadata = "parent" | "children" | "fins" | "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "elsewhereKind" | "waitingOn" | "waitingFor" | "attention" | "threadTitle" | "quietSince" | "cloudContinue" | "movedAt" | "rail" | "copy" | "wakeAt" | "promptedAt" | "order"
+type UnstoredMetadata = "hasSignInHold" | "parent" | "children" | "fins" | "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "elsewhereKind" | "waitingOn" | "waitingFor" | "attention" | "threadTitle" | "quietSince" | "cloudContinue" | "movedAt" | "rail" | "copy" | "wakeAt" | "promptedAt" | "order"
 
 /**
  * Whether `next` holds metadata `previous` did not. Fields are compared by
@@ -647,6 +648,8 @@ export class JournalWriteError extends Error {
   }
 }
 
+const AutoCheckpointSchema = z.object({ wal_autocheckpoint: z.number().int().nonnegative() })
+
 /**
  * One independent journal per conversation. Only changed blocks and requests
  * are written.
@@ -694,6 +697,9 @@ export class LiveJournal {
   private stagedBase?: ThreadPage
   /** The pages a commit checkpoints the journal at when it isn't writing rows ahead (`STAGE_CHECKPOINT_PAGES`). */
   private checkpointPages?: number
+  private checkpoints?: WalCheckpoint
+  private foregroundPages = 1_000
+  private checkpointPolicyDirty = false
   /** Whether the base row names the rows; unknown until the journal is read or writes it. */
   private rowsNamed?: boolean
   private closed = false
@@ -703,6 +709,7 @@ export class LiveJournal {
   private closing?: Promise<void>
   /** `keepFile`: the tidying `closing` waits to do is no longer this journal's. */
   private untidy = false
+  private readonly releaseKey: string
   /** The journal's database file. */
   get file(): string {
     return this.path
@@ -712,10 +719,15 @@ export class LiveJournal {
     z.string().uuid().parse(id)
     mkdirSync(root, { recursive: true })
     this.path = join(root, `${id}.sqlite`)
+    this.releaseKey = join(realpathSync(root), `${id}.sqlite`)
+    journalOpened.publish(this.releaseKey)
+    // A different LiveRecords owner, or an independent opener, takes the same file too. Even a failed open keeps
+    // its data: an old close must not tidy a file another owner may already have begun opening.
     this.db = new DatabaseSync(this.path)
     try {
+      // The checkpoint owner's final close may still hold the WAL lock. Install the existing wait before opening it.
       this.db
-        .exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;
+        .exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
       CREATE TABLE IF NOT EXISTS metadata (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS options (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS progress (id INTEGER PRIMARY KEY, revision INTEGER NOT NULL);
@@ -745,6 +757,29 @@ export class LiveJournal {
       throw error
     }
     this.pager = new EntryPager(journalRows(this.db, () => this.appends))
+  }
+
+  /** Live resident only: listings and independent read connections retain their original policy. */
+  checkpointWith(primer: WalPrimer): void {
+    if (this.closed || this.checkpoints) return
+    this.foregroundPages = AutoCheckpointSchema.parse(this.db.prepare("PRAGMA wal_autocheckpoint").get()).wal_autocheckpoint
+    this.checkpoints = primer.watch(this.path, () => {
+      if (this.closed) return
+      this.checkpointPolicyDirty = true
+      try { this.checkpointPolicy() }
+      catch (error) { hostWarn("journal", "foreground checkpoint policy will be retried before the next write", { error: errorMessage({ error }) }) }
+    })
+    this.checkpoints?.pages(this.foregroundPages)
+  }
+
+  private checkpointPolicy(): void {
+    this.db.exec(`PRAGMA wal_autocheckpoint=${this.checkpoints?.active() ? 0 : this.foregroundPages}`)
+    this.checkpointPolicyDirty = false
+  }
+
+  private beforeWrite(): void {
+    // A failed policy restoration must stop the next write, never leave a dead worker owning an unbounded WAL.
+    if (this.checkpointPolicyDirty) this.checkpointPolicy()
   }
 
   /**
@@ -797,7 +832,8 @@ export class LiveJournal {
     const wakeAt = sooner(this.wakeAt(), transferWakeAt)
     const promptedAt = laterPrompt(this.requestedAt(), steeredAt)
     const unsettled = this.unsettled()
-    return { ...summary, revision: Math.max(summary.revision, this.revision()), ...wakeAt !== undefined && { wakeAt }, ...promptedAt !== undefined && { promptedAt }, ...unsettled && { unsettled } }
+    const hasSignInHold = this.db.prepare(`SELECT 1 FROM requests WHERE value LIKE '%"signIn":%' AND json_extract(value, '$.signIn') IS NOT NULL AND json_extract(value, '$.status') != 'canceled' LIMIT 1`).get() !== undefined
+    return { ...summary, revision: Math.max(summary.revision, this.revision()), ...wakeAt !== undefined && { wakeAt }, ...promptedAt !== undefined && { promptedAt }, ...unsettled && { unsettled }, ...hasSignInHold && { hasSignInHold: true } }
   }
 
   /** Whether a message here was waiting, paused or running as the journal was last written; only rows that name such a status are parsed. */
@@ -964,10 +1000,12 @@ export class LiveJournal {
     if (begun) hostWarn("journal", "Mako's log differed from its rows; took the rows' facts in", {
       conversation: snapshot.session.id, events: events.length, kinds: [...new Set(events.map((event) => event.kind))].join(","),
     })
+    this.beforeWrite()
     this.db.exec("BEGIN IMMEDIATE")
     try {
       this.appendLog(events, "journal")
       this.db.exec("COMMIT")
+      this.checkpoints?.committed()
     } catch (error) {
       if (this.db.isTransaction) this.db.exec("ROLLBACK")
       this.log = undefined
@@ -989,6 +1027,7 @@ export class LiveJournal {
   /** `grown`: tool blocks of `next` that differ from `previous` only by these appends (`deliverLiveUpdates`). */
   commit(next: LiveSnapshot, previous?: LiveSnapshot, grown?: ReadonlyMap<number, ToolGrowth>): void {
     try {
+      this.beforeWrite()
       this.db.exec("BEGIN IMMEDIATE")
     } catch (error) {
       throw new JournalWriteError(error)
@@ -1102,6 +1141,7 @@ export class LiveJournal {
         if (difference) throw new Error(`Mako's log lost a change to ${next.session.id}'s facts. ${difference}`)
       }
       this.db.exec("COMMIT")
+      this.checkpoints?.committed()
       if (writeOptions) this.optionsStored = true
       this.messageBase = false
       for (const [index, count] of counts) {
@@ -1209,8 +1249,19 @@ export class LiveJournal {
   private checkpointAt(pages: number | undefined): void {
     if (this.closed) return
     try {
-      if (pages !== undefined) {
-        this.checkpointPages ??= z.object({ wal_autocheckpoint: z.number() }).parse(this.db.prepare("PRAGMA wal_autocheckpoint").get()).wal_autocheckpoint
+      if (this.checkpoints) {
+        if (pages !== undefined) {
+          this.checkpointPages ??= this.foregroundPages
+          this.foregroundPages = pages
+        } else if (this.checkpointPages !== undefined) {
+          this.foregroundPages = this.checkpointPages
+          this.checkpointPages = undefined
+        }
+        this.checkpoints.pages(this.foregroundPages)
+        this.checkpointPolicyDirty = true
+        this.checkpointPolicy()
+      } else if (pages !== undefined) {
+        this.checkpointPages ??= AutoCheckpointSchema.parse(this.db.prepare("PRAGMA wal_autocheckpoint").get()).wal_autocheckpoint
         this.db.exec(`PRAGMA wal_autocheckpoint=${pages}`)
       } else if (this.checkpointPages !== undefined) {
         this.db.exec(`PRAGMA wal_autocheckpoint=${this.checkpointPages}`)
@@ -1261,6 +1312,7 @@ export class LiveJournal {
     }
     const { entries } = staging.base
     try {
+      this.beforeWrite()
       this.db.exec("BEGIN IMMEDIATE")
       const written = this.writeBaseRows(entries, staging.at, entries.length, performance.now() + (staging.waiting.length ? STAGE_SLICE_WAITED_MS : STAGE_SLICE_MS))
       const done = written.at >= entries.length
@@ -1269,6 +1321,7 @@ export class LiveJournal {
         this.db.prepare("DELETE FROM base_entries WHERE id >= ?").run(entries.length)
       }
       this.db.exec("COMMIT")
+      this.checkpoints?.committed()
       for (const [index, entry] of written.rows) this.baseRows[index] = entry
       if (!done) {
         staging.at = written.at
@@ -1301,11 +1354,13 @@ export class LiveJournal {
    * may outlive it, in a window's view or a read under way: they read
    * through a connection of their own, and the rows written ahead stay, and
    * the file isn't compacted, until the last of them is collected
-   * (`released`). `abandon` doesn't wait: the host is stopping.
+   * (`released`). The returned promise joins checkpoint release and tidying; await it before removing the root.
+   * A later open cancels this close's delayed tidy synchronously. `abandon` skips tidy: the host is stopping.
    */
-  close(compact?: (path: string) => void, abandon = false): void {
-    if (this.closed) return
+  close(compact?: (path: string) => void | Promise<Reclaimed | void>, abandon = false): Promise<void> {
+    if (this.closed) return this.released()
     this.closed = true
+    if (abandon) this.keepFile()
     this.stopStaging()
     // Rows written ahead that the base row doesn't name go with the journal: dropped by the compaction, off this
     // thread, as 150MB of them take a few hundred milliseconds to free.
@@ -1314,7 +1369,9 @@ export class LiveJournal {
     const paged = this.pager.pagedCount() > 0
     if (ahead && !compact && !paged) {
       try {
+        this.beforeWrite()
         this.db.exec("DELETE FROM base_entries")
+        this.checkpoints?.committed()
       } catch (error) {
         hostWarn("journal", "a journal's history rows couldn't be dropped", { path: this.path, error: errorMessage({ error }) })
       }
@@ -1328,14 +1385,21 @@ export class LiveJournal {
     const tidy = () => {
       if (this.untidy) return
       if (ahead && !compact && paged) dropRowsAhead(this.path)
-      if (free) compact(this.path)
+      if (free) return Promise.resolve(compact(this.path)).then(result => {
+        if (result && "skipped" in result) this.keepFile()
+      })
     }
     const freed = this.pager.release(readOnlyRows(this.path))
-    if (!paged || abandon) {
-      tidy()
-      return
-    }
-    this.closing = freed.then(tidy)
+    const checkpointsClosed = this.checkpoints?.close()
+    if (checkpointsClosed || (paged && !abandon)) {
+      const unwatch = journalOpened.subscribe(opened => {
+        if (opened === this.releaseKey) this.keepFile()
+      })
+      this.closing = Promise.all([checkpointsClosed, paged && !abandon ? freed : undefined]).then(tidy).then(() => {}).finally(() => {
+        unwatch()
+      })
+    } else this.closing = Promise.resolve(tidy()).then(() => {})
+    return this.closing
   }
 
   /**
@@ -1349,6 +1413,7 @@ export class LiveJournal {
     this.untidy = true
     this.stopStaging()
     this.db.close()
+    this.closing = this.checkpoints?.close()
   }
 
   /** Once the journal closed and what it waited on before tidying its file (`close`) is done. */
@@ -1363,6 +1428,11 @@ export class LiveJournal {
    */
   keepFile(): void {
     this.untidy = true
+  }
+
+  /** A later opener or shutdown took away this closed journal's right to tidy the file. */
+  get tidyingCancelled(): boolean {
+    return this.untidy
   }
 
   private rowsAhead(): boolean {
@@ -1464,6 +1534,28 @@ export function storedRequest(root: string, id: string, requestId: string): Live
   } finally {
     db.close()
   }
+}
+
+/** Retirement reads only metadata and pending request rows, never transcript blocks or a writable journal. */
+export function storedRetirementState(root: string, id: string): { finished: boolean; at: number } | undefined {
+  const path = join(root, `${id}.sqlite`)
+  if (!existsSync(path)) return undefined
+  const db = new DatabaseSync(path, { readOnly: true })
+  try {
+    const metadata = metadataRow(db)
+    if (!metadata) return undefined
+    const summary = journalSummary(metadata)
+    let pending = false
+    for (const row of db.prepare(`SELECT value FROM requests WHERE value LIKE '%"status":"queued"%' OR value LIKE '%"status":"held"%' OR value LIKE '%"status":"dispatching"%'`).all()) {
+      const request = LiveRequestSchema.parse(JSON.parse(RowSchema.parse(row).value))
+      if (request.status === "queued" || request.status === "held" || request.status === "dispatching") pending = true
+    }
+    return {
+      finished: !pending && !summary.hasSessionQuestions && summary.transferWakeAt === undefined &&
+        (summary.session.status === "ready" || summary.session.status === "failed" || summary.session.status === "closed"),
+      at: Math.max(summary.createdAt, statSync(path).mtimeMs, existsSync(`${path}-wal`) ? statSync(`${path}-wal`).mtimeMs : 0),
+    }
+  } finally { db.close() }
 }
 
 /** The bytes of the copy of its history journal `id` keeps; 0 when it keeps none. */

@@ -2375,6 +2375,9 @@ const inputs = {
   "mako:plan-build-release": () => z.tuple([z.string()]),
   "mako:plan-builds": () => z.tuple([]),
   "mako:plugins-dir": () => z.tuple([]),
+  "mako:preference-offer": () => z.tuple([z.string(), z.json(), z.number()]),
+  "mako:preference-set": () => z.tuple([z.string(), z.json()]),
+  "mako:preferences": () => z.tuple([]),
   "mako:project-app-setup": () => z.tuple([z.string()]),
   "mako:prompt": () =>
     z.tuple([
@@ -3297,6 +3300,19 @@ const inputs = {
   "mako:worktree-pulls": () => z.tuple([z.string()]),
   "mako:worktree-removal": () => z.tuple([z.string()]),
   "mako:worktree-remove": () => z.tuple([z.string()]),
+  "mako:worktree-retention": () => z.tuple([]),
+  "mako:worktree-retention-set": () =>
+    z.tuple([
+      z.object({
+        mode: z.union([
+          z.literal("checkout"),
+          z.literal("preview"),
+          z.literal("packages"),
+        ]),
+        days: z.number(),
+        kept: z.array(z.string()),
+      }),
+    ]),
   "mako:worktree-review": () => z.tuple([z.string()]),
   "mako:worktree-review-diffs": () => z.tuple([z.string()]),
   "mako:worktree-skip": () => z.tuple([z.string()]),
@@ -3602,6 +3618,9 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:plan-build-release", "workspaces"],
   ["mako:plan-builds", "workspaces"],
   ["mako:plugins-dir", "tools"],
+  ["mako:preference-offer", "harnesses"],
+  ["mako:preference-set", "harnesses"],
+  ["mako:preferences", "harnesses"],
   ["mako:project-app-setup", "workspaces"],
   ["mako:prompt", "workspaces"],
   ["mako:provider-connection-action", "harnesses"],
@@ -3749,6 +3768,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:worktree-pulls", "workspaces"],
   ["mako:worktree-removal", "workspaces"],
   ["mako:worktree-remove", "workspaces"],
+  ["mako:worktree-retention", "workspaces"],
+  ["mako:worktree-retention-set", "workspaces"],
   ["mako:worktree-review", "workspaces"],
   ["mako:worktree-review-diffs", "workspaces"],
   ["mako:worktree-skip", "workspaces"],

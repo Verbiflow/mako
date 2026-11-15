@@ -1,3 +1,5 @@
+import type { WorktreeRetention } from "./worktree-retention.js"
+import type { WorktreeRetentionSettings, WorktreeRetentionReport } from "../contracts/thread-worktrees.js"
 import type { MethodTable } from "../base/methods.js"
 import type { ThreadWorktreeService } from "./thread-worktrees.js"
 import type { GitDiff } from "../contracts/git-workspace-search.js"
@@ -13,7 +15,17 @@ interface PullLists {
 const UNAVAILABLE = "This Mako couldn't open its Thread store, so it can't keep worktrees."
 
 /** This device's Thread worktrees, removing one that has nothing uncommitted, and keeping spares of a project ready. */
-export function declareWorktreeMethods(methods: MethodTable, worktrees: ThreadWorktreeService | null, pulls: PullLists) {
+export function declareWorktreeMethods(methods: MethodTable, worktrees: ThreadWorktreeService | null, pulls: PullLists, retention: WorktreeRetention | null = null) {
+  methods.handle("mako:worktree-retention", (): Promise<WorktreeRetentionReport> => {
+    if (!retention) throw new Error(UNAVAILABLE)
+    return retention.preview()
+  })
+  methods.handle("mako:worktree-retention-set", async (settings: WorktreeRetentionSettings): Promise<WorktreeRetentionReport> => {
+    if (!retention) throw new Error(UNAVAILABLE)
+    await retention.configure(settings)
+    retention.changed()
+    return retention.preview()
+  })
   methods.handle("mako:worktree-branches", async (cwd: string): Promise<WorktreeBranch[]> =>
     (await worktrees?.branches(cwd)) ?? [])
   methods.handle("mako:worktree-pulls", (cwd: string): Promise<WorktreePull[] | null> => pulls.heads(cwd))

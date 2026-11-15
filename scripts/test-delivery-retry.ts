@@ -10,6 +10,7 @@ import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { AgentsWorld, HARNESSES, TESTED_HARNESSES, type Script } from "./lib/agents-world.ts"
 import { providerOutageControls } from "./lib/provider-outage-controls.ts"
+import { usageResetControls } from "./lib/usage-reset-controls.ts"
 
 /**
  * A message that can't reach its harness for a cause that clears by itself
@@ -23,8 +24,8 @@ import { providerOutageControls } from "./lib/provider-outage-controls.ts"
  * message with when it goes next, leaves the session asleep rather than
  * failed, and sends it once when that time comes; an Apex woken for a Fin's
  * report the same; a prompt the harness refuses unsent on a rate limit goes
- * again; a turn its harness fails partway on capacity continues by itself, or
- * gives way to a new message; a failure only the person can fix still fails
+ * again; a turn its harness fails partway on capacity continues by itself
+ * before later messages; a failure only the person can fix still fails
  * at once. The waits grow to ten minutes and repeat, so a usage limit is
  * waited out until it resets, and a session open elsewhere is waited for half
  * an hour.
@@ -137,12 +138,17 @@ async function goesOnce(world: AgentsWorld, conversation: string, words: string,
 }
 
 try {
+  await usageResetControls(root)
   await providerOutageControls(root)
   // The policy: waits grow and repeat at ten minutes, so a usage limit is waited out; a session open elsewhere, half an hour.
   {
     const now = 1_000_000
     const first = nextRetry(undefined, "rate-limited", "usage limit", now)!
     assert.deepEqual([first.attempt, first.at - now, first.since], [1, RETRY_STEPS_MS[0], now])
+    const reset = now + 3_600_000
+    const native = nextRetry(undefined, "rate-limited", "Try again in 2 hours", now, reset)!
+    assert.equal(native.until, reset, "a native reset is stronger than prose")
+    assert.equal(nextRetry(native, "rate-limited", "Try again in 4 hours", now + 1, reset + 1_000)!.until, reset, "the admitted reset is not renewed by later observations")
     let retry = first
     for (let attempt = 2; attempt <= 40; attempt++) retry = nextRetry(retry, "rate-limited", "usage limit", now)!
     assert.equal(retry.at - now, 600_000, "the fortieth attempt waits ten minutes, as every one past the sixth")
@@ -234,7 +240,8 @@ try {
       assert.equal(continuation?.status, "held", `${harness} mid-turn: its continuation waits`)
       assert.equal(continuation.retry?.at, failed.retry.at)
       world.say(conversation, "Then this.")
-      assert.equal(world.live.snapshot(conversation)!.requests.find((request) => request.id === continuation.id)?.status, "canceled", "a new message supersedes a continuation, as it does a dropped connection's")
+      assert.equal(world.live.snapshot(conversation)!.requests.find((request) => request.id === continuation.id)?.status, "held", "new words cannot clear the account's rate limit")
+      world.live.wakeDue(continuation.retry.at + 1)
       await until(`${harness} mid-turn: the new message to go`, () => requestOf(world, conversation, "Then this.")?.status === "completed")
       await world.close()
     }
@@ -527,7 +534,7 @@ try {
       await world.close()
     }
 
-    // The person's order holds: A fails partway with B queued, then C supersedes A's continuation; B goes before C.
+    // The person's order holds behind a rate-limit wait: continue A, then B, then C.
     {
       const { world } = worldOf(`${harness}-order`)
       const { conversation } = await world.apex(harness, "full")
@@ -537,8 +544,13 @@ try {
       world.release(conversation)
       await until(`${harness} order: A to fail`, () => requestOf(world, conversation, "Stall later.")?.status === "failed")
       world.say(conversation, "Then C.")
+      const continuation = world.live.snapshot(conversation)!.requests.find(request => request.continues?.requestId === requestOf(world, conversation, "Stall later.")?.id)!
+      assert.equal(continuation.status, "held")
+      world.live.wakeDue(continuation.retry!.at + 1)
       await until(`${harness} order: C to go`, () => requestOf(world, conversation, "Then C.")?.status === "completed")
-      const order = world.prompts.filter((prompt) => prompt.conversation === conversation).map((prompt) => /Stall later\.|Then B\.|Then C\./.exec(prompt.text)?.[0])
+      const prompts = world.prompts.filter(prompt => prompt.conversation === conversation)
+      assert.equal(prompts.length, 4, "one continuation and each person's message once")
+      const order = prompts.flatMap(prompt => /Stall later\.|Then B\.|Then C\./.exec(prompt.text)?.[0] ?? [])
       assert.deepEqual(order, ["Stall later.", "Then B.", "Then C."], `${harness}: the person's messages go in the order they sent them`)
       await world.close()
     }

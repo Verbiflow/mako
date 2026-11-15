@@ -117,6 +117,23 @@ async function goesAsOne(world: AgentsWorld, conversation: string, names: readon
   for (const name of names) assert.equal(text.split(`"${name}"`).length - 1, 1, `${label}: ${name} was heard once`)
 }
 
+/** A new message cannot clear the provider's limit; the existing time releases the digest ahead of it. */
+async function messageAtLimit(world: AgentsWorld, limits: Limits, conversation: string, label: string): Promise<void> {
+  const held = rows(world, conversation).find((request) => request.status === "held" && request.retry?.cause === "rate-limited")
+  assert.ok(held?.retry, `${label}: a usage-limit retry owns the wait`)
+  const due = held.retry.at
+  const knocks = limits.knocks.length
+  const message = world.say(conversation, "Then this.")
+  world.live.wakeDue(due - 1)
+  await pause(60)
+  const kept = rows(world, conversation).find((request) => request.id === held.id)
+  assert.equal(kept?.status, "held", `${label}: new input keeps the digest held`)
+  assert.equal(kept?.retry?.at, due, `${label}: new input preserves the original retry time`)
+  assert.equal(limits.knocks.length, knocks, `${label}: new input makes no attempt before that time`)
+  assert.notEqual(rows(world, conversation).find((request) => request.id === message)?.status, "completed", `${label}: the new message cannot overtake the digest`)
+  world.live.wakeDue(due + 1)
+}
+
 try {
   // A start that fails past the budget, the third way a digest stops being retried: it rests, and what isn't one fails.
   {
@@ -268,7 +285,7 @@ try {
       const sent = digests(world, conversation).length
       limits.failing.clear()
       passed += 61_000
-      world.say(conversation, "Then this.")
+      await messageAtLimit(world, limits, conversation, `${harness} ${failures} failures`)
       await until(`${harness} ${failures} failures: their message to be taken`, () => rows(world, conversation).some((request) => request.text === "Then this." && request.status === "completed"))
       const went = digests(world, conversation).slice(sent)
       assert.equal(went.length, 1, `${harness} ${failures} failures: the digest went, once`)
@@ -393,7 +410,7 @@ try {
       time.mock.restore()
     }
 
-    // A turn that said something heard it: what follows is a plain continuation, which the person's message supersedes, and the digest isn't told twice.
+    // A turn that said something heard it: what follows is a plain continuation, and the digest isn't told twice.
     {
       const { world, limits } = worldOf(`${harness}-heard`)
       const { conversation, fins } = await apexWithFins(world, harness, names.slice(0, 2))
@@ -423,7 +440,7 @@ try {
       await world.close()
     }
 
-    // A message of the person's in the wait is the try the wait was for: the digest goes now, whole and once, then their message.
+    // A person's message preserves a usage-limit wait: at its time the digest goes whole and once, then their message.
     {
       const { world, limits } = worldOf(`${harness}-person`)
       const { conversation, fins } = await apexWithFins(world, harness, names)
@@ -432,7 +449,7 @@ try {
       await until(`${harness} person: the limit to hold the digest`, () => limits.knocks.length > 0)
       const sent = digests(world, conversation).length
       limits.failing.clear()
-      world.say(conversation, "Then this.")
+      await messageAtLimit(world, limits, conversation, `${harness} person`)
       await until(`${harness} person: their message to be taken`, () => rows(world, conversation).some((request) => request.text === "Then this." && request.status === "completed"))
       const went = digests(world, conversation).slice(sent)
       assert.equal(went.length, 1, `${harness} person: their message took nothing from the digest`)

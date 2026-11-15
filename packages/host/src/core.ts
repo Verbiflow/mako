@@ -50,7 +50,7 @@ import { LentHere } from "./base/lent.js"
 import { operationWords } from "@mako/protocol/borrow-words"
 import { setupStep } from "./contracts/simulator-setup.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, type MachineGatewayLink, MachineWorkspace, declareUsageMethods, declareStorageMethods, declareFootprintMethods, readProcessTable, HelperRuns, helperRunsRoot, LeftoverFiles, MakoStorage, RecordRepacks, spendWatch, describeThisDevice, Lending, LEND_BEAT_MS } from "./usage/index.js"
-import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, CliReadings, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, liveCallBounds, installCloudSignIns, CloudSignInSync, AccessChoiceStore, declareAccessChoiceMethods, FinDefaultsStore, declareFinDefaultMethods, callGateAnswer, HookCall, harnessLabel, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
+import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, CliReadings, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, liveCallBounds, installCloudSignIns, CloudSignInSync, AccessChoiceStore, declareAccessChoiceMethods, PreferenceStore, declarePreferenceMethods, FinDefaultsStore, declareFinDefaultMethods, callGateAnswer, HookCall, harnessLabel, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
 import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins.js"
 import type { CarriedFile } from "./contracts/machine-agent.js"
 import type { GitHubPerson } from "./contracts/github-person.js"
@@ -474,6 +474,15 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     subscribed: shell.subscribed,
     emit,
     inUse: async (path) => [...conversationsIn(path, (status) => status !== "closed"), ...await shellsIn(path)],
+    finished: (thread) => late.conversations?.finishedThreadAt(thread),
+    retirementUsers: async (path) => [
+      ...(late.conversations?.live.listed() ?? [])
+        .filter(({ session }) => (session.connection === "connected" || session.connection === "starting" || session.status === "running" || session.status === "starting") && (session.cwd === path || session.cwd.startsWith(`${path}/`)))
+        .map(() => "an open provider"),
+      ...(await (await shell.terminals.load("worktree retirement")).runningShells())
+        .filter((terminal) => terminal.cwd === path || terminal.cwd.startsWith(`${path}/`))
+        .map(() => "an open terminal"),
+    ],
     working: async (path) => conversationsIn(path, (status) => status === "running"),
     workingFolders: async () => (late.conversations?.live.listed() ?? []).filter(({ session }) => session.status === "running").map(({ session }) => session.cwd),
     conversations: checkoutConversations({
@@ -484,6 +493,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     cleanup: (path) => late.movers?.appTools?.cleanup(path),
     ledger: () => late.attribution,
     watchReadings,
+    watch: watchBackend,
     daemonRestarts: fileEvents,
   })
   late.fileHistory = workspaces.fileHistory
@@ -536,7 +546,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     watch: (root, changed, gone, dropped) => watchTree(git, watchBackend, root, changed, gone, dropped),
     history: workspaces.fileHistory,
     deliveryLagMs: () => watchReadings.lagMs(),
-    watchGitDir: (folder, moved) => watchOutsideGitDir(folder, moved),
+    watchGitDir: (folder, moved) => watchOutsideGitDir(folder, moved, watchBackend),
     jobs,
     stores: () => {
       const held = cataloguedRows()
@@ -867,8 +877,42 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     log: (message, fields) => hostLog("access", message, fields),
   })
   declareAccessChoiceMethods(methods, accessChoices)
-  // What the person's Fins run on, by harness, and what they use there themselves: read by every window and the web app.
-  const finDefaults = new FinDefaultsStore(join(environment.userRoot, "fin-defaults.json"))
+  // The preferences that follow the person's account (theme, Fin settings, harness order): the account's, kept here
+  // too so this Mac works without the network, and alone on a Mac that isn't signed in. What mirrors one into a file
+  // an older Mako reads (the Fin settings, the harness order) hears every change.
+  const preferenceListeners = new Set<() => void>()
+  const preferences = new PreferenceStore({
+    file: join(environment.userRoot, "preferences.json"),
+    account: async () => {
+      const cloud = late.cloud
+      if (config.machineAgentFd !== undefined || !cloud?.preferences || !cloud.writePreferences) return undefined
+      const id = await cloud.id().catch(() => undefined)
+      if (!id) return undefined
+      const { preferences: read, writePreferences: write } = cloud
+      return {
+        read: async () => {
+          const answer = await read()
+          return answer ? { account: id, ...answer } : undefined
+        },
+        write: async (edits) => {
+          const answer = await write(edits)
+          return answer ? { account: id, ...answer } : undefined
+        },
+      }
+    },
+    announce: (values) => {
+      emit({ type: "preferences", values })
+      for (const listener of preferenceListeners) listener()
+    },
+    log: (message, fields) => hostLog("preferences", message, fields),
+  })
+  declarePreferenceMethods(methods, preferences)
+  // What the person's Fins run on, by harness, and what they use there themselves: read by every window and the web
+  // app. What follows the account comes from it; this device's own number of Fins and last-used models stay here.
+  const finDefaults = new FinDefaultsStore(join(environment.userRoot, "fin-defaults.json"), preferences)
+  finDefaults.offerFromFile()
+  preferenceListeners.add(() => finDefaults.mirror())
+  finDefaults.mirror()
   // How many Fins this device runs at once: from its hardware and what a Fin costs here, unless the person sets a number.
   const finCapacity = new FinCapacity({
     read: (() => { const mac = new MacCapacity(); return () => mac.read() })(),
@@ -935,6 +979,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       heard: (answer) => void late.cloud?.id().then((account) => account && accessChoices.heard({ account, ...answer }), () => undefined),
       again: () => void accessChoices.sync(),
     },
+    preferences: {
+      heard: (answer) => void late.cloud?.id().then((account) => account && preferences.heard({ account, ...answer }, false), () => undefined),
+      again: () => void preferences.sync(),
+    },
     sessions,
     signedFiles: (request) => withHostClient("gateway:files", () => readSignedFile(request, renditions, owned)),
     jobs: shell.jobs,
@@ -960,6 +1008,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   // What this Mac chose while it wasn't heard goes to the account, and the account's choices come back.
   void accessChoices.sync()
+  void preferences.sync()
   // A project's carried files (its recipe's `carry`) kept in the account's secret store, with its person's word, for its
   // cloud Threads: brought up to date before one is made or a Thread moves there. Only a person's own Mac sends them.
   const carriedFiles = fixtureDesk || config.machineAgentFd !== undefined
@@ -1100,6 +1149,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     notice: (message) => emit({ type: "notice", level: "error", message }),
   })
   const opened = await openConversations({
+    elsewhere: (id) => late.cloudConversations?.has(id) ?? false,
     ...(owner.start && { start: owner.start }),
     stopping: () => shell.closing(),
     streams,
@@ -1172,7 +1222,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       late.threadMoves?.settled(id)
     },
     // What a turn left in its worktree is read again for the rail, as its own event rather than a window's poll.
-    turnEnded: (_id, cwd) => workspaces.worktrees?.turnEnded(cwd),
+    turnEnded: (_id, cwd) => {
+      workspaces.worktrees?.turnEnded(cwd)
+      workspaces.retention?.changed()
+    },
     // Its row in the account's list says whether it works: said as its work moves, checkpoint and close included.
     workMoved: (id) => late.sessions?.conversationMoved(id),
     movePending: (id) => {
@@ -1657,6 +1710,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     archivedThread: ({ conversationId, sessionId }) => {
       control.simulators.releaseThread({ ...(conversationId && { conversation: conversationId }), ...(sessionId && { session: sessionId }) })
       if (conversationId) void late.conversations?.agents?.archived(conversationId)
+      workspaces.retention?.changed()
     },
   })
   late.archivedHere = (conversationId) => lifecycle.archived({ kind: "live", id: conversationId })
@@ -1768,7 +1822,23 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   declareAttributionMethods(methods, () => late.attribution)
   declareMediaMethods(methods, turnMedia)
   const helperRuns = new HelperRuns(helperRunsRoot(environment.dataRoot))
-  declareGitMethods(methods, { worktrees: workspaces.worktrees, withHost, git, environment, secrets, recordHelperRun: helperRuns.record, person: shell.machineGitHubPerson })
+  declareGitMethods(methods, {
+    worktrees: workspaces.worktrees,
+    withHost,
+    git,
+    environment,
+    secrets,
+    recordHelperRun: helperRuns.record,
+    person: shell.machineGitHubPerson,
+    harnessOrder: {
+      read: () => preferences.value("harnessOrder"),
+      has: () => preferences.has("harnessOrder"),
+      save: async (order) => void (await preferences.set("harnessOrder", order === null ? null : [...order])),
+      edit: (order, at) => preferences.edit("harnessOrder", order === null ? null : [...order], at),
+      offer: (order, at) => preferences.offer("harnessOrder", order === undefined ? undefined : [...order], at),
+      onChange: (listener) => void preferenceListeners.add(listener),
+    },
+  })
   declareHarnessMethods(methods, { harnesses, appRoot: environment.appRoot, workspace, emit })
   declareSetupMethods(
     methods,
@@ -1983,7 +2053,15 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     if (!shell.closing()) web()?.conversationEvent(event)
   })
 
-  const plugins = fixtureDesk ? null : watchPluginChanges(environment.dataRoot, emit)
+  const plugins = fixtureDesk ? null : watchPluginChanges(environment.dataRoot, emit, (root, changed) =>
+    watchBackend(root, [], { events: changed, dropped: changed, gone: changed, muted: (muted) => { if (!muted) changed() } }, { kind: "directory" }))
+  if (plugins) {
+    // Register before readiness: a stop during subscription still joins the late release.
+    shell.stopping.register("plugin calls", () => plugins.close())
+    void plugins.ready.catch((error) => {
+      if (!shell.closing()) hostWarn("plugins", "plugin changes could not be followed", { error: error instanceof Error ? error.message : String(error) })
+    })
+  }
   const builds = config.development ? watchOwnBuild(devHostBuildDirectories(environment.appRoot), emit) : []
   appUpdates.start()
   trace("updates ready")
@@ -2012,7 +2090,6 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     "cloud continuations": () => cloudContinues?.close(),
     "cloud calls": () => late.cloud?.stop(),
     "terminal calls": () => shell.terminals.current()?.dispose(),
-    "plugin calls": () => plugins?.close(),
     "builds": () => { for (const build of builds) build.close() },
     "browser and computer calls": () => control.stop(),
     "file calls": () => files.stop(),
@@ -2218,7 +2295,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         cloudConversations?.dispose()
         late.agentServers?.close()
         threads.close()
-        workspaces.close()
+        await workspaces.close()
         conversationFiles.close()
         turnMedia.close()
         void workspaceClients.dispose()

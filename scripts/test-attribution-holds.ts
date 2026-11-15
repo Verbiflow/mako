@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { mkdirSync, realpathSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
+import { PerformanceObserver } from "node:perf_hooks"
 import { DatabaseSync } from "node:sqlite"
 import type { Attribution } from "@mako/protocol"
 import { FakeClock, FakeEventSource } from "@mako/protocol/attribution-conformance"
@@ -20,54 +21,165 @@ import { testScratch } from "./lib/test-scratch.mjs"
  * 137,000 calls), and for 1.2 s counting a turn of 337 files (`turnChanges`). Both now read a step at a time
  * (`JournalStore.recency`, `countingTurn`), run in slices.
  *
- * Each is held to the same work done at once in the same run (the yardstick): the longest hold in slices must stay
- * under a `TIMES`th of the one at once, and what it finds must be exactly what the reading at once finds. And since
- * other work runs between the reading and the letting go, a root a turn began on meanwhile, after the reading or
+ * Three interleaved readings keep the work done at once as a positive control. The median of their paired
+ * sliced/unsliced longest-hold ratios must stay under a quarter; both find exactly the same work. Every raw
+ * sample is printed: one preemption on a shared runner cannot set the budget or alone fail the check.
+ * A trivial sliced producer plus the same reader run one step per turn calibrates active CPU on this runner;
+ * cooperative work can overrun by its last indivisible step. A bounded trailing window
+ * catches work queued after settlement. The CPU bound measures cooperative work: GC-overlapping spans are
+ * reported separately, since JavaScript cannot yield inside GC. Every span still counts toward the original
+ * wall-time gate, including GC and time when this thread was not running. A root work began on meanwhile, after the reading or
  * between two roots let go, stays. A count or a pass cut by the journal's close (its host stopping) ends at its next
- * step, under a `TIMES`th of the whole sliced work's time, quietly: nothing counted, nothing let go, nothing failed.
+ * step, before another queued loop turn, quietly: nothing counted, nothing let go, nothing failed.
  */
+const SAMPLES = 3
+const POSITIVE_HOLD_MS = 50
 const TIMES = 4
+const SLICE_BUDGET_MS = 8
+/** Record sub-millisecond steps for the granularity yardstick without retaining every idle heartbeat. */
+const STEP_CPU_FLOOR_MS = 0.05
+const TRAILING_TURNS = 3
+const cpuSink = new Uint32Array(1)
 const DAY = 86_400_000
 const root = realpathSync(testScratch("mako-attribution-holds-"))
-const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-/** The longest the loop went without turning while `work` ran, and a moment after, sampled every millisecond. */
-async function longestHold<Value>(work: () => Promise<Value> | Value): Promise<{ value: Value; holdMs: number }> {
+/** Longest wall gap and non-GC thread CPU span through work and a bounded trailing window. */
+async function longestHold<Value>(work: () => Promise<Value> | Value, minimumCpuMs = SLICE_BUDGET_MS / 4): Promise<{ value: Value; holdMs: number; cpuMs: number; gcCpuMs: number; allCpuMs: number }> {
   let longest = 0
+  let longestCpu = 0
+  const spans: { start: number; end: number; cpu: number }[] = []
+  const collections: { start: number; end: number }[] = []
+  let overflow = false
+  const collect = (entries: readonly { startTime: number; duration: number }[]) => {
+    for (const entry of entries) {
+      if (collections.length === 256) { overflow = true; break }
+      collections.push({ start: entry.startTime, end: entry.startTime + entry.duration })
+    }
+  }
+  const observer = new PerformanceObserver((list) => collect(list.getEntries()))
+  observer.observe({ entryTypes: ["gc"] })
+  let lastCpu = process.threadCpuUsage()
   let last = performance.now()
-  let running = true
+  let pending: ReturnType<typeof setImmediate>
   const tick = () => {
     const now = performance.now()
     longest = Math.max(longest, now - last)
+    const cpu = process.threadCpuUsage()
+    const used = (cpu.user - lastCpu.user + cpu.system - lastCpu.system) / 1000
+    longestCpu = Math.max(longestCpu, used)
+    // Tiny idle ticks need not fill the bounded record; the step yardstick uses a lower floor.
+    if (used >= minimumCpuMs) {
+      if (spans.length === 4_096) overflow = true
+      else spans.push({ start: last, end: now, cpu: used })
+    }
+    lastCpu = cpu
     last = now
-    if (running) setTimeout(tick, 1)
+    pending = setImmediate(tick)
   }
-  setTimeout(tick, 1)
-  await pause(5)
-  const value = await work()
-  await pause(50)
-  running = false
-  return { value, holdMs: Math.max(longest, performance.now() - last) }
+  pending = setImmediate(tick)
+  try {
+    await new Promise((resolve) => setImmediate(resolve))
+    longest = 0
+    last = performance.now()
+    longestCpu = 0
+    lastCpu = process.threadCpuUsage()
+    spans.length = 0
+    const value = await work()
+    // Observe work queued after settlement too. The fixed turns still run when a shared runner suspended the timer.
+    await new Promise((resolve) => setTimeout(resolve, 2 * SLICE_BUDGET_MS))
+    for (let turn = 0; turn < TRAILING_TURNS; turn++) await new Promise((resolve) => setImmediate(resolve))
+    collect(observer.takeRecords())
+    assert.ok(!overflow, "the loop observer must retain all active spans and GC records")
+    let cpuMs = 0, gcCpuMs = 0
+    for (const span of spans) {
+      const gc = collections.some((entry) => entry.start < span.end && entry.end > span.start)
+      if (gc) gcCpuMs = Math.max(gcCpuMs, span.cpu)
+      else cpuMs = Math.max(cpuMs, span.cpu)
+    }
+    return { value, holdMs: longest, cpuMs, gcCpuMs, allCpuMs: longestCpu }
+  } finally {
+    clearImmediate(pending)
+    observer.disconnect()
+  }
 }
 
-/** How long `work` takes to end once `stop` runs, a slice into it, against `wholeMs`, the whole of it in slices. */
-async function stoppedMidway<Value>(what: string, work: () => Promise<Value>, stop: () => void, wholeMs: number): Promise<Value> {
+/** Consume a known amount of this thread's CPU; another process's load or a suspension does not count. */
+function useCpu(ms: number): void {
+  const start = process.threadCpuUsage()
+  let value = cpuSink[0]!
+  for (;;) {
+    for (let item = 0; item < 1024; item++) value = Math.imul(value + item, 1664525) + 1013904223
+    cpuSink[0] = value
+    const used = process.threadCpuUsage(start)
+    if ((used.user + used.system) / 1000 >= ms) return
+  }
+}
+
+/** A trivial producer with short steps: calibrate the slice budget beside each real sample. */
+function* referenceWork() {
+  for (let step = 0; step < 320; step++) {
+    useCpu(0.2)
+    yield
+  }
+}
+
+/** A deferred regression must be seen even though the API's original promise has already resolved. */
+async function observesDeferredWork(): Promise<void> {
+  const value = { same: true }
+  const measured = await longestHold(() => {
+    setImmediate(() => setImmediate(() => useCpu(3 * SLICE_BUDGET_MS)))
+    return value
+  })
+  assert.equal(measured.value, value)
+  assert.ok(measured.allCpuMs >= 2 * SLICE_BUDGET_MS, "the observer must catch work queued two turns after settlement")
+}
+
+/** A stop ends at the pending slice boundary, before another queued loop turn, regardless of runner speed. */
+async function stoppedMidway<Value>(what: string, work: () => Promise<Value>, stop: () => void): Promise<Value> {
   const running = work()
   await new Promise((resolve) => setImmediate(resolve))
   const stopped = performance.now()
   stop()
-  const value = await running
-  const endMs = performance.now() - stopped
-  const limit = wholeMs / TIMES
-  console.log(`${what}: ended ${Math.round(endMs)} ms after its stop (limit ${Math.round(limit)} ms, a ${TIMES}th of the ${Math.round(wholeMs)} ms it takes whole in slices)`)
-  assert.ok(endMs < limit, `${what} took ${Math.round(endMs)} ms to end after its stop, not under ${Math.round(limit)} ms`)
-  return value
+  let anotherTurn = false
+  const pending = setImmediate(() => { anotherTurn = true })
+  try {
+    const value = await running
+    console.log(`${what}: ended ${Math.round(performance.now() - stopped)} ms after its stop`)
+    assert.equal(anotherTurn, false, `${what} must end at its pending slice, before another loop turn`)
+    return value
+  } finally {
+    clearImmediate(pending)
+  }
 }
 
-function judge(what: string, atOnce: number, sliced: number): void {
-  const limit = atOnce / TIMES
-  console.log(`${what}: at once the loop held ${Math.round(atOnce)} ms, in slices ${Math.round(sliced)} ms (limit ${Math.round(limit)} ms, a ${TIMES}th of at once)`)
-  assert.ok(sliced < limit, `${what} in slices held the loop ${Math.round(sliced)} ms, not under ${Math.round(limit)} ms, a ${TIMES}th of the ${Math.round(atOnce)} ms at once`)
+function median(samples: readonly number[]): number {
+  assert.equal(samples.length, SAMPLES)
+  assert.ok(samples.every(sample => Number.isFinite(sample) && sample >= 0))
+  return [...samples].sort((a, b) => a - b)[Math.floor(samples.length / 2)]!
+}
+
+function judge(what: string, atOnce: readonly number[], sliced: readonly number[], cpu: readonly number[], reference: readonly number[], steps: readonly number[], gc: readonly number[]): void {
+  const baseline = median(atOnce)
+  const hold = median(sliced)
+  const ratio = median(sliced.map((sample, index) => sample / atOnce[index]!))
+  console.log(`${what}: longest holds at once [${atOnce.map(Math.round)}] ms, in slices [${sliced.map(Math.round)}] ms; medians ${Math.round(baseline)} / ${Math.round(hold)} ms, paired median ${(ratio * 100).toFixed(1)}% (under ${100 / TIMES}%)`)
+  assert.ok(baseline > POSITIVE_HOLD_MS, `${what}: the unsliced positive control must exceed ${POSITIVE_HOLD_MS} ms`)
+  assert.ok(ratio < 1 / TIMES, `${what} in slices held the loop a median ${(ratio * 100).toFixed(1)}% of its paired unsliced hold, not under ${100 / TIMES}%`)
+  const referenceCpu = median(reference)
+  // inSlices checks its clock after a step, not inside SQLite or a diff. A trivial producer alone misses that
+  // overshoot. The same real producer, yielding after every step, measures its indivisible cost on this runner.
+  const budgets = reference.map((sample, index) => sample + steps[index]!)
+  const cpuRatio = median(cpu.map((sample, index) => sample / budgets[index]!))
+  console.log(`${what}: longest non-GC thread-CPU holds [${cpu.map(ms => ms.toFixed(1))}] ms, slice yardstick [${reference.map(ms => ms.toFixed(1))}] + one-step yardstick [${steps.map(ms => ms.toFixed(1))}] ms; paired median ${cpuRatio.toFixed(2)} (under 1)`)
+  console.log(`${what}: GC-overlapping CPU spans [${gc.map(ms => ms.toFixed(1))}] ms; included in the wall gate`)
+  assert.ok(referenceCpu >= SLICE_BUDGET_MS / 2, "the explicit-budget reference must exercise a real slice")
+  assert.ok(cpuRatio < 1, `${what}: active CPU exceeded its paired slice-plus-one-step yardstick`)
+  assert.ok(cpu.every(ms => ms > 0), "each reading must observe non-GC cooperative CPU; missing evidence is not a pass")
+  assert.ok(steps.every(ms => Number.isFinite(ms) && ms >= 0), "each sample needs a finite one-step yardstick")
+  const stepRatio = median(steps.map((sample, index) => sample / reference[index]!))
+  console.log(`${what}: indivisible step / paired slice reference median ${stepRatio.toFixed(2)} (under 1)`)
+  assert.ok(stepRatio < 1, `${what}: an indivisible step exceeded its paired slice reference`)
+
 }
 
 /** A turn of `FILES` files, each written `VERSIONS` times by the turn, with another Thread's writes in the checkout meanwhile. */
@@ -81,7 +193,11 @@ async function countATurn(): Promise<void> {
   const checkout = join(root, "turn", "repo")
   store.saveRoot({ id: "r1", path: checkout, kind: "workspace", repository: false, head: null, mark: null, seenAt: started, trackedAt: started, active: true })
   const own: Attribution = { certainty: "exact", author: { thread: "T1", session: "S1", turn: "R1" }, effect: "modify" }
-  const other: Attribution = { certainty: "exact", author: { thread: "T2", session: "S2", turn: "T2-turn" }, effect: "modify" }
+  // The protocol permits sixteen competing writers; keep that decode cost in the indivisible-page yardstick.
+  const other: Attribution = {
+    certainty: "ambiguous", reason: "several-threads",
+    candidates: Array.from({ length: 16 }, (_, index) => ({ thread: `T${index + 2}`, session: `S${index + 2}`, turn: `T${index + 2}-turn` })),
+  }
   const version = (file: number, step: number) => {
     const text = Array.from({ length: LINES }, (_, line) => (line % 30 === step * 5 % 30 ? `line ${line} of file ${file}, step ${step}` : `line ${line} of file ${file}`)).join("\n")
     const bytes = new TextEncoder().encode(text)
@@ -108,15 +224,24 @@ async function countATurn(): Promise<void> {
     store.saveActivity({ kind: "turn", id: "R1", session: "S1", thread: "T1", turn: "R1", checkout, named: [], start: started, end: at + 1 })
   })
   const view = storedView(store)
-  const atOnce = await longestHold(() => turnChanges(view, "T1", "R1", "settled", 0))
-  const began = performance.now()
-  const sliced = await longestHold(() => inSlices(countingTurn(view, "T1", "R1", "settled", 0)))
-  const wholeMs = performance.now() - began
-  assert.equal(atOnce.value.own.files, FILES, "every file the turn wrote is counted")
-  assert.ok(atOnce.value.others.files > 0, "and the other Thread's writes meanwhile")
-  assert.deepEqual(sliced.value, atOnce.value, "counted in slices, the turn counts exactly as at once")
-  judge(`a turn of ${FILES} files written ${VERSIONS} times each`, atOnce.holdMs, sliced.holdMs)
-  const cut = await stoppedMidway("a count its journal closed under", () => countTurnInSlices(view, "T1", "R1", "settled"), () => store.close(), wholeMs)
+  const atOnceHolds: number[] = [], slicedHolds: number[] = [], slicedCpu: number[] = [], referenceCpu: number[] = [], stepCpu: number[] = [], slicedGc: number[] = []
+  for (let sample = 0; sample < SAMPLES; sample++) {
+    referenceCpu.push((await longestHold(() => inSlices(referenceWork(), SLICE_BUDGET_MS))).cpuMs)
+    const atOnce = await longestHold(() => turnChanges(view, "T1", "R1", "settled", 0))
+    const granular = await longestHold(() => inSlices(countingTurn(view, "T1", "R1", "settled", 0), 0), STEP_CPU_FLOOR_MS)
+    stepCpu.push(granular.cpuMs)
+    assert.deepEqual(granular.value, atOnce.value, "the one-step yardstick counts exactly the same work")
+    const sliced = await longestHold(() => inSlices(countingTurn(view, "T1", "R1", "settled", 0)))
+    assert.equal(atOnce.value.own.files, FILES, "every file the turn wrote is counted")
+    assert.deepEqual(atOnce.value.others, { files: 50, added: OTHERS * 2, removed: OTHERS }, "every competing write is counted across page boundaries")
+    assert.deepEqual(sliced.value, atOnce.value, "counted in slices, the turn counts exactly as at once")
+    atOnceHolds.push(atOnce.holdMs)
+    slicedHolds.push(sliced.holdMs)
+    slicedCpu.push(sliced.cpuMs)
+    slicedGc.push(sliced.gcCpuMs)
+  }
+  judge(`a turn of ${FILES} files written ${VERSIONS} times each`, atOnceHolds, slicedHolds, slicedCpu, referenceCpu, stepCpu, slicedGc)
+  const cut = await stoppedMidway("a count its journal closed under", () => countTurnInSlices(view, "T1", "R1", "settled"), () => store.close())
   assert.equal(cut, undefined, "a count its journal closed under counts nothing, and fails nothing")
 }
 
@@ -148,32 +273,50 @@ async function letGoOfIdleRoots(): Promise<void> {
   }
   raw.exec("COMMIT")
   // The reading at once letGoIdle made before, on the same journal: the yardstick.
-  const now = clock.now() + 15 * DAY
-  const readAtOnce = () => {
+  const readAtOnce = (now: number) => {
     const changed = raw.prepare("SELECT root, MAX(at) AS at FROM entries GROUP BY root").all()
     const worked = raw.prepare("SELECT checkout, cwd, MAX(coalesce(ended_at, ?)) AS at FROM activity GROUP BY checkout, cwd").all(now)
     return changed.length + worked.length
   }
-  readAtOnce()
-  const atOnce = await longestHold(readAtOnce)
-
-  // Tracked a moment ago: nobody let go, and where Threads worked isn't read.
-  const began = performance.now()
-  const kept = await longestHold(() => tracker.letGoIdle())
-  const wholeMs = performance.now() - began
-  assert.deepEqual(kept.value, [], "a root tracked a moment ago stays")
-  // Fifteen days on, nothing changed there and nobody worked in or around it: let go.
-  clock.advance(15 * DAY)
-  const letGo = await longestHold(() => tracker.letGoIdle())
-  assert.deepEqual(letGo.value, [folder], "the root idle past retention is let go, and only it")
-  judge(`letting go of idle roots, no root idle (${ENTRIES.toLocaleString("en-US")} entries)`, atOnce.holdMs, kept.holdMs)
-  judge(`letting go of idle roots, one idle (${ENTRIES.toLocaleString("en-US")} entries, ${CALLS.toLocaleString("en-US")} calls)`, atOnce.holdMs, letGo.holdMs)
+  const yardstick = JournalStore.open(join(storage, "journal.sqlite"), { device: "attribution-holds", readOnly: true })
+  const atOnceHolds: number[] = [], keptHolds: number[] = [], letGoHolds: number[] = [], keptCpu: number[] = [], letGoCpu: number[] = [], referenceCpu: number[] = [], keptStepCpu: number[] = [], letGoStepCpu: number[] = [], keptGc: number[] = [], letGoGc: number[] = []
+  for (let sample = 0; sample < SAMPLES; sample++) {
+    if (sample) {
+      await tracker.track({ id: "idle", path: folder, kind: "workspace" })
+      await tracker.settled()
+    }
+    referenceCpu.push((await longestHold(() => inSlices(referenceWork(), SLICE_BUDGET_MS))).cpuMs)
+    const atOnce = await longestHold(() => readAtOnce(clock.now() + 15 * DAY))
+    const keptStep = await longestHold(() => inSlices(yardstick.recency(clock.now(), () => false), 0), STEP_CPU_FLOOR_MS)
+    assert.equal(keptStep.value.worked.size, 0, "the no-idle yardstick skips the call pages too")
+    keptStepCpu.push(keptStep.cpuMs)
+    const letGoStep = await longestHold(() => inSlices(yardstick.recency(clock.now() + 15 * DAY, () => true), 0), STEP_CPU_FLOOR_MS)
+    assert.ok(letGoStep.value.worked.size > 0, "the idle yardstick reads the same journal's call pages")
+    letGoStepCpu.push(letGoStep.cpuMs)
+    // Tracked a moment ago: nobody let go, and where Threads worked isn't read.
+    const kept = await longestHold(() => tracker.letGoIdle())
+    assert.deepEqual(kept.value, [], "a root tracked a moment ago stays")
+    // Fifteen days on, nothing changed there and nobody worked in or around it: let go.
+    clock.advance(15 * DAY)
+    const letGo = await longestHold(() => tracker.letGoIdle())
+    assert.deepEqual(letGo.value, [folder], "the root idle past retention is let go, and only it")
+    atOnceHolds.push(atOnce.holdMs)
+    keptHolds.push(kept.holdMs)
+    letGoHolds.push(letGo.holdMs)
+    keptCpu.push(kept.cpuMs)
+    letGoCpu.push(letGo.cpuMs)
+    keptGc.push(kept.gcCpuMs)
+    letGoGc.push(letGo.gcCpuMs)
+  }
+  judge(`letting go of idle roots, no root idle (${ENTRIES.toLocaleString("en-US")} entries)`, atOnceHolds, keptHolds, keptCpu, referenceCpu, keptStepCpu, keptGc)
+  judge(`letting go of idle roots, one idle (${ENTRIES.toLocaleString("en-US")} entries, ${CALLS.toLocaleString("en-US")} calls)`, atOnceHolds, letGoHolds, letGoCpu, referenceCpu, letGoStepCpu, letGoGc)
+  yardstick.close()
   raw.close()
   // Cut by the tracker's close, as its host stops.
   let closed: Promise<void> | undefined
   const cut = await stoppedMidway("letting go of idle roots, its tracker closed under it", () => tracker.letGoIdle(), () => {
     closed = tracker.close()
-  }, wholeMs)
+  })
   assert.deepEqual(cut, [], "a pass its tracker closed under lets go of nothing, and fails nothing")
   await closed
 }
@@ -224,6 +367,8 @@ async function workBeginsMeanwhile(): Promise<void> {
 }
 
 try {
+  console.log(`attribution holds runtime: ${process.platform}/${process.arch}, Node ${process.version}, slice budget ${SLICE_BUDGET_MS} ms`)
+  await observesDeferredWork()
   await workBeginsMeanwhile()
   await countATurn()
   await letGoOfIdleRoots()

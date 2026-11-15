@@ -19,6 +19,7 @@ import type { LiveQuestions } from "./live-questions.js"
 import { revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
 import { requestTurnEnd, sessionTurnEnd, settleRequest, turnSpendAt, usageMark } from "./live-settlement.js"
 import { updateBinding } from "./live-sources.js"
+import { turnReply } from "./live-goals.js"
 
 type EventsAccess = Pick<LiveAccess,
   "dependencies" | "bindingOwners" | "resident" | "control" | "flush" | "noteWork" | "keep" | "schedule" | "drain" | "storageFailed" | "signInHold" |
@@ -194,9 +195,12 @@ export class LiveEvents {
       // Once the process is gone nothing reports a request it was handed, so
       // it settles here even if its turn never showed as running.
       if ((previousStatus === "running" && event.session.status !== "running") || (gone && settling)) {
-        const outcome = previousStatus === "running" || event.session.status !== "ready"
+        let outcome = previousStatus === "running" || event.session.status !== "ready"
           ? event.session
           : { ...event.session, status: "failed" as const, error: event.session.error ?? "The provider stopped before the turn started" }
+        // Some providers finish their transport successfully after refusing work on a usage limit.
+        if (outcome.status === "ready" && settling && turnReply(resident, settling.id).limit)
+          outcome = { ...outcome, status: "failed", error: "Usage limit reached", failureEvidence: undefined }
         if (previousStatus !== "running" && settling)
           hostWarn("live", "a request's provider went away before its turn ran", {
             conversation: resident.snapshot.session.id, request: settling.id,

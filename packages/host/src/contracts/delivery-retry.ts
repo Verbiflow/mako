@@ -76,9 +76,9 @@ export const RESET_MARGIN_MS = 30_000
  * them again would renew it forever. The bound then counts from the reset, so one three days off is no failure, and
  * one that never lifts ends.
  */
-export function nextRetry(previous: RequestRetry | undefined, cause: RetryCause, reason: string, now: number): RequestRetry | undefined {
+export function nextRetry(previous: RequestRetry | undefined, cause: RetryCause, reason: string, now: number, resetsAt?: number): RequestRetry | undefined {
   const since = previous?.since ?? now
-  const reset = previous?.until ?? (cause === "rate-limited" ? limitReset(reason, now) : undefined)
+  const reset = previous?.until ?? (cause === "rate-limited" ? resetsAt ?? limitReset(reason, now) : undefined)
   if (now - (reset ?? since) >= GIVE_UP_MS[cause]) return undefined
   const attempt = (previous?.attempt ?? 0) + 1
   const wait = RETRY_STEPS_MS[Math.min(attempt, RETRY_STEPS_MS.length) - 1]!
@@ -127,8 +127,8 @@ export function resting(request: LiveRequest, cause: RetryCause | undefined, now
  * What a failure leaves of `request`, waiting: its next attempt, or a digest at rest. A digest resting stays resting,
  * since a retry from nothing would start the budget again; undefined when it fails.
  */
-export function waitsAgain(request: LiveRequest, cause: RetryCause | undefined, reason: string, now: number): LiveRequest | undefined {
-  const retry = cause && !request.digest?.resting ? nextRetry(request.retry, cause, reason, now) : undefined
+export function waitsAgain(request: LiveRequest, cause: RetryCause | undefined, reason: string, now: number, resetsAt?: number): LiveRequest | undefined {
+  const retry = cause && !request.digest?.resting ? nextRetry(request.retry, cause, reason, now, resetsAt) : undefined
   return retry ? { ...request, status: "held", retry } : resting(request, cause, now)
 }
 

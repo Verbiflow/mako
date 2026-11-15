@@ -1,4 +1,5 @@
 import "./lib/scratch-git.mjs"
+import { childBackend } from "@mako/host/workspaces/watch-backend"
 import { Git } from "@mako/git"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import assert from "node:assert/strict"
@@ -967,7 +968,7 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
   let at: string[] = []
   const real = { now: Date.now, readOutput: gitRunner.readOutput, idleOutput: gitRunner.idleOutput }
   let reads = 0
-  let closing = () => {}
+  let closing: () => void | Promise<void> = () => {}
   const pushed: WorktreeSummary[][] = []
   const heard = async (what: string, test: () => boolean) => {
     for (const deadline = performance.now() + 10_000; !test(); await new Promise((resolve) => setTimeout(resolve, 25)))
@@ -986,12 +987,16 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
   try {
     // As the host makes it: what's at work reaches the worktrees only through this.
     const jobs = new HostJobs()
+    const subscribed = jobs.demand("summary viewer")
+    subscribed.set(true)
     const workspaces = openWorkspaces({
+      watch: childBackend(),
       git: gitRunner,
       dataRoot: join(root, "composed"),
       readOnly: false,
       store: threads,
       jobs,
+      subscribed,
       emit: (event) => {
         if (event.type === "worktree-summaries") pushed.push(event.summaries)
       },
@@ -1005,7 +1010,8 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
     const watched = workspaces.worktrees!
     // The pull requests GitHub has for its repository, as the window's ask reads them.
     let pulls: WorktreeBranchPull[] = []
-    const pullsOf = async () => pulls
+    let pullReads = 0
+    const pullsOf = async () => { pullReads++; return pulls }
     const changes = async () => (await watched.summaries(pullsOf)).find((summary) => summary.path === made.path)?.changes
     const passes = async (count: number) => {
       const before = reads
@@ -1039,10 +1045,12 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
     const said = pushed.length
     now += 6_000
     const quickReads = reads
+    const beforeIndexPulls = pullReads
     writeFileSync(join(made.path, "new.txt"), "new\n")
     git(made.path, "add", "new.txt")
     await new Promise((resolve) => setTimeout(resolve, 2_500))
     assert.equal(reads, quickReads, "within half a minute of its last read, an index moved alone waits")
+    assert.equal(pullReads, beforeIndexPulls, "an index-only event does not forget GitHub lists")
     // Past the gap, the host's own pass (the job a listening window keeps running) says it, nobody asking.
     now += 31_000
     await watched.summaries()
@@ -1056,6 +1064,15 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
     now += 61_000
     await watched.summaries()
     assert.equal(pushed.slice(opened).flat().find((summary) => summary.path === made.path)?.pull?.number, 7, "the pull request is told without a window asking")
+    subscribed.set(false)
+    const hiddenReads = pullReads
+    now += 61_000
+    await watched.summaries()
+    assert.equal(pullReads, hiddenReads, "Thread and file events do not poll GitHub without a viewer")
+    subscribed.set(true)
+    now += 61_000
+    await watched.summaries()
+    assert.ok(pullReads > hiddenReads, "a visible window resumes GitHub readings")
     // The turn that made them ends there: read again unasked.
     const turnEnds = pushed.length
     writeFileSync(join(made.path, "turn.txt"), "turn\n")
@@ -1077,7 +1094,7 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
     Date.now = real.now
     gitRunner.readOutput = real.readOutput
     gitRunner.idleOutput = real.idleOutput
-    closing()
+    await closing()
   }
   await worktrees.abandon(id).catch(() => undefined)
 }
@@ -1263,6 +1280,26 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
   await assert.rejects(shared.summaries(), /listing failed/)
   shared.list = async () => ({ root, worktrees: [] })
   assert.deepEqual(await shared.summaries(), [], "a failed pass keeps none after it from running")
+}
+
+// Retirement concerns the checkout alone: no recipe command, app stop or Thread-data deletion.
+{
+  const effects: string[] = []
+  const automatic = new ThreadWorktreeService(gitRunner, join(root, "worktrees"), threads, async () => [], async () => [], {
+    stop: async () => { effects.push("stop") },
+    cleanup: async () => { effects.push("cleanup") },
+    discard: async () => { effects.push("discard") },
+  })
+  const id = randomUUID()
+  started(id)
+  const source = repository("retirement-only")
+  const checkout = await automatic.prepare(id, source, "Finished work")
+  await automatic.attach(id)
+  await automatic.remove(checkout.path, true)
+  assert.deepEqual(effects, [], "retirement leaves apps, recipe cleanup and Thread data alone")
+  assert.equal(existsSync(checkout.path), false)
+  assert.equal(git(source, "branch", "--list", checkout.branch).trim(), checkout.branch, "retirement keeps the committed branch")
+  await automatic.settled()
 }
 
 await worktrees.settled()

@@ -1,6 +1,7 @@
 import type { DomainSecrets } from "../base/host-secrets.js"
 import type { HostEnvironment } from "../base/host-environment.js"
 import { COMMIT_STYLE, type Git } from "@mako/git"
+import { forgetGitHubReads } from "./github.js"
 import { hostClient } from "../base/host-client.js"
 import { GitDrafting } from "./drafting.js"
 import type { RecordHelperRun } from "./helper-tally.js"
@@ -59,6 +60,23 @@ export interface GitIpcContext {
   work: UtilityWork
   /** Where each commit draft goes as a helper run. */
   record?: RecordHelperRun
+  /** The harness order as it follows the person's account; without it, the choices file alone keeps it. */
+  harnessOrder?: HarnessOrderPreference
+}
+
+/** The person's harness order as their account keeps it (`harnessOrder` in `contracts/preferences.ts`). */
+export interface HarnessOrderPreference {
+  /** The order in effect, or undefined for Mako's; `has` says whether there's an edit at all, a cleared one included. */
+  read(): readonly string[] | undefined
+  has(): boolean
+  /** The person's edit here (null: back to Mako's order). */
+  save(order: readonly string[] | null): Promise<void>
+  /** Another program's edit, made at `at`: kept if it's later than the one in effect. Whether it was. */
+  edit(order: readonly string[] | null, at: number): boolean
+  /** What this Mac kept before the account kept it, edited at `at`: offered once. */
+  offer(order: readonly string[] | undefined, at: number): void
+  /** Called whenever the order in effect may have changed. */
+  onChange(listener: () => void): void
 }
 
 const UtilityChoiceSchema = z.tuple([z.enum(UTILITY_TASKS), z.string().min(1).max(400)])
@@ -112,7 +130,7 @@ export function installGitIpc(methods: MethodTable, context: GitIpcContext): voi
   )
   methods.handle("mako:git-push", (input: GitPushInput) => withHost((host) => {
     if (host.gitWorkspace !== input.cwd) throw new Error("The project changed before pushing. Select the intended project and try again.")
-    return host.gitPush(input.branch)
+    return host.gitPush(input.branch).finally(() => forgetGitHubReads(input.cwd))
   }))
   methods.handle("mako:git-remote", (input: GitRemoteInput) => withHost(async (host) => {
     if (host.gitWorkspace !== input.cwd) throw new Error("Select this repository before continuing.")
@@ -152,10 +170,14 @@ export function installGitIpc(methods: MethodTable, context: GitIpcContext): voi
     const [parsedTask, parsedChoice] = UtilityChoiceSchema.parse([task, choice])
     await work.choose(parsedTask, parsedChoice)
   })
-  methods.handle("mako:harness-order-saved", () => models.harnessOrder())
-  methods.handle("mako:harness-order", (order: string[]) =>
-    models.saveHarnessOrder(HarnessOrderSchema.parse(order))
-  )
+  const order = context.harnessOrder
+  methods.handle("mako:harness-order-saved", async () => (order?.has() ? [...(order.read() ?? [])] : models.harnessOrder()))
+  methods.handle("mako:harness-order", async (next: string[]) => {
+    const parsed = HarnessOrderSchema.parse(next)
+    if (order) await order.save(parsed.length ? parsed : null)
+    else await models.saveHarnessOrder(parsed)
+  })
+  if (order) mirrorHarnessOrder(models, order)
   methods.handle(
     "mako:utility-model-catalog",
     (input: UtilityCatalogInput) => catalog.list(input)
@@ -213,4 +235,34 @@ export function openUtilityModels({ dataRoot, appData }: Pick<HostEnvironment, "
   )
   secrets.adoptLegacy(utilityLegacyFiles(directory))
   return new UtilityModelStore(directory, secrets.secrets, { ready: migration, record })
+}
+
+/**
+ * The harness order follows the account (`HarnessOrderPreference`); the choices file mirrors it for an older Mako that
+ * reads it there, marked as the mirror's (`orderMirror`). What the file kept before is offered once, at 0: when it was
+ * chosen isn't known, so it only fills an account that holds none. An order that differs from what the last mirror
+ * wrote, by any host of this user, was changed by another program (an older Mako, which keeps the mark as it found it):
+ * that's its edit, made when the file changed, and it goes to the account.
+ */
+function mirrorHarnessOrder(models: UtilityModelStore, order: HarnessOrderPreference): void {
+  let mirroring = Promise.resolve()
+  const mirror = async () => {
+    const { order: kept, mirrored } = await models.harnessOrderMirror()
+    const said = JSON.stringify(kept)
+    if (mirrored !== undefined && said !== mirrored && order.edit(kept.length ? kept : null, (await models.choicesEdited()) ?? Date.now())) return
+    if (!order.has()) return
+    const want = JSON.stringify([...(order.read() ?? [])])
+    if (want !== said || want !== mirrored) await models.mirrorHarnessOrder(order.read() ?? [])
+  }
+  const again = () => {
+    mirroring = mirroring.then(mirror).catch((error: Error) => hostWarn("utility-models", "the harness order wasn't mirrored into its file", { error: error.message }))
+  }
+  void models.harnessOrder().then(
+    (kept) => {
+      order.offer(kept.length ? kept : undefined, 0)
+      order.onChange(again)
+      again()
+    },
+    (error: Error) => hostWarn("utility-models", "the harness order kept here wasn't offered to the account", { error: error.message })
+  )
 }

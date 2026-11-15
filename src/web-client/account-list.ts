@@ -1,4 +1,5 @@
 import { AccountEventSchema, accountStream } from "@mako/protocol/account-events"
+import type { Preferences } from "@mako/protocol/preferences"
 import { AccountSessions, isAccountListEvent } from "@mako/protocol/account-sessions"
 import { quietDevice, SessionListingsSchema, type ArchivedThread, type ListedSession, type SessionListings } from "@mako/protocol/thread-listing"
 import type { WaitingMessage } from "@mako/protocol/waiting"
@@ -101,7 +102,8 @@ const SAVE_MS = 5_000
  * Follows the account's list for this browser: `GET /v1/sessions`, then the account's stream after its number, held by
  * the same `AccountSessions` a Mac's host holds, so a browser and a Mac can't list the account differently. Followed
  * again from a fresh read whenever the stream ends; a wake (the page shown again, the network back) cuts the wait
- * short. Nothing here wakes a machine or a Mac.
+ * short. While the page is hidden the stream is let go (`park`): nothing is followed or applied until it's shown again,
+ * when the list is read and followed as at any start. Nothing here wakes a machine or a Mac.
  */
 export class AccountList {
   readonly #gateway: Gateway
@@ -111,6 +113,15 @@ export class AccountList {
   #subscription: Subscription | undefined
   #stopped = false
   #wake: (() => void) | undefined
+  /** Hidden: the stream is let go and nothing is applied until the page is shown again (`park`). */
+  #parked = false
+  /** The subscription `park` closed: its end is ours, not a failure, even once shown again. */
+  #letGo: Subscription | undefined
+  #unpark: (() => void) | undefined
+  /** The preferences that follow the account, read as the list is and told what its stream says of them. */
+  #preferences: { heard(answer: { preferences: Preferences; revision: number }): void; sync(): Promise<void> } | undefined
+  /** The list's read under way, which a follow and a refresh asked at once share. */
+  #reading: Promise<SessionListings> | undefined
   #saveTimer: ReturnType<typeof setTimeout> | undefined
   /** Whether this visit kept the list once already. */
   #saved = false
@@ -131,15 +142,43 @@ export class AccountList {
     void this.#run()
   }
 
+  /**
+   * The account's preferences are read whenever the list is read (a first follow, a show, a gap) and told what the
+   * stream says changed, so they're never staler than the list.
+   */
+  followPreferences(preferences: { heard(answer: { preferences: Preferences; revision: number }): void; sync(): Promise<void> }): void {
+    this.#preferences = preferences
+  }
+
   /** Follow again now: the page came back into view, or the network did. */
   wake(): void {
     this.#wake?.()
+  }
+
+  /**
+   * The page is hidden: the account's stream is let go, so nothing arrives or is applied while nobody sees the list.
+   */
+  park(): void {
+    if (this.#parked || this.#stopped) return
+    this.#parked = true
+    this.#letGo = this.#subscription
+    this.#subscription?.close()
+  }
+
+  /** Shown again: the list is read and followed again, as any follow starts. Whether it was parked. */
+  unpark(): boolean {
+    if (!this.#parked) return false
+    this.#parked = false
+    this.#unpark?.()
+    this.#wake?.()
+    return true
   }
 
   stop(): void {
     this.#stopped = true
     this.#subscription?.close()
     this.#wake?.()
+    this.#unpark?.()
     clearTimeout(this.#saveTimer)
   }
 
@@ -171,7 +210,7 @@ export class AccountList {
    */
   async refresh(): Promise<void> {
     this.#gateway.wake()
-    const listings = SessionListingsSchema.parse(await this.#gateway.rest("GET", "/v1/sessions"))
+    const listings = await this.#read()
     if (this.#list.seq === undefined || listings.seq >= this.#list.seq) this.#list.listed(listings)
     await this.refreshDevices().catch((error) => this.#failed({ error }))
     this.#publish("live")
@@ -201,16 +240,24 @@ export class AccountList {
   async #run(): Promise<void> {
     let failures = 0
     while (!this.#stopped) {
+      // Hidden: nothing is followed until the page is shown again.
+      if (this.#parked) {
+        await new Promise<void>((resolve) => (this.#unpark = resolve))
+        continue
+      }
       try {
         // The devices are asked beside the list on its first read, not after it: the list paints once both are here, a
         // round trip sooner on a phone's network.
         const devices = this.#devicesAsked ? undefined : this.refreshDevices().catch((error) => this.#failed({ error }))
-        const listings = SessionListingsSchema.parse(await this.#gateway.rest("GET", "/v1/sessions"))
+        const listings = await this.#read()
         this.#list.listed(listings)
+        void this.#preferences?.sync()
         if (devices) await devices
         else if (this.#unnamedDevice()) await this.refreshDevices().catch((error) => this.#failed({ error }))
         this.#publish("live")
         failures = 0
+        // Hidden while it was read: read again once shown.
+        if (this.#parked) continue
         const subscription = this.#gateway.session.subscribe({ stream: accountStream(this.#accountId), after: listings.seq })
         this.#subscription = subscription
         // The stream is numbered with no gaps: one skipped, or said lost, means the list may be wrong, and it's read
@@ -234,6 +281,10 @@ export class AccountList {
             void this.refreshDevices().catch((error) => this.#failed({ error }))
             continue
           }
+          if (parsed.success && parsed.data.type === "preferences-changed") {
+            this.#preferences?.heard({ preferences: parsed.data.preferences, revision: parsed.data.revision })
+            continue
+          }
           // A kind of event this build doesn't know is passed over, never refused.
           if (!parsed.success || !isAccountListEvent(parsed.data)) continue
           if (parsed.data.type === "sessions-listed") for (const row of parsed.data.sessions) if (row.changedAt) webSync.listChanged(row.changedAt)
@@ -250,6 +301,11 @@ export class AccountList {
         continue
       } catch (error) {
         if (this.#stopped) return
+        // Let go by `park`: not a failure; the list is read again once shown.
+        if (this.#parked || (this.#letGo && this.#letGo === this.#subscription)) {
+          this.#letGo = undefined
+          continue
+        }
         if (error instanceof SignedOutError) {
           accountListStore.set({ phase: "signed-out" })
           return
@@ -259,6 +315,20 @@ export class AccountList {
       }
       await this.#pause(followAgainInMs(failures++))
     }
+  }
+
+  /**
+   * `GET /v1/sessions`, shared while under way: shown again after a while, the follow reads the list as it starts and
+   * the return's refresh asks for it too, and one read answers both.
+   */
+  #read(): Promise<SessionListings> {
+    this.#reading ??= this.#gateway
+      .rest("GET", "/v1/sessions")
+      .then((answer) => SessionListingsSchema.parse(answer))
+      .finally(() => {
+        this.#reading = undefined
+      })
+    return this.#reading
   }
 
   /** A device a listed row runs on that the list hasn't named, if any. */

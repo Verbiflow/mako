@@ -1,13 +1,16 @@
 import assert from "node:assert/strict"
-import { execFileSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { ChildProcess, execFileSync } from "node:child_process"
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mock } from "node:test"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { WatchEvent } from "@mako/host/contracts/watcher-child"
 import { childBackend, childHistory, probeDelivery, type FileHistory, type WatchListener } from "@mako/host/workspaces/watch-backend"
 import { WatchReadings } from "@mako/host/workspaces/watch-readings"
 import { FileEventsServiceWatch } from "@mako/host/workspaces/file-events-service"
+import { runCases } from "./lib/cases.ts"
 import { ranOut } from "./lib/ran-out.ts"
+import { HostStopping } from "@mako/host/base/host-stopping"
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-watch-backend-")))
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -47,14 +50,18 @@ function watcherChildren(): number[] {
 // consumers answer with a rescan: a fresh marker is then the barrier. A watch
 // that goes quiet without saying so still fails, with what it did say.
 let markers = 0
-async function drained(folder: string, watch: ReturnType<typeof recorder>): Promise<void> {
+/** What a watch said while a drain waited, for a failure to name. */
+const whatItSaid = (watch: ReturnType<typeof recorder>) =>
+  `${watch.dropped()} dropped, muted ${JSON.stringify(watch.mutes)}, late ${JSON.stringify(watch.lates)}, watcher children ${JSON.stringify(watcherChildren())}`
+/** Resolves once the watch is drained, saying whether it dropped events meanwhile: then what was written before may be lost. */
+async function drained(folder: string, watch: ReturnType<typeof recorder>): Promise<boolean> {
   const deadline = Date.now() + 90_000
-  let drops = watch.dropped()
+  const before = watch.dropped()
+  let drops = before
   let marker = join(folder, `marker-${++markers}`)
   writeFileSync(marker, "")
   while (!watch.heard.includes(marker)) {
-    const said = () => `${watch.dropped()} dropped, muted ${JSON.stringify(watch.mutes)}, late ${JSON.stringify(watch.lates)}, watcher children ${JSON.stringify(watcherChildren())}`
-    assert.ok(Date.now() < deadline, `file events arrive (${marker}); the watch said ${said()}`)
+    assert.ok(Date.now() < deadline, `file events arrive (${marker}); the watch said ${whatItSaid(watch)}`)
     if (watch.dropped() > drops) {
       drops = watch.dropped()
       marker = join(folder, `marker-${++markers}`)
@@ -62,11 +69,98 @@ async function drained(folder: string, watch: ReturnType<typeof recorder>): Prom
     }
     await wait(25)
   }
+  return watch.dropped() > before
 }
 
-try {
-  const kept = join(root, "kept")
-  const removed = join(root, "removed")
+/** A folder of a case's own under this run's root. */
+function caseFolder(name: string): string {
+  const folder = join(root, name)
+  mkdirSync(folder)
+  return folder
+}
+
+/** Native history can stay in libuv's threadpool even after SIGTERM asks Node to exit. */
+async function historyReaderTermination() {
+  if (process.platform === "win32") return // Windows does not deliver a catchable SIGTERM.
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")
+  assert.ok(platform)
+  const asMac = <T>(operation: () => T): T => {
+    Object.defineProperty(process, "platform", { ...platform, value: "darwin" })
+    try { return operation() } finally { Object.defineProperty(process, "platform", platform) }
+  }
+  const gone = (pid: number) => {
+    try { process.kill(pid, 0); return false }
+    catch (error) { if (error instanceof Error && "code" in error && error.code === "ESRCH") return true; throw error }
+  }
+  for (const path of ["deadline", "recovery", "idle"] as const) {
+    const folder = caseFolder(`history-${path}`), script = join(folder, "reader.mjs")
+    writeFileSync(script, `import {writeFileSync} from "node:fs";
+process.on("SIGTERM",()=>{});setInterval(()=>{},1000);
+process.on("message",request=>{
+  if(request.t==="mark") process.send({t:"marked",id:request.id,mark:{id:String(process.pid),at:"1"}});
+  if(request.t==="since") writeFileSync(${JSON.stringify(join(folder, "reading"))},String(process.pid));
+});\n`)
+    const scope = new HostStopping(), readings = new WatchReadings(), history = childHistory(script, readings)
+    const signals: { pid: number | undefined; signal: NodeJS.Signals | number }[] = []
+    const originalKill = ChildProcess.prototype.kill
+    const killing = mock.method(ChildProcess.prototype, "kill", function (this: ChildProcess, signal?: NodeJS.Signals | number) {
+      signals.push({ pid: this.pid, signal: signal ?? "SIGTERM" })
+      return originalKill.call(this, signal)
+    })
+    const realTimer = globalThis.setTimeout
+    let deadline: () => void = () => assert.fail("the history deadline was not armed")
+    let idle: () => void = () => assert.fail("the reader's idle retirement was not armed")
+    const forces: (() => void)[] = []
+    const observing = (run: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => {
+      // Fire the real deadline/idle action after the child's receipt, rather than wait 120/30 seconds.
+      if (ms === 120_000) deadline = () => run(...args)
+      if (ms === 30_000) idle = () => run(...args)
+      if (ms === 500) forces.push(() => run(...args))
+      return realTimer(run, ms, ...args)
+    }
+    // SAFETY: forward every timer and its arguments unchanged; keep Node's promisified overload.
+    globalThis.setTimeout = Object.assign(observing, realTimer) as typeof setTimeout
+    try {
+      await scope.run(async () => {
+        const mark = await asMac(() => history.mark()), first = Number(mark.id)
+        assert.equal(readings.reading().historyChild?.pid, first)
+        if (path === "idle") idle()
+        else {
+          const read = asMac(() => history.since(mark, [folder]))
+          const failed = assert.rejects(read, path === "deadline" ? /history didn't answer/ : /started over/)
+          await until("the child received the history read", () => existsSync(join(folder, "reading")), 5_000)
+          if (path === "deadline") deadline()
+          else history.recover?.()
+          await failed
+        }
+        const replacement = await asMac(() => history.mark()), second = Number(replacement.id)
+        assert.notEqual(first, second)
+        await until(`the ${path} reader ignoring SIGTERM was reaped`, () => gone(first), 5_000)
+        assert.deepEqual(signals.filter((call) => call.pid === first).map((call) => call.signal), ["SIGTERM", "SIGKILL"])
+        const staleForce = forces[0]
+        assert.ok(staleForce, "retirement arms one bounded escalation")
+        const previous = signals.length
+        staleForce() // An already-queued escalation must not signal an exited/replaced generation.
+        assert.equal(signals.length, previous)
+        assert.equal(readings.reading().historyChild?.pid, second, "an old exit does not clear the replacement's reading")
+        assert.equal((await asMac(() => history.mark())).id, replacement.id, "old retirement leaves the replacement alive")
+        history.recover?.()
+        await until("the replacement ignoring SIGTERM was reaped", () => gone(second), 5_000)
+        assert.equal(readings.reading().historyChild, undefined)
+      })
+    } finally {
+      globalThis.setTimeout = realTimer
+      await scope.stop() // Joins only this case's children even when its assertion fails on the original source.
+      killing.mock.restore()
+    }
+  }
+}
+
+/** One child for every watch, ignores applied there, a crash restarts it, unsubscribe is final, a missing root is refused, a dying child is given up. */
+async function sharedChildAndCrash(): Promise<void> {
+  const home = caseFolder("crash")
+  const kept = join(home, "kept")
+  const removed = join(home, "removed")
   mkdirSync(kept)
   mkdirSync(removed)
   const backend = childBackend()
@@ -76,10 +170,16 @@ try {
   await backend(removed, [], b.listener)
   assert.equal(watcherChildren().length, 1, "every watch shares one child")
   await drained(kept, a)
-  mkdirSync(join(kept, "node_modules", "pkg"), { recursive: true })
-  writeFileSync(join(kept, "node_modules", "pkg", "index.js"), "")
-  writeFileSync(join(kept, "index.ts"), "")
-  await drained(kept, a)
+  // A drop during the drain may have taken these writes with it, as a consumer's rescan would find: they're made
+  // again, and drained again, until a drain passes without one.
+  // Three drains at most: a watch that drops every time is broken, and says so here rather than at the step's limit.
+  for (let attempt = 1, lost = true; lost; attempt += 1) {
+    assert.ok(attempt <= 3, `file events arrive (index.ts): each of 3 drains saw a drop; the watch said ${whatItSaid(a)}`)
+    mkdirSync(join(kept, "node_modules", "pkg"), { recursive: true })
+    writeFileSync(join(kept, "node_modules", "pkg", "index.js"), "")
+    writeFileSync(join(kept, "index.ts"), "")
+    lost = await drained(kept, a)
+  }
   assert.ok(a.heard.includes(join(kept, "index.ts")))
   assert.equal(a.heard.some((path) => path.includes("node_modules/pkg/")), false, "ignored folders stay in the child")
 
@@ -100,19 +200,26 @@ try {
   await wait(1500)
   assert.equal(a.heard.length, after, "nothing arrives after unsubscribing")
 
-  await assert.rejects(backend(join(root, "missing"), [], recorder().listener), "a root that doesn't exist is refused")
+  await assert.rejects(backend(join(home, "missing"), [], recorder().listener), "a root that doesn't exist is refused")
 
   // A child that dies every time is given up after five tries.
-  const dying = join(root, "dying.mjs")
+  const dying = join(home, "dying.mjs")
   writeFileSync(dying, "process.on('message', () => process.exit(1))\n")
   // Within the backoff, by the waits it took rather than the runner's clock: each restart twice the last, then given up.
   const { waits } = await ranOut(() => assert.rejects(childBackend(dying)(kept, [], recorder().listener), /keeps stopping/))
   assert.deepEqual(waits.filter((ms) => ms >= 250), [250, 500, 1_000, 2_000], "within the backoff, not forever")
 
+}
+
+/** A canary heard late mutes nothing and restarts nothing, and the watch is told it's late. */
+async function lateCanary(): Promise<void> {
   // Late isn't silent: a canary heard 8 s late, as a degraded fseventsd
   // delivers, mutes nothing and restarts nothing, and its lag is read and
   // logged. The watch is told it's late.
-  const deaf = join(root, "deaf")
+  const home = caseFolder("late")
+  const kept = join(home, "kept")
+  mkdirSync(kept)
+  const deaf = join(home, "deaf")
   process.env.MAKO_WATCHER_CANARY_TEST = JSON.stringify({ everyMs: 1200, deafWhile: deaf })
   const lines: string[] = []
   const lateReadings = new WatchReadings((message) => lines.push(message))
@@ -129,12 +236,21 @@ try {
   assert.deepEqual(lateReadings.reading().starts, { first: 1, crash: 0, silence: 0, recovery: 0 })
   assert.ok(lines.includes("file events arrive late"), lines.join(", "))
   assert.equal(late.lates[0], true, "the watch hears it's late")
-  const earlier = [second, lateReadings.reading().child?.pid]
   await lateWatch.unsubscribe()
+  delete process.env.MAKO_WATCHER_CANARY_TEST
+}
 
+/** A canary unheard mutes every watch and restarts the child once; a silence soon after doesn't restart it again. */
+async function silentCanary(): Promise<void> {
   // A child whose own canary goes unheard: every watch is told, the child is
   // restarted once, and the watches hear delivery come back. The window is
   // longer than a degraded fseventsd was seen taking to deliver at all, 15 s.
+  const home = caseFolder("silent")
+  const kept = join(home, "kept")
+  mkdirSync(kept)
+  const deaf = join(home, "deaf")
+  // Children of the cases before this one, when they run in one process: only this case's are counted.
+  const earlier = watcherChildren()
   process.env.MAKO_WATCHER_CANARY_TEST = JSON.stringify({ everyMs: 1200, withinMs: 20_000, deafWhile: deaf })
   const readings = new WatchReadings()
   const canaried = childBackend(undefined, readings)
@@ -171,12 +287,19 @@ try {
   delete process.env.MAKO_WATCHER_CANARY_TEST
   console.log(`watch backend canary: silence detected in ${detected} ms at a 1.2 s beat and a 20 s window`)
 
+}
+
+/** A degraded fseventsd, simulated, is read and restarted over, and every watch hears dropped and rescans. */
+async function degradedFseventsd(): Promise<void> {
   // A degraded fseventsd, simulated: every beat heard 1.2 s late, short of the
   // 5 s that makes watches poll. The host's read of the daemon says so once
   // 18 beats are in; the restart, through a stand-in for the privileged step (nothing
   // here touches the real daemon), starts the watcher child over, so every watch
   // hears dropped and rescans; delivery is measured again, and a read of history
   // from before the restart says every root is lost.
+  const home = caseFolder("degraded")
+  const kept = join(home, "kept")
+  mkdirSync(kept)
   process.env.MAKO_WATCHER_CANARY_TEST = JSON.stringify({ everyMs: 1_500, lagMs: 1_200 })
   const scratch = realpathSync(mkdtempSync(join(tmpdir(), "mako-watch-restart-")))
   const daemon = { pid: 338, residentBytes: 9 * 1024 ** 2 }
@@ -238,6 +361,11 @@ try {
   rmSync(scratch, { recursive: true, force: true })
   console.log(`watch backend fseventsd: a canary 1.2 s late read degraded in ${degradedIn} ms at a 1.5 s beat; the restart rescanned every watch and measured ${restarted.restart?.after?.lagMs} ms after`)
 
+}
+
+// Each case on its own folders and children, so CI can run them on separate shards (`CASES`, scripts/lib/cases.ts).
+try {
+  await runCases([historyReaderTermination, sharedChildAndCrash, lateCanary, silentCanary, degradedFseventsd])
   // Only something else holding this process open lets an unref'd timer fire.
   setTimeout(() => {
     console.error("the watcher child still holds the process open with no watch left")

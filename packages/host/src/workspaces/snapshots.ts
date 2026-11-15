@@ -1,4 +1,4 @@
-import { hostLog } from "../base/host-log.js"
+import { hostLog, hostWarn } from "../base/host-log.js"
 import { createHash, randomUUID } from "node:crypto"
 import {
   existsSync,
@@ -59,6 +59,8 @@ const RowSchema = z.object({ value: z.string() })
 const SnapshotIdSchema = z.string().uuid()
 /** Files a checkpoint takes at most: Git reads again only the ones whose stat changed, so this is the listing's cost, not hashing's. */
 const MAX_FILES = 250_000
+/** History only avoids a fresh capture. A slow native replay must leave time for that capture before the turn goes. */
+const CHECKPOINT_HISTORY_MS = 500
 /** Past this many changed paths a checkpoint reads the whole workspace again rather than only them. */
 const MAX_INCREMENT = 2_000
 /** Files whose change changes what every other path is: a capture reads the whole workspace again. */
@@ -160,6 +162,8 @@ export class WorkspaceSnapshots {
   private readonly retention: SnapshotRetentionPolicy
   /** The watcher's history of file changes, once the workspaces are open: what lets a turn's checkpoint be the last one. */
   private history: FileHistory | undefined
+  /** Timed-out reads still belong to the shared history reader; do not pile new asks behind them. */
+  private readonly slowHistory = new Set<Promise<unknown>>()
   /**
    * The last checkpoint taken of each repository, with what it was taken of: where the watcher's history stood as it
    * began, HEAD, and a digest of what the index stages. A turn starting there with all of them as they were is that
@@ -477,7 +481,8 @@ export class WorkspaceSnapshots {
         this.assertNoPending(scope)
         // Marked before anything is read: a change while it's taken is after the mark, so the next turn reads it again.
         // One shared with other runs names them, which a later turn alone there shouldn't say: it's never reused.
-        const mark = shared?.size ? undefined : await this.history?.mark().catch(() => undefined)
+        const history = this.history
+        const mark = shared?.size || !history ? undefined : await this.readHistory(() => history.mark())
         const last = reuse ? await this.sinceLast(scope) : undefined
         if (last?.kind === "same") return this.summary(last.record)
         const [staged, excludes] = mark ? await Promise.all([this.stagedDigest(scope), this.excludesStamp(scope)]) : []
@@ -496,6 +501,31 @@ export class WorkspaceSnapshots {
     }
   }
 
+  /** A late history reply never resumes capture or grants authority to reuse a checkpoint. */
+  private async readHistory<T>(read: () => Promise<T>): Promise<T | undefined> {
+    if (this.slowHistory.size) return undefined
+    const pending = Promise.resolve().then(read).catch(() => undefined)
+    const settled = pending.then((value) => {
+      this.slowHistory.delete(pending)
+      return value
+    })
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([
+        settled,
+        new Promise<undefined>((resolve) => {
+          timer = setTimeout(() => {
+            this.slowHistory.add(pending)
+            hostWarn("checkpoints", "slow file history bypassed for a fresh capture", { waitedMs: CHECKPOINT_HISTORY_MS })
+            resolve(undefined)
+          }, CHECKPOINT_HISTORY_MS)
+        }),
+      ])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   /**
    * Where the repository stands against its last checkpoint: the same, when nothing it holds can have changed since
    * (the watcher's history names no path in the working tree, Git's own folder aside, HEAD is where it was, the index
@@ -504,8 +534,8 @@ export class WorkspaceSnapshots {
    * stat cache (any `git status`) changes none of these.
    */
   private async sinceLast(scope: string): Promise<{ kind: "same"; record: SnapshotRecord } | { kind: "changed"; record: SnapshotRecord; paths: string[] } | undefined> {
-    const last = this.lastTaken.get(scope)
-    if (!last || !this.history) return undefined
+    const last = this.lastTaken.get(scope), history = this.history
+    if (!last || !history) return undefined
     this.lastTaken.delete(scope)
     let record: SnapshotRecord
     try {
@@ -514,7 +544,7 @@ export class WorkspaceSnapshots {
       return undefined
     }
     const [read, head, staged, excludes] = await Promise.all([
-      this.history.since(last.mark, [scope], { exclude: [join(scope, ".git")] }).catch(() => undefined),
+      this.readHistory(() => history.since(last.mark, [scope], { exclude: [join(scope, ".git")] })),
       this.head(scope).catch(() => undefined),
       this.stagedDigest(scope).catch(() => undefined),
       this.excludesStamp(scope).catch(() => undefined),
@@ -1209,6 +1239,18 @@ export class WorkspaceSnapshots {
           "The checkpoint exceeds its object storage limit. No workspace files were changed."
         )
       const objects = await privateSnapshotObjects(this.git, scope, directory)
+      if (!since && !head.endsWith(":unborn")) {
+        const row = this.db.prepare(`SELECT value FROM snapshots WHERE json_extract(value, '$.scope') = ?
+          ORDER BY json_extract(value, '$.createdAt') DESC, id DESC LIMIT 1`).get(scope)
+        const previous = row ? RecordSchema.parse(JSON.parse(RowSchema.parse(row).value)) : undefined
+        if (previous?.storage && previous.gitDir === gitDir && previous.head === head) {
+          const borrowed = join(this.root, previous.id, "git/objects")
+          // The scope's lock keeps this store through sealing. Git still checks the working tree, but needn't write a
+          // blob already packed here. sealSnapshotObjects packs it into this checkpoint before either is pruned.
+          if ((await lstat(borrowed).catch(() => null))?.isDirectory())
+            objects.read = [...(objects.read ?? []), borrowed]
+        }
+      }
       const captureGit = (args: string[], index?: string) =>
         this.snapshotGit(scope, args, index, undefined, objects)
       if (since) {

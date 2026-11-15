@@ -134,7 +134,7 @@ function finish(id: string, answer: string) {
 try {
   // Attribution pending must not remove the independent checkpoint opportunity.
   {
-    owner.stop()
+    await owner.stop()
     owner = new LiveConversations({ ...dependencies, workspaceTracking: () => ({ kind: "pending", reason: "tracking is still opening" }) })
     const independentId = randomUUID(), independentRequest = randomUUID()
     await owner.start("test", cwd, { conversationId: independentId })
@@ -145,7 +145,7 @@ try {
     assert.equal(owner.snapshot(independentId)?.requests[0].snapshots?.coverage?.kind, "unavailable")
     finish(independentId, "checkpoint is independent")
     await until(() => owner.snapshot(independentId)?.requests[0].snapshots?.after?.kind === "ready")
-    owner.stop(); sent.length = 0
+    await owner.stop(); sent.length = 0
     owner = new LiveConversations(dependencies)
   }
   // A prepared checkpoint releases the send even if the old dispatch capture would never answer.
@@ -157,7 +157,7 @@ try {
     const held = new Promise<void>(resolve => { release = resolve })
     const capture = mock.method(snapshots, "beginRun", async () => { await held; return seed })
     try {
-      owner.stop()
+      await owner.stop()
       owner = new LiveConversations({ ...dependencies, workspaceTracking: () => ({ kind: "tracked" }) })
       const readyId = randomUUID()
       await owner.start("test", cwd, { conversationId: readyId })
@@ -170,18 +170,18 @@ try {
       release(); capture.mock.restore()
       if (descriptor) Object.defineProperty(snapshots, "beginPreparedRun", descriptor)
       else Reflect.deleteProperty(snapshots, "beginPreparedRun")
-      owner.stop(); sent.length = 0
+      await owner.stop(); sent.length = 0
       owner = new LiveConversations(dependencies)
     }
   }
   // Opening the Thread starts tracking even if the person has not sent a message.
   {
-    owner.stop()
+    await owner.stop()
     const observed: string[] = []
     owner = new LiveConversations({ ...dependencies, observeWorkspace: (folder: string) => { observed.push(folder) } })
     await owner.start("test", cwd, { conversationId: randomUUID() })
     assert.ok(observed.includes(cwd), "tracking starts at Thread open, before a send")
-    owner.stop()
+    await owner.stop()
     owner = new LiveConversations(dependencies)
   }
   const id = randomUUID(),
@@ -268,7 +268,7 @@ try {
     "PASS: repeated command receipt and real fork-journal failure preserve current files"
   )
 
-  owner.stop()
+  await owner.stop()
   owner = new LiveConversations(dependencies)
   assert.equal(
     owner.snapshot(id)?.requests[0].snapshots?.after?.kind,
@@ -338,7 +338,7 @@ try {
     { kind: "unavailable", reason: "track() timed out" },
     { kind: "incomplete", reason: "Discovery holds more than 12 repositories" },
   ] satisfies WorkspaceTracking[]) {
-    owner.stop()
+    await owner.stop()
     let captures = 0
     owner = new LiveConversations({ ...dependencies, workspaceTracking: () => state })
     const timedId = randomUUID(), timedRequest = randomUUID()
@@ -365,7 +365,7 @@ try {
   console.log("PASS: pending, failed and limited tracking retain ready rewind checkpoints with persistent coverage reasons")
 
   {
-    owner.stop()
+    await owner.stop()
     const acknowledgedAt = Date.now() - 11 * 60_000
     owner = new LiveConversations({ ...dependencies, workspaceTracking: () => ({ kind: "tracked", refreshing: true, preparation: { requestedAt: acknowledgedAt, acknowledgedAt, discoveryMs: 0, trackAckMs: 0 } }) })
     const staleId = randomUUID(), staleRequest = randomUUID()
@@ -382,7 +382,7 @@ try {
 
   // Already-dirty content is prepared before the send; dispatch performs no new capture.
   {
-    owner.stop()
+    await owner.stop()
     writeFileSync(file, "already dirty before dispatch")
     snapshots.changed(cwd)
     owner = new LiveConversations({ ...dependencies, workspaceTracking: () => ({ kind: "tracked" }) })
@@ -419,7 +419,7 @@ try {
   }
 
   for (const failure of ["tracking", "baseline", "missing-baseline"] as const) {
-    owner.stop()
+    await owner.stop()
     owner = new LiveConversations({ ...dependencies, workspaceSnapshots: failure === "missing-baseline" ? undefined : snapshots, workspaceTracking: () => failure === "tracking" ? { kind: "unavailable", reason: "tracking acknowledgement failed" } : { kind: "tracked" } })
     snapshots.changed(cwd)
     const capture = failure === "baseline" ? mock.method(snapshots, "capture", async () => { throw new Error("baseline failed") }) : undefined
@@ -440,7 +440,7 @@ try {
   console.log("PASS: tracking and baseline failures send with explicit incomplete coverage")
 
   {
-    owner.stop()
+    await owner.stop()
     let release = () => {}, entered = false
     const held = new Promise<void>(resolve => { release = resolve })
     const pendingSnapshots = new WorkspaceSnapshots(gitRunner, join(root, "pending-snapshots"))
@@ -466,7 +466,7 @@ try {
   }
 
   {
-    owner.stop()
+    await owner.stop()
     const stoppedSnapshots = new WorkspaceSnapshots(gitRunner, join(root, "stopped-snapshots"))
     owner = new LiveConversations({ ...dependencies, workspaceSnapshots: stoppedSnapshots, workspaceTracking: () => ({ kind: "unavailable", reason: "writer down" }) })
     const stopId = randomUUID(), stopRequest = randomUUID()
@@ -492,7 +492,7 @@ try {
   }
 
   {
-    owner.stop()
+    await owner.stop()
     const frozenSnapshots = new WorkspaceSnapshots(gitRunner, join(root, "frozen-snapshots"))
     owner = new LiveConversations({ ...dependencies, workspaceSnapshots: frozenSnapshots, workspaceTracking: () => ({ kind: "unavailable", reason: "writer down" }) })
     const frozenId = randomUUID(), frozenRequest = randomUUID()
@@ -537,7 +537,7 @@ try {
   }
 
   {
-    owner.stop()
+    await owner.stop()
     owner = new LiveConversations({ ...dependencies, workspaceTracking: () => ({ kind: "tracked" }) })
     const queuedId = randomUUID(), first = randomUUID(), next = randomUUID()
     await owner.start("test", cwd, { conversationId: queuedId })
@@ -565,8 +565,51 @@ try {
     console.log("PASS: a queued send never waits for the previous after checkpoint")
   }
 
+  // A checkpoint held past the deadline: the turn goes without it, and the notice survives a late save or failure.
+  for (const failure of [false, true]) {
+    await owner.stop()
+    owner = new LiveConversations({ ...dependencies, checkpointWaitMs: 200 })
+    const lateId = randomUUID(), lateRequest = randomUUID()
+    await owner.start("test", cwd, { conversationId: lateId })
+    await until(() => owner.snapshot(lateId)?.session.status === "ready")
+    await snapshots.prepare(cwd)
+    snapshots.changed(cwd)
+    let release = () => {}
+    const holding = new Promise<void>((resolve) => (release = resolve))
+    const original = snapshots.captureRun.bind(snapshots)
+    const beginRun = mock.method(snapshots, "captureRun", async (id: string, frozen?: () => void) => {
+      await holding
+      if (failure) throw new Error("late checkpoint failed")
+      return original(id, frozen)
+    })
+    try {
+      const before = sent.length
+      owner.submit(lateId, lateRequest, "late checkpoint")
+      await until(() => sent.length === before + 1)
+      assert.equal(owner.snapshot(lateId)?.requests[0].snapshots?.before.kind, "unavailable", "the turn went without its checkpoint, and says so")
+      const missed = owner.snapshot(lateId)?.requests[0].snapshots?.before
+      assert.ok(missed?.kind === "unavailable")
+      assert.equal(missed.timedOut, true, "the turn can say its checkpoint missed the dispatch deadline")
+      writeFileSync(file, "the agent wrote before the delayed capture held the workspace")
+      release()
+      // Held after the turn went, it may hold the turn's own edits: it never becomes the turn's `before`.
+      const reasonOf = () => { const before = owner.snapshot(lateId)?.requests[0].snapshots?.before; return before?.kind === "unavailable" ? before.reason : "" }
+      await until(() => failure ? reasonOf() === "late checkpoint failed" : /after the turn went/.test(reasonOf()))
+      assert.equal(owner.snapshot(lateId)?.requests[0].snapshots?.before.kind, "unavailable", "a late checkpoint is never the turn's before")
+      const late = owner.snapshot(lateId)?.requests[0].snapshots?.before
+      assert.ok(late?.kind === "unavailable")
+      assert.equal(late.timedOut, true, "the notice remains when a late capture cannot safely be the before-point")
+      finish(lateId, "late answer")
+      await until(() => owner.snapshot(lateId)?.requests[0].snapshots?.after?.kind === "ready")
+      await assert.rejects(owner.previewRewind(lateId, lateRequest, "before"), failure ? /late checkpoint failed/ : /no workspace checkpoint at that point: The checkpoint held the workspace .* after the turn went/, "a rewind to before it refuses, and says why")
+    } finally {
+      beginRun.mock.restore()
+      release()
+    }
+    console.log(failure ? "PASS: a failed late checkpoint retains the turn's timeout notice" : "PASS: a checkpoint held past the deadline lets the turn go; held late, it is never the turn's before, and a rewind to it refuses")
+  }
 } finally {
-  owner.stop()
+  await owner.stop()
   await gitRunner.close()
   await helper.stop()
   snapshots.close()

@@ -22,6 +22,7 @@ import {
   TERMINAL_PROTOCOL_VERSION,
   encodeTerminalFrame,
   parseTerminalRequest,
+  parseTerminalResponse,
   splitTerminalOutput,
   type TerminalDaemonEvent,
   type TerminalRequest,
@@ -620,10 +621,43 @@ async function startServer() {
   }
   server = instance
   if (process.platform !== "win32") {
-    await chmod(endpoint, 0o600)
-    watchEndpoint((await lstat(endpoint)).ino)
+    // The path is ours only while it reaches this process. A successor can rebind it between `listen` and any look at
+    // it, and an inode read after that is the successor's, which the watch would then never see change. So the inode
+    // counts once the path, read after it, still answers with this daemon's pid; otherwise it was taken while starting.
+    // A path gone before it could be read was taken too, and is no longer this daemon's to remove.
+    const ino = await chmod(endpoint, 0o600)
+      .then(() => lstat(endpoint))
+      .then((info) => info.ino, () => null)
+    if (ino === null || !(await reachesThisDaemon(endpoint))) {
+      await shutdown(0, "orphaned")
+      return
+    }
+    watchEndpoint(ino)
   }
   setInterval(() => void persist(), 2_000)
+}
+
+/** Whether `path` answers a hello with this process's pid: a probe that ends at once, whatever it meets. */
+function reachesThisDaemon(path: string) {
+  return new Promise<boolean>((resolve) => {
+    const socket = createConnection(path)
+    const decoder = new JsonLineDecoder()
+    const done = (ours: boolean) => {
+      socket.destroy()
+      resolve(ours)
+    }
+    socket.once("connect", () =>
+      socket.write(encodeTerminalFrame({ protocol: TERMINAL_PROTOCOL_VERSION, id: 0, type: "hello", clientVersion: TERMINAL_DAEMON_VERSION }))
+    )
+    socket.on("data", (chunk) => {
+      for (const value of decoder.push(chunk)) {
+        const answer = parseTerminalResponse(value)
+        if (answer) return done(answer.ok && answer.result?.kind === "hello" && answer.result.pid === process.pid)
+      }
+    })
+    socket.once("error", () => done(false))
+    socket.once("close", () => done(false))
+  })
 }
 
 /**

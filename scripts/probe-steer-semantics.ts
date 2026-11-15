@@ -215,7 +215,7 @@ async function hosted(harness: string, raw: ProviderLiveDriver, sandbox: Sandbox
       console.log(JSON.stringify({ session: { status: held?.session.status, connection: held?.session.connection, error: held?.session.error, lastStop: held?.session.lastStop }, requests: held?.requests.map((request) => ({ text: request.text.slice(0, 40), status: request.status, error: request.error, interruption: request.interruption?.reason })) }, null, 1))
     }
   } finally {
-    owner?.stop()
+    await owner?.stop()
     await Promise.resolve(raw.close(id)).catch(() => {})
     await close()
     await rm(root, { recursive: true, force: true }).catch(() => {})
@@ -407,7 +407,7 @@ async function cursorHosted(held: boolean, sleepS: number, raw: ProviderLiveDriv
     const s = (ms: number | undefined) => ms === undefined ? "never" : `${(ms / 1000).toFixed(1)} s`
     return `lands${held ? "-held" : ""}: ${receipt.state.kind} ${s(answered)} after it was sent, ${restarted ? "its turn stopped and the message sent next" : "Cursor's own steer"}; the model answered it ${s(heard)} after it was sent`
   } finally {
-    owner.stop()
+    await owner.stop()
     await Promise.resolve(raw.close(id)).catch(() => {})
     await rm(root, { recursive: true, force: true }).catch(() => {})
   }

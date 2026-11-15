@@ -198,6 +198,6 @@ try {
 
   console.log("cloud follow: the machine's checkout laid here at a turn's end, nothing for a turn that changed nothing, stopped before the cloud is asked once the person edits here, their edit kept, said once, the last laid kept for the way back; an edit made while the machine answered stops it before anything is laid; a way back begun meanwhile owns the worktree and nothing is laid; the worktree's writes one at a time: ok")
 } finally {
-  git.close()
+  await git.close()
   rmSync(root, { recursive: true, force: true })
 }

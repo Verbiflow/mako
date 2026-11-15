@@ -358,6 +358,18 @@ export function retireNotice(id: string): void {
   env?.dismissDesktop(retired.subject.id)
 }
 
+/** The same outstanding notice, now opened on a member that still waits. No new announcement or disposition. */
+export function retargetNotice(id: string, subject: NotificationSubject): void {
+  const siblings = environment?.siblings?.(subject.target)
+  notificationsStore.set({ items: notificationsStore.get().items.map(item => {
+    if (item.id !== id) return item
+    const kept = { ...item }
+    delete kept.thread
+    delete kept.alongside
+    return { ...kept, subject, ...(siblings && { thread: siblings.thread, alongside: siblings.working }) }
+  }) })
+}
+
 /* ------------------------------------------------------------------ */
 /* Seen                                                                 */
 /* ------------------------------------------------------------------ */
@@ -393,8 +405,9 @@ export function reconcileVisible(): void {
 }
 
 export function openItem(item: NotificationItem): void {
-  markSeen([item.subject.id])
-  environment?.open(item.subject)
+  const current = notificationsStore.get().items.find(entry => entry.id === item.id) ?? item
+  markSeen([current.subject.id])
+  environment?.open(current.subject)
 }
 
 export function openSubjectId(id: string): void {

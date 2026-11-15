@@ -1,17 +1,87 @@
 import assert from "node:assert/strict"
 import { spawn, spawnSync } from "node:child_process"
+import { EventEmitter } from "node:events"
 import { closeSync, constants, ftruncateSync, openSync, writeFileSync, writeSync } from "node:fs"
 import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
+import net from "node:net"
+import { syncBuiltinESMExports } from "node:module"
+import { mock } from "node:test"
 import { acquireHostLock, hostLockName } from "@mako/host/base/host-lock"
 import { ranOut } from "./lib/ran-out.ts"
 
 if (process.argv[2] === "hold") await hold(process.argv[3]!)
 else if (process.argv[2] === "late") late(process.argv[3]!)
 else if (process.argv[2] === "brief") await brief(process.argv[3]!)
+else if (process.argv[2] === "handoff-race") await handoffRace()
 else await check()
+
+/** The kernel refused a bind, but its holder died before the separate identity query answered. */
+async function handoffRace() {
+  const predecessor = 12345
+  const cases: Array<{ name: string; replies: Array<number | null>; heldOn: number; expected: string; attempts: number; waitMs: number; predecessor?: number; alive?: boolean }> = [
+    { name: "the predecessor vanished between bind and identity", replies: [null], heldOn: 2, expected: "held", attempts: 2, waitMs: 1000 },
+    { name: "a different host took the name", replies: [null, 23456], heldOn: 0, expected: "taken", attempts: 2, waitMs: 1000 },
+    { name: "an unnamed holder still owns the name", replies: [null, null], heldOn: 0, expected: "taken", attempts: 2, waitMs: 1000 },
+    { name: "the wait is already spent", replies: [null], heldOn: 2, expected: "taken", attempts: 1, waitMs: 0 },
+  ].map(scenario => ({ ...scenario, predecessor }))
+  cases.push(
+    { name: "no predecessor means no handoff retry", replies: [null], heldOn: 2, expected: "taken", attempts: 1, waitMs: 1000 },
+    { name: "a live unnamed predecessor is still waited for", replies: [null], heldOn: 2, expected: "held", attempts: 2, waitMs: 1000, predecessor, alive: true },
+  )
+  for (const scenario of cases) {
+    let attempts = 0
+    mock.method(Date, "now", () => 1000)
+    mock.method(net, "createServer", () => {
+      const server = new EventEmitter()
+      return Object.assign(server, {
+        listen(_name: string, ready: () => void) {
+          attempts++
+          queueMicrotask(() => {
+            if (attempts === scenario.heldOn) ready()
+            else server.emit("error", Object.assign(new Error("name in use"), { code: "EADDRINUSE" }))
+          })
+        },
+        unref() {},
+        close(done: () => void) { done() },
+      })
+    })
+    mock.method(net, "connect", () => {
+      const socket = new EventEmitter()
+      return Object.assign(socket, {
+        setEncoding() {
+          queueMicrotask(() => {
+            const pid = scenario.replies[attempts - 1]
+            if (pid !== null && pid !== undefined) socket.emit("data", `${pid}\n`)
+            socket.emit("close")
+          })
+        },
+        destroy() { socket.emit("close") },
+      })
+    })
+    mock.method(process, "kill", (pid: number, signal?: NodeJS.Signals | number) => {
+      assert.equal(pid, predecessor)
+      assert.equal(signal, 0, "only the predecessor's liveness is read; nothing is signalled")
+      if (scenario.alive) return true
+      throw Object.assign(new Error("predecessor gone"), { code: "ESRCH" })
+    })
+    syncBuiltinESMExports()
+    try {
+      const { result: lock, waits } = await ranOut(() => acquireHostLock("/fixture/handoff", { platform: "linux", predecessor: scenario.predecessor, waitMs: scenario.waitMs }))
+      assert.equal(lock.kind, scenario.expected, scenario.name)
+      assert.deepEqual(waits, scenario.alive ? [50] : [], `${scenario.name}: the existing live-predecessor wait is retained`)
+      assert.equal(attempts, scenario.attempts, `${scenario.name}: one bounded fresh kernel attempt, never an assumed take`)
+      if (lock.kind === "held") await lock.release()
+      else if (scenario.replies[1]) assert.equal(lock.holder, scenario.replies[1])
+    } finally {
+      mock.restoreAll()
+      syncBuiltinESMExports()
+    }
+  }
+  console.log("Host lock handoff: a vanished predecessor is checked against the kernel again, without bypassing another holder")
+}
 
 /** A `mako-host` command of an older build, or a `join` ending: it holds the lock for a moment and lets go. */
 async function brief(dataRoot: string) {
@@ -42,6 +112,7 @@ async function hold(dataRoot: string) {
 }
 
 async function check() {
+  await handoffRace()
   const root = await mkdtemp(join(tmpdir(), "mako-host-lock-"))
   const dataRoot = join(root, "data")
   try {

@@ -1,3 +1,4 @@
+import { WebPreferences } from "./account-preferences"
 import { createContext, useContext } from "react"
 import { z } from "zod"
 import { AccountList } from "./account-list"
@@ -36,6 +37,8 @@ export class WebClient {
   readonly account: WebAccount
   readonly deviceId: string
   readonly list: AccountList
+  /** The preferences that follow the account: the theme, the Fin settings and the harness order, read from it directly. */
+  readonly preferences: WebPreferences
   #conversations: Promise<WebConversations> | undefined
   /** The conversations once read: what a return wakes, and what hiding lets go of. */
   #loaded: WebConversations | undefined
@@ -48,6 +51,8 @@ export class WebClient {
     this.account = who.account
     this.deviceId = who.deviceId
     this.list = new AccountList(gateway, who.account.id)
+    this.preferences = new WebPreferences(gateway, who.account.id)
+    this.list.followPreferences(this.preferences)
     loadReadState(who.account.id)
     this.push = new WebPush(gateway)
   }
@@ -80,6 +85,7 @@ export class WebClient {
         // less likely to end the page to free memory and bring it back black.
         hidden: () => {
           client.list.save()
+          client.list.park()
           client.#loaded?.releaseHidden()
         },
         returned: (kind, away) => client.#returned(kind, away),
@@ -111,11 +117,14 @@ export class WebClient {
   /**
    * Back in front. Every socket is asked whether it's alive, and one that stays silent for three seconds (or was already
    * quiet past its heartbeat, as a frozen page's is) is ended and opened again, while the list's next follow starts
-   * now rather than after its backoff. Away ten seconds or more, what's shown is stale: the list and the open
-   * conversation are read again over HTTP at once, which answers even while a dead socket is being replaced.
+   * now rather than after its backoff. The list, which followed nothing while hidden, is followed again. Away ten seconds
+   * or more, what's shown is stale: the list and the open conversation are read again over HTTP at once, which answers
+   * even while a dead socket is being replaced.
    */
   #returned(kind: ReturnKind, away: number): void {
     this.gateway.wake()
+    // The list let its stream go while hidden; shown again it's read and followed again.
+    this.list.unpark()
     this.list.wake()
     this.#loaded?.wake()
     if (kind === "long") {

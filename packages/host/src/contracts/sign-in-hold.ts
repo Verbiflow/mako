@@ -4,8 +4,9 @@ import type { LiveRequest, SignInHold } from "./live-conversations.js"
  * Work paused because the provider's account signed out.
  *
  * The pause belongs to the session: what the sign-out cut short and every
- * message behind it carry one `SignInHold`, and nothing sends until the user
- * resumes. Resume releases them in order. The cut-short turn is continued
+ * message behind it carry one `SignInHold`. A verified login for that account
+ * releases its cohort automatically; legacy or unverified recovery keeps
+ * explicit Resume. Both release in order. The cut-short turn is continued
  * when the provider had accepted it; one whose outcome is unknown is left
  * with its own recovery notice and never sent again on its own.
  *
@@ -30,6 +31,11 @@ export function signInPause(requests: readonly LiveRequest[]): SignInPause | und
     else cut = { requestId: request.id, outcome: request.status === "interrupted" ? "continue" : "review" }
   }
   return hold && { hold, waiting, cut }
+}
+
+/** Verified work waiting only for its execution place, unless someone explicitly stopped it meanwhile. */
+export function signInResuming(pause: SignInPause | undefined, requests: readonly LiveRequest[]): boolean {
+  return Boolean(pause?.hold.ready) && !requests.some(request => request.signIn && request.pause === "stop")
 }
 
 /**

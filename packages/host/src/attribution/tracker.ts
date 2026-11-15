@@ -27,6 +27,7 @@ import {
 import { join } from "node:path"
 import { inSlices, StepsStopped } from "@mako/sessions/slices"
 import { HourCounts } from "../base/hour-counts.js"
+import { mapLimit } from "../base/map-limit.js"
 import type { RescanFootprint } from "../contracts/mako-footprint.js"
 import { contentRef, decodeText, hasher, isText, READ_LIMIT, secretPath, STORE_LIMIT } from "./content.js"
 import { attribute, authorOf, claim, Evidence, LEAD_MS, reaches as reachesChange, TRAIL_MS, type Interval, type ObservedChange, type Reach } from "./evidence.js"
@@ -280,16 +281,6 @@ interface Observed {
   text?: boolean
 }
 
-const mapLimit = async <T, R>(items: readonly T[], limit: number, run: (item: T) => Promise<R>): Promise<R[]> => {
-  const out: R[] = []
-  let next = 0
-  const worker = async () => {
-    for (let i = next++; i < items.length; i = next++) out[i] = await run(items[i]!)
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
-  return out
-}
-
 const sameFile = (one: TrackerFileStat, other: TrackerFileStat) =>
   one.dev === other.dev && one.ino === other.ino && one.size === other.size && one.mtimeNs === other.mtimeNs && one.ctimeNs === other.ctimeNs
 /** The same content as the stat cache recorded: a status change alone (a `chmod`) leaves these as they were. */
@@ -327,6 +318,7 @@ export class LaptopTracker implements AttributionTracker {
   private resuming: Promise<void> = Promise.resolve()
   /** Set by `close`: no root starts resuming after it. */
   private closing = false
+  private closePromise: Promise<void> | undefined
   readonly evidence: Evidence
   private readonly pending = new Map<number, Pending>()
   private settleTimer?: ReturnType<typeof setTimeout>
@@ -2292,28 +2284,37 @@ export class LaptopTracker implements AttributionTracker {
     this.options.log?.(message, facts)
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    return this.closePromise ??= this.closeTracker()
+  }
+
+  private async closeTracker(): Promise<void> {
     if (this.closed) return
     // The root resuming now finishes; the rest resume when the journal next opens.
     this.closing = true
     await this.settled()
     this.closed = true
     this.footprints?.close()
-    this.reader.close()
-    clearTimeout(this.settleTimer)
-    for (const state of this.states.values()) this.unlisten(state)
-    await Promise.all([...this.states.values()].map((state) => state.chain))
-    this.settle(true)
-    this.store.transaction(() => {
-      for (const state of this.states.values()) {
-        // One asleep keeps when it fell asleep: its wake reads what changed since then.
-        if (state.asleep) continue
-        state.root.seenAt = this.now()
-        this.store.saveRoot(state.root)
-      }
-    })
-    this.states.clear()
-    this.store.close()
+    const failed: unknown[] = []
+    try { await this.reader.close() } catch (error) { failed.push(error) }
+    try {
+      clearTimeout(this.settleTimer)
+      for (const state of this.states.values()) this.unlisten(state)
+      await Promise.all([...this.states.values()].map((state) => state.chain))
+      this.settle(true)
+      this.store.transaction(() => {
+        for (const state of this.states.values()) {
+          // One asleep keeps when it fell asleep: its wake reads what changed since then.
+          if (state.asleep) continue
+          state.root.seenAt = this.now()
+          this.store.saveRoot(state.root)
+        }
+      })
+      this.states.clear()
+      this.store.close()
+    } catch (error) { failed.push(error) }
+    if (failed.length === 1) throw failed[0]
+    if (failed.length) throw new AggregateError(failed, "The record of changes did not close cleanly.", { cause: failed[0] })
   }
 }
 

@@ -7,6 +7,7 @@ import { z } from "zod"
 import { contentRef, diffLines, splitLines, type Attribution, type CheckoutShares, type ChangeClass, type Partition, type PartitionFile, type Share } from "../attribution/index.js"
 import type { MoveOutcome, MoveShare, MoveShares } from "../contracts/workspace-moves.js"
 import { copyGitIndex } from "./index-copy.js"
+import { mapLimit } from "../base/map-limit.js"
 
 /*
  * Moving a Thread's uncommitted changes from the main checkout into its new
@@ -170,15 +171,7 @@ export async function onDisk(path: string): Promise<{ bytes: Buffer; perm: numbe
   return { bytes: await readFile(path), perm: stat.mode & 0o777 }
 }
 
-export async function mapLimit<T, R>(values: readonly T[], limit: number, map: (value: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = []
-  const queue = values.entries()
-  const worker = async () => {
-    for (const [index, value] of queue) results[index] = await map(value)
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, values.length) }, worker))
-  return results
-}
+export { mapLimit }
 
 /** Byte lines, each with its newline, as a multiset. */
 function lineCounts(into: Map<string, number>, bytes: Buffer | undefined, sign: 1 | -1): void {

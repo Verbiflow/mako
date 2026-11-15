@@ -142,7 +142,7 @@ async function checkWindow() {
     await press(preview("forFins"))
     await capture("fields-dark.png", "[aria-label='Your rules for Fins']")
 
-    /* The phone: the same two rules, saved through the same host call, with the same toggles. */
+    /* The phone: the same two rules, saved to the account they follow (every Mac hears them), with the same toggles. */
     window.setSize(390, 844)
     await window.loadURL(`${process.env.MAKO_ROLE_RULES_URL}scripts/phone-fins.html`)
     const phone = (role) => `textarea[data-role-rules=${role}]`
@@ -152,7 +152,7 @@ async function checkWindow() {
     await press(phone("forApexes"))
     await page.debugger.sendCommand("Input.insertText", { text: "Ask me before starting more than four Fins." })
     await press("header h1")
-    await until(`window.mako.finDefaults().then((reading) => reading.policy.forFins === "Run the tests you touch before you report." && reading.policy.forApexes === "Ask me before starting more than four Fins.")`, "the phone saved both")
+    await until(`window.accountPreferences()["fins.forFins"] === "Run the tests you touch before you report." && window.accountPreferences()["fins.forApexes"] === "Ask me before starting more than four Fins."`, "the phone saved both to the account")
     assert.equal((await saved()).rules.length, 3, "the model rules are kept")
     const toggles = await evaluate(`[...document.querySelectorAll("button[aria-expanded]")].map((button) => button.innerText.trim())`)
     assert.deepEqual(toggles, ["What every Fin reads", "What every Apex reads"])

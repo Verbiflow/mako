@@ -151,7 +151,7 @@ try {
       await world.close()
     }
 
-    // A message about to go again keeps its place: a new one makes it go now, first.
+    // A provider wait keeps its place and its due time when another message arrives.
     {
       let fail = false
       const world = new AgentsWorld({
@@ -174,6 +174,9 @@ try {
       world.say(conversation, "One.")
       await until("the wake to fail", () => holdOf(requestOf(world, conversation, "One.") ?? row("x", "queued"))?.kind === "retry")
       world.say(conversation, "Two.")
+      const waiting = requestOf(world, conversation, "One.")!
+      assert.equal(waiting.status, "held", "new words cannot make capacity return sooner")
+      world.live.wakeDue(waiting.retry!.at + 1)
       await until(`${harness}: both to go`, () => requestOf(world, conversation, "Two.")?.status === "completed")
       assert.deepEqual(sent(world, conversation), ["Hold", "One", "Two"], "the message waiting to go again went first")
       await world.close()

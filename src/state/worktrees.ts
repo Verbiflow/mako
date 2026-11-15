@@ -3,7 +3,7 @@ import { toast } from "sonner"
 import type { CheckoutHead, CheckoutHeads, LinkedCheckout } from "@mako/host/contracts/checkout-heads"
 import type { GitDiff } from "@mako/host/contracts/git-workspace-search"
 import type { GitStatus, ThreadRef } from "@/lib/types"
-import type { ThreadWorktree, WorktreeBranch, WorktreeInventory, WorktreePull, WorktreeRemoval, WorktreeReview, WorktreeStart, WorktreeStartPoint, WorktreeSummary, WorktreeUpdate } from "@mako/host/contracts/thread-worktrees"
+import type { WorktreeRetentionSettings, WorktreeRetentionReport, ThreadWorktree, WorktreeBranch, WorktreeInventory, WorktreePull, WorktreeRemoval, WorktreeReview, WorktreeStart, WorktreeStartPoint, WorktreeSummary, WorktreeUpdate } from "@mako/host/contracts/thread-worktrees"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { landedFor, removable, removedNote, type CheckoutDetail } from "@/lib/worktree-removal"
@@ -495,3 +495,7 @@ export async function archivedWithWorktree(worktree: ThreadWorktree, restore: ()
   if (!removal || removal.held || !landedFor(removal.landing, summary)) return void offer()
   removeAfterUndo([worktree], "Thread archived", `Its worktree goes too. ${removedNote(worktree.branch, removal.landing, summary)}`, restore)
 }
+
+/** Retirement previews never delete; saving a mode takes effect on a later host pass. */
+export const readWorktreeRetention = (): Promise<WorktreeRetentionReport> => getMako().worktreeRetention()
+export const saveWorktreeRetention = (settings: WorktreeRetentionSettings): Promise<WorktreeRetentionReport> => getMako().setWorktreeRetention(settings)

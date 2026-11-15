@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto"
 import { statSync } from "node:fs"
 import { join } from "node:path"
 import { Admission } from "../base/admission.js"
+import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { disconnectedContext } from "../base/execution-context.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -53,7 +54,7 @@ import { bareCommand } from "@mako/sessions/tool-identity"
 import { needsYouWaiting, questionWaiting, requestWaiting, type Waiting } from "@mako/protocol/attention"
 import { agentAskLine } from "../contracts/agent-asks.js"
 import type { SessionSettings } from "@mako/sessions/settings"
-import { steerHeard } from "../harnesses/index.js"
+import { steerHeard, type VerifiedSignIn } from "../harnesses/index.js"
 import { LiveAccounts } from "./live-accounts.js"
 import { LiveActions, type SteerInput, type SteerSender } from "./live-actions.js"
 import { LiveApprovals } from "./live-approvals.js"
@@ -194,6 +195,7 @@ export class LiveConversations {
   /** The one timer for held messages' times (`armWakes`): when it fires, and the timer. */
   private wakeTimer: { at: number; timer: ReturnType<typeof setTimeout> } | undefined
   private wakesStopped = false
+  private stopSignInEvents?: () => void
   private readonly reclaims = new JournalReclaims()
 
   constructor(dependencies: Dependencies) {
@@ -222,7 +224,7 @@ export class LiveConversations {
         // A switch that waited behind another when the last host ended goes on, as it was asked to.
         if (this.transfers.pending(resident)?.behind) queueMicrotask(() => this.dispatch.drain(resident))
       },
-      compact: (path) => { void this.reclaims.reclaim(path) },
+      compact: (path) => this.reclaims.reclaim(path),
       paged: (id) => this.dependencies.historyPaged?.(id),
       released: (id) => {
         // Let go of: its work is read again, from memory, when it's next loaded.
@@ -248,6 +250,7 @@ export class LiveConversations {
     this.bundles = new ContextBundles(dependencies.children, dependencies.harnessLabel)
     const observe = (event: LiveDriverEvent) => this.events.observe(event)
     const access: LiveAccess = {
+      stopMark: id => this.stopMark(id),
       dependencies,
       reclaims: this.reclaims,
       epoch: this.epoch,
@@ -321,7 +324,7 @@ export class LiveConversations {
         this.autoContinue.schedule(resident, settled)
         this.autoContinue.continueFailed(resident, settled)
       },
-      declineAutoContinue: (resident, keepServiceRetry) => this.autoContinue.decline(resident, keepServiceRetry),
+      declineAutoContinue: (resident, keepProviderWait) => this.autoContinue.decline(resident, keepProviderWait),
       goalSettled: (resident, settled) => this.goals.settled(resident, settled),
       turnSettled: (resident, settled) => this.dependencies.agents?.()?.settled(resident.snapshot.session.id, settled),
       goalObserved: (resident, goal) => this.goals.observe(resident, goal),
@@ -383,7 +386,16 @@ export class LiveConversations {
     this.dispatch = new LiveDispatch(access, { actions, checkpoints, transfers })
     this.closing = new LiveClosing(access, { records, actions, approvals, transfers, restarts: this.restarts })
     this.threads.registerJournals(records.open())
+    this.stopSignInEvents = dependencies.signInEvents?.(receipt => this.recoverSignedIn(receipt))
+    queueMicrotask(() => this.recoverSignedIn())
     if (dependencies.holdHistory) this.scheduleSettle(SETTLE_AFTER_START_MS)
+  }
+
+  private recoverSignedIn(receipt?: VerifiedSignIn): void {
+    if (this.wakesStopped) return
+    void this.accounts.recoverSignIns(receipt).catch(error => {
+      hostWarn("live", "held sign-ins could not be reconciled", { error: errorMessage({ error }) })
+    })
   }
 
   /** The sweep a minute after the host starts, then every `SETTLE_EVERY_MS`: a turn writes its conversation's copy back until its session holds the turn. */
@@ -397,8 +409,9 @@ export class LiveConversations {
   }
 
   /** Once every compaction of a journal this host closed has ended. */
-  journalsCompacted(): Promise<void> {
-    return this.reclaims.settled()
+  async journalsCompacted(): Promise<void> {
+    await this.records.releasesSettled()
+    await this.reclaims.settled()
   }
 
   /** The host's sweep, now; `pauseMs` between journals. */
@@ -573,7 +586,7 @@ export class LiveConversations {
     // Waiting, or being sent now: a send whose refusal comes back after the Stop is caught by its mark too (`flush`).
     // One being edited takes the mark under its edit, so saving the edit doesn't send it.
     const stops = (request: LiveRequest) => request.pause !== "stop" &&
-      (request.status === "queued" || request.status === "dispatching" || request.status === "held")
+      (request.status === "queued" || request.status === "dispatching" || request.status === "held" || Boolean(request.signIn && request.status !== "canceled"))
     if (!resident) return 0
     // A switch not yet committed is queued work, held like any message; a committed one's message is in the queue
     // already. Holding moves no generation, so the source binding's events still count (`holdSwitches`).
@@ -582,7 +595,7 @@ export class LiveConversations {
     if (!count) return 0
     const previous = resident.snapshot
     resident.snapshot = { ...snapshot, requests: snapshot.requests.map((request) => stops(request)
-      ? { ...request, pause: "stop" as const, ...request.status !== "dispatching" && { status: "held" as const, retry: undefined, wake: undefined } }
+      ? { ...request, pause: "stop" as const, ...(request.status === "queued" || request.status === "held") && { status: "held" as const, retry: undefined, wake: undefined } }
       : request) }
     try {
       this.flush(resident)
@@ -872,6 +885,9 @@ export class LiveConversations {
     actor?: Actor,
     marks: Pick<LiveRequest, "goal" | "review" | "verbatim" | "wake" | "digest" | "pause" | "grants" | "notification"> = {}
   ): LiveRequest {
+    // Settings may finish resolving after stop cleared the residents. A replay's earlier admission may be durable;
+    // callers must read its receipt from the next host under the same ID, not treat this as a definitive refusal.
+    if (this.records.stopping()) throw new RuntimeDisconnectedError(true, id)
     this.admission.assert()
     const resident = this.records.require(id)
     if (resident.rewinding)
@@ -1064,6 +1080,8 @@ export class LiveConversations {
       const next = this.soonestWake(now)
       const again = failed ? Date.now() + (this.dependencies.saveAgainMs ?? SAVE_AGAIN_MS) : undefined
       this.armWakes(next === undefined ? again : again === undefined ? next : Math.min(next, again))
+      // A verified sign-in may be waiting only for a Fin's execution place; Agents drains through this same wake.
+      this.recoverSignedIn()
     }
     return due
   }
@@ -1969,6 +1987,7 @@ export class LiveConversations {
   close(id: string): Promise<void> {
     // Read in if it isn't: right after a restart its journal may not be loaded yet, and its times must still stop.
     const resident = this.records.load(id)
+    if (resident?.snapshot.requests.some(request => request.signIn && request.status !== "canceled")) this.stopHolds(id)
     if (resident?.snapshot.requests.some((request) => request.status === "held" && (request.retry || request.wake))) {
       resident.snapshot = {
         ...resident.snapshot,
@@ -1979,7 +1998,11 @@ export class LiveConversations {
     return this.closing.close(id)
   }
 
+  /** Starts shutdown now; await completion before removing the root or handing it to another host. */
   stop(): Promise<void> {
+    this.accounts.stop()
+    this.stopSignInEvents?.()
+    this.stopSignInEvents = undefined
     clearTimeout(this.settleTimer)
     this.wakesStopped = true
     clearTimeout(this.wakeTimer?.timer)
@@ -2035,6 +2058,7 @@ export class LiveConversations {
   }
 
   private write(resident: Resident): void {
+    const recoveringStorage = resident.storageFault
     resident.snapshot = withdrawGone(resident.snapshot)
     if (this.records.isReleased(resident)) {
       hostWarn("residency", "a write reached an unloaded conversation and was dropped", { conversation: resident.snapshot.session.id })
@@ -2071,6 +2095,7 @@ export class LiveConversations {
     if (snapshot.requests !== previous.requests || snapshot.control !== previous.control) this.armWakes(sooner(wakeAt(snapshot.requests), transferDue(snapshot.control)))
     resident.flushedAt = performance.now()
     resident.storageFault = false
+    if (recoveringStorage) queueMicrotask(() => this.recoverSignedIn())
     resident.updates = []
     resident.pendingCharacters = 0
     resident.snapshot = snapshot

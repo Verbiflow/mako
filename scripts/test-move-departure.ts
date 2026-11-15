@@ -144,6 +144,6 @@ try {
   console.log("PASS: a Thread leaves its machine released first, then its checkout and records; asked again, the same; busy, nothing released; a failure after the release, and a give-back, take it back here once")
 } finally {
   server.close()
-  git.close()
+  await git.close()
   rmSync(root, { recursive: true, force: true })
 }

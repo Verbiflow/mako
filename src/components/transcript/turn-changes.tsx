@@ -12,6 +12,7 @@ import { acpStore } from "@/state/acp-state"
 import { reviewTurn } from "@/state/review-scope"
 import { useTranscriptSource } from "./source-context"
 import { useVisible } from "./use-visible"
+import { CheckpointNotice } from "./checkpoint-notice"
 
 /** Turns from before the journal counted them, whose changes stay held; a finished turn's never change, so each is read once while it's held. */
 const HELD_TURNS = 200
@@ -62,7 +63,7 @@ function readTurn(conversation: string, requestId: string, key: string): Promise
  * checkpoints or, without them, from the journal the record was counted
  * from; Undo takes the turn's own lines back out and keeps everyone else's.
  */
-export function TurnChanges({ requestId }: { requestId: string | undefined }) {
+export function TurnChanges({ requestId, streaming = false }: { requestId: string | undefined; streaming?: boolean }) {
   const { liveId } = useTranscriptSource()
   const request = useAcp((state) => {
     const live = liveId ? state.conversations[liveId] : undefined
@@ -78,13 +79,15 @@ export function TurnChanges({ requestId }: { requestId: string | undefined }) {
       {coverage.kind === "unavailable" ? "File attribution is unavailable" : "Some file changes may be missing"}
     </div>
   ) : null
+  const notice = <>{incomplete}<CheckpointNotice before={before} /></>
+  if (streaming) return notice
   const recorded = recordedTurnChanges(request.changes)
-  if (recorded) return <>{incomplete}<TurnChangesRow summary={recorded} conversation={liveId} requestId={requestId} workspace={saved ?? recordRoots(request.changes)[0] ?? null} undoable undone={request.undone} /></>
+  if (recorded) return <>{notice}<TurnChangesRow summary={recorded} conversation={liveId} requestId={requestId} workspace={saved ?? recordRoots(request.changes)[0] ?? null} undoable undone={request.undone} /></>
   const workspace = saved
   // A count on its way, or none to make: nothing to read from the checkpoints.
-  if (request.changes || !workspace) return incomplete
+  if (request.changes || !workspace) return notice
   // Mounted once the checkpoints are, so the line watches the viewport from its first frame.
-  return <>{incomplete}<CheckpointTurnChanges key={`${liveId}\0${requestId}`} conversation={liveId} requestId={requestId} workspace={workspace} /></>
+  return <>{notice}<CheckpointTurnChanges key={`${liveId}\0${requestId}`} conversation={liveId} requestId={requestId} workspace={workspace} /></>
 }
 
 /** An older turn's line, from the checkpoints either side of it. */

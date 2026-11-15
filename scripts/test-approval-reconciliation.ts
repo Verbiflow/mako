@@ -196,7 +196,7 @@ try {
       )
     } finally {
       settle.resolve()
-      owner.stop()
+      await owner.stop()
     }
   }
 } finally {

@@ -344,9 +344,10 @@ const starting = racing.start("/tmp", admitted("claude", {
   conversationId: "closing",
   emit: () => {},
 }))
-racing.close("closing")
+const racingClosed = racing.close("closing")
 configured?.()
 await assert.rejects(starting, /closed while configuring/)
+await racingClosed
 assert.equal(launched, false)
 
 const permissionEvents: LiveDriverEvent[] = []
@@ -549,7 +550,7 @@ for (const confirmed of [true, false]) {
     assert.equal(success.session.status, "ready", "ordinary answer text cannot establish a failure")
     assert.equal(success.session.error, undefined)
   }
-  compactDriver.close("compact-fixture")
+  await compactDriver.close("compact-fixture")
 }
 console.log("PASS: Claude compaction requires a manual boundary and the matching SDK result")
 {
@@ -574,7 +575,7 @@ console.log("PASS: Claude compaction requires a manual boundary and the matching
   changed([{ task_id: "build", task_type: "local_bash", description: "npm run build" }])
   await delay(0)
   assert.equal(reported(), 1)
-  backgroundDriver.close("background-fixture")
+  await backgroundDriver.close("background-fixture")
 }
 console.log("PASS: Claude background tasks follow the SDK's replace-semantics task list")
 const assistant: SDKAssistantMessage = {
@@ -993,7 +994,7 @@ console.log("PASS: A monitor's event and a command that settled mid-turn are dra
     tokens: { input: 1000, cacheRead: 5000, cacheWrite: 0, output: 200 },
     native: { tokens: { input: 1000, cacheRead: 5000, cacheWrite: 0, output: 200 }, cost: 0.25 } },
   "a cleared conversation empties the context, a result without model usage erases nothing, and what was spent and the process's own totals stay")
-  noticeDriver.close("notice-fixture")
+  await noticeDriver.close("notice-fixture")
 }
 console.log("PASS: Claude limits, fallbacks, notices, mode, commands, usage and stop reasons reach the session once each")
 const assistantError = (error: SDKAssistantMessageError): SDKAssistantMessage => ({ ...assistant, error })

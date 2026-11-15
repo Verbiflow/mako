@@ -368,7 +368,7 @@ async function runElectron() {
           const checked = await verifyNativeDelivery({
             owner, id, nonce, catalog, waitFor,
             restart: async (binding) => {
-              owner.stop()
+              await owner.stop()
               stopDrivers()
               mcp.close()
               const deadline = Date.now() + 30_000
@@ -963,7 +963,7 @@ async function runElectron() {
         .control.bindings.find(
           (binding) => binding.nativeId === source.session.nativeId
         )
-      owner.stop()
+      await owner.stop()
       stopDrivers()
       mcp.close()
       const deadline = Date.now() + 30_000
@@ -1225,7 +1225,7 @@ async function runElectron() {
         )
     }
     console.log(`Evidence retained: ${root}`)
-    owner.stop()
+    await owner.stop()
     stopDrivers()
     if (controlMode) {
       cua.stop()

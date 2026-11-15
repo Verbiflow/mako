@@ -7,6 +7,7 @@ import {
   realpathSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   writeFileSync,
   rmSync,
   existsSync,
@@ -17,7 +18,7 @@ import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { importSnapshotObjects } from "@mako/host/workspaces/snapshot-git"
 import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
-import { Git, TreeComparison } from "@mako/git"
+import { Git, TreeComparison, type RunOptions } from "@mako/git"
 import {
   RewindPlanSchema,
   type RewindPlan,
@@ -446,6 +447,60 @@ try {
 } finally {
   sparseStore.close()
   rmSync(sparseRoot, { recursive: true, force: true })
+}
+
+// Full captures keep Git's file checks, but do not write a dirty blob again when the last checkpoint holds it.
+const borrowRoot = mkdtempSync(join(tmpdir(), "mako-snapshot-borrow-"))
+const borrowCwd = join(borrowRoot, "workspace")
+mkdirSync(borrowCwd)
+const borrowGit = new Git()
+const borrowStore = new WorkspaceSnapshots(borrowGit, join(borrowRoot, "store"), { maxSnapshots: 1 })
+const looseWrites: number[] = []
+const runBorrow = borrowGit.run.bind(borrowGit)
+borrowGit.run = async (options: RunOptions) => {
+  const result = await runBorrow(options)
+  if (options.args.includes("add") && options.env?.GIT_OBJECT_DIRECTORY) {
+    const objects = options.env.GIT_OBJECT_DIRECTORY
+    const loose = readdirSync(objects).filter((name) => /^[a-f0-9]{2}$/.test(name)).flatMap((name) => readdirSync(join(objects, name)).map((file) => name + file))
+    // Saved staging can also write a tree before add: count blobs, not unrelated tree objects.
+    const types = loose.length ? execFileSync("git", ["cat-file", "--batch-check=%(objecttype)"], { cwd: borrowCwd, env: { ...process.env, ...options.env }, input: `${loose.join("\n")}\n`, encoding: "utf8" }).trim().split("\n") : []
+    looseWrites.push(types.filter((type) => type === "blob").length)
+  }
+  return result
+}
+const borrowCommand = (...args: string[]) => execFileSync("git", args, { cwd: borrowCwd, encoding: "utf8" }).trim()
+try {
+  borrowCommand("init", "-q")
+  writeFileSync(join(borrowCwd, "tracked"), "committed\n")
+  borrowCommand("add", ".")
+  borrowCommand("-c", "user.name=Test", "-c", "user.email=test@localhost", "commit", "-qm", "initial")
+  writeFileSync(join(borrowCwd, "tracked"), "staged\n")
+  borrowCommand("add", "tracked")
+  writeFileSync(join(borrowCwd, "tracked"), "working\n")
+  writeFileSync(join(borrowCwd, "new"), "first\n")
+  const index = readFileSync(join(borrowCwd, ".git", "index"))
+  const first = await borrowStore.capture(borrowCwd)
+  const second = await borrowStore.capture(borrowCwd)
+  assert.deepEqual(looseWrites, [2, 0], "the unchanged dirty files are read but their existing blobs are not written again")
+  assert.equal(existsSync(join(borrowRoot, "store", first.id)), false, "retention can remove the borrowed checkpoint as soon as the new one is sealed")
+  writeFileSync(join(borrowCwd, "new"), "other\n")
+  const third = await borrowStore.capture(borrowCwd)
+  assert.equal(looseWrites[2], 1, "a same-size edit is read again and writes its new blob")
+  assert.equal(existsSync(join(borrowRoot, "store", second.id)), false)
+  const saved = (...args: string[]) => borrowCommand(`--git-dir=${join(borrowRoot, "store", third.id, "git")}`, ...args)
+  assert.equal(saved("show", `refs/mako/checkpoints/${third.id}:tracked`), "working", "the new pack holds the borrowed body without its predecessor")
+  assert.equal(saved("show", `refs/mako/checkpoints/${third.id}:new`), "other")
+  assert.equal(saved("show", `refs/mako/checkpoints/${third.id}^:tracked`), "staged", "saved staging remains independent too")
+  assert.equal(existsSync(join(borrowRoot, "store", third.id, "git", "objects", "info", "alternates")), false, "the saved checkpoint has no persistent alternate dependency")
+  assert.deepEqual(readFileSync(join(borrowCwd, ".git", "index")), index, "every capture preserves the person's index bytes")
+  rmSync(join(borrowRoot, "store", third.id), { recursive: true })
+  await borrowStore.capture(borrowCwd)
+  assert.equal(looseWrites[3], 2, "a missing optional prior store falls back to writing the dirty blobs")
+  console.log("PASS: full captures borrow blobs only while sealing, preserve staging, reread edits and survive predecessor deletion")
+} finally {
+  borrowStore.close()
+  await borrowGit.close()
+  rmSync(borrowRoot, { recursive: true, force: true })
 }
 
 // Past the old 20,000-file limit: Git reads again only what changed.

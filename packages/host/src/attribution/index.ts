@@ -34,7 +34,7 @@ import type { BackfillResult } from "./backfill.js"
 import { LiveActivity, reportedEffect } from "./live-activity.js"
 import { within } from "./paths.js"
 import type { SystemHistory, TreeWatcher } from "./ports.js"
-import { changes, countTurnInSlices, hunks, partition, restorable, shares, storedView, type CheckoutHunk, type CheckoutShares, type JournalView, type Partition, type PartitionOptions, type Restorable, type ThreadChanges } from "./queries.js"
+import { changes, hunks, partition, restorable, shares, storedView, type CheckoutHunk, type CheckoutShares, type JournalView, type Partition, type PartitionOptions, type Restorable, type ThreadChanges } from "./queries.js"
 import { threadTrees, type ThreadTree } from "./thread-tree.js"
 import { runningIn, turnOnlyPair, turnWriters, undoPlan, type ShownPair, type UndoPlan } from "./turn-lines.js"
 import type { TurnUndoScope, WriterRun } from "../contracts/turn-review.js"
@@ -384,8 +384,31 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     const current = [session?.currentCwd ?? session?.cwd, ...(session?.worktrees ?? []).map((worktree) => worktree.path)].filter((folder) => folder !== undefined)
     return { thread: session?.threadId, cwd: session?.cwd, current, asOf: source.asOf }
   }
-  /** The worker `partitionOffLoop` reads on, for the journal file it was made for. */
-  let offLoop: { path: string; reader: JournalReader } | undefined
+  /** The read worker belongs to this followed connection, not merely its path (a new owner may reopen that path). */
+  let offLoop: { source: NonNullable<typeof reader>; reader: JournalReader } | undefined
+  const releasingReaders = new Set<Promise<void>>()
+  let readerReleaseFailure: { error: unknown } | undefined
+  let closing = false
+  let closePromise: Promise<void> | undefined
+  const retireReader = () => {
+    const prior = offLoop
+    offLoop = undefined
+    if (!prior) return
+    const released = (async () => {
+      try { await prior.reader.close() }
+      catch (error) { readerReleaseFailure ??= { error } }
+    })()
+    releasingReaders.add(released)
+    void released.then(() => releasingReaders.delete(released))
+  }
+  const offLoopReader = (): JournalReader => {
+    if (closing || !reader || reader.store.closed) throw new Error("The record of changes closed.")
+    if (offLoop?.source !== reader) {
+      retireReader()
+      offLoop = { source: reader, reader: new JournalReader(activeFile) }
+    }
+    return offLoop.reader
+  }
 
   const view = (): JournalView => {
     if (!reader) throw new Error("Mako's record of changes isn't open yet. Try again in a moment.")
@@ -408,6 +431,7 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     },
     own: async () => { throw new Error("A host never opens the attribution writing owner on its own thread.") },
     follow: () => {
+      retireReader()
       reader?.store.close()
       reader = { store: JournalStore.open(activeFile, { device: hostname(), readOnly: true }), version: -1 }
     },
@@ -596,14 +620,11 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       wakeFor(checkout)
       return partition(view(), checkout, thread, options)
     },
-    partitionOffLoop: (checkout, thread) => {
+    partitionOffLoop: async (checkout, thread) => {
       wakeFor(checkout)
-      const path = activeFile
-      if (offLoop?.path !== path) {
-        offLoop?.reader.close()
-        offLoop = { path, reader: new JournalReader(path) }
-      }
-      return offLoop.reader.partition(checkout, thread)
+      if (releasingReaders.size) await Promise.all(releasingReaders)
+      if (readerReleaseFailure) throw readerReleaseFailure.error
+      return offLoopReader().partition(checkout, thread)
     },
     shares: (checkout, thread) => {
       wakeFor(checkout)
@@ -645,8 +666,18 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       return threadTotals(current.store.turnChangesOf(thread), changes(current, thread))
     },
     countTurn: async (thread, turn, state) => {
-      if (!reader) return undefined
-      return countTurnInSlices(view(), thread, turn, state)
+      const source = reader
+      if (closing || !source || source.store.closed) return undefined
+      try {
+        if (releasingReaders.size) await Promise.all(releasingReaders)
+        if (closing || reader !== source || source.store.closed) return undefined
+        if (readerReleaseFailure) throw readerReleaseFailure.error
+        const counted = await offLoopReader().countTurn(thread, turn, state)
+        return closing || reader !== source || source.store.closed ? undefined : counted
+      } catch (error) {
+        if (closing || reader !== source || source.store.closed) return undefined
+        throw error
+      }
     },
     settledThrough: (at) => !view().store.unsettledThrough(at + TRAIL_MS),
     counted: (summary, session) => journal.writes.counted(summary, session),
@@ -674,19 +705,21 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       sharing: { ...(journal.role().kind === "failed" ? journal.status() : writer.snapshot()?.sharing ?? journal.status()), unsent: journal.status().unsent },
     }),
     rescans: () => { void writer.command({ kind: "snapshot" }).catch(() => {}); return writer.snapshot()?.rescans ?? null },
-    async close() {
+    close: () => closePromise ??= (async () => {
+      closing = true
       preparationClosing = true
       unwatch()
-      offLoop?.reader.close()
-      offLoop = undefined
+      retireReader()
       const acknowledged = await Promise.allSettled([journal.applied()])
       const closed = await Promise.allSettled([journal.close()])
+      await Promise.all(releasingReaders)
       const stopped = await Promise.allSettled([writer.close()])
       reader?.store.close()
       reader = undefined
       const failed = [...acknowledged, ...closed, ...stopped].flatMap(result => result.status === "rejected" ? [result.reason] : [])
+      if (readerReleaseFailure) failed.push(readerReleaseFailure.error)
       if (failed.length) throw new AggregateError(failed, "Attribution did not close cleanly", { cause: failed[0] })
-    },
+    })(),
   }
 }
 

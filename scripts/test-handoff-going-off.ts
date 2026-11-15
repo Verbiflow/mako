@@ -751,6 +751,6 @@ try {
   }
   console.log("PASS: as this Mac sleeps and as it shuts down, each Thread at work, in the project folder or its own worktree, is paused and parked here with nothing moved, its own changes in the cloud already, and the account told before the Mac goes quiet, naming each Thread, its Sessions at their generations and the checkpoint the cloud acknowledged; back, the Sessions the account took wait for its word with no timer, the one a continue took is joined and the other goes on here; with a gateway that takes no notes yet, both wait parked and go on here once the Mac is back")
 } finally {
-  git.close()
+  await git.close()
   rmSync(root, { recursive: true, force: true })
 }

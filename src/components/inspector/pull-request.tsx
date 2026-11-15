@@ -3,7 +3,7 @@ import { Action, IconAction } from "@/components/ui/kit"
 import { harnessLabels, useHarnessIdentity } from "@/lib/harness-label"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { handGitAction, type GitHandoff } from "@/state/git-actions"
-import { pullBaseFor } from "@mako/host/contracts/git-actions"
+import { githubRateLimitWords, pullBaseFor } from "@mako/host/contracts/git-actions"
 import { SearchSelect } from "@/components/ui/search-select"
 import { desktop } from "@/state/desktop"
 import { github, pullComposer, pullRequestAttachment, toastPersonToken, useBranchPull, usePullComposer } from "@/state/github"
@@ -69,7 +69,7 @@ export function PullRequestCard() {
   const unpublished = Boolean(branch) && !upstream
   const hasWork = onDefault ? ahead > 0 : ahead > 0 || unpublished
 
-  if (!status.installed || !status.authenticated || !status.repo) {
+  if (status.limited || !status.installed || !status.authenticated || !status.repo) {
     // The one place a "connect" affordance belongs is exactly where the
     // feature would live — hiding it from the people who have not set it
     // up is how a capability stays undiscovered.
@@ -88,7 +88,9 @@ export function PullRequestCard() {
  * missing login, and a repo with no GitHub remote are fixed differently.
  */
 function ConnectGitHubRow({ status }: { status: GitHubStatus }) {
-  const label = !status.installed
+  const label = status.limited
+    ? githubRateLimitWords(status.limited.until)
+    : !status.installed
     ? "Install the gh CLI to track pull requests"
     : !status.authenticated
       ? "Sign in to GitHub to track pull requests"
@@ -101,10 +103,11 @@ function ConnectGitHubRow({ status }: { status: GitHubStatus }) {
     <div className="shrink-0 px-2.5 py-2">
       <button
         type="button"
-        onClick={status.installed && !status.authenticated ? copy : undefined}
+        title={status.limited ? label : undefined}
+        onClick={!status.limited && status.installed && !status.authenticated ? copy : undefined}
         className={cn(
           "flex w-full items-center gap-2 px-2 py-1.5 text-left text-label text-faint",
-          status.installed && !status.authenticated &&
+          !status.limited && status.installed && !status.authenticated &&
             "pressable transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
         )}
       >
@@ -120,12 +123,16 @@ function GitHubSetup({ status }: { status: GitHubStatus }) {
     void navigator.clipboard.writeText("gh auth login")
     toast.success("Copied gh auth login")
   }
-  const title = !status.installed
+  const title = status.limited
+    ? githubRateLimitWords(status.limited.until)
+    : !status.installed
     ? "Install the GitHub CLI to open a pull request"
     : !status.authenticated
       ? "Sign in to GitHub before opening a pull request"
       : "Add a GitHub remote before opening a pull request"
-  const detail = !status.installed
+  const detail = status.limited
+    ? "Wait until then, then refresh the Changes panel."
+    : !status.installed
     ? "Mako uses the gh CLI so it can reuse your existing GitHub account."
     : !status.authenticated
       ? "Run gh auth login once; Mako will use that login without asking again."
@@ -138,7 +145,7 @@ function GitHubSetup({ status }: { status: GitHubStatus }) {
         <span className="block text-muted-foreground">{title}</span>
         <span className="block text-faint">{detail}</span>
       </span>
-      {status.installed && !status.authenticated ? (
+      {!status.limited && status.installed && !status.authenticated ? (
         <Action tone="ghost" size="xs" className="-my-0.5" onClick={copyLogin}>Copy login command</Action>
       ) : null}
     </div>

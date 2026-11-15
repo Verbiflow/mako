@@ -106,7 +106,8 @@ try {
     assert.deepEqual(drawn(), [`user: ${prompts[0]}`, `assistant: ${answers[0]}`, `user: ${next}`, `assistant: ${answers[2]}`],
       "the next turn follows the store's history")
   } finally {
-    owner.close(id)
+    await owner.close(id)
+    await owner.stop()
   }
   console.log("Native rewind: a harness's own revert redraws from its store, keeps the live record, and the next turn follows it")
 } finally {

@@ -106,6 +106,6 @@ try {
   await assert.rejects(draft(repository, AbortSignal.abort()), /cancel|abort/i)
   console.log("Commit generation: scopes, sensitive files, complete large evidence, 1,005 files, nested folders, renames and cancellation passed")
 } finally {
-  gitRunner.close()
+  await gitRunner.close()
   await rm(root, { recursive: true, force: true })
 }

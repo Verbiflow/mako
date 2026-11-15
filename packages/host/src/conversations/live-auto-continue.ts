@@ -14,6 +14,8 @@ import { closeCutOffCalls, recordCutOffCalls } from "./interrupted-turn.js"
 import { promptFingerprint } from "./live-assets.js"
 import { LiveRequestSchema } from "./live-journal.js"
 import { activeBinding, type LiveAccess, type Resident } from "./live-runtime.js"
+import { turnReply } from "./live-goals.js"
+import { waitsForProvider } from "../contracts/request-hold.js"
 
 type AutoContinueAccess = Pick<LiveAccess, "dependencies" | "admission" | "resident" | "flush" | "pending" | "admit" | "transfer" | "reopens" | "wake">
 
@@ -188,7 +190,7 @@ export class LiveAutoContinue {
     if ((!cause || !ran) && !unheard) return
     if (resident.snapshot.requests.some((request) => request.continues?.requestId === failed.id)) return
     const now = Date.now()
-    const waits = cause || unheard ? waitsAgain(failed, cause, failed.error ?? "", now) : undefined
+    const waits = cause || unheard ? waitsAgain(failed, cause, failed.error ?? "", now, turnReply(resident, failed.id).limit?.resetsAt) : undefined
     if (!waits) return
     const retry = waits.retry
     const continues: TurnContinuation = { requestId: failed.id, reason: "connection-lost", auto: true }
@@ -222,11 +224,11 @@ export class LiveAutoContinue {
     hostLog("live", "a turn its harness failed for now continues by itself", { conversation: resident.snapshot.session.id, request: request.id, continues: failed.id, ...(cause && { cause }), ...(retry && { attempt: retry.attempt, at: new Date(retry.at).toISOString() }) })
   }
 
-  /** Drop a pending continuation; new input/host exit preserves a service retry, while an explicit Close cancels it. */
-  decline(resident: Resident, keepServiceRetry = false): void {
+  /** Drop a pending continuation; new input/host exit preserves a provider wait, while an explicit Close cancels it. */
+  decline(resident: Resident, keepProviderWait = false): void {
     // A failed turn's continuation that waits for its time gives way the same way.
     // One carrying a digest doesn't: it's the only way its reports are heard.
-    const waiting = resident.snapshot.requests.filter((request) => request.status === "held" && request.continues?.auto && request.retry && !request.digest && !(keepServiceRetry && request.retry.cause === "provider-unavailable"))
+    const waiting = resident.snapshot.requests.filter((request) => request.status === "held" && request.continues?.auto && request.retry && !request.digest && !(keepProviderWait && waitsForProvider(request)))
     if (waiting.length) {
       const failed = new Set(waiting.map((request) => request.continues!.requestId))
       const ids = new Set(waiting.map((request) => request.id))

@@ -72,12 +72,11 @@ export class LiveCheckpoints {
         const held = new Promise<void>(resolve => { frozen = resolve })
         const saved = snapshots.captureRun(request.id, frozen).then(snapshot => {
           if (canceled || generation !== resident.generation) return
-          if (wentAt !== undefined) return // Content read after the send cannot replace its true before.
-          before = { kind: "ready", snapshot }
+          before = wentAt === undefined ? { kind: "ready", snapshot } : { kind: "unavailable", timedOut: true, reason: "The checkpoint held the workspace after the turn went, so it may hold the turn's own edits" }
           this.record(resident, request.id, before, tracking)
         }, error => {
-          if (canceled || generation !== resident.generation || wentAt !== undefined) return
-          before = { kind: "unavailable", reason: errorMessage({ error }) }
+          if (canceled || generation !== resident.generation) return
+          before = { kind: "unavailable", reason: errorMessage({ error }), ...(wentAt !== undefined && { timedOut: true }) }
           this.record(resident, request.id, before, tracking)
         })
         void saved.catch(() => {})
@@ -85,7 +84,8 @@ export class LiveCheckpoints {
         const outcome = await Promise.race([held, saved, deadline, stopped])
         if (outcome === "late") {
           wentAt = Date.now()
-          before = { kind: "unavailable", reason: "The checkpoint was still waiting when the turn went" }
+          before = { kind: "unavailable", timedOut: true, reason: "The checkpoint was still waiting when the turn went" }
+          hostWarn("checkpoints", "a turn went before its checkpoint held the workspace", { conversation: resident.snapshot.session.id, request: request.id, waitedMs: wentAt - began })
         }
         // A frozen callback can release while saving continues. Its captured content is still before tools.
         if (outcome !== "late") clearTimeout(timer)

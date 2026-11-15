@@ -136,7 +136,7 @@ try {
   const reads = [concurrent.list(), concurrent.list()]
   indexGate.resolve()
   const indexes = await Promise.all(reads)
-  countedRunner.close()
+  await countedRunner.close()
   assert.equal(scans, 1, "Simultaneous preview cards share one in-flight index scan")
   assert.deepEqual(indexes[0], indexes[1])
   for (const [name, data, media, mime] of [

@@ -4,6 +4,8 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { acpStore, type LiveAcpConversation } from "../src/state/acp-state.ts"
 import { TranscriptSourceContext } from "../src/components/transcript/source-context.ts"
 import { TurnChanges as TurnChangesLine } from "../src/components/transcript/turn-changes.tsx"
+import { CheckpointNotice } from "../src/components/transcript/checkpoint-notice.tsx"
+import { RunSnapshotsSchema } from "@mako/host/contracts/workspace-snapshots"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -17,6 +19,15 @@ import { recordedTurnChanges, turnChangeSummary, turnChangeWords, UNSURE_LABEL, 
 import { writerLabel } from "../src/lib/turn-writers.ts"
 import { undoneWords } from "../src/lib/turn-undone.ts"
 import { requestedTurn, type TurnReviewRequest } from "../src/state/review-scope.ts"
+
+// The deadline is persisted data, not a guess from an error's words. A later valid point removes its notice.
+const timedOutPoint = RunSnapshotsSchema.parse({ before: { kind: "unavailable", reason: "still waiting", timedOut: true } }).before
+const checkpointNote = renderToStaticMarkup(createElement(CheckpointNotice, { before: timedOutPoint }))
+assert.match(checkpointNote, /role="note"/)
+assert.match(checkpointNote, /No rewind point: the checkpoint took too long/)
+assert.equal(renderToStaticMarkup(createElement(CheckpointNotice, { before: undefined })), "")
+assert.equal(renderToStaticMarkup(createElement(CheckpointNotice, { before: { kind: "unavailable", reason: "not a Git repository" } })), "")
+assert.equal(renderToStaticMarkup(createElement(CheckpointNotice, { before: { kind: "ready", snapshot: { id: "00000000-0000-4000-8000-000000000001", scope: "/workspace", createdAt: 1, files: 1 } } })), "")
 
 // The line's words carry their noun, one file or many.
 assert.equal(turnChangeWords(1), "Changed a file")
@@ -128,25 +139,27 @@ const snapshotOf = (requests: LiveRequest[]): LiveSnapshot => ({
   permissions: [],
   requests,
 })
-const live: LiveRequest = { id: summary.turn, text: "Add b.ts", attachments: [], status: "completed", changes: summary }
+const live: LiveRequest = { id: summary.turn, text: "Add b.ts", attachments: [], status: "completed", changes: summary, snapshots: { before: timedOutPoint } }
 try {
   const journal = new LiveJournal(root, id)
   journal.commit(snapshotOf([live]))
-  journal.close()
+  await journal.close()
   const reopened = new LiveJournal(root, id)
   const saved = reopened.read()?.requests[0]
-  reopened.close()
+  await reopened.close()
   assert.deepEqual(saved?.changes, summary, "stored whole")
+  assert.deepEqual(saved?.snapshots?.before, timedOutPoint, "the timeout notice survives journal reload")
+  assert.equal(renderToStaticMarkup(createElement(CheckpointNotice, { before: saved?.snapshots?.before })), checkpointNote)
   assert.deepEqual(recordedTurnChanges(saved?.changes), recordedTurnChanges(live.changes), "the reopened line is the live one")
   // An undo is kept on the request beside its record, and reads back the same.
   const undone = { at: 1_790_000_100_000, scope: "turn" as const, files: 1, left: 0, backup: "refs/mako/moves/undo" }
   const keptRoot = mkdtempSync(join(tmpdir(), "mako-turn-undone-"))
   const kept = new LiveJournal(keptRoot, id)
   kept.commit(snapshotOf([{ ...live, undone }]))
-  kept.close()
+  await kept.close()
   const again = new LiveJournal(keptRoot, id)
   assert.deepEqual(again.read()?.requests[0]?.undone, undone, "the undo survives a reopen")
-  again.close()
+  await again.close()
   rmSync(keptRoot, { recursive: true, force: true })
   assert.equal(LiveRequestSchema.parse({ ...live, undone: { at: "soon" } }).undone, undefined, "an undo this build can't read is dropped")
   // A record of a version this build doesn't read is dropped, never misread.
@@ -205,7 +218,7 @@ try {
   open = ledger
   early.loaded(before)
   await until(() => before.snapshot.requests[0]!.changes?.state === "settled")
-  journal.close()
+  await journal.close()
   rmSync(scratch, { recursive: true, force: true })
 }
 

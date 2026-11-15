@@ -1,6 +1,6 @@
-import { statSync, watch, type FSWatcher } from "node:fs"
 import { realpath } from "node:fs/promises"
 import { join, sep } from "node:path"
+import { childBackend, type WatchBackend, type WatchSubscription } from "./watch-backend.js"
 import { locateGitDir } from "../base/checkout-location.js"
 
 /** What moves on every commit, add, reset or checkout, and nothing else does. */
@@ -9,14 +9,16 @@ const MARKERS = ["index", join("logs", "HEAD")]
  * What moves only when a checkout's HEAD does: a commit, checkout, reset, merge or rebase. The index also moves when
  * any `git status` refreshes its stat cache, as a Changes panel's does on every edit.
  */
-export const HEAD_MARKER = [join("logs", "HEAD")]
+export const HEAD_MARKER = ["HEAD", join("logs", "HEAD")]
+/** Shared ref changes, including a push/fetch that leaves the worktree HEAD alone. */
+export const REF_MARKERS = ["packed-refs", "FETCH_HEAD", join("refs", "remotes")]
 /** What moves when what's staged does, and on any `git status` that refreshes the index's stat cache. */
 export const INDEX_MARKER = ["index"]
 
 export interface GitDirWatch {
   /** Settles once the markers are watched, or once it's clear there's nothing to watch. */
   readonly ready: Promise<void>
-  close(): void
+  close(): Promise<void>
 }
 
 /**
@@ -34,72 +36,63 @@ export interface GitDirWatch {
  * read schedule the next one, forever, so an event that leaves the file's
  * inode, size, mtime and ctime as they were is not a change.
  */
-export function watchOutsideGitDir(folder: string, changed: () => void): GitDirWatch {
+export function watchOutsideGitDir(folder: string, changed: () => void, backend: WatchBackend = childBackend()): GitDirWatch {
   let markers: GitDirWatch | undefined
   let closed = false
+  let closing: Promise<void> | undefined
   const ready = (async () => {
     const [gitDir, root] = await Promise.all([
       locateGitDir(folder).then((found) => found && realpath(found)).catch(() => null),
       realpath(folder).catch(() => null),
     ])
     if (closed || !gitDir || !root || gitDir.startsWith(root + sep)) return
-    markers = watchGitMarkers(gitDir, changed)
+    markers = watchGitMarkers(gitDir, () => { if (!closed) changed() }, MARKERS, backend)
+    await markers.ready.catch(() => {})
   })()
   return {
     ready,
     close() {
       closed = true
-      markers?.close()
+      // The location read cannot arm after `closed`; an already-created proxy owns its own bounded release.
+      return closing ??= markers?.close() ?? Promise.resolve()
     },
   }
 }
 
-/**
- * A Git directory's markers (`MARKERS`, or those given) watched as files, wherever the directory is: each event that
- * changed one moves the watch to the file now there, then says so. A read that only touched the index's access time
- * says nothing.
- */
-export function watchGitMarkers(gitDir: string, changed: () => void, markers: readonly string[] = MARKERS): GitDirWatch {
+/** Git markers use the same child as tree watches; dropped events invalidate the whole marker set. */
+export function watchGitMarkers(gitDir: string, changed: () => void, markers: readonly string[] = MARKERS, backend: WatchBackend = childBackend(), gone: () => void = changed): GitDirWatch {
   let closed = false
-  const watchers = new Map<string, FSWatcher>()
-  const arm = (path: string) => {
-    watchers.get(path)?.close()
-    watchers.delete(path)
-    if (closed) return
-    try {
-      const seen = stamp(path)
-      const watcher = watch(path, { persistent: false }, () => {
-        if (watchers.get(path) !== watcher || stamp(path) === seen) return
-        arm(path)
-        changed()
-      })
-      watcher.on("error", () => {
-        if (watchers.get(path) !== watcher) return
-        watcher.close()
-        watchers.delete(path)
-      })
-      watchers.set(path, watcher)
-    } catch {
-      // Not there yet (a checkout with no commits has no reflog) or no handles
-      // left: the tree watch and explicit refreshes still cover it.
-    }
-  }
-  for (const marker of markers) arm(join(gitDir, marker))
+  let release: Promise<void> | undefined
+  let closing: Promise<void> | undefined
+  let subscription: WatchSubscription | undefined
+  const done = () => release ??= subscription?.unsubscribe() ?? Promise.resolve()
+  const notify = () => { if (!closed) changed() }
+  const ready = (async () => {
+    const found = await backend(gitDir, [], {
+      events: notify,
+      dropped: notify,
+      gone: () => {
+        if (closed) return
+        closed = true
+        gone()
+      },
+      muted: (muted) => { if (!muted) notify() },
+    }, { kind: "git-markers", markers: [...markers] })
+    subscription = found
+    if (closed) await done()
+  })()
+  // Cleanup still joins a failed start; readers can discard it and fall back to explicit refreshes.
+  const settled = ready.catch(() => {})
   return {
-    ready: Promise.resolve(),
+    ready,
     close() {
       closed = true
-      for (const watcher of watchers.values()) watcher.close()
-      watchers.clear()
+      if (closing) return closing
+      const released = settled.then(done)
+      return closing = new Promise<void>((resolve, reject) => {
+        const deadline = setTimeout(() => reject(new Error("The Git marker watch did not close in time")), 2_000)
+        void released.then(() => { clearTimeout(deadline); resolve() }, (error) => { clearTimeout(deadline); reject(error) })
+      })
     },
-  }
-}
-
-function stamp(path: string): string {
-  try {
-    const stats = statSync(path)
-    return `${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`
-  } catch {
-    return ""
   }
 }

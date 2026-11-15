@@ -46,37 +46,40 @@ export function affected(paths) {
   return Object.fromEntries(Object.entries(JOBS).map(([job, rules]) => [job, all || paths.some((path) => rules.some((rule) => rule.test(path)))]))
 }
 
-/** The packages `src/` reaches: its `@mako/*` imports, then each package's own `@mako/*` dependencies, the host aside. */
-export function reachedPackages() {
-  const sources = []
-  const walk = (folder) => {
-    for (const entry of readdirSync(folder, { withFileTypes: true })) {
-      const path = join(folder, entry.name)
-      if (entry.isDirectory()) walk(path)
-      else if (/\.(ts|tsx|mts|js|mjs)$/.test(entry.name)) sources.push(path)
-    }
+/**
+ * The packages `src/` reaches, by their sources: every `@mako/*` its files import (each form TypeScript reads, a bare
+ * `import "@mako/x"` and a type-only one included), then every one the sources of those import in turn; the host only
+ * through its contracts, the one part of it the window reaches. TypeScript loads only here, since the job that reads
+ * the paths checks out this file alone.
+ */
+export async function reachedPackages() {
+  const { default: ts } = await import("typescript")
+  const sourcesOf = (folder) => {
+    if (!existsSync(folder)) return []
+    return readdirSync(folder, { recursive: true }).map(String).filter((name) => /\.(ts|tsx|mts|js|mjs)$/.test(name) && !name.endsWith(".d.ts")).map((name) => join(folder, name))
   }
-  walk("src")
+  const imported = (files) => files.flatMap((file) => ts.preProcessFile(readFileSync(file, "utf8"), true, true).importedFiles.map(({ fileName }) => /^@mako\/([\w-]+)/.exec(fileName)?.[1]).filter(Boolean))
+  const folders = new Map(readdirSync("packages").filter((name) => existsSync(join("packages", name, "package.json"))).map((name) => [JSON.parse(readFileSync(join("packages", name, "package.json"), "utf8")).name.slice("@mako/".length), name]))
   const reached = new Set()
-  for (const path of sources) for (const [, name] of readFileSync(path, "utf8").matchAll(/(?:from|import\()\s*["']@mako\/([\w-]+)/g)) reached.add(name)
-  const folders = new Map(readdirSync("packages").filter((name) => existsSync(join("packages", name, "package.json"))).map((name) => [JSON.parse(readFileSync(join("packages", name, "package.json"), "utf8")).name, name]))
-  for (const name of reached) {
-    const folder = folders.get(`@mako/${name}`)
-    if (!folder || name === "host") continue
-    const manifest = JSON.parse(readFileSync(join("packages", folder, "package.json"), "utf8"))
-    for (const dependency of Object.keys({ ...manifest.dependencies, ...manifest.peerDependencies })) if (dependency.startsWith("@mako/")) reached.add(dependency.slice("@mako/".length))
+  const waiting = imported(sourcesOf("src"))
+  while (waiting.length) {
+    const name = waiting.pop()
+    if (reached.has(name) || !folders.has(name)) continue
+    reached.add(name)
+    waiting.push(...imported(sourcesOf(join("packages", folders.get(name), "src", ...(name === "host" ? ["contracts"] : [])))))
   }
   reached.delete("host")
   return [...reached].sort()
 }
 
 if (process.argv[2] === "--check-ui-scope") {
-  const missing = reachedPackages().filter((name) => !UI_PACKAGES.includes(name))
+  const reached = await reachedPackages()
+  const missing = reached.filter((name) => !UI_PACKAGES.includes(name))
   if (missing.length) {
     console.error(`src/ reaches ${missing.map((name) => `@mako/${name}`).join(", ")}, which UI_PACKAGES in scripts/ci-changes.mjs leaves out: a change there wouldn't run the UI suites on a pull request. Add ${missing.length === 1 ? "it" : "them"}.`)
     process.exit(1)
   }
-  console.log(`UI scope: src/ reaches ${reachedPackages().map((name) => `@mako/${name}`).join(", ")}, all in UI_PACKAGES`)
+  console.log(`UI scope: src/ reaches ${reached.map((name) => `@mako/${name}`).join(", ")}, all in UI_PACKAGES`)
 } else if (import.meta.url === `file://${process.argv[1]}`) {
   const paths = readFileSync(0, "utf8").split("\n").map((line) => line.trim()).filter(Boolean)
   const lines = Object.entries(affected(paths)).map(([job, runs]) => `${job}=${runs}`)

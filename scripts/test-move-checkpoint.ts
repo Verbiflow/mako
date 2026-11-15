@@ -208,6 +208,6 @@ try {
   await assert.rejects(captureMoveCheckpoint(git, empty, await mkdtemp(join(root, "out-"))), { name: "MoveCheckpointError", kind: "no-commits" })
   console.log(`PASS: a checkout carried to a partial clone reads back the same (HEAD, branch, index, ${Object.keys(arrived.files).length} files with modes and links; ignored files stay behind) in a ${checkpoint.bytes}-byte bundle; capture writes nothing into the repository and repeats byte for byte; detached HEAD, a lost base, wrong bytes, conflicts, the limit and no commits each say so; the way back replaces a person's worktree over a remote that moved, and the copy kept first puts it back exactly`)
 } finally {
-  git.close()
+  await git.close()
   await rm(root, { recursive: true, force: true })
 }

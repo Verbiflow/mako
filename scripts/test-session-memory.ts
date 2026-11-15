@@ -225,7 +225,7 @@ async function reconnectAfterRestart() {
   const before = new LiveConversations(dependencies)
   await before.start("cursor", "/repo", { conversationId: id })
   await until(() => before.snapshot(id)?.session.status === "ready", "the first session")
-  before.stop()
+  await before.stop()
   await tick()
   assert.equal(dev.heldBy("cursor", "agent-restart"), null, "a stopped host holds nothing")
 
@@ -274,7 +274,7 @@ async function reconnectAfterRestart() {
     const unavailable = after.snapshot(id)?.control?.transfers.find((transfer) => transfer.input.id === missing.id)
     assert.ok(unavailable?.state.kind === "failed" && unavailable.state.error.includes("The session store is missing or unreadable."), "the refusal carries the provider's own reason")
   } finally {
-    after.stop()
+    await after.stop()
   }
 }
 
@@ -312,7 +312,7 @@ async function closeAfterReconnect() {
     assert.equal(held(), null, "the last close lets go of its hold too")
     assert.equal(starts.length, 4, "one session opened for each time it went on, and none for a close")
   } finally {
-    owner.stop()
+    await owner.stop()
   }
 }
 
@@ -342,7 +342,7 @@ async function reconnectAfterOwnTurn() {
   const sent = randomUUID()
   before.submit(id, sent, "Run the long task")
   await until(() => before.snapshot(id)?.requests.some((request) => request.id === sent && request.status === "dispatching") === true, "the turn to dispatch")
-  before.stop()
+  await before.stop()
   await tick()
 
   const after = new LiveConversations(dependencies)
@@ -354,7 +354,7 @@ async function reconnectAfterOwnTurn() {
     assert.deepEqual(notices, [], "a move the interrupted turn explains raises no notice")
     await after.close(id)
   } finally {
-    after.stop()
+    await after.stop()
   }
 }
 
@@ -419,7 +419,7 @@ async function newerLedger() {
   const first = new LiveConversations(dependencies)
   await first.start("cursor", "/repo", { conversationId: id })
   await until(() => first.snapshot(id)?.session.status === "ready", "a new conversation on a newer ledger")
-  first.stop()
+  await first.stop()
   await tick()
   assert.equal(older.recall("cursor", "agent-newer"), null, "what it ran under stays in its journal")
   const after = new LiveConversations(dependencies)
@@ -457,7 +457,7 @@ async function newerLedger() {
     }).plan(ref.path)
     assert.deepEqual(await attachedPlan(false), { transport: "attached", provider: "cursor", conversationId: id, reason: `${line} A reply goes on from its transcript in a new session.`, makoUpdate: true, notice: { line, reply: "transcript", harness: "cursor" } }, "a resting conversation's plan says what a reply does")
     assert.deepEqual(await attachedPlan(true), { transport: "attached", provider: "cursor", conversationId: id }, "a running one resumes nothing and says nothing")
-    after.stop()
+    await after.stop()
     await tick()
     const rested = new LiveConversations(dependencies)
     try {
@@ -467,15 +467,15 @@ async function newerLedger() {
       assert.deepEqual(resumed, [undefined, undefined, undefined], "from the transcript, never by resuming")
       await until(() => rested.snapshot(id)?.session.connection === "connected", "the conversation to go on")
     } finally {
-      rested.stop()
+      await rested.stop()
     }
   } finally {
-    after.stop()
+    await after.stop()
   }
   older.close()
   // Updated: the host of the newer build starts on the same journals and takes what the older one couldn't write.
   const updated = new LiveConversations({ ...dependencies, memory: raised })
-  updated.stop()
+  await updated.stop()
   assert.deepEqual(raised.recall("cursor", "agent-newer")?.settings, { model: "claude-fable-5-1" }, "the journal's facts reach the ledger once a build that can write it starts")
   assert.equal(raised.recall("codex", "kept-by-newer")?.modeId, "access:full", "and the newer build's own rows are as it left them")
   raised.close()
@@ -499,7 +499,7 @@ async function backfillFromJournals() {
   journal.close()
   assert.equal(dev.recall("cursor", "agent-old"), null)
   const host = new LiveConversations({ appPath: root, driver: () => undefined, history: async () => null, emit: () => {}, root: journals, memory: dev })
-  host.stop()
+  await host.stop()
   const recalled = installed.recall("cursor", "agent-old")
   assert.deepEqual(recalled?.settings, settings, "a pre-ledger journal's settings reach every host")
   assert.equal(recalled?.modeId, "access:edits", "and so does the tier it ran under")
@@ -508,7 +508,7 @@ async function backfillFromJournals() {
   assert.ok(recalled && recalled.updatedAt !== now && recalled.updatedAt <= written + 1_000 && recalled.updatedAt > written - 60_000, "stamped with the journal's write time, not the host's clock")
   installed.remember("cursor", "agent-old", { settings: { model: "gpt-5.3-codex" } }, written + 1_000)
   const again = new LiveConversations({ appPath: root, driver: () => undefined, history: async () => null, emit: () => {}, root: journals, memory: dev })
-  again.stop()
+  await again.stop()
   assert.equal(installed.recall("cursor", "agent-old")?.settings?.model, "gpt-5.3-codex", "a newer observation is never rolled back by a restart")
 }
 
@@ -808,7 +808,7 @@ async function liveConversationsRoundTrip() {
     await tick()
     assert.equal(installed.heldBy("cursor", "agent-live")?.hostLabel, "Mako's dev host", "the other host may reopen it once released")
     assert.deepEqual(applied, ["access:full"], "the provider's own current mode needs no re-application")
-    second.stop()
+    await second.stop()
     await tick()
     assert.equal(installed.heldBy("cursor", "agent-live"), null, "stopping a host releases a hold after its provider exits")
 
@@ -825,7 +825,7 @@ async function liveConversationsRoundTrip() {
     await tick()
     assert.equal(failing.snapshot(failed)?.session.status, "failed")
     assert.equal(installed.heldBy("cursor", "agent-live"), null, "a start that failed is not still holding the session")
-    failing.stop()
+    await failing.stop()
 
     // A launch-enforced tier (OpenCode's Ask, Grok's ladder) is read once from
     // the process environment; the driver refuses to change it on a running
@@ -854,9 +854,9 @@ async function liveConversationsRoundTrip() {
     await tick()
     assert.equal(launchOnly.snapshot(reopened)?.session.status, "ready", `a launch-only tier is applied at launch, never refused afterwards: ${launchOnly.snapshot(reopened)?.session.error}`)
     assert.equal(launchOnly.snapshot(reopened)?.session.currentMode, "access:ask")
-    launchOnly.stop()
+    await launchOnly.stop()
   } finally {
-    first.stop()
-    second.stop()
+    await first.stop()
+    await second.stop()
   }
 }

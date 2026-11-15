@@ -84,6 +84,7 @@ const reads = [
   "mako:worktrees",
   "mako:worktree-ahead",
   "mako:worktree-inventory",
+  "mako:worktree-retention",
   /** Measures Mako's folders with `du`; writes nothing. */
   "mako:storage",
   "mako:worktree-review",
@@ -106,6 +107,7 @@ const reads = [
   "mako:plan-builds",
   "mako:harness-descriptors",
   "mako:access-choices",
+  "mako:preferences",
   "mako:thread-continuation-plan",
   "mako:thread-restore-plan",
   /** Weighs a Thread's harnesses against what the cloud says it runs; changes nothing. */
@@ -235,6 +237,8 @@ const reads = [
  * content differs.
  */
 const replays = [
+  /** Replaces the same retirement settings; never removes a checkout in this call. */
+  "mako:worktree-retention-set",
   /** Snoozes fseventsd's notice until the day ends: a repeat sets the same snooze. */
   "mako:file-events-dismiss",
   /** `MakoStorage.free`: a pass asked for while one runs is that pass, and a second finds nothing more to free. */
@@ -405,6 +409,10 @@ const replays = [
   "mako:access-choose",
   /** `AccessChoiceStore.adopt`: takes only where no choice is made, so a repeat takes nothing. */
   "mako:access-adopt",
+  /** `PreferenceStore.set`: the same value again is the same preference in effect. */
+  "mako:preference-set",
+  /** `PreferenceStore.offer`: each preference is offered once, so a repeat offers nothing. */
+  "mako:preference-offer",
   /** `PlanBuilds.record`: keyed by plan id, and a build no newer than the recorded one changes nothing. */
   "mako:plan-build-record",
   /** `PlanBuilds.claim`: the claim id; a repeat gets the first answer. */

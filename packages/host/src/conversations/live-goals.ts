@@ -129,6 +129,7 @@ export class LiveGoals {
         this.update(resident, { status: "paused", note: "Mako couldn't tell whether the last turn ran." })
         return
       case "failed":
+        if (resident.snapshot.requests.some(next => next.status === "held" && next.retry?.cause === "rate-limited" && next.continues?.auto && next.continues.requestId === request.id)) return
         this.update(resident, { status: "blocked", note: request.error ? `The turn failed: ${request.error}` : "The turn failed." })
         return
       case "completed":
