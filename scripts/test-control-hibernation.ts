@@ -29,6 +29,7 @@ import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
+import type { ToolSteps } from "@mako/host/contracts/tool-steps"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { ConversationTools, ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
@@ -136,7 +137,10 @@ const owner = new LiveConversations({
   revokeTools: (bindingId, conversationId) => residency.revoke(bindingId, conversationId),
   suspendTools: (bindingId, conversationId) => residency.suspend(bindingId, conversationId),
 })
-mcp = await startConversationMcp(owner, (bindingId, operation, signal) => sessions.request(bindingId, operation, signal))
+/** What the host told its windows of each running js call's steps, in order. */
+const stepEvents: Array<{ conversationId: string; steps: ToolSteps | null }> = []
+mcp = await startConversationMcp(owner, (bindingId, operation, signal, steps) => sessions.request(bindingId, operation, signal, steps), [], undefined,
+  (conversationId, steps) => stepEvents.push({ conversationId, steps }))
 control = await startControlService(browser, (conversationId, bindingId) => owner.authorizeAgent(conversationId, bindingId))
 
 const ToolResultSchema = z.object({
@@ -192,6 +196,12 @@ try {
     target = await staleClient.js("JSON.stringify(state.tab.target)")
     assert.deepEqual(staleClient.documented, [true, false, false], "a new session documents itself once")
   })
+  // Each js call's steps reach the windows as its conversation's, and each call's answer clears them.
+  assert.ok(stepEvents.every((event) => event.conversationId === id), "steps are the calling conversation's")
+  assert.equal(stepEvents.filter((event) => event.steps === null).length, 3, "each of the three js calls ends its steps")
+  assert.equal(stepEvents.at(-1)?.steps, null, "nothing is left running once the calls answered")
+  const named = stepEvents.flatMap((event) => event.steps?.steps.map((step) => step.call) ?? [])
+  assert.ok(named.includes("connectBrowser"), `the first cell's calls are named as they run: ${named.join(", ")}`)
   const firstLaunch = grants[0]!.control
   assert.ok(firstLaunch, "the first provider got the Local Control CLI")
 

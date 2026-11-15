@@ -1,4 +1,5 @@
 import { accounts } from "@/state/accounts"
+import { toolStepped } from "@/state/tool-steps"
 import { handOff } from "@/state/handoff"
 import { conversationSettings } from "@/state/conversation-settings"
 import { keepAwake } from "@/state/keep-awake"
@@ -259,6 +260,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "worktree-ready") {
     worktreeMade(event.conversationId)
+    return
+  }
+  if (event.type === "tool-steps") {
+    toolStepped(event.conversationId, event.steps)
     return
   }
   if (event.type === "worktree-step") {

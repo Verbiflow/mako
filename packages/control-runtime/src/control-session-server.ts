@@ -22,7 +22,7 @@ import {
   type ControlTarget,
   type ElementExpectation,
 } from "@mako/control/control"
-import { ControlProgramError, effectText, spillImage, type ControlEffect, type ControlProgramOutput } from "@mako/control/program"
+import { ControlProgramError, effectText, spillImage, throttledSteps, type ControlEffect, type ControlProgramOutput, type ControlSteps } from "@mako/control/program"
 import type { ControlSession } from "./control-session.js"
 import {
   CONTROL_SESSION_PROTOCOL,
@@ -212,7 +212,7 @@ function controlSessionTransport(
     )
     return target.kind === "page" ? client.tab(target) : client.window(target)
   }
-  async function invoke(operation: SessionOperation, signal: AbortSignal) {
+  async function invoke(operation: SessionOperation, signal: AbortSignal, steps?: (steps: ControlSteps) => void) {
     switch (operation.method) {
       case "status":
         return session.status()
@@ -222,7 +222,7 @@ function controlSessionTransport(
         return { ...session.diagnostics(), requests: [...diagnostics] }
       case "js-reset":
       case "js":
-        return controlAgent(session)(operation, signal)
+        return controlAgent(session)(operation, signal, steps)
       case "exec": {
         let blocks: Awaited<ReturnType<typeof session.execute>>
         let failure: Error | undefined
@@ -373,6 +373,20 @@ function controlSessionTransport(
     let operation: SessionOperation | undefined
     let answered: JsonValue | undefined
     let fault: { code: string; message: string } | undefined
+    // A request that asks for steps is answered as NDJSON: each `{ steps }` frame as its program's calls move, at most
+    // one per `STEPS_EVERY_MS`, then the reply as the last line. Every other is one JSON reply, as before.
+    let streaming = false
+    const stepFrames = throttledSteps((steps) => {
+      if (response.writableEnded) return
+      if (!response.headersSent) response.writeHead(200, { "content-type": "application/x-ndjson" })
+      response.write(JSON.stringify({ steps }) + "\n")
+    })
+    const answer = (body: JsonObject) => {
+      stepFrames.stop()
+      if (!response.headersSent)
+        response.writeHead(200, { "content-type": streaming ? "application/x-ndjson" : "application/json" })
+      response.end(JSON.stringify(body) + (streaming ? "\n" : ""))
+    }
     void (async () => {
       if (stopped)
         throw new ControlFault(
@@ -414,6 +428,7 @@ function controlSessionTransport(
       )
       method = input.operation.method
       operation = input.operation
+      streaming = input.steps === true
       if (
         input.build !== descriptor.build ||
         input.session !== descriptor.session
@@ -427,13 +442,11 @@ function controlSessionTransport(
       outcome = "unknown"
       const value = z
         .json()
-        .parse(await invoke(input.operation, controller.signal))
+        .parse(await invoke(input.operation, controller.signal, streaming ? stepFrames.push : undefined))
       answered = value
       outcome = "completed"
       if (method === "stop") response.once("finish", stop)
-      response
-        .writeHead(200, { "content-type": "application/json" })
-        .end(JSON.stringify({ ok: true, requestId, value }))
+      answer({ ok: true, requestId, value })
     })()
       .catch((error) => {
         const partial = error instanceof ControlProgramError ? error.output : undefined
@@ -451,15 +464,13 @@ function controlSessionTransport(
               ? cause.message
               : "Local Control request failed",
         }
-        response.writeHead(200, { "content-type": "application/json" }).end(
-          JSON.stringify({
-            ok: false,
-            requestId,
-            fault: { ...fault, outcome },
-            output: partial?.length ? partial : undefined,
-            ran: error instanceof ControlProgramError && error.effects.length ? error.effects.map(effectText) : undefined,
-          })
-        )
+        answer({
+          ok: false,
+          requestId,
+          fault: { ...fault, outcome },
+          ...partial?.length && { output: partial },
+          ...error instanceof ControlProgramError && error.effects.length && { ran: error.effects.map(effectText) },
+        })
       })
       .finally(() => {
         requests.delete(controller)

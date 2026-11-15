@@ -16,6 +16,7 @@ import {
   spillImage,
   spillJson,
 } from "./artifacts.js"
+import { StepLog, type ControlSteps } from "./steps.js"
 
 const messageSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -136,6 +137,8 @@ export interface ControlProgramExecution {
   /** Called once, before the output resolves, when the cell finishes. A failed
    * cell's effects are on its ControlProgramError instead. */
   report?(cell: ControlCellReport): void
+  /** Called as each call the cell makes starts and settles, with all its steps so far (`StepLog`). */
+  steps?(steps: ControlSteps): void
 }
 
 /** Keep already-emitted evidence when a later statement fails, times out or
@@ -206,6 +209,8 @@ export interface ControlProgramOptions {
   /** A short name for a call that may have changed something, such as
    * "click e12"; undefined for reads. Named in a failed cell's error. */
   effect?(command: JsonObject, namespace: string): string | undefined
+  /** A short name for any call, a read too ("screenshot"), as a running cell's steps name it. */
+  step?(command: JsonObject, namespace: string): string
   fault(detail: ControlProgramFault): Error
   /** Test override; production cells yield after ten seconds. */
   yieldAfterMs?: number
@@ -401,6 +406,19 @@ export class ControlProgramRuntime {
       const files = new Set<string>()
       let returned: Pick<ControlCellReport, "value"> | Promise<Pick<ControlCellReport, "valueArtifact">> = {}
       const unfinished = new Map<number, { command: JsonObject; namespace: string }>()
+      const steps = execution.steps ? new StepLog() : undefined
+      const stepped = (change: (log: StepLog) => void) => {
+        if (!steps || !execution.steps) return
+        change(steps)
+        execution.steps(steps.snapshot())
+      }
+      const stepName = (call: { command: JsonObject; namespace: string }) => {
+        try {
+          return this.options.step?.(call.command, call.namespace) ?? String(call.command.action)
+        } catch {
+          return String(call.command.action)
+        }
+      }
       const effect = (call: { command: JsonObject; namespace: string }) => {
         try {
           return this.options.effect?.(call.command, call.namespace)
@@ -502,6 +520,7 @@ export class ControlProgramRuntime {
         if (value.runId !== runId || finished) return
         if (value.kind === "call") {
           unfinished.set(value.id, value)
+          stepped((log) => log.start(value.id, stepName(value)))
           void Promise.resolve()
             .then(() =>
               this.options.call(value.command, active, value.namespace)
@@ -510,6 +529,7 @@ export class ControlProgramRuntime {
               (result) => {
                 if (finished) return
                 unfinished.delete(value.id)
+                stepped((log) => log.settle(value.id, true))
                 const name = effect(value)
                 if (name) effects.push({ call: name, outcome: "completed" })
                 for (const path of producedMedia(value.command, result)) files.add(path)
@@ -522,6 +542,7 @@ export class ControlProgramRuntime {
               (error) => {
                 if (finished) return
                 unfinished.delete(value.id)
+                stepped((log) => log.settle(value.id, false))
                 const fault = controlFaultData(error)
                 const name = (fault?.outcome ?? "unknown") === "unknown" ? effect(value) : undefined
                 if (name) effects.push({ call: name, outcome: "unknown" })

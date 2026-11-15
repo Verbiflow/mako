@@ -1,4 +1,5 @@
 import { fixtureHarnesses } from "./harness-fixtures"
+import type { ToolStep } from "@mako/host/contracts/tool-steps"
 import { FileIndexCore, type FileFoldersOptions, type FileGrepResults } from "@mako/host/contracts/file-index"
 import { mockAppshots } from "./mock-appshots"
 import { mockAuthoring } from "./mock-authoring"
@@ -856,6 +857,36 @@ export function installMockBridge() {
       { kind: "tool-update", id: "suite", status: "completed", output: "48 passed" },
       { kind: "text", id: "suite-done", text: "All 48 rail tests pass." },
     ], true), 24_000)
+  }
+
+  /**
+   * A `mako-computer` js call that clicks through a page for a while, its steps sent as the host sends them
+   * (`tool-steps`): the whole state at most every 250 ms, and `null` once it answers.
+   */
+  const playBrowserTurn = (id: string) => {
+    const code = 'const tab = await control.openTab({url:"http://localhost:5173/settings"})\nfor (const field of ["name","email","plan"]) await tab.locator({label:field}).fill("x")\nwhile (!(await tab.observe()).includes("Saved")) await control.wait(400)\nreturn await tab.screenshot()'
+    pushLive(id, [{ kind: "text", id: "browse-say", text: "I'll fill the settings form and wait for it to save." }, { kind: "tool", id: "browse", name: "mcp__mako-computer__js", title: "mako-computer: js", toolKind: "other", status: "in_progress", input: JSON.stringify({ code, title: "Fill the settings form" }) }])
+    const plan: ToolStep[][] = [
+      [{ call: "openTab", phase: "running" }],
+      [{ call: "openTab", phase: "done" }, { call: "fill", phase: "running" }],
+      [{ call: "openTab", phase: "done" }, { call: "fill", phase: "done", times: 3 }, { call: "observe", phase: "running" }],
+      [{ call: "openTab", phase: "done" }, { call: "fill", phase: "done", times: 3 }, { call: "observe", phase: "done" }, { call: "wait", phase: "running" }],
+    ]
+    const total = (steps: ToolStep[]) => steps.reduce((sum, step) => sum + (step.times ?? 1), 0)
+    plan.forEach((steps, index) => setTimeout(() => emit({ type: "tool-steps", conversationId: id, steps: { steps, total: total(steps) } }), 300 + index * 700))
+    // Then it polls: observe and wait in turn, the same two steps over and over, until the page says Saved.
+    for (let round = 1; round <= 6; round++) {
+      const steps: ToolStep[] = [{ call: "openTab", phase: "done" }, { call: "fill", phase: "done", times: 3 }, { call: "observe", phase: "done" }, { call: "wait", phase: "done" }]
+      for (let i = 0; i < round; i++) steps.push({ call: "observe", phase: "done" }, { call: "wait", phase: i === round - 1 ? "running" : "done" })
+      setTimeout(() => emit({ type: "tool-steps", conversationId: id, steps: { steps: steps.slice(-12), total: total(steps) } }), 300 + (plan.length + round) * 700)
+    }
+    setTimeout(() => {
+      emit({ type: "tool-steps", conversationId: id, steps: null })
+      pushLive(id, [
+        { kind: "tool-update", id: "browse", status: "completed", output: "Saved. Screenshot: /tmp/settings.png" },
+        { kind: "text", id: "browse-done", text: "The settings form saves." },
+      ], true)
+    }, 300 + (plan.length + 8) * 700)
   }
 
   const startLiveReview = (id: string, target: ReviewTarget): LiveSnapshot => {
@@ -2911,6 +2942,14 @@ export function installMockBridge() {
         acpSessions.set(id, session)
         emit({ type: "live-batch", batch: { id, revision: next.revision, updates, session, permissions: [asked], requests: next.requests } })
         return next.requests.at(-1)!
+      }
+      if (/in the browser/i.test(text)) {
+        const running: LiveRequest = { id: requestId, text, attachments, status: "dispatching" }
+        const session: LiveSessionState = { ...snapshot.session, status: "running" }
+        liveSnapshots.set(id, { ...snapshot, session, requests: [...snapshot.requests, running] })
+        pushLive(id, [{ kind: "user", requestId, text }])
+        playBrowserTurn(id)
+        return running
       }
       if (/run the (?:\w+ )?(?:tests|suite)/i.test(text)) {
         const running: LiveRequest = { id: requestId, text, attachments, status: "dispatching" }
