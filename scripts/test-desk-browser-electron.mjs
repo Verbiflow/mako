@@ -20,6 +20,11 @@ import { BrowserService } from "../packages/control-runtime/dist/browser-service
 import { BrowserCommandSchema } from "../packages/control-runtime/dist/contracts/browser-control.js"
 import { testScratch } from "./lib/test-scratch.mjs"
 
+// A CI Mac is a VM whose GPU compositing never made the hidden window's frame: Chromium logged "ProduceOverlay ...
+// non-existent mailbox" and Page.captureScreenshot waited past its limit. Composited in software there, as on any Mac
+// without a working GPU; everywhere else the window is composited as the desk's are.
+if (process.env.CI) app.disableHardwareAcceleration()
+
 const root = testScratch("mako-desk-browser-")
 app.setPath("userData", join(root, "profile"))
 const html = `<!doctype html><title>Desk check</title><body style="margin:0;height:3000px"><h1>Desk check</h1><button id="b" onclick="document.getElementById('out').textContent='clicked'">Press me</button><input id="i" aria-label="Name" value="old"><select id="s" aria-label="Colour"><option value="r">Red</option><option value="b">Blue</option></select><a id="dl" href="data:text/plain,hello%20download" download="hello.txt">Download</a><iframe name="embed" srcdoc="<p>inner frame text</p>"></iframe><div id="out"></div><script>document.getElementById('i').addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('out').textContent+=' enter'});document.getElementById('s').addEventListener('change',e=>{document.getElementById('out').textContent+=' colour='+e.target.value});setTimeout(()=>{const late=document.createElement('p');late.id='late';late.textContent='late arrival';document.body.appendChild(late)},700)</script></body>`

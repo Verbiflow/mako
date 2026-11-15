@@ -122,12 +122,12 @@ setInterval(() => {
 }, 100)
 `)
 
-async function until<T>(what: string, read: () => Promise<T | undefined> | T | undefined, ms = 15_000): Promise<T> {
+async function until<T>(what: string | (() => string), read: () => Promise<T | undefined> | T | undefined, ms = 15_000): Promise<T> {
   const end = Date.now() + ms
   for (;;) {
     const found = await read()
     if (found !== undefined) return found
-    if (Date.now() > end) throw new Error(`Timed out waiting for ${what}`)
+    if (Date.now() > end) throw new Error(`Timed out waiting for ${what instanceof Function ? what() : what}`)
     await new Promise((resolve) => setTimeout(resolve, 150))
   }
 }
@@ -210,8 +210,11 @@ try {
   }
   const folder = (view: AppProbeView, path: string) => view.changed.entries.find((entry) => entry.folder === path)
   const began = performance.now()
-  const view = await until("the history to show the deep writes", async () => {
+  // What the last read found, for a timeout to say which of the four writes the history hadn't shown.
+  let lastSeen = "nothing read"
+  const view = await until(() => `the history to show the deep writes; the last read had ${lastSeen}`, async () => {
     const found = await probeApp(await inputFor())
+    lastSeen = JSON.stringify({ changedBy: found.changedBy, folders: found.changed.entries.map((entry) => [entry.folder, entry.paths.slice(0, 6)]) }).slice(0, 1_500)
     const entry = folder(found, join(support, "probe-app"))
     return entry?.paths.includes(join("deep", "a", "b", "state.json")) && folder(found, cache)?.paths.includes("blob") &&
       folder(found, join(support, "other-app"))?.paths.includes(join("x", "y", "z.txt")) &&

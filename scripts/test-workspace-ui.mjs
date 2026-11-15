@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { writeFile } from "node:fs/promises"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { manualDevUpdates } from "../electron/dev-updates.mjs"
@@ -75,7 +75,13 @@ async function checkWindow() {
     while (!(await evaluate(code))) {
       if (Date.now() > deadline) {
         await capture("failure.png")
-        throw new Error(`UI condition timed out: ${code}`)
+        // Where CI keeps evidence (the job uploads it on failure), and what the composer and focus were, in the log.
+        if (process.env.MAKO_TEST_EVIDENCE) {
+          await mkdir(join(process.env.MAKO_TEST_EVIDENCE, "workspace-ui"), { recursive: true })
+          await writeFile(join(process.env.MAKO_TEST_EVIDENCE, "workspace-ui", "failure.png"), (await page.capturePage()).toPNG())
+        }
+        const seen = await evaluate(`JSON.stringify({ composer: document.querySelector('.composer-input')?.value, focus: document.activeElement ? document.activeElement.tagName + ' ' + [...document.activeElement.attributes].map(a => a.name + '=' + a.value.slice(0, 40)).join(' ').slice(0, 240) : null, focused: document.hasFocus() })`).catch(() => "unreadable")
+        throw new Error(`UI condition timed out: ${code}; the page had ${seen}`)
       }
       await new Promise((resolve) => setTimeout(resolve, 30))
     }

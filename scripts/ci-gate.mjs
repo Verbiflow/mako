@@ -470,6 +470,8 @@ const INSTALL = {
 const ALONE = [
   /scripts\/test-(app-overview-reads|attribution-holds|event-loop|git-helper|host-probes|idle-app-marks|probe-child-edges|resume-holds|trace-history-holds)\.ts\b/,
   /scripts\/test-terminal-backpressure\.mjs\b/,
+  // It times idle cuts in a recording against the wall clock to within 120 ms; beside another part it missed by 230.
+  /scripts\/test-control-recording-idle\.ts\b/,
 ]
 
 /** Evidence a failed step leaves, by its npm script, run after it: its own exit stays the result. */
