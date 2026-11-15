@@ -43,7 +43,7 @@ import { continueTurnPrompt } from "@mako/host/contracts/turn-continuation"
 import { z } from "zod"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
-import { mcpServerFailedEvent } from "@mako/sessions/events"
+import { mcpServerFailedEvent, turnFailedEvent } from "@mako/sessions/events"
 import type { RecordRef } from "@mako/sessions/entries"
 import { restoreGate } from "@mako/sessions/record-writers"
 import type { RestorePlan } from "@mako/host/contracts/restore-plan"
@@ -2893,6 +2893,8 @@ export function installMockBridge() {
         const updates: LiveUpdate[] = failing.unsent ? [] : [
           { kind: "user", requestId, text },
           ...failing.started || failing.kind === "host-quit" ? [{ kind: "text" as const, text: "Reading `src/net/retry.ts` and the two clients that call it." }] : [],
+          // As a harness does: a started turn that fails also writes its own marker, in its own words.
+          ...failing.started && failing.error ? [{ kind: "event" as const, ...turnFailedEvent(failing.error.split("\n", 1)[0], failing.error) }] : [],
         ]
         const session: LiveSessionState = failing.kind === "host-quit" || failing.kind === "uncertain"
           ? { ...snapshot.session, status: "ready", connection: "hibernated" }

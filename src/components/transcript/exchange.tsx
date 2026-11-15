@@ -57,7 +57,7 @@ import type { SentProse } from "@/lib/prompt-markdown"
 import {
   exchangeRequests,
   isContinuation,
-  notesBesideContinuations,
+  notesBesideContinuations, notesBesideFailure,
   notesBesideStop,
   responseSections,
   responseText,
@@ -183,13 +183,15 @@ function TurnExchange({
   const continuedPrompt = useMemo(() => (exchange.prompt ? isContinuation(exchange.prompt) : undefined), [exchange.prompt])
   // The request the turn stands on now: its newest continuation's, else its prompt's.
   const standing = turnRequest(exchange)
-  const failureRow = useContext(FailedRequestsContext).has(standing ?? "")
+  const failedRequests = useContext(FailedRequestsContext)
+  const failureRow = failedRequests.has(standing ?? "")
   const stopShown = Boolean(interrupted) && !streaming
   const exchangeNote = useContext(ExchangeNoteContext)
-  const notes = useMemo(
+  const kept = useMemo(
     () => notesBesideContinuations(stopShown ? notesBesideStop(exchange.system, exchange.response.length) : exchange.system, exchange.response),
     [exchange.system, exchange.response, stopShown]
   )
+  const notes = useMemo(() => notesBesideFailure(kept, failedRequests.has(standing ?? "")), [kept, failedRequests, standing])
   const answered = useMemo(
     () => responseSections(exchange.response, notes),
     [exchange.response, notes]
