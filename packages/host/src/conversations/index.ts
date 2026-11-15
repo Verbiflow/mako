@@ -145,6 +145,7 @@ export interface Conversations {
 
 export interface ConversationsDeps {
   environment: HostEnvironment
+  checkpointRepositoryObjects?: boolean
   /** The host has begun to stop: what it takes up as it starts ends at its next step, left for the next host. */
   stopping?(): boolean
   /** Remote routing owns continued conversations, even after the local journal closes. */
@@ -247,7 +248,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     threads: threads.store ?? undefined,
     mcpSnapshot: deps.mcpSnapshot,
     workspaceSnapshots: (() => {
-      const snapshots = new WorkspaceSnapshots(deps.git, join(dataRoot, "workspace-snapshots"))
+      const snapshots = new WorkspaceSnapshots(deps.git, join(dataRoot, "workspace-snapshots"), {}, { repositoryObjects: deps.checkpointRepositoryObjects })
       // A turn whose workspace nothing changed in since the last checkpoint goes to its agent on that checkpoint.
       snapshots.followHistory(workspaces.fileHistory)
       return snapshots

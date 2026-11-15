@@ -91,12 +91,13 @@ export async function snapshotGit(
   args: string[],
   index?: string,
   input?: string,
-  objects?: SnapshotObjects
+  objects?: SnapshotObjects,
+  read = true
 ): Promise<string> {
   const result = await git.run({
     cwd,
     args: ["-c", "core.fsmonitor=false", ...args],
-    read: true,
+    read,
     env: environment(index, objects),
     input,
     maxBytes: SNAPSHOT_OUTPUT_BYTES,

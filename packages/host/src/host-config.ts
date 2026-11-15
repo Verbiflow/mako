@@ -35,6 +35,8 @@ export interface HostConfig {
   development: { build: string; devServerUrl: string | null } | undefined
   /** Every Git process is logged (`MAKO_GIT_TRACE=1`), not only the slow ones. */
   gitTrace?: boolean
+  /** Prototype only: checkpoint in the repository's object store, without native history reads. */
+  checkpointRepositoryObjects?: boolean
   /**
    * On a cloud machine, each harness launch also profiles the host's own JavaScript (`MAKO_LAUNCH_PROFILE=1`). Off by
    * default: sampling every millisecond slows the launch it measures.
@@ -65,6 +67,7 @@ export function processHostConfig(env: NodeJS.ProcessEnv = process.env): HostCon
       ? { build: devHostBuild(environment.appRoot), devServerUrl: env.VITE_DEV_SERVER_URL ?? null }
       : undefined,
     gitTrace: env.MAKO_GIT_TRACE === "1",
+    checkpointRepositoryObjects: env.MAKO_CHECKPOINT_REPOSITORY_OBJECTS === "1",
     launchProfile: env.MAKO_LAUNCH_PROFILE === "1",
     machineAgentFd: agentFd === undefined ? undefined : Number(agentFd),
   }

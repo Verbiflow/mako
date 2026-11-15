@@ -65,6 +65,8 @@ const { values } = parseArgs({
     out: { type: "string" },
     keep: { type: "boolean", default: false },
     send: { type: "boolean", default: false },
+    "checkpoint-repository-objects": { type: "boolean", default: false },
+    "host-tmp": { type: "string" },
     "tool-heavy": { type: "boolean", default: false },
     "model-port": { type: "string" },
     "send-quiet": { type: "boolean", default: false },
@@ -194,7 +196,7 @@ try {
   if (snapshots) mkdirSync(snapshots, { recursive: true })
   const nodeArgs = [...HOST_NODE_OPTIONS, ...(values["node-arg"] ?? []), ...(values.gc ? ["--trace-gc"] : []), ...(snapshots ? ["--heapsnapshot-signal=SIGUSR2"] : [])]
   host = spawn("nice", ["-n", "5", process.execPath, ...nodeArgs, ...(profileDir ? ["--cpu-prof", "--cpu-prof-dir", profileDir, "--cpu-prof-interval", "1000"] : []), hostScript], {
-    env: { ...env, HOME: world.home, TMPDIR: world.temporary, MAKO_DATA_ROOT: world.dataRoot, MAKO_WEB_SOCKET: socket, MAKO_PROD: "1", MAKO_TELEMETRY: "off", ...finCount > 0 && { MAKO_FIN_SLOTS: "8" }, ...cloud && { MAKO_CLOUD_URL: cloud.url } },
+    env: { ...env, HOME: world.home, TMPDIR: values["host-tmp"] ?? world.temporary, MAKO_DATA_ROOT: world.dataRoot, MAKO_WEB_SOCKET: socket, MAKO_PROD: "1", MAKO_TELEMETRY: "off", ...values["checkpoint-repository-objects"] && { MAKO_CHECKPOINT_REPOSITORY_OBJECTS: "1" }, ...finCount > 0 && { MAKO_FIN_SLOTS: "8" }, ...cloud && { MAKO_CLOUD_URL: cloud.url } },
     stdio: ["ignore", values.gc ? "pipe" : "ignore", "inherit"],
     ...profileDir && values["node-arg"]?.some((arg) => arg.startsWith("--heap-prof")) && { cwd: profileDir },
     ...snapshots && { cwd: snapshots },

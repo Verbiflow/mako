@@ -18,7 +18,7 @@ import { homedir } from "node:os"
 import { dirname, join, relative, resolve } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
-import { TreeComparison, type Git } from "@mako/git"
+import { TreeComparison, subcommandOf, type Git } from "@mako/git"
 import { projectRepositories } from "../git/index.js"
 import {
   RewindPlanSchema,
@@ -138,6 +138,8 @@ export class WorkspaceSnapshots {
   private readonly git: Git
   private readonly root: string
   private readonly retention: SnapshotRetentionPolicy
+  /** Experimental T3-style capture: repository objects/refs, with no filesystem-history dependency. */
+  private readonly repositoryObjects: boolean
   /** The watcher's history of file changes, once the workspaces are open: what lets a turn's checkpoint be the last one. */
   private history: FileHistory | undefined
   /** Timed-out reads still belong to the shared history reader; do not pile new asks behind them. */
@@ -151,10 +153,11 @@ export class WorkspaceSnapshots {
   /** Captures with nothing a later one from them can't follow: no sparse checkout, no flagged entries, no repository inside. */
   private readonly plain = new Set<string>()
 
-  constructor(git: Git, root: string, retention: Partial<SnapshotRetentionPolicy> = {}) {
+  constructor(git: Git, root: string, retention: Partial<SnapshotRetentionPolicy> = {}, options: { repositoryObjects?: boolean } = {}) {
     this.git = git
     this.retention = SnapshotRetentionPolicySchema.parse(retention)
     this.root = root
+    this.repositoryObjects = options.repositoryObjects ?? false
     mkdirSync(root, { recursive: true, mode: 0o700 })
     this.db = new DatabaseSync(join(root, "snapshots.sqlite"))
     this.db
@@ -297,9 +300,9 @@ export class WorkspaceSnapshots {
         this.assertNoPending(scope)
         // Marked before anything is read: a change while it's taken is after the mark, so the next turn reads it again.
         // One shared with other runs names them, which a later turn alone there shouldn't say: it's never reused.
-        const history = this.history
+        const history = this.repositoryObjects ? undefined : this.history
         const mark = shared?.size || !history ? undefined : await this.readHistory(() => history.mark())
-        const last = reuse ? await this.sinceLast(scope) : undefined
+        const last = reuse && !this.repositoryObjects ? await this.sinceLast(scope) : undefined
         if (last?.kind === "same") return this.summary(last.record)
         const [staged, excludes] = mark ? await Promise.all([this.stagedDigest(scope), this.excludesStamp(scope)]) : []
         const increment = last?.kind === "changed" && frozen ? { prev: last.record, paths: last.paths, frozen } : undefined
@@ -557,7 +560,9 @@ export class WorkspaceSnapshots {
 
   /** A Git command for a checkpoint: its own index and object stores, and Mako as author. */
   private snapshotGit(cwd: string, args: string[], index?: string, input?: string, objects?: SnapshotObjects): Promise<string> {
-    return snapshotGit(this.git, cwd, args, index, input, objects)
+    return snapshotGit(this.git, cwd, this.repositoryObjects
+      ? ["-c", "core.splitIndex=false", "-c", "splitIndex.sharedIndexExpire=never", "-c", "core.fsync=objects,reference", "-c", "core.fsyncMethod=fsync", ...args]
+      : args, index, input, objects, !(this.repositoryObjects && subcommandOf(args).command === "update-ref"))
   }
 
   async restore(input: RewindPlan, complete: () => void): Promise<void> {
@@ -956,6 +961,8 @@ export class WorkspaceSnapshots {
     try {
       return await work(current)
     } finally {
+      if (!current.storage && current.commit)
+        await this.snapshotGit(scope, ["update-ref", "-d", `refs/mako/checkpoints/${current.id}`, current.commit])
       await rm(join(this.root, current.id), { recursive: true, force: true })
     }
   }
@@ -1040,6 +1047,7 @@ export class WorkspaceSnapshots {
     if (since && hasIndex) await copyGitIndex(userIndex, index)
     const head = await this.head(scope)
     let record: SnapshotRecord
+    let publishedCommit: string | undefined
     try {
       if (
         bytes > this.retention.maxSnapshotBytes ||
@@ -1050,8 +1058,8 @@ export class WorkspaceSnapshots {
         throw new Error(
           "The checkpoint exceeds its object storage limit. No workspace files were changed."
         )
-      const objects = await privateSnapshotObjects(this.git, scope, directory)
-      if (!since && !head.endsWith(":unborn")) {
+      const objects: SnapshotObjects = this.repositoryObjects ? {} : await privateSnapshotObjects(this.git, scope, directory)
+      if (!this.repositoryObjects && !since && !head.endsWith(":unborn")) {
         const row = this.db.prepare(`SELECT value FROM snapshots WHERE json_extract(value, '$.scope') = ?
           ORDER BY json_extract(value, '$.createdAt') DESC, id DESC LIMIT 1`).get(scope)
         const previous = row ? RecordSchema.parse(JSON.parse(RowSchema.parse(row).value)) : undefined
@@ -1132,12 +1140,13 @@ export class WorkspaceSnapshots {
         ])
       ).trim()
       await captureGit([
-        `--git-dir=${join(directory, "git")}`,
+        ...(!this.repositoryObjects ? [`--git-dir=${join(directory, "git")}`] : []),
         "update-ref",
         `refs/mako/checkpoints/${id}`,
         commit,
       ])
-      await sealSnapshotObjects(
+      if (this.repositoryObjects) publishedCommit = commit
+      else await sealSnapshotObjects(
         this.git,
         scope,
         directory,
@@ -1162,7 +1171,7 @@ export class WorkspaceSnapshots {
         head,
         tree,
         commit,
-        storage: { kind: "private", bytes: payloadBytes },
+        ...(!this.repositoryObjects && { storage: { kind: "private" as const, bytes: payloadBytes } }),
         indexDigest,
       }
       if (shared?.size) record.shared = [...shared].slice(0, 64)
@@ -1183,6 +1192,8 @@ export class WorkspaceSnapshots {
         .prepare("INSERT INTO snapshots VALUES (?, ?)")
         .run(id, JSON.stringify(record))
     } catch (error) {
+      if (publishedCommit)
+        await this.snapshotGit(scope, ["update-ref", "-d", `refs/mako/checkpoints/${id}`, publishedCommit])
       await rm(directory, { recursive: true, force: true })
       throw error
     }
