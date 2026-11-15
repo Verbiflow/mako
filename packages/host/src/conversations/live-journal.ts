@@ -112,6 +112,13 @@ function logRow(event: MakoLogEvent): string {
   return JSON.stringify(event.value)
 }
 
+/** Restore only the owned slots before replay, keeping unknown and native payload fields verbatim. */
+function readLogValue(kind: string, value: MakoLogEvent["value"]): MakoLogEvent["value"] {
+  if (kind === "request") return LogValueSchema.parse(RequestEvidenceFieldsSchema.parse(value))
+  if (kind.startsWith("request.")) return LogValueSchema.parse(RequestEvidencePatchSchema.parse(value))
+  return value
+}
+
 function requestRow(request: LiveRequest): string {
   const { interruption, continues, failureEvidence } = request
   const stored = { ...request, failureEvidence: failureEvidence && storedFailureEvidence(failureEvidence) }
@@ -492,7 +499,7 @@ function* makoLogRowSteps(db: DatabaseSync): Steps<MakoLogEntry[]> {
     const read = rows.all(last, ROWS_PER_STEP * 4)
     for (const row of read) {
       const entry = LogRowSchema.parse(row)
-      entries.push({ ...entry, value: LogValueSchema.parse(JSON.parse(entry.value)) })
+      entries.push({ ...entry, value: readLogValue(entry.kind, LogValueSchema.parse(JSON.parse(entry.value))) })
       last = entry.seq
     }
     if (read.length < ROWS_PER_STEP * 4) return entries

@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
+import { makoFacts, makoLogDifference } from "@mako/host/conversations/mako-log"
 import { HostFailureError, providerCall } from "@mako/host/contracts/provider-failure"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
@@ -82,6 +83,7 @@ for (const phase of ["host-tools", "host-instructions", "host-identity", "native
     const persisted = saved.read()?.requests.find((item) => item.id === requestId)
     assert.deepEqual(persisted?.failureEvidence, request.failureEvidence)
     assert.deepEqual(persisted?.retry, request.retry)
+    assert.equal(makoLogDifference(saved.makoLog(), makoFacts(saved.read()!)), undefined, "log replay restores exact failure evidence, not the legacy fallback")
     const opaque = { kind: "network", source: "host", exact: { vendorOwned: "keep verbatim" } }
     const future = { kind: "permission.future", value: { key: "opaque", set: { vendorPayload: { failureEvidence: opaque } } } }
     const nested = { kind: "request.future", value: { key: requestId, set: { vendorPayload: { failureEvidence: opaque } } } }
