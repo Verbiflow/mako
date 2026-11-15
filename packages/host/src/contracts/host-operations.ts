@@ -38,6 +38,12 @@ export const hostOperations: ReadonlyMap<string, HostOperation> = new Map(
     .map((channel) => [hostOperationName(channel), { channel, replay: hostCallReplay(channel) }])
 )
 
+/** Every call this host declares, gateway's or not: what tells a call kept to its own socket from one it doesn't have. */
+const ownCalls: ReadonlySet<string> = new Set(hostChannels)
+
+/** Why another device's call to one of this host's own was refused. */
+export const GATEWAY_REFUSED = "Only this Mac's own windows make this call"
+
 /** A host call's input: its arguments as the socket carries them, and whether the caller pages history. */
 const HostInputSchema = z.object({
   args: RuntimeArgsSchema,
@@ -83,6 +89,9 @@ export type HostCallRefusal = { kind: "refused"; problem: Problem }
 /** The call an operation asks for, its input decoded once; the call's own schema checks its arguments. */
 export function fromHostOperation(operation: Operation): HostCallRequest | HostCallRefusal {
   const known = hostOperations.get(operation.op)
+  // A call this host answers only on its own socket: refused to another device by name, unrun (`GATEWAY_ALLOWED`).
+  if (!known && operation.op.startsWith(PREFIX) && ownCalls.has(`mako:${operation.op.slice(PREFIX.length)}`))
+    return { kind: "refused", problem: problem("forbidden", GATEWAY_REFUSED, operation.correlationId, "not-applied", { status: 403, detail: `${GATEWAY_REFUSED} (${operation.op})` }) }
   if (!known)
     return { kind: "refused", problem: problem("not-found", "This host has no such call", operation.correlationId, "not-applied", { status: 404, detail: operation.op }) }
   const malformed = (detail: string): HostCallRefusal =>
