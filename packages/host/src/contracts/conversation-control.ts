@@ -87,7 +87,9 @@ export type ResumeVerdict =
    * It can't be reopened. `lost`: its harness has no record of it here (its identity or source was never located), so
    * nothing could ever resume it: a message goes on in a new session of that harness, handed the whole conversation.
    */
-  | { kind: "unavailable"; reason: string; lost?: true }
+  | { kind: "unavailable"; reason: string; lost?: true; retry?: never }
+  /** Ownership could not be observed now. Recheck it later; this never permits a replacement session. */
+  | { kind: "unavailable"; reason: string; retry: true; lost?: never }
   /**
    * The harness keeps this record closed to resumes (a Codex archive, a
    * Cursor desktop chat) and the catalog says so; continuing it starts a new
