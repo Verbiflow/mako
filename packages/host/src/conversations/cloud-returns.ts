@@ -822,17 +822,29 @@ export class CloudReturns {
    * person's changes merged in, conflicts to resolve, files outside the worktree waiting (`landedNote`). Recorded as
    * heard in the return's plan, so a restart doesn't say it again.
    */
-  notices(conversationId: string): string[] {
-    const untold = this.#untold.get(conversationId)
-    if (!untold?.length) return []
-    this.#untold.delete(conversationId)
-    // One after another: two agents hearing the same return at once each read the plan the other wrote.
-    for (const { move } of untold)
-      this.#noting = this.#noting.then(async () => {
+  notices(conversationId: string, signal?: AbortSignal): Promise<string[]> {
+    if (!this.#untold.has(conversationId)) return Promise.resolve([])
+    // Persist before returning the note to its prompt, not in the background after the agent has heard it.
+    // The same queue serializes two agents updating one return and duplicate calls for one conversation.
+    const hearing = this.#noting.then(async () => {
+      signal?.throwIfAborted()
+      const untold = this.#untold.get(conversationId)
+      if (!untold?.length) return []
+      for (const { move } of untold) {
         const plan = await this.#read(move)
+        signal?.throwIfAborted()
         await this.#write({ ...plan, told: [...new Set([...plan.told ?? [], conversationId])] })
-      }).catch((error: Error) => hostWarn("returns", "couldn't record that an agent heard how its return landed", { move, conversation: conversationId, error: error.message }))
-    return untold.map(({ note }) => note)
+      }
+      // A prompt that stopped waiting sends no note. Keep it queued even if its write finished late.
+      signal?.throwIfAborted()
+      const remaining = (this.#untold.get(conversationId) ?? []).filter(each => !untold.some(told => told.move === each.move))
+      if (remaining.length) this.#untold.set(conversationId, remaining)
+      else this.#untold.delete(conversationId)
+      return untold.map(({ note }) => note)
+    })
+    // Failed or cancelled persistence leaves the notice queued; the prompt can skip it and try on a later turn.
+    this.#noting = hearing.then(() => undefined, error => hostWarn("returns", "couldn't record that an agent heard how its return landed", { conversation: conversationId, error: errorMessage({ error }) }))
+    return hearing
   }
 
   /** A return's note, for each of its conversations that hasn't heard it. */
