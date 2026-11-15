@@ -1887,7 +1887,13 @@ const inputs = {
           z.object({
             callId: z.string().min(1).max(512),
             path: z.string().min(2).max(4_096).startsWith("/"),
-            evidence: z.enum(["shown", "produced", "wrote", "named"]),
+            evidence: z.enum([
+              "shown",
+              "produced",
+              "wrote",
+              "named",
+              "embedded",
+            ]),
             startedAt: z
               .number()
               .int()
