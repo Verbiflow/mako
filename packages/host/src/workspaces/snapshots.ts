@@ -91,12 +91,14 @@ interface ActiveRun {
   ending?: boolean
   superseded?: boolean
   prepared?: boolean
+  baseline?: { mark?: HistoryMark; history?: FileHistory }
 }
 type BaselineWatch = { ready: Promise<void>; alive(): boolean; reliable(): boolean; close(): void }
 type BaselineWatcher = (scope: string, repositories: readonly string[], changed: () => void) => BaselineWatch | undefined
 type PreparedBaseline = {
   scope: string
   revision: number
+  mark?: HistoryMark
   state: { kind: "unavailable"; reason: string } | { kind: "ready"; snapshot: WorkspaceSnapshot; preparedAt: number; captureMs: number }
 }
 export type PreparedRun = { kind: "ready"; snapshot: WorkspaceSnapshot; preparedAt: number; captureMs: number } | { kind: "unavailable"; reason: string }
@@ -244,17 +246,21 @@ export class WorkspaceSnapshots {
           await held.watch.ready
           if (!held.watch.alive() || !held.watch.reliable()) throw new Error("The workspace monitor is unavailable or lost events")
         }
-        const mark = await this.history?.mark()
+        const history = this.history
+        const mark = history ? await this.readHistory(() => history.mark()) : undefined
+        if (history && !mark) throw new Error("File history could not verify the prepared baseline")
         if (this.closed || this.busy(entry.scope) || entry.revision !== revision) return
         captureStartedAt = Date.now()
         const snapshot = await this.capture(cwd, undefined, true)
         capturedAt = Date.now()
         // A history read catches changes held back by the stream during the capture. It never holds a send.
-        const changes = mark ? await this.history?.since(mark, [snapshot.scope], { exclude: [join(snapshot.scope, ".git")] }) : undefined
+        const changes = mark && history ? await this.readHistory(() => history.since(mark, [snapshot.scope], { exclude: [join(snapshot.scope, ".git")] })) : undefined
         if (this.closed) return
+        if (mark && !changes) throw new Error("File history could not verify the prepared baseline")
         if (entry.revision !== revision || this.busy(snapshot.scope) || changes?.paths.length || changes?.lost.length)
           throw new Error("The workspace changed while its content baseline was prepared")
         entry.scope = snapshot.scope
+        entry.mark = mark
         entry.state = { kind: "ready", snapshot, preparedAt: Date.now(), captureMs: capturedAt - captureStartedAt }
       } catch (error) {
         if (!this.closed && entry.revision === revision) entry.state = { kind: "unavailable", reason: error instanceof Error ? error.message : String(error) }
@@ -327,9 +333,26 @@ export class WorkspaceSnapshots {
     this.changed(scope, "A turn is using the workspace")
     if (ready?.kind === "ready") {
       run.snapshotId = ready.snapshot.id
+      run.baseline = { mark: entry.mark, history: this.history }
       return ready
     }
     return { kind: "unavailable", reason: ready?.kind === "unavailable" ? ready.reason : "The content baseline was not ready when the turn went" }
+  }
+
+  /** Called only in background after input was submitted. Never recapture the agent's writes as its before. */
+  async verifyPreparedRun(id: string): Promise<string | undefined> {
+    const run = this.runs.get(id), baseline = run?.baseline
+    const mark = baseline?.mark, history = baseline?.history
+    if (!run || !mark || !history) return "File history could not verify the prepared baseline"
+    const changes = await this.readHistory(() => history.since(mark, [run.scope]))
+    if (this.closed || this.runs.get(id) !== run) return "The turn ended before its prepared baseline could be verified"
+    if (!changes || changes.lost.length) return "File history could not verify the prepared baseline"
+    // since() has no dispatch cutoff. Even a post-dispatch change is conservatively rejected.
+    // Taking a checkpoint holds Git's index lock. Its transient lock alone changes no content,
+    // just as the baseline monitor ignores it; actual index/HEAD writes are still changes.
+    if (changes.paths.some(path => !/(^|\/)\.git\/.*\.lock$/.test(path)))
+      return "The workspace changed after its prepared baseline; its pre-send content is unverified"
+    return undefined
   }
 
   /** Rewinds a crash left unfinished; one across several repositories as the whole rewind, which `restore` finishes. */
@@ -408,12 +431,16 @@ export class WorkspaceSnapshots {
     try {
       if (run.prepared && [...this.runs.values()].some(other => other !== run && !other.ending && overlaps(other.scope, run.scope)))
         throw new Error("Other work is still using this workspace")
+      const history = this.history
+      const mark = history ? await this.readHistory(() => history.mark()) : undefined
       const snapshot = await this.capture(run.scope, run.shared)
       if (run.superseded) throw new Error("Another turn started before this turn's after checkpoint finished")
       hostLog("checkpoints", "after checkpoint prepared", { request: id, scope: run.scope, requestedAt: began, preparedAt: Date.now(), captureMs: Date.now() - began, snapshot: snapshot.id })
       if (!snapshot.shared?.length) for (const [cwd, entry] of this.prepared) {
-        if (overlaps(entry.scope, run.scope) && entry.revision === revisions.get(cwd) && (!this.watchChanges || this.baselineWatches.get(cwd)?.watch.reliable()))
+        if (overlaps(entry.scope, run.scope) && entry.revision === revisions.get(cwd) && (!this.watchChanges || this.baselineWatches.get(cwd)?.watch.reliable())) {
+          entry.mark = mark
           entry.state = { kind: "ready", snapshot, preparedAt: Date.now(), captureMs: Date.now() - began }
+        }
       }
       return snapshot
     } finally {

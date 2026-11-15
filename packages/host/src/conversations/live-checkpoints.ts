@@ -24,6 +24,7 @@ export const BEFORE_CHECKPOINT_WAIT_MS = 10_000
  * historical fork so no irreversible provider rollback participates in recovery. */
 export class LiveCheckpoints {
   private readonly preparing = new Map<string, () => void>()
+  private readonly preparedChecks = new Map<string, (attempt: string) => void>()
   /** Protect relocation and residency while closing snapshots; dispatch deliberately does not wait on this flag. */
   private readonly capturing = new WeakMap<Resident, number>()
   /** The turns last read, newest last, by their two checkpoints. */
@@ -63,7 +64,7 @@ export class LiveCheckpoints {
     let tracking = this.host.dependencies.workspaceTracking?.(cwd)
     const prepared = snapshots?.beginPreparedRun(request.id, cwd)
     let canceled = false, wentAt: number | undefined
-    let before: RunSnapshots["before"] = prepared?.kind === "ready" ? { kind: "ready", snapshot: prepared.snapshot } : { kind: "unavailable", reason: prepared?.reason ?? "The turn's content baseline service is unavailable" }
+    let before: RunSnapshots["before"] = { kind: "unavailable", reason: prepared?.kind === "ready" ? "The prepared baseline is being verified after dispatch" : prepared?.reason ?? "The turn's content baseline service is unavailable" }
     const stopped = new Promise<void>(resolve => this.preparing.set(request.id, () => { canceled = true; resolve() }))
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
@@ -72,7 +73,7 @@ export class LiveCheckpoints {
         const held = new Promise<void>(resolve => { frozen = resolve })
         const saved = snapshots.captureRun(request.id, frozen).then(snapshot => {
           if (canceled || generation !== resident.generation) return
-          before = wentAt === undefined ? { kind: "ready", snapshot } : { kind: "unavailable", timedOut: true, reason: "The checkpoint held the workspace after the turn went, so it may hold the turn's own edits" }
+          before = wentAt === undefined ? { kind: "ready", snapshot } : { kind: "unavailable", timedOut: true, reason: "The checkpoint held the workspace only after the turn went, so it may hold the turn's own edits" }
           this.record(resident, request.id, before, tracking)
         }, error => {
           if (canceled || generation !== resident.generation) return
@@ -105,11 +106,27 @@ export class LiveCheckpoints {
         ...(prepared?.kind === "ready" && { snapshot: prepared.snapshot.id, preparedAt: prepared.preparedAt, captureMs: prepared.captureMs, preparedForMs: Date.now() - prepared.preparedAt }),
       })
       this.preparing.delete(request.id)
+      if (prepared?.kind === "ready" && snapshots) this.preparedChecks.set(request.id, attempt => {
+        void snapshots.verifyPreparedRun(request.id).then(reason => {
+          const current = resident.snapshot.requests.find(item => item.id === request.id)
+          if (canceled || generation !== resident.generation || current?.nativeDelivery?.attemptId !== attempt) return
+          this.record(resident, request.id, reason ? { kind: "unavailable", reason } : { kind: "ready", snapshot: prepared.snapshot }, tracking)
+        }).catch(error => this.host.storageFailed(resident, { error }))
+      })
       await run()
     } finally {
       clearTimeout(timer)
       this.preparing.delete(request.id)
+      this.preparedChecks.delete(request.id)
     }
+  }
+
+  /** A durable native handoff schedules verification outside the driver's synchronous send guard. */
+  dispatched(requestId: string, attempt: string): void {
+    const check = this.preparedChecks.get(requestId)
+    if (!check) return
+    this.preparedChecks.delete(requestId)
+    queueMicrotask(() => check(attempt))
   }
 
   private record(resident: Resident, requestId: string, before: RunSnapshots["before"], tracking: WorkspaceTracking | undefined): void {

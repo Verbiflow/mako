@@ -39,7 +39,7 @@ const helper = new GitHelper({
 })
 const gitRunner = new Git({ processes: helper.runner() })
 
-const root = mkdtempSync(join(tmpdir(), "mako-live-snapshots-"))
+const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-live-snapshots-")))
 const cwd = join(root, "workspace")
 mkdirSync(cwd)
 const git = (...args: string[]) =>
@@ -51,7 +51,22 @@ const file = join(cwd, "answer")
 writeFileSync(file, "initial")
 git("add", ".")
 git("commit", "-qm", "initial")
-const snapshots = new WorkspaceSnapshots(gitRunner, join(root, "snapshots"))
+// Synthetic file history for these single-file fixtures; every mark retains actual content.
+const historyContents = new Map<string, string>()
+let historySequence = 0
+function snapshotStore(name: string) {
+  const store = new WorkspaceSnapshots(gitRunner, join(root, name))
+  store.followHistory({
+    mark: async () => {
+      const id = String(++historySequence)
+      historyContents.set(id, readFileSync(file, "utf8"))
+      return { id, at: "1" }
+    },
+    since: async mark => ({ paths: historyContents.get(mark.id) === readFileSync(file, "utf8") ? [] : [file], lost: [], ignored: [] }),
+  })
+  return store
+}
+const snapshots = snapshotStore("snapshots")
 const states = new Map<string, LiveSessionState>()
 const sent: string[] = []
 const driver: ProviderLiveDriver = {
@@ -443,7 +458,7 @@ try {
     await owner.stop()
     let release = () => {}, entered = false
     const held = new Promise<void>(resolve => { release = resolve })
-    const pendingSnapshots = new WorkspaceSnapshots(gitRunner, join(root, "pending-snapshots"))
+    const pendingSnapshots = snapshotStore("pending-snapshots")
     const original = pendingSnapshots.capture.bind(pendingSnapshots)
     const capture = mock.method(pendingSnapshots, "capture", async (...args: Parameters<typeof original>) => { entered = true; await held; return original(...args) })
     pendingSnapshots.changed(cwd)
@@ -467,7 +482,7 @@ try {
 
   {
     await owner.stop()
-    const stoppedSnapshots = new WorkspaceSnapshots(gitRunner, join(root, "stopped-snapshots"))
+    const stoppedSnapshots = snapshotStore("stopped-snapshots")
     owner = new LiveConversations({ ...dependencies, workspaceSnapshots: stoppedSnapshots, workspaceTracking: () => ({ kind: "unavailable", reason: "writer down" }) })
     const stopId = randomUUID(), stopRequest = randomUUID()
     await owner.start("test", cwd, { conversationId: stopId })
@@ -493,7 +508,7 @@ try {
 
   {
     await owner.stop()
-    const frozenSnapshots = new WorkspaceSnapshots(gitRunner, join(root, "frozen-snapshots"))
+    const frozenSnapshots = snapshotStore("frozen-snapshots")
     owner = new LiveConversations({ ...dependencies, workspaceSnapshots: frozenSnapshots, workspaceTracking: () => ({ kind: "unavailable", reason: "writer down" }) })
     const frozenId = randomUUID(), frozenRequest = randomUUID()
     await owner.start("test", cwd, { conversationId: frozenId })
@@ -608,10 +623,130 @@ try {
     }
     console.log(failure ? "PASS: a failed late checkpoint retains the turn's timeout notice" : "PASS: a checkpoint held past the deadline lets the turn go; held late, it is never the turn's before, and a rewind to it refuses")
   }
+  // A ready cache is only provisional until history is checked after the native handoff.
+  for (const verdict of ["changed", "metadata", "lock-only", "lost", "failed", "slow", "clean", "missing", "retired"] as const) {
+    await owner.stop()
+    const checked = new WorkspaceSnapshots(gitRunner, join(root, `verify-${verdict}`))
+    const clean = verdict === "clean" || verdict === "lock-only"
+    let verifying = false, reads = 0
+    let release = () => {}
+    const held = new Promise<void>(resolve => { release = resolve })
+    if (verdict !== "missing") checked.followHistory({
+      mark: async () => ({ id: "before", at: "1" }),
+      since: async () => {
+        if (!verifying) return { paths: [], lost: [], ignored: [] }
+        reads++
+        await held
+        if (verdict === "failed") throw new Error("history verification failed")
+        return { paths: verdict === "changed" ? [file] : verdict === "metadata" ? [join(cwd, ".git", "HEAD")] : verdict === "lock-only" ? [join(cwd, ".git", "index.lock")] : [], lost: verdict === "lost" ? [cwd] : [], ignored: [] }
+      },
+    })
+    owner = new LiveConversations({ ...dependencies, workspaceSnapshots: checked, workspaceTracking: () => ({ kind: "tracked" }) })
+    const verifyId = randomUUID(), verifyRequest = randomUUID()
+    const content = readFileSync(file, "utf8")
+    try {
+      await owner.start("test", cwd, { conversationId: verifyId })
+      await checked.prepare(cwd)
+      if (verdict === "changed") writeFileSync(file, "pre-send edit with its notification held back")
+      verifying = true
+      const before = sent.length
+      owner.submit(verifyId, verifyRequest, `verify ${verdict}`)
+      await until(() => sent.length === before + 1)
+      assert.equal(owner.snapshot(verifyId)?.requests[0].snapshots?.before.kind, "unavailable", "a pending prepared-baseline check cannot offer a rewind point")
+      assert.equal(owner.snapshot(verifyId)?.requests[0].snapshots?.coverage?.kind, "incomplete")
+      if (verdict !== "missing") await until(() => reads > 0)
+      if (verdict === "retired") {
+        await owner.stop()
+        release()
+        await new Promise(resolve => setTimeout(resolve, 10))
+        const retired = new LiveJournal(dependencies.root, verifyId)
+        try { assert.equal(retired.read()?.requests[0].snapshots?.before.kind, "unavailable", "a late verification cannot restore a retired generation's checkpoint") } finally { retired.close() }
+        continue
+      }
+      if (verdict !== "slow") release()
+      await until(() => {
+        const boundary = owner.snapshot(verifyId)?.requests[0].snapshots?.before
+        return clean ? boundary?.kind === "ready" : boundary?.kind === "unavailable" && !boundary.reason.includes("being verified")
+      })
+      const boundary = owner.snapshot(verifyId)?.requests[0].snapshots
+      assert.equal(boundary?.before.kind, clean ? "ready" : "unavailable")
+      assert.equal(boundary?.coverage?.kind, clean ? "complete" : "incomplete")
+      const journal = new LiveJournal(dependencies.root, verifyId)
+      try { assert.deepEqual(journal.read()?.requests[0].snapshots, boundary, "verification and its failure survive journal reload") } finally { journal.close() }
+      release()
+      await new Promise(resolve => setTimeout(resolve, 10))
+      assert.equal(owner.snapshot(verifyId)?.requests[0].snapshots?.before.kind, clean ? "ready" : "unavailable", "late history cannot resurrect a rejected baseline")
+      verifying = false
+      finish(verifyId, "verified boundary")
+      await until(() => owner.snapshot(verifyId)?.requests[0].snapshots?.after !== undefined)
+      if (!clean) await assert.rejects(owner.previewRewind(verifyId, verifyRequest, "before"), /no workspace checkpoint/)
+    } finally {
+      release()
+      await owner.stop()
+      checked.close()
+      writeFileSync(file, content)
+      snapshots.changed(cwd)
+    }
+    console.log(`PASS: prepared baseline ${verdict} verification never holds native input and persists the truthful boundary`)
+  }
+
+  for (const degraded of ["mark", "since", "failed", "lost"] as const) {
+    await owner.stop()
+    const checked = new WorkspaceSnapshots(gitRunner, join(root, `degraded-${degraded}`))
+    let release = () => {}
+    const held = new Promise<void>(resolve => { release = resolve })
+    checked.followHistory({
+      mark: async () => {
+        if (degraded === "mark") await held
+        if (degraded === "failed") throw new Error("native history failed")
+        return { id: "before", at: "1" }
+      },
+      since: async () => {
+        if (degraded === "since") await held
+        return { paths: [], lost: degraded === "lost" ? [cwd] : [], ignored: [] }
+      },
+    })
+    owner = new LiveConversations({ ...dependencies, workspaceSnapshots: checked, workspaceTracking: () => ({ kind: "tracked" }) })
+    const degradedId = randomUUID(), degradedRequest = randomUUID()
+    const content = readFileSync(file, "utf8")
+    try {
+      await owner.start("test", cwd, { conversationId: degradedId })
+      const preparation = checked.prepare(cwd)
+      const withinBudget = await Promise.race([preparation.then(() => true), new Promise<false>(resolve => setTimeout(() => resolve(false), 1_500))])
+      if (!withinBudget) release()
+      await preparation
+      assert.ok(withinBudget, "degraded history cannot indefinitely occupy a preparation slot")
+      writeFileSync(file, `fresh pre-send content despite ${degraded} history`)
+      const before = sent.length
+      owner.submit(degradedId, degradedRequest, `fallback on ${degraded} history`)
+      await until(() => sent.length === before + 1)
+      await until(() => owner.snapshot(degradedId)?.requests[0].snapshots?.before.kind === "ready")
+      writeFileSync(file, "the agent wrote after the fresh capture")
+      release()
+      finish(degradedId, "degraded history still captured content")
+      await until(() => owner.snapshot(degradedId)?.requests[0].snapshots?.after?.kind === "ready")
+      const boundaries = owner.snapshot(degradedId)?.requests[0].snapshots
+      assert.ok(boundaries?.before.kind === "ready" && boundaries.after?.kind === "ready")
+      const diff = checked.compare(checked.trees(boundaries.before.snapshot.id, boundaries.after.snapshot.id))
+      try {
+        const preview = await diff.preview(basename(file))
+        assert.ok(preview.kind === "files")
+        assert.equal(preview.before, `fresh pre-send content despite ${degraded} history`, "fallback must retain exact dirty content, not merely a ready flag")
+        assert.equal(preview.after, "the agent wrote after the fresh capture")
+      } finally { diff.close() }
+    } finally {
+      release()
+      await owner.stop()
+      checked.close()
+      writeFileSync(file, content)
+      snapshots.changed(cwd)
+    }
+    console.log(`PASS: ${degraded} history has bounded preparation and a fresh exact-content turn baseline`)
+  }
+
 } finally {
   await owner.stop()
-  await gitRunner.close()
-  await helper.stop()
+  await Promise.all([gitRunner.close(), helper.stop()])
   snapshots.close()
   rmSync(root, { recursive: true, force: true })
 }
