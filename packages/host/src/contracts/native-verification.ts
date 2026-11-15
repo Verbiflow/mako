@@ -14,8 +14,11 @@ export function nativeVerificationPending(message: string): boolean {
 
 /** No prompt was admitted. A later attempt must obtain new evidence, not treat the failed read as permission. */
 export class NativeVerificationPendingError extends Error {
-  constructor(readonly detail: string) {
+  readonly detail: string
+
+  constructor(detail: string) {
     super(WAITING)
     this.name = "NativeVerificationPendingError"
+    this.detail = detail
   }
 }
