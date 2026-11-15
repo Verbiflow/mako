@@ -38,7 +38,10 @@ function deskSize() {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize
   return { width: Math.min(1600, width), height: Math.min(1000, height) }
 }
-/** The content size the window took, which the page's viewport must be. */
+/**
+ * The page's viewport: the content size the window took, less the page's own scrollbar. A Mac with no trackpad (a CI
+ * runner) draws scrollbars 15 px wide beside a page this tall; one that overlays them takes nothing.
+ */
 let pageSize
 
 // Electron emits ready only after the ESM entry finishes evaluating, so the
@@ -53,8 +56,10 @@ async function hiddenWindow() {
     webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
   })
   window.setContentSize(size.width, size.height)
-  pageSize = window.getContentSize()
   await window.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html))
+  const [width, height] = window.getContentSize()
+  const scrollbar = await window.webContents.executeJavaScript("innerWidth - document.documentElement.clientWidth")
+  pageSize = [width - scrollbar, height]
   return window
 }
 
@@ -97,7 +102,7 @@ async function main() {
   const { navigation: _navigation, ...target } = await run({ action: "open", browser: "mako" })
   const observed = await run({ action: "observe", target, interactiveOnly: true })
   assert.deepEqual([...new Set(observed.nodes.map((node) => node.role))].sort(), ["button", "combobox", "link", "option", "textbox"])
-  assert.deepEqual([observed.viewport.width, observed.viewport.height], pageSize, "the viewport is the window's content")
+  assert.deepEqual([observed.viewport.width, observed.viewport.height], pageSize, "the viewport is the window's content, less its scrollbar")
   const button = observed.nodes.find((node) => node.role === "button")
   const input = observed.nodes.find((node) => node.role === "textbox")
   await run({ action: "click", target, at: { ref: button.ref } })
