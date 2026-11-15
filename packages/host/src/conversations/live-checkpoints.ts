@@ -131,7 +131,9 @@ export class LiveCheckpoints {
           conversation, request: request.id, kind: before.kind, heldMs: heldAt === undefined ? null : heldAt - began,
           savedMs: Date.now() - began, ...wentAt !== undefined && { wentWithoutMs: wentAt - began },
         })
-        if (generation !== resident.generation) return
+        // The immutable boundary belongs to this request even if Stop/wake advanced its session generation while
+        // packing. Dispatch still checks generation in prompt(); a request removed by rewind keeps no late boundary.
+        if (generation !== resident.generation && !resident.snapshot.requests.some((item) => item.id === request.id)) return
         resident.snapshot = {
           ...resident.snapshot,
           requests: resident.snapshot.requests.map((item) =>
