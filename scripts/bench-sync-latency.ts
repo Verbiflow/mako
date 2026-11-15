@@ -251,12 +251,20 @@ function partsOf(line: string, payload: string) {
   return parts
 }
 
-/** The bytes of each field of a batch that `partsOf` counts as its envelope, by its name. */
+/**
+ * The bytes of each field of a batch that `partsOf` counts as its envelope, by its name, and the line's own wrapper
+ * around the batch (`(wrapper)`: its type and the braces and commas between fields), so they add up to the envelope.
+ */
 function envelopeFieldsOf(payload: string): Map<string, number> {
   const fields = new Map<string, number>()
   const batch = PartsSchema.safeParse(JSON.parse(payload)).data?.batch
-  for (const [key, value] of Object.entries(batch ?? {}))
-    if (key !== "updates" && !BATCH_PARTS.has(key)) fields.set(key, JSON.stringify({ [key]: value }).length - 1)
+  let measured = 0
+  for (const [key, value] of Object.entries(batch ?? {})) {
+    const bytes = JSON.stringify({ [key]: value }).length - 1
+    measured += bytes
+    if (key !== "updates" && !BATCH_PARTS.has(key)) fields.set(key, bytes)
+  }
+  fields.set("(wrapper)", payload.length - measured)
   return fields
 }
 
