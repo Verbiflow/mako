@@ -43,7 +43,7 @@ type ConversationDataDir = () => Promise<string | undefined>
  * else comes back `withheld`, so an answer's `![](~/.ssh/id_rsa)` stays a
  * link rather than a key on screen.
  */
-type FileReadOptions = { relativeTo: "cwd"; dataDir?: ConversationDataDir; preview?: boolean; confined?: boolean }
+type FileReadOptions = { relativeTo: "cwd"; dataDir?: ConversationDataDir; preview?: boolean; confined?: boolean; kept?: readonly string[] }
 
 /**
  * Said of a file another device asked for that resolves, after its symlinks, outside the Thread's folders (its folder,
@@ -210,7 +210,7 @@ export class WorkspaceFiles {
     let absolute = located.absolute
     if (options?.confined) {
       // Resolved once, and read from what was resolved: a link swapped after the check reads nothing new.
-      const real = await this.within(absolute, options.dataDir)
+      const real = await this.within(absolute, options.dataDir, options.kept)
       if (!real) return { path, contents: "", size: 0, binary: false, truncated: false, withheld: OUTSIDE_THREAD_WORDS }
       absolute = real
     }
@@ -326,10 +326,10 @@ export class WorkspaceFiles {
   }
 
   /** `absolute` with every symlink resolved, when that lands inside the Thread's folders; else undefined. */
-  private async within(absolute: string, dataDir?: ConversationDataDir): Promise<string | undefined> {
+  private async within(absolute: string, dataDir?: ConversationDataDir, kept: readonly string[] = []): Promise<string | undefined> {
     const real = await realpath(absolute).catch(() => undefined)
     if (!real) return undefined
-    for (const root of [this.cwdValue, await this.git.root().catch(() => null), await dataDir?.()]) {
+    for (const root of [this.cwdValue, await this.git.root().catch(() => null), await dataDir?.(), ...kept]) {
       if (!root) continue
       const folder = await realpath(resolve(root)).catch(() => undefined)
       if (folder && (real === folder || real.startsWith(folder + sep))) return real
@@ -452,13 +452,16 @@ export class ConversationFiles {
   private readonly git: Git
   private readonly previews: ArtifactPreviews
   private readonly watch: FolderIndexOptions["watch"]
+  /** Mako's own copies, by content (the media turns made and showed): read for any caller that names one. */
+  private readonly kept: readonly string[]
   private readonly held = new Map<string, { files: WorkspaceFiles; at: number }>()
   private readonly indexes = new Map<string, { index: FolderIndex; idle: ReturnType<typeof setTimeout> }>()
 
-  constructor(git: Git, previews: ArtifactPreviews, watch?: FolderIndexOptions["watch"]) {
+  constructor(git: Git, previews: ArtifactPreviews, watch?: FolderIndexOptions["watch"], kept: readonly string[] = []) {
     this.git = git
     this.previews = previews
     this.watch = watch
+    this.kept = kept
   }
 
   /** `confined`: the caller is another device, through the gateway, which reads only the Thread's folders. */
@@ -479,7 +482,7 @@ export class ConversationFiles {
       reader?.files.index.close()
       if (oldest !== undefined) this.held.delete(oldest)
     }
-    return held.files.read(path, { relativeTo: "cwd", dataDir, preview: purpose === "preview", confined })
+    return held.files.read(path, { relativeTo: "cwd", dataDir, preview: purpose === "preview", confined, kept: this.kept })
   }
 
   /** The index of a conversation's folder, kept and watched until nobody has looked at it for `INDEX_KEPT_MS`. */

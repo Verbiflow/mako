@@ -318,6 +318,16 @@ try {
     const picture = await remote(join(secrets, "photo.png"), "preview")
     assert.equal(picture.withheld, OUTSIDE_THREAD_WORDS, "a picture elsewhere isn't signed for another device either")
     assert.equal(picture.previewUrl, undefined)
+    // Mako's own kept media (a turn's copies, by content) draws on every device; a link in it pointing out doesn't.
+    const keptRoot = join(outer, "media")
+    await mkdir(keptRoot, { recursive: true })
+    await writeFile(join(keptRoot, "abc123.png"), Buffer.from("89504e470d0a1a0a", "hex"))
+    await symlink(join(secrets, "id_rsa"), join(keptRoot, "escape.png"))
+    const keeping = new ConversationFiles(gitRunner, noPreviews, undefined, [keptRoot])
+    const copy = await keeping.read(root, join(keptRoot, "abc123.png"), ownedDataDir, "preview", true)
+    assert.equal(copy.withheld, undefined, "a kept copy is read for another device")
+    assert.ok(copy.previewUrl, "and signed for it")
+    assert.equal((await keeping.read(root, join(keptRoot, "escape.png"), ownedDataDir, "preview", true)).withheld, OUTSIDE_THREAD_WORDS, "a link in the store pointing out is resolved first")
     // This Mac's own window still opens a path anywhere on it, as the person asked.
     assert.equal((await conversationFiles.read(root, join(secrets, "id_rsa"))).contents, "PRIVATE KEY", "the desktop window isn't confined")
   }
