@@ -141,11 +141,21 @@ try {
     }
     assert.deepEqual(ran, [], "no handler of the person's ran for a machine")
     assert.ok(gatewayAllows("mako:live-start", "gateway:web:phone"), "the person's phone starts one")
-    assert.ok(gatewayAllows("mako:agents-list", machine) && operation("mako:agents-list", { kind: "runtime", runtimeId: "m-1.g1" }).kind === "call", "a machine keeps its agent's doors")
+    // No runtime runs a Thread here, so none acts as a Thread's agent: a session it names is nothing of its own.
+    for (const channel of ["mako:agents-list", "mako:agents-send", "mako:settings-act", "mako:threads-act", "mako:threads-move", "mako:harnesses-act"]) {
+      assert.equal(gatewayAllows(channel, machine), false, `${channel} isn't a machine's`)
+      assert.equal(gatewayAllows(channel, "gateway:runtime:borrower"), false, `${channel} isn't a borrower's`)
+      const asAgent = operation(channel, { kind: "runtime", runtimeId: "borrower" })
+      assert.ok(asAgent.kind === "refused" && asAgent.problem.type.endsWith("forbidden"), `${channel} is refused to a runtime at the gateway`)
+    }
+    assert.ok(gatewayAllows("mako:agents-list", "gateway:web:phone"), "the person's own device keeps them")
     assert.ok(gatewayAllows("mako:simulators-list", "gateway:runtime:borrower"), "and a borrower its simulator")
     // The gateway itself (`gateway:<thread>`), packing a Thread off its machine, asks whether its conversation still
     // runs; no other runtime may, and the gateway's id opens nothing else.
     assert.ok(operation("mako:live-state", { kind: "runtime", runtimeId: "gateway:t-1" }).kind === "call", "the gateway's own runtime reads a conversation's state")
+    assert.ok(operation("mako:move-depart", { kind: "runtime", runtimeId: "gateway:t-1" }).kind === "call", "and packs a Thread off its machine")
+    const borrowedMove = operation("mako:move-depart", { kind: "runtime", runtimeId: "borrower" })
+    assert.ok(borrowedMove.kind === "refused" && borrowedMove.problem.type.endsWith("forbidden"), "a borrower moves nothing")
     assert.ok(gatewayAllows("mako:live-state", "gateway:runtime:gateway:t-1"))
     const stateRefused = operation("mako:live-state", { kind: "runtime", runtimeId: "m-1.g1" })
     assert.ok(stateRefused.kind === "refused" && stateRefused.problem.type.endsWith("forbidden"), "a machine doesn't")
@@ -156,7 +166,7 @@ try {
     await assert.rejects(methods.invoke("mako:live-start", [], "gateway:runtime:borrower"), new RegExp(MACHINE_REFUSED.split(":")[0]!))
   }
 
-  console.log("PASS: another device reaches only the allowlisted calls; a machine only its agent's doors, simulators and moves; read-live-file and read-file read only the Thread's folders after symlinks, never a key, through the descriptor they verified; a Thread at ~ opens nothing")
+  console.log("PASS: another device reaches only the allowlisted calls; a runtime is no Thread's agent here, a borrower reaches its simulator and the gateway its moves; read-live-file and read-file read only the Thread's folders after symlinks, never a key, through the descriptor they verified; a Thread at ~ opens nothing")
 } finally {
   await rm(scratch, { recursive: true, force: true })
 }
