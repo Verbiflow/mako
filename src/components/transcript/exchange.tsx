@@ -19,7 +19,7 @@ import { PlanSummary } from "./tool-details"
 import { ReviewFindings, ReviewRequest } from "./review-card"
 import { TranscriptAttachments } from "./attachment-collection"
 import { memo, useContext, useMemo, useState, type ReactNode } from "react"
-import { Prose } from "@/components/transcript/markdown"
+import { Prose, type AnswerMedia } from "@/components/transcript/markdown"
 import { AgentWordsCard } from "@/components/transcript/agent-words"
 import { RoutedLine } from "@/components/transcript/routed-line"
 import { agentWords } from "@mako/host/contracts/children"
@@ -1190,7 +1190,7 @@ function Response({
           streaming={message.streaming}
         />
       ))}
-      {text ? <Prose text={text} streaming={message.streaming} previewedFiles={previewedFiles} answerId={message.id} /> : null}
+      {text ? <Prose text={text} streaming={message.streaming} previewedFiles={previewedFiles} answerId={message.id} keeps={landedMedia(message)} /> : null}
 
       {message.error ? <TurnError error={message.error} /> : null}
 
@@ -1517,4 +1517,9 @@ function ForkButton({ exchange }: { exchange: ExchangeData }) {
       </PopoverContent>
     </Popover>
   )
+}
+
+/** A landed answer's embeds are kept as it saw them (`AnswerMedia`); a streaming one, or one with no time, keeps none yet. */
+function landedMedia(message: ChatMessage): AnswerMedia | undefined {
+  return !message.streaming && message.timestamp !== undefined ? { callId: `answer:${message.id}`, at: message.timestamp } : undefined
 }

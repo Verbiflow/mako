@@ -2,7 +2,9 @@ import { rehypeAssetGroups } from "@/lib/markdown-asset-groups"
 import { ListItem } from "./list-item"
 import { DiagramPreview, HighlightedCode } from "./code-preview"
 import { TranscriptAttachment } from "./attachment"
-import { markdownMedia, previewableMediaUrl } from "@/lib/transcript-media"
+import { embeddedCheck, keptEmbed, markdownMedia, previewableMediaUrl } from "@/lib/transcript-media"
+import { useMediaAnswers } from "@/state/turn-media"
+import type { AttachmentContent } from "@mako/sessions"
 import { Paragraph } from "./paragraph"
 import { useParsedProse } from "./use-parsed-prose"
 import {
@@ -92,6 +94,18 @@ const EMPTY_SKILLS = new Map<string, SentSkill>()
 const PromptSkillsContext =
   createContext<ReadonlyMap<string, SentSkill>>(EMPTY_SKILLS)
 
+/** A landed answer whose embedded media the host keeps (`AnswerMedia`): absent for prose that keeps none. */
+const AnswerMediaContext = createContext<AnswerMedia | undefined>(undefined)
+
+/**
+ * The answer an embed (`![](/tmp/shot.png)`) belongs to: the key the host keeps its copy under, and when the answer
+ * landed, so the copy is the file as the answer saw it. A screenshot `/tmp` later loses still draws from it.
+ */
+export interface AnswerMedia {
+  callId: string
+  at: number
+}
+
 /**
  * Settled prose, rendered once per text. `Markdown` is a pure function of
  * its input, and the elements it returns read references and the transcript
@@ -125,8 +139,11 @@ export const Prose = memo(function Prose({
   sent,
   previewedFiles,
   answerId,
+  keeps,
 }: {
   text: string
+  /** A landed answer's: the media it embeds is kept and drawn from Mako's copy. */
+  keeps?: AnswerMedia
   className?: string
   /** The reply's message id, when this is an answer's prose: its words can be quoted in a reply (`quote-reply.tsx`). */
   answerId?: string
@@ -211,6 +228,7 @@ export const Prose = memo(function Prose({
       data-prose-worker={hasTree || undefined}
     >
       <ProseStreamingContext value={Boolean(streaming)}>
+        <AnswerMediaContext value={keeps}>
         <PromptReferencesContext value={referenceMap}>
           <PromptSkillsContext value={skillMap}>
             {kept.map((piece, index) => (
@@ -219,6 +237,7 @@ export const Prose = memo(function Prose({
             {rendered}
           </PromptSkillsContext>
         </PromptReferencesContext>
+        </AnswerMediaContext>
       </ProseStreamingContext>
     </div>
   )
@@ -336,8 +355,18 @@ function MarkdownTable({ children }: ComponentProps<"table">) {
 }
 
 function MarkdownMedia({ src, alt }: ComponentProps<"img">) {
+  const keeps = useContext(AnswerMediaContext)
   if (!src) return <span>{alt || "Image unavailable"}</span>
-  return <TranscriptAttachment attachment={markdownMedia(src, alt)} />
+  return <KeptMarkdownMedia attachment={markdownMedia(src, alt)} keeps={keeps} />
+}
+
+/**
+ * An embed in a landed answer, drawn from the copy the host kept of it when there is one (`embedded`), else from the
+ * file where it is: the same as before the copy, and what a file the answer saw changed since comes back as.
+ */
+function KeptMarkdownMedia({ attachment, keeps }: { attachment: AttachmentContent; keeps: AnswerMedia | undefined }) {
+  const [answer] = useMediaAnswers([embeddedCheck(attachment, keeps)])
+  return <TranscriptAttachment attachment={keptEmbed(attachment, answer)} />
 }
 
 function CitationLink({ href, children, ...rest }: ComponentProps<"a"> & { "data-bare-file"?: boolean | string }) {

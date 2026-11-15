@@ -110,6 +110,13 @@ try {
       await assert.rejects(withHostClient("gateway:web:phone", () => methods.invoke(channel, [key], "gateway:web:phone")), new RegExp(GATEWAY_REFUSED))
     }
     assert.deepEqual(ran, [], "and no handler ran")
+    // An answer's embed (`embedded`) is kept only for this Mac's own windows: another device can't have a key kept by
+    // naming it, through a `.png` link, as embedded media.
+    const embedded = [{ callId: "answer:m1", path: join(root, "shot.png"), evidence: "embedded", endedAt: Date.now() }]
+    const asked = fromHostOperation(toHostOperation("mako:resolve-turn-media", hostCallInput([embedded], false), { id: randomUUID(), target: { kind: "runtime", runtimeId: "laptop" }, actor: { kind: "client", client: "web", deviceId: "phone" }, correlationId: "c", attempt: 1 }))
+    assert.ok(asked.kind === "refused" && asked.problem.type.endsWith("forbidden"), "an embedded check from another device is refused")
+    await assert.rejects(methods.invoke("mako:resolve-turn-media", [embedded], "gateway:web:phone"), new RegExp(GATEWAY_REFUSED))
+    assert.deepEqual(ran, [], "and nothing is kept")
     const declared = new Set<string>(hostChannels)
     for (const channel of GATEWAY_ALLOWED) assert.ok(declared.has(channel), `${channel} is a host call`)
   }
