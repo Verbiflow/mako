@@ -21,6 +21,7 @@ export const STEPS = [
   [21, "npm run test:protocol"],
   [1, "npx tsx scripts/test-host-liveness.ts"],
   [19, "npx tsx scripts/test-host-lifecycle.ts"],
+  [4, "npx tsx scripts/test-host-lock.ts holder-readiness"],
   [0, "npm run test:loop-profile"],
   [34, "npm run test:machine-runtime"],
   [6, "npx tsx scripts/test-cloud-sign-ins.ts"],

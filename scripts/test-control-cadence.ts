@@ -8,6 +8,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { makoNote } from "@mako/host/conversations/mako-note"
 import { CHANGED_LINE, REPLACED_LINE, standingLines } from "@mako/host/conversations/control-cadence"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { CONTEXT_COMPACTED } from "@mako/host/contracts/native-activity"
@@ -39,7 +40,7 @@ interface Standing {
 }
 
 /** `idleMs`: the process hibernates once idle that long, and the next message resumes its session in a new one. */
-function cadenceHost(options: { idleMs?: number } = {}) {
+function cadenceHost(options: { idleMs?: number; beforeInstructions?(): Promise<void> } = {}) {
   const root = mkdtempSync(join(tmpdir(), "mako-control-cadence-"))
   const id = randomUUID()
   const sent: string[] = []
@@ -85,13 +86,17 @@ function cadenceHost(options: { idleMs?: number } = {}) {
     close: () => {},
     setMode: async () => {},
   }
+  const note = makoNote({
+    cloudMachine: false, launchedWith: () => undefined, controlLine: () => undefined, ownSlot: () => true,
+    notices: async () => { await options.beforeInstructions?.(); return notices.splice(0) },
+  })
   owner = new LiveConversations({
     appPath: root,
     root: join(root, "journals"),
     driver: () => driver,
     history: async () => null,
     emit: () => {},
-    controlInstructions: () => ({ standing: { ...standing }, notices: notices.splice(0) }),
+    controlInstructions: async () => ({ ...await note("fixture-binding", id, { role: "thread" }), standing: { ...standing } }),
     ...options.idleMs !== undefined && {
       providerIdleMs: options.idleMs,
       resumeVerdict: async () => ({ kind: "resumable" as const, record: "same" as const }),
@@ -103,6 +108,7 @@ function cadenceHost(options: { idleMs?: number } = {}) {
     owner,
     standing,
     notices,
+    sent: () => [...sent],
     starts: () => starts,
     hibernated: () => owner.snapshot(id)?.session.connection === "hibernated",
     start: () => owner.start("test-provider", root, { conversationId: id }),
@@ -193,7 +199,34 @@ async function afterARelaunch() {
   }
 }
 
+async function awaitedNotice() {
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const host = cadenceHost({ beforeInstructions: () => { entered.resolve(); return release.promise } })
+  try {
+    await host.start()
+    host.notices.push("Returned with a conflict.")
+    const sent = host.send("After return")
+    await entered.promise
+    assert.deepEqual(host.sent(), [], "the provider is not called while a notice's receipt is pending")
+    release.resolve()
+    assert.equal(await sent, noted([CONTROL, ENVIRONMENT, MEDIA, "Returned with a conflict."], "After return"))
+    assert.equal(await host.send("Next"), "Next", "the acknowledged notice goes once")
+  } finally { release.resolve(); await host.cleanup() }
+
+  let fail = true
+  const failing = cadenceHost({ beforeInstructions: async () => { if (fail) throw false } })
+  try {
+    await failing.start()
+    failing.notices.push("Returned with a conflict.")
+    assert.equal(await failing.send("Receipt failed"), noted([CONTROL, ENVIRONMENT, MEDIA], "Receipt failed"), "a failed acknowledgement must not cost the person their message")
+    fail = false
+    assert.equal(await failing.send("Retry"), noted(["Returned with a conflict."], "Retry"))
+    assert.equal(await failing.send("Then"), "Then", "the retained notice goes once after the write succeeds")
+  } finally { await failing.cleanup() }
+}
+
 theRule()
 await throughTheConversation()
 await afterARelaunch()
+await awaitedNotice()
 console.log("control cadence: the note goes whole once per process, then only what changed; whole again after a compaction, a rewind, a failed send or a relaunch; notices once each")
