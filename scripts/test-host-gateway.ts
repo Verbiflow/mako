@@ -368,6 +368,8 @@ function sample(schema: z.core.$ZodType, mode: "full" | "minimal", slot = false)
     }
     return value
   }
+  // Any JSON (`z.json()`, a preference's value): the first sample it takes.
+  if (schema instanceof z.ZodLazy) return [mode === "full" ? "text" : null, 7, true].find((value) => schema.safeParse(value).success) ?? null
   throw new Error(`No sample for ${schema._zod.def.type}`)
 }
 
