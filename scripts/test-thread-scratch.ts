@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto"
 import { access, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
+import { mock } from "node:test"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { ThreadScratch } from "@mako/host/workspaces/thread-scratch"
 
@@ -57,6 +58,23 @@ try {
   measured = () => { owner = { quietAt: now } }
   assert.equal((await inspect()).eligible, false, "a new activity fact while measurement awaits invalidates the plan")
   measured = undefined; owner = { quietAt: now, finishedAt: now }
+
+  const nested = join(path, "worlds"); await mkdir(nested)
+  const receipt = join(nested, "bench.owner.json")
+  await writeFile(receipt, JSON.stringify({ pid: process.pid }))
+  assert.equal((await inspect()).eligible, false, "a live receipt owner holds scratch even with no open files")
+  const probe = mock.method(process, "kill", (_pid: number, signal?: string | number) => {
+    assert.equal(signal, 0, "receipt inspection never sends a destructive signal")
+    throw Object.assign(new Error("fixture"), { code: "EPERM" })
+  })
+  try {
+    assert.equal((await inspect()).eligible, false, "unknown process absence is a hold")
+    probe.mock.mockImplementation(() => { throw Object.assign(new Error("fixture"), { code: "ESRCH" }) })
+    assert.equal((await inspect()).eligible, true, "only positive ESRCH releases a receipt hold")
+  } finally { probe.mock.restore() }
+  await writeFile(receipt, "{}")
+  assert.equal((await inspect()).eligible, false, "a malformed receipt is not absence")
+  await rm(receipt)
 
   const outside = join(root, "outside")
   await mkdir(outside); await writeFile(join(outside, "proof"), "outside")
@@ -120,6 +138,8 @@ try {
   const store = new ThreadStore(join(root, "frames.sqlite")), git = new Git()
   try {
     const cwd = join(root, "shared-folder"); await mkdir(cwd)
+    await mkdir(join(cwd, ".mako"))
+    await writeFile(join(cwd, ".mako", "recipe.json"), JSON.stringify({ values: { PORT: "{port}", APP_URL: "{url}", SCRATCH_FIXTURE: "retained" } }))
     const environments = new ThreadEnvironments({ git, store, dataRoot: join(root, "apps"), listening: async () => false, scratch: id => scratch.ensure(id) })
     const register = () => {
       const conversationId = randomUUID()
@@ -137,6 +157,35 @@ try {
     applyThreadEnvironment(env, one)
     assert.equal(env.MAKO_THREAD_SCRATCH_DIR, one.scratchDir)
     assert.ok(threadEnvironmentInstructions(one).includes(".keep"))
+    const firstThread = ThreadIdSchema.parse(one.thread), firstNote = join(registry, `${firstThread}.json`)
+    const generation = JSON.parse(await readFile(firstNote, "utf8")).generation
+    await rm(one.scratchDir, { recursive: true })
+    const relaunched = await environments.forLaunch(first, "First", cwd)
+    assert.ok(relaunched?.scratchDir)
+    assert.equal(relaunched.port, one.port); assert.equal(relaunched.dataDir, one.dataDir)
+    assert.equal(relaunched.scratchDir, one.scratchDir)
+    assert.notEqual(JSON.parse(await readFile(firstNote, "utf8")).generation, generation, "a removed complete acquisition gets a new generation")
+    const checkFallback = async () => {
+      const fallback = await environments.forLaunch(first, "First", cwd)
+      assert.ok(fallback)
+      assert.equal(fallback.scratchDir, undefined, "a refusal must not advertise a stale previous scratch binding")
+      assert.equal(environments.launchedWith(first)?.scratchDir, undefined)
+      const values: NodeJS.ProcessEnv = {}
+      applyThreadEnvironment(values, fallback)
+      assert.equal(values.MAKO_THREAD_PORT, String(one.port)); assert.equal(values.MAKO_THREAD_PORTS, String(one.ports))
+      assert.equal(values.MAKO_THREAD_URL, `http://${one.host}:${one.port}`); assert.equal(values.MAKO_THREAD_DATA_DIR, one.dataDir)
+      assert.equal(values.PORT, String(one.port)); assert.equal(values.APP_URL, values.MAKO_THREAD_URL)
+      assert.equal(values.SCRATCH_FIXTURE, "retained", "scratch refusal cannot drop recipe values")
+    }
+    const lock = join(registry, `${firstThread}.lock`)
+    await mkdir(lock); await checkFallback(); assert.equal(await exists(lock), true); await rm(lock, { recursive: true })
+    const completed = await readFile(firstNote, "utf8")
+    await writeFile(firstNote, JSON.stringify({ ...JSON.parse(completed), retiring: true }))
+    await checkFallback(); await writeFile(firstNote, completed)
+    await rm(firstNote); await checkFallback()
+    assert.equal(await exists(firstNote), false, "launch fallback does not adopt an unregistered directory")
+    await writeFile(firstNote, JSON.stringify({ thread: firstThread, generation: randomUUID(), usedAt: now }))
+    await checkFallback(); await writeFile(firstNote, completed)
     applyThreadEnvironment(env)
     assert.equal(env.MAKO_THREAD_SCRATCH_DIR, undefined, "nested hosts do not inherit another Thread's scratch")
   } finally { store.close(); await git.close() }

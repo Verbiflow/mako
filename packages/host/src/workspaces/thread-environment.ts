@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { mkdir } from "node:fs/promises"
 import { connect } from "node:net"
 import { basename, join } from "node:path"
+import { hostWarn } from "../base/host-log.js"
 import { ThreadIdSchema, type ThreadId } from "../contracts/thread-identity.js"
 import { worktreeCheckout, worktreeSlug } from "../contracts/thread-worktrees.js"
 import {
@@ -152,7 +153,13 @@ export class ThreadEnvironments {
    */
   async forLaunch(conversationId: string, title?: string, cwd?: string): Promise<ThreadEnvironment | undefined> {
     const environment = await this.forConversation(conversationId, title, cwd)
-    if (environment?.thread && this.dependencies.scratch) environment.scratchDir = await this.dependencies.scratch(environment.thread)
+    if (environment?.thread && this.dependencies.scratch) {
+      try { environment.scratchDir = await this.dependencies.scratch(environment.thread) }
+      catch {
+        delete environment.scratchDir
+        hostWarn("threads", "Scratch preparation failed; launching without disposable scratch.", { thread: environment.thread })
+      }
+    }
     if (environment) this.launched.set(conversationId, environment)
     else this.launched.delete(conversationId)
     return environment

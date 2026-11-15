@@ -128,9 +128,12 @@ export class ThreadScratch {
     return this.#locked(thread, async () => {
       if (this.#closed) throw new ScratchRefused("Scratch ownership is stopping.")
       let record = await this.#record(thread)
-      if (!record) {
-        const path = this.path(thread)
-        if (await lstat(path).then(() => true, (error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return false; throw error }))
+      if (record && (record.retiring || !record.identity))
+        throw new ScratchRefused("Scratch acquisition is incomplete or its folder was replaced.")
+      const path = this.path(thread)
+      const present = await lstat(path).then(() => true, (error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return false; throw error })
+      if (!record || !present) {
+        if (present)
           throw new ScratchRefused("An unregistered scratch folder already exists; it is kept for review.")
         record = { thread, generation: randomUUID(), usedAt: this.#now() }
         // Durable intent precedes acquiring the disposable folder. An incomplete acquisition remains held.
@@ -146,6 +149,22 @@ export class ThreadScratch {
       await this.#publish(this.#note(thread), record)
       return this.path(thread)
     })
+  }
+
+  /** A receipt holds its tree until its creator is positively absent, even with no open files. */
+  async #receiptHeld(path: string): Promise<boolean> {
+    for (const entry of await readdir(path, { withFileTypes: true })) {
+      const child = join(path, entry.name)
+      if (entry.name.endsWith(".owner.json")) {
+        const info = await lstat(child)
+        if (!info.isFile() || info.isSymbolicLink() || info.size > 16_384) return true
+        const parsed = z.object({ pid: z.number().int().positive().max(2_147_483_647) }).safeParse(JSON.parse(await readFile(child, "utf8")))
+        if (!parsed.success) return true
+        try { process.kill(parsed.data.pid, 0); return true }
+        catch (error) { if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) return true }
+      } else if (entry.isDirectory() && await this.#receiptHeld(child)) return true
+    }
+    return false
   }
 
   async #inspect(thread: ThreadId, settings: ThreadScratchSettings, open: string[] | undefined): Promise<ThreadScratchEntry> {
@@ -171,6 +190,7 @@ export class ThreadScratch {
       if (!open) throw new ScratchRefused("Open-file inspection is unavailable.")
       if ((await this.#deps.using(entry.path)).length || open.some(path => path === entry.path || path.startsWith(`${entry.path}${sep}`)))
         throw new ScratchRefused("A provider, terminal or process has this scratch open.")
+      if (await this.#receiptHeld(entry.path)) throw new ScratchRefused("A scratch receipt's process is live or its absence is unknown.")
       entry.privateBytes = await this.#deps.privateBytes(entry.path)
       if (JSON.stringify(this.#deps.owner(thread)) !== JSON.stringify(owner) || JSON.stringify(await this.#record(thread)) !== JSON.stringify(record) ||
         JSON.stringify(await this.#identity(thread)) !== JSON.stringify(record.identity)) throw new ScratchRefused("The Thread or scratch changed during inspection.")
