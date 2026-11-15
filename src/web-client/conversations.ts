@@ -110,6 +110,12 @@ export class WebConversations {
     const answer = async (channel: string, args: unknown[]) => {
       if (isClientCall(channel)) return answerClientCall(answers, channel, undefined, inputs.of(channel).parse(args))
       if (channel === "mako:harness-descriptors") return webHarnessDescriptors()
+      // A turn's media is asked of the host of the conversation on screen, which keeps only what its records name.
+      if (channel === "mako:resolve-turn-media") {
+        const shown = acpStore.get().activeKey
+        if (!shown || !this.#row(shown)) return args[0] instanceof Array ? args[0].map(() => ({ kind: "dropped", reason: "No conversation is open" })) : []
+        return this.#answerFor(shown, "mako:live-turn-media", [shown, ...args])
+      }
       const conversation = conversationCallId(channel, args) ?? this.#ownerAsked(channel, args)
       if (conversation) return this.#answerFor(conversation, channel, args)
       // No owner to ask: the null the bridge declares, so links are drawn as they are, unchecked (`file-references.ts`).
