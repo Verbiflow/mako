@@ -47,19 +47,20 @@ export function watchOutsideGitDir(folder: string, changed: () => void, backend:
     ])
     if (closed || !gitDir || !root || gitDir.startsWith(root + sep)) return
     markers = watchGitMarkers(gitDir, () => { if (!closed) changed() }, MARKERS, backend)
-    await markers.ready
+    await markers.ready.catch(() => {})
   })()
   return {
     ready,
     close() {
       closed = true
-      return closing ??= ready.then(() => markers?.close())
+      // The location read cannot arm after `closed`; an already-created proxy owns its own bounded release.
+      return closing ??= markers?.close() ?? Promise.resolve()
     },
   }
 }
 
 /** Git markers use the same child as tree watches; dropped events invalidate the whole marker set. */
-export function watchGitMarkers(gitDir: string, changed: () => void, markers: readonly string[] = MARKERS, backend: WatchBackend = childBackend()): GitDirWatch {
+export function watchGitMarkers(gitDir: string, changed: () => void, markers: readonly string[] = MARKERS, backend: WatchBackend = childBackend(), gone: () => void = changed): GitDirWatch {
   let closed = false
   let release: Promise<void> | undefined
   let closing: Promise<void> | undefined
@@ -70,13 +71,28 @@ export function watchGitMarkers(gitDir: string, changed: () => void, markers: re
     const found = await backend(gitDir, [], {
       events: notify,
       dropped: notify,
-      gone: notify,
+      gone: () => {
+        if (closed) return
+        closed = true
+        gone()
+      },
       muted: (muted) => { if (!muted) notify() },
     }, { kind: "git-markers", markers: [...markers] })
     subscription = found
     if (closed) await done()
   })()
-  // A missing/unwatchable Git directory is still covered by explicit refreshes, as before.
+  // Cleanup still joins a failed start; readers can discard it and fall back to explicit refreshes.
   const settled = ready.catch(() => {})
-  return { ready: settled, close() { closed = true; return closing ??= settled.then(done) } }
+  return {
+    ready,
+    close() {
+      closed = true
+      if (closing) return closing
+      const released = settled.then(done)
+      return closing = new Promise<void>((resolve, reject) => {
+        const deadline = setTimeout(() => reject(new Error("The Git marker watch did not close in time")), 2_000)
+        void released.then(() => { clearTimeout(deadline); resolve() }, (error) => { clearTimeout(deadline); reject(error) })
+      })
+    },
+  }
 }
