@@ -117,3 +117,32 @@ const ALLOWED: readonly string[] = [
 ]
 
 export const GATEWAY_ALLOWED: ReadonlySet<string> = new Set(ALLOWED)
+
+/**
+ * What a machine (`gateway:runtime:…`: a cloud machine, or a Mac borrowing a simulator under a lease) may call: a
+ * Thread's agent's own doors, each of which takes a machine only as its agent, never as the person (`machineCall`);
+ * a borrowed simulator; and a Thread's moves. Everything else on `GATEWAY_ALLOWED` is the person's, from a device of
+ * theirs: a machine that could start an agent here (`mako:live-start`), make a Session, run an app, or answer an
+ * approval would act on this Mac as the person, which a compromised or prompt-injected machine must never do.
+ */
+const MACHINE_ALLOWED_CALLS: readonly string[] = [
+  "mako:agents-start", "mako:agents-list", "mako:agents-read", "mako:agents-send", "mako:agents-answer", "mako:agents-stop",
+  "mako:agents-move", "mako:agents-report", "mako:agents-wait", "mako:agents-link", "mako:agents-settle",
+  "mako:threads-move", "mako:threads-act", "mako:settings-act", "mako:automations-act", "mako:harnesses-act",
+  "mako:simulators-list", "mako:simulators-open", "mako:simulators-act", "mako:simulators-read", "mako:simulators-shot",
+  "mako:simulators-record", "mako:simulators-release", "mako:simulators-watch",
+  "mako:move-stage", "mako:move-arrive", "mako:move-ready", "mako:move-depart", "mako:move-stay", "mako:move-follow",
+]
+
+export const MACHINE_ALLOWED: ReadonlySet<string> = new Set(MACHINE_ALLOWED_CALLS)
+
+/** How the gateway names a machine's calls (`gatewayClientId`): `gateway:runtime:<runtime>`. */
+export const MACHINE_CALLER = "gateway:runtime:"
+
+/** Why a machine was refused a call that is the person's. */
+export const MACHINE_REFUSED = "A machine calls as its Thread's agent, never as the person: this call is the person's"
+
+/** Whether a `gateway:` caller may make `channel`: a person's device anything allowed, a machine only its own. */
+export function gatewayAllows(channel: string, client: string): boolean {
+  return GATEWAY_ALLOWED.has(channel) && (!client.startsWith(MACHINE_CALLER) || MACHINE_ALLOWED.has(channel))
+}

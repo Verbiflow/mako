@@ -13,7 +13,7 @@ import { Git } from "@mako/git"
 import { HostMethods } from "@mako/host/transport/methods"
 import { unwatchedWork } from "@mako/host/base/event-loop"
 import { withHostClient } from "@mako/host/base/host-client"
-import { GATEWAY_ALLOWED } from "@mako/host/contracts/gateway-allowed"
+import { GATEWAY_ALLOWED, MACHINE_REFUSED, gatewayAllows } from "@mako/host/contracts/gateway-allowed"
 import { GATEWAY_REFUSED, fromHostOperation, hostCallInput, toHostOperation } from "@mako/host/contracts/host-operations"
 import { hostChannels } from "@mako/host/contracts/host-call-inputs"
 import { WorkspaceGit } from "@mako/host/git/workspace-git"
@@ -113,7 +113,32 @@ try {
     const declared = new Set<string>(hostChannels)
     for (const channel of GATEWAY_ALLOWED) assert.ok(declared.has(channel), `${channel} is a host call`)
   }
-  console.log("PASS: another device reaches only the allowlisted calls; read-live-file and read-file read only the Thread's folders after symlinks, never a key, through the descriptor they verified; a Thread at ~ opens nothing")
+  // A machine (`gateway:runtime:`) is never the person: what would start an agent, make a Session, run an app or answer
+  // an approval here is refused to it, while a person's own device makes it and the machine keeps its agent's doors.
+  {
+    const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value, breadcrumb: () => {}, declaring: async () => {}, work: unwatchedWork })
+    const ran: string[] = []
+    const personal = ["mako:live-start", "mako:live-capture", "mako:thread-create-session", "mako:thread-app-start", "mako:live-prompt", "mako:live-permission"] as const
+    for (const channel of personal)
+      // SAFETY: each handler only records that it ran; its arguments are never read.
+      methods.handle(channel, (() => { ran.push(channel) }) as never)
+    const machine = "gateway:runtime:m-1.g1"
+    const operation = (channel: string, actor: Parameters<typeof toHostOperation>[2]["actor"]) =>
+      fromHostOperation(toHostOperation(channel, hostCallInput([], false), { id: randomUUID(), target: { kind: "runtime", runtimeId: "laptop" }, actor, correlationId: "c", attempt: 1 }))
+    for (const channel of personal) {
+      assert.equal(GATEWAY_ALLOWED.has(channel), true, `${channel} is a person's device's call`)
+      const refused = operation(channel, { kind: "runtime", runtimeId: "m-1.g1" })
+      assert.ok(refused.kind === "refused" && refused.problem.type.endsWith("forbidden"), `${channel} is refused to a machine at the gateway`)
+      assert.ok(operation(channel, { kind: "client", client: "web", deviceId: "phone" }).kind === "call", `${channel} reaches the host from the person's phone`)
+      await assert.rejects(methods.invoke(channel, [], machine), new RegExp(MACHINE_REFUSED.split(":")[0]!), `${channel} is refused to a machine in the method table`)
+    }
+    assert.deepEqual(ran, [], "no handler of the person's ran for a machine")
+    assert.ok(gatewayAllows("mako:live-start", "gateway:web:phone"), "the person's phone starts one")
+    assert.ok(gatewayAllows("mako:agents-list", machine) && operation("mako:agents-list", { kind: "runtime", runtimeId: "m-1.g1" }).kind === "call", "a machine keeps its agent's doors")
+    assert.ok(gatewayAllows("mako:simulators-list", "gateway:runtime:borrower"), "and a borrower its simulator")
+  }
+
+  console.log("PASS: another device reaches only the allowlisted calls; a machine only its agent's doors, simulators and moves; read-live-file and read-file read only the Thread's folders after symlinks, never a key, through the descriptor they verified; a Thread at ~ opens nothing")
 } finally {
   await rm(scratch, { recursive: true, force: true })
 }
