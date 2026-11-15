@@ -117,3 +117,47 @@ const ALLOWED: readonly string[] = [
 ]
 
 export const GATEWAY_ALLOWED: ReadonlySet<string> = new Set(ALLOWED)
+
+/**
+ * What a machine (`gateway:runtime:…`: a cloud machine, or a Mac borrowing a simulator under a lease) may call: a
+ * Thread's agent's own doors, each of which takes a machine only as its agent, never as the person (`machineCall`);
+ * a borrowed simulator; and a Thread's moves. Everything else on `GATEWAY_ALLOWED` is the person's, from a device of
+ * theirs: a machine that could start an agent here (`mako:live-start`), make a Session, run an app, or answer an
+ * approval would act on this Mac as the person, which a compromised or prompt-injected machine must never do.
+ */
+const MACHINE_ALLOWED_CALLS: readonly string[] = [
+  "mako:agents-start", "mako:agents-list", "mako:agents-read", "mako:agents-send", "mako:agents-answer", "mako:agents-stop",
+  "mako:agents-move", "mako:agents-report", "mako:agents-wait", "mako:agents-link", "mako:agents-settle",
+  "mako:threads-move", "mako:threads-act", "mako:settings-act", "mako:automations-act", "mako:harnesses-act",
+  "mako:simulators-list", "mako:simulators-open", "mako:simulators-act", "mako:simulators-read", "mako:simulators-shot",
+  "mako:simulators-record", "mako:simulators-release", "mako:simulators-watch",
+  "mako:move-stage", "mako:move-arrive", "mako:move-ready", "mako:move-depart", "mako:move-stay", "mako:move-follow",
+]
+
+export const MACHINE_ALLOWED: ReadonlySet<string> = new Set(MACHINE_ALLOWED_CALLS)
+
+/** How the gateway names a machine's calls (`gatewayClientId`): `gateway:runtime:<runtime>`. */
+export const MACHINE_CALLER = "gateway:runtime:"
+
+/** Why a machine was refused a call that is the person's. */
+export const MACHINE_REFUSED = "A machine calls as its Thread's agent, never as the person: this call is the person's"
+
+/**
+ * The runtime id the gateway itself stamps when it acts on a Thread (`gateway:<thread>`), as it does to see whether a
+ * machine's conversation still runs before packing the Thread off it (the gateway's `#depart`). No machine can claim
+ * it: a machine's own id is its runtime's.
+ */
+export const GATEWAY_RUNTIME = "gateway:"
+
+/** What the gateway itself may ask of a machine beyond a machine's own calls: whether a conversation still runs. */
+export const GATEWAY_RUNTIME_ALLOWED: ReadonlySet<string> = new Set(["mako:live-state"])
+
+/** Whether a runtime caller (`runtimeId`) may make `channel`: a machine its own calls, the gateway also a conversation's state. */
+export function runtimeAllows(channel: string, runtimeId: string): boolean {
+  return MACHINE_ALLOWED.has(channel) || (runtimeId.startsWith(GATEWAY_RUNTIME) && GATEWAY_RUNTIME_ALLOWED.has(channel))
+}
+
+/** Whether a `gateway:` caller may make `channel`: a person's device anything allowed, a machine only its own. */
+export function gatewayAllows(channel: string, client: string): boolean {
+  return GATEWAY_ALLOWED.has(channel) && (!client.startsWith(MACHINE_CALLER) || runtimeAllows(channel, client.slice(MACHINE_CALLER.length)))
+}

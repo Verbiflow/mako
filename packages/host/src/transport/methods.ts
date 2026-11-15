@@ -1,5 +1,5 @@
 import { HostStopping } from "../base/host-stopping.js"
-import { GATEWAY_ALLOWED } from "../contracts/gateway-allowed.js"
+import { GATEWAY_ALLOWED, MACHINE_REFUSED, gatewayAllows } from "../contracts/gateway-allowed.js"
 import { GATEWAY_REFUSED } from "../contracts/host-operations.js"
 import { GATEWAY_CLIENT, withHostClient, hostHistoryPaging } from "../base/host-client.js"
 import { hostCallSchema, hostChannels, isHostChannel, type HostArguments, type HostCallInput, type HostChannel } from "../contracts/host-call-inputs.js"
@@ -92,7 +92,8 @@ export class HostMethods implements MethodTable {
     if (channel === "mako:control-preview" || channel === "mako:control-video") throw new Error("Preview delivery requires a matching binary-capable client. Update the Mako client and host.")
     if (!isHostChannel(channel)) throw new Error("Unknown Mako host method")
     // The gateway refuses these by name first (`fromHostOperation`); this is the table's own word, whatever the door.
-    if (client.startsWith(GATEWAY_CLIENT) && !GATEWAY_ALLOWED.has(channel)) throw new Error(GATEWAY_REFUSED)
+    if (client.startsWith(GATEWAY_CLIENT) && !gatewayAllows(channel, client))
+      throw new Error(GATEWAY_ALLOWED.has(channel) ? MACHINE_REFUSED : GATEWAY_REFUSED)
     const call = await this.declared(channel)
     this.repeated.note(client, channel, args, correlationId)
     return withHostClient(client, () => call(args), history, correlationId)
