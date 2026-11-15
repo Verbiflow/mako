@@ -2747,6 +2747,11 @@ async function providerExitContinued() {
     end({ status: "failed", error: "stream disconnected before completion: error sending request" })
     const request = owner.snapshot(id)!.requests[0]
     assert.equal(request?.interruption?.reason, "connection-lost", "a turn that failed on a dropped connection is continued")
+    assert.equal(request.retry?.cause, "network")
+    const retry = owner.snapshot(id)!.requests.find(item => item.continues?.requestId === request.id)!
+    assert.equal(retry.status, "held", "a known-run dropped turn uses the durable outage backoff")
+    assert.equal(prompts.length, 1, "the continuation does not go before its due time")
+    owner.wakeDue(retry.retry!.at + 1)
     await waitFor(() => prompts.length === 2, "the continuation was not sent")
     assert.equal(starts.length, 1, "a live process is continued in place")
   })
@@ -2838,14 +2843,18 @@ async function providerExitContinued() {
     owner.submit(id, randomUUID(), "first")
     await dispatched(owner, id, 0)
     end({ status: "failed", error: "stream disconnected before completion" })
-    assert.ok(owner.snapshot(id)!.requests[0]?.interruption?.autoContinue)
+    const retry = owner.snapshot(id)!.requests.find(request => request.continues?.auto)!
+    assert.equal(retry.status, "held")
+    assert.equal(retry.retry?.cause, "network")
     await owner.cancel(id)
     end({ status: "running" })
     end({ status: "ready" })
     end({ status: "running" })
     end({ status: "failed", error: "stream disconnected before completion" })
+    owner.wakeDue(retry.retry!.at + 1)
     await sleep(60)
     assert.equal(owner.snapshot(id)!.requests[0]?.interruption?.autoContinue, undefined)
+    assert.equal(owner.snapshot(id)!.requests.find(request => request.id === retry.id)?.pause, "stop")
     assert.equal(prompts.length, 1, "a declined continuation is never sent later")
   })
 }

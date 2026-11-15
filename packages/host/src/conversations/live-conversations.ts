@@ -320,8 +320,8 @@ export class LiveConversations {
       switchAccount: (resident, request) => this.accounts.switchAccount(resident, request),
       accountSwitchWait: (resident) => this.accounts.accountSwitchWait(resident),
       scheduleAutoContinue: (resident, settled) => {
-        this.autoContinue.schedule(resident, settled)
         this.autoContinue.continueFailed(resident, settled)
+        this.autoContinue.schedule(resident, settled)
       },
       declineAutoContinue: (resident, keepProviderWait) => this.autoContinue.decline(resident, keepProviderWait),
       goalSettled: (resident, settled) => this.goals.settled(resident, settled),
@@ -1110,7 +1110,15 @@ export class LiveConversations {
       this.storageFailed(resident, { error })
       return false
     }
-    hostLog("live", "a held message's time came", { conversation: id, requests: ready.length })
+    for (const request of ready) {
+      const hold = holdOf(request)
+      hostLog("live", "a held message's time came", {
+        conversation: id, request: request.id,
+        hold: hold?.kind === "retry" ? "provider-retry" : hold?.kind === "resting" ? "resting-digest"
+          : hold?.kind === "until" ? hold.wake.after === DIGEST_WAITS ? "digest" : "scheduled" : hold?.kind ?? "unknown",
+        ...(hold?.kind === "retry" && { cause: hold.retry.cause, attempt: hold.retry.attempt }),
+      })
+    }
     try {
       this.release(resident)
     } catch (error) {
