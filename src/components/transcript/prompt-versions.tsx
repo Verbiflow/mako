@@ -1,7 +1,7 @@
 import { useEffect } from "react"
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react"
 import { useAcp } from "@/state/acp"
-import { loadPromptVersions, promptVersionsKey, showPromptVersion, usePromptVersions } from "@/state/prompt-versions"
+import { loadPromptVersions, showPromptVersion, usePromptVersions } from "@/state/prompt-versions"
 
 /**
  * "‹ 1/2 ›" beside a prompt that was edited: the version this conversation holds among the conversation it was first
@@ -9,10 +9,10 @@ import { loadPromptVersions, promptVersionsKey, showPromptVersion, usePromptVers
  * shows nothing.
  */
 export function PromptVersionSwitcher({ conversation, requestId }: { conversation: string; requestId: string }) {
-  const versions = usePromptVersions((state) => state.answers[promptVersionsKey(conversation, requestId)])
-  // A fork made from just before it is one more version: asked again whenever the window holds another conversation.
+  const versions = usePromptVersions((state) => state.answers[conversation]?.[requestId])
+  // One question a conversation, whichever of its prompts asks first; again once the window holds another conversation.
   const held = useAcp((state) => Object.keys(state.conversations).length)
-  useEffect(() => loadPromptVersions(conversation, requestId), [conversation, requestId, held])
+  useEffect(() => loadPromptVersions(conversation, held), [conversation, held])
   if (!versions || versions.conversations.length < 2) return null
   const { conversations, at } = versions
   const step = (by: number) => {

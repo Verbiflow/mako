@@ -1171,3 +1171,6 @@ export interface PromptVersions {
   conversations: string[]
   at: number
 }
+
+/** A conversation's edited prompts' versions, by the request each is in it (`mako:live-prompt-versions`). */
+export type PromptVersionsByRequest = Record<string, PromptVersions>

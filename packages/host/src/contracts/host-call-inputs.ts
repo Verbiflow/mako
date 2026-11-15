@@ -1473,7 +1473,7 @@ const inputs = {
         })
         .optional(),
     ]),
-  "mako:live-prompt-versions": () => z.tuple([z.string(), z.string()]),
+  "mako:live-prompt-versions": () => z.tuple([z.string()]),
   "mako:live-read": () =>
     z.tuple([
       z.string(),
