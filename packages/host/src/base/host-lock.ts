@@ -70,9 +70,18 @@ export async function acquireHostLock(dataRoot: string, options: HostLockOptions
       recheckedAfterExit = true
       continue
     }
-    if (options.brief && Date.now() < briefUntil && !(await options.brief.listening())) {
-      await new Promise((done) => setTimeout(done, 100))
-      continue
+    if (options.brief && Date.now() < briefUntil) {
+      if (!(await options.brief.listening())) {
+        await new Promise((done) => setTimeout(done, 100))
+        continue
+      }
+      // The identity query can time out while the holder's loop loads its core. The later readiness probe may
+      // answer once that work ends: reread its identity then, rather than refuse with the earlier missing PID.
+      // This never retries the lock: a silent or departed holder stays unknown, not an assumed admission.
+      if (lock.holder === null) {
+        const name = hostLockName(dataRoot, platform, purpose)
+        return { kind: "taken", holder: await (platform === "darwin" ? fileHolder(name) : askHolder(name)) }
+      }
     }
     return lock
   }
@@ -136,7 +145,11 @@ function openLocked(path: string): number | null {
 
 async function nameLock(dataRoot: string, platform: NodeJS.Platform, purpose: string): Promise<HostLock> {
   const name = hostLockName(dataRoot, platform, purpose)
-  const server = createServer((socket) => socket.end(`${process.pid}\n`))
+  const server = createServer((socket) => {
+    // A lookup may have timed out before a busy holder gets to it. That reader's departure must not end the holder.
+    socket.on("error", () => socket.destroy())
+    socket.end(`${process.pid}\n`)
+  })
   const outcome = await new Promise<"held" | "taken">((settle, reject) => {
     server.once("error", (error: NodeJS.ErrnoException) => {
       if (error.code === "EADDRINUSE") settle("taken")

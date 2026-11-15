@@ -107,6 +107,7 @@ const reads = [
   "mako:plan-builds",
   "mako:harness-descriptors",
   "mako:access-choices",
+  "mako:preferences",
   "mako:thread-continuation-plan",
   "mako:thread-restore-plan",
   /** Weighs a Thread's harnesses against what the cloud says it runs; changes nothing. */
@@ -408,6 +409,10 @@ const replays = [
   "mako:access-choose",
   /** `AccessChoiceStore.adopt`: takes only where no choice is made, so a repeat takes nothing. */
   "mako:access-adopt",
+  /** `PreferenceStore.set`: the same value again is the same preference in effect. */
+  "mako:preference-set",
+  /** `PreferenceStore.offer`: each preference is offered once, so a repeat offers nothing. */
+  "mako:preference-offer",
   /** `PlanBuilds.record`: keyed by plan id, and a build no newer than the recorded one changes nothing. */
   "mako:plan-build-record",
   /** `PlanBuilds.claim`: the claim id; a repeat gets the first answer. */

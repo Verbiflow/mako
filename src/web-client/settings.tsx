@@ -392,7 +392,8 @@ const THEMES: Array<{ value: WebTheme; label: string }> = [
 ]
 
 function Appearance() {
-  const [theme, setTheme] = useTheme()
+  const client = useWebClient()
+  const [theme, setTheme] = useTheme(client.preferences)
   return (
     <Group title="Appearance">
       <div role="radiogroup" aria-label="Theme" className="grid grid-cols-3 gap-1 p-1.5">

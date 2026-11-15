@@ -1,3 +1,4 @@
+import { WebPreferences } from "./account-preferences"
 import { createContext, useContext } from "react"
 import { z } from "zod"
 import { AccountList } from "./account-list"
@@ -36,6 +37,8 @@ export class WebClient {
   readonly account: WebAccount
   readonly deviceId: string
   readonly list: AccountList
+  /** The preferences that follow the account: the theme, the Fin settings and the harness order, read from it directly. */
+  readonly preferences: WebPreferences
   #conversations: Promise<WebConversations> | undefined
   /** The conversations once read: what a return wakes, and what hiding lets go of. */
   #loaded: WebConversations | undefined
@@ -48,6 +51,8 @@ export class WebClient {
     this.account = who.account
     this.deviceId = who.deviceId
     this.list = new AccountList(gateway, who.account.id)
+    this.preferences = new WebPreferences(gateway, who.account.id)
+    this.list.followPreferences(this.preferences)
     loadReadState(who.account.id)
     this.push = new WebPush(gateway)
   }
