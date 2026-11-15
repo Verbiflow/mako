@@ -162,7 +162,10 @@ try {
   assert.ok(!running.pids.includes(leftover), "the escaped process is outside the run's tree")
   const leftovers = new Map(running.leftovers.map((entry) => [entry.pid, entry]))
   assert.equal(leftovers.get(sure)?.sure, true, `a process carrying the app's mark counts wherever it works: ${JSON.stringify(running.leftovers)}`)
-  assert.equal(leftovers.get(leftover)?.sure, false, "sleep's environment can't be read, so it counts by working in the checkout")
+  // Whether sleep's environment can be read is the machine's: a Mac protects its platform binaries' (`ps -E` shows
+  // none, and it counts by working in the checkout), a CI runner's Mac and Linux don't (its mark is read: sure).
+  const readable = (() => { try { return execFileSync("ps", ["-E", "-ww", "-o", "command=", "-p", String(leftover)], { encoding: "utf8" }).includes("MAKO_APP_RUN=") } catch { return false } })()
+  assert.equal(leftovers.get(leftover)?.sure, readable, readable ? "sleep's environment is read, and carries the app's mark" : "sleep's environment can't be read, so it counts by working in the checkout")
   assert.match(leftovers.get(leftover)!.command, /sleep 60/)
   assert.ok(!leftovers.has(started[2]!), "a process in the checkout whose environment shows no mark isn't the app's")
   assert.ok(running.since !== undefined && running.since <= Date.now())
