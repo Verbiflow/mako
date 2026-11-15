@@ -151,6 +151,25 @@ console.log("ready without a process hold");
   } finally {
     await terminal.closeSummaries(); await terminal.settled(); thirdStore.close(); await thirdRunner.close()
   }
+  const fourthRunner = new Git(), fourthStore = new ThreadStore(join(root, "summary.sqlite"))
+  let refusedStarts = 0, refusedPullInvalidations = 0
+  const neverReady = new ThreadWorktreeService(fourthRunner, join(root, "summary-refused-owner"), fourthStore,
+    undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, async () => { refusedPullInvalidations++ },
+    async (_root, _ignore, _listener, native) => {
+      if (native?.kind === "git-markers" && native.markers.includes("FETCH_HEAD")) {
+        refusedStarts++
+        throw new Error("fixture Git directory cannot be watched")
+      }
+      return { unsubscribe: async () => {} }
+    })
+  try {
+    for (let pass = 0; pass < 3; pass++) await neverReady.summaries()
+    await neverReady.settled()
+    assert.equal(refusedStarts, 3, "an initially unwatchable directory is retried on later passes")
+    assert.equal(refusedPullInvalidations, 0, "an initial watch refusal must not defeat the PR list's cache on every pass")
+  } finally {
+    await neverReady.closeSummaries(); await neverReady.settled(); fourthStore.close(); await fourthRunner.close()
+  }
   console.log("Git markers: rearm, remote push, non-persistent lifetime, late close and bounded parallel summaries passed")
 } finally {
   await watching?.close(); mock.restoreAll(); syncBuiltinESMExports()

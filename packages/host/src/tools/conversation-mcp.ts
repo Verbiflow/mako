@@ -9,6 +9,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { configuredListenPort } from "../base/listen-port.js"
 import { heavy } from "../base/heavy-packages.js"
 import { ORCHESTRATION_INSTRUCTIONS } from "../contracts/agent-tools.js"
+import { hostLog } from "../base/host-log.js"
 
 /** Whose agents call: it throws unless `bindingId` is the conversation's binding that is running now. */
 export interface AgentOwner {
@@ -34,7 +35,7 @@ export interface ToolGrant {
 /** `conversationId` for a scope's calls, throwing once its grant no longer holds. */
 function scopeAuthorizer(owner: AgentOwner, scope: Scope): () => string {
   return () => {
-    if (scope.revoked || scope.expiresAt < Date.now()) throw new Error("This task grant has expired")
+    if (scope.revoked) throw new Error("This task grant is no longer active")
     owner.authorizeAgent(scope.conversationId, scope.bindingId)
     return scope.conversationId
   }
@@ -43,7 +44,6 @@ function scopeAuthorizer(owner: AgentOwner, scope: Scope): () => string {
 interface Scope {
   conversationId: string
   bindingId: string
-  expiresAt: number
   revoked: boolean
   /** Calls under way, by path and JSON-RPC id: each server's client numbers its own requests. */
   controlRequests: Map<string, AbortController>
@@ -113,7 +113,9 @@ async function readBody(request: IncomingMessage, maxBytes: number) {
  * computer use, and `/mako` for the Thread's worktree, pull request, app and recipe.
  * Loopback only, and handed to each agent in its launch, never written to an
  * agent app's own settings. Credentials are ephemeral and scoped to a
- * currently executing provider binding; one grant opens both.
+ * currently executing provider binding; one grant opens both. A provider can stay resident for days, including
+ * between turns: its grant ends with explicit binding revocation or server closure, not elapsed wall time. Each
+ * operation still checks the current binding and running turn through `authorizeAgent`.
  */
 export async function startConversationMcp(
   owner: AgentOwner,
@@ -122,15 +124,22 @@ export async function startConversationMcp(
   gate?: CallGate
 ) {
   const scopes = new Map<string, Scope>()
+  const retire = (token: string, scope: Scope, reason: "revoked" | "server-closed") => {
+    scope.revoked = true
+    for (const pending of scope.controlRequests.values()) pending.abort()
+    scopes.delete(token)
+    hostLog("agent-tools", "retired a task grant", { conversation: scope.conversationId, binding: scope.bindingId, reason })
+  }
   const serveMako = makoTools.length > 0
   const server = createServer((request, response) => {
     void (async () => {
       const token = request.headers.authorization?.replace(/^Bearer /, "")
       const scope = token ? scopes.get(token) : undefined
-      if (!scope || scope.revoked || scope.expiresAt < Date.now()) {
+      if (!token || !scope || scope.revoked) {
         response.writeHead(401).end()
         return
       }
+      const authorized = scopeAuthorizer(owner, scope)
       const gated = gatePath(request.url)
       if (gated) {
         if (!gate || request.method !== "POST" || request.headers.origin) {
@@ -138,7 +147,7 @@ export async function startConversationMcp(
           return
         }
         const body = z.json().parse(JSON.parse(await readBody(request, 1024 * 1024)))
-        owner.authorizeAgent(scope.conversationId, scope.bindingId)
+        authorized()
         response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(gate(scope.conversationId, gated, body)))
         return
       }
@@ -173,11 +182,6 @@ export async function startConversationMcp(
       })
       const disconnected = new AbortController()
       if (controlRequestId !== undefined) scope.controlRequests.set(controlRequestId, disconnected)
-      const authorized = () => {
-        if (scope.revoked || scope.expiresAt < Date.now()) throw new Error("This task grant has expired")
-        owner.authorizeAgent(scope.conversationId, scope.bindingId)
-        return scope.conversationId
-      }
       const mcp = route === "computer"
         ? createControlMcpServer((operation, signal) => {
             authorized()
@@ -214,20 +218,15 @@ export async function startConversationMcp(
   const makoUrl = serveMako ? `http://127.0.0.1:${parsed.port}/mako` : undefined
   return {
     mint(bindingId: string, conversationId: string): ToolGrant {
-      for (const [token, scope] of scopes)
-        if (scope.expiresAt < Date.now()) {
-          for (const pending of scope.controlRequests.values()) pending.abort()
-          scopes.delete(token)
-        }
       const token = randomBytes(32).toString("base64url")
       const scope: Scope = {
         bindingId,
         conversationId,
-        expiresAt: Date.now() + 24 * 60 * 60 * 1_000,
         revoked: false,
         controlRequests: new Map(),
       }
       scopes.set(token, scope)
+      hostLog("agent-tools", "issued a task grant", { conversation: conversationId, binding: bindingId })
       const grant: ToolGrant = { token, computerUrl }
       if (makoUrl) {
         grant.makoUrl = makoUrl
@@ -247,9 +246,7 @@ export async function startConversationMcp(
           scope.bindingId === bindingId &&
           scope.conversationId === conversationId
         ) {
-          scope.revoked = true
-          for (const pending of scope.controlRequests.values()) pending.abort()
-          scopes.delete(token)
+          retire(token, scope, "revoked")
         }
     },
     /**
@@ -269,9 +266,7 @@ export async function startConversationMcp(
       await Promise.all(servers.map((each) => each.close()))
     },
     close() {
-      for (const scope of scopes.values())
-        for (const pending of scope.controlRequests.values()) pending.abort()
-      scopes.clear()
+      for (const [token, scope] of scopes) retire(token, scope, "server-closed")
       server.closeAllConnections()
       server.close()
     },

@@ -21,6 +21,7 @@ export const STEPS = [
   [21, "npm run test:protocol"],
   [1, "npx tsx scripts/test-host-liveness.ts"],
   [19, "npx tsx scripts/test-host-lifecycle.ts"],
+  [4, "npx tsx scripts/test-host-lock.ts holder-readiness"],
   [0, "npm run test:loop-profile"],
   [34, "npm run test:machine-runtime"],
   [6, "npx tsx scripts/test-cloud-sign-ins.ts"],
@@ -377,10 +378,10 @@ function workspaceParts(seconds, command, name) {
 /** Every step's parts, each part once: a part two chains share runs in the first. */
 /**
  * Parts run as several, each with an environment its test reads (`CASES`, `MAKO_TEST_HARNESSES`), so one long test
- * spreads over shards: test-watch-backend's four cases took 6, 14, 58 and 29 s, one part of 108 to 138 s.
+ * spreads over shards: test-watch-backend's four native cases took 6, 14, 58 and 29 s, one part of 108 to 138 s.
  */
 const SPLITS = {
-  "tsx scripts/test-watch-backend.ts": ["CASES=silentCanary", "CASES=degradedFseventsd", "CASES=sharedChildAndCrash,lateCanary"],
+  "tsx scripts/test-watch-backend.ts": ["CASES=silentCanary", "CASES=degradedFseventsd", "CASES=historyReaderTermination,sharedChildAndCrash,lateCanary"],
 }
 
 /** `unit` as the parts `SPLITS` makes of it; a test that doesn't read the variable runs once, as it is. */

@@ -335,7 +335,7 @@ function TurnExchange({
             <ReviewFindings report={review} />
           </div>
         ) : null}
-        {streaming ? null : exchangeRequests(exchange).map((requestId) => <TurnChanges key={requestId} requestId={requestId} />)}
+        {exchangeRequests(exchange).map((requestId) => <TurnChanges key={requestId} requestId={requestId} streaming={streaming} />)}
         <ExchangeFailure requestId={standing} />
         {exchange.response.length > 0 || interrupted ? (
           // A turn that ends on its failure row says there why it stopped, and what to do; the footer doesn't repeat it.

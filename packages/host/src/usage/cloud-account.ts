@@ -10,6 +10,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import { basename, join } from "node:path"
 import { AccountEventSchema, accountStream, type AccountEvent } from "@mako/protocol/account-events"
 import { ACCESS_CHOICES_PATH, AccessChoicesAnswerSchema, type AccessChoices as AccountAccessChoices, type AccessChoicesAnswer } from "@mako/protocol/access-choices"
+import { PREFERENCES_PATH, PreferencesAnswerSchema, type Preferences, type PreferencesAnswer } from "@mako/protocol/preferences"
 import { CORRELATION_HEADER } from "@mako/protocol/gateway-http"
 import { SessionListingsSchema, type SessionListings } from "@mako/protocol/thread-listing"
 import { WaitingInputSchema, WaitingMessageSchema, type WaitingInput, type WaitingMessage } from "@mako/protocol/waiting"
@@ -725,6 +726,18 @@ export class CloudAccounts {
   async chooseAccess(choices: AccountAccessChoices, fill: boolean): Promise<AccessChoicesAnswer | null> {
     const response = await this.#call("access.choose", "PATCH", ACCESS_CHOICES_PATH, { choices, ...fill && { fill } }, false, [404])
     return response.status === 404 ? null : AccessChoicesAnswerSchema.parse(await response.json())
+  }
+
+  /** The preferences that follow the person, as the account keeps them; null from a cloud that doesn't keep them yet. */
+  async preferences(): Promise<PreferencesAnswer | null> {
+    const response = await this.#call("preferences.read", "GET", PREFERENCES_PATH, undefined, false, [404])
+    return response.status === 404 ? null : PreferencesAnswerSchema.parse(await response.json())
+  }
+
+  /** Sends edits; each kept where it's later than the account's. All of them after, or null as above. */
+  async writePreferences(preferences: Preferences): Promise<PreferencesAnswer | null> {
+    const response = await this.#call("preferences.write", "PATCH", PREFERENCES_PATH, { preferences }, false, [404])
+    return response.status === 404 ? null : PreferencesAnswerSchema.parse(await response.json())
   }
 
   async devices(): Promise<{ devices: CloudDevice[]; current: string }> {

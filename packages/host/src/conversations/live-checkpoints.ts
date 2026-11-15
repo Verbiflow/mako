@@ -119,7 +119,7 @@ export class LiveCheckpoints {
           // Held after the turn went, it may already hold the turn's own edits: a rewind to it would keep them and the
           // turn's diff would leave them out, so it's never the turn's `before`. The capture still ran for `endRun`.
           before = late > 0
-            ? { kind: "unavailable", reason: `The checkpoint held the workspace ${Math.round(late / 1000)} s after the turn went, so it may hold the turn's own edits` }
+            ? { kind: "unavailable", timedOut: true, reason: `The checkpoint held the workspace ${Math.round(late / 1000)} s after the turn went, so it may hold the turn's own edits` }
             : { kind: "ready", snapshot }
         } catch (error) {
           before = { kind: "unavailable", reason: errorMessage({ error }) }
@@ -158,7 +158,7 @@ export class LiveCheckpoints {
           resident.snapshot = {
             ...resident.snapshot,
             requests: resident.snapshot.requests.map((item) =>
-              item.id === request.id && !item.snapshots?.before ? { ...item, snapshots: { ...item.snapshots, before: { kind: "unavailable", reason } } } : item
+              item.id === request.id && !item.snapshots?.before ? { ...item, snapshots: { ...item.snapshots, before: { kind: "unavailable", reason, timedOut: true } } } : item
             ),
           }
           this.host.flush(resident)

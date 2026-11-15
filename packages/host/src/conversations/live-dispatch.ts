@@ -389,7 +389,7 @@ export class LiveDispatch {
         const moved = since !== undefined ? await cutAccount(cwd, since, request.continues!.reason, Date.now()).catch(() => undefined) : undefined
         const checkout = told?.since !== undefined ? checkoutAccount(await checkoutSince(cwd, told.since).catch(() => [])) : undefined
         const apex = !asWritten && (dependencies.agents?.()?.isApex(resident.snapshot.session.id) ?? false)
-        const instructions = asWritten ? undefined : dependencies.controlInstructions?.(active, resident.snapshot.session.id, { role: apex ? "apex" : "thread" })
+        const instructions = asWritten || !dependencies.controlInstructions ? undefined : await dependencies.controlInstructions(active, resident.snapshot.session.id, { role: apex ? "apex" : "thread" })
         const rules = asWritten ? {} : (dependencies.agents?.()?.ruleLines(resident.snapshot.session.id) ?? {})
         const person = !request.actor || request.actor.kind === "person"
         // Service-only turns need no routing paragraph. Once heard, keep its key through service turns, without repeating it.
