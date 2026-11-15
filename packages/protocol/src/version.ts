@@ -40,9 +40,11 @@ export const PROTOCOL_VERSION = 1
  * `lease-beat`. 25 says the gateway takes a project folder Thread's `project` in a device's quiet note
  * (`QUIET_PROJECT_LINK_VERSION`). 26 says it takes a project folder Thread's other repositories there too
  * (`others`, `QUIET_OTHERS_LINK_VERSION`), and the device folder its project worktree mirrors (`projectFrom`,
- * `QUIET_PROJECT_FROM_LINK_VERSION`). Every envelope stays at `PROTOCOL_VERSION` on every link version.
+ * `QUIET_PROJECT_FROM_LINK_VERSION`). 27 lets a `live` frame be `ephemeral`: the gateway passes it to the conversation's
+ watchers who said they read such frames and keeps nothing of it (`EPHEMERAL_LIVE_VERSION`). Every envelope stays at
+ `PROTOCOL_VERSION` on every link version.
  */
-export const LINK_VERSION = 26
+export const LINK_VERSION = 27
 
 /** The first link version a runtime may send `activity` on; a gateway that agreed less never sees one. */
 export const ACTIVITY_VERSION = 2
@@ -175,6 +177,14 @@ export const QUIET_OTHERS_LINK_VERSION = 26
  * carrying one, and places every Session outside the standby's folder at `project` itself.
  */
 export const QUIET_PROJECT_FROM_LINK_VERSION = 26
+
+/**
+ * The first link version whose gateway takes an `ephemeral` live frame: a watched conversation's passing state (a
+ * running call's steps), relayed to its current watchers that read such frames (`EPHEMERAL_PARAM`) as an `ephemeral`
+ * frame, unnumbered, and never kept in its stream's tail, so it can't push a kept update out of it. A runtime on an
+ * older link sends none: such a gateway would number and keep it as any update.
+ */
+export const EPHEMERAL_LIVE_VERSION = 27
 
 /**
  * The link versions this build can speak. A gateway keeps older versions working for runtimes that wake

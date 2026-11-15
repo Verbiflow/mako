@@ -96,9 +96,9 @@ export type MachineRuntimeOptions = {
 
 /** What the machine asks of the publisher of its Sessions (`SessionPublisher`). */
 export type SessionPublishing = {
-  report(current: { link: RuntimeLink; served: Pick<ServedRuntime, "version" | "sessions" | "live"> } | undefined): void
+  report(current: { link: RuntimeLink; served: Pick<ServedRuntime, "version" | "sessions" | "live" | "ephemeral"> } | undefined): void
   /** The link is up and served: watched conversations go out on it at once, not from the next report. */
-  linked(current: { link: RuntimeLink; served: Pick<ServedRuntime, "version" | "sessions" | "live"> }): void
+  linked(current: { link: RuntimeLink; served: Pick<ServedRuntime, "version" | "sessions" | "live" | "ephemeral"> }): void
   watch(link: RuntimeLink, conversations: readonly string[], after?: Readonly<Record<string, number>>, forms?: Readonly<Record<string, LiveForm>>): void
 }
 

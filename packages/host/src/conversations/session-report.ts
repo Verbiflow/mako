@@ -14,6 +14,7 @@ import { SessionIdSchema, ThreadIdSchema, type SessionId, type ThreadId, type Th
 import { COMPACT_LIVE_FORM, COMPACT_LIVE_VERSION, Payload, SESSIONS_VERSION, WHOLE_LIVE_FORM, type LiveForm, type RuntimeLink, type ServedRuntime } from "@mako/protocol"
 import type { HostWork } from "../base/event-loop.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
+import type { ToolSteps } from "../contracts/tool-steps.js"
 import { encodeRuntimeEvent, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
 import { gatewayCompactLine, gatewayEventLine, historyChangedNotice } from "../transport/index.js"
 import type { OwnerReading } from "../contracts/sync-readings.js"
@@ -476,7 +477,7 @@ export class SessionReporter {
 type KeptUpdate = { n: number; event: RuntimeEvent; text: string; compact?: string; correlationId?: string }
 
 /** The runtime link a host serves its Sessions on, while it's up: the link itself (one per connection), and what serves on it. */
-export type SessionLink = { link: RuntimeLink; served: Pick<ServedRuntime, "version" | "sessions" | "live"> }
+export type SessionLink = { link: RuntimeLink; served: Pick<ServedRuntime, "version" | "sessions" | "live" | "ephemeral"> }
 
 /** Some native sessions' rows as they are now, and every Session they stand for, a row or not (`rowsOfNative`). */
 export interface NativeRowsOf {
@@ -510,6 +511,11 @@ const SHOWN_PER_SECOND = 10
  */
 const KEPT_BYTES = 512 * 1024
 const KEPT_UPDATES = 1_024
+/**
+ * A running js call's steps go to another device at most this often, the newest each time: its window hears them four
+ * times a second over the socket, a phone once a second over the gateway.
+ */
+const STEPS_RELAY_MS = 1_000
 /** The work a report runs as, on the host's tick and soon after a change alike: what it reads in is counted to it. */
 export const REPORT_WORK = "tell the account this host's Sessions"
 
@@ -575,6 +581,8 @@ export class SessionPublisher {
   readonly #kept = new Map<string, { updates: Array<KeptUpdate>; bytes: number; given?: number }>()
   /** The gateway's word on a link not yet served: what it last relayed, to send the rest once the link is. */
   #after: { link: RuntimeLink; after: Readonly<Record<string, number>> } | undefined
+  /** Each watched conversation's running js call's steps on their way out (`#relaySteps`): the newest not yet sent. */
+  readonly #steps = new Map<string, { pending?: ToolSteps; last: number; armed: boolean }>()
   /** Updates sent again on a new link, and notices to read a conversation again sent in their place, for Diagnostics. */
   #resent = 0
   #notices = 0
@@ -917,6 +925,7 @@ export class SessionPublisher {
       if (this.#watching?.conversations.has(event.conversationId)) this.event("event", { type: event.type, conversation: event.conversationId, payload: JSON.stringify(event) })
       return
     }
+    if (event.type === "tool-steps") return this.#relaySteps(event.conversationId, event.steps)
     if (event.type !== "live-batch") return
     this.#touch(event.batch.id)
     this.#sawBatch(event.batch.id, event.batch.trace)
@@ -953,6 +962,48 @@ export class SessionPublisher {
       hostLog("sync", "a message the person sent goes on its row at once, and every rail moves its project", { conversation, promptedAt: shown.promptedAt, ...(trace && { trace }) })
     this.#changedAt.set(conversation, this.#now())
     this.#rowShowsChanged()
+  }
+
+  /**
+   * A watched conversation's running js call's steps, to whoever watches it: the newest at most every
+   * `STEPS_RELAY_MS`, and the call's end (`null`) at once. They go as passing state (`ephemeral`, link version 27), which
+   * the gateway relays to its watchers that read it and keeps nothing of, and this host keeps none either: steps from
+   * before a dropped link are worth nothing to a watcher who comes back, and they mustn't push the batches kept to send
+   * again out of the gateway's tail. A gateway on an older link would number and keep them as any update, so it hears
+   * none, and its watchers see a running call without its steps.
+   */
+  #relaySteps(conversation: string, steps: ToolSteps | null): void {
+    if (!steps) {
+      this.#steps.delete(conversation)
+      this.#sendSteps(conversation, null)
+      return
+    }
+    let relay = this.#steps.get(conversation)
+    if (!relay) this.#steps.set(conversation, (relay = { last: -Infinity, armed: false }))
+    relay.pending = steps
+    if (relay.armed) return
+    const fire = (held: NonNullable<typeof relay>) => {
+      held.armed = false
+      // The call ended meanwhile, or a newer call's steps took its place.
+      if (!held.pending || this.#steps.get(conversation) !== held) return
+      const pending = held.pending
+      held.pending = undefined
+      held.last = this.#now()
+      this.#sendSteps(conversation, pending)
+    }
+    const wait = relay.last + STEPS_RELAY_MS - this.#now()
+    if (wait <= 0) return fire(relay)
+    relay.armed = true
+    const held = relay
+    this.#schedule(() => fire(held), wait)
+  }
+
+  #sendSteps(conversation: string, steps: ToolSteps | null): void {
+    const current = this.#watched(conversation)
+    if (!current) return
+    const event = { type: "tool-steps" as const, conversationId: conversation, steps }
+    const line = gatewayEventLine("event", { type: event.type, conversation, payload: JSON.stringify(event) })
+    if (line.fit === "whole") current.served.ephemeral(conversation, Payload.encoded(line.text))
   }
 
   /** The current link, when another device watches `conversation` on it. */

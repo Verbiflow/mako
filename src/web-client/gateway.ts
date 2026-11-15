@@ -192,7 +192,8 @@ export class Gateway {
 
   async #open(endpoint: ClientEndpoint): Promise<MessageSocket> {
     const { token } = await this.connection()
-    const path = clientEndpointPath(endpoint, LIVE_FORM)
+    // It reads passing state (a running call's steps, `ephemeral`), which the gateway sends only to a connection that says so.
+    const path = clientEndpointPath(endpoint, LIVE_FORM, true)
     const socket = new WebSocket(new URL(path, this.origin.replace(/^http/, "ws")), subprotocols(token))
     socket.binaryType = "arraybuffer"
     watchSocket(path, socket)
