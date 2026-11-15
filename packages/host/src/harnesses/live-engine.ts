@@ -1,3 +1,4 @@
+import { providerTextEvidence } from "../contracts/provider-failure.js"
 import { randomUUID } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
 import type {
@@ -430,6 +431,7 @@ export function createLiveEngine<
     if (change.error) endRetries(live, "gave-up", [change.error])
     else if (change.status !== undefined && change.status !== "running") endRetries(live, undefined)
     const next: Partial<LiveSessionState> = { ...change }
+    if ("error" in change && !("failureEvidence" in change)) next.failureEvidence = change.error ? { kind: "unknown", source: "host" } : undefined
     // SAFETY: `next` is a copy of a Partial<LiveSessionState>, so its own keys are LiveSessionState's.
     for (const key of Object.keys(next) as (keyof LiveSessionState)[])
       if (next[key] !== live.state[key] && isDeepStrictEqual(next[key], live.state[key]))
@@ -516,7 +518,7 @@ export function createLiveEngine<
           updates.length === 1
             ? emitUpdate(live, updates[0]!)
             : emitUpdates(live, updates),
-        patch: (change) => patch(live, change),
+        patch: (change) => patch(live, change.error && !change.failureEvidence ? { ...change, failureEvidence: providerTextEvidence(change.error) } : change),
         activity: (observation) => activity(live, observation),
         marker: (marker, source) => event(live, marker, source),
         compacted: (compaction, source, completes) => compacted(live, compaction, source, completes),

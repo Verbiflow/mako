@@ -1,3 +1,4 @@
+import { HostFailureError } from "../../contracts/provider-failure.js"
 import { hostFetch } from "../../base/host-stopping.js"
 import { z } from "zod"
 import type { SDKRateLimitInfo } from "@anthropic-ai/claude-agent-sdk"
@@ -512,7 +513,7 @@ async function accountEnv(
   env.CLAUDE_CONFIG_DIR = dir
   const credentials = await readCredentials(env)
   if (!credentials || !hasCredentials(credentials))
-    throw new Error(
+    throw new HostFailureError("auth",
       "The selected Claude Code account is signed out. Sign in again in Settings → Agents."
     )
   await ensureSharedLinks(await managedAccountHome(dir, join(homedir(), HOME), "projects"), dir, SHARED_LINKS)

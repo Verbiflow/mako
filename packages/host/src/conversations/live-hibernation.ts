@@ -1,3 +1,4 @@
+import { failureEvidenceOf, HostFailureError } from "../contracts/provider-failure.js"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { resumable, type ProviderBinding } from "../contracts/conversation-control.js"
@@ -427,8 +428,9 @@ export class LiveHibernation {
           connection: "disconnected",
           status: "failed",
           error: message,
+          failureEvidence: { kind: "resume-failed", source: "host" },
         },
-        requests: this.access.failedStart(resident, { error: message }, true),
+        requests: this.access.failedStart(resident, { error: new HostFailureError("resume-failed", message) }, true),
       }
       this.access.flush(resident)
       return
@@ -629,6 +631,7 @@ export class LiveHibernation {
           executionContext: closed ? binding.executionContext : resident.snapshot.session.executionContext,
           status: waits ? "ready" : "failed",
           error: waits ? undefined : message,
+          failureEvidence: waits ? undefined : failureEvidenceOf({ error }),
         },
         requests,
       }

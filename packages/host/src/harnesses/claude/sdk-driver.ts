@@ -1,4 +1,5 @@
-import { ProviderFailureError } from "../../contracts/provider-failure.js"
+import type { ProviderFailureEvidence } from "../../contracts/provider-failure-evidence.js"
+import { providerCall, providerTextEvidence, providerExitEvidence, failureEvidenceOf, HostFailureError, ProviderFailureError } from "../../contracts/provider-failure.js"
 import type { ChildProcess } from "node:child_process"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"
 import { handOff, preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "../prompt-dispatch.js"
@@ -387,9 +388,17 @@ function settled(engine: Engine, live: Live, message: SDKTaskNotificationMessage
   if (live.told.size > MAX_TOLD) live.told.delete(live.told.keys().next().value!)
 }
 
+/** Only `next` rejects with a native SDK failure; errors in Mako's loop body stay host errors. */
+function nativeMessages(query: ClaudeQuery): AsyncIterable<SDKMessage> {
+  return { [Symbol.asyncIterator]() {
+    const iterator = query[Symbol.asyncIterator]()
+    return { next: () => providerCall(iterator.next()), return: iterator.return?.bind(iterator), throw: iterator.throw?.bind(iterator) }
+  } }
+}
+
 async function pump(engine: Engine, live: Live): Promise<void> {
   try {
-    for await (const message of live.query) {
+    for await (const message of nativeMessages(live.query)) {
       if (live.closed) return
       if (message.type === "system" && message.subtype === "init" && live.state.executionContext) {
         const runtime = reportedRuntime(message.claude_code_version, "system/init.claude_code_version")
@@ -472,7 +481,7 @@ async function pump(engine: Engine, live: Live): Promise<void> {
         : undefined
       const failure = nativeFailure?.slice(0, 2000)
       if (failure) live.authDiagnostics.failure(failure)
-      const failureEvidence = await live.authDiagnostics.failureEvidence(nativeFailure)
+      const failureEvidence = await live.authDiagnostics.failureEvidence(nativeFailure) ?? (nativeFailure ? providerTextEvidence(nativeFailure) : undefined)
       if (live.closed) return
       engine.patch(live, {
         nativePath: live.transcript.path,
@@ -495,7 +504,9 @@ async function pump(engine: Engine, live: Live): Promise<void> {
     }
     if (!live.closed) throw new Error("Claude Code closed its SDK stream")
   } catch (error) {
-    await disconnect(engine, live, error instanceof Error ? error.message : String(error))
+    const detail = error instanceof Error ? error.message : String(error)
+    const evidence = failureEvidenceOf({ error })
+    await disconnect(engine, live, detail, { evidence, ...(evidence.source !== "host" && { nativeText: detail }) })
   } finally {
     // The SDK's stream ended with its process, whether Mako closed it or it exited: the launch's stream is finished.
     live.stream?.ended()
@@ -513,10 +524,11 @@ async function reportGoal(live: Live): Promise<void> {
 }
 
 /** The session's process is gone: one failed and disconnected update, with the transcript it resumes from. */
-async function disconnect(engine: Engine, live: Live, detail: string): Promise<void> {
+interface DisconnectFailure { evidence: ProviderFailureEvidence; nativeText?: string }
+async function disconnect(engine: Engine, live: Live, detail: string, failure: DisconnectFailure = { evidence: { kind: "network", source: "host" } }): Promise<void> {
   if (live.closed) return
-  live.authDiagnostics.failure(detail)
-  const failureEvidence = await live.authDiagnostics.failureEvidence(detail)
+  if (failure.nativeText) live.authDiagnostics.failure(failure.nativeText)
+  const failureEvidence = failure.nativeText ? await live.authDiagnostics.failureEvidence(failure.nativeText) ?? failure.evidence : failure.evidence
   const nativePath = await live.transcript.locate(live.state.nativeId)
   if (live.closed) return
   stop(live)
@@ -540,12 +552,12 @@ async function tune(live: Live, settings?: SessionSettings): Promise<void> {
   )
     throw new Error("Change agent teams by starting a new Claude session")
   if (settings.model && settings.model !== live.state.settings?.model)
-    await live.query.setModel(settings.model)
+    await providerCall(live.query.setModel(settings.model))
   if (tuning.effort !== undefined || tuning.fast !== undefined)
-    await live.query.applyFlagSettings({
+    await providerCall(live.query.applyFlagSettings({
       effortLevel: tuning.effort,
       fastMode: tuning.fast,
-    })
+    }))
   live.state = {
     ...live.state,
     settings: {
@@ -606,7 +618,7 @@ export function createClaudeSdkDriver(
     stopNativeAgent: async (id, nativeId) => {
       const { query } = requireLive(id)
       if (!query.stopTask) throw new Error("This Claude session cannot stop one task")
-      await query.stopTask(nativeId)
+      await providerCall(query.stopTask(nativeId))
     },
     turnRecovery: {
       kind: "continues",
@@ -783,7 +795,10 @@ export function createClaudeSdkDriver(
         const evidence = await authDiagnostics.failureEvidence(message)
         throw evidence ? new ProviderFailureError(message, evidence, { cause: error }) : error
       }
-      processGone = (detail) => void disconnect(engine, live, detail)
+      processGone = (detail) => {
+        const nativeText = stderrDetail(startupStderr())
+        void disconnect(engine, live, detail, { evidence: providerExitEvidence(nativeText), ...(nativeText && { nativeText }) })
+      }
       const context = launchContext("claude-agent-sdk", CLAUDE_NATIVE_IDENTITY, account, config.pathToClaudeCodeExecutable)
       const live: Live = {
         observeUsage: options.observeUsage,
@@ -832,13 +847,13 @@ export function createClaudeSdkDriver(
       void pump(engine, live)
       let timer: ReturnType<typeof setTimeout> | undefined
       try {
-        const initialization = query.initializationResult()
+        const initialization = providerCall(query.initializationResult())
         const initialized = await trace.step("sdk-initialization", () => Promise.race([
           initialization,
           spawned.then((watch) => watch.step("SDK initialization", initialization)),
           new Promise<never>((_, reject) => {
             timer = setTimeout(
-              () => reject(new Error(`Claude did not finish SDK initialization within ${STARTUP_TOTAL_MS / 1000} s`)),
+              () => reject(new HostFailureError("launch-stalled", `Claude did not finish SDK initialization within ${STARTUP_TOTAL_MS / 1000} s`)),
               STARTUP_TOTAL_MS
             )
           }),
@@ -867,12 +882,13 @@ export function createClaudeSdkDriver(
         if (options.resume) void reportGoal(live)
         return live.state
       } catch (error) {
-        if (error instanceof Error) authDiagnostics.failure(error.message)
+        if (!(error instanceof HostFailureError) && error instanceof Error) authDiagnostics.failure(error.message)
         hostWarn("claude-sdk", "initialization failed", {
           conversation: conversationId, ms: Date.now() - startedAt,
           spawned: startupWatch !== undefined, steps: startupWatch?.summary(),
         })
         stop(live)
+        if (error instanceof HostFailureError) throw error
         // The SDK's own "process exited" can win the race with the watch; what
         // Claude printed is the cause either way.
         const detail = stderrDetail(startupStderr())
@@ -880,7 +896,7 @@ export function createClaudeSdkDriver(
         const combined = detail && !message.includes(detail) ? `${message}: ${detail}` : message
         const evidence = await authDiagnostics.failureEvidence(combined)
         if (evidence) throw new ProviderFailureError(combined, evidence, { cause: error })
-        throw combined !== message ? new Error(combined, { cause: error }) : error
+        throw combined !== message ? new ProviderFailureError(combined, providerTextEvidence(detail), { cause: error }) : error
       } finally {
         startupFinished = true
         clearTimeout(timer)
@@ -1023,7 +1039,7 @@ export function createClaudeSdkDriver(
     contextBreakdown: { kind: "itemized", via: "The Agent SDK's `getContextUsage`, by category.", async read(id) {
       const { query } = requireLive(id)
       if (!query.getContextUsage) throw new Error("This Claude session cannot itemize its context")
-      return claudeContextBreakdown(await query.getContextUsage({ detail: "summary" }))
+      return claudeContextBreakdown(await providerCall(query.getContextUsage({ detail: "summary" })))
     } },
     async permission(id, requestId, response, dispatch) {
       dispatch.assertCurrent()
@@ -1036,7 +1052,7 @@ export function createClaudeSdkDriver(
       const mode = ClaudeModeSchema.parse(modeId)
       const left = ClaudeModeSchema.safeParse(live.state.currentMode).data
       if (mode === "plan" && left && left !== "plan") live.permissions.planReturn = left
-      await live.query.setPermissionMode(mode)
+      await providerCall(live.query.setPermissionMode(mode))
       engine.patch(live, { currentMode: mode })
     },
     async cancel(id) {

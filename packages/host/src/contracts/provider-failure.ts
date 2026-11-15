@@ -1,18 +1,10 @@
 import type { ProviderFailureEvidence } from "./provider-failure-evidence.js"
-import type { FailureBoundary } from "./error-message.js"
+import { errorMessage, type FailureBoundary } from "./error-message.js"
 
 /**
- * What a failed turn means for the person reading it.
- *
- * A provider hands Mako one string. Some of those strings describe a fault
- * that a second attempt cannot fix — the model API refused the session's own
- * history, the context is full, the account is signed out — and offering
- * "Send again" for them is a lie that costs a round trip. Others are
- * transient and are worth exactly that button. The classifier reads the
- * string once, on the host, and the request carries the verdict; the
- * renderer never pattern-matches error text.
- *
- * Kept free of runtime imports so the renderer and the host share it.
+ * Host failures carry their kind. Only native decoders and transports admit provider text for classification;
+ * mixed host catches never guess a cause from prose. The request retains that verdict for every renderer.
+ * Browser-safe: no host or provider SDK runtime imports.
  */
 export const PROVIDER_FAILURE_KINDS = [
   /** The model API refused the session's saved history; only a new session escapes it. */
@@ -51,6 +43,10 @@ export const PROVIDER_FAILURE_KINDS = [
 ] as const
 export type ProviderFailureKind = (typeof PROVIDER_FAILURE_KINDS)[number]
 
+/** Host-owned failures are never quota evidence; only the provider can attest to quota. */
+export const HOST_FAILURE_KINDS = ["unknown", "auth", "permission", "wrong-account", "missing-folder", "resume-failed", "launch-failed", "launch-stalled", "rejected-input", "transport-limit", "network"] as const
+export type HostFailureKind = (typeof HOST_FAILURE_KINDS)[number]
+
 export interface ProviderFailure {
   kind: ProviderFailureKind
   /** Whether an unchanged attempt may succeed. This is not delivery or replay-safety evidence. */
@@ -70,7 +66,9 @@ interface Rule {
  * The words that say an account ran out rather than that a service is busy: `Your team has reached its usage limit`,
  * `You've hit your weekly limit · resets 1pm`, `Claude usage limit reached`, `Quota exhausted`.
  */
-const USAGE_LIMIT = /\bhit your (?:[\w-]+ )?limit|\breached (?:your|its|the) (?:[\w-]+ )?(?:usage |rate )?limit|\busage limit\b|\b(?:session|weekly|daily|monthly|five-hour|5-hour) limit (?:reached|hit)|\bquota (?:exhausted|exceeded)\b|usage_limit_(?:reached|exceeded)/i
+const USAGE_LIMIT = /^(?:(?:API Error|Error):\s*)?(?:(?:Claude(?: Code| AI)?|Codex|Cursor|Grok|Devin|OpenCode)[: ]+)?(?:you(?: have|'ve|’ve)? (?:hit|have hit|reached) (?:your|the) (?:[\w-]+ )?(?:usage |rate )?limit\b|your team has reached its (?:usage |rate )?limit\b|(?:usage limit|quota) (?:reached|hit|exhausted|exceeded)\b|usage_limit_(?:reached|exceeded)\b)/i
+/** HTTP/JSON-RPC and the providers' native rate-error headings, not suggestions such as “retry after”. */
+const RATE_LIMIT = /^(?:(?:API Error|HTTP(?: Error)?|Error):?\s*)?(?:429\b|rate_limit(?:_error|_exceeded|ed)\b|rate limit (?:reached|exceeded)\b|rate limited(?:[.:]|$)|too many requests\b|overloaded_error\b|resource_exhausted\b|\[resource_exhausted\])/i
 
 /**
  * Claude prefixes temporary failures from its authentication request with "Failed to authenticate". Classify the
@@ -137,8 +135,7 @@ const rules: Rule[] = [
   },
   {
     kind: "rate-limited",
-    match:
-      /\b429\b|\b529\b|rate[_ ]?limit|too many requests|quota|overloaded|over capacity|capacity|resource[_ ]exhausted|usage limit|throttl|try again (?:in|later|shortly)|retry after/i,
+    match: RATE_LIMIT,
   },
   {
     kind: "provider-unavailable",
@@ -206,14 +203,29 @@ export function permanentFailure(message: string | undefined): boolean {
   return personsFault(text) || rules.some((rule) => rule.kind === "plan" && rule.match.test(text))
 }
 
-export function classifyProviderFailure(
-  message: string | undefined,
-  providerLabel = "The provider",
-  evidence?: ProviderFailureEvidence
-): ProviderFailure {
+/** Native text is admitted only by a provider decoder/transport, never by a mixed host catch. */
+export function classifyProviderText(message: string | undefined, providerLabel = "The provider"): ProviderFailure {
   const text = failureText(message)
-  const kind = evidence && evidence.kind !== "unknown" ? evidence.kind : (usageLimitWords(text) ? "rate-limited" : rules.find((rule) => rule.match.test(text))?.kind ?? "unknown")
+  const kind = usageLimitWords(text) ? "rate-limited" : rules.find((rule) => rule.match.test(text))?.kind ?? "unknown"
   return describeProviderFailure(kind, providerLabel)
+}
+
+/** Missing provenance is a host failure of unknown kind; it is never guessed from its prose. */
+export function classifyProviderFailure(message: string | undefined, providerLabel = "The provider", evidence?: ProviderFailureEvidence): ProviderFailure {
+  if (!evidence) return describeProviderFailure("unknown", providerLabel)
+  return evidence.source === "provider-error" && evidence.kind === "unknown"
+    ? classifyProviderText(message, providerLabel)
+    : describeProviderFailure(evidence.kind, providerLabel)
+}
+
+export function providerTextEvidence(message: string | undefined): ProviderFailureEvidence {
+  return { kind: classifyProviderText(message).kind, source: "provider-text" }
+}
+
+/** A process exit is a network fact unless its own stderr supplies a known native cause. */
+export function providerExitEvidence(stderr: string | undefined): ProviderFailureEvidence {
+  const native = providerTextEvidence(stderr)
+  return native.kind === "unknown" ? { kind: "network", source: "host" } : native
 }
 
 /**
@@ -223,7 +235,7 @@ export function classifyProviderFailure(
  */
 export function classifyStartFailure(message: string | undefined, resuming: boolean, evidence?: ProviderFailureEvidence): ProviderFailureKind {
   const kind = classifyProviderFailure(message, undefined, evidence).kind
-  return kind === "unknown" && resuming ? "resume-failed" : kind
+  return evidence?.source === "host" ? kind : kind === "unknown" && resuming ? "resume-failed" : kind
 }
 
 export function describeProviderFailure(
@@ -362,6 +374,27 @@ export class ProviderFailureError extends Error {
   }
 }
 
-export function failureEvidenceOf({ error }: FailureBoundary): ProviderFailureEvidence | undefined {
-  return error instanceof ProviderFailureError ? error.failureEvidence : undefined
+/** Host preparation is the default at a mixed catch boundary. Native calls explicitly wrap their own failures. */
+export function failureEvidenceOf({ error }: FailureBoundary): ProviderFailureEvidence {
+  return error instanceof ProviderFailureError || error instanceof HostFailureError
+    ? error.failureEvidence : { kind: "unknown", source: "host" }
+}
+
+export class HostFailureError extends Error {
+  readonly failureEvidence: { kind: HostFailureKind; source: "host" }
+  constructor(kind: HostFailureKind, message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.name = "HostFailureError"
+    this.failureEvidence = { kind, source: "host" }
+  }
+}
+
+/** Only called at the native provider call, never around Mako's preparation, history, tools or persistence. */
+export async function providerCall<Value>(reply: Promise<Value>): Promise<Value> {
+  try { return await reply }
+  catch (error) {
+    if (error instanceof HostFailureError || error instanceof ProviderFailureError) throw error
+    const message = errorMessage({ error })
+    throw new ProviderFailureError(message, providerTextEvidence(message), { cause: error })
+  }
 }

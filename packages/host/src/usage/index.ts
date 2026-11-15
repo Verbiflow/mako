@@ -102,7 +102,7 @@ export function spendWatch(
       else if (status !== "running") {
         ended = spending.get(event.batch.id)
         spending.delete(event.batch.id)
-        if (ended) turnEnded?.(ended, status === "failed" && LIMIT_FAILURES.has(classifyProviderFailure(session.error).kind))
+        if (ended) turnEnded?.(ended, status === "failed" && LIMIT_FAILURES.has(classifyProviderFailure(session.error, undefined, session.failureEvidence).kind))
       }
     } else if (event.type === "thread-run" && event.run.status !== "running") {
       ended = event.run.harness

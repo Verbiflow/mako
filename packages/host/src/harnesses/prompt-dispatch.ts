@@ -1,3 +1,4 @@
+import { HostFailureError } from "../contracts/provider-failure.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import type { UUID } from "node:crypto"
 import type { PromptDeliveryEvidence } from "../contracts/prompt-delivery.js"
@@ -22,9 +23,9 @@ export interface PromptDispatch {
  * between the host's look and the send. Thrown before anything is sent, so the message waits for that turn and goes
  * after it, whatever the session reads by the time the refusal is handled: such a turn can end at once.
  */
-export class TurnInProgressError extends Error {
+export class TurnInProgressError extends HostFailureError {
   constructor(harness: string) {
-    super(`${harness} is already working`)
+    super("unknown", `${harness} is already working`)
     this.name = "TurnInProgressError"
   }
 }
@@ -34,10 +35,10 @@ export class TurnInProgressError extends Error {
  * `superseded`: a newer attempt or owner has the conversation. `unsaved`: the journal couldn't record it as sent.
  * `withdrawn`: a message Mako sent by itself no longer holds, as what made it says (`ConversationChildren.admits`).
  */
-export class HandoffRefused extends Error {
+export class HandoffRefused extends HostFailureError {
   readonly why: "stopped" | "superseded" | "unsaved" | "withdrawn"
   constructor(why: HandoffRefused["why"], options?: ErrorOptions) {
-    super(why === "stopped" ? "Stopped before it was sent" : why === "superseded" ? "Another send of this conversation took its place" : why === "withdrawn" ? "What it was sent for no longer holds" : "Mako couldn't save this message as sent, so it wasn't sent", options)
+    super("unknown", why === "stopped" ? "Stopped before it was sent" : why === "superseded" ? "Another send of this conversation took its place" : why === "withdrawn" ? "What it was sent for no longer holds" : "Mako couldn't save this message as sent, so it wasn't sent", options)
     this.name = "HandoffRefused"
     this.why = why
   }

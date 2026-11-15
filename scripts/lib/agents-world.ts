@@ -1,3 +1,4 @@
+import { ProviderFailureError, providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import type { ProviderFailureEvidence } from "@mako/host/contracts/provider-failure-evidence"
 import { randomUUID } from "node:crypto"
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
@@ -628,7 +629,7 @@ export class AgentsWorld {
         const refused = await this.options.refusePrompt?.(id, harness)
         if (refused) {
           dispatch.report({ kind: "not-accepted", source: "preflight", reason: refused })
-          throw new Error(refused)
+          throw new ProviderFailureError(refused, providerTextEvidence(refused))
         }
         handOff(dispatch, { kind: "submitted", source: "transport-call" })
         const path = this.live.snapshot(id)?.session.nativePath ?? state(id).nativePath ?? ""
@@ -650,7 +651,7 @@ export class AgentsWorld {
           emit({ type: "live-update", id: binding, update: { kind: "text", text: reply } })
           if (end.limit) emit({ type: "live-update", id: binding, update: { kind: "event", label: "Rate limited", detail: "Reached your usage limit", tone: "warning", limit: end.limit } })
           const ended = { ...(this.live.snapshot(id)?.session ?? session), id: binding }
-          emit({ type: "live-session", session: end.fail ? { ...ended, status: "failed", lastStop: "failed", error: end.fail, failureEvidence: end.failureEvidence } : { ...ended, status: "ready", failureEvidence: undefined } })
+          emit({ type: "live-session", session: end.fail ? { ...ended, status: "failed", lastStop: "failed", error: end.fail, failureEvidence: end.failureEvidence ?? providerTextEvidence(end.fail) } : { ...ended, status: "ready", failureEvidence: undefined } })
         })()
         this.running.add(turn)
         void turn.finally(() => this.running.delete(turn))

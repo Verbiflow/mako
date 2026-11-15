@@ -562,6 +562,7 @@ export class LiveDispatch {
             ...resident.snapshot.session,
             status: "failed",
             error: errorMessage({ error }),
+            failureEvidence,
           },
           requests: resident.snapshot.requests.map((candidate) =>
             candidate.id === request.id

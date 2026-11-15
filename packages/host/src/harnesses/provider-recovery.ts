@@ -1,3 +1,4 @@
+import { HostFailureError } from "../contracts/provider-failure.js"
 import type { MakoProcesses } from "../threads/index.js"
 import type { ProviderBinding, ResumeVerdict } from "../contracts/conversation-control.js"
 import { assessResumeEvidence } from "./native-continuation.js"
@@ -14,32 +15,32 @@ import { assessExecutionContext } from "../base/execution-context.js"
  */
 export async function verifyRecoveredSession(binding: ProviderBinding, session: LiveSessionState, driver: ProviderLiveDriver & Pick<AdmittedLiveDriver, "runtimeOldest">): Promise<void> {
   if (session.harness !== binding.provider || driver.provider !== binding.provider || session.nativeId !== binding.nativeId)
-    throw new Error("The provider opened a different native session. The saved conversation was not replaced.")
+    throw new HostFailureError("resume-failed", "The provider opened a different native session. The saved conversation was not replaced.")
   const sameSource = (left: string, right: string) => sameNativeSource(driver, left, right, binding.nativeId)
   const savedStore = binding.executionContext?.store
   if (binding.path && savedStore?.kind === "located" && !await sameSource(binding.path, savedStore.path))
-    throw new Error("The saved native source disagrees with its execution context. No prompt was dispatched.")
+    throw new HostFailureError("resume-failed", "The saved native source disagrees with its execution context. No prompt was dispatched.")
   const openedStore = session.executionContext?.store
   if (session.nativePath && openedStore?.kind === "located" && !await sameSource(session.nativePath, openedStore.path))
-    throw new Error("The opened native source disagrees with its execution context. No prompt was dispatched.")
+    throw new HostFailureError("resume-failed", "The opened native source disagrees with its execution context. No prompt was dispatched.")
   const openedPath = session.nativePath ?? (openedStore?.kind === "located" ? openedStore.path : undefined)
   if (binding.path && !openedPath)
-    throw new Error("The selected runtime did not locate the reopened native source. No prompt was dispatched.")
+    throw new HostFailureError("resume-failed", "The selected runtime did not locate the reopened native source. No prompt was dispatched.")
   let imported = false
   if (binding.path && openedPath && !await sameSource(binding.path, openedPath)) {
     const receipt = session.executionContext?.sourceImport
     if (!receipt || receipt.nativeId !== binding.nativeId || !await sameSource(receipt.source, binding.path) || !await sameSource(receipt.destination, openedPath))
-      throw new Error("The selected runtime or account opened a different native store without an exact import receipt. No prompt was dispatched; the saved binding was preserved.")
+      throw new HostFailureError("resume-failed", "The selected runtime or account opened a different native store without an exact import receipt. No prompt was dispatched; the saved binding was preserved.")
     const evidence = driver.resume.kind === "native" ? await driver.resume.inspect(binding) : undefined
     if (evidence?.kind !== "available" || evidence.strategy !== "copy")
-      throw new Error("The adapter could not verify the imported native source. No prompt was dispatched; the saved binding was preserved.")
+      throw new HostFailureError("resume-failed", "The adapter could not verify the imported native source. No prompt was dispatched; the saved binding was preserved.")
     if (!receipt.revision || receipt.revision !== evidence.checkpoint)
-      throw new Error("The imported snapshot's revision could not be matched to the current native source. No prompt was dispatched; the saved binding was preserved.")
+      throw new HostFailureError("resume-failed", "The imported snapshot's revision could not be matched to the current native source. No prompt was dispatched; the saved binding was preserved.")
     imported = true
     hostLog("recovery", "native source import verified", { harness: binding.provider, binding: binding.id, via: receipt.via })
   }
   const compatibility = assessExecutionContext(binding.executionContext, session.executionContext, imported, driver.runtimeOldest?.())
-  if (compatibility.kind === "incompatible") throw new Error(compatibility.reason)
+  if (compatibility.kind === "incompatible") throw new HostFailureError("resume-failed", compatibility.reason)
   hostLog("recovery", "opened execution context assessed", {
     harness: binding.provider, binding: binding.id, outcome: compatibility.kind,
     missing: compatibility.kind === "unverified" ? compatibility.missing.join(",") : undefined,
