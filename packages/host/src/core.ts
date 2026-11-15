@@ -334,6 +334,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     readDaemon: readFseventsd,
     privileged: administratorPrompt,
     probe: () => probeDelivery(),
+    pollingLags: () => watchReadings.pollingLags(),
     recover: () => {
       watchBackend.recover()
       late.fileHistory?.recover?.()

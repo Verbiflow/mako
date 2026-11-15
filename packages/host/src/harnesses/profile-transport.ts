@@ -38,6 +38,12 @@ export function runDiscovery(
   )
 }
 
+/**
+ * The discovery process ended before it answered: stopped (143 when the host or a newer discovery ends it) or crashed.
+ * That says nothing of what was asked, so a model being checked when it came is never read as refused.
+ */
+export class DiscoveryEndedError extends Error {}
+
 export interface DiscoveryStream {
   request<T>(
     request: JsonObject,
@@ -74,7 +80,7 @@ export function withDiscoveryStream<TResult>(
     })
     void exited.then(({ code, signal }) =>
       fail(
-        new Error(
+        new DiscoveryEndedError(
           `${options.command} exited with ${signal ?? code} before discovery completed`
         )
       )

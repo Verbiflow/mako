@@ -26,7 +26,7 @@ import { watchApexView } from "@/state/apex-fins"
 import { watchSessionPanes } from "@/state/session-panes"
 import { watchLiveResidency } from "@/state/live-residency"
 import { receiveControlActivity } from "@/state/control-preview"
-import { hostConnectionStore } from "@/state/host-connection"
+import { hostConnectionStore, hostDisconnected } from "@/state/host-connection"
 import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
 import { UNSTATED_MACHINE_OFFER, type MachineOffer } from "@mako/host/contracts/machine-offer"
 import type { ProcessPlatform } from "@mako/host/contracts/platform"
@@ -374,7 +374,7 @@ function apply(event: HostEvent) {
   }
   if (event.type === "host-disconnected") {
     connectionEpoch++
-    hostConnectionStore.set({ kind: "disconnected", message: event.message })
+    hostDisconnected(event.message)
     return
   }
   if (event.type === "control-activity") {
@@ -857,7 +857,7 @@ export const actions = {
       if (!boot.archives) void threadLifecycle.load()
     } catch (error) {
       if (epoch !== connectionEpoch) return
-      hostConnectionStore.set({ kind: "disconnected", message: error instanceof Error ? error.message : "The shared host could not be restored" })
+      hostDisconnected(error instanceof Error ? error.message : "The shared host could not be restored")
       // The host said it is back and nothing will say so again: a boot that failed on the way is tried again, not
       // left on the banner until the person reloads. A new outage or boot moves the epoch on and ends the retries.
       setTimeout(() => { if (epoch === connectionEpoch) void actions.reconnect(attempt + 1) }, Math.min(30_000, 1_000 * 2 ** attempt))

@@ -16,12 +16,14 @@ export const KEEP_AWAKE_BATTERY_FLOOR = 20
  * - `lid`: agents work, on power, and macOS was asked to hold off sleep with the lid closed too.
  * - `low-battery`: agents work, but the battery is below the floor, so nothing is held and the Mac may sleep.
  * - `failed`: agents work and the choice is on, but nothing is held: the helper is missing or gone, or macOS refused.
+ *   Mako tries again at its next recount, within a minute; `again` once that failed too.
  * - `rest`: nothing is held: no agent works, or the choice is off.
  */
 export type KeepAwakeHold =
   | { kind: "idle" | "lid"; agents: number }
   | { kind: "low-battery"; agents: number; percent: number; floor: number }
-  | { kind: "failed"; agents: number }
+  /** `again`: a later recount failed too, so it's said; a first failure the next recount usually puts right isn't. */
+  | { kind: "failed"; agents: number; again?: boolean }
   | { kind: "rest" }
 
 export interface KeepAwakeState {

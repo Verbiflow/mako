@@ -149,7 +149,7 @@ if (!reloaded) {
   try {
     // 1. Mako is away: three messages are taken at once, each shown waiting and kept, and nothing is asked of the host.
     reset()
-    hostConnectionStore.set({ kind: "disconnected", message: "Reconnecting" })
+    hostConnectionStore.set({ kind: "disconnected", message: "Reconnecting", since: Date.now() })
     const away = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()]
     for (const [index, id] of away.entries()) assert.equal(await sendTo(conversation, `away ${index}`, [], id), true, "the composer's message is taken")
     assert.equal(host.asked, 0)
@@ -222,7 +222,7 @@ if (!reloaded) {
     assert.deepEqual(host.took, [{ how: "steer", id: steer, text: "use the parser" }], "steered once, not queued")
     assert.equal(pending().some((prompt) => prompt.id === steer), false, "the turn shows it now")
     // Away mid-turn: it waits as a steer, and goes into the turn once Mako is back.
-    hostConnectionStore.set({ kind: "disconnected", message: "Reconnecting" })
+    hostConnectionStore.set({ kind: "disconnected", message: "Reconnecting", since: Date.now() })
     const awaySteer = crypto.randomUUID()
     assert.equal(await steerTo(conversation, "also the docs", [], awaySteer), true)
     assert.equal(waiting(awaySteer), "Waiting for Mako to reconnect")
@@ -230,7 +230,7 @@ if (!reloaded) {
     await sendWaitingNow(conversation)
     assert.deepEqual(host.took.map((each) => [each.how, each.id]), [["steer", steer], ["steer", awaySteer]])
     // The turn ended while it waited: it goes as the next message instead, once.
-    hostConnectionStore.set({ kind: "disconnected", message: "Reconnecting" })
+    hostConnectionStore.set({ kind: "disconnected", message: "Reconnecting", since: Date.now() })
     const late = crypto.randomUUID()
     await steerTo(conversation, "after all that", [], late)
     host.running = false
@@ -242,7 +242,7 @@ if (!reloaded) {
 
     // 6. The page restarts mid-delivery: the reloaded page sends what the outbox kept once, and nothing the host already took.
     reset()
-    hostConnectionStore.set({ kind: "disconnected", message: "Reconnecting" })
+    hostConnectionStore.set({ kind: "disconnected", message: "Reconnecting", since: Date.now() })
     const survivor = crypto.randomUUID()
     await sendTo(conversation, "survives a restart", [], survivor)
     for (const took of [false, true]) {
