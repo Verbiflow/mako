@@ -505,6 +505,8 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
 }
 
 export interface ConversationMethodsDeps {
+  /** Whether a resolved path is a copy Mako kept of a file this conversation's records name (`ConversationMedia.kept`). */
+  keptMedia?: (conversation: string, real: string) => Promise<boolean>
   conversations: Conversations
   /** Validates each launch's settings against the harness's discovered models. */
   profiles: HarnessProfiles
@@ -701,7 +703,8 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     if (!session) throw new Error("That conversation is unavailable")
     const dataDir = environments ? () => environments.fileDataDir({ conversationId: id, cwd: session.cwd }) : undefined
     // Another device reads through the gateway: only the Thread's folders, never a path anywhere on this Mac.
-    return files.read(session.cwd, path, dataDir, purpose, hostClient().startsWith(GATEWAY_CLIENT))
+    const kept = deps.keptMedia
+    return files.read(session.cwd, path, dataDir, purpose, hostClient().startsWith(GATEWAY_CLIENT), kept && ((real) => kept(id, real)))
   })
   /** A conversation's folder, browsed from wherever its window is: another device's Files view. */
   const folderIndex = (id: string) => {
