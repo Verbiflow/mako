@@ -3716,19 +3716,27 @@ harness order, named and typed in `contracts/preferences.ts`. Each key holds
 its value with when the person made that edit (`at`) and the edit's ID (`op`),
 and the later edit wins (`laterEdit`): the account keeps a write only if it's
 later than the one it holds, clamping a device's clock that runs ahead to its
-own, and an edit at 0 (a value kept before the account kept it, its time
-unknown) only fills one the account holds nothing for. A window reaches them
+own (or just after the edit it holds), and an edit at 0 (a value kept before
+the account kept it, its time unknown) only fills one the account holds
+nothing for. The person's own edit is stamped at the later of the device's
+clock and just after the edit in effect (`PreferenceStore.change`, the web's
+`set`), so an edit made after seeing a value always wins over it, whatever
+that device's clock says. A window reaches them
 through its host (`PreferenceStore`, `mako:preferences`, `mako:preference-set`,
 `<user root>/preferences.json` with what it couldn't send yet laid over it);
 the web app and the phone read and write the account directly
 (`src/web-client/account-preferences.ts`), so they show with every Mac asleep.
-What a device kept before is offered once (`offer`), stamped with when it was
-last edited there: a Mac's `fin-defaults.json` and the harness order in
-`utility-work.json` by their files' times, a window's or a browser's theme at
-0. The account is the source of truth and those two files only mirror it, for
-an older Mako sharing `~/.mako` (`FinDefaultsStore.mirror`,
-`mirrorHarnessOrder`); a change an older Mako makes to one is taken as its
-edit, made when the file changed, and sent. What's each device's own stays in
+What a device kept before is offered once (`offer`), at 0: no file says when a
+choice in it was made (`fin-defaults.json` is written at nearly every session
+start), so a first sync only fills what the account holds nothing for and
+never replaces a choice made since on another device. The account is the
+source of truth and those two files only mirror it, for an older Mako sharing
+`~/.mako` (`FinDefaultsStore.mirror`, `mirrorHarnessOrder`); each mirror write
+marks what it wrote (`preferencesMirror`, `orderMirror`), so every host of the
+user (the app and its profiles) reads a file that still matches its mark as a
+mirror. A synced field that no longer matches it was changed by another
+program (an older Mako keeps the mark as it found it): that's its edit, made
+when the file changed, and it's sent. What's each device's own stays in
 its file: its number of Fins at once and the model it last used on each
 harness. `scripts/test-account-preferences.ts` covers the store, the merge and
 the mirror.

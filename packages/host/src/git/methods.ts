@@ -239,30 +239,27 @@ export function openUtilityModels({ dataRoot, appData }: Pick<HostEnvironment, "
 
 /**
  * The harness order follows the account (`HarnessOrderPreference`); the choices file mirrors it for an older Mako that
- * reads it there. What the file kept before is offered once, edited when the file was; a change to it since this host
- * last mirrored it was another program's (an older Mako's), and goes to the account as its edit, made then.
+ * reads it there, marked as the mirror's (`orderMirror`). What the file kept before is offered once, at 0: when it was
+ * chosen isn't known, so it only fills an account that holds none. An order that differs from what the last mirror
+ * wrote, by any host of this user, was changed by another program (an older Mako, which keeps the mark as it found it):
+ * that's its edit, made when the file changed, and it goes to the account.
  */
 function mirrorHarnessOrder(models: UtilityModelStore, order: HarnessOrderPreference): void {
-  let mirrored: string | undefined
   let mirroring = Promise.resolve()
   const mirror = async () => {
-    const [kept, at] = await Promise.all([models.harnessOrder(), models.choicesEdited()])
+    const { order: kept, mirrored } = await models.harnessOrderMirror()
     const said = JSON.stringify(kept)
-    if (mirrored !== undefined && said !== mirrored) {
-      mirrored = said
-      if (order.edit(kept.length ? kept : null, at ?? Date.now())) return
-    }
+    if (mirrored !== undefined && said !== mirrored && order.edit(kept.length ? kept : null, (await models.choicesEdited()) ?? Date.now())) return
     if (!order.has()) return
-    const want = [...(order.read() ?? [])]
-    if (JSON.stringify(want) !== said) await models.saveHarnessOrder(want)
-    mirrored = JSON.stringify(want)
+    const want = JSON.stringify([...(order.read() ?? [])])
+    if (want !== said || want !== mirrored) await models.mirrorHarnessOrder(order.read() ?? [])
   }
   const again = () => {
     mirroring = mirroring.then(mirror).catch((error: Error) => hostWarn("utility-models", "the harness order wasn't mirrored into its file", { error: error.message }))
   }
-  void Promise.all([models.harnessOrder(), models.choicesEdited()]).then(
-    ([kept, at]) => {
-      order.offer(kept.length ? kept : undefined, at ?? 0)
+  void models.harnessOrder().then(
+    (kept) => {
+      order.offer(kept.length ? kept : undefined, 0)
       order.onChange(again)
       again()
     },

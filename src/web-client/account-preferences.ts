@@ -43,8 +43,10 @@ export class WebPreferences {
 
   /** The person changed `name` here (null: back to the default): in effect at once, and sent. */
   set<Name extends PreferenceName>(name: Name, value: PreferenceValue<Name> | null): Promise<void> {
+    // The later of this clock and just after the edit in effect: an edit made after seeing a value always wins over it.
+    const at = Math.max(Date.now(), (effective(this.#kept.held[name], this.#kept.unsent[name])?.at ?? 0) + 1)
     // SAFETY: `PreferenceValue<Name>` is JSON by `PREFERENCE_SCHEMAS`; null clears it.
-    const entry: PreferenceEntry = { value: value as JsonValue | null, at: Date.now(), op: crypto.randomUUID() }
+    const entry: PreferenceEntry = { value: value as JsonValue | null, at, op: crypto.randomUUID() }
     this.#keep({ ...this.#kept, unsent: { ...this.#kept.unsent, [name]: entry } })
     return this.sync()
   }

@@ -65,8 +65,8 @@ function account(now = () => Date.now()) {
   }
 }
 
-function store(root: string, cloud: ReturnType<typeof account> | undefined, announced: PreferenceValues[] = []) {
-  return new PreferenceStore({ file: join(root, "preferences.json"), account: async () => cloud?.end, announce: (values) => announced.push(values) })
+function store(root: string, cloud: ReturnType<typeof account> | undefined, announced: PreferenceValues[] = [], now?: () => number) {
+  return new PreferenceStore({ file: join(root, "preferences.json"), account: async () => cloud?.end, announce: (values) => announced.push(values), ...(now && { now }) })
 }
 
 test("an edit made later wins; one of unknown time only fills; a device's clock ahead is held to the account's", () => {
@@ -78,6 +78,10 @@ test("an edit made later wins; one of unknown time only fills; a device's clock 
   assert.equal(preferences.theme?.at, 200, "a future edit is kept at the account's now")
   assert.deepEqual(Object.keys(changed), ["theme"])
   assert.deepEqual(applyPreferenceWrites(preferences, { theme: { value: "dark", at: 150, op: "c" } }, 300).changed, {}, "an older edit arriving late changes nothing")
+  // An edit stamped just after the one held, by a device that saw it, follows it even at the moment the account holds.
+  const after = applyPreferenceWrites({ theme: { value: "dark", at: 500, op: "z" } }, { theme: { value: "light", at: 501, op: "a" } }, 500)
+  assert.equal(after.preferences.theme?.value, "light", "kept at the held edit's time + 1, not clamped back to a tie it could lose")
+  assert.equal(after.preferences.theme?.at, 501)
 })
 
 test("an edit is in effect at once and sent; offline it's kept, and sent once the account can be reached", async () => {
@@ -141,17 +145,18 @@ test("a first sync settles each preference by its newest edit: this Mac's older 
 
 test("Fin settings follow the account: read from it, written to it, mirrored into their file, and an older Mako's edit there sent", async () => {
   const cloud = account()
+  // Another Mac chose the rules a while ago; this Mac's file was written a moment ago by a session start (`use`).
+  cloud.elsewhere("fins.forFins", "Ask before deleting", Date.now() - 86_400_000)
   const root = scratch()
   const file = join(root, "fin-defaults.json")
   writeFileSync(file, `${JSON.stringify({ version: 1, chosen: { codex: { model: "gpt-5" } }, used: { claude: { model: "sonnet" } }, policy: { rules: [], forFins: "Small PRs" }, limit: 4, ceiling: 30 })}\n`)
-  const old = Date.now() - 3_600_000
-  utimesSync(file, old / 1000, old / 1000)
   const preferences = store(root, cloud)
   const fins = new FinDefaultsStore(file, preferences)
   fins.offerFromFile()
   await preferences.sync()
-  assert.deepEqual(cloud.held()["fins.chosen"]?.value, { codex: { model: "gpt-5" } }, "the file's choices offered")
-  assert.equal(cloud.held()["fins.chosen"]?.at, Math.round(old), "stamped when the file was last edited")
+  assert.deepEqual(cloud.held()["fins.chosen"]?.value, { codex: { model: "gpt-5" } }, "the file's choices fill what the account held nothing for")
+  assert.equal(cloud.held()["fins.chosen"]?.at, 0, "offered at an unknown time: the file's time says nothing of when they were chosen")
+  assert.equal(cloud.held()["fins.forFins"]?.value, "Ask before deleting", "never replacing a choice the account holds, however fresh the file")
   assert.equal(cloud.held()["fins.ceiling"]?.value, 30)
 
   // Another device chose a ceiling later: in effect here, and the file mirrors it.
@@ -178,6 +183,53 @@ test("Fin settings follow the account: read from it, written to it, mirrored int
   await preferences.sync()
   assert.equal(cloud.held()["fins.ceiling"]?.value, 40, "taken as the older Mako's edit")
   assert.equal(fins.reading().ceiling, 40)
+})
+
+test("two hosts of one user (the app and a profile) sharing the files: each reads the other's mirror as a mirror, never as an edit", async () => {
+  const cloud = account()
+  const root = scratch()
+  const file = join(root, "fin-defaults.json")
+  writeFileSync(file, `${JSON.stringify({ version: 1, chosen: {}, used: {}, policy: { rules: [] }, ceiling: 20 })}\n`)
+  const appPreferences = store(root, cloud)
+  const profilePreferences = store(root, cloud)
+  const app = new FinDefaultsStore(file, appPreferences)
+  const profile = new FinDefaultsStore(file, profilePreferences)
+  app.offerFromFile()
+  await appPreferences.sync()
+  app.mirror()
+  profile.mirror()
+  // Another Mac sets the ceiling; the app's host hears it first, writes preferences.json and mirrors the file.
+  appPreferences.heard(cloud.elsewhere("fins.ceiling", 12, Date.now()), false)
+  app.mirror()
+  // The profile's host mirrors next: the file matches what a mirror wrote, so nothing is taken as an edit.
+  const writes = cloud.writes.length
+  profile.mirror()
+  await profilePreferences.sync()
+  assert.equal(cloud.writes.length, writes, "no edit sent")
+  assert.equal(cloud.held()["fins.ceiling"]?.value, 12)
+  assert.equal(JSON.parse(readFileSync(file, "utf8")).ceiling, 12, "and the file stays on what's in effect")
+  assert.equal(profile.reading().ceiling, 12)
+  // An older Mako that changes the ceiling keeps the mirror's mark as it found it: that one is an edit.
+  const stored = JSON.parse(readFileSync(file, "utf8"))
+  writeFileSync(file, `${JSON.stringify({ ...stored, ceiling: 48 })}\n`)
+  const later = Date.now() + 5
+  utimesSync(file, later / 1000, later / 1000)
+  profile.mirror()
+  await profilePreferences.sync()
+  assert.equal(cloud.held()["fins.ceiling"]?.value, 48)
+})
+
+test("an edit made after seeing a value wins over it, even on a device whose clock is behind", async () => {
+  const cloud = account()
+  const ahead = Date.now()
+  cloud.elsewhere("theme", "light", ahead)
+  // This device's clock is ten minutes behind the device that made the theme light.
+  const behind = store(scratch(), cloud, [], () => ahead - 600_000)
+  await behind.sync()
+  assert.equal(behind.value("theme"), "light")
+  await behind.set("theme", "dark")
+  assert.equal(cloud.held().theme?.value, "dark", "stamped just after what it saw, so the account keeps it")
+  assert.equal(behind.value("theme"), "dark")
 })
 
 test("two Macs on one account: a change on one is in effect on the other once it hears, and neither writes over the other", async () => {

@@ -93,9 +93,17 @@ export class PreferenceStore {
 
   /** The person changed `name` here (null: back to the default): in effect at once, and the account's once it takes it. */
   async set<Name extends PreferenceName>(name: Name, value: PreferenceValue<Name> | null): Promise<PreferenceValues> {
-    this.edit(name, value, this.#now())
+    this.change(name, value)
     await this.sync()
     return this.values()
+  }
+
+  /**
+   * The person's own edit of `name`, made now: stamped at the later of this clock and just after the edit in effect, so
+   * an edit made after seeing a value always wins over it, whatever this device's clock says. Sent in the background.
+   */
+  change<Name extends PreferenceName>(name: Name, value: PreferenceValue<Name> | null): void {
+    this.edit(name, value, Math.max(this.#now(), (this.#entry(name)?.at ?? 0) + 1))
   }
 
   /**

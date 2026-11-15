@@ -70,14 +70,16 @@ export interface AppliedPreferenceWrites {
 
 /**
  * `held` with `writes` applied as the account applies them: each kept only where it's a later edit than the one held.
- * An edit stamped after `now` (a device whose clock runs ahead) is kept at `now`, so it can't outlast edits the person
- * makes after it elsewhere. Answers what changed, which is empty when nothing did.
+ * An edit stamped after `now` (a device whose clock runs ahead) is kept at `now`, or just after the edit held when
+ * that's later still, so it can't outlast edits the person makes after it elsewhere, while an edit a device stamped just
+ * after the one it saw (`at` = the held edit's + 1, its clock behind) still follows it. Answers what changed, which is
+ * empty when nothing did.
  */
 export function applyPreferenceWrites(held: Preferences, writes: Preferences, now: number): AppliedPreferenceWrites {
   const preferences: Preferences = { ...held }
   const changed: Preferences = {}
   for (const [key, write] of Object.entries(writes)) {
-    const entry: PreferenceEntry = { ...write, at: Math.min(write.at, now) }
+    const entry: PreferenceEntry = { ...write, at: Math.min(write.at, Math.max(now, (preferences[key]?.at ?? 0) + 1)) }
     if (!laterEdit(entry, preferences[key])) continue
     preferences[key] = entry
     changed[key] = entry

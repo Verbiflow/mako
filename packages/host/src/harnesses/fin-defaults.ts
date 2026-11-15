@@ -2,7 +2,7 @@ import { readFileSync, statSync } from "node:fs"
 import { publishFileSync } from "../base/published-files.js"
 import { z } from "zod"
 import { SessionSettingsSchema, type SessionSettings } from "@mako/sessions/settings"
-import { FIN_CEILING, FinCeilingSchema, FinLimitSchema, FinPolicySchema, FinRuleSchema, FinTargetSchema, ROLE_RULES_CHARS, type FinCapacityReading, type FinChoicesReading, type FinDefaults, type FinPolicy, type RoleRules } from "../contracts/fin-tuning.js"
+import { FIN_CEILING, FinCeilingSchema, FinDefaultsSchema, FinLimitSchema, FinPolicySchema, FinRuleSchema, FinTargetSchema, ROLE_RULES_CHARS, type FinCapacityReading, type FinChoicesReading, type FinDefaults, type FinPolicy, type RoleRules } from "../contracts/fin-tuning.js"
 import type { MethodTable } from "../base/methods.js"
 import type { JsonObject } from "../contracts/json.js"
 import type { PreferenceName, PreferenceValue } from "../contracts/preferences.js"
@@ -11,6 +11,9 @@ import type { PreferenceName, PreferenceValue } from "../contracts/preferences.j
 export interface FinPreferences {
   value<Name extends PreferenceName>(name: Name): PreferenceValue<Name> | undefined
   has(name: PreferenceName): boolean
+  /** The person's own edit, made now. */
+  change<Name extends PreferenceName>(name: Name, value: PreferenceValue<Name> | null): void
+  /** Another program's edit, made at `at`; kept if it's later than the one in effect. */
   edit<Name extends PreferenceName>(name: Name, value: PreferenceValue<Name> | null, at: number): boolean
   offer<Name extends PreferenceName>(name: Name, value: PreferenceValue<Name> | undefined, at: number): void
 }
@@ -43,12 +46,18 @@ const StoredSchema = z
     ceiling: FinCeilingSchema.optional().catch(undefined),
     /** Kept only once the person turned "When an account runs out, continue on the next one" off. */
     moveOnLimit: z.literal(false).optional().catch(undefined),
+    /**
+     * The synced settings as the last mirror wrote them (`FinDefaultsStore.mirror`), by whichever host of this user wrote
+     * it. A file whose synced settings still match it is a mirror; one that differs was edited by another program (an
+     * older Mako, which keeps this field as it found it).
+     */
+    preferencesMirror: z.string().optional().catch(undefined),
   })
   .catchall(Unread)
 const ROLES = z.enum(["forFins", "forApexes"]) satisfies z.ZodType<RoleRules>
 
 /** What the file holds: `other` and `policyOther` are the fields beside and in the policy this build doesn't read, so a save here never drops them. */
-type Stored = { chosen: FinDefaults; used: Record<string, SessionSettings>; policy: FinPolicy; limit?: number; ceiling?: number; moveOnLimit?: false; other: JsonObject; policyOther: JsonObject }
+type Stored = { chosen: FinDefaults; used: Record<string, SessionSettings>; policy: FinPolicy; limit?: number; ceiling?: number; moveOnLimit?: false; mirrored?: string; other: JsonObject; policyOther: JsonObject }
 
 function kept(entries: Readonly<Record<string, SessionSettings | undefined>>): Record<string, SessionSettings> {
   return Object.fromEntries(Object.entries(entries).filter((entry): entry is [string, SessionSettings] => entry[1] !== undefined))
@@ -73,8 +82,6 @@ export class FinDefaultsStore {
   readonly #preferences: FinPreferences | undefined
   #stored: Stored = { chosen: {}, used: {}, policy: { rules: [] }, other: {}, policyOther: {} }
   #readAt = -1
-  /** The synced fields as this store last mirrored them into the file, to tell another program's edit from its own. */
-  #mirrored: { said: string; synced: Synced } | undefined
 
   /**
    * With `preferences`, the person's Fin settings follow their account: they're read from it and every change goes to
@@ -94,13 +101,15 @@ export class FinDefaultsStore {
   }
 
   /**
-   * What this file kept of the synced settings before the account kept them, offered once, edited when the file last
-   * was: the account keeps each where it holds nothing later (`PreferenceStore.offer`).
+   * What this file kept of the synced settings before the account kept them, offered once. When each was chosen isn't
+   * known (the file is written whenever the person starts a session, so its time says nothing of them), so each is
+   * offered at 0 and only fills what the account holds nothing for (`PreferenceStore.offer`): a choice made since on
+   * another Mac is never replaced by an older one kept here.
    */
   offerFromFile(): void {
     const preferences = this.#preferences
     if (!preferences) return
-    const at = this.#modified() ?? 0
+    const at = 0
     const file = this.#fileSynced()
     preferences.offer("fins.chosen", Object.keys(file.chosen).length ? file.chosen : undefined, at)
     preferences.offer("fins.rules", file.rules.rules.length || file.rules.otherwise ? file.rules : undefined, at)
@@ -111,39 +120,41 @@ export class FinDefaultsStore {
   }
 
   /**
-   * Writes the synced settings in effect into the file, for an older Mako that reads them there. A change to them in
-   * the file since this store last wrote it was another program's (an older Mako's) and is that program's edit, made
-   * when the file changed: it goes to the account rather than being written over.
+   * Writes the synced settings in effect into the file, for an older Mako that reads them there, with the settings as
+   * written (`preferencesMirror`). Synced settings in the file that no longer match what the last mirror wrote, by any
+   * host of this user, were changed by another program (an older Mako, which keeps that field as it found it): that's
+   * its edit, made when the file changed, and it goes to the account rather than being written over. A file no mirror
+   * wrote yet was offered once (`offerFromFile`), not edited.
    */
   mirror(): void {
     const preferences = this.#preferences
     if (!preferences) return
+    const stored = this.#read()
     const file = this.#fileSynced()
     const said = JSON.stringify(file)
-    if (this.#mirrored !== undefined && said !== this.#mirrored.said) {
+    if (stored.mirrored !== undefined && said !== stored.mirrored) {
       const at = this.#modified() ?? Date.now()
-      const before = this.#mirrored.synced
-      let edited = false
-      if (JSON.stringify(file.chosen) !== JSON.stringify(before.chosen)) edited = preferences.edit("fins.chosen", file.chosen, at) || edited
-      if (JSON.stringify(file.rules) !== JSON.stringify(before.rules)) edited = preferences.edit("fins.rules", file.rules, at) || edited
-      if (file.forFins !== before.forFins) edited = preferences.edit("fins.forFins", file.forFins ?? null, at) || edited
-      if (file.forApexes !== before.forApexes) edited = preferences.edit("fins.forApexes", file.forApexes ?? null, at) || edited
-      if (file.ceiling !== before.ceiling) edited = preferences.edit("fins.ceiling", file.ceiling ?? null, at) || edited
-      if (file.moveOnLimit !== before.moveOnLimit) edited = preferences.edit("fins.moveOnLimit", file.moveOnLimit ?? null, at) || edited
-      // Its edits are in effect now; the next mirror writes what's in effect, theirs included.
-      this.#mirrored = { said, synced: file }
-      if (edited) return
+      const before = parseSynced(stored.mirrored)
+      if (before) {
+        let edited = false
+        if (JSON.stringify(file.chosen) !== JSON.stringify(before.chosen)) edited = preferences.edit("fins.chosen", file.chosen, at) || edited
+        if (JSON.stringify(file.rules) !== JSON.stringify(before.rules)) edited = preferences.edit("fins.rules", file.rules, at) || edited
+        if (file.forFins !== before.forFins) edited = preferences.edit("fins.forFins", file.forFins ?? null, at) || edited
+        if (file.forApexes !== before.forApexes) edited = preferences.edit("fins.forApexes", file.forApexes ?? null, at) || edited
+        if (file.ceiling !== before.ceiling) edited = preferences.edit("fins.ceiling", file.ceiling ?? null, at) || edited
+        if (file.moveOnLimit !== before.moveOnLimit) edited = preferences.edit("fins.moveOnLimit", file.moveOnLimit ?? null, at) || edited
+        // The edits are in effect now, and announced: the next mirror writes what's in effect, theirs included.
+        if (edited) return
+      }
     }
     const want = this.#synced()
     const wanted = JSON.stringify(want)
-    if (wanted !== said) {
-      const stored: Stored = { ...this.#read() }
-      delete stored.ceiling
-      delete stored.moveOnLimit
-      const { forFins, forApexes } = want
-      this.#write({ ...stored, chosen: want.chosen, policy: withoutEmpty({ ...want.rules, ...(forFins && { forFins }), ...(forApexes && { forApexes }) }), ...withOwnSynced(want) })
-    }
-    this.#mirrored = { said: wanted, synced: want }
+    if (wanted === said && stored.mirrored === wanted) return
+    const next: Stored = { ...stored }
+    delete next.ceiling
+    delete next.moveOnLimit
+    const { forFins, forApexes } = want
+    this.#write({ ...next, chosen: want.chosen, policy: withoutEmpty({ ...want.rules, ...(forFins && { forFins }), ...(forApexes && { forApexes }) }), ...withOwnSynced(want), mirrored: wanted })
   }
 
   /** The synced settings in effect: the account's where it holds them, else what this file keeps. */
@@ -192,7 +203,7 @@ export class FinDefaultsStore {
   chooseMoveOnLimit(on: boolean): FinChoicesReading {
     z.boolean().parse(on)
     if (this.#preferences) {
-      if (this.reading().moveOnLimit !== on) this.#preferences.edit("fins.moveOnLimit", on ? null : false, Date.now())
+      if (this.reading().moveOnLimit !== on) this.#preferences.change("fins.moveOnLimit", on ? null : false)
       return this.reading()
     }
     const { moveOnLimit, ...stored } = this.#read()
@@ -205,7 +216,7 @@ export class FinDefaultsStore {
     const parsed = FinCeilingSchema.parse(ceiling)
     const next = parsed === FIN_CEILING ? undefined : parsed
     if (this.#preferences) {
-      if (this.#synced().ceiling !== next) this.#preferences.edit("fins.ceiling", next ?? null, Date.now())
+      if (this.#synced().ceiling !== next) this.#preferences.change("fins.ceiling", next ?? null)
       return this.reading()
     }
     const stored = this.#read()
@@ -224,7 +235,7 @@ export class FinDefaultsStore {
         const chosen = { ...before }
         if (parsed) chosen[harness] = parsed
         else delete chosen[harness]
-        this.#preferences.edit("fins.chosen", Object.keys(chosen).length ? chosen : null, Date.now())
+        this.#preferences.change("fins.chosen", Object.keys(chosen).length ? chosen : null)
       }
       return this.reading()
     }
@@ -252,7 +263,7 @@ export class FinDefaultsStore {
     }
     if (this.#preferences) {
       const next = { rules, ...(otherwise && { otherwise }) }
-      if (!same(this.#synced().rules, next)) this.#preferences.edit("fins.rules", next.rules.length || next.otherwise ? next : null, Date.now())
+      if (!same(this.#synced().rules, next)) this.#preferences.change("fins.rules", next.rules.length || next.otherwise ? next : null)
       return this.reading()
     }
     const stored = this.#read()
@@ -267,7 +278,7 @@ export class FinDefaultsStore {
     const words = RoleRulesText.parse(text)
     if (this.#preferences) {
       const name = field === "forFins" ? "fins.forFins" : "fins.forApexes"
-      if ((this.#synced()[field] ?? "") !== words) this.#preferences.edit(name, words || null, Date.now())
+      if ((this.#synced()[field] ?? "") !== words) this.#preferences.change(name, words || null)
       return this.reading()
     }
     const stored = this.#read()
@@ -293,7 +304,7 @@ export class FinDefaultsStore {
     }
     if (modified === this.#readAt) return this.#stored
     try {
-      const { chosen, used, policy, limit, ceiling, moveOnLimit, ...other } = StoredSchema.parse(JSON.parse(readFileSync(this.#file, "utf8")))
+      const { chosen, used, policy, limit, ceiling, moveOnLimit, preferencesMirror, ...other } = StoredSchema.parse(JSON.parse(readFileSync(this.#file, "utf8")))
       const { rules, otherwise, forFins, forApexes, ...policyOther } = policy
       this.#stored = {
         chosen: kept(chosen),
@@ -302,6 +313,7 @@ export class FinDefaultsStore {
         ...(limit !== undefined && { limit }),
         ...(ceiling !== undefined && { ceiling }),
         ...(moveOnLimit === false && { moveOnLimit }),
+        ...(preferencesMirror !== undefined && { mirrored: preferencesMirror }),
         other,
         policyOther,
       }
@@ -314,9 +326,36 @@ export class FinDefaultsStore {
 
   #write(next: Stored): void {
     this.#stored = next
-    const { chosen, used, policy, limit, ceiling, moveOnLimit, other, policyOther } = next
-    publishFileSync(this.#file, `${JSON.stringify({ ...other, version: 1, chosen, used, policy: { ...policyOther, ...policy }, ...(limit !== undefined && { limit }), ...(ceiling !== undefined && { ceiling }), ...(moveOnLimit === false && { moveOnLimit }) })}\n`)
+    const { chosen, used, policy, limit, ceiling, moveOnLimit, mirrored, other, policyOther } = next
+    publishFileSync(this.#file, `${JSON.stringify({ ...other, version: 1, chosen, used, policy: { ...policyOther, ...policy }, ...(limit !== undefined && { limit }), ...(ceiling !== undefined && { ceiling }), ...(moveOnLimit === false && { moveOnLimit }), ...(mirrored !== undefined && { preferencesMirror: mirrored }) })}\n`)
     this.#readAt = statSync(this.#file).mtimeMs
+  }
+}
+
+const SyncedSchema = z.object({
+  chosen: FinDefaultsSchema.catch({}),
+  rules: z.object({ rules: z.array(FinRuleSchema).catch([]), otherwise: FinTargetSchema.optional().catch(undefined) }).catch({ rules: [] }),
+  forFins: z.string().optional().catch(undefined),
+  forApexes: z.string().optional().catch(undefined),
+  ceiling: z.number().optional().catch(undefined),
+  moveOnLimit: z.literal(false).optional().catch(undefined),
+})
+
+/** The synced settings a mirror wrote (`preferencesMirror`), or undefined for a mark this build can't read. */
+function parseSynced(text: string): Synced | undefined {
+  try {
+    const parsed = SyncedSchema.parse(JSON.parse(text))
+    const { rules } = parsed
+    return {
+      chosen: parsed.chosen,
+      rules: { rules: rules.rules, ...(rules.otherwise && { otherwise: rules.otherwise }) },
+      ...(parsed.forFins !== undefined && { forFins: parsed.forFins }),
+      ...(parsed.forApexes !== undefined && { forApexes: parsed.forApexes }),
+      ...(parsed.ceiling !== undefined && { ceiling: parsed.ceiling }),
+      ...(parsed.moveOnLimit === false && { moveOnLimit: false as const }),
+    }
+  } catch {
+    return undefined
   }
 }
 

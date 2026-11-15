@@ -254,9 +254,9 @@ function FinSheet({ harness, profile, chosen, used, onDismiss, onChoose }: {
 }
 
 /**
- * The person's standing rules for every Fin and every Apex on the phone, one group each: their words, saved when the
- * field loses focus through the same host call as the desk's (`mako:fin-role-rules-save`), and the same toggle with
- * what they add to an agent's note (`roleRulesPreview`).
+ * The person's standing rules for every Fin and every Apex on the phone, one group each: their words, saved to their
+ * account when the field loses focus (`fins.forFins`, `fins.forApexes`; every Mac hears them, as the desk's Settings ›
+ * Fins writes them through its host), and the same toggle with what they add to an agent's note (`roleRulesPreview`).
  */
 export function RoleRulesGroups({ policy, target, onSave }: { policy: FinPolicy; target: (target: FinTarget) => string; onSave: (role: RoleRules, text: string) => void }) {
   return (

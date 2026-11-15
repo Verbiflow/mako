@@ -157,6 +157,23 @@ export class UtilityModelStore {
     return (await readChoices(this.choicesPath())).stored.order ?? []
   }
 
+  /**
+   * The harness order as the file holds it, and as the last mirror of the account's wrote it (`orderMirror`), by
+   * whichever host of this user: an order that differs from it was changed by another program.
+   */
+  async harnessOrderMirror(): Promise<{ order: string[]; mirrored?: string }> {
+    await this.ready
+    const { raw, stored } = await readChoices(this.choicesPath())
+    const mirrored = z.string().safeParse(raw["orderMirror"])
+    return { order: stored.order ?? [], ...(mirrored.success && { mirrored: mirrored.data }) }
+  }
+
+  /** Writes the account's harness order into the file, marked as a mirror's (`harnessOrderMirror`). */
+  async mirrorHarnessOrder(order: readonly string[]): Promise<void> {
+    const parsed = harnessOrderSchema.parse([...new Set(order)])
+    await this.update(async (stored) => ({ ...stored, order: parsed.length ? parsed : undefined }), { orderMirror: JSON.stringify(parsed) })
+  }
+
   /** When the choices file, the harness order with them, was last written; undefined while there's none. */
   async choicesEdited(): Promise<number | undefined> {
     await this.ready
@@ -170,13 +187,13 @@ export class UtilityModelStore {
   }
 
   /** Read, change and replace the choices file, one change at a time. */
-  private update(change: (stored: StoredChoices) => Promise<StoredChoices>): Promise<void> {
+  private update(change: (stored: StoredChoices) => Promise<StoredChoices>, extra: JsonObject = {}): Promise<void> {
     const write = this.writes.then(async () => {
       await this.ready
       const { raw, stored } = await readChoices(this.choicesPath())
       const changed = await change(stored)
       // Written over what was there: a field this build doesn't know, or a choice it couldn't read and didn't change, stays as it was.
-      const next = { ...raw }
+      const next = { ...raw, ...extra }
       for (const key of choicesSchema.keyof().options) {
         const value = changed[key]
         if (value !== undefined) next[key] = value
