@@ -3707,6 +3707,32 @@ no choice yet. A move to the cloud carries each session's mode, and a return
 remembers the mode it ran in there (`rememberMode`).
 `scripts/test-access-choices.ts` covers the store.
 
+The person's preferences that follow them across Macs, the web and the phone
+have the same one owner, the account (`@mako/protocol/preferences`,
+`GET`/`PATCH /v1/preferences`, a `preferences-changed` event carrying only
+what changed, at a revision): the theme, the Fin settings (each harness's
+choice, the rules, the role rules, the ceiling, move-on-limit) and the
+harness order, named and typed in `contracts/preferences.ts`. Each key holds
+its value with when the person made that edit (`at`) and the edit's ID (`op`),
+and the later edit wins (`laterEdit`): the account keeps a write only if it's
+later than the one it holds, clamping a device's clock that runs ahead to its
+own, and an edit at 0 (a value kept before the account kept it, its time
+unknown) only fills one the account holds nothing for. A window reaches them
+through its host (`PreferenceStore`, `mako:preferences`, `mako:preference-set`,
+`<user root>/preferences.json` with what it couldn't send yet laid over it);
+the web app and the phone read and write the account directly
+(`src/web-client/account-preferences.ts`), so they show with every Mac asleep.
+What a device kept before is offered once (`offer`), stamped with when it was
+last edited there: a Mac's `fin-defaults.json` and the harness order in
+`utility-work.json` by their files' times, a window's or a browser's theme at
+0. The account is the source of truth and those two files only mirror it, for
+an older Mako sharing `~/.mako` (`FinDefaultsStore.mirror`,
+`mirrorHarnessOrder`); a change an older Mako makes to one is taken as its
+edit, made when the file changed, and sent. What's each device's own stays in
+its file: its number of Fins at once and the model it last used on each
+harness. `scripts/test-account-preferences.ts` covers the store, the merge and
+the mirror.
+
 ### Plan mode
 
 Plan is one composer control (Shift+Tab, the palette's "Toggle plan mode",

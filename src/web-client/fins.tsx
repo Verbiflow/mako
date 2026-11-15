@@ -15,14 +15,16 @@ import { places, startable, type Place } from "./places"
 import { Group, Row, Switch } from "./settings-rows"
 import { Sheet, SheetScroll } from "./sheet"
 import { macCall } from "./start"
+import { useWebPreferences, type WebPreferences, type WebPreferencesState } from "./account-preferences"
 import { SEA_MARK } from "@/lib/sea-mark"
 
 type Mac = Extract<Place, { kind: "mac" }>
 
 /**
- * Settings › Fins on the phone and the web: what each harness's Fins start on when their Apex names no model, as the
- * person's Mac they worked on last keeps it (`mako:fin-defaults`), with that Mac's own catalogs. The desk's Settings ›
- * Fins, in the touch layout.
+ * Settings › Fins on the phone and the web: what each harness's Fins start on when their Apex names no model, the
+ * person's rules and their Fins across every place. Those follow the account (`contracts/preferences.ts`), so they're
+ * read from it and changed there, every Mac asleep or not; a Mac that's on adds what's its own (its number of Fins at
+ * once, what it can run) and its catalogs, to pick a model from. The desk's Settings › Fins, in the touch layout.
  */
 export function Fins() {
   const client = useWebClient()
@@ -33,26 +35,46 @@ export function Fins() {
     () => (deviceId ? <Result,>(channel: string, args: readonly unknown[]) => macCall<Result>(client.gateway, client.deviceId, deviceId, channel, args) : undefined),
     [client, deviceId]
   )
-  if (!mac || !call)
-    return (
-      <Group title="Fins" footer="Turn on a Mac of yours to choose what its Fins run on.">
-        <Row label="What Fins run on" detail="Same as you, until a Mac is on" />
-      </Group>
-    )
-  return <FinsGroup mac={mac.name} call={call} />
+  return <FinsGroup {...(mac && call && { mac: mac.name, call })} preferences={client.preferences} />
+}
+
+/** What a Fins reading holds before a Mac answers, or with none on: Mako's defaults, under the account's. */
+const NO_MAC: FinChoicesReading = { chosen: {}, used: {}, policy: { rules: [] }, ceiling: FIN_CEILING, moveOnLimit: true }
+
+/** `local` (a Mac's reading, or none) with what the account holds of the Fin settings laid over it. */
+function withAccount(local: FinChoicesReading, { values, held }: WebPreferencesState): FinChoicesReading {
+  const rules = held.has("fins.rules") ? values["fins.rules"] : undefined
+  const forFins = held.has("fins.forFins") ? values["fins.forFins"] : local.policy.forFins
+  const forApexes = held.has("fins.forApexes") ? values["fins.forApexes"] : local.policy.forApexes
+  return {
+    ...local,
+    chosen: held.has("fins.chosen") ? values["fins.chosen"] ?? {} : local.chosen,
+    policy: {
+      ...(held.has("fins.rules") ? { rules: rules?.rules ?? [], ...(rules?.otherwise && { otherwise: rules.otherwise }) } : { rules: local.policy.rules, ...(local.policy.otherwise && { otherwise: local.policy.otherwise }) }),
+      ...(forFins && { forFins }),
+      ...(forApexes && { forApexes }),
+    },
+    ceiling: held.has("fins.ceiling") ? values["fins.ceiling"] ?? FIN_CEILING : local.ceiling ?? FIN_CEILING,
+  }
 }
 
 /** A call to the Mac whose Fins these are, as `macCall` makes one. */
 export type MacCall = <Result>(channel: string, args: readonly unknown[]) => Promise<Result>
 
-/** Each harness's Fins on one Mac: its choices and catalogs read from it, and each change written to it. */
-export function FinsGroup({ mac, call, opened }: { mac: string; call: MacCall; opened?: string }) {
-  const [reading, setReading] = useState<FinChoicesReading | undefined>(undefined)
+/**
+ * Each harness's Fins: the person's choices from their account, and each change written there; a Mac that's on adds its
+ * own number of Fins and its catalogs, read from it, and its number is changed on it.
+ */
+export function FinsGroup({ mac, call, preferences, opened }: { mac?: string; call?: MacCall; preferences: Pick<WebPreferences, "set">; opened?: string }) {
+  const [local, setReading] = useState<FinChoicesReading | undefined>(undefined)
+  const account = useWebPreferences((state) => state)
+  const reading = local ? withAccount(local, account) : call ? undefined : withAccount(NO_MAC, account)
   const [profiles, setProfiles] = useState<Record<string, HarnessProfile>>({})
   const [open, setOpen] = useState<string | undefined>(opened)
   const [failure, setFailure] = useState<string | undefined>(undefined)
 
   useEffect(() => {
+    if (!call) return
     let current = true
     call<FinChoicesReading>("mako:fin-defaults", []).then(
       (found) => current && setReading(found),
@@ -68,61 +90,43 @@ export function FinsGroup({ mac, call, opened }: { mac: string; call: MacCall; o
     }
   }, [call])
 
+  // The person's Fin settings follow their account: each change goes there, in effect here at once, and every Mac hears it.
   const choose = (harness: string, settings: SessionSettings | null) => {
-    const before = reading
-    if (before) {
-      const chosen = { ...before.chosen }
-      if (settings) chosen[harness] = settings
-      else delete chosen[harness]
-      setReading({ ...before, chosen })
-    }
-    call<FinChoicesReading>("mako:fin-default-choose", [harness, settings]).then(setReading, (error) => {
-      setReading(before)
-      toast.error(errorMessage({ error }))
-    })
-  }
-
-  const savePolicy = (policy: FinPolicy) => {
-    const before = reading
-    if (before) setReading({ ...before, policy })
-    call<FinChoicesReading>("mako:fin-policy-save", [policy]).then(setReading, (error) => {
-      setReading(before)
-      toast.error(errorMessage({ error }))
-    })
-  }
-
-  const saveRoleRules = (role: RoleRules, text: string) => {
-    const before = reading
-    if (before) setReading({ ...before, policy: { ...before.policy, [role]: text || undefined } })
-    call<FinChoicesReading>("mako:fin-role-rules-save", [role, text]).then(setReading, (error) => {
-      setReading(before)
-      toast.error(errorMessage({ error }))
-    })
-  }
-
-  const save = (channel: string, value: number | null, next: FinChoicesReading) => {
-    const before = reading
-    setReading(next)
-    call<FinChoicesReading>(channel, [value]).then(setReading, (error) => {
-      setReading(before)
-      toast.error(errorMessage({ error }))
-    })
-  }
-  const setLimit = (limit: number | null) => {
     if (!reading) return
-    const next = { ...reading }
+    const chosen = { ...reading.chosen }
+    if (settings) chosen[harness] = settings
+    else delete chosen[harness]
+    void preferences.set("fins.chosen", Object.keys(chosen).length ? chosen : null)
+  }
+  const savePolicy = ({ rules, otherwise }: FinPolicy) => void preferences.set("fins.rules", rules.length || otherwise ? { rules, ...(otherwise && { otherwise }) } : null)
+  const saveRoleRules = (role: RoleRules, text: string) => void preferences.set(role === "forFins" ? "fins.forFins" : "fins.forApexes", text.trim() || null)
+  const setCeiling = (ceiling: number) => void preferences.set("fins.ceiling", ceiling === FIN_CEILING ? null : ceiling)
+
+  // A Mac's own number of Fins at once is its own, changed on it.
+  const setLimit = (limit: number | null) => {
+    if (!local || !call) return
+    const before = local
+    const next = { ...local }
     if (limit === null) delete next.limit
     else next.limit = limit
-    save("mako:fin-limit-set", limit, next)
+    setReading(next)
+    call<FinChoicesReading>("mako:fin-limit-set", [limit]).then(setReading, (error) => {
+      setReading(before)
+      toast.error(errorMessage({ error }))
+    })
   }
-  const setCeiling = (ceiling: number) => reading && save("mako:fin-ceiling-set", ceiling, { ...reading, ceiling })
 
   const signedIn = WEB_HARNESSES.filter((harness) => profiles[harness]?.available)
   const capacity = reading?.capacity
   const own = reading?.limit
   return (
     <>
-      {reading && capacity ? (
+      {reading && !capacity ? (
+        <Group title="Fins at once" footer="Across every place you run Fins. Turn on a Mac to set its own number.">
+          <Row label="Across every place" detail="A safety net over each place's own" end={<WebStepper label="Fins at once across every place" value={reading.ceiling ?? FIN_CEILING} most={FIN_CEILING_MAX} onChange={setCeiling} />} />
+        </Group>
+      ) : null}
+      {reading && capacity && mac ? (
         <Group title="Fins at once" footer="How many of your Fins run at the same time in each place, across every Apex. Past it, an Apex waits for one to end only when it asks to.">
           <Row
             label={mac}
@@ -142,9 +146,15 @@ export function FinsGroup({ mac, call, opened }: { mac: string; call: MacCall; o
       {reading ? <RoleRulesGroups policy={reading.policy} target={(target) => targetWords(target, profiles)} onSave={saveRoleRules} /> : null}
       <Group
       title="Fins, per harness"
-      footer={failure ?? `Once a harness is picked, the model it runs on when your rule or your words name none, on ${mac}. Same as you: the Apex's model on its own harness, else the one you last used there.`}
+      footer={failure ?? (mac ? `Once a harness is picked, the model it runs on when your rule or your words name none. Same as you: the Apex's model on its own harness, else the one you last used there.` : "These follow your account. Turn on a Mac to pick a model from what it can run.")}
     >
-      {signedIn.length === 0 ? <Row label="Asking your Mac…" /> : null}
+      {mac && signedIn.length === 0 ? <Row label="Asking your Mac…" /> : null}
+      {!mac
+        ? WEB_HARNESSES.map((harness) => {
+            const chosen = reading?.chosen[harness]
+            return <Row key={harness} label={webHarnessLabel(harness)} detail={chosen ? chosen.model : "Same as you"} />
+          })
+        : null}
       {signedIn.map((harness) => {
         const profile = profiles[harness]!
         const chosen = reading?.chosen[harness]

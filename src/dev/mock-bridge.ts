@@ -17,6 +17,7 @@ import type { TurnUndoScope } from "@mako/host/contracts/turn-review"
 import type { WorkspaceMoves } from "@mako/host/contracts/workspace-moves"
 import type { PlanBuilds } from "@mako/host/contracts/plan-builds"
 import type { AccessChoices } from "@mako/host/contracts/access-choices"
+import type { PreferenceValues } from "@mako/host/contracts/preferences"
 import type { FinChoicesReading } from "@mako/host/contracts/fin-tuning"
 import { ThreadIdSchema, type ThreadId } from "@mako/host/contracts/thread-identity"
 import { worktreeSlug, type ThreadWorktree, type WorktreeStart, type WorktreeReview, type WorktreeStartPoint, type WorktreeSummary, type WorktreeUpdate } from "@mako/host/contracts/thread-worktrees"
@@ -916,6 +917,7 @@ export function installMockBridge() {
   let workspaceMoves: WorkspaceMoves = { requests: [], alwaysAllowed: [] }
   let planBuilds: PlanBuilds = {}
   let accessChoices: AccessChoices = {}
+  let preferenceValues: PreferenceValues = {}
   // Codex's Fins chosen in Settings › Fins; the rest as the person uses each harness.
   let finChoices: FinChoicesReading = {
     chosen: { codex: { model: "gpt-6.1-sol", options: { effort: "high", fast: true } } },
@@ -1124,6 +1126,17 @@ export function installMockBridge() {
     adoptAccessChoices: async (modes) => {
       accessChoices = { ...Object.fromEntries(Object.entries(modes).map(([harness, mode]) => [harness, { mode }])), ...accessChoices }
       return accessChoices
+    },
+    // The account's preferences, kept in memory: a theme chosen here is the one every mock window applies.
+    preferences: async () => preferenceValues,
+    setPreference: async (name, value) => {
+      preferenceValues = { ...preferenceValues, [name]: value ?? undefined }
+      emit({ type: "preferences", values: preferenceValues })
+      return preferenceValues
+    },
+    offerPreference: async (name, value) => {
+      if (preferenceValues[name] === undefined) preferenceValues = { ...preferenceValues, [name]: value }
+      return preferenceValues
     },
     finDefaults: async () => finChoices,
     chooseFinDefault: async (harness, settings) => {

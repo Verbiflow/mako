@@ -60,6 +60,23 @@ export interface GitIpcContext {
   work: UtilityWork
   /** Where each commit draft goes as a helper run. */
   record?: RecordHelperRun
+  /** The harness order as it follows the person's account; without it, the choices file alone keeps it. */
+  harnessOrder?: HarnessOrderPreference
+}
+
+/** The person's harness order as their account keeps it (`harnessOrder` in `contracts/preferences.ts`). */
+export interface HarnessOrderPreference {
+  /** The order in effect, or undefined for Mako's; `has` says whether there's an edit at all, a cleared one included. */
+  read(): readonly string[] | undefined
+  has(): boolean
+  /** The person's edit here (null: back to Mako's order). */
+  save(order: readonly string[] | null): Promise<void>
+  /** Another program's edit, made at `at`: kept if it's later than the one in effect. Whether it was. */
+  edit(order: readonly string[] | null, at: number): boolean
+  /** What this Mac kept before the account kept it, edited at `at`: offered once. */
+  offer(order: readonly string[] | undefined, at: number): void
+  /** Called whenever the order in effect may have changed. */
+  onChange(listener: () => void): void
 }
 
 const UtilityChoiceSchema = z.tuple([z.enum(UTILITY_TASKS), z.string().min(1).max(400)])
@@ -153,10 +170,14 @@ export function installGitIpc(methods: MethodTable, context: GitIpcContext): voi
     const [parsedTask, parsedChoice] = UtilityChoiceSchema.parse([task, choice])
     await work.choose(parsedTask, parsedChoice)
   })
-  methods.handle("mako:harness-order-saved", () => models.harnessOrder())
-  methods.handle("mako:harness-order", (order: string[]) =>
-    models.saveHarnessOrder(HarnessOrderSchema.parse(order))
-  )
+  const order = context.harnessOrder
+  methods.handle("mako:harness-order-saved", async () => (order?.has() ? [...(order.read() ?? [])] : models.harnessOrder()))
+  methods.handle("mako:harness-order", async (next: string[]) => {
+    const parsed = HarnessOrderSchema.parse(next)
+    if (order) await order.save(parsed.length ? parsed : null)
+    else await models.saveHarnessOrder(parsed)
+  })
+  if (order) mirrorHarnessOrder(models, order)
   methods.handle(
     "mako:utility-model-catalog",
     (input: UtilityCatalogInput) => catalog.list(input)
@@ -214,4 +235,37 @@ export function openUtilityModels({ dataRoot, appData }: Pick<HostEnvironment, "
   )
   secrets.adoptLegacy(utilityLegacyFiles(directory))
   return new UtilityModelStore(directory, secrets.secrets, { ready: migration, record })
+}
+
+/**
+ * The harness order follows the account (`HarnessOrderPreference`); the choices file mirrors it for an older Mako that
+ * reads it there. What the file kept before is offered once, edited when the file was; a change to it since this host
+ * last mirrored it was another program's (an older Mako's), and goes to the account as its edit, made then.
+ */
+function mirrorHarnessOrder(models: UtilityModelStore, order: HarnessOrderPreference): void {
+  let mirrored: string | undefined
+  let mirroring = Promise.resolve()
+  const mirror = async () => {
+    const [kept, at] = await Promise.all([models.harnessOrder(), models.choicesEdited()])
+    const said = JSON.stringify(kept)
+    if (mirrored !== undefined && said !== mirrored) {
+      mirrored = said
+      if (order.edit(kept.length ? kept : null, at ?? Date.now())) return
+    }
+    if (!order.has()) return
+    const want = [...(order.read() ?? [])]
+    if (JSON.stringify(want) !== said) await models.saveHarnessOrder(want)
+    mirrored = JSON.stringify(want)
+  }
+  const again = () => {
+    mirroring = mirroring.then(mirror).catch((error: Error) => hostWarn("utility-models", "the harness order wasn't mirrored into its file", { error: error.message }))
+  }
+  void Promise.all([models.harnessOrder(), models.choicesEdited()]).then(
+    ([kept, at]) => {
+      order.offer(kept.length ? kept : undefined, at ?? 0)
+      order.onChange(again)
+      again()
+    },
+    (error: Error) => hostWarn("utility-models", "the harness order kept here wasn't offered to the account", { error: error.message })
+  )
 }

@@ -157,6 +157,12 @@ export class UtilityModelStore {
     return (await readChoices(this.choicesPath())).stored.order ?? []
   }
 
+  /** When the choices file, the harness order with them, was last written; undefined while there's none. */
+  async choicesEdited(): Promise<number | undefined> {
+    await this.ready
+    return stat(this.choicesPath()).then((info) => info.mtimeMs, () => undefined)
+  }
+
   /** Save the harness order; an empty one goes back to Mako's. */
   async saveHarnessOrder(order: readonly string[]): Promise<void> {
     const parsed = harnessOrderSchema.parse([...new Set(order)])

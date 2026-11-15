@@ -2,7 +2,7 @@ import { join } from "node:path"
 import type { MethodTable } from "../base/methods.js"
 import type { HostEnvironment } from "../base/host-environment.js"
 import type { DomainSecrets } from "../base/host-secrets.js"
-import { installGitIpc, openUtilityModels, type GitTab } from "./methods.js"
+import { installGitIpc, openUtilityModels, type GitTab, type HarnessOrderPreference } from "./methods.js"
 import { UtilityWork } from "./utility-work.js"
 import type { RecordHelperRun } from "./helper-tally.js"
 import { githubStatus, listPulls, listRemoteBranches, pullForBranch, repoAvatar, userAvatar, type CreatePullOptions } from "./github.js"
@@ -30,14 +30,16 @@ export interface GitMethodsDeps {
   recordHelperRun?: RecordHelperRun
   /** On a cloud machine: whether its pull requests go as its person, asked before each write (`pull-requests.ts`). */
   person?: PersonOf
+  /** The harness order as it follows the person's account (`HarnessOrderPreference`). */
+  harnessOrder?: HarnessOrderPreference
 }
 
 /** Status, staging, commits and their drafts, and the pull requests of the tab in front. */
-export function declareGitMethods(methods: MethodTable, { worktrees, withHost, git, environment, secrets, recordHelperRun, person }: GitMethodsDeps): void {
+export function declareGitMethods(methods: MethodTable, { worktrees, withHost, git, environment, secrets, recordHelperRun, person, harnessOrder }: GitMethodsDeps): void {
   const models = openUtilityModels(environment, secrets, recordHelperRun)
   const avatars = join(environment.dataRoot, "avatars")
   const pullSearch = new PullRequestSearch()
-  installGitIpc(methods, { withHost, git, models, work: new UtilityWork({ models }), record: recordHelperRun })
+  installGitIpc(methods, { withHost, git, models, work: new UtilityWork({ models }), record: recordHelperRun, ...(harnessOrder && { harnessOrder }) })
   methods.handle("mako:github-status", () => withHost((h) => githubStatus(h.gitWorkspace)))
   methods.handle("mako:pull-request", () => withHost((h) => pullForBranch(h.gitWorkspace)))
   methods.handle("mako:pull-requests", (limit?: number) => withHost((h) => listPulls(h.gitWorkspace, limit)))

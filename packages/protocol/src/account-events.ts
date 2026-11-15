@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { AccessChoicesSchema } from "./access-choices.js"
+import { PreferencesSchema } from "./preferences.js"
 import type { StreamId } from "./events.js"
 import { ThreadIdSchema } from "./ids.js"
 import { ArchivedThreadSchema, LISTED_PER_FRAME, ListedSessionSchema } from "./thread-listing.js"
@@ -57,6 +58,11 @@ export const AccountEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("thread-unarchived"), thread: ThreadIdSchema }),
   /** The person's access choices changed (`access-choices.ts`): all of them as they stand now, at their revision. */
   z.object({ type: z.literal("access-chosen"), choices: AccessChoicesSchema, revision: z.number().int().nonnegative() }),
+  /**
+   * Preferences that follow the account changed (`preferences.ts`): only those that changed, at the revision the change
+   * made. A device that missed one (a skipped number, a sign-in) reads them all again.
+   */
+  z.object({ type: z.literal("preferences-changed"), preferences: PreferencesSchema, revision: z.number().int().nonnegative() }),
 ])
 export type AccountEvent = z.infer<typeof AccountEventSchema>
 /** An event about the account's devices, as against its Threads. */
