@@ -19,6 +19,7 @@ import { BackgroundWorkLine } from "./background-work-line"
 import { CrewCard } from "./crew-card"
 import { useEffect, useMemo, useState } from "react"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
+import { usePacedProjection } from "./paced-projection"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import { scopedAcp, scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
 import { useThreads } from "@/state/threads"
@@ -153,7 +154,8 @@ function HistoryReadNote({ state }: { state: "reading" | { failed: string } }) {
 function Blocks({ starting = false, continued = false, compact = false }: { starting?: boolean; continued?: boolean; compact?: boolean }) {
   const scope = useConversationScope()
   const session = useAcp((state) => scopedLiveAcp(state, scope)?.session ?? null)
-  const projection = useAcp((state) => scopedAcp(state, scope)?.projection)
+  // Paced while an answer streams: each batch the host sends drew the whole transcript again.
+  const projection = usePacedProjection(scope)
   const history = useAcp((state) => scopedAcp(state, scope)?.base)
   const historyWindow = useAcp((state) => scopedAcp(state, scope)?.history)
   // Stable from the first keystroke of a start through promotion and any
@@ -192,10 +194,11 @@ function Blocks({ starting = false, continued = false, compact = false }: { star
     session?.status === "starting" ||
     session?.status === "running"
   const interruptedRequests = useMemo(() => turnStops(requests, running), [requests, running])
-  const blocks = useAcp((state) => scopedLiveAcp(state, scope)?.blocks ?? EMPTY_QUEUE)
   const earlierRequests = useAcp((state) => scopedLiveAcp(state, scope)?.history?.earlierRequests)
-  // Only a conversation with a message to recover reads its turns for where each was said.
+  // Only a conversation with a message to recover reads its turns for where each was said, and only it follows them:
+  // the blocks change with every batch the host sends.
   const recovering = requests.some((request) => request.status === "failed" || request.status === "uncertain" || request.status === "interrupted")
+  const blocks = useAcp((state) => (recovering ? scopedLiveAcp(state, scope)?.blocks : undefined) ?? EMPTY_QUEUE)
   const recoveries = useMemo(
     () => recovering ? recoveriesByPlace({ blocks, history: earlierRequests ? { earlierRequests } : undefined, requests }) : NO_RECOVERIES,
     [recovering, blocks, earlierRequests, requests]
