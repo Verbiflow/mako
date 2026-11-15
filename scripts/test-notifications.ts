@@ -18,6 +18,8 @@ import {
   notificationsStore,
   reconcileVisible,
   retireNotice,
+  retargetNotice,
+  openItem,
   retireSubject,
   subjectId,
   unseenItems,
@@ -342,6 +344,15 @@ threadsStore.set({ descriptors: harnessDescriptors.map((descriptor) => ({ ...des
   noteOutcome({ kind: "question", subject: subjectFor("/f"), marker: "q-2" })
   retireSubject("thread:/f")
   assert.deepEqual(notificationsStore.get().items.filter((item) => item.subject.id === "thread:/f" && !item.seen).map((item) => item.id), [noticeId(subjectFor("/f"), "question", "q-2"), noticeId(subjectFor("/f"), "question", "q-1")], "two asks on one thread each stand, and a thread starting again leaves both")
+
+  const beforeCohort = notificationsStore.get().items.length
+  const cohort = noteOutcome({ kind: "needs-you", subject: subjectFor("/g"), marker: "one-login" })
+  assert.ok(cohort)
+  retargetNotice(cohort.id, subjectFor("/h"))
+  assert.equal(notificationsStore.get().items.length, beforeCohort + 1, "custody changes no announcement or disposition")
+  openItem(cohort)
+  assert.deepEqual(fake.log.opened.at(-1)?.target, subjectFor("/h").target, "a callback holding the original notice opens the current waiting member")
+  assert.equal(notificationsStore.get().items.filter(item => item.subject.id === "thread:/f" && !item.seen).length, 2, "the account notice settles no unrelated questions")
 
   flushNotificationBursts()
   uninstall()

@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
-import { ExecutionAccountChanged, resumes } from "../harnesses/index.js"
+import { ExecutionAccountChanged, resumes, type VerifiedSignIn } from "../harnesses/index.js"
 import type { AccountRemovalSession, AccountRemovalWait } from "../contracts/accounts.js"
-import type { AccountSwitchWait, LiveRequest, SignInHold, SignInReadiness, SignInResume } from "../contracts/live-conversations.js"
+import type { AccountSwitchWait, LiveRequest, LiveSnapshot, SignInHold, SignInReadiness, SignInResume } from "../contracts/live-conversations.js"
 import { isBusyProviderWork } from "../contracts/native-agents.js"
 import { failureAfterRetry, holdForRetry, transientCause } from "../contracts/delivery-retry.js"
 import { classifyStartFailure, failureEvidenceOf } from "../contracts/provider-failure.js"
@@ -13,12 +13,17 @@ import { holdForSignIn, releaseSignIn, signInPause } from "../contracts/sign-in-
 import type { Actor } from "../contracts/thread-identity.js"
 import { continueTurnPrompt } from "../contracts/turn-continuation.js"
 import { promptFingerprint } from "./live-assets.js"
-import { LiveRequestSchema } from "./live-journal.js"
+import { LiveRequestSchema, JournalWriteError } from "./live-journal.js"
 import { activeBinding, conversationControl, launched, type LiveAccess, type Resident } from "./live-runtime.js"
 
 type AccountsAccess = Pick<LiveAccess,
   "dependencies" | "epoch" | "admission" | "require" | "residents" | "actor" | "flush" | "drain" | "canHibernate" |
-  "hibernate" | "wake" | "reopens" | "returnFromRemovedWorktree" | "launch">
+  "hibernate" | "wake" | "reopens" | "returnFromRemovedWorktree" | "launch" | "summaries" | "loadSliced" | "moves" | "storageFailed" | "stopMark" | "resident">
+
+function sameSignOut(left: SignInHold, right: SignInHold | undefined): boolean {
+  return right !== undefined && (left.id ? left.id === right.id :
+    right.id === undefined && left.at === right.at && left.harness === right.harness && left.account === right.account)
+}
 
 /**
  * Conversations and the accounts their processes run on: work paused when
@@ -27,10 +32,14 @@ type AccountsAccess = Pick<LiveAccess,
  */
 export class LiveAccounts {
   private readonly access: AccountsAccess
+  private stopped = false
+  private readonly signInReads = new Map<string, { resident: Resident; reading: Promise<void> }>()
 
   constructor(access: AccountsAccess) {
     this.access = access
   }
+
+  stop(): void { this.stopped = true }
 
   /**
    * Queued work once a launch failed: it waits for the user when the account signed out, waits and goes again by
@@ -79,15 +88,29 @@ export class LiveAccounts {
     if (existing) return existing
     const binding = activeBinding(resident)
     const account = (resident.snapshot.session.executionContext ?? binding?.executionContext)?.account
+    const harness = binding?.provider ?? resident.snapshot.session.harness
+    const verification = !account || account.kind === "configured" && account.managed ? this.access.dependencies.signInSequence?.(harness) : undefined
     const hold: SignInHold = {
-      harness: binding?.provider ?? resident.snapshot.session.harness,
+      id: randomUUID(),
+      ...(verification !== undefined && { verification }),
+      harness,
       account: account?.kind === "configured" ? account.name : "",
       credential: "",
       at: Date.now(),
     }
     hostLog("live", "work paused on a sign-out", { conversation: resident.snapshot.session.id, harness: hold.harness })
-    void this.recordSignInCredential(resident, hold)
+    void this.readSignInCredential(resident, hold)
     return hold
+  }
+
+  private readSignInCredential(resident: Resident, hold: SignInHold): Promise<void> {
+    const key = hold.id ?? `${resident.snapshot.session.id}:${hold.at}`
+    const pending = this.signInReads.get(key)
+    if (pending?.resident === resident) return pending.reading
+    const reading = this.recordSignInCredential(resident, hold)
+    this.signInReads.set(key, { resident, reading })
+    void reading.then(() => { if (this.signInReads.get(key)?.reading === reading) this.signInReads.delete(key) })
+    return reading
   }
 
   /** Completes a new hold: a launch refused before it ran names no account, so it is the one selected. */
@@ -98,12 +121,13 @@ export class LiveAccounts {
       let state = await signInState(hold.harness, hold.account || "default")
       const account = hold.account || state.selected
       if (account !== (hold.account || "default")) state = await signInState(hold.harness, account)
-      const recorded: SignInHold = { ...hold, account, credential: state.credential }
+      if (this.stopped || this.access.resident(resident.snapshot.session.id) !== resident) return
+      const recorded: SignInHold = { ...hold, account, credential: state.credential, ...(account === "default" && { verification: undefined }) }
       let changed = false
       resident.snapshot = {
         ...resident.snapshot,
         requests: resident.snapshot.requests.map((request) => {
-          if (request.signIn?.at !== hold.at || request.signIn.credential) return request
+          if (!sameSignOut(hold, request.signIn) || request.signIn?.credential) return request
           changed = true
           return { ...request, signIn: recorded }
         }),
@@ -119,9 +143,11 @@ export class LiveAccounts {
     const resident = this.access.require(id)
     const pause = signInPause(resident.snapshot.requests)
     if (!pause) return null
+    const proof = this.access.dependencies.signInProof?.(pause.hold.harness, pause.hold.account)
+    if (proof && (pause.hold.ready === proof.id || pause.hold.verification !== undefined && proof.sequence > pause.hold.verification)) return "ready"
     const signInState = this.access.dependencies.signInState
     if (!pause.hold.credential || !signInState) {
-      await this.recordSignInCredential(resident, pause.hold)
+      await this.readSignInCredential(resident, pause.hold)
       return "signed-out"
     }
     const state = await signInState(pause.hold.harness, pause.hold.account)
@@ -139,16 +165,35 @@ export class LiveAccounts {
     const resident = this.access.require(id)
     resident.signInResume ??= this.resumeSignInNow(resident, anyway, actor).finally(() => {
       resident.signInResume = undefined
+      if (!this.stopped) void this.recoverSignIns().catch(error => hostWarn("live", "held sign-ins could not be reconciled", { error: errorMessage({ error }) }))
     })
     return resident.signInResume
   }
 
-  private async resumeSignInNow(resident: Resident, anyway: boolean, actor?: Actor): Promise<SignInResume> {
+  private async resumeSignInNow(resident: Resident, anyway: boolean, actor?: Actor, verified?: { hold: SignInHold; receipt: string }): Promise<SignInResume> {
     this.access.admission.assert()
-    if (!signInPause(resident.snapshot.requests)) return "resumed"
-    if (!anyway && (await this.signInReadiness(resident.snapshot.session.id)) !== "ready") return "signed-out"
+    const before = signInPause(resident.snapshot.requests)
+    if (!before) return "resumed"
+    const generation = resident.generation
+    const stop = this.access.stopMark(resident.snapshot.session.id)
+    const binding = conversationControl(resident).activeBindingId
+    if (!verified && !anyway && (await this.signInReadiness(resident.snapshot.session.id)) !== "ready") return "signed-out"
     const pause = signInPause(resident.snapshot.requests)
-    if (!pause || resident.closing || resident.snapshot.session.status === "closed") return "resumed"
+    if (!pause) return "resumed"
+    if (this.stopped || this.access.resident(resident.snapshot.session.id) !== resident || !sameSignOut(before.hold, pause.hold) || generation !== resident.generation || stop !== this.access.stopMark(resident.snapshot.session.id) || binding !== conversationControl(resident).activeBindingId || resident.closing) return "signed-out"
+    const currentProof = verified && this.access.dependencies.signInProof?.(pause.hold.harness, pause.hold.account)
+    if (verified && (!sameSignOut(verified.hold, pause.hold) || !this.automaticallyResumable(resident) ||
+      !currentProof || currentProof.id !== verified.receipt || pause.hold.verification !== undefined && currentProof.sequence <= pause.hold.verification)) return "signed-out"
+    const control = conversationControl(resident)
+    const source = activeBinding(resident)
+    if (verified && (!source || source.provider !== pause.hold.harness || source.account !== undefined && source.account !== pause.hold.account)) return "signed-out"
+    if (verified && this.access.dependencies.agents?.()?.mayWake?.(resident.snapshot.session.id) === false) {
+      if (pause.hold.ready !== verified.receipt) this.commitSignIn(resident, {
+        ...resident.snapshot,
+        requests: resident.snapshot.requests.map(request => sameSignOut(pause.hold, request.signIn) ? { ...request, signIn: { ...request.signIn!, ready: verified.receipt } } : request),
+      })
+      return "resumed"
+    }
     const cut = pause.cut?.outcome === "continue"
       ? resident.snapshot.requests.find((request) => request.id === pause.cut?.requestId)
       : undefined
@@ -167,12 +212,13 @@ export class LiveAccounts {
     if (continuation)
       continuation.inputDigest = promptFingerprint(continuation.text, continuation.attachments, continuation.tuning)
     const session = resident.snapshot.session
-    resident.snapshot = {
+    this.commitSignIn(resident, {
       ...resident.snapshot,
-      session: session.status === "failed" ? { ...session, status: "ready", error: undefined } : session,
+      // Automatic recovery retains the account whose work was held, even if Settings selected another meanwhile.
+      ...(verified && { control: { ...control, bindings: control.bindings.map(binding => binding.id === control.activeBindingId ? { ...binding, account: pause.hold.account } : binding) } }),
+      session: session.status === "failed" || session.status === "closed" ? { ...session, status: "ready", error: undefined } : session,
       requests: releaseSignIn(resident.snapshot.requests, continuation),
-    }
-    this.access.flush(resident)
+    })
     hostLog("live", "resumed work paused on a sign-out", {
       conversation: session.id,
       harness: pause.hold.harness,
@@ -184,11 +230,91 @@ export class LiveAccounts {
     return "resumed"
   }
 
+  private commitSignIn(resident: Resident, next: LiveSnapshot): void {
+    if (this.access.resident(next.session.id) !== resident) throw new Error("The conversation owner changed before sign-in recovery could be saved. Its held work was preserved.")
+    const previous = resident.snapshot
+    resident.snapshot = next
+    try { this.access.flush(resident) }
+    catch (error) {
+      if (error instanceof JournalWriteError) {
+        // No provider input before the release is durable. Force a real save after the store recovers.
+        resident.snapshot = { ...previous }
+        this.access.storageFailed(resident, { error })
+      }
+      throw error
+    }
+  }
+
+  private automaticallyResumable(resident: Resident): boolean {
+    return !this.stopped && this.access.resident(resident.snapshot.session.id) === resident && !this.access.admission.closed && !resident.storageFault && !resident.closing && !resident.retireWhenIdle && this.access.moves.executes(resident) &&
+      !resident.snapshot.requests.some(request => request.signIn && request.pause === "stop") &&
+      this.access.dependencies.signInAllowed?.(resident.snapshot.session.id) !== false
+  }
+
+  /** A login settles an account cohort, not just the tab whose sign-in card is visible. */
+  async recoverSignIns(receipt?: VerifiedSignIn): Promise<void> {
+    if (this.stopped || !this.access.dependencies.signInProof || this.access.admission.closed) return
+    const pending: Promise<unknown>[] = []
+    for (const summary of this.access.summaries()) {
+      if (!summary.hasSignInHold || receipt && receipt.harness !== summary.session.harness) continue
+      try {
+        const observed = await this.access.loadSliced(summary.session.id)
+        const resident = this.access.resident(summary.session.id)
+        if (!observed || !resident) continue
+        if (observed !== resident) {
+          const previous = signInPause(observed.snapshot.requests)
+          if (!previous || !sameSignOut(previous.hold, signInPause(resident.snapshot.requests)?.hold)) continue
+        }
+        pending.push(this.recoverSignIn(resident, receipt).catch(error => {
+          hostWarn("live", "verified sign-in could not resume held work", { conversation: summary.session.id, error: errorMessage({ error }) })
+        }))
+      } catch (error) {
+        hostWarn("live", "verified sign-in could not resume held work", { conversation: summary.session.id, error: errorMessage({ error }) })
+      }
+    }
+    await Promise.allSettled(pending)
+  }
+
+  private async recoverSignIn(resident: Resident, receipt?: VerifiedSignIn): Promise<void> {
+    if (!this.automaticallyResumable(resident)) return
+    while (resident.signInResume) {
+      const previous = resident.signInResume
+      await previous.catch(() => {})
+      if (resident.signInResume === previous) resident.signInResume = undefined
+      // A fresh login arriving during an older admission keeps its own evaluation after that admission ends.
+      if (!receipt || !this.automaticallyResumable(resident)) return
+    }
+    if (!signInPause(resident.snapshot.requests)) return
+    // Pin the entire asynchronous admission, including account lookup, to this exact memory owner.
+    const operation = this.recoverOwnedSignIn(resident, receipt)
+    resident.signInResume = operation
+    try { await operation }
+    finally { if (resident.signInResume === operation) resident.signInResume = undefined }
+  }
+
+  private async recoverOwnedSignIn(resident: Resident, receipt?: VerifiedSignIn): Promise<SignInResume> {
+    const before = signInPause(resident.snapshot.requests)
+    if (!before) return "resumed"
+    // A refused first launch may still be naming its account. Keep this exact event through that read, independently of siblings.
+    if (!before.hold.account || !before.hold.credential) await this.readSignInCredential(resident, before.hold)
+    else {
+      const pending = before.hold.id && this.signInReads.get(before.hold.id)
+      if (pending && pending.resident === resident) await pending.reading
+    }
+    const pause = signInPause(resident.snapshot.requests)
+    if (!pause || !sameSignOut(before.hold, pause.hold) || !this.automaticallyResumable(resident)) return "signed-out"
+    if (receipt && (receipt.harness !== pause.hold.harness || receipt.account !== pause.hold.account)) return "signed-out"
+    const proof = this.access.dependencies.signInProof?.(pause.hold.harness, pause.hold.account)
+    // The stored receipt closes the publication/event crash gap. Legacy holds need a fresh event to prove its ordering.
+    if (!proof || pause.hold.verification !== undefined && proof.sequence <= pause.hold.verification || !receipt && pause.hold.verification === undefined && pause.hold.ready !== proof.id || receipt && receipt.id !== proof.id) return "signed-out"
+    return this.resumeSignInNow(resident, false, { kind: "service", name: "auto-continue" }, { hold: pause.hold, receipt: proof.id })
+  }
+
   /** Resumed work runs in a fresh process: the old one may keep the credentials it launched with. */
   private async reopenAfterSignIn(resident: Resident): Promise<void> {
     const { dependencies } = this.access
     if (resident.driver && this.access.canHibernate(resident, false, true)) await this.access.hibernate(resident, "account-change")
-    if (resident.closing || resident.snapshot.session.status === "closed") return
+    if (this.stopped || this.access.resident(resident.snapshot.session.id) !== resident || resident.closing || resident.snapshot.session.status === "closed") return
     if (!resident.driver && this.access.reopens(resident)) return this.access.wake(resident)
     const binding = activeBinding(resident)
     const driver = dependencies.driver(binding?.provider ?? "")
