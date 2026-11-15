@@ -19,7 +19,7 @@ export type AppSamplingDemand = z.infer<typeof AppSamplingDemandSchema>
 
 /** Reading binds to the current stream; following accepts demand, never receipt of the sampled data. */
 export const AppSamplingReplySchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("ready"), connection: z.string().uuid() }).strict(),
+  z.object({ kind: z.literal("ready"), connection: z.string().uuid(), generation: z.number().int().nonnegative() }).strict(),
   z.object({ kind: z.literal("following") }).strict(),
   z.object({ kind: z.literal("unavailable") }).strict(),
 ])

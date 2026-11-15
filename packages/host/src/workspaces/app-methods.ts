@@ -18,7 +18,7 @@ export function declareThreadAppMethods(methods: MethodTable, apps: DeskApp | un
     const client = hostClient()
     if (demand) return { kind: sampler?.follow(client, demand) ? "following" : "unavailable" }
     const connection = sampler?.connection(client)
-    return connection ? { kind: "ready", connection } : { kind: "unavailable" }
+    return connection ? { kind: "ready", connection, generation: sampler?.generation(client) ?? 0 } : { kind: "unavailable" }
   })
   // A window showing a folder's app hears it change by the sampler's pushes, so its ask keeps the sampler looking.
   methods.handle("mako:thread-app", (cwd: string, target?: string): Promise<ThreadAppView> => {

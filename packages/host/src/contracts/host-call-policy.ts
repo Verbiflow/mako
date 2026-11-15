@@ -17,6 +17,7 @@
 export type HostCallReplay = "read" | "replay" | "never"
 
 const reads = [
+  "mako:view-hints",
   /**
    * A client's tabs, conversations and models as they are, opening its first tab if it has none: asked twice, the same
    * answer. A cloud start asks it first, so marked so, its Thread sends it on without waiting for the disk.

@@ -68,6 +68,7 @@ export interface ExternalThreadActivity {
 }
 
 export type HostEventBody =
+  | { type: "view-hint"; hint: import("./view-hints.js").ViewHint }
   | { type: "application-lifecycle"; lifecycle: LifecycleState }
   | { type: "installation"; installation: UpdateInstallation }
   | { type: "app-command"; command: "app.quit" | "app.updates" }

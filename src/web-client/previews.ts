@@ -1,4 +1,5 @@
 import { useEffect } from "react"
+import { pageRefetch } from "@/state/view-refetch"
 import type { ThreadAppView } from "@mako/host/contracts/thread-app"
 import { createHook, createStore } from "@/state/store"
 import type { WebClient } from "./client"
@@ -109,7 +110,7 @@ const ASLEEP_REASON = "Its cloud machine is asleep. Running the app wakes it."
  * own look, kept up while the Thread shows, which never wakes a cloud machine nor keeps it running: one asleep is said
  * to be, and nothing of its app runs meanwhile. Without it, the person asked (opening the app), which wakes it.
  */
-export async function readApp(client: AppReader, owner: Owner, folder: string, how: { passive?: boolean } = {}): Promise<ThreadApp | undefined> {
+export async function readApp(client: AppReader, owner: Owner, folder: string, how: { passive?: boolean; current?: () => boolean } = {}): Promise<ThreadApp | undefined> {
   const key = appKey(owner, folder)
   let app: ThreadApp
   try {
@@ -122,6 +123,7 @@ export async function readApp(client: AppReader, owner: Owner, folder: string, h
       app = { servers: (held?.servers ?? []).map((server) => ({ ...server, state: "stopped" })), runnable: true, asleep: true, reason: ASLEEP_REASON, at: Date.now() }
     else app = { servers: held?.servers ?? [], runnable: false, reason: error instanceof Error ? error.message : String(error), at: Date.now() }
   }
+  if (how.current && !how.current()) return undefined
   const apps = new Map(appsStore.get().apps)
   apps.set(key, app)
   appsStore.set({ apps })
@@ -142,23 +144,14 @@ export function useThreadApp(client: WebClient, conversation: string, owner: Own
     const conversations = new Map(appsStore.get().conversations)
     conversations.set(conversation, appKey(asked, folder))
     appsStore.set({ conversations })
-    let timer: ReturnType<typeof setTimeout> | undefined
-    let stopped = false
-    const look = async () => {
-      clearTimeout(timer)
-      if (stopped || document.visibilityState !== "visible") return
-      const app = await readApp(client, asked, folder, { passive: true })
-      if (stopped || document.visibilityState !== "visible") return
-      timer = setTimeout(() => void look(), settling(app) ? APP_STARTING_MS : APP_SETTLED_MS)
-    }
-    const shown = () => void look()
-    void look()
-    document.addEventListener("visibilitychange", shown)
-    return () => {
-      stopped = true
-      clearTimeout(timer)
-      document.removeEventListener("visibilitychange", shown)
-    }
+    const key = appKey(asked, folder)
+    const lease = pageRefetch().watch(JSON.stringify(["web:app", client.deviceId, ownerKind, key]), {
+      scope: `web:${client.deviceId}:${ownerKind}:${ownerId}`, domain: "preview", key,
+      fields: ["state", "recipe"],
+      every: () => settling(appsStore.get().apps.get(key)) ? APP_STARTING_MS : APP_SETTLED_MS,
+      read: async (current) => { await readApp(client, asked, folder, { passive: true, current }) },
+    })
+    return () => lease.release()
   }, [client, conversation, ownerKind, ownerId, folder, on])
 }
 

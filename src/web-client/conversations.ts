@@ -213,9 +213,10 @@ export class WebConversations {
    * every `ASLEEP_MS` with the smallest read there is while one of its conversations is open, and read live once it answers.
    */
   #watchForWaking(mac: string): void {
-    if (this.#waking.has(mac)) return
+    if (document.visibilityState !== "visible" || this.#waking.has(mac)) return
     this.#waking.set(mac, setTimeout(async () => {
       this.#waking.delete(mac)
+      if (document.visibilityState !== "visible") return
       const asked = this.#openOn(mac)[0]
       if (!asked || accountListStore.get().quiet.has(mac)) return void this.#asleep.delete(mac)
       try {
@@ -226,7 +227,7 @@ export class WebConversations {
         this.#watchForWaking(mac)
         return
       }
-      this.#back(mac, "a call it answered")
+      if (document.visibilityState === "visible") this.#back(mac, "a call it answered")
     }, ASLEEP_MS))
   }
 
@@ -484,6 +485,8 @@ export class WebConversations {
    * to its listing, read again when it's opened. A hidden page that holds less is the last iOS ends for memory.
    */
   releaseHidden(): void {
+    for (const timer of this.#waking.values()) clearTimeout(timer)
+    this.#waking.clear()
     const { activeKey, conversations } = acpStore.get()
     for (const conversation of Object.values(conversations)) {
       if (conversation.kind !== "live" || !conversation.hydrated || conversation.key === activeKey) continue
@@ -555,6 +558,7 @@ export class WebConversations {
 
   /** After a sleep, a return or a network change: every followed stream that went quiet is followed again at once. */
   wake(): void {
+    if (document.visibilityState === "visible") for (const mac of this.#asleep.keys()) this.#watchForWaking(mac)
     this.#gateway.wake()
     for (const done of this.#waits) done()
   }
