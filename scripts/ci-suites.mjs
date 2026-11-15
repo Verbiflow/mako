@@ -41,6 +41,7 @@ const SUITES = [
   "test:account-devices-ui",
   "test:account-threads-ui",
   "test:animations-ui",
+  "test:workspace-ui",
   "test:appshot-ui",
   "test:carried-files-ui",
   "test:cloud-turn-on-ui",
