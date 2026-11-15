@@ -183,6 +183,49 @@ try {
   const settled = await turn()
   const again = await turn()
   assert.equal(again.before.id, settled.after.id)
+  // History is only a shortcut. A reader stuck in native FSEvents must not hold a checkpoint's index lock.
+  for (const phase of ["since", "mark"] as const) {
+    const markPending = Promise.withResolvers<HistoryMark>()
+    const readPending = Promise.withResolvers<Awaited<ReturnType<FileHistory["since"]>>>()
+    const entered = Promise.withResolvers<void>()
+    const originalMark = history.mark, originalRead = history.since
+    let asks = 0
+    if (phase === "since") history.since = () => { asks++; entered.resolve(); return readPending.promise }
+    else history.mark = () => { asks++; entered.resolve(); return markPending.promise }
+    const id = randomUUID()
+    const began = performance.now()
+    const taking = store.beginRun(id, cwd)
+    await entered.promise
+    const queued = store.capture(cwd)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const deadline = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`stuck ${phase} blocked the checkpoint and the next capture past the turn's deadline`)), 10_000) })
+    try {
+      const [captured, next] = await Promise.race([Promise.all([taking, queued]), deadline])
+      const heldAndQueuedMs = performance.now() - began
+      assert.match(treeOf(join(root, "store"), captured.id) ?? "", /^[a-f0-9]{40,64}$/, "the fallback is a saved checkpoint")
+      assert.equal(treeOf(join(root, "store"), captured.id), treeOf(join(root, "store"), next.id), "both fresh checkpoints hold the actual workspace while history has not answered")
+      assert.equal(asks, 1, "a timed-out native reader is not piled up with more history asks")
+      const beforeLate = treeOf(join(root, "store"), captured.id)
+      edit("a.txt", `changed after the ${phase} fallback\n`)
+      readPending.resolve({ paths: [], lost: [], ignored: [] })
+      markPending.resolve({ id: String(count), at: String(BigInt(Date.now()) * 1_000_000n) })
+      await Promise.all([readPending.promise, markPending.promise])
+      history.mark = originalMark
+      history.since = originalRead
+      await store.endRun(id)
+      const following = await turn()
+      assert.notEqual(treeOf(join(root, "store"), following.before.id), beforeLate, "a late history reply cannot publish or reuse the old workspace")
+      console.log(JSON.stringify({ stuckHistory: phase, checkpointAndQueuedMs: Math.round(heldAndQueuedMs) }))
+    } finally {
+      clearTimeout(timer)
+      history.mark = originalMark
+      history.since = originalRead
+      readPending.resolve({ paths: [], lost: [], ignored: [] })
+      markPending.resolve({ id: String(count), at: String(BigInt(Date.now()) * 1_000_000n) })
+      await Promise.allSettled([taking, queued])
+      store.abandonRun(id)
+    }
+  }
   console.log(JSON.stringify({ captureMs: Math.round(settled.ms), reusedMs: Math.round(again.ms), historyReads: reads }))
   console.log("checkpoint reuse: a quiet workspace's turn starts on its last checkpoint; a change, a staged path, a moved HEAD, a lost or unread history, or a shared workspace is captured")
 } finally {
