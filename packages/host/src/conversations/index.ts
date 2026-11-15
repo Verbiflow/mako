@@ -147,6 +147,8 @@ export interface ConversationsDeps {
   environment: HostEnvironment
   /** The host has begun to stop: what it takes up as it starts ends at its next step, left for the next host. */
   stopping?(): boolean
+  /** Remote routing owns continued conversations, even after the local journal closes. */
+  elsewhere?(conversation: string): boolean
   git: Git
   threads: Threads
   harnesses: Harnesses
@@ -458,6 +460,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   })
   const retirementThreads = store ? new WorktreeThreadState({
     store, dataRoot, memory,
+    elsewhere: (id) => deps.elsewhere?.(id) ?? false,
     fin: (thread) => agents?.finishedThreadAt(thread),
     busy: (id) => live.atWork(id) || Boolean(live.held(id)?.requests.some(request => request.status === "queued" || request.status === "held" || request.status === "dispatching")),
   }) : undefined

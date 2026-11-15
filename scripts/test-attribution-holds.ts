@@ -176,6 +176,9 @@ function judge(what: string, atOnce: readonly number[], sliced: readonly number[
   assert.ok(cpuRatio < 1, `${what}: active CPU exceeded its paired slice-plus-one-step yardstick`)
   assert.ok(cpu.every(ms => ms > 0), "each reading must observe non-GC cooperative CPU; missing evidence is not a pass")
   assert.ok(steps.every(ms => Number.isFinite(ms) && ms >= 0), "each sample needs a finite one-step yardstick")
+  const stepRatio = median(steps.map((sample, index) => sample / reference[index]!))
+  console.log(`${what}: indivisible step / paired slice reference median ${stepRatio.toFixed(2)} (under 1)`)
+  assert.ok(stepRatio < 1, `${what}: an indivisible step exceeded its paired slice reference`)
 
 }
 
@@ -190,7 +193,11 @@ async function countATurn(): Promise<void> {
   const checkout = join(root, "turn", "repo")
   store.saveRoot({ id: "r1", path: checkout, kind: "workspace", repository: false, head: null, mark: null, seenAt: started, trackedAt: started, active: true })
   const own: Attribution = { certainty: "exact", author: { thread: "T1", session: "S1", turn: "R1" }, effect: "modify" }
-  const other: Attribution = { certainty: "exact", author: { thread: "T2", session: "S2", turn: "T2-turn" }, effect: "modify" }
+  // The protocol permits sixteen competing writers; keep that decode cost in the indivisible-page yardstick.
+  const other: Attribution = {
+    certainty: "ambiguous", reason: "several-threads",
+    candidates: Array.from({ length: 16 }, (_, index) => ({ thread: `T${index + 2}`, session: `S${index + 2}`, turn: `T${index + 2}-turn` })),
+  }
   const version = (file: number, step: number) => {
     const text = Array.from({ length: LINES }, (_, line) => (line % 30 === step * 5 % 30 ? `line ${line} of file ${file}, step ${step}` : `line ${line} of file ${file}`)).join("\n")
     const bytes = new TextEncoder().encode(text)
@@ -226,7 +233,7 @@ async function countATurn(): Promise<void> {
     assert.deepEqual(granular.value, atOnce.value, "the one-step yardstick counts exactly the same work")
     const sliced = await longestHold(() => inSlices(countingTurn(view, "T1", "R1", "settled", 0)))
     assert.equal(atOnce.value.own.files, FILES, "every file the turn wrote is counted")
-    assert.ok(atOnce.value.others.files > 0, "and the other Thread's writes meanwhile")
+    assert.deepEqual(atOnce.value.others, { files: 50, added: OTHERS * 2, removed: OTHERS }, "every competing write is counted across page boundaries")
     assert.deepEqual(sliced.value, atOnce.value, "counted in slices, the turn counts exactly as at once")
     atOnceHolds.push(atOnce.holdMs)
     slicedHolds.push(sliced.holdMs)
@@ -360,6 +367,7 @@ async function workBeginsMeanwhile(): Promise<void> {
 }
 
 try {
+  console.log(`attribution holds runtime: ${process.platform}/${process.arch}, Node ${process.version}, slice budget ${SLICE_BUDGET_MS} ms`)
   await observesDeferredWork()
   await workBeginsMeanwhile()
   await countATurn()
