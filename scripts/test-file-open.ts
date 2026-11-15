@@ -2,13 +2,13 @@ import "./lib/scratch-git.mjs"
 import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { dirname, join, relative } from "node:path"
 import { promisify } from "node:util"
 import { createMakoBridge } from "@mako/host/contracts/renderer-bridge"
 import { WorkspaceGit } from "@mako/host/git/workspace-git"
-import { ConversationFiles, WorkspaceFiles } from "@mako/host/workspaces/files"
+import { ConversationFiles, OUTSIDE_THREAD_WORDS, WorkspaceFiles } from "@mako/host/workspaces/files"
 import { inlineFileTarget } from "../src/lib/file-citations.ts"
 import { threadFileWorkspace } from "@mako/host/contracts/thread-file-workspace"
 import { registeredHarnessIds } from "./registered-harnesses.ts"
@@ -291,6 +291,36 @@ try {
     "the error object itself is never replaced"
   )
   assert.equal(settled?.message, "gone")
+
+  // Another device reads through the gateway (`confined`): only the Thread's folders, after every symlink is resolved.
+  {
+    const secrets = join(outer, "elsewhere")
+    await mkdir(secrets, { recursive: true })
+    await writeFile(join(secrets, "id_rsa"), "PRIVATE KEY")
+    await writeFile(join(secrets, "photo.png"), Buffer.from("89504e470d0a1a0a", "hex"))
+    await writeFile(join(root, "inside.md"), "The Thread's own file")
+    await symlink(join(secrets, "id_rsa"), join(root, "linked-key"))
+    await mkdir(dataDir, { recursive: true })
+    await writeFile(join(dataDir, "notes.md"), "The Thread's data")
+    const remote = (path: string, purpose?: "preview") => conversationFiles.read(root, path, ownedDataDir, purpose, true)
+    assert.equal((await remote("inside.md")).contents, "The Thread's own file", "a file in the Thread's folder reads")
+    assert.equal((await remote(join(dataDir, "notes.md"))).contents, "The Thread's data", "and one in its data folder")
+    for (const [path, why] of [
+      [join(secrets, "id_rsa"), "an absolute path elsewhere"],
+      ["../elsewhere/id_rsa", "a relative path climbing out"],
+      ["linked-key", "a symlink in the folder pointing out of it"],
+    ] as const) {
+      const read = await remote(path)
+      assert.equal(read.withheld, OUTSIDE_THREAD_WORDS, why)
+      assert.equal(read.contents, "", `${why}: nothing of it is read`)
+      assert.equal(read.previewUrl, undefined, `${why}: and nothing is signed`)
+    }
+    const picture = await remote(join(secrets, "photo.png"), "preview")
+    assert.equal(picture.withheld, OUTSIDE_THREAD_WORDS, "a picture elsewhere isn't signed for another device either")
+    assert.equal(picture.previewUrl, undefined)
+    // This Mac's own window still opens a path anywhere on it, as the person asked.
+    assert.equal((await conversationFiles.read(root, join(secrets, "id_rsa"))).contents, "PRIVATE KEY", "the desktop window isn't confined")
+  }
 
   console.log(
     "Opening a linked file: named and partial paths resolve, ambiguity and absence read as sentences, and host errors lose Electron's IPC wrapper"
