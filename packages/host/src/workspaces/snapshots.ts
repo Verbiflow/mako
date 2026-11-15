@@ -1051,6 +1051,18 @@ export class WorkspaceSnapshots {
           "The checkpoint exceeds its object storage limit. No workspace files were changed."
         )
       const objects = await privateSnapshotObjects(this.git, scope, directory)
+      if (!since && !head.endsWith(":unborn")) {
+        const row = this.db.prepare(`SELECT value FROM snapshots WHERE json_extract(value, '$.scope') = ?
+          ORDER BY json_extract(value, '$.createdAt') DESC, id DESC LIMIT 1`).get(scope)
+        const previous = row ? RecordSchema.parse(JSON.parse(RowSchema.parse(row).value)) : undefined
+        if (previous?.storage && previous.gitDir === gitDir && previous.head === head) {
+          const borrowed = join(this.root, previous.id, "git/objects")
+          // The scope's lock keeps this store through sealing. Git still checks the working tree, but needn't write a
+          // blob already packed here. sealSnapshotObjects packs it into this checkpoint before either is pruned.
+          if ((await lstat(borrowed).catch(() => null))?.isDirectory())
+            objects.read = [...(objects.read ?? []), borrowed]
+        }
+      }
       const captureGit = (args: string[], index?: string) =>
         this.snapshotGit(scope, args, index, undefined, objects)
       if (since) {
