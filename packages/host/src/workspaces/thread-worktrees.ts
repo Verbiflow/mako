@@ -967,17 +967,22 @@ export class ThreadWorktreeService {
         for (const repoRoot of roots) this.invalidatePulls(repoRoot)
         this.summaryStale(paths(), SUMMARY_SETTLE_MS, index)
       }
+      let reachedReady = false
       const retire = () => {
         if (this.summaryWatches.get(key) !== watch) return
         this.summaryWatches.delete(key)
         this.retireWatch(watch)
-        if (!this.summaryWatchesClosed && generation === this.summaryWatchGeneration) invalidate()
+        if (!this.summaryWatchesClosed && generation === this.summaryWatchGeneration) {
+          if (reachedReady) invalidate()
+          else this.summaryStale(paths(), SUMMARY_SETTLE_MS, index)
+        }
       }
       // An injected port may report loss during subscribe, before the proxy has been published in the map.
       const watch = watchGitMarkers(gitDir, invalidate, markers, this.watch, () => queueMicrotask(retire))
       this.summaryWatches.set(key, watch)
       let timedOut = false
       const ready = watch.ready.then(() => {
+        reachedReady = true
         // A slow close in the child can hold its next subscribe. Keep that late owner and reread what it missed.
         if (timedOut && this.summaryWatches.get(key) === watch && !this.summaryWatchesClosed && generation === this.summaryWatchGeneration)
           invalidate()
