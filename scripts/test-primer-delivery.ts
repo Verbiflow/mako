@@ -7,11 +7,20 @@ import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join, resolve } from "node:path"
+import { readFile } from "node:fs/promises"
+import type { SpawnOptions } from "node:child_process"
+import { mock } from "node:test"
+import { z } from "zod"
+import { processRunner } from "@mako/git/process-runner"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { makoNote } from "@mako/host/conversations/mako-note"
 import { standingLines } from "@mako/host/conversations/control-cadence"
 import { primerBlocks } from "@mako/host/contracts/primer"
+import { claudeSdkOptions } from "@mako/host/harnesses/claude/sdk-options"
+import { configureOpenCodePrimer } from "@mako/host/harnesses/opencode/primer-file"
+import { createCodexEngine } from "@mako/host/harnesses/codex-app"
+import { admitted } from "./fixtures/admitted-start.ts"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { CONTEXT_COMPACTED } from "@mako/host/contracts/native-activity"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
@@ -21,6 +30,7 @@ import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts
 
 const FIXTURE = "Injected driver fixture"
 const BLOCKS = primerBlocks({ role: "thread", noRecipe: false, computer: true }).map((block) => block.text)
+const FILE_LINK = "Link files with ordinary Markdown links to their absolute path, optionally followed by :line, so the person can open them."
 const carries = (text: string) => BLOCKS.every((block) => text.includes(block))
 const carriesAny = (text: string) => BLOCKS.some((block) => text.includes(block))
 
@@ -33,15 +43,16 @@ const waitFor = async (predicate: () => boolean, message: string) => {
 }
 
 /** `idleMs`: the process hibernates once idle that long, and the next message resumes its session in a new one. */
-function primerHost(options: { idleMs?: number } = {}) {
+function primerHost(options: { idleMs?: number; harness?: string } = {}) {
   const root = mkdtempSync(join(tmpdir(), "mako-primer-delivery-"))
   const id = randomUUID()
   const sent: string[] = []
   let starts = 0
   let refuse = false
   let owner: LiveConversations
+  const harness = options.harness ?? "test-provider"
   const state = (status: LiveSessionState["status"], connection: LiveSessionState["connection"] = "connected"): LiveSessionState => ({
-    id, nativeId: id, nativePath: join(root, "native-session"), harness: "test-provider", cwd: root, status, connection, modes: [], currentMode: null, configOptions: [],
+    id, nativeId: id, nativePath: join(root, "native-session"), harness, cwd: root, status, connection, modes: [], currentMode: null, configOptions: [],
   })
   const driver: ProviderLiveDriver = {
     ...noCapabilities,
@@ -54,7 +65,7 @@ function primerHost(options: { idleMs?: number } = {}) {
     backgroundStop: { kind: "ends-with-turn", evidence: FIXTURE },
     turnRecovery: { kind: "manual", reason: FIXTURE },
     resume: fixtureResume(),
-    provider: "test-provider",
+    provider: harness,
     available: () => true,
     start: async () => {
       starts += 1
@@ -100,7 +111,7 @@ function primerHost(options: { idleMs?: number } = {}) {
     owner,
     starts: () => starts,
     hibernated: () => owner.snapshot(id)?.session.connection === "hibernated",
-    start: () => owner.start("test-provider", root, { conversationId: id }),
+    start: () => owner.start(harness, root, { conversationId: id }),
     send: async (text: string) => {
       const before = sent.length
       owner.submit(id, randomUUID(), text)
@@ -123,11 +134,12 @@ function primerHost(options: { idleMs?: number } = {}) {
 type Host = ReturnType<typeof primerHost>
 
 /** One way the model can miss the primer: after `lose`, the next accepted prompt carries it. */
-async function primerAfter(lose: (host: Host) => Promise<void>, options: { idleMs?: number } = {}) {
+async function primerAfter(lose: (host: Host) => Promise<void>, options: { idleMs?: number; harness?: string } = {}) {
   const host = primerHost(options)
   try {
     await host.start()
     assert.ok(carries(await host.send("First")), "the first prompt carries the primer")
+    assert.ok(BLOCKS.some(block => block.includes(FILE_LINK)), "the common primer includes clickable absolute file guidance")
     assert.equal(carriesAny(await host.send("Second")), false, "a prompt after it doesn't repeat it")
     await lose(host)
     assert.ok(carries(await host.send("Next")), "the next accepted prompt carries the primer again")
@@ -155,6 +167,95 @@ const cases: Array<[string, () => Promise<void>]> = [
   }, { idleMs: 15 })],
 ]
 
+// The real common note/queue path, with each note-backed harness's identity.
+// The injected transport observes exactly what LiveConversations hands it; no model is called.
+for (const harness of ["cursor", "grok", "devin"]) {
+  cases.push([`${harness} compaction`, () => primerAfter(async host => {
+    host.observe({ type: "live-update", id: host.id, update: { kind: "event", label: CONTEXT_COMPACTED } })
+  }, { harness })])
+  cases.push([`${harness} resume`, () => primerAfter(async host => {
+    await waitFor(host.hibernated, `${harness} never hibernated`)
+  }, { harness, idleMs: 15 })])
+}
+
+cases.push(["native instruction slots", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mako-primer-slots-"))
+  const tools = { token: "fixture", makoUrl: "http://127.0.0.1:1/mako", computerUrl: "http://127.0.0.1:1/computer" }
+  const instructions = BLOCKS.join("\n\n")
+  const id = randomUUID()
+  const options = (resume?: string) => admitted("claude", {
+    conversationId: id, resume, emit: () => {}, conversationTools: tools,
+    mcpSnapshot: async () => ({ cwd: root, generatedAt: 0, servers: [], providers: [] }),
+  }, { env: {} })
+  let primerFolder: string | undefined
+  const codex = createCodexEngine({ dataRoot: root })
+  const originalSpawn = processRunner.spawn
+  let fixtureStderr = ""
+  // Only replace the native executable with a fixture. The production engine still
+  // constructs turn/start and exchanges it over real child stdin/stdout.
+  const spawn = mock.method(processRunner, "spawn", (_command: string, args: readonly string[], settings: SpawnOptions) => {
+    assert.deepEqual(args, ["app-server"])
+    const child = originalSpawn(process.execPath, [resolve("scripts/fixtures/primer-app-server.mjs")], settings)
+    child.stderr?.on("data", chunk => { fixtureStderr += String(chunk) })
+    return child
+  })
+  const states: LiveSessionState[] = []
+  try {
+    for (const phase of ["start", "resume", "after compaction"]) {
+      const input = options(phase === "start" ? undefined : id)
+      const configured = await claudeSdkOptions(root, input, input.trace)
+      assert.deepEqual(configured.options.systemPrompt, { type: "preset", preset: "claude_code", append: instructions }, `Claude ${phase}: native preset append keeps the full primer`)
+      assert.equal(configured.options.resume, input.resume)
+
+      const env = { OPENCODE_CONFIG_CONTENT: JSON.stringify({ instructions: ["person.md"], model: "fixture" }) }
+      // The unique suffix gives this fixture sole ownership of the hashed temp file.
+      await configureOpenCodePrimer(env, `${instructions}\nFixture ${root}`)
+      const config = z.object({ instructions: z.array(z.string()), model: z.string() }).parse(JSON.parse(env.OPENCODE_CONFIG_CONTENT))
+      assert.equal(config.instructions[0], "person.md")
+      assert.equal(config.model, "fixture")
+      const file = config.instructions[1]!
+      primerFolder = dirname(file)
+      assert.ok((await readFile(file, "utf8")).includes(FILE_LINK), `OpenCode ${phase}: the configured instruction file carries file guidance`)
+    }
+
+    const log = join(root, "calls.jsonl")
+    const open = async (resume?: string) => codex.start(root, admitted("codex", {
+      conversationId: id, resume, conversationTools: tools,
+      emit: event => { if (event.type === "live-session") states.push(event.session) },
+    }, { env: { CODEX_EXECUTABLE: process.execPath, PATH: process.env.PATH, PRIMER_CALLS: log } }))
+    const send = async (text: string) => {
+      await codex.prompt(id, text, [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
+      await waitFor(() => states.at(-1)?.status === "ready", "the fixture turn never ended")
+    }
+    await open()
+    await send("first")
+    await codex.compact(id, randomUUID())
+    await waitFor(() => states.at(-1)?.status === "ready", "the fixture compaction never ended")
+    await send("after compaction")
+    await codex.close(id)
+    await open("fixture-thread")
+    await send("after resume")
+    const frames = (await readFile(log, "utf8")).trim().split("\n").map(line => z.object({ method: z.string(), params: z.unknown().optional() }).parse(JSON.parse(line)))
+    const turns = frames.filter(frame => frame.method === "turn/start")
+    assert.equal(turns.length, 3)
+    for (const frame of turns) {
+      const params = z.object({ additionalContext: z.object({ mako: z.object({ kind: z.literal("application"), value: z.string() }) }), input: z.array(z.object({ text: z.string() })) }).parse(frame.params)
+      assert.equal(params.additionalContext.mako.value, instructions, "Codex uses the real turn's developer application context, also after compaction/resume")
+      assert.equal(params.input.some(item => item.text.includes(FILE_LINK)), false, "the primer never replaces the person's words")
+    }
+    assert.ok(frames.some(frame => frame.method === "thread/resume"))
+    assert.ok(frames.some(frame => frame.method === "thread/compact/start"))
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\nfixture spawns=${spawn.mock.callCount()}\n${fixtureStderr}`, { cause: error })
+  } finally {
+    try { await codex.close(id) } finally {
+      spawn.mock.restore()
+      if (primerFolder) rmSync(primerFolder, { recursive: true, force: true })
+      rmSync(root, { recursive: true, force: true })
+    }
+  }
+}])
+
 cases.push(["another binding", async () => {
   const note = makoNote({ cloudMachine: false, launchedWith: () => undefined, controlLine: () => undefined, ownSlot: () => false, notices: () => [] })
   const standing = (await note("binding-a", "conversation", { role: "thread" })).standing
@@ -172,7 +273,7 @@ for (const [name, run] of cases) {
     console.log(`  ok: the primer after ${name}`)
   } catch (error) {
     failed.push(name)
-    console.log(`  FAIL: the primer after ${name}: ${error instanceof Error ? error.message : String(error)}`)
+    console.log(`  FAIL: the primer after ${name}: ${error instanceof Error ? error.stack : String(error)}`)
   }
 }
 assert.deepEqual(failed, [], `the primer was lost after ${failed.join(", ")}`)

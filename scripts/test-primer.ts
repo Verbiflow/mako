@@ -14,6 +14,7 @@ for (const line of ["Prefer worktree_move", "Prefer pull_request_open", "app_pro
 assert.equal(routes.text.includes("Not `"), false)
 for (const rule of ["only when the person asks", "Never put a token", "Say what wasn't run or verified"])
   assert.ok(policy.text.includes(rule), rule)
+assert.match(policy.text, /Link files with ordinary Markdown links to their absolute path, optionally followed by :line, so the person can open them\./)
 
 const apex = primerText({ ...thread, role: "apex" })
 assert.ok(apex.includes("Prefer agents_send"))
