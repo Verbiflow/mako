@@ -43,7 +43,7 @@ export function historyTurns(exchanges: readonly Exchange[], blocks: readonly En
     if (exchange.unloaded !== undefined) continue
     const start = at(exchange), end = at(exchanges[index + 1]!)
     if (!start || !end || (start.kind === "live" && end.kind === "base")) continue
-    result.push({ id: exchange.id, label: promptLabel(exchange).slice(0, 512),
+    result.push({ id: exchange.id, label: promptLabel(exchange),
       blocks: { start: start.kind === "live" ? start.index : blockStart,
         end: end.kind === "live" ? end.index : blockStart },
       base: { start: start.kind === "base" ? start.index : baseStart + base.length,

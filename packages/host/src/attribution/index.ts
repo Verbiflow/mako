@@ -404,6 +404,13 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     return offLoop.reader
   }
 
+  /**
+   * Every file event this host sent its writer taken before `settled` asks: the events go on the writer's port, and
+   * `settled` on the journal's socket, so without this the answer could come before a change heard just before it (a
+   * rename right as a turn ended, missing from a move's notice). A host with no writer of its own sends none.
+   */
+  const heardAll = (): Promise<void> => writer.command({ kind: "heard" }).then(() => undefined, () => undefined)
+
   const view = (): JournalView => {
     if (!reader) throw new Error("Mako's record of changes isn't open yet. Try again in a moment.")
     const version = reader.store.dataVersion()
@@ -581,8 +588,8 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       wakeFor(checkout)
       return shares(view(), checkout, thread)
     },
-    settled: () => journal.writes.settled(),
-    heard: () => journal.writes.settled({ rescans: false }),
+    settled: () => heardAll().then(() => journal.writes.settled()),
+    heard: () => heardAll().then(() => journal.writes.settled({ rescans: false })),
     async track(checkout) {
       const found = await locate(deps.git, checkout).catch(() => null)
       const roots = found ? [found.root] : await projectRepositories(deps.git, checkout).then((result) => ("roots" in result ? result.roots : []), () => [])

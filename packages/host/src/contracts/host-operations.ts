@@ -13,6 +13,7 @@ import { z } from "zod"
 import { FIXTURE_REFUSED_CODE } from "./fixture-desk-policy.js"
 import { hostChannels, type HostChannel } from "./host-call-inputs.js"
 import { gatewayCalls } from "./client-calls.js"
+import { MACHINE_REFUSED, runtimeAllows } from "./gateway-allowed.js"
 import { hostCallReplay, type HostCallReplay } from "./host-call-policy.js"
 import { HOST_CLOSED_CODE, HOST_RESTARTING_CODE } from "./host-connection.js"
 import { RuntimeArgsSchema, decodeRuntimeArgs, runtimeArgs, runtimeFailureError, type RuntimeFailure } from "./runtime.js"
@@ -37,6 +38,12 @@ export const hostOperations: ReadonlyMap<string, HostOperation> = new Map(
   gatewayCalls(hostChannels)
     .map((channel) => [hostOperationName(channel), { channel, replay: hostCallReplay(channel) }])
 )
+
+/** Every call this host declares, gateway's or not: what tells a call kept to its own socket from one it doesn't have. */
+const ownCalls: ReadonlySet<string> = new Set(hostChannels)
+
+/** Why another device's call to one of this host's own was refused. */
+export const GATEWAY_REFUSED = "Only this Mac's own windows make this call"
 
 /** A host call's input: its arguments as the socket carries them, and whether the caller pages history. */
 const HostInputSchema = z.object({
@@ -83,8 +90,14 @@ export type HostCallRefusal = { kind: "refused"; problem: Problem }
 /** The call an operation asks for, its input decoded once; the call's own schema checks its arguments. */
 export function fromHostOperation(operation: Operation): HostCallRequest | HostCallRefusal {
   const known = hostOperations.get(operation.op)
+  // A call this host answers only on its own socket: refused to another device by name, unrun (`GATEWAY_ALLOWED`).
+  if (!known && operation.op.startsWith(PREFIX) && ownCalls.has(`mako:${operation.op.slice(PREFIX.length)}`))
+    return { kind: "refused", problem: problem("forbidden", GATEWAY_REFUSED, operation.correlationId, "not-applied", { status: 403, detail: `${GATEWAY_REFUSED} (${operation.op})` }) }
   if (!known)
     return { kind: "refused", problem: problem("not-found", "This host has no such call", operation.correlationId, "not-applied", { status: 404, detail: operation.op }) }
+  // A machine's call that is the person's: refused unrun, however the machine words its payload (`MACHINE_ALLOWED`).
+  if (operation.actor.kind === "runtime" && !runtimeAllows(known.channel, operation.actor.runtimeId))
+    return { kind: "refused", problem: problem("forbidden", MACHINE_REFUSED, operation.correlationId, "not-applied", { status: 403, detail: `${MACHINE_REFUSED} (${operation.op})` }) }
   const malformed = (detail: string): HostCallRefusal =>
     ({ kind: "refused", problem: problem("bad-request", "A host call's input is its arguments", operation.correlationId, "not-applied", { status: 400, detail }) })
   let decoded: unknown

@@ -20,6 +20,7 @@ import {
   NAVIGATOR_WIDTH,
   TurnNavigator,
 } from "@/components/transcript/turn-navigator"
+import { useNavigatorPrompts } from "@/components/transcript/navigator-prompts"
 import {
   LEAD_EXCHANGE_ID,
   continuedFrom,
@@ -1846,6 +1847,9 @@ export function ConversationTimeline({
   // command's reader (the palette) to work through the whole list.
   const moving = useRef({ activeTurn, exchanges, jump })
   moving.current = { activeTurn, exchanges, jump }
+  // The navigator's jump, the same function for the transcript's life: `jump` changes with every streamed batch, and the
+  // navigator, memoized on its props, would otherwise draw again for each.
+  const jumpTo = useCallback((id: string) => moving.current.jump(id), [])
   useEffect(() => {
     const move = (offset: number) => {
       const { activeTurn, exchanges, jump } = moving.current
@@ -1874,6 +1878,7 @@ export function ConversationTimeline({
   }, [])
 
   const showNavigator = navigates && !isEmpty && exchanges.length >= 3
+  const navigatorPrompts = useNavigatorPrompts(exchanges)
   const woke = useMemo(() => wokeAfterRest(exchanges, askedAt), [exchanges, askedAt])
   const renderExchange = (exchange: ExchangeData) => exchange.unloaded !== undefined ? (
     <ReleasedExchange key={keys.get(exchange.id) ?? exchange.id} id={exchange.id} label={exchange.unloaded}
@@ -2026,9 +2031,9 @@ export function ConversationTimeline({
         </div>
         {showNavigator ? (
           <TurnNavigator
-            exchanges={exchanges}
+            exchanges={navigatorPrompts}
             activeId={activeTurn}
-            onJump={jump}
+            onJump={jumpTo}
             paneRef={pane}
           />
         ) : null}
