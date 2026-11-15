@@ -3048,6 +3048,21 @@ const inputs = {
       z.string().optional(),
       z.array(z.string()).optional(),
     ]),
+  "mako:thread-app-demand": () =>
+    z.tuple([
+      z
+        .object({
+          connection: z.string().uuid(),
+          generation: z
+            .number()
+            .int()
+            .nonnegative()
+            .max(Number.MAX_SAFE_INTEGER),
+          visible: z.boolean(),
+        })
+        .strict()
+        .optional(),
+    ]),
   "mako:thread-app-make-room": () =>
     z.tuple([z.string(), z.string().optional()]),
   "mako:thread-app-marks": () => z.tuple([]),
@@ -3736,6 +3751,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-abort-run", "conversations"],
   ["mako:thread-app", "workspaces"],
   ["mako:thread-app-check", "workspaces"],
+  ["mako:thread-app-demand", "workspaces"],
   ["mako:thread-app-make-room", "workspaces"],
   ["mako:thread-app-marks", "workspaces"],
   ["mako:thread-app-output", "workspaces"],

@@ -319,6 +319,8 @@ export interface WorkspaceMovers {
 }
 
 export interface WorkspaceMoversDeps {
+  /** Connected windows, excluding observers, which may own app sampling demand. */
+  windowStream?: (client: string) => string | undefined
   /**
    * Whether a secret a recipe names (`secretNames`) has a value here, checked before a cloud start: in this host's
    * environment, or on a cloud machine in a carried file the account's secret store gave its checkout.
@@ -418,6 +420,7 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
   // One look at every app for every window, pushed when it changes, with the trace and each running copy's memory peak
   // (toward its project's "about N at once") on the same looks.
   const sampler = appTools && processes ? new ThreadAppSampler({
+    connection: deps.windowStream,
     look: () => appTools.look(),
     trace: appTools.traceApps,
     memory: async () => { await processes.memory() },
