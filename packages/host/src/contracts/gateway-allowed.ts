@@ -144,7 +144,7 @@ export const MACHINE_REFUSED = "A machine calls as its Thread's agent, never as 
 
 /**
  * The runtime id the gateway itself stamps when it acts on a Thread (`gateway:<thread>`), as it does to see whether a
- * machine's conversation still runs before packing the Thread off it (mako-cloud's `#depart`). No machine can claim
+ * machine's conversation still runs before packing the Thread off it (the gateway's `#depart`). No machine can claim
  * it: a machine's own id is its runtime's.
  */
 export const GATEWAY_RUNTIME = "gateway:"
