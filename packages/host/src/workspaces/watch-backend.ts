@@ -46,6 +46,8 @@ export function parcelBackend(subscribe: ParcelSubscribe): WatchBackend {
 
 /** No watch for this long lets the child go; the next one starts it again. */
 const IDLE_MS = 30_000
+/** Callers bound their own waits; keep a slow child's late subscription owned until this final deadline. */
+const READY_MS = 30_000
 /** A child that ran this long without crashing resets the backoff. */
 const STABLE_MS = 60_000
 /** Crashes in a row, each before `STABLE_MS`, after which every watch is given up. */
@@ -66,6 +68,7 @@ interface ChildWatch {
   listener: WatchListener
   /** Set until the first subscribe settles; a later "ready" follows a restart. */
   pending?: { resolve(): void; reject(error: Error): void }
+  readyTimer?: NodeJS.Timeout
 }
 
 /**
@@ -123,7 +126,9 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
   }
 
   const forget = (id: number) => {
+    const watch = watches.get(id)
     if (!watches.delete(id)) return
+    clearTimeout(watch?.readyTimer)
     readings.unwatched(id)
     post({ t: "unsub", id })
     hold(keepsAlive())
@@ -139,6 +144,18 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
       going.kill()
     }, IDLE_MS)
     idle.unref()
+  }
+
+  const limitReadiness = (id: number, watch: ChildWatch) => {
+    // A restart cannot extend the first deadline; an already-ready watch gets a new bound for recovery.
+    if (watch.readyTimer) return
+    const timer = setTimeout(() => {
+      if (watches.get(id) !== watch || watch.readyTimer !== timer) return
+      forget(id)
+      watch.pending?.reject(new Error("The file watcher did not become ready in time"))
+      watch.listener.gone()
+    }, READY_MS)
+    watch.readyTimer = timer
   }
 
   const onDelivery = (ok: boolean, lagMs: number | undefined) => {
@@ -171,6 +188,8 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
     switch (reply.t) {
       case "ready": {
         const pending = watch.pending
+        clearTimeout(watch.readyTimer)
+        watch.readyTimer = undefined
         watch.pending = undefined
         if (pending) {
           pending.resolve()
@@ -197,6 +216,8 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
   }
 
   const giveUp = () => {
+    clearTimeout(restart)
+    restart = undefined
     const lost = [...watches.values()]
     for (const id of watches.keys()) forget(id)
     crashes = 0
@@ -205,6 +226,8 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
       else watch.listener.gone()
     }
   }
+
+  stopping?.addEventListener("abort", giveUp, { once: true })
 
   const lost = (gone: ChildProcess) => {
     if (child !== gone) return
@@ -233,7 +256,7 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
     startedAt = Date.now()
     readings.started(next.pid, why)
     next.on("message", (raw) => {
-      if (child !== next) return
+      if (child !== next || stopping?.aborted) return
       const reply = WatcherReplySchema.safeParse(raw)
       if (reply.success) onReply(reply.data)
     })
@@ -242,7 +265,10 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
       lost(next)
     })
     next.once("error", () => lost(next))
-    for (const [id, watch] of watches) post({ t: "sub", id, root: watch.root, ignore: watch.ignore, ...watch.native && { native: watch.native } })
+    for (const [id, watch] of watches) {
+      limitReadiness(id, watch)
+      post({ t: "sub", id, root: watch.root, ignore: watch.ignore, ...watch.native && { native: watch.native } })
+    }
     hold(keepsAlive())
   }
 
@@ -252,7 +278,9 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
     const id = nextId++
     return new Promise<WatchSubscription>((resolve, reject) => {
       const unsubscribe = async () => forget(id)
-      watches.set(id, { root, ignore: [...ignore], ...native && { native }, listener, pending: { resolve: () => resolve({ unsubscribe }), reject } })
+      const watch = { root, ignore: [...ignore], ...native && { native }, listener, pending: { resolve: () => resolve({ unsubscribe }), reject } }
+      watches.set(id, watch)
+      limitReadiness(id, watch)
       readings.watched(id, root, ignore)
       try {
         if (child) {
@@ -260,8 +288,7 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
           post({ t: "sub", id, root, ignore: [...ignore], ...native && { native } })
         } else if (!restart) start("first")
       } catch (error) {
-        watches.delete(id)
-        readings.unwatched(id)
+        forget(id)
         reject(error)
       }
     })

@@ -203,3 +203,129 @@ void test("plugin and Git native watches share the child, recover and never invo
     await scope.stop()
   }
 })
+
+void test("plugin close has a deadline even when the injected port is wedged, and still releases a late owner", async (t) => {
+  const entered = Promise.withResolvers<void>()
+  const pending = Promise.withResolvers<{ unsubscribe(): Promise<void> }>()
+  let releases = 0, changes = 0, heard: (() => void) | undefined
+  const owner = watchPlugins(join(folder, "wedged-port"), () => changes++, (_dir, changed) => {
+    heard = changed; entered.resolve(); return pending.promise
+  })
+  await entered.promise
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const closing = owner.close()
+  const rejected = assert.rejects(closing, /plugin watch did not close in time/)
+  t.mock.timers.tick(2_000)
+  await rejected
+  assert.equal(owner.close(), closing)
+  pending.resolve({ unsubscribe: async () => { releases++ } })
+  await owner.ready
+  heard!(); t.mock.timers.tick(100)
+  assert.equal(releases, 1)
+  assert.equal(changes, 0)
+})
+
+void test("a live child that never replies cannot hold plugin quit", async () => {
+  const { writeFile } = await import("node:fs/promises")
+  const { childBackend } = await import("@mako/host/workspaces/watch-backend")
+  const { HostStopping } = await import("@mako/host/base/host-stopping")
+  const script = join(folder, "wedged-child.ts")
+  await writeFile(script, 'process.on("message", () => {}); process.on("disconnect", () => process.exit());\n')
+  const scope = new HostStopping(), entered = Promise.withResolvers<void>()
+  const backend = scope.run(() => childBackend(script))
+  const owner = scope.run(() => watchPlugins(join(folder, "wedged-child-plugins"), () => {}, (root, changed) => {
+    const pending = backend(root, [], { events: changed, dropped: changed, gone: changed, muted: () => {} }, { kind: "directory" })
+    entered.resolve(); return pending
+  }))
+  const readiness = assert.rejects(owner.ready, /keeps stopping/)
+  try {
+    await entered.promise
+    // The actual IPC child stays alive and sends no ready; stop must settle ownership and reap it.
+    await scope.stop()
+    await Promise.all([readiness, owner.close()])
+  } finally {
+    await owner.close().catch(() => {})
+    await scope.stop()
+  }
+})
+
+void test("Git marker close is bounded and releases a late subscription without publishing", async (t) => {
+  const entered = Promise.withResolvers<void>(), pending = Promise.withResolvers<{ unsubscribe(): Promise<void> }>()
+  let releases = 0, changes = 0
+  let listener: import("@mako/host/workspaces/watch-backend").WatchListener | undefined
+  const owner = watchGitMarkers(folder, () => changes++, ["HEAD"], (_root, _ignore, heard) => {
+    listener = heard; entered.resolve(); return pending.promise
+  })
+  await entered.promise
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const closing = owner.close(), rejected = assert.rejects(closing, /Git marker watch did not close in time/)
+  t.mock.timers.tick(2_000); await rejected
+  assert.equal(owner.close(), closing)
+  pending.resolve({ unsubscribe: async () => { releases++ } })
+  await owner.ready
+  listener!.events([])
+  assert.equal(releases, 1); assert.equal(changes, 0)
+})
+
+void test("an outside Git directory cannot hide a wedged marker behind its readiness promise", async (t) => {
+  const { mkdir, writeFile } = await import("node:fs/promises")
+  const { watchOutsideGitDir } = await import("@mako/host/workspaces/git-dir-watch")
+  const worktree = join(folder, "outside-git"), git = join(folder, "outside-marker")
+  await mkdir(worktree); await mkdir(git); await writeFile(join(worktree, ".git"), `gitdir: ${git}\n`)
+  const entered = Promise.withResolvers<void>(), pending = Promise.withResolvers<{ unsubscribe(): Promise<void> }>()
+  let releases = 0
+  const owner = watchOutsideGitDir(worktree, () => {}, () => { entered.resolve(); return pending.promise })
+  await entered.promise
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const rejected = assert.rejects(owner.close(), /Git marker watch did not close in time/)
+  t.mock.timers.tick(2_000); await rejected
+  pending.resolve({ unsubscribe: async () => { releases++ } }); await owner.ready
+  assert.equal(releases, 1)
+})
+
+void test("recurring directory errors fail only that subscription in the shared child", async () => {
+  const { writeFile, mkdir, readFile } = await import("node:fs/promises")
+  const { childBackend } = await import("@mako/host/workspaces/watch-backend")
+  const { WatchReadings } = await import("@mako/host/workspaces/watch-readings")
+  const { HostStopping } = await import("@mako/host/base/host-stopping")
+  const root = join(folder, "error-isolation"), bad = join(root, "bad"), git = join(root, "git"), closed = join(root, "closed")
+  await mkdir(bad, { recursive: true }); await mkdir(git); await writeFile(join(git, "HEAD"), "one")
+  const script = join(root, "error-child.ts")
+  const actual = new URL("../packages/host/src/workspaces/watcher-child-main.ts", import.meta.url).href
+  await writeFile(script, `import fs from "node:fs"; import { EventEmitter } from "node:events"; import { syncBuiltinESMExports } from "node:module";
+const original = fs.watch; fs.watch = function(...args) {
+  if (args[0] !== ${JSON.stringify(bad)}) return Reflect.apply(original, this, args);
+  const watcher = new EventEmitter(); watcher.close = () => fs.appendFileSync(${JSON.stringify(closed)}, "closed" + String.fromCharCode(10));
+  setImmediate(() => { for (let index = 0; index < 7; index++) watcher.emit("error", new Error("fixture directory failed")); });
+  return watcher;
+}; syncBuiltinESMExports(); void import(${JSON.stringify(actual)});
+`)
+  const scope = new HostStopping(), generations: number[] = []
+  const backend = scope.run(() => childBackend(script, new WatchReadings((message, fields) => {
+    if (message === "watcher child started") generations.push(StartedChild.parse(fields).pid)
+  })))
+  let gone = 0, events = 0
+  let healthy: ReturnType<typeof watchGitMarkers> | undefined
+  let failed: Awaited<ReturnType<typeof backend>> | undefined
+  try {
+    healthy = scope.run(() => watchGitMarkers(git, () => { events++ }, ["HEAD"], backend))
+    await healthy.ready
+    failed = await scope.run(() => backend(bad, [], { events: () => {}, dropped: () => {}, gone: () => { gone++ }, muted: () => {} }, { kind: "directory" }))
+    const until = async (what: string, done: () => boolean) => {
+      for (const deadline = performance.now() + 10_000; !done(); await new Promise(resolve => setTimeout(resolve, 10)))
+        assert.ok(performance.now() < deadline, what)
+    }
+    await until("the failed watch retires", () => gone > 0)
+    const afterFailure = events
+    await writeFile(join(git, "HEAD"), "two")
+    await until("the other watch still delivers", () => events > afterFailure)
+    assert.ok(events > 0)
+    assert.equal(gone, 1, "seven native errors retire only their own subscription once")
+    assert.equal(generations.length, 1, "no shared-child crash or restart")
+    assert.equal(await readFile(closed, "utf8"), "closed\n", "the failed native handle closes once")
+  } finally {
+    await failed?.unsubscribe()
+    await healthy?.close()
+    await scope.stop()
+  }
+})

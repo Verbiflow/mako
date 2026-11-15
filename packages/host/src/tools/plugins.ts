@@ -125,7 +125,12 @@ export function watchPlugins(dir: string, onChange: () => void, watch: PluginWat
     close() {
       closed = true
       clearTimeout(timer)
-      return closing ??= ready.then(release, (error) => { if (subscription) throw error })
+      if (closing) return closing
+      const released = ready.then(release, (error) => { if (subscription) throw error })
+      return closing = new Promise<void>((resolve, reject) => {
+        const deadline = setTimeout(() => reject(new Error("The plugin watch did not close in time")), 2_000)
+        void released.then(() => { clearTimeout(deadline); resolve() }, (error) => { clearTimeout(deadline); reject(error) })
+      })
     },
   }
 }

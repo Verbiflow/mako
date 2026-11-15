@@ -68,8 +68,20 @@ process.on("message", (raw) => {
       return { unsubscribe: async () => { markers.close() } }
     }
     const directory = watch(asked.root, notify)
-    // Native errors end only this child; childBackend resubscribes every stream and reports the missed interval.
-    return { unsubscribe: async () => { directory.close() } }
+    let closed = false
+    const close = () => { if (!closed) { closed = true; directory.close() } }
+    // Keep the handler after failure too: repeated errors from this handle must not crash every other watch.
+    directory.on("error", (error) => {
+      if (closed || subscriptions.get(id) !== subscription) return
+      subscriptions.delete(id)
+      settling.delete(id)
+      let message = error.message
+      try { close() }
+      catch (failure) { message += `; closing it failed: ${failure instanceof Error ? failure.message : String(failure)}` }
+      reply({ t: "failed", id, message })
+      if (!subscriptions.size) stopCanary()
+    })
+    return { unsubscribe: async () => { close() } }
   }) : parcel
     .subscribe(asked.root, (error, events) => {
       if (!subscriptions.has(id)) return
