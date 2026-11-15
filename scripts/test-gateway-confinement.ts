@@ -20,6 +20,8 @@ import { WorkspaceGit } from "@mako/host/git/workspace-git"
 import { ArtifactPreviews } from "@mako/host/workspaces/artifact-previews"
 import { ConversationFiles, OUTSIDE_THREAD_WORDS, WorkspaceFiles } from "@mako/host/workspaces/files"
 import { confinedRoots, openConfined, secretPath } from "@mako/host/workspaces/confined-read"
+import { ConversationMedia, NOT_THIS_CONVERSATIONS, TurnMedia, type ConversationHistory } from "@mako/host/media/index"
+import type { Entry } from "@mako/sessions/entries"
 
 const run = promisify(execFile)
 const scratch = await mkdtemp(join(tmpdir(), "mako-gateway-confinement-"))
@@ -156,7 +158,43 @@ try {
     await assert.rejects(methods.invoke("mako:live-start", [], "gateway:runtime:borrower"), new RegExp(MACHINE_REFUSED.split(":")[0]!))
   }
 
-  console.log("PASS: another device reaches only the allowlisted calls; a machine only its agent's doors, simulators and moves; read-live-file and read-file read only the Thread's folders after symlinks, never a key, through the descriptor they verified; a Thread at ~ opens nothing")
+  // A phone draws the screenshot `show` kept, from Mako's copy, for that conversation alone: the store is read only for
+  // copies a conversation's own records name, and asked to keep only what they name, with their evidence.
+  {
+    const shots = join(scratch, "tmp-shots")
+    await mkdir(shots, { recursive: true })
+    const home = join(shots, "home.png")
+    await writeFile(home, Buffer.from("89504e470d0a1a0a0000000d49484452000000020000000308060000009d74666b", "hex"))
+    const other = join(shots, "other.png")
+    await writeFile(other, Buffer.from("89504e470d0a1a0a", "hex"))
+    const media = new TurnMedia(join(scratch, "media"), () => 3_500)
+    await media.show(home)
+    await media.show(other)
+    const shown = (id: string, path: string): Entry => ({ type: "tool", id, name: "mcp__mako__show", status: "completed", input: JSON.stringify({ files: [{ path }] }), at: 3_000, endedAt: 4_000 })
+    const histories = new Map<string, ConversationHistory>([
+      ["c1", { harness: "claude", entries: [shown("show1", home)] }],
+      ["c2", { harness: "claude", entries: [shown("show2", other)] }],
+    ])
+    const conversations = new ConversationMedia(media, async (id) => histories.get(id) ?? null)
+    const [kept] = await conversations.confirm("c1", [{ callId: "show1", path: home }])
+    assert.ok(kept?.kind === "kept" && kept.media.file !== home, "the conversation's shown file is kept, as Mako's copy")
+    assert.deepEqual(await conversations.confirm("c1", [{ callId: "show1", path: key }, { callId: "show2", path: other }]),
+      [{ kind: "dropped", reason: NOT_THIS_CONVERSATIONS }, { kind: "dropped", reason: NOT_THIS_CONVERSATIONS }], "a file or a call its records don't name isn't kept for it")
+    await conversations.confirm("c2", [{ callId: "show2", path: other }])
+    const copy = kept?.kind === "kept" ? kept.media.file : ""
+    const files = new ConversationFiles(git, previews)
+    const phone = (conversation: string, path: string) => files.read(root, path, owned, "preview", true, (real) => conversations.kept(conversation, real))
+    const drawn = await phone("c1", copy)
+    assert.equal(drawn.withheld, undefined, "the phone reads the conversation's kept copy")
+    assert.ok(drawn.previewUrl, "signed for it, so it draws")
+    withheld(await phone("c2", copy), "another conversation can't read it")
+    const [theirs] = await new ConversationMedia(media, async (id) => histories.get(id) ?? null).confirm("c2", [{ callId: "show2", path: other }])
+    withheld(await phone("c1", theirs?.kind === "kept" ? theirs.media.file : ""), "nor this one theirs")
+    withheld(await phone("c1", join(scratch, "media", "media.db")), "and nothing else in the store is read")
+    media.close()
+  }
+
+  console.log("PASS: another device reaches only the allowlisted calls; a phone reads only its conversation's kept media; a machine only its agent's doors, simulators and moves; read-live-file and read-file read only the Thread's folders after symlinks, never a key, through the descriptor they verified; a Thread at ~ opens nothing")
 } finally {
   await rm(scratch, { recursive: true, force: true })
 }

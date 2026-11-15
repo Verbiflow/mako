@@ -45,7 +45,7 @@ type ConversationDataDir = () => Promise<string | undefined>
  * else comes back `withheld`, so an answer's `![](~/.ssh/id_rsa)` stays a
  * link rather than a key on screen.
  */
-type FileReadOptions = { relativeTo?: "cwd"; dataDir?: ConversationDataDir; preview?: boolean; confined?: boolean }
+type FileReadOptions = { relativeTo?: "cwd"; dataDir?: ConversationDataDir; preview?: boolean; confined?: boolean; kept?: (real: string) => Promise<boolean> }
 
 /**
  * Said of a file another device asked for that resolves, after its symlinks, outside the Thread's folders (its folder,
@@ -211,7 +211,7 @@ export class WorkspaceFiles {
     const { path } = located
     // Another device's read is opened once, verified, and read only through that descriptor (`openConfined`).
     const confined = options?.confined
-      ? await openConfined(located.absolute, await confinedRoots([this.cwdValue, await this.git.root().catch(() => null), await options.dataDir?.()]))
+      ? await openConfined(located.absolute, await confinedRoots([this.cwdValue, await this.git.root().catch(() => null), await options.dataDir?.()]), options.kept)
       : undefined
     if (options?.confined && !confined) return { path, contents: "", size: 0, binary: false, truncated: false, withheld: OUTSIDE_THREAD_WORDS }
     try {
@@ -458,7 +458,8 @@ export class ConversationFiles {
   }
 
   /** `confined`: the caller is another device, through the gateway, which reads only the Thread's folders. */
-  read(cwd: string, path: string, dataDir?: ConversationDataDir, purpose?: FileReadPurpose, confined = false): Promise<FileContents> {
+  /** `kept`: whether a resolved path outside the Thread's folders is one of its conversation's kept media copies. */
+  read(cwd: string, path: string, dataDir?: ConversationDataDir, purpose?: FileReadPurpose, confined = false, kept?: (real: string) => Promise<boolean>): Promise<FileContents> {
     const key = resolve(cwd)
     const now = Date.now()
     for (const [folder, held] of this.held)
@@ -475,7 +476,7 @@ export class ConversationFiles {
       reader?.files.index.close()
       if (oldest !== undefined) this.held.delete(oldest)
     }
-    return held.files.read(path, { relativeTo: "cwd", dataDir, preview: purpose === "preview", confined })
+    return held.files.read(path, { relativeTo: "cwd", dataDir, preview: purpose === "preview", confined, ...kept && { kept } })
   }
 
   /** The index of a conversation's folder, kept and watched until nobody has looked at it for `INDEX_KEPT_MS`. */

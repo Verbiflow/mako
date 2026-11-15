@@ -1879,6 +1879,35 @@ const inputs = {
       z.string(),
       z.object({ context: z.number().optional() }).optional(),
     ]),
+  "mako:live-turn-media": () =>
+    z.tuple([
+      z.string(),
+      z
+        .array(
+          z.object({
+            callId: z.string().min(1).max(512),
+            path: z.string().min(2).max(4_096).startsWith("/"),
+            evidence: z.enum(["shown", "produced", "wrote", "named"]),
+            startedAt: z
+              .number()
+              .int()
+              .nonnegative()
+              .max(8_640_000_000_000_000)
+              .optional(),
+            endedAt: z
+              .number()
+              .int()
+              .nonnegative()
+              .max(8_640_000_000_000_000)
+              .optional(),
+            digest: z
+              .string()
+              .regex(/^[a-f0-9]{64}$/)
+              .optional(),
+          })
+        )
+        .max(200),
+    ]),
   "mako:live-turn-undo": () =>
     z.tuple([
       z.string(),
@@ -3578,6 +3607,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:live-turn-changes", "conversations"],
   ["mako:live-turn-diff", "conversations"],
   ["mako:live-turn-hunks", "conversations"],
+  ["mako:live-turn-media", "media"],
   ["mako:live-turn-undo", "conversations"],
   ["mako:live-turn-undo-preview", "conversations"],
   ["mako:live-turn-writers", "conversations"],
