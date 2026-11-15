@@ -13,6 +13,12 @@ import type { ReturnDeparture, ReturnState } from "@mako/protocol/moves"
 import type { ReceivedRecords } from "@mako/sessions/record-sync"
 import { CloudReturns, type CloudReturnsOptions } from "@mako/host/conversations/cloud-returns"
 import { makoNote } from "@mako/host/conversations/mako-note"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
+import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
+import { noCapabilities } from "./fixtures/driver-capabilities.ts"
 import { CloudFollow } from "@mako/host/conversations/cloud-follow"
 import { CloudWorktrees } from "@mako/host/conversations/cloud-worktrees"
 import { CloudArchives } from "@mako/host/conversations/cloud-archives"
@@ -367,7 +373,7 @@ try {
       return rename(from, to)
     })
     syncBuiltinESMExports()
-    const note = makoNote({ cloudMachine: false, launchedWith: () => undefined, controlLine: () => undefined, ownSlot: () => true, notices: id => s.returns.notices(id) })
+    const note = makoNote({ cloudMachine: false, launchedWith: () => undefined, controlLine: () => undefined, ownSlot: () => true, notices: (id, signal) => s.returns.notices(id, signal) })
     const delivery = note("fixture-binding", s.conversation, { role: "thread" }).then(instructions => instructions.notices)
     let delivered = false
     void delivery.then(() => { delivered = true })
@@ -570,23 +576,83 @@ try {
     assert.deepEqual(await Promise.all([restarted.notices(s.conversation), restarted.notices(tab.conversationId ?? "")]), [[], []], "neither is told again")
   }
 
-  // A failed acknowledgement never consumes the notice or lets its prompt go, and a later attempt can still persist it.
-  {
-    const s = setup("notice-write-failed")
+  // Receipt failures and timeouts skip the note, never the person's message. Late success/failure also leaves it
+  // queued for the next prompt. This uses the real return-plan write and live dispatcher; only the provider is fake.
+  for (const failure of ["write-failed", "write-hung", "write-late-failed"] as const) {
+    const s = setup(failure)
     await s.sentNow()
     writeFileSync(join(s.checkout, "c.txt"), "the person's own\n")
     assert.equal((await s.returns.bringBack(s.conversation, move())).kind, "back")
+    const release = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>()
+    let cancelled: AbortSignal | undefined
+    const note = makoNote({
+      cloudMachine: false, launchedWith: () => undefined, controlLine: () => undefined, ownSlot: () => true,
+      notices: (id, signal) => { cancelled = signal; return s.returns.notices(id, signal) },
+    })
+    const sent: string[] = []
+    const state: LiveSessionState = {
+      id: s.conversation, nativeId: "fixture", nativePath: join(s.folder, "native"), harness: "test-provider",
+      cwd: s.checkout, status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [],
+    }
+    let live: LiveConversations
+    const driver: ProviderLiveDriver = {
+      ...noCapabilities,
+      provider: "test-provider", available: () => true,
+      approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+      launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+      nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+      nativeExclusion: NO_NATIVE_EXCLUSION, nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
+      planning: { via: "setting", option: "plan", proposal: "Injected driver fixture", feedback: { kind: "next-message", reason: "Injected driver fixture" } },
+      backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+      turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
+      start: async () => state,
+      prompt: async (_id, text, _attachments, _settings, dispatch) => {
+        dispatch.report({ kind: "submitted", source: "transport-call" })
+        sent.push(text)
+        live.observe({ type: "live-session", session: { ...state, status: "running" } })
+        setImmediate(() => live.observe({ type: "live-session", session: state }))
+      },
+      permission: async () => {}, cancel: async () => {}, close: () => {}, setMode: async () => {},
+    }
+    live = new LiveConversations({
+      appPath: s.folder, root: join(s.folder, "live"), driver: () => driver, history: async () => null, emit: () => {}, controlInstructions: note,
+    })
+    const send = async (text: string) => {
+      const before = sent.length
+      live.submit(s.conversation, randomUUID(), text)
+      const deadline = Date.now() + 10_000
+      while (sent.length !== before + 1 || live.snapshot(s.conversation)?.requests.some(request => request.status !== "completed")) {
+        assert.ok(Date.now() < deadline, "notice bookkeeping held or failed the person's message")
+        await new Promise(resolve => setTimeout(resolve, 5))
+      }
+      return sent.at(-1)
+    }
     const rename = fs.rename
     const failed = mock.method(fs, "rename", async (from: Parameters<typeof fs.rename>[0], to: Parameters<typeof fs.rename>[1]) => {
-      if (String(to).startsWith(join(s.folder, "returns"))) throw false
+      if (String(to).startsWith(join(s.folder, "returns"))) {
+        entered.resolve()
+        if (failure !== "write-failed") await release.promise
+        if (failure !== "write-hung") throw false
+      }
       return rename(from, to)
     })
     syncBuiltinESMExports()
-    try { await assert.rejects(s.returns.notices(s.conversation), error => error === false) }
-    finally { failed.mock.restore(); syncBuiltinESMExports() }
-    assert.equal((await s.returns.notices(s.conversation)).length, 1, "a failed write retains the unheard notice")
-    const restarted = s.fresh(); await restarted.settle()
-    assert.deepEqual(await restarted.notices(s.conversation), [], "the successful retry, not elapsed time, prevents restart replay")
+    try {
+      await live.start("test-provider", s.checkout, { conversationId: s.conversation })
+      const first = send("Receipt unavailable")
+      await entered.promise
+      assert.equal(await first, "Receipt unavailable", "the message goes without the unacknowledged note")
+      assert.equal(cancelled?.aborted, true, "a timed-out notice cannot consume its late result")
+      failed.mock.restore(); syncBuiltinESMExports()
+      release.resolve()
+      assert.match(await send("Next") ?? "", /kept their changes beside yours: c\.txt/)
+      assert.equal(await send("Then"), "Then", "the successfully retried notice goes once")
+      const restarted = s.fresh(); await restarted.settle()
+      assert.deepEqual(await restarted.notices(s.conversation), [], "successful retry prevents restart replay")
+    } finally {
+      release.resolve(); failed.mock.restore(); syncBuiltinESMExports()
+      await live.stop()
+    }
   }
 
   // The machine can't pack (a turn runs there): cancelled, the Thread runs in the cloud, and the machine keeps it.

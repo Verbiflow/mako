@@ -8,6 +8,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { makoNote } from "@mako/host/conversations/mako-note"
 import { CHANGED_LINE, REPLACED_LINE, standingLines } from "@mako/host/conversations/control-cadence"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { CONTEXT_COMPACTED } from "@mako/host/contracts/native-activity"
@@ -85,16 +86,17 @@ function cadenceHost(options: { idleMs?: number; beforeInstructions?(): Promise<
     close: () => {},
     setMode: async () => {},
   }
+  const note = makoNote({
+    cloudMachine: false, launchedWith: () => undefined, controlLine: () => undefined, ownSlot: () => true,
+    notices: async () => { await options.beforeInstructions?.(); return notices.splice(0) },
+  })
   owner = new LiveConversations({
     appPath: root,
     root: join(root, "journals"),
     driver: () => driver,
     history: async () => null,
     emit: () => {},
-    controlInstructions: async () => {
-      await options.beforeInstructions?.()
-      return { standing: { ...standing }, notices: notices.splice(0) }
-    },
+    controlInstructions: async () => ({ ...await note("fixture-binding", id, { role: "thread" }), standing: { ...standing } }),
     ...options.idleMs !== undefined && {
       providerIdleMs: options.idleMs,
       resumeVerdict: async () => ({ kind: "resumable" as const, record: "same" as const }),
@@ -216,11 +218,10 @@ async function awaitedNotice() {
   try {
     await failing.start()
     failing.notices.push("Returned with a conflict.")
-    failing.owner.submit(failing.id, randomUUID(), "Receipt failed")
-    await waitFor(() => failing.owner.snapshot(failing.id)?.session.status === "failed", "the notice failure was never reported")
-    assert.deepEqual(failing.sent(), [], "a failed acknowledgement cannot dispatch the prompt")
+    assert.equal(await failing.send("Receipt failed"), noted([CONTROL, ENVIRONMENT, MEDIA], "Receipt failed"), "a failed acknowledgement must not cost the person their message")
     fail = false
-    assert.equal(await failing.send("Retry"), noted([CONTROL, ENVIRONMENT, MEDIA, "Returned with a conflict."], "Retry"))
+    assert.equal(await failing.send("Retry"), noted(["Returned with a conflict."], "Retry"))
+    assert.equal(await failing.send("Then"), "Then", "the retained notice goes once after the write succeeds")
   } finally { await failing.cleanup() }
 }
 
