@@ -3,8 +3,8 @@ import { getMako, hasBridge } from "@/lib/bridge"
 import { createHook, createStore } from "@/state/store"
 
 /**
- * The MCP servers that need the person's sign-in (`McpSignIns`), for the rail and Settings › MCP: the one place each
- * is said, with its one way in, instead of a line in every conversation that starts.
+ * The MCP servers a harness couldn't start (`McpSignIns`), for the rail and Settings › MCP: the one place each
+ * is said, with the one thing that fixes it, instead of a line in every conversation that starts.
  */
 export const mcpSignInsStore = createStore<McpSignIns>({ servers: [] })
 export const useMcpSignIns = createHook(mcpSignInsStore)

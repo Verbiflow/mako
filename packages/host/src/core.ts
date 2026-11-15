@@ -499,8 +499,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     if (reported.call.status !== "refused" && reported.call.effects.some((effect) => effect.kind !== "read")) late.readiness?.wrote(reported.conversation)
   })
   const unfollowBounds = fixtureDesk ? undefined : liveCallBounds.subscribe((bounds) => late.attribution?.bounds(bounds))
-  // MCP servers a harness couldn't start: those that need the person's sign-in, with the harness's own way in, for the
-  // rail and Settings › MCP; every other is the log's. A conversation no longer draws them.
+  // MCP servers a harness couldn't start, each with the one thing that fixes it (the harness's own sign-in where it has
+  // one, else Settings › MCP), for the rail and Settings › MCP. A conversation no longer draws them.
   const mcpSignIns = new McpSignIns({
     login: (harness, server) => harnesses.tools.mcpSources.get(harness)?.login?.(server),
     run: async (harness, args) => {
@@ -2283,6 +2283,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         unfollowEffects?.()
         unfollowBounds?.()
         unfollowMcpSetup?.()
+        mcpSignIns.close()
         step = "closing the record of changes"
         await late.attribution?.close().catch((error: Error) => hostWarn("attribution", "the journal did not close cleanly", { error: error.message }))
         const failedDrains = drained.flatMap(result => result.status === "rejected" ? [result.reason] : [])

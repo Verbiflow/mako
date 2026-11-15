@@ -627,10 +627,15 @@ export function installMockBridge() {
    * that outcome. Any other scene reads a healthy service.
    */
   let mockFileEvents = mockFileEventsService(scene)
-  /** The MCP servers the mock's harnesses can't start without sign-in: one by Codex's command, one claude.ai connector. */
+  /**
+   * The MCP servers the mock's harnesses couldn't start: one signed in by Codex's command, a claude.ai connector, a
+   * Claude server needing sign-in it offers no way to start, and one Codex couldn't reach.
+   */
   let mockMcpSignIns: McpSignIns = { servers: [
-    { harness: "claude", server: "claude.ai Gmail", way: "page", url: "https://claude.ai/settings/connectors", reportedAt: Date.now() },
-    { harness: "codex", server: "todoist", way: "command", reportedAt: Date.now() },
+    { harness: "claude", server: "claude.ai Gmail", reason: "sign-in required", way: "page", url: "https://claude.ai/settings/connectors", reportedAt: Date.now() },
+    { harness: "codex", server: "todoist", reason: "sign-in required", way: "command", reportedAt: Date.now() },
+    { harness: "claude", server: "linear", reason: "sign-in required", way: "settings", reportedAt: Date.now() },
+    { harness: "codex", server: "paper", reason: "could not connect", way: "settings", reportedAt: Date.now() },
   ] }
   const setMcpSignIns = (next: McpSignIns) => {
     mockMcpSignIns = next
@@ -3542,6 +3547,7 @@ export function installMockBridge() {
     mcpSignIn: async (harness: string, server: string) => {
       const known = mockMcpSignIns.servers.find((each) => each.harness === harness && each.server === server)
       const others = mockMcpSignIns.servers.filter((each) => each !== known)
+      if (known?.way === "settings") return mockMcpSignIns
       if (!known || known.way === "page") {
         setMcpSignIns({ servers: others })
         return mockMcpSignIns
