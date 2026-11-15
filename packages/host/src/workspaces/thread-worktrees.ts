@@ -963,29 +963,32 @@ export class ThreadWorktreeService {
       const gitDir = await locate()
       if (this.summaryWatchesClosed || generation !== this.summaryWatchGeneration) return
       if (!gitDir || this.summaryWatches.has(key)) return
-      const watch = watchGitMarkers(gitDir, () => {
+      const invalidate = () => {
         for (const repoRoot of roots) this.invalidatePulls(repoRoot)
         this.summaryStale(paths(), SUMMARY_SETTLE_MS, index)
-      }, markers, this.watch)
+      }
+      const retire = () => {
+        if (this.summaryWatches.get(key) !== watch) return
+        this.summaryWatches.delete(key)
+        this.retireWatch(watch)
+        if (!this.summaryWatchesClosed && generation === this.summaryWatchGeneration) invalidate()
+      }
+      // An injected port may report loss during subscribe, before the proxy has been published in the map.
+      const watch = watchGitMarkers(gitDir, invalidate, markers, this.watch, () => queueMicrotask(retire))
       this.summaryWatches.set(key, watch)
       let timedOut = false
       const ready = watch.ready.then(() => {
         // A slow close in the child can hold its next subscribe. Keep that late owner and reread what it missed.
         if (timedOut && this.summaryWatches.get(key) === watch && !this.summaryWatchesClosed && generation === this.summaryWatchGeneration)
-          this.summaryStale(paths(), SUMMARY_SETTLE_MS, index)
-      }, () => {
-        if (this.summaryWatches.get(key) !== watch) return
-        this.summaryWatches.delete(key)
-        this.retireWatch(watch)
-        if (!this.summaryWatchesClosed && generation === this.summaryWatchGeneration) this.summaryStale(paths(), SUMMARY_SETTLE_MS, index)
-      })
+          invalidate()
+      }, retire)
       let deadline: NodeJS.Timeout | undefined
       try {
         await Promise.race([ready, new Promise<void>((resolve) => {
           deadline = setTimeout(() => {
             timedOut = true
             if (this.summaryWatches.get(key) === watch && !this.summaryWatchesClosed && generation === this.summaryWatchGeneration)
-              this.summaryStale(paths(), SUMMARY_SETTLE_MS, index)
+              invalidate()
             resolve()
           }, 2_000)
         })])

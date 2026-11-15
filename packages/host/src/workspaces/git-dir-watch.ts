@@ -60,7 +60,7 @@ export function watchOutsideGitDir(folder: string, changed: () => void, backend:
 }
 
 /** Git markers use the same child as tree watches; dropped events invalidate the whole marker set. */
-export function watchGitMarkers(gitDir: string, changed: () => void, markers: readonly string[] = MARKERS, backend: WatchBackend = childBackend()): GitDirWatch {
+export function watchGitMarkers(gitDir: string, changed: () => void, markers: readonly string[] = MARKERS, backend: WatchBackend = childBackend(), gone: () => void = changed): GitDirWatch {
   let closed = false
   let release: Promise<void> | undefined
   let closing: Promise<void> | undefined
@@ -71,7 +71,11 @@ export function watchGitMarkers(gitDir: string, changed: () => void, markers: re
     const found = await backend(gitDir, [], {
       events: notify,
       dropped: notify,
-      gone: notify,
+      gone: () => {
+        if (closed) return
+        closed = true
+        gone()
+      },
       muted: (muted) => { if (!muted) notify() },
     }, { kind: "git-markers", markers: [...markers] })
     subscription = found

@@ -98,18 +98,19 @@ console.log("ready without a process hold");
   fs.writeFileSync(wedge, 'process.on("message", () => {}); process.on("disconnect", () => process.exit());\n')
   const scope = new HostStopping(), wedged = scope.run(() => childBackend(wedge))
   const secondRunner = new Git(), secondStore = new ThreadStore(join(root, "summary.sqlite"))
-  let asked = 0, askedAtFirstSettlement: number | undefined
+  let asked = 0, askedAtFirstSettlement: number | undefined, timedOutPulls = 0
   const port: import("@mako/host/workspaces/watch-backend").WatchBackend = (...args) => {
     asked++
     return scope.run(() => wedged(...args)).finally(() => { askedAtFirstSettlement ??= asked })
   }
   const bounded = new ThreadWorktreeService(secondRunner, join(root, "summary-wedged-owner"), secondStore,
-    undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, port)
+    undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, async () => { timedOutPulls++ }, port)
   try {
     const rows = await bounded.summaries()
     assert.equal(rows.length, 1, "a wedged watcher cannot prevent the actual summary API from answering")
     assert.equal(asked, 2, "both independent shared local and remote watches were asked for")
     assert.equal(askedAtFirstSettlement, undefined, "summary readiness stops waiting while the late subscriptions stay owned")
+    assert.equal(timedOutPulls, 1, "the readiness timeout invalidates the unobserved remote-ref PR list")
     await scope.stop()
     assert.equal(askedAtFirstSettlement, 2, "both watches were armed before either subscription settled")
     await bounded.closeSummaries()
@@ -117,6 +118,38 @@ console.log("ready without a process hold");
     await bounded.closeSummaries()
     await scope.stop()
     secondStore.close(); await secondRunner.close()
+  }
+  const thirdRunner = new Git(), thirdStore = new ThreadStore(join(root, "summary.sqlite"))
+  const streams: { listener: import("@mako/host/workspaces/watch-backend").WatchListener; remote: boolean; releases: number }[] = []
+  let invalidations = 0
+  const terminal = new ThreadWorktreeService(thirdRunner, join(root, "summary-terminal-owner"), thirdStore,
+    undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, async () => { invalidations++ },
+    async (_root, _ignore, listener, native) => {
+      const stream = { listener, remote: native?.kind === "git-markers" && native.markers.includes("FETCH_HEAD"), releases: 0 }
+      streams.push(stream)
+      return { unsubscribe: async () => { stream.releases++ } }
+    })
+  try {
+    await terminal.summaries()
+    const remote = streams.find(stream => stream.remote)!
+    const before = streams.length
+    remote.listener.gone()
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(remote.releases, 1, "a lost re-ready retires its dead proxy")
+    assert.equal(invalidations, 1, "losing remote markers invalidates the PR list too")
+    await terminal.summaries()
+    assert.equal(streams.length, before + 1, "the next pass rearms only the lost subscription")
+    const fresh = streams.at(-1)!
+    remote.listener.gone(); remote.listener.events([])
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(invalidations, 1, "late events from the lost proxy cannot invalidate its replacement")
+    fresh.listener.events([])
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(invalidations, 2, "the replacement still follows remote refs")
+    await terminal.closeSummaries()
+    assert.ok(streams.every(stream => stream.releases === 1), "every acquired proxy is released once")
+  } finally {
+    await terminal.closeSummaries(); await terminal.settled(); thirdStore.close(); await thirdRunner.close()
   }
   console.log("Git markers: rearm, remote push, non-persistent lifetime, late close and bounded parallel summaries passed")
 } finally {
