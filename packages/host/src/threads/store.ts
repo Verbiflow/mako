@@ -333,6 +333,8 @@ const MetaRowSchema = z.object({ value: z.string() })
 const SessionRowSchema = z.object({ session_id: z.string() })
 const LocatorRowSchema = z.object({ session_id: z.string(), harness: z.string(), native_id: z.string().nullable() })
 const LocatorPathRowSchema = z.object({ path: z.string(), harness: z.string() })
+/** An answered ask's row, read for every row each time a Fin's open asks are read, so its schema is made once. */
+const AnsweredAskRowSchema = z.object({ ask: z.string() })
 const SessionDetailSchema = z.object({
   id: z.string(),
   origin: z.string(),
@@ -1358,7 +1360,7 @@ export class ThreadStore {
     const known = this.depth === 0 ? this.reportAsksSeen.get(child) : undefined
     if (known) return known
     const reports = this.reportsOf(child)
-    const answered = new Set(this.sql("SELECT ask FROM agent_answers WHERE child_thread = ?").all(child).map((row) => z.object({ ask: z.string() }).parse(row).ask))
+    const answered = new Set(this.sql("SELECT ask FROM agent_answers WHERE child_thread = ?").all(child).map((row) => AnsweredAskRowSchema.parse(row).ask))
     const superseded = new Set(reports.flatMap((report) => report.supersedes ?? []))
     const latest = reports.at(-1)
     const open = reports.filter((report) => (report.retainsQuestion || report === latest) && !report.implicit &&
