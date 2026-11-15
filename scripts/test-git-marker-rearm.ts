@@ -79,19 +79,46 @@ console.log("ready without a process hold");
   const reading = service.summaries()
   try {
     await Promise.race([entered.promise, reading.then(() => { throw new Error("summary returned without subscribing") })])
+    const beforeClose = starts
     const close = service.closeSummaries()
     assert.equal(service.closeSummaries(), close)
     void close.then(() => { closed = true })
     opening.resolve({ unsubscribe: () => { releases++; return release.promise } })
     await new Promise(resolve => setImmediate(resolve))
-    assert.equal(releases, 1); assert.equal(closed, false, "summary close joins its late subscription release")
+    assert.equal(releases, beforeClose); assert.equal(closed, false, "summary close joins its late subscription release")
     release.resolve(); await close; await reading
-    assert.equal(starts, 1, "closing while ready prevents every remaining marker watch from starting")
+    assert.equal(starts, beforeClose, "closing while ready prevents every remaining marker watch from starting")
   } finally {
     opening.resolve({ unsubscribe: async () => {} }); release.resolve()
     await service.closeSummaries(); await reading.catch(() => {}); store.close(); await runner.close()
   }
-  console.log("Git markers: rearm, remote push, non-persistent lifetime and late summary close passed")
+  const { childBackend } = await import("@mako/host/workspaces/watch-backend")
+  const { HostStopping } = await import("@mako/host/base/host-stopping")
+  const wedge = join(root, "summary-wedge.ts")
+  fs.writeFileSync(wedge, 'process.on("message", () => {}); process.on("disconnect", () => process.exit());\n')
+  const scope = new HostStopping(), wedged = scope.run(() => childBackend(wedge))
+  const secondRunner = new Git(), secondStore = new ThreadStore(join(root, "summary.sqlite"))
+  let asked = 0, askedAtFirstSettlement: number | undefined
+  const port: import("@mako/host/workspaces/watch-backend").WatchBackend = (...args) => {
+    asked++
+    return scope.run(() => wedged(...args)).finally(() => { askedAtFirstSettlement ??= asked })
+  }
+  const bounded = new ThreadWorktreeService(secondRunner, join(root, "summary-wedged-owner"), secondStore,
+    undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, port)
+  try {
+    const rows = await bounded.summaries()
+    assert.equal(rows.length, 1, "a wedged watcher cannot prevent the actual summary API from answering")
+    assert.equal(asked, 2, "both independent shared local and remote watches were asked for")
+    assert.equal(askedAtFirstSettlement, undefined, "summary readiness stops waiting while the late subscriptions stay owned")
+    await scope.stop()
+    assert.equal(askedAtFirstSettlement, 2, "both watches were armed before either subscription settled")
+    await bounded.closeSummaries()
+  } finally {
+    await bounded.closeSummaries()
+    await scope.stop()
+    secondStore.close(); await secondRunner.close()
+  }
+  console.log("Git markers: rearm, remote push, non-persistent lifetime, late close and bounded parallel summaries passed")
 } finally {
   await watching?.close(); mock.restoreAll(); syncBuiltinESMExports()
   fs.rmSync(root, { recursive: true, force: true })
