@@ -43,7 +43,8 @@ export const TurnNavigator = memo(function TurnNavigator({
   onJump,
   paneRef,
 }: {
-  exchanges: Exchange[]
+  /** The session's turns, from `useNavigatorPrompts`. */
+  exchanges: readonly Exchange[]
   activeId: string | null
   onJump: (id: string) => void
   /** The pane the navigator sits in, watched for available width. */
@@ -148,7 +149,7 @@ function Flyout({
   onJump,
   onHover,
 }: {
-  exchanges: Exchange[]
+  exchanges: readonly Exchange[]
   activeId: string | null
   onJump(id: string): void
   onHover(id: string): void
@@ -205,7 +206,7 @@ function NavigatorItems({
   className,
   render,
 }: {
-  exchanges: Exchange[]
+  exchanges: readonly Exchange[]
   estimate: number
   gap?: number
   className: string
