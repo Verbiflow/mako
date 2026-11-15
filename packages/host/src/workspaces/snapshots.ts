@@ -14,7 +14,7 @@ import {
   readdir,
   rm,
 } from "node:fs/promises"
-import { homedir } from "node:os"
+import { devNull, homedir } from "node:os"
 import { dirname, join, relative, resolve } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
@@ -47,6 +47,7 @@ import {
   type SnapshotObjects,
 } from "./snapshot-git.js"
 import { copyGitIndex } from "./index-copy.js"
+import { SharedSnapshotObjects } from "./shared-snapshot-objects.js"
 import type { FileHistory } from "./watch-backend.js"
 import type { HistoryMark } from "../contracts/watcher-child.js"
 const OperationSchema = z.object({
@@ -154,6 +155,8 @@ export class WorkspaceSnapshots {
   private readonly git: Git
   private readonly root: string
   private readonly retention: SnapshotRetentionPolicy
+  private readonly sharedObjects: SharedSnapshotObjects
+  private readonly objectStorage: "private" | "shared"
   /** The watcher's history of file changes, once the workspaces are open: what lets a turn's checkpoint be the last one. */
   private history: FileHistory | undefined
   /** Captures already waiting their turn can share one conservative history watermark. */
@@ -169,10 +172,12 @@ export class WorkspaceSnapshots {
   /** Captures with nothing a later one from them can't follow: no sparse checkout, no flagged entries, no repository inside. */
   private readonly plain = new Set<string>()
 
-  constructor(git: Git, root: string, retention: Partial<SnapshotRetentionPolicy> = {}) {
+  constructor(git: Git, root: string, retention: Partial<SnapshotRetentionPolicy> = {}, options: { objectStorage?: "private" | "shared" } = {}) {
     this.git = git
     this.retention = SnapshotRetentionPolicySchema.parse(retention)
     this.root = root
+    this.objectStorage = options.objectStorage ?? "private"
+    this.sharedObjects = new SharedSnapshotObjects(git, root, this.retention.maxStorageBytes)
     mkdirSync(root, { recursive: true, mode: 0o700 })
     this.db = new DatabaseSync(join(root, "snapshots.sqlite"))
     this.db
@@ -330,7 +335,7 @@ export class WorkspaceSnapshots {
   private async captureRepository(cwd: string, shared?: ReadonlySet<string>, reuse = false, frozen?: () => void, owned?: SnapshotLease): Promise<WorkspaceSnapshot> {
     const scope = await this.scope(cwd)
     const pins = new Set<string>()
-    const history = this.history
+    const history = this.objectStorage === "shared" ? undefined : this.history
     const marking = shared?.size || !history ? undefined : this.markHistory(history)
     let told = false
     const tell = () => {
@@ -636,7 +641,8 @@ export class WorkspaceSnapshots {
 
   /** A Git command for a checkpoint: its own index and object stores, and Mako as author. */
   private snapshotGit(cwd: string, args: string[], index?: string, input?: string, objects?: SnapshotObjects): Promise<string> {
-    return snapshotGit(this.git, cwd, args, index, input, objects)
+    return snapshotGit(this.git, cwd, this.objectStorage === "shared" ? ["-c", `core.hooksPath=${devNull}`, ...args] : args,
+      index, input, this.objectStorage === "shared" ? { ...objects, noLazyFetch: true } : objects)
   }
 
   async restore(input: RewindPlan, complete: () => void): Promise<void> {
@@ -885,9 +891,9 @@ export class WorkspaceSnapshots {
   }
   private objects(...records: SnapshotRecord[]) {
     return {
-      read: records
-        .filter((record) => record.storage)
-        .map((record) => join(this.root, record.id, "git/objects")),
+      read: [...new Set(records.flatMap((record) => record.storage?.kind === "shared"
+        ? [this.sharedObjects.objects(record.storage.owner)]
+        : record.storage ? [join(this.root, record.id, "git/objects")] : []))],
     }
   }
   private async scope(cwd: string): Promise<string> {
@@ -1032,6 +1038,10 @@ export class WorkspaceSnapshots {
     return `${branch}:${revision}`
   }
   private async validateRepository(record: SnapshotRecord): Promise<void> {
+    if (record.storage?.kind === "shared") {
+      if (!record.commit) throw new Error("The shared checkpoint has no object root")
+      await this.sharedObjects.verify(record.scope, record.storage.owner, record.commit)
+    }
     if (
       (await this.scope(record.scope)) !== record.scope ||
       (await this.snapshotGit(record.scope, ["rev-parse", "--absolute-git-dir"])).trim() !==
@@ -1229,8 +1239,10 @@ export class WorkspaceSnapshots {
         throw new Error(
           "The checkpoint exceeds its object storage limit. No workspace files were changed."
         )
-      const objects = await privateSnapshotObjects(this.git, scope, directory)
-      if (!since && !head.endsWith(":unborn")) {
+      const sharedCapture = this.objectStorage === "shared" && lifetime === "retained"
+        ? await this.sharedObjects.capture(scope, directory) : undefined
+      const objects = sharedCapture?.objects ?? await privateSnapshotObjects(this.git, scope, directory)
+      if (!sharedCapture && !since && !head.endsWith(":unborn")) {
         const previous = await this.publishing(scope, async () => {
           const row = this.db.prepare(`SELECT value FROM snapshots WHERE json_extract(value, '$.scope') = ?
             ORDER BY json_extract(value, '$.createdAt') DESC, id DESC LIMIT 1`).get(scope)
@@ -1238,7 +1250,7 @@ export class WorkspaceSnapshots {
           if (previous) this.pin(pins, previous.id)
           return previous
         })
-        if (previous?.storage && previous.gitDir === gitDir && previous.head === head) {
+        if (previous?.storage?.kind === "private" && previous.gitDir === gitDir && previous.head === head) {
           const borrowed = join(this.root, previous.id, "git/objects")
           // The capture's lease keeps this store through sealing. Git still checks the working tree, but needn't write a
           // blob already packed here. sealSnapshotObjects packs it into this checkpoint before either is pruned.
@@ -1316,21 +1328,24 @@ export class WorkspaceSnapshots {
           `Mako checkpoint ${id}`,
         ])
       ).trim()
-      await captureGit([
-        `--git-dir=${join(directory, "git")}`,
-        "update-ref",
-        `refs/mako/checkpoints/${id}`,
-        commit,
-      ])
-      await sealSnapshotObjects(
-        this.git,
-        scope,
-        directory,
-        commit,
-        objects,
-        this.retention.maxSnapshotBytes,
-        /:([a-f0-9]{40,64})$/.exec(head)?.[1]
-      )
+      if (sharedCapture) await this.sharedObjects.seal(scope, directory, sharedCapture, id, commit, this.retention.maxSnapshotBytes)
+      else {
+        await captureGit([
+          `--git-dir=${join(directory, "git")}`,
+          "update-ref",
+          `refs/mako/checkpoints/${id}`,
+          commit,
+        ])
+        await sealSnapshotObjects(
+          this.git,
+          scope,
+          directory,
+          commit,
+          objects,
+          this.retention.maxSnapshotBytes,
+          /:([a-f0-9]{40,64})$/.exec(head)?.[1]
+        )
+      }
       // A temporary state's working index is what a restore from it starts with (`restoreFiles`).
       if (lifetime !== "temporary") await rm(workingIndex, { force: true })
       const payloadBytes = await snapshotPayloadBytes(directory)
@@ -1347,7 +1362,9 @@ export class WorkspaceSnapshots {
         head,
         tree,
         commit,
-        storage: { kind: "private", bytes: payloadBytes },
+        storage: sharedCapture
+          ? { kind: "shared", owner: sharedCapture.owner, bytes: payloadBytes }
+          : { kind: "private", bytes: payloadBytes },
         indexDigest,
       }
       if (shared?.size) record.shared = [...shared].slice(0, 64)
@@ -1519,9 +1536,13 @@ export class WorkspaceSnapshots {
         )
     }
     const temporary = await mkdtemp(join(this.root, "restore-"))
+    let releaseStaging: (() => Promise<void>) | undefined
     try {
       const index = join(temporary, "index")
-      if (target.storage)
+      if (target.storage?.kind === "shared" && target.indexDigest !== "absent") {
+        if (!target.commit) throw new Error("The shared checkpoint has no object root")
+        releaseStaging = await this.sharedObjects.importStaging(target.scope, target.storage.owner, target.commit, temporary)
+      } else if (target.storage?.kind === "private")
         await importSnapshotObjects(this.git, target.scope, join(this.root, target.id))
       // The current state's own working index knows each file's stat, so Git rewrites only the files that differ;
       // an index read from its tree knows none, and Git would read every file again.
@@ -1555,7 +1576,8 @@ export class WorkspaceSnapshots {
         }
       } else await rm(destination, { force: true })
     } finally {
-      await rm(temporary, { recursive: true, force: true })
+      try { await releaseStaging?.() }
+      finally { await rm(temporary, { recursive: true, force: true }) }
     }
   }
 }

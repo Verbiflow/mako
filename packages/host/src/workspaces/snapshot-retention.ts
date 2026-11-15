@@ -11,18 +11,23 @@ export const SnapshotRecordSchema = WorkspaceSnapshotSchema.extend({
   head: z.string(),
   tree: oid,
   commit: oid.optional(),
-  storage: z
-    .object({
+  storage: z.discriminatedUnion("kind", [
+    z.object({
       kind: z.literal("private"),
       bytes: z.number().int().nonnegative(),
-    })
-    .optional(),
+    }),
+    z.object({
+      kind: z.literal("shared"),
+      owner: z.string().regex(/^[a-f0-9]{64}$/),
+      bytes: z.number().int().nonnegative(),
+    }),
+  ]).optional(),
   indexDigest: z.union([
     z.literal("absent"),
     z.string().regex(/^[a-f0-9]{64}$/),
   ]),
   retainUntil: z.number().finite().optional(),
-})
+}).refine((record) => record.storage?.kind !== "shared" || record.commit !== undefined, "A shared checkpoint requires its owned commit root")
 export type SnapshotRecord = z.infer<typeof SnapshotRecordSchema>
 export const SnapshotRetentionPolicySchema = z.object({
   maxSnapshots: z.number().int().positive().default(1000),

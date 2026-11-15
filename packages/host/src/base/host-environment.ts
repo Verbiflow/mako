@@ -45,6 +45,8 @@ export interface HostEnvironment {
    * `~/.mako`, so it isn't isolated.
    */
   readonly isolated: boolean
+  /** Experimental private repository-owned checkpoint objects; the default remains separate checkpoint packs. */
+  readonly checkpointStorage?: "shared"
 }
 
 /**
@@ -93,7 +95,7 @@ export function resolveHostEnvironment({ env, appRoot, platform, home }: HostEnv
     ? resolve(env.MAKO_DATA_ROOT)
     : profile ? `${defaultDataRoot}-${profile}` : defaultDataRoot
   const userRoot = userRootFor({ dataRoot, appData, home })
-  return { dataRoot, defaultDataRoot, appData, appRoot, appName, version, build, packaged, development, profile, userRoot, isolated: userRoot !== join(home, ".mako") }
+  return { dataRoot, defaultDataRoot, appData, appRoot, appName, version, build, packaged, development, profile, userRoot, isolated: userRoot !== join(home, ".mako"), ...(env.MAKO_CHECKPOINT_STORE === "shared" && { checkpointStorage: "shared" as const }) }
 }
 
 /** The package a module was built into: the nearest folder above it with a `package.json`, as Node looks a package up. */

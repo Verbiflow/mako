@@ -37,6 +37,8 @@ try {
   assert.equal(mac(checkout, { MAKO_DATA_ROOT: join(support, "Mako-review") }).userRoot, join(home, ".mako"), "A launcher's profile root still shares the user's state")
   assert.equal(mac(checkout, { MAKO_PROD: "1" }).dataRoot, join(support, "mako"), "MAKO_PROD runs a checkout as the installed app")
   assert.equal(mac(checkout, { MAKO_PROD: "1" }).development, false)
+  assert.equal(mac(checkout).checkpointStorage, undefined, "The experimental checkpoint store is off by default")
+  assert.equal(mac(checkout, { MAKO_CHECKPOINT_STORE: "shared" }).checkpointStorage, "shared")
   assert.equal(mac(checkout, { MAKO_PROFILE: "second" }).dataRoot, join(support, "mako-second"), "A named profile gets its own data root")
   assert.equal(mac(checkout, { MAKO_DATA_ROOT: "relative/data", MAKO_PROFILE: "second" }).dataRoot, resolve("relative/data"), "A launcher's data root wins, made absolute")
   assert.throws(() => mac(checkout, { MAKO_PROFILE: "../escape" }), /profile name/, "A profile name can't leave the data folder")

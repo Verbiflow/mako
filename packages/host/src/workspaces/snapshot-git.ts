@@ -3,10 +3,13 @@ import { lstat, readFile, readdir, rm } from "node:fs/promises"
 import { delimiter, join } from "node:path"
 import { z } from "zod"
 import type { Git } from "@mako/git"
+import type { Readable } from "node:stream"
 
 export interface SnapshotObjects {
   write?: string
   read?: string[]
+  /** A borrowed promisor object must fail capture rather than fetch into the user's store. */
+  noLazyFetch?: boolean
 }
 const CaptureOwnerSchema = z.object({
   owner: z.literal("mako-checkpoint"),
@@ -64,6 +67,7 @@ type SnapshotEnvironment = {
   GIT_INDEX_FILE?: string
   GIT_OBJECT_DIRECTORY?: string
   GIT_ALTERNATE_OBJECT_DIRECTORIES?: string
+  GIT_NO_LAZY_FETCH?: string
 }
 
 function environment(
@@ -76,6 +80,7 @@ function environment(
     GIT_COMMITTER_NAME: "Mako",
     GIT_COMMITTER_EMAIL: "mako@localhost",
     GIT_INDEX_FILE: index || undefined,
+    ...(objects?.noLazyFetch && { GIT_NO_LAZY_FETCH: "1" }),
     GIT_OBJECT_DIRECTORY: objects?.write || undefined,
     GIT_ALTERNATE_OBJECT_DIRECTORIES: objects?.read?.length
       ? objects.read.map((path) => JSON.stringify(path)).join(delimiter)
@@ -90,12 +95,12 @@ export async function snapshotGit(
   cwd: string,
   args: string[],
   index?: string,
-  input?: string,
+  input?: string | Readable,
   objects?: SnapshotObjects
 ): Promise<string> {
   const result = await git.run({
     cwd,
-    args: ["-c", "core.fsmonitor=false", ...args],
+    args: [...(objects?.noLazyFetch ? ["--no-lazy-fetch"] : []), "-c", "core.fsmonitor=false", ...args],
     read: true,
     env: environment(index, objects),
     input,
