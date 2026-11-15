@@ -100,6 +100,8 @@ export class WebConversations {
         throw new Error("Previews open on a computer.")
       },
       "mako:quit-client": () => undefined,
+      "mako:reconnect-host": () => undefined,
+      "mako:restart-client": () => undefined,
       "mako:surface-window": () => undefined,
       "mako:appshot-shortcut": () => {
         throw new Error("Appshots are taken on a computer.")

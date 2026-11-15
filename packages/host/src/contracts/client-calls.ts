@@ -26,6 +26,8 @@ export const CLIENT_CALLS = [
   "mako:surface-window",
   "mako:appshot-shortcut",
   "mako:appshot-feedback",
+  "mako:reconnect-host",
+  "mako:restart-client",
 ] as const satisfies readonly HostChannel[]
 
 export type ClientCall = (typeof CLIENT_CALLS)[number]
@@ -81,6 +83,8 @@ export interface ClientCallResults {
   "mako:surface-window": void
   "mako:appshot-shortcut": AppshotShortcutState
   "mako:appshot-feedback": void
+  "mako:reconnect-host": void
+  "mako:restart-client": void
 }
 
 export type ClientCallResult = ClientCallResults[ClientCall]

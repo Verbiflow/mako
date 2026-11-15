@@ -1,7 +1,8 @@
 import type { RecoveryLink } from "./host-call-recovery.js"
 
 /** What a window hears of its host's connection: the reconnect banner, raised or cleared. */
-export type HostConnectionEvent = { type: "host-disconnected"; message: string } | { type: "host-reconnected" }
+/** `gone`: the client tried to reach its host again and found none it could attach to or start. */
+export type HostConnectionEvent = { type: "host-disconnected"; message: string; gone?: true } | { type: "host-reconnected" }
 
 /**
  * A cheap question to the host the window's stream is attached to. `alive`: that host answered. `absent`: nothing

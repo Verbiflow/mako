@@ -995,6 +995,10 @@ export function createMakoBridge(transport: BridgeTransport) {
     lifecycleCommand: (command: LifecycleCommand) =>
       invokeTrustedHost<LifecycleState>("mako:lifecycle-command", command),
     quitClient: () => invokeTrustedHost<void>("mako:quit-client"),
+    /** This window's link to its host, lost: try it again now rather than at its next backoff. Answered by the client. */
+    reconnectHost: () => invokeTrustedHost<void>("mako:reconnect-host"),
+    /** Quit this client, drafts saved, and open it again: it attaches to its host, or starts one. Answered by the client. */
+    restartClient: () => invokeTrustedHost<void>("mako:restart-client"),
     acknowledgeShutdown: (requestId: string) =>
       invokeTrustedHost<void>("mako:shutdown-ack", requestId),
     installationState: () =>

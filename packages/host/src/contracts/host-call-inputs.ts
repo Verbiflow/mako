@@ -2408,6 +2408,7 @@ const inputs = {
   "mako:read-file": () => z.tuple([z.string()]),
   "mako:read-live-file": () =>
     z.tuple([z.string(), z.string(), z.literal("preview").optional()]),
+  "mako:reconnect-host": () => z.tuple([]),
   "mako:relaunch": () => z.tuple([]),
   "mako:reload-automations": () => z.tuple([]),
   "mako:repo-avatar": () => z.tuple([z.string()]),
@@ -2464,6 +2465,7 @@ const inputs = {
         )
         .max(200),
     ]),
+  "mako:restart-client": () => z.tuple([]),
   "mako:restore-version": () => z.tuple([z.string(), z.number()]),
   "mako:reveal": () => z.tuple([z.string()]),
   "mako:reveal-plugins": () => z.tuple([]),

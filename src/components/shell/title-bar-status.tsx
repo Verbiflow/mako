@@ -1,4 +1,4 @@
-import { useHostConnection, useReconnectingLong } from "@/state/host-connection"
+import { useHostConnection, useReconnectStage } from "@/state/host-connection"
 import { Slot } from "@/extend/slot"
 import { useSession } from "@/state/session"
 import { HotIndicator } from "@/components/shell/hot-indicator"
@@ -35,7 +35,7 @@ export function TitleBarStatus() {
 function ConnectionPill() {
   const phase = useSession((state) => state.phase)
   const connected = useHostConnection((state) => state.kind === "connected")
-  const long = useReconnectingLong()
+  const stage = useReconnectStage()
   if (phase === "ready" && connected) return null
   // A window that's starting opens before its host answers (a cold host takes a second or two): that's
   // not something wrong, so it says so quietly, not as the lost host below.
@@ -43,7 +43,7 @@ function ConnectionPill() {
   // The host's link lost: Mako reconnects and replays by itself, so the title bar says so quietly, with nothing to
   // press. Past `RECONNECT_QUIET_MS` the notice under the title bar says it instead, never both.
   if (!connected)
-    return long ? null : (
+    return stage !== "quiet" ? null : (
       <span role="status" data-reconnecting="" className="flex items-center gap-1 px-1.5">
         <Spinner aria-hidden className="size-3" />
         Reconnecting…

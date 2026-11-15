@@ -3417,6 +3417,8 @@ export function installMockBridge() {
       operation: { kind: "idle" as const },
     }),
     quitClient: async () => {},
+    reconnectHost: async () => {},
+    restartClient: async () => {},
     acknowledgeShutdown: async () => {},
     installationState: async () => ({
       distribution: newerStoresScene ? "signed" as const : "development" as const,

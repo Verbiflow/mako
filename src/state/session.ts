@@ -374,7 +374,7 @@ function apply(event: HostEvent) {
   }
   if (event.type === "host-disconnected") {
     connectionEpoch++
-    hostDisconnected(event.message)
+    hostDisconnected(event.message, event.gone)
     return
   }
   if (event.type === "control-activity") {
