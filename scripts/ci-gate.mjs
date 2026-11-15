@@ -99,6 +99,8 @@ export const STEPS = [
   [74, "npm run test:agents-wake"],
   [3, "npm run test:fins-reach-released-apex"],
   [68, "npm run test:fin-pull-waits"],
+  // A turn's wait: armed, met, timed and fired once through restarts, a cancel racing it and a sleep.
+  [1, "npm run test:turn-waits"],
   [12, "npm run test:fin-resume"],
   [31, "npm run test:git-helper"],
   [32, "npm run test:fin-reopen"],

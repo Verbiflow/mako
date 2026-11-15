@@ -1,3 +1,4 @@
+import { TurnWaitSchema, type TurnWait, type TurnWaitCancel } from "../contracts/turn-waits.js"
 import { ReportActionSchema, ReportActionTargetSchema, ReportDispositionSchema, pendingReportAction, type ReportAction, type ReportActionTarget, type ReportActionsPage, type ReportDisposition } from "../contracts/report-actions.js"
 import { createHash, randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, realpathSync, renameSync } from "node:fs"
@@ -637,6 +638,12 @@ CREATE INDEX IF NOT EXISTS agent_answers_op ON agent_answers(op);
 CREATE TABLE IF NOT EXISTS agent_pull_wakes (
   wait TEXT PRIMARY KEY, child_thread TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL, delivered_at INTEGER);
 CREATE INDEX IF NOT EXISTS agent_pull_wakes_waiting ON agent_pull_wakes(at) WHERE delivered_at IS NULL;
+CREATE TABLE IF NOT EXISTS turn_waits (
+  id TEXT PRIMARY KEY, conversation TEXT NOT NULL, state TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL,
+  request TEXT, delivered_at INTEGER);
+CREATE INDEX IF NOT EXISTS turn_waits_armed ON turn_waits(conversation) WHERE state = 'armed';
+CREATE INDEX IF NOT EXISTS turn_waits_unsent ON turn_waits(at) WHERE state = 'fired' AND delivered_at IS NULL;
+CREATE INDEX IF NOT EXISTS turn_waits_request ON turn_waits(request) WHERE request IS NOT NULL;
 `
 const RecordRowSchema = z.object({ record: z.string() })
 const LimitNoticeRowSchema = z.object({ root_thread: z.string(), record: z.string() })
@@ -689,6 +696,10 @@ export const KeptPullWakeSchema = z.object({
 export type KeptPullWake = z.infer<typeof KeptPullWakeSchema>
 function keptPullWake(row: Record<string, SQLOutputValue>): KeptPullWake {
   return KeptPullWakeSchema.parse(JSON.parse(RecordRowSchema.parse(row).record))
+}
+
+function keptTurnWait(row: Record<string, SQLOutputValue>): TurnWait {
+  return TurnWaitSchema.parse(JSON.parse(RecordRowSchema.parse(row).record))
 }
 
 /** A report its parent hasn't heard yet, and the request already named to carry it, if one was. */
@@ -1691,6 +1702,114 @@ export class ThreadStore {
       if (wake.obsolete !== undefined) return
       this.sql("UPDATE agent_pull_wakes SET record = ?, delivered_at = coalesce(delivered_at, ?) WHERE wait = ?").run(JSON.stringify({ ...wake, obsolete: at }), at, wait)
     })
+  }
+
+  /**
+   * Arms a turn's wait (`contracts/turn-waits.ts`), in one write: the same id again finds the one armed first
+   * (`existed`), and a Thread's conversation holds one armed wait, so a newer one ends the one before it (`replaced`).
+   */
+  armTurnWait(input: TurnWait): { wait: TurnWait; replaced: TurnWait[]; existed: boolean } {
+    const wait = TurnWaitSchema.parse(input)
+    return this.write(() => {
+      const held = this.sql("SELECT record FROM turn_waits WHERE id = ?").get(wait.id)
+      if (held) return { wait: keptTurnWait(held), replaced: [], existed: true }
+      const replaced = this.sql("SELECT record FROM turn_waits WHERE conversation = ? AND state = 'armed' ORDER BY at, id").all(wait.conversation)
+        .map(keptTurnWait).map((before) => this.putTurnWait({ ...before, state: "cancelled", cancelled: { at: wait.createdAt, by: "replaced" } }))
+      this.sql("INSERT INTO turn_waits (id, conversation, state, record, at, request, delivered_at) VALUES (?, ?, ?, ?, ?, NULL, NULL)")
+        .run(wait.id, wait.conversation, wait.state, JSON.stringify(wait), wait.createdAt)
+      return { wait, replaced, existed: false }
+    })
+  }
+
+  /** A turn's wait by its id, in whatever state. */
+  turnWait(id: string): TurnWait | undefined {
+    this.syncVersion()
+    const row = this.sql("SELECT record FROM turn_waits WHERE id = ?").get(id)
+    return row ? keptTurnWait(row) : undefined
+  }
+
+  /** Every armed wait, oldest first: what a starting host watches again. */
+  armedTurnWaits(): TurnWait[] {
+    this.syncVersion()
+    return this.sql("SELECT record FROM turn_waits WHERE state = 'armed' ORDER BY at, id").all().map(keptTurnWait)
+  }
+
+  /** The wait a conversation has armed, if it has one. */
+  armedTurnWaitOf(conversation: string): TurnWait | undefined {
+    this.syncVersion()
+    const row = this.sql("SELECT record FROM turn_waits WHERE conversation = ? AND state = 'armed' ORDER BY at DESC, id DESC").get(conversation)
+    return row ? keptTurnWait(row) : undefined
+  }
+
+  /** Keeps that one of an armed wait's items is met, the first time it is: an `all` wait's progress survives a restart. */
+  noteTurnWaitMet(id: string, key: string, met: { at: number; words: string }): TurnWait | undefined {
+    return this.write(() => {
+      const held = this.sql("SELECT record FROM turn_waits WHERE id = ?").get(id)
+      if (!held) return undefined
+      const wait = keptTurnWait(held)
+      if (wait.state !== "armed" || wait.met[key] !== undefined) return wait
+      return this.putTurnWait({ ...wait, met: { ...wait.met, [key]: met } })
+    })
+  }
+
+  /** Claims a wait's one firing, in one write: only an armed wait fires, and only once (`claimed: false` after). */
+  claimTurnWait(id: string, fired: NonNullable<TurnWait["fired"]>): { wait: TurnWait | undefined; claimed: boolean } {
+    return this.write(() => {
+      const held = this.sql("SELECT record FROM turn_waits WHERE id = ?").get(id)
+      if (!held) return { wait: undefined, claimed: false }
+      const wait = keptTurnWait(held)
+      if (wait.state !== "armed") return { wait, claimed: false }
+      return { wait: this.putTurnWait({ ...wait, state: "fired", fired }), claimed: true }
+    })
+  }
+
+  /** A fired wait's note reached its conversation's queue. */
+  markTurnWaitDelivered(id: string, at: number): void {
+    this.write(() => {
+      const held = this.sql("SELECT record FROM turn_waits WHERE id = ?").get(id)
+      if (!held) return
+      const wait = keptTurnWait(held)
+      if (wait.state !== "fired" || wait.delivered || wait.cancelled) return
+      this.putTurnWait({ ...wait, delivered: { at } })
+    })
+  }
+
+  /**
+   * Ends a wait that hasn't woken anyone: an armed one is cancelled; a fired one whose note hasn't gone is retired,
+   * never sent (`ended: "retired"`); one delivered already, or ended before, is left as it is (`ended: undefined`).
+   */
+  cancelTurnWait(id: string, at: number, by: TurnWaitCancel): { wait: TurnWait | undefined; ended?: "cancelled" | "retired" } {
+    return this.write(() => {
+      const held = this.sql("SELECT record FROM turn_waits WHERE id = ?").get(id)
+      if (!held) return { wait: undefined }
+      const wait = keptTurnWait(held)
+      if (wait.cancelled || wait.delivered) return { wait }
+      if (wait.state === "armed") return { wait: this.putTurnWait({ ...wait, state: "cancelled", cancelled: { at, by } }), ended: "cancelled" }
+      return { wait: this.putTurnWait({ ...wait, cancelled: { at, by } }), ended: "retired" }
+    })
+  }
+
+  /** Waits fired and not yet delivered, oldest first: what a starting host sends once, under the request each kept. */
+  undeliveredTurnWaits(): TurnWait[] {
+    this.syncVersion()
+    return this.sql("SELECT record FROM turn_waits WHERE state = 'fired' AND delivered_at IS NULL ORDER BY at, id").all()
+      .map(keptTurnWait).filter((wait) => !wait.cancelled)
+  }
+
+  /** The wait whose note goes as `request`, for its handoff to read it again. */
+  turnWaitOfRequest(request: string): TurnWait | undefined {
+    this.syncVersion()
+    const row = this.sql("SELECT record FROM turn_waits WHERE request = ?").get(request)
+    return row ? keptTurnWait(row) : undefined
+  }
+
+  private putTurnWait(wait: TurnWait): TurnWait {
+    const kept = TurnWaitSchema.parse(wait)
+    // A cancelled fired wait counts as delivered for the unsent index: nothing will send it.
+    const delivered = kept.delivered?.at ?? (kept.state === "fired" && kept.cancelled ? kept.cancelled.at : null)
+    this.sql("UPDATE turn_waits SET state = ?, record = ?, request = ?, delivered_at = ? WHERE id = ?")
+      .run(kept.state, JSON.stringify(kept), kept.fired?.request ?? null, delivered, kept.id)
+    return kept
   }
 
   /** Spawns waiting on a tree's running budget, oldest first. */
