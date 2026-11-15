@@ -9,7 +9,6 @@ import {
   writeFile,
 } from "node:fs/promises"
 import { createRequire } from "node:module"
-import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { promisify } from "node:util"
@@ -48,7 +47,10 @@ if (!worker) {
   const runtime = await import(
     pathToFileURL(require.resolve("@mako/control-runtime/session")).href
   )
-  const source = await mkdtemp(join(tmpdir(), "mc-"))
+  // The owned root sits in /tmp, not tmpdir(): a Mac's tmpdir() is long enough that a root there leaves too few of a
+  // Unix socket's 103 bytes for the session's sockets, so createControlDirectory refused it and packaging failed on every
+  // Mac. Its real path, as createControlDirectory reads it (/tmp is a link to /private/tmp there).
+  const source = await realpath(await mkdtemp("/tmp/mc-"))
   const workers = new runtime.ControlWorkers({ spare: false, cleanup: { scope: "owned", root: source } })
   let owner
   let primaryFailed = false
