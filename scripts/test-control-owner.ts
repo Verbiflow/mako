@@ -1,8 +1,10 @@
 import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
+import { mock } from "node:test"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
 import { readFile } from "node:fs/promises"
 import { setTimeout as delay } from "node:timers/promises"
@@ -16,6 +18,7 @@ import {
   controlLine,
 } from "@mako/host/control/launch"
 const run = promisify(execFile)
+await longLivedTools()
 const fixture = await browserFixture()
 const browsers = new BrowserService([fixture.definition])
 const service = await startControlService(browsers, () => {})
@@ -125,4 +128,103 @@ try {
   await service.close()
   browsers.close()
   await fixture.close()
+}
+
+/** A resident provider can work across days without reopening its process or changing its environment's token. */
+async function longLivedTools() {
+  let now = Date.now()
+  let running = true
+  const clock = mock.method(Date, "now", () => now)
+  const current = new Map([["first", "one"], ["sdk", "two"], ["ended", "old"], ["next", "three"]])
+  const reports: string[] = []
+  const server = await startConversationMcp({
+    authorizeAgent(conversation, binding) {
+      if (!running || current.get(binding) !== conversation) throw new Error("The binding no longer owns a running turn in this conversation")
+    },
+  }, async () => { throw new Error("No computer operation was requested") }, [
+    (mcp, conversation) => mcp.registerTool("report_fixture", { description: "Record this fixture's report", inputSchema: {} }, async () => {
+      const id = conversation()
+      reports.push(id)
+      return { content: [{ type: "text", text: id }] }
+    }),
+  ], () => ({ allowed: true }))
+  const http = new Client({ name: "long-running-fin", version: "1" })
+  const sdk = new Client({ name: "in-process-fin", version: "1" })
+  const replacement = new Client({ name: "replacement-fin", version: "1" })
+  let closed = false
+  const first = server.mint("first", "one")
+  const embedded = server.mint("sdk", "two")
+  const ended = server.mint("ended", "old")
+  const call = async (client: Client, expected: string) => {
+    const before = reports.length
+    const result = await client.callTool({ name: "report_fixture", arguments: {} })
+    assert.notEqual(result.isError, true, JSON.stringify(result))
+    assert.deepEqual(reports.slice(before), [expected], "renewing a grant executes only the requested report once")
+  }
+  try {
+    await http.connect(new StreamableHTTPClientTransport(new URL(first.makoUrl!), { requestInit: { headers: { Authorization: `Bearer ${first.token}` } } }))
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    const mako = await embedded.makoServer!()
+    await mako.connect(serverTransport)
+    await sdk.connect(clientTransport)
+    await call(http, "one")
+    await call(sdk, "two")
+    now += 25 * 60 * 60_000
+    await assert.doesNotReject(() => call(http, "one"), "the same current HTTP grant reports after 25 hours")
+    await assert.doesNotReject(() => call(sdk, "two"), "the same current SDK grant reports after 25 hours")
+    // The real owner refuses operations between turns. Another Fin starting must not retire that idle binding.
+    now += 25 * 60 * 60_000
+    running = false
+    current.delete("ended")
+    server.revoke("ended", "old")
+    server.mint("next", "three")
+    assert.ok((await http.listTools()).tools.some(tool => tool.name === "report_fixture"))
+    const idleCount = reports.length
+    assert.equal((await http.callTool({ name: "report_fixture", arguments: {} })).isError, true, "keeping an idle credential does not authorize an idle report")
+    assert.equal(reports.length, idleCount)
+    running = true
+    await call(http, "one")
+    await call(sdk, "two")
+    const post = (url: string, token: string) => fetch(url, {
+      method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: "{}",
+    })
+    assert.equal((await post(ended.makoUrl!, ended.token)).status, 401, "an ended binding is revoked")
+    current.set("ended", "old")
+    assert.equal((await post(ended.makoUrl!, ended.token)).status, 401, "a later mint does not recreate a retired credential")
+    assert.equal((await post(first.makoUrl!, "fixture-unminted")).status, 401, "an unknown credential never renews")
+    now += 25 * 60 * 60_000
+    const gated = await post(first.makoUrl!.replace(/\/mako$/, "/calls/pre"), first.token)
+    assert.equal(gated.status, 200, "native call hooks use the same active grant")
+    assert.deepEqual(await gated.json(), { allowed: true })
+    // A current binding check, not possession of an old token, is the authority for each operation.
+    current.set("first", "replacement")
+    now += 25 * 60 * 60_000
+    const before = reports.length
+    assert.equal((await http.callTool({ name: "report_fixture", arguments: {} })).isError, true)
+    assert.equal(reports.length, before)
+    server.revoke("first", "one")
+    current.set("first", "one")
+    assert.equal((await post(first.makoUrl!, first.token)).status, 401, "a revoked credential cannot later regain its old binding")
+    await call(sdk, "two")
+    server.revoke("sdk", "two")
+    const revoked = await sdk.callTool({ name: "report_fixture", arguments: {} })
+    assert.equal(revoked.isError, true, "the retained in-process server cannot renew an explicitly revoked grant")
+    assert.equal(reports.length, before + 1, "neither failed nor revoked calls publish another report")
+    assert.equal((await post(embedded.makoUrl!, embedded.token)).status, 401)
+    const fresh = server.mint("sdk", "two")
+    const [freshClient, freshServer] = InMemoryTransport.createLinkedPair()
+    await (await fresh.makoServer!()).connect(freshServer)
+    await replacement.connect(freshClient)
+    await call(replacement, "two")
+    server.close()
+    closed = true
+    const afterClose = await replacement.callTool({ name: "report_fixture", arguments: {} })
+    assert.equal(afterClose.isError, true, "closing the listener also ends its retained SDK grants")
+    assert.equal(reports.length, before + 2)
+    console.log("Task tools: HTTP, SDK and hook grants survive days, idle turns and other mints; idle, ended, replaced, revoked and unknown callers cannot report")
+  } finally {
+    await Promise.all([http.close(), sdk.close(), replacement.close()])
+    if (!closed) server.close()
+    clock.mock.restore()
+  }
 }
