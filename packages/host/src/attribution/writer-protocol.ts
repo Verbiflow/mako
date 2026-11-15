@@ -76,6 +76,7 @@ const BackfillSchema = z.object({ sessions: z.number(), calls: z.number(), entri
 export type WriterCommandResult = WriterSnapshot | BackfillResult | Collected | string[] | undefined
 export const WriterCommandResults = {
   snapshot: WriterSnapshotSchema,
+  heard: WriterVoidSchema,
   wake: WriterVoidSchema,
   "read-back": BackfillSchema,
   collect: WriterCollectionSchema,
@@ -107,6 +108,11 @@ export type WriterHostRequest = z.infer<typeof WriterHostRequestSchema>
 
 export const WriterCommandSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("snapshot") }),
+  /**
+   * Answered once every message the host sent before it has been taken: the file events of its watches come on this
+   * port, so after it they are the tracker's to journal (`settled` asks the journal on another channel).
+   */
+  z.object({ kind: z.literal("heard") }),
   z.object({ kind: z.literal("wake"), checkout: z.string() }),
   z.object({ kind: z.literal("read-back") }),
   z.object({ kind: z.literal("collect") }),
