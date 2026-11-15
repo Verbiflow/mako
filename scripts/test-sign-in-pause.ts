@@ -14,6 +14,7 @@ import type { LiveDriverEvent, LiveRequest } from "@mako/host/contracts/live-con
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { launchContext } from "@mako/host/base/execution-context"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { verifiedSignInControls } from "./lib/verified-sign-in-controls.ts"
 
 const nativeStores = new NativeStores(false)
 
@@ -38,6 +39,7 @@ const SIGNED_OUT = "Failed to authenticate: OAuth session expired and could not 
 type Mode = "ok" | "accepted-sign-out" | "refused-sign-out" | "uncertain-sign-out" | "plan"
 
 try {
+  await verifiedSignInControls(root)
   const peers = providerHost.liveDrivers.list()
   assert.ok(peers.length >= 6, "every harness registers a live driver")
   for (const original of [...peers, { ...peers[0]!, provider: "future" }]) {
