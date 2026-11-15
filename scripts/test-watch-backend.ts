@@ -1,7 +1,6 @@
 import assert from "node:assert/strict"
-import { ChildProcess, execFileSync } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
-import { mock } from "node:test"
+import { execFileSync } from "node:child_process"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { WatchEvent } from "@mako/host/contracts/watcher-child"
@@ -10,7 +9,6 @@ import { WatchReadings } from "@mako/host/workspaces/watch-readings"
 import { FileEventsServiceWatch } from "@mako/host/workspaces/file-events-service"
 import { runCases } from "./lib/cases.ts"
 import { ranOut } from "./lib/ran-out.ts"
-import { HostStopping } from "@mako/host/base/host-stopping"
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-watch-backend-")))
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -77,83 +75,6 @@ function caseFolder(name: string): string {
   const folder = join(root, name)
   mkdirSync(folder)
   return folder
-}
-
-/** Native history can stay in libuv's threadpool even after SIGTERM asks Node to exit. */
-async function historyReaderTermination() {
-  if (process.platform === "win32") return // Windows does not deliver a catchable SIGTERM.
-  const platform = Object.getOwnPropertyDescriptor(process, "platform")
-  assert.ok(platform)
-  const asMac = <T>(operation: () => T): T => {
-    Object.defineProperty(process, "platform", { ...platform, value: "darwin" })
-    try { return operation() } finally { Object.defineProperty(process, "platform", platform) }
-  }
-  const gone = (pid: number) => {
-    try { process.kill(pid, 0); return false }
-    catch (error) { if (error instanceof Error && "code" in error && error.code === "ESRCH") return true; throw error }
-  }
-  for (const path of ["deadline", "recovery", "idle"] as const) {
-    const folder = caseFolder(`history-${path}`), script = join(folder, "reader.mjs")
-    writeFileSync(script, `import {writeFileSync} from "node:fs";
-process.on("SIGTERM",()=>{});setInterval(()=>{},1000);
-process.on("message",request=>{
-  if(request.t==="mark") process.send({t:"marked",id:request.id,mark:{id:String(process.pid),at:"1"}});
-  if(request.t==="since") writeFileSync(${JSON.stringify(join(folder, "reading"))},String(process.pid));
-});\n`)
-    const scope = new HostStopping(), readings = new WatchReadings(), history = childHistory(script, readings)
-    const signals: { pid: number | undefined; signal: NodeJS.Signals | number }[] = []
-    const originalKill = ChildProcess.prototype.kill
-    const killing = mock.method(ChildProcess.prototype, "kill", function (this: ChildProcess, signal?: NodeJS.Signals | number) {
-      signals.push({ pid: this.pid, signal: signal ?? "SIGTERM" })
-      return originalKill.call(this, signal)
-    })
-    const realTimer = globalThis.setTimeout
-    let deadline: () => void = () => assert.fail("the history deadline was not armed")
-    let idle: () => void = () => assert.fail("the reader's idle retirement was not armed")
-    const forces: (() => void)[] = []
-    const observing = (run: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => {
-      // Fire the real deadline/idle action after the child's receipt, rather than wait 120/30 seconds.
-      if (ms === 120_000) deadline = () => run(...args)
-      if (ms === 30_000) idle = () => run(...args)
-      if (ms === 500) forces.push(() => run(...args))
-      return realTimer(run, ms, ...args)
-    }
-    // SAFETY: forward every timer and its arguments unchanged; keep Node's promisified overload.
-    globalThis.setTimeout = Object.assign(observing, realTimer) as typeof setTimeout
-    try {
-      await scope.run(async () => {
-        const mark = await asMac(() => history.mark()), first = Number(mark.id)
-        assert.equal(readings.reading().historyChild?.pid, first)
-        if (path === "idle") idle()
-        else {
-          const read = asMac(() => history.since(mark, [folder]))
-          const failed = assert.rejects(read, path === "deadline" ? /history didn't answer/ : /started over/)
-          await until("the child received the history read", () => existsSync(join(folder, "reading")), 5_000)
-          if (path === "deadline") deadline()
-          else history.recover?.()
-          await failed
-        }
-        const replacement = await asMac(() => history.mark()), second = Number(replacement.id)
-        assert.notEqual(first, second)
-        await until(`the ${path} reader ignoring SIGTERM was reaped`, () => gone(first), 5_000)
-        assert.deepEqual(signals.filter((call) => call.pid === first).map((call) => call.signal), ["SIGTERM", "SIGKILL"])
-        const staleForce = forces[0]
-        assert.ok(staleForce, "retirement arms one bounded escalation")
-        const previous = signals.length
-        staleForce() // An already-queued escalation must not signal an exited/replaced generation.
-        assert.equal(signals.length, previous)
-        assert.equal(readings.reading().historyChild?.pid, second, "an old exit does not clear the replacement's reading")
-        assert.equal((await asMac(() => history.mark())).id, replacement.id, "old retirement leaves the replacement alive")
-        history.recover?.()
-        await until("the replacement ignoring SIGTERM was reaped", () => gone(second), 5_000)
-        assert.equal(readings.reading().historyChild, undefined)
-      })
-    } finally {
-      globalThis.setTimeout = realTimer
-      await scope.stop() // Joins only this case's children even when its assertion fails on the original source.
-      killing.mock.restore()
-    }
-  }
 }
 
 /** One child for every watch, ignores applied there, a crash restarts it, unsubscribe is final, a missing root is refused, a dying child is given up. */
@@ -365,7 +286,7 @@ async function degradedFseventsd(): Promise<void> {
 
 // Each case on its own folders and children, so CI can run them on separate shards (`CASES`, scripts/lib/cases.ts).
 try {
-  await runCases([historyReaderTermination, sharedChildAndCrash, lateCanary, silentCanary, degradedFseventsd])
+  await runCases([sharedChildAndCrash, lateCanary, silentCanary, degradedFseventsd])
   // Only something else holding this process open lets an unref'd timer fire.
   setTimeout(() => {
     console.error("the watcher child still holds the process open with no watch left")

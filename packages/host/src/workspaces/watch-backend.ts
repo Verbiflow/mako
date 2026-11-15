@@ -356,8 +356,6 @@ export function markMs(mark: HistoryMark): number {
 const MARK_MS = 3_000
 /** A read of history this long is stuck, not slow: fseventsd has stopped answering. */
 const HISTORY_MS = 120_000
-/** A native history wait can stop Node exiting even after SIGTERM; only an actual exit ends retirement. */
-const HISTORY_EXIT_GRACE_MS = 500
 
 /**
  * The file system's history, read in a watcher child of its own: a read
@@ -373,20 +371,10 @@ export function childHistory(script = defaultChildScript(), readings = new Watch
   let nextId = 1
   let idle: NodeJS.Timeout | undefined
   const pending = new Map<number, { child: ChildProcess; settle(reply: WatcherReply): void; fail(error: Error): void; timer: NodeJS.Timeout }>()
-  const ending = new WeakSet<ChildProcess>()
 
   const end = (gone: ChildProcess, error: Error) => {
-    if (child === gone) { child = undefined; clearTimeout(idle) }
-    if (gone.pid !== undefined && gone.exitCode === null && gone.signalCode === null && !ending.has(gone)) {
-      ending.add(gone)
-      // Even an idle, unref'd child belongs to this host until it has really exited.
-      gone.ref()
-      const force = setTimeout(() => {
-        if (gone.exitCode === null && gone.signalCode === null) gone.kill("SIGKILL")
-      }, HISTORY_EXIT_GRACE_MS)
-      gone.once("exit", () => clearTimeout(force))
-      gone.kill("SIGTERM")
-    }
+    if (child === gone) child = undefined
+    gone.kill()
     for (const [id, request] of pending) {
       if (request.child !== gone) continue
       pending.delete(id)
@@ -430,7 +418,9 @@ export function childHistory(script = defaultChildScript(), readings = new Watch
     clearTimeout(idle)
     idle = setTimeout(() => {
       if (pending.size || !child) return
-      end(child, new Error("The file system's history reader was idle"))
+      const going = child
+      child = undefined
+      going.kill()
     }, IDLE_MS)
     idle.unref()
   }
