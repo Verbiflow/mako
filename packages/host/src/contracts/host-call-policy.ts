@@ -159,6 +159,8 @@ const reads = [
   "mako:sync-readings",
   /** Mako's processes from `ps`, and its file watching from memory. */
   "mako:mako-footprint",
+  /** A conversation's turn media, judged by its records: asked twice, the same answers. */
+  "mako:live-turn-media",
   /** fseventsd's health from memory; the restart is never repeated by a client (`mako:file-events-restart`). */
   "mako:file-events-service",
   /** The continues in the cloud this Mac pressed or its list says, from memory. */

@@ -20,6 +20,8 @@ import { WorkspaceGit } from "@mako/host/git/workspace-git"
 import { ArtifactPreviews } from "@mako/host/workspaces/artifact-previews"
 import { ConversationFiles, OUTSIDE_THREAD_WORDS, WorkspaceFiles } from "@mako/host/workspaces/files"
 import { confinedRoots, openConfined, secretPath } from "@mako/host/workspaces/confined-read"
+import { ConversationMedia, NOT_THIS_CONVERSATIONS, TurnMedia, type ConversationHistory } from "@mako/host/media/index"
+import type { Entry } from "@mako/sessions/entries"
 
 const run = promisify(execFile)
 const scratch = await mkdtemp(join(tmpdir(), "mako-gateway-confinement-"))
@@ -141,11 +143,21 @@ try {
     }
     assert.deepEqual(ran, [], "no handler of the person's ran for a machine")
     assert.ok(gatewayAllows("mako:live-start", "gateway:web:phone"), "the person's phone starts one")
-    assert.ok(gatewayAllows("mako:agents-list", machine) && operation("mako:agents-list", { kind: "runtime", runtimeId: "m-1.g1" }).kind === "call", "a machine keeps its agent's doors")
+    // No runtime runs a Thread here, so none acts as a Thread's agent: a session it names is nothing of its own.
+    for (const channel of ["mako:agents-list", "mako:agents-send", "mako:settings-act", "mako:threads-act", "mako:threads-move", "mako:harnesses-act"]) {
+      assert.equal(gatewayAllows(channel, machine), false, `${channel} isn't a machine's`)
+      assert.equal(gatewayAllows(channel, "gateway:runtime:borrower"), false, `${channel} isn't a borrower's`)
+      const asAgent = operation(channel, { kind: "runtime", runtimeId: "borrower" })
+      assert.ok(asAgent.kind === "refused" && asAgent.problem.type.endsWith("forbidden"), `${channel} is refused to a runtime at the gateway`)
+    }
+    assert.ok(gatewayAllows("mako:agents-list", "gateway:web:phone"), "the person's own device keeps them")
     assert.ok(gatewayAllows("mako:simulators-list", "gateway:runtime:borrower"), "and a borrower its simulator")
     // The gateway itself (`gateway:<thread>`), packing a Thread off its machine, asks whether its conversation still
     // runs; no other runtime may, and the gateway's id opens nothing else.
     assert.ok(operation("mako:live-state", { kind: "runtime", runtimeId: "gateway:t-1" }).kind === "call", "the gateway's own runtime reads a conversation's state")
+    assert.ok(operation("mako:move-depart", { kind: "runtime", runtimeId: "gateway:t-1" }).kind === "call", "and packs a Thread off its machine")
+    const borrowedMove = operation("mako:move-depart", { kind: "runtime", runtimeId: "borrower" })
+    assert.ok(borrowedMove.kind === "refused" && borrowedMove.problem.type.endsWith("forbidden"), "a borrower moves nothing")
     assert.ok(gatewayAllows("mako:live-state", "gateway:runtime:gateway:t-1"))
     const stateRefused = operation("mako:live-state", { kind: "runtime", runtimeId: "m-1.g1" })
     assert.ok(stateRefused.kind === "refused" && stateRefused.problem.type.endsWith("forbidden"), "a machine doesn't")
@@ -156,7 +168,43 @@ try {
     await assert.rejects(methods.invoke("mako:live-start", [], "gateway:runtime:borrower"), new RegExp(MACHINE_REFUSED.split(":")[0]!))
   }
 
-  console.log("PASS: another device reaches only the allowlisted calls; a machine only its agent's doors, simulators and moves; read-live-file and read-file read only the Thread's folders after symlinks, never a key, through the descriptor they verified; a Thread at ~ opens nothing")
+  // A phone draws the screenshot `show` kept, from Mako's copy, for that conversation alone: the store is read only for
+  // copies a conversation's own records name, and asked to keep only what they name, with their evidence.
+  {
+    const shots = join(scratch, "tmp-shots")
+    await mkdir(shots, { recursive: true })
+    const home = join(shots, "home.png")
+    await writeFile(home, Buffer.from("89504e470d0a1a0a0000000d49484452000000020000000308060000009d74666b", "hex"))
+    const other = join(shots, "other.png")
+    await writeFile(other, Buffer.from("89504e470d0a1a0a", "hex"))
+    const media = new TurnMedia(join(scratch, "media"), () => 3_500)
+    await media.show(home)
+    await media.show(other)
+    const shown = (id: string, path: string): Entry => ({ type: "tool", id, name: "mcp__mako__show", status: "completed", input: JSON.stringify({ files: [{ path }] }), at: 3_000, endedAt: 4_000 })
+    const histories = new Map<string, ConversationHistory>([
+      ["c1", { harness: "claude", entries: [shown("show1", home)] }],
+      ["c2", { harness: "claude", entries: [shown("show2", other)] }],
+    ])
+    const conversations = new ConversationMedia(media, async (id) => histories.get(id) ?? null)
+    const [kept] = await conversations.confirm("c1", [{ callId: "show1", path: home }])
+    assert.ok(kept?.kind === "kept" && kept.media.file !== home, "the conversation's shown file is kept, as Mako's copy")
+    assert.deepEqual(await conversations.confirm("c1", [{ callId: "show1", path: key }, { callId: "show2", path: other }]),
+      [{ kind: "dropped", reason: NOT_THIS_CONVERSATIONS }, { kind: "dropped", reason: NOT_THIS_CONVERSATIONS }], "a file or a call its records don't name isn't kept for it")
+    await conversations.confirm("c2", [{ callId: "show2", path: other }])
+    const copy = kept?.kind === "kept" ? kept.media.file : ""
+    const files = new ConversationFiles(git, previews)
+    const phone = (conversation: string, path: string) => files.read(root, path, owned, "preview", true, (real) => conversations.kept(conversation, real))
+    const drawn = await phone("c1", copy)
+    assert.equal(drawn.withheld, undefined, "the phone reads the conversation's kept copy")
+    assert.ok(drawn.previewUrl, "signed for it, so it draws")
+    withheld(await phone("c2", copy), "another conversation can't read it")
+    const [theirs] = await new ConversationMedia(media, async (id) => histories.get(id) ?? null).confirm("c2", [{ callId: "show2", path: other }])
+    withheld(await phone("c1", theirs?.kind === "kept" ? theirs.media.file : ""), "nor this one theirs")
+    withheld(await phone("c1", join(scratch, "media", "media.db")), "and nothing else in the store is read")
+    media.close()
+  }
+
+  console.log("PASS: another device reaches only the allowlisted calls; a phone reads only its conversation's kept media; a runtime is no Thread's agent here, a borrower reaches its simulator and the gateway its moves; read-live-file and read-file read only the Thread's folders after symlinks, never a key, through the descriptor they verified; a Thread at ~ opens nothing")
 } finally {
   await rm(scratch, { recursive: true, force: true })
 }
