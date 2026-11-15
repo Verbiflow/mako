@@ -12,7 +12,6 @@ import { acpStore } from "@/state/acp-state"
 import { reviewTurn } from "@/state/review-scope"
 import { useTranscriptSource } from "./source-context"
 import { useVisible } from "./use-visible"
-import { CheckpointNotice } from "./checkpoint-notice"
 
 /** Turns from before the journal counted them, whose changes stay held; a finished turn's never change, so each is read once while it's held. */
 const HELD_TURNS = 200
@@ -73,15 +72,16 @@ export function TurnChanges({ requestId, streaming = false }: { requestId: strin
   const before = request?.snapshots?.before
   const saved = before?.kind === "ready" && request?.snapshots?.after?.kind === "ready" ? before.snapshot.scope : null
   if (!liveId || !requestId || !request) return null
-  const notice = <CheckpointNotice before={before} />
-  if (streaming) return notice
+  // A turn that went before its checkpoint held says nothing here: Rewind says why there's no point when asked, and
+  // the host's log says the turn went without one.
+  if (streaming) return null
   const recorded = recordedTurnChanges(request.changes)
-  if (recorded) return <>{notice}<TurnChangesRow summary={recorded} conversation={liveId} requestId={requestId} workspace={saved ?? recordRoots(request.changes)[0] ?? null} undoable undone={request.undone} /></>
+  if (recorded) return <TurnChangesRow summary={recorded} conversation={liveId} requestId={requestId} workspace={saved ?? recordRoots(request.changes)[0] ?? null} undoable undone={request.undone} />
   const workspace = saved
   // A count on its way, or none to make: nothing to read from the checkpoints.
-  if (request.changes || !workspace) return notice
+  if (request.changes || !workspace) return null
   // Mounted once the checkpoints are, so the line watches the viewport from its first frame.
-  return <>{notice}<CheckpointTurnChanges key={`${liveId}\0${requestId}`} conversation={liveId} requestId={requestId} workspace={workspace} /></>
+  return <CheckpointTurnChanges key={`${liveId}\0${requestId}`} conversation={liveId} requestId={requestId} workspace={workspace} />
 }
 
 /** An older turn's line, from the checkpoints either side of it. */

@@ -1,7 +1,4 @@
 import assert from "node:assert/strict"
-import { createElement } from "react"
-import { renderToStaticMarkup } from "react-dom/server"
-import { CheckpointNotice } from "../src/components/transcript/checkpoint-notice.tsx"
 import { RunSnapshotsSchema } from "@mako/host/contracts/workspace-snapshots"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -17,14 +14,9 @@ import { writerLabel } from "../src/lib/turn-writers.ts"
 import { undoneWords } from "../src/lib/turn-undone.ts"
 import { requestedTurn, type TurnReviewRequest } from "../src/state/review-scope.ts"
 
-// The deadline is persisted data, not a guess from an error's words. A later valid point removes its notice.
+// The deadline is persisted data, not a guess from an error's words: Rewind reads its reason when asked; the turn
+// itself says nothing of it.
 const timedOutPoint = RunSnapshotsSchema.parse({ before: { kind: "unavailable", reason: "still waiting", timedOut: true } }).before
-const checkpointNote = renderToStaticMarkup(createElement(CheckpointNotice, { before: timedOutPoint }))
-assert.match(checkpointNote, /role="note"/)
-assert.match(checkpointNote, /No rewind point: the checkpoint took too long/)
-assert.equal(renderToStaticMarkup(createElement(CheckpointNotice, { before: undefined })), "")
-assert.equal(renderToStaticMarkup(createElement(CheckpointNotice, { before: { kind: "unavailable", reason: "not a Git repository" } })), "")
-assert.equal(renderToStaticMarkup(createElement(CheckpointNotice, { before: { kind: "ready", snapshot: { id: "00000000-0000-4000-8000-000000000001", scope: "/workspace", createdAt: 1, files: 1 } } })), "")
 
 // The line's words carry their noun, one file or many.
 assert.equal(turnChangeWords(1), "Changed a file")
@@ -121,7 +113,6 @@ try {
   await reopened.close()
   assert.deepEqual(saved?.changes, summary, "stored whole")
   assert.deepEqual(saved?.snapshots?.before, timedOutPoint, "the timeout notice survives journal reload")
-  assert.equal(renderToStaticMarkup(createElement(CheckpointNotice, { before: saved?.snapshots?.before })), checkpointNote)
   assert.deepEqual(recordedTurnChanges(saved?.changes), recordedTurnChanges(live.changes), "the reopened line is the live one")
   // An undo is kept on the request beside its record, and reads back the same.
   const undone = { at: 1_790_000_100_000, scope: "turn" as const, files: 1, left: 0, backup: "refs/mako/moves/undo" }
