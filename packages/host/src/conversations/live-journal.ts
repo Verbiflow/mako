@@ -21,7 +21,7 @@ import {
   PromptAttachmentSchema,
   RequestRetrySchema,
 } from "../contracts/conversation-control.js"
-import { existsSync, mkdirSync, readdirSync, realpathSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, realpathSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
@@ -163,7 +163,7 @@ export const LiveRequestSchema = z.object({
   ownerCheck: z.object({ since: z.number() }).optional(),
   editing: z.literal(true).optional(),
   pause: z.literal("stop").optional(),
-  signIn: z.object({ harness: z.string(), account: z.string(), credential: z.string(), at: z.number() }).optional(),
+  signIn: z.object({ id: z.string().uuid().optional(), verification: z.number().int().nonnegative().optional(), ready: z.string().uuid().optional(), harness: z.string(), account: z.string(), credential: z.string(), at: z.number() }).optional(),
   wake: z.object({ at: z.number(), after: z.string() }).optional(),
   retry: RequestRetrySchema.optional(),
   digest: z.object({ notices: z.array(NoticeSchema), lines: z.array(z.string()).optional(), sentAt: z.number().optional(), heard: z.literal(true).optional(), resting: z.literal(true).optional(), nextTry: z.number().optional() }).optional(),
@@ -563,7 +563,7 @@ export type MakoLogEntry = Omit<z.infer<typeof LogRowSchema>, "value"> & MakoLog
  * router's word on a conversation it relays or reads from the account's copy, never a journal's. `parent` is its
  * Thread's edge, read from the Thread store whenever it's listed, and `children` its children's count, read from them.
  */
-type UnstoredMetadata = "parent" | "children" | "fins" | "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "elsewhereKind" | "waitingOn" | "waitingFor" | "attention" | "threadTitle" | "quietSince" | "cloudContinue" | "movedAt" | "rail" | "copy" | "wakeAt" | "promptedAt" | "order"
+type UnstoredMetadata = "hasSignInHold" | "parent" | "children" | "fins" | "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "elsewhereKind" | "waitingOn" | "waitingFor" | "attention" | "threadTitle" | "quietSince" | "cloudContinue" | "movedAt" | "rail" | "copy" | "wakeAt" | "promptedAt" | "order"
 
 /**
  * Whether `next` holds metadata `previous` did not. Fields are compared by
@@ -832,7 +832,8 @@ export class LiveJournal {
     const wakeAt = sooner(this.wakeAt(), transferWakeAt)
     const promptedAt = laterPrompt(this.requestedAt(), steeredAt)
     const unsettled = this.unsettled()
-    return { ...summary, revision: Math.max(summary.revision, this.revision()), ...wakeAt !== undefined && { wakeAt }, ...promptedAt !== undefined && { promptedAt }, ...unsettled && { unsettled } }
+    const hasSignInHold = this.db.prepare(`SELECT 1 FROM requests WHERE value LIKE '%"signIn":%' AND json_extract(value, '$.signIn') IS NOT NULL AND json_extract(value, '$.status') != 'canceled' LIMIT 1`).get() !== undefined
+    return { ...summary, revision: Math.max(summary.revision, this.revision()), ...wakeAt !== undefined && { wakeAt }, ...promptedAt !== undefined && { promptedAt }, ...unsettled && { unsettled }, ...hasSignInHold && { hasSignInHold: true } }
   }
 
   /** Whether a message here was waiting, paused or running as the journal was last written; only rows that name such a status are parsed. */
@@ -1533,6 +1534,28 @@ export function storedRequest(root: string, id: string, requestId: string): Live
   } finally {
     db.close()
   }
+}
+
+/** Retirement reads only metadata and pending request rows, never transcript blocks or a writable journal. */
+export function storedRetirementState(root: string, id: string): { finished: boolean; at: number } | undefined {
+  const path = join(root, `${id}.sqlite`)
+  if (!existsSync(path)) return undefined
+  const db = new DatabaseSync(path, { readOnly: true })
+  try {
+    const metadata = metadataRow(db)
+    if (!metadata) return undefined
+    const summary = journalSummary(metadata)
+    let pending = false
+    for (const row of db.prepare(`SELECT value FROM requests WHERE value LIKE '%"status":"queued"%' OR value LIKE '%"status":"held"%' OR value LIKE '%"status":"dispatching"%'`).all()) {
+      const request = LiveRequestSchema.parse(JSON.parse(RowSchema.parse(row).value))
+      if (request.status === "queued" || request.status === "held" || request.status === "dispatching") pending = true
+    }
+    return {
+      finished: !pending && !summary.hasSessionQuestions && summary.transferWakeAt === undefined &&
+        (summary.session.status === "ready" || summary.session.status === "failed" || summary.session.status === "closed"),
+      at: Math.max(summary.createdAt, statSync(path).mtimeMs, existsSync(`${path}-wal`) ? statSync(`${path}-wal`).mtimeMs : 0),
+    }
+  } finally { db.close() }
 }
 
 /** The bytes of the copy of its history journal `id` keeps; 0 when it keeps none. */

@@ -2,7 +2,7 @@ import { conversationWork, type AcpState } from "@/state/acp-state"
 import { agentAskOf } from "@/state/agent-asks"
 import type { ThreadPurposeKind } from "@mako/host/contracts/thread-purposes"
 import { autoContinuePending } from "@/state/prompt-delivery"
-import { signInPause } from "@mako/host/contracts/sign-in-hold"
+import { signInPause, signInResuming } from "@mako/host/contracts/sign-in-hold"
 import { finAskLine } from "@/state/fin-asks"
 import { workedAt } from "@mako/host/contracts/worked-at"
 
@@ -74,6 +74,8 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
       // Listed from another device and not opened here: the account's list says what its ended turn waits on.
       const listedBackground = conversation.session.connection === "hibernated" ? conversation.rail?.background : undefined
       const work = conversationWork(state, conversation) ?? (listedBackground ? { count: listedBackground } : null)
+      const signedOut = signInPause(conversation.requests ?? [])
+      const resuming = signInResuming(signedOut, conversation.requests ?? [])
       const presence: AcpPresence = {
         key: conversation.key,
         harness: conversation.harness,
@@ -95,9 +97,11 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
           // One of its Fins asking them, as an ask of its own would.
           (conversation.session.status !== "failed" && finAskLine(state, conversation) !== undefined) ||
           (conversation.session.status !== "failed" && agentAskOf(conversation) !== undefined) ||
-          (conversation.session.status !== "running" && signInPause(conversation.requests ?? []))
+          (conversation.session.status !== "running" && signedOut && !signedOut.hold.ready)
             ? "needs-permission"
-            : conversation.session.status === "failed" && autoContinuePending(conversation.requests)
+            : signedOut?.hold.ready && !resuming
+              ? "ready"
+            : resuming || conversation.session.status === "failed" && autoContinuePending(conversation.requests)
               ? "running"
               : conversation.session.status === "failed" && conversation.failureSeen
                 ? "ready"

@@ -14,6 +14,7 @@ import type { HostEnvironment } from "../base/host-environment.js"
 import type { HostMethods } from "../transport/index.js"
 import type { MethodTable } from "../base/methods.js"
 import { hostWarn } from "../base/host-log.js"
+import { WorktreeThreadState } from "./worktree-thread-state.js"
 import { LiveConversations } from "./live-conversations.js"
 import type { Dependencies as LiveDependencies } from "./live-runtime.js"
 import { NativeRequests } from "./native-requests.js"
@@ -65,6 +66,7 @@ import type { ConversationSettings } from "../contracts/turn-continuation.js"
 import type { KeepAwakeSettings, KeepAwakeState } from "../contracts/keep-awake.js"
 import type { ThreadHarnessCheck } from "../contracts/cloud-harnesses.js"
 import { z } from "zod"
+import { archivedByKeys, liveArchiveKeys } from "../contracts/thread-lifecycle.js"
 import { harnessOrder } from "../contracts/harness-defaults.js"
 
 export { CloudConversations, folderRepository } from "./cloud-conversations.js"
@@ -111,6 +113,7 @@ export { ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, regis
 /** Live turns and their journals, headless native runs, and who owns each conversation. */
 export interface Conversations {
   live: LiveConversations
+  finishedThreadAt(thread: import("../contracts/thread-identity.js").ThreadId): number | undefined
   /** Headless native runs, one writer per native session. */
   runs: NativeRuns
   /** This Thread continues on that harness: the one way there, whoever asks. */
@@ -208,7 +211,7 @@ export interface ConversationsDeps {
 
 export async function openConversations(deps: ConversationsDeps): Promise<Conversations> {
   const { environment, threads, harnesses, workspaces, emit } = deps
-  const { catalog, memory } = threads
+  const { catalog, memory, store } = threads
   const { host } = harnesses
   const dataRoot = environment.dataRoot
   // `live` is made below; the reader asks it only once a read arrives.
@@ -256,6 +259,15 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     nativePath: (session) => catalog.nativePath(session),
     accountEnv: (binding) => host.accounts.bindingEnv(binding),
     signInState: (harness, account) => host.accounts.signInState(harness, account),
+    signInProof: (harness, account) => host.accounts.signInProof(harness, account),
+    signInSequence: harness => host.accounts.signInSequence(harness),
+    signInEvents: listener => host.accounts.onSignedIn(listener),
+    signInAllowed: id => {
+      const summary = live.listed().find(summary => summary.session.id === id)
+      const placed = threads.store?.journalPlacement(id)
+      const edge = placed && threads.store?.edges().of(placed.thread)
+      return edge?.closedAt === undefined && summary !== undefined && !archivedByKeys(liveArchiveKeys(summary), new Set(threads.archives.snapshot().keys), catalog.ref(summary.session.nativePath ?? ""))
+    },
     children: catalog.childSource,
     harnessLabel: (harness) => harnessLabel(host, harness),
     resumeVerdict: assessResume,
@@ -444,8 +456,14 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     external: (path) => catalog.activity()[path]?.status ?? null,
     resumeRefusal: () => memory?.resumeRefusal()?.message ?? null,
   })
+  const retirementThreads = store ? new WorktreeThreadState({
+    store, dataRoot, memory,
+    fin: (thread) => agents?.finishedThreadAt(thread),
+    busy: (id) => live.atWork(id) || Boolean(live.held(id)?.requests.some(request => request.status === "queued" || request.status === "held" || request.status === "dispatching")),
+  }) : undefined
   return {
     live,
+    finishedThreadAt: (thread) => retirementThreads?.finished(thread),
     continueOn,
     runs,
     ...(agents && { agents }),
