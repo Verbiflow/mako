@@ -49,8 +49,18 @@ git("commit", "-qm", "initial")
 class SlowAfter extends WorkspaceSnapshots {
   readonly held: string[] = []
   private readonly gate = Promise.withResolvers<void>()
+  private readonly beforeSaved = Promise.withResolvers<void>()
   release(): void {
     this.gate.resolve()
+  }
+  releaseBefore(): void {
+    this.beforeSaved.resolve()
+  }
+  override async beginRun(id: string, cwd: string, frozen?: () => void): Promise<WorkspaceSnapshot> {
+    const snapshot = await super.beginRun(id, cwd, frozen)
+    // Inputs are fixed and the provider may run, but publication can outlive Stop and the session's wake.
+    await this.beforeSaved.promise
+    return snapshot
   }
   override async endRun(id: string): Promise<WorkspaceSnapshot> {
     this.held.push(id)
@@ -213,12 +223,16 @@ try {
   // Nothing else happens: no click, no other message.
   await until("the person's message to reach the agent with nothing else happening", () => prompts.length === 2)
   assert.ok(prompts[1]!.endsWith(words), "the agent hears the person's message")
+  assert.notEqual(owner.snapshot(id)?.requests.find((request) => request.id === first)?.snapshots?.before?.kind, "ready", "the next prompt never waits for the stopped turn's before publication")
+  snapshots.releaseBefore()
   const requests = owner.snapshot(id)!.requests
   assert.equal(requests.find((request) => request.id === first)?.interruption?.reason, "steered")
   assert.equal(requests.find((request) => request.id === queued)?.status, "dispatching")
   await until("the stopped turn's after-snapshot to be kept", () => owner.snapshot(id)?.requests.find((request) => request.id === first)?.snapshots?.after?.kind === "ready")
+  assert.equal(owner.snapshot(id)?.requests.find((request) => request.id === first)?.snapshots?.before?.kind, "ready", "the stopped turn keeps both boundaries after its session generation changes")
   console.log("thread stays live: a steer that stopped Claude's turn reaches the agent once its after-snapshot ends, with no click")
 } finally {
+  snapshots.releaseBefore()
   snapshots.release()
   await owner.stop()
 }
