@@ -129,6 +129,12 @@ export class LiveRecords {
     this.hooks = hooks
   }
 
+  /**
+   * Each fork's parent, the point it was made at (`ForkInput.point`, as its journal keeps it) and when: what an edited
+   * prompt's versions are read from (`LiveConversations.promptVersions`), without reading any journal in.
+   */
+  readonly forks = new Map<string, { parentId: string; point: string; createdAt: number }>()
+
   /** Lists every saved journal, as the host before this one left it, for the Thread store to register. */
   open(): JournalFacts[] {
     const { dependencies } = this
@@ -141,6 +147,7 @@ export class LiveRecords {
           if (found) {
             const { ancestry, threadSession, unsettled, ...summary } = found
             if (unsettled) this.unsettled.add(id)
+            if (ancestry) this.forks.set(id, { parentId: ancestry.parentId, point: ancestry.point, createdAt: summary.createdAt })
             dependencies.memory?.rememberBindings(id, summary.nativeBindings, summary.createdAt)
             backfillMemory(dependencies.memory, dependencies.root, id, summary.session)
             journals.push({
@@ -203,6 +210,9 @@ export class LiveRecords {
   add(resident: Resident): void {
     resident.journal.checkpointWith(this.primer)
     this.residents.set(resident.snapshot.session.id, resident)
+    // A fork made now joins the index as a saved one does at `open`.
+    const ancestry = resident.snapshot.control?.ancestry
+    if (ancestry) this.forks.set(resident.snapshot.session.id, { parentId: ancestry.parentId, point: ancestry.point, createdAt: resident.snapshot.createdAt })
   }
 
   /** The session as the listing has it, without reading an unloaded conversation's transcript back. */

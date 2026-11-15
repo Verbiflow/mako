@@ -3479,6 +3479,12 @@ export function installMockBridge() {
     }),
     continueReadings: async () => mockContinues.readings(),
     fileEventsService: async () => mockFileEvents,
+    // `?versions` shows the first prompt of a conversation as edited once: its fork holds the second version.
+    livePromptVersions: async (id: string, requestId: string) => {
+      const versioned = new URLSearchParams(globalThis.location?.search).has("versions")
+      const firstRequest = liveSnapshots.get(id)?.requests[0]?.id
+      return versioned && requestId === firstRequest ? { conversations: [id, `${id}-edited`], at: 0 } : { conversations: [id], at: 0 }
+    },
     fileEventsRestart: async () => {
       const before = mockFileEvents
       setFileEvents({ ...before, restarting: "restarting" })

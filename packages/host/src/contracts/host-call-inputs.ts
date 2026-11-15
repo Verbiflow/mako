@@ -1473,6 +1473,7 @@ const inputs = {
         })
         .optional(),
     ]),
+  "mako:live-prompt-versions": () => z.tuple([z.string(), z.string()]),
   "mako:live-read": () =>
     z.tuple([
       z.string(),
@@ -3596,6 +3597,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:live-permission", "conversations"],
   ["mako:live-prewarm", "conversations"],
   ["mako:live-prompt", "conversations"],
+  ["mako:live-prompt-versions", "conversations"],
   ["mako:live-read", "conversations"],
   ["mako:live-review", "conversations"],
   ["mako:live-rewind", "conversations"],

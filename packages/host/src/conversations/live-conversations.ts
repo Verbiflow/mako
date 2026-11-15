@@ -1,3 +1,5 @@
+import { z } from "zod"
+import type { PromptVersions } from "../contracts/live-conversations.js"
 import { randomBytes, randomUUID } from "node:crypto"
 import { statSync } from "node:fs"
 import { join } from "node:path"
@@ -90,6 +92,9 @@ import { activeBinding, conversationControl, launched, type Dependencies, type L
 import { LiveSources, settled, updateBinding, type SettledBases } from "./live-sources.js"
 import { LiveThreads } from "./live-threads.js"
 import { holdSwitches, LiveTransfers, withdrawGone } from "./live-transfers.js"
+
+/** A fork point made from just before a prompt (`ForkInput.point`, as a journal keeps it). */
+const BeforeRunSchema = z.object({ kind: z.literal("before-run"), requestId: z.string() })
 
 /** How long after the host starts it moves journals' copies of their history onto records (`LiveSources.settleBases`). */
 const SETTLE_AFTER_START_MS = 60_000
@@ -1241,6 +1246,29 @@ export class LiveConversations {
 
   acknowledgeAction(id: string, actionId: string): Promise<void> {
     return this.actions.acknowledge(id, actionId)
+  }
+
+  /**
+   * The versions of the prompt `requestId` in `id` (`PromptVersions`). A fork made from just before a prompt (a rewind
+   * to `before-run`) holds that prompt's next version as its first request: so the versions are the conversation it
+   * was first sent in, then every fork from just before it, oldest first. Read from the fork index alone.
+   */
+  promptVersions(id: string, requestId: string): PromptVersions {
+    const beforeRun = (point: string) => {
+      const parsed = BeforeRunSchema.safeParse((() => { try { return JSON.parse(point) } catch { return undefined } })())
+      return parsed.success ? parsed.data.requestId : undefined
+    }
+    // Asked from a fork about its first request: the original is its parent's prompt it was made before.
+    const fork = this.records.forks.get(id)
+    const first = this.records.get(id)?.snapshot.requests[0]?.id
+    const forkedAt = fork && first === requestId ? beforeRun(fork.point) : undefined
+    const origin = forkedAt && fork ? { conversation: fork.parentId, requestId: forkedAt } : { conversation: id, requestId }
+    const siblings = [...this.records.forks.entries()]
+      .filter(([, each]) => each.parentId === origin.conversation && beforeRun(each.point) === origin.requestId)
+      .sort((left, right) => left[1].createdAt - right[1].createdAt)
+      .map(([child]) => child)
+    const conversations = [origin.conversation, ...siblings]
+    return { conversations, at: Math.max(0, conversations.indexOf(id)) }
   }
 
   recoverRewinds() {

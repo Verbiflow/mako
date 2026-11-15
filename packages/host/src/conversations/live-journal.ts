@@ -621,7 +621,7 @@ export function journalSummary(metadata: string) {
     threadPath,
     createdAt,
     ancestry: control?.ancestry
-      ? { parentId: control.ancestry.parentId, placement: control.ancestry.placement }
+      ? { parentId: control.ancestry.parentId, placement: control.ancestry.placement, point: control.ancestry.point }
       : undefined,
     threadSession: control?.session,
     hasSessionQuestions: Boolean(control?.questions?.length),

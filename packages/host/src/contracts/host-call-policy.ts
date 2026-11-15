@@ -161,6 +161,8 @@ const reads = [
   "mako:mako-footprint",
   /** A conversation's turn media, judged by its records: asked twice, the same answers. */
   "mako:live-turn-media",
+  /** A prompt's versions, from the host's fork index: asked twice, the same answer. */
+  "mako:live-prompt-versions",
   /** fseventsd's health from memory; the restart is never repeated by a client (`mako:file-events-restart`). */
   "mako:file-events-service",
   /** The continues in the cloud this Mac pressed or its list says, from memory. */

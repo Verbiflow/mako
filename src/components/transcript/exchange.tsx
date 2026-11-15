@@ -5,6 +5,7 @@ import { ProposedPlanCard } from "./proposed-plan"
 import { ChangingLabel } from "@/components/ui/changing-label"
 import { Collapse } from "@/components/ui/collapse"
 import { RewindButton, PromptRewindButton } from "./rewind-button"
+import { PromptVersionSwitcher } from "./prompt-versions"
 import { useCopy } from "@/components/ui/use-copy"
 import { completeLiveAnswer } from "@/state/live-history"
 import { copyPromptSelection } from "./prompt-clipboard"
@@ -628,6 +629,7 @@ function Prompt({ message }: { message: ChatMessage }) {
   )
   const { copied, copy } = useCopy(reused.text, reused.records)
   const note = useContext(PromptNoteContext)
+  const { liveId } = useTranscriptSource()
   const compose = () =>
     window.dispatchEvent(
       new CustomEvent("mako:compose", {
@@ -685,6 +687,7 @@ function Prompt({ message }: { message: ChatMessage }) {
         */}
       <div className="mt-1 mr-[34px] flex min-h-7 items-center justify-end gap-0.5 px-0.5 text-label text-muted-foreground">
         {note?.(message.requestId)}
+        {liveId && message.requestId ? <PromptVersionSwitcher conversation={liveId} requestId={message.requestId} /> : null}
         {message.timestamp ? (
           <span className="tabular px-1 text-faint">{formatTime(message.timestamp)}</span>
         ) : null}

@@ -145,8 +145,26 @@ assert.throws(() => MessageAnchorSchema.parse({ index: 1, at: "2026-01-01T00:00:
     const said = (fork: LiveSnapshot) => fork.base?.entries.map((entry) => entry.type === "user" || entry.type === "text" ? entry.text : entry.type)
     assert.deepEqual(said(owner.fork(id, { id: randomUUID(), provider: "claude", point: { kind: "run", requestId: r1 } })), ["first", "one"],
       "an earlier covered answer forks from the live record up to it")
-    assert.deepEqual(said(owner.fork(id, { id: randomUUID(), provider: "claude", point: { kind: "before-run", requestId: r2 } })), ["first", "one"],
-      "a covered prompt's edge is the live record before it")
+    const rewound = owner.fork(id, { id: randomUUID(), provider: "claude", point: { kind: "before-run", requestId: r2 } })
+    assert.deepEqual(said(rewound), ["first", "one"], "a covered prompt's edge is the live record before it")
+    // A prompt edited by a rewind to just before it: its versions are the conversation it was first sent in, then the
+    // fork holding the words written again; read the same from either, and the prompt before it has one version.
+    const again = owner.submit(rewound.session.id, randomUUID(), "second, written again", [], undefined, undefined, undefined, undefined, { pause: "stop" })
+    assert.deepEqual(owner.promptVersions(id, r2), { conversations: [id, rewound.session.id], at: 0 }, "the original holds the first version")
+    assert.deepEqual(owner.promptVersions(rewound.session.id, again.id), { conversations: [id, rewound.session.id], at: 1 }, "the fork the second")
+    assert.deepEqual(owner.promptVersions(id, r1), { conversations: [id], at: 0 }, "a prompt never edited has one version")
+    const later = owner.submit(rewound.session.id, randomUUID(), "a follow-up", [], undefined, undefined, undefined, undefined, { pause: "stop" })
+    assert.deepEqual(owner.promptVersions(rewound.session.id, later.id), { conversations: [rewound.session.id], at: 0 }, "the fork's later prompts aren't versions of anything")
+    // The next host reads the same from the journals' summaries, before reading any in.
+    const next = new LiveConversations({
+      root, appPath: root, driver: () => undefined, emit: () => {},
+      history: async () => ({ ref, entries, start: 0, total: entries.length, hasEarlier: false, checkpoint: 2 }),
+    })
+    try {
+      assert.deepEqual(next.promptVersions(id, r2).conversations, [id, rewound.session.id], "a restart keeps the versions")
+    } finally {
+      await next.stop()
+    }
     const revision = JSON.stringify([ref.revision, ref.bytes, ref.updatedAt])
     const earlier = owner.fork(id, { id: randomUUID(), provider: "claude", point: { kind: "native", index: 1, revision, anchor: { index: 1, id: "a1" } } })
     assert.deepEqual(earlier.base?.entries.map((entry) => entry.id), ["u1", "a1"], "the panel names an earlier covered answer by its native message")
