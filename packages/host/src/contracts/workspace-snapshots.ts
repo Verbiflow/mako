@@ -17,7 +17,7 @@ export type WorkspaceSnapshot = z.infer<typeof WorkspaceSnapshotSchema>
 export const RunSnapshotsSchema = z.object({
   before: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("ready"), snapshot: WorkspaceSnapshotSchema }),
-    z.object({ kind: z.literal("unavailable"), reason: z.string() }),
+    z.object({ kind: z.literal("unavailable"), reason: z.string(), timedOut: z.literal(true).optional() }),
   ]),
   after: z
     .discriminatedUnion("kind", [
