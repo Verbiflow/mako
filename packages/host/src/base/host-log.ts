@@ -1,3 +1,4 @@
+import { z } from "zod"
 import { join } from "node:path"
 import { format } from "node:util"
 import {
@@ -141,6 +142,8 @@ export function hostWarn(scope: string, message: string, fields?: HostLogFields)
   say("warn", scope, message, fields)
 }
 
+const RejectionValueSchema = z.union([z.string(), z.number(), z.boolean(), z.bigint(), z.null(), z.undefined()])
+
 /** Keep each nested failure separately: one formatted AggregateError loses the owners that failed. */
 export function hostFailure(scope: string, message: string, error: Error): void {
   const queue: { value: unknown; path: string }[] = [{ value: error, path: "error" }]
@@ -149,7 +152,8 @@ export function hostFailure(scope: string, message: string, error: Error): void 
   for (let count = 0; queue.length && count < 32; count++) {
     const { value, path } = queue.shift()!
     if (!(value instanceof Error)) {
-      hostWarn(scope, message, { path, error: value === null || ["string", "number", "boolean", "bigint", "undefined"].includes(typeof value) ? String(value) : `Non-Error rejection (${typeof value})` })
+      const primitive = RejectionValueSchema.safeParse(value)
+      hostWarn(scope, message, { path, error: primitive.success ? String(primitive.data) : "Non-Error rejection" })
       continue
     }
     hostWarn(scope, message, { path, error: `${value.name}: ${value.message}`, stack: value.stack, repeated: seen.has(value) || undefined })

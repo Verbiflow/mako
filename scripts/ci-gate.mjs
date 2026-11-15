@@ -20,7 +20,7 @@ export const STEPS = [
   [8, "node scripts/generate-host-inputs.mjs --check"],
   [21, "npm run test:protocol"],
   [1, "npx tsx scripts/test-host-liveness.ts"],
-  [19, "npx tsx scripts/test-host-lifecycle.ts"],
+  [20, "npx tsx scripts/test-host-lifecycle.ts && npx tsx scripts/test-host-log.ts"],
   [0, "npm run test:loop-profile"],
   [34, "npm run test:machine-runtime"],
   [6, "npx tsx scripts/test-cloud-sign-ins.ts"],

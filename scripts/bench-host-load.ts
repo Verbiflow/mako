@@ -34,14 +34,15 @@ import { fakeCloud, type AccountReports } from "./lib/sync-bench-cloud.ts"
  *
  * A shared runner's speed varies by several times between runs, so the limits are calibrated in the same run: a
  * yardstick process beside the host, under the same contention and running none of Mako's code
- * (`host-load-yardstick.mjs`), times its own event loop while the host is probed. It fails (exit 1) only on a clear
- * regression: a health check waiting two seconds past the yardstick's worst wait (the stalled host held its loop for
+ * (`host-load-yardstick.mjs`), times its own event loop while the host is probed. A failed host shutdown always fails
+ * the run. Performance fails (exit 1) only on a clear regression: a health check waiting two seconds past the
+ * yardstick's worst wait (the stalled host held its loop for
  * 3-5 s at a time), one in a hundred
  * waiting past `--times` (30) times the yardstick's one in a hundred (at least 150 ms), one read in a hundred past ten
  * times that, or a probe failing. On one CI runner in one job, at this scale, the yardstick waited 14 ms on one tick in
  * a hundred; the host before #358 waited 3.3 s on one health check in a hundred and 20 s on a read, and the host
  * after it 74 ms and 605 ms: each limit is several times from either. Every number goes to the job's summary
- * (`GITHUB_STEP_SUMMARY`) whether it passes or not; `--report-only` judges without failing. `--cpu-prof <dir>` keeps the host's CPU profile and
+ * (`GITHUB_STEP_SUMMARY`) whether it passes or not; `--report-only` relaxes performance budgets, while an unsuccessful host shutdown still fails. `--cpu-prof <dir>` keeps the host's CPU profile and
  * prints the longest slices it held the loop for, named by the host's own functions; `--out <file>` keeps the report;
  * `--peak-limit-mb` fails on the host's peak resident memory, sampled each second, and on readings too few to say. Memory barely varies between
  * machines: 629 MB on a Mac and 669 MB on a CI runner at this scale, so `checks.yml` sets 1,500;
