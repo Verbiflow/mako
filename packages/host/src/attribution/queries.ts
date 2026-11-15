@@ -603,7 +603,8 @@ export const TURN_FILES = 500
 /** A turn's entries `countingTurn` reads a page. */
 const TURN_PAGE = 128
 /** Entries of the journal's numbering `othersDuring` reads a window, and how many of those in the turn's span it counts at most. */
-const OTHERS_WINDOW = 512
+// Bound decoding work too: each row may carry sixteen candidate writers.
+const OTHERS_WINDOW = 128
 const OTHERS_LIMIT = 10_000
 
 /** Whose a line is in a turn's count: the Thread's, possibly its, or someone else's. */
