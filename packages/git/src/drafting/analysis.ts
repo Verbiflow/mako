@@ -150,19 +150,21 @@ async function summarize(session: ModelSession, chunkBytes: number, input: strin
 async function pooled<T, R>(items: readonly T[], work: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = []
   let next = 0
-  let failed = false
+  // The first failure stops new work, and is thrown once every lane's work under way has settled, so nothing it started
+  // still runs when its caller hears of it (as @mako/host's mapLimit).
+  let failure: { error: unknown } | undefined
   const lane = async () => {
-    while (!failed && next < items.length) {
+    while (!failure && next < items.length) {
       const index = next++
       try {
         results[index] = await work(items[index]!)
       } catch (error) {
-        failed = true
-        throw error
+        failure ??= { error }
       }
     }
   }
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, lane))
+  if (failure) throw failure.error
   return results
 }
 
