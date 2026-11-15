@@ -2472,7 +2472,7 @@ async function restartContinued() {
   const server = { nativeId: "dev-server", title: "Dev server", work: "command" as const, detail: "npm run dev", background: true, state: { kind: "working" as const } }
   let owner = open()
   try {
-    assert.deepEqual(owner.conversationSettings(), { continueAfterRestart: false }, "off unless the person turns it on")
+    assert.deepEqual(owner.conversationSettings(), { continueAfterRestart: true }, "on unless the person turns it off")
     assert.deepEqual(owner.setConversationSettings({ continueAfterRestart: true }), { continueAfterRestart: true })
     assert.deepEqual(events.at(-1), { type: "conversation-settings", settings: { continueAfterRestart: true } }, "every window hears the choice")
     await owner.start("test-provider", root, { conversationId: id })

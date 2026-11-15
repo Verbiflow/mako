@@ -419,6 +419,10 @@ export interface Dependencies {
  */
 export interface LiveAccess {
   stopMark(id: string): number
+  restartAllowed(id: string, requestId: string): boolean
+  restartContinued(id: string, requestId: string): void
+  /** Before opening a crashed turn's continuation, reconcile that exact turn from its native record. False means no send. */
+  reconcileCut(resident: Resident, continues: TurnContinuation | undefined): Promise<boolean>
   dependencies: Dependencies
   /** Compacts the journals this host closes with much of them free. */
   reclaims: JournalReclaims

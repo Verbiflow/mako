@@ -270,10 +270,9 @@ const READ_ENTRIES = 40
 const READ_CHARS = 8_000
 
 /**
- * The Fin's brief a cut turn still has to carry: the brief cut short, or the brief sent again and cut short too, unless
- * its harness said it had it. A digest cut at its hand-off is the same: its reports read as heard, so nothing else would
- * send them. Whether it goes as itself or as a Continue is decided as it's sent, by the harness's transcript
- * (`LiveDispatch`): a bare Continue would leave a Fin that never had it with nothing to do.
+ * The brief/digest identity a cut turn still reconciles against its native transcript (`LiveDispatch`). Task briefs
+ * remain retained context for a new continuation; digests keep their report payload, since an admitted but unheard
+ * notification otherwise has no delivery left. Neither a Stop nor a native receipt is bypassed.
  */
 function cutBrief(op: string | undefined, cut: LiveRequest): string | undefined {
   const root = cut.continues?.brief ?? (cut.digest || (op !== undefined && cut.id === namedUuid(`${op}\nbrief`)) ? cut.id : undefined)
@@ -946,10 +945,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     const snapshot = this.deps.live.snapshot(conversation)
     const crashed = snapshot && crashedChildTurn(snapshot.requests, this.now())
     if (!crashed) return
+    if (snapshot?.control?.transfers.some((transfer) => transfer.continues?.requestId === crashed.id)) return
     const brief = cutBrief(who.op, crashed)
     try {
       this.deps.live.continueTurn(conversation, { requestId: namedUuid(`crashed:${crashed.id}`), reason: "host-crashed", continues: crashed.id, ...(brief ? { brief } : { since: crashed.interruption?.at ?? crashed.createdAt ?? this.now() }), actor: { kind: "service", name: "auto-continue" } })
-      hostLog("agents", "resumed", { ...who, request: crashed.id, crashed: true, ...(brief && { brief: "sent again" }) })
+      hostLog("agents", "resumed", { ...who, request: crashed.id, crashed: true, ...(brief && { brief: "tracked for reconciliation" }) })
     } catch (error) {
       hostWarn("agents", "a turn a crash cut short waits for Continue turn", { ...who, request: crashed.id, error: errorMessage({ error }) })
     }

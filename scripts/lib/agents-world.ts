@@ -31,6 +31,7 @@ import { handOff } from "@mako/host/harnesses/prompt-dispatch"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import { ThreadStore } from "@mako/host/threads/store"
 import { fixtureResume, noCapabilities } from "../fixtures/driver-capabilities.ts"
+import type { NativeTurnReader } from "@mako/host/harnesses/native-turn"
 
 /** The host's jobs without the engine's room watch. */
 class WithoutRoomWatch extends HostJobs {
@@ -105,6 +106,9 @@ export interface WorldOptions {
   /** Whether a conversation's next request waits before it runs (`LiveDependencies.ownerCheck`), as the host's `ownerHold` says. */
   ownerCheck?: ConstructorParameters<typeof LiveConversations>[0]["ownerCheck"]
   script: Script
+  /** Scripted native facts, never a provider/model call. Ordinary fixtures represent a killed, unfinished run. */
+  nativeTurn?: NativeTurnReader | false
+  nativeInspection?: Extract<ProviderLiveDriver["resume"], { kind: "native" }>["inspect"]
   budget?: TreeBudget
   /** Each event the host sends its windows, as it sends it. */
   events?: (event: HostEvent) => void
@@ -587,7 +591,11 @@ export class AgentsWorld {
       planning: { via: "setting", option: "plan", proposal: "Scripted model", feedback: { kind: "next-message", reason: "Scripted model" } },
       backgroundStop: { kind: "ends-with-turn", evidence: "Scripted model" },
       turnRecovery: { kind: "manual", reason: "Scripted model" },
-      resume: fixtureResume(this.options.elsewhere ? { elsewhere: { via: "Scripted model", verified: "Scripted model" } } : {}),
+      resume: fixtureResume({
+        inspect: this.options.nativeInspection ?? (async () => ({ kind: "available", checkpoint: "scripted-record", strategy: "same-session" })),
+        ...this.options.nativeTurn !== false && { readTurn: this.options.nativeTurn ?? (async () => ({ kind: "unfinished" })) },
+        ...this.options.elsewhere && { elsewhere: { via: "Scripted model", verified: "Scripted model" } },
+      }),
       ...((STEERS_AT_STEP.has(harness) || this.options.steering?.[harness]) && {
         steering: {
           kind: "supported" as const,

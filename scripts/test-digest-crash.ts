@@ -4,7 +4,8 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSyn
 import { mock } from "node:test"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { DIGEST_AGAIN } from "@mako/host/contracts/children"
+import { DIGEST_AGAIN, DIGEST_RESTART_HINT } from "@mako/host/contracts/children"
+import { withoutMakoFraming } from "@mako/sessions"
 import { readFinReports } from "@mako/host/contracts/fin-reports"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { AgentsWorld, HARNESSES, TESTED_HARNESSES, type Heard } from "./lib/agents-world.ts"
@@ -12,7 +13,10 @@ import { AgentsWorld, HARNESSES, TESTED_HARNESSES, type Heard } from "./lib/agen
 /**
  * A Fin's question through a real SIGKILL between its hand-off and its receipt (`npm run test:wake-queue`), on each
  * harness as the Apex:
- * - `digest-sent`: the journal says the digest was handed over, and the host dies before the harness has it.
+ * - `digest-prepared`: the journal proves no native submission, so recovery sends the digest.
+ * - `digest-sent`: the journal says submitted, without native receipt proof, so recovery sends only a discovery hint.
+ * - `digest-unreadable`: submitted work has an unreadable native transcript and must use the same hint.
+ * - `digest-hint-failed`: the hint fails before model output; its retry must retain the original receipt identity.
  * - `digest-heard`: the harness has the digest, and the host dies before anything says so.
  * - `steer-sent`: a steer carrying the question is written as under way, on a harness that takes one at a step, and
  *   the host dies before the harness has it.
@@ -20,11 +24,11 @@ import { AgentsWorld, HARNESSES, TESTED_HARNESSES, type Heard } from "./lib/agen
  * - `digest-sent-lookalike`: as `digest-sent`, with a line of the digest already in the transcript: only the digest's
  *   own message id proves it arrived, never its words.
  * - `digest-sent-limit`: as `digest-sent`, and the next host's harness refuses it at a usage limit past the retries: it
- *   rests as a digest, tries every hour, and goes when it can, with what its Fin said since behind it.
- * In every case the Apex hears the question once: from the first host, or from the next, which reads the harness's
- * transcript to see whether it's needed.
+ *   rests as a digest, tries every hour, and sends the discovery hint when it can. Fresh news follows separately.
+ * Prepared delivery goes once. Unknown receipt uses a discovery continuation instead of repeating reports; actual
+ * report payloads retain their once-only checks. A failed discovery continuation must retain that policy on retry.
  */
-const POINTS = ["digest-sent", "digest-heard", "steer-sent", "steer-heard", "digest-sent-lookalike", "digest-sent-limit"] as const
+const POINTS = ["digest-prepared", "digest-sent", "digest-unreadable", "digest-hint-failed", "digest-heard", "steer-sent", "steer-heard", "digest-sent-lookalike", "digest-sent-limit"] as const
 type Point = (typeof POINTS)[number]
 const STEERS = ["claude", "opencode"]
 const QUESTION = "Rerun once more, or hold?"
@@ -60,9 +64,9 @@ async function host(root: string, harness: string, point: Point): Promise<void> 
   mock.method(LiveJournal.prototype, "commit", function (this: LiveJournal, ...args: Parameters<LiveJournal["commit"]>) {
     commit.apply(this, args)
     const [snapshot] = args
-    const handed = snapshot.requests.some((request) => request.digest && request.text.includes(QUESTION) && request.nativeDelivery?.evidence.kind === "submitted")
+    const handed = snapshot.requests.some((request) => request.digest && request.text.includes(QUESTION) && request.nativeDelivery?.evidence.kind === (point === "digest-prepared" ? "prepared" : "submitted"))
     const steer = snapshot.control?.actions?.some((action) => action.input.kind === "steer" && action.input.text.includes(QUESTION))
-    if ((point.startsWith("digest-sent") && handed) || (point === "steer-sent" && steer)) process.kill(process.pid, "SIGKILL")
+    if (((point.startsWith("digest-sent") || point === "digest-prepared" || point === "digest-unreadable" || point === "digest-hint-failed") && handed) || (point === "steer-sent" && steer)) process.kill(process.pid, "SIGKILL")
   })
   let asked!: () => void
   const asking = new Promise<void>((resolve) => { asked = resolve })
@@ -109,13 +113,22 @@ async function next(root: string, point: Point): Promise<void> {
   // SAFETY: this file holds only what `heard` wrote here, each line a `Heard`.
   const lines = (): Heard[] => (existsSync(join(root, "heard.ndjson")) ? readFileSync(join(root, "heard.ndjson"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as Heard) : [])
   let refusing = point === "digest-sent-limit"
+  let failedHint = false
   let refusals = 0
   let now = realNow()
   const clock = point === "digest-sent-limit" ? mock.method(Date, "now", () => now) : undefined
   const world = new AgentsWorld({
     root,
     transcripts: true,
-    script: async () => "ok",
+    script: async (turn) => {
+      if (point === "digest-hint-failed" && turn.conversation === apex && !failedHint) {
+        failedHint = true
+        turn.world.endWith(turn.conversation, { fail: "503 Service unavailable" })
+        return ""
+      }
+      return "ok"
+    },
+    ...(point === "digest-unreadable" && { reading: async () => { throw new Error("Synthetic native history unavailable") } }),
     heard: (line) => appendFileSync(join(root, "heard.ndjson"), `${JSON.stringify(line)}\n`),
     refusePrompt: (id) => {
       if (id !== apex || !refusing) return undefined
@@ -130,6 +143,8 @@ async function next(root: string, point: Point): Promise<void> {
     // Later inputs can repeat this question in pending control context. Only its structured report card is delivery.
     const deliveries = (heard: readonly Heard[]) => heard.filter((line) => line.conversation === apex && readFinReports(line.text).reports.some((report) => report.report === question.id))
     const told = () => deliveries(lines())
+    const uncertain = point.startsWith("digest-sent") || point === "digest-unreadable" || point === "digest-hint-failed"
+    const recovered = () => lines().filter(line => line.conversation === apex && withoutMakoFraming(line.text).includes(DIGEST_RESTART_HINT))
     if (point === "digest-sent-limit") {
       const replay = () => world.live.snapshot(apex)?.requests.find((request) => request.continues?.brief && request.digest)
       await until(`${label}: the replay, a digest, to be refused`, () => replay()?.retry !== undefined)
@@ -146,21 +161,38 @@ async function next(root: string, point: Point): Promise<void> {
       await until(`${label}: its hourly try`, () => refusals > before)
       refusing = false
       await until(`${label}: the digest at rest to be waiting again`, () => world.live.snapshot(apex)?.requests.some((request) => request.digest?.resting === true && request.status === "held") === true)
-      await world.agents.report(world.caller(readFileSync(join(root, "fin"), "utf8")), { status: "done", summary: NEWS, clientKey: "news" })
-      await pause(500)
       now += 3_600_000 + 1
       world.live.wakeDue(now)
-      await until(`${label}: the Apex to hear the question`, () => told().length > 0)
+      await until(`${label}: the Apex to receive the discovery hint`, () => recovered().length > 0)
+      await until(`${label}: the hint turn to complete`, () => world.live.session(apex)?.status === "ready")
+      await world.agents.report(world.caller(readFileSync(join(root, "fin"), "utf8")), { status: "done", summary: NEWS, clientKey: "news" })
       await pause(500)
       now += 3_600_000 + 1
       world.live.wakeDue(now)
       await until(`${label}: the Apex to hear what came after`, () => lines().some((line) => line.conversation === apex && line.text.includes(NEWS)))
     }
-    await until(`${label}: the Apex to hear the question`, () => told().length > 0)
+    await until(`${label}: recovery reaches the Apex`, () => uncertain ? recovered().length > 0 : told().length > 0)
+    if (point === "digest-hint-failed") {
+      const retry = () => world.live.snapshot(apex)?.requests.find(request => request.status === "held" && request.retry)
+      await until(`${label}: failed native discovery has a retry`, () => retry() !== undefined)
+      const original = world.live.snapshot(apex)!.requests.find(request => request.status === "uncertain" && request.digest)!
+      assert.equal(retry()!.continues?.brief, original.id, "retry retains the original receipt decision source")
+      world.live.wakeDue(retry()!.retry!.at)
+      await until(`${label}: discovery retry reaches the Apex`, () => recovered().length === 2)
+    }
     if (point !== "digest-sent-limit") await world.settle(400, 20_000, "ignore")
     else await pause(300)
-    assert.equal(world.store.undeliveredReports().length, 0, `${label}: every report is heard`)
+    assert.equal(world.store.undeliveredReports().length, 0, `${label}: no report remains in the transport's undelivered set`)
     const observed = lines()
+    if (uncertain) {
+      assert.equal(told().length, 0, `${label}: unproved non-receipt never resends report text`)
+      assert.equal(recovered().length, point === "digest-hint-failed" ? 2 : 1, `${label}: only the expected discovery attempts, not a wake loop`)
+      assert.ok(recovered().every(line => !withoutMakoFraming(line.text).includes(QUESTION)))
+      const payload = withoutMakoFraming(recovered()[0]!.text)
+      assert.match(payload, /Continue where you left off/)
+      assert.ok(!payload.includes(QUESTION) && !payload.includes(DIGEST_AGAIN))
+      return
+    }
     const once = (heard: readonly Heard[]) => assert.equal(deliveries(heard).length, 1, `${label}: once, a transcript that shows it saying so`)
     once(observed)
     questionWords(told()[0]!.text, question.id, label)
@@ -181,7 +213,6 @@ async function next(root: string, point: Point): Promise<void> {
       })
       appendFileSync(evidence, `${JSON.stringify({ point, harness: told()[0]!.harness, report: question.id, rawQuestionEntries: mentions.length, payloadQuestionEntries: entries.filter((entry) => !entry.contextOnly).length, reportDeliveries: deliveries(observed).length, plantedDuplicateDeliveries: deliveries(planted).length, duplicateRejected: true, missingQuestionRejected: true, entries })}\n`)
     }
-    if (point.startsWith("digest-sent")) assert.ok(told()[0]!.text.includes(DIGEST_AGAIN), `${label}: framed as maybe repeated`)
   } finally {
     await world.close()
     clock?.mock.restore()
@@ -193,7 +224,9 @@ else {
   const root = mkdtempSync(join(tmpdir(), "mako-digest-crash-"))
   const failures: string[] = []
   try {
-    for (const point of POINTS)
+    const selected = process.env.DIGEST_CRASH_POINT ? POINTS.filter(point => point === process.env.DIGEST_CRASH_POINT) : POINTS
+    assert.ok(selected.length, "requested digest crash point exists")
+    for (const point of selected)
       for (const harness of (point.startsWith("steer") ? STEERS : HARNESSES).filter((harness) => TESTED_HARNESSES.some((tested) => tested === harness))) {
         const dir = join(root, `${point}-${harness}`)
         try {
@@ -211,5 +244,5 @@ else {
     console.error(`${failures.length} failed:\n${failures.join("\n")}`)
     process.exit(1)
   }
-  console.log("digest crash: a question between its hand-off and its receipt reached its Apex through a real SIGKILL, on every harness")
+  console.log("digest crash: prepared work sends once; uncertain/unreadable receipt uses one discovery continuation without report replay, on every harness")
 }
