@@ -209,8 +209,8 @@ const ThreadRow = z.object({ thread: z.string() })
 
 /** Entries `JournalStore.recency` reads a step: a window of the journal's numbering. */
 const RECENT_ENTRIES = 4_096
-/** Calls `JournalStore.recency` reads a step. */
-const RECENT_CALLS = 2_048
+/** Read, decode and fold at most this many calls per step; 2,048 took a whole 9 ms slice on CI x64. */
+const RECENT_CALLS = 512
 
 /** A page of a turn's entries (`JournalStore.entriesOfTurnPage`), and where the next starts; none after the last. */
 export interface TurnEntriesPage {
