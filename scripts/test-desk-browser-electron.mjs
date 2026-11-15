@@ -6,7 +6,7 @@
 // The window is the desktop's and the browser the host's, as in Mako: the
 // host asks over /desktop on its socket (DesktopChannel), and the desktop's
 // DesktopLink makes the window and relays every DevTools message both ways.
-import { app, BrowserWindow } from "electron"
+import { app, BrowserWindow, screen } from "electron"
 import assert from "node:assert/strict"
 import { writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -29,17 +29,31 @@ const watchdog = setTimeout(() => {
   app.exit(2)
 }, 60_000)
 
+/**
+ * The page's size: a desk's 1600 by 1000, or what the screen's work area holds of it. A CI Mac's screen held a 1600 px
+ * window to 1585, and a check that passed only on wide screens checked nothing there; the viewport is asserted against
+ * the size the window took.
+ */
+function deskSize() {
+  const { width, height } = screen.getPrimaryDisplay().workAreaSize
+  return { width: Math.min(1600, width), height: Math.min(1000, height) }
+}
+/** The content size the window took, which the page's viewport must be. */
+let pageSize
+
 // Electron emits ready only after the ESM entry finishes evaluating, so the
 // work runs from a function instead of a top-level await.
 async function hiddenWindow() {
+  const size = deskSize()
   const window = new BrowserWindow({
-    width: 1600,
-    height: 1000,
+    width: size.width,
+    height: size.height,
     show: false,
     enableLargerThanScreen: true,
     webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
   })
-  window.setContentSize(1600, 1000)
+  window.setContentSize(size.width, size.height)
+  pageSize = window.getContentSize()
   await window.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html))
   return window
 }
@@ -83,7 +97,7 @@ async function main() {
   const { navigation: _navigation, ...target } = await run({ action: "open", browser: "mako" })
   const observed = await run({ action: "observe", target, interactiveOnly: true })
   assert.deepEqual([...new Set(observed.nodes.map((node) => node.role))].sort(), ["button", "combobox", "link", "option", "textbox"])
-  assert.deepEqual([observed.viewport.width, observed.viewport.height], [1600, 1000])
+  assert.deepEqual([observed.viewport.width, observed.viewport.height], pageSize, "the viewport is the window's content")
   const button = observed.nodes.find((node) => node.role === "button")
   const input = observed.nodes.find((node) => node.role === "textbox")
   await run({ action: "click", target, at: { ref: button.ref } })
