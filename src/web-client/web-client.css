@@ -1340,35 +1340,6 @@
   .web-trouble-head:disabled {
     @apply cursor-default opacity-100;
   }
-  .web-hops {
-    @apply relative mt-4 flex flex-col gap-2.5 text-label;
-  }
-  /* The chain: a hairline through the marks, as a route through its stops. */
-  .web-hops::before {
-    @apply absolute top-2.5 bottom-2.5 left-[9px] w-px bg-hairline;
-    content: "";
-  }
-  .web-hop {
-    @apply relative flex min-h-5 items-center gap-2.5 text-foreground;
-  }
-  .web-hop-mark {
-    @apply flex size-[19px] shrink-0 items-center justify-center rounded-full bg-raised text-muted-foreground ring-1 ring-hairline;
-  }
-  .web-hop[data-state="failed"] {
-    @apply font-medium;
-  }
-  .web-hop[data-state="failed"] .web-hop-mark {
-    @apply bg-negative text-white ring-0;
-  }
-  .web-hop[data-state="failed"] > :last-child {
-    @apply text-negative;
-  }
-  .web-hop[data-state="unknown"] {
-    @apply text-muted-foreground;
-  }
-  .web-hop[data-state="unknown"] .web-hop-mark {
-    @apply text-faint;
-  }
   .web-causes {
     @apply mt-4 flex flex-col gap-1.5 border-t border-hairline pt-3.5 text-label text-muted-foreground;
   }

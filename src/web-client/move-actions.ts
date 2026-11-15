@@ -56,14 +56,6 @@ function deviceEnd(outcome: ThreadReturnOutcome): MoveEnd {
   return outcome.kind === "back" ? { kind: "done" } : { kind: outcome.kind === "unsettled" ? "unsettled" : "failed", reason: outcome.reason }
 }
 
-/** Asks waiting to ask again, by move: Ask again ends the wait at once. */
-const waits = new Map<string, () => void>()
-
-/** Asks the Mac again now for a move whose answer was lost, under the same ID: never a second move. */
-export function askAgain(move: string): void {
-  waits.get(move)?.()
-}
-
 /**
  * Follows a move's answer to its end, by its ID. The owner's answer ends it. A call the transport lost (the phone slept
  * mid-move, the network went) says nothing of the move, which goes on on the Mac: it's not confirmed, said so, and the
@@ -88,13 +80,12 @@ export async function followAnswer(ask: MoveAsk, call: (attempt: number) => Prom
   }
 }
 
-/** Waits `ms`, or less if Ask again is pressed, and while the page is hidden until it's back. */
-function pause(ms: number, move: string): Promise<void> {
+/** Waits `ms`, and while the page is hidden until it's back. */
+function pause(ms: number): Promise<void> {
   return new Promise((resolve) => {
     const done = () => {
       clearTimeout(timer)
       document.removeEventListener("visibilitychange", shown)
-      waits.delete(move)
       resolve()
     }
     const shown = () => {
@@ -104,6 +95,5 @@ function pause(ms: number, move: string): Promise<void> {
       if (document.visibilityState === "visible") done()
       else document.addEventListener("visibilitychange", shown)
     }, ms)
-    waits.set(move, done)
   })
 }

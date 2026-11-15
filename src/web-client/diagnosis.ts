@@ -4,7 +4,9 @@ import { copyAge } from "@/lib/format"
  * Why something can't be reached from this browser, said as the chain it goes through: this phone, Mako Cloud, the Mac
  * (or the cloud Thread's machine) and the harness on it. Each hop is `ok`, `failed`, or `unknown` (not reached, or not
  * checked yet): what nobody has heard is never painted as off. One headline names the first hop that failed, in the
- * person's words, with what it may be, most likely first, and the facts a bug report needs, never a secret.
+ * person's words, with what it may be, most likely first, and the facts a bug report needs, never a secret. The chain
+ * and the raw reasons are for Copy diagnostics only: the card says the headline, and while Mako retries by itself, that
+ * it does (`retrying`), as T3 Code's connection notice says "Reconnecting…" and that the app keeps retrying.
  */
 
 export type HopState = "ok" | "failed" | "unknown"
@@ -18,8 +20,13 @@ export interface Hop {
 export interface Diagnosis {
   /** What's wrong, in a sentence: "Studio is asleep or offline". */
   headline: string
-  /** What goes with it on its own line: when it was last seen, the harness's own reason. */
+  /** What goes with it on its own line, in Mako's words: when it was last seen, what Mako is doing about it. */
   detail?: string
+  /** The raw reason a hop gave (an error's message, the harness's own words): for Copy diagnostics, never the card. */
+  reason?: string
+  /** Mako is trying again by itself: the card says so, and nothing needs pressing. */
+  retrying?: boolean
+  /** Each hop as it stands: for Copy diagnostics. */
   hops: Hop[]
   /** What it may be, most likely first. */
   causes: string[]
@@ -99,7 +106,7 @@ export function diagnose(input: ReachInput): Diagnosis | undefined {
   return { ...found, ...(detail && { detail }), hops, facts }
 }
 
-type Found = Pick<Diagnosis, "headline" | "detail" | "causes" | "at">
+type Found = Pick<Diagnosis, "headline" | "detail" | "reason" | "retrying" | "causes" | "at">
 
 function locate(input: ReachInput): Found | undefined {
   if (!input.online)
@@ -107,8 +114,10 @@ function locate(input: ReachInput): Found | undefined {
   if (input.cloud === "failed")
     return {
       at: "cloud",
-      headline: "Mako Cloud isn't answering",
-      ...(input.failure && { detail: input.failure.message }),
+      headline: "Reconnecting to Mako Cloud…",
+      detail: "Mako keeps trying by itself. You're seeing the last known state.",
+      retrying: true,
+      ...(input.failure && { reason: input.failure.message }),
       causes: ["It may be a short outage; Mako keeps trying.", `A VPN, firewall or content blocker on ${(input.here ?? "This phone").replace(/^This/, "this")} may be blocking it.`],
     }
   const mac = input.mac
@@ -134,7 +143,7 @@ function locate(input: ReachInput): Found | undefined {
     return {
       at: "machine",
       headline: "This Thread's cloud machine didn't start",
-      ...(input.machine.reason && { detail: input.machine.reason }),
+      ...(input.machine.reason && { reason: input.machine.reason }),
       causes: ["The cloud may be busy; it tries again when you send.", "Its repository may no longer be reachable from the cloud."],
     }
   const harness = input.harness
@@ -143,7 +152,7 @@ function locate(input: ReachInput): Found | undefined {
     return {
       at: "harness",
       headline: `${harness.name}${where} didn't start`,
-      ...(harness.reason && { detail: harness.reason }),
+      ...(harness.reason && { reason: harness.reason }),
       causes: [`${harness.name} may not be signed in${where}.`, `${harness.name} may need an update${where}.`],
     }
   }
@@ -152,10 +161,11 @@ function locate(input: ReachInput): Found | undefined {
 
 const MARK = { ok: "ok", failed: "FAILED", unknown: "not checked" } satisfies Record<HopState, string>
 
-/** Diagnostics as plain text, for a bug report: the headline, each hop, the causes and the facts. No secrets. */
+/** Diagnostics as plain text, for a bug report: the headline, the raw reason, each hop and the facts. No secrets. */
 export function diagnosisText(diagnosis: Diagnosis): string {
   return [
     diagnosis.headline + (diagnosis.detail ? ` · ${diagnosis.detail}` : ""),
+    ...(diagnosis.reason ? [`Reason: ${diagnosis.reason}`] : []),
     "",
     ...diagnosis.hops.map((hop) => `${hop.label}: ${MARK[hop.state]}`),
     "",

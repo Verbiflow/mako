@@ -7,7 +7,7 @@ import { useWebClient } from "./client"
 import { lastSeen } from "./diagnosis"
 import { barFrom, forward, percentWords, sentWords, stepFraction, stepWords, type MoveBar, type MoveWay } from "./move-progress"
 import { dismissMove, listedMove, settledEnd, useMoves, type WebMove } from "./moves"
-import { askAgain, startMove, type MoveMac } from "./move-actions"
+import { startMove, type MoveMac } from "./move-actions"
 import { startContinue } from "./continue-actions"
 import { useForm } from "./route"
 import { Sheet } from "./sheet"
@@ -134,16 +134,14 @@ export function ThreadMove({ thread, session }: { thread: WebThread; session: We
       ? () => void startContinue(client, { thread, session, mac: followed.mac })
       : end?.kind === "failed" && followed
       ? () => void startMove(client, { thread, conversation: session.row.conversation, way: followed.way, mac: followed.mac, handOff: session.row.state === "working" })
-      : end?.kind === "unconfirmed" && followed?.move && !followed.continued
-        ? () => askAgain(followed.move!)
-        : undefined
+      : undefined
   return <MoveStrip thread={thread.id} move={move} onRetry={retry} />
 }
 
 /**
  * A move in a strip: where to, how far in words with a thin bar that only moves forward, the step it's on (what that
  * means a tap away); at its end, the outcome: moved, or the owner's reason with Retry. Not confirmed, it says so and
- * asks again.
+ * asks again by itself, with nothing to press.
  */
 export function MoveStrip({ thread, move, onRetry }: { thread: string; move: ShownMove; onRetry: (() => void) | undefined }) {
   const form = useForm()
@@ -196,12 +194,12 @@ export function MoveStrip({ thread, move, onRetry }: { thread: string; move: Sho
         </div>
       )}
       {detail && open ? <p className="web-move-detail text-label text-muted-foreground">{detail}</p> : null}
-      {problem || unconfirmed ? (
+      {problem ? (
         <div className="web-move-actions">
-          {onRetry && (end?.kind === "failed" || unconfirmed) ? (
-            <button type="button" className={unconfirmed ? "web-quiet-button" : "web-button"} onClick={onRetry}>
+          {onRetry && end?.kind === "failed" ? (
+            <button type="button" className="web-button" onClick={onRetry}>
               <RotateCwIcon className="size-4" />
-              {unconfirmed ? "Ask now" : "Retry"}
+              Retry
             </button>
           ) : null}
           {problem ? (

@@ -6,7 +6,7 @@ import { sendDirect, useAddressee, useThreadAsks, useThreadRollup } from "@/stat
 import type { AgentAsk } from "@mako/host/contracts/agent-asks"
 import { FIN_WORD } from "@mako/host/contracts/agents"
 import { useCrewCardVisible } from "@/state/crew-card-view"
-import { ArrowDownIcon, CheckCheckIcon, CheckIcon, CornerDownLeftIcon, RotateCwIcon, ShieldQuestionIcon, XIcon } from "lucide-react"
+import { ArrowDownIcon, CheckCheckIcon, CheckIcon, CornerDownLeftIcon, ShieldQuestionIcon, XIcon } from "lucide-react"
 import { latestPendingQuestion, activeInputQuestions, type LiveInputQuestion } from "@mako/host/contracts/live-questions"
 import type { LivePermissionRequest, PromptAttachment } from "@mako/host/contracts/providers-acp"
 import { bareCommand, identifyTool } from "@mako/sessions/tool-identity"
@@ -36,7 +36,7 @@ import { ThreadChips } from "./thread-chips"
 import { useSwitching } from "./switching"
 import { answeredWords, dockStatus, statusWords, workingWords, type DockStatus } from "./dock-status"
 import { noteAnswered } from "./install"
-import { dropUnsent, keepUnsent, retryUnconfirmed, retryUnsent, sendMessage, useOutbox, type SendTarget } from "./outbox"
+import { dropUnsent, keepUnsent, retryUnsent, sendMessage, useOutbox, type SendTarget } from "./outbox"
 import { useWaking, wakeThread } from "./wake"
 import { askPreview, useAppStanding } from "./previews"
 import { sendWithReviewNotes } from "./review-notes"
@@ -79,8 +79,6 @@ export interface DockProps {
   /** The reader is up the transcript, away from its newest turn; `jump` takes them back. */
   away: boolean
   jump: () => void
-  /** The link's way back after a drop: asks the gateway to reconnect now. */
-  reconnect: () => void
   /** A send here asks first, offering the Session the person worked in since. */
   elsewhere?: SendElsewhere
   /** Where the words go, in a Thread of more than one Session (`sendsToWords`): "To Cursor · Ship the session picker". */
@@ -97,7 +95,7 @@ export interface SendElsewhere {
   switchTo: (text: string) => void
 }
 
-export function WebDock({ conversation, harness, target, draftKey, away, jump, reconnect, elsewhere, sendsTo }: DockProps) {
+export function WebDock({ conversation, harness, target, draftKey, away, jump, elsewhere, sendsTo }: DockProps) {
   const ask = useAsk()
   // Its own ask goes first. While the crew card is drawn, a Fin's ask lives there; the dock keeps only this Thread's own asks, plus one line when the card has scrolled away.
   const threadId = useAcp((state) => state.conversations[conversation]?.threadId)
@@ -151,7 +149,7 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
   return (
     <div className="web-dock shrink-0" data-asking={ask ? ask.kind : fin ? "fin" : undefined}>
       <div aria-hidden className="web-dock-fade" />
-      <StatusCapsule conversation={conversation} cloudThread={target.cloudThread} asking={Boolean(ask ?? fin)} away={away} jump={jump} reconnect={reconnect} />
+      <StatusCapsule conversation={conversation} cloudThread={target.cloudThread} asking={Boolean(ask ?? fin)} away={away} jump={jump} />
       {ask ? <AskCard key={ask.kind === "question" ? ask.id : ask.kind === "agent" ? ask.ask.id : ask.permission.id} ask={ask} conversation={conversation} harness={harness} answerTyped={answerTyped} /> : null}
       {card !== null ? <FinsNeedYou thread={threadId} compact /> : null}
       {fin ? <FinAskCard key={`${fin.fin}:${fin.ask.id}`} apex={conversation} ask={fin} more={finAsks.length - 1} answerTyped={answerTyped} /> : null}
@@ -603,7 +601,7 @@ function useOnline(): boolean {
  * What's queued behind the turn is the queue's own to say, in the dock just under it. It arrives in 180 ms and leaves in 120; its words come in 80 ms after it. What it
  * last said stays while it leaves, so it never empties before it goes.
  */
-function StatusCapsule({ conversation, cloudThread, asking, away, jump, reconnect }: { conversation: string; cloudThread: string | undefined; asking: boolean; away: boolean; jump: () => void; reconnect: () => void }) {
+function StatusCapsule({ conversation, cloudThread, asking, away, jump }: { conversation: string; cloudThread: string | undefined; asking: boolean; away: boolean; jump: () => void }) {
   const online = useOnline()
   const live = useAcp((state) => {
     const current = activeLiveAcp(state)
@@ -628,31 +626,20 @@ function StatusCapsule({ conversation, cloudThread, asking, away, jump, reconnec
   const key = `${status?.kind}:${status?.kind === "working" ? status.since : status?.kind === "waking" ? status.message : ""}:${app}`
   const [kept, keep] = useState<{ key: string; status: DockStatus | undefined; app?: "running" | "starting" }>({ key, status, app })
   if (shown && kept.key !== key) keep({ key, status, app })
-  const retry = () => {
-    reconnect()
-    void retryUnconfirmed(conversation)
-  }
   let words: ReactNode = null
   if (kept.status?.kind === "working") {
     const since = kept.status.since
     words = <Ticking words={(now) => workingWords(now - since)} />
   } else if (kept.status) words = statusWords(kept.status)
-  const tappable = kept.status?.kind === "offline" || kept.status?.kind === "reconnecting"
   return (
     <div className="web-float" data-away={away || undefined}>
       <div className="web-capsule" data-shown={shown || undefined} data-status={kept.status?.kind} role="status" aria-live="polite">
+        {/* Offline and reconnecting are said, never pressed: the link reconnects and the outbox asks again by itself. */}
         {kept.status ? (
-          tappable ? (
-            <button type="button" className="web-capsule-segment" onClick={retry}>
-              <RotateCwIcon aria-hidden className="size-3.5 shrink-0" />
-              <span className="web-capsule-words">{words}</span>
-            </button>
-          ) : (
-            <span className="web-capsule-segment">
-              {kept.status.kind === "working" || kept.status.kind === "waking" ? <span aria-hidden className="web-capsule-dot" /> : null}
-              <span className="web-capsule-words">{words}</span>
-            </span>
-          )
+          <span className="web-capsule-segment">
+            {kept.status.kind === "working" || kept.status.kind === "waking" ? <span aria-hidden className="web-capsule-dot" /> : null}
+            <span className="web-capsule-words">{words}</span>
+          </span>
         ) : null}
         {kept.app ? (
           <button type="button" className="web-capsule-segment web-capsule-app" data-app={kept.app} onClick={() => askPreview(conversation)}>

@@ -2,7 +2,7 @@ import { createContext, type ReactNode } from "react"
 
 /**
  * What a surface says under a message the person sent, beside its time: the phone's delivery state ("Sending…",
- * "Delivered", "Not confirmed · Retry"), by the message's request ID. The desk says nothing there.
+ * "Delivered", "Not confirmed"), by the message's request ID. The desk says nothing there.
  */
 export const PromptNoteContext = createContext<((requestId: string | undefined) => ReactNode) | null>(null)
 

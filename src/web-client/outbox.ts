@@ -1,7 +1,7 @@
 import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
 import { acpStore } from "@/state/acp-state"
 import { stagePrompt } from "@/state/acp-pending"
-import { replayUnconfirmedPrompts, sendTo, steerTo } from "@/state/acp-queue"
+import { sendTo, steerTo } from "@/state/acp-queue"
 import { commandId, durableAttachments, pendingMessages, settleMessage } from "@/state/message-outbox"
 import { createHook, createStore } from "@/state/store"
 import { whileBusy } from "./busy"
@@ -91,11 +91,6 @@ export async function retryUnsent(target: SendTarget, id: string): Promise<void>
 
 export function dropUnsent(id: string): void {
   outboxStore.set((state) => ({ unsent: state.unsent.filter((each) => each.id !== id) }))
-}
-
-/** Asks the host again now for a conversation's unconfirmed messages, each under its own ID, instead of at the next backoff. */
-export function retryUnconfirmed(conversation: string): Promise<void> {
-  return replayUnconfirmedPrompts([conversation])
 }
 
 /** Whether the renderer's outbox still holds a message by this ID: it will be asked again under it, not put back. */

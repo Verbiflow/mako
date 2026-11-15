@@ -52,9 +52,9 @@ export function workingWords(ms: number): string {
 export function statusWords(status: Exclude<DockStatus, { kind: "working" }>): string {
   switch (status.kind) {
     case "offline":
-      return "Offline · Retry"
+      return "Offline · sends when you're back online"
     case "reconnecting":
-      return "Reconnecting… · Retry"
+      return "Reconnecting…"
     case "stopping":
       return "Stopping…"
     case "waking":
