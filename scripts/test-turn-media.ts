@@ -367,7 +367,8 @@ assert.equal(placeMadeMedia(plain, []), plain, "a turn that made nothing keeps i
   await utimes(edited, new Date(), new Date(Date.now() + 120_000))
   const [changed] = await media.confirm([{ callId: "answer:m2", path: edited, evidence: "embedded", endedAt: Date.now() - 60_000 }])
   assert.equal(changed?.kind, "dropped")
-  assert.equal(keptEmbed(markdownMedia(edited), changed).source?.kind === "file" && keptEmbed(markdownMedia(edited), changed).source.path, edited)
+  const unchanged = keptEmbed(markdownMedia(edited), changed).source
+  assert.equal(unchanged?.kind === "file" ? unchanged.path : undefined, edited)
   // Only a landed answer's absolute media is asked about.
   assert.equal(embeddedCheck(markdownMedia(shot), undefined), undefined, "a streaming answer keeps nothing yet")
   assert.equal(embeddedCheck(markdownMedia("./out/shot.png"), { callId: "answer:m3", at: 1 }), undefined, "a relative path isn't the host's to place")
