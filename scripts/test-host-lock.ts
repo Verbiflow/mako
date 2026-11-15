@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { spawn, spawnSync } from "node:child_process"
-import { EventEmitter } from "node:events"
-import { closeSync, constants, ftruncateSync, openSync, writeFileSync, writeSync } from "node:fs"
+import { EventEmitter, once } from "node:events"
+import { closeSync, constants, existsSync, ftruncateSync, openSync, writeFileSync, writeSync } from "node:fs"
 import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -16,7 +16,100 @@ if (process.argv[2] === "hold") await hold(process.argv[3]!)
 else if (process.argv[2] === "late") late(process.argv[3]!)
 else if (process.argv[2] === "brief") await brief(process.argv[3]!)
 else if (process.argv[2] === "handoff-race") await handoffRace()
+else if (process.argv[2] === "holder-readiness") await holderReadiness(Number(process.argv[3] ?? 1))
+else if (process.argv[2] === "busy-holder") await busyHolder(process.argv[3]!, process.argv[4]!)
 else await check()
+
+/** Holds the real kernel lock but cannot service its identity socket until the parent finishes its first query. */
+async function busyHolder(dataRoot: string, release: string) {
+  const lock = await acquireHostLock(dataRoot)
+  assert.equal(lock.kind, "held")
+  process.send?.("held")
+  const until = Date.now() + 30_000
+  const wait = new Int32Array(new SharedArrayBuffer(4))
+  while (!existsSync(release) && Date.now() < until) Atomics.wait(wait, 0, 0, 10)
+  assert.ok(existsSync(release), "the parent released its busy holder")
+  process.send?.("ready")
+  setInterval(() => { void lock }, 1000)
+}
+
+async function busyIdentity(root: string) {
+  await mkdir(root, { recursive: true })
+  const release = join(root, "continue")
+  const child = spawn(process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), "busy-holder", root, release], { stdio: ["ignore", "ignore", "inherit", "ipc"] })
+  const exited = once(child, "exit")
+  const message = (state: "held" | "ready") => Promise.race([
+    new Promise<void>((done) => child.on("message", (value) => { if (value === state) done() })),
+    exited.then(([code]) => { throw new Error(`Busy holder exited ${code} before ${state}`) }),
+  ])
+  try {
+    await message("held")
+    let probes = 0
+    const lock = await acquireHostLock(root, { brief: { ms: 30_000, listening: async () => {
+      probes++
+      writeFileSync(release, "continue")
+      await message("ready")
+      return true
+    } } })
+    if (lock.kind === "held") await lock.release()
+    assert.deepEqual(lock, { kind: "taken", holder: child.pid }, "the real holder's loop was blocked during lookup, but it answered the later readiness probe")
+    assert.equal(probes, 1)
+    assert.equal(child.exitCode, null, "an identity lookup timing out did not end its holder")
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
+    await exited
+  }
+}
+
+/** Real socket locks: the first identity query was lost, then the host's readiness probe answered. */
+async function holderReadiness(rounds = 1) {
+  if (process.platform === "darwin") return
+  assert.ok(Number.isInteger(rounds) && rounds > 0 && rounds <= 100)
+  const root = await mkdtemp(join(tmpdir(), "mako-holder-readiness-"))
+  try {
+    for (let round = 0; round < rounds; round++) {
+      await busyIdentity(join(root, `${round}-busy`))
+      for (const mode of ["missed", "known", "silent", "gone", "without-probe", "other-purpose"] as const) {
+        const dataRoot = join(root, `${round}-${mode}`)
+        const purpose = mode === "other-purpose" ? "records" : "host"
+        let queries = 0, probes = 0
+        const sockets = new Set<net.Socket>()
+        const holder = net.createServer((socket) => {
+          sockets.add(socket)
+          socket.on("error", () => {})
+          socket.once("close", () => sockets.delete(socket))
+          queries++
+          // Withhold the first answer until its real client timeout, as a busy host's loop can do at startup.
+          if (mode === "known" || (queries > 1 && mode !== "silent")) socket.end(`${process.pid}\n`)
+        })
+        const close = async () => {
+          for (const socket of sockets) socket.destroy()
+          if (holder.listening) await new Promise<void>((done) => holder.close(() => done()))
+        }
+        try {
+          await new Promise<void>((done, reject) => {
+            holder.once("error", reject)
+            holder.listen(hostLockName(dataRoot, process.platform, purpose), done)
+          })
+          const lock = await acquireHostLock(dataRoot, {
+            purpose,
+            ...mode !== "without-probe" && { brief: { ms: 5_000, listening: async () => {
+              probes++
+              if (mode === "gone") await close()
+              return true
+            } } },
+          })
+          if (lock.kind === "held") await lock.release()
+          const named = mode === "missed" || mode === "known" || mode === "other-purpose"
+          assert.deepEqual(lock, { kind: "taken", holder: named ? process.pid : null }, `${mode}: identity after the readiness observation, never admission from a PID`)
+          assert.equal(queries, mode === "known" || mode === "gone" || mode === "without-probe" ? 1 : 2, `${mode}: at most one identity reread`)
+          assert.equal(probes, mode === "without-probe" ? 0 : 1)
+        } finally { await close() }
+      }
+    }
+    console.log(`Socket lock holder readiness: ${rounds} rounds; missed reply recovered, known reply not reread, silent/departed holder stays unknown, no-probe behavior and purpose kept`)
+  } finally { await rm(root, { recursive: true, force: true }) }
+}
 
 /** The kernel refused a bind, but its holder died before the separate identity query answered. */
 async function handoffRace() {
@@ -113,6 +206,7 @@ async function hold(dataRoot: string) {
 
 async function check() {
   await handoffRace()
+  await holderReadiness()
   const root = await mkdtemp(join(tmpdir(), "mako-host-lock-"))
   const dataRoot = join(root, "data")
   try {
