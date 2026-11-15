@@ -26,6 +26,8 @@ import type { MediaChecks, MediaConfirmation } from "./turn-media.js"
 import type { MoveOutcome, WorkspaceMoveAnswer, WorkspaceMoveHold, WorkspaceMoveTarget, WorkspaceMoves } from "./workspace-moves.js"
 import type { PlanBuild, PlanBuildClaim, PlanBuildTarget, PlanBuilds } from "./plan-builds.js"
 import type { AccessChoices } from "./access-choices.js"
+import type { JsonValue } from "./json.js"
+import type { PreferenceName, PreferenceValues } from "./preferences.js"
 import type { FinChoicesReading, FinPolicy, RoleRules } from "./fin-tuning.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
 import type { AppActionOutcome, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProbeView, RoomView, ThreadAppView } from "./thread-app.js"
@@ -232,6 +234,12 @@ export function createMakoBridge(transport: BridgeTransport) {
     chooseAccess: (harness: string, mode: string) => invokeTrustedHost<AccessChoices>("mako:access-choose", harness, mode),
     /** A window's own copy from before the host kept them, handed over once: taken only where no choice is made. */
     adoptAccessChoices: (modes: Record<string, string>) => invokeTrustedHost<AccessChoices>("mako:access-adopt", modes),
+    /** The preferences that follow the person's account (`contracts/preferences.ts`), as they're in effect now. */
+    preferences: () => invokeTrustedHost<PreferenceValues>("mako:preferences"),
+    /** The person changed one here (null: back to Mako's default): in effect at once, and the account's once it takes it. */
+    setPreference: (name: PreferenceName, value: JsonValue | null) => invokeTrustedHost<PreferenceValues>("mako:preference-set", name, value),
+    /** What a window kept before the account kept it, offered once with when it was edited (0: unknown). */
+    offerPreference: (name: PreferenceName, value: JsonValue, at: number) => invokeTrustedHost<PreferenceValues>("mako:preference-offer", name, value, at),
     /** Settings › Fins by harness, and the model the person last used on each (`contracts/fin-tuning.ts`). */
     finDefaults: () => invokeTrustedHost<FinChoicesReading>("mako:fin-defaults"),
     /** Fins on `harness` run on `settings`, or with null, on what the person uses there. */

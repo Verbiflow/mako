@@ -18,6 +18,7 @@ import { github, githubStore } from "@/state/github"
 import { applyWorkspaceMoves, loadWorkspaceMoves, workspaceMoved } from "@/state/workspace-moves"
 import { applyPlanBuilds, loadPlanBuilds } from "@/state/plan-builds"
 import { applyAccessChoices, loadAccessChoices } from "@/state/access-choices"
+import { applyPreferences, loadPreferences } from "@/state/account-preferences"
 import { chatFoldersStore, chatGroupOf, followChatFolders, refreshChatFolders } from "@/state/chat-folders"
 import { applyCheckoutHeads, refollowCheckouts } from "@/state/checkout-heads"
 import { watchThreadSessions } from "@/state/thread-sessions"
@@ -334,6 +335,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "access-choices") {
     applyAccessChoices(event.choices)
+    return
+  }
+  if (event.type === "preferences") {
+    applyPreferences(event.values)
     return
   }
   if (event.type === "workspace-moved") {
@@ -774,6 +779,7 @@ function adoptBoot(boot: BootPayload) {
   void loadWorkspaceMoves().catch(() => {})
   void loadPlanBuilds().catch(() => {})
   void loadAccessChoices().catch(() => {})
+  void loadPreferences().catch(() => {})
   followChatFolders()
   refollowCheckouts()
   if (!boot.archives) void threadLifecycle.load()
@@ -847,6 +853,7 @@ export const actions = {
       void loadGroups()
       void loadPlanBuilds().catch(() => {})
       void loadAccessChoices().catch(() => {})
+      void loadPreferences().catch(() => {})
       if (!boot.archives) void threadLifecycle.load()
     } catch (error) {
       if (epoch !== connectionEpoch) return
