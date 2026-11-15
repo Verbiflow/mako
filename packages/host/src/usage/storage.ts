@@ -142,10 +142,12 @@ export class MakoStorage {
     if (disk.freeBytes >= STORAGE_LOW_BYTES || this.#warned) return
     this.#warned = true
     hostWarn("storage", "the disk is nearly full", { free: disk.freeBytes, total: disk.totalBytes })
+    // Mako frees what it can first (below); the person is asked for the rest, in the one place that shows what's kept.
     this.#deps.emit({
       type: "notice",
       level: "error",
-      message: `This Mac has ${gigabytes(disk.freeBytes)} free. Settings › Storage shows what Mako keeps and frees what it can.`,
+      message: `This Mac has ${gigabytes(disk.freeBytes)} free.`,
+      action: { label: `Free ${gigabytes(STORAGE_LOW_BYTES - disk.freeBytes)}`, does: "open-storage" },
     })
     await this.collect("low disk")
   }

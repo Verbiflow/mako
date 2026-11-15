@@ -378,7 +378,10 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     move: async (id, bring) => (await worktreeMove().carry(id, { lead: true, tell: true, bring })).session.id,
     follow: async (id, told, lead, haste) => { await worktreeMove().carry(id, { lead: false, tell: told, after: lead, ...haste && { haste } }) },
     announce: (state) => emit({ type: "workspace-moves", moves: state }),
-    failed: (_id, message) => emit({ type: "notice", level: "error", message }),
+    failed: (id, message) => {
+      hostWarn("moves", "a workspace move failed", { conversation: id, error: message })
+      emit({ type: "notice", level: "error", message: "The agent didn't move to its own branch; it goes on where it was." })
+    },
   })
   const leaves = new WorktreeLeaves({
     quiet: (id) => live.relocation(id).kind !== "wait",
@@ -387,7 +390,10 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
       await worktrees.remove(path)
     },
     removed: () => worktreesChanged(worktrees, emit),
-    failed: (message) => emit({ type: "notice", level: "error", message }),
+    failed: (message) => {
+      hostWarn("worktrees", "a worktree couldn't be removed", { error: message })
+      emit({ type: "notice", level: "error", message: "A worktree couldn't be removed; it stays where it is." })
+    },
   })
   // The sampler is made from the tools, which tell it when the line for memory moves.
   const sampling: SamplerSlot = {}

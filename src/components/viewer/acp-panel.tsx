@@ -1,4 +1,5 @@
 import { useHarnessIdentity, useHarnessLabels } from "@/lib/harness-label"
+import { quietly } from "@/lib/quiet-retry"
 import { latestPendingQuestion } from "@mako/host/contracts/live-questions"
 import { carriedHistories, promptDelivery, recoveriesByPlace, makoPrompts, turnStops } from "@/state/prompt-delivery"
 import { FailureRow } from "@/components/transcript/failure-row"
@@ -26,7 +27,6 @@ import { useThreads } from "@/state/threads"
 import { asksInSession, descriptorFor } from "@/state/descriptors"
 import { usePlanDecision } from "@/state/plan-mode"
 import { viewerHandedOff } from "@/state/thread-viewing"
-import { toast } from "sonner"
 import type { LivePermissionRequest, LiveRequest } from "@/lib/types"
 import { harnessLabel } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
@@ -171,9 +171,10 @@ function Blocks({ starting = false, continued = false, compact = false }: { star
         : async () => {
             setLoadingEarlier(true)
             try {
-              await loadEarlierLive(sessionId)
+              await quietly("earlier turns", () => loadEarlierLive(sessionId))
             } catch (error) {
-              toast.error(error instanceof Error ? error.message : String(error))
+              // Still offered: reaching the top asks again. The host's words go to its log.
+              console.warn(`Earlier turns didn't load ${JSON.stringify({ error: error instanceof Error ? error.message : String(error) })}`)
             } finally {
               setLoadingEarlier(false)
             }

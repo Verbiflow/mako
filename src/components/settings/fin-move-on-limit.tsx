@@ -1,4 +1,4 @@
-import { toast } from "sonner"
+import { notSaved } from "@/lib/quiet-retry"
 import { ListCard, SettingRow, Toggle } from "@/components/ui/kit"
 import { chooseMoveOnLimit, useFinDefaults } from "@/state/fin-defaults"
 
@@ -23,7 +23,7 @@ export function FinMoveOnLimit() {
             label={TITLE}
             on={on}
             disabled={!reading}
-            onChange={() => void chooseMoveOnLimit(!on).catch((error: Error) => toast.error(error.message || "That choice couldn't be saved. Try again."))}
+            onChange={() => void chooseMoveOnLimit(!on).catch((error: Error) => notSaved("That choice", { error }))}
           />
         </SettingRow>
       </ListCard>

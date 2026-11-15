@@ -191,11 +191,8 @@ export class LiveRecords {
           journal.close()
         }
       } catch (error) {
-        dependencies.emit({
-          type: "notice",
-          level: "error",
-          message: `Saved conversation ${id} could not be opened. Its journal has been preserved for recovery. ${errorMessage({ error })}`,
-        })
+        // Kept for recovery; nothing the person can do with it here.
+        hostWarn("live", "a saved conversation couldn't be opened; its journal is kept", { conversation: id, error: errorMessage({ error }) })
       }
     }
     return journals

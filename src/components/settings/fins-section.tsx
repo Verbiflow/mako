@@ -1,9 +1,9 @@
 import { useEffect, type ReactNode } from "react"
+import { notSaved } from "@/lib/quiet-retry"
 import { targetLine } from "./agent-reads"
 import { FinRules } from "./fin-rules"
 import { FinMoveOnLimit } from "./fin-move-on-limit"
 import { RoleRules } from "./role-rules"
-import { toast } from "sonner"
 import { AlertCircleIcon, CheckIcon, ChevronDownIcon, MinusIcon, PlusIcon, ZapIcon } from "lucide-react"
 import type { ResolvedSetting, SessionSettings } from "@mako/sessions/settings"
 import { cloudWords, FIN_CEILING, FIN_CEILING_MAX, FIN_LIMIT, FIN_LIMIT_MAX, finTuningLine, finTuningWords, resolveFinTuning, type FinTuningSource } from "@mako/host/contracts/fin-tuning"
@@ -72,7 +72,7 @@ function FinLimit() {
   const own = reading.limit
   const atOnce = own ?? capacity?.atOnce ?? FIN_LIMIT
   const ceiling = reading.ceiling ?? FIN_CEILING
-  const fail = (error: Error) => toast.error(error.message || "That number couldn't be saved. Try again.")
+  const fail = (error: Error) => notSaved("That number", { error })
   const saveLimit = (next: number | null) => void setFinLimit(next).catch(fail)
   const saveCeiling = (next: number) => void setFinCeiling(next).catch(fail)
   const based = capacity ? [capacity.pressure ?? capacity.why, ...capacity.measured ? [] : ["defaults so far"]].join(" · ") : undefined
@@ -189,7 +189,7 @@ function FinRow({ harness, profile }: { harness: string; profile: HarnessProfile
 
 function FinPicker({ harness, profile, chosen }: { harness: string; profile: HarnessProfile; chosen: SessionSettings | undefined }) {
   const save = (settings: SessionSettings | null) =>
-    void chooseFinDefault(harness, settings).catch((error: Error) => toast.error(error.message || "That choice couldn't be saved. Try again."))
+    void chooseFinDefault(harness, settings).catch((error: Error) => notSaved("That choice", { error }))
   const { resolved, model, options } = harnessDefaults(harness, profile, chosen ? { source: "saved", settings: chosen } : undefined)
   const choice: ModelChoice = {
     harness,

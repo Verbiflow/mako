@@ -192,7 +192,11 @@ export type HostEventBody =
   | { type: "cloud-account-event"; seq: number; at: string; event: AccountDeviceEvent; mine: boolean }
   /** A runtime's installed or public version was read, or an update moved; window-wide. */
   | { type: "runtime-updates"; updates: HarnessUpdates }
-  | { type: "notice"; level: "info" | "success" | "error"; message: string }
+  /**
+   * Something the person should know or do, as a toast. Every notice that isn't news either does one thing (`action`:
+   * what fixes it) or isn't sent at all: what Mako handled itself, or nobody can act on, is said in the host's log.
+   */
+  | { type: "notice"; level: "info" | "success" | "error"; message: string; action?: NoticeAction }
   /** The file open in the viewer changed on disk (any writer). */
   | { type: "file-changed"; path: string }
   /** A file in the plugins directory changed; the renderer should re-read them. */
@@ -262,6 +266,9 @@ export type HostEventBody =
  * untagged event would be applied to whichever conversation happens to be on
  * screen. Absent only on window-wide events like `plugins-changed`.
  */
+/** The one thing a notice's button does: open Settings › Storage or Updates, or restart Mako. */
+export type NoticeAction = { label: string; does: "open-storage" | "open-updates" | "restart" }
+
 export type HostEvent = HostEventBody & { tabId?: string }
 
 /** Everything the renderer needs to draw one tab from cold. */

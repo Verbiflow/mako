@@ -1151,7 +1151,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     grants: () => late.agentServers,
     browser: () => late.controlService,
     journal: (conversationId) => join(logsRoot(environment.dataRoot), "local-control", `${conversationId}.jsonl`),
-    notice: (message) => emit({ type: "notice", level: "error", message }),
+    notice: (message) => hostWarn("control", "a control session's notice", { message }),
   })
   const opened = await openConversations({
     elsewhere: (id) => late.cloudConversations?.has(id) ?? false,

@@ -1,5 +1,5 @@
 import { useRef, useState, type KeyboardEvent } from "react"
-import { toast } from "sonner"
+import { notSaved } from "@/lib/quiet-retry"
 import { ChevronDownIcon } from "lucide-react"
 import { ROLE_RULES_CHARS, roleRulesPreview, type FinPolicy, type FinTarget } from "@mako/host/contracts/fin-tuning"
 import { FIELD } from "@/components/ui/kit"
@@ -39,7 +39,7 @@ function RoleField({ role, label, description, placeholder, reads, policy, targe
     if (next === saved) return
     void saveRoleRules(role, next).catch((error: Error) => {
       setText(saved)
-      toast.error(error.message || "Your rules couldn't be saved. Try again.")
+      notSaved("Your rules", { error })
     })
   }
   const keys = (event: KeyboardEvent<HTMLTextAreaElement>) => {

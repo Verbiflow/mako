@@ -2361,12 +2361,9 @@ export class LiveConversations {
     if (resident.storageFault) return
     resident.storageFault = true
     const error = errorMessage(boundary)
-    this.dependencies.emit({
-      type: "notice",
-      level: "error",
-      message: `Mako couldn't save this conversation, so it stopped the agent's turn. What isn't saved yet is kept until Mako can write it. ${error}`,
-    })
+    // Its row says so in the conversation (`not-saved`), and saving goes again by itself; a full disk has its own notice.
     const requestId = resident.snapshot.requests.find((request) => request.status === "dispatching")?.id
+    hostWarn("live", "a conversation couldn't be saved; its turn stops", { request: requestId, error })
     if (resident.driver && requestId && resident.stopping !== requestId) {
       resident.stopping = requestId
       resident.stoppingFor = STOPPED_FOR["not-saved"]

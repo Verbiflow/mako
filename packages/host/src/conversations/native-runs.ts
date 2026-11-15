@@ -303,11 +303,6 @@ export class NativeRuns {
       if (prepared.dropped.length) {
         const named = prepared.dropped.join(", ")
         hostWarn("native", "settings dropped", { harness, key, dropped: named })
-        this.emit({
-          type: "notice",
-          level: "info",
-          message: `This ${harness} reply runs without ${named}: its command line cannot carry ${prepared.dropped.length === 1 ? "it" : "them"}.`,
-        })
       }
       ;({ command, args, env: commandEnv } = await build(prepared.options, env))
       assertPreparation()

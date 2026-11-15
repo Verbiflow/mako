@@ -1,5 +1,5 @@
 import { useState, type KeyboardEvent } from "react"
-import { toast } from "sonner"
+import { notSaved } from "@/lib/quiet-retry"
 import { ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronDownIcon, PlusIcon, XIcon } from "lucide-react"
 import type { ResolvedSetting, SessionSettings } from "@mako/sessions/settings"
 import { FIN_RULE_CHARS, FIN_RULES_LIMIT, finPolicyNote, finTuningLine, finTuningWords, type FinPolicy, type FinRule, type FinTarget } from "@mako/host/contracts/fin-tuning"
@@ -31,7 +31,7 @@ export function FinRules({ order, profiles }: { order: readonly string[]; profil
   const [draft, setDraft] = useState<FinRule | undefined>(undefined)
   const signedIn = order.filter((harness) => profiles[harness]?.available)
   if (!policy) return null
-  const save = (next: FinPolicy) => void saveFinPolicy(next).catch((error: Error) => toast.error(error.message || "Your rules couldn't be saved. Try again."))
+  const save = (next: FinPolicy) => void saveFinPolicy(next).catch((error: Error) => notSaved("Your rules", { error }))
   const setRule = (index: number, rule: FinRule) => save({ ...policy, rules: policy.rules.map((each, at) => (at === index ? rule : each)) })
   const move = (index: number, by: number) => {
     const rules = [...policy.rules]
