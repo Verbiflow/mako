@@ -233,7 +233,7 @@ async function countATurn(): Promise<void> {
     assert.deepEqual(granular.value, atOnce.value, "the one-step yardstick counts exactly the same work")
     const sliced = await longestHold(() => inSlices(countingTurn(view, "T1", "R1", "settled", 0)))
     assert.equal(atOnce.value.own.files, FILES, "every file the turn wrote is counted")
-    assert.ok(atOnce.value.others.files > 0, "and the other Thread's writes meanwhile")
+    assert.deepEqual(atOnce.value.others, { files: 50, added: OTHERS * 2, removed: OTHERS }, "every competing write is counted across page boundaries")
     assert.deepEqual(sliced.value, atOnce.value, "counted in slices, the turn counts exactly as at once")
     atOnceHolds.push(atOnce.holdMs)
     slicedHolds.push(sliced.holdMs)
@@ -367,6 +367,7 @@ async function workBeginsMeanwhile(): Promise<void> {
 }
 
 try {
+  console.log(`attribution holds runtime: ${process.platform}/${process.arch}, Node ${process.version}, slice budget ${SLICE_BUDGET_MS} ms`)
   await observesDeferredWork()
   await workBeginsMeanwhile()
   await countATurn()
