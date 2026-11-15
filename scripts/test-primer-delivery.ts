@@ -157,11 +157,11 @@ const cases: Array<[string, () => Promise<void>]> = [
 
 cases.push(["another binding", async () => {
   const note = makoNote({ cloudMachine: false, launchedWith: () => undefined, controlLine: () => undefined, ownSlot: () => false, notices: () => [] })
-  const standing = note("binding-a", "conversation", { role: "thread" }).standing
+  const standing = (await note("binding-a", "conversation", { role: "thread" })).standing
   const heard = standingLines(undefined, { bindingId: "binding-a", generation: 1 }, standing)
   assert.ok(carries(heard.lines.join("\n")), "the first binding hears the primer")
   assert.equal(standingLines(heard.said, { bindingId: "binding-a", generation: 1 }, standing).lines.length, 0, "and not again")
-  const replaced = note("binding-b", "conversation", { role: "thread" }).standing
+  const replaced = (await note("binding-b", "conversation", { role: "thread" })).standing
   assert.ok(carries(standingLines(heard.said, { bindingId: "binding-b", generation: 1 }, replaced).lines.join("\n")), "the binding that replaces it hears it whole")
 }])
 

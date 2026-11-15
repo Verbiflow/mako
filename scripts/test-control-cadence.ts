@@ -39,7 +39,7 @@ interface Standing {
 }
 
 /** `idleMs`: the process hibernates once idle that long, and the next message resumes its session in a new one. */
-function cadenceHost(options: { idleMs?: number } = {}) {
+function cadenceHost(options: { idleMs?: number; beforeInstructions?(): Promise<void> } = {}) {
   const root = mkdtempSync(join(tmpdir(), "mako-control-cadence-"))
   const id = randomUUID()
   const sent: string[] = []
@@ -91,7 +91,10 @@ function cadenceHost(options: { idleMs?: number } = {}) {
     driver: () => driver,
     history: async () => null,
     emit: () => {},
-    controlInstructions: () => ({ standing: { ...standing }, notices: notices.splice(0) }),
+    controlInstructions: async () => {
+      await options.beforeInstructions?.()
+      return { standing: { ...standing }, notices: notices.splice(0) }
+    },
     ...options.idleMs !== undefined && {
       providerIdleMs: options.idleMs,
       resumeVerdict: async () => ({ kind: "resumable" as const, record: "same" as const }),
@@ -103,6 +106,7 @@ function cadenceHost(options: { idleMs?: number } = {}) {
     owner,
     standing,
     notices,
+    sent: () => [...sent],
     starts: () => starts,
     hibernated: () => owner.snapshot(id)?.session.connection === "hibernated",
     start: () => owner.start("test-provider", root, { conversationId: id }),
@@ -193,7 +197,35 @@ async function afterARelaunch() {
   }
 }
 
+async function awaitedNotice() {
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const host = cadenceHost({ beforeInstructions: () => { entered.resolve(); return release.promise } })
+  try {
+    await host.start()
+    host.notices.push("Returned with a conflict.")
+    const sent = host.send("After return")
+    await entered.promise
+    assert.deepEqual(host.sent(), [], "the provider is not called while a notice's receipt is pending")
+    release.resolve()
+    assert.equal(await sent, noted([CONTROL, ENVIRONMENT, MEDIA, "Returned with a conflict."], "After return"))
+    assert.equal(await host.send("Next"), "Next", "the acknowledged notice goes once")
+  } finally { release.resolve(); await host.cleanup() }
+
+  let fail = true
+  const failing = cadenceHost({ beforeInstructions: async () => { if (fail) throw false } })
+  try {
+    await failing.start()
+    failing.notices.push("Returned with a conflict.")
+    failing.owner.submit(failing.id, randomUUID(), "Receipt failed")
+    await waitFor(() => failing.owner.snapshot(failing.id)?.session.status === "failed", "the notice failure was never reported")
+    assert.deepEqual(failing.sent(), [], "a failed acknowledgement cannot dispatch the prompt")
+    fail = false
+    assert.equal(await failing.send("Retry"), noted([CONTROL, ENVIRONMENT, MEDIA, "Returned with a conflict."], "Retry"))
+  } finally { await failing.cleanup() }
+}
+
 theRule()
 await throughTheConversation()
 await afterARelaunch()
+await awaitedNotice()
 console.log("control cadence: the note goes whole once per process, then only what changed; whole again after a compaction, a rewind, a failed send or a relaunch; notices once each")

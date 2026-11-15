@@ -13,7 +13,7 @@ export interface MakoNoteSources {
   controlLine(bindingId: string): string | undefined
   /** Whether the conversation's harness takes Mako's blocks in a slot of its own (`makoInstructions`); undefined before it has one. */
   ownSlot(conversationId: string): boolean | undefined
-  notices(conversationId: string): string[]
+  notices(conversationId: string): string[] | Promise<string[]>
 }
 
 /**
@@ -23,7 +23,8 @@ export interface MakoNoteSources {
  * (`standingLines`): whole to a process that hasn't heard them, then as they change.
  */
 export function makoNote(sources: MakoNoteSources) {
-  return (bindingId: string, conversationId: string, thread: Pick<RoutedThread, "role">): ControlInstructions => {
+  return async (bindingId: string, conversationId: string, thread: Pick<RoutedThread, "role">): Promise<ControlInstructions> => {
+    const notices = await sources.notices(conversationId)
     const launched = sources.launchedWith(conversationId)
     const blocks = sources.ownSlot(conversationId) === false ? primerBlocks({ role: thread.role, noRecipe: launched?.recipe?.kind === "none", computer: true }) : []
     return {
@@ -33,7 +34,7 @@ export function makoNote(sources: MakoNoteSources) {
         environment: launched && threadEnvironmentInstructions(launched, sources.cloudMachine ? "cloud" : "local"),
         ...Object.fromEntries(blocks.map((block) => [block.id, block.text])),
       },
-      notices: sources.notices(conversationId),
+      notices,
     }
   }
 }

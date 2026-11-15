@@ -5,10 +5,14 @@ import { createHash, randomUUID } from "node:crypto"
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import fs from "node:fs/promises"
+import { syncBuiltinESMExports } from "node:module"
+import { mock } from "node:test"
 import { Git } from "@mako/git"
 import type { ReturnDeparture, ReturnState } from "@mako/protocol/moves"
 import type { ReceivedRecords } from "@mako/sessions/record-sync"
 import { CloudReturns, type CloudReturnsOptions } from "@mako/host/conversations/cloud-returns"
+import { makoNote } from "@mako/host/conversations/mako-note"
 import { CloudFollow } from "@mako/host/conversations/cloud-follow"
 import { CloudWorktrees } from "@mako/host/conversations/cloud-worktrees"
 import { CloudArchives } from "@mako/host/conversations/cloud-archives"
@@ -352,15 +356,37 @@ try {
     assert.equal(readFileSync(join(s.checkout, "c.txt"), "utf8"), "the person's own\n", "the person's new file stays")
     assert.equal(readFileSync(join(s.checkout, "b.txt"), "utf8"), "left by the agent\n", "the cloud's file came")
     assert.match(readFileSync(join(s.checkout, "a.txt"), "utf8"), /<<<<<<< mako\/merge\/this-mac\none, changed by the person here\n=======\none, changed in the cloud\n>>>>>>> mako\/merge\/cloud/)
-    const told = s.returns.notices(s.conversation)
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), written = Promise.withResolvers<void>()
+    const rename = fs.rename
+    const held = mock.method(fs, "rename", async (from: Parameters<typeof fs.rename>[0], to: Parameters<typeof fs.rename>[1]) => {
+      if (String(to).startsWith(join(s.folder, "returns")) && JSON.parse(await fs.readFile(from, "utf8")).told?.includes(s.conversation)) {
+        entered.resolve()
+        await release.promise
+        try { return await rename(from, to) } finally { written.resolve() }
+      }
+      return rename(from, to)
+    })
+    syncBuiltinESMExports()
+    const note = makoNote({ cloudMachine: false, launchedWith: () => undefined, controlLine: () => undefined, ownSlot: () => true, notices: id => s.returns.notices(id) })
+    const delivery = note("fixture-binding", s.conversation, { role: "thread" }).then(instructions => instructions.notices)
+    let delivered = false
+    void delivery.then(() => { delivered = true })
+    try {
+      await entered.promise
+      assert.equal(delivered, false, "the notice cannot be delivered before its durable acknowledgement")
+      assert.deepEqual(await s.returns.notices("unrelated"), [], "a pending notice does not hold unrelated conversations")
+    } finally {
+      release.resolve(); await written.promise
+      held.mock.restore(); syncBuiltinESMExports()
+    }
+    const told = await delivery
     assert.equal(told.length, 1)
     assert.match(told[0] ?? "", /changed c\.txt|kept their changes beside yours: c\.txt/)
     assert.match(told[0] ?? "", /both changed a\.txt: it holds Git's conflict markers/)
-    assert.deepEqual(s.returns.notices(s.conversation), [], "told once")
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.deepEqual(await s.returns.notices(s.conversation), [], "told once")
     const restarted = s.fresh()
     await restarted.settle()
-    assert.deepEqual(restarted.notices(s.conversation), [], "and not again after a restart")
+    assert.deepEqual(await restarted.notices(s.conversation), [], "and not again after an immediate restart")
   }
 
   // Records that can't come down ahead: the restore pulls them all, and the Thread comes back the same.
@@ -506,7 +532,7 @@ try {
       assert.equal(readFileSync(join(victim, "untracked.txt"), "utf8"), "the person's, untracked\n", "a repository it never sent isn't touched")
       assert.deepEqual([sh(victim, "rev-parse", "HEAD"), sh(victim, "status", "--short")], victimBefore)
       assert.equal(s.files()[0], "one, changed in the cloud\n", "the Thread's own worktree came")
-      const told = s.returns.notices(s.conversation)
+      const told = await s.returns.notices(s.conversation)
       assert.match(told[0] ?? "", /never came from this Mac weren't put in place/)
       assert.match(told[0] ?? "", /couldn't be written back on the user's Mac: .*state\.json/)
     } finally {
@@ -534,12 +560,33 @@ try {
     const tab = s.tab("claude", "n-2")
     writeFileSync(join(s.checkout, "c.txt"), "the person's own\n")
     assert.equal((await s.returns.bringBack(s.conversation, move())).kind, "back")
-    assert.equal(s.returns.notices(s.conversation).length, 1)
-    assert.equal(s.returns.notices(tab.conversationId ?? "").length, 1)
-    await new Promise((resolve) => setTimeout(resolve, 200))
+    const [first, second, duplicate] = await Promise.all([
+      s.returns.notices(s.conversation), s.returns.notices(tab.conversationId ?? ""), s.returns.notices(s.conversation),
+    ])
+    assert.equal(first.length, 1); assert.equal(second.length, 1)
+    assert.deepEqual(duplicate, [], "a concurrent duplicate caller cannot consume the notice twice")
     const restarted = s.fresh()
     await restarted.settle()
-    assert.deepEqual([restarted.notices(s.conversation), restarted.notices(tab.conversationId ?? "")], [[], []], "neither is told again")
+    assert.deepEqual(await Promise.all([restarted.notices(s.conversation), restarted.notices(tab.conversationId ?? "")]), [[], []], "neither is told again")
+  }
+
+  // A failed acknowledgement never consumes the notice or lets its prompt go, and a later attempt can still persist it.
+  {
+    const s = setup("notice-write-failed")
+    await s.sentNow()
+    writeFileSync(join(s.checkout, "c.txt"), "the person's own\n")
+    assert.equal((await s.returns.bringBack(s.conversation, move())).kind, "back")
+    const rename = fs.rename
+    const failed = mock.method(fs, "rename", async (from: Parameters<typeof fs.rename>[0], to: Parameters<typeof fs.rename>[1]) => {
+      if (String(to).startsWith(join(s.folder, "returns"))) throw false
+      return rename(from, to)
+    })
+    syncBuiltinESMExports()
+    try { await assert.rejects(s.returns.notices(s.conversation), error => error === false) }
+    finally { failed.mock.restore(); syncBuiltinESMExports() }
+    assert.equal((await s.returns.notices(s.conversation)).length, 1, "a failed write retains the unheard notice")
+    const restarted = s.fresh(); await restarted.settle()
+    assert.deepEqual(await restarted.notices(s.conversation), [], "the successful retry, not elapsed time, prevents restart replay")
   }
 
   // The machine can't pack (a turn runs there): cancelled, the Thread runs in the cloud, and the machine keeps it.
