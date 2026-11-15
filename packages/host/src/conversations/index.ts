@@ -14,6 +14,7 @@ import type { HostEnvironment } from "../base/host-environment.js"
 import type { HostMethods } from "../transport/index.js"
 import type { MethodTable } from "../base/methods.js"
 import { hostWarn } from "../base/host-log.js"
+import { WorktreeThreadState } from "./worktree-thread-state.js"
 import { LiveConversations } from "./live-conversations.js"
 import type { Dependencies as LiveDependencies } from "./live-runtime.js"
 import { NativeRequests } from "./native-requests.js"
@@ -112,6 +113,7 @@ export { ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, regis
 /** Live turns and their journals, headless native runs, and who owns each conversation. */
 export interface Conversations {
   live: LiveConversations
+  finishedThreadAt(thread: import("../contracts/thread-identity.js").ThreadId): number | undefined
   /** Headless native runs, one writer per native session. */
   runs: NativeRuns
   /** This Thread continues on that harness: the one way there, whoever asks. */
@@ -145,6 +147,8 @@ export interface ConversationsDeps {
   environment: HostEnvironment
   /** The host has begun to stop: what it takes up as it starts ends at its next step, left for the next host. */
   stopping?(): boolean
+  /** Remote routing owns continued conversations, even after the local journal closes. */
+  elsewhere?(conversation: string): boolean
   git: Git
   threads: Threads
   harnesses: Harnesses
@@ -209,7 +213,7 @@ export interface ConversationsDeps {
 
 export async function openConversations(deps: ConversationsDeps): Promise<Conversations> {
   const { environment, threads, harnesses, workspaces, emit } = deps
-  const { catalog, memory } = threads
+  const { catalog, memory, store } = threads
   const { host } = harnesses
   const dataRoot = environment.dataRoot
   // `live` is made below; the reader asks it only once a read arrives.
@@ -454,8 +458,15 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     external: (path) => catalog.activity()[path]?.status ?? null,
     resumeRefusal: () => memory?.resumeRefusal()?.message ?? null,
   })
+  const retirementThreads = store ? new WorktreeThreadState({
+    store, dataRoot, memory,
+    elsewhere: (id) => deps.elsewhere?.(id) ?? false,
+    fin: (thread) => agents?.finishedThreadAt(thread),
+    busy: (id) => live.atWork(id) || Boolean(live.held(id)?.requests.some(request => request.status === "queued" || request.status === "held" || request.status === "dispatching")),
+  }) : undefined
   return {
     live,
+    finishedThreadAt: (thread) => retirementThreads?.finished(thread),
     continueOn,
     runs,
     ...(agents && { agents }),
