@@ -1,7 +1,7 @@
+import "./lib/scratch-git.mjs"
 // What another device may ask of a host through the gateway: only the calls its clients send (`GATEWAY_ALLOWED`), and
 // of those, any that names a path reads only the Thread's folders, after symlinks, never a folder of keys, through the
 // descriptor it verified. Each path-reading channel is tried with a key and a `.png` symlink to it.
-import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
 import { randomUUID } from "node:crypto"
