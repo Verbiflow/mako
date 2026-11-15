@@ -40,7 +40,7 @@ try {
   assert.equal(originalSummary[0]?.pull?.head, oldHead)
   assert.equal(originalSummary[0]?.pull?.checks, "passed")
   // Delay file events deliberately: the very next summary must compare live HEAD, even with both caches warm.
-  service.closeSummaries()
+  await service.closeSummaries()
   await writeFile(join(made.path, "next"), "Next\n"); command(made.path, "add", "next"); command(made.path, "commit", "-qm", "Next")
   const head = command(made.path, "rev-parse", "HEAD"); await writeFile(catalog, JSON.stringify(pull(head, "FAILURE")))
   await promisify(execFile)("git", ["push", "-q", "origin", `HEAD:refs/heads/${made.branch}`], { cwd: made.path })
@@ -74,5 +74,5 @@ try {
   console.log("GitHub refs: stale-head per-number fallback and actual next-summary HEAD refresh, shell push and in-place remote-ref invalidation passed")
 } finally {
   if (previous === undefined) delete process.env.GH_PATH; else process.env.GH_PATH = previous
-  service.closeSummaries(); await service.settled(); store.close(); await Promise.allSettled([host.stop(), git.close()]); await rm(root, { recursive: true, force: true })
+  await service.closeSummaries(); await service.settled(); store.close(); await Promise.allSettled([host.stop(), git.close()]); await rm(root, { recursive: true, force: true })
 }

@@ -161,7 +161,7 @@ export class AgentHost implements GitTab {
       if (this.workspaceWatcherGeneration !== generation) return
       this.workspaceGit.noteChange(undefined, "this checkout's index or HEAD changed in its Git folder")
       if (this.foreground) this.scheduleGitRefresh(generation)
-    })
+    }, this.watch)
   }
 
   private scheduleGitRefresh(generation: number): void {

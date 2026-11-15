@@ -53,7 +53,7 @@ try {
 } finally {
   if (previous === undefined) delete process.env.GH_PATH
   else process.env.GH_PATH = previous
-  worktrees.closeSummaries()
+  await worktrees.closeSummaries()
   await worktrees.settled()
   store.close()
   await git.close()
