@@ -1,4 +1,5 @@
 import type { Git } from "@mako/git"
+import { confinedRoots, openConfined } from "./confined-read.js"
 import { diagnosticFormat, officeFormat } from "../contracts/file-preview.js"
 import { fileContentType, mediaForContentType } from "./file-media.js"
 import type { ArtifactPreviews } from "./artifact-previews.js"
@@ -12,6 +13,7 @@ import {
   realpath,
   stat,
   writeFile,
+  type FileHandle,
 } from "node:fs/promises"
 import { homedir } from "node:os"
 import {
@@ -43,7 +45,7 @@ type ConversationDataDir = () => Promise<string | undefined>
  * else comes back `withheld`, so an answer's `![](~/.ssh/id_rsa)` stays a
  * link rather than a key on screen.
  */
-type FileReadOptions = { relativeTo: "cwd"; dataDir?: ConversationDataDir; preview?: boolean; confined?: boolean; kept?: readonly string[] }
+type FileReadOptions = { relativeTo?: "cwd"; dataDir?: ConversationDataDir; preview?: boolean; confined?: boolean }
 
 /**
  * Said of a file another device asked for that resolves, after its symlinks, outside the Thread's folders (its folder,
@@ -207,21 +209,27 @@ export class WorkspaceFiles {
   async read(requested: string, options?: FileReadOptions): Promise<FileContents> {
     const located = await this.locate(requested, options)
     const { path } = located
-    let absolute = located.absolute
-    if (options?.confined) {
-      // Resolved once, and read from what was resolved: a link swapped after the check reads nothing new.
-      const real = await this.within(absolute, options.dataDir, options.kept)
-      if (!real) return { path, contents: "", size: 0, binary: false, truncated: false, withheld: OUTSIDE_THREAD_WORDS }
-      absolute = real
+    // Another device's read is opened once, verified, and read only through that descriptor (`openConfined`).
+    const confined = options?.confined
+      ? await openConfined(located.absolute, await confinedRoots([this.cwdValue, await this.git.root().catch(() => null), await options.dataDir?.()]))
+      : undefined
+    if (options?.confined && !confined) return { path, contents: "", size: 0, binary: false, truncated: false, withheld: OUTSIDE_THREAD_WORDS }
+    try {
+      return await this.readAt(path, confined?.real ?? located.absolute, options, confined?.handle)
+    } finally {
+      await confined?.handle.close()
     }
-    const info = await stat(absolute)
+  }
+
+  private async readAt(path: string, absolute: string, options: FileReadOptions | undefined, held: FileHandle | undefined): Promise<FileContents> {
+    const info = held ? await held.stat() : await stat(absolute)
     if (info.isDirectory()) throw new Error(`${path} is a directory`)
-    const prefixFile = await open(absolute, "r")
+    const prefixFile = held ?? await open(absolute, "r")
     const prefix = Buffer.alloc(Math.min(info.size, 4096))
     try {
       await prefixFile.read(prefix, 0, prefix.length, 0)
     } finally {
-      await prefixFile.close()
+      if (!held) await prefixFile.close()
     }
     const mimeType = await fileContentType(path, prefix)
     const media = mediaForContentType(mimeType)
@@ -244,7 +252,7 @@ export class WorkspaceFiles {
     if (media || officeFormat(path, mimeType) || prefix.includes(0)) {
       const previewUrl = filePreviewUrl(absolute, identity)
       const visual = media?.media === "image" || media?.media === "video"
-      const size = visual ? await this.dimensions(absolute, prefix, info.size, mimeType) : undefined
+      const size = visual ? await this.dimensions(absolute, prefix, info.size, mimeType, held) : undefined
       const large = size && Math.max(size.width, size.height) > THUMBNAIL_ABOVE && mimeType !== "image/svg+xml" && mimeType !== "image/gif"
       return {
         path,
@@ -261,7 +269,7 @@ export class WorkspaceFiles {
       }
     }
 
-    const handle = await open(absolute, "r")
+    const handle = held ?? await open(absolute, "r")
     try {
       const length = Math.min(info.size, FILE_VIEW_LIMIT)
       const buffer = Buffer.alloc(length)
@@ -309,7 +317,7 @@ export class WorkspaceFiles {
         ...(page && { mimeType, previewUrl: filePreviewUrl(absolute, identity, { folder: true }) }),
       }
     } finally {
-      await handle.close()
+      if (!held) await handle.close()
     }
   }
 
@@ -325,24 +333,12 @@ export class WorkspaceFiles {
     return false
   }
 
-  /** `absolute` with every symlink resolved, when that lands inside the Thread's folders; else undefined. */
-  private async within(absolute: string, dataDir?: ConversationDataDir, kept: readonly string[] = []): Promise<string | undefined> {
-    const real = await realpath(absolute).catch(() => undefined)
-    if (!real) return undefined
-    for (const root of [this.cwdValue, await this.git.root().catch(() => null), await dataDir?.(), ...kept]) {
-      if (!root) continue
-      const folder = await realpath(resolve(root)).catch(() => undefined)
-      if (folder && (real === folder || real.startsWith(folder + sep))) return real
-    }
-    return undefined
-  }
-
-  private async dimensions(absolute: string, prefix: Buffer, size: number, mimeType: string | undefined) {
-    const file = await open(absolute, "r")
+  private async dimensions(absolute: string, prefix: Buffer, size: number, mimeType: string | undefined, held?: FileHandle) {
+    const file = held ?? await open(absolute, "r")
     try {
       return await mediaDimensions(file, prefix, size, mimeType)
     } finally {
-      await file.close()
+      if (!held) await file.close()
     }
   }
 
@@ -452,16 +448,13 @@ export class ConversationFiles {
   private readonly git: Git
   private readonly previews: ArtifactPreviews
   private readonly watch: FolderIndexOptions["watch"]
-  /** Mako's own copies, by content (the media turns made and showed): read for any caller that names one. */
-  private readonly kept: readonly string[]
   private readonly held = new Map<string, { files: WorkspaceFiles; at: number }>()
   private readonly indexes = new Map<string, { index: FolderIndex; idle: ReturnType<typeof setTimeout> }>()
 
-  constructor(git: Git, previews: ArtifactPreviews, watch?: FolderIndexOptions["watch"], kept: readonly string[] = []) {
+  constructor(git: Git, previews: ArtifactPreviews, watch?: FolderIndexOptions["watch"]) {
     this.git = git
     this.previews = previews
     this.watch = watch
-    this.kept = kept
   }
 
   /** `confined`: the caller is another device, through the gateway, which reads only the Thread's folders. */
@@ -482,7 +475,7 @@ export class ConversationFiles {
       reader?.files.index.close()
       if (oldest !== undefined) this.held.delete(oldest)
     }
-    return held.files.read(path, { relativeTo: "cwd", dataDir, preview: purpose === "preview", confined, kept: this.kept })
+    return held.files.read(path, { relativeTo: "cwd", dataDir, preview: purpose === "preview", confined })
   }
 
   /** The index of a conversation's folder, kept and watched until nobody has looked at it for `INDEX_KEPT_MS`. */
