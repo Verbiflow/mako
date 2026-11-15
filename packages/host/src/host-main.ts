@@ -5,7 +5,7 @@ import { createHost } from "./create-host.js"
 import { acquireSuccessorLock, hostLifecycle, nodeHostExit, stopOnSignals, takePredecessor } from "./base/host-lifecycle.js"
 import { takeHostStart } from "./base/host-start.js"
 import { probeRuntime, settleRuntime } from "./transport/index.js"
-import { hostLog, hostWarn, installHostLog, logsRoot } from "./base/host-log.js"
+import { hostFailure, hostLog, hostWarn, installHostLog, logsRoot } from "./base/host-log.js"
 import { installCrashReporting } from "./base/crash.js"
 import { compileCacheStatus } from "./base/compile-cache.js"
 
@@ -75,7 +75,7 @@ const lifecycle = hostLifecycle({
   exit,
   log: (message, fields) => hostLog("lifecycle", message, fields),
   failed: async (error) => {
-    hostWarn("lifecycle", "shutdown failed", { error: String(error) })
+    hostFailure("lifecycle", "shutdown failed", error)
     await log.flush()
   },
 })

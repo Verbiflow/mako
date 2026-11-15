@@ -2190,13 +2190,14 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         sleepHandOff?.stop()
         keepAwake?.stop()
         step = "waiting for the calls under way and the providers' drains"
-        const drained = await Promise.allSettled([callsDrained, outsideDrained, telemetry.close(), usage.close()])
+        const drains = Object.entries({ "host calls": callsDrained, "outside work": outsideDrained, telemetry: telemetry.close(), usage: usage.close() })
+        const drained = await Promise.allSettled(drains.map(([, work]) => work))
         // Turn-end marks, effects and bounds still arrive while outside work and host calls drain.
         unfollowEffects?.()
         unfollowBounds?.()
         step = "closing the record of changes"
         await late.attribution?.close().catch((error: Error) => hostWarn("attribution", "the journal did not close cleanly", { error: error.message }))
-        const failedDrains = drained.flatMap(result => result.status === "rejected" ? [result.reason] : [])
+        const failedDrains = drained.flatMap((result, index) => result.status === "rejected" ? [new Error(`Could not drain ${drains[index]![0]}`, { cause: result.reason })] : [])
         if (failedDrains.length) throw new AggregateError(failedDrains, "Host calls or outside work did not drain cleanly", { cause: failedDrains[0] })
         // Deliver their stopping answers before the socket's generic reconnect farewell.
         await new Promise<void>((resolve) => setImmediate(resolve))

@@ -13,6 +13,7 @@ import { readResident, unmeasured, type ResidentMemory } from "./lib/host-load-m
 import { claudeSessionPath, makeWorld, TODAY, type WorldScale } from "./lib/host-load-world.ts"
 import { removeScratch } from "./lib/scratch-processes.mjs"
 import { scriptedModel } from "./scripted-model.ts"
+import { hostLoadOutcome, type HostLoadExit } from "./lib/host-load-exit.ts"
 import { fakeCloud, type AccountReports } from "./lib/sync-bench-cloud.ts"
 
 /**
@@ -215,7 +216,7 @@ try {
   // Its resident memory every 5 s, to tell a sawtooth of garbage from growth.
   const rssSeries: [number, number][] = []
   const snapshotsTaken: { why: string; file: string; rssMb: number | undefined }[] = []
-  const exited = new Promise<number | null>((done) => host!.once("exit", (code) => done(code)))
+  const exited = new Promise<HostLoadExit>((done) => host!.once("exit", (code, signal) => done({ code, signal, timedOut: false })))
   // Its resident memory, the peak from outside: memory doesn't vary with a runner's speed the way a wait does.
   const memory: ResidentMemory = { peakKb: 0, readings: 0, misses: 0 }
   const hostPid = String(host.pid)
@@ -268,9 +269,12 @@ try {
     clearInterval(footprint)
     clearInterval(series)
     host.kill("SIGTERM")
-    await Promise.race([exited, delay(60_000)])
-    if (values.out) writeFileSync(values.out, JSON.stringify({ scale: values.scale, host: hostScript, nodeArgs, idle }, null, 2))
-    await finish(0)
+    const shutdown = await Promise.race([exited, delay(60_000).then((): HostLoadExit => ({ code: null, signal: null, timedOut: true }))])
+    if (shutdown.timedOut) host.kill("SIGKILL")
+    if (values.out) writeFileSync(values.out, JSON.stringify({ scale: values.scale, host: hostScript, nodeArgs, idle, shutdown }, null, 2))
+    const outcome = hostLoadOutcome(shutdown, [], values["report-only"])
+    for (const failure of outcome.failures) say(`FAIL ${failure}`)
+    await finish(outcome.code)
   }
 
   // The Fins at work: the Apexes with Fins, and every Fin.
@@ -422,9 +426,11 @@ try {
   clearInterval(series)
   const sampled = (performance.now() - sampling) / 1_000
   churn.kill("SIGKILL")
+  const quittingAt = performance.now()
   host.kill("SIGTERM")
-  const code = await Promise.race([exited, delay(60_000).then(() => "timeout" as const)])
-  if (code === "timeout") host.kill("SIGKILL")
+  const exit = await Promise.race([exited, delay(60_000).then((): HostLoadExit => ({ code: null, signal: null, timedOut: true }))])
+  if (exit.timedOut) host.kill("SIGKILL")
+  const shutdown = { ...exit, ms: performance.now() - quittingAt }
 
   const probed = z.object({ health: z.array(z.tuple([z.number(), z.number().nullable()])), reads: z.array(z.tuple([z.number(), z.number().nullable()])) }).parse(JSON.parse(readFileSync(probeOut, "utf8")))
   const summary = (times: [number, number | null][]) => {
@@ -449,7 +455,7 @@ try {
   const gc = values.gc ? { major: pauses(/^Mark-(Compact|Sweep)$/), minor: pauses(/^(Scavenge|Minor Mark-Sweep)$/) } : undefined
   const unread = unmeasured(memory, sampled)
   const report = {
-    scale: values.scale, host: hostScript, seconds: Number(values.seconds), fins: fins.length, windows, windowCalls, windowFailures,
+    scale: values.scale, host: hostScript, shutdown, seconds: Number(values.seconds), fins: fins.length, windows, windowCalls, windowFailures,
     ...values["tool-heavy"] && { toolWorkload: { callsPerTurn: TOOL_CALLS, requestedTurns: TOOL_TURNS, steps: Object.fromEntries(toolSteps), completed: [...completedTools] } },
     ...answers, eventLoop: health.eventLoop, peakMb: unread ? null : peakMb, memoryReadings: memory.readings, memoryMisses: memory.misses,
     nodeArgs, ...idle && { idle }, ...reportsFrom && reportsTo && { account: accountRate(reportsFrom, reportsTo, (probedTo - probedFrom) / 60_000) }, ...snapshotsTaken.length && { snapshots: snapshotsTaken }, ...rss && { rss }, ...gc && { gc },
@@ -482,9 +488,10 @@ try {
   if ((answers.reads.p99 ?? Infinity) > readLimit) failures.push(`one read in a hundred waited ${answers.reads.p99} ms, past ${readLimit} ms`)
   if (peakLimit && peakMb > peakLimit) failures.push(`the host peaked at ${peakMb} MB, past ${peakLimit} MB`)
   if (peakLimit && unread) failures.push(`the host's memory can't be judged: ${unread}`)
+  const outcome = hostLoadOutcome(shutdown, failures, values["report-only"])
   const row = (name: string, result: { p50: number | null; p99: number | null; max: number | null }, limit: string) => `| ${name} | ${result.p50} | ${result.p99} | ${result.max} | ${limit} |`
   const table = [
-    `### bench:host-load (${values.scale}${values.host ? `, ${values.host}` : ""}): ${failures.length ? "failed" : "passed"}`,
+    `### bench:host-load (${values.scale}${values.host ? `, ${values.host}` : ""}): ${outcome.failures.length ? "failed" : "passed"}`,
     "",
     "| | p50 ms | p99 ms | max ms | fails at |",
     "|---|---|---|---|---|",
@@ -498,12 +505,12 @@ try {
     "",
     `Host peak resident memory: ${unread ? `unmeasured (${unread})` : `${peakMb} MB`}${peakLimit ? `, fails past ${peakLimit} MB` : ""}.`,
     `Loop held in slices of 50 ms or more: ${report.slices ? `${report.slices.count} slices, ${report.slices.totalMs} ms` : "not profiled"}.`,
-    ...failures.map((failure) => `- **${failure}**`),
+    ...outcome.failures.map((failure) => `- **${failure}**`),
   ].join("\n")
   say(table)
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${table}\n`)
-  for (const failure of failures) say(`FAIL ${failure}`)
-  await finish(failures.length && !values["report-only"] ? 1 : 0)
+  for (const failure of outcome.failures) say(`FAIL ${failure}`)
+  await finish(outcome.code)
 } catch (error) {
   say(`bench:host-load failed: ${error instanceof Error ? error.stack : String(error)}`)
   host?.kill("SIGKILL")

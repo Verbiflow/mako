@@ -7,6 +7,7 @@ import { z } from "zod"
 import {
   formatHostLogLine,
   hostLog,
+  hostFailure,
   hostLogKept,
   installHostLog,
   keepHostLog,
@@ -90,6 +91,32 @@ try {
   assert.match(mirrored, /error console Provider MCP configuration cleanup failed 7\n/)
   assert.deepEqual(printed, ["Provider MCP configuration cleanup failed", "after the mirror"], "a mirrored console still prints")
   assert.equal(hostLogKept(), false)
+
+  // Shutdown details survive formatting, including named nested owners and non-Error causes.
+  const failureLog = openHostLog(join(dir, "failure.log"))
+  const stopFailures = keepHostLog(failureLog)
+  const cause = new Error("reader failed token=private-value")
+  const owner = new Error("Could not stop history reader", { cause })
+  const aggregate = new AggregateError([owner, 0, false, null], "Outside work did not stop cleanly", { cause: owner })
+  hostFailure("lifecycle", "shutdown failed", aggregate)
+  await failureLog.flush()
+  const details = await readFile(join(dir, "failure.log"), "utf8")
+  assert.match(details, /Could not stop history reader/)
+  assert.match(details, /reader failed token=…/)
+  assert.ok(!details.includes("private-value"))
+  assert.match(details, /path=error.errors\[1\] error=0/)
+  assert.match(details, /path=error.errors\[2\] error=false/)
+  assert.match(details, /path=error.errors\[3\] error=null/)
+  const cyclic = new Error("cycle")
+  cyclic.cause = cyclic
+  hostFailure("lifecycle", "cyclic shutdown failure", cyclic)
+  hostFailure("lifecycle", "many failures", new AggregateError(Array.from({ length: 100 }, (_, index) => new Error(`failure ${index}`)), "root"))
+  await failureLog.flush()
+  const bounded = await readFile(join(dir, "failure.log"), "utf8")
+  assert.match(bounded, /repeated=true/)
+  assert.match(bounded, /detailsTruncated=true limit=32/)
+  assert.ok(bounded.split("\n").filter(line => line.includes("many failures")).length <= 33)
+  stopFailures()
 
   // A process's log: opened, kept and fed by the console in one call.
   const installed = installHostLog(join(dir, "installed.log"))

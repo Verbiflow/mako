@@ -141,6 +141,30 @@ export function hostWarn(scope: string, message: string, fields?: HostLogFields)
   say("warn", scope, message, fields)
 }
 
+/** Keep each nested failure separately: one formatted AggregateError loses the owners that failed. */
+export function hostFailure(scope: string, message: string, error: Error): void {
+  const queue: { value: unknown; path: string }[] = [{ value: error, path: "error" }]
+  const seen = new Set<Error>()
+  let truncated = false
+  for (let count = 0; queue.length && count < 32; count++) {
+    const { value, path } = queue.shift()!
+    if (!(value instanceof Error)) {
+      hostWarn(scope, message, { path, error: value === null || ["string", "number", "boolean", "bigint", "undefined"].includes(typeof value) ? String(value) : `Non-Error rejection (${typeof value})` })
+      continue
+    }
+    hostWarn(scope, message, { path, error: `${value.name}: ${value.message}`, stack: value.stack, repeated: seen.has(value) || undefined })
+    if (seen.has(value)) continue
+    seen.add(value)
+    if ("cause" in value) queue.push({ value: value.cause, path: `${path}.cause` })
+    if (value instanceof AggregateError) {
+      truncated ||= value.errors.length > 32
+      for (const [index, nested] of value.errors.slice(0, 32).entries())
+        queue.push({ value: nested, path: `${path}.errors[${index}]` })
+    }
+  }
+  if (queue.length || truncated) hostWarn(scope, message, { detailsTruncated: true, limit: 32 })
+}
+
 export function hostError(scope: string, message: string, fields?: HostLogFields): void {
   say("error", scope, message, fields)
 }
