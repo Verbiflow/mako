@@ -7,6 +7,7 @@ export const SnapshotBudgetSettingsSchema = z.object({
 export type SnapshotBudgetSettings = z.infer<typeof SnapshotBudgetSettingsSchema>
 /** Evidence read from the owning conversation journals, not file age. */
 export interface SnapshotSettlement {
+  /** Whether the journal directory could be enumerated; individual failures hold only their known scopes. */
   valid: boolean
   settledIds: string[]
   blockedScopes: string[]

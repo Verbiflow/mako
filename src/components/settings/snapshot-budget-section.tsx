@@ -20,7 +20,7 @@ export function SnapshotBudgetSection() {
     <h3 className="text-ui font-medium">Rewind storage across conversations</h3>
     <p className="mt-0.5 pb-3 text-label text-muted-foreground">One budget across repositories and conversations on this host profile. Preview only by default, with an 8 GiB payload limit. Enabled eviction takes the oldest proven settled turns first. Running or uncertain work, previews, unfinished restores and unproven checkpoints stay. An evicted checkpoint can no longer rewind files.</p>
     {report ? <ListCard>
-      <SettingRow title="Rewind budget" description="Enabling eviction authorizes the next hourly or settled-turn pass. Captures stop at the limit if protected data leaves no room. Up to 64 checkpoints go per pass; more eligible data continues in the background. No conversation messages are removed.">
+      <SettingRow title="Rewind budget" description="Enabling eviction authorizes the next hourly or settled-turn pass. New checkpoints are always kept, even over budget when eviction cannot run safely. Up to 64 checkpoints go per pass; more eligible data continues in the background. No conversation messages are removed.">
         <select aria-label="Rewind budget" value={report.settings.mode} disabled={busy} onChange={event => {
           const mode = event.target.value
           if (mode === "preview" || mode === "evict") void save({ ...report.settings, mode })

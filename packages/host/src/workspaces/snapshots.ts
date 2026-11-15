@@ -422,7 +422,7 @@ export class WorkspaceSnapshots {
       told = true
       frozen?.()
     }
-    if ((await this.budget.settings()).mode === "evict" && !this.budget.admit(this.retention.maxSnapshotBytes, "")) await this.budget.run(this.retention.maxSnapshotBytes)
+    await this.budget.prepareCapture(this.retention.maxSnapshotBytes)
     try {
       return await this.capturing(scope, async (gitDir, copied, fixed, finished) => {
         this.assertNoPending(scope)
@@ -1447,17 +1447,18 @@ export class WorkspaceSnapshots {
         this.unpin(pins)
         this.pin(pins, id)
         // A pass removes at most 64 checkpoints; this one's room may take more.
-        while (await this.pruneLocked(scope, gitDir, undefined, payloadBytes));
-        if (
-          (await retainedSnapshotBytes(this.db, this.root, scope)) +
-            (this.orphanBytes.get(scope) ?? 0) +
-            payloadBytes >
-          this.retention.maxStorageBytes
-        )
-          throw new Error(
-            "Checkpoint storage is full. Active turns and recovery checkpoints were retained; no workspace files were changed."
-          )
-        if (!this.budget.admit(payloadBytes, id)) throw new Error("The total rewind budget is full. Active, unproven and recovery checkpoints were retained.")
+        try {
+          while (await this.pruneLocked(scope, gitDir, undefined, payloadBytes));
+          if (
+            (await retainedSnapshotBytes(this.db, this.root, scope)) +
+              (this.orphanBytes.get(scope) ?? 0) +
+              payloadBytes >
+            this.retention.maxStorageBytes
+          ) hostWarn("checkpoints", "Workspace rewind storage is over budget; retaining the new checkpoint.")
+        } catch {
+          hostWarn("checkpoints", "Workspace rewind eviction failed; retaining the new checkpoint over budget.")
+        }
+        if (!this.budget.withinTarget(payloadBytes, id)) hostWarn("checkpoints", "Total rewind storage is over budget or unknown; retaining the new checkpoint.")
         this.db
           .prepare("INSERT INTO snapshots VALUES (?, ?)")
           .run(id, JSON.stringify(record))

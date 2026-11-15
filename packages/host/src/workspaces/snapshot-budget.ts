@@ -1,6 +1,7 @@
 import { readFile, readdir, rename, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
+import { hostWarn } from "../base/host-log.js"
 import { SnapshotBudgetSettingsSchema, type SnapshotBudgetEntry, type SnapshotBudgetReport, type SnapshotBudgetSettings, type SnapshotSettlement } from "../contracts/snapshot-budget.js"
 import { snapshotPayloadBytes } from "./snapshot-git.js"
 import type { SnapshotRecord } from "./snapshot-retention.js"
@@ -36,7 +37,6 @@ export class SnapshotBudget {
     this.#load ??= (async () => {
       const text = await readFile(join(this.#deps.root, "budget.json"), "utf8").catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return null; throw error })
       this.#settings = text === null ? { ...defaults } : SnapshotBudgetSettingsSchema.parse(JSON.parse(text))
-      if (this.#settings.mode === "evict") await this.#inventory()
     })()
     await this.#load
     return { ...this.#settings }
@@ -135,8 +135,16 @@ export class SnapshotBudget {
     if (report.remainingBytes > this.#settings.maxBytes && report.entries.some(row => row.removed)) this.changed()
     return report
   }
-  /** Synchronous at publication: concurrent captures cannot both spend the same remaining budget. */
-  admit(additionalBytes: number, currentId: string): boolean {
+  /** Eviction is best effort. Missing evidence or overage never denies a new rewind point. */
+  async prepareCapture(additionalBytes: number): Promise<void> {
+    try {
+      if ((await this.settings()).mode === "evict" && !this.withinTarget(additionalBytes, "")) await this.run(additionalBytes)
+    } catch {
+      hostWarn("checkpoints", "Rewind eviction is unavailable; retaining the new checkpoint over budget.")
+    }
+  }
+  /** Advisory at publication, including concurrent captures and retained unknown payload. */
+  withinTarget(additionalBytes: number, currentId: string): boolean {
     return this.#settings.mode !== "evict" || (this.#inventoryKnown && this.#deps.records().every(row => Boolean(row.storage) || this.#legacyBytes.has(row.id)) &&
       this.#deps.records().reduce((sum, row) => sum + (row.storage?.bytes ?? this.#legacyBytes.get(row.id) ?? 0), 0) + this.#untrackedBytes(currentId) + additionalBytes <= this.#settings.maxBytes)
   }

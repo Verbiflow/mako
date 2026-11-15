@@ -1,7 +1,7 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { randomBytes, randomUUID } from "node:crypto"
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises"
 import fs from "node:fs/promises"
 import { syncBuiltinESMExports } from "node:module"
 import { tmpdir } from "node:os"
@@ -93,11 +93,29 @@ try {
   assert.ok((await store.budget.preview()).entries.filter(row => row.scope === first.cwd).every(row => !row.eligible), "pending real request rows protect the whole workspace even without checkpoint IDs")
   const elsewhere = storedSnapshotSettlement(journals, id => id === residents[1]!.snapshot.session.id)
   assert.ok(elsewhere.blockedScopes.includes(residents[1]!.cwd), "continued/cloud ownership is not settled locally")
-  const bad = new DatabaseSync(join(journals, `${randomUUID()}.sqlite`)); bad.close()
-  assert.equal(proof().valid, false)
-  assert.ok((await store.budget.preview()).entries.every(row => !row.eligible), "unknown journal metadata never becomes permission to prune")
+  const missingCwd = join(root, "deleted-busy-workspace"), missingId = randomUUID()
+  await mkdir(missingCwd)
+  const missingJournal = new LiveJournal(journals, missingId)
+  missingJournal.commit({ ...first.snapshot, session: { ...first.snapshot.session, id: missingId, cwd: missingCwd, status: "running" }, requests: [] })
+  missingJournal.close(); await rm(missingCwd, { recursive: true })
+  assert.equal(proof().valid, true, "a busy conversation's deleted cwd must not invalidate unrelated scopes")
+  assert.ok(proof().blockedScopes.includes(missingCwd))
+  assert.ok((await store.budget.preview()).entries.filter(row => row.scope === residents[1]!.cwd).every(row => row.eligible))
+  const badId = randomUUID(), bad = new DatabaseSync(join(journals, `${badId}.sqlite`)); bad.close()
+  assert.equal(proof().valid, true)
+  assert.ok((await store.budget.preview()).entries.filter(row => row.scope === residents[1]!.cwd).every(row => row.eligible), "a journal with no owning evidence cannot freeze proven turns in other workspaces")
+  const damagedId = randomUUID(), damagedPath = join(journals, `${damagedId}.sqlite`)
+  const damaged = new LiveJournal(journals, damagedId)
+  damaged.commit({ ...residents[1]!.snapshot, session: { ...residents[1]!.snapshot.session, id: damagedId } })
+  damaged.close()
+  const damagedDb = new DatabaseSync(damagedPath)
+  damagedDb.prepare("UPDATE requests SET value=json_set(value, '$.snapshots', 'invalid')").run()
+  damagedDb.close()
+  const scoped = await store.budget.preview()
+  assert.ok(scoped.entries.filter(row => row.scope === residents[1]!.cwd).every(row => !row.eligible), "failed request evidence holds every checkpoint in its known cwd")
+  assert.ok(scoped.entries.filter(row => row.scope === residents[2]!.cwd).every(row => row.eligible), "another cwd can still evict after that journal fails")
   const names = await fs.readdir(journals)
-  for (const name of names) if (name.endsWith(".sqlite") && !residents.some(row => `${row.snapshot.session.id}.sqlite` === name)) await rm(join(journals, name))
+  for (const name of names) if (name.endsWith(".sqlite") && ![missingId, badId, ...residents.map(row => row.snapshot.session.id)].some(id => `${id}.sqlite` === name)) await rm(join(journals, name))
   assert.equal(proof().valid, true)
 
   store.close(); store = new WorkspaceSnapshots(git, storage, policy); store.followSettlement(() => readSnapshotSettlement(journals))
@@ -132,13 +150,13 @@ try {
   assert.ok(retained)
   assert.equal(JSON.parse(String(retained.value)).retiring, true, "durable intent precedes the failed rename; no blind retry or resurrection")
   assert.equal(applied.entries.find(row => row.id === failed.id)?.eligible, false)
-  assert.ok(applied.entries.some(row => row.removed), "other independent eligible checkpoints are attempted after a falsey failure")
+  assert.ok(applied.entries.some(row => row.removed), "independent scopes actually evict despite a deleted busy cwd, a bad journal, and a falsey retirement failure")
   for (const removed of applied.entries.filter(row => row.removed)) {
     assert.equal(rows().some(row => row.id === removed.id), false)
     await assert.rejects(readFile(join(storage, removed.id, "capture-owner.json")), { code: "ENOENT" })
   }
   assert.ok(rows().some(row => row.id === first.before.id), "active/preview data remains intact")
-  assert.equal(store.budget.admit(1024 ** 3, randomUUID()), false, "publication cannot exceed the one global limit")
+  assert.equal(store.budget.withinTarget(1024 ** 3, randomUUID()), false, "overage is advisory, never capture admission")
   store.close(); store = new WorkspaceSnapshots(git, storage, policy); store.followSettlement(() => readSnapshotSettlement(journals))
   assert.equal((await store.budget.preview()).entries.find(row => row.id === failed.id)?.eligible, false)
   assert.throws(() => store.trees(failed.id, failed.id), /retirement is unconfirmed/)
@@ -153,10 +171,20 @@ try {
       await writeFile(join(resident.cwd, "payload"), randomBytes(700 * 1024))
       return concurrent.capture(resident.cwd)
     }))
-    assert.equal(attempts.filter(row => row.status === "fulfilled").length, 1, "two concurrent repositories cannot both spend the same global space")
-    assert.equal(attempts.filter(row => row.status === "rejected").length, 1)
-    assert.ok((await concurrent.budget.preview()).payloadBytes <= 1024 ** 2)
+    assert.equal(attempts.filter(row => row.status === "fulfilled").length, 2, "both rewind points survive when protected or unproven data prevents eviction")
+    assert.ok((await concurrent.budget.preview()).payloadBytes > 1024 ** 2)
     assert.equal((await readFile(join(orphan, "payload"))).length, 100 * 1024)
+    const linked = join(otherStorage, "unreviewed-link")
+    await symlink(orphan, linked)
+    await assert.rejects(concurrent.budget.run(), /Linked checkpoint/)
+    const over = await concurrent.beginRun(randomUUID(), residents[1]!.cwd)
+    assert.ok(await readFile(join(otherStorage, over.id, "capture-owner.json")), "unknown inventory cannot block a new active turn's checkpoint")
+    const reopened = new WorkspaceSnapshots(git, otherStorage, policy)
+    try {
+      const captured = await reopened.capture(residents[2]!.cwd)
+      assert.ok(await readFile(join(otherStorage, captured.id, "capture-owner.json")), "loading evict settings with invalid inventory cannot poison future captures")
+    } finally { reopened.close() }
+    await rm(linked)
   } finally { concurrent.close() }
   const headroomStorage = join(root, "headroom-store")
   const headroom = new WorkspaceSnapshots(git, headroomStorage, { ...policy, maxSnapshotBytes: 384 * 1024 })
@@ -183,7 +211,7 @@ try {
     assert.equal((await headroom.budget.preview()).entries.length, 3, "preflight reserves one bounded capture rather than rescanning at the ceiling or evicting everything")
     assert.ok((await headroom.budget.preview()).payloadBytes <= 1024 ** 2)
   } finally { headroom.close() }
-  console.log("Global rewind budget: real Git checkpoints + settled/queued/cloud/unknown journals, cross-repository oldest-first preview, real comparison lease, exact locked retirement, falsey failure/reconstruction and global admission passed")
+  console.log("Global rewind budget: real Git checkpoints + per-cwd settlement/holds, oldest-first preview/eviction, locked retirement, falsey failure/reconstruction, and over-budget/unknown-inventory captures passed")
 } finally {
   mock.restoreAll(); syncBuiltinESMExports(); mock.timers.reset()
   for (const row of residents) row.journal.close()

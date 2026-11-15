@@ -24,7 +24,7 @@ import {
   RequestRetrySchema,
 } from "../contracts/conversation-control.js"
 import { existsSync, mkdirSync, readdirSync, realpathSync, statSync } from "node:fs"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
 import { ExecutionContextSchema } from "../contracts/execution-context.js"
@@ -1887,6 +1887,8 @@ export class ColdJournal {
   }
 }
 
+const SnapshotRequestRowSchema = z.object({ status: z.string(), snapshots: z.string().nullable() })
+
 /** Only request status/checkpoint metadata, never transcript content or request text. */
 export function storedSnapshotSettlement(root: string, elsewhere: (id: string) => boolean = () => false): SnapshotSettlement {
   return atOnce(snapshotSettlementSteps(root, elsewhere))
@@ -1901,26 +1903,37 @@ function* snapshotSettlementSteps(root: string, elsewhere: (id: string) => boole
     for (const name of readdirSync(root)) {
       if (!name.endsWith(".sqlite")) continue
       const id = name.slice(0, -7)
-      const db = new DatabaseSync(join(root, name), { readOnly: true })
+      let scope: string | undefined
       try {
-        const metadata = metadataRow(db)
-        if (!metadata) throw new Error("Conversation metadata is unavailable.")
-        const summary = journalSummary(metadata)
-        let busy = elsewhere(id) || summary.hasSessionQuestions || summary.transferWakeAt !== undefined || !["ready", "failed", "closed"].includes(summary.session.status)
+        const db = new DatabaseSync(join(root, name), { readOnly: true })
+        let busy: boolean
         const ids: string[] = []
-        for (const row of db.prepare("SELECT json_extract(value, '$.status') AS status, json_extract(value, '$.snapshots') AS snapshots FROM requests").iterate()) {
-          yield
-          const projected = z.object({ status: z.string(), snapshots: z.string().nullable() }).parse(row)
-          const settled = ["completed", "failed", "interrupted", "canceled"].includes(projected.status)
-          if (!settled) busy = true
-          if (!projected.snapshots || !settled) continue
-          const snapshots = RunSnapshotsSchema.parse(JSON.parse(projected.snapshots))
-          if (snapshots.before.kind === "ready") ids.push(snapshots.before.snapshot.id)
-          if (snapshots.after?.kind === "ready") ids.push(snapshots.after.snapshot.id)
-        }
-        if (busy) result.blockedScopes.push(realpathSync(summary.session.cwd))
+        try {
+          const metadata = metadataRow(db)
+          if (!metadata) throw new Error("Conversation metadata is unavailable.")
+          const summary = journalSummary(metadata)
+          scope = resolve(summary.session.cwd)
+          // A deleted cwd still holds its original scope; it is not a global evidence failure.
+          if (existsSync(scope)) scope = realpathSync(scope)
+          busy = elsewhere(id) || summary.hasSessionQuestions || summary.transferWakeAt !== undefined || !["ready", "failed", "closed"].includes(summary.session.status)
+          for (const row of db.prepare("SELECT json_extract(value, '$.status') AS status, json_extract(value, '$.snapshots') AS snapshots FROM requests").iterate()) {
+            yield
+            const projected = SnapshotRequestRowSchema.parse(row)
+            const settled = ["completed", "failed", "interrupted", "canceled"].includes(projected.status)
+            if (!settled) busy = true
+            if (!projected.snapshots || !settled) continue
+            const snapshots = RunSnapshotsSchema.parse(JSON.parse(projected.snapshots))
+            if (snapshots.before.kind === "ready") ids.push(snapshots.before.snapshot.id)
+            if (snapshots.after?.kind === "ready") ids.push(snapshots.after.snapshot.id)
+          }
+        } finally { db.close() }
+        if (busy) result.blockedScopes.push(scope)
         else result.settledIds.push(...ids)
-      } finally { db.close() }
+      } catch {
+        if (scope) result.blockedScopes.push(scope)
+        // No partial IDs from a failed journal become settlement evidence.
+        hostWarn("checkpoints", "A conversation's rewind evidence is unavailable; retaining its unproven checkpoints.")
+      }
       yield
     }
   } catch { result.valid = false }
