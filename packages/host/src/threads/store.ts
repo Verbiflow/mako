@@ -1741,14 +1741,21 @@ export class ThreadStore {
     return row ? keptTurnWait(row) : undefined
   }
 
-  /** Keeps that one of an armed wait's items is met, the first time it is: an `all` wait's progress survives a restart. */
-  noteTurnWaitMet(id: string, key: string, met: { at: number; words: string }): TurnWait | undefined {
+  /**
+   * Keeps that one of an armed wait's items is met, the first time it is, so an `all` wait's progress survives a
+   * restart; and when `fire` answers a firing for the wait as it now stands (the item completed it), claims it in the
+   * same write, so no host stops between the two with a wait met and still armed.
+   */
+  noteTurnWaitMet(id: string, key: string, met: { at: number; words: string }, fire?: (wait: TurnWait) => NonNullable<TurnWait["fired"]> | undefined): { wait: TurnWait | undefined; claimed: boolean } {
     return this.write(() => {
       const held = this.sql("SELECT record FROM turn_waits WHERE id = ?").get(id)
-      if (!held) return undefined
-      const wait = keptTurnWait(held)
-      if (wait.state !== "armed" || wait.met[key] !== undefined) return wait
-      return this.putTurnWait({ ...wait, met: { ...wait.met, [key]: met } })
+      if (!held) return { wait: undefined, claimed: false }
+      const before = keptTurnWait(held)
+      if (before.state !== "armed") return { wait: before, claimed: false }
+      const wait = before.met[key] === undefined ? { ...before, met: { ...before.met, [key]: met } } : before
+      const fired = fire?.(wait)
+      if (fired) return { wait: this.putTurnWait({ ...wait, state: "fired", fired }), claimed: true }
+      return { wait: wait === before ? before : this.putTurnWait(wait), claimed: false }
     })
   }
 

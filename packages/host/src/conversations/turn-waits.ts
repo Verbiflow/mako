@@ -18,7 +18,7 @@ export interface TurnWaitStore {
   armTurnWait(wait: TurnWait): { wait: TurnWait; replaced: TurnWait[]; existed: boolean }
   turnWait(id: string): TurnWait | undefined
   armedTurnWaits(): TurnWait[]
-  noteTurnWaitMet(id: string, key: string, met: { at: number; words: string }): TurnWait | undefined
+  noteTurnWaitMet(id: string, key: string, met: { at: number; words: string }, fire?: (wait: TurnWait) => NonNullable<TurnWait["fired"]> | undefined): { wait: TurnWait | undefined; claimed: boolean }
   claimTurnWait(id: string, fired: NonNullable<TurnWait["fired"]>): { wait: TurnWait | undefined; claimed: boolean }
   markTurnWaitDelivered(id: string, at: number): void
   cancelTurnWait(id: string, at: number, by: TurnWaitCancel): { wait: TurnWait | undefined; ended?: "cancelled" | "retired" }
@@ -122,14 +122,15 @@ export class TurnWaits {
     return armed
   }
 
-  /** One of a wait's items is met: kept, then the wait fires if that's what it waited for. */
+  /** One of a wait's items is met: kept, and, when that completes the wait, claimed in the same write and sent. */
   met(id: string, item: TurnWaitItem, words: string): void {
     const store = this.deps.store()
     if (!store || this.stopped) return
-    const wait = store.noteTurnWaitMet(id, turnWaitItemKey(item), { at: this.deps.now(), words })
-    if (!wait || wait.state !== "armed") return
-    this.deps.changed?.(wait.conversation)
-    if (turnWaitMet(wait)) this.fire(wait, "met")
+    const at = this.deps.now()
+    const { wait, claimed } = store.noteTurnWaitMet(id, turnWaitItemKey(item), { at, words }, (now) => turnWaitMet(now) ? this.firing(now, "met", at) : undefined)
+    if (!wait) return
+    if (claimed) return this.fired(wait)
+    if (wait.state === "armed") this.deps.changed?.(wait.conversation)
   }
 
   /** Ends a wait without waking anyone, whoever asks; a fired one whose note hasn't gone is retired. */
@@ -173,12 +174,18 @@ export class TurnWaits {
     this.check()
   }
 
-  /** Fires every armed wait whose time has come, late ones saying so; then times the next. The timer's and the backstop job's. */
+  /**
+   * Fires every armed wait that's met (a host that stopped before its claim, from a build that kept the two apart) or
+   * whose time has come, late ones saying so; then times the next. The timer's, the start's and the backstop job's.
+   */
   check(): void {
     const store = this.deps.store()
     if (!store || this.stopped) return
     const now = this.deps.now()
-    for (const wait of store.armedTurnWaits()) if (wait.endsBy !== undefined && wait.endsBy <= now) this.fire(wait, "time")
+    for (const wait of store.armedTurnWaits()) {
+      if (turnWaitMet(wait)) this.fire(wait, "met")
+      else if (wait.endsBy !== undefined && wait.endsBy <= now) this.fire(wait, "time")
+    }
     this.schedule()
   }
 
@@ -195,20 +202,29 @@ export class TurnWaits {
   }
 
   private fire(wait: TurnWait, why: "met" | "time"): void {
-    const store = this.deps.store()!
-    const at = this.deps.now()
+    const { wait: fired, claimed } = this.deps.store()!.claimTurnWait(wait.id, this.firing(wait, why, this.deps.now()))
+    if (claimed && fired) this.fired(fired)
+  }
+
+  /** A wait's firing as it stands at `at`: its note, and the request that note goes as. */
+  private firing(wait: TurnWait, why: "met" | "time", at: number): NonNullable<TurnWait["fired"]> {
     const lateMs = why === "time" && wait.endsBy !== undefined ? at - wait.endsBy : 0
-    const { wait: fired, claimed } = store.claimTurnWait(wait.id, {
+    return {
       at,
       why,
       ...(lateMs > WAIT_LATE_MS && { lateMs }),
       request: namedUuid(`mako turn wait\0${wait.id}\0fired`),
       text: turnWaitNote(wait, why, at),
-    })
-    if (!claimed || !fired) return
-    hostLog("waits", "fired", { wait: wait.id, conversation: wait.conversation, why, ...(lateMs > WAIT_LATE_MS && { lateMs }) })
+    }
+  }
+
+  private fired(wait: TurnWait): void {
+    const fired = wait.fired
+    if (!fired) return
+    hostLog("waits", "fired", { wait: wait.id, conversation: wait.conversation, why: fired.why, ...(fired.lateMs !== undefined && { lateMs: fired.lateMs }) })
     this.deps.changed?.(wait.conversation)
-    void this.send(fired)
+    this.schedule()
+    void this.send(wait)
   }
 
   private send(wait: TurnWait): Promise<void> {

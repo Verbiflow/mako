@@ -167,6 +167,37 @@ await withStore("a restart between firing and delivery sends the same note once"
   store.close()
 })
 
+await withStore("a host that stops between an item's met and its claim leaves nothing armed and met", async (path) => {
+  const clock = new Clock()
+  let store = open(path)
+  const first = host(store, clock)
+  const wait = armed(first.waits.arm({ conversation: CONVERSATION, thread: THREAD, clientKey: "ci", description: "Waiting for CI on #412", items: [CI] }))
+  // What a build that wrote the two apart could leave: the item met, the wait still armed.
+  store.noteTurnWaitMet(wait.id, "pull:acme/app#412", { at: clock.now, words: "checks settled: all 9 passed" })
+  assert.equal(store.turnWait(wait.id)?.state, "armed")
+  first.waits.stop()
+  store.close()
+  store = open(path)
+  const second = host(store, clock)
+  second.waits.start()
+  second.waits.start()
+  await second.waits.settled()
+  assert.equal(second.sent.length, 1, "the next start fires and sends it, once")
+  assert.match(second.sent[0]!.fired!.text, /- acme\/app#412 checks: checks settled: all 9 passed$/)
+  second.waits.stop()
+  store.close()
+  store = open(path)
+  const third = host(store, clock)
+  third.waits.start()
+  await third.waits.settled()
+  assert.equal(third.sent.length, 0)
+  // And the item that completes a wait claims it in the same write: nothing is left armed and met at any point.
+  const met = armed(third.waits.arm({ conversation: "conv-2", thread: THREAD, clientKey: "docs", description: "Waiting for docs", items: [DOCS] }))
+  third.waits.met(met.id, DOCS, "reported done")
+  assert.equal(store.turnWait(met.id)?.state, "fired")
+  store.close()
+})
+
 await withStore("a cancel racing the fire never delivers", async (path) => {
   const store = open(path)
   const clock = new Clock()
