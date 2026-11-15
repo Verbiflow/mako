@@ -122,7 +122,7 @@ export class LiveCheckpoints {
             ? { kind: "unavailable", timedOut: true, reason: `The checkpoint held the workspace ${Math.round(late / 1000)} s after the turn went, so it may hold the turn's own edits` }
             : { kind: "ready", snapshot }
         } catch (error) {
-          before = { kind: "unavailable", reason: errorMessage({ error }), timedOut: wentAt === undefined ? undefined : true }
+          before = { kind: "unavailable", reason: errorMessage({ error }) }
         }
         // Each turn's checkpoint says how long it took to hold the workspace and to be saved, so a slow one is seen.
         hostLog("checkpoints", "a turn's checkpoint was saved", {
