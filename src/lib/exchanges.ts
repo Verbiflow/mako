@@ -581,6 +581,12 @@ export function turnExchange(exchanges: readonly Exchange[]): Exchange | undefin
 
 /** Each turn's label, by the turn: a stream renders the navigator again every batch, and its turns are kept as they were. */
 const labels = new WeakMap<Exchange, string>()
+/**
+ * A label's most characters: two lines of the navigator's flyout, and more than a reader hears of it. Held whole, a
+ * session of long pasted prompts kept megabytes of labels for the navigator alone.
+ */
+export const PROMPT_LABEL_CHARS = 512
+const label = (text: string) => text.slice(0, PROMPT_LABEL_CHARS * 4).replace(/\s+/g, " ").trim().slice(0, PROMPT_LABEL_CHARS)
 
 export function promptLabel(exchange: Exchange): string {
   let label = labels.get(exchange)
@@ -589,14 +595,14 @@ export function promptLabel(exchange: Exchange): string {
 }
 
 function labelOf(exchange: Exchange): string {
-  if (exchange.unloaded !== undefined) return exchange.unloaded
+  if (exchange.unloaded !== undefined) return label(exchange.unloaded)
   const direct = exchange.direct?.note
-  if (direct?.direct) return `To ${direct.direct.to}: ${(direct.body ?? "").replace(/\s+/g, " ").trim()}`
+  if (direct?.direct) return label(`To ${direct.direct.to}: ${direct.body ?? ""}`)
   const cause = !exchange.prompt ? exchange.opener?.note?.cause : undefined
   if (cause) return eventLabel(causeWords(cause))
   const opening = exchange.prompt ?? exchange.opener
   const text = opening ? textOf(opening.blocks) : ""
-  const line = text.replace(/\s+/g, " ").trim()
+  const line = label(text)
   if (line) return line
   return exchange.response.length > 0 ? "Agent turn" : "Empty turn"
 }

@@ -128,36 +128,56 @@ export function streamingMarkdown(text: string): string {
 }
 
 /**
- * The answer cut where its parse can be cached: after a closed fence at the
- * left edge and the blank line that follows it. A blank line alone is not
- * such a place (a list with spaced items would parse as several lists, a
- * setext heading would lose its underline), but nothing carries across a
- * closed fence: it ends any list or quote above it, and its own lines are
- * never Markdown. The pieces join back to `text` exactly. A document whose
- * context is not local (definitions or HTML blocks outside code, `\r`, a
- * byte-order mark) stays one piece.
+ * After a blank line, a line that still belongs to the block above: indented (a list item's own lines, indented code)
+ * or a list marker (the list goes on). Any other line starts a block of its own, whatever came before.
  */
-export function fenceSegments(text: string): string[] {
+const CONTINUES = /^(?:[ \t]|(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$))/
+/**
+ * A line whose block may join the one before it once drawn: a picture or a link alone is a gallery's next item
+ * (`rehypeAssetGroups`), so the answer is never cut before one.
+ */
+const JOINS = /^ {0,3}!?\[/
+
+/**
+ * The answer cut where its parse can be cached: at a blank line after which a block starts that nothing above can
+ * reach. Markdown is not context-free at every blank line (a list with spaced items goes on across one, as does an
+ * item's indented text), so a cut is made only before a line that starts a block of its own (`CONTINUES`), outside
+ * code, or after a fence closed at the left edge, which ends any list or quote above it. A fence nested in a list ends where a line leaves its indent, which this doesn't follow, so nothing after such
+ * a line is cut. The pieces join back to `text` exactly, and each parses alone as it does in the whole. A document
+ * whose context is not local (definitions or HTML blocks outside code, `\r`, a byte-order mark) stays one piece, and
+ * so does a picture or a link alone after a blank line, which may join a gallery (`JOINS`).
+ *
+ * T3 Code cuts its streaming answers by the same rule (`markdownStreamBlocks.ts`); before this Mako cut only after a
+ * closed fence, so an answer of prose and lists, most of them, was parsed whole on every frame it streamed.
+ */
+export function streamPieces(text: string): string[] {
   if (NON_LOCAL_TEXT.test(text)) return [text]
   const lines = linesOf(text)
   const cuts: number[] = []
-  let fence: Fence | undefined
-  let closed = false
+  let fence: (Fence & { indent: number }) | undefined
+  let afterBlank = false
+  // The block above is a fence closed at the left edge: it ended any list or quote, so whatever comes next is its own.
+  let afterFence = false
   for (const [index, line] of lines.entries()) {
     if (fence) {
+      // A line left of a nested fence's indent may end the item holding it: where the fence ends is no longer known.
+      if (fence.indent > 0 && /\S/.test(line.text.slice(0, fence.indent))) break
       if (closes(fence, line.text)) {
-        closed = fence.topLevel
+        afterFence = fence.topLevel
         fence = undefined
       }
       continue
     }
-    if (closed && blank(line.text) && line.complete) {
-      const end = line.start + line.text.length + 1
-      if (end < text.length) cuts.push(end)
+    if (blank(line.text)) {
+      afterBlank = afterBlank || line.complete || index < lines.length - 1
+      continue
     }
-    closed = false
     if (NON_LOCAL_LINE.test(line.text)) return [text]
-    fence = opens(line.text, index)
+    if (afterBlank && line.start > 0 && (afterFence || (!CONTINUES.test(line.text) && !JOINS.test(line.text)))) cuts.push(line.start)
+    afterBlank = false
+    afterFence = false
+    const opened = opens(line.text, index)
+    fence = opened && { ...opened, indent: line.text.length - line.text.trimStart().length }
   }
   const segments: string[] = []
   let from = 0
