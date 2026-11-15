@@ -29,7 +29,7 @@ export { RecipeAccounts } from "./thread-recipe.js"
 import { CheckoutHeadService } from "./checkout-heads.js"
 import { PlanBuilds } from "./plan-builds.js"
 import { beginTrace, TraceRefresh } from "./app-probe.js"
-import { childHistory, childProcessReader, type DaemonRestarts, type ProcessReader } from "./watch-backend.js"
+import { childHistory, childProcessReader, type DaemonRestarts, type ProcessReader, type WatchBackend } from "./watch-backend.js"
 import type { WatchReadings } from "./watch-readings.js"
 import { commandEnvironment, environmentTools, registerEnvironmentTools, type EnvironmentTools } from "./environment-tools.js"
 import { spareInstaller } from "./spare-install.js"
@@ -115,7 +115,7 @@ export interface Workspaces {
   appOwner(app: AppKey): { id: string; title: string } | undefined
   /** What changed on disk while apps ran, for their probes; FSEvents keeps that history, so macOS only. */
   fileHistory: ReturnType<typeof childHistory>
-  close(): void
+  close(): Promise<void>
 }
 
 export interface WorkspacesDeps {
@@ -149,6 +149,8 @@ export interface WorkspacesDeps {
   ledger?: () => MoveLedger | undefined
   /** What the file system's history reads cost, for Diagnostics. */
   watchReadings?: WatchReadings
+  /** Every native and tree watch shares this host-owned child. */
+  watch: WatchBackend
   /** When fseventsd started over, so a read of history across it is reported lost. */
   daemonRestarts?: DaemonRestarts
   /** The host's probe child (`childProcessReader`), which reads the apps' processes too; one of its own without it. */
@@ -234,7 +236,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
       } : undefined, deps.conversations, deps.ledger, deps.workingFolders, () => deps.subscribed?.on ?? true, async repoRoot => {
         await forgetGitHubReads(repoRoot)
         emit({ type: "github-changed" })
-      })
+      }, deps.watch)
     : null
   const retention = !deps.readOnly && store && shared && worktrees ? new WorktreeRetention({
     file: join(shared, "worktree-retention.json"),
@@ -296,10 +298,10 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     whoseApp,
     appOwner,
     fileHistory,
-    close: () => {
+    close: async () => {
       retention?.close()
       checkoutHeads.close()
-      worktrees?.closeSummaries()
+      await worktrees?.closeSummaries()
     },
   }
 }

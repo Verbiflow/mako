@@ -150,7 +150,8 @@ const INSTRUMENT = `(() => {
     const before = top.get.call(node)
     write()
     const moved = top.get.call(node) - before
-    if (Math.abs(moved) >= 1) writes.push({ at: performance.now(), moved })
+    // Who wrote it, read only when a flick fails (\`flickRecord\`): a script write cancels a glide.
+    if (Math.abs(moved) >= 1) writes.push({ at: performance.now(), moved, top: top.get.call(node), stack: new Error().stack })
   }
   Object.defineProperty(Element.prototype, 'scrollTop', {
     configurable: true,
@@ -258,6 +259,12 @@ async function checkScroll() {
     return tasks.map((task) => ({ wall: task.dur / 1000, cpu: (task.tdur ?? task.dur) / 1000 }))
   }
   const now = () => evaluate("performance.now()")
+  /** A flick's record from `since` (page time) with the finger lifted at `lift` (a touch stamp, in seconds): see the flick. */
+  const flickRecord = (since, lift) => evaluate(`JSON.stringify({
+    lift: Math.round(${lift * 1000} - performance.timeOrigin - ${since}),
+    writes: window.__scrollWrites.filter(write => write.at >= ${since}).map(write => ({ at: Math.round(write.at - ${since}), moved: Math.round(write.moved), top: Math.round(write.top), by: write.stack.split('\\n').slice(3, 10).map(line => line.trim().replace(/\\(?https?:\\/\\/[^/]+/, '(').slice(0, 120)) })),
+    frames: window.__flickFrames.map(([at, fromEnd]) => [at - Math.round(${since}), fromEnd]),
+  })`)
   const centre = { x: 196, y: 380 }
   /**
    * Every touch is stamped with when the finger was there. Chromium reads a finger's speed from the stamps, not from
@@ -449,11 +456,19 @@ async function checkScroll() {
       // A long task is one with 50 ms of the page's own work, as the browser's are 50 ms of wall time. A task the page
       // waits in (a synchronous call to another process, a GPU readback) holds the thread with little work, so any task
       // of 150 ms of wall time fails too: the system taking the CPU from the page made 67 ms at most on the runner.
+      // What the flick met, printed only if it glides short: each script write to the scroller with its caller (one
+      // cancels a glide), when the finger lifted, and how far from the end it was each frame. 60 runs on a CI Mac and
+      // here never glided short; the one that did (535 px, #712's suites (1)) left nothing to say why.
+      await evaluate(`(() => { const node = ${scroller}; const frames = window.__flickFrames = []; window.__flickFraming = true; const step = () => { frames.push([Math.round(performance.now()), Math.round(node.scrollHeight - node.scrollTop - node.clientHeight)]); if (window.__flickFraming) requestAnimationFrame(step) }; requestAnimationFrame(step); return true })()`)
+      let lift = 0
       const work = await pageWork(async () => {
         await flick(400, 2_500)
+        lift = stamp
         await rest()
       })
       const flung = await fromEnd()
+      await evaluate("window.__flickFraming = false, true")
+      if (!(flung > 600)) console.log(`FLICK RECORD ${await flickRecord(since, lift)}`)
       assert.ok(flung > 600, `a flick of 400 px glided ${Math.round(flung)} px from the end`)
       const walls = await longTasks(since)
       const tasks = work.filter((task) => task.cpu >= 50).map((task) => Math.round(task.cpu))

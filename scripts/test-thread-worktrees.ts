@@ -1,4 +1,5 @@
 import "./lib/scratch-git.mjs"
+import { childBackend } from "@mako/host/workspaces/watch-backend"
 import { Git } from "@mako/git"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import assert from "node:assert/strict"
@@ -967,7 +968,7 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
   let at: string[] = []
   const real = { now: Date.now, readOutput: gitRunner.readOutput, idleOutput: gitRunner.idleOutput }
   let reads = 0
-  let closing = () => {}
+  let closing: () => void | Promise<void> = () => {}
   const pushed: WorktreeSummary[][] = []
   const heard = async (what: string, test: () => boolean) => {
     for (const deadline = performance.now() + 10_000; !test(); await new Promise((resolve) => setTimeout(resolve, 25)))
@@ -989,6 +990,7 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
     const subscribed = jobs.demand("summary viewer")
     subscribed.set(true)
     const workspaces = openWorkspaces({
+      watch: childBackend(),
       git: gitRunner,
       dataRoot: join(root, "composed"),
       readOnly: false,
@@ -1092,7 +1094,7 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
     Date.now = real.now
     gitRunner.readOutput = real.readOutput
     gitRunner.idleOutput = real.idleOutput
-    closing()
+    await closing()
   }
   await worktrees.abandon(id).catch(() => undefined)
 }

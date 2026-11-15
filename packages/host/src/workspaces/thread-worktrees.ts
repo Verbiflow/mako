@@ -21,6 +21,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { mapLimit } from "../base/map-limit.js"
 import { githubRepositoryUrl } from "../contracts/cloud-threads.js"
 import { fillWorktree, ProjectMissingError, reattachWorktree, workingCheckout } from "./worktree-reattach.js"
+import { childBackend, type WatchBackend } from "./watch-backend.js"
 import { HEAD_MARKER, REF_MARKERS, INDEX_MARKER, watchGitMarkers, type GitDirWatch } from "./git-dir-watch.js"
 
 /** Git's own markers for work under way, which a removal would throw away. */
@@ -331,6 +332,7 @@ export interface PlannedCheckout {
 
 export class ThreadWorktreeService {
   readonly root: string
+  private readonly watch: WatchBackend
   private readonly git: Git
   private readonly threads: ThreadStore
   private readonly inUse: (path: string) => Promise<string[]>
@@ -360,6 +362,11 @@ export class ThreadWorktreeService {
   private readonly staleSummaries = new Set<string>()
   private readonly indexOnly = new Set<string>()
   /** The watches that say so: each worktree's Git directory, and each repository's own. */
+  private summaryWatchesClosed = false
+  private summaryWatchGeneration = 0
+  private closingWatches: Promise<void> | undefined
+  private readonly retiredWatches = new Set<Promise<void>>()
+  private watchReleaseFailure: { error: unknown } | undefined
   private readonly summaryWatches = new Map<string, GitDirWatch>()
   /** Who hears the summaries when they change (the windows); without one, an event only marks the worktree. */
   private summaryListener: ((summaries: WorktreeSummary[]) => void) | undefined
@@ -410,7 +417,9 @@ export class ThreadWorktreeService {
     workingFolders: () => Promise<string[]> = async () => [],
     pullsVisible: () => boolean = () => true,
     pullsChanged: (repoRoot: string) => Promise<void> = async () => {},
+    watch: WatchBackend = childBackend(),
   ) {
+    this.watch = watch
     this.git = git
     this.root = root
     this.threads = threads
@@ -710,6 +719,8 @@ export class ThreadWorktreeService {
   async settled(): Promise<void> {
     await Promise.all([...this.wanting, ...this.carrying.values()])
     await this.spares.settled()
+    await Promise.all(this.retiredWatches)
+    if (this.watchReleaseFailure) throw this.watchReleaseFailure.error
   }
 
   /**
@@ -834,6 +845,8 @@ export class ThreadWorktreeService {
   /** Hears every worktree's summaries whenever one changes, read on its own events (`SUMMARY_BACKSTOP_MS`). */
   followSummaries(listener: (summaries: WorktreeSummary[]) => void): void {
     this.summaryListener = listener
+    this.summaryWatchesClosed = false
+    this.closingWatches = undefined
   }
 
   /** A turn in `folder` ended: what it left there is read again. */
@@ -914,6 +927,8 @@ export class ThreadWorktreeService {
 
   /** Watches each listed worktree's Git directory and each repository's, and lets go of the rest. */
   private async watchSummaries(worktrees: readonly ThreadWorktree[]): Promise<void> {
+    if (this.summaryWatchesClosed) return
+    const generation = this.summaryWatchGeneration
     const wanted = new Map<string, { gitDir: () => Promise<string | undefined>; paths: () => string[]; index: boolean; markers: readonly string[]; roots: readonly string[] }>()
     const shared = new Map<string, { paths: string[]; roots: Set<string>; branches: Set<string> }>()
     for (const worktree of worktrees) {
@@ -940,17 +955,21 @@ export class ThreadWorktreeService {
       }
     }
     for (const [key, watch] of this.summaryWatches) if (!wanted.has(key)) {
-      watch.close()
+      this.retireWatch(watch)
       this.summaryWatches.delete(key)
     }
     for (const [key, { gitDir: locate, paths, index, markers, roots }] of wanted) {
       if (this.summaryWatches.has(key)) continue
       const gitDir = await locate()
+      if (this.summaryWatchesClosed || generation !== this.summaryWatchGeneration) return
       if (!gitDir || this.summaryWatches.has(key)) continue
-      this.summaryWatches.set(key, watchGitMarkers(gitDir, () => {
+      const watch = watchGitMarkers(gitDir, () => {
         for (const repoRoot of roots) this.invalidatePulls(repoRoot)
         this.summaryStale(paths(), SUMMARY_SETTLE_MS, index)
-      }, markers))
+      }, markers, this.watch)
+      this.summaryWatches.set(key, watch)
+      await watch.ready
+      if (this.summaryWatchesClosed || generation !== this.summaryWatchGeneration) return
     }
   }
 
@@ -964,13 +983,27 @@ export class ThreadWorktreeService {
     return gitDir ? stat(join(gitDir, "index")).then(({ mtimeMs }) => mtimeMs, () => 0) : 0
   }
 
-  /** Stops following the worktrees' summaries. */
-  closeSummaries(): void {
+  private retireWatch(watch: GitDirWatch): void {
+    const released = (async () => {
+      try { await watch.close() } catch (error) { this.watchReleaseFailure ??= { error } }
+    })()
+    this.retiredWatches.add(released)
+    void released.then(() => this.retiredWatches.delete(released))
+  }
+
+  /** Refuses late rearming immediately; completion joins every proxy release. */
+  closeSummaries(): Promise<void> {
+    this.summaryWatchesClosed = true
+    this.summaryWatchGeneration++
     clearTimeout(this.summaryTimer)
     this.summaryTimer = undefined
-    for (const watch of this.summaryWatches.values()) watch.close()
+    for (const watch of this.summaryWatches.values()) this.retireWatch(watch)
     this.summaryWatches.clear()
     this.summaryListener = undefined
+    return this.closingWatches ??= (async () => {
+      await Promise.all(this.retiredWatches)
+      if (this.watchReleaseFailure) throw this.watchReleaseFailure.error
+    })()
   }
 
   /** One pass: each repository's facts read once, then each worktree's status, and what its commits say where they moved. */

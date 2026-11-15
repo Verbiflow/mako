@@ -485,6 +485,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     cleanup: (path) => late.movers?.appTools?.cleanup(path),
     ledger: () => late.attribution,
     watchReadings,
+    watch: watchBackend,
     daemonRestarts: fileEvents,
   })
   late.fileHistory = workspaces.fileHistory
@@ -537,7 +538,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     watch: (root, changed, gone, dropped) => watchTree(git, watchBackend, root, changed, gone, dropped),
     history: workspaces.fileHistory,
     deliveryLagMs: () => watchReadings.lagMs(),
-    watchGitDir: (folder, moved) => watchOutsideGitDir(folder, moved),
+    watchGitDir: (folder, moved) => watchOutsideGitDir(folder, moved, watchBackend),
     jobs,
     stores: () => {
       const held = cataloguedRows()
@@ -1961,7 +1962,14 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     if (!shell.closing()) web()?.conversationEvent(event)
   })
 
-  const plugins = fixtureDesk ? null : watchPluginChanges(environment.dataRoot, emit)
+  const plugins = fixtureDesk ? null : watchPluginChanges(environment.dataRoot, emit, (root, changed) =>
+    watchBackend(root, [], { events: changed, dropped: changed, gone: changed, muted: (muted) => { if (!muted) changed() } }, { kind: "directory" }))
+  if (plugins) {
+    // Register before readiness: a stop during subscription still joins the late release.
+    shell.stopping.register("plugin calls", () => plugins.close())
+    try { await plugins.ready }
+    catch (error) { hostWarn("plugins", "plugin changes could not be followed", { error: error instanceof Error ? error.message : String(error) }) }
+  }
   const builds = config.development ? watchOwnBuild(devHostBuildDirectories(environment.appRoot), emit) : []
   appUpdates.start()
   trace("updates ready")
@@ -1990,7 +1998,6 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     "cloud continuations": () => cloudContinues?.close(),
     "cloud calls": () => late.cloud?.stop(),
     "terminal calls": () => shell.terminals.current()?.dispose(),
-    "plugin calls": () => plugins?.close(),
     "builds": () => { for (const build of builds) build.close() },
     "browser and computer calls": () => control.stop(),
     "file calls": () => files.stop(),
@@ -2196,7 +2203,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         cloudConversations?.dispose()
         late.agentServers?.close()
         threads.close()
-        workspaces.close()
+        await workspaces.close()
         conversationFiles.close()
         turnMedia.close()
         void workspaceClients.dispose()

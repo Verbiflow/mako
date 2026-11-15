@@ -1,9 +1,10 @@
 import parcel, { type AsyncSubscription } from "@parcel/watcher"
 import { execFile, type ChildProcess } from "node:child_process"
 import { z } from "zod"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { watch, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
+import { watchGitMarkersHere } from "./git-marker-native.js"
 import { OTHER_APPS_DATA } from "../base/other-apps-data.js"
 import { membersOnly, parseTable, PS_ARGS, type RunLeader } from "./process-table.js"
 import { CanaryTestSchema, HISTORY_SCRATCH, HistoryMarkSchema, MAX_EXCLUDED, WatcherRequestSchema, type CanaryTest, type DropReason, type HistoryMark, type WatcherReply, type WatcherRequest } from "../contracts/watcher-child.js"
@@ -56,16 +57,29 @@ process.on("message", (raw) => {
     return
   }
   settling.add(id)
-  const subscription = parcel
-    .subscribe(request.data.root, (error, events) => {
+  const asked = request.data
+  const native = asked.native
+  const opening = native ? Promise.resolve().then(async () => {
+    if (!subscriptions.has(id)) return undefined
+    const notify = () => { if (subscriptions.has(id)) reply({ t: "events", id, events: [{ path: asked.root, type: "update" }] }) }
+    if (native.kind === "git-markers") {
+      const markers = watchGitMarkersHere(asked.root, notify, native.markers)
+      await markers.ready
+      return { unsubscribe: async () => { markers.close() } }
+    }
+    const directory = watch(asked.root, notify)
+    // Native errors end only this child; childBackend resubscribes every stream and reports the missed interval.
+    return { unsubscribe: async () => { directory.close() } }
+  }) : parcel
+    .subscribe(asked.root, (error, events) => {
       if (!subscriptions.has(id)) return
       if (error) {
         const reason = dropReason(error)
         reply({ t: "dropped", id, ...(reason && { reason }) })
       }
       else if (events.length) reply({ t: "events", id, events: events.map(({ path, type }) => ({ path, type })) })
-    }, { ignore: request.data.ignore })
-    .then((current) => {
+    }, { ignore: asked.ignore })
+  const subscription = opening.then((current) => {
       settling.delete(id)
       if (subscriptions.has(id)) {
         reply({ t: "ready", id })
