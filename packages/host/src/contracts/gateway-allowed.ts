@@ -142,7 +142,22 @@ export const MACHINE_CALLER = "gateway:runtime:"
 /** Why a machine was refused a call that is the person's. */
 export const MACHINE_REFUSED = "A machine calls as its Thread's agent, never as the person: this call is the person's"
 
+/**
+ * The runtime id the gateway itself stamps when it acts on a Thread (`gateway:<thread>`), as it does to see whether a
+ * machine's conversation still runs before packing the Thread off it (mako-cloud's `#depart`). No machine can claim
+ * it: a machine's own id is its runtime's.
+ */
+export const GATEWAY_RUNTIME = "gateway:"
+
+/** What the gateway itself may ask of a machine beyond a machine's own calls: whether a conversation still runs. */
+export const GATEWAY_RUNTIME_ALLOWED: ReadonlySet<string> = new Set(["mako:live-state"])
+
+/** Whether a runtime caller (`runtimeId`) may make `channel`: a machine its own calls, the gateway also a conversation's state. */
+export function runtimeAllows(channel: string, runtimeId: string): boolean {
+  return MACHINE_ALLOWED.has(channel) || (runtimeId.startsWith(GATEWAY_RUNTIME) && GATEWAY_RUNTIME_ALLOWED.has(channel))
+}
+
 /** Whether a `gateway:` caller may make `channel`: a person's device anything allowed, a machine only its own. */
 export function gatewayAllows(channel: string, client: string): boolean {
-  return GATEWAY_ALLOWED.has(channel) && (!client.startsWith(MACHINE_CALLER) || MACHINE_ALLOWED.has(channel))
+  return GATEWAY_ALLOWED.has(channel) && (!client.startsWith(MACHINE_CALLER) || runtimeAllows(channel, client.slice(MACHINE_CALLER.length)))
 }

@@ -136,6 +136,17 @@ try {
     assert.ok(gatewayAllows("mako:live-start", "gateway:web:phone"), "the person's phone starts one")
     assert.ok(gatewayAllows("mako:agents-list", machine) && operation("mako:agents-list", { kind: "runtime", runtimeId: "m-1.g1" }).kind === "call", "a machine keeps its agent's doors")
     assert.ok(gatewayAllows("mako:simulators-list", "gateway:runtime:borrower"), "and a borrower its simulator")
+    // The gateway itself (`gateway:<thread>`), packing a Thread off its machine, asks whether its conversation still
+    // runs; no other runtime may, and the gateway's id opens nothing else.
+    assert.ok(operation("mako:live-state", { kind: "runtime", runtimeId: "gateway:t-1" }).kind === "call", "the gateway's own runtime reads a conversation's state")
+    assert.ok(gatewayAllows("mako:live-state", "gateway:runtime:gateway:t-1"))
+    const stateRefused = operation("mako:live-state", { kind: "runtime", runtimeId: "m-1.g1" })
+    assert.ok(stateRefused.kind === "refused" && stateRefused.problem.type.endsWith("forbidden"), "a machine doesn't")
+    for (const runtimeId of ["borrower", "gateway:t-1"]) {
+      const started = operation("mako:live-start", { kind: "runtime", runtimeId })
+      assert.ok(started.kind === "refused" && started.problem.type.endsWith("forbidden"), `${runtimeId} still can't start a conversation`)
+    }
+    await assert.rejects(methods.invoke("mako:live-start", [], "gateway:runtime:borrower"), new RegExp(MACHINE_REFUSED.split(":")[0]!))
   }
 
   console.log("PASS: another device reaches only the allowlisted calls; a machine only its agent's doors, simulators and moves; read-live-file and read-file read only the Thread's folders after symlinks, never a key, through the descriptor they verified; a Thread at ~ opens nothing")
