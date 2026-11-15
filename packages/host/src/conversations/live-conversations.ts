@@ -319,6 +319,7 @@ export class LiveConversations {
       pending: (resident) => this.transfers.pending(resident),
       admit: (resident, request) => this.admit(resident, request),
       transfer: (id, input, actor, continues) => this.transfer(id, input, actor, continues),
+      moveOn: (id, move, stays, actor, stillDecided) => this.moveOn(id, move, stays, actor, stillDecided),
       drain: (resident) => this.dispatch.drain(resident),
       close: (id) => this.closing.close(id),
       launch: (...launch) => this.launches.launch(...launch),

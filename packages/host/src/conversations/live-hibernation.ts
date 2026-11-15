@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { failureEvidenceOf, HostFailureError } from "../contracts/provider-failure.js"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -22,7 +23,7 @@ export const PROVIDER_WARM_LIMIT = 2
 
 type HibernationAccess = Pick<LiveAccess,
   "dependencies" | "residents" | "resident" | "load" | "flush" | "noteWork" | "drain" | "moves" | "retireFromAccount" | "locateNativePath" |
-  "failedStart" | "returnFromRemovedWorktree" | "driverEvents" | "reconcileCut" | "restartContinued">
+  "failedStart" | "returnFromRemovedWorktree" | "driverEvents" | "reconcileCut" | "restartContinued" | "moveOn" | "stopMark">
 
 /**
  * Which conversations keep a provider process: a ready one stays warm for
@@ -440,6 +441,7 @@ export class LiveHibernation {
     }
     this.access.returnFromRemovedWorktree(resident)
     const generation = ++resident.generation
+    const stop = this.access.stopMark(resident.snapshot.session.id)
     resident.opening = true
     resident.driver = driver
     resident.snapshot = {
@@ -470,6 +472,36 @@ export class LiveHibernation {
         return
       }
       const verdict = await dependencies.resumeVerdict?.(binding)
+      // Inspection is awaited: Stop, close, or a different binding may have won while it read the record.
+      if (resident.generation !== generation || resident.closing || activeBinding(resident)?.id !== binding.id) return
+      if (!this.access.moves.executes(resident) || this.access.moves.ownerCheck(resident) !== undefined)
+        throw new Error("Execution ownership changed while preparing native recovery.")
+      if (verdict?.kind === "closed" || (verdict?.kind === "unavailable" && verdict.lost === true)) {
+        // No process was opened. A confirmed closed/lost record goes on through the ordinary transcript transfer,
+        // on the same harness and account. Merely unreadable records and unverified owners still refuse below.
+        resident.driver = null
+        resident.opening = false
+        resident.snapshot = { ...resident.snapshot, session: { ...resident.snapshot.session, connection: "hibernated", status: "ready" } }
+        this.access.flush(resident)
+        const first = resident.snapshot.requests.find((request) => request.status === "queued")
+        // A prewarm without a message starts no replacement. The next actual send can make this decision again.
+        if (!first || this.access.stopMark(resident.snapshot.session.id) !== stop) return
+        this.access.moveOn(resident.snapshot.session.id, {
+          id: randomUUID(),
+          first: first.id,
+          unlessStopped: true,
+          to: {
+            harness: binding.provider,
+            account: binding.account,
+            tuning: first.tuning ?? resident.snapshot.session.settings ?? binding.tuning,
+            modeId: resident.snapshot.session.currentMode ?? binding.modeId,
+          },
+        }, false, undefined, () => resident.generation === generation &&
+          this.access.stopMark(resident.snapshot.session.id) === stop &&
+          activeBinding(resident)?.id === binding.id &&
+          resident.snapshot.requests.some((request) => request.id === first.id && request.status === "queued"))
+        return
+      }
       if (!verdict || !resumable(verdict, "moved"))
         throw reconnectError(verdict)
       if (resident.generation !== generation || resident.closing) return
