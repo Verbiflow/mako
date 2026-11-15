@@ -185,15 +185,15 @@ async function longLivedTools() {
     running = true
     await call(http, "one")
     await call(sdk, "two")
-    const post = (url: string, token: string, body: object) => fetch(url, {
-      method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body),
+    const post = (url: string, token: string) => fetch(url, {
+      method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: "{}",
     })
-    assert.equal((await post(ended.makoUrl!, ended.token, {})).status, 401, "an ended binding is revoked")
+    assert.equal((await post(ended.makoUrl!, ended.token)).status, 401, "an ended binding is revoked")
     current.set("ended", "old")
-    assert.equal((await post(ended.makoUrl!, ended.token, {})).status, 401, "a later mint does not recreate a retired credential")
-    assert.equal((await post(first.makoUrl!, "fixture-unminted", {})).status, 401, "an unknown credential never renews")
+    assert.equal((await post(ended.makoUrl!, ended.token)).status, 401, "a later mint does not recreate a retired credential")
+    assert.equal((await post(first.makoUrl!, "fixture-unminted")).status, 401, "an unknown credential never renews")
     now += 25 * 60 * 60_000
-    const gated = await post(first.makoUrl!.replace(/\/mako$/, "/calls/pre"), first.token, {})
+    const gated = await post(first.makoUrl!.replace(/\/mako$/, "/calls/pre"), first.token)
     assert.equal(gated.status, 200, "native call hooks use the same active grant")
     assert.deepEqual(await gated.json(), { allowed: true })
     // A current binding check, not possession of an old token, is the authority for each operation.
@@ -204,13 +204,13 @@ async function longLivedTools() {
     assert.equal(reports.length, before)
     server.revoke("first", "one")
     current.set("first", "one")
-    assert.equal((await post(first.makoUrl!, first.token, {})).status, 401, "a revoked credential cannot later regain its old binding")
+    assert.equal((await post(first.makoUrl!, first.token)).status, 401, "a revoked credential cannot later regain its old binding")
     await call(sdk, "two")
     server.revoke("sdk", "two")
     const revoked = await sdk.callTool({ name: "report_fixture", arguments: {} })
     assert.equal(revoked.isError, true, "the retained in-process server cannot renew an explicitly revoked grant")
     assert.equal(reports.length, before + 1, "neither failed nor revoked calls publish another report")
-    assert.equal((await post(embedded.makoUrl!, embedded.token, {})).status, 401)
+    assert.equal((await post(embedded.makoUrl!, embedded.token)).status, 401)
     const fresh = server.mint("sdk", "two")
     const [freshClient, freshServer] = InMemoryTransport.createLinkedPair()
     await (await fresh.makoServer!()).connect(freshServer)
