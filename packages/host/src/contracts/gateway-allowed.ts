@@ -117,3 +117,46 @@ const ALLOWED: readonly string[] = [
 ]
 
 export const GATEWAY_ALLOWED: ReadonlySet<string> = new Set(ALLOWED)
+
+/**
+ * What a runtime caller (`gateway:runtime:…`) may call. The gateway refuses any connection that names an actor but
+ * its own device's client (the gateway's hub), so a runtime actor reaches a host only two ways: the gateway itself,
+ * acting on a Thread (`gateway:<thread>`, `GATEWAY_RUNTIME_ALLOWED`), and a simulator borrower under a lease, which
+ * stamps its own actor and so may say anything of itself. Neither runs a Thread on this host, so neither may act as a
+ * Thread's agent here (`agents-*`, `threads-*`, `settings-act`, …: their caller names a session, and nothing ties
+ * it to the runtime), nor as the person: a borrower reaches its simulator, and nothing else.
+ */
+const MACHINE_ALLOWED_CALLS: readonly string[] = [
+  "mako:simulators-list", "mako:simulators-open", "mako:simulators-act", "mako:simulators-read", "mako:simulators-shot",
+  "mako:simulators-record", "mako:simulators-release", "mako:simulators-watch",
+]
+
+export const MACHINE_ALLOWED: ReadonlySet<string> = new Set(MACHINE_ALLOWED_CALLS)
+
+/** How the gateway names a runtime's calls (`gatewayClientId`): `gateway:runtime:<runtime>`. */
+export const MACHINE_CALLER = "gateway:runtime:"
+
+/** Why a runtime was refused a call that is the person's or a Thread's agent's. */
+export const MACHINE_REFUSED = "A machine runs no Thread here, so it calls neither as the person nor as a Thread's agent"
+
+/**
+ * The runtime id the gateway itself stamps when it acts on a Thread (`gateway:<thread>`). A borrower writes its own
+ * actor, so this is no proof on its own: what it opens is only what the gateway sends a machine as itself (the gateway's
+ * `#callMachine`), reading a conversation's state and a Thread's departure or stay, never a start or an agent's door.
+ */
+export const GATEWAY_RUNTIME = "gateway:"
+
+/** What the gateway itself asks of a machine as it packs a Thread off it: whether a conversation runs, and the move. */
+export const GATEWAY_RUNTIME_ALLOWED: ReadonlySet<string> = new Set([
+  "mako:live-state", "mako:move-depart", "mako:move-stay", "mako:move-stage", "mako:move-arrive", "mako:move-ready", "mako:move-follow",
+])
+
+/** Whether a runtime caller (`runtimeId`) may make `channel`: a borrower its simulator, the gateway also its moves. */
+export function runtimeAllows(channel: string, runtimeId: string): boolean {
+  return MACHINE_ALLOWED.has(channel) || (runtimeId.startsWith(GATEWAY_RUNTIME) && GATEWAY_RUNTIME_ALLOWED.has(channel))
+}
+
+/** Whether a `gateway:` caller may make `channel`: a person's device anything allowed, a runtime only its own. */
+export function gatewayAllows(channel: string, client: string): boolean {
+  return GATEWAY_ALLOWED.has(channel) && (!client.startsWith(MACHINE_CALLER) || runtimeAllows(channel, client.slice(MACHINE_CALLER.length)))
+}

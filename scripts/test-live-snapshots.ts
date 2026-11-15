@@ -1,5 +1,5 @@
 import "./lib/scratch-git.mjs"
-import { Git } from "@mako/git"
+import { Git, type RunOptions } from "@mako/git"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -14,6 +14,7 @@ import {
 import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
 import { mock } from "node:test"
+import { DatabaseSync } from "node:sqlite"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
@@ -123,9 +124,22 @@ try {
     first = randomUUID(),
     second = randomUUID()
   await owner.start("test", cwd, { conversationId: id })
+  // A fast turn can finish while its baseline is still packing. Its closing files must be read now,
+  // while the next prompt dispatches before baseline publication, and neither side of the record is lost.
+  const baselinePacking = Promise.withResolvers<void>(), releaseBaseline = Promise.withResolvers<void>()
+  const run = gitRunner.run.bind(gitRunner)
+  let paused = false
+  const packing = mock.method(gitRunner, "run", async (input: RunOptions) => {
+    if (!paused && input.args.includes("pack-objects")) {
+      paused = true
+      baselinePacking.resolve()
+      await releaseBaseline.promise
+    }
+    return run(input)
+  })
   owner.submit(id, first, "first question")
   await until(() => sent.length === 1)
-  assert.equal(owner.snapshot(id)?.requests[0].snapshots?.before.kind, "ready")
+  await baselinePacking.promise
   writeFileSync(file, "first answer files")
   owner.submit(id, second, "second question")
   finish(id, "first answer")
@@ -134,8 +148,19 @@ try {
     1,
     "queued provider cannot start ahead of final checkpoint"
   )
-  await until(() => sent.length === 2)
+  const catalog = new DatabaseSync(join(root, "snapshots", "snapshots.sqlite"), { readOnly: true })
+  try {
+    await until(() => Boolean(catalog.prepare("SELECT 1 FROM snapshots LIMIT 1").get()))
+    await until(() => sent.length === 2)
+    assert.equal(owner.snapshot(id)?.requests[0].snapshots, undefined, "the next prompt dispatches while the previous baseline is still packing")
+  } finally {
+    releaseBaseline.resolve()
+    catalog.close()
+    packing.mock.restore()
+  }
+  await until(() => owner.snapshot(id)?.requests[0].snapshots?.after?.kind === "ready")
   const firstRequest = owner.snapshot(id)?.requests[0]
+  assert.equal(firstRequest?.snapshots?.before.kind, "ready")
   assert.equal(firstRequest?.snapshots?.after?.kind, "ready")
   writeFileSync(file, "second answer files")
   finish(id, "second answer")
