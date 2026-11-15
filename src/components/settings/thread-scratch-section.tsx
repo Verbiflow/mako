@@ -20,7 +20,7 @@ export function ThreadScratchSection() {
     <h3 className="text-ui font-medium">Disposable Thread scratch</h3>
     <p className="mt-0.5 pb-3 text-label text-muted-foreground">Preview only by default. Registered clones, benchmark worlds and packaging scratch can go after their Thread ends or seven idle days, when no provider, terminal or process uses them. Ordinary Thread data and unregistered folders stay. A .keep file in a scratch root keeps it.</p>
     {report ? <ListCard>
-      <SettingRow title="Scratch cleanup" description="Removal checks hourly and on Thread events. Enabling it authorizes removal of eligible registered scratch on the next pass. Preview never removes files.">
+      <SettingRow title="Scratch cleanup" description="Removal checks after startup, hourly and on Thread events. Enabling it authorizes removal of eligible registered scratch on the next pass. Preview never removes files.">
         <select aria-label="Scratch cleanup" disabled={busy} value={report.settings.mode} onChange={event => {
           const mode = event.target.value
           if (mode === "preview" || mode === "remove") void save({ ...report.settings, mode })

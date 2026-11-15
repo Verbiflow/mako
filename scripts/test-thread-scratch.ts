@@ -67,6 +67,25 @@ try {
   assert.equal(await readFile(join(outside, "proof"), "utf8"), "outside", "nested links never turn into foreign cleanup")
   assert.equal(await readFile(join(dirname(path), "kept-proof"), "utf8"), "not scratch", "the Thread's durable data survives")
 
+  // A complete acquisition survives a process loss without adopting any unregistered world.
+  const abandoned = ThreadIdSchema.parse(randomUUID())
+  const abandonedPath = await scratch.ensure(abandoned)
+  await writeFile(join(abandonedPath, "unfinished-run"), "fixture")
+  const restarted = new ThreadScratch({
+    root: data, registry, settings: join(root, "settings.json"), now: () => now,
+    owner: () => owner, using: async () => users,
+    openFiles: async () => { if (!files) throw new Error("Unavailable"); return files },
+    privateBytes: async () => 64,
+  })
+  try {
+    files = [join(abandonedPath, "unfinished-run")]
+    await restarted.run()
+    assert.equal(await exists(abandonedPath), true, "restart holds a process's open scratch")
+    files = []
+    const recovered = await restarted.run()
+    assert.equal(recovered.entries.find(row => row.thread === abandoned)?.removed, true, "restart retires completed ownership of a finished run")
+  } finally { restarted.close() }
+
   const recreated = await scratch.ensure(thread)
   const before = (await inspect()).generation
   assert.ok(before)

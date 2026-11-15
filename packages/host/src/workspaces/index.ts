@@ -301,7 +301,8 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     // Allocation totals overcount APFS clones. Unknown exclusive bytes stay unknown in the UI.
     privateBytes: async () => null,
   }) : null
-  if (scratch) deps.jobs.every("retire owned Thread scratch", SCRATCH_PASS_MS, async () => { await scratch?.run() })
+  // Reconsider registered worlds left by a crash once conversations have opened, then hourly.
+  if (scratch) deps.jobs.every("retire owned Thread scratch", SCRATCH_PASS_MS, async () => { await scratch?.run() }, { firstAfterMs: 60_000 })
   if (retention && !deps.readOnly) deps.jobs.every("retire finished Thread worktrees", WORKTREE_RETENTION_MS, async () => { await retention.run() })
   // Windows hear the summaries as they change, rather than each asking every half minute. What no event of its own
   // says (a pull request on GitHub, an edit outside a turn) a pass of the host's says, each worktree read only once
