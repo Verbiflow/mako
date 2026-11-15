@@ -1,4 +1,5 @@
 import type { ExecutionContext, NativeIdentityCapability } from "../contracts/execution-context.js"
+import { NATIVE_VERIFICATION_REASONS } from "../contracts/native-verification.js"
 import { versionsCompatible } from "../contracts/harness-versions.js"
 import { namesBuild, parseVersion } from "../contracts/runtime-version.js"
 
@@ -49,7 +50,7 @@ export function disconnectedContext(context: ExecutionContext | undefined): Exec
 
 export type ContextCompatibility =
   | { kind: "compatible" }
-  | { kind: "incompatible"; reason: string }
+  | { kind: "incompatible"; reason: string; retry?: true }
   | { kind: "unverified"; missing: string[] }
 
 /** Account selection is global. A principal changing with a deliberate
@@ -68,14 +69,14 @@ export function assessExecutionContext(saved: ExecutionContext | undefined, open
     return { kind: "incompatible", reason: "The native authentication backend changed. Reconcile the selected account before resuming." }
   if (saved.service?.kind === "reported" && opened.service?.kind === "reported" && saved.service.authority !== opened.service.authority)
     return { kind: "incompatible", reason: "The native service authority changed. Reconcile the selected service before resuming." }
-  if (saved.service?.kind === "reported" && opened.service?.kind !== "reported")
-    return { kind: "incompatible", reason: "The runtime could not verify the reopened native service authority. No prompt was dispatched." }
-  if (saved.identity.kind === "reported" && opened.identity.kind !== "reported")
-    return { kind: "incompatible", reason: "The runtime could not verify the reopened account's native identity. Retry after sign-in is available; the saved conversation was preserved." }
-  if (saved.account.kind === "configured" && opened.account.kind !== "configured")
-    return { kind: "incompatible", reason: "The runtime could not verify the reopened account selection. No prompt was dispatched." }
   if (saved.account.kind === "configured" && opened.account.kind === "configured" && saved.account.managed === opened.account.managed && saved.account.name === opened.account.name && saved.identity.kind === "reported" && opened.identity.kind === "reported" && saved.identity.principal !== opened.identity.principal)
     return { kind: "incompatible", reason: "The unchanged account selection reported a different native identity. No prompt was dispatched." }
+  if (saved.service?.kind === "reported" && opened.service?.kind !== "reported")
+    return { kind: "incompatible", reason: NATIVE_VERIFICATION_REASONS.service, retry: true }
+  if (saved.identity.kind === "reported" && opened.identity.kind !== "reported")
+    return { kind: "incompatible", reason: NATIVE_VERIFICATION_REASONS.identity, retry: true }
+  if (saved.account.kind === "configured" && opened.account.kind !== "configured")
+    return { kind: "incompatible", reason: NATIVE_VERIFICATION_REASONS.account, retry: true }
   const missing: string[] = []
   if (saved.runtime.kind !== "reported" || opened.runtime.kind !== "reported") missing.push("runtime-version")
   else if (saved.runtime.version !== opened.runtime.version && !runtimeChangeCompatible(saved.runtime.version, opened.runtime.version, oldest))
