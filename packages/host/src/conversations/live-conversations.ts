@@ -69,7 +69,7 @@ import type { TurnUndoScope } from "../contracts/turn-review.js"
 import { LiveClosing } from "./live-closing.js"
 import { LiveDispatch, nextQueued } from "./live-dispatch.js"
 import { latchedByStop } from "../contracts/delivery-retry.js"
-import { arriving, goesNext, goingFirst, holdDue, holdOf, released, sooner, transferDue } from "../contracts/request-hold.js"
+import { arriving, goesNext, goingFirst, holdDue, holdOf, holdWords, released, sooner, transferDue } from "../contracts/request-hold.js"
 import { driverEvents, LiveEvents } from "./live-events.js"
 import { LiveForks } from "./live-forks.js"
 import { LiveGoals, turnReply, type TurnReply } from "./live-goals.js"
@@ -1110,7 +1110,7 @@ export class LiveConversations {
       this.storageFailed(resident, { error })
       return false
     }
-    hostLog("live", "a held message's time came", { conversation: id, requests: ready.length })
+    hostLog("live", "a held message's time came", { conversation: id, requests: ready.length, held: ready.flatMap((request) => { const hold = holdOf(request); return hold ? [holdWords(hold, now)] : [] }).join(", ") })
     try {
       this.release(resident)
     } catch (error) {

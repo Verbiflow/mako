@@ -6,9 +6,9 @@ import { mock } from "node:test"
 import { join } from "node:path"
 import { holdForRetry, RESET_MARGIN_MS } from "@mako/host/contracts/delivery-retry"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
-import { holdDue, holdOf } from "@mako/host/contracts/request-hold"
+import { holdDue, holdOf, holdWords } from "@mako/host/contracts/request-hold"
 import { LiveRequestSchema } from "@mako/host/conversations/live-journal"
-import { FROM_AGENTS } from "@mako/host/contracts/children"
+import { DIGEST_WAITS, FROM_AGENTS } from "@mako/host/contracts/children"
 import { readFinReports } from "@mako/host/contracts/fin-reports"
 import { AgentsWorld, HARNESSES, TESTED_HARNESSES, type Script } from "./lib/agents-world.ts"
 
@@ -460,7 +460,11 @@ try {
     }
     console.log(`${harness}: a wake refused or failed at a limit knocked once for three reports, which waited as one digest and went once, across a restart, a crash mid-write, a switch, 28 failures in a row, a Stop and the person's own message`)
   }
-  console.log("held digest: ok")
+  // The log says what held each message whose time came, so a day of digest windows never reads as one retry stuck.
+assert.equal(holdWords({ kind: "until", wake: { at: 0, after: DIGEST_WAITS } }, 0), "wake after digest")
+assert.equal(holdWords({ kind: "retry", retry: { at: 0, attempt: 3, since: 0, cause: "rate-limited", reason: "" } }, 4 * 60_000), "retry rate-limited #3 after 4m")
+assert.equal(holdWords({ kind: "resting" }, 0), "resting digest")
+console.log("held digest: ok")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

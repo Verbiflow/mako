@@ -45,6 +45,25 @@ export function holdOf(request: Pick<LiveRequest, "status" | "signIn" | "editing
   return { kind: "paused", by: "mako" }
 }
 
+/**
+ * What held a message whose time came, in words the log can count: a retry's cause, attempt and how long it has
+ * waited ("retry rate-limited #3 after 4m"), a digest at rest, or the event a wake waited for ("wake after digest", an
+ * Apex's coalescing window, which runs once per Fin report and is no retry). A day's 260 "time came" lines once read as
+ * one message stuck retrying, when each was a different digest going on time.
+ */
+export function holdWords(hold: Hold, now: number): string {
+  switch (hold.kind) {
+    case "retry":
+      return `retry ${hold.retry.cause} #${hold.retry.attempt} after ${Math.round((now - hold.retry.since) / 60_000)}m`
+    case "resting":
+      return "resting digest"
+    case "until":
+      return `wake after ${hold.wake.after}`
+    default:
+      return hold.kind
+  }
+}
+
 /** Capacity and service waits belong to the provider; new messages cannot make either clear sooner. */
 export function waitsForProvider(request: Pick<LiveRequest, "retry">): boolean {
   return request.retry?.cause === "provider-unavailable" || request.retry?.cause === "rate-limited"
