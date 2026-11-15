@@ -14,6 +14,7 @@ import { harnessLabel } from "@/lib/harness-label"
 import type { SessionReaderEvent, SessionReaderHistory } from "@mako/host/contracts/session-reader"
 import type { UnreadReport } from "@mako/host/contracts/unread-records"
 import { UnreadRecords } from "@/components/settings/unread-records"
+import { UnopenedConversations } from "@/components/settings/unopened-conversations"
 import { SyncReadout } from "@/components/settings/sync-readout"
 import { ContinueReadout } from "@/components/settings/continue-readout"
 import type { ContinueReading } from "@mako/host/contracts/cloud-continues"
@@ -177,6 +178,8 @@ export function DiagnosticsSection() {
           </IfCanReveal>
         </div>
       ) : null}
+
+      <UnopenedConversations />
 
       {reader ? <SessionReaderRow history={reader} /> : null}
 

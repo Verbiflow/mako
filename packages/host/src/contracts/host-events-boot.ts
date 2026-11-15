@@ -266,8 +266,11 @@ export type HostEventBody =
  * untagged event would be applied to whichever conversation happens to be on
  * screen. Absent only on window-wide events like `plugins-changed`.
  */
-/** The one thing a notice's button does: open Settings › Storage or Updates, or restart Mako. */
-export type NoticeAction = { label: string; does: "open-storage" | "open-updates" | "restart" }
+/** A rewind the last host stopped in the middle of, which this one couldn't finish on its own. */
+export const REWIND_CUT_SHORT = "A rewind didn't finish when Mako last stopped, so some files may be only partly put back."
+
+/** The one thing a notice's button does: open Settings › Storage or Updates, restart Mako, or finish a rewind cut short. */
+export type NoticeAction = { label: string; does: "open-storage" | "open-updates" | "restart" | "recover-rewinds" }
 
 export type HostEvent = HostEventBody & { tabId?: string }
 

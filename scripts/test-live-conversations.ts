@@ -1771,8 +1771,10 @@ async function failureIsolationAndAssets() {
         .every((event) => JSON.stringify(event.batch.updates).length < 256_000)
     )
     await f.owner.stop()
-    writeFileSync(join(f.root, `${randomUUID()}.sqlite`), "corrupt journal")
-    // A journal that can't be opened is kept for recovery and said in the host's log; the person can't act on it.
+    const corrupt = randomUUID()
+    writeFileSync(join(f.root, `${corrupt}.sqlite`), "corrupt journal")
+    // A journal that can't be opened is kept for recovery, said in the host's log, and listed for the rail and
+    // Diagnostics (`unopened`) rather than toasted at every start.
     const kept: HostLogLine[] = []
     const stopHearing = followHostLog((line) => { if (line.message === "a saved conversation couldn't be opened; its journal is kept") kept.push(line) })
     const recovered = new LiveConversations(f.dependencies)
@@ -1780,6 +1782,8 @@ async function failureIsolationAndAssets() {
       assert.equal(recovered.snapshot(f.id)?.blocks.length, 2)
       assert.equal(kept.length, 1, "the corrupt journal is said in the log")
       assert.ok(!f.events.some((event) => event.type === "notice"), "and never as a toast")
+      assert.deepEqual(recovered.unopened().map(({ conversation, journal }) => [conversation, journal]), [[corrupt, join(f.root, `${corrupt}.sqlite`)]], "it's listed with its kept journal")
+      assert.ok(recovered.unopened()[0]?.error, "with what opening it met")
     } finally {
       stopHearing()
       await recovered.stop()

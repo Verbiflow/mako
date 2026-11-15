@@ -31,7 +31,10 @@ export function FinRules({ order, profiles }: { order: readonly string[]; profil
   const [draft, setDraft] = useState<FinRule | undefined>(undefined)
   const signedIn = order.filter((harness) => profiles[harness]?.available)
   if (!policy) return null
-  const save = (next: FinPolicy) => void saveFinPolicy(next).catch((error: Error) => notSaved("Your rules", { error }))
+  const save = (next: FinPolicy) => {
+    const again = () => saveFinPolicy(next)
+    void again().catch((error: Error) => notSaved("Your rules weren't saved", { error }, { retry: again }))
+  }
   const setRule = (index: number, rule: FinRule) => save({ ...policy, rules: policy.rules.map((each, at) => (at === index ? rule : each)) })
   const move = (index: number, by: number) => {
     const rules = [...policy.rules]

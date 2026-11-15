@@ -1,6 +1,7 @@
 import { z } from "zod"
 import type { PromptVersions, PromptVersionsByRequest } from "../contracts/live-conversations.js"
 import { randomBytes, randomUUID } from "node:crypto"
+import type { UnopenedConversation } from "../contracts/unopened-conversations.js"
 import { statSync } from "node:fs"
 import { join } from "node:path"
 import { Admission } from "../base/admission.js"
@@ -1322,6 +1323,11 @@ export class LiveConversations {
       if (versions) answers[request.id] = versions
     }
     return answers
+  }
+
+  /** Saved conversations this host couldn't open as it started; their journals are kept. */
+  unopened(): readonly UnopenedConversation[] {
+    return this.records.unopened
   }
 
   recoverRewinds() {

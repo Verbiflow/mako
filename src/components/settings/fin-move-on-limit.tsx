@@ -23,7 +23,10 @@ export function FinMoveOnLimit() {
             label={TITLE}
             on={on}
             disabled={!reading}
-            onChange={() => void chooseMoveOnLimit(!on).catch((error: Error) => notSaved("That choice", { error }))}
+            onChange={() => {
+              const save = () => chooseMoveOnLimit(!on)
+              void save().catch((error: Error) => notSaved("That choice wasn't saved", { error }, { retry: save }))
+            }}
           />
         </SettingRow>
       </ListCard>

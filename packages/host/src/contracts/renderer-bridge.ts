@@ -1,6 +1,7 @@
 import type { RemoteAppDemand, RemoteAppReply, RemoteAppSnapshot } from "./remote-app.js"
 import type { FileFindResults, FileFolders, FileFoldersOptions, FileGrepOptions, FileGrepResults } from "./file-index.js"
 import type { PromptVersionsByRequest } from "./live-conversations.js"
+import type { UnopenedConversation } from "./unopened-conversations.js"
 import type { AgentAskAnswer } from "./agent-asks.js"
 import type { GitRemoteInput, GitRemoteResult, ExternalEditor, FileContents, FileReadPurpose, GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitHubStatus, GitStatus, GitPushInput, PullRequest, SearchOptions, SearchResults, StagedFile, WorkspaceFile } from "./git-workspace-search.js"
 import type { TurnFileHunks, TurnFileWriters, TurnUndoPreview, TurnUndoResult, TurnUndoScope } from "./turn-review.js"
@@ -409,6 +410,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<LiveSnapshot[]>("mako:live-rewind-recover"),
     /** A conversation's edited prompts' versions, by request: the conversation each was first sent in, then each fork. */
     livePromptVersions: (id: string) => invokeTrustedHost<PromptVersionsByRequest>("mako:live-prompt-versions", id),
+    /** Saved conversations this host couldn't open as it started; their journals are kept for recovery. */
+    unopenedConversations: () => invokeTrustedHost<UnopenedConversation[]>("mako:unopened-conversations"),
     liveFork: (id: string, input: ForkInput) =>
       invokeTrustedHost<LiveSnapshot>("mako:live-fork", id, input),
     liveCapture: (id: string, path: string) =>

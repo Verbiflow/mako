@@ -72,9 +72,9 @@ function FinLimit() {
   const own = reading.limit
   const atOnce = own ?? capacity?.atOnce ?? FIN_LIMIT
   const ceiling = reading.ceiling ?? FIN_CEILING
-  const fail = (error: Error) => notSaved("That number", { error })
-  const saveLimit = (next: number | null) => void setFinLimit(next).catch(fail)
-  const saveCeiling = (next: number) => void setFinCeiling(next).catch(fail)
+  const saved = (save: () => Promise<void>) => void save().catch((error: Error) => notSaved("That number wasn't saved", { error }, { retry: save }))
+  const saveLimit = (next: number | null) => saved(() => setFinLimit(next))
+  const saveCeiling = (next: number) => saved(() => setFinCeiling(next))
   const based = capacity ? [capacity.pressure ?? capacity.why, ...capacity.measured ? [] : ["defaults so far"]].join(" · ") : undefined
   // Another place's operations this Mac runs take Fins' places from the same number.
   const lending = capacity?.lent?.length ? `${capacity.lent.length} lent: ${capacity.lent.join(", ")}` : undefined
@@ -188,8 +188,10 @@ function FinRow({ harness, profile }: { harness: string; profile: HarnessProfile
 }
 
 function FinPicker({ harness, profile, chosen }: { harness: string; profile: HarnessProfile; chosen: SessionSettings | undefined }) {
-  const save = (settings: SessionSettings | null) =>
-    void chooseFinDefault(harness, settings).catch((error: Error) => notSaved("That choice", { error }))
+  const save = (settings: SessionSettings | null) => {
+    const again = () => chooseFinDefault(harness, settings)
+    void again().catch((error: Error) => notSaved("That choice wasn't saved", { error }, { retry: again }))
+  }
   const { resolved, model, options } = harnessDefaults(harness, profile, chosen ? { source: "saved", settings: chosen } : undefined)
   const choice: ModelChoice = {
     harness,

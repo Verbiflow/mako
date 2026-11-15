@@ -52,7 +52,7 @@ import { GoalCommandSchema, type GoalCommand } from "../contracts/live-goals.js"
 import { SideQuestionCommandSchema, type SideQuestionCommand } from "../contracts/live-side-questions.js"
 import { ReviewTargetSchema, type ReviewTarget } from "../contracts/live-reviews.js"
 import type { ForkInput, TransferInput } from "../contracts/conversation-control.js"
-import type { HostEvent } from "../contracts/host-events-boot.js"
+import { REWIND_CUT_SHORT, type HostEvent } from "../contracts/host-events-boot.js"
 import type { LivePermissionResponse, PromptAttachment } from "../contracts/providers-acp.js"
 import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandOffCandidate, HandOffResult, HandOffSettings, ThreadContinueOffer, ThreadContinueOutcome, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOptions, ThreadReturnOutcome } from "../contracts/cloud-threads.js"
 import type { ContinueReading } from "../contracts/cloud-continues.js"
@@ -318,8 +318,11 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       }
     },
   })
-  // Nothing the person can do about it from here: the log keeps it.
-  await live.recoverRewinds().catch((error) => hostWarn("turn-undo", "a rewind cut short couldn't be recovered", { error: error instanceof Error ? error.message : String(error) }))
+  // A rewind the last host died in may have left the workspace part put back: said with the one thing that finishes it.
+  await live.recoverRewinds().catch((error) => {
+    hostWarn("turn-undo", "a rewind cut short couldn't be recovered", { error: error instanceof Error ? error.message : String(error) })
+    emit({ type: "notice", level: "error", message: REWIND_CUT_SHORT, action: { label: "Finish the rewind", does: "recover-rewinds" } })
+  })
   // An undo the last host died in the middle of is finished, or put back, from its saved plan.
   await live.resumeUndos().catch((error) => hostWarn("turn-undo", "an undo cut short couldn't be read", { error: error instanceof Error ? error.message : String(error) }))
   // The turns the last host's exit cut short go on, if the person chose so, once their sessions reopen.
@@ -672,6 +675,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   })
   methods.handle("mako:live-rewind-recover", () => live.recoverRewinds())
   methods.handle("mako:live-prompt-versions", (id: string) => live.promptVersions(id))
+  methods.handle("mako:unopened-conversations", () => live.unopened())
   methods.handle("mako:live-action", (id: string, input: LiveActionInput) => live.act(id, input))
   // A separate method advertises atomic queued steering to clients whose UI
   // can update while the shared host remains alive. Keep live-action for

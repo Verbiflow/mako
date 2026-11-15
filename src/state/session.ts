@@ -16,6 +16,7 @@ import { applyThreadPurposes, loadThreadPurposes } from "@/state/thread-purposes
 import { applyStoreFormats, loadStoreFormats } from "@/state/store-formats"
 import { applyFileEvents, loadFileEvents } from "@/state/file-events"
 import { applyMcpSignIns, loadMcpSignIns } from "@/state/mcp-sign-ins"
+import { loadUnopened } from "@/state/unopened-conversations"
 import { applyThreadTitles, loadThreadTitles } from "@/state/thread-titles"
 import { applyWorktreeSummaries, refreshWorktrees, refreshWorktreeSummaries } from "@/state/worktrees"
 import { github, githubStore } from "@/state/github"
@@ -59,7 +60,7 @@ import type {
   TreeNode,
 } from "@/lib/types"
 import { getMako, hasBridge } from "@/lib/bridge"
-import type { NoticeAction } from "@mako/host/contracts/host-events-boot"
+import { REWIND_CUT_SHORT, type NoticeAction } from "@mako/host/contracts/host-events-boot"
 import { reconcileMessages } from "@/lib/reconcile"
 import { composerTurnRunning } from "@/lib/composer-action"
 import {
@@ -670,6 +671,16 @@ function report(message: string) {
 
 /** What a notice's one button does (`NoticeAction`). */
 function act(action: NoticeAction): void {
+  if (action.does === "recover-rewinds") {
+    void getMako().liveRecoverRewinds().then(
+      () => toast.success("The rewind finished."),
+      (error: Error) => {
+        console.warn(`The rewind still didn't finish ${JSON.stringify({ error: error.message })}`)
+        toast.error(REWIND_CUT_SHORT, { duration: ACTION_TOAST_MS, description: "It still didn't finish.", action: { label: "Try again", onClick: () => act(action) } })
+      },
+    )
+    return
+  }
   if (action.does === "restart") void updates.relaunch()
   else window.dispatchEvent(new CustomEvent("mako:settings", { detail: action.does === "open-storage" ? "storage" : "updates" }))
 }
@@ -823,6 +834,8 @@ async function loadGroups() {
   await loadFileEvents().catch(() => undefined)
   // The MCP servers that need sign-in, said in the rail; a host without the reading has none to say.
   await loadMcpSignIns().catch(() => undefined)
+  // Saved conversations the host couldn't open, for the rail and Diagnostics; a host without the reading has none.
+  await loadUnopened().catch(() => undefined)
   await quietly("Thread titles", loadThreadTitles).catch((error) => unread("Thread titles", { error }))
 }
 

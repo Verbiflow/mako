@@ -1,4 +1,5 @@
 import { toast } from "sonner"
+import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { HostCallTimeoutError, RuntimeDisconnectedError, isHostReconnectingError } from "@mako/host/contracts/host-connection"
 import { errorMessage, type FailureBoundary } from "@mako/host/contracts/error-message"
 
@@ -26,16 +27,29 @@ export async function quietly<T>(what: string, work: () => Promise<T>, waitMs = 
   }
 }
 
+/** How a save that didn't go is said: what pressing Try again does, and whether the person's words stay where they typed them. */
+export interface NotSavedOptions {
+  /** The same save again, as the button's one action. */
+  retry: () => Promise<void>
+  /** The words stay in their field, marked unsaved, rather than going back to what was saved. */
+  kept?: boolean
+}
+
 /**
- * A setting that wasn't saved: it's back as it was. A refusal is the host's answer and says why in its words (a rule
- * with no words); a connection that failed twice says only that, its words going to the host's log. `what` names the
- * setting ("Your Fin rules").
+ * A setting that wasn't saved, with its one action. A refusal is the host's answer and says why in its words (a rule
+ * with no words): the same save would meet it again, so the words are all it says. A connection that failed twice
+ * offers Try again, which runs the same save; its words go to the host's log. `title` says what ("Your rules weren't
+ * saved").
  */
-export function notSaved(what: string, failure: FailureBoundary): void {
+export function notSaved(title: string, failure: FailureBoundary, options: NotSavedOptions): void {
   if (!passing(failure)) {
-    toast.error(`${what} wasn't saved`, { description: errorMessage(failure) })
+    toast.error(title, { description: errorMessage(failure) })
     return
   }
-  console.warn(`Not saved ${JSON.stringify({ what, error: errorMessage(failure) })}`)
-  toast.error(`${what} wasn't saved`, { description: "It's back as it was. Mako couldn't reach its host; try again in a moment." })
+  console.warn(`Not saved ${JSON.stringify({ title, error: errorMessage(failure) })}`)
+  toast.error(title, {
+    duration: ACTION_TOAST_MS,
+    description: `${options.kept ? "Your words are still in the field." : "It's back as it was."} Mako couldn't reach its host.`,
+    action: { label: "Try again", onClick: () => void options.retry().catch((error: Error) => notSaved(title, { error }, options)) },
+  })
 }

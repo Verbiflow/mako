@@ -74,6 +74,8 @@ export interface ThreadRunState {
   error?: string
   /** Public facts for this headless launch; absent in older events. */
   executionContext?: ExecutionContext
+  /** Settings asked for that the harness's command line can't carry, so this reply runs without them ("effort"). */
+  dropped?: string[]
 }
 
 export type ThinkingLevel =

@@ -27,6 +27,8 @@ function RoleField({ role, label, description, placeholder, reads, policy, targe
   const saved = policy[role] ?? ""
   const [text, setText] = useState(saved)
   const [preview, setPreview] = useState(false)
+  // Words a save didn't keep stay where they were typed, marked, until a save keeps them or Escape puts back the saved.
+  const [unsaved, setUnsaved] = useState(false)
   // Escape's blur runs before the reverted text renders, so the blur it causes must not save what it reverted.
   const cancelled = useRef(false)
   const id = `role-rules-${role}`
@@ -37,15 +39,17 @@ function RoleField({ role, label, description, placeholder, reads, policy, targe
     }
     const next = text.trim()
     if (next === saved) return
-    void saveRoleRules(role, next).catch((error: Error) => {
-      setText(saved)
-      notSaved("Your rules", { error })
+    const save = () => saveRoleRules(role, next).then(() => setUnsaved(false))
+    void save().catch((error: Error) => {
+      setUnsaved(true)
+      notSaved("Your rules weren't saved", { error }, { retry: save, kept: true })
     })
   }
   const keys = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Escape") {
       cancelled.current = true
       setText(saved)
+      setUnsaved(false)
       event.currentTarget.blur()
     }
   }
@@ -65,8 +69,14 @@ function RoleField({ role, label, description, placeholder, reads, policy, targe
         onChange={(event) => setText(event.target.value)}
         onBlur={commit}
         onKeyDown={keys}
+        aria-describedby={unsaved ? `${id}-unsaved` : undefined}
         className={cn(FIELD, "h-auto min-h-14 resize-none py-2.5 leading-snug [field-sizing:content]")}
       />
+      {unsaved ? (
+        <p id={`${id}-unsaved`} data-role-unsaved={role} className="-mt-1.5 text-label text-caution">
+          Not saved yet. Leave the field to try again, or press Escape for what's saved.
+        </p>
+      ) : null}
       {shown ? (
         <div className="flex flex-col gap-1.5">
           <button
