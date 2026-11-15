@@ -1077,7 +1077,7 @@ export class WorkspaceSnapshots {
         if (!since) await copyGitIndex(userIndex, index)
         // Expand split indexes so retained snapshots do not depend on sharedindex GC.
         await captureGit(["update-index", "--no-split-index"], index)
-      } else {
+      } else if (!since) {
         await captureGit(["read-tree", "--empty"], workingIndex)
       }
       // The live index can move on immediately. Keep its saved tree reachable
