@@ -17,6 +17,7 @@ import { AppKeySchema, type ThreadEnvironment } from "@mako/host/contracts/threa
 import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
 import { environmentTools, registerEnvironmentTools } from "@mako/host/workspaces/environment-tools"
 import { applyThreadEnvironment, folderApp, portListening, ThreadEnvironments, threadEnvironmentInstructions } from "@mako/host/workspaces/thread-environment"
+import { freeThreadBlock } from "./lib/thread-ports.ts"
 import { ThreadProcesses } from "@mako/host/workspaces/thread-processes"
 import { publishDraft, readRecipe, readVersion, recipePath, recipeProblem, RecipeSchema, recipeValues, recipeVersions, RECIPE_PATH, saveDraft, StaleDraftError, type Recipe } from "@mako/host/workspaces/thread-recipe"
 import { ThreadStore } from "@mako/host/threads/store"
@@ -65,14 +66,6 @@ function alive(pid: number): boolean {
   } catch {
     return false
   }
-}
-
-async function freeBlock(from: number): Promise<number> {
-  for (let base = from; base < from + 2_000; base += 10) {
-    const busy = await Promise.all(Array.from({ length: 10 }, (_, index) => portListening(base + index)))
-    if (!busy.some(Boolean)) return base
-  }
-  throw new Error("no free ports for the test")
 }
 
 async function fetchJson(port: number) {
@@ -219,7 +212,7 @@ try {
   title.set(thread, 'the Thread "Fix login"')
   title.set(other, 'the Thread "Tidy settings"')
   cleanups.push(() => processes.discard(thread), () => processes.discard(other))
-  const base = await freeBlock(41_000)
+  const base = await freeThreadBlock()
   const grandchildFile = join(root, "grandchild.pid")
   const webEnv = { ...process.env, PORT: String(base), GRANDCHILD_FILE: grandchildFile }
   const first = await processes.start(thread, [{ kind: "process", name: "web", command: `node ${server}`, cwd: root, env: webEnv, port: base }])
@@ -329,7 +322,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   const service: Actor = { kind: "service", name: "migration" }
   const conversation = randomUUID()
   const placed = store.registerJournal({ conversationId: conversation, createdAt: Date.now(), bindings: [], harness: "codex" }, service)
-  const toolBase = await freeBlock(base + 10)
+  const toolBase = await freeThreadBlock([base])
   const environments = new ThreadEnvironments({ git: gitRunner, store, dataRoot: join(root, "thread-data") })
   // The store hands out real ports in the Threads' range; this test runs apps outside it.
   const environment = async (id: string, cwd: string) => {
