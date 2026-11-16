@@ -24,7 +24,7 @@ const gh = join(root, "gh")
 await writeFile(gh, `#!/bin/sh
 case "$1 $2" in
   "--version "*) echo "gh version 2.103.3" ;;
-  "repo view") echo '{"nameWithOwner":"acme/shop","defaultBranchRef":{"name":"main"}}' ;;
+  "api repos/{owner}/{repo}") echo '{"full_name":"acme/shop","html_url":"https://github.com/acme/shop","default_branch":"main"}' ;;
   "pr view") [ -f "${opened}" ] && echo '{"number":12,"title":"Add the cart","state":"OPEN","isDraft":false,"url":"https://github.com/acme/shop/pull/12","headRefName":"cart","baseRefName":"main","statusCheckRollup":[],"latestReviews":[]}' || exit 1 ;;
   "pr create"|"pr merge"|"pr edit")
     echo "$1 $2 as=\${MAKO_GITHUB_AS:-default}" >> "${calls}"

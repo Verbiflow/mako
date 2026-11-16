@@ -1,9 +1,8 @@
-import { z } from "zod"
 import { hostCommand } from "../base/host-command.js"
 import { hostFetch, hostStopping, type HostStopping } from "../base/host-stopping.js"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { GitHubReads, GitHubRateLimitError, githubRateLimit } from "./github-reads.js"
+import { GitHubReads, GitHubRateLimitError, GitHubRepositoryLookupError, githubRateLimit } from "./github-reads.js"
 import { hostLog } from "../base/host-log.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import { resolveExecutable } from "../base/executable.js"
@@ -14,6 +13,7 @@ import type { PullReading } from "../contracts/pull-waits.js"
 import type { WorktreeBranchPull, WorktreePull } from "../contracts/thread-worktrees.js"
 import { MERGE_METHODS, type MergeMethod } from "../contracts/git-actions.js"
 import { commonDirOf, type Git } from "@mako/git"
+import { z } from "zod"
 
 const run = hostCommand
 
@@ -33,6 +33,15 @@ const run = hostCommand
 /** Ceilings so a hung `gh` cannot hold a panel open forever. */
 const TIMEOUT = 15_000
 const MAX_BUFFER = 8 * 1024 * 1024
+const RepositoryResponse = z.object({
+  full_name: z.string().regex(/^[^/]+\/[^/]+$/),
+  html_url: z.string().url(),
+  default_branch: z.string().nullable().optional(),
+  allow_squash_merge: z.boolean().optional(),
+  allow_merge_commit: z.boolean().optional(),
+  allow_rebase_merge: z.boolean().optional(),
+})
+const CommandFailure = z.object({ stderr: z.string() })
 async function githubExecutable(): Promise<string> {
   const executable = resolveExecutable(process.env.GH_PATH ?? "gh")
   if (!executable) throw new Error("GitHub CLI was not found")
@@ -41,13 +50,43 @@ async function githubExecutable(): Promise<string> {
 
 /** `env`: added to `gh`'s environment, as on a cloud machine to open a pull request as Mako's App (`MACHINE_GITHUB_AS`). */
 async function directGh(cwd: string, args: string[], env?: Readonly<Record<string, string>>): Promise<string> {
-  const { stdout } = await run(await githubExecutable(), args, {
-    cwd,
-    timeout: TIMEOUT,
-    maxBuffer: MAX_BUFFER,
-    ...env && { env: { ...process.env, ...env } },
-  })
-  return stdout
+  const repository = args[0] === "repo" && args[1] === "view" && args.includes("--json")
+  try {
+    const { stdout } = await run(await githubExecutable(), repository ? repositoryArgs(args) : args, {
+      cwd,
+      timeout: TIMEOUT,
+      maxBuffer: MAX_BUFFER,
+      ...env && { env: { ...process.env, ...env } },
+    })
+    if (!repository) return stdout
+    const value = RepositoryResponse.parse(JSON.parse(stdout))
+    return JSON.stringify({
+      nameWithOwner: value.full_name,
+      url: value.html_url,
+      defaultBranchRef: value.default_branch ? { name: value.default_branch } : null,
+      squashMergeAllowed: value.allow_squash_merge,
+      mergeCommitAllowed: value.allow_merge_commit,
+      rebaseMergeAllowed: value.allow_rebase_merge,
+    })
+  } catch (cause) {
+    if (!repository) throw cause
+    const limited = githubRateLimit(cause, Date.now())
+    if (limited) throw limited
+    // Only gh's local remote-discovery refusal proves missing setup. HTTP/GraphQL/parse/timeout failures do not.
+    const failure = CommandFailure.safeParse(cause)
+    if (failure.success && /no git remotes found|none of the git remotes.*known GitHub host/i.test(failure.data.stderr)) throw cause
+    throw new GitHubRepositoryLookupError(Date.now() + 60_000)
+  }
+}
+
+/** Keep gh's checkout/remote selection, but fetch repository metadata over REST instead of GraphQL repo view. */
+function repositoryArgs(args: string[]): string[] {
+  const target = args[2]?.startsWith("--") ? undefined : args[2]
+  if (!target) return ["api", "repos/{owner}/{repo}"]
+  const parts = (target.startsWith("https://") ? target.slice(8) : target).replace(/\/$/, "").split("/")
+  const hostname = parts.length === 3 ? parts.shift() : undefined
+  if (parts.length !== 2 || parts.some(part => !/^[\w.-]+$/.test(part))) throw new GitHubRepositoryLookupError(Date.now() + 60_000)
+  return ["api", `repos/${parts.join("/")}`, ...(hostname ? ["--hostname", hostname] : [])]
 }
 
 // Entries belong to the host that owns the key, not to the process; stopping a host releases its reader.
@@ -105,7 +144,7 @@ async function ghJson<TResult>(
     const value: JsonValue = JSON.parse(await gh(cwd, args, undefined, expectedHead))
     return parse(value)
   } catch (cause) {
-    if (cause instanceof GitHubRateLimitError) throw cause
+    if (cause instanceof GitHubRateLimitError || cause instanceof GitHubRepositoryLookupError) throw cause
     return null
   }
 }
@@ -185,6 +224,12 @@ export async function githubStatus(cwd: string): Promise<GitHubStatus> {
       defaultBranch: repo?.defaultBranch,
     }
   } catch (cause) {
+    if (cause instanceof GitHubRepositoryLookupError) return {
+      installed: true,
+      authenticated: Boolean(who?.login),
+      ...(who?.login && { login: who.login, userId: who.id }),
+      repoLookup: { state: "failed", until: cause.retryAt },
+    }
     if (!(cause instanceof GitHubRateLimitError)) throw cause
     return {
       installed: true,

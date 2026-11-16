@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { createHash } from "node:crypto"
-import { githubRateLimitWords } from "../contracts/git-actions.js"
+import { GITHUB_REPOSITORY_LOOKUP_FAILED, githubRateLimitWords } from "../contracts/git-actions.js"
 
 /** A cheap repository list; checks belong to individual PRs whose heads a caller is actually using. */
 const LIST_FIELDS = "number,title,url,headRefName,headRefOid,state,isDraft,author,updatedAt,isCrossRepository"
@@ -41,7 +41,7 @@ const FRESH_MS = 60_000
 const MAX_READS = 512
 
 type Runner = (cwd: string, args: string[], env?: Readonly<Record<string, string>>) => Promise<string>
-interface Entry { until: number; value: Promise<string>; etag?: string; body?: string }
+interface Entry { until: number; value: Promise<string>; etag?: string; body?: string; repository?: true; repositoryFailed?: true }
 interface Deps {
   run: Runner
   common(cwd: string): Promise<string>
@@ -57,6 +57,16 @@ export class GitHubRateLimitError extends Error {
   constructor(retryAt: number) {
     super(githubRateLimitWords(retryAt))
     this.name = "GitHubRateLimitError"
+    this.retryAt = retryAt
+  }
+}
+
+/** A repository's brief outage cooldown survives refresh/preflight invalidation, without blocking other repositories. */
+export class GitHubRepositoryLookupError extends Error {
+  readonly retryAt: number
+  constructor(retryAt: number) {
+    super(GITHUB_REPOSITORY_LOOKUP_FAILED)
+    this.name = "GitHubRepositoryLookupError"
     this.retryAt = retryAt
   }
 }
@@ -142,16 +152,22 @@ export class GitHubReads {
     if (read) return this.read(`${args[0] === "api" && !args[1]?.includes("{") ? `${auth}:api:` : prefix}${JSON.stringify(args)}`, cwd, args, env)
     // No mutation is cached, joined or retried. A write might have succeeded despite a lost response, so forget reads even then.
     try { return await this.send(cwd, args, env) }
-    finally { this.entries.clear() }
+    finally { this.forget() }
   }
 
-  /** Explicit writes re-read their preflight and invalidate the pushed head; backoff is never reset. */
-  forget(): void { this.entries.clear() }
+  /** Explicit writes re-read successful preflights and invalidate the pushed head; outage backoff is never reset. */
+  forget(): void {
+    for (const [key, entry] of this.entries) if (!this.keepRepositoryRead(entry)) this.entries.delete(key)
+  }
+
+  private keepRepositoryRead(entry: Entry): boolean {
+    return entry.repository === true && (entry.until === Infinity || entry.repositoryFailed === true && entry.until > this.deps.now())
+  }
 
   private rememberRepository(common: string, auth: string, repository: RepositoryIdentity): void {
     let identities = this.repositories.get(common)
     if (!identities) {
-      if (this.repositories.size >= MAX_READS) { this.repositories.clear(); this.entries.clear() }
+      if (this.repositories.size >= MAX_READS) { this.repositories.clear(); this.forget() }
       this.repositories.set(common, identities = new Set())
     }
     identities.add(`${auth}:${new URL(repository.url).hostname}/${repository.nameWithOwner.toLowerCase()}:`)
@@ -163,7 +179,7 @@ export class GitHubReads {
     const identities = this.repositories.get(common)
     if (!identities) return
     const prefixes = [...identities]
-    for (const key of this.entries.keys()) if (prefixes.some(prefix => key.startsWith(prefix))) this.entries.delete(key)
+    for (const [key, entry] of this.entries) if (prefixes.some(prefix => key.startsWith(prefix)) && !this.keepRepositoryRead(entry)) this.entries.delete(key)
   }
 
   private scope(cwd: string): Promise<string> {
@@ -183,10 +199,10 @@ export class GitHubReads {
       return prior.value
     }
     if (this.entries.size >= MAX_READS && !prior) {
-      for (const [old, value] of this.entries) if (value.until !== Infinity) this.entries.delete(old)
+      for (const [old, value] of this.entries) if (value.until !== Infinity && !this.keepRepositoryRead(value)) this.entries.delete(old)
       if (this.entries.size >= MAX_READS) throw new Error("GitHub has too many readings waiting. Try again later.")
     }
-    const entry: Entry = { until: Infinity, value: Promise.resolve("") }
+    const entry: Entry = { until: Infinity, value: Promise.resolve(""), ...(args[0] === "repo" && args[1] === "view" && { repository: true }) }
     // Only plain REST GETs: jq output cannot be reused as an HTTP body, and GraphQL has no ETag contract.
     const conditional = args[0] === "api" && args.length === 2 && args[1] !== "graphql"
     const include = args[0] === "api" && !args.includes("--include")
@@ -207,7 +223,8 @@ export class GitHubReads {
       return output
     }).catch(cause => {
       // Negative readings are shared for one minute too. Never serve old checks after a failed refresh.
-      entry.until = this.deps.now() + FRESH_MS
+      entry.until = cause instanceof GitHubRepositoryLookupError ? cause.retryAt : this.deps.now() + FRESH_MS
+      if (cause instanceof GitHubRepositoryLookupError) entry.repositoryFailed = true
       throw cause
     })
     this.entries.set(key, entry)
