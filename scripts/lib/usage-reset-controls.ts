@@ -85,7 +85,8 @@ export async function usageResetControls(root: string): Promise<void> {
         assert.equal(count(), waiting, "nothing dispatches before reset")
         delete accounts[0]!.spentUntil
         world.live.wakeDue(reset + RESET_MARGIN_MS + 1)
-        await until(() => [continuation.id, before.request, later.request].every(id => snapshot().requests.some(request => request.id === id && request.status === "completed")), "continuation and both queued IDs finish")
+        // Both queued from one Apex, so they may go as one turn (`foldQueued`): an ID folded into another finishes with it.
+        await until(() => [continuation.id, before.request, later.request].every(id => snapshot().requests.some(request => (request.id === id || request.joined?.some(joined => joined.id === id)) && request.status === "completed")), "continuation and both queued IDs finish")
         for (const text of ["Queued before limit", "Queued during limit"])
           assert.equal(world.prompts.filter(prompt => prompt.conversation === id && prompt.text.includes(text)).length, 1)
         assert.equal(snapshot().session.harness, "claude")

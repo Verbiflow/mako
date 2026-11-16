@@ -141,6 +141,18 @@ schedules, and a failing schedule is pinned there.
     attempt cannot silently resend the reports. Proven-unsent digests still wait
     out usage limits as digests; Stop, ordinary-Thread Off and native ownership guards remain in force.
 
+16. **What one sender queued goes as one turn.** When an agent's queued
+    message goes, the plain messages from the same sender queued right behind
+    it and admitted after it (no attachments, grants, pause, edit, hold, digest
+    or continuation, and the same `notification`) go with it, in order, within
+    `JOINED_MAX` and `JOINED_CHARS` (`foldQueued`). The fold is written only
+    as the send commits, in the write that records it handed over: a send that
+    goes no further (a Stop, a withdrawal, a refusal, a write that fails) leaves
+    every row as it was. Until then each is its own row; a folded one is
+    canceled with `joinedInto`, never dropped, and its ID resolves to the
+    message that carried it, which never folds again. An interrupt's message
+    goes alone, and another Apex's message, owed its own reply, never folds.
+
 ## What each failure leaves
 
 Host failures carry a typed kind; mixed catches and decoder sinks never infer a
