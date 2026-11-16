@@ -816,9 +816,12 @@ waiting or blocked) is never folded, past the budget if it must be; `scope: all`
 call (`test-agents-list-fold.ts`). Each Fin has a change mark the host keeps
 (`FinChanges`): when its state, report, open questions or pull requests last
 changed as the host read them, a working Fin's step and a queued one's place in
-line not counting. Each row says it (`changedAt`) and each list answers a
-`mark`; with `since: <mark>` only the Fins that changed since are listed and the
-rest counted in `unchanged`. The front door's note names a Fin unchanged since
+line not counting, on the host's own clock (a tick never earlier than the
+last). Each row says it (`changedAt`) and each list answers a `mark` naming this
+host life and a tick; with `since: <mark>` only the Fins that changed since are
+listed and the rest counted in `unchanged`, but a Fin waiting on its Apex (a
+question, an action, a decision, a block) is always listed, and a mark this
+host can't read (another host's, an earlier life's, one ahead) lists every Fin. The front door's note names a Fin unchanged since
 the last note it gave that Apex on one line instead of describing it again,
 always describing one that waits on an answer or a decision. The marks live for
 the host's life, so after a restart every Fin reads as changed once

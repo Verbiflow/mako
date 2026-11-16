@@ -1215,7 +1215,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     const person = !request.actor || request.actor.kind === "person"
     const now = this.now()
     const door = person ? frontDoorNote(open.map((edge) => this.frontDoorChild(edge)), now, includeGuidance, whole ? undefined : this.doorSaid.get(conversation)) : []
-    if (person && open.length) this.doorSaid.set(conversation, now)
+    // On the marks' own clock: every change this note read came before it.
+    if (person && open.length) this.doorSaid.set(conversation, this.changes.tick(now))
     const lines = [...rules, ...door, ...note, ...followUps]
     hostLog("agents", "front door", { conversation, children: open.length, chars: lines.reduce((sum, line) => sum + line.length + 1, 0) })
     return lines
@@ -2172,15 +2173,18 @@ export class Agents implements AgentOperations, ConversationChildren {
     await this.listPlaced(apex, input, strips)
     const counts = this.treeCounts(this.rootOf(apex.thread))
     const tree = this.treeAnswer(counts)
-    // Each Fin's change mark, read on one clock: `mark` is this list's, so what changed after it shows next time.
-    const mark = this.now()
-    for (const strip of strips) strip.changedAt = this.changes.at(strip.child, stripChange(strip), mark)
-    const since = input.since
-    const changed = since === undefined ? strips : strips.filter((strip) => strip.changedAt! > since)
+    // Each Fin's change mark, read at one tick of this host's clock: `mark` is this list's, so what changed after it
+    // shows next time. A mark this host can't read (another host's, an earlier life's, one ahead) lists them all.
+    const now = this.now()
+    const tick = this.changes.tick(now)
+    for (const strip of strips) strip.changedAt = this.changes.at(strip.child, stripChange(strip), tick)
+    const since = this.changes.since(input.since)
+    // What needs its Apex is listed whatever changed: a question, an action, a decision, a block (`needsApex`).
+    const changed = since === undefined ? strips : strips.filter((strip) => strip.changedAt! > since || needsApex(strip))
     const unchanged = strips.length - changed.length
-    const marked = { tree, mark, ...(since !== undefined && { unchanged }) }
+    const marked = { tree, mark: this.changes.mark(tick), ...(since !== undefined && { unchanged }) }
     if (input.scope === "all") return { children: changed, ...marked }
-    return { ...foldList(changed, mark), ...marked }
+    return { ...foldList(changed, now), ...marked }
   }
 
   /**
@@ -6747,7 +6751,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const changedAt = this.changes.at(edge.child, {
       state, ...(latest && { report: { status: latest.status, at: latest.at } }), ...(held.length && { pulls: held }),
       questions: this.pendingReports(edge).length, actions: this.pendingActions(edge.parent, edge.child).total,
-    }, this.now())
+    }, this.changes.tick(this.now()))
     return {
       name: edge.name,
       changedAt,
@@ -7070,6 +7074,12 @@ function pullWaitReports(reports: Report[], key: string): Report[] {
 }
 
 /** A pull request a report waits on, by repository and number; undefined for another kind or an invalid reference. */
+/** A listed Fin waiting on its Apex: a question or action open, blocked, or ended with a decision. */
+function needsApex(strip: AgentStrip): boolean {
+  const { state } = strip
+  return Boolean(strip.pendingQuestions || strip.pendingActions || strip.custodyActions) || state.kind === "blocked" || (state.kind === "ended" && state.decision !== undefined)
+}
+
 /** What a listed Fin's change mark reads of its row (`FinChanges`). */
 function stripChange(strip: AgentStrip): ChangeFacts {
   return { state: strip.state, ...(strip.report && { report: { status: strip.report.status, at: strip.report.at } }), ...(strip.openPRs && { pulls: strip.openPRs }), questions: strip.pendingQuestions ?? 0, actions: strip.pendingActions ?? 0 }

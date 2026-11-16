@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { frontDoorNote, type FrontDoorChild } from "@mako/host/contracts/agent-tools"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { FinChanges } from "@mako/host/conversations/fin-changes"
-import { AgentsWorld } from "./lib/agents-world.ts"
+import { AgentsWorld, type Script } from "./lib/agents-world.ts"
 
 /**
  * Change marks (`FinChanges`): an Apex reads only what changed. `agents_list` answers a `mark`, and with `since` lists
@@ -28,6 +28,20 @@ const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
   assert.equal(changes.at(fin, { state: { kind: "ended", outcome: "done" }, report: { status: "done", at: 6 }, questions: 1, pulls: [{ number: 12, state: "open" }] }, 9), 6, "the same facts again: same since")
   assert.equal(changes.at("fin-q", { state: { kind: "queued", reason: "tree-running", ahead: 3 } }, 1), 1)
   assert.equal(changes.at("fin-q", { state: { kind: "queued", reason: "tree-running", ahead: 1 } }, 2), 1, "a queued Fin moving up the line is no change")
+}
+
+// The host's own clock: never earlier than the last tick, its marks this host life's alone.
+{
+  const changes = new FinChanges()
+  assert.equal(changes.tick(100), 100)
+  assert.equal(changes.tick(50), 101, "a clock that steps back still moves forward")
+  assert.equal(changes.tick(101), 102, "and two reads in one millisecond are two ticks")
+  const mark = changes.mark(102)
+  assert.equal(changes.since(mark), 102, "its own mark reads")
+  assert.equal(changes.since(new FinChanges().mark(102)), undefined, "another host's, or an earlier life's, doesn't")
+  assert.equal(changes.since(changes.mark(500)), undefined, "nor one past any tick it gave")
+  assert.equal(changes.since("102"), undefined, "nor one without its life")
+  assert.equal(changes.since(undefined), undefined)
 }
 
 // The note: changed Fins in full, unchanged ones named on one line, one that waits on an answer always in full.
@@ -67,7 +81,8 @@ const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
     assert.ok("children" in first && "mark" in first, JSON.stringify(first))
     assert.equal(first.children.length, 3)
     const mark = first.mark!
-    assert.ok(first.children.every((strip) => strip.changedAt !== undefined && strip.changedAt <= mark), "every row has its change mark, on the list's clock")
+    const tick = Number(mark.split(":")[1])
+    assert.ok(first.children.every((strip) => strip.changedAt !== undefined && strip.changedAt <= tick), "every row has its change mark, on the list's clock")
     await pause(5)
     const quiet = await world.agents.list(apex.caller, { since: mark })
     assert.ok("children" in quiet && "mark" in quiet)
@@ -96,6 +111,44 @@ const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
     assert.ok(!whole.some((line) => line.startsWith("Unchanged since")))
     const chars = (lines: readonly string[]) => lines.reduce((sum, line) => sum + line.length + 1, 0)
     console.log(`front door: ${chars(before)} characters with every Fin described, ${chars(after)} with one changed of three`)
+  } finally {
+    await world.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+// What needs its Apex is listed whatever `since` says; a mark this host can't read lists every Fin.
+{
+  const root = mkdtempSync(join(tmpdir(), "mako-fin-changes-asks-"))
+  const script: Script = async (turn) => {
+    if (turn.text.includes("Check asker")) {
+      await turn.world.agents.report(turn.caller, { status: "needs-input", summary: "Two ways to fix it.", question: "Patch or rewrite?", options: [{ label: "Patch" }, { label: "Rewrite" }], clientKey: "ask" })
+      return "Asked."
+    }
+    return turn.text.includes("You're fin:") ? "Done for now." : "ok"
+  }
+  const world = new AgentsWorld({ root, script })
+  try {
+    const apex = await world.apex("claude", "full")
+    for (const name of ["asker", "quiet"]) {
+      const answer = await world.agents.start(apex.caller, { brief: { objective: `Check ${name}` }, name, harness: "codex", cwd: world.root, clientKey: name })
+      assert.ok(!("refused" in answer), JSON.stringify(answer))
+    }
+    await world.settle(300, 30_000, "ignore")
+    const first = await world.agents.list(apex.caller, {})
+    assert.ok("children" in first && first.mark)
+    assert.equal(first.children.find((strip) => strip.name === "asker")?.state.kind, "blocked", JSON.stringify(first.children.map((strip) => [strip.name, strip.state])))
+    const again = await world.agents.list(apex.caller, { since: first.mark })
+    assert.ok("children" in again)
+    assert.deepEqual(again.children.map((strip) => strip.name), ["asker"], "a Fin waiting on its Apex is listed though nothing changed")
+    assert.equal(again.unchanged, 1, "the other is counted")
+    for (const foreign of ["elsewhere:1", `${first.mark.split(":")[0]}:${Number.MAX_SAFE_INTEGER}`]) {
+      const whole = await world.agents.list(apex.caller, { since: foreign })
+      assert.ok("children" in whole)
+      assert.equal(whole.children.length, 2, `a mark this host can't read (${foreign.slice(0, 12)}…) lists every Fin`)
+      assert.equal(whole.unchanged, undefined)
+    }
+    console.log("change marks: a Fin waiting on its Apex is always listed; another host's mark, or one ahead, lists every Fin")
   } finally {
     await world.close()
     rmSync(root, { recursive: true, force: true })
