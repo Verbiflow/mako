@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import type { AppMark, AppOutputChunk, AppOutputCursor, ThreadAppView } from "@mako/host/contracts/thread-app"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import { RowIntersection } from "./lib/row-intersection"
 
 /**
  * The strip's app control and the dock's output, driven by a host: a click
@@ -251,5 +252,34 @@ hostView = ready("running")
 releaseStart!()
 await until(() => phase() === "running", "running once the start answered")
 unwatchAsleep()
+
+// The strip's real reader is owned by its measured row, not merely its mount.
+const { observeVisibleRead } = await import("../src/lib/visible-read")
+// SAFETY: the controlled observer uses this object only as an identity, never as a DOM implementation.
+const row = {} as Element
+Object.defineProperty(globalThis, "IntersectionObserver", { configurable: true, value: RowIntersection })
+const beforeRow = views
+const releaseRow = observeVisibleRead(row, () => driver.watch!(CWD))
+const intersection = (visible: boolean) => RowIntersection.instances.at(-1)!.emit(row, visible)
+assert.equal(views, beforeRow)
+intersection(false)
+assert.equal(views, beforeRow)
+intersection(true)
+await until(() => views === beforeRow + 1, "the first intersecting app detail")
+intersection(false)
+assert.deepEqual(threadAppStore.get().followed, [], "offscreen strips release detail demand, retaining the last view")
+const beforeHint = views
+for (const listener of hostListeners) listener({ type: "thread-app-marks", marks: [{ checkout: CWD, state: "crashed" }] })
+await wait(30)
+assert.equal(views, beforeHint, "a compact mark cannot reacquire an offscreen detail")
+intersection(true)
+await until(() => views === beforeHint + 1, "one fresh view on row entry")
+const explicit = driver.watch!(CWD)
+const shared = views
+releaseRow()
+assert.deepEqual(threadAppStore.get().followed, [CWD], "an open menu or output owns its detail independently of the strip")
+assert.equal(views, shared, "explicit consumers share the existing detail query")
+explicit()
+assert.deepEqual(threadAppStore.get().followed, [])
 
 console.log("thread app host driver: a click shows its phase at once and holds it until the host catches up; output follows its cursor and starts over on a new run; a host that can't answer hides the control; a folder nothing shows isn't polled; the sidebar's marks come from one look while the rail shows them, the strip's view of its folder wins, and nothing is asked once the rail goes; a folder's picked target is what it starts, checks and views, and the first target stands in once the recipe drops it; a sleeping machine's app isn't polled, the host's word that it's waking or awake brings the next look, and a click on it shows it waking at once")

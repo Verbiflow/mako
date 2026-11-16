@@ -60,6 +60,8 @@ export function AppOutputView({ cwd, outputKey }: { cwd: string; outputKey: AppO
   const fontFamily = usePrefs((prefs) => prefs.terminalFontFamily)
   const theme = usePrefs((prefs) => prefs.theme)
   const view = useThreadApp((state) => state.byCwd[cwd])
+  // The selected output's controls stay current even if its pane's strip is offscreen.
+  useEffect(() => threadAppDriver()?.watch?.(cwd), [cwd])
 
   useEffect(() => {
     const element = host.current

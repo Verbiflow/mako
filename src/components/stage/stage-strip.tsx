@@ -4,7 +4,9 @@ import { MakoMark } from "@/components/ui/mako-mark"
 import { SessionTabList } from "@/components/stage/session-tabs"
 import { OpenFinTab } from "@/components/stage/child-tabs"
 import { useApexView } from "@/state/apex-fins"
-import { Fragment, useMemo, type ReactNode } from "react"
+import { Fragment, useCallback, useMemo, type ReactNode, type Ref } from "react"
+import { observeVisibleRead } from "@/lib/visible-read"
+import { threadAppDriver } from "@/state/thread-app"
 import { CheckoutChip } from "@/components/stage/checkout-chip"
 import { AppControl } from "@/components/stage/app-control"
 import { onScreenTab, useOnScreen, useThreadTabs, type OnScreen } from "@/state/thread-sessions"
@@ -59,6 +61,10 @@ export function StageStrip({
     here.cwd ??
     (shownTab?.kind === "draft" ? shownTab.draft.cwd : refCwd ?? shownTab?.presence?.cwd) ??
     (bound ? undefined : workspaceCwd)
+  // Observe the existing strip, which has geometry even before its app's first answer.
+  const followApp = useCallback((element: HTMLDivElement | null) => {
+    if (element && checkoutCwd) return observeVisibleRead(element, () => threadAppDriver()?.watch?.(checkoutCwd))
+  }, [checkoutCwd])
 
   if (!pane) return null
   const canSplit = pane.activeId !== AGENT_TAB_ID
@@ -77,6 +83,7 @@ export function StageStrip({
 
   return (
     <WorkbenchStrip
+      ref={followApp}
       end={
         <>
           <AppControl cwd={checkoutCwd} focused={!bound} />
@@ -247,9 +254,9 @@ export function StageStrip({
  * (each gives way to its least width first), and what stands at its end.
  * The web's desk draws a Thread's Session tabs in it, as the desktop does.
  */
-export function WorkbenchStrip({ children, end }: { children: ReactNode; end?: ReactNode }) {
+export function WorkbenchStrip({ children, end, ref }: { children: ReactNode; end?: ReactNode; ref?: Ref<HTMLDivElement> }) {
   return (
-    <div className="flex h-10 shrink-0 items-center bg-shell">
+    <div ref={ref} className="flex h-10 shrink-0 items-center bg-shell">
       <div
         role="tablist"
         className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto px-2"
