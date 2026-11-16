@@ -4,7 +4,7 @@ import { receiveLive, unlistedSince, unplacedReadAnswered, unplacedReadGoesOut }
 import { projectAcp, projectLive } from "@/state/live-projection"
 import { responseText, type Exchange } from "@/lib/exchanges"
 import type { LiveSnapshot } from "@/lib/types"
-import type { LiveHistoryRead, LiveHistoryAddress, LiveHistoryPage, LiveHistorySnapshot } from "@mako/host/contracts/live-history"
+import { HISTORY_PARTS_IN_FLIGHT, LIVE_HISTORY_CHUNK_CHARS, type LiveHistoryChunk, type LiveHistoryRead, type LiveHistoryAddress, type LiveHistoryPage, type LiveHistorySnapshot } from "@mako/host/contracts/live-history"
 import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading"
 import type { ReleasedTurn } from "@/state/transcript-residency"
 import { EntrySchema, type Entry } from "@mako/sessions/entries"
@@ -20,6 +20,20 @@ export async function readLiveValue<T>(id: string, input: LiveHistoryRead): Prom
   const record = chunk.record
   let offset = 0
   const pieces: string[] = []
+  // The parts after the first are asked for `HISTORY_PARTS_IN_FLIGHT` at a time, each where a whole part ends, and
+  // taken in order; an ask past the end gets an empty last part, and one still on its way when the end comes is dropped.
+  const asked = new Map<number, Promise<LiveHistoryChunk>>()
+  let ahead = 0
+  const ask = () => {
+    while (asked.size < HISTORY_PARTS_IN_FLIGHT) {
+      const at = ahead
+      const part = bridge.liveRead(id, { kind: "part", record, offset: at })
+      // An ask past the end may fail on a host from before it answered one; only a part this read takes can fail it.
+      part.catch(() => {})
+      asked.set(at, part)
+      ahead += LIVE_HISTORY_CHUNK_CHARS
+    }
+  }
   for (;;) {
     if (chunk.record !== record || chunk.offset !== offset || !chunk.data.length)
       throw new Error("The history response changed while it was loading. Try opening the conversation again.")
@@ -30,7 +44,17 @@ export async function readLiveValue<T>(id: string, input: LiveHistoryRead): Prom
       break
     }
     if (chunk.next !== offset) throw new Error("The history response skipped a part.")
-    chunk = await bridge.liveRead(id, { kind: "part", record, offset })
+    // A host from before it served parts ahead is read a part at a time, as it was.
+    if (!chunk.ahead && !asked.size) {
+      chunk = await bridge.liveRead(id, { kind: "part", record, offset })
+      continue
+    }
+    if (!ahead) ahead = offset
+    ask()
+    const next = asked.get(offset)
+    asked.delete(offset)
+    if (!next) throw new Error("The history response skipped a part.")
+    chunk = await next
   }
   // SAFETY: same trusted producer/consumer boundary as createMakoBridge; the framing
   // above proves complete delivery, and JSON.parse rejects malformed content.
