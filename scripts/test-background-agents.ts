@@ -171,7 +171,7 @@ function storeKeeps(): void {
 }
 
 /** Each child does `does` with its brief; an Apex's turns start what the test asks and end. */
-function world(name: string, does: Script, budget?: { running: number; started: number; windowMs?: number }) {
+function world(name: string, does: Script, budget?: { running: number; started: number; windowMs?: number; hourly?: number }) {
   return new AgentsWorld({ root: join(root, name), script: does, ...(budget && { budget: { windowMs: 10 * 60_000, ...budget } }) })
 }
 
@@ -1053,7 +1053,7 @@ async function refusals(): Promise<void> {
  */
 async function startRate(): Promise<void> {
   const windowMs = 1_500
-  const w = world("start-rate", () => "done", { running: 32, started: 3, windowMs })
+  const w = world("start-rate", () => "done", { running: 32, started: 3, windowMs, hourly: 10 })
   try {
     const apex = await w.apex("opencode")
     const start = (key: string) => w.agents.start(apex.caller, { brief: { objective: "Finish" }, name: key, clientKey: key, cwd: w.root })
@@ -1070,9 +1070,14 @@ async function startRate(): Promise<void> {
       assert.match(loop.why, /started 3 Fins in the last \d+ minutes, its limit on starts .*The next start frees in 1 minute, at \d\d:\d\d UTC\./)
       await new Promise((resolve) => setTimeout(resolve, windowMs + 100))
     }
-    assert.equal(started, 9, "three windows started three times the limit: nothing counts a tree's Fins over its life")
+    assert.equal(started, 9, "three windows started three times the short limit: nothing counts a tree's Fins over its life")
+    // A loop paced under the short window still meets the hour's.
+    assert.ok(!("refused" in await start("paced")), "the short window has room again, and the hour one more")
+    const paced = await start("paced-again")
+    assert.ok("refused" in paced && paced.refused === "budget", `the hour's limit holds a paced loop: ${JSON.stringify(paced)}`)
+    assert.match(paced.why, /started 10 Fins in the last hour, its limit on starts .*The next start frees in 60 minutes, at \d\d:\d\d UTC\./, "it says the hour, and when it frees")
     const listed = await w.agents.list(apex.caller, {})
-    assert.ok("tree" in listed && listed.tree.started === 0 && listed.tree.of.windowMs === windowMs, `the tree's count is its window's: ${JSON.stringify("tree" in listed && listed.tree)}`)
+    assert.ok("tree" in listed && listed.tree.started === 1 && listed.tree.startedHour === 10 && listed.tree.of.windowMs === windowMs && listed.tree.of.hourly === 10, `the tree's count is its window's: ${JSON.stringify("tree" in listed && listed.tree)}`)
   } finally {
     await w.close()
   }

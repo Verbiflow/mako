@@ -572,8 +572,11 @@ const FILLED = "\0filled"
 const HELD_PREFIX = "after:"
 
 /** How many of a tree's Threads work now and how many it started, as its budget counts them. */
-/** What the tree runs now, and what it started within its window: `frees` is when the oldest of those leaves it. */
-type TreeCounts = { running: number; started: number; frees?: number }
+/**
+ * What the tree runs now, and what it started within its short window and within the hour: each `frees` is when enough
+ * of those leave their window for one more start.
+ */
+type TreeCounts = { running: number; started: number; frees?: number; startedHour: number; freesHour?: number }
 
 /** A `wait` start holding for its Fin: the Apex's conversation whose turn made the call, and how it hears the Fin move. */
 interface Hold {
@@ -1375,9 +1378,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (start.cancelled) return this.refuse(op, "conflict", `Its ${APEX_WORD} stopped it before it started.`)
     // A queued spawn is one the tree has started (`treeCounts`): once the budget would refuse it, it never waits.
     const counts = this.treeCounts(tree)
-    if (counts.started >= this.budget.started) {
+    const rate = this.rateRefusal(counts)
+    if (rate) {
       const queued = store.queuedSpawns().filter((spawn) => spawn.tree === tree && !store.edges().byOp(spawn.op)).length
-      return this.refuse(op, "budget", `${startRateWords(this.budget, counts.started, counts.frees, this.now())}${queued ? ` ${queued} of those still wait to start.` : ""}`)
+      return this.refuse(op, "budget", `${rate}${queued ? ` ${queued} of those still wait to start.` : ""}`)
     }
     // It waits only as its Apex asked: for the Fins it starts after, or with `queue` for a place, behind every spawn that waits for one already.
     const where = placeOf(input.place)
@@ -1463,8 +1467,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     // From here to its place or its queue row nothing is awaited, as for a start here.
     if (start.cancelled) return this.refuse(op, "conflict", `Its ${APEX_WORD} stopped it before it started.`)
     const counts = this.treeCounts(tree)
-    if (counts.started >= this.budget.started)
-      return this.refuse(op, "budget", startRateWords(this.budget, counts.started, counts.frees, this.now()))
+    const rate = this.rateRefusal(counts)
+    if (rate) return this.refuse(op, "budget", rate)
     const full = this.full(where)
     const waiting = this.waitingForRoom(where)
     const why = after.length ? undefined : counts.running >= this.budget.running ? "tree-running" : full || waiting > 0 ? "place-full" : undefined
@@ -1985,7 +1989,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     await this.listPlaced(apex, input, strips)
     const counts = this.treeCounts(this.rootOf(apex.thread))
-    return { children: strips, tree: { ...counts, of: { ...this.budget } } }
+    return { children: strips, tree: this.treeAnswer(counts) }
   }
 
   /**
@@ -2887,7 +2891,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!store) return { fins: 0, running: 0, followed: 0, queued: 0, notices: 0, budget: this.budget, trees: [], routes: { ...this.routes }, answers: { ...this.answerCounts } }
     const edges = store.edges()
     const roots = new Set([...edges.all.map((edge) => this.rootOf(edge.parent)), ...store.queuedSpawns().map((spawn) => spawn.tree), ...[...this.starts.values()].flatMap((start) => (start.launching ? [start.launching.tree] : []))])
-    const trees = [...roots].map((apex) => ({ apex, ...this.treeCounts(apex) }))
+    const trees = [...roots].map((apex) => { const { running, started } = this.treeCounts(apex); return { apex, running, started } })
     return {
       fins: edges.all.length,
       running: trees.reduce((sum, tree) => sum + tree.running, 0),
@@ -3452,7 +3456,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(edge.tuned?.rule && { rule: ruleWords(edge.tuned.rule) }),
       ...(edge.tuned?.rerouted && { limited: { harness: edge.tuned.rerouted.from, ...(edge.tuned.rerouted.until !== undefined && { until: edge.tuned.rerouted.until }), ...(edge.tuned.rerouted.instead && { instead: edge.tuned.rerouted.instead }) } }),
       ...(edge.tuned?.rerouted?.line && { moved: edge.tuned.rerouted.line }),
-      tree: { ...counts, of: { ...this.budget } },
+      tree: this.treeAnswer(counts),
       ...this.placeWords(),
       ...(edge.placed && edge.asked.place && { place: edge.asked.place }),
       ...(deduped && { deduped: true as const }),
@@ -3494,7 +3498,7 @@ export class Agents implements AgentOperations, ConversationChildren {
               ? `${placeName(queued.away.target)} hasn't answered its start yet: it's asked again under the same key once it does, and never started twice.`
               : `This tree runs ${counts.running} of its ${this.budget.running} at once; it starts when one ends (${ahead} ahead).`,
       ...(pending.length && { after: pending }),
-      tree: { ...counts, of: { ...this.budget } },
+      tree: this.treeAnswer(counts),
       ...this.placeWords(),
       ...(deduped && { deduped: true as const }),
       next: afterStart(queued?.input.wake ?? "decisions"),
@@ -5412,7 +5416,7 @@ export class Agents implements AgentOperations, ConversationChildren {
    */
   private treeCounts(root: string): TreeCounts {
     const store = this.store()
-    if (!store) return { running: 0, started: 0 }
+    if (!store) return { running: 0, started: 0, startedHour: 0 }
     let running = 0
     // Each start once, at the first time it was asked for: queued, then given its edge, or launching now.
     const started = new Map<string, number>()
@@ -5431,14 +5435,36 @@ export class Agents implements AgentOperations, ConversationChildren {
     for (const start of this.starts.values()) if (start.launching?.tree === root) at(start.op, now)
     // A spawn still waiting holds its place in the window, however long it waits: it hasn't started yet.
     const waiting = new Set(store.queuedSpawns().filter((spawn) => spawn.tree === root && !store.edges().byOp(spawn.op)).map((spawn) => spawn.op))
-    const since = now - this.budget.windowMs
-    const recent = [...started].filter(([op, time]) => time > since || waiting.has(op))
-    const aging = recent.filter(([op]) => !waiting.has(op)).map(([, time]) => time)
+    const within = (windowMs: number, limit: number) => {
+      const recent = [...started].filter(([op, time]) => time > now - windowMs || waiting.has(op))
+      // One more fits once all but limit - 1 of them have left: the start that many places from the oldest frees it.
+      const aging = recent.filter(([op]) => !waiting.has(op)).map(([, time]) => time).sort((left, right) => left - right)
+      const freeing = aging[recent.length - limit]
+      return { count: recent.length, ...(freeing !== undefined && { frees: freeing + windowMs }) }
+    }
+    const short = within(this.budget.windowMs, this.budget.started)
+    const hour = within(HOUR_MS, this.budget.hourly)
     return {
       running: running + this.unwritten((launch) => launch.tree === root),
-      started: recent.length,
-      ...(aging.length && { frees: Math.min(...aging) + this.budget.windowMs }),
+      started: short.count,
+      ...(short.frees !== undefined && { frees: short.frees }),
+      startedHour: hour.count,
+      ...(hour.frees !== undefined && { freesHour: hour.frees }),
     }
+  }
+
+  /** A tree's counts as an answer says them, against its budget. */
+  private treeAnswer(counts: TreeCounts): AgentsStarted["tree"] {
+    return { running: counts.running, started: counts.started, startedHour: counts.startedHour, of: { ...this.budget } }
+  }
+
+  /** The words refusing a start for its tree's start rate, of whichever window is full and frees last; undefined while both have room. */
+  private rateRefusal(counts: TreeCounts): string | undefined {
+    const full = [
+      ...(counts.startedHour >= this.budget.hourly ? [{ windowMs: HOUR_MS, started: counts.startedHour, frees: counts.freesHour }] : []),
+      ...(counts.started >= this.budget.started ? [{ windowMs: this.budget.windowMs, started: counts.started, frees: counts.frees }] : []),
+    ].sort((left, right) => (right.frees ?? Infinity) - (left.frees ?? Infinity))[0]
+    return full && startRateWords(full, full.started, full.frees, this.now())
   }
 
 

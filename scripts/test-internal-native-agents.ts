@@ -132,7 +132,7 @@ async function restart(root: string) {
     const caller = w.caller(apex.conversation)
     const listed = await w.agents.list(caller, {})
     assert.ok("tree" in listed)
-    assert.deepEqual(listed.tree, { running: 0, started: 0, of: { running: 2, started: 1, windowMs: 600_000 } }, "an internal review consumes neither running room nor the start budget")
+    assert.deepEqual(listed.tree, { running: 0, started: 0, startedHour: 0, of: { running: 2, started: 1, windowMs: 600_000, hourly: 120 } }, "an internal review consumes neither running room nor the start budget")
     const real = await w.agents.start(caller, { name: "real-after-review", clientKey: "real", cwd: root, brief: { objective: "Do actual delegated work" } })
     assert.ok(!("refused" in real), "the internal review did not spend the real Fin's admission")
     assert.equal(real.tree.started, 1)
