@@ -24,14 +24,83 @@ function artifactName(artifact: NonNullable<FinReportCard["artifacts"]>[number])
  * its options and what it made. Read from the wake's data (`FinReportCard`), never from the words the Apex reads.
  */
 export const FinReports = memo(function FinReports({ reports, timestamp }: { reports: readonly FinReportCard[]; timestamp?: number }) {
+  const [shown, setShown] = useState(false)
+  const open = reports.filter(staysOpen)
+  const folded = reports.filter((card) => !staysOpen(card))
+  // One report, or one to fold, reads best as it is.
+  if (folded.length < 2)
+    return (
+      <div data-fin-reports={reports.length} className="flex flex-col gap-3">
+        {reports.map((card) => (
+          <FinReport key={card.report} card={card} timestamp={timestamp} />
+        ))}
+      </div>
+    )
+  const prs = folded.flatMap((card) => card.artifacts ?? []).filter((artifact) => artifact.kind === "pull-request").length
   return (
-    <div data-fin-reports={reports.length} className="flex flex-col gap-3">
-      {reports.map((card) => (
-        <FinReport key={card.report} card={card} timestamp={timestamp} />
+    <div data-fin-reports={reports.length} data-crew-update className="flex flex-col gap-3">
+      <p data-crew-update-head className="flex items-baseline justify-end gap-1.5 text-label text-faint">
+        {crewUpdateWords(reports).map((part) => (
+          <span key={part.text} className={part.tone}>{part.text}</span>
+        ))}
+        {timestamp ? (
+          <time dateTime={new Date(timestamp).toISOString()} className="tabular pl-2">
+            {formatTime(timestamp)}
+          </time>
+        ) : null}
+      </p>
+      {open.map((card) => (
+        <FinReport key={card.report} card={card} />
       ))}
+      {shown ? (
+        folded.map((card) => <FinReport key={card.report} card={card} />)
+      ) : (
+        <button
+          type="button"
+          data-crew-update-fold={folded.length}
+          onClick={() => setShown(true)}
+          className="pressable ml-auto flex max-w-[min(82%,64ch)] items-center gap-2 bg-raised/60 px-3.5 py-2 text-left text-ui text-muted-foreground hover:bg-fill-hover hover:text-foreground"
+        >
+          <span className="line-clamp-2 min-w-0">{foldedWords(folded)}</span>
+          {prs ? (
+            <span className="flex shrink-0 items-center gap-1 bg-fill-hover px-1.5 text-label">
+              <GitPullRequestIcon aria-hidden className="size-3" />
+              {prs === 1 ? "1 PR" : `${prs} PRs`}
+            </span>
+          ) : null}
+          <span className="shrink-0 text-label text-faint">Show</span>
+        </button>
+      )}
     </div>
   )
 })
+
+/** What stays open in a crew update: what waits on the person, and a failure. Everything else folds into one line. */
+function staysOpen(card: FinReportCard): boolean {
+  return said(card).tone === "text-attention" || card.status === "failed" || (card.apex === true && card.status !== "done")
+}
+
+/** The update's head, one part a kind: "4 finished · Sheet motion needs you · 1 failed". */
+function crewUpdateWords(reports: readonly FinReportCard[]): { text: string; tone: string }[] {
+  const needs = reports.filter((card) => said(card).tone === "text-attention")
+  const failed = reports.filter((card) => card.status === "failed").length
+  const others = reports.filter((card) => said(card).tone !== "text-attention" && card.status !== "failed")
+  const rest = others.length
+  const verb = others.every((card) => said(card).word === "finished") ? "finished" : "reported"
+  return [
+    ...(rest ? [{ text: `${rest} ${verb}`, tone: "" }] : []),
+    ...(needs.length ? [{ text: `${needs.length === 1 ? `${needs[0]!.name} needs` : `${needs.length} need`} you`, tone: "text-attention" }] : []),
+    ...(failed ? [{ text: `${failed} failed`, tone: "text-negative" }] : []),
+  ].flatMap((part, index) => (index ? [{ text: "·", tone: "" }, part] : [part]))
+}
+
+/** The folded reports as one line: "Docs pass, Token sweep and 2 more finished". */
+function foldedWords(folded: readonly FinReportCard[]): string {
+  const names = folded.map((card) => card.name)
+  const who = names.length <= 3 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`
+  const words = new Set(folded.map((card) => said(card).word))
+  return `${who} ${words.size === 1 ? [...words][0] : "reported"}`
+}
 
 const FinReport = memo(function FinReport({ card, timestamp }: { card: FinReportCard; timestamp?: number }) {
   useHarnessIdentity()
@@ -83,7 +152,7 @@ const FinReport = memo(function FinReport({ card, timestamp }: { card: FinReport
         </p>
         {card.line ? <p className="mt-0.5 text-prose leading-[1.6] text-foreground [overflow-wrap:anywhere]">{card.line}</p> : null}
         {card.waiting ? <p data-fin-report-waiting className="mt-0.5 text-label text-faint">{card.waiting}</p> : null}
-        {options.length ? (
+        {options.length && open ? (
           <div className="mt-2.5 flex flex-wrap gap-1.5">
             {options.map((option, index) => {
               const recommended = index === card.recommended
@@ -98,22 +167,18 @@ const FinReport = memo(function FinReport({ card, timestamp }: { card: FinReport
                 "flex h-7 items-center gap-1.5 px-2.5 text-label",
                 recommended || chosen ? "bg-foreground text-background" : "bg-fill-hover text-foreground"
               )
-              return open ? (
-                <button
-                  key={option.label}
-                  type="button"
-                  data-fin-report-option={index}
-                  disabled={sent !== undefined}
-                  title={option.detail}
-                  onClick={() => answer(index)}
-                  className={cn("pressable disabled:opacity-60", look, !recommended && !chosen && "hover:bg-fill-selected")}
-                >
-                  {body}
-                </button>
-              ) : (
-                <span key={option.label} title={option.detail} className={cn(look, "opacity-75")}>
-                  {body}
-                </span>
+              return (
+              <button
+                key={option.label}
+                type="button"
+                data-fin-report-option={index}
+                disabled={sent !== undefined}
+                title={option.detail}
+                onClick={() => answer(index)}
+                className={cn("pressable disabled:opacity-60", look, !recommended && !chosen && "hover:bg-fill-selected")}
+              >
+                {body}
+              </button>
               )
             })}
           </div>
