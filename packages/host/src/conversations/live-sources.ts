@@ -380,6 +380,22 @@ export class LiveSources {
   }
 
   /** Where `source`'s session is now, by its identity; its harness may have moved it, as Codex compresses an idle rollout in place. */
+  /**
+   * The newest page of a conversation's history as its session's record holds it, for a window's cold view: as
+   * `readBaseNow` reads it (an earlier build's view of the unchanged record first), but one page, not every one. Null
+   * when the record can't be read, or holds another session now; the window then reads the conversation in.
+   */
+  async newestBase(source: BaseSource): Promise<ThreadPage | null> {
+    const { dependencies } = this.access
+    const path = this.located(source)
+    try {
+      const page = (dependencies.staleHistory && await dependencies.staleHistory(path)) || await dependencies.history(path)
+      return page && page.ref.harness === source.harness && page.ref.nativeId === source.nativeId ? page : null
+    } catch {
+      return null
+    }
+  }
+
   private located(source: BaseSource): string {
     return bindingPath(this.access.dependencies, { harness: source.harness, nativeId: source.nativeId }, source.path) ?? source.path
   }

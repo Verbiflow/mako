@@ -750,10 +750,18 @@ export class LiveConversations {
   async coldView(id: string): Promise<{ journal: ColdJournal; snapshot: LiveSnapshot; still: () => boolean } | undefined> {
     const cold = await this.records.cold(id)
     if (!cold) return undefined
+    // Its history is its session's record: the newest page of it, the rest read as a window pages back.
+    const source = cold.snapshot.baseSource
+    const base = source ? await this.sources.newestBase(source) : null
+    if (source && (!base || !cold.still())) {
+      cold.journal.close()
+      return undefined
+    }
     // Its Fins, as reading it in adds them (`takeChildren`): the engine's, never the journal's.
     const agents = this.dependencies.agents?.()?.roster(id)
     const nativeAgents = agents ? withChildren(cold.snapshot.nativeAgents, agents) : cold.snapshot.nativeAgents
-    const snapshot = nativeAgents === cold.snapshot.nativeAgents ? cold.snapshot : { ...cold.snapshot, nativeAgents }
+    const read = base ? { ...cold.snapshot, base } : cold.snapshot
+    const snapshot = nativeAgents === read.nativeAgents ? read : { ...read, nativeAgents }
     return { journal: cold.journal, still: cold.still, snapshot: this.stamp(snapshot) }
   }
 

@@ -424,7 +424,9 @@ export class LiveRecords {
     // that holds the history, or none written yet, as a session continued outside Mako) is read in, where that runs.
     const bindings = saved.control?.bindings ?? []
     const binding = bindings.length === 1 ? bindings[0] : undefined
-    const refreshable = Boolean(binding?.path && binding.nativeId) && (journal.length === 0 || (binding!.includesBase && onlyOpening(journal, binding!.coveredBlocks ?? 0)))
+    // One whose history is its session's record reads that record's newest page as it opens, as such a refresh would.
+    const refreshable = !saved.baseSource && Boolean(binding?.path && binding.nativeId) &&
+      (journal.length === 0 || (binding!.includesBase && onlyOpening(journal, binding!.coveredBlocks ?? 0)))
     if (refreshable || saved.session.status === "running" || saved.requests.some((request) => request.status === "dispatching")) {
       journal.close()
       return undefined

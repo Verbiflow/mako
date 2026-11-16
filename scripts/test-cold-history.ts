@@ -11,6 +11,7 @@ import { NativeAgentSchema } from "@mako/host/contracts/native-agents"
 import { HistoryVersions, arrayBlocks, historyPage } from "@mako/host/contracts/history-pages"
 import { HISTORY_VIEW_EXPIRED, type LiveHistoryChunk, type LiveHistoryPage, type LiveHistoryRead } from "@mako/host/contracts/live-history"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
+import type { ThreadPage } from "@mako/sessions"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
@@ -113,6 +114,26 @@ const shrunk = "00000000-0000-4000-9000-000000000009"
   journal.commit({ ...snapshotOf(shrunk, kept), revision: 2 }, full)
   journal.close()
 }
+// Two whose history is their session's record: one it covers whole, with nothing to merge, and one that merges.
+const RECORD_PAGE = 50
+const recordEntries: Entry[] = Array.from({ length: 230 }, (_, n) => n % 4 === 0
+  ? { type: "user", id: `r-u-${n}`, text: `Recorded ask ${n}` }
+  : { type: "text", id: `r-t-${n}`, text: words(n, 200) })
+const recordPath = join(root, "native-record.jsonl")
+const recordPage = async (path: string, before?: number): Promise<ThreadPage | null> => {
+  if (path !== recordPath) return null
+  const end = before ?? recordEntries.length
+  const start = Math.max(0, end - RECORD_PAGE)
+  return { ref: { harness, nativeId: "native-record", path: recordPath, title: "Recorded" }, entries: recordEntries.slice(start, end), start, total: recordEntries.length, hasEarlier: start > 0 }
+}
+const recorded = "00000000-0000-4000-9000-000000000007"
+const merging = "00000000-0000-4000-9000-000000000008"
+for (const [id, liveStart] of [[recorded, undefined], [merging, 0]] as const) {
+  const journal = new LiveJournal(host, id)
+  const covered = blocksOf(6)
+  journal.commit({ ...snapshotOf(id, covered), baseSource: { harness, nativeId: "native-record", path: recordPath }, baseCoveredBlocks: covered.length, ...liveStart !== undefined && { baseLiveStart: liveStart } })
+  journal.close()
+}
 const long = "00000000-0000-4000-9000-000000000003"
 writeJournal(long, blocksOf(3000))
 // One binding whose session holds the whole history: a read may refresh it from the harness's record, so it's read in.
@@ -138,7 +159,7 @@ assert.ok(reply?.type === "text" && reply.text.endsWith("and the end of it."), "
 let reader!: LiveHistoryReader
 const live = new LiveConversations({
   appPath: root, root: host, driver: () => driver, emit: () => {},
-  history: async () => null,
+  history: recordPage,
   historyPaged: (id) => reader.paged(id),
   historyReleased: (id) => reader.released(id),
   historyLoaded: (id) => reader.loaded(id),
@@ -152,7 +173,7 @@ const live = new LiveConversations({
 })
 // Compactions as the host asks for them, here the test's: a cold view puts one off, and its going asks again.
 const reclaims = new JournalReclaims((key) => reader.holds(key))
-reader = new LiveHistoryReader(undefined, undefined, undefined, (id) => live.held(id), (key) => void reclaims.released(key))
+reader = new LiveHistoryReader(recordPage, undefined, undefined, (id) => live.held(id), (key) => void reclaims.released(key))
 try {
   // The newest page, read where the journal lies: nothing of the conversation is read in.
   const opened = await read<LiveSnapshot>(reader, live, quiet, { kind: "snapshot" })
@@ -234,6 +255,18 @@ try {
   const sizeAfter = statSync(shrunkPath).size
   assert.ok(sizeAfter < sizeBefore / 2, `compacted once the view went: ${sizeBefore} -> ${sizeAfter} bytes`)
   assert.equal(reclaims.released(join(realpathSync(host), `${shrunk}.sqlite`)), undefined, "and owed no longer")
+
+  // One whose history is its record, covering every block: its newest page, then the one before, nothing read in.
+  const recordedView = await read<LiveSnapshot>(reader, live, recorded, { kind: "snapshot" })
+  assert.equal(live.held(recorded), undefined, "a record's history is read where it lies too")
+  assert.deepEqual(recordedView.base?.entries.map((entry) => entry.id), recordEntries.slice(-RECORD_PAGE).map((entry) => entry.id).slice(-recordedView.base!.entries.length), "the record's newest page")
+  assert.equal(recordedView.blocks.length, 0, "every block is the record's")
+  const earlierRecord = await read<LiveHistoryPage>(reader, live, recorded, { kind: "earlier", token: recordedView.history!.token, before: recordedView.history!.before! })
+  const shown = recordedView.base!.start
+  assert.deepEqual(earlierRecord.base?.entries.at(-1)?.id, recordEntries[shown - 1]!.id, "the page before it is the record's")
+  assert.equal(live.held(recorded), undefined)
+  // One that merges its record with its blocks is read in, where the merge runs.
+  assert.equal(await live.coldView(merging), undefined, "a record that merges with its blocks is read in")
 
   // Read in between the cold journal opening and its view being held: the view isn't held, the read is from memory.
   const read0 = await reader.read(raced, { kind: "snapshot" }, () => live.refreshedSnapshot(raced), async () => {
