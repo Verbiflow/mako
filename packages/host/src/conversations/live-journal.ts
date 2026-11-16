@@ -307,6 +307,15 @@ const BaseSchema = BaseFields.extend({ entries: z.array(EntrySchema) })
 /** A base stored before 2026-10-15, its entries grouped into messages and its indices counting them. */
 const MessageBaseSchema = BaseFields.extend({ entries: z.array(DecodedEntrySchema) })
 
+/** A journal's order of keys, an id, and a count, each read with a schema made once. */
+const KeyListSchema = z.array(z.string())
+const UuidSchema = z.string().uuid()
+const CountRow = z.object({ count: z.number() })
+/** The pragmas a journal's free space is read from, each schema made once. */
+const PageSizeRow = z.object({ page_size: z.number() })
+const PageCountRow = z.object({ page_count: z.number() })
+const FreelistRow = z.object({ freelist_count: z.number() })
+
 /** How many rows a journal's read (`LiveJournal.reading`) reads and parses between two stops. */
 const ROWS_PER_STEP = 128
 
@@ -461,7 +470,7 @@ export function* journalRowSteps(db: DatabaseSync, withLog: boolean): Steps<Jour
     yield
   }
   const orderRow = db.prepare("SELECT keys FROM request_order WHERE id=1").get()
-  const order = orderRow ? z.array(z.string()).safeParse(JSON.parse(RowKeysSchema.parse(orderRow).keys)).data : undefined
+  const order = orderRow ? KeyListSchema.safeParse(JSON.parse(RowKeysSchema.parse(orderRow).keys)).data : undefined
   const harnessTurns = db.prepare("SELECT value FROM harness_turns ORDER BY rowid").all()
     .map((row) => HarnessTurnSchema.parse(JSON.parse(RowSchema.parse(row).value)))
   const logBegun = Boolean(db.prepare("SELECT 1 AS found FROM log LIMIT 1").get())
@@ -716,7 +725,7 @@ export class LiveJournal {
   }
 
   constructor(root: string, id: string) {
-    z.string().uuid().parse(id)
+    UuidSchema.parse(id)
     mkdirSync(root, { recursive: true })
     this.path = join(root, `${id}.sqlite`)
     this.releaseKey = join(realpathSync(root), `${id}.sqlite`)
@@ -1445,9 +1454,9 @@ export class LiveJournal {
 
   private mostlyFree(): boolean {
     try {
-      const { page_size: size } = z.object({ page_size: z.number() }).parse(this.db.prepare("PRAGMA page_size").get())
-      const { page_count: pages } = z.object({ page_count: z.number() }).parse(this.db.prepare("PRAGMA page_count").get())
-      const { freelist_count: free } = z.object({ freelist_count: z.number() }).parse(this.db.prepare("PRAGMA freelist_count").get())
+      const { page_size: size } = PageSizeRow.parse(this.db.prepare("PRAGMA page_size").get())
+      const { page_count: pages } = PageCountRow.parse(this.db.prepare("PRAGMA page_count").get())
+      const { freelist_count: free } = FreelistRow.parse(this.db.prepare("PRAGMA freelist_count").get())
       return free * size >= RECLAIM_MIN_BYTES && free * 4 >= pages
     } catch (error) {
       hostWarn("journal", "a journal's free space could not be read", { path: this.path, error: errorMessage({ error }) })
@@ -1630,7 +1639,7 @@ export function inspectJournal(root: string, id: string) {
     const base = header?.harness && header.nativeId && header.path && header.start !== null
       ? { start: header.start, hasEarlier: Boolean(header.hasEarlier), preview: Boolean(header.preview), ref: { harness: header.harness, nativeId: header.nativeId, path: header.path } }
       : null
-    const { count: blocks } = z.object({ count: z.number() }).parse(db.prepare("SELECT count(*) AS count FROM blocks").get())
+    const { count: blocks } = CountRow.parse(db.prepare("SELECT count(*) AS count FROM blocks").get())
     const pages = PragmaSchema.parse(db.prepare("SELECT (SELECT page_size FROM pragma_page_size) AS size, (SELECT page_count FROM pragma_page_count) AS pages, (SELECT freelist_count FROM pragma_freelist_count) AS free").get())
     const facts = { base, baseSource: metadata.baseSource, baseCoveredBlocks: metadata.baseCoveredBlocks, blocks: { length: blocks }, control: metadata.control }
     // What the sweep holds: the base as its refresh reads it again.
@@ -1664,7 +1673,7 @@ export function journalIds(root: string): string[] {
   mkdirSync(root, { recursive: true })
   return readdirSync(root).flatMap((name) => {
     if (!name.endsWith(".sqlite")) return []
-    const id = z.string().uuid().safeParse(name.slice(0, -7))
+    const id = UuidSchema.safeParse(name.slice(0, -7))
     return id.success ? [id.data] : []
   })
 }
