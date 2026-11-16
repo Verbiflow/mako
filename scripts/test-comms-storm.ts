@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import type { AgentsListResult } from "@mako/host/contracts/agent-tools"
 import { FROM_AGENTS } from "@mako/host/contracts/children"
 import { AgentsWorld, type Script } from "./lib/agents-world.ts"
 
@@ -17,6 +18,8 @@ import { AgentsWorld, type Script } from "./lib/agents-world.ts"
  *   does it take to hear all of it once free, and does each message arrive exactly once?
  * - **Inbox.** An Apex busy on a turn while the person writes to it and a Fin finishes. How many turns does it take to
  *   hear both once free?
+ * - **Check-in.** An Apex with 30 Fins checks in twice, one Fin having reported between: what share of the first
+ *   check-in's characters does the second cost, in `agents_list` and in the front door's note?
  *
  * Each measure is held to a target (`INVARIANTS`). Where Mako doesn't meet one yet, `EXPECTED_FAILING` says so, and the
  * test fails if a target's result differs from what's expected, either way: a change that meets one flips it here.
@@ -33,7 +36,7 @@ const AFTER_MS = 20_000
 /** The shortest stretch of a turn that counts as time to think, uninterrupted. */
 const THINK_MS = 10_000
 
-type Invariant = "apexSteersPerMinute" | "apexThinkShare" | "apexTurnsAfter" | "resultWaitMaxMs" | "finBacklogTurnsNoPerson" | "finBacklogTurns" | "apexInboxTurns"
+type Invariant = "apexSteersPerMinute" | "apexThinkShare" | "apexTurnsAfter" | "resultWaitMaxMs" | "finBacklogTurnsNoPerson" | "finBacklogTurns" | "apexInboxTurns" | "checkInListShare" | "checkInNoteShare"
 type Bound = { max: number } | { min: number }
 interface Measure { name: Invariant; value: number; target: string; ok: boolean }
 
@@ -56,6 +59,10 @@ const INVARIANTS = {
   finBacklogTurns: { max: 1 },
   /** Turns an Apex takes, once its turn ends, to hear the person's message and a Fin's result that came meanwhile. */
   apexInboxTurns: { max: 1 },
+  /** A second `agents_list` (with the first's mark) as a share of the first's characters, one Fin of 30 changed. */
+  checkInListShare: { max: 0.25 },
+  /** The front door's second note as a share of the first's characters, one Fin of 30 changed. */
+  checkInNoteShare: { max: 0.5 },
 } satisfies Record<Invariant, Bound>
 
 /**
@@ -225,10 +232,44 @@ async function inbox(): Promise<void> {
   }
 }
 
+/** An Apex with 30 Fins checks in twice, one Fin reporting between: what the second check-in costs against the first. */
+async function checkIn(): Promise<void> {
+  const world = new AgentsWorld({ root: join(root, "check-in"), script: (turn) => (turn.text.includes("You're fin:") ? "Done: checked, nothing to fix." : "ok"), finLimit: () => 64 })
+  try {
+    const apex = await world.apex("claude", "full")
+    const conversations: string[] = []
+    for (let index = 1; index <= FINS; index += 1) {
+      const started = await world.agents.start(apex.caller, { brief: { objective: `Part ${index}: check the module and report what you find.` }, harness: "codex", name: `part-${index}`, clientKey: `c${index}`, cwd: world.root })
+      assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
+      conversations.push(started.conversation!)
+    }
+    await world.settle(500, 60_000, "ignore")
+    const chars = (listed: AgentsListResult) => JSON.stringify(listed).length
+    const lines = (note: readonly string[]) => note.reduce((sum, line) => sum + line.length + 1, 0)
+    const first = await world.agents.list(apex.caller, {})
+    assert.ok("children" in first)
+    const door = lines(world.agents.frontDoor(apex.conversation, {}, false))
+    await delay(10)
+    const reported = await world.agents.report(world.caller(conversations[0]!), { status: "done", summary: "Part 1 needs a fix after all: the cache key drops the tenant.", clientKey: "again" })
+    assert.ok(!("refused" in reported), JSON.stringify(reported))
+    await world.settle(300, 30_000, "ignore")
+    // An older build's answer has no mark: its second list is then a full one, which is what the share measures.
+    const mark = "mark" in first ? first.mark : undefined
+    const second = await world.agents.list(apex.caller, mark === undefined ? {} : { since: mark })
+    assert.ok("children" in second)
+    assert.ok(second.children.some((strip) => strip.name === "part-1"), "the Fin that reported is listed")
+    record("checkInListShare", chars(second) / chars(first))
+    record("checkInNoteShare", lines(world.agents.frontDoor(apex.conversation, {}, false)) / door)
+  } finally {
+    await world.close()
+  }
+}
+
 try {
   await interruption()
   await backlog()
   await inbox()
+  await checkIn()
   const out = { fins: FINS, apexTurnMs: APEX_TURN_MS, spreadMs: SPREAD_MS, afterMs: AFTER_MS, thinkMs: THINK_MS, measures }
   console.log(`BENCH ${JSON.stringify(out)}`)
   if (process.env.COMMS_STORM_OUT) writeFileSync(process.env.COMMS_STORM_OUT, `${JSON.stringify(out, null, 2)}\n`)

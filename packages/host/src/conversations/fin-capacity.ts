@@ -1,3 +1,5 @@
+import type { CloudFinStatus } from "@mako/protocol/cloud-fins"
+import type { CloudFinLimits } from "../contracts/fin-tuning.js"
 /**
  * How many Fins a machine runs at once, from what a Fin costs there. A thinking Fin waits on its model and costs
  * little; what costs is the builds and test suites it runs. So each Fin is charged its light cost (cores and memory
@@ -185,4 +187,16 @@ export function cloudCapacity(input: CloudCapacityInput): number | undefined {
     if (sandboxes < running) sandboxes = running
   }
   return sandboxes === undefined || !Number.isFinite(sandboxes) ? undefined : sandboxes * per
+}
+
+/** A visible estimate only: account reserve/claim, never this reading, authorizes paid allocation. */
+export function cloudFinLimits(status: CloudFinStatus | null | undefined): CloudFinLimits {
+  if (!status || status.unavailable) return { atOnce: 0, unavailable: status?.unavailable ?? "unavailable" }
+  const spentTodayCents = (status.spentTodayCents ?? 0) + status.reservedTodayCents
+  return {
+    atOnce: cloudCapacity({ ...status, spentTodayCents }),
+    dailySpendCents: status.dailySpendCents,
+    spentTodayCents: status.spentTodayCents,
+    reservedTodayCents: status.reservedTodayCents,
+  }
 }

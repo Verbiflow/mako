@@ -572,7 +572,13 @@ export class WorktreeSpares {
     // Claimed before it's moved there: a sweep of the trash (any spare's fill) deletes what isn't being emptied, and
     // took this one between the move and freeing its branch, so Git still held the branch for a worktree gone from disk.
     this.emptying.add(aside)
-    await claim(aside)
+    try {
+      await claim(aside)
+    } catch (error) {
+      // A claim that couldn't be written moves nothing: the folder isn't left marked as being emptied.
+      this.emptying.delete(aside)
+      throw error
+    }
     const moved = await this.git.output(repoRoot, ["worktree", "move", "-f", "-f", path, aside]).then(() => true, () => false)
     if (!moved) {
       this.emptying.delete(aside)
@@ -601,8 +607,8 @@ export class WorktreeSpares {
     const aside = join(this.trash, randomUUID())
     // Claimed before it's moved there, as setAside's: a sweep would delete it while each repository is told where it went.
     this.emptying.add(aside)
-    await claim(aside)
     try {
+      await claim(aside)
       await rename(spare.path, aside)
     } catch (error) {
       this.emptying.delete(aside)
@@ -681,20 +687,22 @@ async function sameInputs(git: Git, spare: Spare, targets: readonly SpareTarget[
 /** Beside a trash folder being moved or emptied: the process doing it, for every process sharing the trash. */
 const CLAIM = ".claim"
 const ClaimSchema = z.object({ pid: z.number().int().positive(), at: z.number() })
+/** A claim older than this claims nothing, whoever has its pid now: a move or an emptying takes minutes, and a pid is reused. */
+const CLAIM_MAX_AGE_MS = 24 * 60 * 60_000
 const claimFile = (folder: string) => `${folder}${CLAIM}`
 
 async function claim(folder: string): Promise<void> {
   await writeFile(claimFile(folder), JSON.stringify({ pid: process.pid, at: Date.now() }), { mode: 0o600 })
 }
 
-/** Whether a live process claims the folder; a claim its process left behind (a crash) claims nothing. */
-async function claimedByLiving(folder: string): Promise<boolean> {
+/** Whether a live process claims the folder; a claim its process left behind (a crash), or one past a day, claims nothing. */
+async function claimedByLiving(folder: string, now = Date.now()): Promise<boolean> {
   const text = await readFile(claimFile(folder), "utf8").catch(() => undefined)
   if (text === undefined) return false
   let pid: number
   try {
     const parsed = ClaimSchema.safeParse(JSON.parse(text))
-    if (!parsed.success) return false
+    if (!parsed.success || now - parsed.data.at > CLAIM_MAX_AGE_MS) return false
     pid = parsed.data.pid
   } catch {
     return false

@@ -1,13 +1,16 @@
 import "./scratch-git.mjs"
 import { execFileSync, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { constants, tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, sep } from "node:path"
 import { z } from "zod"
 import { Git } from "@mako/git"
 import { ThreadStore } from "@mako/host/threads/store"
 import { ThreadWorktreeService } from "@mako/host/workspaces/thread-worktrees"
+import { AppKeySchema, type AppKey } from "@mako/host/contracts/thread-environments"
+import { ThreadEnvironments } from "@mako/host/workspaces/thread-environment"
+import { RECIPE_PATH, type Recipe } from "@mako/host/workspaces/thread-recipe"
 
 /**
  * The world `bench:host-load` runs a host in: a project folder of two repositories, Threads with worktrees of it,
@@ -41,6 +44,8 @@ export interface World {
   project: string
   /** Every Thread's checkout, Apexes first, with the worktree of each repository. */
   checkouts: { thread: string; session: string; path: string; repositories: string[]; fin: boolean }[]
+  /** Current folders' web logs, under the app owner the desk resolves, for output reads and controlled writes. */
+  appOutputs: { cwd: string; app: AppKey; file: string }[]
   /** The process groups playing the running apps and the busy Mac, by their IDs. */
   fixtures: number[]
   /** Stops those groups; they also end with this process however it ends (`holdFixtures`). */
@@ -57,7 +62,7 @@ function repository(path: string, files: number): void {
   git(path, "init", "-q", "-b", "main")
   git(path, "config", "user.email", "load@example.invalid")
   git(path, "config", "user.name", "Load")
-  writeFileSync(join(path, ".gitignore"), "node_modules/\ndist/\n.turbo/\n")
+  writeFileSync(join(path, ".gitignore"), "node_modules/\ndist/\n.turbo/\n.mako/\n")
   for (let n = 0; n < files; n += 1) {
     const folder = join(path, "src", `area-${Math.floor(n / 500)}`, `part-${Math.floor(n / 50)}`)
     if (n % 50 === 0) mkdirSync(folder, { recursive: true })
@@ -145,6 +150,7 @@ interface AppRun {
   command: string
   cwd: string
   port?: number
+  ready?: string
   pid: number
   startedMs: number
   at: number
@@ -188,6 +194,34 @@ export async function makeWorld(root: string, scale: WorldScale): Promise<World>
   for (const [index, count] of scale.fins.entries())
     for (let n = 0; n < count; n += 1) await make(apexes[index]!, `fin ${index}-${n}`, true)
   await worktrees.settled()
+  const environments = join(dataRoot, "thread-environments")
+  const appOwners = new ThreadEnvironments({ store, git: runner, dataRoot: join(dataRoot, "thread-data") })
+  const apps: { app: AppKey; checkout: string; port: number }[] = []
+  const appOutputs: World["appOutputs"] = []
+  const keys = new Set<AppKey>()
+  const owned = realpathSync(root) + sep
+  const recipe = {
+    values: {}, prepare: [], processes: { web: { command: "npm run dev", port: "{port}", ready: "true" } },
+    checks: { quick: "npm run typecheck" },
+  } satisfies Recipe
+  for (let n = 0; n < scale.apps; n += 1) {
+    const item = checkouts[n % checkouts.length]!
+    // First the apps a window can show; extra records represent earlier apps, still part of the overview's load.
+    const found = n < checkouts.length ? await appOwners.forFolder(item.path, false) : undefined
+    const app = found?.app ?? AppKeySchema.parse(randomUUID())
+    if (keys.has(app)) throw new Error("The host-load fixture resolved two current folders to the same app")
+    keys.add(app)
+    const checkout = found?.checkout ?? item.path
+    if (found) {
+      if (!realpathSync(checkout).startsWith(owned)) throw new Error("The fixture's app resolved outside its scratch folder")
+      mkdirSync(join(checkout, ".mako"), { recursive: true })
+      writeFileSync(join(checkout, RECIPE_PATH), JSON.stringify(recipe), { flag: "wx" })
+      appOutputs.push({ cwd: item.path, app, file: join(environments, app, "process-web.log") })
+    }
+    const values = store.claimEnvironment({ app, host: `load-app-${n}.thread.localhost`, port: 41_000 + n * 10 })
+    if (!values) throw new Error("The host-load fixture could not register its app's values")
+    apps.push({ app, checkout, port: values.port })
+  }
   store.close()
   await runner.close()
 
@@ -195,10 +229,9 @@ export async function makeWorld(root: string, scale: WorldScale): Promise<World>
 
   // The apps: each checkout's records, the first `running` with a process group up, the rest with checks that ended.
   const groups: { pid: number; stop(): void; ended: Promise<void> }[] = []
-  const environments = join(dataRoot, "thread-environments")
   for (let n = 0; n < scale.apps; n += 1) {
-    const checkout = checkouts[n % checkouts.length]!.path
-    const folder = join(environments, randomUUID())
+    const { app, checkout, port } = apps[n]!
+    const folder = join(environments, app)
     mkdirSync(folder, { recursive: true })
     const runs: Record<string, AppRun> = {}
     const now = Date.now()
@@ -207,15 +240,18 @@ export async function makeWorld(root: string, scale: WorldScale): Promise<World>
     if (n < scale.running) {
       const group = idleGroup(`mako-load-app-${n}`, checkout)
       groups.push(group)
-      runs["process-web"] = { kind: "process", name: "web", command: "npm run dev", cwd: checkout, port: 41_000 + n, pid: group.pid, startedMs: startedMs(group.pid), at: now }
+      runs["process-web"] = { kind: "process", name: "web", command: "npm run dev", cwd: checkout, port, ready: "true", pid: group.pid, startedMs: startedMs(group.pid), at: now }
+      writeFileSync(join(folder, "process-web.ready"), String(now))
     }
+    writeFileSync(join(folder, "process-web.log"), `host-load web output for ${app}\n`)
+    writeFileSync(join(folder, "check-quick.log"), "host-load quick check passed\n")
     writeFileSync(join(folder, "runs.json"), JSON.stringify({ runs }))
     writeFileSync(join(folder, "checkout"), checkout)
     writeFileSync(join(folder, "used"), String(now))
   }
   for (let n = 0; n < scale.processes / 2; n += 1) groups.push(idleGroup(`mako-load-busy-${n}`, temporary, 1))
 
-  return { root, home, dataRoot, temporary, project, checkouts, fixtures: groups.map((group) => group.pid), release: holdFixtures(groups) }
+  return { root, home, dataRoot, temporary, project, checkouts, appOutputs, fixtures: groups.map((group) => group.pid), release: holdFixtures(groups) }
 }
 
 /**
