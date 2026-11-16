@@ -396,6 +396,7 @@ export class LiveConversations {
       compact: (id, action, recovery) => this.actions.submit(id, { kind: "compact", id: action }, "native", recovery),
       replace: (resident, recovery) => { this.moves.assertStarts(resident); this.transfers.replaceCompaction(resident, recovery) },
       restartAllowed: id => this.restarts.settings().continueAfterRestart || this.inTree(id),
+      refresh: (resident, recovery) => this.sources.refreshCompaction(resident, recovery),
     })
     this.sources = new LiveSources(access)
     this.launches = new LiveLaunches(access)
@@ -410,7 +411,7 @@ export class LiveConversations {
     })
     this.sideQuestions = new LiveSideQuestions(access)
     const { actions, approvals, questions, checkpoints, assets, transfers, records } = this
-    this.events = new LiveEvents(access, { actions, approvals, questions, checkpoints, assets })
+    this.events = new LiveEvents(access, { compactions: this.compactions, actions, approvals, questions, checkpoints, assets })
     this.dispatch = new LiveDispatch(access, { actions, checkpoints, transfers })
     this.closing = new LiveClosing(access, { records, actions, approvals, transfers, restarts: this.restarts })
     this.threads.registerJournals(records.open())
@@ -1168,6 +1169,8 @@ export class LiveConversations {
       const transfer = this.transfers.pending(resident)
       const transferDue = Boolean(transfer?.retry && transfer.retry.at <= now)
       if (transfer?.retry && transferDue) this.transfers.save(resident, { ...transfer, retry: { ...transfer.retry, at: Math.min(transfer.retry.at, Date.now()) } })
+      const recovery = conversationControl(resident).compactionRecovery
+      if (recovery?.state.kind === "reconcile" && recovery.state.at <= now) this.compactions.resume(resident)
       if (!ready.length) {
         if (transferDue) this.release(resident)
         return true

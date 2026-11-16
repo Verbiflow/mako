@@ -134,8 +134,14 @@ function requestRow(request: LiveRequest): string {
 }
 
 /** The conversation's control as the metadata row keeps it: a transfer's continuation saved as a request's is (`requestRow`). */
-function controlRow(control: LiveSnapshot["control"]): LiveSnapshot["control"] {
-  if (!control?.transfers.some((transfer) => transfer.continues)) return control
+function controlRow(control: LiveSnapshot["control"]): z.input<typeof ConversationControlSchema> | undefined {
+  if (!control) return control
+  if (control.compactionRecovery?.origin === "native" || control.compactionRecovery?.state.kind === "reconcile") {
+    const { compactionRecovery, ...rest } = control
+    return { ...rest, pendingCompactionRecovery: compactionRecovery, transfers: control.transfers.map(transfer => transfer.continues
+      ? { ...transfer, continues: { ...transfer.continues, ...savedReason(transfer.continues.reason) } } : transfer) }
+  }
+  if (!control.transfers.some((transfer) => transfer.continues)) return control
   return {
     ...control,
     transfers: control.transfers.map((transfer) => transfer.continues ? { ...transfer, continues: { ...transfer.continues, ...savedReason(transfer.continues.reason) } } : transfer),

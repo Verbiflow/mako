@@ -205,8 +205,24 @@ are committed together. A broken summary gets at most one new compact command,
 under the episode's recorded retry ID. A duplicate receipt, a restart or a second
 window never issues that command again. Dispatching, accepted and uncertain
 receipts do not prove non-delivery and are not replayed. A late confirmed result
-still settles a pending action. Uncertain compaction and automatic-only native
-compaction admission remain a separate recovery step.
+still settles a pending action. The receipt's original five-minute confirmation
+deadline is journaled before native dispatch and survives restart. Missing or
+uncertain confirmation never issues compact again: at the deadline the host closes
+only its owned source, verifies native ownership and a stable readable record,
+then hands that transcript to a fresh binding. The original receipt stays uncertain;
+reading a compact marker, an idle session or a local turn ID does not prove its
+completion. Source inspection that cannot be verified waits on the existing host
+wake scheduler without sending anything. Exact late success fences an awaited
+read or replacement preparation while the source remains active; after replacement,
+a stale source cannot take the conversation back.
+
+For an automatic-only harness, recovery admits only a correlated, handed-over turn
+that ends with typed native context-exhaustion evidence. It creates no fictitious
+Compact action or retry. Summary markers, historical/replayed failures, prose and
+productive ongoing turns cannot admit an episode. A failed discovery continuation
+cannot create another recovery episode. Native episodes and the new reconciliation phase use a new journal wire field
+so an older host can still read the remaining journal; they share the same in-memory recovery
+owner, queue and transfer machinery.
 
 After the retry fails, the host quiesces the source and hands the retained
 transcript to a fresh session of the same harness, pinned account, model and mode.

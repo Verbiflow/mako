@@ -1,3 +1,4 @@
+import { mock } from "node:test"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -33,7 +34,7 @@ for (const name of cases) {
       await new Promise(resolve => setImmediate(resolve))
       assert.equal(calls.length, 1, "Stop before the first result forbids a new episode")
       assert.equal(world.launches.length, 1)
-      assert.equal(owner.snapshot(id)!.control!.compactionRecovery, undefined)
+      assert.equal(owner.snapshot(id)!.control!.compactionRecovery?.state.kind, "withdrawn", "Stop withdraws the already admitted deadline; the late failure cannot revive it")
       assert.equal(owner.snapshot(id)!.requests.find(request => request.id === queued)!.pause, "stop")
       console.log(`PASS: compaction ${name}`)
       continue
@@ -77,6 +78,11 @@ for (const name of cases) {
       assert.equal(world.prompts.length, 0)
       const reopening = randomUUID()
       owner.submit(id, reopening, "new message reopens the conversation")
+      const recovery = owner.snapshot(id)!.control!.compactionRecovery!
+      assert.equal(recovery.state.kind, "reconcile", "the unknown retry keeps its own original confirmation deadline after reopening")
+      if (recovery.state.kind !== "reconcile") throw new Error("Expected unknown retry")
+      mock.timers.enable({ apis: ["Date"], now: recovery.state.deadline + 1 })
+      owner.wakeDue(Date.now())
       await until("reopening sends kept words once without Resume", () => owner.snapshot(id)!.requests.find(request => request.id === queued)?.status === "completed")
       await until("the new input follows the old queue", () => owner.snapshot(id)!.requests.find(request => request.id === reopening)?.status === "completed")
       assert.equal(world.prompts.length, 2)
@@ -117,5 +123,5 @@ for (const name of cases) {
     const snapshot = owner.snapshot(id)
     console.error(JSON.stringify({ name, calls, prompts: world.prompts, control: snapshot?.control, requests: snapshot?.requests, logs: world.logs }))
     throw error
-  } finally { await world.close(); rmSync(root, { recursive: true, force: true }) }
+  } finally { mock.timers.reset(); await world.close(); rmSync(root, { recursive: true, force: true }) }
 }

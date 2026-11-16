@@ -722,6 +722,7 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
   const activity: string[] = []
   const agents = new Map<string, string>()
   let lastStop: string | undefined
+  let failureKind: string | undefined
   try {
     await driver.start(root, admitted("cursor", {
       conversationId: id,
@@ -731,7 +732,7 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
           markers.push([label, detail, body, tone].filter(Boolean).join(" | "))
         }
         if (event.type === "live-activity") activity.push(event.activity?.kind ?? "idle")
-        if (event.type === "live-session") lastStop = event.session.lastStop
+        if (event.type === "live-session") { lastStop = event.session.lastStop; failureKind = event.session.failureEvidence?.kind }
         if (event.type === "live-agent") agents.set(event.agent.nativeId, event.agent.state.kind)
       },
     }, { env: { CURSOR_API_KEY: "key_fixture_0123456789abcdef" } }))
@@ -767,6 +768,8 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
 
     assert.deepEqual(await turn([], { status: "error", error: { message: "Model overloaded", code: "resource_exhausted" } }),
       ["Turn failed | Model overloaded | error"])
+    await turn([], { status: "error", error: { message: "context window exceeded" } })
+    assert.equal(failureKind, "context-exhausted", "the real automatic-only adapter types its correlated terminal context failure, not a summary marker")
     const long = `Provider returned error: ${"x".repeat(300)}\nsecond line`
     const [failure] = await turn([], { status: "error", error: { message: long } })
     assert.ok(failure?.startsWith("Turn failed | Provider returned error: x") && failure.includes(`| ${long} |`), "a long reason is clipped beside the label and whole in the body")
