@@ -98,10 +98,12 @@ try {
       assert.equal(world.live.atWork(fin), false, "waiting on ownership holds no execution place")
       const before = promptsOf(world, fin).length
       world.agents.frontDoor(apex.conversation, {}, false)
-      const listed = await world.agents.list(apex.caller, { scope: "all" })
-      assert.ok("mark" in listed)
+      const listing = world.agents.list(apex.caller, { scope: "all" })
+      // Ownership settles while the list awaits its placed-Fin portion: the returned row and its mark must agree.
       checking = false
       world.live.moves.ownerChecked()
+      const listed = await listing
+      assert.ok("mark" in listed)
       await until("the held message to run", () => promptsOf(world, fin).length === before + 1)
       world.live.moves.ownerChecked()
       await pause(30)

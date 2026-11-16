@@ -2170,6 +2170,14 @@ export class Agents implements AgentOperations, ConversationChildren {
       const said = this.saidNow()
       for (const strip of strips) if (!strip.under) strip.said = said
     }
+    // Capture host-owned waits with their local rows, before the remote portion yields. A later wait cannot stamp
+    // an older row: otherwise the next delta would hide the change whose row this response never carried.
+    const awaitingByChild = new Map<string, string>()
+    for (const strip of strips) {
+      const edge = store.edges().of(strip.child)
+      const awaiting = strip.state.kind === "working" && edge ? this.childReading(edge).awaiting : undefined
+      if (awaiting) awaitingByChild.set(strip.child, awaiting)
+    }
     await this.listPlaced(apex, input, strips)
     const counts = this.treeCounts(this.rootOf(apex.thread))
     const tree = this.treeAnswer(counts)
@@ -2178,8 +2186,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const now = this.now()
     const tick = this.changes.tick(now)
     for (const strip of strips) {
-      const edge = this.store()?.edges().of(strip.child)
-      const awaiting = strip.state.kind === "working" && edge ? this.childReading(edge).awaiting : undefined
+      const awaiting = awaitingByChild.get(strip.child)
       strip.changedAt = this.changes.at(strip.child, { ...stripChange(strip), ...(awaiting && { awaiting }) }, tick)
     }
     const since = this.changes.since(input.since)
