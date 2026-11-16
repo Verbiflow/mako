@@ -3,7 +3,6 @@ import type { PromptDelivery, PromptDeliveryEvidence } from "./prompt-delivery.j
 
 /** A run/turn receipt is not necessarily the stored user's message ID. */
 export const NativePromptIdentityCapabilitySchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("supplied-message-id"), evidence: z.string().min(1) }),
   z.object({ kind: z.literal("accepted-message-id"), evidence: z.string().min(1) }),
   z.object({ kind: z.literal("unavailable"), reason: z.string().min(1) }),
 ])

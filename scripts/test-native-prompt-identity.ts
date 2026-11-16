@@ -7,14 +7,14 @@ import { auditId, auditSnapshot } from "./performance-audit-fixtures.ts"
 import { registeredHarnessIds } from "./registered-harnesses.ts"
 import { createAcpLiveDriver } from "@mako/host/harnesses/acp-live-driver"
 import { noAcpCapabilities } from "./fixtures/driver-capabilities.ts"
-import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { createProviderHost } from "@mako/host/harnesses/host"
+import { detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
 const nativeStores = new NativeStores(false)
 
 const context = detachedHarnessContext(nativeStores)
-const host = createHarnessHost(context)
-assert.equal(host.liveDrivers.get("claude")?.nativePromptIdentity.kind, "supplied-message-id", "SDK input UUIDs have an explicit adapter contract")
+const host = createProviderHost(context)
 
 const capability = { kind: "accepted-message-id", evidence: "Injected message receipt" } as const
 assert.equal(createAcpLiveDriver({
@@ -30,7 +30,6 @@ const accepted = { kind: "accepted", source: "native-response", referenceId: "u1
 const reference = nativePromptReference(capability, accepted, scope)
 assert.ok(reference)
 assert.equal(nativePromptReference(NO_NATIVE_PROMPT_IDENTITY, accepted, scope), undefined)
-assert.equal(nativePromptReference({ kind: "supplied-message-id", evidence: "Fixture" }, accepted, scope), undefined, "a supplied UUID is not an accepted response's message-ID receipt")
 assert.equal(nativePromptReference(capability, { kind: "uncertain", reason: "lost response" }, scope), undefined)
 assert.equal(nativePromptReference(capability, { kind: "submitted", source: "transport-call", correlationId: "run-id" }, scope), undefined)
 assert.equal(nativePromptReference(capability, { kind: "accepted", source: "native-response" }, scope), undefined)

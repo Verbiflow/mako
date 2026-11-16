@@ -4,7 +4,6 @@ import { z } from "zod"
 import { inspectNativeSession } from "../native-continuation.js"
 import type { ProviderBinding } from "../../contracts/conversation-control.js"
 import type { NativeForkSource } from "../live-driver.js"
-import type { NativeTurnReader } from "../native-turn.js"
 import type { ProviderProcessProbe } from "../../threads/index.js"
 import { openCodeRecordLocator, type OpenCodeOpening, type OpenCodeResumeRecord } from "./resume-store.js"
 
@@ -23,18 +22,10 @@ const holdsSchema = z.object({ kind: z.literal("holds"), holds: z.boolean() })
 const unavailable: Extract<OpenCodeResumeRecord, { kind: "unavailable" }> = { kind: "unavailable", reason: "The OpenCode recovery reader did not complete. Retry after the native store is available." }
 
 const sealedSchema = z.object({ kind: z.literal("sealed"), sealed: z.boolean() })
-const turnSchema = z.discriminatedUnion("kind", [z.object({ kind: z.literal("completed") }), z.object({ kind: z.literal("unfinished") }), z.object({ kind: z.literal("unknown"), reason: z.string() }), z.object({ kind: z.literal("unavailable"), reason: z.string() })])
 
 type WorkerRead =
   | { read: "record" | "holds" | "opens"; path: string; nativeId: string }
   | { read: "sealed"; path: string; nativeId: string; runId: string; steers: number }
-  | { read: "turn"; path: string; nativeId: string; runId: string }
-
-export function openCodeTurnReader(stores: NativeStores): NativeTurnReader {
-  return async ({ binding, runId }) => binding.path && binding.nativeId
-    ? readInWorker(stores, { read: "turn", path: binding.path, nativeId: binding.nativeId, runId }, turnSchema, { kind: "unknown", reason: "The source was verified, but its bounded completion scan did not finish." })
-    : unavailable
-}
 
 /** Reads in a worker that opens OpenCode's store as `stores` would. */
 function readInWorker<T>(stores: NativeStores, read: WorkerRead, schema: z.ZodType<T>, fallback: T): Promise<T> {

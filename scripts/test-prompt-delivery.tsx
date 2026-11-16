@@ -232,7 +232,7 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   assert.equal(autoContinueCandidate([dropped, { ...request, status: "canceled" }]), dropped, "a canceled request after it does not change the candidate")
   assert.equal(autoContinueCandidate([dropped, { ...request, status: "queued" }]), undefined, "a queued prompt behind it is the user's next word")
   assert.equal(autoContinueCandidate([quit]), undefined, "only a dropped connection or an exited provider earns an automatic continuation")
-  // With restart continuation on, both an intentional exit and a crash are candidates; Stop and Off still stand.
+  // After Mako's own restart, with the person's choice on, Mako's exit earns one too; a crash never does.
   const now = 10 * 60_000
   const cut = (id: string, at: number, continues?: string): LiveRequest => ({
     ...request, id, status: "interrupted", interruption: { reason: "host-quit", at },
@@ -240,10 +240,7 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   })
   const quitAt = cut("11111111-1111-4111-8111-000000000001", now - 1_000)
   assert.equal(autoContinueCandidate([quitAt], true, now), quitAt, "a turn Mako's exit cut short is continued after the restart")
-  const crashCandidate: LiveRequest = { ...quitAt, status: "uncertain", interruption: { reason: "host-crashed", at: now } }
-  assert.equal(autoContinueCandidate([crashCandidate], true, now), crashCandidate, "a crash is eligible under the default-on restart contract")
-  assert.equal(autoContinueCandidate([crashCandidate], false, now), undefined, "explicit Off does not admit crash recovery")
-  assert.equal(autoContinueCandidate([{ ...crashCandidate, pause: "stop" }], true, now), undefined, "a person's Stop still prevents crash recovery")
+  assert.equal(autoContinueCandidate([{ ...quitAt, status: "uncertain", interruption: { reason: "host-crashed", at: now } }], true, now), undefined, "a crash waits for the person")
   assert.equal(autoContinueCandidate([dropped], true, now), dropped, "the restart flag adds to the dropped turns, it doesn't replace them")
   const chain = [quitAt]
   for (let index = 2; index <= 4; index++) chain.push(cut(`11111111-1111-4111-8111-00000000000${index}`, now - 60_000 + index, chain.at(-1)!.id))

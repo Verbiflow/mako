@@ -1,5 +1,6 @@
 import { ProviderFailureError } from "../../contracts/provider-failure.js"
 import type { ChildProcess } from "node:child_process"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"
 import { handOff, preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "../prompt-dispatch.js"
 import { ClaudeAgents } from "./sdk-agents.js"
 import { randomUUID } from "node:crypto"
@@ -60,7 +61,6 @@ import type { ClaudeCredentialState } from "./accounts.js"
 import { claudeStopReason } from "./sdk-notices.js"
 import { claudeAcknowledged, claudeCommandLifecycle, claudeOwnTurnEnded, claudeTurnGoesOn } from "./sdk-message-kinds.js"
 import { fileResumeEvidence } from "../native-continuation.js"
-import { readClaudeTurn } from "./turn-outcome.js"
 import { claudeSessionCheckpoint } from "./session-checkpoint.js"
 import { claudeProcessProbe } from "./process-probe.js"
 import { claudeLayer } from "./layer.js"
@@ -574,7 +574,7 @@ export function createClaudeSdkDriver(
     makoInstructions: { via: "`systemPrompt.append` on the claude_code preset, which Claude Code keeps out of its transcript." },
     nativeIdentity: CLAUDE_NATIVE_IDENTITY,
     nativeExclusion: NO_NATIVE_EXCLUSION,
-    nativePromptIdentity: { kind: "supplied-message-id", evidence: "SDKUserMessage.uuid is dispatch.attemptId; the native history reader preserves it as the user entry ID." },
+    nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
     approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", nativeRequests: ["structured-question", ...(dependencies.prepareApprovals ? ["tool-permission" as const] : [])], coverage: "Parent AskUserQuestion results in the saved branch; parent tool decisions from the bundled runtime's local native event exporter, retained before delivery. Existing telemetry configuration, custom runtimes, child tools and MCP elicitation retain submission evidence unless a matching observer is available. Missing native events never confirm an answer." },
     planning: { via: "mode", mode: "plan", proposal: "ExitPlanMode's `plan` input, built by answering its permission request",
       feedback: { kind: "in-refusal", via: "the deny message of ExitPlanMode's permission answer, which Claude reads as the tool's result" } },
@@ -584,7 +584,6 @@ export function createClaudeSdkDriver(
       via: "The Agent SDK's `resume` option with the session ID, after the session file is checked.",
       wake: "The next message starts a new `claude` process that resumes the session from its file.",
       ...fileResumeEvidence(claudeProcessProbe, claudeSessionCheckpoint),
-      readTurn: readClaudeTurn,
       async locate(binding) {
         const account = binding.executionContext?.account
         const name = account?.kind === "configured" ? account.name : "default"

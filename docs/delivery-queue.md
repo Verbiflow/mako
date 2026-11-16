@@ -128,18 +128,13 @@ schedules, and a failing schedule is pinned there.
     holds takes that digest along. Otherwise a question could outwait the minute its
     Apex has to answer (`APEX_ANSWER_MS`), and the person would be asked first.
 
-15. **A crashed digest fails closed on unknown receipt.** The digest itself goes
-    again only when its gated delivery never passed `prepared` (or was refused
-    before submission), or a complete, readable, source-matched native snapshot
-    proves its supplied message ID absent. Accepted delivery proves receipt.
-    Missing paths, unreadable/partial history and adapters without supplied native
-    message IDs prove nothing; `submitted` alone proves neither receipt nor absence.
-    Those cases send a new crash continuation, with one short hint: “Fin reports may
-    have arrived around the restart; agents_list shows each Fin's latest.” The
-    recovery payload repeats no report text. A digest's words never prove receipt.
-    Its reconciliation identity survives retries and further crashes, so a later
-    attempt cannot silently resend the reports. Proven-unsent digests still wait
-    out usage limits as digests; Stop, ordinary-Thread Off and native ownership guards remain in force.
+15. **A digest cut at its hand-off goes again.** Its reports read as heard once it's
+    in the queue, so a crash after `submitted` and before the harness has it would
+    lose them. The next host sends it again, framed as maybe repeated, unless the
+    harness's transcript shows that very message by its id: a digest's words prove
+    nothing, as any of them may be in what the Thread was told before. It goes again
+    as a digest, so it waits out a limit and rests like any other, and later news goes
+    on its own behind it (`cutBrief`, `DIGEST_AGAIN`).
 
 ## What each failure leaves
 
