@@ -393,6 +393,16 @@ const prompted = (id: string, words = continueTurnPrompt("connection-lost", "mak
 })
 assert.match(text(draw([prompted("m", "You're on the Thread's own branch now.")], { mako: { m: { kind: "moved" } } })), /Mako moved this session onto its own branch/)
 assert.match(text(draw([prompted("g", "Continue toward the goal.")], { mako: { g: { kind: "goal", step: { step: "continue", turn: 3 } } } })), /Mako continued toward the goal turn 3/)
+// A wait's note, the one a move carries included, is Mako's line: never the person's prompt, with its actions.
+{
+  const note = "Mako: your wait \"CI on #412\" ended when this Thread moved here. If you still need it, call wait again."
+  const drawn = draw([prompted("w", note)], { mako: { w: { kind: "wait", line: "Your wait \"CI on #412\" ended when this Thread moved here. If you still need it, call wait again." } } })
+  assert.match(drawn, /data-turn-wait/)
+  assert.doesNotMatch(drawn, /data-prompt-actions/, "no person's prompt block")
+  const saved = draw([prompted("s", "Mako: the wait \"CI\" is over.\n- #412 checks: passed")])
+  assert.match(saved, /data-turn-wait/, "read back from a store by its words")
+  assert.doesNotMatch(saved, /data-prompt-actions/)
+}
 
 // A continuation is never a turn of its own, nor the person's words: the turn it continues goes on, as one turn,
 // whether Mako sent it or the person pressed Continue turn, live with its requests or read back from a store.

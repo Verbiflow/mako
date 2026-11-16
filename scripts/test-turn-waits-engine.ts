@@ -183,6 +183,25 @@ try {
   assert.deepEqual(first, ["Mako: your wait \"Waiting overnight\" ended when this Thread moved here. If you still need it, call wait again."])
   assert.equal(world.store.armedTurnWaitOf(apex.conversation), undefined)
   assert.deepEqual(world.agents.waitsDeparting(apex.conversation, since), first, "a handover asked again tells the same")
+  // The move refused after its hand-over: the Thread stayed, so the wait is armed again here, and fires as it would have.
+  world.agents.waitsStayed(apex.conversation, since)
+  assert.equal(world.store.armedTurnWaitOf(apex.conversation)?.description, "Waiting overnight", "armed again")
+  world.agents.waitsStayed(apex.conversation, since)
+  assert.equal(world.store.turnWaitsOf(apex.conversation).filter((wait) => wait.state === "armed").length, 1, "once")
+  // A check it waited on is watched again; one that ended meanwhile meets the wait, saying so.
+  checkRunning = true
+  armed(await world.agents.turnWait(apex.caller, { description: "Waiting for the moved check", on: [{ check: "quick" }], clientKey: "move-check" }))
+  const checkSince = now()
+  world.agents.waitsDeparting(apex.conversation, checkSince)
+  const watched = checkEnds.length
+  world.agents.waitsStayed(apex.conversation, checkSince)
+  await world.settle(50)
+  assert.equal(checkEnds.length, watched + 1, "its check is watched again")
+  world.agents.waitsDeparting(apex.conversation, checkSince)
+  checkRunning = false
+  world.agents.waitsStayed(apex.conversation, checkSince)
+  await world.settle(300)
+  assert.ok(apexTexts.some((text) => text.includes("- the quick check: the quick check ended while this Thread was moving")), JSON.stringify(apexTexts.slice(-1)))
 
   // Stop and archive end the wait without waking anyone.
   armed(await world.agents.turnWait(apex.caller, { description: "Waiting an hour", seconds: 3600, clientKey: "stop" }))

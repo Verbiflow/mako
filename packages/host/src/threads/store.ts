@@ -1804,6 +1804,22 @@ export class ThreadStore {
     })
   }
 
+  /**
+   * Arms again a wait a move ended (`cancelled.by: move`) that never fired, when the move didn't happen: the Thread
+   * stayed, so what it waited on still matters here. Any other wait is left as it is (`rearmed: false`).
+   */
+  rearmTurnWait(id: string): { wait: TurnWait | undefined; rearmed: boolean } {
+    return this.write(() => {
+      const held = this.sql("SELECT record FROM turn_waits WHERE id = ?").get(id)
+      if (!held) return { wait: undefined, rearmed: false }
+      const wait = keptTurnWait(held)
+      if (wait.state !== "cancelled" || wait.cancelled?.by !== "move" || wait.fired) return { wait, rearmed: false }
+      const rearmed: TurnWait = { ...wait, state: "armed" }
+      delete rearmed.cancelled
+      return { wait: this.putTurnWait(rearmed), rearmed: true }
+    })
+  }
+
   /** Waits fired and not yet delivered, oldest first: what a starting host sends once, under the request each kept. */
   undeliveredTurnWaits(): TurnWait[] {
     this.syncVersion()

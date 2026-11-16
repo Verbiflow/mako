@@ -67,7 +67,7 @@ class Gateway {
   readonly handOvers = new Map<string, Promise<void>>()
   unreachable = 0
   /** What the machine answers when it's ready: one that takes a carry says so (`{ folder, carry: true }`). */
-  readyAnswer: { folder: string; carry: true } | undefined
+  readyAnswer: { folder: string; carry: true; promptActor?: true } | undefined
   answered(move: string, answer: MoveAnswer): MoveAnswer {
     const first = this.answers.get(move) ?? answer
     this.answers.set(move, first)
@@ -515,6 +515,7 @@ try {
     assert.ok(!s.gateway.calls.some((call) => call.channel === "mako:live-prompt"), "and no message of its own")
 
     const idle = setup("wait-idle", { make: withWait })
+    idle.gateway.readyAnswer = { folder: idle.checkout, carry: true, promptActor: true }
     const id = move()
     const moved = await idle.moves.move(idle.conversation, id, { why: "asked" })
     assert.equal(moved.kind, "moved", JSON.stringify(moved))
@@ -523,10 +524,40 @@ try {
     const [conversation, requestId, text] = ArgsSchema.parse(prompts[0]?.args)
     assert.equal(conversation, idle.conversation)
     assert.equal(text, note)
+    assert.deepEqual(ArgsSchema.parse(prompts[0]?.args)[5], { actor: { kind: "service", name: "turn-wait" } }, "as Mako's words, never the person's")
     assert.equal(requestId, namedUuid(`mako move\0${id}\0${idle.conversation}\0turn-waits`), "under the move's id, so a repeat runs once")
     await idle.moves.move(idle.conversation, id, { why: "asked" })
     assert.equal(idle.gateway.calls.filter((call) => call.channel === "mako:live-prompt").length, 1, "asked again, sent once")
     assert.ok(departed.length >= 2 && departed.every((since) => since > 0), "asked with the move's start")
+
+    // A machine from before `promptActor` would draw the note as the person's message: it isn't sent there.
+    const older = setup("wait-idle-older", { make: withWait })
+    older.gateway.readyAnswer = { folder: older.checkout, carry: true }
+    const olderMoved = await older.moves.move(older.conversation, move(), { why: "asked" })
+    assert.equal(olderMoved.kind, "moved", JSON.stringify(olderMoved))
+    assert.ok(!older.gateway.calls.some((call) => call.channel === "mako:live-prompt"), "dropped, not sent as the person's")
+  }
+
+  // A move refused after the hand-over ended the Thread's waits: the Thread stays, and its waits are armed again here,
+  // since the move's start, or nothing would ever wake its agent.
+  {
+    const stayed: Array<{ conversation: string; since: number }> = []
+    const departedAt: number[] = []
+    const s = setup("wait-refused", {
+      make: (base) => ({
+        ...base,
+        live: {
+          ...base.live,
+          waitsDeparting: (_conversationId, since) => (departedAt.push(since), ["Mako: your wait \"CI\" ended when this Thread moved here. If you still need it, call wait again."]),
+          waitsStayed: (conversation, since) => void stayed.push({ conversation, since }),
+        },
+      }),
+    })
+    s.gateway.arrival = new Error("the machine's clone isn't there")
+    const outcome = await s.moves.move(s.conversation, move())
+    assert.equal(outcome.kind, "kept-here", JSON.stringify(outcome))
+    assert.ok(departedAt.length > 0, "the hand-over ended the waits")
+    assert.deepEqual(stayed, [{ conversation: s.conversation, since: departedAt[0]! }], "and the refusal arms them again, since the move's start")
   }
 
   // A quit's handoff answers once this Mac let go (`released`), while the claim is still out; the move goes on in this

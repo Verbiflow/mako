@@ -1490,6 +1490,16 @@ const inputs = {
             .optional(),
         })
         .optional(),
+      z
+        .object({
+          actor: z
+            .object({
+              kind: z.literal("service"),
+              name: z.literal("turn-wait"),
+            })
+            .optional(),
+        })
+        .optional(),
     ]),
   "mako:live-prompt-versions": () => z.tuple([z.string()]),
   "mako:live-read": () =>
@@ -1729,13 +1739,13 @@ const inputs = {
                 name: z.union([
                   z.literal("handoff"),
                   z.literal("workspace"),
+                  z.literal("turn-wait"),
                   z.literal("goal"),
                   z.literal("catalog"),
                   z.literal("migration"),
                   z.literal("auto-continue"),
                   z.literal("relay"),
                   z.literal("pull-watch"),
-                  z.literal("turn-wait"),
                 ]),
               }),
             ]),

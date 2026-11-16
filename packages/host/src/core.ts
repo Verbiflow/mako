@@ -1401,6 +1401,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       waitingPrompts: (conversationId) => live.waitingPrompts(conversationId),
       carried: (conversationId, requestIds, to) => live.carried(conversationId, requestIds, to),
       waitsDeparting: (conversationId, since) => late.conversations?.agents?.waitsDeparting(conversationId, since) ?? [],
+      waitsStayed: (conversationId, since) => late.conversations?.agents?.waitsStayed(conversationId, since),
     },
     step: (conversationId, move, step) => {
       // Every device's list says the move from its first step; its window and a device watching it hear each step.

@@ -3082,6 +3082,17 @@ export class Agents implements AgentOperations, ConversationChildren {
     return this.turnWaits.departing(conversation, since).map(turnWaitMovedNote)
   }
 
+  /** The move that ended the conversation's waits didn't happen: they're armed again, and their checks watched again. */
+  waitsStayed(conversation: string, since: number): void {
+    for (const wait of this.turnWaits.stayed(conversation, since))
+      for (const item of wait.items) {
+        if (item.kind !== "check" || wait.met[turnWaitItemKey(item)] !== undefined) continue
+        void this.watchCheck(conversation, item).then((watching) => {
+          if (!watching) this.turnWaits.met(wait.id, item, `the ${item.tier} check ended while this Thread was moving; app_check with tier "${item.tier}" reads how`)
+        })
+      }
+  }
+
   /** A pull request's state as a wait arms on it; nothing when it can't be read now, which refuses nothing. */
   private async readPullOnce(item: Extract<TurnWaitItem, { kind: "pull" }>, conversation: string): Promise<PullReading | null | undefined> {
     const read = this.deps.readPull

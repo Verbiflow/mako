@@ -224,6 +224,11 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   assert.equal(turnWords([quit, asked], asked), "Run the suite and fix what fails", "anything else, its own words")
   const moved: LiveRequest = { ...request, id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", actor: { kind: "service", name: "workspace" } }
   assert.deepEqual([...makoPrompts([moved])], [[moved.id, { kind: "moved" }]], "the note after an agent's move is Mako's")
+  const waitNote = "Mako: your wait \"CI on #412\" ended when this Thread moved here. If you still need it, call wait again."
+  const waited: LiveRequest = { ...request, id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", text: waitNote, actor: { kind: "service", name: "turn-wait" } }
+  assert.deepEqual([...makoPrompts([waited])], [[waited.id, { kind: "wait", line: "Your wait \"CI on #412\" ended when this Thread moved here. If you still need it, call wait again." }]], "a wait's note a move carried is Mako's")
+  assert.deepEqual(savedMakoPrompt("Mako: the wait \"CI\" is over.\n- #412 checks: passed"), { kind: "wait", line: "The wait \"CI\" is over.", detail: "- #412 checks: passed" }, "read back by its words")
+  assert.equal(savedMakoPrompt("Mako: the waiting room is full"), undefined, "words that only begin like one are the person's")
   assert.deepEqual(turnStops([dropped, continuation], true).get(dropped.id), { reason: "connection-lost", continuable: false, automatic: false })
   assert.equal(autoContinueCandidate([dropped]), dropped, "the newest dropped turn is Mako's to continue")
   assert.equal(autoContinueCandidate([dropped, continuation]), undefined, "a turn already continued is not continued again")

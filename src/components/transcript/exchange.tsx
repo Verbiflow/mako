@@ -105,6 +105,7 @@ import {
   GitForkIcon,
   GitPullRequestIcon,
   HistoryIcon,
+  HourglassIcon,
   LayersIcon,
   PencilLineIcon,
   MoonIcon,
@@ -305,6 +306,8 @@ function TurnExchange({
             <ReviewRequest target={mako.target} timestamp={exchange.prompt.timestamp} />
           ) : mako?.kind === "pull" ? (
             <PullWakeNote line={mako.line} timestamp={exchange.prompt.timestamp} origin={exchange.prompt.origin} />
+          ) : mako?.kind === "wait" ? (
+            <TurnWaitNote line={mako.line} detail={mako.detail} timestamp={exchange.prompt.timestamp} origin={exchange.prompt.origin} />
           ) : fromAgent && promptText ? (
             <AgentWordsCard words={fromAgent} raw={promptText} timestamp={exchange.prompt.timestamp} />
           ) : (
@@ -527,6 +530,11 @@ function MovedNote({ timestamp, origin }: { timestamp?: number; origin?: Message
 /** Mako woke this Fin with an outcome of the pull request its report said it waits on: the note's own words. */
 function PullWakeNote({ line, timestamp, origin }: { line: string; timestamp?: number; origin?: MessageOrigin }) {
   return <EventLine align="end" icon={GitPullRequestIcon} time={timestamp} data-pull-wake words={{ title: line }} action={<ShowOriginal origins={[origin]} />} />
+}
+
+/** A turn's wait that fired or ended, as Mako's line: what the agent was woken with, never the person's words. */
+function TurnWaitNote({ line, detail, timestamp, origin }: { line: string; detail?: string; timestamp?: number; origin?: MessageOrigin }) {
+  return <EventLine align="end" icon={HourglassIcon} time={timestamp} data-turn-wait words={{ title: line, detail }} action={<ShowOriginal origins={[origin]} />} />
 }
 
 const GOAL_NOTES = {

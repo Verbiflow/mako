@@ -164,7 +164,7 @@ export type MoveReadyInput = z.infer<typeof MoveReadyInputSchema>
 export async function readyForMove(
   deps: Pick<MoveArrivalDeps, "workspaceSettled" | "warm"> & Partial<Pick<MoveArrivalDeps, "records" | "stage" | "ahead" | "clone">>,
   input: MoveReadyInput
-): Promise<{ folder: string; carry: true }> {
+): Promise<{ folder: string; carry: true; promptActor: true }> {
   const settled = await deps.workspaceSettled()
   if ("problem" in settled) throw new Error(`The cloud machine couldn't make this Thread's folder: ${settled.problem}`)
   if (settled.path !== input.folder) throw new Error(`This machine's folder is ${settled.path}, not the move's ${input.folder}.`)
@@ -189,7 +189,8 @@ export async function readyForMove(
       hostWarn("moves", "a harness's launch settings weren't read ahead of a move", { harness: launch.harness, error: error.message })
     }))).then(() => hostLog("moves", "launch settings read ahead of a move", { harnesses: launches.map((launch) => launch.harness).join(","), ms: Math.round(performance.now() - began) }))
   pullAhead(deps, settled.path)
-  return { folder: settled.path, carry: true }
+  // `promptActor`: `mako:live-prompt` here takes Mako's actor, so a move's own note arrives as Mako's.
+  return { folder: settled.path, carry: true, promptActor: true }
 }
 
 /**

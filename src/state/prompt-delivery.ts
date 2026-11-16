@@ -11,6 +11,7 @@ import type { LiveHistoryWindow } from "@mako/host/contracts/live-history"
 import { continueTurnPrompt, savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { goalContinuePrompt, goalStartPrompt } from "@mako/host/contracts/live-goals"
 import { pullWakeWords } from "@mako/host/contracts/pull-waits"
+import { turnWaitWords } from "@mako/host/contracts/turn-waits"
 
 export { continueTurnPrompt }
 
@@ -79,6 +80,8 @@ export type MakoPrompt =
   | { kind: "review"; target: NonNullable<LiveRequest["review"]> }
   /** A pull request the Fin waits on came to an outcome (`pullWakeNote`): its line, and the pull request's link. */
   | { kind: "pull"; line: string; url?: string }
+  /** A turn's wait fired or ended (`turnWaitNote`, `turnWaitMovedNote`): its first line, and the rest. */
+  | { kind: "wait"; line: string; detail?: string }
 
 /**
  * The prompts Mako sent itself, keyed by their request id, so the transcript
@@ -93,7 +96,8 @@ export function makoPrompts(requests: readonly LiveRequest[]): Map<string, MakoP
     else if (request.actor?.kind === "service" && request.actor.name === "pull-watch") {
       const pull = pullWakeWords(request.text)
       if (pull) prompts.set(request.id, { kind: "pull", ...pull })
-    }
+    } else if (request.actor?.kind === "service" && request.actor.name === "turn-wait")
+      prompts.set(request.id, { kind: "wait", ...turnWaitWords(request.text) ?? { line: request.text.trim().split("\n", 1)[0] ?? "" } })
   }
   return prompts
 }
@@ -132,6 +136,8 @@ export function carriedHistories(requests: readonly LiveRequest[]): Map<string, 
 export function savedMakoPrompt(text: string): MakoPrompt | undefined {
   const pull = pullWakeWords(text)
   if (pull) return { kind: "pull", ...pull }
+  const wait = turnWaitWords(text)
+  if (wait) return { kind: "wait", ...wait }
   const objective = /\n<objective>\n([\s\S]*?)\n<\/objective>\n/.exec(text)?.[1]
   if (objective === undefined) return undefined
   const words = text.trim()
