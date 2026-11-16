@@ -1,4 +1,5 @@
 import { Slot } from "@/extend/slot"
+import { quietly } from "@/lib/quiet-retry"
 import { elementScroll, measureElement, useVirtualizer, type Virtualizer } from "@tanstack/react-virtual"
 import { registerCommands } from "@/extend/commands"
 import {
@@ -36,7 +37,6 @@ import { Orb } from "@/components/ui/orb/orb"
 import { liveReadingSource, nativeReadingSource, transcriptReaders, type TranscriptReading, type TranscriptPreviewIdentity } from "@/state/transcript-reading"
 import { loadReleasedLiveTurn } from "@/state/live-history"
 import { loadReleasedThreadTurn } from "@/state/thread-viewing"
-import { toast } from "sonner"
 import { TranscriptPaneContext } from "@/state/conversation-scope"
 import { SCROLL_WRITE_EVENT, TRANSCRIPT_END_EVENT, TranscriptEndContext } from "./transcript-end"
 import { READER_SCROLL_EVENT } from "@/lib/reader-scroll"
@@ -455,9 +455,10 @@ function ReleasedExchange({ id, label, height, viewport, load }: {
   const [failed, setFailed] = useState(false)
   const fetch = useCallback(() => {
     setFailed(false)
-    void load().catch(error => {
+    // Asked again once by itself; still failing, the row offers to load it again, and the host's words go to its log.
+    void quietly("an earlier turn", load).catch(error => {
       setFailed(true)
-      toast.error(error instanceof Error ? error.message : String(error))
+      console.warn(`An earlier turn didn't load ${JSON.stringify({ error: error instanceof Error ? error.message : String(error) })}`)
     })
   }, [load])
   useEffect(() => {

@@ -16,6 +16,7 @@ import { encodeRuntimeEvent, payloadFor, runtimeEventLine, runtimeSuccessBody, t
 import { HOST_CLOSED_CODE, HOST_RECONNECTING_MESSAGE, HOST_RESTARTING_CODE } from "../contracts/host-connection.js"
 import { historyChangedNotice } from "./gateway.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import { failedCallWords } from "./failed-calls.js"
 import { filePolicyHeaders } from "../base/file-policy.js"
 import type { SecretKeyHandover } from "../base/host-secrets.js"
 import { HostJobs, type JobDemand } from "../base/host-jobs.js"
@@ -277,9 +278,13 @@ export async function startWebHost(
     // An older client sends none; minting one here still ties the host's lines for this call together.
     const correlationId = CorrelationIdSchema.safeParse(request.headers[CORRELATION_HEADER]).data ?? randomUUID()
     response.setHeader(CORRELATION_HEADER, correlationId)
+    // Whether the call reached its method, which says its own failure (`FailedCalls`); one refused before it is said here.
+    let reached = false
+    let called = "unread"
     void readRequest(request)
       .then(async (call) => {
         const { channel, attempt } = call
+        called = channel
         const args = decodeRuntimeArgs(call.args)
         if (channel === "mako:control-preview" && request.headers.accept === PREVIEW_MEDIA_TYPE) {
           if (!preview) throw new Error("Preview delivery requires a newer Mako host. Existing agents have not been restarted.")
@@ -320,6 +325,7 @@ export async function startWebHost(
         // A replayed mutation is answered by its id; the line is the receipt
         // that a dropped call was settled rather than repeated.
         if (attempt !== undefined && attempt > 1) hostLog("rpc", "replayed call", { channel, client: clientId, attempt, correlationId })
+        reached = true
         const value = await invoke(
           channel,
           args,
@@ -332,6 +338,7 @@ export async function startWebHost(
         response.writeHead(200, { "content-type": "application/json" }).end(runtimeSuccessBody(value))
       })
       .catch((error) => {
+        if (!reached) hostWarn("rpc", "a call was refused before its method", { channel: called, client: clientId, correlationId, ...failedCallWords({ error }) })
         if (!response.destroyed && !response.headersSent)
           response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(runtimeFailure(error)))
       })

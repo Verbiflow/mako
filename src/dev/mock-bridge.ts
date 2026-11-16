@@ -3559,6 +3559,11 @@ export function installMockBridge() {
       setTimeout(() => setMcpSignIns({ servers: mockMcpSignIns.servers.filter((each) => each.server !== server) }), 2_000)
       return mockMcpSignIns
     },
+    // `?mock&unopened` shows a saved conversation the host couldn't open.
+    unopenedConversations: async () =>
+      new URLSearchParams(globalThis.location?.search).has("unopened")
+        ? [{ conversation: "6f1c2a90-3b7e-4d2a-9c41-8e5b0f7d2a13", journal: "conversations/6f1c2a90-3b7e-4d2a-9c41-8e5b0f7d2a13.sqlite", error: "file is not a database" }]
+        : [],
     fileEventsRestart: async () => {
       const before = mockFileEvents
       setFileEvents({ ...before, restarting: "restarting" })

@@ -243,7 +243,8 @@ async function reconnectAfterRestart() {
     const accepted = after.snapshot(id)?.control?.transfers.find((transfer) => transfer.input.id === moved.id)
     assert.equal(accepted?.state.kind, "accepted", `a record that moved while the host was away still reconnects: ${JSON.stringify(accepted?.state)}`)
     assert.equal(starts.length, 2, "the provider was started once for the reconnect")
-    assert.ok(notices.some((message) => message.includes("continued outside Mako")), "a move no turn here explains is said out loud")
+    // Nothing in it for the person to act on, so it's the host's log, not a notice (`live-transfers.ts`).
+    assert.ok(!notices.some((message) => message.includes("continued outside Mako")), "a move no turn here explains is logged, not said")
     await until(() => dev.heldBy("cursor", "agent-restart")?.hostLabel === "the installed Mako app", "the reconnect to hold the session")
     await after.close(id)
     assert.equal(dev.heldBy("cursor", "agent-restart"), null)

@@ -1,5 +1,6 @@
 import type { Reclaimed } from "./journal-reclaim.js"
 import { join } from "node:path"
+import type { UnopenedConversation } from "../contracts/unopened-conversations.js"
 import { disconnectedContext } from "../base/execution-context.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -147,6 +148,9 @@ export class LiveRecords {
    */
   readonly forks = new Map<string, ForkFacts>()
 
+  /** Saved conversations `open` couldn't read: kept for recovery, and said in the rail and Diagnostics. */
+  readonly unopened: UnopenedConversation[] = []
+
   /** Lists every saved journal, as the host before this one left it, for the Thread store to register. */
   open(): JournalFacts[] {
     const { dependencies } = this
@@ -191,11 +195,9 @@ export class LiveRecords {
           journal.close()
         }
       } catch (error) {
-        dependencies.emit({
-          type: "notice",
-          level: "error",
-          message: `Saved conversation ${id} could not be opened. Its journal has been preserved for recovery. ${errorMessage({ error })}`,
-        })
+        // Kept for recovery, and said where the person looks (`unopened`) rather than as a toast at every start.
+        hostWarn("live", "a saved conversation couldn't be opened; its journal is kept", { conversation: id, error: errorMessage({ error }) })
+        this.unopened.push({ conversation: id, journal: join(dependencies.root, `${id}.sqlite`), error: errorMessage({ error }) })
       }
     }
     return journals

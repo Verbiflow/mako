@@ -772,11 +772,7 @@ export class LiveTransfers {
           nativeId: prior?.nativeId,
           cause: movedByOwnTurn ? "interrupted turn" : "outside Mako",
         })
-        if (!movedByOwnTurn) this.host.dependencies.emit({
-          type: "notice",
-          level: "info",
-          message: "This session was continued outside Mako since its last turn here. Those turns are not in this transcript; the session itself carries them.",
-        })
+        if (!movedByOwnTurn) hostLog("transfer", "the session was continued outside Mako since its last turn here", { harness: transfer.input.provider, nativeId: prior?.nativeId })
       }
     } catch (error) {
       if (activated) {

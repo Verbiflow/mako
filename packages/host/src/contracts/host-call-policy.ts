@@ -172,6 +172,8 @@ const reads = [
   "mako:file-events-service",
   /** The servers that need sign-in, from memory. */
   "mako:mcp-sign-ins",
+  /** The saved conversations this host couldn't open, from memory. */
+  "mako:unopened-conversations",
   /** The continues in the cloud this Mac pressed or its list says, from memory. */
   "mako:continue-readings",
   /** Asks the account what a continue would take now; asked twice, it's asked twice. */

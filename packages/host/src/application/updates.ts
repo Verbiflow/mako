@@ -73,7 +73,10 @@ export class Updates {
       this.installationChanged()
       // Where the checkout stands, from what it last fetched; Settings › Updates fetches when it opens.
       void local.check({ fetch: false }).catch((error: Error) => hostWarn("updates", "the source checkout couldn't be read", { reason: error.message }))
-    }).catch(() => this.emit({ type: "notice", level: "error", message: "The saved update state could not be read. Choose the source checkout again in Settings > Updates." }))
+    }).catch((error: Error) => {
+      hostWarn("updates", "the saved update state couldn't be read", { reason: error.message })
+      this.emit({ type: "notice", level: "error", message: "Mako lost track of where it builds updates from.", action: { label: "Choose the checkout", does: "open-updates" } })
+    })
   }
 
   installation(): UpdateInstallation {
