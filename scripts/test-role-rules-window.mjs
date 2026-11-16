@@ -68,23 +68,54 @@ async function checkWindow() {
       await new Promise((done) => setTimeout(done, 40))
     }
   }
+  // A press aims where the target was on a painted frame, and only once it held still for two: the fields render
+  // before the readings above them land and move them (16 px when those come half a second late), and a press sent
+  // before the page's first frame can reach nothing.
   const press = async (selector) => {
-    const point = await evaluate(`(() => {
+    const point = await evaluate(`(async () => {
       const found = document.querySelector(${JSON.stringify(selector)})
       found.scrollIntoView({ block: "center" })
-      const r = found.getBoundingClientRect()
-      return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }
+      // A frame, or a tenth of a second where the window paints none.
+      const frame = () => new Promise((done) => {
+        const read = () => { clearTimeout(timer); done(found.getBoundingClientRect()) }
+        const timer = setTimeout(read, 100)
+        requestAnimationFrame(read)
+      })
+      let before = await frame()
+      for (let frames = 0; frames < 60; frames += 1) {
+        const now = await frame()
+        if (now.x === before.x && now.y === before.y && now.width === before.width && now.height === before.height) break
+        before = now
+      }
+      return { x: Math.round(before.x + before.width / 2), y: Math.round(before.y + before.height / 2) }
     })()`)
     for (const type of ["mousePressed", "mouseReleased"])
       await page.debugger.sendCommand("Input.dispatchMouseEvent", { type, button: "left", clickCount: 1, ...point })
+    return point
   }
   const field = (role) => `[data-role-rules=${role}] textarea`
-  // Typing goes wherever focus is: a press on a loaded runner can land as the page re-renders after the other field's
-  // save, so a field is typed into only once it has focus.
+  // Typing goes wherever focus is, so a field is typed into only once it has focus. A press that leaves focus
+  // elsewhere says what the page received of it, what's at the point it aimed at and where the field is now, then
+  // aims again: CI's Linux runners twice left the first press with focus on the body, which no run here repeats.
   const focusField = async (role) => {
-    await press(field(role))
-    await until(`document.activeElement === document.querySelector(${JSON.stringify(field(role))})`, `${role} has focus`)
+    const focused = `document.activeElement === document.querySelector(${JSON.stringify(field(role))})`
+    for (let attempt = 1; ; attempt += 1) {
+      const point = await press(field(role))
+      const end = Date.now() + 3_000
+      while (!(await evaluate(focused)) && Date.now() < end) await new Promise((done) => setTimeout(done, 40))
+      if (await evaluate(focused)) return
+      const seen = await evaluate(`JSON.stringify({ received: window.__pointer.slice(-8), at: document.elementFromPoint(${point.x}, ${point.y})?.outerHTML.slice(0, 120), field: document.querySelector(${JSON.stringify(field(role))}).getBoundingClientRect().toJSON(), focus: document.activeElement?.tagName, viewport: [innerWidth, innerHeight, scrollY] })`)
+      console.error(`Pressing ${role} at ${JSON.stringify(point)} left focus elsewhere (attempt ${attempt}): ${seen}`)
+      if (attempt === 2) return until(focused, `${role} has focus`)
+    }
   }
+  // What the page received of each press, from its load, for a press that missed.
+  const recordPointer = () => evaluate(`(() => {
+    window.__pointer = []
+    const began = performance.now()
+    for (const type of ["pointerdown", "mousedown", "focusin", "focusout"])
+      document.addEventListener(type, (event) => window.__pointer.push([type, Math.round(performance.now() - began), event.clientX, event.clientY, event.target.tagName]), true)
+  })()`)
   const preview = (role) => `[data-role-rules=${role}] button[aria-expanded]`
   const theme = (light) => evaluate(`document.documentElement.classList.toggle("light", ${light})`)
   const saved = () => evaluate("window.mako.finDefaults().then((reading) => reading.policy)")
@@ -94,6 +125,7 @@ async function checkWindow() {
   }, 60_000)
   try {
     await window.loadURL(`${process.env.MAKO_ROLE_RULES_URL}scripts/role-rules.html`)
+    await recordPointer()
     await until(`document.querySelector(${JSON.stringify(field("forFins"))}) !== null`, "the fields render")
     const labels = await evaluate(`[...document.querySelectorAll("[data-role-rules] label")].map((label) => label.innerText)`)
     assert.deepEqual(labels, ["For every Fin", "For every Apex"])
