@@ -532,7 +532,8 @@ assert.match(errored, /role="alert" data-event-error="rate-limited"/)
 assert.match(text(errored), /Cursor is over its rate limit or capacity\s*Wait for capacity to return or choose another model\./, "a recorded failure is named by the rules a live one is")
 const unnamed = draw([{ id: "u", prompt: { id: "u", role: "user", blocks: [{ type: "text", text: "Summarize" }] },
   response: [{ id: "u-a", role: "assistant", blocks: [{ type: "text", text: "Reading." }], error: "Tool schema mismatch in step 4\nat validate (schema.ts:12)" }], system: [] }])
-assert.match(text(unnamed), /Tool schema mismatch in step 4\s*Details/, "a failure no rule knows says the provider's own first line")
+assert.match(text(unnamed), /did not finish this turn\s*Details/, "a failure no rule knows is named, not shown as the provider's raw line")
+assert.doesNotMatch(text(unnamed), /Tool schema mismatch/, "the provider's own words wait behind Details, closed")
 assert.doesNotMatch(errored, /rounded-lg border border-negative/, "no tinted card")
 
 const separator = draw([{ id: "x", prompt: { id: "x", role: "user", blocks: [{ type: "text", text: "Go" }] }, response: [],
