@@ -325,6 +325,7 @@
     "test:git-helper": "tsx scripts/test-git-helper.ts && node --expose-gc --import tsx scripts/test-git-helper-release.ts",
     "test:git-helper-release": "node --expose-gc --import tsx scripts/test-git-helper-release.ts",
     "test:fin-reopen": "tsx scripts/test-fin-reopen.ts",
+    "test:fin-turn-ends": "tsx scripts/test-fin-turn-ends.ts",
     "test:roster-refresh": "tsx scripts/test-roster-refresh.ts",
     "test:pager-release": "node --expose-gc --import tsx scripts/test-pager-release.ts",
     "test:resume-holds": "node scripts/test-loop-hold.mjs && tsx scripts/test-wal-primer.ts && tsx scripts/test-wal-checkpoints.ts && tsx scripts/test-resume-holds.ts",

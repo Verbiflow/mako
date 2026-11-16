@@ -1,6 +1,6 @@
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { errorMessage } from "../base/error-message.js"
-import { APEX_WORD, decisionWords, FIN_WORD, reportAsk, reportPhase, waitingWords, type Notice, type Report } from "../contracts/agents.js"
+import { APEX_WORD, decisionWords, FIN_WORD, reportAsk, reportPhase, reportWord, UNFINISHED_WORDS, waitingWords, type Notice, type Report } from "../contracts/agents.js"
 import { appendFinReports, FIN_REPORTS_MAX, type FinReportCard } from "../contracts/fin-reports.js"
 import { FROM_AGENTS } from "../contracts/children.js"
 import { FOCUS_MS, quietLine, WAKE_COALESCE_MS } from "../contracts/children.js"
@@ -368,7 +368,10 @@ export function digest(notices: readonly Notice[], counts: string): string {
   const decided = fins.filter((notice) => notice.decision)
   const decisions = [...asks.filter((notice) => notice.report.for !== "person"), ...decided.filter((notice) => notice.decision === "lead")]
   const persons = [...asks.filter((notice) => notice.report.for === "person"), ...decided.filter((notice) => notice.decision === "person")]
-  const finished = fins.filter((notice) => !notice.decision && (notice.report.status === "done" || notice.report.status === "failed"))
+  const ended = fins.filter((notice) => !notice.decision && (notice.report.status === "done" || notice.report.status === "failed"))
+  // A Fin whose turn ended without a result hasn't finished: said apart, for its Apex to send on or take its reply.
+  const finished = ended.filter((notice) => !notice.report.unfinished)
+  const unfinished = ended.filter((notice) => notice.report.unfinished)
   const handoffs = fins.filter((notice) => notice.report.status === "progress" && notice.report.handoff)
   const awaiting = fins.filter((notice) => notice.report.status === "progress" && !notice.report.handoff && notice.report.awaits)
   const lines = [FROM_AGENTS]
@@ -380,7 +383,7 @@ export function digest(notices: readonly Notice[], counts: string): string {
       const { label, report, decision } = notice
       const summary = report.summary.trim() || (report.status === "done" ? "It finished." : "It failed.")
       const text = summary.length > RESULT_CHARS ? `${summary.slice(0, RESULT_CHARS)}… (agents_read gives the rest)` : summary
-      lines.push(`  • ${label} ${report.status}:`, ...text.split("\n").map((line) => `    ${line}`))
+      lines.push(`  • ${label} ${reportWord(report)}:`, ...text.split("\n").map((line) => `    ${line}`))
       cards.push(card(notice, opening(report.summary) || (report.status === "done" ? "It finished." : "It failed.")))
       for (const artifact of report.artifacts ?? []) lines.push(`    ${artifact.kind}: ${artifact.ref}${artifact.label ? ` (${artifact.label})` : ""}`)
       if (decision && report.question) lines.push(`    ${decisionWords({ question: report.question, on: decision, ask: reportAsk(report) })}`)
@@ -442,8 +445,18 @@ export function digest(notices: readonly Notice[], counts: string): string {
     lines.push(`${finished.length} finished:`)
     for (const notice of finished) {
       const { label, report } = notice
-      lines.push(`  • ${label} ${report.status}: ${finishedLine(report)}`)
+      lines.push(`  • ${label} ${reportWord(report)}: ${finishedLine(report)}`)
       cards.push(card(notice, opening(report.summary) || (report.status === "done" ? "It finished." : "It failed.")))
+      artifactLines(lines, report)
+    }
+  }
+  if (unfinished.length) {
+    lines.push(`${unfinished.length} ${UNFINISHED_WORDS} (agents_send sends one on; or take its reply as its result):`)
+    for (const notice of unfinished) {
+      const { label, report } = notice
+      lines.push(`  • ${label}: ${finishedLine(report)}`)
+      if (notice.holds?.length) lines.push(`    Still waiting to start after it: ${notice.holds.join(", ")} (they start once it reports done; agents_stop on it drops them).`)
+      cards.push(card(notice, opening(report.summary) || "Its turn ended without a result."))
       artifactLines(lines, report)
     }
   }
@@ -496,6 +509,7 @@ function card(notice: Notice, line: string): FinReportCard {
     ...(notice.fin.harness && { harness: notice.fin.harness }),
     ...(notice.reply && { apex: true as const }),
     status: report.status,
+    ...(report.unfinished && { unfinished: true as const }),
     line: line.slice(0, 4_000),
     ...(report.options?.length && { options: report.options }),
     ...(report.recommended !== undefined && { recommended: report.recommended }),

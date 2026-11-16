@@ -115,6 +115,8 @@ export const STEPS = [
   [4, "npm run test:roster-refresh"],
   [33, "npm run test:resume-holds"],
   [36, "npm run test:fin-states"],
+  // A Fin's turn's end with no report: work its harness holds, that work's process ending, a promise nothing wakes.
+  [10, "npm run test:fin-turn-ends"],
   [20, "npm run test:fin-quiet"],
   // What comes back: a crash, a recovery or a Fin moved, with its queue kept through SIGKILL.
   [40, "MAKO_TEST_HARNESSES=claude npm run test:fin-move"],

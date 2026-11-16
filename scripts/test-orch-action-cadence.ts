@@ -79,7 +79,7 @@ try {
   rule = "Replacement rule applies; all exact obligations still persist."
   const changedRule = await emit(apex.conversation, "person", "JOINT person changed rule", false)
   assert.ok(changedRule.includes(rule) && changedRule.includes(`ask ${nextQuestion.id}`) && changedRule.includes("request failed"))
-  assert.ok(changedRule.includes("- fin:source · Claude · done; decide: Authentication outcome unknown;") && changedRule.includes("- fin:receiver · Claude · done just now:"), "fresh decision and the receiver's turn-end result (its progress named no wait anything watches) stay in the person roster after rule change")
+  assert.ok(changedRule.includes("- fin:source · Claude · done; decide: Authentication outcome unknown;") && changedRule.includes("- fin:receiver · Claude · ended without a result just now:"), "fresh decision and the receiver's unfinished turn end (its progress named no wait anything watches, so never done) stay in the person roster after rule change")
   world.live.observe({ type: "live-update", id: apex.conversation, update: { kind: "event", label: CONTEXT_COMPACTED } })
   await emit(apex.conversation, "service", "JOINT service after compaction", false)
   await emit(apex.conversation, "person", "JOINT person after compaction", true)
