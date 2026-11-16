@@ -1,4 +1,8 @@
 import "./lib/scratch-git.mjs"
+import { mock } from "node:test"
+import { createHook } from "node:async_hooks"
+import { atOnce, inSlices } from "@mako/sessions/slices"
+import { summaryRows, summaryTips, summaryChanges } from "@mako/host/workspaces/worktree-summary-rows"
 import { childBackend } from "@mako/host/workspaces/watch-backend"
 import { Git } from "@mako/git"
 import { HostJobs } from "@mako/host/base/host-jobs"
@@ -9,7 +13,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
-import { DatabaseSync } from "node:sqlite"
+import { DatabaseSync, StatementSync } from "node:sqlite"
 import type { Actor } from "@mako/host/contracts/thread-identity"
 import type { Prepared } from "@mako/host/workspaces/thread-processes"
 import { inputsDigest, mirroredProject, projectRoot, recipePath, RecipeSchema, type Recipe } from "@mako/host/workspaces/thread-recipe"
@@ -19,6 +23,112 @@ import { worktreeCheckout, worktreeSlug, type WorktreeBranchPull, type WorktreeS
 import { openWorkspaces } from "@mako/host/workspaces"
 import { ThreadWorktreeService, type CheckoutConversations } from "@mako/host/workspaces/thread-worktrees"
 import { bringFiles, carryOutputs, carryReport, type CheckoutSetup, holdsCredentials, LINKED_MARK, linkedCarry, linkReach, outputNames, throughLinks } from "@mako/host/workspaces/worktree-carry"
+
+// Comparison observes every field and row order, including in-place changes; work yields while a large pass is made.
+{
+  const row = (path: string): WorktreeSummary => ({ path, into: "main", ahead: 0, changes: 0, landing: { kind: "empty" }, pull: null, behind: null })
+  const rows = [row("/one"), row("/two")]
+  const first = atOnce(summaryRows(rows, undefined))
+  assert.equal(first.changed, true)
+  assert.equal(atOnce(summaryRows(rows, first.said)).changed, false)
+  rows[0]!.changes = 1
+  assert.equal(atOnce(summaryRows(rows, first.said)).changed, true, "an in-place update is still seen")
+  const moved = atOnce(summaryRows(rows, undefined))
+  assert.equal(atOnce(summaryRows([...rows].reverse(), moved.said)).changed, true, "order counts")
+  assert.equal(atOnce(summaryRows(rows.slice(1), moved.said)).changed, true, "removal counts")
+  const future = { ...row("/future"), futureField: "one" }
+  const before = atOnce(summaryRows([future], undefined))
+  future.futureField = "two"
+  assert.equal(atOnce(summaryRows([future], before.said)).changed, true, "an unfamiliar field is never skipped")
+  assert.deepEqual(atOnce(summaryTips("abc main\ndef branch name\ninvalid\n")), new Map([["main", "abc"], ["branch name", "def"]]))
+  for (const status of ["", "one", "one\ntwo", "one\n", "\n"]) assert.equal(atOnce(summaryChanges(status)), status ? status.split("\n").length : 0)
+  let made = 0, seen = -1
+  const many = Array.from({ length: 20 }, (_, n) => ({ ...row(`/yield-${n}`), toJSON() {
+    const until = performance.now() + 1
+    while (performance.now() < until) { /* Make this row use the controlled slice budget, whatever the runner's speed. */ }
+    made++
+    return row(`/yield-${n}`)
+  } }))
+  const otherWork = new Promise<void>((resolve) => setImmediate(() => { seen = made; resolve() }))
+  await inSlices(summaryRows(many, undefined), 1)
+  await otherWork
+  assert.ok(seen > 0 && seen < many.length, `another loop turn ran between rows (${seen}/${many.length})`)
+}
+
+async function unchangedSummaryPassBudget() {
+  const count = 96, folder = realpathSync(mkdtempSync(join(tmpdir(), "mako-summary-budget-")))
+  const common = join(folder, "repo"), hash = "1".repeat(40)
+  const store = new ThreadStore(join(folder, "threads.sqlite"))
+  const runner = new Git(), controls: { mock: { restore(): void } }[] = []
+  let rawReads = 0, canonicalReads = 0, statuses = 0, service: ThreadWorktreeService | undefined
+  try {
+    mkdirSync(join(common, ".git"), { recursive: true }); writeFileSync(join(common, ".git", "HEAD"), "ref: refs/heads/main\n")
+    const threads = []
+    for (let n = 0; n < count; n++) {
+      const path = join(folder, `worktree-${n}`), gitDir = join(common, ".git", "worktrees", String(n))
+      mkdirSync(path); mkdirSync(gitDir, { recursive: true }); writeFileSync(join(path, ".git"), `gitdir: ${gitDir}\n`)
+      writeFileSync(join(gitDir, "HEAD"), `ref: refs/heads/mako/row-${n}\n`); writeFileSync(join(gitDir, "index"), "")
+      const placed = store.registerJournal({ conversationId: randomUUID(), createdAt: n, bindings: [], harness: "codex" }, { kind: "service", name: "migration" })
+      threads.push(placed.thread)
+      store.attachWorktree({ path, thread: placed.thread, repoRoot: common, project: common, branch: `mako/row-${n}`, base: hash })
+    }
+    const refs = [`${hash} main`, ...threads.map((_, n) => `${hash} mako/row-${n}`)].join("\n")
+    const read = async (_cwd: string, args: readonly string[]) => {
+      if (args[0] === "for-each-ref") return refs
+      if (args[0] === "symbolic-ref") return "main"
+      if (args[0] === "status") { statuses++; return "" }
+      if (args[0] === "rev-list") return "0"
+      if (args[0] === "config") return ""
+      return hash
+    }
+    controls.push(mock.method(runner, "readOutput", read), mock.method(runner, "idleOutput", read))
+    service = new ThreadWorktreeService(runner, join(folder, "worktrees"), store, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, async () => ({ unsubscribe: async () => {} }))
+    const before = await service.summaries()
+    assert.equal(before.length, count)
+    store.renameThread({ operationId: randomUUID(), thread: threads[0]!, title: "unrelated title", actor: store.person() })
+    // Each raw worktree row read costs a controlled 1 ms. Resolving its Thread through the normal cache remains
+    // part of the measured pass: a local commit can change an alias, so it cannot be skipped with the row inputs.
+    const all = StatementSync.prototype.all
+    controls.push(mock.method(StatementSync.prototype, "all", function (this: StatementSync, ...args: Parameters<typeof all>) {
+      const rows = all.apply(this, args)
+      if (this.sourceSQL.includes("FROM thread_worktrees WHERE device_id")) {
+        for (let n = 0; n < rows.length; n++) {
+          rawReads++
+          const cpu = process.threadCpuUsage()
+          while (true) { const used = process.threadCpuUsage(cpu); if (used.user + used.system >= 1_000) break }
+        }
+      }
+      return rows
+    }))
+    const get = StatementSync.prototype.get
+    controls.push(mock.method(StatementSync.prototype, "get", function (this: StatementSync, ...args: Parameters<typeof get>) {
+      if (this.sourceSQL.includes("FROM threads WHERE id")) canonicalReads++
+      return get.apply(this, args)
+    }))
+    statuses = 0
+    let maxCpuMs = 0
+    const stack: NodeJS.CpuUsage[] = []
+    const sample = () => { const started = stack.at(-1); if (started) { const used = process.threadCpuUsage(started); maxCpuMs = Math.max(maxCpuMs, (used.user + used.system) / 1_000) } }
+    const hook = createHook({ before: () => { stack.push(process.threadCpuUsage()) }, after: () => { sample(); stack.pop() } })
+    hook.enable()
+    let after: WorktreeSummary[]
+    try {
+      after = await new Promise<WorktreeSummary[]>((resolve, reject) => setImmediate(() => { void service!.summaries().then(resolve, reject) }))
+      sample()
+    } finally { hook.disable() }
+    console.log(`unchanged summaries of ${count} worktrees: raw rows ${rawReads}, canonical DB reads ${canonicalReads}, statuses ${statuses}, max callback CPU ${maxCpuMs.toFixed(2)} ms`)
+    assert.deepEqual(after, before)
+    assert.equal(rawReads, 0, "an unrelated commit does not reread unchanged worktree rows")
+    assert.ok(canonicalReads <= count, "Thread resolution reuses its cache within the pass")
+    assert.equal(statuses, 0, "unchanged rows reuse their held status")
+    assert.ok(maxCpuMs < 50, `an unchanged pass held its thread for ${maxCpuMs.toFixed(1)} ms CPU, not below 50 ms`)
+  } finally {
+    for (const control of controls.reverse()) control.mock.restore()
+    await service?.closeSummaries(); await runner.close(); store.close(); rmSync(folder, { recursive: true, force: true })
+  }
+}
+
+await unchangedSummaryPassBudget()
 
 const gitRunner = new Git()
 

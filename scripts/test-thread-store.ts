@@ -516,6 +516,67 @@ function worktreesHeard(): void {
   threads.close()
 }
 
+/** Worktree reads depend on worktree rows and Thread aliases, not every report or title commit. */
+function worktreeReadInputs(): void {
+  const path = join(root, "worktree-inputs.sqlite")
+  const threads = new ThreadStore(path, { now })
+  let other: ThreadStore | undefined
+  try {
+    const primary = threads.registerJournal(journal({ harness: "codex", bindings: [{ provider: "codex", nativeId: "cache-parent", path: "/codex/cache-parent" }] }), migration)
+    const worktree = { path: "/repo/tree", thread: primary.thread, repoRoot: "/repo", project: "/repo", branch: "mako/tree", base: "main" }
+    assert.deepEqual(threads.worktrees(), [])
+    threads.attachWorktree(worktree)
+    const first = threads.worktrees()[0]
+    assert.ok(first)
+    for (let n = 0; n < 4; n++) {
+      threads.renameThread({ operationId: randomUUID(), thread: primary.thread, title: `Title ${n}`, actor: threads.person() })
+      assert.equal(threads.worktrees()[0], first, "an unrelated local commit retains the parsed worktree, not a full reread")
+    }
+    threads.rehomeWorktree(worktree.path, "/moved", "/moved")
+    assert.equal(threads.worktrees()[0]?.repoRoot, "/moved", "own worktree changes invalidate immediately")
+    other = new ThreadStore(path, { now })
+    threads.worktrees()
+    other.rehomeWorktree(worktree.path, "/elsewhere", "/elsewhere")
+    assert.equal(threads.worktrees()[0]?.repoRoot, "/elsewhere", "a foreign commit invalidates conservatively")
+    other.detachWorktree(worktree.path)
+    assert.deepEqual(threads.worktrees(), [], "a foreign removal is not held")
+    const childRef = row("codex", "cache-child", "/codex/cache-child")
+    const child = threads.place(childRef, catalog)
+    threads.attachWorktree({ ...worktree, thread: child.thread })
+    assert.equal(threads.worktrees()[0]?.thread, child.thread)
+    threads.resolveRefs([{ ...childRef, parentNativeId: "cache-parent" }], catalog)
+    assert.equal(threads.worktrees()[0]?.thread, primary.thread, "a local alias change invalidates even if the worktree's row stays")
+    threads.detachWorktree(worktree.path)
+    assert.deepEqual(threads.worktrees(), [], "own removals invalidate too")
+  } finally { other?.close(); threads.close() }
+}
+
+/** A held worktree follows local aliases made by both native-fork adoption and reconciliation. */
+function worktreeLocalMerges(): void {
+  for (const kind of ["fork", "reconcile"] as const) {
+    const threads = store(`worktree-local-${kind}`)
+    try {
+      const ref = row("claude", "merge-worktree", "/claude/default/merge-worktree")
+      const loser = threads.place(ref, catalog)
+      threads.attachWorktree({ path: `/repo/${kind}`, thread: loser.thread, repoRoot: "/repo", project: "/repo", branch: `mako/${kind}`, base: "main" })
+      assert.equal(threads.worktrees()[0]?.thread, loser.thread, "populate the cache before the merge")
+      let winner: typeof loser.thread
+      if (kind === "fork") {
+        const parent = threads.place(row("claude", "merge-parent", "/claude/merge-parent"), catalog)
+        winner = parent.thread
+        threads.resolveRefs([{ ...ref, parentNativeId: "merge-parent" }], catalog)
+      } else {
+        const kept = threads.registerJournal(journal({ harness: "claude", bindings: [{ provider: "claude", nativeId: "merge-worktree", path: "/claude/account/merge-worktree" }] }), migration)
+        winner = kept.thread
+        threads.resolveRefs([row("claude", "merge-worktree", "/claude/account/merge-worktree")], catalog)
+      }
+      assert.notEqual(winner, loser.thread)
+      assert.equal(threads.thread(loser.thread)?.id, winner, `${kind}: the alias points at the winner`)
+      assert.equal(threads.worktrees()[0]?.thread, winner, `${kind}: a held worktree follows its winning Thread`)
+    } finally { threads.close() }
+  }
+}
+
 function oneWorktreePerThread(): void {
   const path = join(root, "worktrees.sqlite")
   const threads = new ThreadStore(path, { now })
@@ -607,6 +668,8 @@ try {
   membership()
   oneWorktreePerThread()
   worktreesHeard()
+  worktreeReadInputs()
+  worktreeLocalMerges()
   harnessForks()
   console.log("thread store: ok")
 } finally {

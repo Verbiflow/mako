@@ -802,7 +802,8 @@ export class ThreadStore {
   private edgesSeen: { revision: number; edges: ThreadEdges } | undefined
   /** The rows the last edges were read from, kept through commits: a read that finds the same keeps the same object. */
   private edgesKept: { records: string[]; native: Set<string>; edges: ThreadEdges } | undefined
-  private worktreesSeen: { revision: number; worktrees: ThreadWorktree[] } | undefined
+  /** Worktree inputs survive unrelated local commits; worktree/alias changes and foreign commits invalidate. */
+  private worktreesSeen: ThreadWorktree[] | undefined
   /** Who hears this device's worktrees change here (`onWorktrees`). */
   private readonly worktreeListeners = new Set<() => void>()
   private changeSeq = 0
@@ -2014,6 +2015,7 @@ export class ThreadStore {
   }
 
   private worktreesMoved(): void {
+    this.worktreesSeen = undefined
     for (const listener of this.worktreeListeners) listener()
   }
 
@@ -2023,13 +2025,16 @@ export class ThreadStore {
    * project folder as `project`.
    */
   worktrees(): ThreadWorktree[] {
-    // Every summary, status and read of a worktree asks: read once per commit, as `groups` is.
+    // Summaries ask repeatedly: only worktree/alias changes need these rows again, not report/title commits.
     this.syncVersion()
-    const held = this.worktreesSeen
-    if (held && held.revision === this.revision && this.depth === 0) return [...held.worktrees]
-    const worktrees = this.readWorktrees()
-    if (this.depth === 0) this.worktreesSeen = { revision: this.revision, worktrees }
-    return [...worktrees]
+    const held = this.depth === 0 ? this.worktreesSeen : undefined
+    const worktrees = held ?? this.readWorktrees()
+    if (this.depth === 0) this.worktreesSeen = worktrees
+    // Cache row inputs, not resolved aliases: a local merge can change the winner without changing these rows.
+    return worktrees.map((worktree) => {
+      const thread = this.thread(worktree.thread)?.id ?? worktree.thread
+      return thread === worktree.thread ? worktree : { ...worktree, thread }
+    })
   }
 
   private readWorktrees(): ThreadWorktree[] {
@@ -2044,7 +2049,7 @@ export class ThreadStore {
         const row = WorktreeRowSchema.parse(found)
         const worktree: ThreadWorktree = {
           path: row.path,
-          thread: this.thread(ThreadIdSchema.parse(row.thread_id))?.id ?? ThreadIdSchema.parse(row.thread_id),
+          thread: ThreadIdSchema.parse(row.thread_id),
           repoRoot: row.repo_root,
           project: row.project,
           branch: row.branch,
@@ -3316,6 +3321,7 @@ export class ThreadStore {
    * as a worktree Mako didn't make.
    */
   private keepOneWorktreePerThread(): void {
+    this.worktreesSeen = undefined
     const seen = new Set<string>()
     for (const found of this.db.prepare("SELECT path, thread_id, device_id FROM thread_worktrees ORDER BY created_at").all()) {
       const row = z.object({ path: z.string(), thread_id: z.string(), device_id: z.string() }).parse(found)
@@ -3577,7 +3583,7 @@ export class ThreadStore {
     // Another host committed: a newer Mako may have raised the format since this one opened.
     if (!this.reader) this.format = readStoreFormat(this.db, "store_meta") ?? this.format
     this.executions.clear()
-    this.committed()
+    this.committed(true)
     this.consumeChanges(true)
   }
 
@@ -3603,8 +3609,8 @@ export class ThreadStore {
     this.changeSeq = rows.at(-1)?.seq ?? this.changeSeq
   }
 
-  /** A commit landed, this host's or another's (or a write was rolled back): what was read of many at once is read again. */
-  private committed(): void {
+  /** Invalidate shared views after a commit or rollback; worktree inputs have their own local boundaries. */
+  private committed(external = false): void {
     this.revision += 1
     this.executionsSeen.clear()
     this.titlesSeen.clear()
@@ -3615,7 +3621,7 @@ export class ThreadStore {
     this.forksSeen.clear()
     this.groupsSeen = undefined
     this.edgesSeen = undefined
-    this.worktreesSeen = undefined
+    if (external) this.worktreesSeen = undefined
   }
 
   private remember(key: string, placed: ThreadPlacement): void {
