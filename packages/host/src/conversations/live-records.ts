@@ -101,6 +101,13 @@ export interface ForkFacts {
   firstRequest?: string
 }
 
+/**
+ * Why a journal isn't read cold (`LiveRecords.cold`): `busy`, something under way (read in, being let go of, a turn
+ * running) that passes; `structural`, what the journal is, which doesn't, with its session's own record where that
+ * holds its history.
+ */
+export type ColdRefusal = { kind: "busy" } | { kind: "structural"; why: string; record?: { path: string; harness: string } }
+
 export class LiveRecords {
   private readonly dependencies: Dependencies
   private readonly hooks: RecordHooks
@@ -402,22 +409,30 @@ export class LiveRecords {
    * makes it resident as before. One the last host left is shown as reading it in would leave it (`afterRestart`); one
    * this host let go, exactly as it went (`reload`).
    */
-  async cold(id: string): Promise<{ journal: ColdJournal; snapshot: LiveSnapshot; still: () => boolean } | undefined> {
-    const readable = () => !this.stopping() && !this.residents.has(id) && !this.reading.has(id) && !this.releasing.has(id) && this.recovered.has(id)
-    if (!readable()) return undefined
+  /**
+   * `releasing`: read one whose closed journal is still being let go of, as a search does. Its file is kept for the
+   * read (a cold journal's opening is `journalOpened`, which keeps a releasing journal from tidying it); a window's
+   * view waits for the release instead.
+   */
+  async cold(id: string, releasing = false, refused?: (why: ColdRefusal) => void): Promise<{ journal: ColdJournal; snapshot: LiveSnapshot; still: () => boolean } | undefined> {
+    const readable = () => !this.stopping() && !this.residents.has(id) && !this.reading.has(id) && (releasing || !this.releasing.has(id)) && this.recovered.has(id)
+    // Why it isn't read cold, for a search: what's under way passes, what the journal is doesn't.
+    const busy = () => (refused?.({ kind: "busy" }), undefined)
+    if (!readable()) return busy()
     let journal: ColdJournal | undefined
     try {
       journal = await inSlices(ColdJournal.opening(this.dependencies.root, id), undefined, () => this.stopping())
     } catch (error) {
       // Cut by the host's stop: the opening closed what it opened, and nothing's wrong with the journal.
-      if (error instanceof StepsStopped) return undefined
+      if (error instanceof StepsStopped) return busy()
       throw error
     }
-    if (!journal) return undefined
+    // None, or one that keeps its own copy of its history: read only as a resident's is.
+    if (!journal) return (refused?.({ kind: "structural", why: "its journal keeps its own copy of its history" }), undefined)
     // Read in, or let go, while it opened: read as that left it.
     if (!readable()) {
       journal.close()
-      return undefined
+      return busy()
     }
     const saved = journal.snapshot
     // One a window's read might refresh from its harness's own record (`LiveSources.refreshedSnapshot`: a single binding
@@ -429,6 +444,9 @@ export class LiveRecords {
       (journal.length === 0 || (binding!.includesBase && onlyOpening(journal, binding!.coveredBlocks ?? 0)))
     if (refreshable || saved.session.status === "running" || saved.requests.some((request) => request.status === "dispatching")) {
       journal.close()
+      // Its history is its harness's own record: a search reads that instead.
+      if (refreshable) refused?.({ kind: "structural", why: "its history is its session's own record", ...(binding?.path && { record: { path: binding.path, harness: binding.provider } }) })
+      else refused?.({ kind: "busy" })
       return undefined
     }
     const unloaded = this.unloaded.get(id)

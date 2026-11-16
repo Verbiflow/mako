@@ -445,8 +445,10 @@ const inputs = {
             z.literal("transcript"),
             z.literal("pulls"),
             z.literal("actions"),
+            z.literal("outcome"),
           ])
           .optional(),
+        search: z.string().optional(),
         snapshot: z.string().optional(),
         offset: z.number().optional(),
         limit: z.number().optional(),

@@ -155,6 +155,7 @@ import { AgentRuns, lastStep, type ProcessReads, type RunEnd } from "./agent-run
 import { holdOf, keepsLine, nextInLine } from "../contracts/request-hold.js"
 import { foldList } from "./agent-list-fold.js"
 import { FinChanges, type ChangeFacts } from "./fin-changes.js"
+import type { ThreadHistoryTools } from "./thread-history.js"
 import { AgentWakes, DIGEST_WAITS, firstParagraph, FROM_AGENTS, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
 import { namedUuid } from "./cloud-moves.js"
 import { carriedDigest } from "../contracts/delivery-retry.js"
@@ -330,6 +331,8 @@ type Live = Pick<
 > & Partial<Pick<LiveConversations, "waitChanged">>
 
 export interface AgentsDeps {
+  /** `thread_history`'s tools, for `agents_read`'s `search` of one Fin; absent until the host builds them. */
+  history?: () => ThreadHistoryTools | undefined
   store(): ThreadStore | undefined
   catalog: Pick<ThreadCatalog, "nativePath" | "ref" | "page" | "activity" | "subscribe" | "announce"> & Partial<Pick<ThreadCatalog, "readRef">>
   jobs: HostJobs
@@ -2268,6 +2271,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       } catch { return { refused: "conflict", why: "afterAction must name a report in your exact custody view." } }
     }
     const edge = this.resolve(apex, input.child, true)
+    if (edge && input.search !== undefined) return this.searchFin(apex, edge, input)
     if (!edge) {
       const held = this.heldNamed(apex, input.child)
       if (!held) return unknownFin(input.child)
@@ -2299,7 +2303,11 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (read.refused !== "place-unavailable" && read.refused !== "unavailable") return read
       away = `${read.why}\nWhat it last reported to this device:`
     }
-    const local = input.view === "transcript" && !away ? await this.transcript(edge) : this.reportText(edge, state, selected)
+    // Its outcome: the latest result it reported, without the progress after it or a transcript.
+    const outcome = input.view === "outcome" && !selected ? [...reports].reverse().find((report) => report.status !== "progress") : undefined
+    const local = input.view === "transcript" && !away ? await this.transcript(edge)
+      : input.view === "outcome" && !selected && !outcome ? `No result yet. It is ${state.kind}${state.kind === "working" && state.step ? `: ${state.step}` : ""}.`
+      : this.reportText(edge, state, selected ?? outcome)
     const text = away ? `${away}\n${local}` : local
     const truncated = text.length > limit
     return {
@@ -2313,6 +2321,30 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(truncated && { truncated: true as const }),
       ...(input.view === "transcript" && { whole: `That's the last ${READ_ENTRIES} entries of its newest session at most. thread_history with thread: "${edge.child}" reads every turn of every harness it ran on (turns, read, search, payload), and action export writes it to a file.` }),
     }
+  }
+
+  /**
+   * `agents_read`'s `search`: words found in one Fin's whole history, every Session and harness it ran on, through
+   * `thread_history`'s search of its Thread as its Apex would ask it, a page of hits at a time. A placed Fin's history is
+   * on its own device, where `thread_history` reads it.
+   */
+  private async searchFin(apex: Apex, edge: ThreadParent, input: AgentsReadInput): Promise<AgentsReadResult> {
+    const query = input.search?.trim()
+    if (!query) return { refused: "conflict", why: "search needs words to find." }
+    if (input.view !== undefined || input.report !== undefined || input.afterAsk !== undefined || input.afterAction !== undefined || input.snapshot !== undefined)
+      return { refused: "conflict", why: "search reads only the Fin's history: leave out view, report, afterAsk, afterAction and snapshot; offset pages on." }
+    if (edge.placed) return { refused: "unsupported", why: `${edge.name}'s history is on ${placeName(edge.placed.target)}: thread_history there searches it.` }
+    const history = this.deps.history?.()
+    if (!history || !apex.conversation) return { refused: "unavailable", why: "This host can't search a Fin's history: thread_history isn't open here." }
+    let text: string
+    try {
+      text = await history.answer(apex.conversation, { action: "search", thread: edge.child, query: query.slice(0, 400), ...(input.offset !== undefined && { offset: input.offset }) })
+    } catch (error) {
+      return { refused: "unavailable", why: errorMessage({ error }) }
+    }
+    const limit = Math.max(200, Math.min(input.maxChars ?? READ_CHARS, 64_000))
+    const truncated = text.length > limit
+    return { child: edge.child, name: edge.name, state: this.stateOf(edge), text: truncated ? text.slice(0, limit) : text, ...(truncated && { truncated: true as const }) }
   }
 
   async report(caller: AgentCaller, input: AgentsReportInput): Promise<AgentsReportResult> {

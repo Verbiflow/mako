@@ -1,3 +1,4 @@
+import { threadHistoryTools } from "@mako/host/conversations/thread-history"
 import { ProviderFailureError, providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import type { ProviderFailureEvidence } from "@mako/host/contracts/provider-failure-evidence"
 import { randomUUID } from "node:crypto"
@@ -354,7 +355,18 @@ export class AgentsWorld {
       this.continued.push({ conversation: id, to, kind: continuation.kind, by: actor?.kind ?? "person" })
       return continuing(id, continuation, actor, stillDecided)
     }
+    // `thread_history`'s tools over this world's conversations, as the host builds them: `agents_read`'s search reads them.
+    const history = threadHistoryTools({
+      conversations: () => this.live.summaries(),
+      snapshot: (id) => this.live.historySnapshot(id),
+      resident: (id) => this.live.loaded(id),
+      cold: (id) => this.live.coldSearch(id),
+      store: () => this.store,
+      catalog: { list: () => [], nativePath: () => undefined, ref: () => undefined, open: async () => null, entry: async () => null },
+      bundle: { live: (id) => this.live.transcriptBundle(id), native: async () => null },
+    })
     const deps: AgentsDeps = {
+      history: () => history,
       store: () => this.store,
       catalog: this.options.catalog ?? emptyCatalog(),
       jobs: this.jobs,

@@ -291,10 +291,13 @@ export type AgentsListModelResult = AgentsListResult | {
 export interface AgentsReadInput {
   /** The Fin's name or Thread ID. */
   child: string
-  view?: "report" | "transcript" | "pulls" | "actions"
+  /** `outcome`: its latest result (done, failed, blocked or needs-input) and how it stands, without later progress or a transcript. */
+  view?: "report" | "outcome" | "transcript" | "pulls" | "actions"
+  /** Words to find in its whole history, every harness it ran on (`thread_history`'s search of its Thread), a page at a time; `offset` pages on. */
+  search?: string
   /** With pulls: the exact snapshot returned by agents_list, held for 30 minutes or until this host restarts. */
   snapshot?: string
-  /** With pulls: the next record offset returned by the preceding page; zero by default. */
+  /** With pulls: the next record offset returned by the preceding page; with search, the hit to start at. Zero by default. */
   offset?: number
   /** With pulls: at most 20 PR facts and 16,000 UTF-8 bytes of JSON per page. */
   limit?: number
@@ -799,8 +802,8 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     filled: [],
     mcp: {
       name: "agents_read",
-      description: `One ${FIN_WORD}'s last report in full, or the end of its transcript: a quick, bounded tail, for when its digest line isn't enough. thread_history with its Thread ID reads it whole. For PR details omitted by agents_list, pass its read object: view pulls and snapshot. text is a JSON array of original PR facts; follow pulls.next as offset until absent. Every page rechecks access to the Fin; reading never changes state.`,
-      fields: { child: "Its name or Thread ID; with view actions, your own exact Thread ID only, to page delegated custody without accessing source transcripts. PR details require the exact ID in the list's read object.", view: "report (default), transcript, pulls with the list's snapshot, or actions for your own delegated custody.", snapshot: "With view pulls: explicit summary's same-Session snapshot, lost at expiresAt or host restart. Unavailable snapshots refuse; relisting gives current facts, not the original array.", offset: "With pulls: the preceding page's pulls.next; zero by default.", limit: "With pulls: integer from 1 to 20, 20 by default; each page also fits 16000 UTF-8 bytes of JSON. Records are never cut; an array with an oversized fact stays inline in the list.", maxChars: "Report/transcript only: at most this many characters (default 8000).", report: "Exact stored report ID to inspect instead of latest narration. Reading never resolves its question.", afterAction: "Page pending action-only follow-ups after this exact report ID, including an already resolved cursor. Reads never resolve them.", afterAsk: "Page pending report questions after this exact report ID. Reading does not answer them." },
+      description: `One ${FIN_WORD}'s last report in full, or the end of its transcript: a quick, bounded tail, for when its digest line isn't enough. thread_history with its Thread ID reads it whole. Its outcome alone: view outcome, its latest result without later progress. Words in its whole history: search, a page of hits at a time. For PR details omitted by agents_list, pass its read object: view pulls and snapshot. text is a JSON array of original PR facts; follow pulls.next as offset until absent. Every page rechecks access to the Fin; reading never changes state.`,
+      fields: { child: "Its name or Thread ID; with view actions, your own exact Thread ID only, to page delegated custody without accessing source transcripts. PR details require the exact ID in the list's read object.", view: "report (default): its last report; outcome: its latest result (done, failed, blocked or needs-input) and how it stands, without later progress; transcript; pulls with the list's snapshot; or actions for your own delegated custody.", search: "Words to find in its whole history, every Session and harness it ran on, as thread_history searches its Thread; leave view out, and use offset to page on.", snapshot: "With view pulls: explicit summary's same-Session snapshot, lost at expiresAt or host restart. Unavailable snapshots refuse; relisting gives current facts, not the original array.", offset: "With pulls: the preceding page's pulls.next; with search, the hit to start at, as its More line says. Zero by default.", limit: "With pulls: integer from 1 to 20, 20 by default; each page also fits 16000 UTF-8 bytes of JSON. Records are never cut; an array with an oversized fact stays inline in the list.", maxChars: "Report/transcript only: at most this many characters (default 8000).", report: "Exact stored report ID to inspect instead of latest narration. Reading never resolves its question.", afterAction: "Page pending action-only follow-ups after this exact report ID, including an already resolved cursor. Reads never resolve them.", afterAsk: "Page pending report questions after this exact report ID. Reading does not answer them." },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
   },
