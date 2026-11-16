@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { NativeAgentObservation } from "@mako/host/contracts/native-agents"
+import { childWord } from "@mako/host/contracts/children"
+import { readFinReports } from "@mako/host/contracts/fin-reports"
 import type { PullReading } from "@mako/host/contracts/pull-waits"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { AgentsWorld, type Script } from "./lib/agents-world.ts"
@@ -16,8 +18,10 @@ import { AgentsWorld, type Script } from "./lib/agents-world.ts"
  *   its session stays up; once that work settles and the harness's turn reports, that's its result.
  * - If the harness's process ends with that work pending, the work ended with it: the Fin's end says so at once.
  * - fin-models, woken by the pull-request watch on #868, pushed a fix and ended its turn saying it would report when CI
- *   settled, with nothing watching the new run. Mako wrote "done". A Fin whose word is progress hasn't said it's done:
- *   its Apex hears at once that it ended unfinished, as its question with its last words, never as "done".
+ *   settled, with nothing watching the new run. Mako wrote its promise as its result, and its row said "Done". A Fin
+ *   whose word is progress hasn't said it's done: it reads "Ended without a result" in the list, its row and the
+ *   digest, never done, and its Apex hears at once, with its last words, and sends it on or takes the reply. Nobody is
+ *   asked, so nothing reaches the person's Inbox.
  */
 const root = mkdtempSync(join(tmpdir(), "mako-fin-turn-ends-"))
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -34,7 +38,7 @@ const monitor = (state: NativeAgentObservation["state"]): NativeAgentObservation
   ({ nativeId: "monitor-ci", title: "CI checks on #783", work: "monitor", ambient: true, background: true, stoppable: true, state })
 
 /** A world whose Fins run `script`, and what the Apex heard and how each Fin stands. */
-async function world(name: string, script: Script, options: { readPull?: () => Promise<PullReading | null> } = {}) {
+async function world(name: string, script: Script, options: { readPull?: () => Promise<PullReading | null>; apexAnswerMs?: number } = {}) {
   const w = new AgentsWorld({ root: join(root, name), script, backgroundOutlivesTurn: ["claude"], ...options })
   const apex = await w.apex("claude", "full")
   const start = async (fin: string, objective: string) => {
@@ -138,11 +142,12 @@ async function promiseAfterWake(): Promise<void> {
   assert.ok(f.w.prompts.some((prompt) => prompt.text.startsWith("Mako: PR acme/app#868")), "Mako's note woke it")
   const [report] = f.reports(child).filter((each) => each.implicit)
   assert.ok(report, "its turn's end is said")
-  assert.equal(report!.status, "needs-input", `not "done": it never said it was ${JSON.stringify(report)}`)
-  assert.match(report!.question ?? "", /Its last words: "I've pushed a fix and CI is running again on it\. I'll report the result when the new run settles\."/)
-  assert.match(f.heard(), /"models" \(Claude\) is asking: It ended its turn without a result/, "its Apex hears it at once")
-  assert.doesNotMatch(f.heard(), /"models" \(Claude\) done/)
-  console.log("promise after a wake: its Apex's question, with its last words, not a result")
+  assert.equal(report!.unfinished, true, `never its promise as its result: ${JSON.stringify(report)}`)
+  assert.match(report!.summary, /^Nothing it waits on will wake it\. Its last words: "I've pushed a fix and CI is running again on it\. I'll report the result when the new run settles\."/)
+  assert.equal(report!.question, undefined, "and asks nobody")
+  assert.equal(childWord((await f.state("models")).state), "Ended without a result", "its row never says done")
+  assert.match(f.heard(), /1 ended without a result [^\n]*:\n {2}• "models" \(Claude\): Nothing it waits on will wake it\. Its last words: "I've pushed a fix/, "its Apex hears it at once")
+  console.log("promise after a wake: \"Ended without a result\", its Apex woken with its last words")
   await f.w.close()
 }
 
@@ -153,18 +158,30 @@ async function unfinished(): Promise<void> {
       return "I'll report when the local suites settle."
     }
     return "ok"
-  })
+  }, { apexAnswerMs: 50 })
   const child = await f.start("suites", "Run every suite")
   await f.w.settle()
   const [report] = f.reports(child).filter((each) => each.implicit)
   assert.ok(report, "its turn's end is said")
-  assert.equal(report!.status, "needs-input", `not "done": it never said it was ${JSON.stringify(report)}`)
-  assert.equal(report!.question, `It ended its turn without a result, and nothing it waits on will wake it. Its last words: "I'll report when the local suites settle.". How should it go on?`)
-  assert.equal(report!.summary, "I'll report when the local suites settle.")
-  assert.match(f.heard(), /"suites"/, "its Apex hears it")
-  assert.doesNotMatch(f.heard(), /"suites" \(Claude\) done/, "never as done")
-  assert.equal((await f.state("suites")).state.kind, "blocked")
-  console.log("unfinished: a silent end after progress nothing watches is its Apex's question, not a result")
+  assert.deepEqual([report!.status, report!.unfinished], ["failed", true], "kept as failed, so an older build never reads it as done")
+  assert.equal(report!.summary, `Nothing it waits on will wake it. Its last words: "I'll report when the local suites settle."`)
+  assert.equal(report!.question, undefined, "a question would reach the person's Inbox once its Apex left it")
+  // Its Apex's digest says it apart from what finished, its card the same.
+  assert.match(f.heard(), /1 ended without a result \(agents_send sends one on; or take its reply as its result\):\n {2}• "suites" \(Claude\): Nothing it waits on will wake it\. Its last words: "I'll report when the local suites settle\."/, "its Apex hears it at once, its last words with it")
+  assert.doesNotMatch(f.heard(), /finished:|"suites" \(Claude\) (done|failed)/, "never as finished, done or failed")
+  const wake = f.w.prompts.find((prompt) => prompt.conversation === f.apex.conversation && prompt.text.includes('"suites"'))!
+  assert.deepEqual(readFinReports(wake.text).reports.map((card) => [card.status, card.unfinished]), [["failed", true]], "its card says it too")
+  // agents_list: its state and its report.
+  const listed = await f.state("suites")
+  assert.deepEqual(listed.state, { kind: "ended", outcome: "failed", unfinished: true, reason: `Nothing it waits on will wake it. Its last words: "I'll report when the local suites settle."` })
+  assert.equal(childWord(listed.state), "Ended without a result", "its row, the phone's and its strip say so")
+  assert.equal(listed.report?.unfinished, true)
+  // Its Apex leaves it past the window an ask has: nothing goes to the person.
+  await pause(200)
+  await f.w.settle()
+  assert.equal(f.w.agents.personAsk(f.apex.conversation), undefined, "nothing waits on the person")
+  assert.ok(!f.reports(child).some((each) => each.for === "person"), "and nothing was escalated to them")
+  console.log("unfinished: a silent end after progress nothing watches reads \"Ended without a result\" everywhere, wakes its Apex with its last words and asks nobody")
   await f.w.close()
 }
 

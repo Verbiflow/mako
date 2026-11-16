@@ -1,7 +1,7 @@
 import { REPORT_FOLLOW_UP_INSTRUCTIONS } from "./report-actions.js"
 import { z } from "zod"
 import { LISTED_AFTER, LISTED_FINS, LISTED_WAITING_ON, type ListedFin, type ListedFinState } from "@mako/protocol/thread-listing"
-import { APEX_WORD, entryState, FIN_WORD, finsWord, LEGACY_APEX_WORD, waitingStateWords, type Brief, type ChildState } from "./agents.js"
+import { APEX_WORD, entryState, FIN_WORD, finsWord, LEGACY_APEX_WORD, UNFINISHED_WORDS, waitingStateWords, type Brief, type ChildState } from "./agents.js"
 import type { Block } from "./conversation-session.js"
 import { CHILDREN_BINDING, isProviderWork, type FinAnswered, type FinAsk, type NativeAgent, type NativeAgentRoster, type WaitingOn } from "./native-agents.js"
 import type { Waiting } from "@mako/protocol/attention"
@@ -656,7 +656,7 @@ export function timeWords(state: ChildState, stood: string): TimeWords {
     case "idle":
       return { time: stood, title: `${state.waitingOn?.length ? "Waiting" : "Idle"} for ${stood}` }
     case "ended":
-      return { time: `${stood} ago`, title: `${{ done: "Finished", failed: "Failed", stopped: "Stopped" }[state.outcome]} ${stood} ago` }
+      return { time: `${stood} ago`, title: `${endedUnfinished(state) ? capitalized(UNFINISHED_WORDS) : { done: "Finished", failed: "Failed", stopped: "Stopped" }[state.outcome]} ${stood} ago` }
   }
 }
 
@@ -679,8 +679,21 @@ export function childWord(state: ChildState): string {
     case "idle":
       return state.waitingOn?.length ? "Waiting" : "Idle"
     case "ended":
+      if (endedUnfinished(state)) return capitalized(UNFINISHED_WORDS)
       return state.outcome === "done" ? (state.decision?.on === "person" ? DONE_NEEDS_YOU : "Done") : state.outcome === "failed" ? "Failed" : "Stopped"
   }
+}
+
+/**
+ * A Fin whose turn ended without a result (`Report.unfinished`): it reads so, never "Done" or "Failed". One stopped
+ * for want of an account is unfinished too, and reads "Stopped".
+ */
+export function endedUnfinished(state: ChildState): boolean {
+  return state.kind === "ended" && state.outcome === "failed" && state.unfinished === true
+}
+
+function capitalized(words: string): string {
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)}`
 }
 export const DIGEST_RESTART_HINT = "Fin reports may have arrived around the restart; agents_list shows each Fin's latest."
 

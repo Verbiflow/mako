@@ -563,6 +563,12 @@ export const ReportSchema = z.object({
   /** Recorded by the owner because the turn ended without one. */
   implicit: z.literal(true).optional(),
   /**
+   * Its turn ended without a result while its word was progress nothing will wake it on: never done, since it never
+   * said so, and never a question, which would reach the person. Kept as `failed`, so a build before this reads it as
+   * that and never as done; this one says "ended without a result" wherever it says how a Fin ended. Host-owned.
+   */
+  unfinished: z.literal(true).optional(),
+  /**
    * Work it hands to another Fin of its Apex: a progress report that names one ("hand the slot to fin:x"), or its
    * message to a sibling, which it can't send itself (`text`, relayed). It wakes the Apex, who passes it on. Host-owned.
    */
@@ -699,6 +705,20 @@ export function turnFailedAt(request: { createdAt?: number; dispatchedAt?: numbe
   return Math.max(request.dispatchedAt ?? request.createdAt ?? start, activityAt ?? 0)
 }
 
+/** How a report says it went, in the words a digest and a line use: "done", "failed", "ended without a result". */
+export function reportWord(report: Pick<Report, "status" | "unfinished">): string {
+  return report.unfinished ? UNFINISHED_WORDS : report.status
+}
+
+/** A Fin whose turn ended without a result (`Report.unfinished`), as every surface says it. */
+export const UNFINISHED_WORDS = "ended without a result"
+
+/** An unfinished end's line on a row: its summary's first line, whose quoted last words a sentence split would cut. */
+function unfinishedReason(summary: string): string {
+  const line = summary.trim().split("\n", 1)[0] ?? ""
+  return line ? (line.length > 160 ? `${line.slice(0, 159)}…` : line) : "Its turn ended without a result."
+}
+
 /** Its last report's first sentence: what a strip and the digest show it at. */
 export function reportPhase(report: Report | undefined): string | undefined {
   const text = report?.summary.trim()
@@ -752,6 +772,7 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
       ...(open && latest.waitingOn?.length && { waitingOn: latest.waitingOn }),
     }
   }
+  if (latest?.status === "failed" && latest.unfinished) return { kind: "ended", outcome: "failed", unfinished: true, reason: unfinishedReason(latest.summary) }
   if (latest?.status === "failed") return { kind: "ended", outcome: "failed", reason: reportPhase(latest) ?? "It failed." }
   if (ended) return ended.outcome === "done"
     ? { kind: "ended", outcome: "done" }

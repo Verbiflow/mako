@@ -54,6 +54,7 @@ import {
   type PlaceTarget,
   PlaceTargetSchema,
   reportPhase,
+  reportWord,
   reportRoute,
   APEX_ROLE,
   APEX_WORD,
@@ -187,12 +188,13 @@ const LIMIT_READ_MS = 3_000
 /** A Fin's own Fins in these states are work it still waits on. */
 const WAITED_ON: ReadonlySet<ChildState["kind"]> = new Set(["queued", "starting", "working", "blocked"])
 /**
- * A Fin's turn that ended on progress, with nothing it waits on that will wake it: its Apex's question. Not a result:
- * the Fin never said it was done.
+ * A Fin's turn that ended on progress, with nothing it waits on that will wake it, in the words of its report
+ * (`Report.unfinished`), which every surface heads "ended without a result": its last words lead, the whole reply follows.
  */
-function unfinishedQuestion(words: string): string {
+function unfinishedSummary(words: string): string {
   const last = firstLine(words).slice(0, 240)
-  return `It ended its turn without a result, and nothing it waits on will wake it${last ? `. Its last words: "${last}"` : ""}. How should it go on?`
+  const head = `Nothing it waits on will wake it.${last ? ` Its last words: "${last}"` : ""}`
+  return (words.trim() && words.trim() !== last ? `${head}\n\n${words.trim()}` : head).slice(0, 16_000)
 }
 /** How long a message waits for a Fin's session to finish reopening before it's refused: half a door's wait. */
 const SWITCH_WAIT_MS = WAIT_LIMIT_MS / 2
@@ -911,11 +913,6 @@ export class Agents implements AgentOperations, ConversationChildren {
       const conversation = this.conversationOf(report.child)
       const waiting = conversation ? this.deps.live.waitingOn(conversation) : undefined
       return waiting !== undefined && report.id.endsWith(namedUuid(waiting.line))
-    }
-    // Nor that it ended a turn unfinished, once something sent it on: it's at work again.
-    if (report.implicit && report.status === "needs-input") {
-      const conversation = this.conversationOf(report.child)
-      return conversation !== undefined && !this.deps.live.atWork(conversation)
     }
     if (!report.implicit || (report.status !== "done" && report.status !== "failed")) return true
     const edge = this.store()?.edges().of(report.child)
@@ -4120,18 +4117,17 @@ export class Agents implements AgentOperations, ConversationChildren {
     const word = said ?? (woken && latest && !latest.implicit && latest.status === "progress" ? latest : undefined)
     const text = reply.text.trim() || (said && ended.status === "completed" ? said.summary.trim() : "")
     if (ended.status === "completed" && ended.notification) return this.childMoved(edge, false)
-    // A Fin whose word is progress hasn't said it's done, and nothing it waits on will wake it: its turn ended
-    // unfinished, and its Apex says how it goes on. A turn that said nothing at all, over progress from before it, stays a
-    // failure, as below: it answered nothing.
+    // A Fin whose word is progress hasn't said it's done, and nothing it waits on will wake it: its turn ended without a
+    // result, and it reads so wherever it's listed, never "done". Its Apex hears so at once, with its last words, and
+    // sends it on or takes the reply; nobody is asked, so nothing reaches the person's Inbox. A turn that said nothing at all, over progress from before it, stays a failure,
+    // as below: it answered nothing.
     if (ended.status === "completed" && word?.status === "progress" && (said || reply.text.trim())) {
-      const summary = (text || word.summary.trim() || "Its turn ended without a result.").slice(0, 16_000)
       return void this.keepReport(edge, {
         id: `report:${edge.child}:${request}`,
         child: ThreadIdSchema.parse(edge.child),
-        status: "needs-input",
-        summary,
-        question: unfinishedQuestion(text || word.summary),
-        action: "Tell it how to go on with agents_send, or stop it.",
+        status: "failed",
+        unfinished: true,
+        summary: unfinishedSummary(text || word.summary),
         ...(word.artifacts?.length && { artifacts: word.artifacts }),
         implicit: true,
         ownerGeneration: this.generation,
@@ -4814,7 +4810,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     this.childMoved(edge, false)
     for (const wake of this.waiters) wake()
     this.checkHolds(edge.child)
-    if (report.status !== "progress") this.finMet(edge.child, `${report.status}: ${firstLine(report.summary)}`)
+    if (report.status !== "progress") this.finMet(edge.child, `${reportWord(report)}: ${firstLine(report.summary)}`)
     this.pulls.refresh()
     return kept
   }
@@ -5452,7 +5448,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       state,
       ...(reading.title && { title: reading.title }),
       ...(reading.toolUses && { toolUses: reading.toolUses }),
-      ...(latest && { report: { status: latest.status, line: reportPhase(latest) ?? latest.status, at: latest.at } }),
+      ...(latest && { report: { status: latest.status, ...(latest.unfinished && { unfinished: true as const }), line: latest.unfinished ? latest.summary.split("\n", 1)[0]!.slice(0, 400) : reportPhase(latest) ?? latest.status, at: latest.at } }),
       ...(pendingQuestions && { pendingQuestions }),
       ...(pendingActions && { pendingActions }),
       ...(custodyActions && { custodyActions }),
@@ -6811,7 +6807,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(pulls.length && { openPRs: pulls }),
       topic: noteLine(edge.asked.brief.objective, 160),
       ...(edge.asked.workspace?.branch && { branch: edge.asked.workspace.branch }),
-      ...(latest && { report: { status: latest.status, line: noteLine(reportPhase(latest) ?? latest.status, 160), at: latest.at } }),
+      ...(latest && { report: { status: latest.status, ...(latest.unfinished && { unfinished: true as const }), line: noteLine(latest.unfinished ? latest.summary : reportPhase(latest) ?? latest.status, 160), at: latest.at } }),
       ...(direct && { direct: { line: noteLine(direct.displayText ?? direct.text, 120), at: direct.createdAt! } }),
     }
   }
@@ -7147,7 +7143,7 @@ function waitingItem(item: WaitingOn): WaitingOn {
 }
 
 function waitedReport(report: Report): WaitedReport {
-  return { status: report.status, summary: report.summary, ...(report.artifacts?.length && { artifacts: report.artifacts }), ...(report.question && { question: report.question }), ...(report.decides && { decides: report.decides }) }
+  return { status: report.status, ...(report.unfinished && { unfinished: true as const }), summary: report.summary, ...(report.artifacts?.length && { artifacts: report.artifacts }), ...(report.question && { question: report.question }), ...(report.decides && { decides: report.decides }) }
 }
 
 /** Who answers a Fin's ask: its Apex, within its access, or the person, whose ask it is. */

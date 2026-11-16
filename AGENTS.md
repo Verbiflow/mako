@@ -620,9 +620,13 @@ last report was progress that hands nothing on and names no wait Mako watches:
 a pull request the watch reads, an armed turn wait or its own Fins at work,
 `progressLeftUnwatched`) sends its Apex a notice. A Fin whose word is progress
 (said this turn, or before a turn Mako's note started) that ends a turn with a
-reply and no result hasn't said it's done: its end is `needs-input`, its Apex
-asked how it goes on with its last words (`unfinishedQuestion`), never "done",
-and that question leaves an unsent digest once the Fin works again; an idle Apex waits
+reply and no result hasn't said it's done: its end is a report marked
+`unfinished` (kept as `failed`, so an older build never reads it as done) that
+reads "Ended without a result" in the list, its row, the phone and the digest
+(`reportWord`, `endedUnfinished`, its own digest section), wakes its Apex at
+once with its last words (`unfinishedSummary`), and asks nobody, so nothing
+reaches the person's Inbox; its Apex sends it on (the row's Continue) or takes
+the reply as its result; an idle Apex waits
 `WAKE_COALESCE_MS` and takes ONE turn with the digest; a busy one is left to
 think: only a question or decision it can answer is steered into its running
 turn, at its next step where its harness steers there, and what else its
