@@ -916,6 +916,10 @@ export class Agents implements AgentOperations, ConversationChildren {
       if ((last?.status !== "done" && last?.status !== "failed") || (conversation && this.deps.live.leftUnsettled(conversation))) this.resumePaused(edge)
       // Whatever the last host left of it, a cut turn nothing picks up reaches its Apex.
       if (conversation) this.watchCut(conversation)
+      // One at work as this host starts is watched from the last activity its journal kept: a turn hung across a
+      // restart is named as one hung before it would be (`QuietWatch`).
+      if (conversation && !edge.placed && this.deps.live.atWork(conversation))
+        this.quiet.activity(edge.child, this.deps.live.snapshot(conversation)?.activityAt ?? this.now())
     }
     // A notice the last host was gathering goes on and is said, and one standing still ends at its reset.
     for (const { root, notice } of store.limitNotices()) {

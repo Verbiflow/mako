@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { join } from "node:path"
 import { test } from "node:test"
 import { FROM_AGENTS, QUIET_MS } from "@mako/host/contracts/children"
+import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { digest, type Notice } from "@mako/host/conversations/agent-wakes"
 import { QuietWatch } from "@mako/host/conversations/fin-quiet"
 import { AgentsWorld, type Script } from "./lib/agents-world.ts"
@@ -118,7 +119,7 @@ test("a tree waits on one deadline however many Fins it has; each tree on its ow
 test("the digest names a quiet Fin, its last step, and what the Apex can do", () => {
   const notice: Notice = {
     id: "notice:quiet:fin:1",
-    report: { id: "quiet:fin:1", child: "11111111-1111-4111-8111-111111111111", status: "progress", summary: "", implicit: true, ownerGeneration: 1, at: 1 },
+    report: { id: "quiet:fin:1", child: ThreadIdSchema.parse("11111111-1111-4111-8111-111111111111"), status: "progress", summary: "", implicit: true, ownerGeneration: 1, at: 1 },
     label: `"docs" (Claude)`,
     fin: { name: "docs", harness: "claude" },
     from: "s",
@@ -166,6 +167,41 @@ test("through the engine: a Fin whose turn hangs is named to its Apex once; its 
     await until(() => world.agents.quiet.waiting === 0, "the ended Fin leaves the watch")
     await pause(4 * QUIET)
     assert.equal(quietWakes().length, 2, "an idle Fin is never named quiet")
+  } finally {
+    await world.close()
+  }
+})
+
+test("through the engine: a Fin at work across a crash, with nothing new from it, is named once", async () => {
+  // A hung turn is the case a restart hides: the new host must watch the Fins it finds at work, not wait for news of them.
+  const QUIET = 1_500
+  const wakes: string[] = []
+  let fin = ""
+  const script: Script = async (turn) => {
+    if (turn.conversation === fin) {
+      await turn.world.hold(turn.conversation)
+      return "Done."
+    }
+    const spoken = turn.text.replace(/^<mako-local-control>[\s\S]*?<\/mako-local-control>\n\n/, "")
+    if (spoken.startsWith(FROM_AGENTS)) wakes.push(spoken)
+    return "ok"
+  }
+  const quietWakes = () => wakes.filter((text) => text.includes("gone quiet"))
+  const world = new AgentsWorld({ root: join(root, "restart"), script, quietMs: QUIET })
+  try {
+    const apex = await world.apex("claude", "full")
+    const started = await world.agents.start(apex.caller, { brief: { objective: "Run the tests" }, harness: "codex", name: "tests", clientKey: "tests", cwd: world.root })
+    assert.ok(!("refused" in started) && started.conversation)
+    fin = started.conversation!
+    await until(() => world.agents.quiet.waiting === 1, "the Fin's turn began")
+    // The host goes before the window, its turn left at work.
+    await world.crashed()
+    await until(() => world.agents.quiet.waiting === 1, "the new host watches the Fin it found at work")
+    await until(() => quietWakes().length === 1, "the Apex is told of the Fin quiet across the crash")
+    assert.match(quietWakes()[0]!, /"tests" \(Codex\) has shown no activity/)
+    await pause(4 * QUIET)
+    assert.equal(quietWakes().length, 1, "once")
+    world.release(fin)
   } finally {
     await world.close()
   }
