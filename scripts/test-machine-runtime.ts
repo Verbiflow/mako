@@ -376,7 +376,6 @@ async function nextBatch(reader: Subscription): Promise<{ revision: number; form
 
 /** A relayed `tool-steps` event, by its total. */
 const StepsHeardSchema = z.object({ steps: z.object({ total: z.number() }).nullable() })
-const AppHintHeardSchema = z.looseObject({ conversationId: z.string(), revision: z.number() })
 
 /** What the gateway said each time the form every reader reads changed. */
 const formsSaid = (lines: GatewayLogLine[]) => lines.filter((line) => line.event === "live-form").map(({ form, readers, whole }) => ({ form, readers, whole }))
@@ -502,59 +501,6 @@ test("a watched conversation's running js steps reach the watchers that read pas
   }
   assert.deepEqual(plainHeard, ["live-batch", "live-batch", "live-batch"], "a watcher that doesn't read passing state hears the batches alone")
   watcher.close()
-  plain.close()
-})
-
-test("a cloud Thread's running js steps and its app's hints reach its readers that read passing state, routed by conversation, unnumbered and never in its log", async () => {
-  const cloud = await machineGateway()
-  let clock = 1_000_000
-  const timers: Array<() => void> = []
-  let machine: MachineRuntime | undefined
-  // As the host composes it on a machine (`machinePassing`): the publisher's passing state goes to the Threads it runs.
-  const sessions = new SessionPublisher({ rows: () => undefined, now: () => clock, schedule: (run) => void timers.push(run), appsFollowing: () => new Set(["c-1"]), threadPassing: (event) => machine?.passing(event) })
-  const agent = machineAgent({ dataRoot: join(scratch, "thread-passing"), sessions })
-  machine = agent.runtime
-  await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello"))
-  agent.tell({ type: "link", gatewayUrl: cloud.url, runtimeId: RUNTIME, credential: CREDENTIAL, machine: "m-0123456789abcdef", generation: 1 })
-  await agent.until("enrolled", () => agent.state()?.link === "connected")
-  await cloud.gateway.assign("th-1", RUNTIME)
-  await agent.until("assigned", () => cloud.gateway.activity("th-1") !== undefined)
-  // A phone following the Thread, as every reader of a cloud Thread follows it; and a client that doesn't read passing state.
-  const phone = await cloud.gateway.connectClient(desktop, { ephemeral: true }).then((session) => session.subscribe({ stream: threadStream("th-1"), after: Number.MAX_SAFE_INTEGER }))
-  const plain = await cloud.gateway.connectClient(desktop, {}).then((session) => session.subscribe({ stream: threadStream("th-1"), after: Number.MAX_SAFE_INTEGER }))
-  const heard = async (reader: Subscription, type: string) => {
-    for (;;) {
-      const frame = await reader.next(5_000)
-      const line = readEventLine(frame.event.text)
-      if (line?.type === type) return { frame, line }
-    }
-  }
-  const steps = (total: number) => ({ steps: [{ call: "screenshot", phase: "running" as const }], total })
-  sessions.own({ type: "tool-steps", conversationId: "c-1", steps: steps(1) })
-  const first = await heard(phone, "tool-steps")
-  assert.deepEqual([first.frame.ephemeral, first.frame.seq, first.line.conversation], [true, 0, "c-1"], "steps are passing state, routed by their conversation")
-  assert.equal(StepsHeardSchema.parse(JSON.parse(first.line.payload)).steps?.total, 1)
-  // Throttled as a watcher's: the newest when its second is up.
-  clock += 100
-  sessions.own({ type: "tool-steps", conversationId: "c-1", steps: steps(2) })
-  sessions.own({ type: "tool-steps", conversationId: "c-1", steps: steps(3) })
-  assert.equal(timers.length, 1, "one send waits, however many came")
-  clock += 900
-  timers.shift()!()
-  assert.equal(StepsHeardSchema.parse(JSON.parse((await heard(phone, "tool-steps")).line.payload)).steps?.total, 3)
-  sessions.own({ type: "view-hint", hint: { epoch: "e-1", revision: 7, domain: "apps", fields: ["state"] } })
-  const hint = await heard(phone, "conversation-app-hint")
-  assert.deepEqual([hint.frame.ephemeral, hint.frame.seq, hint.line.conversation], [true, 0, "c-1"])
-  assert.deepEqual(AppHintHeardSchema.parse(JSON.parse(hint.line.payload)), { type: "conversation-app-hint", conversationId: "c-1", epoch: "e-1", revision: 7, fields: ["state"] })
-  // A kept event after it all: the client that doesn't read passing state hears it first, and the log holds it alone.
-  agent.runtime.event("event", hostEvent(1))
-  const kept = await plain.next(5_000)
-  assert.deepEqual([kept.ephemeral, HostEventLineSchema.parse(kept.event.decode()).payload.n], [undefined, 1], "nothing passing reached the plain reader before the kept event")
-  const log = await hostEvents(cloud.gateway, 1)
-  assert.deepEqual(log.map((line) => line.payload.n), [1])
-  agent.tell({ type: "inspect" })
-  await agent.until("only the kept event took a number", () => agent.state()?.threads?.[0]?.localSeq === 1 && agent.state()?.events.emitted === 1)
-  phone.close()
   plain.close()
 })
 

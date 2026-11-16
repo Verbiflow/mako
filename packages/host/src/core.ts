@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto"
 import { recipesOverHttp } from "@mako/protocol/recipes-http"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { z } from "zod"
-import { decodeRuntimeValue, encodeRuntimeValue, type RuntimeEvent } from "./contracts/runtime-value.js"
+import { decodeRuntimeValue, encodeRuntimeValue } from "./contracts/runtime-value.js"
 import { sessionAccessTier } from "./contracts/access.js"
 import { listedUnderApex } from "./contracts/agents.js"
 import { listedFins } from "./contracts/children.js"
@@ -104,8 +104,6 @@ export interface CoreShell {
   refreshMachineCarried?(): Promise<void>
   /** On a cloud machine: reports its Sessions on its runtime's link now, as its tick does (`MachineRuntime.reportSessions`). */
   reportMachineSessions?(): void
-  /** On a cloud machine: passing state for the Threads its runtime runs (`MachineRuntime.passing`). */
-  machinePassing?(event: RuntimeEvent): void
   /** On a cloud machine: whether its pull requests go as its person, asked now (`MachineRuntime.githubPerson`); undefined elsewhere. */
   machineGitHubPerson?(): Promise<GitHubPerson | undefined>
   owner: HostOwner
@@ -696,7 +694,6 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const sessions = new SessionPublisher({
     appsFollowing: () => late.movers?.sampler?.remoteConversations(),
     appPosition: () => viewHints.position("apps"),
-    ...shell.machinePassing && { threadPassing: shell.machinePassing },
     rows: () => reportedRows()?.rows,
     rowsOf: (conversations) => reportedRows(conversations)?.rows,
     // A native session's write or catalog row reworks its own rows, never the whole list.

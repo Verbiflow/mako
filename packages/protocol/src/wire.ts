@@ -82,7 +82,7 @@ export function decodeEventFrame(text: string): EventFrame {
 }
 
 export function encodeRuntimeFrame(frame: RuntimeFrame): string {
-  if (frame.type === "event" || frame.type === "live" || frame.type === "passing") {
+  if (frame.type === "event" || frame.type === "live") {
     const { event, ...envelope } = frame
     return framed(envelope, event)
   }
@@ -100,8 +100,6 @@ export function decodeRuntimeFrame(text: string): RuntimeFrame {
     return { ...frame, event: required(payload, "An event") }
   if (frame.type === "live")
     return { ...frame, event: required(payload, "A live update") }
-  if (frame.type === "passing")
-    return { ...frame, event: required(payload, "A Thread's passing state") }
   if (frame.type === "reply")
     return { type: "reply", reply: withValue(frame.reply, payload) }
   return bare(frame, payload)

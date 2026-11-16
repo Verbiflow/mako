@@ -119,7 +119,7 @@ const MACHINE_ONLY_EVENTS: ReadonlySet<string> = new Set(["account-usage", "harn
  * - `view-hint`, a window's hint to look at a view again (the apps one goes to a watched conversation's watchers as
  *   passing state of its own, `conversation-app-hint`, which never comes here);
  * - `file-changed`, the file a window's viewer holds changed on disk.
- * They reach a Thread's readers as passing state instead (`passing`). `control-activity` is passing too, but a Mac reads a machine's from its
+ * Nothing reads them from a Thread's stream. `control-activity` is passing too, but a Mac reads a machine's from its
  * Thread's stream for that Thread's control previews (`CloudConversations`), so it stays there until a Thread's
  * stream carries passing state outside its log.
  */
@@ -245,20 +245,6 @@ export class MachineRuntime {
     clearTimeout(this.#report)
     this.#cloud?.stop()
     this.#cloud = undefined
-  }
-
-  /**
-   * Passing state for the Threads this runtime runs (`PASSING_EVENTS`, routed by its conversation): to each Thread's
-   * readers now, as a `passing` frame its object relays and never logs (link version 28). A gateway on an older link
-   * gets none, and the Thread's readers see the running call without its steps.
-   */
-  passing(event: RuntimeEvent): void {
-    const threads = this.#threads
-    if (!threads) return
-    const line = gatewayEventLine("event", event)
-    if (line.fit !== "whole") return
-    const payload = Payload.encoded(line.text)
-    for (const { threadId } of threads.claims()) threads.passing(threadId, payload, event.trace)
   }
 
   /**

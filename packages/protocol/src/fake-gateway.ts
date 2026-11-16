@@ -546,15 +546,6 @@ export function createFakeGateway(
         )
       return connection.deliver({ type: "renewed", expiresAt })
     }
-    // A Thread's passing state: from its owner under its generation, to the readers that read it, now; never in its log.
-    if (frame.type === "passing") {
-      const target = threads.get(frame.threadId)
-      if (target?.owner !== connection.runtimeId || target.generation !== frame.generation) return
-      for (const reader of target.readers.keys())
-        if (ephemeralReaders.has(reader))
-          reader.push({ v: PROTOCOL_VERSION, stream: target.stream, seq: 0, at: now().toISOString(), ...(frame.correlationId && { correlationId: frame.correlationId }), event: frame.event, ephemeral: true })
-      return
-    }
     if (frame.type === "event") return record(connection, frame)
     if (frame.type === "activity") {
       // As an event is: only from the Thread's owner, under its generation.

@@ -41,11 +41,10 @@ export const PROTOCOL_VERSION = 1
  * (`QUIET_PROJECT_LINK_VERSION`). 26 says it takes a project folder Thread's other repositories there too
  * (`others`, `QUIET_OTHERS_LINK_VERSION`), and the device folder its project worktree mirrors (`projectFrom`,
  * `QUIET_PROJECT_FROM_LINK_VERSION`). 27 lets a `live` frame be `ephemeral`: the gateway passes it to the conversation's
- watchers who said they read such frames and keeps nothing of it (`EPHEMERAL_LIVE_VERSION`). 28 adds `passing`: the same
- for a Thread the runtime runs, to that Thread's readers who read such frames, never into its log
- (`PASSING_THREAD_VERSION`). Every envelope stays at `PROTOCOL_VERSION` on every link version.
+ watchers who said they read such frames and keeps nothing of it (`EPHEMERAL_LIVE_VERSION`). Every envelope stays at
+ `PROTOCOL_VERSION` on every link version.
  */
-export const LINK_VERSION = 28
+export const LINK_VERSION = 27
 
 /** The first link version a runtime may send `activity` on; a gateway that agreed less never sees one. */
 export const ACTIVITY_VERSION = 2
@@ -186,14 +185,6 @@ export const QUIET_PROJECT_FROM_LINK_VERSION = 26
  * older link sends none: such a gateway would number and keep it as any update.
  */
 export const EPHEMERAL_LIVE_VERSION = 27
-
-/**
- * The first link version whose gateway takes a runtime's `passing` frame: a Thread's passing state (a running call's
- * steps, an app's hint), relayed to the Thread's current readers that read such frames (`EPHEMERAL_PARAM`) as an
- * `ephemeral` frame, under the runtime's generation for it, and never written into the Thread's log. A runtime on an
- * older link sends none: the only way into a Thread then is its log, which keeps everything.
- */
-export const PASSING_THREAD_VERSION = 28
 
 /**
  * The link versions this build can speak. A gateway keeps older versions working for runtimes that wake
