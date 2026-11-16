@@ -52,7 +52,7 @@ const INVARIANTS = {
  * What Mako doesn't meet yet, each with a ceiling it mustn't get worse than: each later PR that meets a target removes
  * it, or tightens its ceiling, and the test then holds it there.
  */
-const EXPECTED_FAILING = new Map<Invariant, Bound>([["apexSteersPerMinute", { max: 60 }], ["apexThinkShare", { min: 0.2 }], ["finBacklogTurns", { max: 3 }]])
+const EXPECTED_FAILING = new Map<Invariant, Bound>([["finBacklogTurns", { max: 3 }]])
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 async function until(what: string, done: () => boolean, timeoutMs = 60_000): Promise<void> {

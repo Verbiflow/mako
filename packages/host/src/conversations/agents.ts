@@ -379,6 +379,8 @@ export interface AgentsDeps {
   processes?: ProcessReads
   /** `APEX_ANSWER_MS`, shorter in tests. */
   apexAnswerMs?: number
+  /** `FOCUS_MS`: how long a working Apex's turn runs before what waits for its end is steered in once; shorter in tests. */
+  focusMs?: number
   /** How long a working Fin may show no activity before its Apex hears it (`QuietWatch`); `QUIET_MS` without it. */
   quietMs?: number
   /**
@@ -788,6 +790,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       },
       rewrite: (conversation, request, text, notices, lines) => deps.live.rewriteWaiting(conversation, request, text, { notices: [...notices], ...(lines?.length && { lines: [...lines] }) }),
       steer: (conversation, id, text) => this.steer(conversation, id, text),
+      ...(deps.focusMs !== undefined && { focusMs: deps.focusMs }),
       assign: (reports, request) => {
         this.store()?.assignWake(reports.filter(stored), request)
         for (const id of reports) if (id.startsWith(HELD_PREFIX)) this.heldIn(id.slice(HELD_PREFIX.length), request)

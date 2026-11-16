@@ -3,7 +3,7 @@ import { errorMessage } from "../base/error-message.js"
 import { APEX_WORD, decisionWords, FIN_WORD, reportAsk, reportPhase, waitingWords, type Notice, type Report } from "../contracts/agents.js"
 import { appendFinReports, FIN_REPORTS_MAX, type FinReportCard } from "../contracts/fin-reports.js"
 import { FROM_AGENTS } from "../contracts/children.js"
-import { quietLine, WAKE_COALESCE_MS } from "../contracts/children.js"
+import { FOCUS_MS, quietLine, WAKE_COALESCE_MS } from "../contracts/children.js"
 import { SessionIdSchema, type Actor } from "../contracts/thread-identity.js"
 import { namedUuid } from "./cloud-moves.js"
 
@@ -58,6 +58,14 @@ export interface AgentWakesDeps {
   /** Whether a notice still says how its Fin stands: an end the host inferred for a Fin that works again doesn't. */
   current?(notice: Notice): boolean
   now?(): number
+  /** How long a working Apex's turn runs before what waits for its end is steered in once (`FOCUS_MS`); a test shortens it. */
+  focusMs?: number
+}
+
+/** A notice its Apex can act on at once: a question or decision that is the Apex's to answer, never the person's. */
+function asksApex(notice: Notice): boolean {
+  const status = notice.report.status
+  return ((status === "blocked" || status === "needs-input") && notice.report.for !== "person") || notice.decision === "lead"
 }
 
 /**
@@ -83,6 +91,8 @@ export class AgentWakes {
   private reading = 0
   /** Conversations with a digest admitted, for `pending`. */
   private readonly digests = new Set<string>()
+  /** A working Apex's turn's focus timer: when it fires, what waits for the turn's end is steered in once. */
+  private readonly focus = new Map<string, ReturnType<typeof setTimeout>>()
   private stopped = false
 
   constructor(deps: AgentWakesDeps) {
@@ -107,8 +117,12 @@ export class AgentWakes {
     const ready = this.deps.ready(conversation)
     // Kept unheard in the store: the host that has the Apex sends them on its start.
     if (ready === "gone") return
-    // A running turn that takes a message at its next step hears this now; a result waits for the turn's end.
-    if (ready === "steer" && !notice.settledOnly && !notice.wake) return this.steerIn(conversation, notice)
+    // A running turn that takes a message at its next step hears a question it can answer now. The rest waits for the
+    // turn's end as one digest, so the Apex isn't steered by each report while it works, unless its turn runs long.
+    if (ready === "steer" && !notice.settledOnly && !notice.wake) {
+      if (asksApex(notice)) return this.steerIn(conversation, notice)
+      this.armFocus(conversation)
+    }
     const open = this.deps.unsent(conversation).at(-1)
     if (open) return this.join(conversation, open, notice)
     this.start(conversation, [notice], ready)
@@ -193,6 +207,8 @@ export class AgentWakes {
 
   dispose(): void {
     this.stopped = true
+    for (const timer of this.focus.values()) clearTimeout(timer)
+    this.focus.clear()
   }
 
   private now(): number {
@@ -251,6 +267,31 @@ export class AgentWakes {
     this.digests.add(conversation)
     this.heardNow(notices)
     hostLog("agents", "wake", { conversation, request, how: "queued", coalesced: notices.length, ...(hold && { hold: hold === "paused" ? "paused" : new Date(hold.at).toISOString() }) })
+  }
+
+  /**
+   * Once a turn has run `FOCUS_MS` past the first report it left waiting, what waits for its end is steered in, once, as
+   * one digest: an Apex on a long turn still hears its Fins, at most once a stretch. What the harness doesn't take
+   * stays for the turn's end.
+   */
+  private armFocus(conversation: string): void {
+    if (this.focus.has(conversation)) return
+    const timer = setTimeout(() => {
+      this.focus.delete(conversation)
+      if (this.stopped || this.deps.ready(conversation) !== "steer") return
+      const open = this.deps.unsent(conversation).at(-1)
+      if (!open?.notices.length) return
+      const took = this.deps.steer(conversation, namedUuid(`steer:focus:${open.id}`), this.words(conversation, open.notices, open.lines ?? []))
+      if (!took) return
+      void took.then((answered) => {
+        if (this.stopped || !answered) return
+        // Heard in the turn: the digest it was is taken back, its lines with it.
+        this.deps.rewrite(conversation, open.id, "", [], [])
+        hostLog("agents", "wake", { conversation, request: open.id, how: "focus-steer", coalesced: open.notices.length })
+      })
+    }, this.deps.focusMs ?? FOCUS_MS)
+    timer.unref?.()
+    this.focus.set(conversation, timer)
   }
 
   /** Into the running turn at its next step; what the harness doesn't take goes as a digest of its own. */

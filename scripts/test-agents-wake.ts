@@ -389,7 +389,10 @@ async function refusedSteer(): Promise<void> {
     }
     if (spoken(turn.text).startsWith(FROM_AGENTS)) return "Going on."
     child = turn.conversation
-    return "Lint is clean."
+    // A question is what a working Apex is steered with (a finished result waits for its turn's end, FOCUS_MS).
+    const asked = await turn.world.agents.report(turn.caller, { status: "needs-input", summary: "Two configs.", question: "Which lint config?", clientKey: "q" })
+    assert.ok(!("refused" in asked), JSON.stringify(asked))
+    return "Asked."
   } })
   try {
     const apex = await w.apex("claude")
@@ -403,7 +406,7 @@ async function refusedSteer(): Promise<void> {
     assert.equal(actionNotice(held, []), undefined, "and the person hears nothing of a steer Mako sent by itself")
     w.release(apex.conversation)
     await until("the next turn", () => wakesOf(w, apex.conversation).length === 1)
-    assert.match(wakesOf(w, apex.conversation)[0]!.text, /"lint" \(Codex\) done: Lint is clean\./)
+    assert.match(wakesOf(w, apex.conversation)[0]!.text, /"lint" \(Codex\) is asking: Which lint config\?/)
     await w.settle()
     assert.equal(w.store.undeliveredReports().length, 0)
   } finally {
@@ -429,17 +432,16 @@ async function waitNeverSteers(): Promise<void> {
     await until("both children", () => answers.length === 1 && kids.size === 2)
     w.release(kids.get("count")!)
     w.release(kids.get("lint")!)
-    await until("the background report's steer", () => w.steers.length === 1, 6_000)
-    assert.match(w.steers[0]!.text, /1 finished:\n {2}• "lint" \(Codex\) done: Lint is clean\./)
-    assert.doesNotMatch(w.steers[0]!.text, /waited for/, "the waited-for result isn't steered into the running turn")
-    await delay(500)
-    assert.equal(wakesOf(w, apex.conversation).length, 0, "and doesn't start a turn while one runs")
+    await delay(WAKE_COALESCE_MS + 500)
+    assert.equal(w.steers.length, 0, "neither result is steered into the running turn: the Apex is left to think (FOCUS_MS)")
+    assert.equal(wakesOf(w, apex.conversation).length, 0, "and neither starts a turn while one runs")
     w.release(apex.conversation)
-    await until("the next turn", () => wakesOf(w, apex.conversation).length === 1)
-    assert.match(wakesOf(w, apex.conversation)[0]!.text, /The result you waited for:\n {2}• "count" \(Codex\) done:\n {4}There are 12 files\./)
+    await until("the next turn", () => wakesOf(w, apex.conversation).length >= 1)
     await w.settle()
-    assert.equal(w.steers.length, 1)
-    assert.equal(wakesOf(w, apex.conversation).length, 1)
+    const heard = wakesOf(w, apex.conversation).map((wake) => wake.text).join("\n")
+    assert.match(heard, /The result you waited for:\n {2}• "count" \(Codex\) done:\n {4}There are 12 files\./)
+    assert.match(heard, /"lint" \(Codex\) done: Lint is clean\./, "the background result goes at the turn's end too")
+    assert.equal(w.steers.length, 0)
   } finally {
     await w.close()
   }

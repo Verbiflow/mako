@@ -172,22 +172,41 @@ try {
     assert.equal(f.entries[0]!.canceled, true, "a stale end leaves the older digest too")
   }
   {
-    // A running turn that takes a step's message hears a notice now; one it refuses joins the digest.
+    // A running turn that takes a step's message hears a question it can answer now; one it refuses joins the digest.
+    // A result waits for the turn's end, so a working Apex isn't steered by each report (`FOCUS_MS`).
     let answer = true
     const steered: string[] = []
     const f = fakes(() => "steer", () => 5_000_000, (text) => { steered.push(text); return Promise.resolve(answer) })
-    const wakes = new AgentWakes(f.deps)
-    wakes.notice("apex", "", notice())
+    const wakes = new AgentWakes({ ...f.deps, focusMs: 60_000 })
+    wakes.notice("apex", "", notice("blocked"))
     await pause(0)
     assert.equal(steered.length, 1)
     assert.equal(f.entries.length, 0, "taken by the running turn, nothing queued")
     answer = false
-    wakes.notice("apex", "", notice())
+    wakes.notice("apex", "", notice("blocked"))
     await pause(0)
     assert.equal(f.entries.length, 1, "a refused steer goes as a digest of its own")
+    wakes.notice("apex", "", notice())
+    assert.equal(steered.length, 2, "a finished Fin's result isn't steered into the turn")
     wakes.notice("apex", "", notice("done", { settledOnly: true }))
-    assert.equal(steered.length, 2, "a result is never steered")
-    assert.equal(f.open()!.notices.length, 2)
+    assert.equal(steered.length, 2, "nor is a waited-for result")
+    assert.equal(f.open()!.notices.length, 3)
+    wakes.dispose()
+  }
+  {
+    // A turn that runs past `FOCUS_MS` after the first result it left waiting hears what waits, once, as one digest.
+    const steered: string[] = []
+    const f = fakes(() => "steer", () => 5_000_000, (text) => { steered.push(text); return Promise.resolve(true) })
+    const wakes = new AgentWakes({ ...f.deps, focusMs: 50 })
+    wakes.notice("apex", "", notice())
+    wakes.notice("apex", "", notice())
+    assert.equal(steered.length, 0, "nothing steered as the results come")
+    assert.equal(f.open()!.notices.length, 2, "they wait as one digest")
+    await pause(120)
+    assert.equal(steered.length, 1, "past the focus window, the digest is steered in once")
+    assert.match(steered[0]!, /2 finished:/)
+    assert.equal(f.entries.at(-1)!.canceled, true, "and taken back from the queue")
+    wakes.dispose()
   }
   {
     // What rides a digest stays with it whatever happens to its reports, and is said once. Nothing takes it away but its going.
