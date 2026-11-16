@@ -45,9 +45,9 @@ export function holdOf(request: Pick<LiveRequest, "status" | "signIn" | "editing
   return { kind: "paused", by: "mako" }
 }
 
-/** Outages and startup waits belong to the provider; new messages cannot make them clear sooner. */
+/** Capacity and service waits belong to the provider; new messages cannot make either clear sooner. */
 export function waitsForProvider(request: Pick<LiveRequest, "retry">): boolean {
-  return request.retry !== undefined && request.retry.cause !== "busy"
+  return request.retry?.cause === "provider-unavailable" || request.retry?.cause === "rate-limited"
 }
 
 /** Whether new input releases a retry/resting digest. Provider waits keep their time; an explicit move can go now. */

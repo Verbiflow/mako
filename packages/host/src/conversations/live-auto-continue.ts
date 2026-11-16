@@ -177,7 +177,7 @@ export class LiveAutoContinue {
   }
 
   /**
-   * A turn its harness failed or cut partway for a cause that clears by itself (its
+   * A turn its harness failed partway for a cause that clears by itself (its
    * service at capacity or rate-limited, failing on its side, a dropped or
    * stalled connection): what it did stands in its session, so Mako continues
    * it when its next attempt is due (`nextRetry`), held first in line so what
@@ -187,9 +187,7 @@ export class LiveAutoContinue {
    */
   continueFailed(resident: Resident, settled: string): void {
     const failed = resident.snapshot.requests.find((request) => request.id === settled)
-    if (!failed || this.access.admission.closed) return
-    const dropped = failed.status === "interrupted" && (failed.interruption?.reason === "connection-lost" || failed.interruption?.reason === "provider-exited")
-    if (failed.status !== "failed" && !dropped) return
+    if (failed?.status !== "failed" || this.access.admission.closed) return
     // A turn a Stop latched isn't picked up again by itself (`LiveRequest.pause`).
     if (failed.pause === "stop") return
     const cause = transientCause(failed.error ?? "", failed.failure ?? "unknown", false, failed.failureEvidence)
@@ -201,17 +199,9 @@ export class LiveAutoContinue {
     if (resident.snapshot.requests.some((request) => request.continues?.requestId === failed.id)) return
     const now = Date.now()
     const waits = cause || unheard ? waitsAgain(failed, cause, failed.error ?? "", now, turnReply(resident, failed.id).limit?.resetsAt) : undefined
-    if (!waits) {
-      // The retry budget is over, so neither the old deadline nor the one-shot drop timer promises another go.
-      if (failed.retry) {
-        resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map(request => request === failed
-          ? { ...request, retry: undefined, status: "failed" as const } : request) }
-        this.access.flush(resident)
-      }
-      return
-    }
+    if (!waits) return
     const retry = waits.retry
-    const continues: TurnContinuation = { requestId: failed.id, reason: failed.interruption?.reason ?? "connection-lost", auto: true, ...(failed.continues?.brief && { brief: failed.continues.brief }) }
+    const continues: TurnContinuation = { requestId: failed.id, reason: "connection-lost", auto: true, ...(failed.continues?.brief && { brief: failed.continues.brief }) }
     // Retain the digest and its original receipt identity. Dispatch decides whether proof permits its payload or
     // only a discovery continuation; past the retries it rests (`resting`).
     const request = LiveRequestSchema.parse({
