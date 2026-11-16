@@ -70,12 +70,12 @@ const link = await gateway.connectRuntime()
 const served = await serveHostThroughGateway(link, { runtimeId: `d-${device}`, build: "fixture", invoke: (channel, args, client) => methods.invoke(channel, args, client), watch: (ids, after, forms) => publisher.watch(link, ids, after, forms) })
 publisher.linked({ link, served })
 const forwarded: string[] = []
-const live = served.live
-mock.method(served, "live", (...args: Parameters<typeof served.live>) => {
+const ephemeral = served.ephemeral
+mock.method(served, "ephemeral", (...args: Parameters<typeof served.ephemeral>) => {
   if (forwarded.length < 32) forwarded.push(args[1].text)
-  return live(...args)
+  return ephemeral(...args)
 })
-const session = await gateway.connectClient({ kind: "client", client: "web", deviceId: browser })
+const session = await gateway.connectClient({ kind: "client", client: "web", deviceId: browser }, { ephemeral: true })
 const webGateway = new Gateway({ origin: "https://fixture.invalid", connect: async () => { throw new Error("No HTTP, token or account is used") } })
 mock.method(webGateway.session, "subscribe", (request: Parameters<typeof webGateway.session.subscribe>[0]) => session.subscribe(request))
 let lastView = ""
@@ -233,14 +233,16 @@ await clock.tick(REMOTE_APP_LEASE_MS + 1)
 assert.equal(bounded.followRemote("a", conversation, { ...command, view: randomUUID() }), true, "expired leases release capacity")
 // Metadata is ephemeral: it cannot evict or occupy the critical live-update replay tail.
 const replayed: string[] = []
+let passingHints = 0
 const replay = new SessionPublisher({ rows: () => [], now: clock.now, schedule: () => {}, appsFollowing: () => new Set([conversation]) })
-const replayLink: SessionLink = { link, served: { version: served.version, sessions: () => true, live: (_id, event) => { replayed.push(event.text); return true } } }
+const replayLink: SessionLink = { link, served: { version: served.version, sessions: () => true, ephemeral: () => { passingHints++; return true }, live: (_id, event) => { replayed.push(event.text); return true } } }
 replay.linked(replayLink)
 replay.watch(link, [conversation])
 replay.event("event", { type: "live-batch", conversation, payload: JSON.stringify({ type: "live-batch", batch: { id: conversation, revision: 1, updates: [] } }) })
 replayed.length = 0
 for (let i = 0; i < 1100; i++) replay.own({ type: "view-hint", hint: { ...hints.position("apps"), domain: "apps", fields: ["all"] } })
-assert.equal(replayed.length, 1100)
+assert.equal(passingHints, 1100)
+assert.equal(replayed.length, 0, "hints never use the kept live writer")
 replayed.length = 0
 replay.watch(link, [conversation], { [conversation]: 0 })
 assert.equal(replayed.length, 1)

@@ -434,9 +434,9 @@ export class WebConversations {
             continue
           }
           const verdict = cursor.heard({ seq: frame.seq, text: frame.event.text, ...frame.ephemeral && { ephemeral: true } })
-          // Passing state (a running call's steps): applied as it comes, and it moves no cursor and counts as no update.
+          // Passing state (steps and app hints): applied as it comes, moving no cursor and counting as no update.
           if (verdict.kind === "ephemeral") {
-            this.#heard(frame.event.text, follow.conversations)
+            this.#heard(frame.event.text, follow.conversations, owner)
             continue
           }
           if (verdict.kind === "notice" || verdict.kind === "duplicate") continue

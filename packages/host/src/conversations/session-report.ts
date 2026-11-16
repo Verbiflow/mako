@@ -12,7 +12,7 @@ import type { ExternalThreadActivity } from "../contracts/host-events-boot.js"
 import type { LiveSummary } from "../contracts/live-conversations.js"
 import type { SessionExecution } from "../contracts/thread-execution.js"
 import { SessionIdSchema, ThreadIdSchema, type SessionId, type ThreadId, type ThreadPlacement } from "../contracts/thread-identity.js"
-import { COMPACT_LIVE_FORM, COMPACT_LIVE_VERSION, Payload, SESSIONS_VERSION, WHOLE_LIVE_FORM, type LiveForm, type RuntimeLink, type ServedRuntime } from "@mako/protocol"
+import { COMPACT_LIVE_FORM, COMPACT_LIVE_VERSION, EPHEMERAL_LIVE_VERSION, Payload, SESSIONS_VERSION, WHOLE_LIVE_FORM, type LiveForm, type RuntimeLink, type ServedRuntime } from "@mako/protocol"
 import type { HostWork } from "../base/event-loop.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { ToolSteps } from "../contracts/tool-steps.js"
@@ -829,12 +829,12 @@ export class SessionPublisher {
   }
 
   #appHint(hint: RemoteAppHint): void {
-    if (this.#watching?.link !== this.#current?.link || !this.#watching?.conversations.has(hint.conversationId)) return
+    const current = this.#watched(hint.conversationId)
+    // Older gateways would keep a normal live frame. Send none: the preview keeps polling until real delivery proves
+    // the hint path. Passing state takes neither the host's n nor a gateway tail slot, including the ready handshake.
+    if (!current || current.served.version < EPHEMERAL_LIVE_VERSION) return
     const line = gatewayEventLine("event", { type: hint.type, conversation: hint.conversationId, payload: JSON.stringify(hint) })
-    if (line.fit !== "too-large") {
-      this.#current?.served.live(hint.conversationId, Payload.encoded(line.text), { n: ++this.#n })
-      this.#sent?.()
-    }
+    if (line.fit === "whole" && current.served.ephemeral(hint.conversationId, Payload.encoded(line.text))) this.#sent?.()
   }
 
   /** Once the link the gateway's `after` was said on is the one served: what each watched conversation missed, in order. */
