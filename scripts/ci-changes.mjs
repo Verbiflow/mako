@@ -22,8 +22,13 @@ export const JOBS = {
   ui: [/^src\//, /^electron\//, new RegExp(`^packages/(${UI_PACKAGES.join("|")})/`), /^public\//, /^mako-icons\//, /^tsconfig[\w.-]*\.json$/, /^packages\/host\/src\/(contracts|transport)\//, /^scripts\/test-[\w-]*-ui[\w-]*\./, /^scripts\/ci-suites\.mjs$/, /^scripts\/(ui-vite-server|ci-ui-warm)\.mjs$/, /^scripts\/lib\/ui-vite\.mjs$/, /^scripts\/lib\/test-/, /^index\.html$/, /^vite\./, /^tailwind/],
   // The gate's steps that pass only on a Mac (`ci-gate.mjs`'s `MAC_STEPS`): the host, its packages and their tests.
   macHost: [/^packages\//, /^electron\//, /^scripts\/(test-|lib\/|diagnose-|check-)/, /^scripts\/ci-gate\.mjs$/],
-  // The local updater's checks: the application domain, the update scripts and anything the packaged build reads.
-  updates: [/^packages\/host\/src\/application\//, /^scripts\/[\w-]*update[\w-]*\./, /^scripts\/ci-update-checks\.ts$/, /^electron\//, /^electron-builder/, /^build\//],
+  // The local updater's checks: the application domain, the update scripts and anything the packaged build reads; and
+  // the host's own life, which test:application holds (its start and stop, the socket and its calls, a stop's words to a
+  // sign-in): #859 changed how a stopped call is said in transport/ and broke a sign-in's answer, and passed its PR
+  // because this job didn't run there.
+  updates: [/^packages\/host\/src\/application\//, /^scripts\/[\w-]*update[\w-]*\./, /^scripts\/ci-update-checks\.ts$/, /^electron\//, /^electron-builder/, /^build\//,
+    /^packages\/host\/src\/(transport|base)\//, /^packages\/host\/src\/(create-host|core|host-main|host-config)\.ts$/, /^packages\/host\/src\/harnesses\/account-login\.ts$/,
+    /^scripts\/test-(application-|stop-|host-idle|window-shutdown|git-stop|daemon-login|isolated-host|local-build|checkout-copy|command-utf8)/],
   // Decode and live-path timings measured against the base: the decoders, readers, live host and the window's reduction.
   performance: [/^packages\/sessions\//, /^packages\/host\/src\/(conversations|harnesses|threads)\//, /^src\/(state|lib)\//, /^scripts\/perf[\w-]*\./, /^scripts\/test-perf[\w-]*\./, /^scripts\/test-performance-budgets\.ts$/],
   // The host's loop under many Fins.
