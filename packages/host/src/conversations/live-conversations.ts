@@ -87,7 +87,7 @@ import { LiveLaunches, nativeStart } from "./live-launches.js"
 import { syncMemory } from "./live-ledger.js"
 import { LiveMoves } from "./live-moves.js"
 import { LiveQuestions } from "./live-questions.js"
-import { LiveRecords, wakeAt } from "./live-records.js"
+import { LiveRecords, wakeAt, type ColdRefusal } from "./live-records.js"
 import { isPaged } from "./paged-entries.js"
 import { LiveRelocations } from "./live-relocations.js"
 import { LiveRestarts } from "./live-restarts.js"
@@ -150,6 +150,9 @@ const startingWork = (id: string): LifecycleWork => ({ id, token: id, title: "St
 function limitCut(request: LiveRequest): boolean {
   return request.continues !== undefined && request.retry?.cause === "rate-limited"
 }
+
+/** A conversation read cold for a search, or why it isn't (`LiveConversations.coldSearch`). */
+export type ColdSearch = { journal: ColdJournal; snapshot: LiveSnapshot; still: () => boolean } | { refused: ColdRefusal }
 
 export class LiveConversations {
   private readonly stops = new Map<string, { requestId: string; result: Promise<boolean> }>()
@@ -767,14 +770,15 @@ export class LiveConversations {
    * Conversation `id` read where its journal lies, for a window or a search, when nothing holds it in memory
    * (`LiveRecords.cold`); `releasing` reads one still being let go of, as a search does.
    */
-  async coldView(id: string, releasing = false): Promise<{ journal: ColdJournal; snapshot: LiveSnapshot; still: () => boolean } | undefined> {
-    const cold = await this.records.cold(id, releasing)
+  async coldView(id: string, releasing = false, refused?: (why: ColdRefusal) => void): Promise<{ journal: ColdJournal; snapshot: LiveSnapshot; still: () => boolean } | undefined> {
+    const cold = await this.records.cold(id, releasing, refused)
     if (!cold) return undefined
     // Its history is its session's record: the newest page of it, the rest read as a window pages back.
     const source = cold.snapshot.baseSource
     const base = source ? await this.sources.newestBase(source) : null
     if (source && (!base || !cold.still())) {
       cold.journal.close()
+      refused?.(!cold.still() ? { kind: "busy" } : { kind: "structural", why: "its session's record couldn't be read" })
       return undefined
     }
     // Its Fins, as reading it in adds them (`takeChildren`): the engine's, never the journal's.
@@ -783,6 +787,16 @@ export class LiveConversations {
     const read = base ? { ...cold.snapshot, base } : cold.snapshot
     const snapshot = nativeAgents === read.nativeAgents ? read : { ...read, nativeAgents }
     return { journal: cold.journal, still: cold.still, snapshot: this.stamp(snapshot) }
+  }
+
+  /**
+   * Conversation `id` for a search, read where its journal lies (`coldView`, one still being let go of too), or why it
+   * isn't: something under way that passes, or what the journal is, with its session's own record where that holds it.
+   */
+  async coldSearch(id: string): Promise<ColdSearch> {
+    let refusal: ColdRefusal | undefined
+    const view = await this.coldView(id, true, (why) => { refusal = why })
+    return view ?? { refused: refusal ?? { kind: "busy" } }
   }
 
   relocate(id: string, cwd: string): Promise<string | undefined> {

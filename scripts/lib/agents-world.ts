@@ -358,7 +358,7 @@ export class AgentsWorld {
       conversations: () => this.live.summaries(),
       snapshot: (id) => this.live.historySnapshot(id),
       resident: (id) => this.live.loaded(id),
-      cold: (id) => this.live.coldView(id, true),
+      cold: (id) => this.live.coldSearch(id),
       store: () => this.store,
       catalog: { list: () => [], nativePath: () => undefined, ref: () => undefined, open: async () => null, entry: async () => null },
       bundle: { live: (id) => this.live.transcriptBundle(id), native: async () => null },

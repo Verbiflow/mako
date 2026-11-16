@@ -1720,8 +1720,6 @@ export function journalIds(root: string): string[] {
 /** A block that begins a turn or names a request, as a cold journal's index holds it (`ColdJournal`). */
 const TurnRowSchema = z.object({ id: z.number().int().nonnegative(), type: z.string().nullable(), steering: z.number().int(), request: z.string().nullable(), message: z.string().nullable() })
 const BlockCountSchema = z.object({ count: z.number().int().nonnegative(), last: z.number().int().nullable() })
-/** What a row's JSON begins with when its first key is the entry's type, which every journal so far writes. */
-const TYPED_ROWS = `value LIKE '{"type":"%'`
 const TURN_ROWS = `SELECT id, json_extract(value,'$.type') AS type, json_extract(value,'$.steeringFor') IS NOT NULL AS steering,
   json_extract(value,'$.requestId') AS request, json_extract(value,'$.messageId') AS message FROM blocks`
 
@@ -1906,11 +1904,9 @@ export class ColdJournal {
 
   #turnRows(): z.infer<typeof TurnRowSchema>[] {
     if (this.#turns) return this.#turns
-    // A row's JSON begins with its type: only those of a user or provider turn are parsed, unless one doesn't.
-    const typed = !this.#db.prepare(`SELECT 1 AS found FROM blocks WHERE NOT ${TYPED_ROWS} LIMIT 1`).get()
-    const rows = typed
-      ? this.#db.prepare(`${TURN_ROWS} WHERE value LIKE '{"type":"user"%' OR value LIKE '{"type":"provider-turn"%' ORDER BY id`).all()
-      : this.#db.prepare(`${TURN_ROWS} WHERE json_extract(value,'$.type') IN ('user','provider-turn') ORDER BY id`).all()
+    // One scan of the blocks, whatever order a row's keys are in: a probe for that first was a second whole scan, about
+    // 40 ms more a call on a 117 MB journal (pr-review, 2026-11-16).
+    const rows = this.#db.prepare(`${TURN_ROWS} WHERE json_extract(value,'$.type') IN ('user','provider-turn') ORDER BY id`).all()
     this.#turns = rows.map((row) => TurnRowSchema.parse(row))
     return this.#turns
   }

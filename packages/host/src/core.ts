@@ -1781,7 +1781,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     conversations: () => live.summaries(),
     snapshot: (id) => live.historySnapshot(id),
     resident: (id) => live.loaded(id),
-    cold: (id) => live.coldView(id, true),
+    cold: (id) => live.coldSearch(id),
     store: () => threads.store,
     catalog: threads.catalog,
     bundle: { live: (conversation) => live.transcriptBundle(conversation), native: (path) => threads.catalog.transcriptArtifact(path) },

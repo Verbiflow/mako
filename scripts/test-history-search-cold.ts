@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { monitorEventLoopDelay } from "node:perf_hooks"
+import type { Thread } from "@mako/sessions"
+import type { ColdRefused } from "@mako/host/conversations/thread-history"
 import { AgentsWorld, type Script } from "./lib/agents-world.ts"
 
 /**
@@ -63,12 +65,36 @@ try {
   const conversations = world.live.summaries()
   const history = await import("@mako/host/conversations/thread-history")
   const tools = history.threadHistoryTools({
-    conversations: () => conversations, snapshot: (id) => world.live.historySnapshot(id), resident: (id) => world.live.loaded(id), cold: (id) => world.live.coldView(id, true),
+    conversations: () => conversations, snapshot: (id) => world.live.historySnapshot(id), resident: (id) => world.live.loaded(id), cold: (id) => world.live.coldSearch(id),
     store: () => world.store, catalog: { list: () => [], nativePath: () => undefined, ref: () => undefined, open: async () => null, entry: async () => null },
   })
   const reached = await tools.answer(apex.conversation, { action: "search", thread: started.child!, query: "marker-3:", turns: cursor! })
   assert.match(reached, /^1 hit for "marker-3:" in turns/, `the named turns reach it: ${reached.slice(0, 300)}`)
   assert.equal(world.live.loaded(fin), false, "and still nothing is read in")
+  // One its journal can't give cold: searched in its session's own record when that holds it, within the same budget;
+  // else named unsearchable, never "search again"; one only busy says to search again.
+  const RECORD_TURNS = 2_000
+  const recordPath = join(root, "record.jsonl")
+  const record: Thread = {
+    ref: { harness: "codex", nativeId: "record", path: recordPath, title: "Its record", cwd: world.root, bytes: 1 },
+    entries: Array.from({ length: RECORD_TURNS }, (_, index) => ({ type: "user" as const, id: `r-${index + 1}`, text: `Record mark-${index + 1}: ${FILLER.slice(0, 3_000)}` })),
+  }
+  const refusing = (refused: ColdRefused["refused"]) => history.threadHistoryTools({
+    conversations: () => conversations, snapshot: (id) => world.live.historySnapshot(id), resident: () => false, cold: async () => ({ refused }),
+    store: () => world.store, catalog: { list: () => [], nativePath: () => undefined, ref: () => undefined, open: async (path) => (path === recordPath ? record : null), entry: async () => null },
+  })
+  const asRecord = refusing({ kind: "structural", why: "its history is its session's own record", record: { path: recordPath, harness: "codex" } })
+  const newestInRecord = await asRecord.answer(apex.conversation, { action: "search", thread: started.child!, query: `mark-${RECORD_TURNS}:` })
+  assert.match(newestInRecord, /^1 hit for "mark-2000:"/, newestInRecord.slice(0, 200))
+  const oldestInRecord = await asRecord.answer(apex.conversation, { action: "search", thread: started.child!, query: "mark-2:" })
+  const recordCursor = /search again with turns: "(\d+:1-\d+)"/.exec(oldestInRecord)?.[1]
+  assert.ok(oldestInRecord.startsWith('No match for "mark-2:"') && recordCursor, `a long record is held to the budget too: ${oldestInRecord.slice(0, 300)}`)
+  const recordReached = await asRecord.answer(apex.conversation, { action: "search", thread: started.child!, query: "mark-2:", turns: recordCursor! })
+  assert.match(recordReached, /^1 hit for "mark-2:" in turns/, recordReached.slice(0, 200))
+  const unsearchable = await refusing({ kind: "structural", why: "its journal keeps its own copy of its history" }).answer(apex.conversation, { action: "search", thread: started.child!, query: "marker" })
+  assert.ok(unsearchable.includes("can't be searched here") && unsearchable.includes("thread_history read") && !unsearchable.includes("search again in a moment"), unsearchable)
+  const busy = await refusing({ kind: "busy" }).answer(apex.conversation, { action: "search", thread: started.child!, query: "marker" })
+  assert.ok(busy.includes("search again in a moment"), busy)
   console.log(`cold search: ${TURNS} turns, the newest found in ${took.toFixed(0)} ms holding the loop ${held.toFixed(0)} ms at most (idle ${yardstick.toFixed(0)} ms), nothing read in; older turns named (${cursor}) and reached`)
 } finally {
   await world.close()
