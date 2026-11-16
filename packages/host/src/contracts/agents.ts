@@ -7,6 +7,7 @@ import type { LiveSessionMode, PromptAttachment } from "./providers-acp.js"
 import { ActorSchema, SessionIdSchema, ThreadIdSchema, type SessionId, type ThreadId } from "./thread-identity.js"
 import { FinTuningSourceSchema, type FinTuningWords } from "./fin-tuning.js"
 import type { FallbackStep } from "./fin-fallback.js"
+import { CommittedFinSourceSchema, type CommittedFinSource } from "./fin-source.js"
 
 export { CHILDREN_BINDING, WAITING_ON_LIMIT, WaitingOnSchema, type WaitingOn }
 
@@ -486,6 +487,8 @@ export const ThreadParentSchema = z.object({
     .optional(),
   /** Its Apex runs on another device (`RemoteParent`): `parent` and `parentSession` name a Thread and a Session there. */
   remote: RemoteParentSchema.optional(),
+  /** The committed input verified before this Fin's first request; retained for idempotent placement. */
+  source: CommittedFinSourceSchema.optional(),
   /** It runs elsewhere (`Placed`): this row is its Apex's record of it, and `child` names a Thread there. */
   placed: PlacedSchema.optional(),
 })
@@ -1102,6 +1105,8 @@ export interface ApexCaller {
  */
 export interface AgentsCapabilities {
   orchestration: { version: number }
+  /** This host verifies a committed source on an already prepared private checkout before placement. */
+  committedSource?: 1
   /** How many Fins this device runs at once, and how many are at work or on their way now, as `advertise` says them. */
   slots: { used: number; of: number }
   /** The harnesses a Fin can run on here. */
@@ -1114,6 +1119,8 @@ export interface PlaceWorkspace {
   branch?: string
   base?: string
   folder?: string
+  /** Requires an already prepared folder; a source-aware host verifies it before the first brief. */
+  source?: CommittedFinSource
 }
 
 /**
@@ -1152,6 +1159,8 @@ export interface AgentsPlaced {
   runsOn?: string
   note?: string
   deduped?: true
+  /** The source kept with the actual Fin edge, never echoed from an unchecked caller. */
+  sourceSha256?: string
 }
 
 /**
