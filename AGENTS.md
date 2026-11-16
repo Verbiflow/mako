@@ -445,9 +445,13 @@ read a minute after it's first watched, doubling while unchanged up to
 `PULL_WATCH_MAX_MS` (8 min), a minute again once it changes. A reading's
 outcome (`pullOutcome`, `contracts/pull-waits.ts`) matched to `until`
 (current-head checks settled, or one failed while others run, even before
-the report; a head with no checks at all `NO_CHECKS_MS` (15 minutes) after
-the report, said "checks: none after 15m", so a wait on CI that never
-started ends; a review submitted since, by anyone but the author; merged or
+the report, and only once every check its base branch requires has run
+(`required`, read over REST from its rulesets and branch protection by
+`RequiredChecks`, kept an hour, settling as before when unreadable); a head
+with no checks, or none of what's required, `NO_CHECKS_MS` (15 minutes) after
+the later of the report and when the watch first saw that head, said "checks:
+none after 15m" or "required checks missing after 15m: ci", so a wait on CI
+that never started ends; a review submitted since, by anyone but the author; merged or
 closed, which end any wait) is claimed once per Fin, retained dependency and observation
 (`ThreadStore.claimPullWake`, `agent_pull_wakes`) and delivered to the Fin,
 never its Apex, through `deliver` under a named request as Mako's words

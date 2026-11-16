@@ -11,7 +11,7 @@ import { NO_CHECKS_MS, pullOutcome, pullWakeNote, pullWakeWords, type PullReadin
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { PULL_WATCH_EVERY_MS, PULL_WATCH_MAX_MS, PullWatch, type PullWait } from "@mako/host/conversations/pull-watch"
-import { readPull } from "@mako/host/git/index"
+import { readPull, RequiredChecks } from "@mako/host/git/index"
 import { AgentsWorld, type Script, type WorldOptions } from "./lib/agents-world.ts"
 
 /*
@@ -130,7 +130,7 @@ console.log('words: "Mako: PR acme/app#371 checks settled: 2 failed (lint, e2e).
     latestReviews: [{ author: { login: "ada" }, state: "APPROVED", submittedAt: "2026-11-04T10:05:00Z" }],
   })
   const read = await readPull({ repository: "acme/app", number: 371, cwd: "/work" }, async (cwd, args) => (asked.push({ cwd, args }), printed))
-  assert.deepEqual(asked, [{ cwd: "/work", args: ["pr", "view", "371", "--repo", "acme/app", "--json", "state,url,headRefOid,author,statusCheckRollup,latestReviews"] }])
+  assert.deepEqual(asked, [{ cwd: "/work", args: ["pr", "view", "371", "--repo", "acme/app", "--json", "state,url,headRefOid,baseRefName,author,statusCheckRollup,latestReviews"] }])
   assert.deepEqual(read, {
     state: "open", url: URL, head: "a".repeat(40), author: "fin-bot",
     checks: [{ name: "lint", state: "failed", at: Date.parse("2026-11-04T10:00:00Z") }, { name: "deploy", state: "running", at: Date.parse("2026-11-04T09:59:00Z") }],
@@ -162,9 +162,43 @@ console.log('words: "Mako: PR acme/app#371 checks settled: 2 failed (lint, e2e).
   assert.deepEqual(events?.checks.map((each) => each.state), ["failed", "passed"], "a failure is never hidden by another run of its check (push and pull_request runs read alike)")
 
   const bare = await readPull({ number: 12, cwd: "/work" }, async (_cwd, args) => (asked.push({ cwd: _cwd, args }), JSON.stringify({ state: "MERGED", url: URL })))
-  assert.deepEqual(asked.at(-1)?.args, ["pr", "view", "12", "--json", "state,url,headRefOid,author,statusCheckRollup,latestReviews"], "a bare number is read in the Fin's folder")
+  assert.deepEqual(asked.at(-1)?.args, ["pr", "view", "12", "--json", "state,url,headRefOid,baseRefName,author,statusCheckRollup,latestReviews"], "a bare number is read in the Fin's folder")
   assert.equal(bare?.state, "merged")
   assert.equal(await readPull({ number: 1, cwd: "/work" }, async () => { throw new Error("gh: not logged in") }), null, "a reader that can't answer says nothing")
+
+  // The base branch's required checks, read over REST from its rulesets and branch protection, once per repository and branch.
+  const apis: string[] = []
+  let protection: string | Error = JSON.stringify({ contexts: ["pr-gate"], checks: [{ context: "pr-gate" }, { context: "CodeQL" }] })
+  const rest = async (_cwd: string, args: string[]) => {
+    if (args[0] === "api") {
+      apis.push(args[1]!)
+      if (args[1]!.includes("/rules/branches/")) return JSON.stringify([{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "ci" }] } }, { type: "deletion" }])
+      if (protection instanceof Error) throw protection
+      return protection
+    }
+    return JSON.stringify({ state: "OPEN", url: "https://github.com/acme/app/pull/803", baseRefName: "main", headRefOid: "d".repeat(40), statusCheckRollup: [{ __typename: "CheckRun", name: "public-text", status: "COMPLETED", conclusion: "SUCCESS" }] })
+  }
+  let clock = 0
+  const required = new RequiredChecks(rest, () => clock)
+  const read803 = await readPull({ repository: "acme/app", number: 803, cwd: "/work" }, rest, required)
+  assert.deepEqual(read803?.required, ["ci", "pr-gate", "CodeQL"], "what its rulesets and branch protection require, once each")
+  assert.deepEqual(apis, ["repos/acme/app/rules/branches/main", "repos/acme/app/branches/main/protection/required_status_checks"], "read over REST")
+  assert.equal(pullOutcome(read803!, "checks", SINCE, SINCE + 1), undefined, "only Public text ran: nothing has settled while what's required hasn't run")
+  assert.deepEqual(pullOutcome(read803!, "checks", SINCE, SINCE + NO_CHECKS_MS), { kind: "no-checks", minutes: 15, missing: ["ci", "pr-gate", "CodeQL"] }, "and 15 minutes on, the Fin hears what never ran")
+  assert.equal(pullWakeNote("acme/app#803", URL, { kind: "no-checks", minutes: 15, missing: ["ci", "pr-gate", "CodeQL"] }), `Mako: PR acme/app#803 required checks missing after 15m: ci, pr-gate, CodeQL. ${URL}`)
+  assert.deepEqual(pullWakeWords(`Mako: PR acme/app#803 required checks missing after 15m: ci, pr-gate, CodeQL. ${URL}`), { line: "Mako: PR acme/app#803 required checks missing after 15m: ci, pr-gate, CodeQL.", url: URL })
+  await readPull({ repository: "acme/app", number: 803, cwd: "/work" }, rest, required)
+  assert.equal(apis.length, 2, "kept: a second reading asks nothing more")
+  clock += 61 * 60_000
+  protection = new Error("gh: HTTP 404: Branch not protected")
+  assert.deepEqual((await readPull({ repository: "acme/app", number: 803, cwd: "/work" }, rest, required))?.required, ["ci"], "an hour on it's read again; an unprotected branch has its rulesets' alone")
+  const unreadable = new RequiredChecks(async (_cwd, args) => { if (args[0] === "api") throw new Error("gh: HTTP 403"); return rest(_cwd, args) }, () => clock)
+  const plain = await readPull({ repository: "acme/app", number: 803, cwd: "/work" }, rest, unreadable)
+  assert.equal(plain?.required, undefined, "unreadable: nothing required, and it settles as before")
+  assert.deepEqual(pullOutcome({ ...read803!, required: undefined }, "checks", SINCE), { kind: "settled", passed: 1, failed: [] })
+  const ran = { ...read803!, checks: [...read803!.checks, check("ci", "passed"), check("pr-gate", "failed"), check("CodeQL", "passed")] }
+  assert.deepEqual(pullOutcome(ran, "checks", SINCE), { kind: "settled", passed: 3, failed: ["pr-gate"] }, "once each required check ran, it settles")
+  assert.deepEqual(pullOutcome({ ...read803!, checks: [check("lint", "failed")] }, "checks", SINCE), { kind: "failed", check: "lint", running: 0 }, "a failure is news even while what's required never started")
 }
 // A head whose checks never start (#803, 2026-11-15: its CI never ran) ends its Fin's wait once, never holding it for hours.
 {
@@ -180,7 +214,27 @@ console.log('words: "Mako: PR acme/app#371 checks settled: 2 failed (lint, e2e).
   assert.deepEqual(notes, [`Mako: PR acme/app#803 checks: none after 15m; observed head ${head}. ${URL}`], "the Fin hears its head has no checks")
   assert.deepEqual(pullWakeWords(notes[0]!), { line: `Mako: PR acme/app#803 checks: none after 15m; observed head ${head}.`, url: URL }, "its transcript reads the note back")
 }
-console.log("no checks: a head whose checks never start ends its wait once, after 15 minutes")
+// The clock runs from when the watch first saw the head: a push after the report starts it again.
+{
+  const [first, pushed] = ["1".repeat(40), "2".repeat(40)]
+  let now = SINCE
+  let head = first
+  const waits: PullWait[] = [{ key: "pushed", child: "fin", report: "r", pullKey: "acme/app#804", since: SINCE, pull: "acme/app#804", target: { key: "acme/app#804", repository: "acme/app", number: 804, cwd: "/work" }, until: "checks" }]
+  const notes: string[] = []
+  const watch = new PullWatch({ waits: () => waits, read: async () => reading({ head }), now: () => now, fire: async (_wait, _outcome, note) => { notes.push(note) } })
+  await watch.tick()
+  now = SINCE + 10 * 60_000
+  head = pushed
+  await watch.tick()
+  now = SINCE + NO_CHECKS_MS
+  await watch.tick()
+  assert.deepEqual(notes, [], "15 minutes after the report, but 5 after the push: its checks may still start")
+  now = SINCE + 10 * 60_000 + NO_CHECKS_MS
+  await watch.tick()
+  assert.equal(notes.length, 1, "15 minutes after the push was first seen, it says so")
+  assert.ok(notes[0]!.includes(`observed head ${pushed}`))
+}
+console.log("no checks: a head whose checks never start ends its wait once, 15 minutes after the later of its report and the head")
 
 console.log("readPull: one gh pr view by repository and number, parsed as the status tool parses it")
 
