@@ -69,6 +69,8 @@ export const HARNESS_TOOL_SAMPLES: Sample[] = [
   { source: { harness: "codex", name: "exec", input: "text(await tools.exec_command({cmd:'curl -s localhost:3000', yield_time_ms: 1000}))" }, expect: { kind: "code", label: "Script", via: undefined, target: "curl -s localhost:3000" } },
   { source: { harness: "codex", name: "exec", input: "text(await tools.mcp__mako__app_status({}))" }, expect: { kind: "code", label: "Script", server: undefined, target: "Read the app's status" } },
   { source: { harness: "codex", name: "exec", input: "const a = await tools.exec_command({cmd:'ls'})\nconst b = await tools.exec_command({cmd:'pwd'})" }, expect: { kind: "code", label: "Script", target: "ls, pwd" } },
+  // A server whose name isn't an identifier is called by its name in brackets.
+  { source: { harness: "codex", name: "exec", input: 'text(JSON.stringify(await tools["mcp__mako-computer__js"]({ title: "Check the session", code: "await control.status()" })))' }, expect: { kind: "code", label: "Script", target: "Computer" } },
   { source: { harness: "codex", name: "exec", input: "throw new Error('release day unknown')" }, expect: { kind: "code", label: "Script", target: "throw new Error('release day unknown')" } },
   { source: { harness: "codex", name: "apply_patch", input: "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-a\n+b\n*** End Patch" }, expect: { kind: "edit", target: "src/a.ts" } },
   { source: { harness: "codex", name: "js", input: json({ code: "await page.click()", title: "Open settings" }) }, expect: { kind: "computer", target: "Open settings" } },
@@ -80,6 +82,9 @@ export const HARNESS_TOOL_SAMPLES: Sample[] = [
 
   // OpenCode
   { source: { harness: "opencode", name: "execute", input: json({ code: "return await tools.mako.app_status();" }) }, expect: { kind: "mcp", label: "Read the app's status", server: "mako", via: "execute" } },
+  // On a cloud machine OpenCode calls Mako's computer by its name in brackets: the row is the js call, so it draws its steps.
+  { source: { harness: "opencode", name: "execute", input: json({ code: 'const r = await tools["mako-computer"].js({ title: "Check the session, round by round", timeout_ms: 55000, code: "await control.status()" })\nreturn r' }) }, expect: { kind: "computer", tool: "js", server: "mako-computer", via: "execute", target: "Check the session, round by round" } },
+  { source: { harness: "opencode", name: "execute", input: json({ code: "return await tools.mako['app_status']();" }) }, expect: { kind: "mcp", label: "Read the app's status", server: "mako", via: "execute" } },
   { source: { harness: "opencode", name: "execute", input: json({ code: "return search({namespace:\"mako\",query:\"app\"})" }) }, expect: { kind: "tool-search", target: "app" } },
   { source: { harness: "opencode", name: "patch", input: json({ patchText: "*** Begin Patch\n*** Add File: notes.md\n+hi\n*** End Patch" }) }, expect: { kind: "edit", target: "notes.md" } },
   { source: { harness: "opencode", name: "skill", input: json({ id: "unslop" }) }, expect: { kind: "skill", target: "unslop" } },
