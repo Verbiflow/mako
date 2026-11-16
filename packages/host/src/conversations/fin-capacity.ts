@@ -196,6 +196,7 @@ export function cloudFinLimits(status: CloudFinStatus | null | undefined): Cloud
   return {
     atOnce: cloudCapacity({ ...status, spentTodayCents }),
     dailySpendCents: status.dailySpendCents,
-    spentTodayCents,
+    spentTodayCents: status.spentTodayCents,
+    reservedTodayCents: status.reservedTodayCents,
   }
 }

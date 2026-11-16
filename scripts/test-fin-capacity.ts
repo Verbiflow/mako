@@ -314,7 +314,8 @@ console.log("fin capacity: each machine's number from its hardware and its Fins'
 // Account readings include held spend; unknown policy/usage cannot become unlimited local admission.
 {
   const base = { at: 1, day: "2026-11-16", planSandboxes: 5, sandboxCentsPerHour: 20, runningSandboxes: 1, dailySpendCents: 100, spentTodayCents: 20, reservedTodayCents: 40 }
-  assert.equal(cloudFinLimits(CloudFinStatusSchema.parse(base)).spentTodayCents, 60)
+  assert.equal(cloudFinLimits(CloudFinStatusSchema.parse(base)).spentTodayCents, 20)
+  assert.equal(cloudFinLimits(base).reservedTodayCents, 40)
   assert.equal(cloudFinLimits(base).atOnce, 2)
   assert.equal(cloudFinLimits(undefined).atOnce, 0)
   assert.equal(cloudFinLimits({ ...base, unavailable: "usage" }).atOnce, 0)

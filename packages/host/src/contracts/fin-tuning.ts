@@ -157,6 +157,7 @@ export interface CloudFinLimits {
   atOnce?: number
   dailySpendCents?: number
   spentTodayCents?: number
+  reservedTodayCents?: number
 }
 
 /** What a place's Fins at once are held to: a device's own count, or the cloud's plan and spend. */
@@ -174,8 +175,8 @@ export function placeFull(limit: FinPlaceLimit, working: number): string | undef
   if (limit.place === "device") return working >= limit.atOnce ? `${working} of the ${limit.atOnce} Fins this device runs at once are at work` : undefined
   if (limit.unavailable) return "the account's cloud limits could not be confirmed"
   if (limit.atOnce !== undefined && working >= limit.atOnce) return `${working} of the ${limit.atOnce} cloud Fins the person's plan runs at once are at work`
-  if (limit.dailySpendCents !== undefined && (limit.spentTodayCents ?? 0) >= limit.dailySpendCents)
-    return `today's cloud spend reached the person's ceiling of $${(limit.dailySpendCents / 100).toFixed(2)}`
+  if (limit.dailySpendCents !== undefined && (limit.spentTodayCents ?? 0) + (limit.reservedTodayCents ?? 0) >= limit.dailySpendCents)
+    return `today's cloud ${limit.reservedTodayCents ? "spend and reservations" : "spend"} reached the person's ceiling of $${(limit.dailySpendCents / 100).toFixed(2)}`
   return undefined
 }
 
