@@ -8,7 +8,7 @@ import { stagePrompt, removePendingPrompt } from "../src/state/acp-pending"
 import { beginStart } from "../src/state/acp-start"
 import { autoContinuePending, continueTurnPrompt, foldedPromptParts, promptDelivery, recoverableRequests, recoveriesByPlace, makoPrompts, savedMakoPrompt, turnStopLabel, turnStops, turnWords } from "../src/state/prompt-delivery"
 import { foldedSeparator } from "@mako/host/contracts/live-conversations"
-import { fromAgent, YOUR_APEX } from "@mako/host/contracts/children"
+import { FROM_AGENTS, fromAgent, YOUR_APEX } from "@mako/host/contracts/children"
 import { pullWakeNote } from "@mako/host/contracts/pull-waits"
 import { autoContinueCandidate, crashedChildTurn, savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { classifyProviderFailure, providerTextEvidence } from "@mako/host/contracts/provider-failure"
@@ -259,6 +259,13 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
     assert.deepEqual(parts.map((part) => part.kind), ["wait", "agent"])
     assert.ok(parts[0]!.kind === "wait" && parts[0]!.detail === "- #412 checks: passed", "the wait's detail is its own, not the Apex's words")
     assert.equal(foldedPromptParts(apexSays("Alone.")), undefined, "a message that went alone isn't split")
+    // The person's message carrying the rest: their words as theirs, then the Apex's card, then Fins' news as its own.
+    const news = `${FROM_AGENTS}\n1 finished:\n  • "schema" (Codex) done:\n    Done: the schema checked.`
+    const personFirst = `Use staging.${foldedSeparator("agent", at)}${apexSays("Docs too.")}${foldedSeparator("fins", at + 1)}${news}`
+    const inbox = foldedPromptParts(personFirst)!
+    assert.deepEqual(inbox.map((part) => part.kind), ["words", "agent", "agent"])
+    assert.ok(inbox[0]!.kind === "words" && inbox[0]!.text === "Use staging.", "the person's words alone, first")
+    assert.ok(inbox[2]!.kind === "agent" && inbox[2]!.raw.startsWith(FROM_AGENTS) && !inbox[2]!.raw.includes("Docs too."), "Fins' news drawn as its own, apart from the Apex's card")
   }
   assert.deepEqual(turnStops([dropped, continuation], true).get(dropped.id), { reason: "connection-lost", continuable: false, automatic: false })
   assert.equal(autoContinueCandidate([dropped]), dropped, "the newest dropped turn is Mako's to continue")

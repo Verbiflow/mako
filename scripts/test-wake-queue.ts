@@ -329,6 +329,42 @@ try {
     console.log(`${harness}: SIGKILL at every write gap of a digest recovered to each report delivered once`)
   }
 
+  // Fins' news folded into the person's turn (`foldQueued`) that fails before its model answers goes again by itself, as
+  // a digest of its own would: never lost with the turn that carried it.
+  {
+    let failed = false
+    const script: Script = (turn) => {
+      if (turn.text.includes("Hold.")) return turn.world.hold(turn.conversation).then(() => "Held.")
+      if (turn.text.startsWith("Ship it.") && !failed) {
+        failed = true
+        turn.world.endWith(turn.conversation, { fail: "503 Service unavailable" })
+        return ""
+      }
+      return "ok"
+    }
+    const world = new AgentsWorld({ root: join(root, "folded-news"), script })
+    const { conversation } = await world.apex("claude", "full")
+    world.say(conversation, "Hold.")
+    await until("the turn", () => world.live.session(conversation)?.status === "running")
+    world.say(conversation, "Ship it.")
+    const actor = { kind: "agent" as const, session: world.store.journalPlacement(conversation)!.session }
+    const news = randomUUID()
+    world.live.submit(conversation, news, `${FROM_AGENTS}\nDigest folded.`, [], undefined, undefined, undefined, actor, { digest: { notices: [notice()] }, wake: { at: Date.now() + 60_000, after: DIGEST_WAITS } })
+    world.release(conversation)
+    const heard = () => world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.includes("Digest folded."))
+    await until("the news to go again after the turn carrying it failed", () => heard().length === 2, 15_000)
+    assert.ok(heard()[0]!.text.startsWith("Ship it."), "first inside the person's turn")
+    assert.ok(heard()[1]!.text.startsWith(FROM_AGENTS), "then as a digest of its own")
+    const requests = world.live.snapshot(conversation)!.requests
+    const carrier = requests.find((request) => request.text.startsWith("Ship it."))!
+    assert.equal(requests.find((request) => request.id === news)?.joinedInto, carrier.id, "it went inside the person's turn")
+    assert.equal(requests.filter((request) => request.continues?.requestId === news && request.digest).length, 1, "and goes again once")
+    await world.settle(300, 10_000, "ignore")
+    assert.equal(heard().length, 2, "no more than that")
+    await world.close()
+    console.log("wakes: Fins' news a failed turn carried goes again as its own digest, once")
+  }
+
   for (const harness of TESTED_HARNESSES) {
     // The minute's budget is the queue's, as it sends: seven digests waiting for a busy Apex go six now, the seventh a minute after the first.
     {

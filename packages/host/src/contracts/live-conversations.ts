@@ -292,14 +292,14 @@ export const JOINED_MAX = 32
 export const JOINED_CHARS = 64_000
 
 /** Who wrote a part of a folded message, as its separator says it. */
-export type FoldedBy = "mako" | "same" | "agent"
-const FOLDED_SAID = { mako: "Mako's note", same: "the next message from the same sender", agent: "a message" } satisfies Record<FoldedBy, string>
+export type FoldedBy = "mako" | "same" | "agent" | "fins"
+const FOLDED_SAID = { mako: "Mako's note", same: "the next message from the same sender", agent: "a message", fins: "your Fins' news" } satisfies Record<FoldedBy, string>
 
 /** Who a separator's words name. */
 function foldedBy(said: string | undefined): FoldedBy {
-  return said === FOLDED_SAID.mako ? "mako" : said === FOLDED_SAID.same ? "same" : "agent"
+  return said === FOLDED_SAID.mako ? "mako" : said === FOLDED_SAID.same ? "same" : said === FOLDED_SAID.fins ? "fins" : "agent"
 }
-const FOLDED_SEPARATOR = /\n\n\[mako · (Mako's note|the next message from the same sender|a message), sent (\d{4}-\d\d-\d\dT[\d:.]+Z)\]\n/g
+const FOLDED_SEPARATOR = /\n\n\[mako · (Mako's note|the next message from the same sender|a message|your Fins' news), sent (\d{4}-\d\d-\d\dT[\d:.]+Z)\]\n/g
 
 /** The line a folded message's part goes under (`foldQueued`): who wrote it and when. */
 export function foldedSeparator(by: FoldedBy, at: number): string {
