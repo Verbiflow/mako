@@ -1,11 +1,17 @@
+import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
-import { makeWorld, reapWhenGone, sweepLeftFixtures, type WorldScale } from "./lib/host-load-world.ts"
+import { makeWorld, reapWhenGone, sweepLeftFixtures, type World, type WorldScale } from "./lib/host-load-world.ts"
 import { processesLeftIn } from "./lib/scratch-processes.mjs"
+import { Git } from "@mako/git"
+import { ThreadStore } from "@mako/host/threads/store"
+import { ThreadEnvironments } from "@mako/host/workspaces/thread-environment"
+import { ThreadProcesses } from "@mako/host/workspaces/thread-processes"
+import { readRecipe } from "@mako/host/workspaces/thread-recipe"
 
 /**
  * bench:host-load's fixtures (a running app's `sh` and its `sleep`s, the busy Mac's) end with the bench however it
@@ -126,12 +132,40 @@ const until = async (what: () => boolean, ms: number) => {
 
 {
   const root = mkdtempSync(join(tmpdir(), "mako-host-load-release-"))
+  let world: World | undefined
   try {
-    const world = await makeWorld(root, TINY)
+    world = await makeWorld(root, TINY)
+    const store = new ThreadStore(join(world.dataRoot, "threads.sqlite"))
+    const git = new Git()
+    try {
+      const environments = new ThreadEnvironments({ store, git, dataRoot: join(world.dataRoot, "thread-data") })
+      const processes = new ThreadProcesses({ root: join(world.dataRoot, "thread-environments"), listening: async () => false })
+      for (const checkout of world.checkouts) {
+        const found = await environments.forFolder(checkout.path, false)
+        assert.ok(store.environment(found.app), "the fixture registers the app owner the real desk resolver chooses")
+        assert.ok(found.environment, "the world's visible app has registered values; a look must not silently read an empty app")
+        assert.equal((await readRecipe(git, found.checkout, found.environment)).kind, "ready", "the desk can read the fixture's recipe")
+        assert.equal((await processes.status(found.app)).find(run => run.name === "web")?.state.kind, "running", "the visible app's process record belongs to that owner too")
+        const first = await processes.readLog(found.app, "process-web")
+        assert.ok(first.text.length > 0, "the actual log reader finds output under that same owner")
+        assert.ok(first.cursor.offset > 0, "the fixture exercises a non-empty output cursor")
+        const fixtureOutput: World["appOutputs"][number] | undefined = world.appOutputs.find((entry) => entry.cwd === checkout.path)
+        assert.equal(fixtureOutput?.app, found.app, "the controlled output writer uses the resolved owner")
+        assert.ok(fixtureOutput)
+        appendFileSync(fixtureOutput.file, "a later fixture line\n")
+        assert.equal((await processes.readLog(found.app, "process-web", first.cursor)).text, "a later fixture line\n", "a new write reaches the real cursor reader without replaying old output")
+      }
+    } finally {
+      store.close()
+      await git.close()
+    }
     const released = world.release()
     assert.equal(world.release(), released, "reentry joins the same release, without repeating signals")
     await released
     assert.deepEqual(await processesLeftIn(root), [], "the unchanged guard proves the released world unused")
-  } finally { rmSync(root, { recursive: true, force: true }) }
+  } finally {
+    await world?.release()
+    rmSync(root, { recursive: true, force: true })
+  }
 }
 console.log("host-load world: its fixtures end with the bench, killed, exited or signalled; explicit release reaps leaders before guarded removal; the reaper and sweep end fixtures alone")
