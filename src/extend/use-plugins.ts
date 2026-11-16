@@ -2,15 +2,6 @@ import { useEffect } from "react"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { toast } from "sonner"
 import { plugins } from "@/extend/plugin-registry"
-import { ACTION_TOAST_MS } from "@/lib/toast-duration"
-
-/** How long a plugin runtime that didn't load waits before it's asked again, once. */
-export const PLUGINS_RETRY_MS = 2_000
-
-/** Settings › UI extensions, where each plugin's error is on its row. */
-function openPlugins() {
-  window.dispatchEvent(new CustomEvent("mako:settings", { detail: "plugins" }))
-}
 
 /**
  * Keeps the loaded plugins in step with the plugins directory.
@@ -52,24 +43,15 @@ export function usePlugins() {
         const loaded = await loadPlugin(file.id, file.source, file.error)
         // A broken save should say so the moment it happens — the person
         // (or agent) who wrote it is looking at the wrong window to notice.
-        // Its error is on its row in Settings › UI extensions, where it can be read whole; the toast says where.
         if (loaded.error) {
-          console.warn(`A plugin didn't load ${JSON.stringify({ plugin: file.id, error: loaded.error })}`)
-          toast.error(`Plugin "${file.id}" didn't load`, { duration: ACTION_TOAST_MS, action: { label: "Show the error", onClick: openPlugins } })
+          toast.error(`Plugin "${file.id}" failed to load`, { description: loaded.error })
         }
       }
     }
 
-    // A runtime that can't load leaves every plugin unloaded. A moment's failure is asked again once, quietly; one that
-    // stays is a window older than the app (an update replaced the chunk it asks for), which a reload fixes.
-    const syncing = () => sync().catch(async (first: Error) => {
-      console.warn(`Plugins didn't load; asked again ${JSON.stringify({ error: first.message })}`)
-      await new Promise((resolve) => setTimeout(resolve, PLUGINS_RETRY_MS))
-      if (!live) return
-      await sync().catch((error: Error) => {
-        console.warn(`Plugins didn't load ${JSON.stringify({ error: error.message })}`)
-        toast.error("UI extensions didn't load", { duration: ACTION_TOAST_MS, action: { label: "Reload", onClick: () => window.location.reload() } })
-      })
+    // A runtime that can't load (a chunk gone after an update) leaves every plugin unloaded: say so, as a plugin's own failure is said.
+    const syncing = () => sync().catch((error) => {
+      toast.error("Plugins couldn't load", { description: error instanceof Error ? error.message : String(error) })
     })
     void syncing()
     const unsubscribe = bridge.onEvent((event) => {
