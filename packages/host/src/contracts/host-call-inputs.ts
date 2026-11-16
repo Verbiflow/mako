@@ -3026,14 +3026,6 @@ const inputs = {
         scope: z.union([z.literal("workspace"), z.literal("user")]),
       }),
     ]),
-  "mako:snapshot-budget": () => z.tuple([]),
-  "mako:snapshot-budget-set": () =>
-    z.tuple([
-      z.object({
-        mode: z.union([z.literal("preview"), z.literal("evict")]),
-        maxBytes: z.number(),
-      }),
-    ]),
   "mako:stage-file": () => z.tuple([z.string(), z.string()]),
   "mako:stage-file-path": () => z.tuple([z.string()]),
   "mako:storage": () => z.tuple([z.boolean()]),
@@ -3861,8 +3853,6 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:skills-resolve", "tools"],
   ["mako:skills-sync-apply", "tools"],
   ["mako:skills-sync-preview", "tools"],
-  ["mako:snapshot-budget", "conversations"],
-  ["mako:snapshot-budget-set", "conversations"],
   ["mako:stage-file", "workspaces"],
   ["mako:stage-file-path", "workspaces"],
   ["mako:storage", "usage"],

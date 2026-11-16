@@ -119,8 +119,7 @@ try {
     maxStorageBytes: protectedBytes,
   })
   try {
-    const overBudget = await limited.capture(cwd)
-    assert.ok(db.prepare("SELECT id FROM snapshots WHERE id=?").get(overBudget.id), "a new rewind point survives when protected storage exceeds the target")
+    await assert.rejects(limited.capture(cwd), /Checkpoint storage is full/)
     assert.ok(db.prepare("SELECT id FROM snapshots WHERE id=?").get(latest.id))
     assert.ok(
       db.prepare("SELECT id FROM snapshots WHERE id=?").get(preview.current.id)

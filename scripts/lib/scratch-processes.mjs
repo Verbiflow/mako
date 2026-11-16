@@ -27,7 +27,6 @@ export function processesUsingSync(folder, includeSelf = false) {
       try {
         if (statSync(`/proc/${pid}`).uid !== process.getuid()) continue
         const args = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").join(" ").trim()
-        if (args.includes(folder)) { found.set(pid, args); continue }
         let home
         try {
           home = readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").find((entry) => entry.startsWith("HOME="))?.slice(5)
@@ -37,7 +36,7 @@ export function processesUsingSync(folder, includeSelf = false) {
           throw error
         }
         const files = [readlinkSync(`/proc/${pid}/cwd`), ...readdirSync(`/proc/${pid}/fd`).map((fd) => { try { return readlinkSync(`/proc/${pid}/fd/${fd}`) } catch (error) { if (error?.code === "ENOENT") return ""; throw error } })]
-        if ((home && inside(home)) || files.some(inside)) found.set(pid, args)
+        if (args.includes(folder) || (home && inside(home)) || files.some(inside)) found.set(pid, args)
       } catch (error) {
         if (error?.code !== "ENOENT" && error?.code !== "ESRCH") throw new Error("Scratch process inspection was incomplete.", { cause: error })
       }

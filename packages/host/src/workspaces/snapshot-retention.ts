@@ -22,7 +22,6 @@ export const SnapshotRecordSchema = WorkspaceSnapshotSchema.extend({
     z.string().regex(/^[a-f0-9]{64}$/),
   ]),
   retainUntil: z.number().finite().optional(),
-  retiring: z.boolean().optional(),
 })
 export type SnapshotRecord = z.infer<typeof SnapshotRecordSchema>
 export const SnapshotRetentionPolicySchema = z.object({
@@ -107,7 +106,7 @@ export async function pruneSnapshotRecords({
 }): Promise<number> {
   const now = Date.now()
   const protectedRecord = (record: SnapshotRecord) =>
-    record.retiring || protectedIds.has(record.id) || (record.retainUntil ?? 0) > now
+    protectedIds.has(record.id) || (record.retainUntil ?? 0) > now
   let budget = policy.maxStorageBytes - additionalBytes
   for (const record of records(db, scope)) {
     if (protectedRecord(record)) budget -= await recordBytes(root, record)
