@@ -61,6 +61,10 @@ async function hiddenWindow() {
     webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
   })
   window.setContentSize(size.width, size.height)
+  // A CI Mac's VM never composites a window that was never shown: CDP's screenshot timed out and Electron's capturePage
+  // failed with UnknownVizError. This window stands in for the desk's agent view; what's checked is the desk page's
+  // relay and the browser over it, so there it's shown without taking focus.
+  if (process.env.CI) window.showInactive()
   await window.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html))
   const [width, height] = window.getContentSize()
   const scrollbar = await window.webContents.executeJavaScript("innerWidth - document.documentElement.clientWidth")
@@ -211,8 +215,8 @@ main().then(
     clearTimeout(watchdog)
     // Whether Electron's own capture, which counts the hidden page as captured while it runs, gets pixels where CDP's didn't.
     for (const window of BrowserWindow.getAllWindows()) {
-      const image = await Promise.race([window.webContents.capturePage(), new Promise((resolve) => setTimeout(() => resolve(undefined), 5_000))])
-      console.error(`capturePage of ${window.webContents.getURL().slice(0, 40)}: ${image ? `${image.getSize().width}x${image.getSize().height}, empty ${image.isEmpty()}` : "no answer in 5 s"}`)
+      const image = await Promise.race([window.webContents.capturePage(), new Promise((resolve) => setTimeout(() => resolve(undefined), 5_000))]).catch((failure) => new Error(String(failure?.message ?? failure)))
+      console.error(`capturePage of ${window.webContents.getURL().slice(0, 40)}: ${image === undefined ? "no answer in 5 s" : image instanceof Error ? image.message : `${image.getSize().width}x${image.getSize().height}, empty ${image.isEmpty()}`}`)
     }
     app.exit(1)
   }
