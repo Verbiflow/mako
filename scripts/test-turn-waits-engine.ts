@@ -29,11 +29,18 @@ try {
   const fins = new Map<string, string>()
   let release: (() => void) | undefined
   const held = new Promise<void>((resolve) => { release = resolve })
+  let releaseSlow: (() => void) | undefined
+  const slowHeld = new Promise<void>((resolve) => { releaseSlow = resolve })
+  let readGate: Promise<void> | undefined
   const script: Script = async (turn) => {
     const name = fins.get(turn.conversation)
     if (!name) {
       apexTexts.push(turn.text)
       return "ok"
+    }
+    if (name === "slow" && turn.text.includes("You're fin:")) {
+      await slowHeld
+      return "Stopped before it finished."
     }
     if (name === "docs" && turn.text.includes("You're fin:")) {
       await held
@@ -41,7 +48,13 @@ try {
     }
     return "ok"
   }
-  const world = new AgentsWorld({ root, script, now, readPull: async (target) => (target.number === 371 ? pull : null) })
+  const world = new AgentsWorld({ root, script, now, readPull: async (target) => {
+    if (target.number === 372) {
+      await readGate
+      return { state: "open", url: "https://git.example.com/acme/app/pull/372", author: "fin-bot", checks: [], reviews: [] }
+    }
+    return target.number === 371 ? pull : null
+  } })
   const apex = await world.apex("claude", "full")
   const started = await world.agents.start(apex.caller, { brief: { objective: "Write the docs page" }, harness: "codex", name: "docs", clientKey: "docs", cwd: world.root })
   assert.ok(!("refused" in started) && started.conversation)
@@ -106,6 +119,34 @@ try {
   assert.ok(ci, JSON.stringify(apexTexts.slice(-2)))
   assert.equal(ci, `Mako: the wait "Waiting for CI on #371" is over.\n- acme/app#371 checks: checks settled: 1 passed. ${URL}`)
   assert.equal(apexTexts.filter((text) => text === ci).length, 1, "once")
+
+  // The host wakes from a sleep the timer slept through: the wait fires once, saying it's late.
+  armed(await world.agents.turnWait(apex.caller, { description: "Checking in after lunch", seconds: 60, clientKey: "lunch" }))
+  offset += 2 * 3600_000
+  world.agents.woke()
+  world.agents.woke()
+  await world.settle(300)
+  const late = apexTexts.filter((text) => text.startsWith("Mako: the time you waited for has come: \"Checking in after lunch\""))
+  assert.equal(late.length, 1, "once")
+  assert.match(late[0]!, /this host was asleep or off until .*, so this comes late\.$/)
+
+  // A Fin that ends while the pull request read is pending: its check comes after the read, so the wait is refused.
+  const slow = await world.agents.start(apex.caller, { brief: { objective: "Something slow" }, harness: "codex", name: "slow", clientKey: "slow", cwd: world.root })
+  assert.ok(!("refused" in slow) && slow.conversation)
+  fins.set(slow.conversation!, "slow")
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  let openRead: (() => void) | undefined
+  readGate = new Promise<void>((resolve) => { openRead = resolve })
+  const racing = world.agents.turnWait(apex.caller, { description: "Waiting for #372 and slow", on: [{ fin: "slow" }, { pull: "acme/app#372", until: "checks" }], returnWhen: "all", clientKey: "race" })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  const stopped = await world.agents.stop(apex.caller, { child: "slow" })
+  assert.ok(!("refused" in stopped))
+  openRead!()
+  const raced = await racing
+  assert.ok("refused" in raced && raced.refused === "never", `a Fin that ended during the read is refused: ${JSON.stringify(raced)}`)
+  assert.equal(world.store.armedTurnWaitOf(apex.conversation), undefined, "nothing armed that could never end")
+  releaseSlow!()
+  readGate = undefined
 
   // Stop and archive end the wait without waking anyone.
   armed(await world.agents.turnWait(apex.caller, { description: "Waiting an hour", seconds: 3600, clientKey: "stop" }))

@@ -193,8 +193,6 @@ function inputsOf(request: string, actions: readonly LiveAction[] | undefined): 
 }
 
 const TURN_WAIT_ACTOR: Actor = { kind: "service", name: "turn-wait" }
-/** How often armed waits are looked at besides their timer, while any is armed: a clock that jumped, a sleep the timer slept through. */
-const TURN_WAIT_CHECK_MS = 60_000
 /** A pull request's key in PullWatch for a turn wait's item, so its outcome goes to the wait (`pullOutcome`). */
 const TURN_WAIT_PULL = "turn-wait:"
 
@@ -706,7 +704,6 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly notFins = new Set<string>()
   /** Turns' waits (`wait`): armed in the store, met by Fins' results and ends and pull requests' outcomes, fired once. */
   readonly turnWaits: TurnWaits
-  private readonly stopTurnWaitCheck: () => void
   /** This Mac's load as a start last read it, which every answer carries while it's busy. */
   private mac: MacLoad | undefined
   /** Where a Fin goes when its harness's account runs out; absent without the host's accounts. */
@@ -818,7 +815,6 @@ export class Agents implements AgentOperations, ConversationChildren {
       now: () => this.now(),
     })
     this.stopPullWatch = deps.jobs.every("read the pull requests Fins wait on", PULL_WATCH_EVERY_MS, () => this.pulls.tick(), { needs: [watching] })
-    const waiting = deps.jobs.demand("turn waits armed")
     this.turnWaits = new TurnWaits({
       store: () => this.store(),
       now: () => this.now(),
@@ -828,12 +824,8 @@ export class Agents implements AgentOperations, ConversationChildren {
         timer.unref()
         return () => clearTimeout(timer)
       },
-      changed: () => {
-        waiting.set((this.store()?.armedTurnWaits().length ?? 0) > 0)
-        this.pulls.refresh()
-      },
+      changed: () => this.pulls.refresh(),
     })
-    this.stopTurnWaitCheck = deps.jobs.every("look at the turn waits armed", TURN_WAIT_CHECK_MS, () => this.turnWaits.check(), { needs: [waiting] })
     this.places = deps.away && new AgentPlaces({
       link: deps.away,
       jobs: deps.jobs,
@@ -2982,29 +2974,38 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (armed) this.turnWaits.cancel(armed.id, caller.kind === "person" ? "person" : "agent")
       return { outcome: "cancelled", ...(armed && { wait: armed.id }) }
     }
+    // Pull requests are read first, the only await; the Fins are checked after, with nothing between their check and
+    // the arm, so a Fin that ends while a read is pending can't leave a wait that never ends.
     const items: TurnWaitItem[] = []
     const met: Record<string, { at: number; words: string }> = {}
-    for (const on of input.on ?? []) {
-      if ("fin" in on) {
-        if (!apex) return { refused: "invalid", why: `Wait on a ${FIN_WORD} from its ${APEX_WORD}'s own Thread.` }
-        const edge = this.resolve(apex, on.fin, false)
-        if (!edge) return { refused: "unknown-fin", why: `${on.fin} isn't a ${FIN_WORD} of this Thread: agents_list names them.` }
-        const state = this.stateOf(edge)
-        if (edge.closedAt !== undefined || state.kind === "ended")
-          return { refused: "never", why: `${edge.name} isn't at work, so it has no result coming: send it work with agents_send, or read its report with agents_read.` }
-        items.push({ kind: "fin", fin: edge.child, name: edge.name })
-        continue
-      }
+    const pulls = new Map<number, Extract<TurnWaitItem, { kind: "pull" }>>()
+    const asked = input.on ?? []
+    for (const [index, on] of asked.entries()) {
+      if ("fin" in on) continue
       const ref = pullRef(on.pull)
       if (!ref) return { refused: "invalid", why: `${on.pull} isn't a pull request: name it as owner/name#412, #412 or its URL.` }
-      const item: TurnWaitItem = { kind: "pull", pull: pullKey(ref), ...(on.until && { until: on.until }) }
+      const item: Extract<TurnWaitItem, { kind: "pull" }> = { kind: "pull", pull: pullKey(ref), ...(on.until && { until: on.until }) }
       const reading = await this.readPullOnce(item, conversation)
       if (reading?.state === "closed") return { refused: "never", why: `${item.pull} was closed without merging, so nothing more will happen on it.` }
       if (reading?.state === "merged") {
         if (item.until !== "merge") return { refused: "never", why: `${item.pull} is merged already: its checks and reviews won't change now.` }
         met[turnWaitItemKey(item)] = { at: this.now(), words: "merged" }
       }
-      items.push(item)
+      pulls.set(index, item)
+    }
+    for (const [index, on] of asked.entries()) {
+      const pull = pulls.get(index)
+      if (pull) {
+        items.push(pull)
+        continue
+      }
+      if (!("fin" in on)) continue
+      if (!apex) return { refused: "invalid", why: `Wait on a ${FIN_WORD} from its ${APEX_WORD}'s own Thread.` }
+      const edge = this.resolve(apex, on.fin, false)
+      if (!edge) return { refused: "unknown-fin", why: `${on.fin} isn't a ${FIN_WORD} of this Thread: agents_list names them.` }
+      if (edge.closedAt !== undefined || this.stateOf(edge).kind === "ended")
+        return { refused: "never", why: `${edge.name} isn't at work, so it has no result coming: send it work with agents_send, or read its report with agents_read.` }
+      items.push({ kind: "fin", fin: edge.child, name: edge.name })
     }
     let at: number | undefined
     if (input.at !== undefined) {
@@ -3071,6 +3072,14 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (live.held(wait.conversation)?.requests.some((request) => request.id === fired.request)) return "taken"
     live.submit(wait.conversation, fired.request, fired.text, [], undefined, undefined, undefined, TURN_WAIT_ACTOR)
     return "taken"
+  }
+
+  /**
+   * The host came back (`watchWake`: a resume, an unlock, or the clock jumping over a sleep): a wait whose time came
+   * meanwhile fires now, once, saying it's late; the timer it armed may have slept through it.
+   */
+  woke(): void {
+    this.turnWaits.check()
   }
 
   /** The person's Stop, or their archive, of a conversation's Thread ends the wait its turn armed. */
@@ -3146,7 +3155,6 @@ export class Agents implements AgentOperations, ConversationChildren {
     this.cutChecks.clear()
     this.stopRoomWatch()
     this.stopPullWatch()
-    this.stopTurnWaitCheck()
     this.turnWaits.stop()
     for (const cancel of this.unanswered.values()) cancel()
     this.unanswered.clear()
