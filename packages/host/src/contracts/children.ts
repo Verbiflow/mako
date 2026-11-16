@@ -676,3 +676,13 @@ export function childWord(state: ChildState): string {
   }
 }
 export const DIGEST_RESTART_HINT = "Fin reports may have arrived around the restart; agents_list shows each Fin's latest."
+
+/**
+ * A change to an Apex's crew that happened outside its turn, said as a centred line in its transcript: a Fin moved to
+ * another account or harness ("Docs pass moved to Claude (work)", why under it), or stopped by the person ("Token sweep
+ * stopped by you"). A Fin it started or stopped itself is already its own tool row.
+ */
+export function membershipLine(change: { kind: "moved"; fin: string; to: string; why: string } | { kind: "stopped"; fin: string }): { label: string; detail: string } {
+  if (change.kind === "moved") return { label: `${change.fin} ${change.to.charAt(0).toLowerCase()}${change.to.slice(1)}`, detail: change.why }
+  return { label: `${change.fin} stopped by you`, detail: "A message to it resumes it." }
+}
