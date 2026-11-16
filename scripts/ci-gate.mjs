@@ -269,7 +269,6 @@ export const STEPS = [
   [1, "tsx scripts/test-context-wire.ts"],
   [3, "tsx scripts/test-continuation-plan.ts"],
   [2, "tsx scripts/test-control-optional.ts"],
-  [18, "tsx scripts/test-control-recording-idle.ts"],
   [10, "tsx scripts/test-control-recording-stream.ts"],
   [3, "tsx scripts/test-control-recording.ts"],
   [4, "tsx scripts/test-conversation-transfers.ts"],
@@ -408,6 +407,8 @@ export const MAC_STEPS = [
   [25, "tsx scripts/test-native-driver-death.ts"],
   [1, "node scripts/test-preload.mjs"],
   [2, "tsx scripts/test-providers.ts"],
+  // Native idle trimming shifts packets with setts as the FFmpeg Mako ships (8.0.1) does; Ubuntu's 6.1 drops the held last frame, and native recording is the Mac's.
+  [18, "tsx scripts/test-control-recording-idle.ts"],
 ]
 
 /**

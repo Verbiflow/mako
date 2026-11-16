@@ -214,7 +214,7 @@ try {
   let lastSeen = "nothing read"
   const view = await until(() => `the history to show the deep writes; the last read had ${lastSeen}`, async () => {
     const found = await probeApp(await inputFor())
-    lastSeen = JSON.stringify({ changedBy: found.changedBy, folders: found.changed.entries.map((entry) => [entry.folder, entry.paths.slice(0, 6)]) }).slice(0, 1_500)
+    lastSeen = JSON.stringify({ changedBy: found.changedBy, folders: found.changed.entries.map((entry) => [entry.folder, entry.paths.slice(0, 6)]), notes: found.notes.filter((note) => note.includes("/private/tmp")) }).slice(0, 2_500)
     const entry = folder(found, join(support, "probe-app"))
     return entry?.paths.includes(join("deep", "a", "b", "state.json")) && folder(found, cache)?.paths.includes("blob") &&
       folder(found, join(support, "other-app"))?.paths.includes(join("x", "y", "z.txt")) &&

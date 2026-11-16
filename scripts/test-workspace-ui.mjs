@@ -86,8 +86,9 @@ async function checkWindow() {
       await new Promise((resolve) => setTimeout(resolve, 30))
     }
   }
-  const click = async (selector) => {
-    const point = await evaluate(`(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) throw new Error('Missing click target'); const r = node.getBoundingClientRect(); return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)} })()`)
+  // The press lands on whatever is drawn at the point; `exposed` says what covers the target rather than press it.
+  const click = async (selector, { exposed = false } = {}) => {
+    const point = await evaluate(`(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) throw new Error('Missing click target'); const r = node.getBoundingClientRect(); const x = Math.round(r.x + r.width / 2), y = Math.round(r.y + r.height / 2); const top = document.elementFromPoint(x, y); if (${exposed} && top && !node.contains(top)) throw new Error(${JSON.stringify(selector)} + ' covered by ' + top.tagName + ' ' + [...top.attributes].map(a => a.name + '=' + a.value.slice(0, 40)).join(' ').slice(0, 200)); return {x, y} })()`)
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point })
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point })
   }
@@ -175,11 +176,14 @@ async function checkWindow() {
   await until(`!document.querySelector('[aria-label="Remove Screenshot.png"]')`)
   assert.equal(await evaluate(`document.querySelector('.composer-input').value`), "Review ")
   await click('nav[aria-label="Previous prompts"] button')
+  // The navigator's list stays open while the pointer rests on it or its button holds focus, and at this window's size it covers the prompt's actions.
+  await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", x: 4, y: 4 })
+  await evaluate(`document.activeElement?.blur()`)
   await evaluate(`(async () => { const {getMako} = await import('/src/lib/bridge.ts'); getMako().copy = async text => {window.copiedText = text}; document.querySelector('[aria-label="Copy question"]').scrollIntoView({block:'center'}); })()`)
-  await click('[aria-label="Copy question"]')
+  await click('[aria-label="Copy question"]', { exposed: true })
   await until(`window.copiedText === 'Keep the reply in the same Claude conversation.'`)
   await evaluate(`document.querySelector('[aria-label="Copy answer"]').scrollIntoView({block:'center'})`)
-  await click('[aria-label="Copy answer"]')
+  await click('[aria-label="Copy answer"]', { exposed: true })
   await until(`window.copiedText?.startsWith('The provider session ID now owns continuation.')`)
   await evaluate(`window.dispatchEvent(new CustomEvent('mako:compose', {detail:{text:Array.from({length:100}, (_, i) => 'Draft line ' + i).join('\\n')}}))`)
   await until(`document.querySelector('.composer-input').value.split('\\n').length === 100`)
@@ -387,7 +391,7 @@ async function checkWindow() {
   const gap = await evaluate(`document.querySelector('.prompt-prose > p').getBoundingClientRect().top - document.querySelector('.prompt-prose > ul').getBoundingClientRect().bottom`)
   assert.ok(gap >= 0 && gap <= 24, `The paragraph gap must be compact, received ${gap}px`)
   await evaluate(`import('/src/lib/bridge.ts').then(({getMako}) => { getMako().copy = async text => { window.copiedText = text } })`)
-  await click('[aria-label="Copy question"]')
+  await click('[aria-label="Copy question"]', { exposed: true })
   await until(`window.copiedText === document.querySelector('#prompt-format').dataset.source`)
   await capture("prompt-format.png")
   console.log("PASS: exact reported Markdown renders a bold bullet with a compact paragraph gap; copying preserves the original text")

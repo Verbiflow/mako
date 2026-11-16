@@ -206,9 +206,14 @@ main().then(
     clearTimeout(watchdog)
     app.exit(0)
   },
-  (error) => {
+  async (error) => {
     console.error("Desk browser check failed:", error?.stack ?? error)
     clearTimeout(watchdog)
+    // Whether Electron's own capture, which counts the hidden page as captured while it runs, gets pixels where CDP's didn't.
+    for (const window of BrowserWindow.getAllWindows()) {
+      const image = await Promise.race([window.webContents.capturePage(), new Promise((resolve) => setTimeout(() => resolve(undefined), 5_000))])
+      console.error(`capturePage of ${window.webContents.getURL().slice(0, 40)}: ${image ? `${image.getSize().width}x${image.getSize().height}, empty ${image.isEmpty()}` : "no answer in 5 s"}`)
+    }
     app.exit(1)
   }
 )
