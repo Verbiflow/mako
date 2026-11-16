@@ -1,4 +1,5 @@
 import { fixtureHarnesses } from "./harness-fixtures"
+import type { ToolStep } from "@mako/host/contracts/tool-steps"
 import { FileIndexCore, type FileFoldersOptions, type FileGrepResults } from "@mako/host/contracts/file-index"
 import { mockAppshots } from "./mock-appshots"
 import { mockAuthoring } from "./mock-authoring"
@@ -43,7 +44,7 @@ import { continueTurnPrompt } from "@mako/host/contracts/turn-continuation"
 import { z } from "zod"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
-import { mcpServerFailedEvent } from "@mako/sessions/events"
+import { mcpServerFailedEvent, turnFailedEvent } from "@mako/sessions/events"
 import type { RecordRef } from "@mako/sessions/entries"
 import { restoreGate } from "@mako/sessions/record-writers"
 import type { RestorePlan } from "@mako/host/contracts/restore-plan"
@@ -858,6 +859,36 @@ export function installMockBridge() {
     ], true), 24_000)
   }
 
+  /**
+   * A `mako-computer` js call that clicks through a page for a while, its steps sent as the host sends them
+   * (`tool-steps`): the whole state at most every 250 ms, and `null` once it answers.
+   */
+  const playBrowserTurn = (id: string) => {
+    const code = 'const tab = await control.openTab({url:"http://localhost:5173/settings"})\nfor (const field of ["name","email","plan"]) await tab.locator({label:field}).fill("x")\nwhile (!(await tab.observe()).includes("Saved")) await control.wait(400)\nreturn await tab.screenshot()'
+    pushLive(id, [{ kind: "text", id: "browse-say", text: "I'll fill the settings form and wait for it to save." }, { kind: "tool", id: "browse", name: "mcp__mako-computer__js", title: "mako-computer: js", toolKind: "other", status: "in_progress", input: JSON.stringify({ code, title: "Fill the settings form" }) }])
+    const plan: ToolStep[][] = [
+      [{ call: "openTab", phase: "running" }],
+      [{ call: "openTab", phase: "done" }, { call: "fill", phase: "running" }],
+      [{ call: "openTab", phase: "done" }, { call: "fill", phase: "done", times: 3 }, { call: "observe", phase: "running" }],
+      [{ call: "openTab", phase: "done" }, { call: "fill", phase: "done", times: 3 }, { call: "observe", phase: "done" }, { call: "wait", phase: "running" }],
+    ]
+    const total = (steps: ToolStep[]) => steps.reduce((sum, step) => sum + (step.times ?? 1), 0)
+    plan.forEach((steps, index) => setTimeout(() => emit({ type: "tool-steps", conversationId: id, steps: { steps, total: total(steps) } }), 300 + index * 700))
+    // Then it polls: observe and wait in turn, the same two steps over and over, until the page says Saved.
+    for (let round = 1; round <= 6; round++) {
+      const steps: ToolStep[] = [{ call: "openTab", phase: "done" }, { call: "fill", phase: "done", times: 3 }, { call: "observe", phase: "done" }, { call: "wait", phase: "done" }]
+      for (let i = 0; i < round; i++) steps.push({ call: "observe", phase: "done" }, { call: "wait", phase: i === round - 1 ? "running" : "done" })
+      setTimeout(() => emit({ type: "tool-steps", conversationId: id, steps: { steps: steps.slice(-12), total: total(steps) } }), 300 + (plan.length + round) * 700)
+    }
+    setTimeout(() => {
+      emit({ type: "tool-steps", conversationId: id, steps: null })
+      pushLive(id, [
+        { kind: "tool-update", id: "browse", status: "completed", output: "Saved. Screenshot: /tmp/settings.png" },
+        { kind: "text", id: "browse-done", text: "The settings form saves." },
+      ], true)
+    }, 300 + (plan.length + 8) * 700)
+  }
+
   const startLiveReview = (id: string, target: ReviewTarget): LiveSnapshot => {
     const snapshot = liveSnapshots.get(id)
     if (!snapshot) throw new Error("This conversation is no longer available")
@@ -978,6 +1009,8 @@ export function installMockBridge() {
     takeTurnForThreadApp: async () => ({ problems: ["The mock desk runs no apps."] }),
     threadAppOutput: async () => ({ text: "", cursor: { file: "", offset: 0 }, reset: false }),
     threadAppMarks: async () => [],
+    followThreadApps: async () => ({ kind: "unavailable" }),
+    viewHints: async () => null,
     probeThreadApp: async () => {
       throw new Error("The mock desk runs no apps; ?app=<scenario> shows one.")
     },
@@ -2226,8 +2259,9 @@ export function installMockBridge() {
       if (cloud) {
         const from = mockHarnessesHere.get(provider)
         const reading = { provider, binary: `/Users/you/.nvm/versions/node/v24.19.0/bin/${provider}`, channel: "npm" as const, checkedAt: Date.now() }
+        // npm refused to write its global folder (EACCES): the host words it (`updateFailureWords`) and logs npm's own.
         if (mockHarnessScene === "failing")
-          return { ...reading, installed: from, result: { at: Date.now() - 1_200, outcome: "failed" as const, from, message: "npm error code EACCES: permission denied, mkdir '/usr/local/lib/node_modules/@openai'" } }
+          return { ...reading, installed: from, result: { at: Date.now() - 1_200, outcome: "failed" as const, from, message: "It needs permission to change the folder it's installed in." } }
         // The updater finished, but the binary Mako runs didn't move: the host names where the update went and what Mako runs.
         if (mockHarnessScene === "elsewhere")
           return { ...reading, installed: from, result: { at: Date.now() - 1_200, outcome: "failed" as const, from, message: `npm installed Codex ${cloud} into /opt/homebrew, but Mako runs ${reading.binary}, still ${from}.` } }
@@ -2893,6 +2927,8 @@ export function installMockBridge() {
         const updates: LiveUpdate[] = failing.unsent ? [] : [
           { kind: "user", requestId, text },
           ...failing.started || failing.kind === "host-quit" ? [{ kind: "text" as const, text: "Reading `src/net/retry.ts` and the two clients that call it." }] : [],
+          // As a harness does: a started turn that fails also writes its own marker, in its own words.
+          ...failing.started && failing.error ? [{ kind: "event" as const, ...turnFailedEvent(failing.error.split("\n", 1)[0], failing.error) }] : [],
         ]
         const session: LiveSessionState = failing.kind === "host-quit" || failing.kind === "uncertain"
           ? { ...snapshot.session, status: "ready", connection: "hibernated" }
@@ -2911,6 +2947,14 @@ export function installMockBridge() {
         acpSessions.set(id, session)
         emit({ type: "live-batch", batch: { id, revision: next.revision, updates, session, permissions: [asked], requests: next.requests } })
         return next.requests.at(-1)!
+      }
+      if (/in the browser/i.test(text)) {
+        const running: LiveRequest = { id: requestId, text, attachments, status: "dispatching" }
+        const session: LiveSessionState = { ...snapshot.session, status: "running" }
+        liveSnapshots.set(id, { ...snapshot, session, requests: [...snapshot.requests, running] })
+        pushLive(id, [{ kind: "user", requestId, text }])
+        playBrowserTurn(id)
+        return running
       }
       if (/run the (?:\w+ )?(?:tests|suite)/i.test(text)) {
         const running: LiveRequest = { id: requestId, text, attachments, status: "dispatching" }
@@ -3479,6 +3523,12 @@ export function installMockBridge() {
     }),
     continueReadings: async () => mockContinues.readings(),
     fileEventsService: async () => mockFileEvents,
+    // `?versions` shows the first prompt of a conversation as edited once: its fork holds the second version.
+    livePromptVersions: async (id: string) => {
+      const versioned = new URLSearchParams(globalThis.location?.search).has("versions")
+      const firstRequest = liveSnapshots.get(id)?.requests[0]?.id
+      return versioned && firstRequest ? { [firstRequest]: { conversations: [id, `${id}-edited`], at: 0 } } : {}
+    },
     fileEventsRestart: async () => {
       const before = mockFileEvents
       setFileEvents({ ...before, restarting: "restarting" })

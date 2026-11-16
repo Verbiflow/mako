@@ -1473,6 +1473,7 @@ const inputs = {
         })
         .optional(),
     ]),
+  "mako:live-prompt-versions": () => z.tuple([z.string()]),
   "mako:live-read": () =>
     z.tuple([
       z.string(),
@@ -3048,6 +3049,21 @@ const inputs = {
       z.string().optional(),
       z.array(z.string()).optional(),
     ]),
+  "mako:thread-app-demand": () =>
+    z.tuple([
+      z
+        .object({
+          connection: z.string().uuid(),
+          generation: z
+            .number()
+            .int()
+            .nonnegative()
+            .max(Number.MAX_SAFE_INTEGER),
+          visible: z.boolean(),
+        })
+        .strict()
+        .optional(),
+    ]),
   "mako:thread-app-make-room": () =>
     z.tuple([z.string(), z.string().optional()]),
   "mako:thread-app-marks": () => z.tuple([]),
@@ -3313,6 +3329,7 @@ const inputs = {
       ]),
     ]),
   "mako:utility-model-settings": () => z.tuple([]),
+  "mako:view-hints": () => z.tuple([]),
   "mako:watch-file": () => z.tuple([z.string()]),
   "mako:workspace-move-answer": () =>
     z.tuple([
@@ -3596,6 +3613,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:live-permission", "conversations"],
   ["mako:live-prewarm", "conversations"],
   ["mako:live-prompt", "conversations"],
+  ["mako:live-prompt-versions", "conversations"],
   ["mako:live-read", "conversations"],
   ["mako:live-review", "conversations"],
   ["mako:live-rewind", "conversations"],
@@ -3736,6 +3754,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-abort-run", "conversations"],
   ["mako:thread-app", "workspaces"],
   ["mako:thread-app-check", "workspaces"],
+  ["mako:thread-app-demand", "workspaces"],
   ["mako:thread-app-make-room", "workspaces"],
   ["mako:thread-app-marks", "workspaces"],
   ["mako:thread-app-output", "workspaces"],
@@ -3794,6 +3813,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:utility-model-connect", "git"],
   ["mako:utility-model-disconnect", "git"],
   ["mako:utility-model-settings", "git"],
+  ["mako:view-hints", "workspaces"],
   ["mako:watch-file", "workspaces"],
   ["mako:workspace-move-answer", "workspaces"],
   ["mako:workspace-move-bring", "workspaces"],

@@ -491,7 +491,20 @@ mates' view and the `apexes` digest say how long it has been idle
 (`idleFor`, seconds, only while it isn't working) and its open pull requests
 (`openPRs`, `finPullRequests`): its worktree branch's as the worktree
 summaries last read them (`ThreadWorktreeService.heldPulls`) and those its
-reports name, with no read of GitHub of their own. A pull request is its
+reports name, with no read of GitHub of their own. A Fin that reads as
+working and does nothing is named to its Apex: the live engine's activity in
+its conversation (each stamp of `activityAt`, a turn or a steer its harness
+takes, its own report) moves its last moment, a map write, and its tree waits
+on one deadline for the earliest of its Fins' (`QuietWatch`,
+`conversations/fin-quiet.ts`). A Fin at work on Mako's live driver, waiting on
+nothing that explains a pause, that showed nothing for `QUIET_MS` (15 min) is
+said once a quiet stretch in its Apex's digest, under "gone quiet while
+working", with its last step and whether it still runs (`quietLine`): a
+notice kept nowhere, never a state, which leaves an unsent digest once the Fin
+moves again (`AgentWakes.current`), and only under the default `wake`. A long
+command counts as quiet; the line names it and the Apex decides. A Fin whose
+turn ended leaves the watch, and an idle one is never named
+(`test:fin-quiet`). A pull request is its
 repository's (`owner/name`, from its URL) and number (`pullRef`, `pullKey`),
 never its number alone, since a Thread can hold several repositories; a bare
 `#12` is the Fin's one repository's, or stays unqualified when it has several,
@@ -1791,7 +1804,11 @@ once, and the rest of a burst one flush per frame (`LIVE_FRAME_MS`, 50 ms, in
 `contracts/live-conversations.ts`): windows, watching devices and the journal
 get the same batches. The frame is the window's paint frame (`StreamFrames`
 takes it): on 33 ms the batches beat against the paints, a third of them were
-painted over unseen and a word waited longer for its paint. Status changes,
+painted over unseen and a word waited longer for its paint. A long answer going
+on (past `LONG_ANSWER_CHARS`, 1,500, with nothing else changed) waits up to
+`LONG_ANSWER_FLUSH_MS` (400 ms) or a paragraph's end instead
+(`conversations/answer-pace.ts`): sent each frame, its batches were mostly
+envelope, 156 bytes a token to a phone with 7 of them its words. Status changes,
 questions and approvals don't wait for it. A batch says `activityAt` only when
 it moved into another second, and carries a whole value (a control, a request,
 a roster) only when its content changed (`sharedFields`); a message whose

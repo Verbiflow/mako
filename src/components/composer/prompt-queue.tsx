@@ -214,7 +214,7 @@ export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body
  */
 function OutboxLine({ conversation, request }: { conversation: string; request: PendingPrompt }) {
   const words = request.waiting
-    ? `Waiting · ${request.waiting.replace(/\.$/, "")}. It goes by itself${request.steering ? ", into the turn or after it" : ""}.`
+    ? `${request.waiting.replace(/\.$/, "")}. It goes by itself${request.steering ? ", into the turn or after it" : ""}.`
     : request.steering ? "Steering into the running turn…" : "Sending…"
   return (
     <div className="mt-1 flex items-center gap-2 text-label text-faint" data-outbox={request.waiting ? "waiting" : request.steering ? "steering" : "sending"}>

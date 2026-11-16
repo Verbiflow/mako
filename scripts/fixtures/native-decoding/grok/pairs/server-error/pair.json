@@ -8,13 +8,7 @@
     {
       "reader": "grok",
       "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a1b13a-3b1e-7321-9314-7e3bec804d35/updates.jsonl",
-      "known": [
-        {
-          "side": "-",
-          "line": "note: Retried 3 times",
-          "reason": "Mako sums up the retries it watched on the wire (Grok's `retry_state` updates) in one marker, measured by the frames' clock; the store keeps each retry's update, never Mako's measure, so only the live drawing has it (RETRY_MARKERS, declared stream-only)."
-        }
-      ]
+      "known": []
     }
   ]
 }

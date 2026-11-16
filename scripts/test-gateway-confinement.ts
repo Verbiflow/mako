@@ -127,7 +127,7 @@ try {
   {
     const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value, breadcrumb: () => {}, declaring: async () => {}, work: unwatchedWork })
     const ran: string[] = []
-    const personal = ["mako:live-start", "mako:live-capture", "mako:thread-create-session", "mako:thread-app-start", "mako:live-prompt", "mako:live-permission"] as const
+    const personal = ["mako:live-start", "mako:live-capture", "mako:thread-create-session", "mako:thread-app-start", "mako:live-prompt", "mako:live-permission", "mako:live-prompt-versions"] as const
     for (const channel of personal)
       // SAFETY: each handler only records that it ran; its arguments are never read.
       methods.handle(channel, (() => { ran.push(channel) }) as never)
@@ -143,6 +143,8 @@ try {
     }
     assert.deepEqual(ran, [], "no handler of the person's ran for a machine")
     assert.ok(gatewayAllows("mako:live-start", "gateway:web:phone"), "the person's phone starts one")
+    // A prompt's versions are a person's device's read of a conversation, never a machine's: not even the gateway's own.
+    assert.equal(gatewayAllows("mako:live-prompt-versions", "gateway:runtime:gateway:t-1"), false, "the gateway acting on a Thread doesn't read them")
     // No runtime runs a Thread here, so none acts as a Thread's agent: a session it names is nothing of its own.
     for (const channel of ["mako:agents-list", "mako:agents-send", "mako:settings-act", "mako:threads-act", "mako:threads-move", "mako:harnesses-act"]) {
       assert.equal(gatewayAllows(channel, machine), false, `${channel} isn't a machine's`)

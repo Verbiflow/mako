@@ -15,6 +15,7 @@ import { z } from "zod"
 import { applyLiveBatch, hydrateLive, listLive, unloadLive } from "@/state/live-recovery"
 import { watchLiveResidency } from "@/state/live-residency"
 import { acp } from "@/state/acp"
+import { toolStepped } from "@/state/tool-steps"
 import { acpStore } from "@/state/acp-state"
 import { threadsStore } from "@/state/thread-store"
 import { CONSOLE_LOG, type Gateway } from "./gateway"
@@ -47,6 +48,14 @@ const RECENT_TRANSCRIPTS = { bytes: 32 * 1024 * 1024, recent: 4 }
 const ASLEEP_MS = 15_000
 
 /** A move's step as its owner's stream carries it (`thread-move-step`, `thread-return-step`): read as far as its kind. */
+/** A running js call's steps as its owner relays them (`SessionReport`'s `#relaySteps`); `steps: null` once it answered. */
+const ToolStepsEventSchema = z.object({
+  type: z.literal("tool-steps"),
+  steps: z.object({
+    steps: z.array(z.object({ call: z.string(), phase: z.enum(["running", "done", "failed"]), times: z.number().int().optional() })),
+    total: z.number().int(),
+  }).nullable(),
+})
 const MoveStepEventSchema = z.object({ type: z.enum(["thread-move-step", "thread-return-step"]), move: z.string(), step: z.object({ kind: z.string() }).loose() })
 
 /** One owner's stream as this browser follows it: its conversations, and how many follow each. */
@@ -213,9 +222,10 @@ export class WebConversations {
    * every `ASLEEP_MS` with the smallest read there is while one of its conversations is open, and read live once it answers.
    */
   #watchForWaking(mac: string): void {
-    if (this.#waking.has(mac)) return
+    if (document.visibilityState !== "visible" || this.#waking.has(mac)) return
     this.#waking.set(mac, setTimeout(async () => {
       this.#waking.delete(mac)
+      if (document.visibilityState !== "visible") return
       const asked = this.#openOn(mac)[0]
       if (!asked || accountListStore.get().quiet.has(mac)) return void this.#asleep.delete(mac)
       try {
@@ -226,7 +236,7 @@ export class WebConversations {
         this.#watchForWaking(mac)
         return
       }
-      this.#back(mac, "a call it answered")
+      if (document.visibilityState === "visible") this.#back(mac, "a call it answered")
     }, ASLEEP_MS))
   }
 
@@ -416,7 +426,12 @@ export class WebConversations {
             probedAt = Date.now()
             continue
           }
-          const verdict = cursor.heard({ seq: frame.seq, text: frame.event.text })
+          const verdict = cursor.heard({ seq: frame.seq, text: frame.event.text, ...frame.ephemeral && { ephemeral: true } })
+          // Passing state (a running call's steps): applied as it comes, and it moves no cursor and counts as no update.
+          if (verdict.kind === "ephemeral") {
+            this.#heard(frame.event.text, follow.conversations)
+            continue
+          }
           if (verdict.kind === "notice" || verdict.kind === "duplicate") continue
           if (verdict.kind === "reread") {
             readings.reread()
@@ -484,6 +499,8 @@ export class WebConversations {
    * to its listing, read again when it's opened. A hidden page that holds less is the last iOS ends for memory.
    */
   releaseHidden(): void {
+    for (const timer of this.#waking.values()) clearTimeout(timer)
+    this.#waking.clear()
     const { activeKey, conversations } = acpStore.get()
     for (const conversation of Object.values(conversations)) {
       if (conversation.kind !== "live" || !conversation.hydrated || conversation.key === activeKey) continue
@@ -522,6 +539,11 @@ export class WebConversations {
       this.#moveStep(head.conversation, head.payload)
       return undefined
     }
+    if (head.type === "tool-steps") {
+      const event = ToolStepsEventSchema.safeParse(JSON.parse(head.payload)).data
+      if (event) toolStepped(head.conversation, event.steps)
+      return undefined
+    }
     if (head.type !== "live-batch") return undefined
     // SAFETY: the owner's host encoded this line from its own `live-batch` event, as its windows read it: whole, or in
     // the compact live form this browser said it reads.
@@ -555,6 +577,7 @@ export class WebConversations {
 
   /** After a sleep, a return or a network change: every followed stream that went quiet is followed again at once. */
   wake(): void {
+    if (document.visibilityState === "visible") for (const mac of this.#asleep.keys()) this.#watchForWaking(mac)
     this.#gateway.wake()
     for (const done of this.#waits) done()
   }

@@ -257,6 +257,11 @@ export const ConversationControlSchema = z.object({
       parentId: z.string().uuid(),
       sourceRevision: z.number().int().nonnegative(),
       point: z.string(),
+      /**
+       * The first request sent in the fork: for one made from just before a prompt (`before-run`), that prompt's next
+       * version (`LiveConversations.promptVersions`). Set as it's admitted, so the fork index knows it unloaded.
+       */
+      firstRequest: z.string().optional(),
       /** A fork made with this set joins its parent's Thread as a tab. Older forks have their own Thread. */
       placement: z.literal("parent-thread").optional(),
       /** The Session it was asked to go into (`ForkInput.session`). */

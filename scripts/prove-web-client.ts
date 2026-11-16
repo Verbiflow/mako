@@ -27,7 +27,7 @@ import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
  * - `begin <access> <first message>`: a Thread of its own in `api` at that access ("full", "ask"), its first turn the
  *   script its words name: "Say hello", "Stream a long answer", "Hold the turn", "Ask me a question", "Fail this turn",
  *   "Check the retry fix" (three steps), "Break the last step" (three, the last failing), "Work through the steps" (three,
- *   the last running 30 seconds), "Tidy the retry backoff" (it changes three files). `STARTED <conversation>`
+ *   the last running 30 seconds), "Drive the computer" (a 75 s wait, then one mako-computer js call of 24 calls over about 20 s), "Tidy the retry backoff" (it changes three files). `STARTED <conversation>`
  * - `access <harness> <mode>`: the person chooses that access for the harness here, as the desk's composer does; it goes
  *   to their account. `ACCESS <the host's choices>`
  * - `choices`: the access choices as this host holds them now, after the account's word. `CHOICES <the host's choices>`
@@ -196,6 +196,9 @@ const LONG_ANSWER = Array.from({ length: 12 }, (_, index) => [
   index % 3 === 0 ? "```ts\nconst clock = installClock()\nawait retry(charge, { attempts: 3 })\nclock.runAll()\n```" : `- Attempt ${index + 1} runs after its backoff\n- The clock advances by hand\n- The assertion reads the calls`,
 ].join("\n\n")).join("\n\n")
 
+/** The long js program "Drive the computer" runs: twelve rounds of a status read, a help read and a wait, 24 calls in about 20 s. */
+const LONG_JS = "for (let round = 0; round < 12; round++) {\n  await control.status()\n  await control.help({ topic: \"examples\" })\n  await new Promise((done) => setTimeout(done, 1500))\n}\nreturn \"twelve rounds checked\""
+
 /**
  * What the stand-in model says, by the last thing the person said: the live Thread's first turn runs the payments tests
  * (a command "Ask first" asks about), then answers; a message from the phone gets its own answer; "run the whole suite"
@@ -223,6 +226,19 @@ const ANSWERS: Array<{ heard: RegExp; steps: ScriptedReply[] }> = [
   // The phone's behaviour cases each start a Thread of their own (`begin`) with one of these.
   { heard: /Say hello/i, steps: [{ text: "Hello." }] },
   { heard: /Stream a long answer/i, steps: [{ reasoning: "Write it out at a model's pace.", text: LONG_ANSWER, pace: 8 }] },
+  {
+    // A long mako-computer js call: twelve rounds of a status read, a help read and a wait, 24 calls over about 20 s,
+    // so its row shows its steps as they go (`tool-steps`) on the Mac and on a device watching it.
+    heard: /Drive the computer/i,
+    steps: [
+      // Codex runs MCP tools from a Code Mode cell (`exec`), as `tools.mcp__<server>__<tool>`; a harness that offers them
+      // directly takes `name: "js"` (the stand-in finds it under its server's prefix).
+      // A wait first, so a device opening the Thread has it open before the js call starts.
+      { text: "Getting the computer ready.", call: { id: "call_ready", name: "exec", input: "await tools.exec_command({ cmd: 'sleep 75', yield_time_ms: 80000 })\ntext('ready')" } },
+      { text: "I'll walk the computer session through a long check.", call: { id: "call_js", name: "exec", input: `const js = tools["mcp__mako_computer__js"] ?? tools["mcp__mako-computer__js"]\nif (!js) throw new Error("no js tool: " + Object.keys(tools).filter((name) => name.startsWith("mcp__")).join(", "))\ntext(JSON.stringify(await js({ title: "Check the session, round by round", timeout_ms: 55000, code: ${JSON.stringify(LONG_JS)} })).slice(0, 400))` } },
+      { text: "The long check finished: twelve rounds, every call answered." },
+    ],
+  },
   { heard: /Hold the turn/i, steps: [{ text: "Holding the turn for a while.", call: { id: "call_hold", name: "exec_command", arguments: { cmd: "sleep 25", yield_time_ms: 30_000 } } }, { text: "Held for twenty-five seconds." }] },
   {
     heard: /Ask me a question/i,

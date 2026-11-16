@@ -1,5 +1,6 @@
 import { ControlFault } from "@mako/control/control"
 import type { ControlAgentOperation } from "@mako/control-runtime/mcp"
+import type { ToolSteps } from "../contracts/tool-steps.js"
 import { hostWarn } from "../base/host-log.js"
 import {
   ControlWorkers,
@@ -119,12 +120,13 @@ export class ControlSessions {
     for (const [id, pending] of this.sessions) bindings[id] = (await pending.catch(() => undefined))?.pid
     return { bindings, spare: this.workers.sparePid }
   }
-  async request(bindingId: string, operation: ControlAgentOperation, signal: AbortSignal) {
+  /** `steps` hears a js call's steps as they change. */
+  async request(bindingId: string, operation: ControlAgentOperation, signal: AbortSignal, steps?: (steps: ToolSteps) => void) {
     const pending = this.sessions.get(bindingId)
     const session = await pending
     if (!session || this.sessions.get(bindingId) !== pending)
       throw new ControlFault("session-closed", "This task’s Local Control session is no longer active.", "not-dispatched")
-    return session.request(operation, signal)
+    return session.request(operation, signal, steps)
   }
   async stop(bindingId: string): Promise<void> {
     const pending = this.sessions.get(bindingId)

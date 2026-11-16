@@ -673,6 +673,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     return rewound
   })
   methods.handle("mako:live-rewind-recover", () => live.recoverRewinds())
+  methods.handle("mako:live-prompt-versions", (id: string) => live.promptVersions(id))
   methods.handle("mako:live-action", (id: string, input: LiveActionInput) => live.act(id, input))
   // A separate method advertises atomic queued steering to clients whose UI
   // can update while the shared host remains alive. Keep live-action for
