@@ -763,9 +763,12 @@ export class LiveConversations {
     void this.reclaims.released(key)
   }
 
-  /** Conversation `id` read where its journal lies, for a window, when nothing holds it in memory (`LiveRecords.cold`). */
-  async coldView(id: string): Promise<{ journal: ColdJournal; snapshot: LiveSnapshot; still: () => boolean } | undefined> {
-    const cold = await this.records.cold(id)
+  /**
+   * Conversation `id` read where its journal lies, for a window or a search, when nothing holds it in memory
+   * (`LiveRecords.cold`); `releasing` reads one still being let go of, as a search does.
+   */
+  async coldView(id: string, releasing = false): Promise<{ journal: ColdJournal; snapshot: LiveSnapshot; still: () => boolean } | undefined> {
+    const cold = await this.records.cold(id, releasing)
     if (!cold) return undefined
     // Its history is its session's record: the newest page of it, the rest read as a window pages back.
     const source = cold.snapshot.baseSource

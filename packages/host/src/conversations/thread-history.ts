@@ -37,6 +37,13 @@ const INDEX_TURNS = 80
 const INDEX_REQUEST = 100
 const INDEX_ANSWER = 80
 const SEARCH_HITS = 25
+/**
+ * What one search reads of the conversations no host holds in memory, newest first, in characters of their entries:
+ * the rest it names as turns to search next. Read cold (`ThreadHistoryDeps.cold`), so a search loads no journal.
+ */
+const SEARCH_CHARS = 4_000_000
+/** Turns a search matches between its yields to what else the host has to do. */
+const SEARCH_TURNS_PER_YIELD = 64
 const SNIPPET_CHARS = 70
 /** Native sessions read whole, kept until there are more than this many or they hold more than this many characters. */
 const OPENED_THREADS = 4
@@ -54,6 +61,13 @@ export interface ThreadHistoryDeps {
   conversations(): readonly LiveSummary[]
   /** A conversation once its history is read (`LiveConversations.historySnapshot`). */
   snapshot(id: string): Promise<LiveSnapshot | null>
+  /** Whether a conversation is held in memory: one that isn't, a search reads cold (`cold`) instead of reading it in. */
+  resident?(id: string): boolean
+  /**
+   * A conversation's journal read where it lies, nothing of it read in (`LiveConversations.coldView`): its metadata and
+   * requests, its blocks by index, the blocks that open its turns; closed once read. Undefined when it can't be read so.
+   */
+  cold?(id: string): Promise<ColdRead | undefined>
   /** The Thread store; null where it didn't open, and then a conversation is its own history. */
   store(): Pick<ThreadStore, "thread" | "sessionContents" | "edges"> | null
   /** Native sessions as the catalog reads them. */
@@ -63,6 +77,25 @@ export interface ThreadHistoryDeps {
     live(conversation: string): Promise<{ file: string } | null>
     native(path: string): Promise<{ file: string } | null>
   }
+}
+
+/** The turns a search's `turns` names: its Session when it names one, and its first and last. */
+interface AskedTurns {
+  session?: number
+  from: number
+  to: number
+}
+
+/** What a search has left to read cold this call (`SEARCH_CHARS`), and the turns it names. */
+interface SearchRead {
+  budget: { left: number }
+  asked?: AskedTurns
+}
+
+/** A journal read cold for a search: what `ColdJournal` gives of it. */
+export interface ColdRead {
+  snapshot: LiveSnapshot
+  journal: { readonly length: number; at(index: number): Entry | undefined; turnOpeners(covered: number): number[]; close(): void }
 }
 
 export interface ThreadHistoryInput {
@@ -102,6 +135,8 @@ interface Part {
   missing?: string
   /** Its last turn is still running. */
   running?: true
+  /** Turns before its first entry, which a search read cold left out: its turns number on from here. */
+  turnOffset?: number
 }
 
 interface Turn {
@@ -183,6 +218,66 @@ export function threadHistoryTools(deps: ThreadHistoryDeps): ThreadHistoryTools 
     return { part, snapshot }
   }
 
+  /**
+   * A conversation for a search, read cold when no host holds it in memory: its newest turns within what the search has
+   * left to read (`budget`), whole turns from the one that opens the window, numbered as `read` numbers them; or the
+   * turns `turns` asks for, when it names this Session. Nothing of it is read in, and its journal closes once read. One
+   * in memory reads as `livePart` does.
+   */
+  async function coldPart(summary: LiveSummary, session: number, budget: { left: number }, asked?: AskedTurns): Promise<{ part: Part; snapshot: LiveSnapshot | null }> {
+    const id = summary.session.id
+    if (!deps.cold || (deps.resident?.(id) ?? true)) return livePart(summary, session)
+    const cold = await deps.cold(id)
+    const part: Part = { session, harness: summary.session.harness, conversation: id, baseLength: 0, entries: [], turns: [], inherited: 0 }
+    if (summary.sessionId) part.sessionId = summary.sessionId
+    if (!cold) return { part: { ...part, missing: "it was being read in or written as this searched: search again in a moment" }, snapshot: null }
+    try {
+      const { snapshot, journal } = cold
+      const covered = Math.min(snapshot.baseCoveredBlocks ?? 0, journal.length)
+      // Its session's record before its blocks, through the bounded cache of native sessions read whole.
+      const base = await resumed({ openThread: open }, snapshot)
+      const baseTurns = base.filter((entry, index) => opensTurn(entry, base[index - 1])).length
+      const openers = journal.turnOpeners(covered)
+      // The blocks a turn number starts at: base turns come first, then the journal's own.
+      const startOf = (turn: number) => turn <= baseTurns ? covered : openers[turn - baseTurns - 1] ?? journal.length
+      let end = journal.length
+      let floor = covered
+      if (asked && (asked.session === undefined || asked.session === session)) {
+        end = asked.to + 1 - baseTurns > openers.length ? journal.length : startOf(asked.to + 1)
+        floor = startOf(asked.from)
+      }
+      let start = end
+      while (start > floor && budget.left > 0) {
+        start -= 1
+        const entry = journal.at(start)
+        if (entry) budget.left -= entryChars(entry)
+      }
+      // A turn whole: back to the block that opens it.
+      while (start > floor && !openers.includes(start)) {
+        start -= 1
+        const entry = journal.at(start)
+        if (entry) budget.left -= entryChars(entry)
+      }
+      const blocks: Entry[] = []
+      for (let index = start; index < end; index++) {
+        const entry = journal.at(index)
+        if (entry) blocks.push(entry)
+      }
+      const whole = start <= covered && (!asked || asked.from <= baseTurns || floor <= covered) && budget.left > 0
+      part.harness = snapshot.session.harness
+      part.entries = whole ? [...base, ...blocks] : blocks
+      part.baseLength = whole ? base.length : 0
+      if (!whole) part.turnOffset = start <= covered ? baseTurns : baseTurns + openers.filter((opener) => opener < start).length
+      if (whole) budget.left -= base.reduce((sum, entry) => sum + entryChars(entry), 0)
+      if (snapshot.session.title) part.title = snapshot.session.title
+      if (snapshot.base) part.path = snapshot.base.ref.path
+      if (snapshot.historyFailure) part.missing = snapshot.historyFailure
+      return { part, snapshot }
+    } finally {
+      cold.journal.close()
+    }
+  }
+
   async function nativePart(path: string, harness: string, session: number): Promise<Part> {
     const thread = await open(path)
     const part: Part = { session, harness, path, baseLength: thread?.entries.length ?? 0, entries: thread?.entries ?? [], turns: [], inherited: 0 }
@@ -195,13 +290,13 @@ export function threadHistoryTools(deps: ThreadHistoryDeps): ThreadHistoryTools 
   }
 
   /** The Sessions a scope reads, each whole, with the threads their requests referenced. */
-  async function view(scope: Scope, caller?: string): Promise<View> {
+  async function view(scope: Scope, caller?: string, search?: SearchRead): Promise<View> {
     const listing = new Map(deps.conversations().map((summary) => [summary.session.id, summary]))
     const parts: Part[] = []
     const snapshots = new Map<string, LiveSnapshot>()
     let title: string | undefined
     const addLive = async (summary: LiveSummary) => {
-      const read = await livePart(summary, parts.length + 1)
+      const read = search ? await coldPart(summary, parts.length + 1, search.budget, search.asked) : await livePart(summary, parts.length + 1)
       parts.push(read.part)
       if (read.snapshot) snapshots.set(summary.session.id, read.snapshot)
     }
@@ -293,8 +388,9 @@ export function threadHistoryTools(deps: ThreadHistoryDeps): ThreadHistoryTools 
     return { top: edges[0]?.parent ?? scope.thread, edges }
   }
 
-  async function scoped(conversationId: string, thread: string | undefined): Promise<View> {
-    const own = await view(ownScope(conversationId), conversationId)
+  async function scoped(conversationId: string, thread: string | undefined, search?: SearchRead): Promise<View> {
+    // Another Thread's search reads the caller's own only for what it references: none of its history is searched.
+    const own = await view(ownScope(conversationId), conversationId, search && thread ? { budget: { left: 0 } } : search)
     if (!thread) return own
     const ref = thread.trim().replace(/^@/, "")
     const known = own.references.find((reference) => reference.ref === ref)
@@ -309,7 +405,7 @@ export function threadHistoryTools(deps: ThreadHistoryDeps): ThreadHistoryTools 
       throw new Error(`${ref} isn't in this Thread's tree or one its messages referenced, so it isn't readable here. Omit thread for this Thread;${family} referenced threads: ${readable}.`)
     }
     if (!scope) throw new Error(`${ref} (${known?.title ?? "untitled"}) isn't on this device any more.`)
-    const read = await view(scope)
+    const read = await view(scope, undefined, search)
     read.references = []
     if (known?.title) read.title ??= known.title
     return read
@@ -326,21 +422,24 @@ export function threadHistoryTools(deps: ThreadHistoryDeps): ThreadHistoryTools 
     let total = 0
     let turns = 0
     const unread: string[] = []
+    const budget = { left: SEARCH_CHARS }
+    const older: string[] = []
     for (const { thread, name } of members) {
       const scope = placed(thread, undefined)
-      const read = scope && await view(scope).catch(() => undefined)
+      const read = scope && await view(scope, undefined, { budget }).catch(() => undefined)
       if (!read) {
         unread.push(name)
         continue
       }
-      turns += matches(read, input, pattern, (hit) => {
+      turns += await matches(read, input, pattern, (hit) => {
         total += 1
         if (total > skip && lines.length < SEARCH_HITS) lines.push(`${name} (${thread}) ${hit()}`)
       })
+      for (const part of read.parts) if (part.turnOffset) older.push(`${name} session ${part.session}, turns 1–${part.turnOffset}`)
       // A tree is many histories: what else this host has to do goes between them.
       await new Promise((next) => setImmediate(next))
     }
-    const missed = unread.length ? ` Not read: ${unread.join(", ")}.` : ""
+    const missed = (unread.length ? ` Not read: ${unread.join(", ")}.` : "") + (older.length ? ` Older history not searched: ${older.join("; ")}; search one Thread with turns to reach it.` : "")
     if (!total) return `No match for ${JSON.stringify(input.query)} across ${plural(turns, "turn")} of ${plural(members.length, "Thread")}.${missed}`
     const more = skip + lines.length < total ? ` More: offset=${skip + lines.length}.` : ""
     return [`${plural(total, "hit")} for ${JSON.stringify(input.query)} across ${plural(members.length, "Thread")}; ${skip + 1}–${skip + lines.length} shown.${more}${missed}`, ...lines].join("\n")
@@ -363,7 +462,8 @@ export function threadHistoryTools(deps: ThreadHistoryDeps): ThreadHistoryTools 
         if (input.action !== "search") throw new Error(`thread: "${WHOLE_TREE}" is for search; read one Thread by its ID or a Fin's name.`)
         return searchTree(conversationId, input)
       }
-      const read = await scoped(conversationId, input.thread)
+      // A search reads what no host holds in memory cold, at most `SEARCH_CHARS` of it, newest first.
+      const read = await scoped(conversationId, input.thread, input.action === "search" ? { budget: { left: SEARCH_CHARS }, ...searchedTurns(input.turns) } : undefined)
       switch (input.action) {
         case "turns":
           return index(read, input)
@@ -395,7 +495,7 @@ function turnsOf(part: Part): Turn[] {
   for (const [index, entry] of part.entries.entries()) {
     const opens = opensTurn(entry, previous)
     if (opens || !current) {
-      current = { number: opens ? ++opened : 0, part, start: index, end: index + 1 }
+      current = { number: opens ? (part.turnOffset ?? 0) + ++opened : 0, part, start: index, end: index + 1 }
       turns.push(current)
     } else current.end = index + 1
     previous = entry
@@ -826,8 +926,19 @@ function searchPattern(input: ThreadHistoryInput): RegExp {
   }
 }
 
-/** Each match in a view, newest first, its line made only if it's kept; how many turns were searched. */
-function matches(view: View, input: ThreadHistoryInput, pattern: RegExp, hit: (line: () => string) => void): number {
+/** The turns a search's `turns` names, before a view is read: its Session when it names one, and its first and last. */
+function searchedTurns(text: string | undefined): Pick<SearchRead, "asked"> {
+  const found = text === undefined ? null : /^\s*(?:(\d+):)?(\d+)(?:\.\d+)?\s*(?:-\s*(\d+)(?:\.\d+)?\s*)?$/.exec(text)
+  if (!found) return {}
+  const from = Number(found[2])
+  return { asked: { ...(found[1] !== undefined && { session: Number(found[1]) }), from, to: found[3] === undefined ? from : Number(found[3]) } }
+}
+
+/**
+ * Each match in a view, newest first, its line made only if it's kept; how many turns were searched. It gives way to
+ * what else the host has to do every `SEARCH_TURNS_PER_YIELD` turns and between Sessions.
+ */
+async function matches(view: View, input: ThreadHistoryInput, pattern: RegExp, hit: (line: () => string) => void): Promise<number> {
   const asked = range(input.turns, view)
   const parts = asked ? [asked.part] : [view.home, ...view.parts.filter((part) => part !== view.home)]
   let searched = 0
@@ -839,6 +950,7 @@ function matches(view: View, input: ThreadHistoryInput, pattern: RegExp, hit: (l
       if (asked && (turn.number < asked.from || turn.number > asked.to)) continue
       if (turn.end <= floor) break
       searched++
+      if (searched % SEARCH_TURNS_PER_YIELD === 0) await new Promise((next) => setImmediate(next))
       for (let index = Math.max(turn.start, floor); index < turn.end; index++) {
         const entry = part.entries[index]!
         const ref = `${at}${turn.number}.${index - turn.start}`
@@ -849,25 +961,29 @@ function matches(view: View, input: ThreadHistoryInput, pattern: RegExp, hit: (l
         }
       }
     }
+    await new Promise((next) => setImmediate(next))
   }
   return searched
 }
 
-function search(view: View, input: ThreadHistoryInput): string {
+async function search(view: View, input: ThreadHistoryInput): Promise<string> {
   const pattern = searchPattern(input)
   const { query } = input
   const skip = input.offset ?? 0
   const hits: string[] = []
   let total = 0
-  const searched = matches(view, input, pattern, (hit) => {
+  const searched = await matches(view, input, pattern, (hit) => {
     total++
     if (total > skip && hits.length < SEARCH_HITS) hits.push(hit())
   })
   const asked = input.turns !== undefined
   const scope = asked ? ` in turns ${input.turns}` : ""
-  if (!total) return `No match for ${JSON.stringify(query)}${scope} across ${plural(searched, "turn")}.`
+  // What a search read cold left out, by the turns that reach it.
+  const older = view.parts.filter((part) => part.turnOffset).map((part) => `turns: "${part.session}:1-${part.turnOffset}"`)
+  const left = older.length ? ` Older turns weren't searched: search again with ${older.join(" or ")}.` : ""
+  if (!total) return `No match for ${JSON.stringify(query)}${scope} across ${plural(searched, "turn")}.${left}`
   const more = skip + hits.length < total ? ` More: offset=${skip + hits.length}.` : ""
-  return [`${plural(total, "hit")} for ${JSON.stringify(query)}${scope}, newest first; ${skip + 1}–${skip + hits.length} shown.${more}`, ...hits].join("\n")
+  return [`${plural(total, "hit")} for ${JSON.stringify(query)}${scope}, newest first; ${skip + 1}–${skip + hits.length} shown.${more}${left}`, ...hits].join("\n")
 }
 
 /** One field whole, a page of characters at a time. */

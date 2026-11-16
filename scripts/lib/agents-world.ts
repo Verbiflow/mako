@@ -357,6 +357,8 @@ export class AgentsWorld {
     const history = threadHistoryTools({
       conversations: () => this.live.summaries(),
       snapshot: (id) => this.live.historySnapshot(id),
+      resident: (id) => this.live.loaded(id),
+      cold: (id) => this.live.coldView(id, true),
       store: () => this.store,
       catalog: { list: () => [], nativePath: () => undefined, ref: () => undefined, open: async () => null, entry: async () => null },
       bundle: { live: (id) => this.live.transcriptBundle(id), native: async () => null },

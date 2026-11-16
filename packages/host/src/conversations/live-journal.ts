@@ -1718,12 +1718,12 @@ export function journalIds(root: string): string[] {
 }
 
 /** A block that begins a turn or names a request, as a cold journal's index holds it (`ColdJournal`). */
-const TurnRowSchema = z.object({ id: z.number().int().nonnegative(), type: z.string().nullable(), steering: z.number().int(), request: z.string().nullable() })
+const TurnRowSchema = z.object({ id: z.number().int().nonnegative(), type: z.string().nullable(), steering: z.number().int(), request: z.string().nullable(), message: z.string().nullable() })
 const BlockCountSchema = z.object({ count: z.number().int().nonnegative(), last: z.number().int().nullable() })
 /** What a row's JSON begins with when its first key is the entry's type, which every journal so far writes. */
 const TYPED_ROWS = `value LIKE '{"type":"%'`
 const TURN_ROWS = `SELECT id, json_extract(value,'$.type') AS type, json_extract(value,'$.steeringFor') IS NOT NULL AS steering,
-  json_extract(value,'$.requestId') AS request FROM blocks`
+  json_extract(value,'$.requestId') AS request, json_extract(value,'$.messageId') AS message FROM blocks`
 
 /**
  * A journal read where it lies, for a window reading a conversation no host holds in memory (`LiveHistoryReader`'s cold
@@ -1874,6 +1874,23 @@ export class ColdJournal {
       if (row.id >= covered && ((row.type === "user" && !row.steering) || row.type === "provider-turn")) turnStart++
     }
     return { turnStart, earlierRequests }
+  }
+
+  /**
+   * The blocks from `covered` that open a turn as `thread_history` numbers them (`opensTurn`: a person's prompt or a
+   * turn its harness began, not a steer, nor a chunk continuing the message before it), in order. A search that reads
+   * only the newest turns numbers them from here, as `read` would.
+   */
+  turnOpeners(covered: number): number[] {
+    const opens: number[] = []
+    let previous: z.infer<typeof TurnRowSchema> | undefined
+    for (const row of this.#turnRows()) {
+      const prompt = row.type === "user" && !row.steering
+      const chunk = prompt && previous?.type === "user" && previous.id === row.id - 1 && row.message !== null && row.message === previous.message
+      if (row.id >= covered && (row.type === "provider-turn" || (prompt && !chunk))) opens.push(row.id)
+      previous = row
+    }
+    return opens
   }
 
   /** About what the blocks read so far weigh, for the views' budget. */

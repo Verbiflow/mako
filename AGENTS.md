@@ -1657,6 +1657,15 @@ writes a Thread out through the bundle a switch and a chip hand over.
 needs-input) and how it stands, without the progress after it, and its `search`
 finds words in the Fin's whole history through `thread_history`'s search of its
 Thread, a page at a time (`AgentsDeps.history`, `test-agents-read-views.ts`).
+A search, `thread_history`'s own too, reads no journal in: a conversation no
+host holds in memory is read where it lies (`ThreadHistoryDeps.cold`, a
+`ColdJournal` closed once read, one still being let go of included), its base
+through the bounded cache of native sessions read whole, at most `SEARCH_CHARS`
+(4M characters) a call, newest turns first and whole, numbered as `read`
+numbers them (`ColdJournal.turnOpeners`); what it left is named as a `turns`
+range that reaches it. It gives way to the host every 64 turns and between
+Sessions. On 420 turns (4.6M characters) the newest took 45 ms, the loop held
+15 ms at most, nothing read in (`test-history-search-cold.ts`).
 
 Mako never writes a session a harness didn't. A conversation goes on in
 another harness as a new real session of that harness, whose first turn

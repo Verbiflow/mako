@@ -402,8 +402,13 @@ export class LiveRecords {
    * makes it resident as before. One the last host left is shown as reading it in would leave it (`afterRestart`); one
    * this host let go, exactly as it went (`reload`).
    */
-  async cold(id: string): Promise<{ journal: ColdJournal; snapshot: LiveSnapshot; still: () => boolean } | undefined> {
-    const readable = () => !this.stopping() && !this.residents.has(id) && !this.reading.has(id) && !this.releasing.has(id) && this.recovered.has(id)
+  /**
+   * `releasing`: read one whose closed journal is still being let go of, as a search does. Its file is kept for the
+   * read (a cold journal's opening is `journalOpened`, which keeps a releasing journal from tidying it); a window's
+   * view waits for the release instead.
+   */
+  async cold(id: string, releasing = false): Promise<{ journal: ColdJournal; snapshot: LiveSnapshot; still: () => boolean } | undefined> {
+    const readable = () => !this.stopping() && !this.residents.has(id) && !this.reading.has(id) && (releasing || !this.releasing.has(id)) && this.recovered.has(id)
     if (!readable()) return undefined
     let journal: ColdJournal | undefined
     try {
