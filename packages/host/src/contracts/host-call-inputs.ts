@@ -1717,6 +1717,7 @@ const inputs = {
                   z.literal("auto-continue"),
                   z.literal("relay"),
                   z.literal("pull-watch"),
+                  z.literal("turn-wait"),
                 ]),
               }),
             ]),
@@ -3269,6 +3270,59 @@ const inputs = {
       ]),
       z.union([z.literal("full"), z.literal("concise")]),
     ]),
+  "mako:turn-wait": () =>
+    z.tuple([
+      z.union([
+        z.object({ kind: z.literal("agent"), session: z.string() }),
+        z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("apex"),
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+          forwards: z.string().optional(),
+          epoch: z.number().optional(),
+        }),
+      ]),
+      z.object({
+        action: z
+          .union([z.literal("list"), z.literal("cancel"), z.literal("start")])
+          .optional(),
+        description: z.string().optional(),
+        on: z
+          .array(
+            z.union([
+              z.object({ fin: z.string() }),
+              z.object({
+                pull: z.string(),
+                until: z
+                  .union([
+                    z.literal("checks"),
+                    z.literal("merge"),
+                    z.literal("review"),
+                  ])
+                  .optional(),
+              }),
+            ])
+          )
+          .optional(),
+        seconds: z.number().optional(),
+        at: z.string().optional(),
+        returnWhen: z.union([z.literal("any"), z.literal("all")]).optional(),
+        conversation: z.string().optional(),
+        clientKey: z.string(),
+      }),
+    ]),
   "mako:unread-records": () => z.tuple([]),
   "mako:unwatch-file": () => z.tuple([]),
   "mako:update-state": () => z.tuple([]),
@@ -3803,6 +3857,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:threads-act", "conversations"],
   ["mako:threads-move", "conversations"],
   ["mako:transcript-document", "conversations"],
+  ["mako:turn-wait", "conversations"],
   ["mako:unread-records", "threads"],
   ["mako:unwatch-file", "workspaces"],
   ["mako:update-state", "application"],
