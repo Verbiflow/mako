@@ -5,6 +5,7 @@ import type { EntryOriginal } from "@mako/sessions/record-original"
 import { isTurnStart } from "@mako/sessions/live-content"
 import { mediaFacts } from "@mako/sessions/turn-media"
 import type { JsonObject, JsonValue } from "./json.js"
+import type { ContextManifest } from "./conversation-control.js"
 import type { LiveSnapshot } from "./live-conversations.js"
 import { LIVE_HISTORY_CHUNK_CHARS, type LiveHistoryChunk, type LiveHistoryCursor, type LiveHistoryPage, type LiveHistorySnapshot } from "./live-history.js"
 
@@ -115,13 +116,55 @@ export function historyRange(token: string, source: LiveSnapshot, from: LiveHist
       before: from.blocks > (source.baseCoveredBlocks ?? 0) || base?.hasEarlier ? from : null } }
 }
 
+/**
+ * A manifest as a window reads it: without `resources`, the path of every payload its transcript moved out, which only
+ * the agent reading the transcript opens and nothing a window shows names. One long Thread's were 942 KB, sent again
+ * in each request that carried the transcript and each transfer and merge that made it.
+ */
+function shownManifest(manifest: ContextManifest): ContextManifest {
+  if (!manifest.resources) return manifest
+  const shown = { ...manifest }
+  delete shown.resources
+  return shown
+}
+
+function shownManifests(manifests: ContextManifest[]): ContextManifest[] {
+  return manifests.some((manifest) => manifest.resources) ? manifests.map(shownManifest) : manifests
+}
+
+/**
+ * What a window reads of a snapshot's requests and control: each the same object unless a manifest in it named its
+ * resources (`shownManifest`). A 122 MB Fin's first read was 10 MB, 4.7 MB of it its transfers' and merges' manifests.
+ */
+export function shownSnapshot(snapshot: LiveSnapshot): LiveSnapshot {
+  const requests = snapshot.requests.some((request) => request.context?.some((manifest) => manifest.resources))
+    ? snapshot.requests.map((request) => request.context ? { ...request, context: shownManifests(request.context) } : request)
+    : snapshot.requests
+  const control = snapshot.control
+  const named = control && (control.merges.some((merge) => merge.manifest.resources) ||
+    control.transfers.some((transfer) => transfer.state.kind === "accepted" && transfer.state.manifest.resources))
+  if (requests === snapshot.requests && !named) return snapshot
+  return {
+    ...snapshot,
+    requests,
+    ...(control && named && {
+      control: {
+        ...control,
+        merges: control.merges.map((merge) => merge.manifest.resources ? { ...merge, manifest: shownManifest(merge.manifest) } : merge),
+        transfers: control.transfers.map((transfer) => transfer.state.kind === "accepted" && transfer.state.manifest.resources
+          ? { ...transfer, state: { ...transfer.state, manifest: shownManifest(transfer.state.manifest) } } : transfer),
+      },
+    }),
+  }
+}
+
 /** A capture's newest page, and the pages back to `from` when a window held those: the snapshot a read answers. */
 export function historyCapture(token: string, snapshot: LiveSnapshot, versions: HistoryVersions, from?: LiveHistoryCursor): LiveSnapshot {
   const tail = historyPage(token, snapshot, { blocks: snapshot.blocks.length,
     base: snapshot.base ? snapshot.base.start + snapshot.base.entries.length : 0 }, versions)
   // A background refresh keeps the range the reader explicitly loaded. It
   // must not throw away earlier pages while a large live event arrives.
-  if (!from) return { ...snapshot, ...tail }
+  if (!from) return { ...shownSnapshot(snapshot), ...tail }
   const target = { blocks: Math.max(snapshot.baseCoveredBlocks ?? 0, from.blocks), base: from.base }
   const pages = [tail]
   let page = tail
@@ -131,7 +174,7 @@ export function historyCapture(token: string, snapshot: LiveSnapshot, versions: 
     pages.push(page)
   }
   pages.reverse()
-  return { ...snapshot, blocks: pages.flatMap(part => part.blocks),
+  return { ...shownSnapshot(snapshot), blocks: pages.flatMap(part => part.blocks),
     base: tail.base ? { ...tail.base, entries: pages.flatMap(part => part.base?.entries ?? []),
       start: page.base!.start, hasEarlier: page.base!.hasEarlier } : null,
     history: { ...tail.history, blockStart: page.history.blockStart, turnStart: page.history.turnStart, before: page.history.before } }
