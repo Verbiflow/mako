@@ -548,7 +548,11 @@ export class WorktreeSpares {
   async setAside(repoRoot: string, path: string): Promise<void> {
     await mkdir(this.trash, { recursive: true, mode: 0o700 })
     const aside = join(this.trash, randomUUID())
+    // Claimed before it's moved there: a sweep of the trash (any spare's fill) deletes what isn't being emptied, and
+    // took this one between the move and freeing its branch, so Git still held the branch for a worktree gone from disk.
+    this.emptying.add(aside)
     const moved = await this.git.output(repoRoot, ["worktree", "move", "-f", "-f", path, aside]).then(() => true, () => false)
+    if (!moved) this.emptying.delete(aside)
     const target = moved ? aside : path
     // Frees its branch now rather than when the delete finishes, so it can be checked out elsewhere at once.
     const commit = await this.git.output(target, ["rev-parse", "--verify", "--quiet", "HEAD"]).catch(() => "")
@@ -568,13 +572,19 @@ export class WorktreeSpares {
   private async setAsideFolder(spare: Spare): Promise<void> {
     await mkdir(this.trash, { recursive: true, mode: 0o700 })
     const aside = join(this.trash, randomUUID())
-    await rename(spare.path, aside)
+    // Claimed before it's moved there, as setAside's: a sweep would delete it while each repository is told where it went.
+    this.emptying.add(aside)
+    try {
+      await rename(spare.path, aside)
+    } catch (error) {
+      this.emptying.delete(aside)
+      throw error
+    }
     const worktrees = worktreesOf(spare, aside)
     for (const worktree of worktrees) {
       await this.git.output(worktree.repoRoot, ["worktree", "repair", worktree.path]).catch(() => {})
       await this.git.output(worktree.repoRoot, ["worktree", "unlock", worktree.path]).catch(() => {})
     }
-    this.emptying.add(aside)
     void Promise.all(worktrees.map((worktree) => this.git.output(worktree.repoRoot, ["worktree", "remove", "-f", "-f", worktree.path], true).catch(() => {})))
       .then(() => removeBelowAgents(aside))
       .then(() => Promise.all(worktrees.map((worktree) => this.git.output(worktree.repoRoot, ["worktree", "prune"]))))
