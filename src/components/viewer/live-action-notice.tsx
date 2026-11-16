@@ -10,14 +10,18 @@ export function useLiveActionNotice(): ComposerNotice | null {
   const id = useAcp((state) => state.activeKey)
   const control = useAcp((state) => activeLiveAcp(state)?.control)
   const episode = control?.compactionRecovery
-  const actions = control?.actions?.filter(action => action.input.id !== episode?.actionId && (action.input.id !== episode?.retryActionId || episode?.state.kind === "withdrawn" && episode.state.reason === "superseded"))
+  const actionEpisode = episode?.origin === "native" ? undefined : episode
+  const actions = control?.actions?.filter(action => action.input.id !== actionEpisode?.actionId && (action.input.id !== actionEpisode?.retryActionId || episode?.state.kind === "withdrawn" && episode.state.reason === "superseded"))
   const requests = useAcp((state) => activeLiveAcp(state)?.requests)
   if (id && episode && compactionRecovering(episode) && episode.bindingId === control?.activeBindingId) {
     const transfer = episode.state.kind === "replace" ? control.transfers.find(item => episode.state.kind === "replace" && item.input.id === episode.state.transferId) : undefined
     // A specific transfer failure owns its one fixing action; don't cover it with a second progress notice.
     if (transfer?.state.kind === "failed" || transfer?.state.kind === "uncertain") return null
+    const confirming = episode.state.kind === "reconcile" ? episode.state : undefined
+    const originalWorking = confirming && control.actions?.some(action => action.input.id === confirming.actionId && ["dispatching", "accepted"].includes(action.state.kind))
     return { id: `compaction-recovery:${episode.id}`, tone: "progress",
-      title: "Recovering conversation", description: episode.state.kind === "retry" ? "Retrying compaction once." : "Starting a fresh session with the retained conversation.",
+      title: originalWorking ? "Compacting conversation" : "Recovering conversation", description: confirming ? "Waiting for the native result before continuing."
+        : episode.state.kind === "retry" ? "Retrying compaction once." : "Starting a fresh session with the retained conversation.",
       data: { "data-compaction-recovery": episode.id } }
   }
   const action = actionNotice(actions, requests ?? [])

@@ -29,7 +29,7 @@ function draw(plan: CompactionRecovery | undefined, transfers: ContextTransfer[]
   acpStore.set({ activeKey: id, conversations: { [id]: { ...live, control: { ...live.control!, compactionRecovery: plan, transfers } } } })
   return renderToStaticMarkup(<Notices />)
 }
-for (const state of [{ kind: "retry" }, { kind: "replace", transferId: randomUUID() }] satisfies CompactionRecovery["state"][]) {
+for (const state of [{ kind: "reconcile", actionId: original, deadline: 300001, at: 300001 }, { kind: "retry" }, { kind: "replace", transferId: randomUUID() }] satisfies CompactionRecovery["state"][]) {
   const html = draw({ ...episode, state })
   assert.equal((html.match(/data-notice=/g) ?? []).length, 1, "recovery owns one line despite original and retry receipts")
   assert.match(html, /Recovering conversation/)
@@ -50,3 +50,7 @@ const continuing = { id: randomUUID(), text: "discovery", attachments: [], statu
   continues: { requestId: original, reason: "compaction-failed" as const, auto: true } }
 assert.deepEqual(recoverableRequests({ blocks: [], requests: [failed, continuing] }), [], "an owned continuation must not offer another Compact and retry for its source")
 assert.deepEqual(recoverableRequests({ blocks: [], requests: [failed, { ...continuing, status: "canceled" }] }).map(request => request.id), [original], "withdrawn work must not silently erase the original recovery")
+
+const native = draw({ id: episodeId, origin: "native", requestId: original, bindingId: id, createdAt: 1, epoch: "fixture", target: { provider: "cursor" }, state: { kind: "replace", transferId: randomUUID() } })
+assert.equal((native.match(/Recovering conversation/g) ?? []).length, 1)
+assert.doesNotMatch(native, /<button/)

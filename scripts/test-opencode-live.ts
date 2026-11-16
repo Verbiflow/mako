@@ -19,6 +19,10 @@ import { admitted } from "./fixtures/admitted-start.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { openCodeFreeModels } from "./opencode-free-models.ts"
 
+import { allowLiveProviderTest } from "./fixtures/live-provider-test.ts"
+
+allowLiveProviderTest()
+
 const nativeStores = new NativeStores(false)
 
 // Real OpenCode v2 through Mako's native driver. Every store is disposable
