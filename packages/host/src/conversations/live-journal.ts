@@ -45,6 +45,7 @@ import { RECLAIM_MIN_BYTES, journalOpened, type Reclaimed } from "./journal-recl
 import { cutOffRequests, mergedBaseSteps } from "./stream-merging.js"
 import { errorMessage } from "../base/error-message.js"
 import { EntrySchema, type Entry } from "@mako/sessions/entries"
+import type { PageCounts } from "../contracts/history-pages.js"
 import { sharedBase } from "./shared-entries.js"
 import { EntryPager, type PagedRows, type PagedTable } from "./paged-entries.js"
 import { atOnce, inSlices, StepsStopped, type Steps } from "@mako/sessions/slices"
@@ -1699,4 +1700,181 @@ export function journalIds(root: string): string[] {
     const id = UuidSchema.safeParse(name.slice(0, -7))
     return id.success ? [id.data] : []
   })
+}
+
+/** A block that begins a turn or names a request, as a cold journal's index holds it (`ColdJournal`). */
+const TurnRowSchema = z.object({ id: z.number().int().nonnegative(), type: z.string().nullable(), steering: z.number().int(), request: z.string().nullable() })
+const BlockCountSchema = z.object({ count: z.number().int().nonnegative(), last: z.number().int().nullable() })
+/** What a row's JSON begins with when its first key is the entry's type, which every journal so far writes. */
+const TYPED_ROWS = `value LIKE '{"type":"%'`
+const TURN_ROWS = `SELECT id, json_extract(value,'$.type') AS type, json_extract(value,'$.steeringFor') IS NOT NULL AS steering,
+  json_extract(value,'$.requestId') AS request FROM blocks`
+
+/**
+ * A journal read where it lies, for a window reading a conversation no host holds in memory (`LiveHistoryReader`'s cold
+ * views): one read transaction pinned on a read-only connection until `close`, so every page reads the rows as they were
+ * when it opened, whatever is written after, and nothing of the conversation is read in. `snapshot` is its metadata and
+ * requests with no blocks; a page reads its blocks by index (`at`), each kept for the view's life so a preview and the
+ * detail read later are the same entry, and the counts a page carries (`before`) come from an index of the blocks that
+ * begin a turn or name a request, made by SQLite once. A journal that keeps a base (named by `baseSource`, or a copy)
+ * isn't read cold: its history merges with blocks as a resident's does.
+ *
+ * Reading a 122 MB journal in whole took 1.8 s and 50 to 100 MB of heap, all of it paged out again 15 s later.
+ */
+export class ColdJournal {
+  readonly snapshot: LiveSnapshot
+  readonly length: number
+  /** Its file as compaction names it (`journalOpened`): a cold view holds it, so nothing compacts it meanwhile. */
+  readonly key: string
+  readonly #db: DatabaseSync
+  readonly #block: ReturnType<DatabaseSync["prepare"]>
+  readonly #tail: ReturnType<DatabaseSync["prepare"]>
+  readonly #appended: ReadonlyMap<number, number>
+  readonly #read = new Map<number, Entry>()
+  #turns: z.infer<typeof TurnRowSchema>[] | undefined
+  #chars = 0
+
+  private constructor(db: DatabaseSync, key: string, snapshot: LiveSnapshot, length: number, appended: ReadonlyMap<number, number>) {
+    this.#db = db
+    this.key = key
+    this.snapshot = snapshot
+    this.length = length
+    this.#appended = appended
+    this.#block = db.prepare("SELECT value FROM blocks WHERE id=?")
+    this.#tail = db.prepare("SELECT value FROM block_appends WHERE block_id=? ORDER BY sequence")
+  }
+
+  /** Conversation `id`'s journal under `root`, read cold; undefined when there is none, or it keeps a base. */
+  static open(root: string, id: string): ColdJournal | undefined {
+    return atOnce(ColdJournal.opening(root, id))
+  }
+
+  /** `open` as `Steps`, its requests parsed `ROWS_PER_STEP` at a time: a long Fin's 793 held the loop 73 ms at once. */
+  static *opening(root: string, id: string): Steps<ColdJournal | undefined> {
+    const path = join(root, `${id}.sqlite`)
+    if (!existsSync(path)) return undefined
+    const key = join(realpathSync(root), `${id}.sqlite`)
+    // An opener takes away any older close's right to tidy the file, and cancels a compaction waiting for it.
+    journalOpened.publish(key)
+    const db = new DatabaseSync(path, { readOnly: true })
+    try {
+      db.exec("BEGIN")
+      const metadata = metadataRow(db)
+      const base = db.prepare("SELECT value FROM base WHERE id=1").get()
+      const kept = base !== undefined && RowSchema.parse(base).value !== "null"
+      if (!metadata || kept) {
+        ColdJournal.#end(db)
+        return undefined
+      }
+      const stored = MetadataSchema.parse(JSON.parse(metadata))
+      const counted = BlockCountSchema.parse(db.prepare("SELECT count(*) AS count, max(id) AS last FROM blocks").get())
+      // Blocks are kept by index; a journal whose ids say otherwise is read whole, as it always was.
+      if (stored.baseSource || (counted.last ?? -1) !== counted.count - 1) {
+        ColdJournal.#end(db)
+        return undefined
+      }
+      const revision = ProgressSchema.safeParse(db.prepare("SELECT revision FROM progress WHERE id=1").get()).data?.revision ?? 0
+      const requests: LiveRequest[] = []
+      const requestRows = db.prepare("SELECT rowid AS at, value FROM requests WHERE rowid > ? ORDER BY rowid LIMIT ?")
+      for (let last = -1; ;) {
+        const rows = requestRows.all(last, ROWS_PER_STEP)
+        for (const row of rows) {
+          const request = RowAtSchema.parse(row)
+          requests.push(LiveRequestSchema.parse(JSON.parse(request.value)))
+          last = request.at
+        }
+        if (rows.length < ROWS_PER_STEP) break
+        yield
+      }
+      const orderRow = db.prepare("SELECT keys FROM request_order WHERE id=1").get()
+      const order = orderRow ? KeyListSchema.safeParse(JSON.parse(RowKeysSchema.parse(orderRow).keys)).data : undefined
+      if (order) inOrder(requests, order)
+      const harnessTurns = db.prepare("SELECT value FROM harness_turns ORDER BY rowid").all()
+        .map((row) => HarnessTurnSchema.parse(JSON.parse(RowSchema.parse(row).value)))
+      const appended = new Map<number, number>()
+      for (const value of db.prepare("SELECT block_id, count(*) AS count FROM block_appends GROUP BY block_id").all()) {
+        const row = AppendCountSchema.parse(value)
+        appended.set(row.block_id, row.count)
+      }
+      const snapshot: LiveSnapshot = {
+        ...stored,
+        revision: Math.max(stored.revision, revision),
+        ...harnessTurns.length && { harnessTurns },
+        base: null,
+        blocks: [],
+        requests,
+      }
+      return new ColdJournal(db, key, snapshot, counted.count, appended)
+    } catch (error) {
+      ColdJournal.#end(db)
+      throw error
+    }
+  }
+
+  static #end(db: DatabaseSync): void {
+    if (db.isTransaction) db.exec("ROLLBACK")
+    db.close()
+  }
+
+  /** Block `index` as the journal held it when this opened, its appends folded in; the same object each time. */
+  at(index: number): Entry | undefined {
+    if (index < 0 || index >= this.length) return undefined
+    const held = this.#read.get(index)
+    if (held) return held
+    const row = this.#block.get(index)
+    if (!row) return undefined
+    const value = RowSchema.parse(row).value
+    let entry = EntrySchema.parse(JSON.parse(value))
+    let chars = value.length
+    if (this.#appended.get(index)) {
+      for (const stored of this.#tail.all(index)) {
+        const text = RowSchema.parse(stored).value
+        const part = AppendValueSchema.parse(JSON.parse(text))
+        chars += text.length
+        if (part.kind === "text" && (entry.type === "text" || entry.type === "thinking")) entry = { ...entry, text: entry.text + part.text }
+        else if (part.kind === "tool" && entry.type === "tool") entry = growTool(entry, part.growth)
+        else throw new Error("Journal append has no matching block")
+      }
+    }
+    this.#read.set(index, entry)
+    this.#chars += chars
+    return entry
+  }
+
+  /**
+   * What a page ending at `index` carries of the blocks before it: how many turns begin among those from `covered`
+   * (`isTurnStart`), and the requests whose prompt is among them, as `historyPage` counts them over an array.
+   */
+  before(index: number, covered: number): PageCounts {
+    let turnStart = 0
+    const earlierRequests: string[] = []
+    for (const row of this.#turnRows()) {
+      if (row.id >= index) break
+      if (row.type === "user" && row.request) earlierRequests.push(row.request)
+      if (row.id >= covered && ((row.type === "user" && !row.steering) || row.type === "provider-turn")) turnStart++
+    }
+    return { turnStart, earlierRequests }
+  }
+
+  /** About what the blocks read so far weigh, for the views' budget. */
+  get chars(): number {
+    return this.#chars
+  }
+
+  /** Ends the read transaction and the connection; a view let go calls it once. */
+  close(): void {
+    if (!this.#db.isOpen) return
+    ColdJournal.#end(this.#db)
+  }
+
+  #turnRows(): z.infer<typeof TurnRowSchema>[] {
+    if (this.#turns) return this.#turns
+    // A row's JSON begins with its type: only those of a user or provider turn are parsed, unless one doesn't.
+    const typed = !this.#db.prepare(`SELECT 1 AS found FROM blocks WHERE NOT ${TYPED_ROWS} LIMIT 1`).get()
+    const rows = typed
+      ? this.#db.prepare(`${TURN_ROWS} WHERE value LIKE '{"type":"user"%' OR value LIKE '{"type":"provider-turn"%' ORDER BY id`).all()
+      : this.#db.prepare(`${TURN_ROWS} WHERE json_extract(value,'$.type') IN ('user','provider-turn') ORDER BY id`).all()
+    this.#turns = rows.map((row) => TurnRowSchema.parse(row))
+    return this.#turns
+  }
 }

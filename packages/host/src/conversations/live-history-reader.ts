@@ -3,7 +3,8 @@ import { z } from "zod"
 import type { ThreadPage } from "@mako/sessions"
 import type { LiveSnapshot } from "../contracts/live-conversations.js"
 import { HISTORY_VIEW_EXPIRED, type LiveHistoryAddress, type LiveHistoryRead, type LiveHistoryChunk, type LiveHistoryCursor } from "../contracts/live-history.js"
-import { HistoryRecords, HistoryVersions, historyCapture, historyPage, historyRange, isPartial, type HistoryValue } from "../contracts/history-pages.js"
+import { HistoryRecords, HistoryVersions, arrayBlocks, historyCapture, historyPage, historyRange, isPartial, type HistoryBlocks, type HistoryValue } from "../contracts/history-pages.js"
+import type { ColdJournal } from "./live-journal.js"
 import { nativeHistoryRevision } from "./native-history.js"
 import { cutOffRequests, mergedBaseSteps } from "./stream-merging.js"
 import { inSlices } from "@mako/sessions/slices"
@@ -22,7 +23,17 @@ const PRUNE_MS = 30_000
 /** Views let go, remembered by token so a read naming one says why. */
 const GONE_KEPT = 256
 const IDLE_MS = 10 * 60_000
-interface View { id: string; snapshot: LiveSnapshot; used: number }
+/**
+ * A capture a window reads from. `cold`: its blocks are read where the journal lies, a page at a time, under a read
+ * transaction the view holds until it's let go (`ColdJournal`); `snapshot.blocks` is then empty.
+ */
+interface View { id: string; snapshot: LiveSnapshot; used: number; cold?: ColdJournal }
+/** Conversation `id` read where its journal lies, when nothing holds it in memory (`LiveConversations.coldView`). */
+export type ColdOpener = () => Promise<{ journal: ColdJournal; snapshot: LiveSnapshot; still: () => boolean } | undefined>
+
+function blocksOf(view: View): HistoryBlocks {
+  return view.cold ?? arrayBlocks(view.snapshot.blocks)
+}
 /** Where an entry's bytes are read: its record by the catalog, and Mako's streams folder. */
 interface Originals {
   record(path: string, id: string): Promise<EntryOriginal | null>
@@ -52,6 +63,8 @@ export class LiveHistoryReader {
   private readonly originals?: Originals
   /** What memory holds of a conversation now, without reading one only on disk back in. */
   private readonly held?: (id: string) => LiveSnapshot | undefined
+  /** The last cold view of conversation `id`'s journal file `key` was let go (`JournalReclaims.released`). */
+  private readonly coldReleased?: (key: string, id: string) => void
   private readonly gone = new Map<string, { id: string; why: string; at: number }>()
   private pruned = 0
   /** A weighing of the views a capture asked for, still to run (`pruneSoon`). */
@@ -62,7 +75,8 @@ export class LiveHistoryReader {
     nativeEntry?: (path: string, id: string) => Promise<Entry | null>,
     originals?: Originals,
     held?: (id: string) => LiveSnapshot | undefined,
-  ) { this.nativePage = nativePage; this.nativeEntry = nativeEntry; this.originals = originals; this.held = held }
+    coldReleased?: (key: string, id: string) => void,
+  ) { this.nativePage = nativePage; this.nativeEntry = nativeEntry; this.originals = originals; this.held = held; this.coldReleased = coldReleased }
 
   /**
    * Conversation `id`'s entries were paged (`paged-entries.ts`): its views of
@@ -77,6 +91,27 @@ export class LiveHistoryReader {
       const entries = view.snapshot.base?.entries
       if (entries && entries !== held?.base?.entries) swapPaged(entries)
     }
+  }
+
+  /**
+   * Conversation `id` was read into memory: its cold views go, each holding a read transaction on a journal now being
+   * written, and a window reading one reads the conversation again, from memory.
+   */
+  loaded(id: string): void {
+    for (const [token, view] of Array.from(this.views)) if (view.id === id && view.cold) this.letGo(token, view, "its conversation was read in")
+  }
+
+  /** Whether a cold view holds journal file `key`, which isn't compacted meanwhile (`JournalReclaims`). */
+  holds(key: string): boolean {
+    for (const view of this.views.values()) if (view.cold?.key === key) return true
+    return false
+  }
+
+  /** What cold views hold: the blocks they've read, about two bytes a character. */
+  coldBytes(): number {
+    let chars = 0
+    for (const view of this.views.values()) chars += view.cold?.chars ?? 0
+    return chars * 2
   }
 
   /** Conversation `id` was let go: its views go with it, and a window reading one reads the conversation again. */
@@ -113,17 +148,25 @@ export class LiveHistoryReader {
     return this.capture(snapshot) as Result
   }
 
-  capture(snapshot: LiveSnapshot, from?: LiveHistoryCursor): LiveSnapshot {
+  capture(snapshot: LiveSnapshot, from?: LiveHistoryCursor, cold?: ColdJournal): LiveSnapshot {
     const held = [...this.views].find(([, view]) => view.id === snapshot.session.id &&
       view.snapshot.epoch === snapshot.epoch && view.snapshot.revision === snapshot.revision)
     const token = held?.[0] ?? randomUUID()
-    if (held) { this.touchView(held[0], held[1]); snapshot = held[1].snapshot }
-    else this.views.set(token, { id: snapshot.session.id, snapshot, used: Date.now() })
+    let view: View
+    if (held) {
+      // A view of the same revision is read on; the journal opened for this one isn't needed.
+      cold?.close()
+      this.touchView(held[0], held[1])
+      view = held[1]
+    } else {
+      view = { id: snapshot.session.id, snapshot, used: Date.now(), ...cold && { cold } }
+      this.views.set(token, view)
+    }
     this.pruneSoon()
-    return historyCapture(token, snapshot, this.versions, from)
+    return historyCapture(token, view.snapshot, this.versions, from, blocksOf(view))
   }
 
-  async read(id: string, input: LiveHistoryRead, snapshot: () => Promise<LiveSnapshot | null>): Promise<LiveHistoryChunk> {
+  async read(id: string, input: LiveHistoryRead, snapshot: () => Promise<LiveSnapshot | null>, coldOpen?: ColdOpener): Promise<LiveHistoryChunk> {
     if (this.pruneDue) this.prunePending()
     else if (Date.now() - this.pruned > PRUNE_MS) this.pruneViews()
     this.records.prune()
@@ -132,15 +175,25 @@ export class LiveHistoryReader {
       throw new Error("Other history reads are still finishing. Try this read again shortly.")
     let value: HistoryValue | undefined
     if (input.kind === "snapshot") {
-      const captured = await snapshot()
+      // One nothing holds in memory is read where its journal lies, and isn't read in for a window to look at it.
+      let cold = await coldOpen?.()
+      // Opening it and paging it are each a few tens of milliseconds on a long one: on turns of their own.
+      if (cold) await new Promise((resolve) => setImmediate(resolve))
+      // Read in meanwhile (its `loaded` came before this view was held): a view must not pin a journal a host writes.
+      if (cold && !cold.still()) {
+        cold.journal.close()
+        cold = undefined
+      }
+      const captured = cold?.snapshot ?? await snapshot()
       if (!captured) value = null
       else {
         const held = input.ifCurrent && this.views.get(input.ifCurrent.token)
         if (held?.id === id && input.epoch !== undefined && held.snapshot.epoch === input.epoch && captured.epoch === input.epoch &&
             captured.revision === input.ifCurrent?.revision) {
+          cold?.journal.close()
           this.touchView(input.ifCurrent.token, held)
           value = { kind: "unchanged", token: input.ifCurrent.token, revision: captured.revision, epoch: captured.epoch }
-        } else value = this.capture(captured, input.epoch !== undefined && input.epoch === captured.epoch ? input.from : undefined)
+        } else value = this.capture(captured, input.epoch !== undefined && input.epoch === captured.epoch ? input.from : undefined, cold?.journal)
       }
     } else {
       const view = this.views.get(input.token)
@@ -160,12 +213,12 @@ export class LiveHistoryReader {
           // Another read of this page may have prepended it meanwhile.
           if (view.snapshot.base === base) view.snapshot = { ...view.snapshot, base: merged.base }
         }
-        value = input.kind === "range" ? historyRange(input.token, view.snapshot, input.from, input.to, this.versions)
-          : historyPage(input.token, view.snapshot, input.before, this.versions)
+        value = input.kind === "range" ? historyRange(input.token, view.snapshot, input.from, input.to, this.versions, blocksOf(view))
+          : historyPage(input.token, view.snapshot, input.before, this.versions, blocksOf(view))
       }
-      else if (input.kind === "original") value = await this.original(view.snapshot, input.at)
+      else if (input.kind === "original") value = await this.original(view.snapshot, blocksOf(view), input.at)
       else if (input.at.kind === "live") {
-        value = view.snapshot.blocks[input.at.index]
+        value = blocksOf(view).at(input.at.index)
         if (value?.type === "tool") value = { ...value, historyVersion: this.versions.of(value) }
       } else {
         const base = view.snapshot.base
@@ -195,9 +248,9 @@ export class LiveHistoryReader {
    * the stream lines any entry names. One the record no longer holds by its
    * id is read by the bytes the view names.
    */
-  private async original(snapshot: LiveSnapshot, at: LiveHistoryAddress): Promise<EntryOriginal> {
+  private async original(snapshot: LiveSnapshot, blocks: HistoryBlocks, at: LiveHistoryAddress): Promise<EntryOriginal> {
     const base = snapshot.base
-    const entry = at.kind === "live" ? snapshot.blocks[at.index] : base?.entries.find((each) => each.id === at.id)
+    const entry = at.kind === "live" ? blocks.at(at.index) : base?.entries.find((each) => each.id === at.id)
     if (!entry) throw new Error("That retained history item is unavailable.")
     const record = at.kind === "base" && base && entry.record
       ? await this.originals?.record(base.ref.path, at.id).catch(() => null) ?? await readOriginal(base.ref.path, entry.record)
@@ -240,7 +293,7 @@ export class LiveHistoryReader {
       const count = newer.get(view.id) ?? 0
       const held = count === 0 ? this.held?.(view.id) : undefined
       if (held) this.weights.share(held, shared)
-      const weight = this.weights.of(view.snapshot, shared)
+      const weight = this.weights.of(view.snapshot, shared) + (view.cold ? view.cold.chars * 2 : 0)
       const why = count >= VIEWS_PER_CONVERSATION ? "newer views of its conversation"
         : first || held ? undefined
         : now - view.used > IDLE_MS ? "unused for ten minutes"
@@ -257,6 +310,10 @@ export class LiveHistoryReader {
 
   private letGo(token: string, view: View, why: string): void {
     this.views.delete(token)
+    if (view.cold) {
+      view.cold.close()
+      if (!this.holds(view.cold.key)) this.coldReleased?.(view.cold.key, view.id)
+    }
     this.gone.set(token, { id: view.id, why, at: Date.now() })
     if (this.gone.size > GONE_KEPT) this.gone.delete(this.gone.keys().next().value!)
   }

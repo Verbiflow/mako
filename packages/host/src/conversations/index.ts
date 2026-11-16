@@ -219,7 +219,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   const dataRoot = environment.dataRoot
   // `live` is made below; the reader asks it only once a read arrives.
   const history = new LiveHistoryReader(catalog.page, catalog.entry, deps.streams === undefined ? undefined : { record: catalog.original, streams: deps.streams },
-    (id) => live.held(id))
+    (id) => live.held(id), (key, id) => live.coldViewReleased(key, id))
   // Every resume, from the rail, a reconnect or a wake, first puts a session its harness deleted back from Mako's records.
   const restoring = restoringResume({
     assess: (binding) => harnesses.assessResume(binding),
@@ -307,6 +307,9 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     history: catalog.page,
     historyPaged: (id) => history.paged(id),
     historyReleased: (id) => history.released(id),
+    historyLoaded: (id) => history.loaded(id),
+    historyHeld: () => history.coldBytes(),
+    historyHolds: (key) => history.holds(key),
     staleHistory: (path, before) => catalog.page(path, before, undefined, { stale: true }),
     holdHistory: catalog.hold,
     historyAsOf: (path, asOf, before) => catalog.page(path, before, undefined, { asOf }),
@@ -721,7 +724,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   methods.handle("mako:live-snapshot", (id: string) => live.refreshedSnapshot(id))
   methods.handle("mako:live-context-breakdown", (id: string) => live.contextBreakdown(id))
   methods.handle("mako:live-read", (id: string, input: LiveHistoryRead) =>
-    history.read(id, LiveHistoryReadSchema.parse(input), () => live.refreshedSnapshot(id))
+    history.read(id, LiveHistoryReadSchema.parse(input), () => live.refreshedSnapshot(id), () => live.coldView(id))
   )
   methods.handle("mako:live-state", (id: string) => live.session(id) ?? null)
   methods.handle("mako:live-continue", async (id: string, bindingId: string,

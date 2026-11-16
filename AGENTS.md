@@ -1486,7 +1486,20 @@ opening the file read-only, its rows handed over a part at a time,
 `journalRowSteps`) and its snapshot made on the loop from them; a reader
 that fails leaves the journal read on the loop as before. On a 60MB
 journal it held the loop 42–91 ms in all against 108–477 ms read on it
-(`bench:live-read`'s `journalRead*`). A history read from its session whose
+(`bench:live-read`'s `journalRead*`). A window's read of a conversation not in
+memory isn't one: it reads the journal where it lies (`ColdJournal`, a
+cold view), under one read transaction pinned on a read-only connection
+until the view is let go, so its pages read the rows as they were when it
+opened. It parses the metadata and requests, a slice at a time, and the
+blocks a page shows, by index; SQLite counts the turns and requests before
+a page. The conversation is read in only when something acts on it, which
+lets its cold views go (`historyLoaded`), and what they hold counts in the
+conversations' memory budget (`historyHeld`). One its last host left
+running or sending, or that keeps a base (`baseSource` or a copy), is read
+in as before (`LiveRecords.cold`). On copies of ten Fins' journals (22 to
+122 MB) the first reads took 2.4 s in all against 7.8 s, a 122 MB one's
+0.6 s against 1.8 s, and the host's RSS peaked at 0.9 GB against 1.6 GB
+(`test-cold-history.ts`). A history read from its session whose
 merge was overtaken is merged again on the next drain, not read again
 (`LiveSources.pagesRead`). `agents_report` never reads a journal: a
 notice for an Apex not in memory reads it in first (`readIn`), and the
