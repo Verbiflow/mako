@@ -336,6 +336,34 @@ export function runGatewayConformance(
   }
 
   scenario(
+    "a Thread's passing state reaches only its readers that read it, from its owner under its generation, takes no number, and never enters its log",
+    async (gateway) => {
+      const { runtime, generation } = await running(gateway)
+      const reads = (await gateway.connectClient(phone, { ephemeral: true })).subscribe({ stream: threadStream("th-1"), after: 0 })
+      const plain = (await gateway.connectClient(desktop)).subscribe({ stream: threadStream("th-1"), after: 0 })
+      const kept = (localSeq: number) => runtime.send({ type: "event", threadId: "th-1", generation, localSeq, event: Payload.encoded(`kept ${localSeq}`) })
+      const passing = (text: string, under = generation) => runtime.send({ type: "passing", threadId: "th-1", generation: under, event: Payload.encoded(text) })
+      kept(1)
+      expect(await runtime.next(), "ack")
+      passing("from an older generation", generation - 1)
+      passing("passing")
+      kept(2)
+      expect(await runtime.next(), "ack")
+      const [first, between, second] = [await reads.next(), await reads.next(), await reads.next()]
+      assert.deepEqual([first.seq, first.event.text], [1, "kept 1"])
+      assert.deepEqual([between.ephemeral, between.seq, between.event.text], [true, 0, "passing"], "passing state, with no place in the log; an older generation's none")
+      assert.deepEqual([second.seq, second.event.text], [2, "kept 2"], "the next event's number follows the last logged one's")
+      assert.deepEqual([(await plain.next()).event.text, (await plain.next()).event.text], ["kept 1", "kept 2"], "a reader that didn't say it reads passing state hears none")
+      // Read from the log afterwards: only what it kept.
+      const later = (await gateway.connectClient(desktop, { ephemeral: true })).subscribe({ stream: threadStream("th-1"), after: 0 })
+      assert.deepEqual([(await later.next()).event.text, (await later.next()).event.text], ["kept 1", "kept 2"])
+      kept(3)
+      expect(await runtime.next(), "ack")
+      assert.deepEqual([(await later.next()).event.text], ["kept 3"], "nothing of the passing state was kept between")
+    }
+  )
+
+  scenario(
     "a Thread whose readers all read the compact live form is said so (`live-form`); a reader of form 1 hears the notice to read again in place of a compact event, and a run of them from the log as one",
     async (gateway) => {
       const { runtime, generation } = await running(gateway)
