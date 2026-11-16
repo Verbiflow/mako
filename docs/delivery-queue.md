@@ -141,18 +141,29 @@ schedules, and a failing schedule is pinned there.
     attempt cannot silently resend the reports. Proven-unsent digests still wait
     out usage limits as digests; Stop, ordinary-Thread Off and native ownership guards remain in force.
 
-16. **What one sender queued goes as one turn, with Mako's notes.** When an
-    agent's or Mako's queued message goes, the plain messages from the same
-    agent and Mako's notes (pull-request outcomes, wait notes) queued right
-    behind it and admitted after it, each still admitted at the handoff, (no attachments, grants, pause, edit, hold, digest
-    or continuation, and the same `notification`) go with it, in order, within
-    `JOINED_MAX` and `JOINED_CHARS` (`foldQueued`). The fold is written only
-    as the send commits, in the write that records it handed over: a send that
-    goes no further (a Stop, a withdrawal, a refusal, a write that fails) leaves
-    every row as it was. Until then each is its own row; a folded one is
-    canceled with `joinedInto`, never dropped, and its ID resolves to the
-    message that carried it, which never folds again. An interrupt's message
-    goes alone, and another Apex's message, owed its own reply, never folds.
+16. **What waits for a turn goes as one turn, the person's words first.** When a
+   queued message goes, what waits right behind it goes with it, in order: one
+   agent's plain messages, Mako's notes (pull-request outcomes, wait notes), one
+   message from the person, and Fins' news, a digest never sent before, waiting
+   for the turn or for its burst's window (one ahead of it too); one tried before
+   (sent, or resting after a limit) goes again alone, by its own retry. Each is admitted after it, each still
+   admitted at the handoff, with no attachments, grants, pause, edit, hold,
+   continuation or command, and the same `notification`, within `JOINED_MAX` and
+   `JOINED_CHARS` (`foldQueued`). The person's message is never folded into
+   another's: it carries the turn, its words first, and the rest follow under a
+   line each saying who and when. Without it the first that isn't Fins' news
+   carries it; Fins' news never carries a turn, so a digest that goes alone keeps
+   rule 15's receipt. The fold is written only as the send commits, in the write
+   that records it handed over: a send that goes no further (a Stop, a
+   withdrawal, a refusal, a write that fails, Fins' news that changed meanwhile)
+   leaves every row as it was. Until then each is its own row; a folded one is
+   canceled with `joinedInto`, never dropped, and its ID resolves to the message
+   that carried it, which never folds again. Each folded message reaches the
+   conversation as its own sender's (rule 13). Fins' news a folded turn carried is
+   heard when that turn's model answers; a turn that fails before it does sends the
+   news again as a digest of its own, once, and a crash after its handoff sends
+   rule 15's discovery hint, never the reports. An interrupt's message goes
+   alone, and another Apex's message, owed its own reply, never folds.
 
 ## What each failure leaves
 

@@ -15,6 +15,8 @@ import { AgentsWorld, type Script } from "./lib/agents-world.ts"
  *   longest result wait to reach it?
  * - **Backlog.** A Fin busy on a long turn while its Apex, the person and Mako each leave it something. How many turns
  *   does it take to hear all of it once free, and does each message arrive exactly once?
+ * - **Inbox.** An Apex busy on a turn while the person writes to it and a Fin finishes. How many turns does it take to
+ *   hear both once free?
  *
  * Each measure is held to a target (`INVARIANTS`). Where Mako doesn't meet one yet, `EXPECTED_FAILING` says so, and the
  * test fails if a target's result differs from what's expected, either way: a change that meets one flips it here.
@@ -31,7 +33,7 @@ const AFTER_MS = 20_000
 /** The shortest stretch of a turn that counts as time to think, uninterrupted. */
 const THINK_MS = 10_000
 
-type Invariant = "apexSteersPerMinute" | "apexThinkShare" | "apexTurnsAfter" | "resultWaitMaxMs" | "finBacklogTurnsNoPerson" | "finBacklogTurns"
+type Invariant = "apexSteersPerMinute" | "apexThinkShare" | "apexTurnsAfter" | "resultWaitMaxMs" | "finBacklogTurnsNoPerson" | "finBacklogTurns" | "apexInboxTurns"
 type Bound = { max: number } | { min: number }
 interface Measure { name: Invariant; value: number; target: string; ok: boolean }
 
@@ -52,13 +54,15 @@ const INVARIANTS = {
   finBacklogTurnsNoPerson: { max: 1 },
   /** And with the person's message among them. */
   finBacklogTurns: { max: 1 },
+  /** Turns an Apex takes, once its turn ends, to hear the person's message and a Fin's result that came meanwhile. */
+  apexInboxTurns: { max: 1 },
 } satisfies Record<Invariant, Bound>
 
 /**
  * What Mako doesn't meet yet, each with a ceiling it mustn't get worse than: each later PR that meets a target removes
  * it, or tightens its ceiling, and the test then holds it there.
  */
-const EXPECTED_FAILING = new Map<Invariant, Bound>([["finBacklogTurns", { max: 3 }]])
+const EXPECTED_FAILING = new Map<Invariant, Bound>()
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 async function until(what: string, done: () => boolean, timeoutMs = 60_000): Promise<void> {
@@ -183,9 +187,48 @@ async function backlog(): Promise<void> {
   }
 }
 
+/** An Apex on a turn while the person writes to it and one of its Fins finishes: its turns once free. */
+async function inbox(): Promise<void> {
+  let release: () => void = () => {}
+  const released = new Promise<void>((resolve) => { release = resolve })
+  let finished = false
+  const script: Script = async (turn) => {
+    if (turn.text.includes("You're fin:")) {
+      await released
+      finished = true
+      return "Done: the schema checked."
+    }
+    if (turn.text.includes("Long work")) await turn.world.hold(turn.conversation)
+    return "Noted."
+  }
+  const world = new AgentsWorld({ root: join(root, "inbox"), script })
+  try {
+    const apex = await world.apex("claude", "full")
+    const started = await world.agents.start(apex.caller, { brief: { objective: "Check the schema." }, harness: "codex", name: "schema", clientKey: "schema", cwd: world.root })
+    assert.ok(!("refused" in started), JSON.stringify(started))
+    world.say(apex.conversation, "Long work: plan the release.")
+    await until("the Apex's long turn", () => world.live.session(apex.conversation)?.status === "running")
+    const person = "Person: ship it after the review."
+    world.say(apex.conversation, person)
+    release()
+    await until("the Fin's result in its Apex's queue", () => finished && Boolean(world.live.snapshot(apex.conversation)?.requests.some((request) => request.digest && request.text.includes("the schema checked"))))
+    const before = world.prompts.filter((prompt) => prompt.conversation === apex.conversation).length
+    world.release(apex.conversation)
+    await world.settle(500, 30_000, "ignore")
+    const turns = world.prompts.filter((prompt) => prompt.conversation === apex.conversation).slice(before)
+    // The Fin's result by its digest's header: the person's turn also carries the roster, which quotes its last report.
+    for (const text of [person, FROM_AGENTS]) assert.equal(turns.filter((turn) => turn.text.includes(text)).length, 1, `${text} reached the Apex exactly once`)
+    assert.ok(turns.some((turn) => turn.text.includes(FROM_AGENTS) && turn.text.includes("the schema checked")), "the digest carried the Fin's result")
+    record("apexInboxTurns", turns.length)
+  } finally {
+    await world.close()
+  }
+}
+
 try {
   await interruption()
   await backlog()
+  await inbox()
   const out = { fins: FINS, apexTurnMs: APEX_TURN_MS, spreadMs: SPREAD_MS, afterMs: AFTER_MS, thinkMs: THINK_MS, measures }
   console.log(`BENCH ${JSON.stringify(out)}`)
   if (process.env.COMMS_STORM_OUT) writeFileSync(process.env.COMMS_STORM_OUT, `${JSON.stringify(out, null, 2)}\n`)

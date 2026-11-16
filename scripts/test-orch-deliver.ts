@@ -5,11 +5,11 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AgentsSendResult, AgentsSent } from "@mako/host/contracts/agent-tools"
-import { agentWords, apexNote } from "@mako/host/contracts/children"
+import { agentWords, apexNote, DIGEST_WAITS } from "@mako/host/contracts/children"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import { foldQueued } from "@mako/host/conversations/live-dispatch"
 import { actionNotice } from "@mako/host/contracts/operation-recovery"
-import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
+import { PrincipalIdSchema, SessionIdSchema } from "@mako/host/contracts/thread-identity"
 import { agentMessageOrder } from "@mako/host/conversations/agent-message-order"
 import { TurnInProgressError } from "@mako/host/harnesses/index"
 import { AgentsWorld, type WorldOptions } from "./lib/agents-world.ts"
@@ -183,6 +183,46 @@ function apexMessagesNeverFold(): void {
   assert.equal(foldQueued(fromApex, fromApex[0]!), undefined, "messages from another Apex each go as their own turn")
   const mixed = [message("a", "First.", 1), message("b", `${apexNote("t-1")}\n\nSecond.`, 2)]
   assert.equal(foldQueued(mixed, mixed[0]!), undefined, "and never into another")
+}
+
+/**
+ * One turn for what waits around the message going (`foldQueued`): the person's message carries it, its words first, and
+ * is never folded into another's; Fins' news waiting out its window, ahead of it, goes along as its own section; a second
+ * message from the person ends the fold; and Fins' news never carries a turn.
+ */
+function theInboxCarrier(): void {
+  const apex = { kind: "agent" as const, session: SessionIdSchema.parse(randomUUID()) }
+  const person = { kind: "person" as const, principal: PrincipalIdSchema.parse(randomUUID()) }
+  const mako = { kind: "service" as const, name: "turn-wait" as const }
+  const row = (id: string, text: string, order: number, extra: Partial<LiveRequest> = {}): LiveRequest => ({ id, text, attachments: [], status: "queued", admissionOrder: order, createdAt: order, ...extra })
+  const queue = [row("a1", "Apex one.", 1, { actor: apex }), row("a2", "Apex two.", 2, { actor: apex }), row("p", "Use staging.", 3, { actor: person }), row("m", "Mako: your wait ended.", 4, { actor: mako })]
+  const plan = foldQueued(queue, queue[0]!)
+  assert.ok(plan, "the Apex's messages, the person's and Mako's note go as one turn")
+  assert.equal(plan.carrier.id, "p", "carried by the person's message")
+  assert.ok(plan.request.text.startsWith("Use staging."), `the person's words first: ${plan.request.text}`)
+  const parts = ["Apex one.", "Apex two.", "Mako: your wait ended."].map((words) => plan.request.text.indexOf(words))
+  assert.ok(parts.every((at, index) => at > 0 && (index === 0 || at > parts[index - 1]!)), "then the rest in the order sent")
+  assert.match(plan.request.text, /\[mako · a message, sent [^\]]+\]\nApex one\./)
+  assert.match(plan.request.text, /\[mako · the next message from the same sender, sent [^\]]+\]\nApex two\./)
+  assert.match(plan.request.text, /\[mako · Mako's note, sent [^\]]+\]\nMako: your wait ended\./)
+  assert.deepEqual(plan.request.joined?.map((each) => each.id), ["a1", "a2", "m"])
+  const after = new Map(plan.requests.map((each) => [each.id, each]))
+  assert.equal(after.get("p")?.status, "queued", "the person's row is never folded into another's")
+  for (const id of ["a1", "a2", "m"]) assert.equal(after.get(id)?.joinedInto, "p", `${id} goes inside the person's turn`)
+
+  const news = row("d", "[mako · from your Fins, not the person]\n1 finished.", 1, { actor: apex, status: "held", wake: { at: 99, after: DIGEST_WAITS }, digest: { notices: [] } })
+  const inbox = [news, row("p", "Ship it after review.", 2, { actor: person })]
+  const carried = foldQueued(inbox, inbox[1]!)
+  assert.equal(carried?.carrier.id, "p", "Fins' news waiting out its window goes with the person's message")
+  assert.match(carried!.request.text, /^Ship it after review\.\n\n\[mako · your Fins' news, sent [^\]]+\]\n\[mako · from your Fins/)
+  assert.equal(carried!.requests.find((each) => each.id === "d")?.joinedInto, "p")
+  const paused = [{ ...news, pause: "stop" as const }, inbox[1]!]
+  assert.equal(foldQueued(paused, paused[1]!), undefined, "news a Stop paused stays where it is")
+
+  const twice = [row("p1", "One.", 1, { actor: person }), row("p2", "Two.", 2, { actor: person })]
+  assert.equal(foldQueued(twice, twice[0]!), undefined, "a second message from the person goes as its own turn")
+  const onlyNews = [{ ...news, status: "queued" as const, wake: undefined }]
+  assert.equal(foldQueued(onlyNews, onlyNews[0]!), undefined, "Fins' news never carries a turn")
 }
 
 /** A gate on a Fin's next send: held between its dispatch and its handoff until the test opens it. */
@@ -574,7 +614,7 @@ async function siblingRefusalNamesRelay(): Promise<void> {
 }
 
 try {
-  await runCases([siblingRefusalNamesRelay, notificationDoesNotReportCompletion, notificationsAcrossApexes, oldQueuedKeepsNewerInstructions, aRowCountsItsTurn, idleTakesATurn, queueByDefault, queuedJoinOneTurn, apexMessagesNeverFold, foldUndoneOnStop, foldAfterTurnInProgress, steerAsATurnBegins, steerAcrossHarnesses, refusedSteerQueues, cursorHoldsASteer, interruptGoesFirst, forwardTakesTheChoice], (name) => console.log(`ok ${name}`))
+  await runCases([siblingRefusalNamesRelay, notificationDoesNotReportCompletion, notificationsAcrossApexes, oldQueuedKeepsNewerInstructions, aRowCountsItsTurn, idleTakesATurn, queueByDefault, queuedJoinOneTurn, apexMessagesNeverFold, theInboxCarrier, foldUndoneOnStop, foldAfterTurnInProgress, steerAsATurnBegins, steerAcrossHarnesses, refusedSteerQueues, cursorHoldsASteer, interruptGoesFirst, forwardTakesTheChoice], (name) => console.log(`ok ${name}`))
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

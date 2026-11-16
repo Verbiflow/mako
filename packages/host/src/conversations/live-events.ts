@@ -45,6 +45,12 @@ function unheardDigest(request: LiveRequest): boolean {
   return request.status === "dispatching" && request.digest !== undefined && !request.digest.heard
 }
 
+/** Fins' news that went folded into the turn on its way (`joinedInto`), which its model hasn't shown it heard. */
+function unheardFolded(request: LiveRequest, requests: readonly LiveRequest[]): boolean {
+  return request.digest !== undefined && !request.digest.heard && request.joinedInto !== undefined &&
+    requests.some((carrier) => carrier.id === request.joinedInto && carrier.status === "dispatching")
+}
+
 export class LiveEvents {
   private readonly access: EventsAccess
   private readonly parts: EventParts
@@ -335,8 +341,10 @@ export class LiveEvents {
     // The model answering again is the end of a retry's wait.
     if (resident.snapshot.nativeActivity?.kind === "retrying" && prepared.some((update) => update.kind !== "user"))
       resident.snapshot = { ...resident.snapshot, nativeActivity: undefined }
-    if (prepared.some(modelAnswered) && resident.snapshot.requests.some(unheardDigest))
-      resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((request) => (unheardDigest(request) ? { ...request, digest: { ...request.digest!, heard: true as const } } : request)) }
+    const { requests } = resident.snapshot
+    const unheard = (request: LiveRequest): boolean => unheardDigest(request) || unheardFolded(request, requests)
+    if (prepared.some(modelAnswered) && requests.some(unheard))
+      resident.snapshot = { ...resident.snapshot, requests: requests.map((request) => (unheard(request) ? { ...request, digest: { ...request.digest!, heard: true as const } } : request)) }
     for (const update of prepared) {
       if (dispatching && update.kind === "user") continue
       // What the harness kept of its history may have dropped Mako's note.

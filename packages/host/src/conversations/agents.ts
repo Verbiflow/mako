@@ -792,8 +792,9 @@ export class Agents implements AgentOperations, ConversationChildren {
       // Memory first: a notice for an Apex in memory reads nothing in, and one that isn't is read in before (`noticeOf`).
       unsent: (conversation) => ((deps.live.held(conversation) ?? deps.live.snapshot(conversation))?.requests ?? []).flatMap((request) =>
         request.digest && !request.continues?.brief && (request.status === "queued" || request.status === "held") ? [{ id: request.id, ...carriedDigest(request.digest) }] : []),
+      // A digest folded into another turn (`joinedInto`) carries its notices there.
       carried: (conversation, notice) => Boolean((deps.live.held(conversation) ?? deps.live.snapshot(conversation))?.requests.some((request) =>
-        request.status !== "canceled" && request.digest?.notices.some((carried) => carried.id === notice))),
+        (request.status !== "canceled" || request.joinedInto !== undefined) && request.digest?.notices.some((carried) => carried.id === notice))),
       admit: (conversation, request, text, notices, actor, hold, lines) => {
         // The conversation took this request already: a host that died before marking its reports heard sent it.
         if (deps.live.snapshot(conversation)?.requests.some((asked) => asked.id === request)) return
@@ -2730,8 +2731,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     const apex = this.frontOf(edge.parent, edge.parentSession)
     const id = `notice:${edge.child}:${report.id}`
     if (apex && this.wakes.steered(id)) return false
-    const carriers = (apex ? this.deps.live.snapshot(apex)?.requests ?? [] : []).filter((request) => request.status !== "canceled" && request.digest?.notices.some((notice) => notice.id === id))
-    return carriers.length ? carriers.some(handedOver) : !this.store()!.undeliveredReports().some((waiting) => waiting.report.id === report.id)
+    const requests = apex ? this.deps.live.snapshot(apex)?.requests ?? [] : []
+    const carriers = requests.filter((request) => (request.status !== "canceled" || request.joinedInto !== undefined) && request.digest?.notices.some((notice) => notice.id === id))
+    // One folded into another turn reached it when that turn was handed over.
+    const went = (request: LiveRequest): boolean => handedOver(request.joinedInto === undefined ? request : requests.find((each) => each.id === request.joinedInto) ?? request)
+    return carriers.length ? carriers.some(went) : !this.store()!.undeliveredReports().some((waiting) => waiting.report.id === report.id)
   }
 
   private async answerOnce(by: Answerer, edge: ThreadParent, op: string, input: Pick<AgentsAnswerInput, "answer" | "allow" | "person" | "ask">): Promise<AgentsAnswered | AgentRefused> {

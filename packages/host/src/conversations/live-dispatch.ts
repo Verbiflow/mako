@@ -55,66 +55,129 @@ function admitted(request: LiveRequest): number {
   return request.admissionOrder ?? request.createdAt ?? 0
 }
 
-/** A message that can go with others from its sender: an agent's plain words, waiting for nothing but its turn. */
 /** Mako's own notes that go with the turn they wait for: a pull request's outcome, a wait that fired. */
 const FOLDED_SERVICES = new Set(["pull-watch", "turn-wait"])
 
-/** Who wrote a message that can go with others: an agent, by its Session, or Mako; undefined for anyone else. */
-function folder(request: LiveRequest): { agent: string } | "mako" | undefined {
-  if (request.actor?.kind === "agent") return { agent: request.actor.session }
-  return request.actor?.kind === "service" && FOLDED_SERVICES.has(request.actor.name) ? "mako" : undefined
+/** Who wrote a message that can go with others: the person, an agent by its Session, Mako, or Fins' news (a digest). */
+type Sender = { kind: "person" } | { kind: "agent"; session: string } | { kind: "mako" } | { kind: "fins" }
+
+function senderOf(request: LiveRequest): Sender | undefined {
+  if (request.digest) return { kind: "fins" }
+  if (!request.actor || request.actor.kind === "person") return { kind: "person" }
+  if (request.actor.kind === "agent") return { kind: "agent", session: request.actor.session }
+  return FOLDED_SERVICES.has(request.actor.name) ? { kind: "mako" } : undefined
 }
 
-function foldable(request: LiveRequest): boolean {
-  return request.status === "queued" && folder(request) !== undefined && !request.pause && !request.editing && !request.wake &&
-    !request.retry && !request.digest && !request.continues && !request.signIn && !request.accountSwitch && !request.review &&
-    !request.verbatim && !request.ownerCheck && !request.attachments.length && !request.grants?.length && !request.joinedInto &&
+/** Whether a message is the person's own. */
+function personal(request: LiveRequest): boolean {
+  return senderOf(request)?.kind === "person"
+}
+
+/** Words and a sender, nothing else: no hold, no edit, no command, nothing it sends or settles of its own. */
+function plain(request: LiveRequest): boolean {
+  return senderOf(request) !== undefined && !request.pause && !request.editing && !request.retry && !request.continues && !request.signIn &&
+    !request.accountSwitch && !request.review && !request.verbatim && !request.ownerCheck && !request.goal && request.displayText === undefined &&
+    !request.joinedInto && !request.interruption &&
     // Folded once already, it carries what it carries; and another Apex's message is owed its own reply.
     !request.joined?.length && !request.text.includes(APEX_NOTE_MARK)
 }
 
+/** A digest held only for its burst's window (`DIGEST_WAITS`): a turn that goes now takes it along. */
+function windowedDigest(request: LiveRequest): boolean {
+  return request.status === "held" && request.wake?.after === DIGEST_WAITS && !request.digest?.resting
+}
+
 /**
- * `next`, about to go, with what waits right behind it from its sender and from Mako, as one turn: their words after its
- * own, in the order sent, each under a line saying who and when, so a Fin back from a long turn reads everything said
- * since at once, not one message a turn (land-2, 2026-11-16: ten of its Apex's messages, ten turns, the newest read
- * last; a pull request's outcome and a wait's note a turn each besides). One agent's plain messages and Mako's notes
- * (`FOLDED_SERVICES`) admitted after it fold, only while nothing else stands between them (another agent, the person, a
- * paused or edited message, one with attachments or a different `notification`, one `admits` refuses), within
- * `JOINED_MAX` and `JOINED_CHARS`. Each folded message is canceled with `joinedInto`, its ID kept in `joined`.
- * Undefined when none fold.
+ * Fins' news never sent: one tried before (sent, or resting after a limit) goes again alone, as its own retry and
+ * receipt say (`delivery-retry.ts`, rule 15).
  */
-export function foldQueued(requests: readonly LiveRequest[], next: LiveRequest, admits: (request: LiveRequest) => boolean = () => true): { request: LiveRequest; requests: LiveRequest[] } | undefined {
-  if (!foldable(next)) return undefined
-  const first = folder(next)
-  let session = first && first !== "mako" ? first.agent : undefined
-  const behind = requests.slice(requests.indexOf(next) + 1).filter((request) => request.status === "queued" || request.status === "held")
-  const folded: LiveRequest[] = []
-  let length = next.text.length
-  for (const request of behind) {
-    const by = folder(request)
-    if (!foldable(request) || !by || Boolean(request.notification) !== Boolean(next.notification)) break
-    // One agent's words, and Mako's: another agent's message is its own turn.
-    if (by !== "mako") {
-      if (session !== undefined && by.agent !== session) break
-      session = by.agent
-    }
+function freshNews(request: LiveRequest): boolean {
+  return request.digest === undefined || (request.digest.sentAt === undefined && !request.digest.resting && !request.digest.heard)
+}
+
+/** A message that can go inside another's turn: waiting only for its turn (a digest, or its window), with nothing attached. */
+function joins(request: LiveRequest): boolean {
+  return plain(request) && freshNews(request) && (request.status === "queued" ? !request.wake : Boolean(request.digest) && windowedDigest(request)) &&
+    !request.attachments.length && !request.grants?.length
+}
+
+/** A turn of several messages: the row that carries it, as it is now and with the words it goes with, and the queue as it leaves. */
+export interface FoldPlan {
+  carrier: LiveRequest
+  request: LiveRequest
+  requests: LiveRequest[]
+}
+
+/**
+ * `next`, about to go, with what waits for a turn around it, as one turn (`docs/delivery-queue.md`, rule 16): a Fin back
+ * from a long turn, or an Apex the person wrote to while its Fins reported, reads everything said since at once, not a
+ * message a turn (land-2, 2026-11-16: ten of its Apex's messages, ten turns, the newest read last; a pull request's
+ * outcome and a wait's note a turn each besides). Behind `next`, while nothing else stands between them (another agent,
+ * a second message from the person, a paused or edited message, one with attachments or a different `notification`, one
+ * `admits` refuses), go one agent's plain messages, Mako's notes (`FOLDED_SERVICES`), the person's message and Fins'
+ * news, a digest waiting for the turn or for its window, the one ahead of `next` too. The person's message is never
+ * folded into another's: it carries the turn, its words first, and the rest follow in their order, each under a line
+ * saying who and when. Without it the first that isn't a digest carries the turn; a digest never does, so one that goes
+ * alone keeps its own receipt (rule 15). Within `JOINED_MAX` and `JOINED_CHARS`; each folded message is canceled with
+ * `joinedInto`, its ID kept in `joined`. Undefined when none fold.
+ */
+export function foldQueued(requests: readonly LiveRequest[], next: LiveRequest, admits: (request: LiveRequest) => boolean = () => true): FoldPlan | undefined {
+  if (next.status !== "queued" || next.wake || !plain(next) || !freshNews(next)) return undefined
+  // A person's message may bring what it attaches and grants: it carries the turn. Anyone else's goes alone with them.
+  if (!personal(next) && (next.attachments.length || next.grants?.length)) return undefined
+  const at = requests.indexOf(next)
+  const line: LiveRequest[] = [...requests.slice(0, at).filter((request) => joins(request) && request.digest !== undefined && admits(request)).slice(-1), next]
+  let agent: string | undefined
+  let person = false
+  let digests = 0
+  let length = 0
+  const fits = (request: LiveRequest): boolean => {
+    const by = senderOf(request)
+    if (!by || Boolean(request.notification) !== Boolean(next.notification)) return false
+    // One person's message, carrying it; one digest; one agent's words: another agent's message is its own turn.
+    if (by.kind === "person" && person) return false
+    if (by.kind === "fins" && digests) return false
+    if (by.kind === "agent" && agent !== undefined && by.session !== agent) return false
+    if (line.length > JOINED_MAX || length + request.text.length > JOINED_CHARS) return false
+    if (by.kind === "person") person = true
+    if (by.kind === "fins") digests += 1
+    if (by.kind === "agent") agent = by.session
+    length += request.text.length
+    return true
+  }
+  if (!fits(next)) return undefined
+  // What's ahead of `next` is a digest waiting out its window, taken only if it fits beside `next`.
+  if (line.length > 1 && !fits(line[0]!)) line.shift()
+  for (const request of requests.slice(at + 1)) {
+    if (request.status !== "queued" && request.status !== "held") continue
+    if (request.status === "held" && !windowedDigest(request)) break
+    if (!joins(request)) break
     // A note whose wait no longer holds (`Agents.admits`) goes alone, to be refused there.
     if (!admits(request)) break
     // Only what came after it: one that went ahead of older messages (an interrupt's) goes alone, and they follow it.
-    if (admitted(request) <= admitted(next)) break
-    if (folded.length >= JOINED_MAX || length + request.text.length > JOINED_CHARS) break
-    folded.push(request)
-    length += request.text.length
+    // Fins' news says what's new whenever it was gathered.
+    if (!request.digest && admitted(request) <= admitted(next)) break
+    if (!fits(request)) break
+    line.push(request)
   }
-  if (!folded.length) return undefined
-  const by = (request: LiveRequest): FoldedBy => folder(request) === "mako" ? "mako" : folder(next) === "mako" && !folded.slice(0, folded.indexOf(request)).some((each) => folder(each) !== "mako") ? "agent" : "same"
-  const text = next.text + folded.map((request) => `${foldedSeparator(by(request), request.createdAt ?? Date.now())}${request.text}`).join("")
-  const joined = [...next.joined ?? [], ...folded.map((request) => ({ id: request.id, at: request.createdAt ?? Date.now() }))]
-  const request: LiveRequest = { ...next, text, joined, inputDigest: promptFingerprint(text, next.attachments, next.tuning) }
-  const gone = new Set(folded.map((each) => each.id))
+  const carrier = line.find(personal) ?? line.find((request) => !request.digest)
+  if (!carrier || line.length < 2) return undefined
+  const rest = line.filter((request) => request !== carrier)
+  const by = (request: LiveRequest, index: number): FoldedBy => {
+    const sender = senderOf(request)
+    if (sender?.kind === "mako") return "mako"
+    if (sender?.kind === "fins") return "fins"
+    const before = [carrier, ...rest.slice(0, index)]
+    return sender?.kind === "agent" && before.some((each) => { const was = senderOf(each); return was?.kind === "agent" && was.session === sender.session }) ? "same" : "agent"
+  }
+  const text = carrier.text + rest.map((request, index) => `${foldedSeparator(by(request, index), request.createdAt ?? Date.now())}${request.text}`).join("")
+  const joined = rest.map((request) => ({ id: request.id, at: request.createdAt ?? Date.now() }))
+  const request: LiveRequest = { ...carrier, text, joined, inputDigest: promptFingerprint(text, carrier.attachments, carrier.tuning) }
+  const gone = new Set(rest.map((each) => each.id))
   return {
+    carrier,
     request,
-    requests: requests.map((each) => each === next ? request : gone.has(each.id) ? { ...each, status: "canceled" as const, joinedInto: next.id } : each),
+    requests: requests.map((each) => each === carrier ? request : gone.has(each.id) ? { ...each, status: "canceled" as const, joinedInto: carrier.id } : each),
   }
 }
 
@@ -129,8 +192,13 @@ function commitFold(requests: readonly LiveRequest[], carrier: string, folded: L
     if (each.id === carrier) return { ...each, text: folded.text, joined: folded.joined, inputDigest: folded.inputDigest }
     const as = then.get(each.id)
     if (!as) return each
-    return each.status === "queued" && !each.editing && !each.pause && each.text === as.text ? { ...each, status: "canceled" as const, joinedInto: carrier } : each
+    return stillWaiting(each, as.text) ? { ...each, status: "canceled" as const, joinedInto: carrier } : each
   })
+}
+
+/** Whether a message folded into a turn still waits as it was when the fold was planned: unsent, unchanged, not paused. */
+function stillWaiting(request: LiveRequest | undefined, text: string): boolean {
+  return request !== undefined && (request.status === "queued" || (Boolean(request.digest) && windowedDigest(request))) && !request.editing && !request.pause && request.text === text
 }
 
 /**
@@ -324,10 +392,12 @@ export class LiveDispatch {
       })
       return
     }
-    const request = queued
-    // What its sender queued right behind it goes with it, as one turn: its words are sent now, and the journal folds the
-    // rows only as the handoff commits (`report`), so a send that goes no further leaves every row as it was.
-    const folded = foldQueued(resident.snapshot.requests, request, (each) => dependencies.agents?.()?.admits?.(resident.snapshot.session.id, each) !== false)
+    // What waits for a turn around it goes with it, as one turn, carried by the person's message where there is one: its
+    // words are sent now, and the journal folds the rows only as the handoff commits (`report`), so a send that goes no
+    // further leaves every row as it was. A switch's own message carries nothing here: it goes on its destination.
+    const plan = foldQueued(resident.snapshot.requests, queued, (each) => dependencies.agents?.()?.admits?.(resident.snapshot.session.id, each) !== false)
+    const folded = plan && plan.carrier.id !== transfer?.input.id ? plan : undefined
+    const request = folded?.carrier ?? queued
     const sends = folded?.request.text ?? request.text
     const previousSnapshot = resident.snapshot
     const previousUpdates = [...resident.updates]
@@ -442,6 +512,9 @@ export class LiveDispatch {
       // planned sends the carrier back to the queue, to be worked out again without it (and refused there alone).
       if (handoff && folded?.requests.some((planned) => planned.joinedInto === request.id && dependencies.agents?.()?.admits?.(resident.snapshot.session.id, resident.snapshot.requests.find((each) => each.id === planned.id) ?? planned) === false))
         throw new HandoffRefused("refold")
+      // So is Fins' news that changed meanwhile (a notice joined it, or one was withdrawn): it goes as it is now.
+      if (handoff && folded?.requests.some((planned) => planned.joinedInto === request.id && planned.digest && !stillWaiting(resident.snapshot.requests.find((each) => each.id === planned.id), planned.text)))
+        throw new HandoffRefused("refold")
       if (!own || !target?.nativeDelivery) return
       const delivery = target.nativeDelivery
       const next = advancePromptDelivery(delivery.evidence, evidence)
@@ -485,7 +558,13 @@ export class LiveDispatch {
         unsent()
         throw new HandoffRefused("unsaved")
       }
-      if (handoff) dependencies.agents?.()?.inputDelivered?.(resident.snapshot.session.id, request, "turn")
+      if (handoff) {
+        const agents = dependencies.agents?.()
+        agents?.inputDelivered?.(resident.snapshot.session.id, request, "turn")
+        // Each message folded into it reached it too, as its own sender's (rule 13): an Apex's words a Mako note
+        // carried answer what the Apex has heard, and Fins' news answers nothing.
+        for (const each of resident.snapshot.requests) if (each.joinedInto === request.id) agents?.inputDelivered?.(resident.snapshot.session.id, each, "turn")
+      }
     }
     const drewIt = !shown && Boolean(text || request.attachments.length)
     const dispatch: PromptDispatch = { operationId: request.id, attemptId, report, ...text && { shown: text }, ...drewIt && { shownAt: toldAt } }
@@ -500,9 +579,11 @@ export class LiveDispatch {
         const receipt = sourceBrief ? await briefInTranscript(resident.snapshot, this.access.control(resident), sourceBrief.id, dependencies.history, provider => dependencies.driver(provider)?.nativePromptIdentity) : undefined
         // A digest steered into the turn this continues whose receipt is unknown fails closed as a crashed digest does
         // (rule 15): never sent again, and the turn that goes on hears that reports may have arrived around the restart.
-        const steeredDigest = request.continues && this.access.control(resident).actions?.some((action) =>
+        // So does one folded into the turn a crash cut (`joinedInto`): its words went with that turn, whoever's it was.
+        const steeredDigest = request.continues && (this.access.control(resident).actions?.some((action) =>
           action.input.kind === "steer-queued" && action.input.requestId === request.continues!.requestId && action.state.kind === "uncertain" &&
-          Boolean(resident.snapshot.requests.find((item) => item.id === (action.input.kind === "steer-queued" ? action.input.queuedRequestId : ""))?.digest))
+          Boolean(resident.snapshot.requests.find((item) => item.id === (action.input.kind === "steer-queued" ? action.input.queuedRequestId : ""))?.digest)) ||
+          (request.continues.reason === "host-crashed" && resident.snapshot.requests.some((item) => item.joinedInto === request.continues!.requestId && item.digest)))
         const said = sourceBrief?.digest && receipt !== "absent"
           ? `${continueTurnPrompt("host-crashed", "mako")}\n\n${DIGEST_RESTART_HINT}`
           : receipt === "present" ? continueTurnPrompt("host-crashed", "mako") : sends
