@@ -23,7 +23,7 @@ import { AgentsWorld, type Script } from "./lib/agents-world.ts"
 
 const FINS = 30
 /** How long the Apex's own turn runs while its Fins finish: the storm happens inside it. */
-const APEX_TURN_MS = 40_000
+const APEX_TURN_MS = 45_000
 /** The Fins finish spread over this much of the Apex's turn. */
 const SPREAD_MS = 30_000
 /** After the Apex's turn ends, how long the bench watches it take what waited. */
@@ -48,8 +48,11 @@ const INVARIANTS = {
   finBacklogTurns: { max: 1 },
 } satisfies Record<Invariant, Bound>
 
-/** What Mako doesn't meet yet: each later PR that meets one removes it, and the test then holds it. */
-const EXPECTED_FAILING = new Set<Invariant>(["apexSteersPerMinute", "apexThinkShare", "finBacklogTurns"])
+/**
+ * What Mako doesn't meet yet, each with a ceiling it mustn't get worse than: each later PR that meets a target removes
+ * it, or tightens its ceiling, and the test then holds it there.
+ */
+const EXPECTED_FAILING = new Map<Invariant, Bound>([["apexSteersPerMinute", { max: 60 }], ["apexThinkShare", { min: 0.2 }], ["finBacklogTurns", { max: 3 }]])
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 async function until(what: string, done: () => boolean, timeoutMs = 60_000): Promise<void> {
@@ -72,11 +75,16 @@ const record = (name: Invariant, value: number) => {
 async function interruption(): Promise<void> {
   const finished = new Map<string, number>()
   const fins = new Set<string>()
+  // The Fins' finishes start together when the bench releases them, once the Apex's long turn runs: a Fin finishing
+  // early would wake an idle Apex and measure nothing.
+  let release: () => void = () => {}
+  const released = new Promise<void>((resolve) => { release = resolve })
   const script: Script = async (turn) => {
     if (fins.has(turn.conversation) || turn.text.includes("You're fin:")) {
       fins.add(turn.conversation)
       const part = /Part (\d+)/.exec(turn.text)?.[1]
       if (!part) return "ok"
+      await released
       await delay((Number(part) / FINS) * SPREAD_MS)
       finished.set(part, Date.now())
       return `Done: part ${part} checked.`
@@ -91,9 +99,12 @@ async function interruption(): Promise<void> {
       const started = await world.agents.start(apex.caller, { brief: { objective: `Part ${index}: check it.` }, harness: "codex", name: `part-${index}`, clientKey: `p${index}`, cwd: world.root })
       assert.ok(!("refused" in started), JSON.stringify(started))
     }
-    const began = Date.now()
     world.say(apex.conversation, "Long work: plan the release.")
     await until("the Apex's long turn", () => world.live.session(apex.conversation)?.status === "running")
+    const running = world.live.snapshot(apex.conversation)?.requests.filter((request) => request.status === "dispatching") ?? []
+    assert.ok(running.length === 1 && running[0]!.text.includes("Long work"), `the Apex's running turn is its long work: ${JSON.stringify(running.map((request) => request.text.slice(0, 80)))}`)
+    const began = Date.now()
+    release()
     await delay(APEX_TURN_MS)
     const ended = Date.now()
     world.release(apex.conversation)
@@ -167,8 +178,14 @@ try {
   console.log(`BENCH ${JSON.stringify(out)}`)
   if (process.env.COMMS_STORM_OUT) writeFileSync(process.env.COMMS_STORM_OUT, `${JSON.stringify(out, null, 2)}\n`)
   for (const measure of measures) console.log(`${measure.ok ? "meets" : "misses"} ${measure.name}: ${measure.value} (target ${measure.target})`)
-  const surprises = measures.filter((measure) => measure.ok === EXPECTED_FAILING.has(measure.name))
-  assert.deepEqual(surprises.map((measure) => `${measure.name} ${measure.ok ? "now meets its target: take it out of EXPECTED_FAILING" : "misses its target"}`), [], "every target is where it's expected")
+  const within = (value: number, bound: Bound) => ("max" in bound ? value <= bound.max : value >= bound.min)
+  const surprises = measures.flatMap((measure) => {
+    const ceiling = EXPECTED_FAILING.get(measure.name)
+    if (!ceiling) return measure.ok ? [] : [`${measure.name} misses its target`]
+    if (measure.ok) return [`${measure.name} now meets its target: take it out of EXPECTED_FAILING`]
+    return within(measure.value, ceiling) ? [] : [`${measure.name} got worse than its baseline ceiling (${"max" in ceiling ? `≤ ${ceiling.max}` : `≥ ${ceiling.min}`})`]
+  })
+  assert.deepEqual(surprises, [], "every target is where it's expected")
   console.log("comms storm: ok")
 } finally {
   rmSync(root, { recursive: true, force: true })

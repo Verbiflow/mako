@@ -38,6 +38,8 @@ export const STEPS = [
   [3, "npm run test:transcript-events"],
   [12, "npm run test:stage"],
   [0, "npm run test:fin-words"],
+  // An Apex under a 30-Fin storm and a Fin's backlog, each held to its targets; timed, so it runs alone (`ALONE`).
+  [65, "npm run test:comms-storm"],
   [2, "npm run test:setup"],
   [1, "npm run test:fin-row-time"],
   [0, "npm run test:steer-notices"],
@@ -302,6 +304,7 @@ const INSTALL = {
 const ALONE = [
   /scripts\/test-(app-overview-reads|attribution-holds|event-loop|git-helper|host-probes|idle-app-marks|probe-child-edges|resume-holds|trace-history-holds)\.ts\b/,
   /scripts\/test-terminal-backpressure\.mjs\b/,
+  /scripts\/test-comms-storm\.ts\b/,
 ]
 
 /** Evidence a failed step leaves, by its npm script, run after it: its own exit stays the result. */
