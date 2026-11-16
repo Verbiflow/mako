@@ -548,7 +548,10 @@ function CrewCardBody({
     [routed, thread, apexTitle]
   )
   const stoppable = children.filter((agent) => agent.stoppable).length
+  // On the phone one tap stops every Fin; it asks first there, where a thumb brushes it easily.
+  const [confirmingStop, setConfirmingStop] = useState(false)
   const stopAll = useCallback(() => {
+    setConfirmingStop(false)
     if (!conversation || !thread) return
     for (const agent of threadChildren(acpStore.get(), thread))
       if (agent.stoppable) void acp.stopAgent(conversation, agent.nativeId)
@@ -579,8 +582,9 @@ function CrewCardBody({
         {stoppable ? (
           <button
             type="button"
-            onClick={stopAll}
+            onClick={compact ? () => setConfirmingStop((open) => !open) : stopAll}
             title={`Stop ${finsWord(stoppable)} under ${apexTitle}; the ${APEX_WORD} keeps running`}
+            aria-expanded={compact ? confirmingStop : undefined}
             data-stop-all
             className={cn("pressable flex shrink-0 items-center gap-1.5 px-2 text-label text-faint hover:bg-fill-hover hover:text-foreground", compact ? "h-9" : "h-7")}
           >
@@ -589,6 +593,19 @@ function CrewCardBody({
           </button>
         ) : null}
       </header>
+      {compact && confirmingStop && stoppable ? (
+        <div role="group" aria-label="Stop all" data-stop-all-confirm className="flex items-center gap-2 bg-raised/60 px-3 py-1.5">
+          <span className="min-w-0 flex-1 text-ui text-foreground">
+            Stop {finsWord(stoppable)}? <span className="text-muted-foreground">The {APEX_WORD} keeps running.</span>
+          </span>
+          <button type="button" onClick={() => setConfirmingStop(false)} className="pressable h-9 shrink-0 px-3 text-ui text-muted-foreground hover:bg-fill-hover">
+            Cancel
+          </button>
+          <button type="button" data-stop-all-yes onClick={stopAll} className="pressable h-9 shrink-0 bg-negative/15 px-3 text-ui font-medium text-negative hover:bg-negative/25">
+            Stop
+          </button>
+        </div>
+      ) : null}
       {notice && conversation ? <LimitNoticeRow key={notice.ask.id} apex={conversation} ask={notice} compact={compact} /> : null}
       <div
         ref={scroller}
