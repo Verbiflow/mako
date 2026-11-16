@@ -1,11 +1,13 @@
 import assert from "node:assert/strict"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Entry } from "@mako/sessions/entries"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { LiveHistoryReader } from "@mako/host/conversations/live-history-reader"
 import { ColdJournal, LiveJournal } from "@mako/host/conversations/live-journal"
+import { JournalReclaims } from "@mako/host/conversations/journal-reclaim"
+import { NativeAgentSchema } from "@mako/host/contracts/native-agents"
 import { HistoryVersions, arrayBlocks, historyPage } from "@mako/host/contracts/history-pages"
 import { HISTORY_VIEW_EXPIRED, type LiveHistoryChunk, type LiveHistoryPage, type LiveHistoryRead } from "@mako/host/contracts/live-history"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
@@ -39,19 +41,19 @@ function blocksOf(turns: number): Entry[] {
   return blocks
 }
 
-function snapshotOf(id: string, blocks: Entry[], status: LiveSnapshot["session"]["status"] = "ready"): LiveSnapshot {
+function snapshotOf(id: string, blocks: Entry[], status: LiveSnapshot["session"]["status"] = "ready", control?: LiveSnapshot["control"]): LiveSnapshot {
   const turns = blocks.filter((block) => block.type === "user" && block.requestId && !("steeringFor" in block && block.steeringFor))
   return {
     session: { id, harness, nativeId: `native-${id}`, cwd: root, title: "A long Fin", status, connection: "disconnected", modes: [], currentMode: null, configOptions: [] },
-    revision: 1, createdAt: 1, base: null, blocks, permissions: [],
+    revision: 1, createdAt: 1, base: null, blocks, permissions: [], ...control && { control },
     requests: turns.map((block) => ({ id: block.type === "user" ? block.requestId! : "", text: "Ask", attachments: [], status: "completed" as const, createdAt: 1 })),
   }
 }
 
 /** Writes a journal as a host leaves it, then grows its last reply, so the journal keeps that as an append. */
-function writeJournal(id: string, blocks: Entry[], status?: LiveSnapshot["session"]["status"]): void {
+function writeJournal(id: string, blocks: Entry[], status?: LiveSnapshot["session"]["status"], control?: LiveSnapshot["control"]): void {
   const journal = new LiveJournal(host, id)
-  const first = snapshotOf(id, blocks, status)
+  const first = snapshotOf(id, blocks, status, control)
   journal.commit(first)
   const last = blocks.at(-1)!
   const grown = last.type === "text" ? { ...last, text: `${last.text} and the end of it.` } : last
@@ -102,6 +104,20 @@ writeJournal(quiet, blocks)
 writeJournal(running, blocksOf(12), "running")
 const long = "00000000-0000-4000-9000-000000000003"
 writeJournal(long, blocksOf(3000))
+// One binding whose session holds the whole history: a read may refresh it from the harness's record, so it's read in.
+// One that covers none of it: nothing to refresh, read cold.
+const bound = (id: string, covered: number): LiveSnapshot["control"] => ({ merges: [], transfers: [], activeBindingId: id,
+  bindings: [{ id, provider: harness, nativeId: `native-${id}`, path: join(root, `native-${id}`), coveredBlocks: covered, includesBase: true }] })
+const refreshable = "00000000-0000-4000-9000-000000000004"
+const opened12 = blocksOf(12)
+writeJournal(refreshable, opened12, "ready", bound(refreshable, opened12.length))
+const uncovered = "00000000-0000-4000-9000-000000000005"
+writeJournal(uncovered, blocksOf(12), "ready", bound(uncovered, 0))
+const raced = "00000000-0000-4000-9000-000000000006"
+writeJournal(raced, blocksOf(30))
+// An Apex: its Fins are its children engine's, never its journal's.
+const fin = NativeAgentSchema.parse({ nativeId: "mako-child:fin", title: "fin-1", bindingId: "mako:children", provider: "mako", observedAt: 1,
+  state: { kind: "working" }, child: { thread: "00000000-0000-4000-8000-00000000f1f1", name: "fin-1", origin: "started" } })
 const whole = new LiveJournal(host, quiet)
 const expected = whole.read()!
 whole.close()
@@ -116,6 +132,11 @@ const live = new LiveConversations({
   historyReleased: (id) => reader.released(id),
   historyLoaded: (id) => reader.loaded(id),
   historyHeld: () => reader.coldBytes(),
+  historyHolds: (key) => reader.holds(key),
+  agents: () => ({
+    roster: (id) => (id === quiet ? [fin] : []),
+    stopChild: async () => false, settled: () => {}, isApex: () => true, frontDoor: () => [], ruleLines: () => ({}),
+  }),
   resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
 })
 reader = new LiveHistoryReader(undefined, undefined, undefined, (id) => live.held(id))
@@ -125,6 +146,7 @@ try {
   assert.equal(live.held(quiet), undefined, "a window's read leaves the conversation on disk")
   assert.equal(live.residency().memory.loaded, 0)
   assert.equal(opened.session.status, "ready")
+  assert.deepEqual(opened.nativeAgents?.agents.map((agent) => agent.child?.name), ["fin-1"], "an Apex read cold shows its Fins, as read in")
   assert.equal(opened.requests.length, expected.requests.length)
   const token = opened.history!.token
   const versions = new HistoryVersions()
@@ -156,6 +178,10 @@ try {
   assert.equal(detail.output, expected.blocks[index]!.type === "tool" ? expected.blocks[index]!.output : undefined, "the whole output")
   assert.equal(detail.historyVersion, previewed.historyVersion, "the version its preview named")
   assert.ok(reader.coldBytes() > 0, "what the view read is counted for the conversations' budget")
+  // Nothing compacts a journal a cold view holds: its read transaction would hold the compaction up.
+  const key = join(realpathSync(host), `${quiet}.sqlite`)
+  assert.ok(reader.holds(key))
+  assert.deepEqual(await new JournalReclaims((held) => reader.holds(held)).reclaim(join(host, `${quiet}.sqlite`)), { skipped: true }, "a compaction skips a journal a cold view holds")
 
   // Rows written after the view opened don't reach it: its read transaction holds the journal as it was.
   const writer = new LiveJournal(host, quiet)
@@ -178,6 +204,21 @@ try {
   assert.ok(live.held(running), "read in")
 
   assert.equal(ColdJournal.open(host, "00000000-0000-4000-9000-00000000ffff"), undefined, "no journal, no cold view")
+
+  // One a read could refresh from its harness's record is read in, where that refresh runs; one with nothing to refresh isn't.
+  assert.equal(await live.coldView(refreshable), undefined, "a single binding holding the whole history is read in")
+  const cold = await live.coldView(uncovered)
+  assert.ok(cold, "a binding that covers none of it is read cold")
+  cold.journal.close()
+
+  // Read in between the cold journal opening and its view being held: the view isn't held, the read is from memory.
+  const read0 = await reader.read(raced, { kind: "snapshot" }, () => live.refreshedSnapshot(raced), async () => {
+    const opening = await live.coldView(raced)
+    assert.ok(live.snapshot(raced), "read in meanwhile")
+    return opening
+  })
+  assert.ok(read0.data.length > 0)
+  assert.equal(reader.holds(join(realpathSync(host), `${raced}.sqlite`)), false, "no view pins a journal a host now writes")
 
   // A long one's first read goes on a turn at a time: its requests are parsed a slice at a time, its page on a turn of
   // its own. Read whole, a 122 MB Fin's held the loop 73 ms opening and 41 ms paging.

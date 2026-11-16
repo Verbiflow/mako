@@ -400,7 +400,7 @@ export class LiveRecords {
    * makes it resident as before. One the last host left is shown as reading it in would leave it (`afterRestart`); one
    * this host let go, exactly as it went (`reload`).
    */
-  async cold(id: string): Promise<{ journal: ColdJournal; snapshot: LiveSnapshot } | undefined> {
+  async cold(id: string): Promise<{ journal: ColdJournal; snapshot: LiveSnapshot; still: () => boolean } | undefined> {
     const readable = () => !this.stopping() && !this.residents.has(id) && !this.reading.has(id) && !this.releasing.has(id) && this.recovered.has(id)
     if (!readable()) return undefined
     let journal: ColdJournal | undefined
@@ -418,14 +418,19 @@ export class LiveRecords {
       return undefined
     }
     const saved = journal.snapshot
-    if (saved.session.status === "running" || saved.requests.some((request) => request.status === "dispatching")) {
+    // One a window's read might refresh from its harness's own record (`LiveSources.refreshedSnapshot`: a single binding
+    // that holds the history, or none written yet, as a session continued outside Mako) is read in, where that runs.
+    const bindings = saved.control?.bindings ?? []
+    const binding = bindings.length === 1 ? bindings[0] : undefined
+    const refreshable = Boolean(binding?.path && binding.nativeId) && (journal.length === 0 || (binding!.includesBase && onlyOpening(journal, binding!.coveredBlocks ?? 0)))
+    if (refreshable || saved.session.status === "running" || saved.requests.some((request) => request.status === "dispatching")) {
       journal.close()
       return undefined
     }
     const unloaded = this.unloaded.get(id)
-    if (!unloaded) return { journal, snapshot: afterRestart(saved, this.dependencies.root, (provider) => this.dependencies.driver(provider)?.backgroundStop.kind === "ends-with-turn") }
+    if (!unloaded) return { journal, still: readable, snapshot: afterRestart(saved, this.dependencies.root, (provider) => this.dependencies.driver(provider)?.backgroundStop.kind === "ends-with-turn") }
     const session = unloaded.commands ? { ...saved.session, commands: unloaded.commands } : saved.session
-    return { journal, snapshot: {
+    return { journal, still: readable, snapshot: {
       ...saved, session,
       ...unloaded.activityAt !== undefined && { activityAt: unloaded.activityAt },
       ...unloaded.nativeActivity && { nativeActivity: unloaded.nativeActivity },
@@ -714,6 +719,15 @@ export function endedTurnsOnRead(previous: Pick<LiveSnapshot, "session" | "reque
     if (end) return active || end.kind !== "finished" ? end : undefined
     return active && idle ? { kind: "finished" } : undefined
   })
+}
+
+/** Whether a cold journal's blocks past `covered` are only the notices a session gives as it opens, as `refreshedSnapshot` asks. */
+function onlyOpening(journal: ColdJournal, covered: number): boolean {
+  for (let index = covered; index < journal.length; index++) {
+    const block = journal.at(index)
+    if (block?.type !== "event" || block.setup !== true) return false
+  }
+  return true
 }
 
 /**

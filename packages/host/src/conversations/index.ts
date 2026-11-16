@@ -309,6 +309,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     historyReleased: (id) => history.released(id),
     historyLoaded: (id) => history.loaded(id),
     historyHeld: () => history.coldBytes(),
+    historyHolds: (key) => history.holds(key),
     staleHistory: (path, before) => catalog.page(path, before, undefined, { stale: true }),
     holdHistory: catalog.hold,
     historyAsOf: (path, asOf, before) => catalog.page(path, before, undefined, { asOf }),

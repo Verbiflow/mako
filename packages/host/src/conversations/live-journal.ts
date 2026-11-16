@@ -1701,6 +1701,8 @@ const TURN_ROWS = `SELECT id, json_extract(value,'$.type') AS type, json_extract
 export class ColdJournal {
   readonly snapshot: LiveSnapshot
   readonly length: number
+  /** Its file as compaction names it (`journalOpened`): a cold view holds it, so nothing compacts it meanwhile. */
+  readonly key: string
   readonly #db: DatabaseSync
   readonly #block: ReturnType<DatabaseSync["prepare"]>
   readonly #tail: ReturnType<DatabaseSync["prepare"]>
@@ -1709,8 +1711,9 @@ export class ColdJournal {
   #turns: z.infer<typeof TurnRowSchema>[] | undefined
   #chars = 0
 
-  private constructor(db: DatabaseSync, snapshot: LiveSnapshot, length: number, appended: ReadonlyMap<number, number>) {
+  private constructor(db: DatabaseSync, key: string, snapshot: LiveSnapshot, length: number, appended: ReadonlyMap<number, number>) {
     this.#db = db
+    this.key = key
     this.snapshot = snapshot
     this.length = length
     this.#appended = appended
@@ -1727,6 +1730,9 @@ export class ColdJournal {
   static *opening(root: string, id: string): Steps<ColdJournal | undefined> {
     const path = join(root, `${id}.sqlite`)
     if (!existsSync(path)) return undefined
+    const key = join(realpathSync(root), `${id}.sqlite`)
+    // An opener takes away any older close's right to tidy the file, and cancels a compaction waiting for it.
+    journalOpened.publish(key)
     const db = new DatabaseSync(path, { readOnly: true })
     try {
       db.exec("BEGIN")
@@ -1775,7 +1781,7 @@ export class ColdJournal {
         blocks: [],
         requests,
       }
-      return new ColdJournal(db, snapshot, counted.count, appended)
+      return new ColdJournal(db, key, snapshot, counted.count, appended)
     } catch (error) {
       ColdJournal.#end(db)
       throw error

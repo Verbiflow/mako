@@ -28,6 +28,12 @@ export class JournalReclaims {
   private queue: Promise<unknown> = Promise.resolve()
   private readonly pending = new Set<Int32Array>()
   private stopped = false
+  /** Whether a window's cold view holds file `key` (`ColdJournal`): its read transaction would hold a compaction up. */
+  private readonly held: (key: string) => boolean
+
+  constructor(held: (key: string) => boolean = () => false) {
+    this.held = held
+  }
 
   reclaim(path: string): Promise<Reclaimed> {
     if (this.stopped) return Promise.resolve({ skipped: true })
@@ -36,6 +42,7 @@ export class JournalReclaims {
       if (error instanceof Error && "code" in error && error.code === "ENOENT") return Promise.resolve({ skipped: true })
       throw error
     }
+    if (this.held(key)) return Promise.resolve({ skipped: true })
     const cancellation = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)
     const flag = new Int32Array(cancellation)
     const unwatch = journalOpened.subscribe(opened => {

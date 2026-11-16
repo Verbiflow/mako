@@ -414,6 +414,8 @@ export interface Dependencies {
   historyLoaded?(id: string): void
   /** What windows' cold views of journals hold, counted in the conversations' memory budget. */
   historyHeld?(): number
+  /** Whether a window's cold view holds journal file `key`, which then isn't compacted (`JournalReclaims`). */
+  historyHolds?(key: string): boolean
   /** Test clock for deterministic residency decisions. */
   now?: () => number
   /** A conversation's work moved (running, waiting, finishing, none), with or without a batch: its row is told now. */

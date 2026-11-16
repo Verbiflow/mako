@@ -29,7 +29,7 @@ const IDLE_MS = 10 * 60_000
  */
 interface View { id: string; snapshot: LiveSnapshot; used: number; cold?: ColdJournal }
 /** Conversation `id` read where its journal lies, when nothing holds it in memory (`LiveConversations.coldView`). */
-export type ColdOpener = () => Promise<{ journal: ColdJournal; snapshot: LiveSnapshot } | undefined>
+export type ColdOpener = () => Promise<{ journal: ColdJournal; snapshot: LiveSnapshot; still: () => boolean } | undefined>
 
 function blocksOf(view: View): HistoryBlocks {
   return view.cold ?? arrayBlocks(view.snapshot.blocks)
@@ -96,6 +96,12 @@ export class LiveHistoryReader {
    */
   loaded(id: string): void {
     for (const [token, view] of Array.from(this.views)) if (view.id === id && view.cold) this.letGo(token, view, "its conversation was read in")
+  }
+
+  /** Whether a cold view holds journal file `key`, which isn't compacted meanwhile (`JournalReclaims`). */
+  holds(key: string): boolean {
+    for (const view of this.views.values()) if (view.cold?.key === key) return true
+    return false
   }
 
   /** What cold views hold: the blocks they've read, about two bytes a character. */
@@ -167,9 +173,14 @@ export class LiveHistoryReader {
     let value: HistoryValue | undefined
     if (input.kind === "snapshot") {
       // One nothing holds in memory is read where its journal lies, and isn't read in for a window to look at it.
-      const cold = await coldOpen?.()
+      let cold = await coldOpen?.()
       // Opening it and paging it are each a few tens of milliseconds on a long one: on turns of their own.
       if (cold) await new Promise((resolve) => setImmediate(resolve))
+      // Read in meanwhile (its `loaded` came before this view was held): a view must not pin a journal a host writes.
+      if (cold && !cold.still()) {
+        cold.journal.close()
+        cold = undefined
+      }
       const captured = cold?.snapshot ?? await snapshot()
       if (!captured) value = null
       else {

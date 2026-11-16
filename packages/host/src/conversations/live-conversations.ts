@@ -203,7 +203,7 @@ export class LiveConversations {
   private wakeTimer: { at: number; timer: ReturnType<typeof setTimeout> } | undefined
   private wakesStopped = false
   private stopSignInEvents?: () => void
-  private readonly reclaims = new JournalReclaims()
+  private readonly reclaims = new JournalReclaims((key) => this.dependencies.historyHolds?.(key) ?? false)
 
   constructor(dependencies: Dependencies) {
     this.dependencies = dependencies
@@ -737,9 +737,14 @@ export class LiveConversations {
   }
 
   /** Conversation `id` read where its journal lies, for a window, when nothing holds it in memory (`LiveRecords.cold`). */
-  async coldView(id: string): Promise<{ journal: ColdJournal; snapshot: LiveSnapshot } | undefined> {
+  async coldView(id: string): Promise<{ journal: ColdJournal; snapshot: LiveSnapshot; still: () => boolean } | undefined> {
     const cold = await this.records.cold(id)
-    return cold && { journal: cold.journal, snapshot: this.stamp(cold.snapshot) }
+    if (!cold) return undefined
+    // Its Fins, as reading it in adds them (`takeChildren`): the engine's, never the journal's.
+    const agents = this.dependencies.agents?.()?.roster(id)
+    const nativeAgents = agents ? withChildren(cold.snapshot.nativeAgents, agents) : cold.snapshot.nativeAgents
+    const snapshot = nativeAgents === cold.snapshot.nativeAgents ? cold.snapshot : { ...cold.snapshot, nativeAgents }
+    return { journal: cold.journal, still: cold.still, snapshot: this.stamp(snapshot) }
   }
 
   relocate(id: string, cwd: string): Promise<string | undefined> {
