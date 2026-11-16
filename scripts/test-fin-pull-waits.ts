@@ -228,7 +228,7 @@ console.log('words: "Mako: PR acme/app#371 checks settled: 2 failed (lint, e2e).
   await watch.tick()
   now = SINCE + NO_CHECKS_MS
   await watch.tick()
-  assert.deepEqual(notes, [], "15 minutes after the report, but 5 after the push: its checks may still start")
+  assert.equal(notes.length, 0, "15 minutes after the report, but 5 after the push: its checks may still start")
   now = SINCE + 10 * 60_000 + NO_CHECKS_MS
   await watch.tick()
   assert.equal(notes.length, 1, "15 minutes after the push was first seen, it says so")
