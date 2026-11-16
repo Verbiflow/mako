@@ -57,7 +57,6 @@ const SocketRequest = z.object({
  */
 const AdditionalTools = z.object({ type: z.literal("additional_tools"), tools: z.array(z.json()) }).loose()
 const Namespace = z.object({ type: z.literal("namespace"), name: z.string(), tools: z.array(z.json()) }).loose()
-const NamespacedTool = z.object({ name: z.string(), namespace: z.string() }).loose()
 
 /**
  * Codex 0.159.3's remote compaction asks with a `compaction_trigger` input
@@ -80,11 +79,21 @@ function offeredTools(body: { tools?: JsonValue[]; input?: JsonValue }): JsonVal
   return tools.length ? tools : undefined
 }
 
-/** The call, with the namespace the request offered its tool in: Codex 0.164.0 runs a gpt-6 model's `collaboration.spawn_agent` only so named. */
+const OfferedTool = z.object({ name: z.string(), namespace: z.string().optional() }).loose()
+
+/**
+ * The call, with the namespace the request offered its tool in: Codex 0.164.0 runs a gpt-6 model's
+ * `collaboration.spawn_agent` only so named. A script names an MCP tool by its own name (`js`); where the harness offers
+ * it flattened under its server (`mcp__mako-computer__js`) and nothing is offered by that name alone, the call takes the
+ * offered name.
+ */
 function namespaced(reply: ScriptedReply, tools: readonly JsonValue[] | undefined): ScriptedReply {
   const call = reply.call
-  const namespace = call && (tools ?? []).map((tool) => NamespacedTool.safeParse(tool).data).find((tool) => tool?.name === call.name)?.namespace
-  return namespace && call ? { ...reply, call: { ...call, namespace } } : reply
+  if (!call) return reply
+  const offered = (tools ?? []).flatMap((tool) => OfferedTool.safeParse(tool).data ?? [])
+  const found = offered.find((tool) => tool.name === call.name) ?? offered.find((tool) => tool.name.endsWith(`__${call.name}`))
+  if (!found || (found.name === call.name && !found.namespace)) return reply
+  return { ...reply, call: { ...call, name: found.name, ...found.namespace && { namespace: found.namespace } } }
 }
 
 /** A tool choice that names one tool: Responses and Anthropic put the name on it, Chat Completions under `function`. */

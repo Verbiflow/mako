@@ -11,10 +11,11 @@ function stepWords(step: ToolStep): string {
  */
 export function RunningStep({ steps }: { steps: ToolSteps }) {
   const current = steps.steps.findLast((step) => step.phase === "running") ?? steps.steps.at(-1)
+  // The count never shrinks: on a phone's width the step's name gives way first, the count stays.
   return (
-    <span className="min-w-0 shrink truncate text-faint" data-tool-step>
-      {current ? ` · ${stepWords(current)}` : null}
-      {` · ${steps.total} ${steps.total === 1 ? "call" : "calls"}`}
+    <span className="flex min-w-0 shrink text-faint" data-tool-step>
+      {current ? <span className="min-w-0 truncate">&nbsp;· {stepWords(current)}</span> : null}
+      <span className="shrink-0 whitespace-pre">{` · ${steps.total} ${steps.total === 1 ? "call" : "calls"}`}</span>
     </span>
   )
 }

@@ -17,6 +17,7 @@ import { z } from "zod"
 import { applyLiveBatch, hydrateLive, listLive, unloadLive } from "@/state/live-recovery"
 import { watchLiveResidency } from "@/state/live-residency"
 import { acp } from "@/state/acp"
+import { toolStepped } from "@/state/tool-steps"
 import { acpStore } from "@/state/acp-state"
 import { threadsStore } from "@/state/thread-store"
 import { CONSOLE_LOG, type Gateway } from "./gateway"
@@ -49,6 +50,14 @@ const RECENT_TRANSCRIPTS = { bytes: 32 * 1024 * 1024, recent: 4 }
 const ASLEEP_MS = 15_000
 
 /** A move's step as its owner's stream carries it (`thread-move-step`, `thread-return-step`): read as far as its kind. */
+/** A running js call's steps as its owner relays them (`SessionReport`'s `#relaySteps`); `steps: null` once it answered. */
+const ToolStepsEventSchema = z.object({
+  type: z.literal("tool-steps"),
+  steps: z.object({
+    steps: z.array(z.object({ call: z.string(), phase: z.enum(["running", "done", "failed"]), times: z.number().int().optional() })),
+    total: z.number().int(),
+  }).nullable(),
+})
 const MoveStepEventSchema = z.object({ type: z.enum(["thread-move-step", "thread-return-step"]), move: z.string(), step: z.object({ kind: z.string() }).loose() })
 
 /** One owner's stream as this browser follows it: its conversations, and how many follow each. */
@@ -424,7 +433,12 @@ export class WebConversations {
             probedAt = Date.now()
             continue
           }
-          const verdict = cursor.heard({ seq: frame.seq, text: frame.event.text })
+          const verdict = cursor.heard({ seq: frame.seq, text: frame.event.text, ...frame.ephemeral && { ephemeral: true } })
+          // Passing state (a running call's steps): applied as it comes, and it moves no cursor and counts as no update.
+          if (verdict.kind === "ephemeral") {
+            this.#heard(frame.event.text, follow.conversations)
+            continue
+          }
           if (verdict.kind === "notice" || verdict.kind === "duplicate") continue
           if (verdict.kind === "reread") {
             readings.reread()
@@ -538,6 +552,11 @@ export class WebConversations {
     }
     if (head.type === "thread-move-step" || head.type === "thread-return-step") {
       this.#moveStep(head.conversation, head.payload)
+      return undefined
+    }
+    if (head.type === "tool-steps") {
+      const event = ToolStepsEventSchema.safeParse(JSON.parse(head.payload)).data
+      if (event) toolStepped(head.conversation, event.steps)
       return undefined
     }
     if (head.type !== "live-batch") return undefined

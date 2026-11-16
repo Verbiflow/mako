@@ -115,6 +115,8 @@ export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
       n: SeqSchema.optional(),
       correlationId: CorrelationIdSchema.optional(),
       form: LiveFormSchema.optional(),
+      /** Passing state, relayed and never kept (`EPHEMERAL_LIVE_VERSION`); it carries no `n`. */
+      ephemeral: z.literal(true).optional(),
     })
     .strict(),
   /** The runtime ended a stream it served (version 3 on, `media.ts`); its viewer hears why. */
