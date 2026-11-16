@@ -177,13 +177,15 @@ for (const channel of ["mako:live-start", "mako:lifecycle-command", "mako:list-m
       if (message.error) held.fail(new Error(message.error.message))
       else held.done(message.result)
     }
-    const send = (method, params = {}, sessionId) => new Promise((done, fail) => {
+    // The first target starts the agent views app, an Electron cold start that a loaded CI Mac running another
+    // Electron check beside it took past 30 s; its later calls answer in milliseconds.
+    const send = (method, params = {}, sessionId, ms = 30_000) => new Promise((done, fail) => {
       const id = ++sequence
-      const timer = setTimeout(() => { pending.delete(id); fail(new Error(`${method} timed out`)) }, 30_000)
+      const timer = setTimeout(() => { pending.delete(id); fail(new Error(`${method} timed out after ${ms / 1000} s`)) }, ms)
       pending.set(id, { done: (value) => { clearTimeout(timer); done(value) }, fail: (error) => { clearTimeout(timer); fail(error) } })
       cdp.send(JSON.stringify({ id, method, params, sessionId }))
     })
-    const { targetId } = await send("Target.createTarget", {})
+    const { targetId } = await send("Target.createTarget", {}, undefined, 90_000)
     const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true })
     const evaluate = async (expression) => {
       const result = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, sessionId)
@@ -212,6 +214,9 @@ for (const channel of ["mako:live-start", "mako:lifecycle-command", "mako:list-m
   }
 } catch (error) {
   console.error(error)
+  // What the host said of the agent views app, for a failure that never reached its window.
+  const said = await readFile(join(dataRoot, "logs", "host.log"), "utf8").catch(() => "")
+  console.error(said.split("\n").filter((line) => /agent.views|desk-page|desktop (attached|detached)/i.test(line)).slice(-20).join("\n") || "host.log says nothing of the agent views app")
   process.exitCode = 1
 } finally {
   cdp?.close()
