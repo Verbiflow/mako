@@ -1,4 +1,4 @@
-import { ThreadScratch, SCRATCH_PASS_MS } from "./thread-scratch.js"
+import { ThreadScratch, SCRATCH_PASS_MS, threadDataAncestorsClosed } from "./thread-scratch.js"
 import { declareThreadScratchMethods } from "./thread-scratch-methods.js"
 import { AppOutputHints } from "./app-output-hints.js"
 import type { BuildSlots } from "./build-slots.js"
@@ -110,6 +110,7 @@ export interface Workspaces {
   /** Automatic retirement is off until the person enables it in Settings. */
   retention: WorktreeRetention | null
   scratch: ThreadScratch | null
+  threadData: ThreadScratch | null
   /** The recipe Mako keeps for each project, one file per repository, outside every checkout. */
   recipes: string | undefined
   /** Where recipes run here: this computer or a cloud machine. */
@@ -140,7 +141,8 @@ export interface WorkspacesDeps {
   /** What holds a worktree: its conversations and terminals, as a person would name them. */
   inUse(path: string): Promise<string[]>
   /** Fail-closed terminal/provider reading for automatic retirement. */
-  retirementUsers?(path: string): Promise<string[]>
+  retirementUsers?(path: string, thread?: ThreadId): Promise<string[]>
+  archived?(conversation: string): boolean | undefined
   scratchOwner?(thread: ThreadId): { quietAt: number; finishedAt?: number } | undefined
   finished?(thread: ThreadId): number | undefined
   /** Conversations mid-turn in a worktree. */
@@ -174,10 +176,17 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
   const shared = store ? realpathSync(dirname(store.path)) : undefined
   const recipes = shared ? join(shared, "recipes") : undefined
   let scratch: ThreadScratch | null = null
+  let threadData: ThreadScratch | null = null
   const environments = store && shared
     ? new ThreadEnvironments({ git, store, dataRoot: join(shared, "thread-data"), scratch: (thread) => {
       if (!scratch) throw new Error("Thread scratch ownership is unavailable.")
       return scratch.ensure(thread)
+    }, threadData: {
+      path: (thread) => join(shared, "thread-data", "owned", thread, "data"),
+      ensure: (thread) => {
+        if (!threadData) throw new Error("Thread data ownership is unavailable.")
+        return threadData.ensure(thread)
+      },
     }, recipesRoot: recipes, where: deps.where, recipes: deps.recipes })
     : null
   const fileHistory = childHistory(undefined, deps.watchReadings, deps.daemonRestarts)
@@ -291,20 +300,28 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
       for (const row of store.worktrees()) if (row.path.startsWith(`${path}/`)) await processes?.forgetPrepared(row.path)
     },
   }) : null
-  scratch = !deps.readOnly && shared && store ? new ThreadScratch({
-    root: join(shared, "thread-data"), registry: join(shared, "scratch-owners"), settings: join(shared, "scratch-retention.json"),
-    owner: (thread) => deps.scratchOwner?.(thread),
-    title: (thread) => store.thread(thread)?.title,
-    using: (path) => {
-      if (!deps.retirementUsers) throw new Error("Live-use checks are unavailable.")
-      return deps.retirementUsers(path)
-    },
-    openFiles,
-    // Allocation totals overcount APFS clones. Unknown exclusive bytes stay unknown in the UI.
-    privateBytes: async () => null,
-  }) : null
+  if (!deps.readOnly && shared && store) {
+    const owned = {
+      settings: join(shared, "scratch-retention.json"),
+      owner: (thread: ThreadId) => deps.scratchOwner?.(thread),
+      title: (thread: ThreadId) => store.thread(thread)?.title,
+      using: (path: string, thread: ThreadId) => {
+        if (!deps.retirementUsers) throw new Error("Live-use checks are unavailable.")
+        return deps.retirementUsers(path, thread)
+      },
+      openFiles,
+      // Allocation totals overcount APFS clones. Unknown exclusive bytes stay unknown in the UI.
+      privateBytes: async () => null,
+    }
+    scratch = new ThreadScratch({ ...owned, root: join(shared, "thread-data"), registry: join(shared, "scratch-owners") })
+    threadData = new ThreadScratch({ ...owned,
+      // A settled turn is not the end of a person's Thread. Only known Fin lifecycle completion permits retirement.
+      owner: (thread) => store.edges().of(thread) ? deps.scratchOwner?.(thread) : undefined,
+      ancestorsClosed: (thread) => threadDataAncestorsClosed(store, deps.archived, thread),
+      kind: "data", root: join(shared, "thread-data", "owned"), registry: join(shared, "thread-data-owners") })
+  }
   // Reconsider registered worlds left by a crash once conversations have opened, then hourly.
-  if (scratch) deps.jobs.every("retire owned Thread scratch", SCRATCH_PASS_MS, async () => { await scratch?.run() }, { firstAfterMs: 60_000 })
+  if (scratch) deps.jobs.every("retire owned Thread scratch", SCRATCH_PASS_MS, async () => { await scratch?.run(); await threadData?.run() }, { firstAfterMs: 60_000 })
   if (retention && !deps.readOnly) deps.jobs.every("retire finished Thread worktrees", WORKTREE_RETENTION_MS, async () => { await retention.run() })
   // Windows hear the summaries as they change, rather than each asking every half minute. What no event of its own
   // says (a pull request on GitHub, an edit outside a turn) a pass of the host's says, each worktree read only once
@@ -314,6 +331,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
       emit({ type: "worktree-summaries", summaries })
       retention?.changed()
       scratch?.changed()
+      threadData?.changed()
     })
     deps.jobs.every("say the worktrees' summaries as they change", SUMMARY_PASS_MS, () => void worktrees.summaries().catch(() => undefined), deps.subscribed ? { needs: [deps.subscribed] } : {})
   }
@@ -332,6 +350,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     recipes,
     retention,
     scratch,
+    threadData,
     where: deps.where,
     whoseApp,
     appOwner,
@@ -339,6 +358,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     close: async () => {
       retention?.close()
       scratch?.close()
+      threadData?.close()
       checkoutHeads.close()
       await worktrees?.closeSummaries()
     },
@@ -577,7 +597,7 @@ export function declareWorkspaceMethods(methods: MethodTable, { workspaces, move
   methods.handle("mako:run-automation", (id: string, operation?: string, cwd?: string) => automations.fire(id, "manual", operation, cwd))
   methods.handle("mako:reload-automations", () => withHost((h) => automations.load(h.workspace)))
   declareWorktreeMethods(methods, workspaces.worktrees, { heads: listPullHeads, branches: listBranchPulls }, workspaces.retention)
-  declareThreadScratchMethods(methods, workspaces.scratch)
+  declareThreadScratchMethods(methods, workspaces.scratch, workspaces.threadData)
   declareMoveMethods(methods, movers.moves, (target) => moveHold(live, movers.worktreeMoves, movers.moves, target), workspaces.worktrees)
   declarePlanBuildMethods(methods, workspaces.planBuilds)
   declareCheckoutHeadMethods(methods, workspaces.checkoutHeads)

@@ -3222,6 +3222,9 @@ const inputs = {
         mode: z.union([z.literal("remove"), z.literal("preview")]),
         idleDays: z.number(),
         kept: z.array(z.string()),
+        dataMode: z
+          .union([z.literal("remove"), z.literal("preview")])
+          .optional(),
       }),
     ]),
   "mako:thread-stop": () =>

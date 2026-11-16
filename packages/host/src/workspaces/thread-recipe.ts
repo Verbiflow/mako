@@ -21,7 +21,7 @@ const MissingFileSchema = z.object({ code: z.literal("ENOENT") })
 const SHELL_OWNED = new Set(["PATH", "HOME", "SHELL", "USER", "LOGNAME", "TMPDIR", "PWD"])
 const PLACEHOLDER = /\{([a-z][a-z0-9 +]*)\}/g
 /** What Mako itself sets on agents and processes; a project's own MAKO_ names, such as Mako's `MAKO_PROFILE`, are the project's. */
-const MAKO_OWNED = ["MAKO_THREAD_", "MAKO_CONTROL_", "MAKO_CONVERSATIONS_TOKEN", STEPS_FOLDER_VARIABLE]
+const MAKO_OWNED = ["MAKO_APP_DATA_DIR", "MAKO_THREAD_", "MAKO_CONTROL_", "MAKO_CONVERSATIONS_TOKEN", STEPS_FOLDER_VARIABLE]
 
 const template = z.string().max(2_000)
 const command = z.string().trim().min(1).max(4_000)

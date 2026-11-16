@@ -37,7 +37,7 @@ import { FolderIndex, type FolderIndexOptions } from "./file-index.js"
  * renderer. Above it the head is shown and the viewer says the rest was cut.
  */
 const FILE_VIEW_LIMIT = 2_000_000
-type ConversationDataDir = () => Promise<string | undefined>
+type ConversationDataDir = () => Promise<string | string[] | undefined>
 /**
  * `preview`: the read is for a preview the transcript shows unasked (an
  * embed, a path an answer names). Outside the Thread's folders only what a
@@ -211,7 +211,7 @@ export class WorkspaceFiles {
     const { path } = located
     // Another device's read is opened once, verified, and read only through that descriptor (`openConfined`).
     const confined = options?.confined
-      ? await openConfined(located.absolute, await confinedRoots([this.cwdValue, await this.git.root().catch(() => null), await options.dataDir?.()]), options.kept)
+      ? await openConfined(located.absolute, await confinedRoots([this.cwdValue, await this.git.root().catch(() => null), await options.dataDir?.()].flat()), options.kept)
       : undefined
     if (options?.confined && !confined) return { path, contents: "", size: 0, binary: false, truncated: false, withheld: OUTSIDE_THREAD_WORDS }
     try {
@@ -323,7 +323,7 @@ export class WorkspaceFiles {
 
   /** Whether `absolute` sits in the folders this conversation works in: its checkout, its folder, or its Thread's data folder. */
   private async inside(absolute: string, dataDir?: ConversationDataDir): Promise<boolean> {
-    const roots = [this.cwdValue, await this.git.root().catch(() => null), await dataDir?.()]
+    const roots = [this.cwdValue, await this.git.root().catch(() => null), await dataDir?.()].flat()
     const real = await realpath(absolute).catch(() => absolute)
     for (const root of roots) {
       if (!root) continue
@@ -378,10 +378,11 @@ export class WorkspaceFiles {
       (relativeTo === "cwd" && (requested.startsWith("./") || requested.startsWith("../"))))
       throw new Error(`No file at ${requested}`)
     // Agents also write into MAKO_THREAD_DATA_DIR and cite its relative path.
-    // Only the owner's exact path is tried, before the project's suffix index;
+    // The owner's exact artifact root, then its unchanged app/legacy root, precede the project suffix index;
     // never walk data folders or let a relative traversal select another owner.
-    const dataDir = await options?.dataDir?.()
-    if (dataDir) {
+    const dataDirs = [await options?.dataDir?.()].flat()
+    for (const dataDir of dataDirs) {
+      if (!dataDir) continue
       const root = resolve(dataDir)
       const candidate = resolve(root, requested)
       if (candidate.startsWith(`${root}${sep}`)) {
