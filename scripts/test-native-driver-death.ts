@@ -72,9 +72,10 @@ server.setRequestHandler(CallToolRequestSchema,async request=>{
   if(name==='press_key'){
     const key=args.pid===undefined?'unscoped':args.pid+':'+args.window_id;
     // Key down reaches the app first; the key up follows after a delay the
-    // test uses to kill the driver between them.
-    note({event:'down',key,value:args.key});
+    // test uses to kill the driver between them. The app has the key before the log says so: the test kills the
+    // driver as soon as it reads 'down', which once landed between the two and the app never had it.
     change(key,value=>value+args.key);
+    note({event:'down',key,value:args.key});
     await sleep(600);
     note({event:'up',key,value:args.key});
     return reply({route:'background',effect:'unverifiable'});
