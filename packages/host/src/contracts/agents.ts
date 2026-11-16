@@ -434,6 +434,16 @@ export const LimitNoticeSchema = z.object({
 })
 export type LimitNotice = z.infer<typeof LimitNoticeSchema>
 
+/** The exact held work and fallback place shown by a crew notice; a press cannot take newer work with it. */
+export const LimitNoticeChoiceSchema = z.object({
+  notice: z.string().min(1).max(600),
+  place: z.string().min(1).max(1200),
+  waits: z.array(z.object({ thread: z.string().uuid(), request: z.string().uuid() })).min(1).max(64),
+})
+/** @wire z.object({ notice: z.string().min(1).max(600), place: z.string().min(1).max(1200), waits: z.array(z.object({ thread: z.string().uuid(), request: z.string().uuid() })).min(1).max(64) }) */
+export type LimitNoticeChoice = z.infer<typeof LimitNoticeChoiceSchema>
+
+
 /**
  * The edge: one row of `thread_parents`, keyed by the child Thread, written
  * by the child's owner. It holds only what nothing else does; the child's

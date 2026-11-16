@@ -80,7 +80,26 @@ const inputs = {
       }),
     ]),
   "mako:agents-capabilities": () => z.tuple([]),
-  "mako:agents-continue-next": () => z.tuple([z.string(), z.string()]),
+  "mako:agents-continue-next": () =>
+    z.tuple([
+      z.string(),
+      z.string(),
+      z
+        .object({
+          notice: z.string().min(1).max(600),
+          place: z.string().min(1).max(1200),
+          waits: z
+            .array(
+              z.object({
+                thread: z.string().uuid(),
+                request: z.string().uuid(),
+              })
+            )
+            .min(1)
+            .max(64),
+        })
+        .optional(),
+    ]),
   "mako:agents-diagnostics": () => z.tuple([]),
   "mako:agents-direct": () =>
     z.tuple([
@@ -217,7 +236,7 @@ const inputs = {
         clientKey: z.string(),
       }),
     ]),
-  "mako:agents-next-place": () => z.tuple([z.string()]),
+  "mako:agents-next-place": () => z.tuple([z.string(), z.string().optional()]),
   "mako:agents-notice": () =>
     z.tuple([
       z.object({
@@ -1127,8 +1146,8 @@ const inputs = {
       z.object({
         head: z.string().optional(),
         action: z.union([
-          z.literal("merge"),
           z.literal("abort"),
+          z.literal("merge"),
           z.literal("fetch"),
           z.literal("pull"),
           z.literal("continue"),

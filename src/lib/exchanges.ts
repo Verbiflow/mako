@@ -2,7 +2,7 @@ import type { Block, ChatMessage } from "@/lib/types"
 import { TURN_FAILED } from "@mako/sessions/events"
 import { mergeMedia, type MediaCandidate } from "@mako/sessions/turn-media"
 import { textOf } from "@/lib/format"
-import { causeWords, eventLabel, foldLimitMoves } from "@/lib/transcript-events"
+import { causeWords, eventLabel, foldLimitMoves, limitFailure } from "@/lib/transcript-events"
 import { foldUsageLimits } from "@/lib/usage-limit-folds"
 import { opensContinuation, savedContinuation, type SavedContinuation } from "@mako/host/contracts/turn-continuation"
 import { savedResumeAccount } from "@mako/host/contracts/resume-account"
@@ -620,4 +620,14 @@ function labelOf(exchange: Exchange): string {
   const line = label(text)
   if (line) return line
   return exchange.response.length > 0 ? "Agent turn" : "Empty turn"
+}
+
+/** The local automatic wait already says this limit; keep the native marker in history, outside the live projection. */
+export function withoutWaitingLimitNotes(exchanges: Exchange[], waiting: ReadonlySet<string>): Exchange[] {
+  if (!waiting.size) return exchanges
+  return exchanges.map(exchange => {
+    if (!exchangeRequests(exchange).some(id => waiting.has(id))) return exchange
+    const system = exchange.system.filter(({ message }) => !message.note || (!message.note.limit && !limitFailure(message.note)))
+    return system.length === exchange.system.length ? exchange : { ...exchange, system }
+  })
 }

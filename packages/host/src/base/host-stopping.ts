@@ -3,9 +3,15 @@ import { withControlProcesses } from "@mako/control-runtime/processes"
 import { withSessionProcesses } from "@mako/sessions/processes"
 import { hostSpawn, hostFork, hostCommand } from "./host-command.js"
 
-/** Expected cancellation, rather than a provider, network or authentication failure. */
+/** What a stop says of work it ended that has no words of its own for it. */
+export const HOST_STOPPING_WORDS = "Mako's host is stopping. This request was not completed."
+
+/**
+ * Expected cancellation, rather than a provider, network or authentication failure. Work the stop means something
+ * particular for says so in its own words ("Mako quit before sign-in finished; sign in again."), which its caller hears.
+ */
 export class HostStoppingError extends Error {
-  constructor(message = "Mako's host is stopping. This request was not completed.") {
+  constructor(message = HOST_STOPPING_WORDS) {
     super(message)
     this.name = "HostStoppingError"
   }

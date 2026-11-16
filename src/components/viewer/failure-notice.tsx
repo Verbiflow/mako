@@ -8,6 +8,7 @@ import { useLimitReset } from "@/state/limit-reset"
 import { prefsStore, setPref, usePrefs } from "@/state/prefs"
 import { endsOnFailureRow, turnWords } from "@/state/prompt-delivery"
 import { requestRecovery } from "@/state/request-recovery"
+import { usageLimitSources } from "@/state/usage-limit-wait"
 import { shallowEqual } from "@/state/store"
 
 const NONE: never[] = []
@@ -29,7 +30,8 @@ export function useFailureNotice(): ComposerNotice | null {
     if (!current) return null
     const requests = current.requests ?? NONE
     const answered = requests.findLastIndex((request) => request.status === "completed")
-    const latest = requests.slice(answered + 1).findLast(endsOnFailureRow)
+    const held = current.copy ? new Set<string>() : usageLimitSources(requests)
+    const latest = requests.slice(answered + 1).findLast(request => !held.has(request.id) && endsOnFailureRow(request))
     const waiting = latest !== undefined && requests.some((request) => request.status === "held" && request.wake?.after === latest.id)
     // Which message, by its words: a continuation's are Mako's, so it is named by the turn it continued.
     return { key: current.key, harness: current.harness, latest, waiting, words: latest ? turnWords(requests, latest) : "" }

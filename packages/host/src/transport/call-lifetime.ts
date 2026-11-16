@@ -1,4 +1,4 @@
-import { HostStopping, HostStoppingError } from "../base/host-stopping.js"
+import { HOST_STOPPING_WORDS, HostStopping, HostStoppingError } from "../base/host-stopping.js"
 import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
 
 /** A call the stopping host never started: nothing of it happened, so its caller sends it again to the next host. */
@@ -11,11 +11,13 @@ export class HostStoppedCallError extends RuntimeDisconnectedError {}
  * A call the host's stop ended, as its caller hears it: a disconnect, never a refusal. One it refused before starting
  * didn't happen (`unconfirmed: false`); one it cut may have, and is asked again under its ID, which the next host
  * settles once. Heard as a plain failure, the renderer's outbox took a person's message sent during a quit's drain as
- * refused for good and handed it back (`waitsFor`).
+ * refused for good and handed it back (`waitsFor`). Only the stop's own words are said so: a call whose work said
+ * what the stop means for it (an unfinished sign-in: "Mako quit before sign-in finished; sign in again.") is answered
+ * in those words, which no repeat changes.
  */
 export function stoppedCallError(error: Error): Error {
   if (error instanceof HostCallRefusedError) return new HostStoppedCallError(false)
-  if (error instanceof HostStoppingError) return new HostStoppedCallError(true)
+  if (error instanceof HostStoppingError && error.message === HOST_STOPPING_WORDS) return new HostStoppedCallError(true)
   return error
 }
 
