@@ -972,7 +972,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   declareFinDefaultMethods(methods, finDefaults, () => {
     const reading = finCapacity.reading()
     return lent.count() ? { ...reading, lent: lent.words() } : reading
-  }, () => finCapacity.changed(), async () => cloudFinLimits(await late.cloud?.cloudFinLimits?.().catch(() => null)))
+  }, () => finCapacity.changed(), {
+    refresh: async () => { await late.cloud?.cloudFinLimits?.().catch(() => null) },
+    reading: () => cloudFinLimits(late.cloud?.heldCloudFinLimits?.()),
+  })
   // Every check run holds one of the builds capacity keeps room for, and the rest wait their turn.
   const buildSlots = new BuildSlots(() => finCapacity.builds())
   finCapacity.subscribe(() => buildSlots.changed())

@@ -374,12 +374,15 @@ function withOwn(stored: Stored, key: "limit" | "ceiling", value: number | undef
 }
 
 /** Settings › Fins on every window and the web app's Macs: read, with this device's capacity, and chosen. */
-export function declareFinDefaultMethods(methods: MethodTable, store: FinDefaultsStore, capacity?: () => FinCapacityReading | undefined, changed?: () => void, cloud?: () => Promise<CloudFinLimits>): void {
-  const read = async (reading: FinChoicesReading): Promise<FinChoicesReading> => {
+export function declareFinDefaultMethods(methods: MethodTable, store: FinDefaultsStore, capacity?: () => FinCapacityReading | undefined, changed?: () => void, cloud?: { refresh(): Promise<void>; reading(): CloudFinLimits }): void {
+  const read = (reading: FinChoicesReading): FinChoicesReading => {
     const held = capacity?.()
-    return { ...reading, ...(held && { capacity: held }), ...(cloud && { cloud: await cloud() }) }
+    return { ...reading, ...(held && { capacity: held }), ...(cloud && { cloud: cloud.reading() }) }
   }
-  methods.handle("mako:fin-defaults", () => read(store.reading()))
+  methods.handle("mako:fin-defaults", async () => {
+    await cloud?.refresh()
+    return read(store.reading())
+  })
   methods.handle("mako:fin-default-choose", (harness: string, settings: SessionSettings | null) => read(store.choose(harness, settings)))
   methods.handle("mako:fin-policy-save", (policy: FinPolicy) => read(store.savePolicy(policy)))
   methods.handle("mako:fin-role-rules-save", (role: RoleRules, text: string) => read(store.saveRoleRules(role, text)))
