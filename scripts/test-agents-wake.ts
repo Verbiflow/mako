@@ -178,7 +178,8 @@ async function progressThenTurnEnd(): Promise<void> {
     const wakes = wakesOf(w, apex.conversation)
     const heard = wakes.map((wake) => wake.text).join("\n")
     assert.match(heard, /"review" \(Claude\) done: Ready for review at 1a2b3c4\./, `progress then a silent turn end is its result: ${heard}`)
-    assert.match(heard, /"merge" \(Claude\) done: Over to the person\./, "a wait on the person wakes the Apex at the turn's end")
+    assert.match(heard, /"merge" \(Claude\): Reviewed; it needs merging\. · waiting on the person to merge/, "a first wait on the person wakes the Apex as it's said")
+    assert.equal(heard.match(/• "merge"/g)?.length, 1, "and once: its turn's end says nothing more")
     assert.doesNotMatch(heard, /"ci"/, "progress on a pull request the watch reads stays quiet")
     assert.equal(wakes.length, 1, "one wake for both")
     assert.equal(heard.match(/• "review"/g)?.length, 1, "once")
@@ -187,8 +188,8 @@ async function progressThenTurnEnd(): Promise<void> {
     const kind = (name: string) => listed.children.find((child) => child.name === name)?.state
     assert.equal(kind("review")?.kind, "ended")
     assert.equal(kind("ci")?.kind, "idle", "the CI one waits")
-    const merge = w.store.reportsOf(w.store.edges().all.find((edge) => edge.name === "merge")!.child).at(-1)
-    assert.deepEqual(merge?.waitingOn, [{ kind: "person", what: "merge" }], "its result keeps what it waits on")
+    const merge = w.store.reportsOf(w.store.edges().all.find((edge) => edge.name === "merge")!.child)
+    assert.deepEqual(merge.map((report) => [report.status, report.implicit ?? false]), [["progress", false]], "no turn-end result after a wait that woke the Apex")
   } finally {
     await w.close()
   }

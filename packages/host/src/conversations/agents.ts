@@ -3895,7 +3895,8 @@ export class Agents implements AgentOperations, ConversationChildren {
    * again, so that progress stays quiet; a wait on the person or in other words wakes nothing, so its Apex hears it.
    */
   private progressLeftUnwatched(report: Report, conversation: string): boolean {
-    if (report.status !== "progress" || report.handoff) return false
+    // One that handed work on or first named a wait on someone else woke its Apex already: its turn's end says nothing new.
+    if (report.status !== "progress" || report.handoff || report.awaits) return false
     if (this.deps.readPull && report.waitingOn?.some((item) => waitedPull(item) !== undefined)) return false
     return !this.store()!.armedTurnWaits().some((wait) => wait.conversation === conversation)
   }
