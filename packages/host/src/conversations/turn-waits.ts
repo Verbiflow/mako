@@ -55,6 +55,10 @@ export interface ArmTurnWait {
   at?: number
   /** Items the caller found met already as it arms, by `turnWaitItemKey`. */
   met?: Readonly<Record<string, { at: number; words: string }>>
+  /** Mako's own crew check-in (`CREW_WAIT`), not the agent's. */
+  armedBy?: "mako"
+  /** The crew check-in's step of its backoff. */
+  crewStep?: number
 }
 
 export type ArmTurnWaitResult =
@@ -117,6 +121,8 @@ export class TurnWaits {
       createdAt: now,
       met,
       state: "armed",
+      ...(input.armedBy && { armedBy: input.armedBy }),
+      ...(input.crewStep !== undefined && { crewStep: input.crewStep }),
     })
     if (!armed.existed) hostLog("waits", "armed", { wait: armed.wait.id, conversation: input.conversation, items: items.length, returnWhen, ...(endsBy !== undefined && { endsInMs: endsBy - now }), ...(armed.replaced.length && { replaced: armed.replaced.map((wait) => wait.id).join(" ") }) })
     this.schedule()

@@ -89,6 +89,11 @@ export class QuietWatch {
     return last !== undefined && this.told.get(child) === last ? last : undefined
   }
 
+  /** When a watched Fin last did something; nothing for one not watched. */
+  lastActivity(child: string): number | undefined {
+    return this.last.get(child)
+  }
+
   /** Whether the quiet stretch that began at `since` still holds: nothing from the Fin since, and it still works. */
   stillQuiet(child: string, since: number): boolean {
     return this.last.get(child) === since && this.deps.working(child)
