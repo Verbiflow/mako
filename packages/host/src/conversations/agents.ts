@@ -130,7 +130,7 @@ import {
   type FrontDoorChild,
   frontDoorNote,
 } from "../contracts/agent-tools.js"
-import { agentWords, answerText, apexAsk, apexNote, briefText, askWords, CHILD_GROUPS, childGroup, childLine, finName, fromApex, HANDED_OVER_NOTE, openAsk, type OpenAsk, PASSED_ON_NOTE, passedOn, personsApproval, rollup, YOUR_APEX } from "../contracts/children.js"
+import { agentWords, answerText, apexAsk, apexNote, briefText, askWords, CHILD_GROUPS, childGroup, childLine, finName, fromApex, HANDED_OVER_NOTE, openAsk, type OpenAsk, PASSED_ON_NOTE, passedOn, personsApproval, quietLine, rollup, YOUR_APEX } from "../contracts/children.js"
 import { KeyedAdmission } from "../base/keyed-admission.js"
 import type { FinAtWork } from "./fin-cost-sampler.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
@@ -159,6 +159,7 @@ import { macLoad, type MacLoad, type MacReading } from "./mac-capacity.js"
 import { FinMoves, type FinPlace } from "./fin-moves.js"
 import type { TurnReply } from "./live-goals.js"
 import { PULL_WATCH_EVERY_MS, PullWatch, type PullWait } from "./pull-watch.js"
+import { QuietWatch } from "./fin-quiet.js"
 import { AgentPlaces, placeName, type AwayRefused, type OutboxNotice, type PlacedAsk, type PlaceLink } from "./agent-places.js"
 import type { PullOutcome, PullReading, PullWaitUntil } from "../contracts/pull-waits.js"
 import type { PullTarget as ReadTarget } from "../git/index.js"
@@ -359,6 +360,8 @@ export interface AgentsDeps {
   processes?: ProcessReads
   /** `APEX_ANSWER_MS`, shorter in tests. */
   apexAnswerMs?: number
+  /** How long a working Fin may show no activity before its Apex hears it (`QuietWatch`); `QUIET_MS` without it. */
+  quietMs?: number
   /**
    * The pull requests whose head is `branch` in `repoRoot`, as this host last read them (the worktree summaries'),
    * without asking GitHub; none before any were read.
@@ -569,6 +572,9 @@ const FILLED = "\0filled"
 
 /** A queued spawn's notice that a Fin it was to start after didn't finish: `after:<op>`; once its Apex heard it, it's dropped. */
 const HELD_PREFIX = "after:"
+/** A quiet Fin's notice (`QuietWatch`): no report row holds it, and it goes once heard. */
+const QUIET_PREFIX = "quiet:"
+const stored = (id: string) => !id.startsWith(HELD_PREFIX) && !id.startsWith(QUIET_PREFIX)
 
 /** How many of a tree's Threads work now and how many it started, as its budget counts them. */
 type TreeCounts = { [Count in keyof TreeBudget]: number }
@@ -677,6 +683,10 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** The pull requests Fins' latest reports say they wait on, read until each outcome wakes its Fin. */
   readonly pulls: PullWatch
   private readonly stopPullWatch: () => void
+  /** Fins that read as working and do nothing, each tree on one deadline (`QuietWatch`). */
+  readonly quiet: QuietWatch
+  /** Conversations that aren't a Fin's, so activity in them costs a set lookup: emptied when the edges change. */
+  private readonly notFins = new Set<string>()
   /** This Mac's load as a start last read it, which every answer carries while it's busy. */
   private mac: MacLoad | undefined
   /** Where a Fin goes when its harness's account runs out; absent without the host's accounts. */
@@ -750,11 +760,11 @@ export class Agents implements AgentOperations, ConversationChildren {
       rewrite: (conversation, request, text, notices, lines) => deps.live.rewriteWaiting(conversation, request, text, { notices: [...notices], ...(lines?.length && { lines: [...lines] }) }),
       steer: (conversation, id, text) => this.steer(conversation, id, text),
       assign: (reports, request) => {
-        this.store()?.assignWake(reports.filter((id) => !id.startsWith(HELD_PREFIX)), request)
+        this.store()?.assignWake(reports.filter(stored), request)
         for (const id of reports) if (id.startsWith(HELD_PREFIX)) this.heldIn(id.slice(HELD_PREFIX.length), request)
       },
       delivered: (reports, at) => {
-        this.store()?.markReportsDelivered(reports.filter((id) => !id.startsWith(HELD_PREFIX)), at)
+        this.store()?.markReportsDelivered(reports.filter(stored), at)
         for (const id of reports) if (id.startsWith(HELD_PREFIX)) this.dropHeld(id.slice(HELD_PREFIX.length))
       },
       counts: (conversation) => this.counts(conversation),
@@ -764,6 +774,14 @@ export class Agents implements AgentOperations, ConversationChildren {
       now: deps.now,
     })
     // Reads the machine for its capacity; a place that gains room says so (`capacityChanged`), and what waits goes then.
+    this.quiet = new QuietWatch({
+      now: () => this.now(),
+      later: (ms, run) => this.later(ms, run),
+      working: (child) => this.quietWorking(child),
+      tree: (child) => this.rootOf(child),
+      quiet: (child, since) => this.tellQuiet(child, since),
+      ...(deps.quietMs !== undefined && { quietMs: deps.quietMs }),
+    })
     this.stopRoomWatch = deps.jobs.every(ROOM_WATCH_JOB, ROOM_EVERY_MS, () => this.observe(true))
     const read = deps.readPull
     const watching = deps.jobs.demand("pull requests Fins wait on")
@@ -786,8 +804,10 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /** A digest never says a Fin ended, or was cut short, while its Session shows it at work: the end the host inferred for its run is past. */
-  private current(notice: Pick<Notice, "report">): boolean {
+  private current(notice: Pick<Notice, "report" | "quiet">): boolean {
     const { report } = notice
+    // A quiet Fin that did something since, or stopped working, isn't quiet: its notice leaves any digest still unsent.
+    if (notice.quiet) return this.quiet.stillQuiet(report.child, notice.quiet.since)
     if (this.store()?.edges().internalRuns.some((edge) => edge.child === report.child)) return false
     if (report.retainsQuestion && !this.store()?.openReportAsks(report.child).some((open) => open.id === report.id)) return false
     // Nor a question a message answered before this digest went.
@@ -1216,6 +1236,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     this.wakes.settled(conversation)
     const child = this.childOfConversation(conversation)
     const edge = child ? this.store()?.edges().of(child) : undefined
+    if (child && !this.deps.live.atWork(conversation)) this.quiet.forget(child)
     if (edge && !edge.closedAt) this.turnEnded(edge, conversation, request)
     if (!edge) this.apexLimit(conversation, request)
     void this.drain()
@@ -2482,6 +2503,8 @@ export class Agents implements AgentOperations, ConversationChildren {
    * What Mako sends by itself answers nothing. An answer still on its way that later fails doesn't open it again.
    */
   inputDelivered(conversation: string, { id: request, text, actor, digest, continues, goal }: LiveRequest | SteerDelivered, delivery: FinDelivery): void {
+    // Its harness took input: a turn begins, or a steer reaches the one it runs. Either is the Fin at work again.
+    this.active(conversation)
     if (digest || continues || goal || actor?.kind === "service" || this.digestSteers.has(request)) return
     const child = this.childOfConversation(conversation)
     const edge = child ? this.store()?.edges().of(child) : undefined
@@ -2906,6 +2929,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     for (const timer of this.noticeEnds.values()) clearTimeout(timer)
     this.noticeEnds.clear()
     this.stopped = true
+    this.quiet.stop()
     for (const timer of this.cutChecks.values()) clearTimeout(timer)
     this.cutChecks.clear()
     this.stopRoomWatch()
@@ -4152,6 +4176,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   private keepReport(edge: ThreadParent, report: Report): { report: Report; deduped: boolean } | AgentRefused {
+    // Its own report is the Fin at work; one Mako writes for it (a cut turn, a silent turn's end) isn't.
+    if (!report.implicit) this.quiet.activity(edge.child)
     const store = this.store()!
     let kept: ReturnType<ThreadStore["keepReport"]>
     try {
@@ -4587,6 +4613,77 @@ export class Agents implements AgentOperations, ConversationChildren {
     this.unanswered.get(child)?.()
     this.unanswered.delete(child)
     this.escalated.delete(child)
+  }
+
+  /**
+   * The live engine stamped activity in a conversation: its output, a step, a turn beginning. A Fin's quiet starts again
+   * (`QuietWatch`); any other conversation's costs a set lookup. Called on every stamp, so it reads no store row twice.
+   */
+  active(conversation: string): void {
+    if (this.stopped || this.notFins.has(conversation)) return
+    const child = this.childOfConversation(conversation)
+    if (!child) {
+      this.notFins.add(conversation)
+      return
+    }
+    this.quiet.activity(child)
+  }
+
+  /**
+   * Whether a Fin's quiet means anything: it reads as working on Mako's live driver, by the same `atWork` its row reads,
+   * and waits on nothing that explains a pause (the person's answer, its own Fins, its move, a usage limit). A Fin
+   * placed elsewhere or run by a process Mako follows is its own host's or process's to watch.
+   */
+  private quietWorking(child: string): boolean {
+    const edge = this.store()?.edges().of(child)
+    if (!edge || edge.closedAt !== undefined || edge.placed || (edge.run && !edge.run.ended)) return false
+    const conversation = this.askingConversation(child)
+    if (!conversation || !this.deps.live.atWork(conversation)) return false
+    if (this.personWaiting(conversation) !== undefined || this.messageHold(conversation)) return false
+    const reading = this.childReading(edge)
+    return reading.working === true && reading.awaiting === undefined && reading.waiting === undefined
+  }
+
+  /**
+   * A working Fin was quiet `QUIET_MS` since `since`: its Apex hears it once, in its digest, with its last step and
+   * whether that still runs, so it decides (read it, ask it, stop it, or leave a long command be). Not a report: kept
+   * nowhere, it changes how the Fin reads in nothing. A Fin whose spawn asked to be heard only on results, or never,
+   * isn't named.
+   */
+  private tellQuiet(child: string, since: number): void {
+    const edge = this.store()?.edges().of(child)
+    if (!edge || edge.closedAt !== undefined || edge.remote) return
+    const wake = edge.asked.wake ?? "decisions"
+    const conversation = this.askingConversation(child)
+    const held = conversation ? this.deps.live.held(conversation) : undefined
+    const blocks = held?.blocks.slice(-24) ?? []
+    const harness = this.harnessOf(edge)
+    const step = lastStep(blocks, harness)
+    const tool = [...blocks].reverse().find((block) => block.type === "tool")
+    const running = tool?.type === "tool" && (tool.status === "pending" || tool.status === "running") && blocks.at(-1) === tool
+    const forMs = this.now() - since
+    hostLog("agents", "fin quiet", { op: edge.op, forMs, ...(step && { step }), ...(running && { running }), told: wake === "decisions" })
+    if (wake !== "decisions") return
+    const front = this.frontOf(edge.parent, edge.parentSession)
+    if (!front) return
+    const quiet = { since, forMs, ...(step && { step: step.slice(0, 400) }), ...(running && { running: true as const }) }
+    const report: Report = {
+      id: `${QUIET_PREFIX}${child}:${since}`,
+      child: ThreadIdSchema.parse(child),
+      status: "progress",
+      summary: quietLine(quiet),
+      implicit: true,
+      ownerGeneration: this.generation,
+      at: this.now(),
+    }
+    this.wakes.notice(front, this.rootOf(edge.parent), {
+      id: `notice:${report.id}`,
+      report,
+      label: `"${edge.name}" (${this.deps.harnessLabel(harness)})`,
+      fin: { name: edge.name, harness },
+      from: this.store()?.thread(edge.child)?.sessions[0] ?? edge.parentSession,
+      quiet,
+    })
   }
 
   private later(ms: number, run: () => void): () => void {
@@ -6190,6 +6287,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const edges = store.edges()
     if (edges !== this.seen) {
       this.seen = edges
+      this.notFins.clear()
       this.keptMark = store.keptMark()
       this.latest = store.latestReports()
       this.answersHeld = store.latestAnswers()

@@ -3,7 +3,7 @@ import { errorMessage } from "../base/error-message.js"
 import { APEX_WORD, decisionWords, FIN_WORD, reportAsk, reportPhase, waitingWords, type Notice, type Report } from "../contracts/agents.js"
 import { appendFinReports, FIN_REPORTS_MAX, type FinReportCard } from "../contracts/fin-reports.js"
 import { FROM_AGENTS } from "../contracts/children.js"
-import { WAKE_COALESCE_MS } from "../contracts/children.js"
+import { quietLine, WAKE_COALESCE_MS } from "../contracts/children.js"
 import { SessionIdSchema, type Actor } from "../contracts/thread-identity.js"
 import { namedUuid } from "./cloud-moves.js"
 
@@ -292,7 +292,8 @@ const DECIDES = new Set<Report["status"]>(["blocked", "needs-input"])
 export function digest(notices: readonly Notice[], counts: string): string {
   const results = notices.filter((notice) => notice.settledOnly)
   const replies = notices.filter((notice) => notice.reply)
-  const fins = notices.filter((notice) => !notice.settledOnly && !notice.reply)
+  const fins = notices.filter((notice) => !notice.settledOnly && !notice.reply && !notice.quiet)
+  const quiets = notices.filter((notice) => notice.quiet && !notice.settledOnly && !notice.reply)
   const asks = fins.filter((notice) => DECIDES.has(notice.report.status))
   const decided = fins.filter((notice) => notice.decision)
   const decisions = [...asks.filter((notice) => notice.report.for !== "person"), ...decided.filter((notice) => notice.decision === "lead")]
@@ -387,8 +388,17 @@ export function digest(notices: readonly Notice[], counts: string): string {
     }
     lines.push(`  agents_send to each passes it on.`)
   }
+  if (quiets.length) {
+    lines.push(`${quiets.length} ${quiets.length === 1 ? "has" : "have"} gone quiet while working:`)
+    for (const notice of quiets) {
+      const words = quietLine(notice.quiet!)
+      lines.push(`  • ${notice.label} ${words}`)
+      cards.push(card(notice, words))
+    }
+    lines.push(`  agents_read shows what each is doing. A long command may be fine; otherwise agents_send asks it (deliver: steer reaches the turn it runs, interrupt cuts it), or agents_stop stops it.`)
+  }
   lines.push(counts)
-  lines.push((results.length || replies.length) && !decisions.length && !persons.length && !finished.length && !handoffs.length
+  lines.push((results.length || replies.length) && !decisions.length && !persons.length && !finished.length && !handoffs.length && !quiets.length
     ? "Go on with it: reply to the person, start more work, or end your turn."
     : "agents_read gives a report in full. Reply to the person, start more work, or end your turn.")
   return appendFinReports(lines.join("\n"), cards)
