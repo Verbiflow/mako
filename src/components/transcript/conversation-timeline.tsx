@@ -1,6 +1,7 @@
 import { Slot } from "@/extend/slot"
 import { quietly } from "@/lib/quiet-retry"
 import { elementScroll, measureElement, useVirtualizer, type Virtualizer } from "@tanstack/react-virtual"
+import { useRowRef } from "@/lib/virtual-row-ref"
 import { registerCommands } from "@/extend/commands"
 import {
   TranscriptSourceContext,
@@ -864,6 +865,7 @@ export function ConversationTimeline({
       if (viewport.current) owned(viewport.current)
     },
   })
+  const measureRow = useRowRef(rows)
   /**
    * A conversation that grows into a window is on screen as it crosses, and the virtualizer's first commit knows neither
    * the viewport nor its rows: it would mount the first turns at offset 0, and the column would paint empty until a seek
@@ -2009,7 +2011,7 @@ export function ConversationTimeline({
                     <div
                       key={row.key}
                       data-index={row.index}
-                      ref={rows.measureElement}
+                      ref={measureRow}
                       style={{ position: "absolute", top: 0, left: 0, width: "100%" }}
                     >
                       {renderExchange(exchanges[row.index]!)}

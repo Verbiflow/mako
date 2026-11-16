@@ -1,5 +1,6 @@
 import { memo, useEffect, useState, useRef, type ReactNode } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
+import { useRowRef } from "@/lib/virtual-row-ref"
 import { cn } from "@/lib/utils"
 import type { Exchange } from "@/lib/exchanges"
 import { promptLabel } from "@/lib/exchanges"
@@ -224,6 +225,7 @@ function NavigatorItems({
     overscan: 6,
     useAnimationFrameWithResizeObserver: true,
   })
+  const measureRow = useRowRef(rows)
   const items = large
     ? rows.getVirtualItems()
     : exchanges.map((entry, index) => ({ index, key: entry.id, start: 0 }))
@@ -288,7 +290,7 @@ function NavigatorItems({
             key={item.key}
             data-navigator-index={item.index}
             data-index={item.index}
-            ref={large ? rows.measureElement : undefined}
+            ref={large ? measureRow : undefined}
             style={
               large
                 ? {

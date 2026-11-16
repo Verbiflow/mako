@@ -12,6 +12,7 @@ import {
 import { FinRowActions } from "@/components/viewer/fin-row-actions"
 import { FinTypedAnswer } from "@/components/composer/fin-typed-answer"
 import { useVirtualizer } from "@tanstack/react-virtual"
+import { useRowRef } from "@/lib/virtual-row-ref"
 import { finMoved } from "@/state/fin-moved"
 import {
   ArrowRightLeftIcon,
@@ -507,6 +508,7 @@ function CrewCardBody({
           : index
     },
   })
+  const measureRow = useRowRef(virtualizer)
   // A Fin opens in place on the desk; the web's Thread screen opens it by its own address.
   const routed = use(RoutedOpenContext)
   const onOpen = useCallback(
@@ -591,7 +593,7 @@ function CrewCardBody({
               <div
                 key={item.key}
                 data-index={item.index}
-                ref={virtualizer.measureElement}
+                ref={measureRow}
                 className="absolute inset-x-0 top-0 pb-1.5"
                 style={{ transform: `translateY(${item.start}px)` }}
               >
