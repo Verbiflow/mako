@@ -169,6 +169,8 @@ import { TurnWaits } from "./turn-waits.js"
 import { CREW_STEPS_MAX, CREW_WAIT, crewWaitNote, crewWaitSeconds, turnWaitItemKey, turnWaitItemWords, turnWaitLine, turnWaitMovedNote, type CrewFin, type TurnWait, type TurnWaitItem, type TurnWaitLine } from "../contracts/turn-waits.js"
 import { AFTER_WAIT, type TurnWaitInput, type TurnWaitResult } from "../contracts/thread-tools.js"
 import { AgentPlaces, placeName, type AwayRefused, type OutboxNotice, type PlacedAsk, type PlaceLink } from "./agent-places.js"
+import { checkedFinSource } from "./fin-source.js"
+import { CommittedFinSourceSchema, type CommittedFinSource } from "../contracts/fin-source.js"
 import type { PullOutcome, PullReading, PullWaitUntil } from "../contracts/pull-waits.js"
 import type { PullTarget as ReadTarget } from "../git/index.js"
 
@@ -371,6 +373,8 @@ export interface AgentsDeps {
   remoteOf?(cwd: string): Promise<string | undefined>
   /** A checkout of `remote` on this device for a Fin placed here: one it has, or a clone it makes; refused with why. */
   checkoutOf?(remote: string): Promise<{ folder: string } | { refused: string }>
+  /** Verify an already prepared private checkout and return the source's confined cwd before its brief is started. */
+  verifySource?(folder: string, source: CommittedFinSource): Promise<string>
   /** The most access a Fin started here from another device may have (`PLACED_CEILING` without it). */
   placedCeiling?(): AccessTier
   /** What bounds the cloud's Fins (the person's plan and spend ceiling), once Fins start there; nothing without it. */
@@ -461,6 +465,8 @@ interface Apex {
   session: string
   thread: string
   conversation?: string
+  source?: CommittedFinSource
+  sourceRoot?: string
   /**
    * It runs on another device and calls for the Fins it placed here (`ApexCaller`): its device, its conversation there,
    * its access as this device bounds it, and the person's message its turn answers.
@@ -537,6 +543,8 @@ const QueuedByApexSchema = z.object({
   session: z.string(),
   thread: z.string(),
   conversation: z.string().optional(),
+  source: CommittedFinSourceSchema.optional(),
+  sourceRoot: z.string().optional(),
   away: z.object({ device: z.string(), conversation: z.string().optional(), access: z.enum(ACCESS_TIER_NAMES), forwards: z.string().optional() }).optional(),
 })
 const QueuedStartSchema = z.object({
@@ -784,8 +792,9 @@ export class Agents implements AgentOperations, ConversationChildren {
       // Memory first: a notice for an Apex in memory reads nothing in, and one that isn't is read in before (`noticeOf`).
       unsent: (conversation) => ((deps.live.held(conversation) ?? deps.live.snapshot(conversation))?.requests ?? []).flatMap((request) =>
         request.digest && !request.continues?.brief && (request.status === "queued" || request.status === "held") ? [{ id: request.id, ...carriedDigest(request.digest) }] : []),
+      // A digest folded into another turn (`joinedInto`) carries its notices there.
       carried: (conversation, notice) => Boolean((deps.live.held(conversation) ?? deps.live.snapshot(conversation))?.requests.some((request) =>
-        request.status !== "canceled" && request.digest?.notices.some((carried) => carried.id === notice))),
+        (request.status !== "canceled" || request.joinedInto !== undefined) && request.digest?.notices.some((carried) => carried.id === notice))),
       admit: (conversation, request, text, notices, actor, hold, lines) => {
         // The conversation took this request already: a host that died before marking its reports heard sent it.
         if (deps.live.snapshot(conversation)?.requests.some((asked) => asked.id === request)) return
@@ -1417,9 +1426,10 @@ export class Agents implements AgentOperations, ConversationChildren {
    * One admission per Apex and client key: the record is made before anything is awaited, so a second call with the
    * same key, while the first is still deciding or launching, joins its answer rather than starting again.
    */
-  private admitOnce(caller: AgentCaller, input: AgentsStartInput): Promise<AgentsStartResult> {
+  private admitOnce(caller: AgentCaller, input: AgentsStartInput, prepared?: { source: CommittedFinSource; root: string }): Promise<AgentsStartResult> {
     const apex = this.apexOf(caller)
     if ("refused" in apex) return Promise.resolve(apex)
+    if (prepared) { apex.source = prepared.source; apex.sourceRoot = prepared.root }
     const op = `start:${apex.session}:${input.clientKey}`
     const { record, joined } = this.starts.open(op, () => startRecord(op, apex.thread, input.name ?? input.title))
     if (joined) return record.answer.then((answer) => ("refused" in answer ? answer : { ...answer, deduped: true as const }))
@@ -2721,8 +2731,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     const apex = this.frontOf(edge.parent, edge.parentSession)
     const id = `notice:${edge.child}:${report.id}`
     if (apex && this.wakes.steered(id)) return false
-    const carriers = (apex ? this.deps.live.snapshot(apex)?.requests ?? [] : []).filter((request) => request.status !== "canceled" && request.digest?.notices.some((notice) => notice.id === id))
-    return carriers.length ? carriers.some(handedOver) : !this.store()!.undeliveredReports().some((waiting) => waiting.report.id === report.id)
+    const requests = apex ? this.deps.live.snapshot(apex)?.requests ?? [] : []
+    const carriers = requests.filter((request) => (request.status !== "canceled" || request.joinedInto !== undefined) && request.digest?.notices.some((notice) => notice.id === id))
+    // One folded into another turn reached it when that turn was handed over.
+    const went = (request: LiveRequest): boolean => handedOver(request.joinedInto === undefined ? request : requests.find((each) => each.id === request.joinedInto) ?? request)
+    return carriers.length ? carriers.some(went) : !this.store()!.undeliveredReports().some((waiting) => waiting.report.id === report.id)
   }
 
   private async answerOnce(by: Answerer, edge: ThreadParent, op: string, input: Pick<AgentsAnswerInput, "answer" | "allow" | "person" | "ask">): Promise<AgentsAnswered | AgentRefused> {
@@ -3386,7 +3399,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const limit = this.placeLimit(HERE)
     const of = limit.place === "device" ? limit.atOnce : FIN_LIMIT
     const used = this.full(HERE) ? of : Math.min(of, this.working(HERE) + this.waitingForRoom(HERE))
-    return { orchestration: { version: ORCHESTRATION_VERSION }, slots: { used, of }, harnesses: [...this.deps.harnesses()] }
+    return { orchestration: { version: ORCHESTRATION_VERSION }, slots: { used, of }, harnesses: [...this.deps.harnesses()], ...(this.deps.verifySource && { committedSource: 1 as const }) }
   }
 
   /**
@@ -3405,8 +3418,15 @@ export class Agents implements AgentOperations, ConversationChildren {
     const apex = this.apexOf(caller)
     if ("refused" in apex) return apex
     if (input.op !== `start:${apex.session}:${input.clientKey}`) return { refused: "conflict", why: "A placed start's op is start:{its Apex's Session}:{its clientKey}." }
+    let source: CommittedFinSource | undefined
+    if (input.workspace.source) {
+      try { source = checkedFinSource(input.workspace.source) }
+      catch { return this.refuse(input.op, "conflict", "The Fin's committed source manifest is invalid.") }
+      if (!input.workspace.folder || input.workspace.remote !== undefined || input.workspace.branch !== undefined || input.workspace.base !== undefined)
+        return this.refuse(input.op, "conflict", "Committed source requires its prepared folder, without another remote, branch or base.")
+    }
     const kept = store.edges().byOp(input.op)
-    if (kept) return this.placedAnswer(kept, true)
+    if (kept) return kept.source?.sha256 === source?.sha256 ? this.placedAnswer(kept, true) : this.refuse(input.op, "conflict", "That placement already has a different source.")
     // Its Apex stopped it before it got here (`cancel`): whenever it arrives, it doesn't run.
     const stopped = `Its ${APEX_WORD} stopped this start before it reached this device, so it doesn't run here.`
     if (store.startCancelled(input.op)) return this.refuse(input.op, "conflict", stopped)
@@ -3415,6 +3435,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     const ceiling = this.deps.placedCeiling?.() ?? PLACED_CEILING
     const access = childAccess(ceiling, asked) ?? ceiling
     let folder = input.workspace.folder
+    if (source) {
+      if (!this.deps.verifySource) return this.refuse(input.op, "unsupported", "This host cannot verify committed Fin sources.")
+      try { folder = await this.deps.verifySource(folder!, source) }
+      catch { return this.refuse(input.op, "conflict", "The prepared checkout does not match the Fin's committed source.") }
+    }
     if (!folder) {
       const remote = input.workspace.remote
       if (!remote) return this.refuse(input.op, "place-unavailable", `A ${FIN_WORD} placed here works in a checkout of its project's Git remote, and its ${APEX_WORD} named none.`)
@@ -3439,10 +3464,11 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(input.wake && { wake: input.wake }),
       clientKey: input.clientKey,
       cwd: folder,
-    })
+    }, source && input.workspace.folder ? { source, root: input.workspace.folder } : undefined)
     if ("refused" in started) return started
     const edge = started.child ? store.edges().of(started.child) : undefined
     if (!edge) return { refused: "budget", why: started.why ?? "This device has no room for it now." }
+    if (edge.source?.sha256 !== source?.sha256) return this.refuse(input.op, "conflict", "That placement already has a different source.")
     const lowered = access !== asked ? `It runs on ${access} here: this device holds ${FIN_WORD}s started from other devices to ${ceiling}.` : undefined
     return this.placedAnswer(edge, started.deduped === true, [lowered, started.note].filter(Boolean).join(" "))
   }
@@ -3465,6 +3491,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(runsOn && { runsOn }),
       ...(said && { note: said }),
       ...(deduped && { deduped: true as const }),
+      ...(edge.source && { sourceSha256: edge.source.sha256 }),
     }
   }
 
@@ -3568,6 +3595,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       name,
       role: input.role ?? "worker",
       origin: "started",
+      ...(apex.source && { source: apex.source }),
       asked: {
         brief: input.brief,
         harness,
@@ -3611,6 +3639,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     this.starting.add(op)
     this.forget(apex.thread)
     try {
+      if (apex.source) {
+        if (!apex.sourceRoot || !this.deps.verifySource || await this.deps.verifySource(apex.sourceRoot, apex.source) !== cwd)
+          throw new Error("The Fin's committed source is no longer prepared.")
+        if (start.cancelled) return this.refuse(op, "conflict", `Its ${APEX_WORD} stopped it before it started.`)
+      }
       await this.deps.startLive(harness, cwd, options)
     } catch (error) {
       if (!store.edges().byOp(op)) {

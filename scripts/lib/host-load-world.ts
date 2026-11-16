@@ -44,7 +44,7 @@ export interface World {
   /** The process groups playing the running apps and the busy Mac, by their IDs. */
   fixtures: number[]
   /** Stops those groups; they also end with this process however it ends (`holdFixtures`). */
-  release(): void
+  release(): Promise<void>
 }
 
 function git(cwd: string, ...args: string[]): string {
@@ -133,8 +133,9 @@ const FIXTURE_LABEL = new RegExp(FIXTURE_PATTERN)
 function idleGroup(label: string, cwd: string, sleeps = 2) {
   const script = `${Array.from({ length: sleeps }, () => `sleep ${FIXTURE_SECONDS} &`).join(" ")} wait`
   const child = spawn("/bin/sh", ["-c", script, label, "--port", "3000", "--watch", "--config", "vite.config.ts"], { cwd, detached: true, stdio: "ignore" })
+  const ended = new Promise<void>(resolve => child.once("exit", () => resolve()))
   child.unref()
-  return { pid: child.pid!, stop: () => { try { process.kill(-child.pid!, "SIGKILL") } catch { /* gone */ } } }
+  return { pid: child.pid!, ended, stop: () => { if (child.exitCode === null && child.signalCode === null) try { process.kill(-child.pid!, "SIGKILL") } catch { /* the reap or scratch guard decides whether it ended */ } } }
 }
 
 /** An app's run as the host records it (`runs.json`). */
@@ -193,7 +194,7 @@ export async function makeWorld(root: string, scale: WorldScale): Promise<World>
   pastSessions(home, project, scale.sessions)
 
   // The apps: each checkout's records, the first `running` with a process group up, the rest with checks that ended.
-  const groups: { pid: number; stop(): void }[] = []
+  const groups: { pid: number; stop(): void; ended: Promise<void> }[] = []
   const environments = join(dataRoot, "thread-environments")
   for (let n = 0; n < scale.apps; n += 1) {
     const checkout = checkouts[n % checkouts.length]!.path
@@ -243,24 +244,33 @@ export function reapWhenGone(owner: number, pgids: readonly number[], seconds = 
  * lets the next run sweep them should the reaper be killed too; and their sleeps end after `FIXTURE_SECONDS` whatever
  * happens.
  */
-function holdFixtures(groups: { pid: number; stop(): void }[]): () => void {
+function holdFixtures(groups: { pid: number; stop(): void; ended: Promise<void> }[]): () => Promise<void> {
   const pgids = groups.map((group) => group.pid)
   const reaper = reapWhenGone(process.pid, pgids)
+  const reaperEnded = new Promise<void>(resolve => reaper.once("exit", () => resolve()))
   mkdirSync(FIXTURE_RUNS, { recursive: true })
   const record = join(FIXTURE_RUNS, `${process.pid}-${randomUUID()}.json`)
   writeFileSync(record, JSON.stringify({ owner: process.pid, groups: pgids }))
   let released = false
-  const release = () => {
+  const stop = () => {
     if (released) return
     released = true
     for (const group of groups) group.stop()
-    try { process.kill(-reaper.pid!, "SIGKILL") } catch { /* gone */ }
-    rmSync(record, { force: true })
+    if (reaper.exitCode === null && reaper.signalCode === null) try { process.kill(-reaper.pid!, "SIGKILL") } catch { /* its recorded reap decides whether it ended */ }
   }
-  process.once("exit", release)
+  let pending: Promise<void> | undefined
+  const release = () => pending ??= (async () => {
+    stop()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([Promise.all([...groups.map(group => group.ended), reaperEnded]), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error("The world's owned fixture leaders did not exit.")), 10_000) })])
+      rmSync(record, { force: true })
+    } finally { clearTimeout(timer) }
+  })()
+  process.once("exit", stop)
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const)
     process.once(signal, () => {
-      release()
+      stop()
       // Ends as the signal would have: raising it again isn't enough under tsx, whose own listener takes it.
       process.exit(128 + constants.signals[signal])
     })

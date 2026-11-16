@@ -241,6 +241,7 @@ export interface WorldOptions {
   remoteOf?: AgentsDeps["remoteOf"]
   /** This host's checkout of a remote, for a Fin placed here (`AgentsDeps.checkoutOf`). */
   checkoutOf?: AgentsDeps["checkoutOf"]
+  verifySource?: AgentsDeps["verifySource"]
   /** The most access a Fin placed here from another device may have (`AgentsDeps.placedCeiling`). */
   placedCeiling?: AgentsDeps["placedCeiling"]
 }
@@ -416,6 +417,7 @@ export class AgentsWorld {
       ...(this.options.away && { away: this.options.away }),
       ...(this.options.remoteOf && { remoteOf: this.options.remoteOf }),
       ...(this.options.checkoutOf && { checkoutOf: this.options.checkoutOf }),
+      ...(this.options.verifySource && { verifySource: this.options.verifySource }),
       ...(this.options.placedCeiling && { placedCeiling: this.options.placedCeiling }),
       archived: (conversation) => this.archived.has(conversation),
     }

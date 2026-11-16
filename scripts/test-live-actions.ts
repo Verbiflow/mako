@@ -276,13 +276,20 @@ try {
   const failedCompact: LiveActionInput = { kind: "compact", id: randomUUID() }
   await owner.act(id, failedCompact)
   const heldRequest = randomUUID()
-  owner.submit(id, heldRequest, "Do not run after failed compaction")
+  owner.submit(id, heldRequest, "Run after verified compaction recovery")
   const compactState = states.get(id)
   assert.ok(compactState)
   owner.observe({ type: "live-session", session: { ...compactState, status: "failed", error: "Compaction failed" } })
   owner.observe({ type: "live-action-result", id, actionId: failedCompact.id, result: { kind: "failed", reason: "Compaction failed" } })
-  assert.equal(owner.snapshot(id)?.requests.find((request) => request.id === heldRequest)?.status, "held")
-  assert.equal(owner.snapshot(id)?.control?.actions?.at(-1)?.state.kind, "failed")
+  assert.equal(owner.snapshot(id)?.requests.find((request) => request.id === heldRequest)?.status, "queued", "recovery owns the queue instead of leaving it held without a successor")
+  assert.equal(owner.snapshot(id)?.control?.actions?.find(action => action.input.id === failedCompact.id)?.state.kind, "failed")
+  const attempts = compactionCalls
+  await delay(0)
+  assert.equal(compactionCalls, attempts + 1, "one journaled retry starts independently of the renderer")
+  finish()
+  owner.observe({ type: "live-action-result", id, actionId: compactionId!, result: { kind: "completed" } })
+  assert.equal(sent.at(-1), "Run after verified compaction recovery")
+  finish()
   const interruptedCompact: LiveActionInput = { kind: "compact", id: randomUUID() }
   await owner.act(id, interruptedCompact)
   const dispatched = compactionCalls
@@ -290,7 +297,7 @@ try {
   owner = new LiveConversations({ ...dependencies, root: join(root, "compact-journals") })
   assert.equal((await owner.act(id, interruptedCompact)).state.kind, "uncertain")
   assert.equal(compactionCalls, dispatched, "restart cannot repeat compaction")
-  console.log("PASS: failed compaction holds queued work; restart preserves an unknown outcome without replay")
+  console.log("PASS: failed compaction owns a retry and queued work; restart preserves an unknown outcome without replay")
   const compactOutcome = owner.snapshot(id)?.control?.actions?.at(-1)?.state
   await Promise.all([
     owner.acknowledgeAction(id, interruptedCompact.id),

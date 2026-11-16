@@ -114,7 +114,7 @@ export function FailureRow({ conversationId, request, quoted = false, compact = 
   const idle = useAcp((state) => {
     const live = state.conversations[conversationId]
     return live?.kind === "live" && compactionAvailable(live.session, live.control?.actions ?? [],
-      live.requests?.some((item) => item.status === "queued" || item.status === "dispatching") ?? false)
+      live.requests?.some((item) => item.status === "queued" || item.status === "dispatching") ?? false, live.control?.activeBindingId)
   })
   // Sent again already: a later request carries the same words, or a timed send waits for this one.
   const followed = useAcp((state) => {
@@ -327,8 +327,8 @@ function useVisibility(key: string) {
 }
 
 /**
- * Compact the conversation for this request, then send it again once the
- * compaction finished; a compaction that fails or is refused sends nothing.
+ * A directly completed compact keeps the existing client resend. The host owns failed-compaction
+ * recovery; its original failed receipt stops this client from also resending the original.
  */
 function compactAndRetry(conversationId: string, request: LiveRequest): Promise<boolean> {
   return acp.compact(request.id).then((accepted) => accepted ? new Promise<boolean>((resolve) => {

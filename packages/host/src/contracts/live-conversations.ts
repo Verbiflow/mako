@@ -98,6 +98,8 @@ export const INTERRUPTION_REASONS = [
    * process rather than being sent again.
    */
   "provider-exited",
+  /** The native summary failed; recovery continues from retained context, never by repeating the original. */
+  "compaction-failed",
   /**
    * The provider's account signed out after it had accepted the prompt. The
    * turn so far stands in its session; it continues only when the user
@@ -160,7 +162,7 @@ export type SavedReason = (typeof SAVED_REASONS)[number]
  * the nearest a build before it knows: Mako carried the turn to another machine;
  * `steered` reads as the person's Stop, which it was, for their message.
  */
-export const OLDER_READING = { "not-saved": "stopped", "goal-budget": "stopped", "machine-lost": "handed-off", steered: "stopped" } as const satisfies Record<Exclude<InterruptionReason, SavedReason>, SavedReason>
+export const OLDER_READING = { "not-saved": "stopped", "goal-budget": "stopped", "machine-lost": "handed-off", steered: "stopped", "compaction-failed": "connection-lost" } as const satisfies Record<Exclude<InterruptionReason, SavedReason>, SavedReason>
 
 function isSavedReason(reason: InterruptionReason): reason is SavedReason {
   return SAVED_REASONS.some((saved) => saved === reason)
@@ -290,14 +292,14 @@ export const JOINED_MAX = 32
 export const JOINED_CHARS = 64_000
 
 /** Who wrote a part of a folded message, as its separator says it. */
-export type FoldedBy = "mako" | "same" | "agent"
-const FOLDED_SAID = { mako: "Mako's note", same: "the next message from the same sender", agent: "a message" } satisfies Record<FoldedBy, string>
+export type FoldedBy = "mako" | "same" | "agent" | "fins"
+const FOLDED_SAID = { mako: "Mako's note", same: "the next message from the same sender", agent: "a message", fins: "your Fins' news" } satisfies Record<FoldedBy, string>
 
 /** Who a separator's words name. */
 function foldedBy(said: string | undefined): FoldedBy {
-  return said === FOLDED_SAID.mako ? "mako" : said === FOLDED_SAID.same ? "same" : "agent"
+  return said === FOLDED_SAID.mako ? "mako" : said === FOLDED_SAID.same ? "same" : said === FOLDED_SAID.fins ? "fins" : "agent"
 }
-const FOLDED_SEPARATOR = /\n\n\[mako · (Mako's note|the next message from the same sender|a message), sent (\d{4}-\d\d-\d\dT[\d:.]+Z)\]\n/g
+const FOLDED_SEPARATOR = /\n\n\[mako · (Mako's note|the next message from the same sender|a message|your Fins' news), sent (\d{4}-\d\d-\d\dT[\d:.]+Z)\]\n/g
 
 /** The line a folded message's part goes under (`foldQueued`): who wrote it and when. */
 export function foldedSeparator(by: FoldedBy, at: number): string {
@@ -494,6 +496,8 @@ export interface LiveRequest {
 }
 
 export interface LiveSummary {
+  /** A journaled compaction incident must recover even when no window opens its conversation. */
+  hasCompactionRecovery?: boolean
   /** A sign-out holds work here, including an accepted cut with no queued messages. No transcript read needed. */
   hasSignInHold?: boolean
   /** Saved session questions keep their conversation controls available after process exit. */

@@ -622,8 +622,9 @@ steered in once (`asksApex`, `armFocus`); at most `WAKES_PER_MINUTE` digests
 an Apex (`agent-wakes.ts`): the Apex never polls. `npm run test:comms-storm`
 holds both ways this can go wrong: a 30-Fin storm around a working Apex
 (steers per minute, the share of its turn left uninterrupted, its turns once
-free, the longest a result waits) and a Fin's backlog after a long turn (the
-turns it takes to hear it all); targets Mako misses are in its
+free, the longest a result waits), a Fin's backlog after a long turn (the
+turns it takes to hear it all) and an Apex's inbox (the person's message and a
+Fin's result that came during its turn); targets Mako misses are in its
 `EXPECTED_FAILING`. A steer the harness doesn't take goes as the Apex's next turn,
 never dropped. The digest is an entry in the Apex's own queue
 (`LiveRequest.digest`), its reports heard once it's there, so the queue
@@ -870,15 +871,23 @@ the turn it runs, for a correction to what it's doing now; `interrupt`, which
 stops that turn (`LiveConversations.interrupt`) and starts the next with the
 message, ahead of what was queued, which still follows in order. An idle Fin
 takes any as its next turn. A direct message, a redirect and an answer steer.
-When a queued message from an agent or Mako goes, the plain messages its
-agent sender and Mako's notes (a pull request's outcome, a wait that fired,
-`FOLDED_SERVICES`) queued right behind it, admitted after it, go with it as
-one turn, in order, each under a line saying who and when (`foldQueued`); a
-note `admits` refuses goes alone, to be refused there, so a Fin back from
-a long turn reads all of it at once; each row stays the person's to edit
-until it goes, and one folded is canceled with `joinedInto`, its ID kept in
-the carrier's `joined` for a repeat or a handoff. A steer that arrives as a
-turn is handed over waits for its run rather than queueing.
+When a queued message goes, what waits right behind it goes with it as one
+turn (`foldQueued`, `docs/delivery-queue.md` rule 16): one agent's plain
+messages, Mako's notes (a pull request's outcome, a wait that fired,
+`FOLDED_SERVICES`), one message from the person, and Fins' news, a digest
+never sent before waiting for the turn or its window (one tried before goes
+again alone, `freshNews`), each under a line saying who and when.
+The person's message carries the turn, its words first, and is never folded
+into another's; Fins' news never carries one. A note `admits` refuses goes
+alone, to be refused there, so a Fin back from a long turn, or an Apex the
+person wrote to while its Fins reported, reads all of it at once; each row
+stays the person's to edit until it goes, and one folded is canceled with
+`joinedInto`, its ID kept in the carrier's `joined` for a repeat or a
+handoff. Fins' news a folded turn carried keeps a digest's guarantees: a turn
+that fails before its model answers sends it again as its own digest
+(`carryFoldedNews`), and one a crash cuts after its handoff hears rule 15's
+discovery hint. A steer that arrives as a turn is handed over waits for its
+run rather than queueing.
 A steer queues the message first and steers that request (`steer-queued`), so
 one the harness refuses, then or when its turn ends (Cursor's `answersOnEnd`),
 stays where it was queued and nothing sent after it overtakes it; the call

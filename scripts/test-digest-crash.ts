@@ -25,12 +25,17 @@ import { AgentsWorld, HARNESSES, TESTED_HARNESSES, type Heard } from "./lib/agen
  *   own message id proves it arrived, never its words.
  * - `digest-sent-limit`: as `digest-sent`, and the next host's harness refuses it at a usage limit past the retries: it
  *   rests as a digest, tries every hour, and sends the discovery hint when it can. Fresh news follows separately.
+ * - `folded-sent`: the digest goes folded into the person's message (`foldQueued`), on a harness that takes no steer at
+ *   a step, and the host dies once that turn is submitted: the same discovery hint, never the reports again.
  * Prepared delivery goes once. Unknown receipt uses a discovery continuation instead of repeating reports; actual
  * report payloads retain their once-only checks. A failed discovery continuation must retain that policy on retry.
  */
-const POINTS = ["digest-prepared", "digest-sent", "digest-unreadable", "digest-hint-failed", "digest-heard", "steer-sent", "steer-heard", "digest-sent-lookalike", "digest-sent-limit"] as const
+const POINTS = ["digest-prepared", "digest-sent", "digest-unreadable", "digest-hint-failed", "digest-heard", "steer-sent", "steer-heard", "digest-sent-lookalike", "digest-sent-limit", "folded-sent"] as const
 type Point = (typeof POINTS)[number]
 const STEERS = ["claude", "opencode"]
+/** Harnesses with no steer at a step, where a question waits for the turn's end and folds into what goes then. */
+const FOLDS = ["codex"]
+const PERSON = "Ship it after the review."
 const QUESTION = "Rerun once more, or hold?"
 /** A line of a digest as a person might have pasted one, or as a question might hold. */
 const LOOKALIKE = `{"version":1}`
@@ -66,6 +71,8 @@ async function host(root: string, harness: string, point: Point): Promise<void> 
     const [snapshot] = args
     const handed = snapshot.requests.some((request) => request.digest && request.text.includes(QUESTION) && request.nativeDelivery?.evidence.kind === (point === "digest-prepared" ? "prepared" : "submitted"))
     const steer = snapshot.control?.actions?.some((action) => action.input.kind === "steer" && action.input.text.includes(QUESTION))
+    const folded = snapshot.requests.some((request) => request.joined?.length && request.text.startsWith(PERSON) && request.text.includes(QUESTION) && request.nativeDelivery?.evidence.kind === "submitted")
+    if (point === "folded-sent" && folded) process.kill(process.pid, "SIGKILL")
     if (((point.startsWith("digest-sent") || point === "digest-prepared" || point === "digest-unreadable" || point === "digest-hint-failed") && handed) || (point === "steer-sent" && steer)) process.kill(process.pid, "SIGKILL")
   })
   let asked!: () => void
@@ -97,11 +104,16 @@ async function host(root: string, harness: string, point: Point): Promise<void> 
     await until("that turn", () => world.prompts.some((prompt) => prompt.conversation === apex.conversation && prompt.text.includes(LOOKALIKE)))
     await until("its end", () => world.live.session(apex.conversation)?.status === "ready")
   }
-  if (steering) {
+  if (steering || point === "folded-sent") {
     world.say(apex.conversation, "Keep busy.")
     await until("the Apex's turn", () => world.live.session(apex.conversation)?.status === "running")
   }
   asked()
+  if (point === "folded-sent") {
+    world.say(apex.conversation, PERSON)
+    await until("the question's digest to wait for the turn's end", () => Boolean(world.live.snapshot(apex.conversation)?.requests.some((request) => request.digest && request.text.includes(QUESTION))))
+    world.release(apex.conversation)
+  }
   // Its timers don't hold a process up, and the digest's window is one of them.
   setInterval(() => {}, 1_000)
 }
@@ -143,7 +155,7 @@ async function next(root: string, point: Point): Promise<void> {
     // Later inputs can repeat this question in pending control context. Only its structured report card is delivery.
     const deliveries = (heard: readonly Heard[]) => heard.filter((line) => line.conversation === apex && readFinReports(line.text).reports.some((report) => report.report === question.id))
     const told = () => deliveries(lines())
-    const uncertain = point.startsWith("digest-sent") || point === "digest-unreadable" || point === "digest-hint-failed"
+    const uncertain = point.startsWith("digest-sent") || point === "digest-unreadable" || point === "digest-hint-failed" || point === "folded-sent"
     const recovered = () => lines().filter(line => line.conversation === apex && withoutMakoFraming(line.text).includes(DIGEST_RESTART_HINT))
     if (point === "digest-sent-limit") {
       const replay = () => world.live.snapshot(apex)?.requests.find((request) => request.continues?.brief && request.digest)
@@ -227,7 +239,7 @@ else {
     const selected = process.env.DIGEST_CRASH_POINT ? POINTS.filter(point => point === process.env.DIGEST_CRASH_POINT) : POINTS
     assert.ok(selected.length, "requested digest crash point exists")
     for (const point of selected)
-      for (const harness of (point.startsWith("steer") ? STEERS : HARNESSES).filter((harness) => TESTED_HARNESSES.some((tested) => tested === harness))) {
+      for (const harness of (point.startsWith("steer") ? STEERS : point === "folded-sent" ? FOLDS : HARNESSES).filter((harness) => TESTED_HARNESSES.some((tested) => tested === harness))) {
         const dir = join(root, `${point}-${harness}`)
         try {
           const killed = spawnSync(process.execPath, ["--import", "tsx", import.meta.filename, "--host", dir, harness, point], { stdio: ["ignore", "ignore", "pipe"], timeout: 40_000, encoding: "utf8" })

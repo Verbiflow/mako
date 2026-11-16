@@ -538,7 +538,7 @@ process.stdin.on("end", () => process.exit(0))
     await driver.compaction.start(id, actionId)
     push(event("session.compaction.failed", { sessionID: root, reason: "manual", inputID: compactID, error: { type: "compaction.failed", message: "Nothing to compact" } }))
     const result = await until("the compaction action", () => emitted.find(item => item.type === "live-action-result" && item.actionId === actionId))
-    assert.deepEqual(result.type === "live-action-result" && result.result, { kind: "failed", reason: "Nothing to compact" })
+    assert.deepEqual(result.type === "live-action-result" && result.result, { kind: "failed", reason: "Nothing to compact", failureEvidence: { kind: "unknown", source: "provider-text" } })
 
     const quiet: Array<[string, EventData]> = [
       ["tui.toast.show", { message: "MCP Authentication Required", variant: "warning" }],

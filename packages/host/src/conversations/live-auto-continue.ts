@@ -192,6 +192,7 @@ export class LiveAutoContinue {
     if (failed.status !== "failed" && !dropped) return
     // A turn a Stop latched isn't picked up again by itself (`LiveRequest.pause`).
     if (failed.pause === "stop") return
+    this.carryFoldedNews(resident, failed)
     const cause = transientCause(failed.error ?? "", failed.failure ?? "unknown", false, failed.failureEvidence)
     // Only a turn its harness ran is continued: one it never took has nothing to pick up. A digest no model answered is
     // the exception, whatever ended it: it stays until one does.
@@ -240,6 +241,33 @@ export class LiveAutoContinue {
     }
     this.access.flush(resident)
     hostLog("live", "a turn its harness failed for now continues by itself", { conversation: resident.snapshot.session.id, request: request.id, continues: failed.id, ...(cause && { cause }), ...(retry && { attempt: retry.attempt, at: new Date(retry.at).toISOString() }) })
+  }
+
+  /**
+   * Fins' news that went folded into a turn (`joinedInto`) that failed before its model answered goes again by itself, as
+   * its own digest would (`unheardDigest`): queued right behind the failed turn, under the news's own receipt identity,
+   * once. The turn itself fails or goes on as it would have.
+   */
+  private carryFoldedNews(resident: Resident, failed: LiveRequest): void {
+    const news = resident.snapshot.requests.find((request) => request.joinedInto === failed.id && request.digest !== undefined && !request.digest.heard)
+    if (!news?.digest || resident.snapshot.requests.some((request) => request.continues?.requestId === news.id)) return
+    const request = LiveRequestSchema.parse({
+      actor: news.actor,
+      id: randomUUID(),
+      createdAt: Date.now(),
+      text: news.text,
+      displayText: "",
+      digest: carriedDigest(news.digest),
+      attachments: [],
+      tuning: failed.tuning,
+      status: "queued",
+      continues: { requestId: news.id, reason: "connection-lost", auto: true },
+    })
+    request.inputDigest = promptFingerprint(request.text, request.attachments, request.tuning)
+    const at = resident.snapshot.requests.findIndex((candidate) => candidate.id === failed.id) + 1
+    resident.snapshot = { ...resident.snapshot, requests: [...resident.snapshot.requests.slice(0, at), request, ...resident.snapshot.requests.slice(at)] }
+    this.access.flush(resident)
+    hostLog("live", "Fins' news a failed turn carried goes again", { conversation: resident.snapshot.session.id, request: request.id, news: news.id, failed: failed.id })
   }
 
   /** Drop a pending continuation; new input/host exit preserves a provider wait, while an explicit Close cancels it. */

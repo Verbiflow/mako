@@ -141,18 +141,29 @@ schedules, and a failing schedule is pinned there.
     attempt cannot silently resend the reports. Proven-unsent digests still wait
     out usage limits as digests; Stop, ordinary-Thread Off and native ownership guards remain in force.
 
-16. **What one sender queued goes as one turn, with Mako's notes.** When an
-    agent's or Mako's queued message goes, the plain messages from the same
-    agent and Mako's notes (pull-request outcomes, wait notes) queued right
-    behind it and admitted after it, each still admitted at the handoff, (no attachments, grants, pause, edit, hold, digest
-    or continuation, and the same `notification`) go with it, in order, within
-    `JOINED_MAX` and `JOINED_CHARS` (`foldQueued`). The fold is written only
-    as the send commits, in the write that records it handed over: a send that
-    goes no further (a Stop, a withdrawal, a refusal, a write that fails) leaves
-    every row as it was. Until then each is its own row; a folded one is
-    canceled with `joinedInto`, never dropped, and its ID resolves to the
-    message that carried it, which never folds again. An interrupt's message
-    goes alone, and another Apex's message, owed its own reply, never folds.
+16. **What waits for a turn goes as one turn, the person's words first.** When a
+   queued message goes, what waits right behind it goes with it, in order: one
+   agent's plain messages, Mako's notes (pull-request outcomes, wait notes), one
+   message from the person, and Fins' news, a digest never sent before, waiting
+   for the turn or for its burst's window (one ahead of it too); one tried before
+   (sent, or resting after a limit) goes again alone, by its own retry. Each is admitted after it, each still
+   admitted at the handoff, with no attachments, grants, pause, edit, hold,
+   continuation or command, and the same `notification`, within `JOINED_MAX` and
+   `JOINED_CHARS` (`foldQueued`). The person's message is never folded into
+   another's: it carries the turn, its words first, and the rest follow under a
+   line each saying who and when. Without it the first that isn't Fins' news
+   carries it; Fins' news never carries a turn, so a digest that goes alone keeps
+   rule 15's receipt. The fold is written only as the send commits, in the write
+   that records it handed over: a send that goes no further (a Stop, a
+   withdrawal, a refusal, a write that fails, Fins' news that changed meanwhile)
+   leaves every row as it was. Until then each is its own row; a folded one is
+   canceled with `joinedInto`, never dropped, and its ID resolves to the message
+   that carried it, which never folds again. Each folded message reaches the
+   conversation as its own sender's (rule 13). Fins' news a folded turn carried is
+   heard when that turn's model answers; a turn that fails before it does sends the
+   news again as a digest of its own, once, and a crash after its handoff sends
+   rule 15's discovery hint, never the reports. An interrupt's message goes
+   alone, and another Apex's message, owed its own reply, never folds.
 
 ## What each failure leaves
 
@@ -186,3 +197,37 @@ the renderer never guesses a quota from unmarked or legacy error prose.
 | Move: Stop after commit | `accepted` | every row on the target, held by the Stop |
 | Move: close fails | `failed`, `removed` | every row back where it was, no pending context |
 | Move: restart or crash before commit | `failed`, `removed` | every row where it was |
+
+## Confirmed compaction failure
+
+A native failed compact receipt and its host-owned `compactionRecovery` episode
+are committed together. A broken summary gets at most one new compact command,
+under the episode's recorded retry ID. A duplicate receipt, a restart or a second
+window never issues that command again. Dispatching, accepted and uncertain
+receipts do not prove non-delivery and are not replayed. A late confirmed result
+still settles a pending action. Uncertain compaction and automatic-only native
+compaction admission remain a separate recovery step.
+
+After the retry fails, the host quiesces the source and hands the retained
+transcript to a fresh session of the same harness, pinned account, model and mode.
+It never resumes or forks the failed source. Its existing transfer owner verifies
+source ownership and commits the replacement before dispatch. The episode owns
+the unchanged queued request IDs through native delivery, including a crash
+between replacement commit and the first prompt. Attachments, grants, per-request
+settings and queue order stay with those requests. An original failed or uncertain
+request with unknown delivery gets a linked discovery continuation that checks
+prior work; its original words, including any Fin digest payload, are never
+repeated. Only authoritative non-delivery (a preflight refusal, or a gated attempt
+still prepared) lets the exact original request go again after recovery.
+
+Stop, archive and Close withdraw automated recovery, including work waiting on
+source cleanup. Close leaves ordinary queued words intact: a new message reopens
+with a fresh replacement. Explicit restart Off prevents recovery on a new host;
+Fin/Apex policy remains unchanged. A failed journal write permits no native
+recovery effect; the existing storage retry resumes the same episode after saving.
+The composer projects one quiet recovery line, not the original failed receipt
+plus its retry and transfer. Typed sign-in, permission and service failures use
+their existing fixing action or wait rather than treating a provider-wide problem
+as a broken summary. A failed destination's explicit retry names `recoveryOf`: the
+host requires the exact failed handoff, current episode and unchanged destination
+before accepting a new operation. No unknown action is resent.

@@ -234,10 +234,13 @@ try {
       assert.equal(promptsOf(world, lead).length, 1, `${harness}: nor after a restart`)
       assert.deepEqual(stateOf(world, apex.conversation, "lead"), { kind: "ended", outcome: "stopped", reason: "pausing" })
       sent(await world.agents.send(world.caller(apex.conversation), { to: "lead", text: "Carry on.", clientKey: "go" }))
-      await until(`${harness}: the lead to hear its Fin after the message`, () => promptsOf(world, lead).some((text) => text.startsWith(FROM_AGENTS)))
+      // Its Fins' news goes with that message's turn, as its own section after it (`foldQueued`), or as a turn after it.
+      await until(`${harness}: the lead to hear its Fin after the message`, () => promptsOf(world, lead).some((text) => text.includes(FROM_AGENTS)))
       const after = promptsOf(world, lead).slice(1)
       assert.ok(after[0]!.includes("Carry on."), `the message that resumed it goes first: ${after[0]}`)
-      assert.match(after.find((text) => text.startsWith(FROM_AGENTS))!, /"sub" \(\w+\) done: Sub finished\./)
+      const news = after.find((text) => text.includes(FROM_AGENTS))!
+      assert.ok(news !== after[0] || news.indexOf("Carry on.") < news.indexOf(FROM_AGENTS), `the news after the message: ${news}`)
+      assert.match(news, /"sub" \(\w+\) done: Sub finished\./)
       await world.close()
     }
 

@@ -175,7 +175,7 @@ function applyEffect(context: ProtocolContext, effect: CodexEffect): void {
       void listBackground(context)
       if (compaction) context.protocol.actionResult?.(compaction.actionId,
         effect.error || effect.stop !== "completed"
-          ? { kind: "failed", reason: effect.error ?? "Compaction was interrupted" }
+          ? { kind: "failed", reason: effect.error ?? "Compaction was interrupted", failureEvidence: effect.failureEvidence, ...(effect.stop === "interrupted" && { cancelled: true as const }) }
           : compaction.confirmed
             ? { kind: "completed" }
             : { kind: "uncertain", reason: "The provider ended the turn without confirming compaction." })

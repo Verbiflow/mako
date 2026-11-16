@@ -11,6 +11,7 @@ import { heldBy, slices, timeIn } from "./lib/cpu-slices.ts"
 import { readResident, unmeasured, type ResidentMemory } from "./lib/host-load-memory.ts"
 import { claudeSessionPath, makeWorld, TODAY, type WorldScale } from "./lib/host-load-world.ts"
 import { ownedScratch } from "./lib/owned-scratch.mjs"
+import { once } from "node:events"
 import { scriptedModel } from "./scripted-model.ts"
 import { fakeCloud, type AccountReports } from "./lib/sync-bench-cloud.ts"
 
@@ -99,6 +100,7 @@ const times = Number(values.times)
  * a runner that stops every process at once stops the yardstick as long, so its stall isn't the host's.
  */
 const HELD_MS = 2_000
+const CleanupCodeSchema = z.object({ code: z.enum(["EACCES", "EPERM", "ENOENT", "ESRCH", "EIO", "EBUSY", "ENOTEMPTY", "ENOTDIR"]) })
 /** One health check in a hundred may wait this long whatever the yardstick says: below it a runner's noise decides. */
 const HEALTH_FLOOR_MS = 150
 /** A read does work of its own (a hundred worktrees looked at), so it may take this many health checks' limits. */
@@ -111,18 +113,41 @@ const scratch = ownedScratch("mako-host-load-", { root: values.root, keep: value
 const root = scratch.path
 const children: ChildProcess[] = []
 let host: ChildProcess | undefined
-let releaseWorld = () => {}
+let releaseWorld: () => void | Promise<void> = () => {}
 let closeModel: () => Promise<void> = async () => {}
 let closeCloud: () => Promise<void> = async () => {}
 let finishing: Promise<never> | undefined
+const stopChild = async (child: ChildProcess): Promise<void> => {
+  if (child.exitCode !== null || child.signalCode !== null) return
+  if (!child.pid) throw new Error("The owned child's start is unconfirmed.")
+  const reaped = once(child, "exit")
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    child.kill("SIGKILL")
+    await Promise.race([reaped, new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error("The owned child did not exit after its stop.")), 10_000) })])
+  } catch (error) {
+    void reaped.catch(() => {})
+    throw error
+  } finally { clearTimeout(timer) }
+}
 const finish = (code: number): Promise<never> => {
   finishing ??= Promise.resolve().then(async () => {
     let failed = false
     const attempt = async (stage: string, work: () => void | boolean | Promise<void>) => {
-      try { await work() } catch { failed = true; say(`bench:host-load cleanup failed at ${stage}; scratch is kept if its guards cannot prove it unused`) }
+      try { await work() } catch (error) {
+        failed = true
+        let reason = "unknown", code = "unknown"
+        try {
+          if (error instanceof Error) {
+            reason = error.message.includes("still in use") ? "in-use" : error.message.includes("inspection") ? "inspection" : error.message.includes("identity changed") ? "identity" : "cleanup"
+            const parsed = CleanupCodeSchema.safeParse(error.cause ?? error)
+            if (parsed.success) code = parsed.data.code
+          }
+        } catch { /* Diagnostics never replace cleanup. */ }
+        say(`bench:host-load cleanup failed at ${stage} (${reason}, ${code}); scratch is kept if its guards cannot prove it unused`)
+      }
     }
-    if (host) await attempt("host stop", () => host?.kill("SIGKILL"))
-    for (const child of children) await attempt("child stop", () => child.kill("SIGKILL"))
+    await Promise.all([...new Set([...(host ? [host] : []), ...children])].map(child => attempt("child stop", () => stopChild(child))))
     await attempt("world release", releaseWorld)
     await attempt("model close", closeModel)
     await attempt("cloud close", closeCloud)
