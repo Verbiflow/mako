@@ -309,13 +309,13 @@ async function checkWindow() {
   assert.match(await evaluate(`document.querySelector('[role="dialog"] main').innerText`), /This Mac was signed out[\s\S]*used from somewhere else[\s\S]*Sign in/)
   await both("signed-out-reused", ['[role="dialog"] main'])
   // 4. A device joins while this Mac is open: said at once, with Remove.
-  await window.loadURL(`${base}?mock&cloud=signed-in&invited`)
+  await window.loadURL(`${base}?mock&cloud=signed-in&invited&plugins=none`)
   await until(`Boolean(document.querySelector('.composer-input'))`, "the joined device's desk")
   await until("import('/src/state/session.ts').then(({store}) => store.get().phase === 'ready')", "the subscribed desk")
   await evaluate("window.makoMockAccount.join(), true")
   // Other fixture toasts can precede this one; wait for and read the same device's alert.
   const joinedToast = `[...document.querySelectorAll('[data-sonner-toast]')].find((node) => node.querySelector('[data-title]')?.textContent === 'render-box joined your account')`
-  await until(`Boolean(${joinedToast})`, "the joined alert")
+  await until(`(${joinedToast})?.getAttribute('data-front') === 'true'`, "the joined alert at the front")
   const alert = await evaluate(`(() => { const node = ${joinedToast}; node.setAttribute('data-device-joined-toast', ''); return node.innerText })()`)
   await writeFile(join(evidence, "joined-toasts.json"), JSON.stringify(await evaluate(`[...document.querySelectorAll('[data-sonner-toast]')].map(node => ({ joined: node.hasAttribute('data-device-joined-toast'), words: node.innerText }))`), null, 2))
   assert.match(alert, /A machine on Linux x64 · Ubuntu 24\.04, from Frankfurt, Germany, with a code you approved\. If it isn't yours, remove it\./)
