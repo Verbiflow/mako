@@ -15,6 +15,7 @@ const RecordSchema = z.object({
   identity: z.object({ device: z.string().regex(/^\d+$/), inode: z.string().regex(/^\d+$/) }).strict().optional(),
 }).strict()
 type Record = z.infer<typeof RecordSchema>
+const OwnerReceiptSchema = z.object({ pid: z.number().int().positive().max(2_147_483_647) })
 class ScratchRefused extends Error {}
 interface Deps {
   /** The existing thread-data folder; only <ThreadId>/scratch is disposable. */
@@ -158,7 +159,7 @@ export class ThreadScratch {
       if (entry.name.endsWith(".owner.json")) {
         const info = await lstat(child)
         if (!info.isFile() || info.isSymbolicLink() || info.size > 16_384) return true
-        const parsed = z.object({ pid: z.number().int().positive().max(2_147_483_647) }).safeParse(JSON.parse(await readFile(child, "utf8")))
+        const parsed = OwnerReceiptSchema.safeParse(JSON.parse(await readFile(child, "utf8")))
         if (!parsed.success) return true
         try { process.kill(parsed.data.pid, 0); return true }
         catch (error) { if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) return true }

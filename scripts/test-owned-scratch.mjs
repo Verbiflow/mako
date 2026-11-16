@@ -7,7 +7,7 @@ import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { mock } from "node:test"
 import { ownedScratch, recoverScriptScratch } from "./lib/owned-scratch.mjs"
-import { processesUsingSync, describeProcesses } from "./lib/scratch-processes.mjs"
+import { processesUsingSync, describeProcesses, removeScratch } from "./lib/scratch-processes.mjs"
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-owned-scratch-test-")))
 const oldEnvironment = process.env.MAKO_THREAD_SCRATCH_DIR, platform = Object.getOwnPropertyDescriptor(process, "platform")
@@ -160,3 +160,42 @@ try {
   if (oldEnvironment === undefined) delete process.env.MAKO_THREAD_SCRATCH_DIR; else process.env.MAKO_THREAD_SCRATCH_DIR = oldEnvironment
   rmSync(root, { recursive: true, force: true })
 }
+
+// Linux can expose an owned-looking /proc row while denying its environment.
+// Fake every process/filesystem observation here: no live /proc or UID is read.
+let deniedCode = "EACCES", deniedFile = "environ", heldFile = true
+let removed = 0
+try {
+  Object.defineProperty(process, "platform", { value: "linux", configurable: true })
+  mock.method(process, "getuid", () => 4242)
+  mock.method(fs, "statSync", path => ({ uid: path === "/proc/3000" ? 99 : 4242 }))
+  mock.method(fs, "readdirSync", path => {
+    if (path === "/proc") return ["1000", "2000", "3000"]
+    assert.equal(path, "/proc/2000/fd")
+    return ["4"]
+  })
+  mock.method(fs, "readFileSync", path => {
+    assert.doesNotMatch(path, /3000/, "another UID is skipped before reading its files")
+    if (path === `/proc/1000/${deniedFile}`) throw Object.assign(new Error("fixture denied"), { code: deniedCode })
+    return path.endsWith("cmdline") ? "fixture\0" : "HOME=/outside\0"
+  })
+  mock.method(fs, "readlinkSync", path => path.endsWith("/fd/4") && heldFile ? "/fixture/scratch/proof" : "/outside")
+  mock.method(fs, "rmSync", path => { assert.equal(path, "/fixture/scratch"); removed++ })
+  syncBuiltinESMExports()
+  for (const code of ["EACCES", "EPERM", "ENOENT", "ESRCH"]) {
+    deniedCode = code
+    assert.deepEqual(processesUsingSync("/fixture/scratch", true).map(item => item.pid), [2000], `${code} environment refusal skips that row, but keeps every readable holder`)
+  }
+  heldFile = false
+  await removeScratch("/fixture/scratch", 0)
+  assert.equal(removed, 1, "an inaccessible unrelated environment cannot fail scratch cleanup")
+  deniedCode = "EIO"
+  assert.throws(() => processesUsingSync("/fixture/scratch", true), error => error.cause?.code === "EIO", "other environment failures remain incomplete inspection")
+  deniedCode = "EACCES"; deniedFile = "cmdline"
+  assert.throws(() => processesUsingSync("/fixture/scratch", true), error => error.cause?.code === "EACCES", "the exception is specific to environ, not a blanket process-probe bypass")
+  assert.equal(removed, 1, "unknown probes never authorize another removal")
+} finally {
+  mock.restoreAll(); syncBuiltinESMExports()
+  Object.defineProperty(process, "platform", platform)
+}
+console.log("Linux scratch: unreadable environments skipped; readable holders and other errors retained")

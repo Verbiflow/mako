@@ -27,7 +27,14 @@ export function processesUsingSync(folder, includeSelf = false) {
       try {
         if (statSync(`/proc/${pid}`).uid !== process.getuid()) continue
         const args = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").join(" ").trim()
-        const home = readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").find((entry) => entry.startsWith("HOME="))?.slice(5)
+        let home
+        try {
+          home = readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").find((entry) => entry.startsWith("HOME="))?.slice(5)
+        } catch (error) {
+          // Linux exposes some process rows whose environment we are not permitted to inspect.
+          if (error?.code === "EACCES" || error?.code === "EPERM") continue
+          throw error
+        }
         const files = [readlinkSync(`/proc/${pid}/cwd`), ...readdirSync(`/proc/${pid}/fd`).map((fd) => { try { return readlinkSync(`/proc/${pid}/fd/${fd}`) } catch (error) { if (error?.code === "ENOENT") return ""; throw error } })]
         if (args.includes(folder) || (home && inside(home)) || files.some(inside)) found.set(pid, args)
       } catch (error) {
