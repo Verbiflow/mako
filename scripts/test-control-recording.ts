@@ -207,12 +207,11 @@ assert.deepEqual(
 console.log(JSON.stringify({ nativeVideo: nativeReceipt.video, decoded }))
 
 // A burst keeps only its latest queued frame, including when stop interrupts the timer.
-// The frames are made first: encoding one between calls can outlast the 100 ms interval on a slow runner.
+// One burst: all three in the same tick. Awaited one by one, the second waited out the first's write, which on a loaded
+// runner took past the 100 ms interval, so it had a slot of its own and three frames were kept.
 const burst = [await frame("red"), await frame("green"), await frame("blue", 640, 478)] as const
 const sampled = await ControlRecording.create(target, { directory, fps: 10 }, async () => {})
-await sampled.frame(burst[0], 640, 480)
-await sampled.frame(burst[1], 640, 480)
-await sampled.frame(burst[2], 640, 480)
+await Promise.all(burst.map((data) => sampled.frame(data, 640, 480)))
 await sampled.stop()
 const sampledResult = await sampled.settled()
 assert.equal(sampledResult.status, "finished", sampledResult.error)
