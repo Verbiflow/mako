@@ -598,7 +598,7 @@ export type MakoLogEntry = Omit<z.infer<typeof LogRowSchema>, "value"> & MakoLog
  * router's word on a conversation it relays or reads from the account's copy, never a journal's. `parent` is its
  * Thread's edge, read from the Thread store whenever it's listed, and `children` its children's count, read from them.
  */
-type UnstoredMetadata = "hasSignInHold" | "parent" | "children" | "fins" | "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "elsewhereKind" | "waitingOn" | "waitingFor" | "attention" | "threadTitle" | "quietSince" | "cloudContinue" | "movedAt" | "rail" | "copy" | "wakeAt" | "promptedAt" | "order"
+type UnstoredMetadata = "hasSignInHold" | "parent" | "children" | "fins" | "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "turnWait" | "historyFailure" | "elsewhere" | "elsewhereKind" | "waitingOn" | "waitingFor" | "attention" | "threadTitle" | "quietSince" | "cloudContinue" | "movedAt" | "rail" | "copy" | "wakeAt" | "promptedAt" | "order"
 
 /**
  * Whether `next` holds metadata `previous` did not. Fields are compared by
@@ -1079,7 +1079,7 @@ export class LiveJournal {
       if (!previous || writeOptions || this.messageBase || metadataChanged(previous, next))
         this.db
           .prepare("INSERT OR REPLACE INTO metadata VALUES (1, ?)")
-          .run(JSON.stringify({ ...metadata, session: { ...session, failureEvidence: session.failureEvidence && storedFailureEvidence(session.failureEvidence) }, nativeAgents: providerRoster(metadata.nativeAgents), control: controlRow(metadata.control), base: undefined, activityAt: undefined, nativeActivity: undefined, side: undefined, historyFailure: undefined, spentThrough: undefined }))
+          .run(JSON.stringify({ ...metadata, session: { ...session, failureEvidence: session.failureEvidence && storedFailureEvidence(session.failureEvidence) }, nativeAgents: providerRoster(metadata.nativeAgents), control: controlRow(metadata.control), base: undefined, activityAt: undefined, nativeActivity: undefined, side: undefined, turnWait: undefined, historyFailure: undefined, spentThrough: undefined }))
       this.db.prepare("INSERT OR REPLACE INTO progress VALUES (1, ?)").run(next.revision)
       // An unread base stays unread here: Mako's own blocks can follow it
       // meanwhile, and nothing reaches its harness until it is read.

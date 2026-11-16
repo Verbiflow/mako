@@ -17,6 +17,7 @@ import { WorktreeOpening } from "@/components/viewer/worktree-opening"
 import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { useStartedWorktree } from "@/state/worktrees"
 import { BackgroundWorkLine } from "./background-work-line"
+import { TurnWaitLineView } from "./turn-wait-line"
 import { CrewCard } from "./crew-card"
 import { useEffect, useMemo, useState } from "react"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
@@ -279,6 +280,8 @@ function Blocks({ starting = false, continued = false, compact = false }: { star
           />
           {/* The Fins stand through every turn and transition; only the background line waits for the turn's end. */}
           <CrewCard compact={compact} fallback={running ? null : <BackgroundWorkLine />} />
+          {/* The wait its agent armed for when its turn ends: said once the turn has. */}
+          {running ? null : <TurnWaitLineView />}
         </>
       }
     />

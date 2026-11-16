@@ -3166,6 +3166,14 @@ export function installMockBridge() {
       emit({ type: "live-batch", batch: { id, revision: next.revision, updates: [], nativeAgents } })
       return true
     },
+    liveWaitStop: async (id: string, wait: string) => {
+      const snapshot = liveSnapshots.get(id)
+      if (snapshot?.turnWait?.wait !== wait) return false
+      const next = { ...snapshot, revision: snapshot.revision + 1, turnWait: undefined }
+      liveSnapshots.set(id, next)
+      emit({ type: "live-batch", batch: { id, revision: next.revision, updates: [], turnWait: null } })
+      return true
+    },
     liveCancel: async (id: string) => {
       const session = acpSessions.get(id)
       if (!session) return
