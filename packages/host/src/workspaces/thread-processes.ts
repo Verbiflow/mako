@@ -1,3 +1,4 @@
+import type { WatchBackend, WatchListener } from "./watch-backend.js"
 import { hostSpawn, hostProbe } from "../base/host-command.js"
 import { hostStopping } from "../base/host-stopping.js"
 import { setTimeout as wait } from "node:timers/promises"
@@ -386,6 +387,12 @@ export class ThreadProcesses {
       await this.save(app, runs)
     })
     return { started, refused }
+  }
+
+  /** Output is written by detached runs. Its file changes are watched off the host thread, never piped through it. */
+  async watchOutputFiles(app: AppKey, backend: WatchBackend, listener: WatchListener) {
+    const folder = await realpath(this.folder(app))
+    return backend(folder, ["runs.json", "checkout", "project", "used", "up", "lock", "memory", "checkouts"].map(name => join(folder, name)), listener, { kind: "app-output" })
   }
 
   /** Hears that this host started or signalled a process, or changed a run's record: a look now would see something new. */

@@ -1717,7 +1717,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       if (!found.environment) return empty
       const [run, step] = outputRun(key)
       const app = key === "prepare" ? (await installOf(found.app, found.checkout)).carrier : found.app
-      return deps.processes.readLog(app, run, cursor, undefined, step)
+      return { ...await deps.processes.readLog(app, run, cursor, undefined, step), app }
     },
     async probe(cwd) {
       if (!deps.folder) throw new Error("This Mako can't run apps from the desk.")

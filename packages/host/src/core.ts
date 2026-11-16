@@ -1718,6 +1718,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   }
   const workspaceMovers = openWorkspaceMovers({
     appChanged: () => viewHints.changed("apps"),
+    outputChanged: fields => viewHints.changed("output", fields),
+    watchOutputs: watchBackend,
     windowStream: (client) => web()?.windowStream(client),
     git,
     buildSlots,
@@ -1745,6 +1747,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     position: () => viewHints.position("apps"),
     confirm: (conversation) => sessions.appReady(conversation),
   })
+  if (workspaceMovers.outputHints) shell.stopping.register("app output watches", () => workspaceMovers.outputHints!.close())
   late.movers = workspaceMovers
   const history = threadHistoryTools({
     conversations: () => live.summaries(),
@@ -2203,6 +2206,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     file: (request, client = "web") => withHostClient(client, () => readWindowFile(request, withHost, renditions, owned)),
     signedFile: (request) => withHostClient("gateway:files", () => readSignedFile(request, renditions, owned)),
     disconnected: (client) => {
+      workspaceMovers.outputHints?.reconcile()
       shell.terminals.current()?.release(client)
       void workspaceClients.release(client)
     },

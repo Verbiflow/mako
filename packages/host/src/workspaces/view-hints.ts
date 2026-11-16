@@ -15,7 +15,7 @@ export class ViewHints {
   constructor(emit: (event: HostEvent) => void) { this.emit = emit }
 
   status(): ViewHintsStatus {
-    return { version: 1, epoch: this.epoch, domains: ["apps", "sync"] }
+    return { version: 1, epoch: this.epoch, domains: ["apps", "sync", "output"] }
   }
 
   changed(domain: ViewDomain, fields: string[] = ["all"], keys?: string[]): void {

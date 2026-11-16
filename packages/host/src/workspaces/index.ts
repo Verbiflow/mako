@@ -1,3 +1,4 @@
+import { AppOutputHints } from "./app-output-hints.js"
 import type { BuildSlots } from "./build-slots.js"
 import { sessionAccessTier } from "../contracts/access.js"
 import type { GitHubPerson } from "../contracts/github-person.js"
@@ -315,12 +316,15 @@ export interface WorkspaceMovers {
   appTools: EnvironmentTools | undefined
   /** The apps' marks, looked at once for every window and pushed when they change. */
   sampler: ThreadAppSampler | undefined
+  outputHints: AppOutputHints | undefined
   /** The `mako` server's tools: the Thread's worktree, its app and recipe, and its pull request. */
   agentTools: MakoTools[]
 }
 
 export interface WorkspaceMoversDeps {
   appChanged?: () => void
+  outputChanged?: (fields: string[]) => void
+  watchOutputs?: WatchBackend
   /** Connected windows, excluding observers, which may own app sampling demand. */
   windowStream?: (client: string) => string | undefined
   /**
@@ -429,6 +433,7 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
   // (toward its project's "about N at once") on the same looks.
   const sampler = appTools && processes ? new ThreadAppSampler({
     invalidated: deps.appChanged,
+    demandChanged: () => outputHints?.reconcile(true),
     connection: deps.windowStream,
     look: () => appTools.look(),
     trace: appTools.traceApps,
@@ -438,12 +443,18 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
       deps.appChanged?.()
     },
   }) : undefined
+  const outputHints = sampler && processes && deps.watchOutputs ? new AppOutputHints({
+    wanted: () => sampler.outputWanted(),
+    watch: (app, listener) => processes.watchOutputFiles(app, deps.watchOutputs!, listener),
+    changed: fields => deps.outputChanged?.(fields),
+    warn: message => deps.warn(message, {}),
+  }) : undefined
   if (sampler) sampling.sampler = sampler
   if (sampler && processes) {
     processes.onChange(() => sampler.changed())
-    deps.jobs.every("sample thread apps", SAMPLER_TICK_MS, sampler.tick)
+    deps.jobs.every("sample thread apps", SAMPLER_TICK_MS, async () => { outputHints?.reconcile(); await sampler.tick() })
   }
-  return { worktreeMoves, moves, leaves, appTools, sampler, agentTools: agentTools(deps, moves, leaves, appTools) }
+  return { worktreeMoves, moves, leaves, appTools, sampler, outputHints, agentTools: agentTools(deps, moves, leaves, appTools) }
 }
 
 /** Where the apps' sampler is kept once made, for the tools made before it. */
@@ -532,7 +543,7 @@ export function declareWorkspaceMethods(methods: MethodTable, { workspaces, move
   declareMoveMethods(methods, movers.moves, (target) => moveHold(live, movers.worktreeMoves, movers.moves, target), workspaces.worktrees)
   declarePlanBuildMethods(methods, workspaces.planBuilds)
   declareCheckoutHeadMethods(methods, workspaces.checkoutHeads)
-  declareThreadAppMethods(methods, movers.appTools?.desk, movers.sampler)
+  declareThreadAppMethods(methods, movers.appTools?.desk, movers.sampler, apps => movers.outputHints?.ready(apps) ?? false)
   return files
 }
 

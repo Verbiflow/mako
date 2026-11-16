@@ -1,17 +1,16 @@
+import { appOutputReader } from "./thread-app-output"
 import { toast } from "sonner"
 import { getMako } from "@/lib/bridge"
 import { installThreadAppDriver, putAppMarks, putRoom, putThreadApp, targetOf, threadAppStore, type AppPhase, type ThreadAppView } from "@/state/thread-app"
 import { deskRefetch, DESK_SCOPE } from "@/state/desk-refetch"
 import type { RefetchLease } from "@/lib/view-refetch"
-import type { AppActionOutcome, AppOutputCursor, AppOutputKey } from "@mako/host/contracts/thread-app"
+import type { AppActionOutcome } from "@mako/host/contracts/thread-app"
 
 const BUSY_MS = 1_000
 const SETTLED_MS = 30_000
 const UNAVAILABLE_MS = 60_000
 const ASLEEP_MS = 30_000
-const OUTPUT_MS = 500
 const ROOM_MS = 4_000
-const FULL_READ_CHARS = 128 * 1024
 const EXPECT_MS = 6_000
 interface Watched {
   count: number
@@ -19,18 +18,12 @@ interface Watched {
   lease?: RefetchLease
   expected?: { from: AppPhase[]; to: AppPhase; until: number }
 }
-interface OutputWatch {
-  listeners: Set<(text: string, reset: boolean) => void>
-  cursor?: AppOutputCursor
-  lease?: RefetchLease
-}
 
 /** Existing app stores and actions, with one visibility/refetch owner shared with the rest of the desk. */
 export function installHostThreadApp(): void {
   const mako = getMako()
   const owner = deskRefetch()
   const watched = new Map<string, Watched>()
-  const outputs = new Map<string, OutputWatch>()
   let markWatchers = 0
   let roomWatchers = 0
   let marks: RefetchLease | undefined
@@ -130,42 +123,7 @@ export function installHostThreadApp(): void {
       act(cwd, undefined, () => mako.checkThreadApp(cwd, tier, aim(cwd), steps))
     },
     readOutput: async (cwd, key) => (await mako.threadAppOutput(cwd, key)).text,
-    subscribeOutput: (cwd, key: AppOutputKey, listener) => {
-      const id = JSON.stringify(["host:output", cwd, key])
-      let entry = outputs.get(id)
-      if (!entry) {
-        entry = { listeners: new Set() }
-        outputs.set(id, entry)
-        const output = entry
-        output.lease = owner.reads.watch(id, {
-          scope: DESK_SCOPE, domain: "output", key: cwd, fields: ["output", "state"],
-          every: () => owner.supports("apps") ? 2_000 : OUTPUT_MS,
-          read: async (current) => {
-            const chunk = await mako.threadAppOutput(cwd, key, output.cursor)
-            if (!current()) return
-            const reset = chunk.reset || !output.cursor
-            if (reset || chunk.text) for (const told of output.listeners) told(chunk.text, reset)
-            output.cursor = chunk.cursor
-            if (chunk.text.length >= FULL_READ_CHARS) output.lease?.refresh({ immediate: true })
-          },
-        })
-      } else {
-        // A new reader needs the prefix too; reset every consumer through the same bounded cursor stream.
-        entry.cursor = undefined
-        entry.lease?.refresh({ immediate: true, invalidate: true })
-      }
-      const output = entry
-      output.listeners.add(listener)
-      let released = false
-      return () => {
-        if (released) return
-        released = true
-        output.listeners.delete(listener)
-        if (output.listeners.size) return
-        output.lease?.release()
-        outputs.delete(id)
-      }
-    },
+    subscribeOutput: appOutputReader(owner, (cwd, key, cursor) => mako.threadAppOutput(cwd, key, cursor)),
     watch: (cwd) => {
       let entry = watched.get(cwd)
       if (entry) entry.count++

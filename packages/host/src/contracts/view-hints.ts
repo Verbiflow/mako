@@ -1,6 +1,6 @@
 import { z } from "zod"
 
-export const ViewDomainSchema = z.enum(["apps", "sync"])
+export const ViewDomainSchema = z.enum(["apps", "sync", "output"])
 export type ViewDomain = z.infer<typeof ViewDomainSchema>
 
 /** Hints invalidate projections; they never supply content or authorize a read. Unknown fields mean changed. */

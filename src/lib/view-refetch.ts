@@ -153,8 +153,8 @@ export class ViewRefetch {
     }
     this.changed()
   }
-  reschedule(scope: string): void {
-    for (const [id, entry] of this.entries) if (entry.options.scope === scope && !entry.running) {
+  reschedule(scope: string, domain?: RefetchDomain): void {
+    for (const [id, entry] of this.entries) if (entry.options.scope === scope && (domain === undefined || entry.options.domain === domain) && !entry.running) {
       entry.cancel?.(); entry.cancel = undefined; entry.due = undefined
       this.next(id, entry)
     }
