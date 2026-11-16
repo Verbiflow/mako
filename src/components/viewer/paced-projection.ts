@@ -26,5 +26,6 @@ export function usePacedProjection(scope: ConversationScope | null): LiveProject
       pacer.stop()
     }
   }, [pacer, read])
-  return useSyncExternalStore(subscribe, () => pacer.shown(read()))
+  // Rendered on a server (a test's, a static page's), nothing streams: the store's turns as they are, unpaced.
+  return useSyncExternalStore(subscribe, () => pacer.shown(read()), read)
 }
