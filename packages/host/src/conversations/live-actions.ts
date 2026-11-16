@@ -1,3 +1,5 @@
+import { compactionRecovering } from "../contracts/conversation-control.js"
+import type { LiveCompactions } from "./live-compactions.js"
 import { isDeepStrictEqual } from "node:util"
 import { retireQuestionsForInput } from "../contracts/live-questions.js"
 import type { LiveRequest } from "../contracts/live-conversations.js"
@@ -32,22 +34,20 @@ export class LiveActions {
   private readonly deadlines = new Map<string, ReturnType<typeof setTimeout>>()
   /** Stops the running turn `running` and sends the steer's words as the next message (`LiveConversations.steerByRestart`). */
   private readonly restart: (id: string, running: string, input: SteerInput) => void
-  constructor(host: LiveAccess, restart: (id: string, running: string, input: SteerInput) => void) {
+  private readonly compactions: () => LiveCompactions
+  constructor(host: LiveAccess, restart: (id: string, running: string, input: SteerInput) => void, compactions: () => LiveCompactions) {
+    this.compactions = compactions
     this.host = host
     this.restart = restart
   }
 
   blocks(resident: Resident): boolean {
-    return (
-      this.host
-        .control(resident)
-        .actions?.some(
-          (action) =>
-            action.state.kind === "dispatching" ||
-            (action.input.kind === "compact" &&
-              ["accepted", "uncertain"].includes(action.state.kind))
-        ) ?? false
-    )
+    const control = this.host.control(resident)
+    const recovery = control.compactionRecovery
+    const handingOff = recovery?.state.kind === "replace" && control.transfers.some(transfer =>
+      transfer.state.kind === "queued" || transfer.state.kind === "preparing")
+    return (compactionRecovering(recovery) && recovery.bindingId === control.activeBindingId && !handingOff) || (control.actions?.some(action =>
+      action.state.kind === "dispatching" || (action.input.kind === "compact" && action.bindingId === control.activeBindingId && ["accepted", "uncertain"].includes(action.state.kind))) ?? false)
   }
 
   private provider(resident: Resident): string {
@@ -85,7 +85,9 @@ export class LiveActions {
         ),
       },
     }
+    this.compactions().record(resident, updated)
     this.host.flush(resident)
+    queueMicrotask(() => this.compactions().resume(resident))
     return updated
   }
 
@@ -106,14 +108,6 @@ export class LiveActions {
     )
       return
     const result = LiveActionResultSchema.parse(raw)
-    if (result.kind === "failed") {
-      resident.snapshot = {
-        ...resident.snapshot,
-        requests: resident.snapshot.requests.map((request) =>
-          request.status === "queued" ? { ...request, status: "held" } : request
-        ),
-      }
-    }
     this.state(resident, actionId, result)
   }
 
@@ -217,6 +211,7 @@ export class LiveActions {
   /** An action settled as it's taken, saved as its receipt. */
   private receipt(resident: Resident, action: LiveAction): LiveAction {
     const control = this.host.control(resident)
+    action = { ...action, owner: { epoch: this.host.epoch, stop: this.host.stopMark(resident.snapshot.session.id) } }
     resident.snapshot = { ...resident.snapshot, control: { ...control, actions: [...(control.actions ?? []), action] } }
     try {
       this.host.flush(resident)
@@ -227,7 +222,7 @@ export class LiveActions {
     return action
   }
 
-  async submit(id: string, raw: LiveActionInput, sender: SteerSender = "native"): Promise<LiveAction> {
+  async submit(id: string, raw: LiveActionInput, sender: SteerSender = "native", recoveryId?: string): Promise<LiveAction> {
     const input = LiveActionInputSchema.parse(raw)
     const resident = this.host.require(id)
     const control = this.host.control(resident)
@@ -250,6 +245,11 @@ export class LiveActions {
       if (!resident.driver)
         throw new Error(resident.snapshot.session.error ?? "This conversation could not reconnect to compact")
     }
+    if (recoveryId) {
+      const plan = this.host.control(resident).compactionRecovery
+      if (input.kind !== "compact" || plan?.id !== recoveryId || plan.state.kind !== "retry" || plan.retryActionId !== input.id || plan.bindingId !== this.host.control(resident).activeBindingId)
+        throw new Error("The compaction recovery no longer owns this retry")
+    }
     const driver = resident.driver
     if (
       !driver ||
@@ -264,7 +264,7 @@ export class LiveActions {
         "Wait for this conversation to connect and finish its pending operation"
       )
     if (
-      this.blocks(resident) ||
+      (!recoveryId && this.blocks(resident)) ||
       control.actions?.some(
         (action) =>
           action.state.kind === "dispatching" ||
@@ -368,8 +368,9 @@ export class LiveActions {
           control.actions ?? [],
           resident.snapshot.requests.some(
             (request) =>
-              request.status === "queued" || request.status === "dispatching"
-          )
+              (!recoveryId && request.status === "queued") || request.status === "dispatching"
+          ),
+          bindingId
         )
       )
         throw new Error(
@@ -386,6 +387,7 @@ export class LiveActions {
       bindingId,
       createdAt: Date.now(),
       sender,
+      owner: { epoch: this.host.epoch, stop: this.host.stopMark(id) },
       queueStatus: queued?.status === "queued" || queued?.status === "held" ? queued.status : undefined,
       state: { kind: "dispatching" },
     }

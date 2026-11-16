@@ -497,7 +497,7 @@ async function pump(engine: Engine, live: Live): Promise<void> {
         live.compaction = undefined
         live.emit({ type: "live-action-result", id: live.state.id, actionId: compact.actionId,
           result: message.is_error
-            ? { kind: "failed", reason: failure ?? "Compaction failed" }
+            ? { kind: "failed", reason: failure ?? "Compaction failed", failureEvidence }
             : compact.confirmed ? { kind: "completed" }
               : { kind: "uncertain", reason: "The provider ended the turn without confirming compaction." } })
       }

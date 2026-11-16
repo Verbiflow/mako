@@ -7,7 +7,8 @@ export const COMPACTION_CONFIRMATION_MS = 5 * 60_000
 export function compactionAvailable(
   session: LiveSessionState,
   actions: readonly LiveAction[],
-  hasPendingMessages: boolean
+  hasPendingMessages: boolean,
+  activeBindingId?: string
 ): boolean {
   return (
     session.connection !== "starting" &&
@@ -15,9 +16,10 @@ export function compactionAvailable(
     !hasPendingMessages &&
     !actions.some(
       (action) =>
-        action.state.kind === "dispatching" ||
+        (activeBindingId === undefined || action.bindingId === activeBindingId) &&
+        (action.state.kind === "dispatching" ||
         action.state.kind === "uncertain" ||
-        (action.input.kind === "compact" && action.state.kind === "accepted")
+        (action.input.kind === "compact" && action.state.kind === "accepted"))
     )
   )
 }

@@ -15,6 +15,8 @@ export { PromptAttachmentSchema } from "./prompt-attachments.js"
 
 export const ProviderSelectionSchema = SessionSettingsSchema
 export const TransferInputSchema = z.object({
+  /** Explicit retry of a failed compaction handoff; the host verifies the exact episode and destination. */
+  recoveryOf: z.string().uuid().optional(),
   bindingId: z.string().uuid().optional(),
   id: z.string().uuid(),
   provider: z.string().min(1),
@@ -178,8 +180,37 @@ export const RequestRetrySchema = z.object({
   until: z.number().optional(),
 })
 
+/** One host-owned compaction incident. Original action receipts stay truthful and immutable. */
+export const CompactionRecoverySchema = z.object({
+  id: z.string().uuid(),
+  actionId: z.string().uuid(),
+  bindingId: z.string().uuid(),
+  retryActionId: z.string().uuid(),
+  target: z.object({ provider: z.string(), account: z.string().optional(), tuning: ProviderSelectionSchema.optional(), modeId: z.string().optional() }),
+  requestId: z.string().uuid().optional(),
+  createdAt: z.number(),
+  epoch: z.string(),
+  state: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("retry") }),
+    z.object({ kind: z.literal("replace"), transferId: z.string().uuid() }),
+    z.object({ kind: z.literal("completed"), bindingId: z.string().uuid(), waiting: z.array(z.string().uuid()).optional() }),
+    z.object({ kind: z.literal("withdrawn"), reason: z.enum(["stop", "close", "archive", "restart-off", "superseded"]) }),
+  ]),
+})
+export type CompactionRecovery = z.infer<typeof CompactionRecoverySchema>
+export function compactionRecovering(recovery: CompactionRecovery | undefined): recovery is CompactionRecovery & { state: Extract<CompactionRecovery["state"], { kind: "retry" | "replace" }> } {
+  return recovery?.state.kind === "retry" || recovery?.state.kind === "replace"
+}
+
+/** Recovery also owns the backlog between a committed replacement and native delivery. */
+export function compactionPending(recovery: CompactionRecovery | undefined): boolean {
+  return compactionRecovering(recovery) || recovery?.state.kind === "completed" && Boolean(recovery.state.waiting?.length)
+}
+
 export const ContextTransferSchema = z.object({
   inputDigest: z.string().optional(),
+  /** Internal same-harness transcript replacement; never a caller-supplied resume/fork verdict. */
+  compaction: z.object({ recoveryId: z.string().uuid(), bindingId: z.string().uuid() }).optional(),
   input: TransferInputSchema,
   /** Who asked for the handoff; kept beside the caller's input, never read from it. */
   actor: ActorSchema.optional(),
@@ -226,6 +257,7 @@ export const ConversationControlSchema = z.object({
   approvalObservations: z.array(z.object({ bindingId: z.string(), identity: NativeApprovalIdentitySchema, decision: NativeApprovalDecisionSchema.optional() })
     .refine(item => !item.decision || sameNativeApproval(item.identity, item.decision.identity), "Native decision belongs to another question")).max(2000).optional(),
   actions: z.array(LiveActionSchema).optional(),
+  compactionRecovery: CompactionRecoverySchema.optional(),
   /** What its agent asked the person to let it do through Mako's tools, until they answer (`LiveAsks`). */
   asks: z.array(AgentAskSchema).max(32).optional(),
   merges: z

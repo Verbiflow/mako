@@ -213,6 +213,7 @@ const TURN_STOP_LABELS = {
   "host-crashed": () => "Interrupted when Mako closed unexpectedly",
   "connection-lost": (provider) => `The connection to ${provider} dropped`,
   "provider-exited": (provider) => `${provider} stopped unexpectedly`,
+  "compaction-failed": () => "Continuing after compaction failed",
   "signed-out": (provider) => `${provider} signed out`,
   "handed-off": () => "Paused to move to the cloud",
   "not-saved": () => "Stopped when Mako couldn't save",
@@ -335,12 +336,14 @@ export function recoverableRequests(input: Pick<DeliveryInput, "blocks" | "histo
   // Read only when a request needs it: most conversations hold none of these.
   let visible: Set<string> | undefined
   const shown = (id: string) => (visible ??= transcribedRequests(input)).has(id)
+  const continuing = new Set((input.requests ?? []).filter(request => request.continues?.reason === "compaction-failed" &&
+    (request.status === "queued" || request.status === "held" || request.status === "dispatching" || request.status === "completed")).map(request => request.continues!.requestId))
   const waiting = input.copy ? new Set<string>() : usageLimitSources(input.requests ?? [])
   // A turn the transcript shows carries its own stopped marker (`turnStops`);
   // only a stopped or unconfirmed message with no turn on screen needs a panel,
   // and a turn Mako couldn't save its failure row.
   return (input.requests ?? []).filter(
-    (request) => !waiting.has(request.id) && (
+    (request) => !waiting.has(request.id) && !continuing.has(request.id) && (
       endsOnFailureRow(request) ||
       (request.status === "uncertain" && !shown(request.id)) ||
       (request.status === "interrupted" && !shown(request.id)))

@@ -1,3 +1,4 @@
+import { providerTextEvidence } from "../../contracts/provider-failure.js"
 import type { AcpCompactionSpec } from "../acp-compaction.js"
 
 /** Devin 3000.6.14 returns end_turn before starting /compact. Its command's
@@ -25,12 +26,12 @@ export const devinCompaction: AcpCompactionSpec = {
         )
           return { kind: "completed" }
         if (/^(?:Compacting context…\s*)?Compaction canceled\.\s*$/.test(text))
-          return { kind: "failed", reason: "Compaction was canceled" }
+          return { kind: "failed", reason: "Compaction was canceled", cancelled: true }
         const failure =
           /^(?:Compacting context…\s*)?Force compaction failed:\s*(.+)$/s.exec(
             text
           )
-        if (failure) return { kind: "failed", reason: failure[1] }
+        if (failure) return { kind: "failed", reason: failure[1], failureEvidence: providerTextEvidence(failure[1]) }
         return undefined
       }
     },

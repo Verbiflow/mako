@@ -45,6 +45,8 @@ const SITUATIONS = {
     "Continue where you left off. Your connection dropped before you finished the previous turn, and its last steps may not have been saved. Check the result of any command or edit you were in the middle of before repeating it.",
   "provider-exited":
     "Continue where you left off. Your process stopped before you finished the previous turn and has been restarted; the work you did so far is in place. Check the result of any command or edit you were in the middle of before repeating it.",
+  "compaction-failed":
+    "Continue where you left off. Your conversation could not be compacted. Read the retained conversation and check the result of any command or edit before repeating it; the previous turn may have completed some work. Continue only what remains.",
   "signed-out":
     "Continue where you left off. Your sign-in expired before you finished the previous turn and has been renewed; the work you did so far is in place. Check the result of any command or edit you were in the middle of before repeating it.",
   "host-quit": "Continue where you left off. Mako closed before you finished the previous turn; pick it up from there.",
@@ -258,6 +260,7 @@ export const CUT_BY = {
   "connection-lost": "its harness lost its connection",
   "provider-exited": "its harness's process exited",
   "signed-out": "its harness's account signed out",
+  "compaction-failed": "its conversation could not be compacted",
   "handed-off": "Mako handed its Thread to another machine",
   "not-saved": "Mako couldn't save its conversation",
   "goal-budget": "its goal reached its token budget",

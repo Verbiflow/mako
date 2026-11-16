@@ -399,6 +399,8 @@ function continuedTitle({ reason, sender, stayed }: SavedContinuation, provider:
       return `${who} after the connection to ${provider} dropped`
     case "provider-exited":
       return sender === "mako" ? `Mako restarted ${provider} and continued the turn` : `${who} after ${provider} stopped unexpectedly`
+    case "compaction-failed":
+      return "The conversation could not be compacted"
     case "signed-out":
       return `${who} after ${provider} signed in again`
     case "host-quit":

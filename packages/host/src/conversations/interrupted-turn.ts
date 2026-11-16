@@ -167,6 +167,8 @@ function cause(reason: Interruption["reason"]): string {
       return "your process stopped"
     case "connection-lost":
       return "the connection to your runtime dropped"
+    case "compaction-failed":
+      return "your conversation could not be compacted"
     case "signed-out":
       return "your sign-in expired"
     case "host-crashed":

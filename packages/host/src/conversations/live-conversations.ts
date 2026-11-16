@@ -1,3 +1,4 @@
+import { compactionRecovering } from "../contracts/conversation-control.js"
 import { z } from "zod"
 import type { PromptVersions, PromptVersionsByRequest } from "../contracts/live-conversations.js"
 import { randomBytes, randomUUID } from "node:crypto"
@@ -60,6 +61,7 @@ import { agentAskLine } from "../contracts/agent-asks.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { steerHeard, sameNativeSource, type VerifiedSignIn } from "../harnesses/index.js"
 import { LiveAccounts } from "./live-accounts.js"
+import { LiveCompactions } from "./live-compactions.js"
 import { LiveActions, type SteerInput, type SteerSender } from "./live-actions.js"
 import { LiveApprovals } from "./live-approvals.js"
 import { LiveAsks } from "./live-asks.js"
@@ -170,6 +172,7 @@ export class LiveConversations {
   private readonly approvals: LiveApprovals
   /** What its agents ask the person through Mako's tools (`ThreadMoveTool`). */
   readonly asks: LiveAsks
+  private readonly compactions: LiveCompactions
   private readonly actions: LiveActions
   private readonly transfers: LiveTransfers
   private readonly bundles: ContextBundles
@@ -239,6 +242,7 @@ export class LiveConversations {
         if (this.takeWait(resident)) this.schedule(resident)
         // A switch that waited behind another when the last host ended goes on, as it was asked to.
         if (this.transfers.pending(resident)?.behind) queueMicrotask(() => this.dispatch.drain(resident))
+        if (resident.snapshot.control?.compactionRecovery) queueMicrotask(() => { this.compactions.resume(resident); this.dispatch.drain(resident) })
       },
       compact: (path) => this.reclaims.reclaim(path),
       paged: (id) => this.dependencies.historyPaged?.(id),
@@ -386,8 +390,13 @@ export class LiveConversations {
       },
       steer: (id, input) => this.act(id, input, "native"),
     })
-    this.actions = new LiveActions(access, (id, running, input) => this.steerByRestart(id, running, input))
+    this.actions = new LiveActions(access, (id, running, input) => this.steerByRestart(id, running, input), () => this.compactions)
     this.transfers = new LiveTransfers(access)
+    this.compactions = new LiveCompactions(access, {
+      compact: (id, action, recovery) => this.actions.submit(id, { kind: "compact", id: action }, "native", recovery),
+      replace: (resident, recovery) => { this.moves.assertStarts(resident); this.transfers.replaceCompaction(resident, recovery) },
+      restartAllowed: id => this.restarts.settings().continueAfterRestart || this.inTree(id),
+    })
     this.sources = new LiveSources(access)
     this.launches = new LiveLaunches(access)
     this.hibernation = new LiveHibernation(access)
@@ -406,7 +415,11 @@ export class LiveConversations {
     this.closing = new LiveClosing(access, { records, actions, approvals, transfers, restarts: this.restarts })
     this.threads.registerJournals(records.open())
     this.stopSignInEvents = dependencies.signInEvents?.(receipt => this.recoverSignedIn(receipt))
-    queueMicrotask(() => this.recoverSignedIn())
+    queueMicrotask(() => {
+      this.recoverSignedIn()
+      void this.readIn(this.records.listing().filter(summary => summary.hasCompactionRecovery).map(summary => summary.session.id))
+        .catch(error => hostWarn("live", "compaction recovery journals could not be read", { error: errorMessage({ error }) }))
+    })
     if (dependencies.holdHistory) this.scheduleSettle(SETTLE_AFTER_START_MS)
   }
 
@@ -609,12 +622,13 @@ export class LiveConversations {
         ((request.status === "interrupted" || request.status === "uncertain") && (request.interruption?.reason === "host-quit" || request.interruption?.reason === "host-crashed")) ||
         Boolean(request.signIn && request.status !== "canceled"))
     if (!resident) return 0
+    const previous = resident.snapshot
+    const compactionWithdrawn = this.compactions.withdraw(resident, "stop")
     // A switch not yet committed is queued work, held like any message; a committed one's message is in the queue
     // already. Holding moves no generation, so the source binding's events still count (`holdSwitches`).
     const { snapshot, held, retired } = holdSwitches(resident.snapshot)
     const count = resident.snapshot.requests.filter(stops).length + held + retired.length
-    if (!count) return 0
-    const previous = resident.snapshot
+    if (!count && !compactionWithdrawn) return 0
     resident.snapshot = { ...snapshot, requests: snapshot.requests.map((request) => stops(request)
       ? { ...request, pause: "stop" as const, ...(request.status === "queued" || request.status === "held") && { status: "held" as const, retry: undefined, wake: undefined } }
       : request) }
@@ -792,6 +806,8 @@ export class LiveConversations {
   }
 
   setArchived(id: string, archived: boolean): void {
+    const resident = this.records.load(id)
+    if (archived && resident && this.compactions.withdraw(resident, "archive")) this.flush(resident)
     this.hibernation.setArchived(id, archived)
   }
 
@@ -1004,6 +1020,12 @@ export class LiveConversations {
       request.inputDigest = inputDigest
       return this.admit(resident, { ...request, status: "held" })
     }
+    if (compactionRecovering(conversationControl(resident).compactionRecovery)) {
+      request.inputDigest = inputDigest
+      const accepted = this.admit(resident, request)
+      this.compactions.resume(resident)
+      return accepted
+    }
     if (resident.hibernating || (!resident.driver && this.hibernation.reopens(resident))) {
       request.inputDigest = inputDigest
       const accepted = this.admit(resident, request)
@@ -1040,7 +1062,8 @@ export class LiveConversations {
     if (!binding?.nativeId) throw new Error("This conversation was closed before it started a session. Start a new conversation to carry on.")
     // A session whose records were never located opens through a transfer instead, which finds them or hands a new
     // session of its harness the conversation (`LiveTransfers.perform`): a wake could only fail.
-    const connection = launched(binding) ? "hibernated" : "disconnected"
+    const replacing = this.compactions.reopen(resident)
+    const connection = !replacing && launched(binding) ? "hibernated" : "disconnected"
     resident.snapshot = { ...resident.snapshot, session: { ...resident.snapshot.session, status: "ready", connection, error: undefined } }
     hostLog("residency", "a closed conversation reopens for a new message", { conversation: resident.snapshot.session.id })
   }
@@ -1553,6 +1576,7 @@ export class LiveConversations {
   private release(resident: Resident): void {
     if (resident.snapshot.session.status === "closed" && !resident.closing && !resident.driver && launched(activeBinding(resident)))
       this.reopenClosed(resident)
+    if (compactionRecovering(conversationControl(resident).compactionRecovery)) { this.compactions.resume(resident); return }
     if (resident.hibernating || (!resident.driver && this.hibernation.reopens(resident))) void this.hibernation.wake(resident)
     // A conversation whose first start failed before any session existed starts again for what waited for it.
     else if (!resident.driver && !launched(activeBinding(resident)) && this.launches.relaunch(resident)) return
@@ -2210,6 +2234,7 @@ export class LiveConversations {
     // Read in if it isn't: right after a restart its journal may not be loaded yet, and its times must still stop.
     const resident = this.records.load(id)
     this.restarts.discard(id)
+    if (resident && this.compactions.withdraw(resident, "close")) this.flush(resident)
     if (resident?.snapshot.requests.some(request => request.signIn && request.status !== "canceled")) this.stopHolds(id)
     if (resident?.snapshot.requests.some((request) => request.status === "held" && (request.retry || request.wake))) {
       resident.snapshot = {
@@ -2291,6 +2316,7 @@ export class LiveConversations {
 
   private write(resident: Resident): void {
     const recoveringStorage = resident.storageFault
+    this.compactions.settled(resident)
     resident.snapshot = withdrawGone(resident.snapshot)
     if (this.records.isReleased(resident)) {
       hostWarn("residency", "a write reached an unloaded conversation and was dropped", { conversation: resident.snapshot.session.id })
@@ -2328,7 +2354,7 @@ export class LiveConversations {
     if (snapshot.requests !== previous.requests || snapshot.control !== previous.control) this.armWakes(sooner(wakeAt(snapshot.requests), transferDue(snapshot.control)))
     resident.flushedAt = performance.now()
     resident.storageFault = false
-    if (recoveringStorage) queueMicrotask(() => this.recoverSignedIn())
+    if (recoveringStorage) queueMicrotask(() => { this.recoverSignedIn(); this.compactions.resume(resident) })
     resident.updates = []
     resident.pendingCharacters = 0
     resident.snapshot = snapshot
