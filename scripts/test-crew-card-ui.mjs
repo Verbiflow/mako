@@ -769,16 +769,30 @@ async function checkPage({ window, page, shots, base }) {
   await until("Boolean(document.querySelector('[data-composer]'))", "the Apex's composer, quiet scene")
   await evaluate("window.apexScene.setRunning(false); true")
   await until("Boolean(document.querySelector('[data-quiet-row]'))", "the quiet Fin's row")
-  const quietRow = await evaluate(`(() => { const row = document.querySelector('[data-quiet-row]'); return { text: row.innerText.replace(/\\s+/g, ' '), mark: row.querySelector('[data-live-mark]')?.dataset.liveMark, actions: [...row.querySelectorAll('[data-quiet-action]')].map((node) => node.dataset.quietAction), shimmer: Boolean(row.querySelector('.shimmer, [data-shimmer]')) } })()`)
+  const quietRow = await evaluate(`(() => { const row = document.querySelector('[data-quiet-row]'); return { text: row.innerText.replace(/\\s+/g, ' '), mark: row.querySelector('[data-live-mark]')?.dataset.liveMark, actions: [...row.querySelectorAll('[data-fin-action]')].map((node) => node.dataset.finAction), shimmer: Boolean(row.querySelector('.shimmer, [data-shimmer]')) } })()`)
   console.log("QUIET", JSON.stringify(quietRow))
   assert.match(quietRow.text, /Offline outbox retry/)
   assert.match(quietRow.text, /Quiet 18m · last step: .+, still running/, "the row says how long, and its last step")
   assert.equal(quietRow.mark, "quiet", "its mark is still, not working")
   assert.deepEqual(quietRow.actions, ["message", "stop"], "and offers Message and Stop beside opening it")
   await capture("quiet-row")
-  await evaluate("document.querySelector('[data-quiet-action=message]').click(); true")
+  await evaluate("document.querySelector('[data-quiet-row] [data-fin-action=message]').click(); true")
   await until("document.querySelector('[data-child-note=direct]')?.innerText.includes('Offline outbox retry')", "Message addresses the Apex's composer to the quiet Fin")
   console.log("PASS: a quiet Fin reads quiet, says for how long, and offers Message and Stop")
+
+  // Every Fin row, in the crew card and the side rail, can be written to or stopped: on hover, always for a quiet one.
+  const rowActions = await evaluate(`(() => {
+    const crew = [...document.querySelectorAll('[data-crew] [data-fin-actions]')].map((node) => ({ fin: node.dataset.finActions, actions: [...node.querySelectorAll('[data-fin-action]')].map((each) => each.dataset.finAction), shown: getComputedStyle(node).opacity }))
+    const side = [...document.querySelectorAll('[data-child-row]')].map((row) => Boolean(row.parentElement.querySelector('[data-fin-actions]')))
+    return { crew, side }
+  })()`)
+  console.log("ROW ACTIONS", JSON.stringify(rowActions))
+  const stoppable = rowActions.crew.filter((row) => row.actions.includes("stop"))
+  assert.ok(stoppable.length >= 4, `working Fins offer Stop beside Message: ${JSON.stringify(rowActions.crew)}`)
+  assert.ok(rowActions.crew.every((row) => row.actions.includes("message") || row.actions.includes("resume") || row.actions.includes("retry") || row.actions.includes("stop")), "every row offers an action")
+  assert.equal(rowActions.crew.filter((row) => row.shown === "1").length, 1, "only the quiet Fin's actions show without hover")
+  assert.ok(rowActions.side.length > 0 && rowActions.side.every(Boolean), "the side rail's Fin rows offer them too")
+  console.log("PASS: every Fin row offers Message and Stop, shown on hover and always for a quiet Fin")
 
   assert.deepEqual(
     errors.filter(
