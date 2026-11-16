@@ -35,7 +35,7 @@ import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
-import { childProcessReader, CheckoutLeave, cloudHasAll, cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, AutomationLaunches, AutomationNotStartedError, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers, declareSetupMethods, SetupViews } from "./workspaces/index.js"
+import { childProcessReader, CheckoutLeave, cloudHasAll, cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, AutomationLaunches, AutomationNotStartedError, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, declareRemoteAppMethods, ViewHints, declareViewHints, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers, declareSetupMethods, SetupViews } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -325,6 +325,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     if (recountsWork(event)) late.keepAwake?.changed()
     web()?.event(event, client)
   }
+  const viewHints = new ViewHints(emit)
+  declareViewHints(methods, viewHints)
   const previews = new ArtifactPreviews(() => providerHost.artifactPreviews.list())
   const watchReadings = new WatchReadings((message, fields) => hostLog("watch", message, fields))
   const watchBackend = childBackend(undefined, watchReadings)
@@ -669,6 +671,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     return { rows, sessions }
   }
   const sessions = new SessionPublisher({
+    appsFollowing: () => late.movers?.sampler?.remoteConversations(),
+    appPosition: () => viewHints.position("apps"),
     rows: () => reportedRows()?.rows,
     rowsOf: (conversations) => reportedRows(conversations)?.rows,
     // A native session's write or catalog row reworks its own rows, never the whole list.
@@ -788,7 +792,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       status: () => catalog.syncStatus(),
       backfill: () => readBackfill(records),
       now: Date.now,
-      statusChanged: () => void late.turnOn?.changed(),
+      statusChanged: () => {
+        void late.turnOn?.changed()
+        viewHints.changed("sync", ["status"])
+      },
     })
     const ticking = uploads
     // As the account's list changes (`rowsSent`), never two at once, and a look after one that ran meanwhile; a slow
@@ -1694,6 +1701,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     return back.kind === "back" ? { kind: "restored", thread: cloudThread } : { kind: "refused", thread: cloudThread, reason: back.reason }
   }
   const workspaceMovers = openWorkspaceMovers({
+    appChanged: () => viewHints.changed("apps"),
+    windowStream: (client) => web()?.windowStream(client),
     git,
     buildSlots,
     dataRoot: environment.dataRoot,
@@ -1713,6 +1722,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     emit,
     warn: (message, facts) => hostWarn("workspace", message, facts),
   })
+  declareRemoteAppMethods(methods, {
+    apps: workspaceMovers.appTools?.desk,
+    sampler: workspaceMovers.sampler,
+    cwd: (id) => live.session(id)?.cwd,
+    position: () => viewHints.position("apps"),
+    confirm: (conversation) => sessions.appReady(conversation),
+  })
   late.movers = workspaceMovers
   const history = threadHistoryTools({
     conversations: () => live.summaries(),
@@ -1727,7 +1743,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     places: machineArtifactPlaces({ artifacts: controlArtifactsRoot(), recordings: controlRecordingsRoot(), media: mediaRoot }),
   })
   machineArtifacts?.schedule(shell.jobs)
-  late.agentServers = await startConversationMcp(live, (bindingId, operation, signal) => control.sessions.request(bindingId, operation, signal), [
+  late.agentServers = await startConversationMcp(live, (bindingId, operation, signal, steps) => control.sessions.request(bindingId, operation, signal, steps), [
     ...workspaceMovers.agentTools,
     (server, conversationId) => registerThreadHistoryTools(server, history, conversationId),
     (server, conversationId) => registerShowTool(server, { media: turnMedia, cwd: (id) => live.session(id)?.cwd }, conversationId),
@@ -1756,7 +1772,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     if (!cwd) return {}
     const thread = callThreadOf(threads.store ?? undefined, conversationId, cwd, workspaces.environments?.launchedWith(conversationId), buildSlots.reading())
     return callGateAnswer(event, HookCall.safeParse(body).data, thread, conversationId)
-  })
+  }, (conversationId, steps) => emit({ type: "tool-steps", conversationId, steps }))
   trace("conversation tools ready")
   late.controlService = await control.startService((conversationId, bindingId) => live.authorizeAgent(conversationId, bindingId))
 

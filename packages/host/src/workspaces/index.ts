@@ -84,6 +84,7 @@ export { applyThreadEnvironment, CLOUD_MACHINE_INSTRUCTIONS, threadEnvironmentIn
 export { childBackend, probeDelivery, type FileHistory } from "./watch-backend.js"
 export { administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd } from "./file-events-service.js"
 export { childProcessReader, type ProcessReader } from "./watch-backend.js"
+export { ViewHints, declareViewHints } from "./view-hints.js"
 export { WatchReadings } from "./watch-readings.js"
 export { watchTree } from "./tree-watcher.js"
 export { watchOutsideGitDir } from "./git-dir-watch.js"
@@ -319,6 +320,9 @@ export interface WorkspaceMovers {
 }
 
 export interface WorkspaceMoversDeps {
+  appChanged?: () => void
+  /** Connected windows, excluding observers, which may own app sampling demand. */
+  windowStream?: (client: string) => string | undefined
   /**
    * Whether a secret a recipe names (`secretNames`) has a value here, checked before a cloud start: in this host's
    * environment, or on a cloud machine in a carried file the account's secret store gave its checkout.
@@ -418,10 +422,15 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
   // One look at every app for every window, pushed when it changes, with the trace and each running copy's memory peak
   // (toward its project's "about N at once") on the same looks.
   const sampler = appTools && processes ? new ThreadAppSampler({
+    invalidated: deps.appChanged,
+    connection: deps.windowStream,
     look: () => appTools.look(),
     trace: appTools.traceApps,
     memory: async () => { await processes.memory() },
-    publish: (marks) => emit({ type: "thread-app-marks", marks }),
+    publish: (marks) => {
+      emit({ type: "thread-app-marks", marks })
+      deps.appChanged?.()
+    },
   }) : undefined
   if (sampler) sampling.sampler = sampler
   if (sampler && processes) {
@@ -520,3 +529,5 @@ export function declareWorkspaceMethods(methods: MethodTable, { workspaces, move
   declareThreadAppMethods(methods, movers.appTools?.desk, movers.sampler)
   return files
 }
+
+export { declareRemoteAppMethods } from "./app-methods.js"

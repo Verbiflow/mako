@@ -4,17 +4,20 @@ import { execFileSync, spawn } from "node:child_process"
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { ThreadPage, ThreadRef } from "@mako/sessions"
+import { withoutMakoFraming, type ThreadPage, type ThreadRef } from "@mako/sessions"
 import { followHostLog } from "@mako/host/base/host-log"
 import type { z } from "zod"
 import type { InterruptionReason, LiveRequest } from "@mako/host/contracts/live-conversations"
 import { LiveRequestSchema } from "@mako/host/conversations/live-journal"
 import { BRIEF_AGAIN } from "@mako/host/contracts/children"
 import { finResumedText, RESUMED_OPENS } from "@mako/host/contracts/resume-account"
-import { continueTurnPrompt, opensContinuation, RESTART_CHAIN, savedContinuation, strandedTurn } from "@mako/host/contracts/turn-continuation"
+import { continueTurnPrompt, opensContinuation as opensContinuationBody, RESTART_CHAIN, savedContinuation, strandedTurn } from "@mako/host/contracts/turn-continuation"
 import type { AgentsDeps } from "@mako/host/conversations/agents"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { AgentsWorld, type Heard, type Script } from "./lib/agents-world.ts"
+
+/** Native prompts can carry retained-history framing before their active message. */
+const opensContinuation = (text: string) => opensContinuationBody(withoutMakoFraming(text))
 
 /**
  * Fins come back from anything that cuts them (`npm run test:orch-recovery`),
@@ -225,10 +228,12 @@ async function scenario(base: string, which: Scenario): Promise<void> {
   switch (which) {
     case "loop": {
       assert.equal(kills, 1 + RESTART_CHAIN, `its turn was continued ${RESTART_CHAIN} times, each cut too, and then not again`)
-      // Cut at its brief each time, with nothing to say its harness had it: each goes as the brief again, never a bare Continue.
-      const continued = fin.filter((prompt) => prompt.text.includes(BRIEF_AGAIN))
+      // Submission preceded SIGKILL but no receipt survived. Read the native context and send a new continuation;
+      // an uncertain original brief must never be replayed as new input.
+      const continued = fin.filter((prompt) => opensContinuation(prompt.text))
       assert.equal(continued.length, RESTART_CHAIN + 1, "Mako's continuations, then the one its Apex asked for")
-      assert.equal(fin.filter((prompt) => opensContinuation(prompt.text)).length, 0, "and none of them bare")
+      assert.equal(fin.filter((prompt) => prompt.text.includes(BRIEF_AGAIN)).length, 0, "no uncertain brief is replayed")
+      for (const prompt of continued) assert.match(prompt.text, /check the result of any command or edit before repeating/)
       const asked = digests.find((prompt) => prompt.text.includes("cut short"))
       assert.ok(asked, "its Apex is asked once Mako stops continuing it")
       assert.match(asked.text, /Mako stopped without closing: a crash, a force quit, or this Mac shutting down or losing power/, "with what cut it")
@@ -241,7 +246,7 @@ async function scenario(base: string, which: Scenario): Promise<void> {
     case "quit": {
       const picked = apex.filter((prompt) => opensContinuation(prompt.text))
       assert.equal(picked.length, 1, `the Apex's own cut turn was continued once (${which})`)
-      assert.match(picked[0]!.text, /Mako closed before you finished the previous turn/)
+      assert.match(picked[0]!.text, which === "quit" ? /Mako closed before you finished the previous turn/ : /Mako closed unexpectedly/)
       assert.equal(settled.reports.at(-1)?.status, "done", "and its Fin finished")
       break
     }
@@ -251,7 +256,7 @@ async function scenario(base: string, which: Scenario): Promise<void> {
       assert.match(asked.text, /Its process ended while Mako wasn't running: a quit, a crash, or this Mac shutting down or restarting/, "with what ended it")
       const resumed = fin.find((prompt) => opensContinuation(prompt.text))
       assert.ok(resumed, "Continue resumed its session in Mako")
-      assert.ok(resumed.text.startsWith(continueTurnPrompt("provider-exited", "mako")), "with the words of a process that stopped")
+      assert.ok(withoutMakoFraming(resumed.text).startsWith(continueTurnPrompt("provider-exited", "mako")), "with the words of a process that stopped")
       assert.equal(fin.filter((prompt) => opensContinuation(prompt.text)).length, 1, "once, though Continue was answered twice at once")
       assert.ok(resumed.text.includes(`${RESUMED_OPENS}a cut`), "beneath them, the account of a resume")
       assert.match(resumed.text, /Fix the header/, "naming what landed in its checkout meanwhile")
@@ -389,7 +394,7 @@ function strandedTurns(): void {
   assert.equal(strandedTurn([cut("interrupted", "steered")]), undefined, "a steer's cut has its message next")
   const account = finResumedText({ how: "cut", at: 1, reason: "Mako quit", now: 61_000, checkout: [], branches: [] })
   assert.ok(account.startsWith(`${RESUMED_OPENS}a cut 1 minute ago]`))
-  assert.deepEqual(savedContinuation(`${continueTurnPrompt("host-crashed", "mako")}\n\n${account}`), { reason: "host-quit", sender: "mako" }, "a continuation with its account beneath still reads as one")
+  assert.deepEqual(savedContinuation(`${continueTurnPrompt("host-crashed", "mako")}\n\n${account}`), { reason: "host-crashed", sender: "mako" }, "a continuation with its account beneath still reads as one")
   console.log("stranded turns: ok")
 }
 

@@ -12,6 +12,7 @@ import { SHOW_MEDIA_LINE } from "@mako/sessions/turn-media"
 import { primerBlocks } from "../contracts/primer.js"
 import type { ProviderBinding } from "../contracts/conversation-control.js"
 import type { NativeResumeEvidence } from "./native-continuation.js"
+import type { NativeTurnReader } from "./native-turn.js"
 import type { LivePermissionResponse, PromptAttachment, LiveSessionState, LiveSessionMode, LiveSteering } from "../contracts/providers-acp.js"
 import type { LiveDriverEvent, LiveStartOptions } from "../contracts/live-conversations.js"
 import type { McpRegistrySnapshot } from "../contracts/mcp-skills-integrations.js"
@@ -110,6 +111,8 @@ export type NativeResume =
       checkpoint(path: string): Promise<string | undefined>
       /** `mako`: the harness processes Mako's hosts recorded, each with the session it holds (`ProviderProbeTarget.mako`). */
       inspect(binding: ProviderBinding, mako?: MakoProcesses): Promise<NativeResumeEvidence>
+      /** Exact native turn outcome, before a crash continuation opens or sends anything. Missing support proves no outcome. */
+      readTurn?: NativeTurnReader
       locate?(binding: ProviderBinding, cwd: string, env: NodeJS.ProcessEnv): Promise<string | undefined>
       elsewhere?: ResumeElsewhere
     }

@@ -1,4 +1,6 @@
+import type { RemoteAppDemand, RemoteAppReply, RemoteAppSnapshot } from "./remote-app.js"
 import type { FileFindResults, FileFolders, FileFoldersOptions, FileGrepOptions, FileGrepResults } from "./file-index.js"
+import type { PromptVersionsByRequest } from "./live-conversations.js"
 import type { AgentAskAnswer } from "./agent-asks.js"
 import type { GitRemoteInput, GitRemoteResult, ExternalEditor, FileContents, FileReadPurpose, GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitHubStatus, GitStatus, GitPushInput, PullRequest, SearchOptions, SearchResults, StagedFile, WorkspaceFile } from "./git-workspace-search.js"
 import type { TurnFileHunks, TurnFileWriters, TurnUndoPreview, TurnUndoResult, TurnUndoScope } from "./turn-review.js"
@@ -30,7 +32,8 @@ import type { JsonValue } from "./json.js"
 import type { PreferenceName, PreferenceValues } from "./preferences.js"
 import type { FinChoicesReading, FinPolicy, RoleRules } from "./fin-tuning.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
-import type { AppActionOutcome, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProbeView, RoomView, ThreadAppView } from "./thread-app.js"
+import type { AppActionOutcome, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProbeView, AppSamplingDemand, AppSamplingReply, RoomView, ThreadAppView } from "./thread-app.js"
+import type { ViewHintsStatus } from "./view-hints.js"
 import type { ThreadPlacement } from "./thread-identity.js"
 import type {
   LifecycleState,
@@ -189,6 +192,10 @@ export function createMakoBridge(transport: BridgeTransport) {
     threadAppOutput: (cwd: string, key: AppOutputKey, cursor?: AppOutputCursor) =>
       invokeTrustedHost<AppOutputChunk>("mako:thread-app-output", cwd, key, cursor),
     threadAppMarks: () => invokeTrustedHost<AppMark[]>("mako:thread-app-marks"),
+    followThreadApps: (demand?: AppSamplingDemand) => invokeTrustedHost<AppSamplingReply>("mako:thread-app-demand", demand),
+    followConversationApp: (conversation: string, demand: RemoteAppDemand) => invokeTrustedHost<RemoteAppReply>("mako:conversation-app-demand", conversation, demand),
+    conversationApp: (conversation: string, view: string) => invokeTrustedHost<RemoteAppSnapshot>("mako:conversation-app", conversation, view),
+    viewHints: () => invokeTrustedHost<ViewHintsStatus | null>("mako:view-hints"),
     probeThreadApp: (cwd: string) => invokeTrustedHost<AppProbeView>("mako:thread-app-probe", cwd),
     threadAppRoom: () => invokeTrustedHost<RoomView>("mako:thread-app-room"),
     stopThreadApps: (apps: string[]) => invokeTrustedHost<void>("mako:thread-app-stop-apps", apps),
@@ -399,6 +406,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<LiveSnapshot>("mako:live-rewind", id, input),
     liveRecoverRewinds: () =>
       invokeTrustedHost<LiveSnapshot[]>("mako:live-rewind-recover"),
+    /** A conversation's edited prompts' versions, by request: the conversation each was first sent in, then each fork. */
+    livePromptVersions: (id: string) => invokeTrustedHost<PromptVersionsByRequest>("mako:live-prompt-versions", id),
     liveFork: (id: string, input: ForkInput) =>
       invokeTrustedHost<LiveSnapshot>("mako:live-fork", id, input),
     liveCapture: (id: string, path: string) =>

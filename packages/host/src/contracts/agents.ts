@@ -575,6 +575,11 @@ export const NoticeSchema = z.object({
   reply: z.literal(true).optional(),
   /** A done report's question: who decides it (`decisionOn`). */
   decision: z.enum(["lead", "person"]).optional(),
+  /**
+   * Not a report: a Fin that reads as working went quiet (`QuietWatch`), since `since`, for `forMs`, its last step and
+   * whether that step still runs. Its report is the digest's words alone, kept nowhere, and changes how the Fin reads in nothing.
+   */
+  quiet: z.object({ since: z.number(), forMs: z.number(), step: z.string().max(400).optional(), running: z.literal(true).optional() }).optional(),
 })
 export type Notice = z.infer<typeof NoticeSchema>
 

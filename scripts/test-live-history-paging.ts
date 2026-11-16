@@ -7,6 +7,7 @@ import { LiveHistoryReader } from "@mako/host/conversations/live-history-reader"
 import { historyJsonChunks } from "@mako/host/contracts/history-pages"
 import type { Entry } from "@mako/sessions/entries"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
+import { ConversationControlSchema } from "@mako/host/contracts/conversation-control"
 import type { LiveHistoryRead, LiveHistoryPage } from "@mako/host/contracts/live-history"
 import type { MakoBridge } from "@mako/host/contracts/renderer-bridge"
 import { auditSnapshot, auditId } from "./performance-audit-fixtures"
@@ -423,6 +424,39 @@ console.log("PASS: conditional refresh owner/epoch and eviction fences")
   const raw = view.blocks.find((block) => block.type === "tool" && block.id === "raw-patch")
   assert.ok(raw?.type === "tool" && raw.input === patch.input!.slice(0, 2048), "input that isn't JSON keeps its head")
   console.log("PASS: a large call's preview keeps its input's JSON, so an agent with a long prompt is named while it runs")
+}
+
+// A window reads no transcript's resource paths: the requests that carried it and the transfers and merges that made it
+// name its file and counts, while the view the host pages from keeps them whole.
+{
+  const source = auditSnapshot(40, registeredHarnessIds()[0]!, 16, 1024)
+  source.session.id = auditId(900)
+  const resources = Array.from({ length: 2000 }, (_, n) => `/data/context/transcript/payloads/${n}.txt`)
+  const manifest = { file: "/data/context/transcript.md", resources, digest: "d", sourceRevision: 1, fromBlock: 0, toBlock: 10, includesBase: true, losses: [], turns: 12, from: ["codex"] }
+  const bindingId = "00000000-0000-4000-8000-000000000001"
+  source.requests = [
+    { id: "00000000-0000-4000-8000-0000000000a1", text: "Go on", attachments: [], status: "completed", createdAt: 1, context: [manifest] },
+    { id: "00000000-0000-4000-8000-0000000000a2", text: "Next", attachments: [], status: "completed", createdAt: 2 },
+    { id: "00000000-0000-4000-8000-0000000000a3", text: "Look", status: "completed", createdAt: 3,
+      attachments: [{ name: "shot.png", mimeType: "image/png", size: 3, data: "AAAA".repeat(20_000), path: "/data/attachments/shot.png" }] },
+    { id: "00000000-0000-4000-8000-0000000000a4", text: "Again", status: "failed", createdAt: 4,
+      attachments: [{ name: "shot.png", mimeType: "image/png", size: 3, data: "BBBB", path: "/data/attachments/shot.png" }] },
+  ]
+  source.control = ConversationControlSchema.parse({ merges: [{ id: "00000000-0000-4000-8000-0000000000b1", sourceId: "00000000-0000-4000-8000-0000000000b2", sourceRevision: 1, manifest, status: "consumed" }],
+    activeBindingId: bindingId, bindings: [], transfers: [{ input: { id: "00000000-0000-4000-8000-0000000000c1", provider: "codex", text: "Go on", attachments: [] }, createdAt: 1, state: { kind: "accepted", bindingId, manifest } }] })
+  const whole = JSON.stringify(source).length
+  const shown = await read<LiveSnapshot>(new LiveHistoryReader(), source, { kind: "snapshot" })
+  const text = JSON.stringify(shown)
+  assert.ok(!text.includes("/payloads/"), "no resource path reaches the window")
+  assert.equal(shown.requests[0]!.context![0]!.file, manifest.file)
+  assert.equal(shown.requests[0]!.context![0]!.turns, 12, "the manifest's counts stay")
+  assert.equal(shown.control!.merges[0]!.manifest.file, manifest.file)
+  assert.deepEqual(shown.requests[1], source.requests[1], "a request with no manifest is as it was")
+  assert.equal(source.requests[0]!.context![0]!.resources!.length, 2000, "the host's own snapshot keeps them")
+  assert.deepEqual(shown.requests[2]!.attachments, [{ name: "shot.png", mimeType: "image/png", size: 3, path: "/data/attachments/shot.png" }], "a completed request's saved bytes stay on the host")
+  assert.equal(shown.requests[3]!.attachments[0]!.data, "BBBB", "a failed request keeps its bytes, which Send again sends")
+  assert.ok(source.requests[2]!.attachments[0]!.data, "the host's own request keeps them")
+  console.log(`PASS: a window reads no transcript's resource paths, nor a completed request's saved attachment bytes (${Math.round(whole / 1024)} KB → ${Math.round(text.length / 1024)} KB)`)
 }
 
 await import("./test-released-live-turn")

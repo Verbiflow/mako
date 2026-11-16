@@ -320,18 +320,13 @@ assert.deepEqual(notesLeft([treeLine]), ["Cursor ran out until Sun 12:00 AM PST"
 assert.deepEqual(notesLeft([limited]), ["Turn failed"], "nothing came of it: it stands")
 assert.equal(eventWords({ label: "Turn failed", detail: "Failed to authenticate: invalid API key. Claude usage limit reached.", tone: "error" }).tone, "error", "a fault only the person can fix stays a failure, whatever else it says")
 
-// A provider's retries, quiet either way: the count, its words and how long; the failure after them says itself.
-const recoveredWords = eventWords(retriesEvent({ count: 3, outcome: "recovered", durationMs: 41_000 }, "Overloaded (529)"))
-assert.deepEqual(recoveredWords, { glyph: "retry", title: "Recovered after 3 retries", detail: "Overloaded (529)", aside: "41s" })
-assert.deepEqual(eventWords(retriesEvent({ count: 1, outcome: "gave-up", durationMs: 62_000 }, "Overloaded (529)")),
-  { glyph: "retry", title: "Retried once", detail: "Overloaded (529)", aside: "1m 02s" })
+// A provider's retries that ended are the host's log's: a journal from before keeps their markers, and they draw nothing.
 const retries = draw(streamed([go, marker(retriesEvent({ count: 3, outcome: "recovered", durationMs: 41_000 }, "Overloaded (529)")), { kind: "text", id: "a3", text: "Here it is." },
   marker(retriesEvent({ count: 5, outcome: "gave-up", durationMs: 62_000 }))]))
-assert.match(text(retries), /Recovered after 3 retries Overloaded \(529\) 41s/)
-assert.match(text(retries), /Retried 5 times 1m 02s/)
-assert.doesNotMatch(retries, /text-negative|text-caution/, "retries are ambient whichever way they ended: the failure after them owns the attention")
-assert.deepEqual(entriesToMessages(reduceLiveUpdates([], [{ kind: "event", ...retriesEvent({ count: 2, outcome: "recovered", durationMs: 3_000 }) }]), { kind: "live", running: false, provider: "claude" }).messages[0]?.note?.retries,
-  { count: 2, outcome: "recovered", durationMs: 3_000 }, "the measure reaches the window from the blocks the journal keeps")
+assert.doesNotMatch(text(retries), /Recovered after|Retried/, "an old journal's retry markers draw nothing")
+assert.match(text(retries), /Here it is\./, "and what was around them draws as ever")
+assert.equal(entriesToMessages(reduceLiveUpdates([], [{ kind: "event", ...retriesEvent({ count: 2, outcome: "recovered", durationMs: 3_000 }) }]), { kind: "live", running: false, provider: "claude" }).messages.length, 0,
+  "no message is made of one")
 
 const long = draw(streamed([go, marker({ label: "Warning", detail: "Codex is ignoring 2 unrecognized configuration settings. Check for typos or deprecated settings in config.toml.", tone: "warning" })]))
 assert.match(long, /<button[^>]*data-event-line[^>]*aria-expanded="false"/, "a line too long to fit opens onto the whole of it")
@@ -532,7 +527,8 @@ assert.match(errored, /role="alert" data-event-error="rate-limited"/)
 assert.match(text(errored), /Cursor is over its rate limit or capacity\s*Wait for capacity to return or choose another model\./, "a recorded failure is named by the rules a live one is")
 const unnamed = draw([{ id: "u", prompt: { id: "u", role: "user", blocks: [{ type: "text", text: "Summarize" }] },
   response: [{ id: "u-a", role: "assistant", blocks: [{ type: "text", text: "Reading." }], error: "Tool schema mismatch in step 4\nat validate (schema.ts:12)" }], system: [] }])
-assert.match(text(unnamed), /Tool schema mismatch in step 4\s*Details/, "a failure no rule knows says the provider's own first line")
+assert.match(text(unnamed), /did not finish this turn\s*Details/, "a failure no rule knows is named, not shown as the provider's raw line")
+assert.doesNotMatch(text(unnamed), /Tool schema mismatch/, "the provider's own words wait behind Details, closed")
 assert.doesNotMatch(errored, /rounded-lg border border-negative/, "no tinted card")
 
 const separator = draw([{ id: "x", prompt: { id: "x", role: "user", blocks: [{ type: "text", text: "Go" }] }, response: [],

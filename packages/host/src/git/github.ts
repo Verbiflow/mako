@@ -1,3 +1,4 @@
+import { z } from "zod"
 import { hostCommand } from "../base/host-command.js"
 import { hostFetch, hostStopping, type HostStopping } from "../base/host-stopping.js"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
@@ -500,7 +501,84 @@ export interface PullTarget {
   cwd: string
 }
 
-const READING_FIELDS = "state,url,headRefOid,author,statusCheckRollup,latestReviews"
+const READING_FIELDS = "state,url,headRefOid,baseRefName,author,statusCheckRollup,latestReviews"
+
+/** `owner/name` from a pull request's URL (`https://github.com/owner/name/pull/12`). */
+function pullRefRepository(url: string): string | undefined {
+  const found = /^https?:\/\/[^/\s]+\/([\w.-]+)\/([\w.-]+)\/pull\/\d+/.exec(url)
+  return found ? `${found[1]}/${found[2]}` : undefined
+}
+
+/** How long a repository branch's required checks are kept once read; a failed read is tried again sooner. */
+export const REQUIRED_FRESH_MS = 60 * 60_000
+const REQUIRED_RETRY_MS = 10 * 60_000
+
+/** A ruleset rule as REST lists it for a branch; only `required_status_checks` names checks. */
+const BranchRulesSchema = z.array(z.looseObject({
+  type: z.string(),
+  parameters: z.looseObject({ required_status_checks: z.array(z.looseObject({ context: z.string() })).optional() }).optional(),
+}))
+/** A branch protection's required status checks: `contexts`, and `checks` with each one's app. */
+const ProtectionChecksSchema = z.looseObject({
+  contexts: z.array(z.string()).optional(),
+  checks: z.array(z.looseObject({ context: z.string() })).optional(),
+})
+
+function requiredNames(output: string, field: "rules" | "protection"): string[] | undefined {
+  const value: unknown = JSON.parse(output)
+  if (field === "rules") {
+    const rules = BranchRulesSchema.safeParse(value)
+    return rules.success ? rules.data.flatMap((rule) => rule.type === "required_status_checks" ? rule.parameters?.required_status_checks?.map((check) => check.context) ?? [] : []) : undefined
+  }
+  const protection = ProtectionChecksSchema.safeParse(value)
+  return protection.success ? [...protection.data.contexts ?? [], ...protection.data.checks?.map((check) => check.context) ?? []] : undefined
+}
+
+/**
+ * The checks a repository's branch requires before a merge, by name: its rulesets
+ * (`repos/{repo}/rules/branches/{branch}`) and its branch protection, read over REST once per repository and branch and
+ * kept `REQUIRED_FRESH_MS`. Undefined when neither can be read, so a caller settles as it did without them. One per
+ * host, made where the host is composed.
+ */
+export class RequiredChecks {
+  private readonly kept = new Map<string, { until: number; value: Promise<string[] | undefined> }>()
+  private readonly runner: GitHubRunner
+  private readonly now: () => number
+
+  constructor(runner: GitHubRunner = gh, now: () => number = () => Date.now()) {
+    this.runner = runner
+    this.now = now
+  }
+
+  read(cwd: string, repository: string, branch: string): Promise<string[] | undefined> {
+    const key = `${repository.toLowerCase()}@${branch}`
+    const kept = this.kept.get(key)
+    if (kept && kept.until > this.now()) return kept.value
+    const value = this.fetch(cwd, repository, branch)
+    const entry = { until: this.now() + REQUIRED_FRESH_MS, value }
+    this.kept.set(key, entry)
+    void value.then((names) => { if (names === undefined) entry.until = this.now() + REQUIRED_RETRY_MS })
+    return value
+  }
+
+  private async fetch(cwd: string, repository: string, branch: string): Promise<string[] | undefined> {
+    const path = encodeURIComponent(branch)
+    const read = async (api: string, field: "rules" | "protection") => {
+      try {
+        return requiredNames(await this.runner(cwd, ["api", api]), field)
+      } catch {
+        return undefined
+      }
+    }
+    const [rules, protection] = await Promise.all([
+      read(`repos/${repository}/rules/branches/${path}`, "rules"),
+      read(`repos/${repository}/branches/${path}/protection/required_status_checks`, "protection"),
+    ])
+    // An unprotected branch answers 404 for its protection: what the rulesets say is all there is.
+    if (rules === undefined && protection === undefined) return undefined
+    return [...new Set([...(rules ?? []), ...(protection ?? [])])]
+  }
+}
 
 function timeOf(text: string | undefined): number | undefined {
   const at = text ? Date.parse(text) : Number.NaN
@@ -511,7 +589,7 @@ function timeOf(text: string | undefined): number | undefined {
  * One pull request's state, checks and reviews for the watch (`PullReading`), with the same `gh pr view` and the same
  * normalising of checks and reviews `pull_request_status` reads with. Null when `gh` can't say.
  */
-export async function readPull(target: PullTarget, runner: GitHubRunner = gh): Promise<PullReading | null> {
+export async function readPull(target: PullTarget, runner: GitHubRunner = gh, required?: RequiredChecks): Promise<PullReading | null> {
   const args = ["pr", "view", String(target.number), ...(target.repository ? ["--repo", target.repository] : []), "--json", READING_FIELDS]
   let value: JsonValue
   try {
@@ -527,11 +605,15 @@ export async function readPull(target: PullTarget, runner: GitHubRunner = gh): P
   const reviews = parseJsonArray(value.latestReviews, parseRawReview) ?? []
   const author = parseOptionalUser(value.author)?.login
   const head = stringValue(value.headRefOid)
+  const base = stringValue(value.baseRefName)
+  const repository = target.repository ?? pullRefRepository(url)
+  const requires = required && base && repository ? await required.read(target.cwd, repository, base) : undefined
   return {
     state: state === "MERGED" ? "merged" : state === "CLOSED" ? "closed" : "open",
     url,
     ...(head && /^[a-f0-9]{40,64}$/.test(head) && { head }),
     ...(author && { author }),
+    ...(requires && { required: requires }),
     checks: checks.map((raw) => {
       const check = toCheck(raw)
       const at = timeOf(raw.completedAt ?? raw.startedAt)

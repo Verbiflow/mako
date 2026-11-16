@@ -68,6 +68,7 @@ export interface ExternalThreadActivity {
 }
 
 export type HostEventBody =
+  | { type: "view-hint"; hint: import("./view-hints.js").ViewHint }
   | { type: "application-lifecycle"; lifecycle: LifecycleState }
   | { type: "installation"; installation: UpdateInstallation }
   | { type: "app-command"; command: "app.quit" | "app.updates" }
@@ -83,6 +84,12 @@ export type HostEventBody =
   /** A new Thread's worktree is checked out; its provider starts next. */
   | { type: "worktree-ready"; conversationId: string }
   | { type: "worktree-step"; conversationId: string; step: WorktreeStep }
+  /**
+   * The conversation's running `mako-computer` `js` call's steps so far, as its program's calls move; `null` once
+   * that call has answered. One program runs at a time in a conversation's control session, so these are its oldest
+   * call still running.
+   */
+  | { type: "tool-steps"; conversationId: string; steps: import("./tool-steps.js").ToolSteps | null }
   /**
    * A new cloud conversation's start: `preparing` while its machine and its copy of `project` come up, `starting`
    * once the harness is starting there. A start whose machine was ready from the composer goes straight to `starting`.
