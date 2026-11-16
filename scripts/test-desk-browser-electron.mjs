@@ -87,25 +87,6 @@ async function relayedPages() {
   }
 }
 
-/**
- * Whether the page still answers CDP's screenshot, read after each step that could stop a hidden window drawing, and
- * how it reports its visibility. On CI Macs the screenshot at the end timed out in the gate and the suites, while a hidden
- * window alone captures there (awake or with the display asleep). Electron's capturePage would make the page draw and
- * hide the cause, so it isn't used here.
- */
-async function drawable(step) {
-  const [window] = BrowserWindow.getAllWindows()
-  if (!window) return console.log(`after ${step}: no window`)
-  const contents = window.webContents
-  const visibility = await contents.executeJavaScript("document.visibilityState").catch((failure) => `unread (${failure?.message ?? failure})`)
-  const began = Date.now()
-  const shot = await Promise.race([
-    contents.debugger.sendCommand("Page.captureScreenshot", { format: "png", optimizeForSpeed: true, captureBeyondViewport: false }).then(() => `in ${Date.now() - began} ms`, (failure) => `failed: ${failure?.message ?? failure}`),
-    new Promise((resolve) => setTimeout(() => resolve("no answer in 5 s"), 5_000)),
-  ])
-  console.log(`after ${step}: page ${visibility}, window visible=${window.isVisible()}, CDP screenshot ${shot}`)
-}
-
 async function main() {
   // The check ends with app.exit; closing its last window mustn't quit before the check reports.
   app.on("window-all-closed", () => {})
@@ -121,7 +102,6 @@ async function main() {
   await run({ action: "connect", browser: "mako" })
   const { navigation: _navigation, ...target } = await run({ action: "open", browser: "mako" })
   const observed = await run({ action: "observe", target, interactiveOnly: true })
-  await drawable("load")
   assert.deepEqual([...new Set(observed.nodes.map((node) => node.role))].sort(), ["button", "combobox", "link", "option", "textbox"])
   assert.deepEqual([observed.viewport.width, observed.viewport.height], pageSize, "the viewport is the window's content, less its scrollbar")
   const button = observed.nodes.find((node) => node.role === "button")
@@ -153,7 +133,6 @@ async function main() {
   const dismissed = await run({ action: "evaluate", target, expression: "window.second" })
   assert.equal(dismissed.result.value, false)
 
-  await drawable("dialogs")
   // selectOption fires change handlers.
   const select = observed.nodes.find((node) => node.role === "combobox") ?? (await run({ action: "observe", target, query: "Colour" })).nodes[0]
   const picked = await run({ action: "selectOption", target, ref: select.ref, label: "Blue" })
@@ -161,7 +140,6 @@ async function main() {
   const afterSelect = await run({ action: "evaluate", target, expression: "document.getElementById('out').textContent" })
   assert.match(afterSelect.result.value, /colour=b/)
 
-  await drawable("select")
   // wait resolves once the late element exists.
   const waited = await run({ action: "wait", target, for: { selector: "#late", text: "late arrival" }, timeoutMs: 5000 })
   assert.equal(waited.satisfied, true)
@@ -179,7 +157,6 @@ async function main() {
   const pdf = await run({ action: "pdf", target, path: join(root, "page.pdf") })
   assert.ok(pdf.bytes > 1000, "pdf has content")
 
-  await drawable("pdf")
   // Download through the anchor.
   const dlObserved = await run({ action: "observe", target, query: "Download" })
   let download
@@ -194,23 +171,25 @@ async function main() {
   assert.equal(download.state, "completed")
   assert.equal(download.path, join(root, "hello.txt"))
 
-  await drawable("download")
+  // Screenshots, before history: on CI Macs (Electron 43.4.0), a back that lands the page in its original renderer
+  // process leaves it no compositor surface. CDP's screenshot then never answers and Electron's capturePage fails with
+  // UnknownVizError: 5 of 5 such backs in 20 runs, against 0 of 15 that got a new process; with the back-forward cache
+  // off, and whether the window was hidden or shown. That is Electron's to fix; here the captures come first.
+  const shot = await run({ action: "screenshot", target, format: "png", maxSide: 800 })
+  writeFileSync(join(root, "viewport.png"), Buffer.from(shot.data, "base64"))
+  assert.equal(shot.coordinates.imageWidth, 800)
+  assert.equal(shot.coordinates.devicePixelRatio > 0, true)
+  // The download clicked through the page, so refs come from a new observation.
+  const again = await run({ action: "observe", target, interactiveOnly: true })
+  const buttonAgain = again.nodes.find((node) => node.role === "button")
+  const element = await run({ action: "screenshot", target, format: "png", ref: buttonAgain.ref })
+  assert.ok(element.coordinates.imageWidth < 200, "element capture is scoped to the button")
   // History: a second document, then back.
   await run({ action: "navigate", target, url: "data:text/html;charset=utf-8," + encodeURIComponent(second) })
   const back = await run({ action: "history", target, go: "back" })
   assert.equal(back.moved, true)
   const title = await run({ action: "evaluate", target, expression: "document.title" })
   assert.equal(title.result.value, "Desk check")
-  await drawable("history back")
-  const shot = await run({ action: "screenshot", target, format: "png", maxSide: 800 })
-  writeFileSync(join(root, "viewport.png"), Buffer.from(shot.data, "base64"))
-  assert.equal(shot.coordinates.imageWidth, 800)
-  assert.equal(shot.coordinates.devicePixelRatio > 0, true)
-  // History navigation replaced the document, so refs come from a new observation.
-  const again = await run({ action: "observe", target, interactiveOnly: true })
-  const buttonAgain = again.nodes.find((node) => node.role === "button")
-  const element = await run({ action: "screenshot", target, format: "png", ref: buttonAgain.ref })
-  assert.ok(element.coordinates.imageWidth < 200, "element capture is scoped to the button")
   await run({ action: "close", target })
   assert.equal(desk.openPages, 0)
   // The desktop closes its window once the host's ask arrives.
