@@ -249,6 +249,15 @@ export function awaitedAnew(before: readonly WaitingOn[] | undefined, now: reado
 }
 
 /**
+ * Whether `now` names only waits on someone else that `before` named already: at least one, every one a pull
+ * request's review or the person (`othersWaits`), none new. Progress that only says such a wait again tells its Apex
+ * nothing new; one naming no wait, a wait in other words, or a pull request's checks does.
+ */
+export function othersOnly(before: readonly WaitingOn[] | undefined, now: readonly WaitingOn[] | undefined): boolean {
+  return Boolean(now?.length) && othersWaits(now).size > 0 && now!.every((item) => othersWaits([item]).size > 0) && !awaitedAnew(before, now).length
+}
+
+/**
  * What a Fin waits on outside its tree, in a line: "waiting on #412 checks, the person to merge". A pull request is
  * its number alone, and `owner/name#412` only where the line names pull requests of more than one repository.
  */

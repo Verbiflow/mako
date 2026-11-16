@@ -81,6 +81,7 @@ import {
   queuedWords,
   quietProgress,
   awaitedAnew,
+  othersOnly,
   type Report,
   type ThreadParent,
   type TreeBudget,
@@ -3903,7 +3904,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     let from = reports.length
     while (from > 0 && reports[from - 1]!.status === "progress") from -= 1
     const since = reports.slice(from)
-    if (since.some((each) => each.awaits) && !awaitedAnew(since.filter((each) => each.id !== report.id).flatMap((each) => each.waitingOn ?? []), report.waitingOn).length) return false
+    if (since.some((each) => each.awaits) && othersOnly(since.filter((each) => each.id !== report.id).flatMap((each) => each.waitingOn ?? []), report.waitingOn)) return false
     if (this.deps.readPull && report.waitingOn?.some((item) => waitedPull(item) !== undefined)) return false
     return !this.store()!.armedTurnWaits().some((wait) => wait.conversation === conversation)
   }
