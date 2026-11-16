@@ -116,7 +116,7 @@ export class PullWatch {
       if (!reading) continue
       for (const wait of waits) {
         if (wait.target.key !== key) continue
-        const outcome = pullOutcome(reading, wait.until, wait.since)
+        const outcome = pullOutcome(reading, wait.until, wait.since, this.deps.now())
         if (!outcome) continue
         const note = pullWakeNote(wait.pull, reading.url, outcome, reading.head)
         hostLog("agents", "pull request outcome", { wait: wait.key, child: wait.child, outcome: outcome.kind })

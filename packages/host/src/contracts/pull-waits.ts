@@ -20,10 +20,18 @@ export interface PullReading {
 }
 
 /**
- * What happened on a pull request a Fin waits on: its checks all finished, one failed while others still run, a review
- * came in, or it merged or closed.
+ * How long a wait on checks takes a head with none before it says so (`no-checks`): GitHub starts a push's checks
+ * within a minute or two, and a head that has none this long after the report has nothing coming (#803 on 2026-11-15:
+ * its CI never started, and its Fin's checks wait could never end).
+ */
+export const NO_CHECKS_MS = 15 * 60_000
+
+/**
+ * What happened on a pull request a Fin waits on: its checks all finished, one failed while others still run, its head
+ * still had no checks `NO_CHECKS_MS` after the report, a review came in, or it merged or closed.
  */
 export type PullOutcome =
+  | { kind: "no-checks"; minutes: number }
   | { kind: "settled"; passed: number; failed: string[]; cancelled?: string[] }
   | { kind: "failed"; check: string; running: number }
   | { kind: "review"; by: string; state: "approved" | "changes" | "commented" }
@@ -37,7 +45,7 @@ export type PullOutcome =
  * head's checks: registering a wait doesn't mean the Fin already knows their outcome. Undefined while nothing it waits
  * for happened.
  */
-export function pullOutcome(reading: PullReading, until: PullWaitUntil | undefined, since: number): PullOutcome | undefined {
+export function pullOutcome(reading: PullReading, until: PullWaitUntil | undefined, since: number, now?: number): PullOutcome | undefined {
   if (reading.state === "merged") return { kind: "merged" }
   if (reading.state === "closed") return { kind: "closed" }
   if (until === "merge") return undefined
@@ -49,7 +57,8 @@ export function pullOutcome(reading: PullReading, until: PullWaitUntil | undefin
     if (until === "review") return undefined
   }
   const checks = reading.checks
-  if (!checks.length) return undefined
+  // None at all is no outcome yet, until long enough has passed that none are coming: then the Fin hears so, once a head.
+  if (!checks.length) return now !== undefined && now - since >= NO_CHECKS_MS ? { kind: "no-checks", minutes: Math.round(NO_CHECKS_MS / 60_000) } : undefined
   const running = checks.filter((check) => check.state === "running" || check.state === "unknown").length
   const failed = checks.filter((check) => check.state === "failed")
   // A run cancelled with no newer one after it (the reader drops one a newer run replaced) settled without failing.
@@ -73,6 +82,8 @@ function outcomeWords(outcome: PullOutcome): string {
       if (!outcome.failed.length) return `checks settled: ${outcome.passed === 1 && !cancelled ? "1 passed" : cancelled ? `${outcome.passed} passed` : `all ${outcome.passed} passed`}${cancelled}`
       return `checks settled: ${outcome.failed.length} failed (${listed(outcome.failed)})${cancelled}`
     }
+    case "no-checks":
+      return `checks: none after ${outcome.minutes}m`
     case "failed":
       return `check failed: ${outcome.check}${outcome.running ? `, ${outcome.running} still running` : ""}`
     case "review":
@@ -89,7 +100,7 @@ export function pullWakeNote(pull: string, url: string | undefined, outcome: Pul
   return `${PULL_WAKE_HEAD}${pull} ${outcomeWords(outcome)}${head ? `; observed head ${head}` : ""}.${url ? ` ${url}` : ""}`
 }
 const PULL_WAKE_HEAD = "Mako: PR "
-const OUTCOME_WORDS = String.raw`checks settled: (?:all \d+ passed|1 passed|\d+ passed|\d+ failed \([^\n)]*\))(?:, \d+ cancelled \([^\n)]*\))?|check failed: [^\n]+?|review: \S+ (?:approved|requested changes|commented)|merged|closed without merging`
+const OUTCOME_WORDS = String.raw`checks settled: (?:all \d+ passed|1 passed|\d+ passed|\d+ failed \([^\n)]*\))(?:, \d+ cancelled \([^\n)]*\))?|checks: none after \d+m|check failed: [^\n]+?|review: \S+ (?:approved|requested changes|commented)|merged|closed without merging`
 const PULL_WAKE = new RegExp(String.raw`^Mako: PR ([\w.-]+\/[\w.-]+#\d+|#\d+) (${OUTCOME_WORDS})(; observed head [a-f0-9]{40,64})?\.(?: (https?:\/\/\S+))?$`)
 
 /** A wake's note read back from its words, as a saved transcript keeps it: what its event line says, and the link. */

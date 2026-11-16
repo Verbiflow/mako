@@ -7,7 +7,7 @@ import { frontDoorNote } from "@mako/host/contracts/agent-tools"
 import { childState, ReportSchema, waitingStateWords, type ChildState, type Report, type ThreadParent, type WaitingOn } from "@mako/host/contracts/agents"
 import { childLine, childWord } from "@mako/host/contracts/children"
 import { ChildStateSchema } from "@mako/host/contracts/native-agents"
-import { pullOutcome, pullWakeNote, pullWakeWords, type PullReading } from "@mako/host/contracts/pull-waits"
+import { NO_CHECKS_MS, pullOutcome, pullWakeNote, pullWakeWords, type PullReading } from "@mako/host/contracts/pull-waits"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { PULL_WATCH_EVERY_MS, PULL_WATCH_MAX_MS, PullWatch, type PullWait } from "@mako/host/conversations/pull-watch"
@@ -41,6 +41,11 @@ const check = (name: string, state: PullReading["checks"][number]["state"], at?:
   const known = reading({ checks: [check("lint", "failed", SINCE - 5), check("e2e", "running")] })
   assert.deepEqual(pullOutcome(known, "checks", SINCE), { kind: "failed", check: "lint", running: 1 }, "a current-head failure already present when the wait was registered still answers it")
   assert.equal(pullOutcome(reading(), "checks", SINCE), undefined, "no checks yet: a push GitHub hasn't started on")
+  assert.equal(pullOutcome(reading(), "checks", SINCE, SINCE + NO_CHECKS_MS - 1), undefined, "no checks a little while after the report: still starting")
+  assert.deepEqual(pullOutcome(reading(), "checks", SINCE, SINCE + NO_CHECKS_MS), { kind: "no-checks", minutes: 15 }, "no checks long after the report: none are coming, and the Fin hears so")
+  assert.deepEqual(pullOutcome(reading(), undefined, SINCE, SINCE + NO_CHECKS_MS), { kind: "no-checks", minutes: 15 }, "a wait on any outcome hears it too")
+  assert.equal(pullOutcome(reading(), "review", SINCE, SINCE + NO_CHECKS_MS), undefined, "a wait on a review doesn't")
+  assert.equal(pullOutcome(reading(), "merge", SINCE, SINCE + NO_CHECKS_MS), undefined, "nor one on a merge")
   const lone = reading({ checks: [check("lint", "passed"), check("e2e", "cancelled")] })
   assert.deepEqual(pullOutcome(lone, "checks", SINCE), { kind: "settled", passed: 1, failed: [], cancelled: ["e2e"] }, "a cancelled check nothing replaced settles as cancelled, not failed")
   const both = reading({ checks: [check("lint", "failed"), check("e2e", "cancelled"), check("unit", "passed")] })
@@ -161,6 +166,22 @@ console.log('words: "Mako: PR acme/app#371 checks settled: 2 failed (lint, e2e).
   assert.equal(bare?.state, "merged")
   assert.equal(await readPull({ number: 1, cwd: "/work" }, async () => { throw new Error("gh: not logged in") }), null, "a reader that can't answer says nothing")
 }
+// A head whose checks never start (#803, 2026-11-15: its CI never ran) ends its Fin's wait once, never holding it for hours.
+{
+  const head = "d".repeat(40)
+  let now = SINCE
+  const waits: PullWait[] = [{ key: "no-checks", child: "fin", report: "r", pullKey: "acme/app#803", since: SINCE, pull: "acme/app#803", target: { key: "acme/app#803", repository: "acme/app", number: 803, cwd: "/work" }, until: "checks" }]
+  const notes: string[] = []
+  const watch = new PullWatch({ waits: () => waits, read: async () => reading({ head }), now: () => now, fire: async (_wait, _outcome, note) => { notes.push(note) } })
+  await watch.tick()
+  assert.equal(notes.length, 0, "no checks yet: still waiting")
+  now = SINCE + NO_CHECKS_MS
+  await watch.tick()
+  assert.deepEqual(notes, [`Mako: PR acme/app#803 checks: none after 15m; observed head ${head}. ${URL}`], "the Fin hears its head has no checks")
+  assert.deepEqual(pullWakeWords(notes[0]!), { line: `Mako: PR acme/app#803 checks: none after 15m; observed head ${head}.`, url: URL }, "its transcript reads the note back")
+}
+console.log("no checks: a head whose checks never start ends its wait once, after 15 minutes")
+
 console.log("readPull: one gh pr view by repository and number, parsed as the status tool parses it")
 
 // A PR condition follows the head in the current reading, with that observation preserved in its durable note.
