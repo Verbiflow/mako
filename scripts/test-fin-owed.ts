@@ -72,6 +72,13 @@ const waiting = { kind: "pull-request" as const, ref: "acme/app#12", until: "che
     assert.equal(told.length, 1, "once")
     assert.ok(told[0]!.includes(ASK.slice(0, 20)), told[0])
     assert.equal(finPrompts().filter((text) => text.includes(REMINDER) && text.includes(ASK.slice(0, 20))).length, 1, "the reminder went once")
+    // Its Apex was told: its list shows the Fin whatever changed since, with what it owes (`owes`, `needsApex`).
+    const marked = await world.agents.list(apex.caller, {})
+    assert.ok("children" in marked && marked.mark)
+    const since = await world.agents.list(apex.caller, { since: marked.mark })
+    assert.ok("children" in since)
+    const owing = since.children.find((strip) => strip.name === "lander")
+    assert.equal(owing?.owes, 1, `a Fin owing its Apex an answer is listed though unchanged: ${JSON.stringify(since.children.map((strip) => [strip.name, strip.owes]))}`)
     console.log("owed: progress on a watched wait left the question open; one reminder, then its Apex heard it once; a reply: none message owed nothing")
   } finally {
     await world.close()
@@ -111,6 +118,9 @@ const waiting = { kind: "pull-request" as const, ref: "acme/app#12", until: "che
     const apexHeard = () => world.prompts.filter((prompt) => prompt.conversation === apex.conversation).map((prompt) => prompt.text)
     await until("its Apex to hear the answer", () => apexHeard().some((text) => text.includes("answers your message")))
     assert.ok(apexHeard().some((text) => text.includes("two checks pass")), "progress that answers wakes its Apex with it")
+    const answered = await world.agents.list(apex.caller, {})
+    assert.ok("children" in answered)
+    assert.equal(answered.children.find((strip) => strip.name === "lander")?.owes, undefined, "and it owes nothing once answered")
     // A result settles a message without naming it: no reminder on the turn after.
     assert.ok(!("refused" in await world.agents.send(apex.caller, { to: "lander", text: "Then: tidy the docs.", expects: "answer", clientKey: "docs" })))
     await world.settle(400, 20_000, "ignore")

@@ -4299,6 +4299,16 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /**
+   * How many of its Apex's questions a Fin still owes an answer past their reminder: its Apex was told, so its list
+   * shows the Fin whatever changed (`needsApex`). Read only of a conversation in memory, so a list reads no journal in.
+   */
+  private owesApex(edge: ThreadParent): number {
+    const conversation = this.conversationOf(edge.child)
+    if (!conversation || !this.deps.live.held(conversation)) return 0
+    return this.owedOf(edge, conversation).filter((owed) => owed.turns >= 2).length
+  }
+
+  /**
    * A Fin's reminder, once, on the turn after the first of its turns that ended without answering a message its Apex
    * sent: by the request's ID, which `agents_report`'s `answers` takes when progress is its answer.
    */
@@ -5641,6 +5651,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const pendingQuestions = this.pendingReports(edge).length
     const pendingActions = this.pendingActions(edge.parent, edge.child).total
     const custodyActions = this.store()!.reportCustody(edge.child).total
+    const owes = this.owesApex(edge)
     return {
       child: edge.child,
       name: edge.name,
@@ -5658,6 +5669,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(pendingQuestions && { pendingQuestions }),
       ...(pendingActions && { pendingActions }),
       ...(custodyActions && { custodyActions }),
+      ...(owes && { owes }),
       ...(waiting && { waiting }),
       ...(idle !== undefined && { idleFor: idle }),
       ...(pulls.length && { openPRs: pulls }),
@@ -7010,7 +7022,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const changedAt = this.changes.at(edge.child, {
       state, ...(state.kind === "working" && { awaiting: this.childReading(edge).awaiting }),
       ...(latest && { report: { status: latest.status, at: latest.at } }), ...(held.length && { pulls: held }),
-      questions: this.pendingReports(edge).length, actions: this.pendingActions(edge.parent, edge.child).total,
+      questions: this.pendingReports(edge).length, actions: this.pendingActions(edge.parent, edge.child).total, owes: this.owesApex(edge),
     }, this.changes.tick(this.now()))
     return {
       name: edge.name,
@@ -7337,12 +7349,12 @@ function pullWaitReports(reports: Report[], key: string): Report[] {
 /** A listed Fin waiting on its Apex: a question or action open, blocked, or ended with a decision. */
 function needsApex(strip: AgentStrip): boolean {
   const { state } = strip
-  return Boolean(strip.pendingQuestions || strip.pendingActions || strip.custodyActions) || state.kind === "blocked" || (state.kind === "ended" && state.decision !== undefined)
+  return Boolean(strip.pendingQuestions || strip.pendingActions || strip.custodyActions || strip.owes) || state.kind === "blocked" || (state.kind === "ended" && state.decision !== undefined)
 }
 
 /** What a listed Fin's change mark reads of its row (`FinChanges`). */
 function stripChange(strip: AgentStrip): ChangeFacts {
-  return { state: strip.state, ...(strip.report && { report: { status: strip.report.status, at: strip.report.at } }), ...(strip.openPRs && { pulls: strip.openPRs }), questions: strip.pendingQuestions ?? 0, actions: strip.pendingActions ?? 0 }
+  return { state: strip.state, ...(strip.report && { report: { status: strip.report.status, at: strip.report.at } }), ...(strip.openPRs && { pulls: strip.openPRs }), questions: strip.pendingQuestions ?? 0, actions: strip.pendingActions ?? 0, owes: strip.owes ?? 0 }
 }
 
 /**

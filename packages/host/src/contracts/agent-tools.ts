@@ -195,6 +195,8 @@ export interface AgentStrip {
   custodyActions?: number
   /** What it waits on outside its tree, in words (`waitingWords`): "waiting on #412 checks". */
   waiting?: string
+  /** Its Apex's questions it still owes an answer past their reminder, which its Apex was told of (`Agents.owedOf`). */
+  owes?: number
   /** Seconds since its last activity, while it isn't working (`idleFor`). */
   idleFor?: number
   /** Its open pull requests, from what the host holds (`finPullRequests`). */
