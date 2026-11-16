@@ -38,6 +38,8 @@ import { JournalStore, wholeChange, type FileState, type Recency, type StatRow, 
 import { diffLines, splitLines } from "./line-diff.js"
 import { applyHunks, BASE, baseMap, onlyBase, presentLines, presentRuns, rebase, UNKNOWN, withKnownWriters, withWriter, writers, type Run } from "./line-map.js"
 import { FootprintReader, type FootprintOptions } from "./footprint-reader.js"
+import { ShellReconciliations } from "./shell-reconciliations.js"
+import { readOnlyCommand } from "./read-only.js"
 import type { FootprintTurn } from "./footprint.js"
 import { untrackable, within } from "./paths.js"
 import { ranTexts, SCRIPT_LIMIT } from "./scripts.js"
@@ -184,6 +186,9 @@ interface Flush {
   slowest?: string
 }
 
+/** A Git inventory is a live completeness observation, persisted as a rescan without changing author evidence. */
+type ObservationSource = ObservedBy | "inventory"
+
 interface RootState {
   root: StoredRoot
   repo: TrackerRepository | null
@@ -193,7 +198,7 @@ interface RootState {
   tracked: Set<string>
   watch?: { close(): void }
   headWatch?: { close(): void }
-  pending: Map<string, ObservedBy>
+  pending: Map<string, ObservationSource>
   /** Paths Git ignores that a Thread's own write named, not yet journaled: those are kept like any file. */
   adopted: Set<string>
   firstHeard: number
@@ -333,6 +338,7 @@ export class LaptopTracker implements AttributionTracker {
   private holds = 0
   /** Reads under way of what reported commands ran (`readScripts`). */
   private readonly scriptReads = new Set<Promise<void>>()
+  private readonly shells: ShellReconciliations
   /** Each turn's footprint outside the tracked roots, and the machine's learned churn. */
   readonly footprints?: FootprintReader
   private readonly flushes: Flush[] = []
@@ -351,6 +357,10 @@ export class LaptopTracker implements AttributionTracker {
     this.ports = ports
     this.options = options
     this.store = store
+    this.shells = new ShellReconciliations(
+      (root) => this.refreshShell(root),
+      (root, error) => this.log("a shell's Git inventory could not be reconciled", { root, error: error.message }),
+    )
     this.reader = new JournalReader(store.path)
     this.evidence = new Evidence(new WorkingSets((thread) => store.activityOfThread(thread)))
     this.seq = store.lastSeq()
@@ -470,6 +480,7 @@ export class LaptopTracker implements AttributionTracker {
   async untrack(id: string): Promise<void> {
     const state = this.states.get(id)
     if (!state) return
+    this.shells.forget(id)
     this.states.delete(id)
     this.unlisten(state)
     await state.chain
@@ -715,11 +726,17 @@ export class LaptopTracker implements AttributionTracker {
   }
 
   private queue(state: RootState, run: () => Promise<void>): Promise<void> {
-    const next = state.chain.then(run, run).catch((error: Error) => {
+    this.checkedQueue(state, run)
+    return state.chain
+  }
+
+  /** Reconciliation must report a failed inventory to its finalization barrier, rather than silently count it. */
+  private checkedQueue(state: RootState, run: () => Promise<void>): Promise<void> {
+    const pending = state.chain.then(run, run)
+    state.chain = pending.catch((error: Error) => {
       this.options.log?.("a change could not be journaled", { root: state.root.path, error: error.message })
     })
-    state.chain = next
-    return next
+    return pending
   }
 
   /** `checkHead`, its failure logged: the files are read regardless, against the base as it stood. */
@@ -950,7 +967,7 @@ export class LaptopTracker implements AttributionTracker {
     const timing: Flush = { at: this.now(), files: batch.length, entries: 0, lagMs: 0, statMs: 0, hashMs: 0, diffMs: 0, writeMs: 0 }
     let started = performance.now()
     // A folder that went or came stands for every file under it.
-    const expanded = new Map<string, ObservedBy>()
+    const expanded = new Map<string, ObservationSource>()
     const stats = new Map<string, TrackerFileStat | null>()
     const ignored = batch.some(([path]) => !state.stats.has(path)) ? await this.gitIgnored(state) : undefined
     const unread = ignored ? this.unreadIn(state, ignored) : () => false
@@ -1029,7 +1046,7 @@ export class LaptopTracker implements AttributionTracker {
       }
     const consumed = new Set(renamed.values())
     started = performance.now()
-    const prepared: { item: Observed; how: ObservedBy; before: { ref: ContentRef | null; bytes?: Uint8Array } }[] = []
+    const prepared: { item: Observed; how: ObservationSource; before: { ref: ContentRef | null; bytes?: Uint8Array } }[] = []
     for (const item of observed) {
       if (consumed.has(item.path)) continue
       const from = renamed.get(item.path)
@@ -1044,7 +1061,7 @@ export class LaptopTracker implements AttributionTracker {
     const lostFrom = state.gap ? this.lostFrom(state, prepared, renamed, at) : undefined
     const gapEvidence = lostFrom !== undefined ? evidenceOf(await this.activityOverlapping(lostFrom - TRAIL_MS, at), this.evidence.worked) : undefined
     // A remote owner asks its host for current session context before taking the SQLite write transaction.
-    const outsiders = this.options.outsider ? new Map(await Promise.all(prepared.filter(({ how }) => how === "event").map(async ({ item }) =>
+    const outsiders = this.options.outsider ? new Map(await Promise.all(prepared.filter(({ how }) => how === "event" || how === "inventory").map(async ({ item }) =>
       [item.path, await this.options.outsider!(join(state.root.path, item.path), state.root.path)] as const))) : new Map<string, string | undefined>()
     // A burst (a build's output, a copied folder) is journaled a slice at a time: each change is attributed as it's recorded.
     const slice = new Slice(this.slicing)
@@ -1092,7 +1109,7 @@ export class LaptopTracker implements AttributionTracker {
    * reading the whole gap's activity, days of it after a long one, read nothing more: on the person's journal
    * (175,857 calls and turns) it held the host's loop for 2.7 s. Undefined when none needs it.
    */
-  private lostFrom(state: RootState, prepared: readonly { item: Observed; how: ObservedBy; before: { ref: ContentRef | null } }[], renamed: ReadonlyMap<string, string>, at: number): number | undefined {
+  private lostFrom(state: RootState, prepared: readonly { item: Observed; how: ObservationSource; before: { ref: ContentRef | null } }[], renamed: ReadonlyMap<string, string>, at: number): number | undefined {
     const gap = state.gap
     if (!gap) return undefined
     let earliest: number | undefined
@@ -1214,7 +1231,7 @@ export class LaptopTracker implements AttributionTracker {
   private record(
     state: RootState,
     item: Observed,
-    how: ObservedBy,
+    how: ObservationSource,
     given: Attribution | undefined,
     at: number,
     known?: { ref: ContentRef | null; bytes?: Uint8Array },
@@ -1310,7 +1327,7 @@ export class LaptopTracker implements AttributionTracker {
       lines = { added: hunks.reduce((sum, hunk) => sum + hunk.added, 0), removed: hunks.reduce((sum, hunk) => sum + hunk.removed, 0) }
       map = restored ? restored.map : applyHunks(state0.map, hunks, seq)
     }
-    const settled = how !== "event" || author.certainty === "mako"
+    const settled = (how !== "event" && how !== "inventory") || author.certainty === "mako"
     const inserted = this.store.insertEntry({
       at,
       changedAt,
@@ -1325,7 +1342,7 @@ export class LaptopTracker implements AttributionTracker {
       added: lines?.added,
       removed: lines?.removed,
       stored,
-      observed: how,
+      observed: how === "inventory" ? "rescan" : how,
       gap: state.gap && how !== "event" ? state.gap.id : undefined,
       restores: restored?.seq,
       author,
@@ -1558,9 +1575,52 @@ export class LaptopTracker implements AttributionTracker {
           : effect.kind === "command" ? { kind: "command", command: effect.command.slice(0, 500), cwd: effect.cwd, exitCode: effect.exitCode, ...effect.named?.length && { named: effect.named.slice(0, STORED_NAMED) } }
             : { kind: effect.kind, path: effect.path }),
     })
+    this.shellCompleted(call)
     this.adopt(parsed)
     this.readScripts(call)
     this.reattribute()
+  }
+
+  /** Existing normalized command effects reach this owner from every harness; no new hook or wire field. */
+  private shellCompleted(call: ReportedCall): void {
+    if (this.closing || this.closed || call.status === "running" || call.status === "refused" || call.endedAt === undefined) return
+    // Read-back imports can name old commands. Live completion reports are stamped as they arrive.
+    if (this.now() - call.endedAt > Math.max(SETTLE_MS, this.lateMs() + TRAIL_MS)) return
+    const commands = call.effects.filter((effect) => effect.kind === "command" && !readOnlyCommand(effect.command))
+    if (!commands.length) return
+    const folders = call.checkout ? [call.checkout] : commands.flatMap((command) => command.kind === "command" && command.cwd ? [command.cwd] : [])
+    for (const state of this.states.values()) {
+      if (!state.root.repository || call.endedAt < state.root.trackedAt) continue
+      if (folders.some((folder) => within(state.root.path, folder) || within(folder, state.root.path)))
+        this.shells.schedule(state.root.id, Math.max(TRAIL_MS, this.lateMs()))
+    }
+  }
+
+  /** Git's dirty/untracked inventory plus already-kept versions catches silent writes and returns to HEAD. */
+  private async refreshShell(id: string): Promise<void> {
+    const found = this.states.get(id)
+    if (!found) return
+    await this.tracking.get(found.root.path)
+    const state = this.states.get(id)
+    if (!state) return
+    if (!state.repo || state.asleep) throw new Error("The checkout baseline is not ready for shell reconciliation")
+    const repo = state.repo
+    await this.checkedQueue(state, async () => {
+      if (this.states.get(id) !== state) return
+      const checking = !state.moved
+      if (checking) state.moved = await this.checkHead(state)
+      try {
+        await this.settleCommitted(state)
+        const inventory = await repo.inventory()
+        if (this.states.get(id) !== state) return
+        if (await repo.head() !== state.root.head) throw new Error("HEAD moved during shell reconciliation; its inventory must be read again")
+        for (const path of inventory.tracked) state.tracked.add(path)
+        const paths = new Set([...inventory.changed, ...inventory.untracked, ...state.files.keys()])
+        for (const path of paths) if (!state.pending.has(path)) state.pending.set(path, "inventory")
+        await this.flush(state)
+        this.log("shell Git inventory reconciled", { root: state.root.path, files: paths.size })
+      } finally { if (checking) state.moved = undefined }
+    })
   }
 
   /**
@@ -1970,6 +2030,7 @@ export class LaptopTracker implements AttributionTracker {
   async settled(options: { rescans?: boolean } = {}): Promise<void> {
     if (options.rescans === false) return this.whatWasHeard()
     await this.resuming
+    await this.shells.flush()
     this.settling++
     try {
       for (;;) {
@@ -2000,6 +2061,7 @@ export class LaptopTracker implements AttributionTracker {
   /** What was heard journaled, rescans left to their own pace: a root rescanning now is passed over, its changes found by the rescan. */
   private async whatWasHeard(): Promise<void> {
     await this.resuming
+    await this.shells.heard()
     for (let pass = 0; pass < HEARD_PASSES; pass++) {
       const runs: Promise<void>[] = []
       for (const state of this.states.values()) {
@@ -2292,6 +2354,7 @@ export class LaptopTracker implements AttributionTracker {
     if (this.closed) return
     // The root resuming now finishes; the rest resume when the journal next opens.
     this.closing = true
+    await this.shells.close()
     await this.settled()
     this.closed = true
     this.footprints?.close()

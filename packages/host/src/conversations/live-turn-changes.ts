@@ -83,6 +83,8 @@ export class LiveTurnChanges {
       hostWarn("attribution", "a turn's changes could not be counted", { conversation: resident.snapshot.session.id, request: requestId, error: errorMessage({ error }) })
     const settle = () => {
       void (async () => {
+        // A shell reconciliation (or its lag window) can have completed since the initial settling count.
+        await ledger.flushed()
         if (!ledger.settledThrough(endedAt) && Date.now() - endedAt < GIVE_UP_MS) {
           setTimeout(settle, ledger.settleMs / 4).unref?.()
           return false
