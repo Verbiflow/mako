@@ -65,6 +65,8 @@ export class PullWatch {
   private ticking: Promise<void> | undefined
   /** When the watch first read each wait's current head (`wait key @ head`): a later push starts a no-checks clock again. */
   private readonly seenHeads = new Map<string, number>()
+  /** Required checks already logged as never appearing, by pull request and name: said once, not every reading. */
+  private readonly unseenRequired = new Set<string>()
 
   constructor(deps: PullWatchDeps) {
     this.deps = deps
@@ -126,6 +128,13 @@ export class PullWatch {
         if (!outcome) continue
         const note = pullWakeNote(wait.pull, reading.url, outcome, reading.head)
         hostLog("agents", "pull request outcome", { wait: wait.key, child: wait.child, outcome: outcome.kind })
+        // A required check is named by its context, which an app or code scanning can report under another name: one
+        // that never appears may be a name that doesn't match, so the log says which, beside what did run.
+        const unseen = outcome.kind === "no-checks" ? (outcome.missing ?? []).filter((name) => !this.unseenRequired.has(`${wait.pullKey}:${name}`)) : []
+        if (unseen.length) {
+          for (const name of unseen) this.unseenRequired.add(`${wait.pullKey}:${name}`)
+          hostWarn("agents", "a required check never appeared", { pull: wait.pullKey, head: reading.head ?? "", missing: unseen.join(", "), ran: reading.checks.map((check) => check.name).join(", ") })
+        }
         try {
           const checks = reading.checks.filter((check) => outcome.kind !== "failed" || check.state === "failed")
             .map((check) => JSON.stringify([check.name, check.state, check.at ?? null])).sort()
