@@ -113,7 +113,6 @@ export function AppControl({ cwd, focused }: { cwd: string | undefined; focused:
   const view = useThreadApp((state) => (cwd ? state.byCwd[cwd] : undefined))
   const hidden = useThreadApp((state) => view?.kind === "none" && state.hidden.includes(view.root))
   const target = useThreadApp((state) => (cwd ? targetOf(state, cwd) : undefined))
-  useEffect(() => (cwd ? threadAppDriver()?.watch?.(cwd) : undefined), [cwd])
   if (!cwd || !view || hidden) return null
   if (view.kind === "asleep") return <AsleepControl cwd={cwd} view={view} />
   const state = view.kind === "ready" ? view.phase : view.kind
