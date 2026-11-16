@@ -7,7 +7,7 @@ import { mediaFacts } from "@mako/sessions/turn-media"
 import type { JsonObject, JsonValue } from "./json.js"
 import type { ContextManifest } from "./conversation-control.js"
 import type { LiveSnapshot } from "./live-conversations.js"
-import { LIVE_HISTORY_CHUNK_CHARS, type LiveHistoryChunk, type LiveHistoryCursor, type LiveHistoryPage, type LiveHistorySnapshot } from "./live-history.js"
+import { HISTORY_PARTS_IN_FLIGHT, LIVE_HISTORY_CHUNK_CHARS, type LiveHistoryChunk, type LiveHistoryCursor, type LiveHistoryPage, type LiveHistorySnapshot } from "./live-history.js"
 
 /**
  * How a view of a conversation's history goes to a window, whichever reader holds the view: a host's of its own
@@ -399,6 +399,11 @@ export class HistoryRecords {
     record.used = Date.now()
     const cached = record.recent.get(offset)
     if (cached) return cached
+    // A window asks for the next parts before the last arrives (`HISTORY_PARTS_IN_FLIGHT`): one ahead of this read's
+    // place moves the place there, keeping each part it passes for the ask that's on its way.
+    while (offset > record.offset && !record.next.done) this.#take(key, record)
+    // Past the end: the answer was shorter than the window guessed. It reads this empty last part and drops it.
+    if (record.next.done && offset >= record.offset) return { record: key, offset, data: "", total: record.offset, next: null }
     if (offset !== record.offset) {
       // Re-reading an older part is harmless. Rebuild its stream from the
       // pinned value with bounded memory, never from a newer journal snapshot.
@@ -411,13 +416,20 @@ export class HistoryRecords {
       }
     }
     if (record.next.done || record.offset !== offset) throw new Error("Invalid history read position")
+    return this.#take(key, record)
+  }
+
+  /** The part at this read's place, kept for an ask on its way, and the place moved past it. */
+  #take(key: string, record: HistoryRecord): LiveHistoryChunk {
+    if (record.next.done) throw new Error("Invalid history read position")
+    const offset = record.offset
     const data = record.next.value
     record.offset += data.length
     record.next = record.reader.next()
-    const chunk = { record: key, offset, data, total: record.next.done ? record.offset : undefined,
-      next: record.next.done ? null : record.offset }
+    const chunk: LiveHistoryChunk = { record: key, offset, data, total: record.next.done ? record.offset : undefined,
+      next: record.next.done ? null : record.offset, ahead: true }
     record.recent.set(offset, chunk)
-    if (record.recent.size > 2) record.recent.delete(record.recent.keys().next().value!)
+    if (record.recent.size > HISTORY_PARTS_IN_FLIGHT + 2) record.recent.delete(record.recent.keys().next().value!)
     return chunk
   }
 }

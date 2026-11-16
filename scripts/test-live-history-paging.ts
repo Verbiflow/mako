@@ -459,4 +459,49 @@ console.log("PASS: conditional refresh owner/epoch and eviction fences")
   console.log(`PASS: a window reads no transcript's resource paths, nor a completed request's saved attachment bytes (${Math.round(whole / 1024)} KB → ${Math.round(text.length / 1024)} KB)`)
 }
 
+// A window asks for an answer's parts ahead: the host makes each once, in order, keeping those it passed, and an ask past
+// the end gets an empty last part. A host that doesn't say it serves parts ahead is read a part at a time.
+{
+  const { HistoryRecords } = await import("@mako/host/contracts/history-pages")
+  const { HISTORY_PARTS_IN_FLIGHT, LIVE_HISTORY_CHUNK_CHARS: C } = await import("@mako/host/contracts/live-history")
+  const value: Entry = { type: "text", id: "long", text: "word ".repeat(Math.round(C * 9.3 / 5)) }
+  const whole = JSON.stringify(value)
+  const records = new HistoryRecords()
+  const first = records.open("c", value)
+  assert.equal(first.ahead, true, "the host says it serves parts ahead")
+  const parts = [first]
+  for (const at of [3, 1, 2, 5, 4, 6, 8, 7, 9]) parts[at] = records.part("c", first.record, at * C)
+  assert.equal(parts.map((part) => part.data).join(""), whole, "parts asked out of order make the whole answer")
+  assert.equal(parts[9]!.next, null)
+  assert.deepEqual(records.part("c", first.record, 11 * C), { record: first.record, offset: 11 * C, data: "", total: whole.length, next: null }, "an ask past the end gets an empty last part")
+
+  for (const ahead of [true, false]) {
+    const reads = new HistoryRecords()
+    let inFlight = 0
+    let most = 0
+    let asked = 0
+    const liveRead: MakoBridge["liveRead"] = async (_id, input) => {
+      asked++
+      inFlight++
+      most = Math.max(most, inFlight)
+      await tick()
+      inFlight--
+      const part = input.kind === "part" ? reads.part("c", input.record, input.offset) : reads.open("c", value)
+      if (ahead) return part
+      const { ahead: _said, ...before } = part
+      return before
+    }
+    const bridge: Pick<MakoBridge, "liveRead"> = { liveRead }
+    // The window module reads only `liveRead` of its bridge here.
+    Object.assign(globalThis, { window: { mako: bridge } })
+    const { readLiveValue } = await import("@/state/live-history")
+    assert.deepEqual(await readLiveValue("c", { kind: "snapshot" }), value)
+    if (ahead) {
+      assert.equal(most, HISTORY_PARTS_IN_FLIGHT, `asked ${HISTORY_PARTS_IN_FLIGHT} parts at once`)
+      assert.ok(asked <= 10 + HISTORY_PARTS_IN_FLIGHT, "and not many past the end")
+    } else assert.equal(most, 1, "a host from before reads a part at a time")
+  }
+  console.log(`PASS: a window asks for ${HISTORY_PARTS_IN_FLIGHT} of an answer's parts at once, from a host that serves them ahead`)
+}
+
 await import("./test-released-live-turn")
