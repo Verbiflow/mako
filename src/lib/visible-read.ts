@@ -39,11 +39,12 @@ export function observeVisibleRead(element: Element, start: Interest["start"]): 
   if (!entries) {
     entries = new Set()
     interests.set(element, entries)
-    observer.observe(element)
   }
-  const visible = entries.values().next().value?.visible ?? false
   entries.add(interest)
-  show(interest, visible)
+  // A second consumer must get a fresh initial record too. An older queued
+  // exit may predate this interest, so copying another consumer's state is unsafe.
+  observer.unobserve(element)
+  observer.observe(element)
   let released = false
   return () => {
     if (released) return
