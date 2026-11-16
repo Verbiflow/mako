@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { followHostLog } from "@mako/host/base/host-log"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -233,6 +234,25 @@ console.log('words: "Mako: PR acme/app#371 checks settled: 2 failed (lint, e2e).
   await watch.tick()
   assert.equal(notes.length, 1, "15 minutes after the push was first seen, it says so")
   assert.ok(notes[0]!.includes(`observed head ${pushed}`))
+}
+// A required check that never appears is logged once, naming what did run, since its context may not match a check's name.
+{
+  const logged: string[] = []
+  const stop = followHostLog((line) => { if (line.message === "a required check never appeared") logged.push(JSON.stringify(line.fields)) })
+  try {
+    let now = SINCE
+    const waits: PullWait[] = [{ key: "required", child: "fin", report: "r", pullKey: "acme/app#806", since: SINCE, pull: "acme/app#806", target: { key: "acme/app#806", repository: "acme/app", number: 806, cwd: "/work" }, until: "checks" }]
+    const watch = new PullWatch({ waits: () => waits, read: async () => reading({ head: "f".repeat(40), required: ["CodeQL"], checks: [check("Analyze (javascript)", "passed")] }), now: () => now, fire: async () => {} })
+    await watch.tick()
+    now = SINCE + NO_CHECKS_MS
+    await watch.tick()
+    now += PULL_WATCH_MAX_MS
+    await watch.tick()
+    assert.equal(logged.length, 1, "once")
+    assert.ok(logged[0]!.includes("CodeQL") && logged[0]!.includes("Analyze (javascript)"), `it names what's missing and what ran: ${logged[0]}`)
+  } finally {
+    stop()
+  }
 }
 console.log("no checks: a head whose checks never start ends its wait once, 15 minutes after the later of its report and the head")
 
