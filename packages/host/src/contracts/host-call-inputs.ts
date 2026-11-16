@@ -300,6 +300,7 @@ const inputs = {
               text: z.string().optional(),
             })
             .optional(),
+          awaits: z.literal(true).optional(),
         }),
         standing: z
           .object({

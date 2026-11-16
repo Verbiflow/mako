@@ -79,6 +79,8 @@ import {
   type FinRerouted,
   type LimitNotice,
   queuedWords,
+  quietProgress,
+  awaitedAnew,
   type Report,
   type ThreadParent,
   type TreeBudget,
@@ -2168,9 +2170,19 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (input.handoff && !handedTo) return { refused: "unknown-child", why: `No other ${FIN_WORD} of your ${APEX_WORD} is ${input.handoff.to}: handoff names one by its name or Thread. agents_list with scope crew lists them.` }
     const handed = handedTo ?? (input.status === "progress" ? this.siblingNamed(edge, `${input.summary}\n${input.action ?? ""}`) : undefined)
     if (handed && input.status === "progress") report.handoff = { to: handed.name, child: ThreadIdSchema.parse(handed.child) }
+    // Progress that first waits on a review or on the person waits on what its Apex arranges or passes on: it wakes
+    // the Apex once. Every wait named since its last result or question counts as said, so narrating one again,
+    // rewording it or flipping between two stays quiet.
+    if (input.status === "progress" && !report.handoff) {
+      const reports = this.store()!.reportsOf(edge.child)
+      let from = reports.length
+      while (from > 0 && reports[from - 1]!.status === "progress") from -= 1
+      const said = reports.slice(from).flatMap((each) => each.waitingOn ?? [])
+      if (awaitedAnew(said, report.waitingOn).length) report.awaits = true
+    }
     const kept = this.keepReport(edge, report)
     if ("refused" in kept) return kept
-    return { id: kept.report.id, ...(kept.report.followUp && { followUp: this.store()!.reportAction(kept.report.id) }), ...(kept.deduped && { deduped: true as const }), delivered: kept.report.status === "progress" && !kept.report.handoff ? "none" : "notice", ...(kept.report.waitingOn?.length && { subscriptions: this.waitSubscriptions(edge, kept.report) }), ...(kept.report.supersedes?.length && { superseded: kept.report.supersedes }) }
+    return { id: kept.report.id, ...(kept.report.followUp && { followUp: this.store()!.reportAction(kept.report.id) }), ...(kept.deduped && { deduped: true as const }), delivered: quietProgress(kept.report) ? "none" : "notice", ...(kept.report.waitingOn?.length && { subscriptions: this.waitSubscriptions(edge, kept.report) }), ...(kept.report.supersedes?.length && { superseded: kept.report.supersedes }) }
   }
 
   /** Silent disposition of ordinary follow-through; native questions/approvals remain in answer(). */
@@ -4418,7 +4430,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (kept.deduped) return kept
     hostLog("agents", "report", { op: edge.op, report: report.id, status: report.status, implicit: report.implicit ?? false })
     this.latest.set(edge.child, kept.report)
-    if (report.status === "progress" && !report.handoff) store.markReportsDelivered([report.id], this.now())
+    if (quietProgress(report)) store.markReportsDelivered([report.id], this.now())
     else this.noticeOf(edge, kept.report, undefined, "off-the-call")
     this.childMoved(edge, false)
     for (const wake of this.waiters) wake()
@@ -4460,7 +4472,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** What a report is to its Apex: a notice, or nothing, and heard, when its route sends it elsewhere. */
   private noticeFor(edge: ThreadParent, report: Report, wake?: string): Notice | undefined {
     const store = this.store()!
-    const route = report.for === "person" ? (report.told ? "apex" : "person") : reportRoute(edge.asked, report.status, report.handoff !== undefined)
+    const route = report.for === "person" ? (report.told ? "apex" : "person") : reportRoute(edge.asked, report.status, !quietProgress(report))
     if (route !== "apex") {
       store.markReportsDelivered([report.id], this.now())
       hostLog("agents", "report kept", { op: edge.op, report: report.id, status: report.status, to: route, wake: edge.asked.wake ?? "decisions" })

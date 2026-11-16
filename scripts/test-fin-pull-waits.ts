@@ -409,7 +409,9 @@ try {
     if (turn.text.includes("You're fin:")) {
       const waitOn = WAIT_ON.get(name)!
       const reported = await turn.world.agents.report(turn.caller, { status: "progress", summary: `Opened the PR; waiting on its ${waitOn.until}.`, waitingOn: [{ kind: "pull-request", ...waitOn }], clientKey: "wait" })
-      assert.ok(!("refused" in reported) && reported.delivered === "none", "a progress report wakes no Apex")
+      // Checks Mako watches wake only the Fin; a first wait on a review is someone else's to arrange, so its Apex hears it once.
+      const delivered = waitOn.until === "review" ? "notice" : "none"
+      assert.ok(!("refused" in reported) && reported.delivered === delivered, `a progress report on ${waitOn.until} is ${delivered}: ${JSON.stringify(reported)}`)
       return "Waiting on the PR."
     }
     return "Fixed lint and e2e; pushed."

@@ -300,6 +300,7 @@ export function digest(notices: readonly Notice[], counts: string): string {
   const persons = [...asks.filter((notice) => notice.report.for === "person"), ...decided.filter((notice) => notice.decision === "person")]
   const finished = fins.filter((notice) => !notice.decision && (notice.report.status === "done" || notice.report.status === "failed"))
   const handoffs = fins.filter((notice) => notice.report.status === "progress" && notice.report.handoff)
+  const awaiting = fins.filter((notice) => notice.report.status === "progress" && !notice.report.handoff && notice.report.awaits)
   const lines = [FROM_AGENTS]
   // Every entry the digest writes has its twin here, from the same record, in the same order.
   const cards: FinReportCard[] = []
@@ -388,6 +389,17 @@ export function digest(notices: readonly Notice[], counts: string): string {
     }
     lines.push(`  agents_send to each passes it on.`)
   }
+  if (awaiting.length) {
+    lines.push(`${awaiting.length} ${awaiting.length === 1 ? "waits" : "wait"} on someone else to act:`)
+    for (const notice of awaiting) {
+      const { label, report } = notice
+      const waiting = waitingWords(report.waitingOn)
+      lines.push(`  • ${label}: ${finishedLine(report)}${waiting ? ` · ${waiting}` : ""}`)
+      cards.push(card(notice, opening(report.summary) || waiting || "it waits on someone else."))
+      artifactLines(lines, report)
+    }
+    lines.push("  Nothing wakes it until that happens: ask for the review or tell the person, unless it's already under way.")
+  }
   if (quiets.length) {
     lines.push(`${quiets.length} ${quiets.length === 1 ? "has" : "have"} gone quiet while working:`)
     for (const notice of quiets) {
@@ -398,7 +410,7 @@ export function digest(notices: readonly Notice[], counts: string): string {
     lines.push(`  agents_read shows what each is doing. A long command may be fine; otherwise agents_send asks it (deliver: steer reaches the turn it runs, interrupt cuts it), or agents_stop stops it.`)
   }
   lines.push(counts)
-  lines.push((results.length || replies.length) && !decisions.length && !persons.length && !finished.length && !handoffs.length && !quiets.length
+  lines.push((results.length || replies.length) && !decisions.length && !persons.length && !finished.length && !handoffs.length && !awaiting.length && !quiets.length
     ? "Go on with it: reply to the person, start more work, or end your turn."
     : "agents_read gives a report in full. Reply to the person, start more work, or end your turn.")
   return appendFinReports(lines.join("\n"), cards)
