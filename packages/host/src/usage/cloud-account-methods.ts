@@ -3,7 +3,7 @@ import type { SourceProjectCommand, SourceProjectReceipt } from "@mako/protocol/
 import type { Advertisement, ClientSessionOverSockets } from "@mako/protocol"
 import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
 import { attendable, CloudAttention, macIdleSeconds } from "./cloud-attention.js"
-import { CloudAccounts, cloudLegacyFiles, cloudSignInName, type BorrowArtifact, type CloudAccountOptions, type CloudThreadMaking, type WaitingClaim } from "./cloud-account.js"
+import { CLOUD_FIN_LIMITS_MS, CloudAccounts, cloudLegacyFiles, cloudSignInName, type BorrowArtifact, type CloudAccountOptions, type CloudThreadMaking, type WaitingClaim } from "./cloud-account.js"
 import { isAccountListEvent, type AccountListHeard } from "@mako/protocol/account-sessions"
 import type { SessionListings } from "@mako/protocol/thread-listing"
 import type { WaitingInput, WaitingMessage } from "@mako/protocol/waiting"
@@ -386,7 +386,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   const attention = attendable(machine, onMac())
     ? new CloudAttention({ idle: macIdleSeconds, say: (attending) => cloud.attend(attending), signedIn: () => status === "signed-in", log: (message, fields) => hostLog("cloud", message, fields) })
     : undefined
-  jobs.every("read the account's cloud Fin limits", 30_000, () => cloud.cloudFinLimits().then(() => {}, () => {}), { firstAfterMs: 0 })
+  jobs.every("read the account's cloud Fin limits", CLOUD_FIN_LIMITS_MS, () => cloud.cloudFinLimits(CLOUD_FIN_LIMITS_MS).then(() => {}, () => {}), { firstAfterMs: 0 })
   attention?.start(jobs)
 
   methods.handle("mako:cloud-account", () => cloud.ready())
