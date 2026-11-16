@@ -9,6 +9,7 @@ import {
   BURST_SETTLE_MS,
   BURST_SUMMARY_FROM,
   FIN_ASKS_COALESCE_MS,
+  openFinAskRuns,
   SUMMARY_SUBJECT,
   markSeen,
   decideDelivery,
@@ -855,10 +856,12 @@ assert.equal(notificationHeadline("finished", "Codex", []), "Codex finished")
   const items = notificationsStore.get().items.filter((item) => item.subject.id === apex.id && !item.seen)
   assert.equal(items.length, 3, "each ask is still an item, retired when it's answered")
   assert.equal(unseenSubjects(notificationsStore.get().items).length, 2, "and the badge counts Threads")
+  assert.equal(openFinAskRuns(), 2, "a run is held per Apex while it's open")
   await fake.advance(FIN_ASKS_COALESCE_MS)
   ask(apex, "Haptics")
   await fake.advance(BURST_SETTLE_MS)
   assert.equal(fake.log.desktop.at(-1)?.body, "Haptics: which one?", "past the window an ask is said alone")
+  assert.equal(openFinAskRuns(), 1, "the next write let the other Apex's ended run go")
   // Seen asks end a run: the next ask is news of its own.
   markSeen([apex.id])
   ask(apex, "Share sheet")
