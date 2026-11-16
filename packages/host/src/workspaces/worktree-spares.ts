@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { existsSync } from "node:fs"
 import { lstat, mkdir, open, readFile, readdir, readlink, rename, rm, stat, statfs, symlink, unlink, writeFile } from "node:fs/promises"
-import { basename, isAbsolute, join, relative } from "node:path"
+import { basename, dirname, isAbsolute, join, relative } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
 import { AppKeySchema } from "../contracts/thread-environments.js"
@@ -258,7 +258,9 @@ export class WorktreeSpares {
         await unlink(link).catch(() => {})
       }
     }
-    for (const name of await readdir(this.trash).catch(() => [])) void this.emptyTrash(join(this.trash, name))
+    for (const name of await readdir(this.trash).catch(() => []))
+      if (name.endsWith(CLAIM)) void this.dropStaleClaim(join(this.trash, name))
+      else void this.emptyTrash(join(this.trash, name))
     return kept
   }
 
@@ -534,10 +536,29 @@ export class WorktreeSpares {
     return join(this.records, `${id}.${suffix}`)
   }
 
+  /**
+   * Empty a trash folder no one is moving or emptying: not in this process (`emptying`), and not in another sharing
+   * the trash (the installed app and a dev profile share ~/.mako's worktrees), whose claim beside it names a live
+   * process. A folder left by a crash mid-move still has its repository's record of it, holding its branch, so each
+   * repository it was a worktree of is pruned once it's gone.
+   */
   private emptyTrash(path: string): Promise<void> {
     if (this.emptying.has(path)) return Promise.resolve()
     this.emptying.add(path)
-    return removeBelowAgents(path).finally(() => this.emptying.delete(path))
+    return (async () => {
+      if (await claimedByLiving(path)) return
+      const repositories = await worktreeRepositories(path)
+      await removeBelowAgents(path)
+      for (const common of repositories) await this.git.output(common, ["worktree", "prune"]).catch(() => {})
+      await rm(claimFile(path), { force: true })
+    })().finally(() => this.emptying.delete(path))
+  }
+
+  /** A claim whose folder is gone and whose process is too: nothing will remove it otherwise. */
+  private async dropStaleClaim(claim: string): Promise<void> {
+    const folder = claim.slice(0, -CLAIM.length)
+    if (existsSync(folder) || await claimedByLiving(folder)) return
+    await rm(claim, { force: true })
   }
 
   /**
@@ -551,8 +572,12 @@ export class WorktreeSpares {
     // Claimed before it's moved there: a sweep of the trash (any spare's fill) deletes what isn't being emptied, and
     // took this one between the move and freeing its branch, so Git still held the branch for a worktree gone from disk.
     this.emptying.add(aside)
+    await claim(aside)
     const moved = await this.git.output(repoRoot, ["worktree", "move", "-f", "-f", path, aside]).then(() => true, () => false)
-    if (!moved) this.emptying.delete(aside)
+    if (!moved) {
+      this.emptying.delete(aside)
+      await rm(claimFile(aside), { force: true })
+    }
     const target = moved ? aside : path
     // Frees its branch now rather than when the delete finishes, so it can be checked out elsewhere at once.
     const commit = await this.git.output(target, ["rev-parse", "--verify", "--quiet", "HEAD"]).catch(() => "")
@@ -560,6 +585,8 @@ export class WorktreeSpares {
     this.emptying.add(target)
     void this.git.output(repoRoot, ["worktree", "remove", "-f", "-f", target], true)
       .catch(() => removeBelowAgents(target).then(() => this.git.output(repoRoot, ["worktree", "prune"])))
+      .catch(() => {})
+      .then(() => rm(claimFile(target), { force: true }))
       .catch(() => {})
       .finally(() => this.emptying.delete(target))
   }
@@ -574,10 +601,12 @@ export class WorktreeSpares {
     const aside = join(this.trash, randomUUID())
     // Claimed before it's moved there, as setAside's: a sweep would delete it while each repository is told where it went.
     this.emptying.add(aside)
+    await claim(aside)
     try {
       await rename(spare.path, aside)
     } catch (error) {
       this.emptying.delete(aside)
+      await rm(claimFile(aside), { force: true })
       throw error
     }
     const worktrees = worktreesOf(spare, aside)
@@ -588,6 +617,8 @@ export class WorktreeSpares {
     void Promise.all(worktrees.map((worktree) => this.git.output(worktree.repoRoot, ["worktree", "remove", "-f", "-f", worktree.path], true).catch(() => {})))
       .then(() => removeBelowAgents(aside))
       .then(() => Promise.all(worktrees.map((worktree) => this.git.output(worktree.repoRoot, ["worktree", "prune"]))))
+      .catch(() => {})
+      .then(() => rm(claimFile(aside), { force: true }))
       .catch(() => {})
       .finally(() => this.emptying.delete(aside))
   }
@@ -645,4 +676,47 @@ async function sameInputs(git: Git, spare: Spare, targets: readonly SpareTarget[
     if (own.length && !(await git.output(worktree.repoRoot, ["diff", "--quiet", worktree.base, base, "--", ...own]).then(() => true, () => false))) return false
   }
   return true
+}
+
+/** Beside a trash folder being moved or emptied: the process doing it, for every process sharing the trash. */
+const CLAIM = ".claim"
+const ClaimSchema = z.object({ pid: z.number().int().positive(), at: z.number() })
+const claimFile = (folder: string) => `${folder}${CLAIM}`
+
+async function claim(folder: string): Promise<void> {
+  await writeFile(claimFile(folder), JSON.stringify({ pid: process.pid, at: Date.now() }), { mode: 0o600 })
+}
+
+/** Whether a live process claims the folder; a claim its process left behind (a crash) claims nothing. */
+async function claimedByLiving(folder: string): Promise<boolean> {
+  const text = await readFile(claimFile(folder), "utf8").catch(() => undefined)
+  if (text === undefined) return false
+  let pid: number
+  try {
+    const parsed = ClaimSchema.safeParse(JSON.parse(text))
+    if (!parsed.success) return false
+    pid = parsed.data.pid
+  } catch {
+    return false
+  }
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    // Alive, but another user's: still a claim.
+    return error instanceof Error && "code" in error && error.code === "EPERM"
+  }
+}
+
+/** The common folders of the repositories a trash folder is a worktree of: its own and, for a project folder, its children's. */
+async function worktreeRepositories(folder: string): Promise<string[]> {
+  const gitFiles = [join(folder, ".git"), ...(await readdir(folder).catch(() => [])).map((name) => join(folder, name, ".git"))]
+  const commons = new Set<string>()
+  for (const file of gitFiles) {
+    const text = await readFile(file, "utf8").catch(() => "")
+    // A worktree's .git file: "gitdir: <common>/worktrees/<name>".
+    const gitdir = /^gitdir: (.+)$/m.exec(text)?.[1]?.trim()
+    if (gitdir && basename(dirname(gitdir)) === "worktrees") commons.add(dirname(dirname(gitdir)))
+  }
+  return [...commons]
 }
