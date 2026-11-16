@@ -16,12 +16,15 @@ import { KEPT, testScratch } from "./lib/test-scratch.mjs"
  * Now a connection's check under way ends as the host begins to stop (`ProviderConnectionCapability.stop`).
  *
  * Cursor's child here (`CURSOR_SDK_CHILD`) answers its hello and nothing after, and ignores its stdin closing. The
- * host is stopped twice in this run: once with nothing under way (the yardstick), once while Settings' check waits on
- * that child. The second must exit cleanly within `TIMES` times the first, leave the child gone, and log no failure.
+ * host is stopped while Settings' check waits on that child, and judged by what its stop waited on, in its own log:
+ * the check ends as the stop begins (its step logs `exited` between `lifecycle stopping` and `lifecycle stopped`),
+ * nothing makes the stop slow (`stopping is slow`, logged at 2 s, which a stop waiting on that minute would reach),
+ * it exits cleanly, and the child is gone with no failure logged. A stop with nothing under way is timed beside it
+ * for the record. A limit of five times that stop's wall time failed once on a runner (b04657dac: 1,204 ms against
+ * 796) whose check had ended 31 ms into the stop, the rest spent after every closer it names.
  *
  * Needs the built host: `npx tsgo -b packages/host`.
  */
-const TIMES = 5
 const scratch = testScratch("mako-stop-provider-checks-")
 const bin = join(scratch, "bin")
 await mkdir(bin)
@@ -112,10 +115,14 @@ const waiting = await stopAfter("waiting", async (host) => {
 })
 await connections
 
-const limit = idle.stopped.stopMs * TIMES
-console.log(`stopped with nothing under way in ${Math.round(idle.stopped.stopMs)} ms; with Cursor's check waiting on a child that never answers, in ${Math.round(waiting.stopped.stopMs)} ms (limit ${Math.round(limit)} ms, ${TIMES} times the first)`)
-const slow = waiting.stopped.code !== 0 || waiting.stopped.stopMs >= limit
-if (slow) {
+console.log(`stopped with nothing under way in ${Math.round(idle.stopped.stopMs)} ms; with Cursor's check waiting on a child that never answers, in ${Math.round(waiting.stopped.stopMs)} ms`)
+// What the stop waited on, in order, from its own log: Cursor's check ended once the stop began and before it ended.
+const lines = waiting.log.split("\n")
+const stopping = lines.findIndex((line) => /lifecycle stopping/.test(line))
+const checkEnded = lines.findIndex((line, index) => index > stopping && /owner=cursor-sdk-auth steps="[^"]* exited /.test(line))
+const stoppedAt = lines.findIndex((line, index) => index > stopping && /lifecycle stopped/.test(line))
+const waitedOnCheck = stopping < 0 || checkEnded < 0 || stoppedAt < checkEnded || /stopping is slow/.test(waiting.log)
+if (waiting.stopped.code !== 0 || waitedOnCheck) {
   // What it waited on is in its own log, which goes with the scratch folder: kept for the job's artifacts.
   const into = join(process.env.MAKO_TEST_EVIDENCE ?? KEPT, "stop-provider-checks")
   await mkdir(into, { recursive: true })
@@ -123,10 +130,11 @@ if (slow) {
   console.error(`Its logs are in ${into}. The end of its log:\n${waiting.log.split("\n").slice(-60).join("\n")}`)
 }
 assert.equal(waiting.stopped.code, 0, `the host stopped cleanly: ${JSON.stringify(waiting.stopped)}`)
-assert.ok(waiting.stopped.stopMs < limit, `the host took ${Math.round(waiting.stopped.stopMs)} ms to stop, not under ${Math.round(limit)} ms`)
+assert.ok(stopping >= 0 && stoppedAt > stopping, "the host logged its stop")
+assert.ok(checkEnded > stopping && checkEnded < stoppedAt, "Cursor's check ended as the stop began, before it ended")
 // A child killed as the host stopped may take a moment to be reaped.
 const pids = [...new Set((await childrenAsked()).map(({ pid }) => pid))]
-for (const deadline = Date.now() + limit; Date.now() < deadline && pids.some(alive); ) await delay(20)
+for (const deadline = Date.now() + 5_000; Date.now() < deadline && pids.some(alive); ) await delay(20)
 assert.deepEqual(pids.filter(alive), [], "no Cursor child is left running")
 assert.doesNotMatch(waiting.log, /auth probe failed/, "the check its stop ended isn't logged as a failure")
 assert.doesNotMatch(waiting.log, /stopping is slow/, "nor is the stop slow")
@@ -144,9 +152,8 @@ const signingIn = await stopAfter("login", async (host) => {
 })
 await loginWait
 assert.equal(signingIn.stopped.code, 0, `the host stopped cleanly with a login pending: ${JSON.stringify(signingIn.stopped)}`)
-assert.ok(signingIn.stopped.stopMs < limit, `a login pending took ${Math.round(signingIn.stopped.stopMs)} ms, limit ${Math.round(limit)} ms`)
 const loginPids = (await readFile(loginAsked, "utf8")).trim().split("\n").map(Number)
-for (const deadline = Date.now() + limit; Date.now() < deadline && loginPids.some(alive); ) await delay(20)
+for (const deadline = Date.now() + 5_000; Date.now() < deadline && loginPids.some(alive); ) await delay(20)
 assert.deepEqual(loginPids.filter(alive), [], "no login child survives the host")
 assert.doesNotMatch(signingIn.log, /stopping is slow|auth probe failed/)
 console.log(`stop provider checks: a wedged auth check and a pending login both end before the call drain (login ${Math.round(signingIn.stopped.stopMs)} ms)`)
