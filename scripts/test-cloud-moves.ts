@@ -1,6 +1,7 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { mock } from "node:test"
+import { DatabaseSync } from "node:sqlite"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { LiveRecords } from "@mako/host/conversations/live-records"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
@@ -284,6 +285,16 @@ try {
       assert.ok(warm?.nativeId && warm.nativePath, "the harness started and its native path is indexed")
       assert.deepEqual((await planWithoutJournals()).paths, [warm.nativePath])
       await world.close()
+      // A retired binding may name the same native session at its old path. Only the active binding is current.
+      const db = new DatabaseSync(join(world.root, "journals", `${conversation}.sqlite`))
+      try {
+        const row = z.object({ value: z.string() }).parse(db.prepare("SELECT value FROM metadata WHERE id=1").get())
+        const metadata = z.object({ control: z.object({ activeBindingId: z.string(), bindings: z.array(z.object({ id: z.string() }).loose()) }).loose() }).loose().parse(JSON.parse(row.value))
+        const binding = metadata.control.bindings.find((binding) => binding.id === metadata.control.activeBindingId)
+        assert.ok(binding)
+        metadata.control.bindings.unshift({ ...binding, id: randomUUID(), path: "/retired-binding/path" })
+        db.prepare("UPDATE metadata SET value=? WHERE id=1").run(JSON.stringify(metadata))
+      } finally { db.close() }
       cold = new LiveConversations({ root: join(world.root, "journals"), appPath: world.root, driver: () => undefined, history: async () => null, emit: () => {} })
       live = cold
       assert.equal(live.held(conversation), undefined, "the journal is cold after reopening")

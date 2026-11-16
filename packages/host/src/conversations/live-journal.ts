@@ -658,8 +658,12 @@ function metadataRow(db: DatabaseSync): string | null {
 export function journalSummary(metadata: string) {
   const { session, revision, threadPath, createdAt, control } =
     MetadataSchema.parse(JSON.parse(metadata))
+  // Session paths live on bindings in the stored metadata. Choose the active binding, never an older binding
+  // with the same provider/native ID: metadata readers must not load a journal to locate its current session.
+  const binding = control?.bindings.find((binding) => binding.id === control.activeBindingId)
+  const path = binding?.provider === session.harness && binding.nativeId === session.nativeId ? binding.path : undefined
   return {
-    session,
+    session: path ? { ...session, nativePath: path } : session,
     revision,
     threadPath,
     createdAt,
