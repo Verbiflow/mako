@@ -525,6 +525,29 @@ async function sleepyProxy(port: number) {
   return { url: `http://127.0.0.1:${(proxy.address() as AddressInfo).port}`, sleep: () => pairs.forEach((pair) => (pair.asleep = true)) }
 }
 
+test("a held ownership check promptly replaces a half-open account, then returns to idle", async () => {
+  const cloud = await fakeCloud()
+  const network = await sleepyProxy(Number(new URL(cloud.url).port))
+  let waiting = false
+  const mac = await signedIn(cloud, { url: network.url, waitingForAccount: () => waiting })
+  try {
+    await waitFor(() => cloud.subscribes.length > 0, "the first account subscription")
+    const subscriptions = cloud.subscribes.length
+    network.sleep() // Blackhole both directions without closing the socket; new connections still pass.
+    waiting = true
+    mac.accounts.checkAccountWaiting()
+    const began = performance.now()
+    for (const deadline = Date.now() + 6_000; cloud.subscribes.length === subscriptions;) {
+      assert.ok(Date.now() < deadline, "the account reconnects within its heartbeat/pong bound, without a person")
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+    waiting = false
+    mac.accounts.checkAccountWaiting()
+    console.log(`  half-open account replaced itself in ${(performance.now() - began).toFixed(0)} ms`)
+    assert.equal(mac.accounts.account().state.status, "signed-in", "a transport failure never signs the person out")
+  } finally { mac.accounts.close() }
+})
+
 test("after a sleep, a call to the cloud never waits on a pooled connection the network dropped", async () => {
   const cloud = await fakeCloud()
   const network = await sleepyProxy(Number(new URL(cloud.url).port))

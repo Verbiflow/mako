@@ -750,7 +750,8 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
   }
   if (thread.starting) return { kind: "starting", step: thread.starting }
   if (thread.waiting) return { kind: "blocked", question: thread.waiting.question, on: thread.waiting.on, ...(thread.waiting.ask && { ask: thread.waiting.ask }) }
-  const phase = latest?.status === "progress" ? reportPhase(latest) : undefined
+  // A current host-owned wait takes precedence over a progress report from the previous turn.
+  const phase = latest?.status === "progress" && !thread.awaiting ? reportPhase(latest) : undefined
   // By identity, never by time: an answer settles the ask it names, and a newer ask is open whatever the clocks say.
   const answered = journal.answered && latest && journal.answered.ask === reportAsk(latest).id ? { by: journal.answered.by, answer: journal.answered.answer } : undefined
   if (thread.working && edge.closedAt === undefined) return { kind: "working", ...(thread.step && { step: thread.step }), ...(phase && { phase }), ...(answered && answerShown(journal, thread) && { answered }), ...(thread.quiet && { quiet: thread.quiet }) }

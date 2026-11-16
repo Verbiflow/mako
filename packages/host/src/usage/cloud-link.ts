@@ -7,9 +7,9 @@ import { CLOSE_CODES, PING, subprotocols } from "@mako/protocol"
  * there, and says how it's doing in the one way a person sees it.
  *
  * - A dropped connection comes back with backoff and jitter, so a cloud restart isn't met by every Mac at once; a
- *   connection that stayed up a while starts the backoff over.
+ *   connection that answered and stayed up a while starts the backoff over.
  * - An expired token is fetched fresh and the link reconnects at once; a removed device stops it.
- * - A connection that goes quiet for a minute, as after a laptop sleeps, is taken as gone; `wake` reconnects now.
+ * - Idle links retain their silence bound. An account with ownership work waiting is probed at once, with a short deadline.
  * - Going away on purpose (`quiet`, as the Mac goes to sleep or shuts down), it closes at once and waits for `wake`.
  * - It reports "offline" only once it has been down for `offlineAfterMs`. A reconnect that's over in seconds, after
  *   a deploy or a network change, is never shown.
@@ -41,11 +41,12 @@ export type CloudLinkOptions = {
   log?: (message: string, fields?: Record<string, string | number | boolean>) => void
   /** A connection down this long is reported offline; anything shorter isn't shown. */
   offlineAfterMs?: number
+  /** Current account ownership work, not an idle subscription. `checkWaiting` notices changes at once. */
+  waiting?: () => boolean
 }
 
 /** Each connection pings this often, so a dead one is found; the cloud's edge answers without waking anything. */
 export const PING_MS = 25_000
-/** Nothing heard for this long and the connection is presumed dead, as after a laptop sleeps. */
 const SILENT_MS = 60_000
 /** A link answered at least once a ping, quieter than this when woken, missed its heartbeat while asleep. */
 const WOKEN_QUIET_MS = PING_MS + 5_000
@@ -55,10 +56,12 @@ const WOKEN_QUIET_MS = PING_MS + 5_000
  */
 const RESUME_PROBE_MS = 1_500
 /**
- * Up this long, a connection counts as healthy: the next drop starts the backoff over, so a link that worked and then
+ * Up this long and actually heard from, a connection counts as healthy: the next drop starts the backoff over, so a link that worked and then
  * dropped (a network change) is back in a quarter second, while one the cloud keeps closing as it opens backs off.
  */
 const STABLE_MS = 5_000
+const WAITING_PING_MS = 5_000
+const WAITING_ANSWER_MS = 3_000
 /**
  * After a drop, connect again this soon, then back off while it keeps failing. The first is a quarter second: what the
  * other devices watch of this Mac's conversations is back within a second of a network change, and a cloud restart is
@@ -69,7 +72,7 @@ const BACKOFF_MS = [250, 1_000, 2_000, 5_000, 10_000, 30_000] as const
 const QUIET_HOLD_MS = 30_000
 const OFFLINE_AFTER_MS = 15_000
 
-type Open = { socket: WebSocket; token: string; opened: boolean; openedAt: number; lastHeard: number; detach: CloudLinkAttachment | undefined }
+type Open = { socket: WebSocket; token: string; opened: boolean; openedAt: number; lastHeard: number; detach: CloudLinkAttachment | undefined; answered: boolean; probe?: NodeJS.Timeout }
 
 export class CloudLink {
   readonly #options: CloudLinkOptions
@@ -87,6 +90,7 @@ export class CloudLink {
   #asking: Open | undefined
   #offlineTimer: NodeJS.Timeout | undefined
   #reconnectTimer: NodeJS.Timeout | undefined
+  #waitingTimer: NodeJS.Timeout | undefined
   /** Those waiting on `reach`: told whether the next connection opened. */
   readonly #reaching: Array<(opened: boolean) => void> = []
 
@@ -118,6 +122,33 @@ export class CloudLink {
       this.#reconnect(0)
     }
     return reached
+  }
+
+  /** Ownership work started or ended: only while it waits, probe now and keep checking at the short cadence. */
+  checkWaiting(): void {
+    this.#clearWaiting()
+    const open = this.#open
+    if (!this.#running || !this.#options.waiting?.()) {
+      if (open) this.#clearProbe(open)
+      return
+    }
+    // Connecting uses the existing backoff; opening this successor calls us again.
+    if (!open?.opened) return
+    if (open.socket.readyState !== WebSocket.OPEN) return this.#closed(open, 1006, "unanswered")
+    if (!open.probe) {
+      const asked = Date.now()
+      open.probe = this.#after(WAITING_ANSWER_MS, () => {
+        open.probe = undefined
+        if (open !== this.#open || !this.#options.waiting?.()) return
+        // Any frame proves liveness, including a backlog replay. An open handshake alone is not an answer.
+        if (!open.answered || open.lastHeard < asked) {
+          this.#options.log?.(`cloud ${this.#options.name}: unanswered while ownership waits; reconnecting`, { answerMs: WAITING_ANSWER_MS })
+          this.#closed(open, 1006, "unanswered")
+        }
+      })
+      try { open.socket.send(PING) } catch { this.#closed(open, 1006, "unanswered"); return }
+    }
+    this.#waitingTimer = this.#after(WAITING_PING_MS, () => this.checkWaiting())
   }
 
   start(): void {
@@ -158,6 +189,7 @@ export class CloudLink {
       return
     }
     const asked = Date.now()
+    this.#clearProbe(open)
     open.socket.send(PING)
     this.#after(RESUME_PROBE_MS, () => {
       if (open !== this.#open) return
@@ -227,10 +259,14 @@ export class CloudLink {
         const url = new URL(this.#options.url)
         url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
         const socket = new WebSocket(url, subprotocols(token))
-        const open: Open = { socket, token, opened: false, openedAt: 0, lastHeard: Date.now(), detach: undefined }
+        const open: Open = { socket, token, opened: false, openedAt: 0, lastHeard: Date.now(), detach: undefined, answered: false }
         this.#open = open
         socket.addEventListener("open", () => this.#opened(open))
-        socket.addEventListener("message", () => void (open.lastHeard = Date.now()))
+        socket.addEventListener("message", () => {
+          if (open !== this.#open) return
+          open.lastHeard = Date.now()
+          open.answered = true
+        })
         socket.addEventListener("close", (event) => this.#closed(open, event.code))
       },
       (error) => {
@@ -252,6 +288,7 @@ export class CloudLink {
     this.#keepAlive(open)
     open.detach = this.#options.attach(open.socket, (ending) => this.#ended(open, ending))
     this.#reached(true)
+    this.checkWaiting()
   }
 
   /** What the protocol on the link learned before the close arrived, which a proxy can hold back. */
@@ -260,14 +297,16 @@ export class CloudLink {
     this.#closed(open, ending === "removed" ? CLOSE_CODES.credentialRevoked : ending === "expired" ? CLOSE_CODES.credentialExpired : 1006)
   }
 
-  #closed(open: Open, code: number): void {
+  #closed(open: Open, code: number, why?: "unanswered"): void {
     if (open !== this.#open) return
+    this.#clearProbe(open)
+    this.#clearWaiting()
     this.#open = undefined
     open.detach?.close()
     if (open.socket.readyState === WebSocket.OPEN || open.socket.readyState === WebSocket.CONNECTING) open.socket.close(1000)
     if (!open.opened) this.#reached(false)
     if (!this.#running) return
-    if (open.opened && Date.now() - open.openedAt >= STABLE_MS) this.#attempt = 0
+    if (why !== "unanswered" && open.answered && open.opened && Date.now() - open.openedAt >= STABLE_MS) this.#attempt = 0
     if (code === CLOSE_CODES.credentialRevoked) {
       this.#options.log?.(`cloud ${this.#options.name}: this device was removed`)
       this.#running = false
@@ -299,15 +338,34 @@ export class CloudLink {
   #keepAlive(open: Open): void {
     const tick = () => {
       if (open !== this.#open) return
-      if (Date.now() - open.lastHeard > SILENT_MS) {
-        this.#options.log?.(`cloud ${this.#options.name}: nothing heard for a minute; reconnecting`)
-        this.#closed(open, 1006)
-        return
+      // Work waiting on ownership has its own immediate probe and deadline; idle links keep the old cadence.
+      if (!this.#options.waiting?.()) {
+        if (Date.now() - open.lastHeard > SILENT_MS) {
+          this.#options.log?.(`cloud ${this.#options.name}: nothing heard for a minute; reconnecting`)
+          this.#closed(open, 1006, "unanswered")
+          return
+        }
+        if (open.socket.readyState === WebSocket.OPEN) open.socket.send(PING)
       }
-      if (open.socket.readyState === WebSocket.OPEN) open.socket.send(PING)
       this.#after(PING_MS, tick)
     }
     this.#after(PING_MS, tick)
+  }
+
+  #clearWaiting(): void {
+    if (this.#waitingTimer) {
+      clearTimeout(this.#waitingTimer)
+      this.#timers.delete(this.#waitingTimer)
+      this.#waitingTimer = undefined
+    }
+  }
+
+  #clearProbe(open: Open): void {
+    if (open.probe) {
+      clearTimeout(open.probe)
+      this.#timers.delete(open.probe)
+      open.probe = undefined
+    }
   }
 
   /** Up: shown at once, and whatever was about to say offline doesn't. */
@@ -340,7 +398,9 @@ export class CloudLink {
 
   #drop(code: number): void {
     const open = this.#open
+    this.#clearWaiting()
     this.#open = undefined
+    if (open) this.#clearProbe(open)
     open?.detach?.close()
     if (open && (open.socket.readyState === WebSocket.OPEN || open.socket.readyState === WebSocket.CONNECTING)) open.socket.close(code)
   }
@@ -360,5 +420,6 @@ export class CloudLink {
     this.#timers.clear()
     this.#offlineTimer = undefined
     this.#reconnectTimer = undefined
+    this.#waitingTimer = undefined
   }
 }

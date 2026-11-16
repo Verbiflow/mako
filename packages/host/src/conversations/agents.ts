@@ -152,7 +152,7 @@ import { SessionIdSchema, ThreadIdSchema, type Actor, type ThreadId } from "../c
 import { continuationsSpent, continueTurnPrompt, crashedChildTurn, CUT_BY, RESTART_CHAIN, STRANDED_AFTER_MS, strandedTurn } from "../contracts/turn-continuation.js"
 import { uniqueName, type KeptAnswer, type KeptMark, type KeptPullWake, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
 import { AgentRuns, lastStep, type ProcessReads, type RunEnd } from "./agent-runs.js"
-import { holdOf, keepsLine } from "../contracts/request-hold.js"
+import { holdOf, keepsLine, nextInLine } from "../contracts/request-hold.js"
 import { foldList } from "./agent-list-fold.js"
 import { FinChanges, type ChangeFacts } from "./fin-changes.js"
 import { AgentWakes, DIGEST_WAITS, firstParagraph, FROM_AGENTS, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
@@ -2208,6 +2208,14 @@ export class Agents implements AgentOperations, ConversationChildren {
       const said = this.saidNow()
       for (const strip of strips) if (!strip.under) strip.said = said
     }
+    // Capture host-owned waits with their local rows, before the remote portion yields. A later wait cannot stamp
+    // an older row: otherwise the next delta would hide the change whose row this response never carried.
+    const awaitingByChild = new Map<string, string>()
+    for (const strip of strips) {
+      const edge = store.edges().of(strip.child)
+      const awaiting = strip.state.kind === "working" && edge ? this.childReading(edge).awaiting : undefined
+      if (awaiting) awaitingByChild.set(strip.child, awaiting)
+    }
     await this.listPlaced(apex, input, strips)
     const counts = this.treeCounts(this.rootOf(apex.thread))
     const tree = this.treeAnswer(counts)
@@ -2215,7 +2223,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     // shows next time. A mark this host can't read (another host's, an earlier life's, one ahead) lists them all.
     const now = this.now()
     const tick = this.changes.tick(now)
-    for (const strip of strips) strip.changedAt = this.changes.at(strip.child, stripChange(strip), tick)
+    for (const strip of strips) {
+      const awaiting = awaitingByChild.get(strip.child)
+      strip.changedAt = this.changes.at(strip.child, { ...stripChange(strip), ...(awaiting && { awaiting }) }, tick)
+    }
     const since = this.changes.since(input.since)
     // What needs its Apex is listed whatever changed: a question, an action, a decision, a block (`needsApex`).
     const changed = since === undefined ? strips : strips.filter((strip) => strip.changedAt! > since || needsApex(strip))
@@ -5104,7 +5115,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     const signedInWait = !busy && !waiting && held && signInResuming(signInPause(held.requests), held.requests)
       ? `${this.deps.harnessLabel(session.harness)} to resume after sign-in when an execution place opens` : undefined
     // A turn that ended on its own Fins' work or its move is still at work, on that.
-    const waits = resetWait || signedInWait || (!busy && !waiting && last?.status === "completed" ? this.waitsOn(edge, conversation) : undefined)
+    const ownerWait = !busy && !waiting && held && nextInLine(held.requests, session.status === "failed")?.ownerCheck
+      ? "your account" : undefined
+    const waits = ownerWait || resetWait || signedInWait || (!busy && !waiting && last?.status === "completed" ? this.waitsOn(edge, conversation) : undefined)
     const working = busy || waits !== undefined
     const workSince = waits ? held?.activityAt : last && (last.dispatchedAt ?? last.createdAt)
     const thread = this.store()?.thread(edge.child)
@@ -5128,7 +5141,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(working && { working }),
       ...(working && workSince !== undefined && { workSince }),
       ...(working && last && { workInputs: inputsOf(last.id, held?.control?.actions) }),
-      ...(waits ? { step: `Waiting for ${waits}`, awaiting: waits } : working && held && { step: lastStep(held.blocks.slice(-24), session.harness) }),
+      ...(waits ? { step: ownerWait ? "Waiting to hear from your account" : `Waiting for ${waits}`, awaiting: waits } : working && held && { step: lastStep(held.blocks.slice(-24), session.harness) }),
       ...(waiting && { waiting: this.waitingOf(edge, waiting.line, live.pendingAsk(conversation)) }),
       ...(!working && last?.status === "failed" && { ended: { outcome: "failed" as const, ...(last.error && { reason: last.error }), at: turnFailedAt(last, held?.activityAt, edge.createdAt) } }),
       ...(!working && last?.status === "interrupted" && last.interruption?.reason === "stopped" && { ended: { outcome: "stopped" as const, at: last.interruption.at } }),
@@ -6883,7 +6896,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     const pulls = facts ? held : []
     // Read as `agents_list` reads its row (`stripChange`), so the two marks agree.
     const changedAt = this.changes.at(edge.child, {
-      state, ...(latest && { report: { status: latest.status, at: latest.at } }), ...(held.length && { pulls: held }),
+      state, ...(state.kind === "working" && { awaiting: this.childReading(edge).awaiting }),
+      ...(latest && { report: { status: latest.status, at: latest.at } }), ...(held.length && { pulls: held }),
       questions: this.pendingReports(edge).length, actions: this.pendingActions(edge.parent, edge.child).total,
     }, this.changes.tick(this.now()))
     return {
