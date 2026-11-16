@@ -35,6 +35,7 @@ interface SamplerDeps {
   now?: () => number
   /** Event connections that really exist, excluding observers; a payload never supplies its owner. */
   connection?: (client: string) => string | undefined
+  invalidated?: () => void
 }
 
 /**
@@ -72,6 +73,7 @@ export class ThreadAppSampler {
   /** Something this host did may have changed the marks: the next tick looks. */
   changed(): void {
     this.dirty = true
+    this.deps.invalidated?.()
   }
 
   /** Legacy reads renew their lease; a connection that opted in owns its demand independently of its data reads. */
@@ -106,6 +108,12 @@ export class ThreadAppSampler {
   /** A read-only binding for a real event connection; a client name alone cannot acquire demand. */
   connection(client: string): string | undefined {
     return this.deps.connection?.(client)
+  }
+
+  generation(client: string): number {
+    this.prune()
+    const reader = this.readers.get(client)
+    return reader?.kind === "window" ? reader.generation : 0
   }
 
   /** A visible return reads afresh; an opted-in hidden reader only reads the held marks, without waking the sampler. */

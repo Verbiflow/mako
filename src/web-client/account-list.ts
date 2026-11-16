@@ -217,9 +217,10 @@ export class AccountList {
   }
 
   /** The account's devices, read again: a device that joined is named once a row names it. */
-  async refreshDevices(): Promise<void> {
+  async refreshDevices(current: () => boolean = () => true): Promise<void> {
     this.#devicesAsked = Date.now()
     const { devices } = DevicesSchema.parse(await this.#gateway.rest("GET", "/v1/devices"))
+    if (!current()) return
     accountListStore.set({ devices: new Map(devices.map((device) => [device.id, device])) })
     // Whether each is quiet is said of every Mac the account has, one just named included.
     const { phase } = accountListStore.get()

@@ -3329,6 +3329,7 @@ const inputs = {
       ]),
     ]),
   "mako:utility-model-settings": () => z.tuple([]),
+  "mako:view-hints": () => z.tuple([]),
   "mako:watch-file": () => z.tuple([z.string()]),
   "mako:workspace-move-answer": () =>
     z.tuple([
@@ -3812,6 +3813,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:utility-model-connect", "git"],
   ["mako:utility-model-disconnect", "git"],
   ["mako:utility-model-settings", "git"],
+  ["mako:view-hints", "workspaces"],
   ["mako:watch-file", "workspaces"],
   ["mako:workspace-move-answer", "workspaces"],
   ["mako:workspace-move-bring", "workspaces"],

@@ -1010,6 +1010,7 @@ export function installMockBridge() {
     threadAppOutput: async () => ({ text: "", cursor: { file: "", offset: 0 }, reset: false }),
     threadAppMarks: async () => [],
     followThreadApps: async () => ({ kind: "unavailable" }),
+    viewHints: async () => null,
     probeThreadApp: async () => {
       throw new Error("The mock desk runs no apps; ?app=<scenario> shows one.")
     },

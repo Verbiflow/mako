@@ -32,6 +32,7 @@ import type { PreferenceName, PreferenceValues } from "./preferences.js"
 import type { FinChoicesReading, FinPolicy, RoleRules } from "./fin-tuning.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
 import type { AppActionOutcome, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProbeView, AppSamplingDemand, AppSamplingReply, RoomView, ThreadAppView } from "./thread-app.js"
+import type { ViewHintsStatus } from "./view-hints.js"
 import type { ThreadPlacement } from "./thread-identity.js"
 import type {
   LifecycleState,
@@ -191,6 +192,7 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<AppOutputChunk>("mako:thread-app-output", cwd, key, cursor),
     threadAppMarks: () => invokeTrustedHost<AppMark[]>("mako:thread-app-marks"),
     followThreadApps: (demand?: AppSamplingDemand) => invokeTrustedHost<AppSamplingReply>("mako:thread-app-demand", demand),
+    viewHints: () => invokeTrustedHost<ViewHintsStatus | null>("mako:view-hints"),
     probeThreadApp: (cwd: string) => invokeTrustedHost<AppProbeView>("mako:thread-app-probe", cwd),
     threadAppRoom: () => invokeTrustedHost<RoomView>("mako:thread-app-room"),
     stopThreadApps: (apps: string[]) => invokeTrustedHost<void>("mako:thread-app-stop-apps", apps),

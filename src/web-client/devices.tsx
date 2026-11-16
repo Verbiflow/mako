@@ -1,3 +1,4 @@
+import { pageRefetch } from "@/state/view-refetch"
 import { useEffect, useMemo, useState } from "react"
 import { errorMessage } from "@mako/host/contracts/error-message"
 import { Devices, type MachineSheetProps } from "@/components/settings/devices"
@@ -48,17 +49,15 @@ export function WebDevices() {
   // The devices' own records (their Mako, when each last signed in) are read again while this shows: once a minute and
   // whenever the window comes back to the front, as a Mac's Settings does. A read that fails keeps the last one.
   useEffect(() => {
-    const read = () => {
-      setNow(Date.now())
-      void client.list.refreshDevices().catch(() => undefined)
-    }
-    read()
-    const timer = setInterval(read, DEVICES_EVERY_MS)
-    window.addEventListener("focus", read)
-    return () => {
-      clearInterval(timer)
-      window.removeEventListener("focus", read)
-    }
+    const lease = pageRefetch().watch(`web:devices:${client.deviceId}`, {
+      scope: `web:${client.deviceId}`, domain: "devices", fields: ["all"],
+      every: () => DEVICES_EVERY_MS,
+      read: async (current) => {
+        await client.list.refreshDevices(current)
+        if (current()) setNow(Date.now())
+      },
+    })
+    return () => lease.release()
   }, [client])
   const list = useMemo(() => [...devices.values()], [devices])
   const remove = async (id: string): Promise<boolean> => {
