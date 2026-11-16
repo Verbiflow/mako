@@ -389,7 +389,7 @@ function workspaceParts(seconds, command, name) {
  * spreads over shards: test-watch-backend's four native cases took 6, 14, 58 and 29 s, one part of 108 to 138 s.
  */
 const SPLITS = {
-  "tsx scripts/test-watch-backend.ts": ["CASES=silentCanary", "CASES=degradedFseventsd", "CASES=historyReaderTermination,sharedChildAndCrash,lateCanary"],
+  "tsx scripts/test-watch-backend.ts": ["CASES=silentCanary", "CASES=degradedFseventsd", "CASES=historyReaderTermination,sharedChildAndCrash,lateCanary", "CASES=deadRootBeside"],
 }
 
 /** `unit` as the parts `SPLITS` makes of it; a test that doesn't read the variable runs once, as it is. */
