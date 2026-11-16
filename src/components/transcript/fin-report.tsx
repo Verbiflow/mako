@@ -25,13 +25,20 @@ function artifactName(artifact: NonNullable<FinReportCard["artifacts"]>[number])
  * each Fin's fin where the person's face is, its name (which opens it), harness, one word for what it did, what it said,
  * its options and what it made. Read from the wake's data (`FinReportCard`), never from the words the Apex reads.
  */
-export const FinReports = memo(function FinReports({ reports, timestamp }: { reports: readonly FinReportCard[]; timestamp?: number }) {
+export const FinReports = memo(function FinReports({ reports: sent, timestamp }: { reports: readonly FinReportCard[]; timestamp?: number }) {
   const [shown, setShown] = useState(false)
   const source = useTranscriptSource()
   const thread = useAcp((state) => (source.liveId ? state.conversations[source.liveId]?.threadId : undefined))
   const children = useThreadChildren(thread)
-  const leadOpen = useMemo(() => openLeadDecisions(children), [children])
-  const keep = (card: FinReportCard) => staysOpen(card, leadOpen)
+  const asks = useThreadAsks(thread)
+  // A decision its Apex left went to the person (`escalateDecision`): the report still says its Apex decides, the
+  // roster says the person does, so it reads as theirs (its word, the head's count, open) from then on.
+  const reports = useMemo(
+    () => sent.map((card) => (card.decides === "lead" && asks.some((ask) => ask.fin === card.fin && ask.ask.kind === "report" && ask.ask.id === card.report) ? { ...card, decides: "person" as const } : card)),
+    [sent, asks]
+  )
+  const decisionsOpen = useMemo(() => openDecisions(children), [children])
+  const keep = (card: FinReportCard) => staysOpen(card, decisionsOpen)
   const open = reports.filter(keep)
   const folded = reports.filter((card) => !keep(card))
   // One report, or one to fold, reads best as it is.
@@ -83,24 +90,25 @@ export const FinReports = memo(function FinReports({ reports, timestamp }: { rep
 })
 
 /**
- * What stays open in a crew update: what waits on the person, a failure, and a done Fin's decision that's its Apex's
- * while it's still open (it's the person's too once it escalates). Everything else folds into one line.
+ * What stays open in a crew update: what waits on the person, a failure, and a done Fin's decision while it's still open,
+ * whoever's it is now: its Apex's, or the person's once the Apex left it (`escalateDecision`), when the roster says
+ * `on: "person"` while the report still says `decides: "lead"`. Everything else folds into one line.
  */
-function staysOpen(card: FinReportCard, leadOpen: ReadonlySet<string>): boolean {
+function staysOpen(card: FinReportCard, decisionsOpen: ReadonlySet<string>): boolean {
   return (
     said(card).tone === "text-attention" ||
     card.status === "failed" ||
     (card.apex === true && card.status !== "done") ||
-    (card.decides === "lead" && leadOpen.has(`${card.fin}:${card.report}`))
+    decisionsOpen.has(`${card.fin}:${card.report}`)
   )
 }
 
-/** The done Fins' decisions still open for their Apex to make, as `<fin thread>:<report>`. */
-function openLeadDecisions(children: readonly NativeAgent[]): ReadonlySet<string> {
+/** The done Fins' decisions still open, its Apex's or escalated to the person, as `<fin thread>:<report>`. */
+function openDecisions(children: readonly NativeAgent[]): ReadonlySet<string> {
   const open = new Set<string>()
   for (const agent of children) {
     const ask = openAsk(childStateOf(agent))
-    if (agent.child?.thread && ask?.done && ask.on === "lead" && ask.ask?.id) open.add(`${agent.child.thread}:${ask.ask.id}`)
+    if (agent.child?.thread && ask?.done && ask.ask?.id) open.add(`${agent.child.thread}:${ask.ask.id}`)
   }
   return open
 }

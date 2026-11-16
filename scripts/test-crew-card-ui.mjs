@@ -870,6 +870,27 @@ async function checkPage({ window, page, shots, base }) {
   await capture("crew-update-lead")
   console.log("PASS: a done Fin's open decision for its Apex stays open in the crew update")
 
+  // Left past its time, the Apex's decision went to the person: its report still says the Apex decides, the roster says
+  // the person does. It stays open then too, the moment it needs them, never folded.
+  await window.loadURL(`${base}?mock&app=apex&wake=crew&fins=escalated`)
+  await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, escalated wake")
+  await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
+  await evaluate("window.apexScene.setRunning(false); true")
+  await until("Boolean(document.querySelector('[data-crew-update]'))", "the crew update, escalated")
+  const escalated = await evaluate(`(() => {
+    const block = document.querySelector('[data-crew-update]')
+    return {
+      head: block.querySelector('[data-crew-update-head]').innerText.replace(/\\s+/g, ' '),
+      open: [...block.querySelectorAll('[data-fin-report]')].map((node) => node.innerText.replace(/\\s+/g, ' ')),
+      fold: block.querySelector('[data-crew-update-fold]')?.innerText.replace(/\\s+/g, ' '),
+    }
+  })()`)
+  console.log("ESCALATED UPDATE", JSON.stringify(escalated))
+  assert.ok(escalated.open.some((text) => text.includes("Pull to refresh") && text.includes("finished · needs you")), `an escalated decision stays open, as the person's: ${JSON.stringify(escalated.open)}`)
+  assert.match(escalated.head, /· 2 need you$/, `the head counts it as needing the person: ${escalated.head}`)
+  assert.match(escalated.fold ?? "", /^Thread list swipe, Haptics audit and 2 more finished 2 PRs Show$/, `the finished ones fold without it: ${escalated.fold}`)
+  console.log("PASS: a done Fin's decision escalated to the person stays open in the crew update")
+
   // One crew list: the side rail folds finished and idle Fins as the card does, and the phone has Stop all too.
   window.setContentSize(1440, 900)
   await window.loadURL(`${base}?mock&app=apex`)

@@ -64,7 +64,16 @@ const DECIDED = new Map<string, ChildState>([
   ["swipe", { kind: "ended", outcome: "done", decision: { question: "Merge #371 into main?", on: "person", ask: { kind: "report", id: "report:swipe:merge", options: [{ label: "Merge", detail: "Squash it into main; every check is green." }, { label: "Leave open", detail: "Keep it for a review first." }], recommended: 0, action: "Decide whether the swipe fix lands now." } } }],
   ["pull-refresh", { kind: "ended", outcome: "done", decision: { question: "Ship the cached list or the fresh read on pull?", on: "lead", ask: { kind: "report", id: "report:pull-refresh:read", options: [{ label: "Fresh read" }, { label: "Cached list" }], recommended: 0 } } }],
 ])
-const DECISIONS_SCENE = new URLSearchParams(globalThis.location?.search).get("fins") === "decisions"
+/**
+ * `&fins=escalated`: the same, but its Apex left Pull to refresh's decision past `APEX_ANSWER_MS`, so it went to the
+ * person (`escalateDecision`): the roster says `on: "person"` while its report in the wake still says `decides: "lead"`.
+ */
+const ESCALATED_SCENE = new URLSearchParams(globalThis.location?.search).get("fins") === "escalated"
+const DECISIONS_SCENE = ESCALATED_SCENE || new URLSearchParams(globalThis.location?.search).get("fins") === "decisions"
+if (ESCALATED_SCENE) {
+  const pull = DECIDED.get("pull-refresh")
+  if (pull?.kind === "ended" && pull.decision) DECIDED.set("pull-refresh", { ...pull, decision: { ...pull.decision, on: "person" } })
+}
 
 /**
  * `&fins=quiet`: "Offline outbox retry" reads as working and nothing has come of it for 18 minutes, its last step a
