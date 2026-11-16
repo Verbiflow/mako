@@ -93,3 +93,36 @@ for (const mode of ["stop", "archive"] as const) {
     console.log("PASS: storage refusal prevents native effects and the existing save recovery resumes the same episode")
   } finally { LiveJournal.prototype.commit = commit; await world.close(); rmSync(root, { recursive: true, force: true }) }
 }
+
+{
+  const root = mkdtempSync(join(tmpdir(), "mako-compact-old-ack-")), id = randomUUID()
+  let world = compactionWorld(root, { id }), closed = 0
+  try {
+    await world.start()
+    await world.owner.act(id, { kind: "compact", id: randomUUID() })
+    world.fail(world.calls[0]!)
+    await until("one retry", () => world.calls.length === 2)
+    const retiredAction = world.calls[1]!.action
+    await world.owner.close(id)
+    const next = randomUUID()
+    world.owner.submit(id, next, "carry on after Close")
+    await until("replacement has delivered", () => world.owner.snapshot(id)!.requests.find(request => request.id === next)?.status === "completed")
+    await world.close()
+    // The old compact's deadline retained uncertainty in history; opening an older client may still acknowledge it.
+    const journal = new LiveJournal(join(root, "journals"), id), saved = journal.read()!
+    journal.commit({ ...saved, control: { ...saved.control!, actions: saved.control!.actions!.map(action => action.input.id === retiredAction
+      ? { ...action, state: { kind: "uncertain", reason: "The retired source never confirmed its command" } } : action) } })
+    journal.close()
+    world = compactionWorld(root, { id, closing: async () => { closed++ } })
+    const message = randomUUID()
+    world.owner.submit(id, message, "the replacement is healthy")
+    await until("the healthy replacement reopens", () => world.owner.snapshot(id)!.requests.find(request => request.id === message)?.status === "completed")
+    const active = world.owner.snapshot(id)!.control!.activeBindingId
+    await world.owner.acknowledgeAction(id, retiredAction)
+    assert.equal(closed, 0, "acknowledging a retired binding's unknown action cannot disconnect the healthy active binding")
+    assert.equal(world.owner.snapshot(id)!.control!.activeBindingId, active)
+    assert.equal(world.owner.snapshot(id)!.session.connection, "connected")
+    assert.equal(world.calls.length, 0)
+    console.log("PASS: an old client's acknowledgement settles only the retired receipt, never the healthy replacement")
+  } finally { await world.close(); rmSync(root, { recursive: true, force: true }) }
+}

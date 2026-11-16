@@ -172,7 +172,8 @@ export class LiveActions {
     if (!action || action.state.kind !== "uncertain")
       throw new Error("This action does not need acknowledgement")
     const outcome = action.state
-    if (action.input.kind === "compact") {
+    const closesActive = action.input.kind === "compact" && action.bindingId === this.host.control(resident).activeBindingId
+    if (closesActive) {
       const closing = this.host.close(id)
       // Closing advances the generation itself. A further change retires us.
       const generation = resident.generation
@@ -185,7 +186,7 @@ export class LiveActions {
       if (current?.state.kind !== "uncertain") return
     }
     const previous = resident.snapshot
-    if (action.input.kind === "compact") {
+    if (closesActive) {
       resident.snapshot = {
         ...resident.snapshot,
         session: {

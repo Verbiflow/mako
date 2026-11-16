@@ -20,7 +20,7 @@ const child = process.argv.indexOf("--child")
 if (child !== -1) {
   const [root, id, phase] = ChildArgsSchema.parse(process.argv.slice(child + 1))
   let armed = false
-  const world = compactionWorld(root, { id, emit: () => {
+  const world = compactionWorld(root, { id, launch: { tuning: { model: "fixture-model" } }, emit: () => {
     if (!armed) return
     const control = world.owner.snapshot(id)?.control, recovery = control?.compactionRecovery
     const hit = phase === "before-retry" || phase === "off" ? recovery?.state.kind === "retry" && !control?.actions?.some(action => action.input.id === recovery.retryActionId)

@@ -30,7 +30,7 @@ export function compactionWorld(root: string, options: {
   const unfollow = followHostLog(line => { if (line.level === "warn") logs.push(JSON.stringify(line)) })
   const state = (binding: string, status: LiveSessionState["status"] = "ready"): LiveSessionState => ({
     id: binding, nativeId: native.get(binding), nativePath: join(root, binding), harness: "compaction-fixture", cwd: root,
-    status, connection: "connected", modes: [], currentMode: configurations.get(binding)?.modeId ?? null, configOptions: [], settings: configurations.get(binding)?.tuning,
+    status, connection: "connected", modes: [], currentMode: configurations.get(binding)?.modeId ?? null, configOptions: [], settings: configurations.get(binding)?.tuning ? { ...configurations.get(binding)!.tuning, options: configurations.get(binding)!.tuning?.options } : undefined,
   })
   const driver: ProviderLiveDriver = {
     ...noCapabilities,
