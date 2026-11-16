@@ -230,7 +230,10 @@ counted as the larger of the roster's active non-ambient entries and the
 provider's own level (`backgroundTasks`), which can't wedge on a missed end.
 The window shows it as an hourglass on the row and tab, a quiet line at the
 transcript's end and the Agents panel; ambient watchers are listed and never
-counted. Claude's roster reads the SDK's task events and its
+counted there. What a provider still holds that wakes it, ambient watchers such
+as Claude's Monitor included, is `pendingWake`: a Fin's turn that ends on it
+waits on it, and a session holding it is never hibernated (`canHibernate`),
+since closing the process ends it and nothing would wake the Fin. Claude's roster reads the SDK's task events and its
 `background_tasks_changed` level (a Monitor reports as `local_bash`, so its
 kind comes from the `tool_use` that started it), Codex's the terminal list,
 Grok's its `background_tasks` list, Devin's its backgrounded exec calls and
@@ -515,12 +518,15 @@ repository's (`owner/name`, from its URL) and number (`pullRef`, `pullKey`),
 never its number alone, since a Thread can hold several repositories; a bare
 `#12` is the Fin's one repository's, or stays unqualified when it has several,
 and a line names the repository only when two could be confused. A Fin
-that ends a turn without `agents_report` while its own Fins work, or while a
-`worktree_move` it asked for is pending (`movePending`), hasn't finished.
-Its turn's end writes no report, and it reads as working with "Waiting for
-…" (`waitsOn`). Its result is the turn after that work ends: the one its
-Fins' reports wake, or, with nothing to wake it, that turn's reply
-(`checkAwaiting`). A message to it
+that ends a turn without `agents_report` while its own Fins work, while a
+`worktree_move` it asked for is pending (`movePending`), or while its harness
+holds work that wakes it (`pendingWake`: a background command, a subagent, a
+Monitor), hasn't finished. Its turn's end writes no report, and it reads as
+working with "Waiting for …" (`waitsOn`). Its result is the turn after that
+work ends: the one its Fins' reports or the harness's own turn wake, or, with
+nothing to wake it, that turn's reply (`checkAwaiting`). A harness process that
+ends while it held such work took the work with it: the Fin's end is a failed
+report saying so, at once (`test:fin-turn-ends`). A message to it
 (`agents_send`, `takeOver`) stops the run, resumes its Session in the Fin's
 Thread on Mako's live driver at no more than its Apex's access, and arrives
 with `HANDED_OVER_NOTE` saying its last step may have been cut. From then on
@@ -612,7 +618,11 @@ has it and made from the newest start in the rest. A report (`agents_report`, el
 implicit report at a turn's end, which a completed turn also writes when its
 last report was progress that hands nothing on and names no wait Mako watches:
 a pull request the watch reads, an armed turn wait or its own Fins at work,
-`progressLeftUnwatched`) sends its Apex a notice; an idle Apex waits
+`progressLeftUnwatched`) sends its Apex a notice. A Fin whose word is progress
+(said this turn, or before a turn Mako's note started) that ends a turn with a
+reply and no result hasn't said it's done: its end is `needs-input`, its Apex
+asked how it goes on with its last words (`unfinishedQuestion`), never "done",
+and that question leaves an unsent digest once the Fin works again; an idle Apex waits
 `WAKE_COALESCE_MS` and takes ONE turn with the digest; a busy one is left to
 think: only a question or decision it can answer is steered into its running
 turn, at its next step where its harness steers there, and what else its

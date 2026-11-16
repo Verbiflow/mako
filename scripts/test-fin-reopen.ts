@@ -343,8 +343,31 @@ async function carriedAcross(): Promise<void> {
   }
 }
 
+/**
+ * host-stalls, 2026-11-16: its saved Claude session couldn't be resumed and isn't one its harness lost (`unavailable`
+ * without `lost`), so the reopen refused to start a replacement. The person's host, from before #587, answered both of
+ * its Apex's messages "host-stalls takes it now, as its next turn", 470 ms and 150 ms before that refusal, and nothing
+ * ran. The send waits for the reopen and says it failed, whether the session was in memory (it wakes) or read in from
+ * its journal with no located record (a transfer under the message's own ID).
+ */
+async function unresumableRefused(located: boolean): Promise<void> {
+  let refuse = false
+  const verdict = async (): Promise<ResumeVerdict> => refuse ? { kind: "unavailable", reason: "The native session identity or source has not been located." } : { kind: "resumable", record: "same" }
+  const f = await world("claude", { resumeVerdict: verdict, ...(!located && { unlocated: ["claude"] }) })
+  await f.w.crashed()
+  refuse = true
+  const before = f.prompts().length
+  const said = await f.send("Third case: the Monitor.")
+  assert.ok("refused" in said, `said as taken: ${"hears" in said ? said.hears : ""}`)
+  assert.match(said.why, /didn't get this: Mako couldn't open its session\. The saved native session cannot be resumed/)
+  await f.w.settle(40, 20_000)
+  assert.equal(f.prompts().length, before, "nothing ran")
+  console.log(`unresumable (${located ? "in memory" : "unlocated"}): "${said.why.slice(0, 90)}…"`)
+  await f.w.close()
+}
+
 /** `CASE=<name>` runs that one alone. */
-const cases = { lostAfterExit: () => lostSession("closed"), lostAfterCrash: () => lostSession("crashed"), movedThenExit: () => movedThenRestarted("closed", "apex"), movedThenCrash: () => movedThenRestarted("crashed", "apex"), movedThenPerson: () => movedThenRestarted("closed", "person"), movedThenCrashPerson: () => movedThenRestarted("crashed", "person"), movedThenCut, movedStartFailed, movedThenHeld, reopenFails, sameHarnessModel, carriedAcross }
+const cases = { lostAfterExit: () => lostSession("closed"), lostAfterCrash: () => lostSession("crashed"), movedThenExit: () => movedThenRestarted("closed", "apex"), movedThenCrash: () => movedThenRestarted("crashed", "apex"), movedThenPerson: () => movedThenRestarted("closed", "person"), movedThenCrashPerson: () => movedThenRestarted("crashed", "person"), movedThenCut, movedStartFailed, movedThenHeld, reopenFails, unresumableInMemory: () => unresumableRefused(true), unresumableUnlocated: () => unresumableRefused(false), sameHarnessModel, carriedAcross }
 try {
   for (const [name, run] of Object.entries(cases)) if (!process.env.CASE || process.env.CASE === name) await run()
   console.log("fin reopen ok")

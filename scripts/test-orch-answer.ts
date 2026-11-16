@@ -257,9 +257,9 @@ try {
   }
   console.log("ask: the Apex was told the approval was the person's, refused it, and the person's answer from its Thread let the Fin go on, once")
 
-  // A progress report before an approval, then the answered turn's end: that end is its result, since nothing watches
-  // what the progress said. The stored notice that the Apex couldn't answer must stop blocking the Fin once the person
-  // answers, even before it reports anything else.
+  // A progress report before an approval, then the answered turn's end with no result: nothing watches what the
+  // progress said, so the turn ended unfinished and its Apex is asked how it goes on. The stored notice that the Apex
+  // couldn't answer must stop blocking the Fin once the person answers, even before it reports anything else.
   {
     const { world, apex, fin, thread, state, heard } = await fixture("answered-after-progress", {
       access: "ask", finHarness: "codex",
@@ -273,16 +273,19 @@ try {
     assert.ok(blocked?.kind === "blocked" && blocked.ask)
     assert.equal(answered(await world.agents.respond(apex.conversation, { fin: thread(), ask: blocked.ask.id, allow: true, request: "r-progress-allow" })).answered, "approval")
     await until("the answered turn to end", () => heard.length === 1 && world.live.session(fin)?.status === "ready")
-    assert.equal(state()?.kind, "ended", "the stored approval notice no longer blocks the Fin after the person's answer: its turn's end is its result")
+    const unfinished = state()
+    assert.ok(unfinished?.kind === "blocked" && unfinished.on !== "approval", `the stored approval notice no longer blocks the Fin after the person's answer: ${JSON.stringify(unfinished)}`)
+    assert.match(unfinished.question, /^It ended its turn without a result/, "it waits on its Apex's word on its unfinished turn")
     assert.equal(world.agents.personAsk(apex.conversation), undefined)
     const read = await world.agents.read(apex.caller, { child: "tests" })
     assert.ok("text" in read)
     assert.doesNotMatch(read.text, /asked them in their Inbox|^blocked/, "agents_read cannot repeat the stale notice as its current report")
     const listed = await world.agents.list(apex.caller, {})
     assert.ok("children" in listed)
-    assert.equal(listed.children[0]?.report?.status, "done", "the strip cannot keep it as a blocked report either: it shows the turn's result")
+    assert.equal(listed.children[0]?.report?.status, "needs-input", "the strip cannot keep the approval either: it shows the turn's unfinished end")
     await world.restart()
-    assert.equal(state()?.kind, "ended", "a restart cannot revive that notice from the journal")
+    const restarted = state()
+    assert.ok(restarted?.kind === "blocked" && restarted.on !== "approval", "a restart cannot revive that notice from the journal")
     await world.close()
   }
   console.log("an answered approval's stored notice no longer blocks its idle Fin, including after restart")

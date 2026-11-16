@@ -1,5 +1,5 @@
 import type { LiveSessionState } from "./providers-acp.js"
-import { isBusyNativeAgent, isProviderWork, type NativeAgent, type NativeAgentRoster, type NativeWork } from "./native-agents.js"
+import { isActiveNativeAgent, isBusyNativeAgent, isProviderWork, type NativeAgent, type NativeAgentRoster, type NativeWork } from "./native-agents.js"
 import { childGroup, childStateOf } from "./children.js"
 
 /**
@@ -54,6 +54,29 @@ export function backgroundWork(session: WorkSession | undefined, roster: NativeA
   const count = Math.max(held ? session.backgroundTasks ?? 0 : 0, named.length)
   if (!count) return null
   return { count, named, unnamed: count - named.length }
+}
+
+/**
+ * Whether a session's provider process is there to hold work: not closed, failed, disconnected or hibernated. Its
+ * background commands and watchers live in that process, so they end with it.
+ */
+export function providerHolds(session: WorkSession | undefined): boolean {
+  return session !== undefined && session.status !== "closed" && session.status !== "failed" && session.connection !== "disconnected" && session.connection !== "hibernated"
+}
+
+/**
+ * What a session's provider still holds that wakes it again when it settles: its background work (`backgroundWork`)
+ * and the watchers it armed, such as Claude Code's Monitor, which `backgroundWork` leaves out as ambient and which
+ * Claude's own level doesn't count either. A Fin that ended its turn on these is still at work on them, and a session
+ * holding them isn't put to sleep: closing its process ends them, and then nothing would wake it. A Fin started from it
+ * is a Thread of its own, waited on as one, never here. Null when the provider holds nothing, isn't there to hold it,
+ * or runs a turn.
+ */
+export function pendingWake(session: WorkSession | undefined, roster: NativeAgentRoster | undefined): BackgroundWork | null {
+  if (!session || session.status === "running" || session.status === "starting" || !providerHolds(session)) return null
+  const named = (roster?.agents ?? []).filter((agent) => isActiveNativeAgent(agent) && isProviderWork(agent))
+  const count = Math.max(session.backgroundTasks ?? 0, named.length)
+  return count ? { count, named, unnamed: count - named.length } : null
 }
 
 const NOUNS = {
