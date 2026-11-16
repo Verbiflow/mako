@@ -73,6 +73,8 @@ interface ThreadAppState {
   room?: RoomView
   /** Folders whose view the driver keeps current now; any other view may be old. */
   followed: string[]
+  /** A successful read during the current interest; optimistic changes do not establish this. */
+  fresh: string[]
   /** The app output in the terminal dock instead of a shell, if any. */
   shown?: { cwd: string; key: AppOutputKey }
   /** Projects whose people said the strip shouldn't offer setup, by root. */
@@ -104,7 +106,7 @@ function readHidden(): string[] {
   }
 }
 
-export const threadAppStore = createStore<ThreadAppState>({ byCwd: {}, marks: {}, followed: [], hidden: readHidden(), targets: readTargets(), probes: {} })
+export const threadAppStore = createStore<ThreadAppState>({ byCwd: {}, marks: {}, followed: [], fresh: [], hidden: readHidden(), targets: readTargets(), probes: {} })
 export const useThreadApp = createHook(threadAppStore)
 
 export function putAppMarks(marks: readonly AppMark[]): void {
@@ -124,12 +126,22 @@ export function putRoom(room: RoomView | undefined): void {
  * it shows, wins over the sidebar's slower look, so the two never disagree.
  */
 export function appMarkOf(state: ThreadAppState, checkout: string): Omit<AppMark, "checkout"> | undefined {
-  const view = state.followed.includes(checkout) ? state.byCwd[checkout] : undefined
+  const view = appViewOf(state, checkout)
   if (view?.kind !== "ready") return view ? undefined : state.marks[checkout]
   if (view.phase === "stopped") return undefined
   if (view.phase !== "running") return { state: view.phase === "preparing" ? "starting" : view.phase }
   const port = view.processes.find((process) => process.state === "running" && process.port !== undefined)?.port
   return port === undefined ? { state: "running" } : { state: "running", port }
+}
+
+/** Cached detail stands only after a read for the current, uninterrupted interest. */
+export function appViewOf(state: ThreadAppState, cwd: string): ThreadAppView | undefined {
+  return state.followed.includes(cwd) && state.fresh.includes(cwd) ? state.byCwd[cwd] : undefined
+}
+
+export function forgetThreadAppRead(cwd: string): void {
+  if (threadAppStore.get().fresh.includes(cwd))
+    threadAppStore.set((state) => ({ fresh: state.fresh.filter((folder) => folder !== cwd) }))
 }
 
 let driver: ThreadAppDriver | undefined
@@ -142,12 +154,15 @@ export function threadAppDriver(): ThreadAppDriver | undefined {
   return driver
 }
 
-export function putThreadApp(cwd: string, view: ThreadAppView | undefined): void {
+export function putThreadApp(cwd: string, view: ThreadAppView | undefined, source?: "read"): void {
   threadAppStore.set((state) => {
     const byCwd = { ...state.byCwd }
     if (view) byCwd[cwd] = view
     else delete byCwd[cwd]
-    return { byCwd }
+    let fresh = state.fresh
+    if (!view) fresh = fresh.filter((folder) => folder !== cwd)
+    else if (source === "read" && state.followed.includes(cwd) && !fresh.includes(cwd)) fresh = [...fresh, cwd]
+    return { byCwd, fresh }
   })
 }
 
