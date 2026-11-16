@@ -838,6 +838,25 @@ async function checkPage({ window, page, shots, base }) {
   console.log(`PASS: the phone's Stop all asks first ("${question.replace(/ Cancel Stop$/, "")}"), Cancel keeps them, Stop stops them`)
   console.log(`PASS: one crew list: the side rail folds as the card does (${folds[0]}), the phone says "${phoneWords}" and has Stop all`)
 
+  // What changed in the crew outside the Apex's turns reads as lines of its own in its transcript, desk and phone.
+  window.setContentSize(1440, 900)
+  await window.loadURL(`${base}?mock&app=apex&crew=moves`)
+  await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, moves")
+  await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
+  await evaluate("window.apexScene.setRunning(false); true")
+  const membership = "[...document.querySelectorAll('[data-event-line]')].filter((node) => /moved to Claude Code|stopped by you/.test(node.innerText))"
+  await until(`${membership}.length === 2`, "the crew's membership lines")
+  const lines = await evaluate(`${membership}.map((node) => node.innerText.replace(/\\s+/g, ' ').trim())`)
+  assert.match(lines[0], /^Composer chips on iPad moved to Claude Code \(work\)/, `a move names the Fin and where: ${lines[0]}`)
+  assert.match(lines[1], /^Haptics audit stopped by you/, `the person's stop names the Fin: ${lines[1]}`)
+  await capture("membership-lines")
+  window.setContentSize(390, 844)
+  await window.loadURL(`${base}scripts/phone-apex.html?app=apex&crew=moves&open=1ead1ead-0000-4000-8000-000000001ead`)
+  await until(`${membership}.length === 2`, "the phone's membership lines")
+  await evaluate(`${membership}[0].scrollIntoView({ block: 'center' }); true`)
+  await both("membership-lines-phone")
+  console.log(`PASS: the crew's changes outside the Apex's turns read as lines: ${JSON.stringify(lines)}`)
+
   assert.deepEqual(
     errors.filter(
       (message) =>

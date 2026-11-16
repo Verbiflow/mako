@@ -133,7 +133,7 @@ import {
   type FrontDoorChild,
   frontDoorNote,
 } from "../contracts/agent-tools.js"
-import { agentWords, answerText, apexAsk, apexNote, briefText, askWords, CHILD_GROUPS, childGroup, childLine, finName, fromApex, HANDED_OVER_NOTE, openAsk, type OpenAsk, PASSED_ON_NOTE, passedOn, personsApproval, quietLine, rollup, YOUR_APEX } from "../contracts/children.js"
+import { agentWords, answerText, apexAsk, apexNote, briefText, askWords, CHILD_GROUPS, childGroup, childLine, finName, fromApex, HANDED_OVER_NOTE, membershipLine, openAsk, type OpenAsk, PASSED_ON_NOTE, passedOn, personsApproval, quietLine, rollup, YOUR_APEX } from "../contracts/children.js"
 import { KeyedAdmission } from "../base/keyed-admission.js"
 import type { FinAtWork } from "./fin-cost-sampler.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
@@ -1303,7 +1303,14 @@ export class Agents implements AgentOperations, ConversationChildren {
     const thread = store?.journalPlacement(conversation)?.thread
     const edge = store?.edges().of(child)
     if (!edge || edge.parent !== thread) return false
-    return this.end(edge, "the person stopped it")
+    const open = !edge.closedAt
+    const ended = await this.end(edge, "the person stopped it")
+    // Said where the person stopped it, in its Apex's conversation: the Apex's own stops are its tool rows.
+    if (ended && open) {
+      const line = membershipLine({ kind: "stopped", fin: store?.thread(edge.child)?.title ?? edge.name })
+      this.deps.live.recordNote(conversation, line.label, line.detail, true)
+    }
+    return ended
   }
 
   settled(conversation: string, request: string): void {
@@ -4189,6 +4196,12 @@ export class Agents implements AgentOperations, ConversationChildren {
       const rerouted = edge && (store.rerouteEdge(edge.child, { from: harness, ...(until !== undefined && { until }), ...(from && { account: from.label }), to: step, at: now, line }) ?? edge)
       moved = store.finishFinMove(thread, this.generation, { visited: [placeKey(place), stepKey(step)] })
       if (edge) this.movedNotes.set(edge.parent, [...(this.movedNotes.get(edge.parent) ?? []), `"${edge.name}" ${line.charAt(0).toLowerCase()}${line.slice(1)}.`])
+      // Its Apex's transcript says it too, where the person reads the crew, as a line of its own.
+      const apexConversation = edge && this.frontOf(edge.parent, edge.parentSession)
+      if (edge && apexConversation) {
+        const said = membershipLine({ kind: "moved", fin: store.thread(edge.child)?.title ?? edge.name, to: words.to, why: words.why })
+        this.deps.live.recordNote(apexConversation, said.label, said.detail)
+      }
       // The tree's line says an Apex's move, and more: its own line only when that line has been said already.
       if (!this.noteMove(mover, { harness, ...(from && { account: from.label }), ...(until !== undefined && { until }) }, words.to.replace(/^Moved to /, "")) || edge) this.deps.live.recordNote(conversation, words.to, words.why)
       hostLog("agents", "a Thread's account ran out; it goes on at the next step", { thread, from: harness, why: step.why, to: step.harness })

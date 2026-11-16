@@ -2059,13 +2059,14 @@ export class LiveConversations {
 
   /**
    * A line Mako writes into a conversation that no harness's record holds, as `recordDirect` does: a Fin's move to
-   * another account or harness when its own ran out. Said once: the same words again change nothing.
+   * another account or harness when its own ran out, and in its Apex's, a Fin's move or the person's stop of it
+   * (`membershipLine`). Said once unless `again`: the same words again change nothing; a stop is its own each time.
    */
-  recordNote(id: string, label: string, detail: string): boolean {
+  recordNote(id: string, label: string, detail: string, again = false): boolean {
     const resident = this.records.load(id)
     if (!resident) return false
     this.keep(resident)
-    if (reduceLiveUpdates(resident.snapshot.blocks, resident.updates).some((block) => block.type === "event" && block.label === label && block.detail === detail)) return true
+    if (!again && reduceLiveUpdates(resident.snapshot.blocks, resident.updates).some((block) => block.type === "event" && block.label === label && block.detail === detail)) return true
     queueLiveUpdate(resident, { kind: "event", label, detail })
     this.keep(resident)
     return true

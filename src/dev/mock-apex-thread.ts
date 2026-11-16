@@ -4,7 +4,7 @@ import { childEntry, type ChildJournal, type ChildState, type ChildThread, type 
 import { movedLine, type FallbackStep } from "@mako/host/contracts/fin-fallback"
 import { harnessLabel } from "@/lib/harness-label"
 import type { FinTuningWords } from "@mako/host/contracts/fin-tuning"
-import { BRIEF_CLOSE, briefIntro, fromAgent, FROM_AGENTS, PASSED_ON_NOTE, passedOn, rollup, rosterChildren, YOUR_APEX } from "@mako/host/contracts/children"
+import { BRIEF_CLOSE, briefIntro, fromAgent, FROM_AGENTS, membershipLine, PASSED_ON_NOTE, passedOn, rollup, rosterChildren, YOUR_APEX } from "@mako/host/contracts/children"
 import { appendFinReports } from "@mako/host/contracts/fin-reports"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
@@ -111,6 +111,8 @@ const CHILDREN: ChildFixture[] = ([
  */
 const ASK_SCENE = new URLSearchParams(globalThis.location?.search).get("ask")
 const LIMIT_SCENE = new URLSearchParams(globalThis.location?.search).get("fins") === "limit"
+/** `&crew=moves`: the crew changed outside the Apex's turns, said as lines in its transcript (`membershipLine`). */
+const MOVES_SCENE = new URLSearchParams(globalThis.location?.search).get("crew") === "moves"
 const LIMIT_UNTIL = "Sun 12:00 AM PST"
 const LIMIT_MOVED = `Moved to Claude Code: Cursor is at its limit until ${LIMIT_UNTIL}`
 const LIMIT_OUT = `Out of accounts until ${LIMIT_UNTIL}: Cursor and Claude Code (work)`
@@ -465,6 +467,12 @@ export function apexSnapshot(): LiveSnapshot {
       { type: "user", text: wake.text, requestId: wake.id },
       { type: "text", text: "Push wording's tone is yours to pick; Thread list swipe finished with its PR." },
       ...(LIMIT_SCENE ? [{ type: "event" as const, label: LIMIT_RAN, detail: LIMIT_DID }] : []),
+      ...(MOVES_SCENE
+        ? [
+            { type: "event" as const, ...membershipLine({ kind: "moved", fin: "Composer chips on iPad", to: "Moved to Claude Code (work)", why: "personal is at its limit until 12:31 AM" }) },
+            { type: "event" as const, ...membershipLine({ kind: "stopped", fin: "Haptics audit" }) },
+          ]
+        : []),
       { type: "user", text: request.text, requestId: request.id },
       { type: "text", text: "Reading the digest." },
     ],
