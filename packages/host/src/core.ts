@@ -65,7 +65,7 @@ import { accountBorrowing, BorrowedSimulators, ControlResidency, controlLine, op
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
 import { SyncRecorder } from "./contracts/sync-readings.js"
-import { AgentAskGate, AutomationTool, HarnessTool, SettingsTool, declareAutomationToolMethods, declareHarnessToolMethods, declareSettingsMethods, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, machineLeaving, SHUTDOWN_HOLD_MS, CloudWorktrees, CloudMoves, CloudReadiness, AwayNotes, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, workingThreads, conversationShown, finAsking, ownedSessions, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations, sessionOrderIn } from "./conversations/index.js"
+import { AgentAskGate, AutomationTool, HarnessTool, SettingsTool, declareAutomationToolMethods, declareHarnessToolMethods, declareSettingsMethods, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, machineLeaving, SHUTDOWN_HOLD_MS, CloudWorktrees, CloudMoves, CloudReadiness, AwayNotes, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, workingThreads, conversationShown, finAsking, ownedSessions, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type ThreadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations, sessionOrderIn } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, McpSignIns, declareMcpSignInMethods, type ConversationMcp } from "./tools/index.js"
 import { hostCommand } from "./base/host-command.js"
 import { declareGitMethods, hostGit, machinePullRequestsAs } from "./git/index.js"
@@ -196,6 +196,8 @@ const trace = (stage: string) => {
 /** Parts of the core built further down `openCore`; reached before then only through `?.`, by a caller that came early. */
 interface LateParts {
   conversations?: Conversations
+  /** `thread_history`'s tools, which `agents_read`'s search uses. */
+  history?: ThreadHistoryTools
   /** This Mac's Sessions' uploads look again now: changed rows went to the account (`SessionPublisher.rowsSent`). */
   uploadsLook?: () => void
   /** What this Mac can serve another place and its room, said to borrowing's brokers (`Advertiser`). */
@@ -1171,6 +1173,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     notice: (message) => hostWarn("control", "a control session's notice", { message }),
   })
   const opened = await openConversations({
+    history: () => late.history,
     elsewhere: (id) => late.cloudConversations?.has(id) ?? false,
     watchCheck: (conversation, tier, onEnd) => late.movers?.appTools?.watchCheck(conversation, tier, onEnd) ?? Promise.resolve(false),
     ...(owner.start && { start: owner.start }),
@@ -1781,6 +1784,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     catalog: threads.catalog,
     bundle: { live: (conversation) => live.transcriptBundle(conversation), native: (path) => threads.catalog.transcriptArtifact(path) },
   })
+  late.history = history
   const mediaRoot = join(environment.dataRoot, "media")
   const turnMedia = new TurnMedia(mediaRoot)
   const machineArtifacts = config.machineAgentFd === undefined ? undefined : new MachineArtifacts({

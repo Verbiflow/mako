@@ -1652,7 +1652,11 @@ writes both, and `thread_history` reads the caller's referenced threads and
 its own tree (`thread-tree.ts`): its Fins, its Apex and the Fins beside it, each
 by Thread ID or a Fin's name. `thread: "tree"` searches all of them, and `export`
 writes a Thread out through the bundle a switch and a chip hand over.
-`agents_read`'s transcript is a quick tail, and says where the whole is.
+`agents_read`'s transcript is a quick tail, and says where the whole is. Its
+`view: "outcome"` is the Fin's latest result (done, failed, blocked or
+needs-input) and how it stands, without the progress after it, and its `search`
+finds words in the Fin's whole history through `thread_history`'s search of its
+Thread, a page at a time (`AgentsDeps.history`, `test-agents-read-views.ts`).
 
 Mako never writes a session a harness didn't. A conversation goes on in
 another harness as a new real session of that harness, whose first turn
