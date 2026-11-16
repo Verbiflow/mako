@@ -1,4 +1,3 @@
-import { z } from "zod"
 import { hostCommand } from "../base/host-command.js"
 import { hostFetch, hostStopping, type HostStopping } from "../base/host-stopping.js"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
