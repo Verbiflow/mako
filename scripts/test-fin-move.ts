@@ -952,8 +952,9 @@ async function grantsAndQuestions(): Promise<void> {
     await f.world.close()
   }
   {
-    // And a digest steered into a Fin's running turn is Mako's: it answers nothing, so its question stays open.
-    const f = await fixture("claude", { hold: true, apex: "codex" })
+    // And a digest steered into a Fin's running turn is Mako's: it answers nothing, so its question stays open. A
+    // finished Fin's result waits for the turn's end, then is steered in once its turn runs past `focusMs`.
+    const f = await fixture("claude", { hold: true, apex: "codex", focusMs: 300 })
     await until("its turn", () => f.world.live.session(f.fin().conversation)?.status === "running")
     const { conversation } = f.fin()
     const fin = f.world.caller(conversation)

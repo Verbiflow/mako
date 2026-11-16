@@ -469,9 +469,15 @@ export class LiveDispatch {
         // Read now, in its place in the queue, and sent through the same handoff and Stop as any message.
         const sourceBrief = request.continues?.brief ? resident.snapshot.requests.find(item => item.id === request.continues!.brief) : undefined
         const receipt = sourceBrief ? await briefInTranscript(resident.snapshot, this.access.control(resident), sourceBrief.id, dependencies.history, provider => dependencies.driver(provider)?.nativePromptIdentity) : undefined
-        const words = sourceBrief?.digest && receipt !== "absent"
+        // A digest steered into the turn this continues whose receipt is unknown fails closed as a crashed digest does
+        // (rule 15): never sent again, and the turn that goes on hears that reports may have arrived around the restart.
+        const steeredDigest = request.continues && this.access.control(resident).actions?.some((action) =>
+          action.input.kind === "steer-queued" && action.input.requestId === request.continues!.requestId && action.state.kind === "uncertain" &&
+          Boolean(resident.snapshot.requests.find((item) => item.id === (action.input.kind === "steer-queued" ? action.input.queuedRequestId : ""))?.digest))
+        const said = sourceBrief?.digest && receipt !== "absent"
           ? `${continueTurnPrompt("host-crashed", "mako")}\n\n${DIGEST_RESTART_HINT}`
           : receipt === "present" ? continueTurnPrompt("host-crashed", "mako") : sends
+        const words = steeredDigest && !said.includes(DIGEST_RESTART_HINT) ? `${said}\n\n${DIGEST_RESTART_HINT}` : said
         // A continuation says what moved since the cut, read here too, so nothing crosses the read (`TurnContinuation.since`).
         const since = request.continues?.since
         const moved = since !== undefined ? await cutAccount(cwd, since, request.continues!.reason, Date.now()).catch(() => undefined) : undefined

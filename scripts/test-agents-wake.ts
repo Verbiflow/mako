@@ -10,6 +10,7 @@ import { actionNotice } from "@mako/host/contracts/operation-recovery"
 import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
 import { agentToolSchema } from "@mako/host/conversations/agent-tools"
 import { FROM_AGENTS, WAKE_COALESCE_MS } from "@mako/host/conversations/agent-wakes"
+import { DIGEST_RESTART_HINT } from "@mako/host/contracts/children"
 import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
 
 /**
@@ -215,6 +216,54 @@ async function progressThenTurnEnd(): Promise<void> {
     assert.equal(kind("ci")?.kind, "idle", "the CI one waits")
     const merge = w.store.reportsOf(w.store.edges().all.find((edge) => edge.name === "merge")!.child)
     assert.deepEqual(merge.map((report) => [report.status, report.implicit ?? false]), [["progress", false]], "no turn-end result after a wait that woke the Apex")
+  } finally {
+    await w.close()
+  }
+}
+
+/**
+ * The digest a long turn's focus window steers in is taken from the queue once: a host that crashes while the harness
+ * holds that steer never sends those results a second time, and drops none of them.
+ */
+async function focusSteerAcrossCrash(): Promise<void> {
+  await focusCrash("held")
+  await focusCrash("taken")
+}
+
+/** `held`: the host crashes while the harness still holds the steer. `taken`: the harness takes it and the host crashes at once. */
+async function focusCrash(how: "held" | "taken"): Promise<void> {
+  const w = new AgentsWorld({
+    root: join(root, `focus-crash-${how}`),
+    focusMs: 300,
+    steering: { claude: { lands: "step", hears: "at its next step", holds: true } },
+    script: async (turn) => {
+      if (turn.text.includes("You're fin:")) return `Done: ${turn.text.includes("Part one") ? "part one" : "part two"} checked.`
+      if (spoken(turn.text) === "go") {
+        for (const [key, objective] of [["one", "Part one"], ["two", "Part two"]])
+          started(await turn.world.agents.start(turn.caller, { brief: { objective }, harness: "codex", name: key, clientKey: key, cwd: turn.world.root }))
+        await turn.world.hold(turn.conversation)
+        return "Planned."
+      }
+      return "ok"
+    },
+  })
+  try {
+    const apex = await w.apex("claude", "full")
+    w.say(apex.conversation, "go")
+    await until("both results", () => w.store.edges().all.every((edge) => w.store.reportsOf(edge.child, 0).length > 0) && w.store.edges().all.length === 2)
+    await delay(800)
+    const digests = () => w.live.snapshot(apex.conversation)!.requests.filter((request) => request.digest)
+    assert.ok(digests().length >= 1, "the results wait as a digest while the Apex works")
+    if (how === "taken") assert.ok(w.answerSteer(apex.conversation, { kind: "accepted" }), "the harness takes the focus steer")
+    await w.crashed()
+    await w.settle(500, 30_000, "ignore")
+    const heard = [...w.prompts.filter((prompt) => prompt.conversation === apex.conversation), ...w.steers.filter((steer) => steer.conversation === apex.conversation)].map((entry) => entry.text).join("\n")
+    // Never twice. A digest whose steer the crash left unknown fails closed (delivery-queue rule 15): it isn't sent again,
+    // and the turn that goes on is told reports may have arrived around the restart.
+    const once = ["one", "two"].map((name) => heard.split(`• "${name}" (Codex)`).length - 1)
+    assert.ok(once.every((count) => count <= 1), `no result reached its Apex twice across the crash: ${heard}`)
+    if (once.some((count) => count === 0)) assert.ok(heard.includes(DIGEST_RESTART_HINT), `one not heard is said to have maybe arrived around the restart: ${heard}`)
+    if (how === "taken") assert.ok(once.every((count) => count === 1), `a steer the harness took is heard, once each: ${heard}`)
   } finally {
     await w.close()
   }
@@ -581,6 +630,7 @@ try {
   await burst()
   await finishOnly()
   await progressThenTurnEnd()
+  await focusSteerAcrossCrash()
   await never()
   await waitSettles()
   await waitAsks("decisions")

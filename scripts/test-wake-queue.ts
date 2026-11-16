@@ -194,18 +194,37 @@ try {
     wakes.dispose()
   }
   {
-    // A turn that runs past `FOCUS_MS` after the first result it left waiting hears what waits, once, as one digest.
-    const steered: string[] = []
-    const f = fakes(() => "steer", () => 5_000_000, (text) => { steered.push(text); return Promise.resolve(true) })
-    const wakes = new AgentWakes({ ...f.deps, focusMs: 50 })
-    wakes.notice("apex", "", notice())
+    // A turn that runs past `FOCUS_MS` after the first result it left waiting hears what waits, once: the queued digest
+    // itself is steered in (`steer-queued`), so it leaves the queue in the journal's write. A notice that comes while the
+    // steer is out starts a digest of its own rather than joining one on its way, and one the harness refuses stays queued.
+    const steered: { request: string; text: string }[] = []
+    let settle: (answered: boolean) => void = () => {}
+    const f = fakes(() => "steer", () => 5_000_000, () => Promise.resolve(true))
+    const wakes = new AgentWakes({
+      ...f.deps,
+      focusMs: 50,
+      steerQueued: (_conversation, _id, request, text) => {
+        steered.push({ request, text })
+        return new Promise<boolean>((resolve) => { settle = resolve })
+      },
+    })
+    const first = notice()
+    wakes.notice("apex", "", first)
     wakes.notice("apex", "", notice())
     assert.equal(steered.length, 0, "nothing steered as the results come")
-    assert.equal(f.open()!.notices.length, 2, "they wait as one digest")
+    const digest = f.open()!
+    assert.equal(digest.notices.length, 2, "they wait as one digest")
     await pause(120)
-    assert.equal(steered.length, 1, "past the focus window, the digest is steered in once")
-    assert.match(steered[0]!, /2 finished:/)
-    assert.equal(f.entries.at(-1)!.canceled, true, "and taken back from the queue")
+    assert.equal(steered.length, 1, "past the focus window, the digest is steered in")
+    assert.equal(steered[0]!.request, digest.id, "the queued digest itself, not a copy of its words")
+    assert.match(steered[0]!.text, /2 finished:/)
+    const late = notice()
+    wakes.notice("apex", "", late)
+    assert.equal(digest.notices.length, 2, "a notice arriving while the steer is out doesn't join the digest on its way")
+    assert.ok(f.entries.some((entry) => entry.id !== digest.id && entry.notices.some((each) => each.id === late.id)), "it starts a digest of its own")
+    settle(true)
+    await pause(0)
+    assert.equal(digest.canceled, undefined, "the steered digest isn't rewritten: the journal's steer took it")
     wakes.dispose()
   }
   {
