@@ -12,7 +12,7 @@ import type { ThreadStore } from "./store.js"
  * when another host recorded one. With no client subscribed it doesn't look;
  * the first look after one subscribes catches up on everything since.
  */
-export function followOtherHosts(
+export function followOtherHosts<Formats>(
   store: ThreadStore,
   emit: (event: HostEvent) => void,
   { jobs, subscribed, everyMs = 1000, formats }: {
@@ -20,15 +20,18 @@ export function followOtherHosts(
     subscribed: JobDemand
     everyMs?: number
     /**
-     * The shared stores' formats as this host holds them (`key`), and what
-     * to do when another host raised one, so this one now only reads it.
+     * The shared stores' formats as this host holds them (`read`, compared by
+     * `key`), and what to do when another host raised one, so this one now
+     * only reads it. `changed` is told the very reading that differed: read
+     * again, a raise of a second store landing between the two reads was
+     * told then, and told again on the next tick (`test-store-formats-hosts`).
      */
-    formats?: { key: () => string; changed: () => void }
+    formats?: { read: () => Formats; key: (formats: Formats) => string; changed: (formats: Formats) => void }
   },
 ): () => void {
   let known = byId(store.groups())
   let purposes = JSON.stringify(store.purposes())
-  let format = formats?.key()
+  let format = formats && formats.key(formats.read())
   let failing = false
   return jobs.every("follow other hosts' Thread changes", everyMs, () => {
     try {
@@ -42,10 +45,13 @@ export function followOtherHosts(
       }
       const changed = store.takeExternalChanges()
       // Reading the changes rereads the store's format after another host's commit.
-      const standing = formats?.key()
-      if (standing !== format) {
-        format = standing
-        formats?.changed()
+      if (formats) {
+        const reading = formats.read()
+        const standing = formats.key(reading)
+        if (standing !== format) {
+          format = standing
+          formats.changed(reading)
+        }
       }
       const titles = store.takeExternalTitles()
       if (titles.length) emit({ type: "thread-titles", titles })

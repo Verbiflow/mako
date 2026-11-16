@@ -170,7 +170,7 @@ async function threadStoreRaisedWhileOpen(): Promise<void> {
   const subscribed = jobs.demand("a client is subscribed")
   subscribed.set(true)
   let told = 0
-  const stop = followOtherHosts(open, () => {}, { jobs, subscribed, everyMs: 20, formats: { key: () => JSON.stringify(open.standing()), changed: () => told++ } })
+  const stop = followOtherHosts(open, () => {}, { jobs, subscribed, everyMs: 20, formats: { read: () => open.standing(), key: (standing) => JSON.stringify(standing), changed: () => told++ } })
 
   // A development build starts beside the running app and migrates the store.
   const newer = new ThreadStore(path, { now, realPath, format: NEWER, writer: "0.0.1+development" })
@@ -195,6 +195,38 @@ async function threadStoreRaisedWhileOpen(): Promise<void> {
   assert.throws(() => ancient.prepare("UPDATE threads SET title = 'overwritten'").run(), /no such function: mako_store_format/)
   ancient.close()
   console.log("PASS: a store a newer Mako raises under a running host turns read-only there, and its windows are told")
+}
+
+/**
+ * A newer host raises the Thread store, then the ledger, from another process, so the ledger's raise can land
+ * between this host's reading of the formats and its telling of them. The windows are told the reading that changed,
+ * each once: told a second reading, they once heard both stores read-only twice (`test-store-formats-hosts`, main
+ * 25880c8b2).
+ */
+async function formatsToldOncePerChange(): Promise<void> {
+  const path = join(root, "threads-told-once.sqlite")
+  const open = new ThreadStore(path, { now, realPath })
+  const jobs = new HostJobs()
+  const subscribed = jobs.demand("a client is subscribed")
+  subscribed.set(true)
+  // The two stores' access as each read finds it: the ledger is raised the moment after the Thread store's raise is read.
+  const access = { threads: "write", ledger: "write" }
+  let reads = 0
+  const read = () => {
+    const reading = [access.threads, access.ledger]
+    reads += 1
+    if (access.threads === "read") access.ledger = "read"
+    return reading
+  }
+  const told: string[] = []
+  const stop = followOtherHosts(open, () => {}, { jobs, subscribed, everyMs: 20, formats: { read, key: (reading) => JSON.stringify(reading), changed: (reading) => told.push(JSON.stringify(reading)) } })
+  access.threads = "read"
+  for (const deadline = Date.now() + 30_000; reads < 6 && Date.now() < deadline;) await delay(20)
+  stop()
+  jobs.stop()
+  open.close()
+  assert.deepEqual(told, [JSON.stringify(["read", "write"]), JSON.stringify(["read", "read"])], "each change is told once, as it was read")
+  console.log("PASS: a second store raised between the formats' reading and their telling is told once, on the next tick")
 }
 
 function sessionLedgerInANewerFormat(): void {
@@ -302,6 +334,7 @@ async function sharedFiles(): Promise<void> {
 try {
   threadStoreInANewerFormat()
   await threadStoreRaisedWhileOpen()
+  await formatsToldOncePerChange()
   sessionLedgerInANewerFormat()
   diagnosticsReport()
   await sharedFiles()
