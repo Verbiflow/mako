@@ -1,3 +1,4 @@
+import type { RemoteAppDemand, RemoteAppReply, RemoteAppSnapshot } from "./remote-app.js"
 import type { FileFindResults, FileFolders, FileFoldersOptions, FileGrepOptions, FileGrepResults } from "./file-index.js"
 import type { PromptVersionsByRequest } from "./live-conversations.js"
 import type { AgentAskAnswer } from "./agent-asks.js"
@@ -192,6 +193,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<AppOutputChunk>("mako:thread-app-output", cwd, key, cursor),
     threadAppMarks: () => invokeTrustedHost<AppMark[]>("mako:thread-app-marks"),
     followThreadApps: (demand?: AppSamplingDemand) => invokeTrustedHost<AppSamplingReply>("mako:thread-app-demand", demand),
+    followConversationApp: (conversation: string, demand: RemoteAppDemand) => invokeTrustedHost<RemoteAppReply>("mako:conversation-app-demand", conversation, demand),
+    conversationApp: (conversation: string, view: string) => invokeTrustedHost<RemoteAppSnapshot>("mako:conversation-app", conversation, view),
     viewHints: () => invokeTrustedHost<ViewHintsStatus | null>("mako:view-hints"),
     probeThreadApp: (cwd: string) => invokeTrustedHost<AppProbeView>("mako:thread-app-probe", cwd),
     threadAppRoom: () => invokeTrustedHost<RoomView>("mako:thread-app-room"),

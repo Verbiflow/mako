@@ -486,7 +486,20 @@ mates' view and the `apexes` digest say how long it has been idle
 (`idleFor`, seconds, only while it isn't working) and its open pull requests
 (`openPRs`, `finPullRequests`): its worktree branch's as the worktree
 summaries last read them (`ThreadWorktreeService.heldPulls`) and those its
-reports name, with no read of GitHub of their own. A pull request is its
+reports name, with no read of GitHub of their own. A Fin that reads as
+working and does nothing is named to its Apex: the live engine's activity in
+its conversation (each stamp of `activityAt`, a turn or a steer its harness
+takes, its own report) moves its last moment, a map write, and its tree waits
+on one deadline for the earliest of its Fins' (`QuietWatch`,
+`conversations/fin-quiet.ts`). A Fin at work on Mako's live driver, waiting on
+nothing that explains a pause, that showed nothing for `QUIET_MS` (15 min) is
+said once a quiet stretch in its Apex's digest, under "gone quiet while
+working", with its last step and whether it still runs (`quietLine`): a
+notice kept nowhere, never a state, which leaves an unsent digest once the Fin
+moves again (`AgentWakes.current`), and only under the default `wake`. A long
+command counts as quiet; the line names it and the Apex decides. A Fin whose
+turn ended leaves the watch, and an idle one is never named
+(`test:fin-quiet`). A pull request is its
 repository's (`owner/name`, from its URL) and number (`pullRef`, `pullKey`),
 never its number alone, since a Thread can hold several repositories; a bare
 `#12` is the Fin's one repository's, or stays unqualified when it has several,
@@ -772,7 +785,11 @@ deployed cloud.
 
 What an Apex and its Fins tell each other is kept short without dropping
 what the reader needs. Every `agents_*` answer is its JSON on one line
-(`agentToolText`), every field kept. A finished Fin's digest line
+(`agentToolText`), every field kept. `agents_list` lists what an Apex can act on (`foldList`): a Fin that ended over a day ago with
+nothing open is counted in `folded`, not listed; past `LIST_BUDGET_CHARS` (16 KB) idle and ended rows lose
+their pull requests, then fold, oldest first. A Fin needing attention (a question, an action, a decision, at work,
+waiting or blocked) is never folded, past the budget if it must be; `scope: all` lists every one. An Apex's 130 Fins were once 105 KB, about 26,000 tokens, a
+call (`test-agents-list-fold.ts`). A finished Fin's digest line
 (`finishedLine`) is its report's first paragraph past any heading, on one
 line, at most `FINISHED_CHARS`, with how many more characters the
 report holds (`agents_read` gives them), and every artifact by its ref with

@@ -188,6 +188,8 @@ export interface WorldOptions {
   steering?: Partial<Record<string, Pick<Extract<SteerCapability, { kind: "supported" }>, "lands" | "answersOnEnd" | "hears"> & { holds?: true }>>
   /** How long an ask waits on its Apex alone before the person is asked too (`AgentsDeps.apexAnswerMs`). */
   apexAnswerMs?: number
+  /** How long a working Fin may show no activity before its Apex hears it (`AgentsDeps.quietMs`). */
+  quietMs?: number
   /** The engine's timers for those waits (`AgentsDeps.later`): a fake clock a test advances itself. */
   later?: AgentsDeps["later"]
   /** The pull requests the host last read for a worktree's branch (`AgentsDeps.heldPulls`). */
@@ -396,6 +398,7 @@ export class AgentsWorld {
       ...(this.options.lent && { lent: this.options.lent }),
       ...(this.options.processes && { processes: this.options.processes }),
       ...(this.options.apexAnswerMs !== undefined && { apexAnswerMs: this.options.apexAnswerMs }),
+      ...(this.options.quietMs !== undefined && { quietMs: this.options.quietMs }),
       ...(this.options.later && { later: this.options.later }),
       ...(this.options.heldPulls && { heldPulls: this.options.heldPulls }),
       ...(this.options.readPull && { readPull: this.options.readPull }),

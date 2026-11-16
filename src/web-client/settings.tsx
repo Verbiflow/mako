@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react"
+import { copyText } from "./replies"
 import { continueReadings, describeContinue } from "@mako/host/contracts/cloud-continues"
 import { describeFollow, describeList } from "@mako/host/contracts/sync-readings"
 import { webContinues } from "./continue-actions"
@@ -448,7 +449,7 @@ function Diagnostics() {
           </div>
         ))}
       </dl>
-      <button type="button" onClick={() => void navigator.clipboard.writeText(text).then(() => toast.success("Copied"))} className="web-row flex h-11 w-full items-center gap-3 px-4 text-left text-ui">
+      <button type="button" onClick={() => void copyText(text).then(() => toast.success("Copied"), () => undefined)} className="web-row flex h-11 w-full items-center gap-3 px-4 text-left text-ui">
         <CopyIcon className="size-4 text-muted-foreground" />
         Copy diagnostics
       </button>

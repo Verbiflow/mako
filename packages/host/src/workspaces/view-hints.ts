@@ -7,6 +7,9 @@ import type { MethodTable } from "../base/methods.js"
 export class ViewHints {
   private readonly epoch = randomUUID()
   private revision = 0
+  private readonly positions = new Map<ViewDomain, number>()
+
+  position(domain: ViewDomain) { return { epoch: this.epoch, revision: this.positions.get(domain) ?? 0 } }
 
   private readonly emit: (event: HostEvent) => void
   constructor(emit: (event: HostEvent) => void) { this.emit = emit }
@@ -16,6 +19,7 @@ export class ViewHints {
   }
 
   changed(domain: ViewDomain, fields: string[] = ["all"], keys?: string[]): void {
+    this.positions.set(domain, this.revision + 1)
     this.emit({ type: "view-hint", hint: { epoch: this.epoch, revision: ++this.revision, domain, fields, ...keys && { keys } } })
   }
 }

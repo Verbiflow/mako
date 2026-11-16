@@ -1018,7 +1018,11 @@ try {
       const caughtUp = keepsUp < 0
         ? (late.length ? Math.max(...late) : disturbance.back)
         : Math.max(...words.slice(0, keepsUp + 1).map((word) => shownAt(device, word)))
-      const after = keepsUp < 0 ? [] : words.slice(keepsUp + 1).filter((word) => lag(word) > CURRENT_LAG_MS)
+      const rest = keepsUp < 0 ? [] : words.slice(keepsUp + 1)
+      const after = rest.filter((word) => lag(word) > CURRENT_LAG_MS)
+      // How far behind it runs once current: a device that settled a steady few hundred ms behind passes every word's
+      // budget but isn't current. Its median lag over the rest of the turn is held to the lag that says current.
+      const restLags = rest.map(lag).sort((a, b) => a - b)
       // Where the turn's end was in what went missing: when the device showed the conversation idle again.
       const idle = disturbance.ended ? liveStates.get(device)?.find((item) => item.t > disturbance.at && item.state === "idle") : undefined
       return [name, {
@@ -1028,6 +1032,7 @@ try {
         timeToCurrentMs: missed.length ? null : Math.max(0, Math.round(caughtUp - disturbance.back)),
         laterLateWords: after.length,
         laterMaxLagMs: after.length ? Math.round(Math.max(...after.map(lag))) : 0,
+        laterMedianLagMs: restLags.length ? Math.round(restLags[Math.floor(restLags.length / 2)]!) : 0,
         rereads: rereads.filter((item) => item.device === device && item.t >= disturbance.at && item.t <= end).length,
       }]
     }))
@@ -1086,6 +1091,7 @@ try {
       time(`reconnect.${name}.${device}.timeToCurrentMs`, seenThere.timeToCurrentMs, BUDGETS.reconnect.currentMs)
       // Caught up, it stays up: a word late after that by as much as a reconnect may take is a device falling behind again.
       time(`reconnect.${name}.${device}.laterMaxLagMs`, seenThere.laterMaxLagMs, BUDGETS.reconnect.currentMs)
+      time(`reconnect.${name}.${device}.laterMedianLagMs`, seenThere.laterMedianLagMs, CURRENT_LAG_MS)
       count(`reconnect.${name}.${device}.wordsMissed`, seenThere.wordsMissed, BUDGETS.reconnect.wordsMissed)
       count(`reconnect.${name}.${device}.rereads`, seenThere.rereads, BUDGETS.reconnect.rereads)
       if ("turnEndShownMs" in seenThere) time(`reconnect.${name}.${device}.turnEndShownMs`, seenThere.turnEndShownMs, BUDGETS.reconnect.currentMs)

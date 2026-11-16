@@ -1,3 +1,4 @@
+import type { RemoteAppDemand, RemoteAppReply, RemoteAppSnapshot } from "../contracts/remote-app.js"
 import type { MethodTable } from "../base/methods.js"
 import type { DeskApp } from "./environment-tools.js"
 import { AppOutputKeySchema, type AppActionOutcome, type AppMark, type AppOutputChunk, type AppOutputCursor, type AppProbeView, type AppSamplingDemand, type AppSamplingReply, type RoomView, type ThreadAppView } from "../contracts/thread-app.js"
@@ -43,4 +44,24 @@ export function declareThreadAppMethods(methods: MethodTable, apps: DeskApp | un
   })
   methods.handle("mako:thread-app-stop-apps", (apps: string[]): Promise<void> => desk().stopApps(apps))
   methods.handle("mako:project-app-setup", (cwd: string): Promise<ProjectAppSetup> => desk().setup(cwd))
+}
+
+/** Conversation-scoped reads never trust a folder supplied by a remote page or renew its legacy client lease. */
+export function declareRemoteAppMethods(methods: MethodTable, deps: {
+  apps: Pick<DeskApp, "view"> | undefined
+  sampler: ThreadAppSampler | undefined
+  cwd(conversation: string): string | undefined
+  position(): { epoch: string; revision: number }
+  confirm(conversation: string): void
+}) {
+  methods.handle("mako:conversation-app-demand", (conversation: string, demand: RemoteAppDemand): RemoteAppReply => {
+    if (!deps.cwd(conversation) || !deps.apps || !deps.sampler?.followRemote(hostClient(), conversation, demand)) return { kind: "unavailable" }
+    if (demand.visible && demand.confirm) deps.confirm(conversation)
+    return { kind: "following", ...deps.position() }
+  })
+  methods.handle("mako:conversation-app", async (conversation: string, view: string): Promise<RemoteAppSnapshot> => {
+    const cwd = deps.cwd(conversation)
+    if (!cwd || !deps.apps || !deps.sampler?.remoteActive(hostClient(), conversation, view)) throw new Error("This app view is no longer followed")
+    return { folder: cwd, app: await deps.apps.view(cwd) }
+  })
 }

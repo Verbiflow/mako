@@ -177,6 +177,7 @@ const inputs = {
             z.literal("crew"),
             z.literal("apexes"),
             z.literal("threads"),
+            z.literal("all"),
           ])
           .optional(),
         query: z.string().optional(),
@@ -946,6 +947,23 @@ const inputs = {
       z.string(),
       z.string(),
       z.object({ width: z.number(), height: z.number() }).optional(),
+    ]),
+  "mako:conversation-app": () => z.tuple([z.string(), z.string()]),
+  "mako:conversation-app-demand": () =>
+    z.tuple([
+      z.string(),
+      z
+        .object({
+          view: z.string().uuid(),
+          generation: z
+            .number()
+            .int()
+            .nonnegative()
+            .max(Number.MAX_SAFE_INTEGER),
+          visible: z.boolean(),
+          confirm: z.boolean(),
+        })
+        .strict(),
     ]),
   "mako:conversation-settings": () => z.tuple([]),
   "mako:conversation-settings-set": () =>
@@ -3499,6 +3517,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:control-preview-source", "control"],
   ["mako:control-preview-viewers", "control"],
   ["mako:control-video", "conversations"],
+  ["mako:conversation-app", "workspaces"],
+  ["mako:conversation-app-demand", "workspaces"],
   ["mako:conversation-settings", "conversations"],
   ["mako:conversation-settings-set", "conversations"],
   ["mako:crashes", "application"],

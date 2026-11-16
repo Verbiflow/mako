@@ -1011,6 +1011,8 @@ export function installMockBridge() {
     threadAppMarks: async () => [],
     followThreadApps: async () => ({ kind: "unavailable" }),
     viewHints: async () => null,
+    followConversationApp: async () => ({ kind: "unavailable" }),
+    conversationApp: async () => ({ folder: "/fixture", app: { kind: "none", project: "fixture", root: "/fixture" } }),
     probeThreadApp: async () => {
       throw new Error("The mock desk runs no apps; ?app=<scenario> shows one.")
     },
@@ -2259,8 +2261,9 @@ export function installMockBridge() {
       if (cloud) {
         const from = mockHarnessesHere.get(provider)
         const reading = { provider, binary: `/Users/you/.nvm/versions/node/v24.19.0/bin/${provider}`, channel: "npm" as const, checkedAt: Date.now() }
+        // npm refused to write its global folder (EACCES): the host words it (`updateFailureWords`) and logs npm's own.
         if (mockHarnessScene === "failing")
-          return { ...reading, installed: from, result: { at: Date.now() - 1_200, outcome: "failed" as const, from, message: "npm error code EACCES: permission denied, mkdir '/usr/local/lib/node_modules/@openai'" } }
+          return { ...reading, installed: from, result: { at: Date.now() - 1_200, outcome: "failed" as const, from, message: "It needs permission to change the folder it's installed in." } }
         // The updater finished, but the binary Mako runs didn't move: the host names where the update went and what Mako runs.
         if (mockHarnessScene === "elsewhere")
           return { ...reading, installed: from, result: { at: Date.now() - 1_200, outcome: "failed" as const, from, message: `npm installed Codex ${cloud} into /opt/homebrew, but Mako runs ${reading.binary}, still ${from}.` } }
