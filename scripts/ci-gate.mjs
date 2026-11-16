@@ -396,7 +396,6 @@ export const MAC_STEPS = [
   [11, "npm run -s test:native-authoring"],
   // Test files no CI ran until 2026-11-15 that pass on a Mac and not on Linux: they read macOS's ps and process titles,
   // ~/Library, the native driver, or Electron's Mac behaviour (#783's Linux gate).
-  [5, "npm run -s build:electron && electron scripts/test-desk-browser-electron.mjs"],
   [22, "tsx scripts/test-app-probe.ts"],
   [1, "npm run -s build:electron && node scripts/test-browser-extension.mjs"],
   [30, "tsx scripts/test-claude-sdk-startup.ts"],

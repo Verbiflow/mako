@@ -57,11 +57,6 @@ async function hiddenWindow() {
     webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
   })
   window.setContentSize(size.width, size.height)
-  // A CI Mac's VM never composites a window that was never shown: hidden, Chromium logged "ProduceOverlay ...
-  // non-existent mailbox" and CDP's screenshot timed out; composited in software, CDP timed out and capturePage failed
-  // with UnknownVizError. This window stands in for the desk's agent view; what's checked is the desk page's relay and
-  // the browser over it, so there it's shown without taking focus.
-  if (process.env.CI) window.showInactive()
   await window.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html))
   const [width, height] = window.getContentSize()
   const scrollbar = await window.webContents.executeJavaScript("innerWidth - document.documentElement.clientWidth")

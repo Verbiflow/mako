@@ -58,6 +58,9 @@ const SUITES = [
   "test:composer-edges-ui",
   "test:agent-ask-ui",
   "test:internal-review-ui",
+  // Its hidden window's capture timed out on every mac-host gate run (GPU or software, hidden or shown), while the
+  // hidden windows of the UI suites here capture on the same macos-15 image.
+  "test:desk-browser-electron",
 ]
 /** Past this a suite has hung: the slowest here takes about 4 minutes on a Mac at load 15. */
 const SUITE_MS = 20 * 60_000
