@@ -2156,7 +2156,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       const next = this.resolve(apex, disposition.to, false)
       const there = next && this.conversationOf(next.child)
       const requestId = disposition.request
-      const request = there ? this.deps.live.snapshot(there)?.requests.find(item => item.id === requestId) : undefined
+      const request = there ? sentAs(this.deps.live.snapshot(there)?.requests ?? [], requestId) : undefined
       const sender = request && request.actor?.kind === "agent" ? store.sessionPlacement(request.actor.session) : undefined
       if (!next || next.placed || next.remote || (!store.hasReportActionOperation(op) &&
           (next.closedAt !== undefined || (there && this.deps.archived?.(there)) || !request || sender?.thread !== apex.thread ||
@@ -5712,7 +5712,7 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   private async sendInto(stopped: ThreadParent, request: string, text: string, attachments: PromptAttachment[], actor: Actor | undefined, want: FinDeliver, crossing: Crossing, automatic: boolean, attaching: Attaching): Promise<Delivered | AgentRefused> {
     const before = this.conversationOf(stopped.child)
-    const repeat = before ? this.deps.live.held(before)?.requests.find((asked) => asked.id === request) : undefined
+    const repeat = before ? sentAs(this.deps.live.held(before)?.requests ?? [], request) : undefined
     if (repeat) return repeat.status === "queued" || repeat.status === "held"
       ? { ...this.queuedDelivery(before!, stopped.name, this.ready(before!)), deduped: true }
       : { delivery: "turn", hears: `${stopped.name} already has it.`, deduped: true }
@@ -5737,7 +5737,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const ready = conversation ? this.ready(conversation) : "gone"
     if (!conversation || ready === "gone") return { refused: "unavailable", why: `${edge.name}'s conversation isn't on this device.` }
     const name = edge.name
-    const held = this.deps.live.held(conversation)?.requests.find((asked) => asked.id === request)
+    const held = sentAs(this.deps.live.held(conversation)?.requests ?? [], request)
     if (held)
       return held.status === "queued" || held.status === "held"
         ? { ...this.queuedDelivery(conversation, name, this.ready(conversation)), deduped: true }
@@ -5927,7 +5927,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!steering) return { why: `${harness} takes no message into a running turn.` }
     const deadline = Date.now() + STEER_WAIT_MS
     const turn = () => this.deps.live.held(conversation)?.requests.find((asked) => asked.status === "dispatching" && asked.nativeRun)
-    while (!turn() && Date.now() < deadline && this.deps.live.session(conversation)?.status !== "ready") await new Promise((resolve) => setTimeout(resolve, 50))
+    // A turn just handed to its harness has no run yet while its session still reads ready: wait for it too, rather than
+    // queue a steer that arrived as the turn began (land-2's 911d68d2, 2026-11-16).
+    const starting = () => this.deps.live.session(conversation)?.status !== "ready" || Boolean(this.deps.live.held(conversation)?.requests.some((asked) => asked.status === "dispatching"))
+    while (!turn() && Date.now() < deadline && starting()) await new Promise((resolve) => setTimeout(resolve, 50))
     const running = turn()
     if (!running) return { why: "its turn hadn't started yet." }
     const action = Promise.resolve().then(() => this.deps.live.act(conversation, { kind: "steer-queued", id: namedUuid(`steer:${request}`), requestId: running.id, queuedRequestId: request, text, attachments }, "native"))
@@ -6430,6 +6433,11 @@ function pullWaitReports(reports: Report[], key: string): Report[] {
 }
 
 /** A pull request a report waits on, by repository and number; undefined for another kind or an invalid reference. */
+/** The message a request ID went as: the one it was folded into when it went (`LiveRequest.joined`), else its own. */
+function sentAs(requests: readonly LiveRequest[], id: string): LiveRequest | undefined {
+  return requests.find((request) => request.joined?.some((joined) => joined.id === id)) ?? requests.find((request) => request.id === id)
+}
+
 function waitedPull(item: WaitingOn): { key: string; repository?: string; number: number; until?: PullWaitUntil } | undefined {
   if (item.kind !== "pull-request") return undefined
   const ref = pullRef(item.ref)

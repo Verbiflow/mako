@@ -31,7 +31,7 @@ import { ToolGrowthSchema, changedEntryStart, continues, growTool, type ToolGrow
 import { RunSnapshotsSchema } from "../contracts/workspace-snapshots.js"
 import { RequestChangesSchema } from "../contracts/turn-changes.js"
 import { TurnUndoneSchema } from "../contracts/turn-review.js"
-import { ACCOUNT_SWITCH_WAITS, MAX_INTERRUPTED_CALLS, savedReason, type LiveRequest, type LiveSnapshot } from "../contracts/live-conversations.js"
+import { ACCOUNT_SWITCH_WAITS, JOINED_MAX, MAX_INTERRUPTED_CALLS, savedReason, type LiveRequest, type LiveSnapshot } from "../contracts/live-conversations.js"
 import { PROVIDER_FAILURE_KINDS } from "../contracts/provider-failure.js"
 import { ActorSchema } from "../contracts/thread-identity.js"
 import { laterPrompt, personPromptedAt, type PromptedRequest } from "../contracts/worked-at.js"
@@ -141,6 +141,8 @@ export const LiveRequestSchema = z.object({
   createdAt: z.number().nonnegative().optional(),
   admissionOrder: z.number().int().positive().optional(),
   notification: z.literal(true).optional(),
+  joined: z.array(z.object({ id: z.string().max(200), at: z.number() })).max(JOINED_MAX).optional(),
+  joinedInto: z.string().max(200).optional(),
   dispatchedAt: z.number().optional(),
   text: z.string().max(1_000_000),
   attachments: z.array(PromptAttachmentSchema),

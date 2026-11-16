@@ -133,6 +133,43 @@ async function queueByDefault(): Promise<void> {
   }
 }
 
+/**
+ * Messages an Apex queues behind a long turn go as one turn when it ends, in order, not one a turn: land-2 (2026-11-16)
+ * took ten in ten turns and read its Apex's newest last. A repeat finds the message it joined; a notification goes apart.
+ */
+async function queuedJoinOneTurn(): Promise<void> {
+  const { world, apex, fin, work, release, prompts } = await team("joined", "codex", ["claude"])
+  try {
+    await work()
+    const before = prompts(fin.claude!).length
+    const first = sent(await world.agents.send(apex.caller, { to: "claude", text: "First: land #801.", clientKey: "j1" }))
+    assert.equal(first.hears, "claude hears it when its current turn ends, as its next message.")
+    const second = sent(await world.agents.send(apex.caller, { to: "claude", text: "Second: #801 is superseded; land #805 instead.", clientKey: "j2" }))
+    assert.equal(second.delivery, "queued")
+    assert.equal(world.live.snapshot(fin.claude!)!.requests.filter((request) => request.status === "queued").length, 2, "each waits as its own message, for the person to edit or remove")
+    const again = sent(await world.agents.send(apex.caller, { to: "claude", text: "Second: #801 is superseded; land #805 instead.", clientKey: "j2" }))
+    assert.equal(again.deduped, true, "a repeat finds the message it joined")
+    const note = sent(await world.agents.send(apex.caller, { to: "claude", text: "FYI: CI is slow today.", reply: "none", clientKey: "j3" }))
+    assert.equal(note.delivery, "queued")
+    await release()
+    const turns = prompts(fin.claude!).slice(before)
+    assert.equal(turns.length, 2, `one turn for both instructions, one for the notification: ${JSON.stringify(turns)}`)
+    const joined = turns[0]!
+    assert.ok(joined.includes("First: land #801.") && joined.indexOf("First: land #801.") < joined.indexOf("Second: #801 is superseded"), `in the order sent: ${joined}`)
+    assert.match(joined, /\[mako · the next message from the same sender, sent \d{4}-\d\d-\d\dT/)
+    assert.equal(joined.split("Second: #801 is superseded").length - 1, 1, "the repeat added nothing")
+    assert.equal(turns[1], "FYI: CI is slow today.", "a notification goes on its own")
+    const requests = world.live.snapshot(fin.claude!)!.requests
+    const carrier = requests.find((request) => request.joined?.length)
+    assert.deepEqual(carrier?.joined?.map((each) => each.id), [second.request], "the folded message keeps its ID")
+    assert.deepEqual(requests.find((request) => request.id === second.request)?.joinedInto, carrier?.id, "and says where it went")
+    const late = sent(await world.agents.send(apex.caller, { to: "claude", text: "Second: #801 is superseded; land #805 instead.", clientKey: "j2" }))
+    assert.equal(late.deduped, true, "a repeat after it went finds it")
+  } finally {
+    await world.close()
+  }
+}
+
 /** Steered into a step harness's turn, from an Apex on another harness: the answer is the Fin's harness's, not the Apex's. */
 async function steerAcrossHarnesses(): Promise<void> {
   const { world, apex, fin, work, release, prompts, steers } = await team("steer", "cursor", ["claude", "codex"])
@@ -193,7 +230,10 @@ async function cursorHoldsASteer(): Promise<void> {
     assert.match(second.hears, /^cursor hears it when its current turn ends, as its next message: it couldn't go into its running turn/)
     assert.ok(world.answerSteer(fin.cursor!, { kind: "not-accepted", reason: "The run ended before taking it." }), "Cursor answers the steer it held as its run ends")
     await release()
-    assert.deepEqual(prompts(fin.cursor!).slice(-2), ["Drop the retry loop.", "And the second retry."], "each as a message of its own, in order")
+    // Both still waiting when the turn ended, both from its Apex: one turn, in order (`foldQueued`).
+    const after = prompts(fin.cursor!).at(-1)!
+    assert.ok(after.startsWith("Drop the retry loop.") && after.indexOf("Drop the retry loop.") < after.indexOf("And the second retry."), `both, in order, as its next turn: ${after}`)
+    assert.equal(prompts(fin.cursor!).filter((text) => text.includes("Drop the retry loop.")).length, 1, "once")
     assert.equal(steers(fin.cursor!).length, 0)
     await work()
     const taken = sent(await world.agents.send(apex.caller, { to: "cursor", text: "Skip the flaky test.", deliver: "steer", clientKey: "c3" }))
@@ -416,7 +456,7 @@ async function siblingRefusalNamesRelay(): Promise<void> {
 }
 
 try {
-  await runCases([siblingRefusalNamesRelay, notificationDoesNotReportCompletion, notificationsAcrossApexes, oldQueuedKeepsNewerInstructions, aRowCountsItsTurn, idleTakesATurn, queueByDefault, steerAcrossHarnesses, refusedSteerQueues, cursorHoldsASteer, interruptGoesFirst, forwardTakesTheChoice], (name) => console.log(`ok ${name}`))
+  await runCases([siblingRefusalNamesRelay, notificationDoesNotReportCompletion, notificationsAcrossApexes, oldQueuedKeepsNewerInstructions, aRowCountsItsTurn, idleTakesATurn, queueByDefault, queuedJoinOneTurn, steerAcrossHarnesses, refusedSteerQueues, cursorHoldsASteer, interruptGoesFirst, forwardTakesTheChoice], (name) => console.log(`ok ${name}`))
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

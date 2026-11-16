@@ -5,7 +5,8 @@ import { controlNote } from "../control/index.js"
 import { ExecutionAccountChanged, ExecutionIdentityMismatch, HandoffRefused, TurnInProgressError, type PromptDispatch } from "../harnesses/index.js"
 import { digestAsks } from "../contracts/agents.js"
 import { FRONT_DOOR_GUIDANCE } from "../contracts/agent-tools.js"
-import type { LiveRequest, LiveSnapshot } from "../contracts/live-conversations.js"
+import { JOINED_CHARS, JOINED_MAX, type LiveRequest, type LiveSnapshot } from "../contracts/live-conversations.js"
+import { promptFingerprint } from "./live-assets.js"
 import { quietSwitch } from "../contracts/conversation-control.js"
 import { retireQuestionsForInput } from "../contracts/live-questions.js"
 import { nativePromptReference } from "../contracts/native-prompt-identity.js"
@@ -46,6 +47,44 @@ const TURN_IN_PROGRESS_RETRIES = 3
  */
 export function nextQueued(snapshot: Pick<LiveSnapshot, "session" | "requests">): LiveRequest | undefined {
   return nextInLine(snapshot.requests, snapshot.session.status === "failed")
+}
+
+/** A message that can go with others from its sender: an agent's plain words, waiting for nothing but its turn. */
+function foldable(request: LiveRequest): boolean {
+  return request.status === "queued" && request.actor?.kind === "agent" && !request.pause && !request.editing && !request.wake &&
+    !request.retry && !request.digest && !request.continues && !request.signIn && !request.accountSwitch && !request.review &&
+    !request.verbatim && !request.ownerCheck && !request.attachments.length && !request.grants?.length && !request.joinedInto
+}
+
+/**
+ * `next`, about to go, with the plain messages from its sender queued right behind it, as one turn: their words after
+ * its own, in the order sent, each under a line saying when, so a Fin back from a long turn reads everything its sender
+ * said since at once, not one message a turn (land-2, 2026-11-16: ten of its Apex's messages, ten turns, the newest
+ * read last). Only an agent's plain messages fold, and only while nothing else stands between them (another sender, a
+ * paused or edited message, one with attachments or a different `notification`), within `JOINED_MAX` and
+ * `JOINED_CHARS`. Each folded message is canceled with `joinedInto`, its ID kept in `joined`. Undefined when none fold.
+ */
+export function foldQueued(requests: readonly LiveRequest[], next: LiveRequest): { request: LiveRequest; requests: LiveRequest[] } | undefined {
+  if (!foldable(next) || next.actor?.kind !== "agent") return undefined
+  const session = next.actor.session
+  const behind = requests.slice(requests.indexOf(next) + 1).filter((request) => request.status === "queued" || request.status === "held")
+  const folded: LiveRequest[] = []
+  let length = next.text.length
+  for (const request of behind) {
+    if (!foldable(request) || request.actor?.kind !== "agent" || request.actor.session !== session || Boolean(request.notification) !== Boolean(next.notification)) break
+    if (folded.length >= JOINED_MAX || length + request.text.length > JOINED_CHARS) break
+    folded.push(request)
+    length += request.text.length
+  }
+  if (!folded.length) return undefined
+  const text = [next.text, ...folded.map((request) => `[mako · the next message from the same sender, sent ${new Date(request.createdAt ?? Date.now()).toISOString()}]\n${request.text}`)].join("\n\n")
+  const joined = [...next.joined ?? [], ...folded.map((request) => ({ id: request.id, at: request.createdAt ?? Date.now() }))]
+  const request: LiveRequest = { ...next, text, joined, inputDigest: promptFingerprint(text, next.attachments, next.tuning) }
+  const gone = new Set(folded.map((each) => each.id))
+  return {
+    request,
+    requests: requests.map((each) => each === next ? request : gone.has(each.id) ? { ...each, status: "canceled" as const, joinedInto: next.id } : each),
+  }
 }
 
 /**
@@ -227,18 +266,25 @@ export class LiveDispatch {
       )
     )
       return
-    const request = nextQueued(resident.snapshot)
-    if (!request) return
+    const queued = nextQueued(resident.snapshot)
+    if (!queued) return
     // A switch's own message goes on its destination, once the switch has committed.
-    if (request.id === transfer?.input.id) return
-    if (request.digest && this.overBudget(resident, request)) return
+    if (queued.id === transfer?.input.id) return
+    if (queued.digest && this.overBudget(resident, queued)) return
     if (this.leaveRemovedFolder(resident)) return
-    if (request.accountSwitch) {
-      void this.access.switchAccount(resident, request).catch((error) => {
+    if (queued.accountSwitch) {
+      void this.access.switchAccount(resident, queued).catch((error) => {
         hostWarn("live", "account switch failed", { conversation: resident.snapshot.session.id, error: errorMessage({ error }) })
       })
       return
     }
+    // What its sender queued right behind it goes with it, as one turn.
+    const folded = foldQueued(resident.snapshot.requests, queued)
+    if (folded) {
+      resident.snapshot = { ...resident.snapshot, requests: folded.requests }
+      hostLog("live", "messages went as one turn", { conversation: resident.snapshot.session.id, request: queued.id, joined: folded.request.joined?.length ?? 0 })
+    }
+    const request = folded?.request ?? queued
     const previousSnapshot = resident.snapshot
     const previousUpdates = [...resident.updates]
     const previousCharacters = resident.pendingCharacters
