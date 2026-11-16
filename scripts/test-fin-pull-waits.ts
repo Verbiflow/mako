@@ -612,7 +612,8 @@ console.log("engine: watched from reports, rebuilt on start, pruned on stop; the
         assert.ok(!("refused" in fin) && fin.conversation)
         const conversation = fin.conversation!
         const child = world.store.edges().all.find((edge) => edge.name === "one")!.child
-        const notes = () => world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.startsWith("Mako: PR"))
+        // Each note heard, whether its own turn or one of several Mako's notes went together in (`foldQueued`).
+        const notes = () => world.prompts.filter((prompt) => prompt.conversation === conversation).flatMap((prompt) => prompt.text.match(/^Mako: PR .*$/gm) ?? [])
         const report = () => world.agents.report(world.caller(conversation), { status: "progress", summary: "Other work finished; same dependencies remain.", waitingOn: waits, clientKey: `narration-${seq++}` })
         const tick = async () => { offset += PULL_WATCH_MAX_MS; await world.agents.pulls.tick(); await world.settle(100) }
         await world.settle(100)
@@ -627,7 +628,9 @@ console.log("engine: watched from reports, rebuilt on start, pruned on stop; the
         world.release(conversation)
         await world.settle(100)
         assert.equal(notes().length, 2, "both already-finished dependencies survive another dependency's narration")
-        assert.ok(queued.every((request) => world.live.held(conversation)!.requests.find((row) => row.id === request.id)?.status === "completed"), "the original unconsumed requests are retained")
+        const rows = world.live.held(conversation)!.requests
+        const went = (id: string) => { const row = rows.find((each) => each.id === id); return row?.joinedInto ? rows.find((each) => each.id === row.joinedInto) : row }
+        assert.ok(queued.every((request) => went(request.id)?.status === "completed"), "the original unconsumed requests are retained, each its own turn or folded into one that completed")
         await world.restart()
         await report()
         await tick()

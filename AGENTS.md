@@ -870,9 +870,11 @@ the turn it runs, for a correction to what it's doing now; `interrupt`, which
 stops that turn (`LiveConversations.interrupt`) and starts the next with the
 message, ahead of what was queued, which still follows in order. An idle Fin
 takes any as its next turn. A direct message, a redirect and an answer steer.
-When a queued message from an agent goes, the plain messages its sender
-queued right behind it, admitted after it, go with it as one turn, in order,
-each under a line saying when it was sent (`foldQueued`), so a Fin back from
+When a queued message from an agent or Mako goes, the plain messages its
+agent sender and Mako's notes (a pull request's outcome, a wait that fired,
+`FOLDED_SERVICES`) queued right behind it, admitted after it, go with it as
+one turn, in order, each under a line saying who and when (`foldQueued`); a
+note `admits` refuses goes alone, to be refused there, so a Fin back from
 a long turn reads all of it at once; each row stays the person's to edit
 until it goes, and one folded is canceled with `joinedInto`, its ID kept in
 the carrier's `joined` for a repeat or a handoff. A steer that arrives as a

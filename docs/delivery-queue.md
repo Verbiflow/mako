@@ -141,9 +141,10 @@ schedules, and a failing schedule is pinned there.
     attempt cannot silently resend the reports. Proven-unsent digests still wait
     out usage limits as digests; Stop, ordinary-Thread Off and native ownership guards remain in force.
 
-16. **What one sender queued goes as one turn.** When an agent's queued
-    message goes, the plain messages from the same sender queued right behind
-    it and admitted after it (no attachments, grants, pause, edit, hold, digest
+16. **What one sender queued goes as one turn, with Mako's notes.** When an
+    agent's or Mako's queued message goes, the plain messages from the same
+    agent and Mako's notes (pull-request outcomes, wait notes) queued right
+    behind it and admitted after it, each still admitted at the handoff, (no attachments, grants, pause, edit, hold, digest
     or continuation, and the same `notification`) go with it, in order, within
     `JOINED_MAX` and `JOINED_CHARS` (`foldQueued`). The fold is written only
     as the send commits, in the write that records it handed over: a send that
