@@ -44,9 +44,34 @@ class FakeClock {
 function watch(working: (child: string) => boolean, tree: (child: string) => string = () => "apex") {
   const clock = new FakeClock()
   const told: { child: string; since: number; at: number }[] = []
-  const quiet = new QuietWatch({ now: clock.now, later: clock.later, working, tree, quiet: (child, since) => told.push({ child, since, at: clock.now() }) })
-  return { clock, told, quiet }
+  const heard: string[] = []
+  const quiet = new QuietWatch({ now: clock.now, later: clock.later, working, tree, quiet: (child, since) => told.push({ child, since, at: clock.now() }), heard: (child) => heard.push(child) })
+  return { clock, told, heard, quiet }
 }
+
+test("a Fin reads quiet from the moment it's told until it does anything, and never before the window", () => {
+  let working = true
+  const { clock, heard, quiet } = watch(() => working)
+  quiet.activity("fin")
+  const began = clock.now()
+  clock.advance(QUIET_MS - 1)
+  assert.equal(quiet.quietSince("fin"), undefined, "not quiet before the window")
+  clock.advance(1)
+  assert.equal(quiet.quietSince("fin"), began, "quiet once the window passed, since its last activity")
+  clock.advance(10 * QUIET_MS)
+  assert.equal(quiet.quietSince("fin"), began, "and still, however long it stays so")
+  quiet.activity("fin")
+  assert.equal(quiet.quietSince("fin"), undefined, "activity clears it at once")
+  assert.deepEqual(heard, ["fin"], "and says so, once")
+  quiet.activity("fin")
+  assert.deepEqual(heard, ["fin"], "activity while not quiet says nothing")
+  clock.advance(QUIET_MS)
+  assert.equal(quiet.quietSince("fin"), clock.now() - QUIET_MS, "a new stretch reads quiet again")
+  working = false
+  quiet.forget("fin")
+  assert.equal(quiet.quietSince("fin"), undefined, "a Fin that left work isn't quiet")
+  assert.deepEqual(heard, ["fin", "fin"], "leaving work ends the stretch too")
+})
 
 test("a working Fin quiet past the window is told once, and not again while it stays quiet", () => {
   const { clock, told, quiet } = watch(() => true)
@@ -154,13 +179,18 @@ test("through the engine: a Fin whose turn hangs is named to its Apex once; its 
     fin = started.conversation!
     await until(() => world.agents.quiet.waiting === 1, "the Fin's turn began, and its tree waits on one deadline")
     await until(() => quietWakes().length === 1, "the Apex is woken with the quiet Fin")
+    // What every window reads: the roster's working state says quiet, and stops saying it when the Fin moves again.
+    const state = () => world.agents.roster(apex.conversation).find((entry) => entry.child?.name === "tests")?.child?.state
+    await until(() => { const now = state(); return now?.kind === "working" && now.quiet !== undefined }, "the roster reads the Fin quiet")
     assert.match(quietWakes()[0]!, /"tests" \(Codex\) has shown no activity for \d+s/)
     assert.match(quietWakes()[0]!, /It still reads as working\./)
     // Once: more quiet, no more notices.
     await pause(4 * QUIET)
     assert.equal(quietWakes().length, 1, "once a quiet stretch")
-    // Activity starts a new stretch, which is told again.
+    // Activity starts a new stretch, which is told again; meanwhile the roster reads it working, not quiet.
     world.agents.active(fin)
+    const moved = state()
+    assert.ok(moved?.kind === "working" && moved.quiet === undefined, `activity clears quiet at once: ${JSON.stringify(moved)}`)
     await until(() => quietWakes().length === 2, "a new quiet stretch is told again")
     // Its turn ends: it no longer works, and nothing more is said of it however long it's idle.
     world.release(fin)

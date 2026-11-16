@@ -761,6 +761,25 @@ async function checkPage({ window, page, shots, base }) {
     "the phone's line leaves once the card is back"
   )
 
+  // A quiet Fin (`&fins=quiet`): still working, nothing from it for 18 minutes. Its row says so, with what to do about it.
+  window.setContentSize(1440, 900)
+  await window.loadURL(`${base}?mock&app=apex&fins=quiet`)
+  await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, quiet scene")
+  await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
+  await until("Boolean(document.querySelector('[data-composer]'))", "the Apex's composer, quiet scene")
+  await evaluate("window.apexScene.setRunning(false); true")
+  await until("Boolean(document.querySelector('[data-quiet-row]'))", "the quiet Fin's row")
+  const quietRow = await evaluate(`(() => { const row = document.querySelector('[data-quiet-row]'); return { text: row.innerText.replace(/\\s+/g, ' '), mark: row.querySelector('[data-live-mark]')?.dataset.liveMark, actions: [...row.querySelectorAll('[data-quiet-action]')].map((node) => node.dataset.quietAction), shimmer: Boolean(row.querySelector('.shimmer, [data-shimmer]')) } })()`)
+  console.log("QUIET", JSON.stringify(quietRow))
+  assert.match(quietRow.text, /Offline outbox retry/)
+  assert.match(quietRow.text, /Quiet 18m · last step: .+, still running/, "the row says how long, and its last step")
+  assert.equal(quietRow.mark, "quiet", "its mark is still, not working")
+  assert.deepEqual(quietRow.actions, ["message", "stop"], "and offers Message and Stop beside opening it")
+  await capture("quiet-row")
+  await evaluate("document.querySelector('[data-quiet-action=message]').click(); true")
+  await until("document.querySelector('[data-child-note=direct]')?.innerText.includes('Offline outbox retry')", "Message addresses the Apex's composer to the quiet Fin")
+  console.log("PASS: a quiet Fin reads quiet, says for how long, and offers Message and Stop")
+
   assert.deepEqual(
     errors.filter(
       (message) =>

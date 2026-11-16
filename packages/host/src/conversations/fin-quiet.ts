@@ -13,6 +13,8 @@ export interface QuietWatchDeps {
   tree(child: string): string
   /** A working Fin had no activity since `since`, for at least `QUIET_MS`: its Apex hears it, once a quiet stretch. */
   quiet(child: string, since: number): void
+  /** A quiet stretch it told of ended: the Fin did something, or left work. How it reads changes back. */
+  heard?(child: string): void
   quietMs?: number
 }
 
@@ -46,7 +48,9 @@ export class QuietWatch {
   /** A Fin did something: its quiet starts again from `at`. */
   activity(child: string, at = this.deps.now()): void {
     if (this.stopped) return
+    const wasQuiet = this.quietSince(child) !== undefined
     this.last.set(child, at)
+    if (wasQuiet) this.deps.heard?.(child)
     let tree = this.treeOf.get(child)
     if (tree === undefined) {
       tree = this.deps.tree(child)
@@ -61,10 +65,12 @@ export class QuietWatch {
 
   /** A Fin left work (its turn ended, it stopped): it's no longer watched. */
   forget(child: string): void {
+    const wasQuiet = this.quietSince(child) !== undefined
     const tree = this.treeOf.get(child)
     this.last.delete(child)
     this.told.delete(child)
     this.treeOf.delete(child)
+    if (wasQuiet) this.deps.heard?.(child)
     if (tree === undefined) return
     const members = this.members.get(tree)
     members?.delete(child)
@@ -72,6 +78,15 @@ export class QuietWatch {
     this.members.delete(tree)
     this.deadlines.get(tree)?.cancel()
     this.deadlines.delete(tree)
+  }
+
+  /**
+   * When the quiet stretch it told of began, while that stretch holds: nothing from the Fin since, past `QUIET_MS`.
+   * Undefined before the window or once the Fin did anything, so a row reading it is never quiet longer than it is.
+   */
+  quietSince(child: string): number | undefined {
+    const last = this.last.get(child)
+    return last !== undefined && this.told.get(child) === last ? last : undefined
   }
 
   /** Whether the quiet stretch that began at `since` still holds: nothing from the Fin since, and it still works. */

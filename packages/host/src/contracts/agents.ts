@@ -633,6 +633,8 @@ export interface ChildThread {
   working?: boolean
   /** The last thing its transcript shows it doing (`lastStep`). */
   step?: string
+  /** It reads as working and nothing came of it past `QUIET_MS` (`QuietWatch`): since when, its last step, whether it ran. */
+  quiet?: { since: number; step?: string; running?: true }
   /** Its work waits for its own Fins, a move or provider recovery: pending, but holding no execution room. */
   awaiting?: string
   /** When its work now began: its turn's start, or with `awaiting`, when that turn ended. Absent when nothing says. */
@@ -716,7 +718,7 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
   const phase = latest?.status === "progress" ? reportPhase(latest) : undefined
   // By identity, never by time: an answer settles the ask it names, and a newer ask is open whatever the clocks say.
   const answered = journal.answered && latest && journal.answered.ask === reportAsk(latest).id ? { by: journal.answered.by, answer: journal.answered.answer } : undefined
-  if (thread.working && edge.closedAt === undefined) return { kind: "working", ...(thread.step && { step: thread.step }), ...(phase && { phase }), ...(answered && answerShown(journal, thread) && { answered }) }
+  if (thread.working && edge.closedAt === undefined) return { kind: "working", ...(thread.step && { step: thread.step }), ...(phase && { phase }), ...(answered && answerShown(journal, thread) && { answered }), ...(thread.quiet && { quiet: thread.quiet }) }
   // A question it waits on blocks it until the answer has reached it: that answer is what it goes on with.
   if (latest && (latest.status === "blocked" || latest.status === "needs-input") && !(answered && journal.answered?.delivered) && !edge.closedAt)
     return {
@@ -847,7 +849,7 @@ function carried(state: ChildState): ChildState {
   const cut = (text: string) => (text.length > NOTE_LIMIT ? `${text.slice(0, NOTE_LIMIT - 1)}…` : text)
   switch (state.kind) {
     case "working":
-      return { kind: "working", ...(state.step && { step: cut(state.step) }), ...(state.phase && { phase: cut(state.phase) }), ...(state.answered && { answered: state.answered }) }
+      return { kind: "working", ...(state.step && { step: cut(state.step) }), ...(state.phase && { phase: cut(state.phase) }), ...(state.answered && { answered: state.answered }), ...(state.quiet && { quiet: { ...state.quiet, ...(state.quiet.step && { step: cut(state.quiet.step) }) } }) }
     case "blocked":
       return { ...state, question: cut(state.question) }
     case "ended":
