@@ -1,3 +1,5 @@
+import { z } from "zod"
+import type { PromptVersions, PromptVersionsByRequest } from "../contracts/live-conversations.js"
 import { randomBytes, randomUUID } from "node:crypto"
 import { statSync } from "node:fs"
 import { join } from "node:path"
@@ -90,6 +92,9 @@ import { activeBinding, conversationControl, launched, type Dependencies, type L
 import { LiveSources, settled, updateBinding, type SettledBases } from "./live-sources.js"
 import { LiveThreads } from "./live-threads.js"
 import { holdSwitches, LiveTransfers, withdrawGone } from "./live-transfers.js"
+
+/** A fork point made from just before a prompt (`ForkInput.point`, as a journal keeps it). */
+const BeforeRunSchema = z.object({ kind: z.literal("before-run"), requestId: z.string() })
 
 /** How long after the host starts it moves journals' copies of their history onto records (`LiveSources.settleBases`). */
 const SETTLE_AFTER_START_MS = 60_000
@@ -1123,9 +1128,13 @@ export class LiveConversations {
   private admit(resident: Resident, request: LiveRequest): LiveRequest {
     request.attachments = this.assets.retainPrompt(request.attachments)
     const previousSnapshot = resident.snapshot
+    const control = request.continues?.auto ? conversationControl(resident) : retireQuestionsForInput(conversationControl(resident), request.id)
+    // A fork's first request is the version of the prompt it was made before: kept with its ancestry, and indexed.
+    const ancestry = control.ancestry
+    const first = ancestry && ancestry.firstRequest === undefined && !request.continues?.auto && !resident.snapshot.requests.length ? { ...ancestry, firstRequest: request.id } : undefined
     resident.snapshot = {
       ...resident.snapshot,
-      control: request.continues?.auto ? conversationControl(resident) : retireQuestionsForInput(conversationControl(resident), request.id),
+      control: first ? { ...control, ancestry: first } : control,
       requests: admittedInPlace(resident.snapshot.requests, request),
     }
     // Rejected acceptance must never become a later executable request.
@@ -1134,6 +1143,10 @@ export class LiveConversations {
     } catch (error) {
       resident.snapshot = previousSnapshot
       throw error
+    }
+    if (first) {
+      const indexed = this.records.forks.get(resident.snapshot.session.id)
+      if (indexed) indexed.firstRequest = request.id
     }
     this.dispatch.drain(resident)
     return request
@@ -1241,6 +1254,61 @@ export class LiveConversations {
 
   acknowledgeAction(id: string, actionId: string): Promise<void> {
     return this.actions.acknowledge(id, actionId)
+  }
+
+  /**
+   * The versions of each of `id`'s prompts that has more than one (`PromptVersions`), by request. A fork made from just
+   * before a prompt (a rewind to `before-run`) holds that prompt's next version as its first request, and a fork of
+   * that fork from just before its first request the next again: so a prompt's versions are a tree, rooted where the
+   * chain of such forks starts, read whole and ordered by when each was made. Read from the fork index alone, so a
+   * version whose conversation isn't loaded still counts.
+   */
+  promptVersions(id: string): PromptVersionsByRequest {
+    const forks = this.records.forks
+    const beforeRun = (point: string) => {
+      const parsed = BeforeRunSchema.safeParse((() => { try { return JSON.parse(point) } catch { return undefined } })())
+      return parsed.success ? parsed.data.requestId : undefined
+    }
+    // A fork made before this build kept no first request: the one on screen still says its own.
+    const firstOf = (conversation: string) => forks.get(conversation)?.firstRequest ?? this.records.get(conversation)?.snapshot.requests[0]?.id
+    const childrenOf = new Map<string, string[]>()
+    for (const [child, fork] of forks) {
+      const at = beforeRun(fork.point)
+      if (!at) continue
+      const key = `${fork.parentId}\0${at}`
+      childrenOf.set(key, [...childrenOf.get(key) ?? [], child])
+    }
+    const versionsOf = (conversation: string, requestId: string): PromptVersions | undefined => {
+      // Up to where the chain starts: while this is a before-run fork's first request, its parent's prompt came first.
+      let root = { conversation, requestId }
+      for (let hops = 0; hops < 64; hops++) {
+        const fork = forks.get(root.conversation)
+        const at = fork && beforeRun(fork.point)
+        if (!fork || !at || firstOf(root.conversation) !== root.requestId) break
+        root = { conversation: fork.parentId, requestId: at }
+      }
+      // Down the tree: each version's forks from just before its prompt, each holding the next.
+      const found: string[] = []
+      const walk = (node: { conversation: string; requestId: string }) => {
+        for (const child of childrenOf.get(`${node.conversation}\0${node.requestId}`) ?? []) {
+          if (found.includes(child)) continue
+          found.push(child)
+          const next = firstOf(child)
+          if (next) walk({ conversation: child, requestId: next })
+        }
+      }
+      walk(root)
+      if (!found.length) return undefined
+      found.sort((left, right) => (forks.get(left)?.createdAt ?? 0) - (forks.get(right)?.createdAt ?? 0))
+      const conversations = [root.conversation, ...found]
+      return { conversations, at: Math.max(0, conversations.indexOf(conversation)) }
+    }
+    const answers: PromptVersionsByRequest = {}
+    for (const request of this.records.get(id)?.snapshot.requests ?? []) {
+      const versions = versionsOf(id, request.id)
+      if (versions) answers[request.id] = versions
+    }
+    return answers
   }
 
   recoverRewinds() {
