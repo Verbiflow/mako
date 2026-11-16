@@ -62,7 +62,7 @@ function repository(path: string, files: number): void {
   git(path, "init", "-q", "-b", "main")
   git(path, "config", "user.email", "load@example.invalid")
   git(path, "config", "user.name", "Load")
-  writeFileSync(join(path, ".gitignore"), "node_modules/\ndist/\n.turbo/\n")
+  writeFileSync(join(path, ".gitignore"), "node_modules/\ndist/\n.turbo/\n.mako/\n")
   for (let n = 0; n < files; n += 1) {
     const folder = join(path, "src", `area-${Math.floor(n / 500)}`, `part-${Math.floor(n / 50)}`)
     if (n % 50 === 0) mkdirSync(folder, { recursive: true })
