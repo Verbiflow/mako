@@ -37,6 +37,8 @@ const quoted = (text: string) => `'${text.replaceAll("'", "'\\''")}'`
 const ChangeSchema = z.looseObject({ kind: z.string(), text: z.string().optional() })
 const QueueSchema = z.object({ requests: z.array(z.object({ status: z.string() })) })
 let host: ChildProcess | undefined
+// The host's own words, kept for a failure: a call it didn't finish says only that the connection was interrupted.
+let errors = ""
 
 try {
   await Promise.all([mkdir(home, { recursive: true }), mkdir(project, { recursive: true }), mkdir(standIn, { recursive: true }), mkdir(location.directory, { recursive: true, mode: 0o700 })])
@@ -63,7 +65,6 @@ exit 2
   }
   for (const key of ["ELECTRON_RUN_AS_NODE", "VITE_DEV_SERVER_URL", "CLAUDE_CONFIG_DIR", "NODE_OPTIONS", "MAKO_SESSION_ID"]) delete env[key]
   host = spawn(process.execPath, [join(repo, "packages/host/dist/mako-host.js")], { env, stdio: ["ignore", "ignore", "pipe"] })
-  let errors = ""
   host.stderr?.on("data", (data: Buffer) => (errors = (errors + data.toString()).slice(-4_000)))
   for (const deadline = Date.now() + 60_000; ; ) {
     assert.ok(host.exitCode === null, `The host exited while starting: ${errors}`)
@@ -153,6 +154,10 @@ exit 2
   assert.equal(JSON.parse(refused?.stdout ?? "{}").refused, "no-parent")
   console.log(JSON.stringify({ receiptMs: Math.round(receiptMs), children: listed.children.map((child: { name: string; state: { kind: string } }) => [child.name, child.state.kind]) }))
   console.log("PASS: mako agents started children from an Apex's shell, each report woke the Apex once, and list, wait and read answered")
+} catch (error) {
+  const log = await readFile(join(dataRoot, "logs/host.log"), "utf8").then((text) => text.split("\n").slice(-60).join("\n"), () => "(no host log)")
+  console.error(`The host: exit ${host?.exitCode ?? "none"}, signal ${host?.signalCode ?? "none"}\n--- its stderr ---\n${errors || "(nothing)"}\n--- the end of its log ---\n${log}`)
+  throw error
 } finally {
   if (host && host.exitCode === null) {
     const exited = once(host, "exit")
