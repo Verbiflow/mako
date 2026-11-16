@@ -145,6 +145,9 @@ class EntryDrawing {
           this.marker(entry, at, { label: entry.reason, ...entry.detail !== undefined && { detail: entry.detail }, ...entry.cause && { cause: entry.cause }, ...entry.body && { body: entry.body }, ...entry.tone && { tone: entry.tone }, ...entry.source && { source: entry.source } }, true)
           break
         case "event":
+          // A provider's retries that ended are the host's log's: recovered, nothing is left to say, and given up, the
+          // failure says itself. Journals from before keep them, and they draw nothing.
+          if (entry.retries) break
           this.marker(entry, at, { label: entry.label, detail: entry.detail, body: entry.body, tone: entry.tone, setup: entry.setup, source: entry.source, cause: entry.cause, limit: entry.limit, nearLimit: entry.nearLimit, retries: entry.retries, direct: entry.direct }, false)
           break
         case "unread":

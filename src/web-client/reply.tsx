@@ -4,7 +4,7 @@ import { toast } from "sonner"
 import type { CompactReply } from "@/components/transcript/compact-presentation"
 import { Spinner } from "@/components/ui/spinner"
 import { activeLiveAcp, useAcp } from "@/state/acp"
-import { branchReply, copyReply, offerReply } from "./replies"
+import { branchReply, copyText, offerReply } from "./replies"
 import { Sheet } from "./sheet"
 
 /**
@@ -32,7 +32,7 @@ function CopyReply({ text }: { text: string }) {
     return () => clearTimeout(timer)
   }, [copied])
   return (
-    <button type="button" data-reply-action="copy" className="web-reply-action pressable" onClick={() => void copyReply(text).then(() => setCopied(true))}>
+    <button type="button" data-reply-action="copy" className="web-reply-action pressable" onClick={() => void copyText(text).then(() => setCopied(true), () => undefined)}>
       {copied ? <CheckIcon aria-hidden className="size-4 text-positive" /> : <CopyIcon aria-hidden className="size-4" />}
       <span role="status">{copied ? "Copied" : "Copy"}</span>
     </button>
@@ -70,7 +70,7 @@ export function ReplySheet({ reply, onDismiss }: { reply: CompactReply | undefin
             className="web-choice"
             onClick={() => {
               onDismiss()
-              void copyReply(reply.text).then(() => toast.success("Copied the reply"), () => undefined)
+              void copyText(reply.text).then(() => toast.success("Copied the reply"), () => undefined)
             }}
           >
             <CopyIcon aria-hidden className="size-[18px] text-muted-foreground" />

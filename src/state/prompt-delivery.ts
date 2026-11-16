@@ -282,16 +282,32 @@ function transcribedRequests(input: Pick<DeliveryInput, "blocks" | "history">): 
   return ids
 }
 
+/**
+ * Whether the transcript holds `id`'s turn, read for that one request. The surfaces that ask (the panel, the composer,
+ * the queue, the live step) ask on every streamed batch, and reading every block of a long conversation into a set for
+ * each was most of what a batch cost them.
+ */
+function transcribes(input: Pick<DeliveryInput, "blocks" | "history">, id: string): boolean {
+  if (input.history?.earlierRequests?.includes(id)) return true
+  for (let index = input.blocks.length - 1; index >= 0; index--) {
+    const block = input.blocks[index]!
+    if (block.type === "user" && block.requestId === id) return true
+  }
+  return false
+}
+
 export function recoverableRequests(input: Pick<DeliveryInput, "blocks" | "history" | "requests">): LiveRequest[] {
-  const visible = transcribedRequests(input)
+  // Read only when a request needs it: most conversations hold none of these.
+  let visible: Set<string> | undefined
+  const shown = (id: string) => (visible ??= transcribedRequests(input)).has(id)
   // A turn the transcript shows carries its own stopped marker (`turnStops`);
   // only a stopped or unconfirmed message with no turn on screen needs a panel,
   // and a turn Mako couldn't save its failure row.
   return (input.requests ?? []).filter(
     (request) =>
       endsOnFailureRow(request) ||
-      (request.status === "uncertain" && !visible.has(request.id)) ||
-      (request.status === "interrupted" && !visible.has(request.id))
+      (request.status === "uncertain" && !shown(request.id)) ||
+      (request.status === "interrupted" && !shown(request.id))
   )
 }
 
@@ -304,13 +320,15 @@ export function recoverableRequests(input: Pick<DeliveryInput, "blocks" | "histo
  * the saved messages list.
  */
 export function recoveriesByPlace(input: Pick<DeliveryInput, "blocks" | "history" | "requests">) {
+  const recoverable = recoverableRequests(input)
+  const onTurns = new Map<string, LiveRequest>()
+  const apart: LiveRequest[] = []
+  if (!recoverable.length) return { onTurns, apart }
   const visible = transcribedRequests(input)
   const requests = input.requests ?? []
   const answered = requests.findLastIndex((request) => request.status === "completed")
   const recent = new Set(requests.slice(answered + 1).map((request) => request.id))
-  const onTurns = new Map<string, LiveRequest>()
-  const apart: LiveRequest[] = []
-  for (const request of recoverableRequests(input)) {
+  for (const request of recoverable) {
     if (!visible.has(request.id)) {
       if (recent.has(request.id)) apart.push(request)
     } else if (endsOnFailureRow(request)) onTurns.set(request.id, request)
@@ -352,9 +370,8 @@ export function promptDelivery(input: DeliveryInput): PromptDelivery {
         : undefined
   // A message waiting in this device's outbox stays in the queue, where its row says why, not drawn as sent.
   const starting = first?.status === "held" || (first && "waiting" in first && first.waiting) ? undefined : first
-  const visible = transcribedRequests(input)
   return {
-    starting: starting && !visible.has(starting.id) ? starting : null,
+    starting: starting && !transcribes(input, starting.id) ? starting : null,
     queued: waiting.filter((prompt) => prompt.id !== starting?.id),
   }
 }

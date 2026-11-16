@@ -278,7 +278,7 @@ export class CursorSdkAuth {
   reportRejected(message: string): void {
     const source = this.snapshot?.state.status === "signed-in" ? this.snapshot.state.source : "mako"
     hostWarn("cursor-sdk", "Cursor rejected the key a session ran under", { source, error: message })
-    this.record({ status: "signed-out", problem: { source, message: rejectionText(source, message) } })
+    this.record({ status: "signed-out", problem: { source, message: rejectionText(source) } })
   }
 
   private now(): number {
@@ -381,7 +381,7 @@ export class CursorSdkAuth {
         hostWarn("cursor-sdk", "Cursor rejected the key", { source: resolved.source, error: error.message })
         return this.record({
           status: "signed-out",
-          problem: { source: resolved.source, message: rejectionText(resolved.source, error.message) },
+          problem: { source: resolved.source, message: rejectionText(resolved.source) },
         })
       }
       // A failed probe is not "signed out": the last verified answer stands
@@ -392,10 +392,11 @@ export class CursorSdkAuth {
         this.snapshot = { state: this.snapshot.state, checkedAt: this.now() - CURSOR_SDK_AUTH_TTL_MS + CURSOR_SDK_AUTH_RETRY_MS }
         return this.snapshot
       }
-      return this.record({
-        status: "signed-out",
-        problem: { source: resolved.source, message: `Cursor could not be reached to check the key: ${errorMessage({ error })}` },
-      })
+      // With no answer to keep, it reads as unchecked in the row's words (the log has why) and is asked again after the
+      // retry window, as a kept answer is.
+      const unreached = this.record({ status: "signed-out", problem: { source: resolved.source, message: CURSOR_UNREACHED } })
+      this.snapshot = { state: unreached.state, checkedAt: unreached.checkedAt - CURSOR_SDK_AUTH_TTL_MS + CURSOR_SDK_AUTH_RETRY_MS }
+      return this.snapshot
     }
   }
 
@@ -410,18 +411,24 @@ export class CursorSdkAuth {
 }
 
 /** The refusal, said in terms of where the key came from and what fixes it. */
-export function rejectionText(source: CursorKeySource, detail: string): string {
-  const reason = detail.replace(/\s+/g, " ").trim().slice(0, 200)
+/**
+ * Why a key stopped working and what fixes it, by where it came from. Cursor's own words ("401 Unauthorized: …") go to
+ * the host's log with each rejection, never into the row.
+ */
+export function rejectionText(source: CursorKeySource): string {
   switch (source) {
     case "account":
-      return `Cursor rejected the selected account's key (${reason}). It may have expired or been revoked; sign in again in Settings → Agents.`
+      return "Cursor rejected the selected account's key. It may have expired or been revoked; sign in again in Settings → Agents."
     case "env":
-      return `Cursor rejected the CURSOR_API_KEY in Mako's environment (${reason}). Fix or unset it, then restart Mako.`
+      return "Cursor rejected the CURSOR_API_KEY in Mako's environment. Fix or unset it, then restart Mako."
     case "mako":
-      return `Cursor rejected the saved key (${reason}). It may have expired or been revoked; sign in again.`
+      return "Cursor rejected the saved key. It may have expired or been revoked; sign in again."
     case "cli":
-      return `Cursor rejected the key cursor-agent is signed in with (${reason}). Run cursor-agent login again, or sign in here.`
+      return "Cursor rejected the key cursor-agent is signed in with. Run cursor-agent login again, or sign in here."
     case "sdk":
-      return `Cursor rejected the SDK's own stored login (${reason}). Sign in again.`
+      return "Cursor rejected the SDK's own stored login. Sign in again."
   }
 }
+
+/** A first check of the key that couldn't reach Cursor: not proof it's signed out, so it's asked again soon. */
+export const CURSOR_UNREACHED = "Mako couldn't reach Cursor to check the key. It checks again in a moment."

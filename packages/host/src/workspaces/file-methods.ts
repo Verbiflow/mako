@@ -5,6 +5,7 @@ import type { SearchOptions } from "../contracts/git-workspace-search.js"
 import type { FileFoldersOptions, FileGrepOptions } from "../contracts/file-index.js"
 import type { MethodTable } from "../base/methods.js"
 import type { MachineCapability } from "../base/machine.js"
+import { GATEWAY_CLIENT, hostClient } from "../base/host-client.js"
 
 export interface FileMethodsDeps {
   withHost<TResult>(
@@ -41,8 +42,11 @@ export function declareFileMethods(methods: MethodTable, context: FileMethodsDep
   methods.handle("mako:files-grep", (query: string, options?: FileGrepOptions) => withHost((host) => host.filesGrep(query, options)))
   methods.handle("mako:read-file", (path: string) =>
     withHost(async (host) => {
-      const file = await host.readWorkspaceFile(path)
-      if (file.media !== "spreadsheet") return file
+      // Another device reads only this workspace's folders, through the file it verified; a sheet's picture is made
+      // from its path, so it's this Mac's windows' alone.
+      const remote = hostClient().startsWith(GATEWAY_CLIENT)
+      const file = await host.readWorkspaceFile(path, remote)
+      if (file.media !== "spreadsheet" || remote) return file
       if (machine.kind === "absent") return file
       const absolute = await host.resolvePath(path)
       const thumbnail = await machine.thumbnail(absolute, 1200).catch(() => null)

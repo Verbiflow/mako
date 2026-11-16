@@ -13,6 +13,7 @@ import {
 } from "@mako/sessions/live-content"
 import { createLiveEngine, type EngineLive } from "@mako/host/harnesses/live-engine"
 import { mcpServerFailedEvent } from "@mako/sessions/events"
+import { followHostLog, type HostLogLine } from "@mako/host/base/host-log"
 import {
   ClaudeProjection,
   claudeRetracted,
@@ -213,9 +214,10 @@ try {
     "PASS: The engine measures compaction across retries and late summaries, and draws a replayed native event once"
   )
 
-  // A provider's retries end in one quiet marker, drawn before what ended
-  // them: the model's answer (recovered) or the failure it gave up on, which
-  // says the failure itself, so the provider's words appear once.
+  // A provider's retries are "Retrying" while they run (the window's activity line) and one line of the host's log once
+  // they end, never a marker: recovered, nothing is left to say; given up, the failure says itself.
+  const ended: HostLogLine[] = []
+  const stopHearing = followHostLog((line) => { if (line.message === "a provider's retries ended") ended.push(line) })
   const updates = (events: LiveDriverEvent[]) => events.flatMap((event) => event.type === "live-update" ? [event.update] : event.type === "live-updates" ? event.updates : [])
   const recovered = session()
   at(10_000)
@@ -227,19 +229,11 @@ try {
   engine.activity(recovered.live, { kind: "retrying", attempt: 3, maxAttempts: 10 })
   at(51_000)
   engine.emitUpdates(recovered.live, [{ kind: "text", text: "" }])
-  assert.deepEqual(recovered.markers(), [], "an empty text is no answer")
   engine.emitUpdates(recovered.live, [{ kind: "text", text: "Here it is." }])
   engine.emitUpdate(recovered.live, { kind: "text", text: " More." })
-  assert.deepEqual(
-    updates(recovered.events).map((update) => update.kind === "event" ? [update.kind, update.label, update.detail, update.tone, update.retries] : [update.kind]),
-    [
-      ["text"],
-      ["event", "Recovered after 3 retries", "Overloaded (529)", undefined, { count: 3, outcome: "recovered", durationMs: 41_000 }],
-      ["text"],
-      ["text"],
-    ],
-    "recovered once the model answers, measured from the first retry, a repeated attempt counted once, drawn before the answer and only once"
-  )
+  assert.deepEqual(updates(recovered.events).map((update) => update.kind), ["text", "text", "text"], "recovered: the answer, and no marker")
+  assert.deepEqual(ended.map((line) => [line.fields?.outcome, line.fields?.count, line.fields?.durationMs, line.fields?.reason]), [["recovered", 3, 41_000, "Overloaded (529)"]],
+    "the log has it once, measured from the first retry, a repeated attempt counted once")
 
   const gaveUp = session()
   at(0)
@@ -247,48 +241,27 @@ try {
   at(62_000)
   engine.activity(gaveUp.live, null)
   engine.observe(gaveUp.live, "retry_state", [{ kind: "event", event: { label: "Turn failed", detail: "Server error", tone: "error" } }], "update-9")
-  assert.deepEqual(
-    gaveUp.markers().map((marker) => [marker.label, marker.detail, marker.tone, marker.retries]),
-    [
-      ["Retried once", undefined, undefined, { count: 1, outcome: "gave-up", durationMs: 62_000 }],
-      ["Turn failed", "Server error", "error", undefined],
-    ],
-    "the provider's failure ends the retries quietly; its words are the failure's, said once"
-  )
-  const otherWords = session()
-  engine.activity(otherWords.live, { kind: "retrying", attempt: 1, reason: "Overloaded (529)" })
-  engine.activity(otherWords.live, { kind: "retrying", attempt: 2 })
-  engine.event(otherWords.live, { label: "API error", detail: "Claude's servers didn't answer", tone: "error" })
-  assert.deepEqual(otherWords.markers().map((marker) => [marker.label, marker.detail, marker.tone]), [
-    ["Retried 2 times", "Overloaded (529)", undefined],
-    ["API error", "Claude's servers didn't answer", "error"],
-  ], "what it retried on stays beside the count when the failure says something else")
+  assert.deepEqual(gaveUp.markers().map((marker) => [marker.label, marker.detail, marker.tone]), [["Turn failed", "Server error", "error"]], "given up: the failure alone says it")
+  assert.deepEqual(ended.at(-1)?.fields?.outcome, "gave-up")
 
-  // Codex says it gave up in the session's error, before the failure marker; its retries name no reason.
+  // Codex says it gave up in the session's error, before the failure marker.
   const errored = session()
-  at(0)
   engine.activity(errored.live, { kind: "retrying", attempt: 1, maxAttempts: 5 })
-  engine.activity(errored.live, { kind: "retrying", attempt: 2, maxAttempts: 5 })
-  at(9_000)
   engine.patch(errored.live, { error: "We're currently experiencing high demand.\nTry again later." })
   engine.event(errored.live, { label: "Turn failed", detail: "Server error", tone: "error" })
-  assert.deepEqual(
-    errored.markers().map((marker) => [marker.label, marker.detail, marker.retries?.durationMs]),
-    [
-      ["Retried 2 times", undefined, 9_000],
-      ["Turn failed", "Server error", undefined],
-    ],
-    "an error in the session's state gives up; the error is the failure's to say"
-  )
+  assert.deepEqual(errored.markers().map((marker) => marker.label), ["Turn failed"])
 
-  // A turn that ends another way (a Stop, a process gone) ends its retries unsaid, and the next turn's answer is no recovery.
+  // A turn that ends another way (a Stop, a process gone) ends its retries unsaid, even in the log.
+  const before = ended.length
   const stopped = session()
   engine.activity(stopped.live, { kind: "retrying", attempt: 1 })
   engine.patch(stopped.live, { status: "ready", lastStop: "cancelled" })
   engine.patch(stopped.live, { status: "running" })
   engine.emitUpdate(stopped.live, { kind: "text", text: "A new turn." })
   assert.deepEqual(stopped.markers(), [], "nothing is said of retries a Stop cut short")
-  console.log("PASS: a provider's retries end in one quiet marker: recovered when the model answers, retried before the failure without repeating its words, unsaid when the turn ends otherwise")
+  assert.equal(ended.length, before)
+  stopHearing()
+  console.log("PASS: a provider's retries draw no marker: the host's log has each burst once, recovered or given up, and nothing when the turn ends otherwise")
 } finally {
   clock.mock.restore()
 }

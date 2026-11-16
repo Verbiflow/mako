@@ -22,12 +22,12 @@ export type HostCalling = { readonly session: ClientSession }
  * One host call to one of the account's Macs, through its runtime link: the same call its own window makes, answered
  * by its host as it answers that window (`serveHostThroughGateway`). Said at once, as itself, when the Mac is off.
  */
-export async function macCall<Result>(gateway: HostCalling, webDeviceId: string, deviceId: string, channel: string, args: readonly unknown[], how: { history?: boolean } = {}): Promise<Result> {
+export async function macCall<Result>(gateway: HostCalling, webDeviceId: string, deviceId: string, channel: string, args: readonly unknown[], how: { history?: boolean; passive?: boolean } = {}): Promise<Result> {
   const runtimeId = `d-${deviceId}`
   const place = macPlace(deviceId)
   const log = reachLog(place)
-  const send = gatewayHostCalls(gateway.session, { runtimeId, actor: { kind: "client", client: "web", deviceId: webDeviceId }, history: how.history ?? false, log }).call(channel, args)
-  const value = await sendWithRepeats(channel, send, { runtime: runtimeId, log })
+  const send = gatewayHostCalls(gateway.session, { runtimeId, actor: { kind: "client", client: "web", deviceId: webDeviceId }, history: how.history ?? false, passive: how.passive === true, log }).call(channel, args)
+  const value = await sendWithRepeats(channel, send, { runtime: runtimeId, passive: how.passive === true, log })
   answered(place)
   // SAFETY: the Mac's host answers each channel with the value its bridge method declares, as to its own window.
   return decodeRuntimeValue(value) as Result

@@ -1,7 +1,10 @@
+import { z } from "zod"
+import type { PromptVersions, PromptVersionsByRequest } from "../contracts/live-conversations.js"
 import { randomBytes, randomUUID } from "node:crypto"
 import { statSync } from "node:fs"
 import { join } from "node:path"
 import { Admission } from "../base/admission.js"
+import { NativeVerificationPendingError } from "../contracts/native-verification.js"
 import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { disconnectedContext } from "../base/execution-context.js"
@@ -54,7 +57,7 @@ import { bareCommand } from "@mako/sessions/tool-identity"
 import { needsYouWaiting, questionWaiting, requestWaiting, type Waiting } from "@mako/protocol/attention"
 import { agentAskLine } from "../contracts/agent-asks.js"
 import type { SessionSettings } from "@mako/sessions/settings"
-import { steerHeard, type VerifiedSignIn } from "../harnesses/index.js"
+import { steerHeard, sameNativeSource, type VerifiedSignIn } from "../harnesses/index.js"
 import { LiveAccounts } from "./live-accounts.js"
 import { LiveActions, type SteerInput, type SteerSender } from "./live-actions.js"
 import { LiveApprovals } from "./live-approvals.js"
@@ -87,9 +90,13 @@ import { LiveRelocations } from "./live-relocations.js"
 import { LiveRestarts } from "./live-restarts.js"
 import { ContextBundles, prepareLiveContext } from "./live-context.js"
 import { activeBinding, conversationControl, launched, type Dependencies, type LiveAccess, type ProviderStop, type Resident, STOPPED_FOR } from "./live-runtime.js"
+import { flushFrameMs } from "./answer-pace.js"
 import { LiveSources, settled, updateBinding, type SettledBases } from "./live-sources.js"
 import { LiveThreads } from "./live-threads.js"
 import { holdSwitches, LiveTransfers, withdrawGone } from "./live-transfers.js"
+
+/** A fork point made from just before a prompt (`ForkInput.point`, as a journal keeps it). */
+const BeforeRunSchema = z.object({ kind: z.literal("before-run"), requestId: z.string() })
 
 /** How long after the host starts it moves journals' copies of their history onto records (`LiveSources.settleBases`). */
 const SETTLE_AFTER_START_MS = 60_000
@@ -208,6 +215,12 @@ export class LiveConversations {
     this.restarts = new LiveRestarts(dependencies.root, dependencies.emit)
     this.threads = new LiveThreads(dependencies)
     this.records = new LiveRecords(dependencies, {
+      recovered: (previous, snapshot) => {
+        const cut = snapshot.requests.find((request) => (request.status === "uncertain" || request.status === "interrupted") && request.pause !== "stop" && request.interruption?.reason === "host-crashed" && previous.requests.some((old) => old.id === request.id && old.status === "dispatching"))
+        if (!cut) return
+        const waiting = previous.requests.flatMap((request) => request.status === "queued" && request.inputDigest ? [{ id: request.id, inputDigest: request.inputDigest }] : [])
+        this.restarts.leave([{ conversationId: snapshot.session.id, requestId: cut.id, waiting, ...(this.inTree(snapshot.session.id) && { always: true as const }) }])
+      },
       busy: (resident) => {
         const id = resident.snapshot.session.id
         return Boolean(this.transfers.pending(resident)) || this.launches.starting(id) || this.sources.refreshing(id) || this.stops.has(id) || this.finsAtWork(id)
@@ -250,6 +263,9 @@ export class LiveConversations {
     const observe = (event: LiveDriverEvent) => this.events.observe(event)
     const access: LiveAccess = {
       stopMark: id => this.stopMark(id),
+      restartAllowed: (id, requestId) => this.dependencies.signInAllowed?.(id) !== false && this.restarts.left().some((turn) => turn.conversationId === id && turn.requestId === requestId),
+      restartContinued: (id, requestId) => this.restartContinued(id, requestId),
+      reconcileCut: (resident, continues) => this.reconcileCut(resident, continues),
       dependencies,
       reclaims: this.reclaims,
       epoch: this.epoch,
@@ -585,7 +601,9 @@ export class LiveConversations {
     // Waiting, or being sent now: a send whose refusal comes back after the Stop is caught by its mark too (`flush`).
     // One being edited takes the mark under its edit, so saving the edit doesn't send it.
     const stops = (request: LiveRequest) => request.pause !== "stop" &&
-      (request.status === "queued" || request.status === "dispatching" || request.status === "held" || Boolean(request.signIn && request.status !== "canceled"))
+      (request.status === "queued" || request.status === "dispatching" || request.status === "held" ||
+        ((request.status === "interrupted" || request.status === "uncertain") && (request.interruption?.reason === "host-quit" || request.interruption?.reason === "host-crashed")) ||
+        Boolean(request.signIn && request.status !== "canceled"))
     if (!resident) return 0
     // A switch not yet committed is queued work, held like any message; a committed one's message is in the queue
     // already. Holding moves no generation, so the source binding's events still count (`holdSwitches`).
@@ -1131,9 +1149,13 @@ export class LiveConversations {
   private admit(resident: Resident, request: LiveRequest): LiveRequest {
     request.attachments = this.assets.retainPrompt(request.attachments)
     const previousSnapshot = resident.snapshot
+    const control = request.continues?.auto ? conversationControl(resident) : retireQuestionsForInput(conversationControl(resident), request.id)
+    // A fork's first request is the version of the prompt it was made before: kept with its ancestry, and indexed.
+    const ancestry = control.ancestry
+    const first = ancestry && ancestry.firstRequest === undefined && !request.continues?.auto && !resident.snapshot.requests.length ? { ...ancestry, firstRequest: request.id } : undefined
     resident.snapshot = {
       ...resident.snapshot,
-      control: request.continues?.auto ? conversationControl(resident) : retireQuestionsForInput(conversationControl(resident), request.id),
+      control: first ? { ...control, ancestry: first } : control,
       requests: admittedInPlace(resident.snapshot.requests, request),
     }
     // Rejected acceptance must never become a later executable request.
@@ -1142,6 +1164,10 @@ export class LiveConversations {
     } catch (error) {
       resident.snapshot = previousSnapshot
       throw error
+    }
+    if (first) {
+      const indexed = this.records.forks.get(resident.snapshot.session.id)
+      if (indexed) indexed.firstRequest = request.id
     }
     this.dispatch.drain(resident)
     return request
@@ -1249,6 +1275,61 @@ export class LiveConversations {
 
   acknowledgeAction(id: string, actionId: string): Promise<void> {
     return this.actions.acknowledge(id, actionId)
+  }
+
+  /**
+   * The versions of each of `id`'s prompts that has more than one (`PromptVersions`), by request. A fork made from just
+   * before a prompt (a rewind to `before-run`) holds that prompt's next version as its first request, and a fork of
+   * that fork from just before its first request the next again: so a prompt's versions are a tree, rooted where the
+   * chain of such forks starts, read whole and ordered by when each was made. Read from the fork index alone, so a
+   * version whose conversation isn't loaded still counts.
+   */
+  promptVersions(id: string): PromptVersionsByRequest {
+    const forks = this.records.forks
+    const beforeRun = (point: string) => {
+      const parsed = BeforeRunSchema.safeParse((() => { try { return JSON.parse(point) } catch { return undefined } })())
+      return parsed.success ? parsed.data.requestId : undefined
+    }
+    // A fork made before this build kept no first request: the one on screen still says its own.
+    const firstOf = (conversation: string) => forks.get(conversation)?.firstRequest ?? this.records.get(conversation)?.snapshot.requests[0]?.id
+    const childrenOf = new Map<string, string[]>()
+    for (const [child, fork] of forks) {
+      const at = beforeRun(fork.point)
+      if (!at) continue
+      const key = `${fork.parentId}\0${at}`
+      childrenOf.set(key, [...childrenOf.get(key) ?? [], child])
+    }
+    const versionsOf = (conversation: string, requestId: string): PromptVersions | undefined => {
+      // Up to where the chain starts: while this is a before-run fork's first request, its parent's prompt came first.
+      let root = { conversation, requestId }
+      for (let hops = 0; hops < 64; hops++) {
+        const fork = forks.get(root.conversation)
+        const at = fork && beforeRun(fork.point)
+        if (!fork || !at || firstOf(root.conversation) !== root.requestId) break
+        root = { conversation: fork.parentId, requestId: at }
+      }
+      // Down the tree: each version's forks from just before its prompt, each holding the next.
+      const found: string[] = []
+      const walk = (node: { conversation: string; requestId: string }) => {
+        for (const child of childrenOf.get(`${node.conversation}\0${node.requestId}`) ?? []) {
+          if (found.includes(child)) continue
+          found.push(child)
+          const next = firstOf(child)
+          if (next) walk({ conversation: child, requestId: next })
+        }
+      }
+      walk(root)
+      if (!found.length) return undefined
+      found.sort((left, right) => (forks.get(left)?.createdAt ?? 0) - (forks.get(right)?.createdAt ?? 0))
+      const conversations = [root.conversation, ...found]
+      return { conversations, at: Math.max(0, conversations.indexOf(conversation)) }
+    }
+    const answers: PromptVersionsByRequest = {}
+    for (const request of this.records.get(id)?.snapshot.requests ?? []) {
+      const versions = versionsOf(id, request.id)
+      if (versions) answers[request.id] = versions
+    }
+    return answers
   }
 
   recoverRewinds() {
@@ -1471,6 +1552,85 @@ export class LiveConversations {
     return this.restarts.set(settings)
   }
 
+  /** A committed continuation releases only the unchanged messages this exit paused, behind itself. */
+  private restartContinued(id: string, requestId: string): void {
+    const left = this.restarts.left().find((turn) => turn.conversationId === id && turn.requestId === requestId)
+    const resident = this.records.get(id)
+    const continuation = resident?.snapshot.requests.find((request) => request.continues?.requestId === requestId)
+    const source = resident?.snapshot.requests.find((request) => request.id === requestId)
+    if (!left || !resident || (!continuation && source?.status !== "completed") || this.dependencies.signInAllowed?.(id) === false) return
+    if (source?.pause !== "stop" && (source?.status === "completed" || continuation?.status !== "canceled")) {
+      const waiting = left.waiting ?? []
+      const ids = new Set(resident.snapshot.requests.flatMap((request) => {
+        const hold = holdOf(request)
+        return hold?.kind === "paused" && hold.by === "mako" &&
+          (request === continuation || waiting.some((row) => row.id === request.id && row.inputDigest === request.inputDigest)) ? [request.id] : []
+      }))
+      const previous = resident.snapshot
+      const requests = previous.requests.map((request) => ids.has(request.id) ? released(request) : request)
+      resident.snapshot = { ...previous, requests: continuation ? [...goingFirst(requests, continuation.id)] : requests }
+      try { this.flush(resident) } catch (error) { resident.snapshot = previous; throw error }
+    }
+    this.restarts.handed(resident.snapshot)
+  }
+
+  private inTree(id: string): boolean {
+    const threads = this.dependencies.threads
+    const placement = threads?.journalPlacement(id)
+    if (!threads || !placement) return false
+    return threads.edges().of(placement.thread) !== undefined || threads.edges().children(placement.thread).some((edge) => edge.closedAt === undefined)
+  }
+
+  private ordinaryCrashIds(): readonly string[] {
+    return this.restarts.settings().continueAfterRestart
+      ? this.records.unsettledIds().filter((id) => !this.inTree(id) && this.dependencies.signInAllowed?.(id) !== false) : []
+  }
+
+  /** An uncertain crash is read before any replacement executor is opened. Transport acceptance is not completion. */
+  private async reconcileCut(resident: Resident, continues: TurnContinuation | undefined): Promise<boolean> {
+    if (!continues?.auto || continues.reason !== "host-crashed") return true
+    const id = resident.snapshot.session.id
+    const source = resident.snapshot.requests.find((request) => request.id === continues.requestId)
+    if (!source || source.pause === "stop" || source.status === "completed" || source.status === "canceled") return false
+    const binding = activeBinding(resident)
+    const run = source.nativeRun
+    const driver = binding && this.dependencies.driver(binding.provider)
+    if (!binding?.nativeId || !binding.path || (run && run.bindingId !== binding.id) || driver?.resume.kind !== "native")
+      throw new NativeVerificationPendingError("The saved native context could not be verified. No continuation was sent.")
+    const generation = resident.generation
+    const stopped = this.stopMark(id)
+    const owned = () => this.records.get(id) === resident && resident.generation === generation &&
+      this.stopMark(id) === stopped && !resident.closing && !this.admission.closed &&
+      (this.restarts.settings().continueAfterRestart || this.inTree(id)) &&
+      activeBinding(resident) === binding && this.moves.executes(resident) &&
+      this.dependencies.signInAllowed?.(id) !== false &&
+      resident.snapshot.requests.some((request) => request.id === source.id && request.pause !== "stop" &&
+        (request.status === "uncertain" || request.status === "interrupted") && request.nativeRun?.runId === run?.runId && (!request.nativeRun || request.nativeRun.bindingId === binding.id))
+    if (!owned()) return false
+    const store = binding.executionContext?.store
+    if (store?.kind === "located" && !await sameNativeSource(driver, binding.path, store.path, binding.nativeId))
+      throw new Error("The saved native source disagrees with its execution context. No continuation was sent.")
+    if (!owned()) return false
+    const evidence = await driver.resume.inspect(binding)
+    if (!owned()) return false
+    if (evidence.kind !== "available") throw new NativeVerificationPendingError("The native turn's execution owner could not be ruled out.")
+    const outcome = run && driver.resume.readTurn ? await driver.resume.readTurn({ binding, runId: run.runId })
+      : { kind: "unknown" as const, reason: "The native source was read, but this dispatch has no exact retained native turn correspondence." }
+    if (!owned()) return false
+    if (outcome.kind === "unavailable") throw new NativeVerificationPendingError(outcome.reason)
+    if (outcome.kind === "unfinished" || outcome.kind === "unknown") return true
+    const shown = await this.sources.refreshCompletedCut(id, source)
+    if (!owned()) return false
+    // A completion without a readable result must not leave an empty "done" conversation. The verified native
+    // continuation can inspect that context and return its result; it still never replays the uncertain original.
+    if (!shown) return true
+    resident.snapshot = { ...resident.snapshot, session: { ...resident.snapshot.session, status: "ready", error: undefined }, requests: resident.snapshot.requests.map((request) =>
+      request.id === source.id ? { ...request, status: "completed" as const, interruption: undefined, error: undefined, failure: undefined } : request) }
+    this.flush(resident)
+    hostLog("live", "native record confirmed a crashed turn finished; no continuation sent", { conversation: id, request: source.id, harness: binding.provider })
+    return false
+  }
+
   /**
    * Continues the turns the host before this one cut short as it quit,
    * restarted or updated, when the person chose so (`LiveRestarts`): each
@@ -1478,10 +1638,26 @@ export class LiveConversations {
    * reopening its session, so its footer says Mako is continuing it.
    */
   continueRestarted(): void {
-    for (const { conversationId, requestId } of this.restarts.take()) {
+    for (const id of this.ordinaryCrashIds()) this.records.load(id)
+    for (const { conversationId, requestId } of this.restarts.left()) {
       try {
         const resident = this.records.load(conversationId)
         if (!resident) continue
+        const source = resident.snapshot.requests.find((request) => request.id === requestId)
+        if (source?.pause === "stop" || source?.status === "completed" || source?.status === "canceled") {
+          if (source?.status === "completed") {
+            this.restartContinued(conversationId, requestId)
+            if (resident.snapshot.requests.some((request) => request.status === "queued")) this.release(resident)
+          } else this.restarts.finish(conversationId, requestId)
+          continue
+        }
+        if (resident.snapshot.requests.some((request) => request.continues?.requestId === requestId)) {
+          // Its admission was written before the last host could release the exact exit-paused queue.
+          this.restartContinued(conversationId, requestId)
+          if (resident.snapshot.requests.some((request) => request.status === "queued")) this.release(resident)
+          continue
+        }
+        if (resident.snapshot.control?.transfers.some((transfer) => transfer.continues?.requestId === requestId)) continue
         this.autoContinue.schedule(resident, requestId, true)
         if (resident.autoContinue) this.flush(resident)
       } catch (error) {
@@ -1496,7 +1672,7 @@ export class LiveConversations {
    * continues nothing and leaves the turns where they were, for the next.
    */
   async continueRestartedInSlices(): Promise<void> {
-    if (await this.readIn(this.restarts.left().map((turn) => turn.conversationId))) this.continueRestarted()
+    if (await this.readIn([...new Set([...this.restarts.left().map((turn) => turn.conversationId), ...this.ordinaryCrashIds()])])) this.continueRestarted()
   }
 
   /**
@@ -1969,13 +2145,14 @@ export class LiveConversations {
   }
 
   /**
-   * The person closes a conversation: what waited to go again or at a time stops waiting and stays paused, with
-   * Resume, since closing it says they're done for now. Mako's own exit closes through `closeForExit`, which keeps
-   * those, so the next host sends them when their time comes.
+   * Close withdraws restart recovery and cancels held retries and schedules. Sign-in holds keep their Stop behavior;
+   * ordinary queued messages remain queued for reopening. Mako's own exit uses `closeForExit`, which retains the
+   * held retries and schedules for the next host.
    */
   close(id: string): Promise<void> {
     // Read in if it isn't: right after a restart its journal may not be loaded yet, and its times must still stop.
     const resident = this.records.load(id)
+    this.restarts.discard(id)
     if (resident?.snapshot.requests.some(request => request.signIn && request.status !== "canceled")) this.stopHolds(id)
     if (resident?.snapshot.requests.some((request) => request.status === "held" && (request.retry || request.wake))) {
       resident.snapshot = {
@@ -2002,18 +2179,26 @@ export class LiveConversations {
   /**
    * A change goes out in the next batch: at once (the next turn of the event loop) when the conversation hasn't
    * flushed for a frame, else when the frame since its last flush has passed. So the first token of a burst isn't held,
-   * and a stream goes at most every `BATCH_MS`, in batches every window, watching device and the journal share.
+   * and a stream goes at most every `BATCH_MS`, in batches every window, watching device and the journal share. A long
+   * answer going on waits longer (`flushFrameMs`), and a change that can't wait brings its batch back to the frame.
    */
   private schedule(resident: Resident): void {
-    if (resident.timer) return
-    const wait = resident.flushedAt === undefined ? 0 : Math.max(0, resident.flushedAt + BATCH_MS - performance.now())
+    const now = performance.now()
+    // A long answer going on waits for a reader's pace; anything else comes back to the frame (`flushFrameMs`).
+    const frame = flushFrameMs(BATCH_MS, resident.snapshot.blocks, resident.updates, resident.snapshot !== resident.journalSnapshot)
+    const due = resident.flushedAt === undefined ? now : resident.flushedAt + frame
+    if (resident.timer) {
+      if (due >= (resident.timerDue ?? now)) return
+      clearTimeout(resident.timer)
+    }
+    resident.timerDue = due
     resident.timer = setTimeout(() => {
       try {
         this.flush(resident)
       } catch (error) {
         this.storageFailed(resident, { error })
       }
-    }, wait)
+    }, Math.max(0, due - now))
   }
 
   /** See `LiveAccess.keep`. */
@@ -2041,6 +2226,7 @@ export class LiveConversations {
   private flush(resident: Resident): void {
     try {
       this.write(resident)
+      this.restarts.handed(resident.snapshot)
     } finally {
       this.noteWork(resident)
     }
@@ -2061,6 +2247,7 @@ export class LiveConversations {
     }
     if (resident.timer) clearTimeout(resident.timer)
     resident.timer = null
+    resident.timerDue = undefined
     // A Stop's latch holds whatever its requests became since, in the one place every change is written.
     const latched = latchedByStop(resident.snapshot.requests)
     if (latched !== resident.snapshot.requests) resident.snapshot = { ...resident.snapshot, requests: latched }

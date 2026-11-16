@@ -177,6 +177,7 @@ const inputs = {
             z.literal("crew"),
             z.literal("apexes"),
             z.literal("threads"),
+            z.literal("all"),
           ])
           .optional(),
         query: z.string().optional(),
@@ -947,6 +948,23 @@ const inputs = {
       z.string(),
       z.object({ width: z.number(), height: z.number() }).optional(),
     ]),
+  "mako:conversation-app": () => z.tuple([z.string(), z.string()]),
+  "mako:conversation-app-demand": () =>
+    z.tuple([
+      z.string(),
+      z
+        .object({
+          view: z.string().uuid(),
+          generation: z
+            .number()
+            .int()
+            .nonnegative()
+            .max(Number.MAX_SAFE_INTEGER),
+          visible: z.boolean(),
+          confirm: z.boolean(),
+        })
+        .strict(),
+    ]),
   "mako:conversation-settings": () => z.tuple([]),
   "mako:conversation-settings-set": () =>
     z.tuple([z.object({ continueAfterRestart: z.boolean() })]),
@@ -1473,6 +1491,7 @@ const inputs = {
         })
         .optional(),
     ]),
+  "mako:live-prompt-versions": () => z.tuple([z.string()]),
   "mako:live-read": () =>
     z.tuple([
       z.string(),
@@ -1878,6 +1897,41 @@ const inputs = {
       z.string(),
       z.string(),
       z.object({ context: z.number().optional() }).optional(),
+    ]),
+  "mako:live-turn-media": () =>
+    z.tuple([
+      z.string(),
+      z
+        .array(
+          z.object({
+            callId: z.string().min(1).max(512),
+            path: z.string().min(2).max(4_096).startsWith("/"),
+            evidence: z.enum([
+              "shown",
+              "produced",
+              "wrote",
+              "named",
+              "embedded",
+            ]),
+            startedAt: z
+              .number()
+              .int()
+              .nonnegative()
+              .max(8_640_000_000_000_000)
+              .optional(),
+            endedAt: z
+              .number()
+              .int()
+              .nonnegative()
+              .max(8_640_000_000_000_000)
+              .optional(),
+            digest: z
+              .string()
+              .regex(/^[a-f0-9]{64}$/)
+              .optional(),
+          })
+        )
+        .max(200),
     ]),
   "mako:live-turn-undo": () =>
     z.tuple([
@@ -2443,7 +2497,13 @@ const inputs = {
           z.object({
             callId: z.string().min(1).max(512),
             path: z.string().min(2).max(4_096).startsWith("/"),
-            evidence: z.enum(["shown", "produced", "wrote", "named"]),
+            evidence: z.enum([
+              "shown",
+              "produced",
+              "wrote",
+              "named",
+              "embedded",
+            ]),
             startedAt: z
               .number()
               .int()
@@ -3007,6 +3067,21 @@ const inputs = {
       z.string().optional(),
       z.array(z.string()).optional(),
     ]),
+  "mako:thread-app-demand": () =>
+    z.tuple([
+      z
+        .object({
+          connection: z.string().uuid(),
+          generation: z
+            .number()
+            .int()
+            .nonnegative()
+            .max(Number.MAX_SAFE_INTEGER),
+          visible: z.boolean(),
+        })
+        .strict()
+        .optional(),
+    ]),
   "mako:thread-app-make-room": () =>
     z.tuple([z.string(), z.string().optional()]),
   "mako:thread-app-marks": () => z.tuple([]),
@@ -3272,6 +3347,7 @@ const inputs = {
       ]),
     ]),
   "mako:utility-model-settings": () => z.tuple([]),
+  "mako:view-hints": () => z.tuple([]),
   "mako:watch-file": () => z.tuple([z.string()]),
   "mako:workspace-move-answer": () =>
     z.tuple([
@@ -3441,6 +3517,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:control-preview-source", "control"],
   ["mako:control-preview-viewers", "control"],
   ["mako:control-video", "conversations"],
+  ["mako:conversation-app", "workspaces"],
+  ["mako:conversation-app-demand", "workspaces"],
   ["mako:conversation-settings", "conversations"],
   ["mako:conversation-settings-set", "conversations"],
   ["mako:crashes", "application"],
@@ -3555,6 +3633,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:live-permission", "conversations"],
   ["mako:live-prewarm", "conversations"],
   ["mako:live-prompt", "conversations"],
+  ["mako:live-prompt-versions", "conversations"],
   ["mako:live-read", "conversations"],
   ["mako:live-review", "conversations"],
   ["mako:live-rewind", "conversations"],
@@ -3572,6 +3651,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:live-turn-changes", "conversations"],
   ["mako:live-turn-diff", "conversations"],
   ["mako:live-turn-hunks", "conversations"],
+  ["mako:live-turn-media", "media"],
   ["mako:live-turn-undo", "conversations"],
   ["mako:live-turn-undo-preview", "conversations"],
   ["mako:live-turn-writers", "conversations"],
@@ -3694,6 +3774,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-abort-run", "conversations"],
   ["mako:thread-app", "workspaces"],
   ["mako:thread-app-check", "workspaces"],
+  ["mako:thread-app-demand", "workspaces"],
   ["mako:thread-app-make-room", "workspaces"],
   ["mako:thread-app-marks", "workspaces"],
   ["mako:thread-app-output", "workspaces"],
@@ -3752,6 +3833,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:utility-model-connect", "git"],
   ["mako:utility-model-disconnect", "git"],
   ["mako:utility-model-settings", "git"],
+  ["mako:view-hints", "workspaces"],
   ["mako:watch-file", "workspaces"],
   ["mako:workspace-move-answer", "workspaces"],
   ["mako:workspace-move-bring", "workspaces"],

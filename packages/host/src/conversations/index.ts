@@ -1,4 +1,5 @@
 import { noteCarried } from "@mako/sessions/record-carried"
+import { GATEWAY_CLIENT, hostClient } from "../base/host-client.js"
 import type { Foreground } from "../base/foreground.js"
 import type { NativeRoutingReading } from "../contracts/native-routing.js"
 import { routeAccepted } from "../contracts/model-routes.js"
@@ -8,7 +9,7 @@ import type { Git } from "@mako/git"
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
 import type { Admission } from "../base/admission.js"
-import { readPull } from "../git/index.js"
+import { readPull, RequiredChecks } from "../git/index.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { HostEnvironment } from "../base/host-environment.js"
 import type { HostMethods } from "../transport/index.js"
@@ -359,6 +360,8 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     projects: join(environment.userRoot, "projects"),
     known: () => [...(threads.store?.worktrees().map((worktree) => worktree.repoRoot) ?? []), ...live.summaries().flatMap((summary) => summary.session.cwd ?? [])],
   })
+  // The checks each repository's branches require, read once and kept: a pull request wait settles only once they ran.
+  const requiredChecks = new RequiredChecks()
   if (threads.store) {
     agents = new Agents({
       store: () => threads.store ?? undefined,
@@ -417,7 +420,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       finCeiling: () => deps.finDefaults?.reading().ceiling ?? FIN_CEILING,
       capacity: new MacCapacity(),
       heldPulls: (repoRoot, branch) => workspaces.worktrees?.heldPulls(repoRoot, branch) ?? [],
-      readPull: (target) => readPull(target),
+      readPull: (target) => readPull(target, undefined, requiredChecks),
       ...(away && { away }),
       remoteOf: (cwd) => deps.git.output(cwd, ["remote", "get-url", "origin"]).then((text) => text.trim() || undefined, () => undefined),
       checkoutOf: (remote) => checkouts.find(remote),
@@ -504,6 +507,8 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
 }
 
 export interface ConversationMethodsDeps {
+  /** Whether a resolved path is a copy Mako kept of a file this conversation's records name (`ConversationMedia.kept`). */
+  keptMedia?: (conversation: string, real: string) => Promise<boolean>
   conversations: Conversations
   /** Validates each launch's settings against the harness's discovered models. */
   profiles: HarnessProfiles
@@ -670,6 +675,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     return rewound
   })
   methods.handle("mako:live-rewind-recover", () => live.recoverRewinds())
+  methods.handle("mako:live-prompt-versions", (id: string) => live.promptVersions(id))
   methods.handle("mako:live-action", (id: string, input: LiveActionInput) => live.act(id, input))
   // A separate method advertises atomic queued steering to clients whose UI
   // can update while the shared host remains alive. Keep live-action for
@@ -699,7 +705,9 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     const session = live.session(id)
     if (!session) throw new Error("That conversation is unavailable")
     const dataDir = environments ? () => environments.fileDataDir({ conversationId: id, cwd: session.cwd }) : undefined
-    return files.read(session.cwd, path, dataDir, purpose)
+    // Another device reads through the gateway: only the Thread's folders, never a path anywhere on this Mac.
+    const kept = deps.keptMedia
+    return files.read(session.cwd, path, dataDir, purpose, hostClient().startsWith(GATEWAY_CLIENT), kept && ((real) => kept(id, real)))
   })
   /** A conversation's folder, browsed from wherever its window is: another device's Files view. */
   const folderIndex = (id: string) => {

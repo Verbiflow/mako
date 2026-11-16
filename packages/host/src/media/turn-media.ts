@@ -104,6 +104,21 @@ export class TurnMedia {
     return media
   }
 
+  /**
+   * What the host already answered for each check, read only: kept (with its copy still there), dropped, or undefined
+   * when nothing was decided. Nothing is copied or decided here.
+   */
+  async answered(checks: readonly Pick<MediaCheck, "callId" | "path">[]): Promise<(MediaConfirmation | undefined)[]> {
+    const read = this.db.prepare("SELECT answer FROM answers WHERE call = ? AND path = ?")
+    const answers: (MediaConfirmation | undefined)[] = []
+    for (const check of checks) {
+      const row = read.get(check.callId, check.path)
+      const answer = row ? AnswerSchema.safeParse(JSON.parse(z.object({ answer: z.string() }).parse(row).answer)) : undefined
+      answers.push(answer?.success && (answer.data.kind === "dropped" || await this.present(answer.data.media)) ? answer.data : undefined)
+    }
+    return answers
+  }
+
   private async check(check: MediaCheck): Promise<MediaConfirmation> {
     const kind = mediaKind(check.path)
     if (!kind) return { kind: "dropped", reason: "Not an image, video, audio file, HTML page or PDF" }

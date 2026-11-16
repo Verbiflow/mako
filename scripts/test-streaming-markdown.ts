@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { toHtml } from "hast-util-to-html"
-import { fenceSegments, streamingMarkdown } from "../src/lib/streaming-markdown"
+import { streamPieces, streamingMarkdown } from "../src/lib/streaming-markdown"
 import { parseProse } from "../src/lib/parsed-markdown"
 import { LIVE_FRAME_MS } from "@mako/host/contracts/live-conversations"
 import { STREAM_FRAME_MAX_MS, STREAM_FRAME_MS, StreamFrames, streamFrameMs, type StreamClock } from "../src/lib/stream-frames"
@@ -52,18 +52,28 @@ import { STREAM_FRAME_MAX_MS, STREAM_FRAME_MS, StreamFrames, streamFrameMs, type
 // Where a streaming answer's parse can be cut: only after a closed fence at the left edge and a blank line.
 {
   const doc = "Intro\n\n```ts\nconst a = 1\n```\n\n- one\n\n- two\n\n```\nb\n```\n\nEnd"
-  const pieces = fenceSegments(doc)
-  assert.deepEqual(pieces, ["Intro\n\n```ts\nconst a = 1\n```\n\n", "- one\n\n- two\n\n```\nb\n```\n\n", "End"])
+  // Cut before each block of its own; a list with spaced items is one block, and so is a fence inside it.
+  assert.deepEqual(streamPieces(doc), ["Intro\n\n", "```ts\nconst a = 1\n```\n\n", "- one\n\n- two\n\n", "```\nb\n```\n\n", "End"])
+  // Prose and lists alone, most answers: cut before each paragraph, never before a list item (a list may go on there).
+  assert.deepEqual(streamPieces("First.\n\nSecond.\n\n- a\n- b\n\nThird."), ["First.\n\n", "Second.\n\n- a\n- b\n\n", "Third."])
   // A loose list across blank lines is never cut.
   const loose = "1. one\n\n2. two\n\n   more of two\n\n3. three"
-  assert.deepEqual(fenceSegments(loose), [loose])
+  assert.deepEqual(streamPieces(loose), [loose])
   // A fence inside a list item is not at the left edge: the list goes on after it.
   const nested = "- item\n\n  ```\n  code\n  ```\n\n  still the item\n- next"
-  assert.deepEqual(fenceSegments(nested), [nested])
-  // A fence still open, or closed without a blank line after it yet, is no cut.
-  assert.deepEqual(fenceSegments("```\na\n\nb"), ["```\na\n\nb"])
-  assert.deepEqual(fenceSegments("```\na\n```\nb"), ["```\na\n```\nb"])
-  assert.deepEqual(fenceSegments("```\na\n```\n\n"), ["```\na\n```\n\n"])
+  assert.deepEqual(streamPieces(nested), [nested])
+  // A line leaving a nested fence's indent may end the item: nothing after it is cut.
+  assert.deepEqual(streamPieces("- item\n\n  ```\n  a\n```\n\nAfter\n\nMore"), ["- item\n\n  ```\n  a\n```\n\nAfter\n\nMore"])
+  // A fence still open is no cut; a fence closed with no blank line after it neither.
+  assert.deepEqual(streamPieces("```\na\n\nb"), ["```\na\n\nb"])
+  assert.deepEqual(streamPieces("```\na\n```\nb"), ["```\na\n```\nb"])
+  assert.deepEqual(streamPieces("```\na\n```\n\n"), ["```\na\n```\n\n"])
+  // A picture or a link alone may join the gallery above it: no cut before one.
+  assert.deepEqual(streamPieces("![a](a.png)\n\n![b](b.png)\n\n[c](c.pdf)"), ["![a](a.png)\n\n![b](b.png)\n\n[c](c.pdf)"])
+  // Indented text after a blank line goes on with the block above (an item, or indented code).
+  assert.deepEqual(streamPieces("Para\n\n    code\n\nNext"), ["Para\n\n    code\n\n", "Next"])
+  // A heading's underline never follows a blank line, so cutting there can't take it from its paragraph.
+  assert.deepEqual(streamPieces("Title\n=====\n\nBody"), ["Title\n=====\n\n", "Body"])
   // Context that reaches across the document keeps it whole.
   for (const whole of [
     "See [docs][d].\n\n```\na\n```\n\n[d]: https://example.test",
@@ -72,26 +82,46 @@ import { STREAM_FRAME_MAX_MS, STREAM_FRAME_MS, StreamFrames, streamFrameMs, type
     "Text\r\n\r\n```\r\na\r\n```\r\n\r\nMore",
     "\uFEFFText\n\n```\na\n```\n\nMore",
   ])
-    assert.deepEqual(fenceSegments(whole), [whole])
+    assert.deepEqual(streamPieces(whole), [whole])
   // Markup inside code is code: a fence of JSX still cuts.
-  assert.equal(fenceSegments("```tsx\n<div>\n[x]: y\n```\n\nAfter").length, 2)
+  assert.equal(streamPieces("```tsx\n<div>\n[x]: y\n```\n\nAfter").length, 2)
   // Every piece rejoins to the answer exactly, at every length it streams through.
-  for (let end = 0; end <= doc.length; end++) assert.equal(fenceSegments(doc.slice(0, end)).join(""), doc.slice(0, end))
+  for (let end = 0; end <= doc.length; end++) assert.equal(streamPieces(doc.slice(0, end)).join(""), doc.slice(0, end))
 }
 
 // Pieces parsed alone draw what the whole parse draws.
+const html = (text: string) => toHtml(parseProse(text)).replace(/ data-source-line="\d+"/g, "").replace(/ id="[^"]*"/g, "").replace(/\n/g, "")
 {
   const docs = [
     "Intro\n\n```ts\nconst a = 1\n```\n\n- one\n\n- two\n\n```\nb\n```\n\nEnd **bold**",
     "> quote\n```\ncode\n```\n\nSetext\n------\n\n| a | b |\n| - | - |\n| 1 | 2 |",
     "1. one\n```\ncode\n```\n\n2. two\n\n```\nx\n```\n\n---\n\n# Heading",
+    "1. one\n\nA paragraph between.\n\n2. two\n\n> quote\n\n> another\n\n***\n\n- a\n\n  - nested\n\nEnd",
   ]
-  const html = (text: string) => toHtml(parseProse(text)).replace(/ data-source-line="\d+"/g, "").replace(/\n/g, "")
   for (const doc of docs) {
-    const pieces = fenceSegments(doc)
+    const pieces = streamPieces(doc)
     assert.ok(pieces.length > 1, `expected cuts in ${JSON.stringify(doc)}`)
     assert.equal(pieces.map(html).join(""), html(doc))
   }
+}
+
+// The same on real answers, at the lengths they stream through: `MAKO_STREAM_CORPUS=<file.json>` names one, a list of
+// `{ assistant }` turns (a transcript's prose, kept outside the repository).
+if (process.env.MAKO_STREAM_CORPUS) {
+  const { readFileSync } = await import("node:fs")
+  const turns: Array<{ assistant: string }> = JSON.parse(readFileSync(process.env.MAKO_STREAM_CORPUS, "utf8")).turns
+  let checked = 0
+  for (const [index, { assistant }] of turns.entries()) {
+    const step = Math.max(97, Math.floor(assistant.length / 12))
+    for (let end = step; end < assistant.length + step; end += step) {
+      const shown = streamingMarkdown(assistant.slice(0, end))
+      const pieces = streamPieces(shown)
+      if (pieces.length < 2) continue
+      assert.equal(pieces.map(html).join(""), html(shown), `turn ${index} at ${end}`)
+      checked += 1
+    }
+  }
+  console.log(`streaming pieces: ${checked} cut prefixes of ${turns.length} real answers draw as the whole does`)
 }
 
 // How a streaming answer repaints: the first token of a burst at once, then at most once a frame, the latest text each
@@ -166,4 +196,4 @@ import { STREAM_FRAME_MAX_MS, STREAM_FRAME_MS, StreamFrames, streamFrameMs, type
   }
 }
 
-console.log("PASS: streaming markdown draws whole structure and cuts its parse only at closed fences, and repaints the first token of a burst at once, then once a frame")
+console.log("PASS: streaming markdown draws whole structure and cuts its parse only where what follows parses the same alone, and repaints the first token of a burst at once, then once a frame")

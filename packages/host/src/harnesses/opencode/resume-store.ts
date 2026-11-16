@@ -4,6 +4,12 @@ import { isAbsolute } from "node:path"
 import type { DatabaseSync, StatementSync } from "node:sqlite"
 import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import type { NativeResumeRecord } from "../native-continuation.js"
+import type { NativeTurnOutcome } from "../native-turn.js"
+import { z } from "zod"
+
+const TurnInput = z.object({ seq: z.number() })
+const TurnRow = z.object({ type: z.string(), data: z.string() })
+const TurnAnswer = z.object({ finish: z.string().optional(), error: z.unknown().optional(), retry: z.unknown().optional() })
 
 export type OpenCodeResumeRecord =
   | { kind: "available"; checkpoint: string; generation: "v2" }
@@ -87,6 +93,39 @@ export function openCodeHistorySealed(stores: NativeStores, path: string, native
   } finally {
     db?.close()
   }
+}
+
+/** Worker-only, one SQLite snapshot: the accepted inbox ID is the stored input's primary key. */
+export function readOpenCodeTurn(stores: NativeStores, path: string, nativeId: string, runId: string): NativeTurnOutcome {
+  const unknown = { kind: "unknown" as const, reason: "The native source was read, but this input has no unambiguous outcome." }
+  const unavailable = { kind: "unavailable" as const, reason: "The exact native input and its outcome could not be verified." }
+  const target = openCodeRecordLocator(path)
+  if (!target || target.nativeId !== nativeId) return unavailable
+  let db: DatabaseSync | undefined
+  try {
+    db = stores.open(realpathSync(target.database))
+    db.exec("PRAGMA busy_timeout=100; BEGIN")
+    const admitted = admit(db, target, target.database, nativeId)
+    if (admitted.kind !== "admitted") return unavailable
+    if (admitted.session["revert"]) return unknown
+    const input = TurnInput.safeParse(db.prepare("SELECT seq FROM session_message WHERE session_id=? AND id=? AND type='user'").get(nativeId, runId)).data
+    if (!input) return unknown
+    let completed = false
+    for (const value of db.prepare("SELECT type, data FROM session_message WHERE session_id=? AND seq>? ORDER BY seq").iterate(nativeId, input.seq)) {
+      const row = TurnRow.safeParse(value).data
+      if (!row) return unknown
+      if (row.type === "user" || row.type === "idle") return unknown
+      if (row.type !== "assistant") continue
+      const data = TurnAnswer.safeParse(JSON.parse(row.data)).data
+      if (!data) return unknown
+      if (data["error"] || data["retry"]) return unknown
+      const finish = data["finish"]
+      if (finish !== undefined && !["stop", "end_turn", "end-turn", "tool-calls"].includes(String(finish))) return unknown
+      completed = finish === "stop" || finish === "end_turn" || finish === "end-turn"
+    }
+    return { kind: completed ? "completed" : "unfinished" }
+  } catch { return unavailable }
+  finally { if (db) { if (db.isTransaction) db.exec("ROLLBACK"); db.close() } }
 }
 
 export type OpenCodeOpening = { kind: "opens" } | Extract<NativeResumeRecord, { kind: "unavailable" }>

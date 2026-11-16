@@ -382,8 +382,9 @@ export class AgentHost implements GitTab {
     return this.workspaceFiles.createText(cwd, path, text)
   }
 
-  async readWorkspaceFile(path: string): Promise<FileContents> {
-    return this.workspaceFiles.read(path)
+  /** `confined`: another device's read, through the gateway: only this workspace's folders (`openConfined`). */
+  async readWorkspaceFile(path: string, confined = false): Promise<FileContents> {
+    return this.workspaceFiles.read(path, confined ? { confined } : undefined)
   }
 
   async resolvePath(path: string): Promise<string> {

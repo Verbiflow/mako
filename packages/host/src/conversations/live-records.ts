@@ -72,6 +72,8 @@ export interface RecordHooks {
   storageFailed(resident: Resident, boundary: FailureBoundary): void
   /** A journal was read in; what it names but doesn't keep is read now (`LiveSources.readBase`). */
   loaded(resident: Resident): void
+  /** Preserve recovery intent before healing a crash's journal; queued inputs still have their original provenance here. */
+  recovered?(previous: LiveSnapshot, snapshot: LiveSnapshot): void
   /** Entries of the conversation were paged: whatever still holds them warm (a window's view) may hold the paged ones instead. */
   paged?(id: string): void
   /** The conversation was let go: what still holds its entries (a window's view) lets them go too. */
@@ -85,6 +87,16 @@ export interface RecordHooks {
  * journal is read in when something needs it, and let go once the memory
  * budget has no room for it and nothing is using it.
  */
+/** What the fork index keeps of each fork (`LiveRecords.forks`). */
+export interface ForkFacts {
+  parentId: string
+  /** `ForkInput.point`, as its journal keeps it. */
+  point: string
+  createdAt: number
+  /** Its first request, once one is admitted (`ancestry.firstRequest`). */
+  firstRequest?: string
+}
+
 export class LiveRecords {
   private readonly dependencies: Dependencies
   private readonly hooks: RecordHooks
@@ -129,6 +141,12 @@ export class LiveRecords {
     this.hooks = hooks
   }
 
+  /**
+   * Each fork's parent, the point it was made at (`ForkInput.point`, as its journal keeps it) and when: what an edited
+   * prompt's versions are read from (`LiveConversations.promptVersions`), without reading any journal in.
+   */
+  readonly forks = new Map<string, ForkFacts>()
+
   /** Lists every saved journal, as the host before this one left it, for the Thread store to register. */
   open(): JournalFacts[] {
     const { dependencies } = this
@@ -141,6 +159,7 @@ export class LiveRecords {
           if (found) {
             const { ancestry, threadSession, unsettled, ...summary } = found
             if (unsettled) this.unsettled.add(id)
+            if (ancestry) this.forks.set(id, { parentId: ancestry.parentId, point: ancestry.point, createdAt: summary.createdAt, ...ancestry.firstRequest && { firstRequest: ancestry.firstRequest } })
             dependencies.memory?.rememberBindings(id, summary.nativeBindings, summary.createdAt)
             backfillMemory(dependencies.memory, dependencies.root, id, summary.session)
             journals.push({
@@ -203,6 +222,9 @@ export class LiveRecords {
   add(resident: Resident): void {
     resident.journal.checkpointWith(this.primer)
     this.residents.set(resident.snapshot.session.id, resident)
+    // A fork made now joins the index as a saved one does at `open`.
+    const ancestry = resident.snapshot.control?.ancestry
+    if (ancestry) this.forks.set(resident.snapshot.session.id, { parentId: ancestry.parentId, point: ancestry.point, createdAt: resident.snapshot.createdAt, ...ancestry.firstRequest && { firstRequest: ancestry.firstRequest } })
   }
 
   /** The session as the listing has it, without reading an unloaded conversation's transcript back. */
@@ -218,6 +240,10 @@ export class LiveRecords {
   /** Whether the host before this one left a message of `id` waiting, paused or running (`open`). */
   leftUnsettled(id: string): boolean {
     return this.unsettled.has(id)
+  }
+
+  unsettledIds(): readonly string[] {
+    return [...this.unsettled]
   }
 
   /** Whether `unload` let this resident go; a write through it is dropped. */
@@ -323,6 +349,7 @@ export class LiveRecords {
       return this.reload(journal, previous, unloaded, by)
     }
     const snapshot = afterRestart(previous, this.dependencies.root, (provider) => this.dependencies.driver(provider)?.backgroundStop.kind === "ends-with-turn")
+    this.hooks.recovered?.(previous, snapshot)
     journal.commit(snapshot, previous)
     const resident = residentOf(snapshot, journal, { usedAt: this.dependencies.now?.() ?? Date.now(), loadedBy: by })
     this.add(resident)

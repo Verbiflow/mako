@@ -3,6 +3,7 @@
  * streamed as ControlVideo packets, and a call that reaches that Mac through a fake gateway the way the cloud does.
  * Nothing here needs Xcode: the remote Mac is a second host process, and its screen is the mock bridge's frames.
  */
+import { MACHINE_REFUSED } from "@mako/host/contracts/gateway-allowed"
 import assert from "node:assert/strict"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -426,7 +427,7 @@ test("a machine runtime can't name itself the person to skip a simulator's lease
   }
 })
 
-test("a machine runtime is never the person at any door that names its caller: agents_* and threads-move", async () => {
+test("a machine runtime is neither the person nor a Thread's agent at any door that names its caller: agents_* and threads-move", async () => {
   const heard: string[] = []
   const engine = new Proxy({}, { get: (_target, verb: string) => async () => (heard.push(verb), { refused: "unknown-thread", why: "heard" }) })
   const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value, breadcrumb: () => {}, declaring: async () => {}, work: unwatchedWork })
@@ -436,16 +437,15 @@ test("a machine runtime is never the person at any door that names its caller: a
   const call = async (channel: string, args: unknown[], client: string) => decodeRuntimeValue(await methods.invoke(channel, args, client))
   const person = { kind: "person" }
   const machine = "gateway:runtime:m-1.g1"
+  // A machine runs no Thread on this host: naming the person, or a session as its agent, it's refused before the door.
   for (const [channel, input] of [["mako:agents-list", {}], ["mako:agents-answer", { to: "fin", answer: "Continue", clientKey: "k" }], ["mako:agents-start", { brief: { objective: "y" }, clientKey: "k" }], ["mako:threads-move", { to: "cloud", clientKey: "k" }]] as const) {
-    const answer = await call(channel, [person, input], machine)
-    const refusal = Refused.safeParse(answer)
-    assert.ok(refusal.success && refusal.data.why !== "heard", `${channel}: a machine's person claim is refused before the engine hears it`)
+    await assert.rejects(call(channel, [person, input], machine), new RegExp(MACHINE_REFUSED), `${channel}: a machine's person claim is refused before the engine hears it`)
+    await assert.rejects(call(channel, [{ kind: "agent", session: "s-1" }, input], machine), new RegExp(MACHINE_REFUSED), `${channel}: and so is its claim to be another Thread's agent`)
   }
   assert.deepEqual(heard, [])
   await call("mako:agents-list", [person, {}], "gateway:web:phone-device")
-  await call("mako:agents-list", [{ kind: "agent", session: "s-1" }, {}], machine)
   await call("mako:threads-move", [person, { to: "cloud", clientKey: "k" }], "gateway:desktop:d-1")
-  assert.deepEqual(heard, ["list", "list", "threads-move"], "the person's own device, and a machine as its agent, are heard")
+  assert.deepEqual(heard, ["list", "threads-move"], "the person's own device is heard")
   await methods.close()
 })
 
@@ -469,8 +469,8 @@ test("a machine runtime is never the person at main's later doors either: agents
     ["mako:harnesses-act", { action: "read", clientKey: "k" }],
   ] as const
   for (const [channel, input] of doors) {
-    const refusal = Refused.safeParse(await call(channel, [person, input], "gateway:runtime:m-1.g1"))
-    assert.ok(refusal.success && refusal.data.why !== "heard", `${channel}: a machine's person claim is refused before the tool hears it`)
+    await assert.rejects(call(channel, [person, input], "gateway:runtime:m-1.g1"), new RegExp(MACHINE_REFUSED), `${channel}: a machine's person claim is refused before the tool hears it`)
+    await assert.rejects(call(channel, [{ kind: "agent", session: "s-other" }, input], "gateway:runtime:m-1.g1"), new RegExp(MACHINE_REFUSED), `${channel}: and so is its claim to be another Thread's agent`)
   }
   assert.deepEqual(heard, [])
   for (const [channel, input] of doors) await call(channel, [person, input], "gateway:desktop:d-1")

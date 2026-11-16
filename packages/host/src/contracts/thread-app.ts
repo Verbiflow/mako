@@ -8,6 +8,23 @@ import { z } from "zod"
 
 export type AppPhase = "stopped" | "preparing" | "starting" | "running" | "crashed" | "waiting"
 
+/** A connected window's latest sampling demand; a late call cannot undo a newer hide. */
+export const AppSamplingDemandSchema = z.object({
+  connection: z.string().uuid(),
+  generation: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  visible: z.boolean(),
+}).strict()
+/** @wire z.object({ connection: z.string().uuid(), generation: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), visible: z.boolean() }).strict() */
+export type AppSamplingDemand = z.infer<typeof AppSamplingDemandSchema>
+
+/** Reading binds to the current stream; following accepts demand, never receipt of the sampled data. */
+export const AppSamplingReplySchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("ready"), connection: z.string().uuid(), generation: z.number().int().nonnegative() }).strict(),
+  z.object({ kind: z.literal("following") }).strict(),
+  z.object({ kind: z.literal("unavailable") }).strict(),
+])
+export type AppSamplingReply = z.infer<typeof AppSamplingReplySchema>
+
 export interface AppProcessView {
   name: string
   state: "starting" | "running" | "exited" | "stopped"

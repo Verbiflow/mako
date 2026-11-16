@@ -17,7 +17,7 @@ import { activeBinding, type LiveAccess, type Resident } from "./live-runtime.js
 import { turnReply } from "./live-goals.js"
 import { waitsForProvider } from "../contracts/request-hold.js"
 
-type AutoContinueAccess = Pick<LiveAccess, "dependencies" | "admission" | "resident" | "flush" | "pending" | "admit" | "transfer" | "reopens" | "wake">
+type AutoContinueAccess = Pick<LiveAccess, "dependencies" | "admission" | "resident" | "flush" | "pending" | "admit" | "transfer" | "reopens" | "wake" | "restartAllowed" | "restartContinued">
 
 /**
  * A turn that just ended on the provider's dropped connection or exited
@@ -84,6 +84,7 @@ export class LiveAutoContinue {
       // The exit that cut a restarted turn closed its conversation as it went; any other close declines the turn.
       (resident.snapshot.session.status === "closed" && !pending.restarted) ||
       resident.snapshot.permissions.length > 0
+      || (pending.restarted && !this.access.restartAllowed(id, requestId))
     ) {
       this.access.flush(resident)
       return
@@ -107,7 +108,10 @@ export class LiveAutoContinue {
       this.access.admission.assert()
       if (reconnect)
         this.access.transfer(id, { id: request.id, provider: reconnect.provider, text: request.text, attachments: [], tuning: source.tuning, notification: request.notification }, actor, continues)
-      else this.access.admit(resident, request)
+      else {
+        this.access.admit(resident, request)
+        if (pending.restarted) this.access.restartContinued(id, requestId)
+      }
       hostLog("live", pending.restarted ? "continued a turn Mako's exit cut short" : "continued a dropped turn", {
         conversation: id,
         harness: resident.snapshot.session.harness,
@@ -141,9 +145,13 @@ export class LiveAutoContinue {
     if (resident.snapshot.requests.some((request) => request.id === input.requestId)) return
     this.decline(resident)
     const tuning = runningTuning(resident, this.access.dependencies.heldModels)
-    const continues: TurnContinuation = { requestId: input.continues, reason: input.reason, auto: true, ...input.brief && { brief: input.brief }, ...input.since !== undefined && { since: input.since } }
+    // Keep the reconciliation identity: dispatch still reads its native receipt under the Stop/ownership fence.
+    // Task briefs continue from retained context; a digest retains its stable report delivery contract.
+    const briefId = input.brief
+    const continues: TurnContinuation = { requestId: input.continues, reason: input.reason, auto: true, ...briefId && { brief: briefId }, ...input.since !== undefined && { since: input.since } }
     // A brief carried again goes as itself, framed; as it's sent, a transcript that shows it has a Continue go instead.
-    const brief = input.brief && resident.snapshot.requests.find((request) => request.id === input.brief)
+    const sourceBrief = briefId && resident.snapshot.requests.find((request) => request.id === briefId)
+    const brief = input.reason === "host-crashed" && sourceBrief && !sourceBrief.digest ? undefined : sourceBrief
     const request = LiveRequestSchema.parse({
       actor: input.actor,
       id: input.requestId,
@@ -203,9 +211,9 @@ export class LiveAutoContinue {
       return
     }
     const retry = waits.retry
-    const continues: TurnContinuation = { requestId: failed.id, reason: failed.interruption?.reason ?? "connection-lost", auto: true }
-    // Its reports read as heard, so it goes again as itself, for later news to join, as often as it fails, where "carry
-    // on" would tell nothing of them; past the retries it rests (`resting`).
+    const continues: TurnContinuation = { requestId: failed.id, reason: failed.interruption?.reason ?? "connection-lost", auto: true, ...(failed.continues?.brief && { brief: failed.continues.brief }) }
+    // Retain the digest and its original receipt identity. Dispatch decides whether proof permits its payload or
+    // only a discovery continuation; past the retries it rests (`resting`).
     const request = LiveRequestSchema.parse({
       actor: { kind: "service", name: "auto-continue" },
       id: randomUUID(),

@@ -1,4 +1,5 @@
 import type { HostArguments, HostChannel } from "./host-call-inputs.js"
+import { GATEWAY_ALLOWED } from "./gateway-allowed.js"
 import type { NotificationDelivery, NotificationPermission } from "./notifications.js"
 import type { AppshotShortcutState } from "./appshot-shortcut.js"
 
@@ -62,9 +63,12 @@ export function socketCalls<Channel extends string>(channels: readonly Channel[]
   return channels.filter((channel) => !isClientCall(channel))
 }
 
-/** What a host answers through the gateway: what its socket answers, less what acts on its screen. */
+/**
+ * What a host answers through the gateway: only what another device's client sends (`GATEWAY_ALLOWED`), never what
+ * acts on its screen. Every other call is its own windows', on its socket.
+ */
 export function gatewayCalls<Channel extends string>(channels: readonly Channel[]): Channel[] {
-  return socketCalls(channels).filter((channel) => !isHostScreenCall(channel))
+  return socketCalls(channels).filter((channel) => !isHostScreenCall(channel) && GATEWAY_ALLOWED.has(channel))
 }
 
 /** What each client call answers, as the renderer bridge reads it. */
