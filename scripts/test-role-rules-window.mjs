@@ -95,18 +95,24 @@ async function checkWindow() {
   }
   const field = (role) => `[data-role-rules=${role}] textarea`
   // Typing goes wherever focus is, so a field is typed into only once it has focus. A press that leaves focus
-  // elsewhere says what the page received of it, what's at the point it aimed at and where the field is now, then
-  // aims again: CI's Linux runners twice left the first press with focus on the body, which no run here repeats.
+  // elsewhere for 3 s is one of two things, told apart by what the page received of it. One the field received (a
+  // pointerdown or mousedown on its textarea) that still left focus elsewhere is a field a click doesn't focus, and
+  // fails at once. One that never reached it (none recorded on it; what's at the aimed point says where it went) is
+  // this check's aim, so it aims once more. CI's Linux runners twice left the first press with focus on the body, which no run here repeats.
   const focusField = async (role) => {
-    const focused = `document.activeElement === document.querySelector(${JSON.stringify(field(role))})`
+    const selector = JSON.stringify(field(role))
+    const focused = `document.activeElement === document.querySelector(${selector})`
     for (let attempt = 1; ; attempt += 1) {
+      const from = await evaluate("window.__pointer.length")
       const point = await press(field(role))
       const end = Date.now() + 3_000
       while (!(await evaluate(focused)) && Date.now() < end) await new Promise((done) => setTimeout(done, 40))
       if (await evaluate(focused)) return
-      const seen = await evaluate(`JSON.stringify({ received: window.__pointer.slice(-8), at: document.elementFromPoint(${point.x}, ${point.y})?.outerHTML.slice(0, 120), field: document.querySelector(${JSON.stringify(field(role))}).getBoundingClientRect().toJSON(), focus: document.activeElement?.tagName, viewport: [innerWidth, innerHeight, scrollY] })`)
-      console.error(`Pressing ${role} at ${JSON.stringify(point)} left focus elsewhere (attempt ${attempt}): ${seen}`)
-      if (attempt === 2) return until(focused, `${role} has focus`)
+      const seen = await evaluate(`JSON.stringify({ received: window.__pointer.slice(${from}), at: document.elementFromPoint(${point.x}, ${point.y})?.outerHTML.slice(0, 120), field: document.querySelector(${selector}).getBoundingClientRect().toJSON(), focus: document.activeElement?.tagName, viewport: [innerWidth, innerHeight, scrollY] })`)
+      const reached = await evaluate(`window.__pointer.slice(${from}).some(([type, , , , target]) => (type === "pointerdown" || type === "mousedown") && target === ${JSON.stringify(role)})`)
+      if (reached) throw new Error(`The ${role} field received a press at ${JSON.stringify(point)} and focus went elsewhere: ${seen}`)
+      console.error(`Pressing ${role} at ${JSON.stringify(point)} never reached the field (attempt ${attempt}): ${seen}`)
+      if (attempt === 2) throw new Error(`Two presses never reached the ${role} field: ${seen}`)
     }
   }
   // What the page received of each press, from its load, for a press that missed.
@@ -114,7 +120,8 @@ async function checkWindow() {
     window.__pointer = []
     const began = performance.now()
     for (const type of ["pointerdown", "mousedown", "focusin", "focusout"])
-      document.addEventListener(type, (event) => window.__pointer.push([type, Math.round(performance.now() - began), event.clientX, event.clientY, event.target.tagName]), true)
+      // Each as [type, ms since load, x, y, the role rules field it was on or the element's tag].
+      document.addEventListener(type, (event) => window.__pointer.push([type, Math.round(performance.now() - began), event.clientX, event.clientY, event.target.closest?.("[data-role-rules] textarea")?.closest("[data-role-rules]").dataset.roleRules ?? event.target.tagName]), true)
   })()`)
   const preview = (role) => `[data-role-rules=${role}] button[aria-expanded]`
   const theme = (light) => evaluate(`document.documentElement.classList.toggle("light", ${light})`)
