@@ -169,6 +169,11 @@ async function crew(): Promise<void> {
     assert.ok(asked.includes("1 waits on someone else to act:") && asked.includes("waiting on #810 review"), asked)
     const narrated = await world.agents.report(world.caller(docs), { status: "progress", summary: "Still waiting for the review.", waitingOn: review, clientKey: "awaits-review-again" })
     assert.ok(!("refused" in narrated) && narrated.delivered === "none", "the same wait narrated again stays quiet")
+    // Flipping to another wait and back, or naming the same review by its URL, is still the wait it named.
+    const flipped = await world.agents.report(world.caller(docs), { status: "progress", summary: "CI first.", waitingOn: [{ kind: "pull-request", ref: "acme/app#810", until: "checks" }], clientKey: "awaits-flip" })
+    assert.ok(!("refused" in flipped) && flipped.delivered === "none")
+    const back = await world.agents.report(world.caller(docs), { status: "progress", summary: "Back to waiting for the review.", waitingOn: [{ kind: "pull-request", ref: "https://github.com/acme/app/pull/810", until: "review" }], clientKey: "awaits-back" })
+    assert.ok(!("refused" in back) && back.delivered === "none", `a wait named since its last result stays quiet, reworded or after another: ${JSON.stringify(back)}`)
     const person = await world.agents.report(world.caller(docs), { status: "progress", summary: "Reviewed; the person merges it.", waitingOn: [...review, { kind: "person", what: "merge" }], clientKey: "awaits-person" })
     assert.ok(!("refused" in person) && person.delivered === "notice", "a first wait on the person wakes the Apex")
     const checks = await world.agents.report(world.caller(docs), { status: "progress", summary: "Pushed a fix; CI runs.", waitingOn: [{ kind: "pull-request", ref: "acme/app#811", until: "checks" }], clientKey: "awaits-checks" })

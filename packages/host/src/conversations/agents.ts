@@ -2103,8 +2103,14 @@ export class Agents implements AgentOperations, ConversationChildren {
     const handed = handedTo ?? (input.status === "progress" ? this.siblingNamed(edge, `${input.summary}\n${input.action ?? ""}`) : undefined)
     if (handed && input.status === "progress") report.handoff = { to: handed.name, child: ThreadIdSchema.parse(handed.child) }
     // Progress that first waits on a review or on the person waits on what its Apex arranges or passes on: it wakes
-    // the Apex once. Narrating the same wait again stays quiet.
-    if (input.status === "progress" && !report.handoff && awaitedAnew(this.latest.get(edge.child)?.waitingOn, report.waitingOn).length) report.awaits = true
+    // the Apex once. Every wait named since its last result or question counts as said, so narrating one again,
+    // rewording it or flipping between two stays quiet.
+    if (input.status === "progress" && !report.handoff) {
+      const reports = this.store()!.reportsOf(edge.child)
+      const last = reports.findLastIndex((each) => each.status !== "progress")
+      const said = reports.slice(last + 1).flatMap((each) => each.waitingOn ?? [])
+      if (awaitedAnew(said, report.waitingOn).length) report.awaits = true
+    }
     const kept = this.keepReport(edge, report)
     if ("refused" in kept) return kept
     return { id: kept.report.id, ...(kept.report.followUp && { followUp: this.store()!.reportAction(kept.report.id) }), ...(kept.deduped && { deduped: true as const }), delivered: quietProgress(kept.report) ? "none" : "notice", ...(kept.report.waitingOn?.length && { subscriptions: this.waitSubscriptions(edge, kept.report) }), ...(kept.report.supersedes?.length && { superseded: kept.report.supersedes }) }
