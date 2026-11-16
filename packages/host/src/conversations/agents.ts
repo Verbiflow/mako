@@ -710,6 +710,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly stopPullWatch: () => void
   /** Fins that read as working and do nothing, each tree on one deadline (`QuietWatch`). */
   readonly quiet: QuietWatch
+  /** What each quiet Fin's notice read of it: its last step then, and whether that ran. */
+  private readonly quietSteps = new Map<string, { since: number; step?: string; running?: true }>()
   /** Conversations that aren't a Fin's, so activity in them costs a set lookup: emptied when the edges change. */
   private readonly notFins = new Set<string>()
   /** Turns' waits (`wait`): armed in the store, met by Fins' results and ends and pull requests' outcomes, fired once. */
@@ -812,6 +814,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       working: (child) => this.quietWorking(child),
       tree: (child) => this.rootOf(child),
       quiet: (child, since) => this.tellQuiet(child, since),
+      heard: (child) => this.quietChanged(child),
       ...(deps.quietMs !== undefined && { quietMs: deps.quietMs }),
     })
     this.stopRoomWatch = deps.jobs.every(ROOM_WATCH_JOB, ROOM_EVERY_MS, () => this.observe(true))
@@ -4704,8 +4707,16 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   // ── What a Fin shows ──
 
-  /** What the Fin's Thread shows now, from whatever runs its current turn: one source at a time. */
+  /** A Fin's reading, with the quiet stretch `QuietWatch` holds now, while it holds. */
   private childReading(edge: ThreadParent): ChildThread {
+    const reading = this.liveReading(edge)
+    const since = reading.working ? this.quiet.quietSince(edge.child) : undefined
+    const told = since === undefined ? undefined : this.quietSteps.get(edge.child)
+    return since === undefined ? reading : { ...reading, quiet: { since, ...(told?.since === since && told.step && { step: told.step }), ...(told?.since === since && told.running && { running: true as const }) } }
+  }
+
+  /** What the Fin's Thread shows now, from whatever runs its current turn: one source at a time. */
+  private liveReading(edge: ThreadParent): ChildThread {
     if (edge.placed) return this.placedReading(edge)
     const run = edge.run
     const conversation = this.askingConversation(edge.child)
@@ -4997,6 +5008,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     const tool = [...blocks].reverse().find((block) => block.type === "tool")
     const running = tool?.type === "tool" && (tool.status === "pending" || tool.status === "running") && blocks.at(-1) === tool
     const forMs = this.now() - since
+    this.quietSteps.set(child, { since, ...(step && { step: step.slice(0, 400) }), ...(running && { running: true as const }) })
+    // Its row reads quiet now, whoever its notice goes to.
+    this.childMoved(edge, true)
     hostLog("agents", "fin quiet", { op: edge.op, forMs, ...(step && { step }), ...(running && { running }), told: wake === "decisions" })
     if (wake !== "decisions") return
     const front = this.frontOf(edge.parent, edge.parentSession)
@@ -5019,6 +5033,14 @@ export class Agents implements AgentOperations, ConversationChildren {
       from: this.store()?.thread(edge.child)?.sessions[0] ?? edge.parentSession,
       quiet,
     })
+  }
+
+  /** A quiet stretch ended: the Fin did something, or left work. Its row reads as it is again. */
+  private quietChanged(child: string): void {
+    this.quietSteps.delete(child)
+    if (this.stopped) return
+    const edge = this.store()?.edges().of(child)
+    if (edge) this.childMoved(edge, true)
   }
 
   private later(ms: number, run: () => void): () => void {

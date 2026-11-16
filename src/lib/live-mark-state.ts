@@ -12,6 +12,7 @@ import type { ThreadStatus } from "@/state/thread-status"
  * - `queued`: a still dashed ring, the glyph dimmed.
  * - `open`: a still hairline ring, open in another app with no turn running there.
  * - `failed` and `unread`: a dot cut out of the mark, low right in negative, high right in the text colour.
+ * - `quiet`: a working Fin nothing has come of past the window: still, dimmed, settled low.
  * - `idle`: the glyph alone.
  */
 /** A Thread wears the two-tone fin of the app icon; a Fin, started by an Apex, the plain fin. */
@@ -32,7 +33,7 @@ export function motionOf(doing: string | undefined): LiveMotion {
   return "thinking"
 }
 
-export type LiveMarkState = "working" | "background" | "starting" | "needs" | "lead" | "queued" | "open" | "failed" | "unread" | "idle"
+export type LiveMarkState = "working" | "background" | "starting" | "needs" | "lead" | "queued" | "quiet" | "open" | "failed" | "unread" | "idle"
 
 const WORDS = {
   working: "Working",
@@ -41,6 +42,7 @@ const WORDS = {
   needs: "Needs you",
   lead: "Asking its Apex",
   queued: "Queued",
+  quiet: "Quiet",
   open: "Open in another app",
   failed: "Failed",
   unread: "Answer ready to review",
@@ -81,7 +83,7 @@ export function finMarkState(state: ChildState): LiveMarkState {
     case "starting":
       return "starting"
     case "working":
-      return "working"
+      return state.quiet ? "quiet" : "working"
     case "blocked":
       return state.on === "lead" ? "lead" : "needs"
     case "idle":

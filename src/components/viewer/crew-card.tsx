@@ -36,6 +36,8 @@ import { acp, acpStore, useAcp } from "@/state/acp"
 import { scopedAcp, useConversationScope } from "@/state/conversation-scope"
 import { useThreads } from "@/state/threads"
 import {
+  address,
+  addresseeOf,
   apexConversation,
   openFinInApex,
   useFinOpenable,
@@ -346,10 +348,15 @@ const CrewElapsed = memo(function CrewElapsed({
 const CrewLineRow = memo(function CrewLineRow({
   agent,
   onOpen,
+  onMessage,
+  onStop,
   compact,
 }: {
   agent: NativeAgent
   onOpen: (agent: NativeAgent) => void
+  /** A quiet Fin's row offers what to do about it: write to it, or stop it. */
+  onMessage?: (agent: NativeAgent) => void
+  onStop?: (agent: NativeAgent) => void
   compact?: boolean
 }) {
   useHarnessIdentity()
@@ -357,22 +364,25 @@ const CrewLineRow = memo(function CrewLineRow({
   const openable = useFinOpenable(agent)
   const group = childGroup(state)
   const waiting = waitsOutside(state)
-  // "Waiting on acme/app#371 checks · 12m": the same string for a whole minute, so the row repaints once a minute.
-  const waited = useTickingText(waiting, (now) => (waiting ? childLine(state, now) ?? "" : ""))
-  const line = waiting ? waited : childLine(state)
-  const live = state.kind === "working" || state.kind === "starting"
+  const quiet = state.kind === "working" && state.quiet !== undefined
+  // "Waiting on acme/app#371 checks · 12m", "Quiet 18m · …": the same string for a whole minute, so the row repaints once a minute.
+  const ticking = waiting || quiet
+  const waited = useTickingText(ticking, (now) => (ticking ? childLine(state, now) ?? "" : ""))
+  const line = ticking ? waited : childLine(state)
+  const live = (state.kind === "working" && !quiet) || state.kind === "starting"
   const lead = openAsk(state)?.on === "lead"
   const moved = finMoved(agent)
   // `childState()` keeps a reason for a failed Fin but drops it for one that succeeded (`agents.ts`, not this
   // card's own), so the glyph only ever has a failure's line to read on real data today.
   const pr =
     (group === "done" || group === "failed") && /\bPR\b/.test(line ?? "")
-  return (
+  const row = (
     <button
       type="button"
       data-crew-row={agent.child?.thread}
       data-child-group={group}
       data-child-state={state.kind}
+      data-quiet={quiet || undefined}
       data-openable={openable}
       aria-disabled={openable ? undefined : true}
       title={openable ? undefined : NOT_OPENABLE}
@@ -424,13 +434,30 @@ const CrewLineRow = memo(function CrewLineRow({
           )}
         </span>
       </span>
-      {waiting ? null : (
+      {ticking ? null : (
         <CrewElapsed
           agent={agent}
           className="min-w-8 shrink-0 text-right text-label text-faint"
         />
       )}
     </button>
+  )
+  if (!quiet || (!onMessage && !onStop)) return row
+  // A quiet Fin is a question for the person: read it (the row opens it), write to it, or stop it.
+  return (
+    <div data-quiet-row className="flex items-center">
+      <div className="min-w-0 flex-1">{row}</div>
+      {onMessage ? (
+        <button type="button" data-quiet-action="message" onClick={() => onMessage(agent)} className="pressable h-7 shrink-0 px-2 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground">
+          Message
+        </button>
+      ) : null}
+      {onStop && agent.stoppable ? (
+        <button type="button" data-quiet-action="stop" onClick={() => onStop(agent)} className="pressable h-7 shrink-0 px-2 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground">
+          Stop
+        </button>
+      ) : null}
+    </div>
   )
 })
 
@@ -568,6 +595,22 @@ function CrewCardBody({
     },
     [routed, thread, apexTitle]
   )
+  // A quiet Fin's row: write to it from the Apex's composer, addressed, or stop it.
+  const onMessage = useCallback(
+    (agent: NativeAgent) => {
+      const addressee = addresseeOf(agent)
+      if (!conversation || !addressee) return
+      address(conversation, addressee)
+      window.dispatchEvent(new CustomEvent("mako:focus-composer"))
+    },
+    [conversation]
+  )
+  const onStop = useCallback(
+    (agent: NativeAgent) => {
+      if (conversation && agent.stoppable) void acp.stopAgent(conversation, agent.nativeId)
+    },
+    [conversation]
+  )
   const stoppable = children.filter((agent) => agent.stoppable).length
   const stopAll = useCallback(() => {
     if (!conversation || !thread) return
@@ -659,6 +702,8 @@ function CrewCardBody({
                   <CrewLineRow
                     agent={row.agent}
                     onOpen={onOpen}
+                    onMessage={routed ? undefined : onMessage}
+                    onStop={onStop}
                     compact={compact}
                   />
                 )}
