@@ -472,6 +472,8 @@ const ALONE = [
   /scripts\/test-terminal-backpressure\.mjs\b/,
   // It times idle cuts in a recording against the wall clock to within 120 ms; beside another part it missed by 230.
   /scripts\/test-control-recording-idle\.ts\b/,
+  // The agent views app it starts, and the desk it loads from a cold Vite, took past 90 s beside another lane's Electron.
+  /scripts\/test-fixture-desk\.mjs\b/,
 ]
 
 /** Evidence a failed step leaves, by its npm script, run after it: its own exit stays the result. */
