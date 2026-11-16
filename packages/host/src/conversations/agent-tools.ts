@@ -22,6 +22,7 @@ import {
   type PlacementOperations,
 } from "../contracts/agent-tools.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
+import type { TurnWaitInput, TurnWaitResult } from "../contracts/thread-tools.js"
 import { AgentListResults } from "./agent-list-results.js"
 
 const UNAVAILABLE: AgentRefused = { refused: "unavailable", why: "Children need the Thread store, which didn't open on this host." }
@@ -32,7 +33,7 @@ const MACHINE_AS_PERSON: AgentRefused = { refused: "access", why: NOT_THE_PERSON
  * `mako:agents-<verb>`: every door's one way in, each the engine's operation of the same name. A machine runtime's call
  * that names the person as its caller is refused before the engine hears it (`machineCall`).
  */
-export function declareAgentMethods(methods: MethodTable, agents: () => (AgentOperations & PlacementOperations) | undefined): void {
+export function declareAgentMethods(methods: MethodTable, agents: () => (AgentOperations & PlacementOperations & Partial<TurnWaitOperations>) | undefined): void {
   const listResults = new AgentListResults()
   const machineAsPerson = (caller: AgentCaller) => caller.kind === "person" && machineCall()
   // Between hosts, for Fins placed across the person's devices: no door shows these to an agent.
@@ -64,6 +65,13 @@ export function declareAgentMethods(methods: MethodTable, agents: () => (AgentOp
   methods.handle("mako:agents-answer", (caller: AgentCaller, input: AgentsAnswerInput) => machineAsPerson(caller) ? MACHINE_AS_PERSON : agents()?.answer(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-stop", (caller: AgentCaller, input: AgentsStopInput) => machineAsPerson(caller) ? MACHINE_AS_PERSON : agents()?.stop(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-wait", (caller: AgentCaller, input: AgentsWaitInput) => machineAsPerson(caller) ? MACHINE_AS_PERSON : agents()?.wait(caller, input) ?? UNAVAILABLE)
+  methods.handle("mako:turn-wait", async (caller: AgentCaller, input: TurnWaitInput): Promise<TurnWaitResult> =>
+    machineAsPerson(caller) ? { refused: "not-yours", why: NOT_THE_PERSON } : (await agents()?.turnWait?.(caller, input)) ?? { refused: "unavailable", why: "This host keeps no waits." })
+}
+
+/** A turn's wait (`wait` on the `mako` server), which the agents engine keeps. */
+export interface TurnWaitOperations {
+  turnWait(caller: AgentCaller, input: TurnWaitInput): Promise<TurnWaitResult>
 }
 
 /**

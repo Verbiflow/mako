@@ -361,6 +361,16 @@ const TOOLS: ReadonlyMap<string, MakoTool> = new Map<string, MakoTool>([
   ["app_own_packages", { group: "app", say: () => ({ verb: verb("Unlink", "Unlinking", "Unlinked"), what: "packages" }) }],
   ["port_holder", { group: "port", say: ({ args }) => ({ verb: CHECK, what: text(args["port"]) ? `port ${text(args["port"])}` : "a port" }) }],
   ["thread_move", { group: "cloud", say: () => ({ verb: MOVE, what: "this Thread to the cloud" }) }],
+  ["wait", {
+    group: "agents",
+    say: ({ args }) => {
+      const action = text(args["action"])
+      if (action === "cancel") return { verb: verb("Stop waiting", "Stopping the wait", "Stopped waiting") }
+      if (action === "list") return { verb: READ, what: "the wait" }
+      const description = text(args["description"])
+      return { verb: verb("Wait", "Waiting", "Waited"), what: description ? description.replace(/^Waiting (?:for |on )?/i, "for ") : "for its work" }
+    },
+  }],
   ["thread", { group: "cloud", say: ({ args }) => threadWords(args) }],
   ["settings", { group: "cloud", say: ({ args }) => settingsWords(args) }],
   ["harness", { group: "cloud", say: ({ args }) => harnessWords(args) }],

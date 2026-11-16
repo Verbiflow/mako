@@ -584,6 +584,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     late.cloud?.wake()
     late.cloudConversations?.wake()
     late.awayNotes?.back("wake")
+    late.conversations?.agents?.woke()
   })
   const telemetry = await declareTelemetryMethods(methods, {
     environment,

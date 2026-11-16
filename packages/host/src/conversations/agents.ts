@@ -161,6 +161,9 @@ import { FinMoves, type FinPlace } from "./fin-moves.js"
 import type { TurnReply } from "./live-goals.js"
 import { PULL_WATCH_EVERY_MS, PullWatch, type PullWait } from "./pull-watch.js"
 import { QuietWatch } from "./fin-quiet.js"
+import { TurnWaits } from "./turn-waits.js"
+import { turnWaitItemKey, turnWaitItemWords, turnWaitLine, type TurnWait, type TurnWaitItem } from "../contracts/turn-waits.js"
+import { AFTER_WAIT, type TurnWaitInput, type TurnWaitResult } from "../contracts/thread-tools.js"
 import { AgentPlaces, placeName, type AwayRefused, type OutboxNotice, type PlacedAsk, type PlaceLink } from "./agent-places.js"
 import type { PullOutcome, PullReading, PullWaitUntil } from "../contracts/pull-waits.js"
 import type { PullTarget as ReadTarget } from "../git/index.js"
@@ -188,6 +191,19 @@ function inputsOf(request: string, actions: readonly LiveAction[] | undefined): 
     return [input.kind === "steer-queued" ? input.queuedRequestId : input.id]
   })
   return [request, ...steered]
+}
+
+const TURN_WAIT_ACTOR: Actor = { kind: "service", name: "turn-wait" }
+/** A pull request's key in PullWatch for a turn wait's item, so its outcome goes to the wait (`pullOutcome`). */
+const TURN_WAIT_PULL = "turn-wait:"
+
+function firstLine(text: string): string {
+  const line = text.trim().split("\n", 1)[0] ?? ""
+  return line.length > 300 ? `${line.slice(0, 299)}…` : line
+}
+
+function isTurnWaitNote(request: Pick<LiveRequest, "actor">): boolean {
+  return request.actor?.kind === "service" && request.actor.name === "turn-wait"
 }
 
 function isPullNote(request: Pick<LiveRequest, "actor">): boolean {
@@ -687,6 +703,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   readonly quiet: QuietWatch
   /** Conversations that aren't a Fin's, so activity in them costs a set lookup: emptied when the edges change. */
   private readonly notFins = new Set<string>()
+  /** Turns' waits (`wait`): armed in the store, met by Fins' results and ends and pull requests' outcomes, fired once. */
+  readonly turnWaits: TurnWaits
   /** This Mac's load as a start last read it, which every answer carries while it's busy. */
   private mac: MacLoad | undefined
   /** Where a Fin goes when its harness's account runs out; absent without the host's accounts. */
@@ -798,6 +816,17 @@ export class Agents implements AgentOperations, ConversationChildren {
       now: () => this.now(),
     })
     this.stopPullWatch = deps.jobs.every("read the pull requests Fins wait on", PULL_WATCH_EVERY_MS, () => this.pulls.tick(), { needs: [watching] })
+    this.turnWaits = new TurnWaits({
+      store: () => this.store(),
+      now: () => this.now(),
+      deliver: (wait) => this.deliverWait(wait),
+      timer: (at, fire) => {
+        const timer = setTimeout(fire, Math.max(0, at - this.now()))
+        timer.unref()
+        return () => clearTimeout(timer)
+      },
+      changed: () => this.pulls.refresh(),
+    })
     this.places = deps.away && new AgentPlaces({
       link: deps.away,
       jobs: deps.jobs,
@@ -944,6 +973,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       const edge = edges.of(kept.child)
       if (edge) void this.sendPullWake(edge, kept)
     }
+    // A turn's wait the last host fired and didn't deliver goes once; one met or due while it was down fires now.
+    this.turnWaits.start()
     this.pulls.refresh()
     for (const apex of new Set(edges.all.map((edge) => edge.parent))) {
       // A stopped Fin's wait for it to resume (`resumeFin`).
@@ -1225,6 +1256,8 @@ export class Agents implements AgentOperations, ConversationChildren {
    * already keeps its stop. A message to it is refused until it's restored.
    */
   async archived(conversation: string): Promise<boolean> {
+    // Its own wait ends with it, a Fin's or not.
+    this.turnWaits.cancelOf(conversation, "archive")
     const child = this.childOfConversation(conversation)
     const edge = child ? this.store()?.edges().of(child) : undefined
     if (!edge) return false
@@ -1244,6 +1277,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     for (const hold of this.holds) if (hold.apex === conversation) hold.end()
     this.apexReplied(conversation, request)
     this.wakes.settled(conversation)
+    // It can take input again: a turn wait's note it couldn't take goes now.
+    this.turnWaits.retry(conversation)
     const child = this.childOfConversation(conversation)
     const edge = child ? this.store()?.edges().of(child) : undefined
     if (child && !this.deps.live.atWork(conversation)) this.quiet.forget(child)
@@ -2681,6 +2716,36 @@ export class Agents implements AgentOperations, ConversationChildren {
    * keeps their first registration; claims deduplicate head/check observations. Failed, stopped and archived Fins wait on nothing.
    */
   private pullWaits(): PullWait[] {
+    return [...this.finPullWaits(), ...this.turnPullWaits()]
+  }
+
+  /**
+   * The pull requests turns' armed waits name, keyed apart from Fins' (`TURN_WAIT_PULL`) so an outcome meets the wait,
+   * never a Fin's report: read with the same cadence and the same outcomes (`pullOutcome`). A bare `#412` is read in the
+   * waiting conversation's folder.
+   */
+  private turnPullWaits(): PullWait[] {
+    const store = this.store()
+    if (!store) return []
+    return store.armedTurnWaits().flatMap((wait) => wait.items.flatMap((item): PullWait[] => {
+      if (item.kind !== "pull" || wait.met[turnWaitItemKey(item)] !== undefined) return []
+      const ref = pullRef(item.pull)
+      if (!ref) return []
+      const cwd = this.deps.live.session(wait.conversation)?.cwd || homedir()
+      return [{
+        key: `${TURN_WAIT_PULL}${wait.id}:${item.pull}:${item.until ?? ""}`,
+        child: wait.thread,
+        report: wait.id,
+        pullKey: item.pull,
+        since: wait.createdAt,
+        pull: item.pull,
+        target: { key: ref.repository ? item.pull : `${item.pull}@${cwd}`, ...(ref.repository && { repository: ref.repository }), number: ref.number, cwd },
+        ...(item.until && { until: item.until }),
+      }]
+    }))
+  }
+
+  private finPullWaits(): PullWait[] {
     const store = this.store()
     if (!store) return []
     this.sync()
@@ -2742,6 +2807,13 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /** A pull request's outcome: claimed once per retained dependency and observation, then sent as Mako's note. */
   private async pullOutcome(wait: PullWait, outcome: PullOutcome, note: string): Promise<void> {
+    if (wait.key.startsWith(TURN_WAIT_PULL)) {
+      // The note says "Mako: PR acme/app#371 checks settled: …"; the wait's line names the pull request already.
+      const said = note.startsWith("Mako: PR ") ? note.slice("Mako: PR ".length) : note
+      const words = said.startsWith(`${wait.pull} `) ? said.slice(wait.pull.length + 1) : said
+      this.turnWaits.metWhere((item) => item.kind === "pull" && item.pull === wait.pullKey && item.until === wait.until, words)
+      return
+    }
     const store = this.store()
     const edge = store?.edges().of(wait.child)
     if (!store || !edge || !this.pullWaitHolds(wait.child, wait.report, wait.pullKey)) return
@@ -2791,6 +2863,7 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /** At a request's handoff: a pull request's note goes only while its wait holds, and is retired once it doesn't. */
   admits(conversation: string, request: Pick<LiveRequest, "id" | "actor">): boolean {
+    if (isTurnWaitNote(request)) return this.turnWaits.admits(request.id)
     if (!isPullNote(request)) return true
     const child = this.childOfConversation(conversation)
     const kept = child ? this.store()?.pullWakeOfRequest(child, request.id) : undefined
@@ -2879,6 +2952,145 @@ export class Agents implements AgentOperations, ConversationChildren {
     return { stopped: [...stopped], ...(pending.length && { pending }) }
   }
 
+  /**
+   * `wait`: a turn's wait (`contracts/turn-waits.ts`), started, cancelled or read. An agent waits in its own Thread on
+   * its Fins, pull requests and a time; one that could never end is refused (a Fin stopped or finished, a pull request
+   * closed, or merged when it waits for checks or a review). It's kept in the Thread store and wakes the Thread once.
+   */
+  async turnWait(caller: AgentCaller, input: TurnWaitInput): Promise<TurnWaitResult> {
+    const store = this.store()
+    if (!store) return { refused: "unavailable", why: "Waits need the Thread store, which didn't open on this host." }
+    const apex = caller.kind === "person" ? undefined : this.apexOf(caller)
+    if (apex && "refused" in apex) return { refused: "no-thread", why: apex.why }
+    if (apex?.conversation && input.conversation && input.conversation !== apex.conversation) return { refused: "not-yours", why: "An agent waits in its own Thread: leave conversation out." }
+    const conversation = apex?.conversation ?? input.conversation
+    if (!conversation) return { refused: "no-thread", why: "Name the conversation that waits (--conversation), or call it from a Thread's shell, where MAKO_SESSION_ID names it." }
+    const thread = apex?.thread ?? store.journalPlacement(conversation)?.thread
+    if (!thread) return { refused: "no-thread", why: "Mako doesn't know that conversation here." }
+    const action = input.action ?? "start"
+    if (action === "list") {
+      const armed = store.armedTurnWaitOf(conversation)
+      const line = armed ? turnWaitLine(armed) : undefined
+      return { outcome: "listed", ...(line && { wait: { id: line.wait, description: line.description, waitsOn: line.items.map((item) => ({ what: item.words, met: item.met })), returnWhen: line.returnWhen, ...(line.endsBy !== undefined && { endsBy: new Date(line.endsBy).toISOString() }) } }) }
+    }
+    if (action === "cancel") {
+      const armed = store.armedTurnWaitOf(conversation)
+      if (armed) this.turnWaits.cancel(armed.id, caller.kind === "person" ? "person" : "agent")
+      return { outcome: "cancelled", ...(armed && { wait: armed.id }) }
+    }
+    // Pull requests are read first, the only await; the Fins are checked after, with nothing between their check and
+    // the arm, so a Fin that ends while a read is pending can't leave a wait that never ends.
+    const items: TurnWaitItem[] = []
+    const met: Record<string, { at: number; words: string }> = {}
+    const pulls = new Map<number, Extract<TurnWaitItem, { kind: "pull" }>>()
+    const asked = input.on ?? []
+    for (const [index, on] of asked.entries()) {
+      if ("fin" in on) continue
+      const ref = pullRef(on.pull)
+      if (!ref) return { refused: "invalid", why: `${on.pull} isn't a pull request: name it as owner/name#412, #412 or its URL.` }
+      const item: Extract<TurnWaitItem, { kind: "pull" }> = { kind: "pull", pull: pullKey(ref), ...(on.until && { until: on.until }) }
+      const reading = await this.readPullOnce(item, conversation)
+      if (reading?.state === "closed") return { refused: "never", why: `${item.pull} was closed without merging, so nothing more will happen on it.` }
+      if (reading?.state === "merged") {
+        if (item.until !== "merge") return { refused: "never", why: `${item.pull} is merged already: its checks and reviews won't change now.` }
+        met[turnWaitItemKey(item)] = { at: this.now(), words: "merged" }
+      }
+      pulls.set(index, item)
+    }
+    for (const [index, on] of asked.entries()) {
+      const pull = pulls.get(index)
+      if (pull) {
+        items.push(pull)
+        continue
+      }
+      if (!("fin" in on)) continue
+      if (!apex) return { refused: "invalid", why: `Wait on a ${FIN_WORD} from its ${APEX_WORD}'s own Thread.` }
+      const edge = this.resolve(apex, on.fin, false)
+      if (!edge) return { refused: "unknown-fin", why: `${on.fin} isn't a ${FIN_WORD} of this Thread: agents_list names them.` }
+      if (edge.closedAt !== undefined || this.stateOf(edge).kind === "ended")
+        return { refused: "never", why: `${edge.name} isn't at work, so it has no result coming: send it work with agents_send, or read its report with agents_read.` }
+      items.push({ kind: "fin", fin: edge.child, name: edge.name })
+    }
+    let at: number | undefined
+    if (input.at !== undefined) {
+      at = Date.parse(input.at)
+      if (!Number.isFinite(at)) return { refused: "invalid", why: `${input.at} isn't a time: give it as ISO 8601, such as 2026-11-16T09:00:00-08:00.` }
+    }
+    const armed = this.turnWaits.arm({
+      conversation,
+      thread,
+      clientKey: input.clientKey,
+      description: input.description ?? "",
+      items,
+      ...(input.returnWhen && { returnWhen: input.returnWhen }),
+      ...(input.seconds !== undefined && { seconds: input.seconds }),
+      ...(at !== undefined && { at }),
+      met,
+    })
+    if ("refused" in armed) return { refused: armed.refused, why: armed.why }
+    if ("alreadyDone" in armed) return { outcome: "already-done", met: Object.values(armed.met).map((each) => each.words), next: AFTER_WAIT.alreadyDone }
+    hostLog("agents", "turn wait", { conversation, wait: armed.wait.id, items: items.length, existed: armed.existed })
+    return {
+      outcome: "armed",
+      wait: armed.wait.id,
+      waitsOn: armed.wait.items.map(turnWaitItemWords),
+      ...(armed.wait.endsBy !== undefined && { endsBy: new Date(armed.wait.endsBy).toISOString() }),
+      ...(armed.replaced.length && { replaced: armed.replaced.map((wait) => wait.description) }),
+      next: AFTER_WAIT.armed,
+    }
+  }
+
+  /** A pull request's state as a wait arms on it; nothing when it can't be read now, which refuses nothing. */
+  private async readPullOnce(item: Extract<TurnWaitItem, { kind: "pull" }>, conversation: string): Promise<PullReading | null | undefined> {
+    const read = this.deps.readPull
+    const ref = pullRef(item.pull)
+    if (!read || !ref) return undefined
+    const cwd = this.deps.live.session(conversation)?.cwd || homedir()
+    try {
+      return await read({ ...(ref.repository && { repository: ref.repository }), number: ref.number, cwd })
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * A turn wait's note into the conversation that waited, as Mako's words under the request it fired with: a Fin's
+   * through `deliver` as a pull request's note goes, a Thread's own straight into its queue. `later` when the
+   * conversation can't take it now: its next turn's end, or the next start, sends it (`TurnWaits.retry`, `start`).
+   */
+  private async deliverWait(wait: TurnWait): Promise<"taken" | "later"> {
+    const fired = wait.fired
+    if (!fired) return "taken"
+    const child = this.childOfConversation(wait.conversation)
+    const edge = child ? this.store()?.edges().of(child) : undefined
+    if (edge) {
+      const sent = await this.deliver(edge, fired.request, fired.text, [], TURN_WAIT_ACTOR, "queue", true)
+      if ("refused" in sent) {
+        hostLog("agents", "turn wait note held", { wait: wait.id, refused: sent.refused })
+        return "later"
+      }
+      return "taken"
+    }
+    const live = this.deps.live
+    if (!live.session(wait.conversation) || this.deps.archived?.(wait.conversation)) return "later"
+    if (live.held(wait.conversation)?.requests.some((request) => request.id === fired.request)) return "taken"
+    live.submit(wait.conversation, fired.request, fired.text, [], undefined, undefined, undefined, TURN_WAIT_ACTOR)
+    return "taken"
+  }
+
+  /**
+   * The host came back (`watchWake`: a resume, an unlock, or the clock jumping over a sleep): a wait whose time came
+   * meanwhile fires now, once, saying it's late; the timer it armed may have slept through it.
+   */
+  woke(): void {
+    this.turnWaits.check()
+  }
+
+  /** The person's Stop, or their archive, of a conversation's Thread ends the wait its turn armed. */
+  threadStopped(conversation: string, by: "stop" | "archive"): void {
+    this.turnWaits.cancelOf(conversation, by)
+  }
+
   async wait(caller: AgentCaller, input: AgentsWaitInput): Promise<AgentsWaitResult> {
     const apex = this.apexOf(caller)
     if ("refused" in apex) return apex
@@ -2947,6 +3159,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     this.cutChecks.clear()
     this.stopRoomWatch()
     this.stopPullWatch()
+    this.turnWaits.stop()
     for (const cancel of this.unanswered.values()) cancel()
     this.unanswered.clear()
     for (const held of this.undecided.values()) held.cancel()
@@ -4210,8 +4423,14 @@ export class Agents implements AgentOperations, ConversationChildren {
     this.childMoved(edge, false)
     for (const wake of this.waiters) wake()
     this.checkHolds(edge.child)
+    if (report.status !== "progress") this.finMet(edge.child, `${report.status}: ${firstLine(report.summary)}`)
     this.pulls.refresh()
     return kept
+  }
+
+  /** A Fin's result or end meets every turn wait naming it. */
+  private finMet(child: string, words: string): void {
+    this.turnWaits.metWhere((item) => item.kind === "fin" && item.fin === child, words)
   }
 
   /** `notice:{child}:{reportId}` to the Apex's owner: this host, which has the Apex's conversation; a report its spawn asked not to hear goes nowhere but its strip. */
@@ -4334,6 +4553,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     this.runs.stop(edge.child, why.slice(0, 2000))
     if (conversation) await this.halt(edge, conversation)
     hostLog("agents", "end", { op: edge.op, child: edge.child, outcome: "stopped", why })
+    this.finMet(edge.child, `stopped: ${why}`)
+    // The Fin's own wait ends with its work.
+    if (conversation) this.turnWaits.cancelOf(conversation, why === "the person archived it" ? "archive" : "stop")
     this.childMoved(closed, false)
     // Its own queued Fins now wait for it to resume.
     this.queueRefresh()

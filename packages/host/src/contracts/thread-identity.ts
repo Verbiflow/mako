@@ -31,6 +31,8 @@ export const SERVICE_ACTORS = [
   "workspace",
   /** Mako waking a Fin on the pull request its report said it waits on (`contracts/pull-waits.ts`). */
   "pull-watch",
+  /** Mako waking a Thread whose agent's turn waited (`contracts/turn-waits.ts`). */
+  "turn-wait",
 ] as const
 
 /**

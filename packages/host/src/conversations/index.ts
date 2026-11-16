@@ -752,7 +752,11 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     live.permission(id, requestId, response)
   )
   methods.handle("mako:live-mode", (id: string, modeId: string) => live.setMode(id, modeId))
-  methods.handle("mako:live-cancel", (id: string) => live.cancel(id))
+  methods.handle("mako:live-cancel", async (id: string) => {
+    await live.cancel(id)
+    // The person's Stop ends the wait the turn armed: nothing goes by itself after a Stop.
+    conversations.agents?.threadStopped(id, "stop")
+  })
   methods.handle("mako:live-stop-agent", (id: string, nativeId: string) => live.stopNativeAgent(id, nativeId))
   methods.handle("mako:live-goal", async (id: string, command: GoalCommand, tuning?: SessionSettings) => {
     const session = live.session(id)
