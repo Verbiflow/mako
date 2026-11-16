@@ -362,6 +362,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
       threadData?.close()
       checkoutHeads.close()
       await worktrees?.closeSummaries()
+      await borrowing?.borrowing.close()
     },
   }
 }
