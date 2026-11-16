@@ -55,8 +55,12 @@ export async function answerFin(apexConversation: string, ask: PersonAsk, answer
       return false
     }
     return true
-  } catch (error) {
-    toast.error(`${ask.title} didn't get your answer`, { description: error instanceof Error ? error.message : String(error) })
+  } catch {
+    // The host settles one answer to an ask once, so trying again can't answer it twice.
+    toast.error(`${ask.title} didn't get your answer`, {
+      description: "Mako couldn't reach the Apex's host, so nothing was sent.",
+      action: { label: "Try again", onClick: () => void answerFin(apexConversation, ask, answer) },
+    })
     return false
   }
 }
