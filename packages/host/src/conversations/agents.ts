@@ -143,7 +143,7 @@ import { resetWords, type HarnessLimit } from "../contracts/account-usage.js"
 import { signInPause, signInResuming } from "../contracts/sign-in-hold.js"
 import { FIN_LIMIT, finPolicyNote, placeFull, roleRuleLines, type RoleRuleLines, type CloudFinLimits, type FinPlaceLimit, FinTuningSourceSchema, finTuningLine, finTuningWords, resolveFinTuning, type FinPolicy, type FinTarget, type FinTuningSource } from "../contracts/fin-tuning.js"
 import { AFTER_LIMIT, ASK_OPTIONS, type FinAsk, type NativeAgent } from "../contracts/native-agents.js"
-import { backgroundWorkText, pendingWake, providerHolds } from "../contracts/background-work.js"
+import { backgroundWorkText, HELD_WORK_CEILING_MS, pendingWake, providerHolds, staleWork } from "../contracts/background-work.js"
 import type { PendingAsk } from "../contracts/live-questions.js"
 import { RESTART_RETIRED_MOVE, type ContextTransfer } from "../contracts/conversation-control.js"
 import type { LiveRequest, LiveSnapshot, LiveStartOptions } from "../contracts/live-conversations.js"
@@ -191,6 +191,10 @@ const WAITED_ON: ReadonlySet<ChildState["kind"]> = new Set(["queued", "starting"
  * A Fin's turn that ended on progress, with nothing it waits on that will wake it, in the words of its report
  * (`Report.unfinished`), which every surface heads "ended without a result": its last words lead, the whole reply follows.
  */
+function holding(names: readonly string[]): { holds?: string[] } {
+  return names.length ? { holds: [...names] } : {}
+}
+
 function unfinishedSummary(words: string): string {
   const last = firstLine(words).slice(0, 240)
   const head = `Nothing it waits on will wake it.${last ? ` Its last words: "${last}"` : ""}`
@@ -675,9 +679,10 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly releasing = new Set<string>()
   /**
    * Fins whose turn ended while their own work went on, with that turn: its reply is their report once nothing is left.
-   * `work` names what their harness held then (`pendingWake`), so a process that ends with it still pending is said.
+   * `work` names what their harness held then (`pendingWake`), so a process that ends with it still pending is said;
+   * `woke`, that its harness started a turn of its own since, on that work.
    */
-  private readonly awaiting = new Map<string, { conversation: string; request: string; work?: string }>()
+  private readonly awaiting = new Map<string, { conversation: string; request: string; work?: string; woke?: true }>()
   /** Fins' conversations whose cut turn is looked at once Mako's own continuation would have been scheduled (`watchCut`). */
   private readonly cutChecks = new Map<string, NodeJS.Timeout>()
   /** Messages on their way to each Fin (`deliver`), which a Stop marks: one may open a session before it has a queue to wait in. */
@@ -1426,7 +1431,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     this.childMoved(edge, true)
     // A Fin whose turn ended on its harness's background work: that work settling, or the process holding it ending,
     // moves its snapshot, and its end is looked at again.
-    if (this.awaiting.get(edge.child)?.work) this.checkAwaiting(edge)
+    const awaiting = this.awaiting.get(edge.child)
+    if (awaiting?.work) {
+      if (this.deps.live.held(conversation)?.session.status === "running") awaiting.woke = true
+      this.checkAwaiting(edge)
+    }
     // A message its harness refused at its limit waits to go again: a Fin moves on instead. A continuation scheduled
     // for its cut turn that was dropped leaves it cut: looked at again.
     if (edge.closedAt === undefined && !this.limitMove(edge, conversation)) this.watchCut(conversation)
@@ -2047,7 +2056,7 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /**
    * How a spawn's `after` stands now: a Fin done is finished; one failed or stopped, or a spawn of them that was
-   * dropped or refused before it started, holds it; the rest it waits for.
+   * dropped or refused before it started, holds it; the rest it waits for, one that ended without a result included.
    */
   private afterStand(queued: QueuedStart): AfterStand {
     const store = this.store()!
@@ -2060,6 +2069,12 @@ export class Agents implements AgentOperations, ConversationChildren {
         continue
       }
       const state = this.stateOf(edge)
+      // One that ended without a result isn't finished, nor failed: what waits for it waits on, until its Apex sends it
+      // on and it finishes, takes its reply as its result, or stops it.
+      if (state.kind === "ended" && state.outcome === "failed" && state.unfinished) {
+        pending.push(edge.name)
+        continue
+      }
       if (state.kind === "ended" && state.outcome !== "done") {
         const session = store.thread(edge.child)?.sessions[0]
         return { pending, held: { name: edge.name, outcome: state.outcome, ...(state.reason && { reason: state.reason }), ...(session && { session }) } }
@@ -4104,6 +4119,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (waits) {
       const work = this.heldWork(conversation)
       this.awaiting.set(edge.child, { conversation, request, ...(work && { work }) })
+      // Work nothing says the end of is believed for `HELD_WORK_CEILING_MS`: past it, its end is looked at again.
+      if (work) this.later(HELD_WORK_CEILING_MS + 1_000, () => {
+        const now = this.store()?.edges().of(edge.child)
+        if (now && this.awaiting.get(edge.child)?.request === request) this.checkAwaiting(now)
+      })
       hostLog("agents", "turn ended waiting", { op: edge.op, child: edge.child, on: waits })
       return this.childMoved(edge, false)
     }
@@ -4592,7 +4612,7 @@ export class Agents implements AgentOperations, ConversationChildren {
    */
   private heldWork(conversation: string): string | undefined {
     const held = this.deps.live.held(conversation)
-    const work = held ? pendingWake(held.session, held.nativeAgents) : null
+    const work = held ? pendingWake(held.session, held.nativeAgents, this.now()) : null
     return work ? `${backgroundWorkText(work)} it left running` : undefined
   }
 
@@ -4615,13 +4635,33 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (newest && (newest.status === "completed" || newest.status === "failed" || newest.status === "interrupted")) this.turnEnded(edge, held.conversation, newest.id)
       return
     }
-    if (held.work && !providerHolds(snapshot?.session)) {
+    if (held.work && !providerHolds(snapshot?.session) && snapshot?.session.connection !== "hibernated") {
       const why = snapshot?.session.error
       this.keepReport(edge, {
         id: `report:${edge.child}:${held.request}:work-ended`,
         child: ThreadIdSchema.parse(edge.child),
         status: "failed",
         summary: `Its ${this.deps.harnessLabel(snapshot!.session.harness)} process ended while it waited on ${held.work}${why ? ` (${why})` : ""}, so that work ended with it and nothing will wake it. A message resumes it.`,
+        implicit: true,
+        ownerGeneration: this.generation,
+        at: this.now(),
+      })
+      return
+    }
+    // That work ended without its harness starting a turn on it (Claude dropped a Monitor that timed out, or one TaskStop
+    // ended, saying nothing), or nothing was heard of it past the ceiling: nothing will wake it. It ended without a result.
+    if (held.work && !held.woke) {
+      const stale = staleWork(snapshot?.nativeAgents, this.now()).length > 0
+      const why = stale
+        ? `Nothing was heard of ${held.work} in ${HELD_WORK_CEILING_MS / 3_600_000} hours, so Mako no longer counts on it.`
+        : `${held.work.charAt(0).toUpperCase()}${held.work.slice(1)} ended without waking it.`
+      const said = this.deps.live.turnReply(held.conversation, held.request)?.text ?? ""
+      this.keepReport(edge, {
+        id: `report:${edge.child}:${held.request}:work-ended`,
+        child: ThreadIdSchema.parse(edge.child),
+        status: "failed",
+        unfinished: true,
+        summary: `${why} ${unfinishedSummary(said)}`.slice(0, 16_000),
         implicit: true,
         ownerGeneration: this.generation,
         at: this.now(),
@@ -4862,7 +4902,17 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(wake && { wake }),
       ...(edge.asked.mode === "wait" && (report.status === "done" || report.status === "failed") && { settledOnly: true as const }),
       ...(report.status === "done" && report.question && { decision: decisionOn(edge.asked, report) }),
+      ...(report.unfinished && { ...holding(this.waitingAfter(edge)) }),
     }
+  }
+
+  /** The names of the starts queued to go after a Fin, oldest first. */
+  private waitingAfter(edge: ThreadParent): string[] {
+    return (this.store()?.queuedSpawns() ?? []).flatMap((spawn) => {
+      const queued = parseQueued(spawn.record)
+      const after = queued?.after?.some((ref) => ref.child === edge.child || (ref.op !== undefined && ref.op === edge.op))
+      return queued && after ? [(queued.input.name ?? queued.input.title ?? "queued").slice(0, 200)] : []
+    }).slice(0, 32)
   }
 
   /** The notices of Fins here whose Apex is on another device that no such device has taken yet, oldest first (`AgentPlaces`). */

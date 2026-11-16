@@ -233,7 +233,11 @@ transcript's end and the Agents panel; ambient watchers are listed and never
 counted there. What a provider still holds that wakes it, ambient watchers such
 as Claude's Monitor included, is `pendingWake`: a Fin's turn that ends on it
 waits on it, and a session holding it is never hibernated (`canHibernate`),
-since closing the process ends it and nothing would wake the Fin. Claude's roster reads the SDK's task events and its
+since closing the process ends it and nothing would wake the Fin. An entry
+nothing says the end of is believed for `HELD_WORK_CEILING_MS` (6 hours) from
+its start, no longer (`heldWork`, `staleWork`), and a task Claude's level drops
+between turns with no notification is settled unknown after
+`DROPPED_GRACE_MS` (a Monitor that timed out or that TaskStop ended). Claude's roster reads the SDK's task events and its
 `background_tasks_changed` level (a Monitor reports as `local_bash`, so its
 kind comes from the `tool_use` that started it), Codex's the terminal list,
 Grok's its `background_tasks` list, Devin's its backgrounded exec calls and
@@ -526,7 +530,9 @@ working with "Waiting for …" (`waitsOn`). Its result is the turn after that
 work ends: the one its Fins' reports or the harness's own turn wake, or, with
 nothing to wake it, that turn's reply (`checkAwaiting`). A harness process that
 ends while it held such work took the work with it: the Fin's end is a failed
-report saying so, at once (`test:fin-turn-ends`). A message to it
+report saying so, at once; one whose work ended, or went past the ceiling,
+without its harness starting a turn on it ended without a result
+(`test:fin-turn-ends`). A message to it
 (`agents_send`, `takeOver`) stops the run, resumes its Session in the Fin's
 Thread on Mako's live driver at no more than its Apex's access, and arrives
 with `HANDED_OVER_NOTE` saying its last step may have been cut. From then on
@@ -626,7 +632,8 @@ reads "Ended without a result" in the list, its row, the phone and the digest
 (`reportWord`, `endedUnfinished`, its own digest section), wakes its Apex at
 once with its last words (`unfinishedSummary`), and asks nobody, so nothing
 reaches the person's Inbox; its Apex sends it on (the row's Continue) or takes
-the reply as its result; an idle Apex waits
+the reply as its result. What was to start `after` it waits on (the digest
+says so) and starts once it reports done; a stop drops it. An idle Apex waits
 `WAKE_COALESCE_MS` and takes ONE turn with the digest; a busy one is left to
 think: only a question or decision it can answer is steered into its running
 turn, at its next step where its harness steers there, and what else its

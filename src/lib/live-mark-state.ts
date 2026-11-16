@@ -1,4 +1,5 @@
 import type { ChildState } from "@mako/host/contracts/agents"
+import { endedUnfinished } from "@mako/host/contracts/children"
 import { harnessLabel } from "@/lib/harness-label"
 import type { ThreadStatus } from "@/state/thread-status"
 
@@ -89,6 +90,8 @@ export function finMarkState(state: ChildState): LiveMarkState {
     case "idle":
       return "idle"
     case "ended":
+      // Ended without a result is its Apex's to send on, not a failure: quiet, as its row's words and its card are.
+      if (endedUnfinished(state)) return "idle"
       return state.outcome === "failed" || state.unfinished ? "failed" : state.decision?.on === "person" ? "needs" : "idle"
   }
 }

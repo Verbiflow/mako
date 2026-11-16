@@ -37,7 +37,7 @@ for (const rule of [
   // #827's reporting rules: what's ready for review or waits on someone is a result, and a turn ending on progress is one.
   "Ready for review, or waiting on your Apex or the person, is done with an `action`, never progress",
   "progress is for a turn that goes on",
-  "a turn ending on progress nothing Mako watches will wake tells your Apex it ended unfinished",
+  "a turn ending on progress nothing will wake tells your Apex it ended unfinished",
   "`mode: \"wait\"`",
   "If you poll gh yourself: at most once a minute per repository; after a 403/429 stop all GitHub calls until Retry-After.",
   "Never run an agent CLI with nohup",

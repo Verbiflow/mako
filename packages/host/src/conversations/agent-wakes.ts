@@ -455,6 +455,7 @@ export function digest(notices: readonly Notice[], counts: string): string {
     for (const notice of unfinished) {
       const { label, report } = notice
       lines.push(`  • ${label}: ${finishedLine(report)}`)
+      if (notice.holds?.length) lines.push(`    Still waiting to start after it: ${notice.holds.join(", ")} (they start once it reports done; agents_stop on it drops them).`)
       cards.push(card(notice, opening(report.summary) || "Its turn ended without a result."))
       artifactLines(lines, report)
     }

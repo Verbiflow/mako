@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { NativeAgentObservation } from "@mako/host/contracts/native-agents"
+import { HELD_WORK_CEILING_MS } from "@mako/host/contracts/background-work"
 import { childWord } from "@mako/host/contracts/children"
 import { readFinReports } from "@mako/host/contracts/fin-reports"
 import type { PullReading } from "@mako/host/contracts/pull-waits"
@@ -17,6 +18,9 @@ import { AgentsWorld, type Script } from "./lib/agents-world.ts"
  *   A Fin whose harness holds work that wakes it (a background command, a Monitor, a subagent) is at work on it, and
  *   its session stays up; once that work settles and the harness's turn reports, that's its result.
  * - If the harness's process ends with that work pending, the work ended with it: the Fin's end says so at once.
+ * - Claude can drop a Monitor that timed out, or that TaskStop ended, saying nothing: the driver settles it unknown, and
+ *   the Fin ended without a result. Work nothing says the end of is believed for `HELD_WORK_CEILING_MS`, no longer.
+ * - An unfinished Fin keeps what was to start after it waiting, until it reports done.
  * - fin-models, woken by the pull-request watch on #868, pushed a fix and ended its turn saying it would report when CI
  *   settled, with nothing watching the new run. Mako wrote its promise as its result, and its row said "Done". A Fin
  *   whose word is progress hasn't said it's done: it reads "Ended without a result" in the list, its row and the
@@ -38,7 +42,7 @@ const monitor = (state: NativeAgentObservation["state"]): NativeAgentObservation
   ({ nativeId: "monitor-ci", title: "CI checks on #783", work: "monitor", ambient: true, background: true, stoppable: true, state })
 
 /** A world whose Fins run `script`, and what the Apex heard and how each Fin stands. */
-async function world(name: string, script: Script, options: { readPull?: () => Promise<PullReading | null>; apexAnswerMs?: number } = {}) {
+async function world(name: string, script: Script, options: { readPull?: () => Promise<PullReading | null>; apexAnswerMs?: number; now?: () => number; later?: (ms: number, run: () => void) => () => void } = {}) {
   const w = new AgentsWorld({ root: join(root, name), script, backgroundOutlivesTurn: ["claude"], ...options })
   const apex = await w.apex("claude", "full")
   const start = async (fin: string, objective: string) => {
@@ -121,6 +125,87 @@ async function monitorDied(): Promise<void> {
   await f.w.close()
 }
 
+async function monitorDropped(): Promise<void> {
+  const f = await world("monitor-dropped", async (turn) => {
+    if (!turn.text.includes("You're fin:")) return "ok"
+    turn.world.live.observe({ type: "live-agent", id: turn.conversation, agent: monitor({ kind: "working" }) })
+    return "Monitor is armed for #783; I'll fix and re-push from its events."
+  })
+  const child = await f.start("queue", "Get #783 green")
+  await f.w.settle()
+  const conversation = f.conversationOf(child)
+  assert.equal((await f.state("queue")).state.kind, "working")
+  // Claude dropped it from its level with no notification and no turn: the driver settles it, its end unknown.
+  f.w.live.observe({ type: "live-agent", id: conversation, agent: monitor({ kind: "unknown", reason: "Claude no longer lists this task and did not say how it ended." }) })
+  await until("its end to be said", () => f.reports(child).length > 0)
+  const [report] = f.reports(child)
+  assert.deepEqual([report!.status, report!.unfinished], ["failed", true], JSON.stringify(report))
+  assert.equal(report!.summary, `A monitor it left running ended without waking it. Nothing it waits on will wake it. Its last words: "Monitor is armed for #783; I'll fix and re-push from its events."`)
+  assert.equal(childWord((await f.state("queue")).state), "Ended without a result", "never waiting forever, never done")
+  await f.w.settle()
+  assert.match(f.heard(), /1 ended without a result [^\n]*:\n {2}• "queue" \(Claude\): A monitor it left running ended without waking it\./, "its Apex hears it at once")
+  console.log(`monitor dropped: "${report!.summary}"`)
+  await f.w.close()
+}
+
+async function monitorPastCeiling(): Promise<void> {
+  let offset = 0
+  const timers: { ms: number; run: () => void }[] = []
+  const f = await world("monitor-stale", async (turn) => {
+    if (!turn.text.includes("You're fin:")) return "ok"
+    turn.world.live.observe({ type: "live-agent", id: turn.conversation, agent: monitor({ kind: "working" }) })
+    return "Monitor is armed; I'll act on its events."
+  }, { now: () => Date.now() + offset, later: (ms, run) => (timers.push({ ms, run }), () => {}) })
+  const child = await f.start("queue", "Get #783 green")
+  await f.w.settle()
+  assert.equal((await f.state("queue")).state.kind, "working")
+  const ceiling = timers.find((timer) => timer.ms > HELD_WORK_CEILING_MS)
+  assert.ok(ceiling, "its end is looked at again past the ceiling")
+  // Nothing was heard of the Monitor since: past the ceiling it's no longer believed.
+  offset = HELD_WORK_CEILING_MS + 60_000
+  ceiling!.run()
+  const [report] = f.reports(child)
+  assert.deepEqual([report?.status, report?.unfinished], ["failed", true], JSON.stringify(report))
+  assert.match(report!.summary, /^Nothing was heard of a monitor it left running in 6 hours, so Mako no longer counts on it\. Nothing it waits on will wake it\. Its last words: "Monitor is armed; I'll act on its events\."$/)
+  console.log("monitor past the ceiling: no longer believed; it ended without a result")
+  await f.w.close()
+}
+
+async function unfinishedHoldsAfter(): Promise<void> {
+  const f = await world("holds-after", async (turn) => {
+    if (turn.text.includes("You're fin:suites")) {
+      await turn.world.agents.report(turn.caller, { status: "progress", summary: "Half the suites run.", clientKey: "half" })
+      await turn.world.hold(turn.conversation)
+      return "I'll report when the local suites settle."
+    }
+    if (turn.text.includes("Go on")) {
+      await turn.world.agents.report(turn.caller, { status: "done", summary: "Every suite passes.", clientKey: "all" })
+      return "Every suite passes."
+    }
+    return turn.text.includes("You're fin:deploy") ? "Deployed." : "ok"
+  })
+  const child = await f.start("suites", "Run every suite")
+  const deploy = await f.w.agents.start(f.apex.caller, { brief: { objective: "Deploy it" }, name: "deploy", after: ["suites"], clientKey: "deploy", cwd: f.w.root })
+  assert.ok(!("refused" in deploy) && deploy.state === "queued", JSON.stringify(deploy))
+  const started = () => f.w.store.edges().all.some((edge) => edge.name === "deploy")
+  f.w.release(f.conversationOf(child))
+  await f.w.settle()
+  assert.equal(childWord((await f.state("suites")).state), "Ended without a result")
+  assert.equal(started(), false, "what was to start after it doesn't start")
+  assert.equal(f.w.store.queuedSpawns().length, 1, "and isn't dropped: it ended without a result, it didn't fail")
+  assert.match(f.heard(), /• "suites" \(Claude\): Nothing it waits on will wake it\.[^\n]*\n {4}Still waiting to start after it: deploy \(they start once it reports done; agents_stop on it drops them\)\./, "its Apex hears what waits on it")
+  assert.doesNotMatch(f.heard(), /It didn't start/)
+  // Its Apex sends it on; it finishes, and what waited starts.
+  const sent = await f.w.agents.send(f.apex.caller, { to: "suites", text: "Go on", clientKey: "go-on" })
+  assert.ok(!("refused" in sent), JSON.stringify(sent))
+  await until("deploy to start once suites finished", started)
+  await f.w.settle()
+  assert.equal((await f.state("suites")).state.kind, "ended")
+  assert.equal(childWord((await f.state("suites")).state), "Done")
+  console.log("unfinished holds after: what was to start after it waits, and starts once it reports done")
+  await f.w.close()
+}
+
 async function promiseAfterWake(): Promise<void> {
   const URL = "https://github.com/acme/app/pull/868"
   let pull: PullReading = { state: "open", url: URL, author: "fin-bot", checks: [{ name: "gate", state: "running" }], reviews: [] }
@@ -197,7 +282,7 @@ async function finishedWithoutReport(): Promise<void> {
 
 try {
   const only = process.argv.slice(2)
-  const cases = { monitorArmed, monitorDied, promiseAfterWake, unfinished, finishedWithoutReport }
+  const cases = { monitorArmed, monitorDied, monitorDropped, monitorPastCeiling, promiseAfterWake, unfinished, unfinishedHoldsAfter, finishedWithoutReport }
   for (const [name, run] of Object.entries(cases)) if (!only.length || only.includes(name)) await run()
 } finally {
   rmSync(root, { recursive: true, force: true })

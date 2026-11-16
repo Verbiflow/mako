@@ -4,7 +4,8 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { resumable, type ProviderBinding } from "../contracts/conversation-control.js"
 import { retriesBegun } from "../contracts/delivery-retry.js"
 import { goalWorking } from "../contracts/live-goals.js"
-import { disconnectNativeAgents, isActiveNativeAgent, isBusyProviderWork, isProviderWork } from "../contracts/native-agents.js"
+import { heldWork } from "../contracts/background-work.js"
+import { disconnectNativeAgents, isActiveNativeAgent, isBusyProviderWork } from "../contracts/native-agents.js"
 import type { ConversationMemory, ProviderResidencyEntry, ProviderResidencySnapshot } from "../contracts/provider-residency.js"
 import type { LiveSessionState } from "../contracts/providers-acp.js"
 import { signInPause } from "../contracts/sign-in-hold.js"
@@ -157,7 +158,6 @@ export class LiveHibernation {
   }
 
   canHibernate(resident: Resident, preparing = false, recoverAccount = false): boolean {
-    const native = resident.snapshot.nativeAgents?.agents ?? []
     const binding = activeBinding(resident)
     const driver = this.access.dependencies.driver(binding?.provider ?? "")
     return Boolean(
@@ -194,8 +194,9 @@ export class LiveHibernation {
               !(recoverAccount && (!request.nativeDelivery || request.nativeDelivery.evidence.kind === "not-accepted")))
         ) &&
         // A watcher it armed (Claude's Monitor) is ambient, so no level counts it, but it lives in the provider's process:
-        // closing that ends the watcher, and then nothing wakes the session when what it watches happens.
-        !native.some((agent) => isActiveNativeAgent(agent) && isProviderWork(agent))
+        // closing that ends the watcher, and then nothing wakes the session when what it watches happens. One past the
+        // ceiling without word of it is no longer believed (`heldWork`).
+        !heldWork(resident.snapshot.nativeAgents, this.access.dependencies.now?.() ?? Date.now()).length
     )
   }
 

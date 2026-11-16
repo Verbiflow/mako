@@ -294,6 +294,8 @@ export function childGroup(state: ChildState): ChildGroup {
     case "idle":
       return "idle"
     case "ended":
+      // Ended without a result: open for its next message, its Apex's to send on. Neither failed nor done.
+      if (endedUnfinished(state)) return "idle"
       return state.outcome === "failed" || state.unfinished ? "failed" : state.decision?.on === "person" ? "needs" : "done"
   }
 }
