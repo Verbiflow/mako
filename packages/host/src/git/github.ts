@@ -49,10 +49,10 @@ async function githubExecutable(): Promise<string> {
 }
 
 /** `env`: added to `gh`'s environment, as on a cloud machine to open a pull request as Mako's App (`MACHINE_GITHUB_AS`). */
-async function directGh(cwd: string, args: string[], env?: Readonly<Record<string, string>>): Promise<string> {
+async function directGh(cwd: string, args: string[], env?: Readonly<Record<string, string>>, now: () => number = Date.now): Promise<string> {
   const repository = args[0] === "repo" && args[1] === "view" && args.includes("--json")
   try {
-    const { stdout } = await run(await githubExecutable(), repository ? repositoryArgs(args) : args, {
+    const { stdout } = await run(await githubExecutable(), repository ? repositoryArgs(args, now) : args, {
       cwd,
       timeout: TIMEOUT,
       maxBuffer: MAX_BUFFER,
@@ -70,22 +70,22 @@ async function directGh(cwd: string, args: string[], env?: Readonly<Record<strin
     })
   } catch (cause) {
     if (!repository) throw cause
-    const limited = githubRateLimit(cause, Date.now())
+    const limited = githubRateLimit(cause, now())
     if (limited) throw limited
     // Only gh's local remote-discovery refusal proves missing setup. HTTP/GraphQL/parse/timeout failures do not.
     const failure = CommandFailure.safeParse(cause)
     if (failure.success && /no git remotes found|none of the git remotes.*known GitHub host/i.test(failure.data.stderr)) throw cause
-    throw new GitHubRepositoryLookupError(Date.now() + 60_000)
+    throw new GitHubRepositoryLookupError(now() + 60_000)
   }
 }
 
 /** Keep gh's checkout/remote selection, but fetch repository metadata over REST instead of GraphQL repo view. */
-function repositoryArgs(args: string[]): string[] {
+function repositoryArgs(args: string[], now: () => number): string[] {
   const target = args[2]?.startsWith("--") ? undefined : args[2]
   if (!target) return ["api", "repos/{owner}/{repo}"]
   const parts = (target.startsWith("https://") ? target.slice(8) : target).replace(/\/$/, "").split("/")
   const hostname = parts.length === 3 ? parts.shift() : undefined
-  if (parts.length !== 2 || parts.some(part => !/^[\w.-]+$/.test(part))) throw new GitHubRepositoryLookupError(Date.now() + 60_000)
+  if (parts.length !== 2 || parts.some(part => !/^[\w.-]+$/.test(part))) throw new GitHubRepositoryLookupError(now() + 60_000)
   return ["api", `repos/${parts.join("/")}`, ...(hostname ? ["--hostname", hostname] : [])]
 }
 
