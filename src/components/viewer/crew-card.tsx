@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react"
+import { FinTypedAnswer } from "@/components/composer/fin-typed-answer"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { finMoved } from "@/state/fin-moved"
 import {
@@ -307,11 +308,14 @@ const NeedsRow = memo(function NeedsRow({
               )
             })
           )}
+          {approval ? null : (
+            <FinTypedAnswer title={agent.title} options={options.length} disabled={Boolean(sent)} onAnswer={(words) => send({ answer: words })} />
+          )}
           {!compact ? (
             <span className="ml-auto text-label text-faint">
               {approval
                 ? ask?.named ? `${agent.title} waits on your answer` : `${agent.title} waits on this command`
-                : `Answer here or tell ${apexTitle}`}
+                : `Or tell ${apexTitle}`}
             </span>
           ) : null}
         </div>

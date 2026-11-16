@@ -29,6 +29,11 @@ export function InboxScreen({ onBack, onOpen }: { onBack: (() => void) | undefin
   const toRead = threads.filter((thread) => thread.standing === "failed" || (thread.standing === "idle" && isUnread(read, thread)))
   const count = fins.length + waiting.length
   const empty = !count && !toRead.length
+  // A Fin's ask opens its Apex's Thread, where its crew card holds it.
+  const openApex = (id: string) => {
+    const thread = threads.find((each) => each.id === id)
+    return thread ? () => onOpen(thread) : undefined
+  }
   const row = (thread: WebThread) => <ThreadRow thread={thread} selected={false} named={false} unread={isUnread(read, thread)} onOpen={() => onOpen(thread)} />
   return (
     <div data-inbox className="flex min-h-0 flex-1 flex-col bg-surface">
@@ -53,7 +58,7 @@ export function InboxScreen({ onBack, onOpen }: { onBack: (() => void) | undefin
             <h2 className="web-section-label -mx-2 text-attention">Needs you</h2>
             {fins.map((fin) => (
               <div key={fin.key} data-inbox-item={fin.key}>
-                <FinAskCard apex={fin.apex.conversation} ask={fin.ask} more={0} answerTyped={noTyped} from={fin.apex.title} />
+                <FinAskCard apex={fin.apex.conversation} ask={fin.ask} more={0} answerTyped={noTyped} from={fin.apex.title} onOpen={openApex(fin.apex.thread)} />
               </div>
             ))}
           </section>
