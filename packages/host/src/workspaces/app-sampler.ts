@@ -1,3 +1,4 @@
+import { REMOTE_APP_LEASE_MS, type RemoteAppDemand } from "../contracts/remote-app.js"
 import type { AppMark, AppSamplingDemand } from "../contracts/thread-app.js"
 import { SAMPLE_EVERY_MS } from "./app-probe.js"
 import type { AppsLook } from "./environment-tools.js"
@@ -61,6 +62,31 @@ export class ThreadAppSampler {
   private dirty = true
   /** Whether a run was alive at the last trace: a trace closes an app's as it stops, so one more runs after the last goes. */
   private tracedAlive = true
+  private readonly remote = new Map<string, { conversation: string; generation: number; visible: boolean; until: number }>()
+  /** A remote view's passive lease cannot change any legacy reader or another page's demand. */
+  followRemote(client: string, conversation: string, demand: RemoteAppDemand): boolean {
+    this.prune()
+    const key = JSON.stringify([client, conversation, demand.view])
+    const before = this.remote.get(key)
+    if (before && demand.generation <= before.generation)
+      return demand.generation === before.generation && demand.visible === before.visible
+    if (!before && this.remote.size >= MAX_READERS) return false
+    const wasWatched = this.watched()
+    this.remote.set(key, { conversation, generation: demand.generation, visible: demand.visible, until: this.now() + REMOTE_APP_LEASE_MS })
+    if (demand.visible && !wasWatched) this.dirty = true
+    return true
+  }
+
+  remoteConversations(): ReadonlySet<string> {
+    this.prune()
+    return new Set([...this.remote.values()].filter((reader) => reader.visible).map((reader) => reader.conversation))
+  }
+
+  remoteActive(client: string, conversation: string, view: string): boolean {
+    this.prune()
+    return this.remote.get(JSON.stringify([client, conversation, view]))?.visible === true
+  }
+
   private readonly readers = new Map<string, Reader>()
   /** An overflowing legacy read retains the old bounded lease without retaining another identity. */
   private overflowUntil = Number.NEGATIVE_INFINITY
@@ -130,12 +156,14 @@ export class ThreadAppSampler {
   private watched(): boolean {
     this.prune()
     if (this.now() < this.overflowUntil) return true
+    for (const reader of this.remote.values()) if (reader.visible) return true
     for (const reader of this.readers.values()) if (reader.kind === "legacy" || reader.visible) return true
     return false
   }
 
   private prune(): void {
     const now = this.now()
+    for (const [key, reader] of this.remote) if (now >= reader.until) this.remote.delete(key)
     for (const [client, reader] of this.readers)
       if (reader.kind === "legacy" ? now >= reader.until : this.connection(client) !== reader.connection) this.readers.delete(client)
   }

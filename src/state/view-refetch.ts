@@ -16,7 +16,10 @@ export function pageRefetch(): ViewRefetch {
     const alreadyVisible = current.visible
     shown()
     // A focus-only return matters too. Visibility/pageshow may already have caught up this same return.
-    if (alreadyVisible && performance.now() - returnedAt >= REFETCH_BATCH_MS) current.reset()
+    if (alreadyVisible && performance.now() - returnedAt >= REFETCH_BATCH_MS) {
+      returnedAt = performance.now()
+      current.reset()
+    }
   }
   document.addEventListener("visibilitychange", shown)
   window.addEventListener("pagehide", () => current.setVisible(false))

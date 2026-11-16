@@ -1,3 +1,4 @@
+import { RemoteAppViews } from "./app-views"
 import { WebPreferences } from "./account-preferences"
 import { createContext, useContext } from "react"
 import { z } from "zod"
@@ -37,6 +38,7 @@ export class WebClient {
   readonly account: WebAccount
   readonly deviceId: string
   readonly list: AccountList
+  readonly appViews: RemoteAppViews
   /** The preferences that follow the account: the theme, the Fin settings and the harness order, read from it directly. */
   readonly preferences: WebPreferences
   #conversations: Promise<WebConversations> | undefined
@@ -50,6 +52,7 @@ export class WebClient {
     this.gateway = gateway
     this.account = who.account
     this.deviceId = who.deviceId
+    this.appViews = new RemoteAppViews(this)
     this.list = new AccountList(gateway, who.account.id)
     this.preferences = new WebPreferences(gateway, who.account.id)
     this.list.followPreferences(this.preferences)
@@ -106,7 +109,7 @@ export class WebClient {
    */
   conversations(): Promise<WebConversations> {
     this.#conversations ??= import("./conversations").then(({ WebConversations }) => {
-      const conversations = new WebConversations({ gateway: this.gateway, deviceId: this.deviceId, row: (conversation) => this.list.byConversation(conversation) })
+      const conversations = new WebConversations({ gateway: this.gateway, deviceId: this.deviceId, row: (conversation) => this.list.byConversation(conversation), appHint: (owner, hint) => this.appViews.heard(owner, hint), appsReconnected: (owner) => this.appViews.reconnected(owner) })
       window.mako = conversations.bridge
       this.#loaded = conversations
       return conversations
@@ -143,6 +146,7 @@ export class WebClient {
   }
 
   stop(): void {
+    this.appViews.close()
     for (const stop of this.#stops.splice(0)) stop()
     this.list.stop()
     this.gateway.close()
