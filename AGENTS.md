@@ -237,11 +237,7 @@ since closing the process ends it and nothing would wake the Fin. An entry
 nothing says the end of is believed for `HELD_WORK_CEILING_MS` (6 hours) from
 its start, no longer (`heldWork`, `staleWork`), and a task Claude's level drops
 between turns with no notification is settled unknown after
-`DROPPED_GRACE_MS` (30 s; a Monitor that timed out or that TaskStop ended),
-unless a later level lists it again. A notification later than that still
-wakes the Fin, and the end the grace inferred leaves an unsent digest once the
-Fin works or reports again, so its Apex hears one outcome. Each Fin has one
-ceiling timer at a time. Claude's roster reads the SDK's task events and its
+`DROPPED_GRACE_MS` (a Monitor that timed out or that TaskStop ended). Claude's roster reads the SDK's task events and its
 `background_tasks_changed` level (a Monitor reports as `local_bash`, so its
 kind comes from the `tool_use` that started it), Codex's the terminal list,
 Grok's its `background_tasks` list, Devin's its backgrounded exec calls and

@@ -240,10 +240,8 @@ export class ClaudeAgents {
 
   /** The level: every live background task. Names what the edges missed, flags ambient changes, and marks what it dropped. */
   private level(tasks: Extract<SDKMessage, { subtype: "background_tasks_changed" }>["tasks"]): NativeAgentObservation[] {
-    const listed = new Set(tasks.map((task) => task.task_id))
-    // Listed again: a level that briefly left it out didn't end it, so it isn't settled with what was dropped.
-    for (const id of listed) this.dropped.delete(id)
     const changed = this.settleDropped()
+    const listed = new Set(tasks.map((task) => task.task_id))
     for (const task of tasks) {
       const previous = this.agents.get(task.task_id)
       const pending = this.unlisted.get(task.task_id)
