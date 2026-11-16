@@ -1,5 +1,6 @@
 import type { SessionSettings } from "@mako/sessions/settings"
 import { Git } from "@mako/git"
+import { ProviderFailureError, providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import assert from "node:assert/strict"
 import { workingThreads } from "@mako/host/conversations/cloud-handoffs"
 import { ThreadIdSchema, SessionIdSchema } from "@mako/host/contracts/thread-identity"
@@ -2242,6 +2243,9 @@ async function coalescedToolBursts() {
   }
 }
 
+/** This fixture is a native provider, so it supplies provider provenance just as a real decoder does. */
+function nativeFailure(error: string) { return { error, failureEvidence: providerTextEvidence(error) } }
+
 /**
  * A turn's verdict travels with its request: a Stop is recorded as the user's
  * interruption, and a failure carries the kind the provider's text classifies
@@ -2277,8 +2281,7 @@ async function settledVerdicts() {
       session: {
         ...f.state,
         status: "failed",
-        error:
-          'Failed to run prompt: {"type":"invalid_request_error","message":"Item \'rs_0a1b\' of type \'reasoning\' was provided without its required following item."} (reasoning encrypted_content was not issued to this caller)',
+        ...nativeFailure('Failed to run prompt: {"type":"invalid_request_error","message":"Item \'rs_0a1b\' of type \'reasoning\' was provided without its required following item."} (reasoning encrypted_content was not issued to this caller)'),
       },
     })
     f.prompts[1]?.resolve()
@@ -2301,7 +2304,7 @@ async function settledVerdicts() {
         ...f.state,
         status: "failed",
         lastStop: CONNECTION_LOST_STOP,
-        error: "RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)",
+        ...nativeFailure("RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)"),
       },
     })
     f.prompts[2]?.resolve()
@@ -2351,7 +2354,7 @@ async function autoContinuedTurn() {
   const dropped: Partial<LiveSessionState> = {
     status: "failed",
     lastStop: CONNECTION_LOST_STOP,
-    error: "RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)",
+    ...nativeFailure("RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)"),
   }
   const tuning = { model: "model-a", options: { effort: "high" } }
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
@@ -2641,6 +2644,7 @@ async function providerExitContinued() {
       currentMode: null,
       configOptions: [],
       ...patch,
+      ...(patch.error && { failureEvidence: patch.failureEvidence ?? providerTextEvidence(patch.error) }),
     })
     const driver: ProviderLiveDriver = {
       ...fixtureCapabilities,
@@ -2929,7 +2933,7 @@ async function heldUntilReset() {
     await f.owner.start("test-provider", "/tmp", { conversationId: f.id, initialRequest: { id: first, text: "limited", attachments: [] } })
     f.started.resolve(f.state)
     await tick()
-    f.prompts[0]!.reject(new Error("429 Too Many Requests: usage limit reached"))
+    f.prompts[0]!.reject(new ProviderFailureError("429 Too Many Requests: usage limit reached", providerTextEvidence("429 Too Many Requests: usage limit reached")))
     await waitFor(() => f.owner.snapshot(f.id)?.requests[0]?.status === "failed", "the first message fails")
     assert.equal(f.owner.snapshot(f.id)?.requests[0]?.failure, "rate-limited")
     const at = Date.now() + 60_000
@@ -2970,7 +2974,7 @@ async function heldWakeResumes() {
     await f.owner.start("test-provider", "/tmp", { conversationId: f.id, initialRequest: { id: first, text: "limited", attachments: [] } })
     f.started.resolve(f.state)
     await tick()
-    f.prompts[0]!.reject(new Error("429 rate limit"))
+    f.prompts[0]!.reject(new ProviderFailureError("429 rate limit", providerTextEvidence("429 rate limit")))
     await waitFor(() => f.owner.snapshot(f.id)?.requests[0]?.status === "failed", "the first message fails")
     f.owner.observe({ type: "live-session", session: { ...f.state, status: "ready" } })
     const later = randomUUID()
