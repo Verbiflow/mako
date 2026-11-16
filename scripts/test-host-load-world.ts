@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
 import { makeWorld, reapWhenGone, sweepLeftFixtures, type WorldScale } from "./lib/host-load-world.ts"
+import { processesLeftIn } from "./lib/scratch-processes.mjs"
 
 /**
  * bench:host-load's fixtures (a running app's `sh` and its `sleep`s, the busy Mac's) end with the bench however it
@@ -123,4 +124,14 @@ const until = async (what: () => boolean, ms: number) => {
   rmSync(records, { recursive: true, force: true })
 }
 
-console.log("host-load world: its fixtures end with the bench, killed, exited or signalled; the reaper and the sweep end fixtures alone, and the reaper gives up after its time")
+{
+  const root = mkdtempSync(join(tmpdir(), "mako-host-load-release-"))
+  try {
+    const world = await makeWorld(root, TINY)
+    const released = world.release()
+    assert.equal(world.release(), released, "reentry joins the same release, without repeating signals")
+    await released
+    assert.deepEqual(await processesLeftIn(root), [], "the unchanged guard proves the released world unused")
+  } finally { rmSync(root, { recursive: true, force: true }) }
+}
+console.log("host-load world: its fixtures end with the bench, killed, exited or signalled; explicit release reaps leaders before guarded removal; the reaper and sweep end fixtures alone")
