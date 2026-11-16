@@ -309,7 +309,10 @@ async function checkWindow() {
   assert.match(await evaluate(`document.querySelector('[role="dialog"] main').innerText`), /This Mac was signed out[\s\S]*used from somewhere else[\s\S]*Sign in/)
   await both("signed-out-reused", ['[role="dialog"] main'])
   // 4. A device joins while this Mac is open: said at once, with Remove.
-  await window.loadURL(`${base}?mock&cloud=signed-in&invited&joined`)
+  await window.loadURL(`${base}?mock&cloud=signed-in&invited`)
+  await until(`Boolean(document.querySelector('.composer-input'))`, "the joined device's desk")
+  await until("import('/src/state/session.ts').then(({store}) => store.get().phase === 'ready')", "the subscribed desk")
+  await evaluate("window.makoMockAccount.join(), true")
   // Other fixture toasts can precede this one; wait for and read the same device's alert.
   const joinedToast = `[...document.querySelectorAll('[data-sonner-toast]')].find((node) => node.querySelector('[data-title]')?.textContent === 'render-box joined your account')`
   await until(`Boolean(${joinedToast})`, "the joined alert")
@@ -319,6 +322,17 @@ async function checkWindow() {
   assert.match(alert, /Remove/)
   showToasts = true
   await both("device-joined", ['[data-device-joined-toast]'])
+
+  // The product's account handler can hear an event before React's Toaster
+  // subscribes. Sonner must retain it; this isn't the fixture's pre-desk timer.
+  await window.loadURL(`${new URL("scripts/account-toast-browser.html", base).href}?cloud=signed-in&invited`)
+  await until("typeof window.mountAccountToast === 'function'", "the pre-mount toast fixture")
+  await evaluate("window.makoMockAccount.join('before-mount'), true")
+  assert.equal(await evaluate("Boolean(document.querySelector('[data-sonner-toaster]'))"), false, "the event precedes the Toaster")
+  await evaluate("window.mountAccountToast(), true")
+  await until("[...document.querySelectorAll('[data-sonner-toast]')].some(node => node.querySelector('[data-title]')?.textContent === 'before-mount joined your account')", "the retained pre-mount alert")
+  assert.match(await evaluate("document.querySelector('[data-sonner-toast]').innerText"), /before-mount joined your account[\s\S]*Remove/)
+  console.log("Account event before Toaster mount: retained with Remove")
   console.log("Account devices UI: every device with its kind, health and joining, removal asked with what stops, a machine added and said as it joins, a machine's rail row marked, the browsers named, placed and signed out one or all, a reused sign-in's sign-out said, a device that joins said at once")
   clearTimeout(watchdog)
   app.exit(0)
