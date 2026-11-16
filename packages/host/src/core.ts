@@ -67,7 +67,7 @@ import { SyncRecorder } from "./contracts/sync-readings.js"
 import { AgentAskGate, AutomationTool, HarnessTool, SettingsTool, declareAutomationToolMethods, declareHarnessToolMethods, declareSettingsMethods, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, machineLeaving, SHUTDOWN_HOLD_MS, CloudWorktrees, CloudMoves, CloudReadiness, AwayNotes, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, workingThreads, conversationShown, finAsking, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations, sessionOrderIn } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit, machinePullRequestsAs } from "./git/index.js"
-import { declareMediaMethods, MachineArtifacts, machineArtifactPlaces, registerShowTool, TurnMedia } from "./media/index.js"
+import { ConversationMedia, declareConversationMediaMethods, declareMediaMethods, MachineArtifacts, machineArtifactPlaces, registerShowTool, TurnMedia } from "./media/index.js"
 import type { TerminalClients } from "./terminals/index.js"
 import { declareApplicationMethods, Updates, type Application } from "./application/index.js"
 import { devHostBuildDirectories } from "./base/dev-host-build.js"
@@ -1944,7 +1944,14 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const unwatchSaves = machineTracker && workspaceWrites.subscribe((write) => {
     if (write.paths.length) machineTracker?.saves.changed("Mako wrote files")
   })
+  // Another device's turn media: only what each conversation's own records name, read from its kept copies alone.
+  const conversationMedia = new ConversationMedia(turnMedia, async (conversation) => {
+    const snapshot = await opened.live.historySnapshot(conversation)
+    return snapshot ? { harness: snapshot.session.harness, entries: [...snapshot.base?.entries ?? [], ...snapshot.blocks] } : null
+  })
+  declareConversationMediaMethods(methods, conversationMedia)
   declareConversationMethods(methods, {
+    keptMedia: (conversation, real) => conversationMedia.kept(conversation, real),
     conversations: opened,
     profiles: harnesses.profiles,
     threads,

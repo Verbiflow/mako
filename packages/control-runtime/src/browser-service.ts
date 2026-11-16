@@ -53,6 +53,8 @@ const targetInfo = z.object({
   url: z.string(),
 })
 const targetsResult = z.object({ targetInfos: z.array(targetInfo) })
+/** A `Target.targetCreated` event's params: read for every target the browser makes, so its schema is made once. */
+const targetCreated = z.object({ targetInfo })
 const sessionResult = z.object({ sessionId: z.string() })
 /**
  * Chrome's and the extension's words for a debugger session that no longer
@@ -862,7 +864,7 @@ export class BrowserService {
     if (event.method === "Page.screencastFrame") return
 
     if (event.method === "Target.targetCreated") {
-      const child = z.object({ targetInfo }).safeParse(event.params)
+      const child = targetCreated.safeParse(event.params)
       if (child.success && child.data.targetInfo.makoTaskLifetime) {
         const info = child.data.targetInfo
         const parent = [...this.ownedTargets.values()].find(

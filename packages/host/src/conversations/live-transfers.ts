@@ -15,6 +15,7 @@ import { heldReason, SessionBusyError } from "../contracts/session-hold.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import type { LiveRequest, TurnContinuation, LiveSnapshot } from "../contracts/live-conversations.js"
 import { classifyStartFailure, failureEvidenceOf } from "../contracts/provider-failure.js"
+import { NativeVerificationPendingError } from "../contracts/native-verification.js"
 import { failureAfterRetry, nextRetry, transientCause } from "../contracts/delivery-retry.js"
 import { arriving, departing } from "../contracts/request-hold.js"
 import { SessionHeldError } from "../threads/index.js"
@@ -41,7 +42,9 @@ function arrival(requests: readonly LiveRequest[], arrived: LiveRequest, ahead: 
 /** Why a reconnect could not go on from the saved session; the reason is the verdict's own. */
 /** The refusal a resume that can't go raises: `SessionBusyError` while a process has the session open. */
 export function reconnectError(verdict: ResumeVerdict | undefined): Error {
-  return verdict?.kind === "held" ? new SessionBusyError(verdict.by) : new Error(reconnectRefusal(verdict))
+  return verdict?.kind === "held" ? new SessionBusyError(verdict.by)
+    : verdict?.kind === "unavailable" && verdict.retry ? new NativeVerificationPendingError(verdict.reason)
+      : new Error(reconnectRefusal(verdict))
 }
 
 export function reconnectRefusal(verdict: ResumeVerdict | undefined): string {

@@ -5,6 +5,9 @@ import { invokeRuntime, subscribeRuntime } from "@mako/host/transport/connection
 import { appDataFolder, runtimeDataRoot, runtimeLocation } from "@mako/host/transport/service"
 import { z } from "zod"
 
+/** A host call's answer, read for every call, so its schema is made once. */
+const ReplyJsonSchema = z.json()
+
 /**
  * Where a client's calls go: a host on this computer, through its socket, or a cloud Thread, through the gateway to
  * whichever runtime runs it. Either way the calls are the host's own (`mako:live-start`, `mako:live-prompt`, …) with
@@ -88,7 +91,7 @@ export function cloudThread(options: { gateway: string; threadId: string; device
         const reply = await session.call(toHostOperation(channel, input, { id, target, actor, correlationId, attempt }))
         if (reply.ok) {
           const value = hostReplyValue(reply)
-          return value === undefined ? undefined : z.json().parse(JSON.parse(value))
+          return value === undefined ? undefined : ReplyJsonSchema.parse(JSON.parse(value))
         }
         if (reply.problem.outcome !== "unknown" || attempt >= 8) throw new Error(`${channel}: ${reply.problem.title}${reply.problem.detail ? `: ${reply.problem.detail}` : ""}`)
       }

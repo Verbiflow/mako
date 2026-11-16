@@ -251,6 +251,15 @@ function partsOf(line: string, payload: string) {
   return parts
 }
 
+/** The bytes of each field of a batch that `partsOf` counts as its envelope, by its name. */
+function envelopeFieldsOf(payload: string): Map<string, number> {
+  const fields = new Map<string, number>()
+  const batch = PartsSchema.safeParse(JSON.parse(payload)).data?.batch
+  for (const [key, value] of Object.entries(batch ?? {}))
+    if (key !== "updates" && !BATCH_PARTS.has(key)) fields.set(key, JSON.stringify({ [key]: value }).length - 1)
+  return fields
+}
+
 const PermissionSchema = z.object({ id: z.string(), options: z.array(z.object({ optionId: z.string(), kind: z.string().optional() }).loose()) }).loose()
 type Permission = z.infer<typeof PermissionSchema>
 /** What this bench reads of a live batch: its numbering, whether its history changed, its status and what it asks. */
@@ -262,7 +271,13 @@ const BatchSchema = z.object({
   permissions: z.array(PermissionSchema).optional(),
 }).loose()
 type Batch = z.infer<typeof BatchSchema>
-const batchOf = (payload: string): Batch => z.object({ batch: BatchSchema }).safeParse(JSON.parse(payload)).data?.batch ?? {}
+/**
+ * Made once, as every schema read per message here: a zod schema built for each one compiles anew each time, and on this
+ * bench's own thread, which times every arrival, that held it 50 to 110 ms at a time, so a batch seemed late to every
+ * device it reached at once (2026-11-15: 38 to 49 such stalls a run; none once made once).
+ */
+const BatchLineSchema = z.object({ batch: BatchSchema })
+const batchOf = (payload: string): Batch => BatchLineSchema.safeParse(JSON.parse(payload)).data?.batch ?? {}
 
 /**
  * A window's reading of a conversation's batches: a revision past the next one, or a notice that its history changed,
@@ -431,10 +446,13 @@ const skipped: Record<string, string> = {}
 const started = now()
 
 const DeltaSchema = z.object({ type: z.literal("response.output_text.delta"), delta: z.string() })
+const AccountEventSchema = z.object({ type: z.string(), sessions: z.array(z.unknown()).optional(), deviceId: z.string().optional(), since: z.string().nullable().optional() }).loose()
+const ListedRowsSchema = z.array(z.object({ conversation: z.string(), session: z.string(), state: z.string(), threadTitle: z.string().optional() }).loose())
 const model = await scriptedModel({
   pace: PACE,
   sent: (event) => {
-    const delta = DeltaSchema.safeParse(event).data?.delta
+    // Only a text delta is read: a parse that fails builds its error, for every other event the model sends.
+    const delta = event.type === "response.output_text.delta" ? DeltaSchema.safeParse(event).data?.delta : undefined
     if (delta !== undefined)
       for (const match of delta.matchAll(TOKEN)) if (!sentAt.has(match[1]!)) sentAt.set(match[1]!, now())
     if (event.type === "response.completed") note("model", "completed")
@@ -597,11 +615,11 @@ try {
         for (;;) {
           const frame = await stream.next()
           const at = now()
-          const event = z.object({ type: z.string(), sessions: z.array(z.unknown()).optional(), deviceId: z.string().optional(), since: z.string().nullable().optional() }).loose().parse(JSON.parse(frame.event.text))
+          const event = AccountEventSchema.parse(JSON.parse(frame.event.text))
           if (event.type === "device-quiet") note("phone", "device-quiet", { deviceId: event.deviceId, since: event.since })
           if (event.type === "sessions-unlisted" && session && event.sessions?.includes(session) && !unlisted.has("phone")) unlisted.set("phone", at)
           if (event.type !== "sessions-listed" || !C) continue
-          const mine = z.array(z.object({ conversation: z.string(), session: z.string(), state: z.string(), threadTitle: z.string().optional() }).loose()).parse(event.sessions).find((item) => item.conversation === C)
+          const mine = ListedRowsSchema.parse(event.sessions).find((item) => item.conversation === C)
           if (!mine) continue
           session = mine.session
           if (!listed.has("phone")) listed.set("phone", at)
@@ -1011,7 +1029,13 @@ try {
     const text = (summed.text ?? 0) / watchers
     // What each batch carries besides its words, at the plan's message every two tokens.
     const bytesPerTokenAtPlan = round(text / tokens + ((bytes / watchers - text) / messages) * BUDGETS.cost.messagesPerToken)
-    return [[hop, { messages: held.length, bytes, messagesPerToken: round((messages / tokens) * 100) / 100, bytesPerToken: round(bytes / watchers / tokens), frames, beyondFrames: Math.round(messages - frames), bytesPerTokenAtPlan, parts }]]
+    // What the envelope is, by field, and how many messages came in the whole form (a route ahead of each, every value
+    // whole), so a run over its cost names what it carried more of.
+    const fields: Record<string, number> = {}
+    for (const { payload } of held) for (const [field, fieldBytes] of envelopeFieldsOf(payload)) fields[field] = (fields[field] ?? 0) + fieldBytes
+    const envelope = Object.fromEntries(Object.entries(fields).sort(([, a], [, b]) => b - a).map(([field, fieldBytes]) => [field, round(fieldBytes / watchers / tokens)]))
+    const wholeMessages = held.filter(({ line, payload }) => line.length !== payload.length).length / watchers
+    return [[hop, { messages: held.length, bytes, messagesPerToken: round((messages / tokens) * 100) / 100, bytesPerToken: round(bytes / watchers / tokens), frames, beyondFrames: Math.round(messages - frames), bytesPerTokenAtPlan, parts, envelope, wholeMessages }]]
   }))
 
   const measured = { ...head, live, paint, status, reconnect, quiet: values.quiet && cloud.presence ? quiet : undefined, cost, skipped, seconds: Math.round((now() - started) / 1000) }
