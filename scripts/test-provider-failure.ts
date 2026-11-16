@@ -1,3 +1,4 @@
+import { NATIVE_VERIFICATION_REASONS } from "@mako/host/contracts/native-verification"
 import assert from "node:assert/strict"
 import {
   PROVIDER_FAILURE_KINDS,
@@ -23,9 +24,6 @@ const cases: [string, string][] = [
   ["This model's maximum context length is 128000 tokens", "context-exhausted"],
   ["401 Unauthorized: invalid api key", "auth"],
   ["auth_required", "auth"],
-  ["The runtime could not verify the reopened account's native identity. Retry after sign-in is available; the saved conversation was preserved.", "launch-stalled"],
-  ["The runtime could not verify the reopened native service authority. No prompt was dispatched.", "launch-stalled"],
-  ["The runtime could not verify the reopened account selection. No prompt was dispatched.", "launch-stalled"],
   ["Failed to authenticate: OAuth session expired and could not be refreshed", "auth"],
   ["Not logged in. Run `cursor-agent login`.", "auth"],
   ["Your plan does not include this model", "plan"],
@@ -98,6 +96,11 @@ for (const [text, kind] of cases)
 assert.equal(classifyProviderFailure('API Error: 401 {"error":{"type":"some_new_error"}}', "Claude", { kind: "unknown", source: "provider-error" }).kind, "auth", "unlisted provider JSON must retain the ordinary 401 sign-in verdict")
 assert.equal(classifyStartFailure('API Error: 401 {"error":{"type":"some_new_error"}}', true, { kind: "unknown", source: "provider-error" }), "auth", "startup uses the same fallback")
 assert.equal(classifyProviderFailure("unrecognised failure", "Claude", { kind: "unknown", source: "provider-error" }).kind, "unknown", "fallback does not invent a cause when the text has none")
+
+for (const text of Object.values(NATIVE_VERIFICATION_REASONS)) {
+  assert.equal(classifyProviderFailure(text, undefined, { kind: "unknown", source: "provider-error" }).kind, "launch-stalled", "only legacy stored prose uses the exact host refusal matcher")
+  assert.notEqual(providerTextEvidence(text).kind, "rate-limited")
+}
 
 // A specific fault wins over the broad HTTP family it could also trip: a
 // rejected transcript arrives as a 400 invalid_request_error.

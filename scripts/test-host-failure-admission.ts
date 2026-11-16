@@ -84,6 +84,14 @@ for (const phase of ["host-tools", "host-instructions", "host-identity", "native
     assert.deepEqual(persisted?.failureEvidence, request.failureEvidence)
     assert.deepEqual(persisted?.retry, request.retry)
     assert.equal(makoLogDifference(saved.makoLog(), makoFacts(saved.read()!)), undefined, "log replay restores exact failure evidence, not the legacy fallback")
+    if (phase === "host-identity") {
+      const before = saved.read()!
+      const nativeEvidence = { kind: "auth", source: "native-error" } as const
+      const after = { ...before, requests: before.requests.map(item => item.id === requestId ? { ...item, failure: "auth" as const, failureEvidence: nativeEvidence } : item) }
+      saved.commit(after, before)
+      assert.deepEqual(saved.read()?.requests.find(item => item.id === requestId)?.failureEvidence, nativeEvidence)
+      assert.equal(makoLogDifference(saved.makoLog(), makoFacts(saved.read()!)), undefined, "new native-error origin survives actual row and log replay with the legacy fallback")
+    }
     const opaque = { kind: "network", source: "host", exact: { vendorOwned: "keep verbatim" } }
     const future = { kind: "permission.future", value: { key: "opaque", set: { vendorPayload: { failureEvidence: opaque } } } }
     const nested = { kind: "request.future", value: { key: requestId, set: { vendorPayload: { failureEvidence: opaque } } } }

@@ -4,6 +4,7 @@ import { z } from "zod"
 /** A verdict with its origin: typed host facts, native protocol facts, or text admitted by a native transport. */
 const CurrentFailureEvidenceSchema = z.union([
   z.object({ kind: z.literal("rate-limited"), source: z.literal("native-limit") }),
+  z.object({ kind: z.enum(PROVIDER_FAILURE_KINDS), source: z.literal("native-error") }),
   z.object({ kind: z.enum(HOST_FAILURE_KINDS), source: z.literal("host") }),
   z.object({ kind: z.enum(PROVIDER_FAILURE_KINDS), source: z.literal("provider-text") }),
   z.discriminatedUnion("kind", [
@@ -24,7 +25,7 @@ export type ProviderFailureEvidence = z.infer<typeof ProviderFailureEvidenceSche
 
 /** Existing binaries can parse the request/session without knowing the new evidence variants. */
 export function storedFailureEvidence(evidence: ProviderFailureEvidence) {
-  return evidence.source === "host" || evidence.source === "provider-text" || evidence.source === "native-limit"
+  return evidence.source === "host" || evidence.source === "provider-text" || evidence.source === "native-limit" || evidence.source === "native-error"
     ? { kind: "unknown" as const, source: "provider-error" as const, exact: evidence }
     : evidence
 }

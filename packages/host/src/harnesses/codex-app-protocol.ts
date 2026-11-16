@@ -1,4 +1,5 @@
-import { HostFailureError, ProviderFailureError, providerTextEvidence } from "../contracts/provider-failure.js"
+import { codexFailureEvidence } from "./codex/failure.js"
+import { HostFailureError, ProviderFailureError } from "../contracts/provider-failure.js"
 import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import { STARTUP_TOTAL_MS } from "./provider-startup.js"
 import { CodexAgentRunsSchema } from "./codex/agent-status.js"
@@ -6,7 +7,7 @@ import type { CodexDecoded, CodexEffect } from "./codex/decoder.js"
 import { z } from "zod"
 import { CodexIdentityResponseSchema, CodexInitializeSchema } from "./codex/native-context.js"
 import { CodexGoalClearResultSchema, CodexGoalSetResultSchema } from "./codex/goals.js"
-import { isNumber, stringValue, type JsonRpcId } from "../base/json-values.js"
+import { isNumber, objectValue, stringValue, type JsonRpcId } from "../base/json-values.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import {
   parseJsonRpcEnvelope,
@@ -250,7 +251,7 @@ function settleRpc(
   if (message.error) {
     pending.reject(
       new ProviderFailureError(stringValue(message.error.message) ?? "Codex JSON-RPC request failed",
-        providerTextEvidence(stringValue(message.error.message)))
+        codexFailureEvidence(stringValue(message.error.message), objectValue(message.error.data)?.codexErrorInfo))
     )
     return
   }

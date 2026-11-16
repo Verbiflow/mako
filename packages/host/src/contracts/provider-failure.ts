@@ -220,6 +220,10 @@ export function classifyProviderFailure(message: string | undefined, providerLab
 }
 
 export function providerTextEvidence(message: string | undefined): ProviderFailureEvidence {
+  // Only native transports call this. Strip one known native error heading, never arbitrary enclosing prose.
+  const quota = message?.replace(/^(?:(?:stream error: exceeded retry limit, last status|unexpected status):?\s*|(?:AI_APICallError|Request failed|Grok):\s*)/i, "")
+  if (quota !== message && classifyProviderText(quota).kind === "rate-limited" && !personsFault(message ?? ""))
+    return { kind: "rate-limited", source: "provider-text" }
   return { kind: classifyProviderText(message).kind, source: "provider-text" }
 }
 

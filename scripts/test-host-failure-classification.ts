@@ -84,6 +84,7 @@ const oldEvidence = z.discriminatedUnion("kind", [
 ])
 for (const evidence of [...HOST_FAILURE_KINDS.map(kind => ({kind,source:"host" as const})),
   {kind:"rate-limited" as const,source:"native-limit" as const},
+  {kind:"auth" as const,source:"native-error" as const},
   {kind:"network" as const,source:"provider-text" as const}]) {
   const stored=storedFailureEvidence(evidence)
   assert.deepEqual(oldEvidence.parse(stored), {kind:"unknown",source:"provider-error"})

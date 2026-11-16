@@ -276,7 +276,11 @@
               "type": "failed",
               "error": {
                 "type": "provider.no-route",
-                "message": "Model unavailable: opencode/muse-spark-1.3-contributor-free"
+                "message": "Model unavailable: opencode/muse-spark-1.3-contributor-free",
+                "failureEvidence": {
+                  "kind": "rejected-input",
+                  "source": "provider-text"
+                }
               }
             }
           }

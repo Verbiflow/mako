@@ -1,4 +1,3 @@
-import { providerTextEvidence } from "../contracts/provider-failure.js"
 import { randomUUID } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
 import type {
@@ -518,7 +517,7 @@ export function createLiveEngine<
           updates.length === 1
             ? emitUpdate(live, updates[0]!)
             : emitUpdates(live, updates),
-        patch: (change) => patch(live, change.error && !change.failureEvidence ? { ...change, failureEvidence: providerTextEvidence(change.error) } : change),
+        patch: (change) => patch(live, change),
         activity: (observation) => activity(live, observation),
         marker: (marker, source) => event(live, marker, source),
         compacted: (compaction, source, completes) => compacted(live, compaction, source, completes),

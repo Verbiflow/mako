@@ -1,3 +1,4 @@
+import { providerTextEvidence } from "../../contracts/provider-failure.js"
 import { codexCommand, codexErrorClass, codexWarningEvent, firstLine } from "@mako/sessions/codex-presentation"
 import { CodexRecords, type CodexRead } from "@mako/sessions/codex-records"
 import { event, mcpServerFailedEvent, type Compaction, type TranscriptEvent } from "@mako/sessions/events"
@@ -539,7 +540,7 @@ export class CodexDecoder {
         if (notification.willRetry) {
           this.waiting = undefined
           out.push(decoded.activity(retrying(notification.message, notification.variant)))
-        } else out.push(decoded.state({ error: notification.message }))
+        } else out.push(decoded.state({ error: notification.message, failureEvidence: notification.failureEvidence }))
         return
       case "serverRequest/resolved":
         out.push(decoded.effect({ type: "server-request-resolved", requestId: notification.requestId }))
@@ -621,7 +622,7 @@ export class CodexDecoder {
   }
 
   private completeTurn(out: CodexDecoded[], turn: Turn): void {
-    const error = turn.error?.message || undefined
+    const error = turn.error?.message || (turn.error?.failureEvidence && turn.error.failureEvidence.kind !== "unknown" ? "Codex encountered an error" : undefined)
     const stop = turn.status === "inProgress" ? "completed" : turn.status
     this.currentTurnId = null
     this.goalTurnId = null
@@ -633,7 +634,7 @@ export class CodexDecoder {
     if (error) ended.error = error
     out.push(
       decoded.effect({ type: "turn-ending", turnId: turn.id }),
-      decoded.state({ status: error || stop === "failed" ? "failed" : "ready", lastStop: stop, error }),
+      decoded.state({ status: error || stop === "failed" ? "failed" : "ready", lastStop: stop, error, ...(error && { failureEvidence: turn.error?.failureEvidence ?? providerTextEvidence(error) }) }),
       decoded.effect(ended),
     )
   }

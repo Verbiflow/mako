@@ -138,6 +138,13 @@ schedules, and a failing schedule is pinned there.
 
 ## What each failure leaves
 
+Host failures carry a typed kind; mixed catches and decoder sinks never infer a
+quota from host prose. Native adapters classify structured error variants and HTTP
+status before admitting provider text. Only that provider-text boundary recognises
+known native wrapper headings. An exact matcher for older saved native-verification
+refusals remains a legacy read path; new verification failures carry their short
+retry kind directly.
+
 | What happened | The switch | Its message |
 | --- | --- | --- |
 | Stop before commit | `queued` | a held row, by the Stop |

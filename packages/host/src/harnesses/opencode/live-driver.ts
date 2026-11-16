@@ -1,5 +1,5 @@
 import type { ProviderFailureEvidence } from "../../contracts/provider-failure-evidence.js"
-import { providerCall, failureEvidenceOf, providerTextEvidence, providerExitEvidence } from "../../contracts/provider-failure.js"
+import { providerCall, failureEvidenceOf, providerExitEvidence } from "../../contracts/provider-failure.js"
 import { configureOpenCodeCalls } from "./call-plugin.js"
 import { realpath } from "node:fs/promises"
 import { openCodeModelRoutes } from "./connections.js"
@@ -554,7 +554,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         if (live.turn?.delivered) finish(live, { kind: "succeeded" })
         return
       case "failed":
-        if (live.turn?.delivered) finish(live, { kind: "failed", message: fact.error.message, failureEvidence: providerTextEvidence(fact.error.message), type: fact.error.type })
+        if (live.turn?.delivered) finish(live, { kind: "failed", message: fact.error.message, failureEvidence: fact.error.failureEvidence, type: fact.error.type })
         return
       case "interrupted": {
         const stopped = openCodeStopped(fact.reason, live.turn?.stopRequested === true)
@@ -568,7 +568,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       case "compaction-failed":
         // Compaction Mako asked for fails its action and turn; any other would leave no trace.
         if (live.turn?.kind === "compaction" && (!fact.inbox || fact.inbox === live.turn.inboxId))
-          finish(live, { kind: "failed", message: fact.error.message, failureEvidence: providerTextEvidence(fact.error.message), type: fact.error.type })
+          finish(live, { kind: "failed", message: fact.error.message, failureEvidence: fact.error.failureEvidence, type: fact.error.type })
         else engine.event(live, compactionFailedEvent(fact.error.message), fact.source)
         return
     }
