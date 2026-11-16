@@ -307,7 +307,7 @@ const BaseSchema = BaseFields.extend({ entries: z.array(EntrySchema) })
 /** A base stored before 2026-10-15, its entries grouped into messages and its indices counting them. */
 const MessageBaseSchema = BaseFields.extend({ entries: z.array(DecodedEntrySchema) })
 
-/** How many rows a journal's read (`LiveJournal.reading`) reads and parses between two stops. */
+/** A journal's order of keys, an id, and a count, each read with a schema made once. */
 const KeyListSchema = z.array(z.string())
 const UuidSchema = z.string().uuid()
 const CountRow = z.object({ count: z.number() })
@@ -315,6 +315,8 @@ const CountRow = z.object({ count: z.number() })
 const PageSizeRow = z.object({ page_size: z.number() })
 const PageCountRow = z.object({ page_count: z.number() })
 const FreelistRow = z.object({ freelist_count: z.number() })
+
+/** How many rows a journal's read (`LiveJournal.reading`) reads and parses between two stops. */
 const ROWS_PER_STEP = 128
 
 /** How long `stageBase` writes rows before it lets other work run. */
