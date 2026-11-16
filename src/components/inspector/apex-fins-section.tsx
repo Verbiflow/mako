@@ -1,4 +1,5 @@
 import { memo, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react"
+import { FinRowActions } from "@/components/viewer/fin-row-actions"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { ChevronRightIcon } from "lucide-react"
 import { childGroup, childLine, childStateOf, childWord, rollup, rollupLabel, rollupLine, type ChildGroup } from "@mako/host/contracts/children"
@@ -119,7 +120,7 @@ export function ApexFinsSection({
                   <span className="tabular">{row.count}</span>
                 </div>
               ) : (
-                <ChildRow agent={row.agent} onOpen={onOpen} lit={row.agent.child?.thread === open} />
+                <ChildRow agent={row.agent} onOpen={onOpen} conversation={conversation} lit={row.agent.child?.thread === open} />
               )}
             </div>
           )
@@ -130,7 +131,7 @@ export function ApexFinsSection({
 }
 
 /** One Fin as a strip: harness, name, state and time, then its question or phase, then what it runs as. Memoized on its entry. */
-const ChildRow = memo(function ChildRow({ agent, onOpen, nested = false, lit = false }: { agent: NativeAgent; onOpen?: (agent: NativeAgent) => void; nested?: boolean; lit?: boolean }) {
+const ChildRow = memo(function ChildRow({ agent, onOpen, conversation, nested = false, lit = false }: { agent: NativeAgent; onOpen?: (agent: NativeAgent) => void; conversation?: string; nested?: boolean; lit?: boolean }) {
   useHarnessIdentity()
   const state = childStateOf(agent)
   const group = childGroup(state)
@@ -142,7 +143,8 @@ const ChildRow = memo(function ChildRow({ agent, onOpen, nested = false, lit = f
     agent.usage?.toolUses !== undefined ? `${agent.usage.toolUses} ${agent.usage.toolUses === 1 ? "tool use" : "tool uses"}` : undefined,
   ].filter(Boolean)
   return (
-    <div className={cn("contain-turn", nested && "ml-5")}>
+    <div className={cn("contain-turn group/fin relative", nested && "ml-5")}>
+      <FinRowActions agent={agent} conversation={conversation} always={state.kind === "working" && state.quiet !== undefined} className="absolute top-1.5 right-1 z-[1] bg-surface" />
       <button
         type="button"
         data-child-row={agent.child?.thread}

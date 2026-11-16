@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react"
+import { FinRowActions } from "@/components/viewer/fin-row-actions"
 import { FinTypedAnswer } from "@/components/composer/fin-typed-answer"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { finMoved } from "@/state/fin-moved"
@@ -37,8 +38,6 @@ import { acp, acpStore, useAcp } from "@/state/acp"
 import { scopedAcp, useConversationScope } from "@/state/conversation-scope"
 import { useThreads } from "@/state/threads"
 import {
-  address,
-  addresseeOf,
   apexConversation,
   openFinInApex,
   useFinOpenable,
@@ -352,15 +351,13 @@ const CrewElapsed = memo(function CrewElapsed({
 const CrewLineRow = memo(function CrewLineRow({
   agent,
   onOpen,
-  onMessage,
-  onStop,
+  conversation,
   compact,
 }: {
   agent: NativeAgent
   onOpen: (agent: NativeAgent) => void
-  /** A quiet Fin's row offers what to do about it: write to it, or stop it. */
-  onMessage?: (agent: NativeAgent) => void
-  onStop?: (agent: NativeAgent) => void
+  /** The Apex's conversation, for the row's actions; none where the window can't act on its Fins (the web's). */
+  conversation?: string
   compact?: boolean
 }) {
   useHarnessIdentity()
@@ -446,21 +443,12 @@ const CrewLineRow = memo(function CrewLineRow({
       )}
     </button>
   )
-  if (!quiet || (!onMessage && !onStop)) return row
-  // A quiet Fin is a question for the person: read it (the row opens it), write to it, or stop it.
+  if (!conversation || compact) return row
+  // Opening it is the row; writing to it or stopping it sits beside, on hover, and always for a quiet Fin.
   return (
-    <div data-quiet-row className="flex items-center">
+    <div data-quiet-row={quiet || undefined} className="group/fin flex items-center">
       <div className="min-w-0 flex-1">{row}</div>
-      {onMessage ? (
-        <button type="button" data-quiet-action="message" onClick={() => onMessage(agent)} className="pressable h-7 shrink-0 px-2 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground">
-          Message
-        </button>
-      ) : null}
-      {onStop && agent.stoppable ? (
-        <button type="button" data-quiet-action="stop" onClick={() => onStop(agent)} className="pressable h-7 shrink-0 px-2 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground">
-          Stop
-        </button>
-      ) : null}
+      <FinRowActions agent={agent} conversation={conversation} always={quiet} />
     </div>
   )
 })
@@ -599,22 +587,6 @@ function CrewCardBody({
     },
     [routed, thread, apexTitle]
   )
-  // A quiet Fin's row: write to it from the Apex's composer, addressed, or stop it.
-  const onMessage = useCallback(
-    (agent: NativeAgent) => {
-      const addressee = addresseeOf(agent)
-      if (!conversation || !addressee) return
-      address(conversation, addressee)
-      window.dispatchEvent(new CustomEvent("mako:focus-composer"))
-    },
-    [conversation]
-  )
-  const onStop = useCallback(
-    (agent: NativeAgent) => {
-      if (conversation && agent.stoppable) void acp.stopAgent(conversation, agent.nativeId)
-    },
-    [conversation]
-  )
   const stoppable = children.filter((agent) => agent.stoppable).length
   const stopAll = useCallback(() => {
     if (!conversation || !thread) return
@@ -706,8 +678,7 @@ function CrewCardBody({
                   <CrewLineRow
                     agent={row.agent}
                     onOpen={onOpen}
-                    onMessage={routed ? undefined : onMessage}
-                    onStop={onStop}
+                    conversation={routed ? undefined : conversation}
                     compact={compact}
                   />
                 )}
