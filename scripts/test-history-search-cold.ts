@@ -35,6 +35,12 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 20))
   }
   // Its journal is read where it lies, while the host still lets go of it too.
+  // The loop's holds while nothing searches, as a yardstick: a shared runner's speed varies by several times, and this
+  // world sweeps its memory every 20 ms, so the search is held to a multiple of what the host holds the loop anyway.
+  const idle = monitorEventLoopDelay({ resolution: 10 })
+  idle.enable()
+  await new Promise((resolve) => setTimeout(resolve, 1_000))
+  idle.disable()
   const delay = monitorEventLoopDelay({ resolution: 10 })
   delay.enable()
   const began = performance.now()
@@ -45,7 +51,9 @@ try {
   assert.match(newest.text, /^1 hit for "marker-420:"/, newest.text.slice(0, 300))
   assert.equal(world.live.loaded(fin), false, "a search reads its journal cold: nothing of it is read in")
   const held = delay.max / 1e6
-  assert.ok(held < LOOP_HOLD_MS, `the search held the loop ${held.toFixed(0)} ms at most, over ${LOOP_HOLD_MS} ms`)
+  const yardstick = idle.max / 1e6
+  const bound = Math.max(LOOP_HOLD_MS, 3 * yardstick)
+  assert.ok(held < bound, `the search held the loop ${held.toFixed(0)} ms at most, over ${bound.toFixed(0)} ms (idle: ${yardstick.toFixed(0)} ms)`)
 
   // Its oldest turns are past what one search reads: it says so, and names the turns that reach them.
   const oldest = await world.agents.read(apex.caller, { child: "notes", search: "marker-3:" })
@@ -61,7 +69,7 @@ try {
   const reached = await tools.answer(apex.conversation, { action: "search", thread: started.child!, query: "marker-3:", turns: cursor! })
   assert.match(reached, /^1 hit for "marker-3:" in turns/, `the named turns reach it: ${reached.slice(0, 300)}`)
   assert.equal(world.live.loaded(fin), false, "and still nothing is read in")
-  console.log(`cold search: ${TURNS} turns, the newest found in ${took.toFixed(0)} ms holding the loop ${held.toFixed(0)} ms at most, nothing read in; older turns named (${cursor}) and reached`)
+  console.log(`cold search: ${TURNS} turns, the newest found in ${took.toFixed(0)} ms holding the loop ${held.toFixed(0)} ms at most (idle ${yardstick.toFixed(0)} ms), nothing read in; older turns named (${cursor}) and reached`)
 } finally {
   await world.close()
   rmSync(root, { recursive: true, force: true })

@@ -42,6 +42,8 @@ const SEARCH_HITS = 25
  * the rest it names as turns to search next. Read cold (`ThreadHistoryDeps.cold`), so a search loads no journal.
  */
 const SEARCH_CHARS = 4_000_000
+/** Characters of blocks a search reads cold between its yields to what else the host has to do. */
+const SEARCH_READ_CHARS = 256 * 1024
 /** Turns a search matches between its yields to what else the host has to do. */
 const SEARCH_TURNS_PER_YIELD = 64
 const SNIPPET_CHARS = 70
@@ -247,10 +249,18 @@ export function threadHistoryTools(deps: ThreadHistoryDeps): ThreadHistoryTools 
         floor = startOf(asked.from)
       }
       let start = end
+      let read = 0
       while (start > floor && budget.left > 0) {
         start -= 1
         const entry = journal.at(start)
-        if (entry) budget.left -= entryChars(entry)
+        const chars = entry ? entryChars(entry) : 0
+        budget.left -= chars
+        read += chars
+        // Each block is parsed as it's read: the host's other work goes between every `SEARCH_READ_CHARS` of them.
+        if (read >= SEARCH_READ_CHARS) {
+          read = 0
+          await new Promise((next) => setImmediate(next))
+        }
       }
       // A turn whole: back to the block that opens it.
       while (start > floor && !openers.includes(start)) {
