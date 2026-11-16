@@ -22,7 +22,7 @@ import { LIVE_FORM, PING, PONG, SUBPROTOCOL, WHOLE_LIVE_FORM, decodeRuntimeFrame
 import { createFakeGateway, type FakeGatewayOptions, type GatewayLogLine } from "@mako/protocol/fake-gateway"
 import { compactLiveBatch, type LiveBatch } from "@mako/host/contracts/live-conversations"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import { MachineRuntime, type MachineRuntimeOptions } from "@mako/host/usage/machine-runtime"
+import { MachineRuntime, PASSING_EVENTS, type MachineRuntimeOptions } from "@mako/host/usage/machine-runtime"
 import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import type { AgentMessage, ArtifactCapState, HostMessage, MachineRuntimeState } from "@mako/host/contracts/machine-agent"
 import { hostCallInput, hostOperations, hostReplyValue, toHostOperation } from "@mako/host/contracts/host-operations"
@@ -309,6 +309,22 @@ test("the machine tells its Thread when it works and when it stops, a silent tur
   assert.equal(only?.payload.n, 1)
   agent.tell({ type: "inspect" })
   await agent.until("one event counted, the readings not", () => agent.state()?.events.emitted === 1)
+  // Passing state never goes into the Thread's log (numbered, kept in its object's storage): a running call's steps, a
+  // view's hint, a viewer's file changing. Each as the host emits it, then one event that does belong there.
+  assert.ok(["tool-steps", "view-hint", "file-changed"].every((type) => PASSING_EVENTS.has(type)), "steps, hints and file pings are passing state")
+  const passing: HostEvent[] = [
+    { type: "tool-steps", conversationId: "c-1", steps: { steps: [{ call: "screenshot", phase: "running" }], total: 1 } },
+    { type: "tool-steps", conversationId: "c-1", steps: null },
+    { type: "view-hint", hint: { epoch: "e-1", revision: 7, domain: "apps", fields: ["state"] } },
+    { type: "file-changed", path: "/w/README.md" },
+  ]
+  for (const event of passing) agent.runtime.event("event", encodeRuntimeEvent(event))
+  for (const type of PASSING_EVENTS) agent.runtime.event("event", { type, payload: JSON.stringify({ type }) })
+  agent.runtime.event("event", hostEvent(2))
+  const after = await hostEvents(cloud.gateway, 2)
+  assert.deepEqual(after.map((line) => line.payload.n), [1, 2], "only the events that belong in the log reach it")
+  agent.tell({ type: "inspect" })
+  await agent.until("still only the two counted", () => agent.state()?.events.emitted === 2)
 })
 
 test("the machine reports the Sessions it owns on its link: everything at first, then what changed, never as a heartbeat, and everything again on a new link", async () => {
