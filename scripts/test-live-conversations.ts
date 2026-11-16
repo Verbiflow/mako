@@ -918,13 +918,14 @@ async function bulkLoadsAreNamed() {
     await waitFor(() => { const residency = owner.residency(); return residency.active + residency.warm === 0 && residency.memory.loaded === 0 },
       `the seeded providers hibernated and nothing stayed in memory: ${JSON.stringify(owner.residency().memory.loads)}`)
     const loadsBefore = JSON.stringify(owner.residency().memory.loads)
-    // A load no work owns is the host's own (gate 21 met one with nothing running); its stack says whose, on every run.
+    // Every load from here on, with its stack: work's name follows its timers and listeners (AsyncLocalStorage), so a
+    // name alone can't tell the report's own read from a timer it happened to schedule.
     const strays: string[] = []
     const records = owner["records"]
     const noteLoad = records["noteLoad"].bind(records)
     records["noteLoad"] = () => {
       const by = noteLoad()
-      if (by === "unnamed work") strays.push((new Error().stack ?? "").split("\n").slice(2, 9).join("\n"))
+      strays.push(`as ${by}:\n${(new Error().stack ?? "").split("\n").slice(2, 14).join("\n")}`)
       return by
     }
 
@@ -952,8 +953,8 @@ async function bulkLoadsAreNamed() {
     assert.equal(work.run("report again", () => ownedSessions(sources)).length, ids.length - 1, "an archived conversation leaves the list, by its listing's keys")
     const reportOrLifecycle = ["tell the account this host's Sessions", "archive check", "archive", "report again"]
     assert.deepEqual(owner.residency().memory.loads.filter((load) => reportOrLifecycle.includes(load.by)), [],
-      `neither the report nor the lifecycle read a journal in: loads were ${loadsBefore}, now ${JSON.stringify(owner.residency().memory.loads)}`)
-    if (strays.length) console.log(`bulkLoadsAreNamed: the host read ${strays.length} conversation(s) in as no work, from:\n${strays.join("\n--\n")}`)
+      `neither the report nor the lifecycle read a journal in: loads were ${loadsBefore}, now ${JSON.stringify(owner.residency().memory.loads)}, from:\n${strays.join("\n--\n")}`)
+    if (strays.length) console.log(`bulkLoadsAreNamed: the host read ${strays.length} conversation(s) in, from:\n${strays.join("\n--\n")}`)
     assert.equal(warned.length, 0, "and nothing was named for loading in bulk")
     // What a stray load left in memory goes, so the readers below are measured alone.
     for (const id of ids) records.release(id)
