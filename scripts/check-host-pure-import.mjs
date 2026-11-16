@@ -20,7 +20,6 @@ import { packageSource, root } from "./lib/host-graph.mjs"
 const PROGRAMS = new Map([
   ["mako-host.ts", "the mako-host program: the package's executable, and the desktop's entry for its host"],
   ["host-main.ts", "the host process, from mako-host.ts"],
-  ["base/borrowing-migrate-worker.ts", "the one-shot borrowing state importer (base/local-borrowing.ts), joined under its broker lock"],
   ["usage-worker.ts", "the usage history reader's worker (usage/reader.ts)"],
   ["threads/catalog-worker.ts", "the catalog's worker (threads/catalog.ts)"],
   ["conversations/journal-reclaim-worker.ts", "the journal compaction worker (conversations/journal-reclaim.ts)"],

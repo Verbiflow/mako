@@ -1,16 +1,15 @@
 import assert from "node:assert/strict"
 import { createHook } from "node:async_hooks"
-import { mkdtemp, writeFile, readFile, stat, rm } from "node:fs/promises"
+import { mkdtemp, writeFile, readFile, stat, rm, readdir, mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { DatabaseSync } from "node:sqlite"
 import { emptyBroker, chooseGrant, type Grant, type Need } from "@mako/protocol/borrow"
 import { atOnce } from "@mako/sessions/slices"
 import { LocalBorrowing } from "@mako/host/base/local-borrowing"
-import { BorrowingStore } from "@mako/host/base/borrowing-store"
+import { BorrowingSnapshot } from "@mako/host/base/borrowing-snapshot"
 import { compactGrants, type BorrowingState } from "@mako/host/base/borrowing-state"
 
-const root = await mkdtemp(join(tmpdir(), "mako-borrowing-rows-"))
+const root = await mkdtemp(join(tmpdir(), "mako-borrowing-snapshot-"))
 const clock = 1_800_000_000_000
 const grant = (id: string, ref = "items"): Grant => ({ id, resource: { kind: "tree", ref }, scope: { level: "account", account: "local" }, source: { kind: "device", device: "mac" }, within: "source-device", mode: "copy", access: "read", lifetime: { until: "revoked" }, ask: "never", secret: false, grantedBy: { kind: "person", account: "local" }, grantedAt: clock - 1_000, version: 1 })
 const need = (ref = "items/file", correlationId = "launch"): Need => ({ kind: "tree", ref, mode: "copy", for: { account: "local", repository: "example/project", thread: "thread", place: { kind: "device", device: "mac" } }, correlationId, why: "a fixture" })
@@ -54,27 +53,36 @@ try {
   legacy = undefined
   const a = broker(folder)
   assert.equal((await a.grants()).length, 1)
-  assert.ok((await stat(join(folder, "state.json"))).size < 100, "the legacy snapshot becomes a tiny format fence")
-  const inspect = new DatabaseSync(join(folder, "state.sqlite"))
-  assert.equal(inspect.prepare("SELECT count(*) AS n FROM ended_grants").get()?.n, 43_000, "old IDs cannot be re-granted")
-  assert.equal(inspect.prepare("SELECT count(*) AS n FROM borrowing_rows WHERE kind='grants'").get()?.n, 5, "only live and latest refusal grants remain materialized")
-  inspect.close()
+  assert.ok((await stat(join(folder, "state.json"))).size < 16 * 1024, "the legacy snapshot keeps only live, pinned and latest-per-reach grants")
+  assert.equal((await readFile(join(folder, "ended-grants.jsonl"), "utf8")).trim().split("\n").length, 43_000, "compact IDs survive payload pruning")
+  assert.ok(!(await readdir(folder)).some(name => name.includes("sqlite")), "no format migration or database is created")
+  // The original reader dereferences state.account and writes only these three fields. Both stay valid.
+  const oldLoad = async () => {
+    // SAFETY: this fixture replays the original reader on the snapshot produced by the broker above.
+    const saved = JSON.parse(await readFile(join(folder, "state.json"), "utf8")) as BorrowingState
+    assert.equal(saved.state.account, "local")
+    return { state: saved.state, waiting: saved.waiting ?? [], unanswered: saved.unanswered ?? [] }
+  }
+  const oldView = await oldLoad()
+  assert.equal(Object.keys(oldView.state.grants).length, 5)
+  await writeFile(join(folder, "state.json"), JSON.stringify(oldView))
   assert.match((await a.grant(grant("old-0")))!, /ended/)
   assert.deepEqual(await a.borrow(need("items-0/file")), { refusal: { refused: "revoked" } })
 
   // The cache never exposes mutable state to a view.
   const listing = await a.grants(); listing[0]!.resource.ref = "tampered"
   assert.equal((await a.grants())[0]?.resource.ref, "live-items")
+  await a.grants()
   const parse = JSON.parse, stringify = JSON.stringify
   let wholeParses = 0, wholeWrites = 0
   // SAFETY: this observer forwards the intrinsic unchanged after counting a large parse.
   JSON.parse = ((text: string, reviver?: Parameters<typeof JSON.parse>[1]) => {
-    if (text.length > 4096) { wholeParses++; throw new Error("A borrowing operation parsed a whole snapshot") }
+    if (text.includes('"state"')) { wholeParses++; throw new Error("An unchanged borrowing read parsed a snapshot") }
     return parse(text, reviver)
   }) as typeof JSON.parse
   // SAFETY: this intrinsic observer forwards the original argument tuple, including replacer and spacing.
   JSON.stringify = ((...args: Parameters<typeof stringify>) => {
-    if (args[0] && Object.hasOwn(args[0], "state") && Object.hasOwn(args[0], "unanswered")) { wholeWrites++; throw new Error("A borrowing operation encoded a whole snapshot") }
+    if (args[0] && Object.hasOwn(args[0], "state") && Object.hasOwn(args[0], "unanswered")) { wholeWrites++ }
     return stringify.apply(JSON, args)
   }) as typeof JSON.stringify
   const longest: number[] = []
@@ -85,16 +93,16 @@ try {
       const hook = createHook({ before(id) { const cpu = process.threadCpuUsage(); started.set(id, cpu.user + cpu.system) }, after(id) { const from = started.get(id); if (from === undefined) return; started.delete(id); const cpu = process.threadCpuUsage(); maximum = Math.max(maximum, (cpu.user + cpu.system - from) / 1000) } })
       hook.enable()
       try {
-        for (let i = 0; i < 12; i++) { await a.grants(); await a.leases(); await a.tick() }
+        for (let i = 0; i < 12; i++) { await a.grants(); await a.leases() }
         const given = grant(`fresh-${sample}`, "fresh")
         await a.grant(given); await a.revoke(given.id, { kind: "person", account: "local" })
       } finally { hook.disable() }
       longest.push(maximum)
     }
   } finally { JSON.parse = parse; JSON.stringify = stringify }
-  assert.equal(wholeParses, 0); assert.equal(wholeWrites, 0)
+  assert.equal(wholeParses, 0); assert.equal(wholeWrites, 10, "only the two actual mutations per sample encode the compact legacy file")
   const median = [...longest].sort((a, b) => a - b)[2]!
-  assert.ok(median < 20, `warm row operations' callback CPU median ${median.toFixed(2)} ms, samples ${longest.map(n => n.toFixed(2))}`)
+  assert.ok(median < 20, `warm snapshot operations' callback CPU median ${median.toFixed(2)} ms, samples ${longest.map(n => n.toFixed(2))}`)
   console.log(JSON.stringify({ legacyBytes: originalBytes, warmLongestCallbackCpuMs: longest, medianMs: median }))
 
   const borrowed = await a.borrow(need("live-items/file", "cache-copy"))
@@ -109,60 +117,37 @@ try {
   assert.deepEqual(await a.borrow(need("foreign/file", "after-revoke")), { refusal: { refused: "revoked" } })
   assert.match((await a.grant(gave))!, /ended/, "another instance cannot undo a revoke")
 
-  // A source failure is a typed refusal. A failed durable save must not poison cached state.
+  // Old writes remain readable; new reads reload and compaction never removes a live decision.
+  const oldWritten = await oldLoad()
+  oldWritten.state.grants["old-writer"] = { grant: grant("old-writer", "old-writer"), consented: [] }
+  const file = join(folder, "state.json")
+  await writeFile(file, JSON.stringify(oldWritten))
+  assert.ok((await a.grants()).some(g => g.id === "old-writer"))
+  await a.revoke("old-writer", { kind: "person", account: "local" })
+  assert.ok((await oldLoad()).state.grants["old-writer"]?.ended, "the old binary sees a new revoke")
+  // A newer instance must retain compact revocation IDs even after an old writer rewrites the snapshot.
+  const reopened = broker(folder)
+  await writeFile(file, JSON.stringify(await oldLoad()))
+  assert.match((await reopened.grant(grant("old-0")))!, /ended/)
+
+  // A source failure is a typed refusal; a failed atomic save invalidates its cached decision.
   const failed = new LocalBorrowing({ ...options, folder, sources: { tree: async () => { throw new Error("fixture") } } }); brokers.push(failed)
   assert.ok("refusal" in await failed.borrow(need("live-items/file", "source-error")))
-  const db = new DatabaseSync(join(folder, "state.sqlite"))
-  db.exec("CREATE TRIGGER reject_fixture BEFORE INSERT ON borrowing_rows BEGIN SELECT RAISE(ABORT,'fixture write failure'); END")
-  await assert.rejects(a.grant(grant("rolled-back", "not-persisted")), /fixture write failure/)
-  db.exec("DROP TRIGGER reject_fixture"); db.close()
-  assert.ok(!(await a.grants()).some(g => g.id === "rolled-back"))
-
-  // A legacy process already open at migration still reads on every locked operation. Its exact dereference
-  // fails closed at the fence instead of creating grants from a stale snapshot. New decisions survive reopen.
-  const oldLoad = async () => {
-    // SAFETY: deliberately replay the original reader's unchecked dereference; the new fence must make it throw.
-    const saved = JSON.parse(await readFile(join(folder, "state.json"), "utf8")) as { state: { account: string } }
-    return saved.state.account
-  }
-  await assert.rejects(oldLoad(), TypeError)
-  for (const item of brokers) await item.close()
-  const reopened = broker(folder)
-  assert.match((await reopened.grant(grant("old-0")))!, /ended/)
-  const fence = await readFile(join(folder, "state.json"), "utf8")
-  await writeFile(join(folder, "state.json"), JSON.stringify(empty()))
-  await assert.rejects(reopened.grants(), /refusing to overwrite newer decisions/)
-  await writeFile(join(folder, "state.json"), fence)
-  assert.ok((await reopened.grants()).some(g => g.id === "another"))
-  await writeFile(join(folder, "state.json"), JSON.stringify({ version: 3, reads: 2, state: null }))
-  assert.ok((await reopened.grants()).some(g => g.id === "another"))
-  await assert.rejects(reopened.tick(), /cannot change it/)
-  await writeFile(join(folder, "state.json"), JSON.stringify({ version: 3, reads: 3, state: null }))
-  await assert.rejects(reopened.grants(), /update Mako to read it/)
-  await writeFile(join(folder, "state.json"), fence)
-
-  // A crash after the import commits but before the fence publishes leaves JSON authoritative. Importing the
-  // next locked operation replaces that incomplete migration, including its tentative tombstones.
-  const recovery = join(root, "recovery"); await import("node:fs/promises").then(fs => fs.mkdir(recovery))
-  const partial = new BorrowingStore(join(recovery, "state.sqlite"), "local")
-  const stale = empty(); stale.state.grants.stale = { grant: grant("stale"), consented: [], ended: { at: clock, why: "revoked", by: { kind: "mako" } } }
-  await partial.write(stale, true); partial.close()
-  const current = empty(); current.state.grants.current = { grant: grant("current"), consented: [] }
-  await writeFile(join(recovery, "state.json"), JSON.stringify(current))
-  const recovered = broker(recovery)
-  assert.deepEqual((await recovered.grants()).map(g => g.id), ["current"])
-  assert.equal(await recovered.grant(grant("stale", "separate")), undefined, "an unpublished tentative tombstone was replaced too")
-  assert.ok("lease" in await recovered.borrow(need("separate/file", "recovered")))
+  const snapshot = new BorrowingSnapshot(folder, "local")
+  const savedText = await readFile(file, "utf8")
+  const tentative = structuredClone(await snapshot.read())
+  tentative.state.grants.tentative = { grant: grant("tentative"), consented: [] }
+  await rm(file); await mkdir(file)
+  await assert.rejects(snapshot.write(tentative))
+  await rm(file, { recursive: true }); await writeFile(file, savedText)
+  assert.equal((await snapshot.read()).state.grants.tentative, undefined)
+  // A process dying during a ledger append leaves a partial final line, never a published pruning without IDs.
+  await import("node:fs/promises").then(fs => fs.appendFile(join(folder, "ended-grants.jsonl"), '{"account":"local","id":"partial'))
+  const recovered = broker(folder)
+  assert.match((await recovered.grant(grant("old-0")))!, /ended/)
+  await recovered.revoke("live", { kind: "person", account: "local" })
+  assert.equal((await oldLoad()).state.grants.live?.ended?.why, "revoked")
   assert.ok((await Array.fromAsync(recovered.events())).some(event => event.event === "granted"))
-  const future = new DatabaseSync(join(recovery, "state.sqlite"))
-  future.exec("UPDATE meta SET value='2' WHERE key='schema'")
-  assert.ok((await recovered.grants()).length > 0, "a readable newer format still lists decisions")
-  const logBytes = (await stat(join(recovery, "events.jsonl"))).size
-  await assert.rejects(recovered.grant(grant("newer-format")), /cannot change borrowing decisions/)
-  assert.equal((await stat(join(recovery, "events.jsonl"))).size, logBytes, "read-only means no event-log write either")
-  future.exec("UPDATE meta SET value='2' WHERE key='reads'")
-  await assert.rejects(recovered.grants(), /needs .* to read/)
-  future.close()
   const closing = broker(folder)
   await closing.grants()
   let release!: () => void, entered!: () => void
@@ -176,7 +161,7 @@ try {
     assert.equal(result, "closed", "closing a connection never waits for another broker's lock")
     await assert.rejects(closing.grants(), /closed/)
   } finally { clearTimeout(timer); release(); await blocking }
-  console.log("local borrowing: bounded materialized state, unchanged cache, row writes, durable revocation IDs, foreign invalidation, rollback, interrupted migration and old-writer fence")
+  console.log("local borrowing: compact legacy snapshots, unchanged cache, old-reader/writer compatibility, durable revocation IDs, foreign invalidation, failed save and interrupted append")
 } finally {
   await Promise.allSettled(brokers.map(b => b.close()))
   await rm(root, { recursive: true, force: true })

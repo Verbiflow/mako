@@ -1,12 +1,8 @@
-import { z } from "zod"
 import { randomUUID } from "node:crypto"
-import { appendFile, mkdir, readFile, stat } from "node:fs/promises"
-import { createReadStream, existsSync } from "node:fs"
+import { appendFile, mkdir } from "node:fs/promises"
+import { createReadStream } from "node:fs"
 import { createInterface } from "node:readline"
-import { Worker } from "node:worker_threads"
-import { fileURLToPath } from "node:url"
-import { jsonStoreAccess } from "@mako/sessions/store-format"
-import { BorrowingStore } from "./borrowing-store.js"
+import { BorrowingSnapshot } from "./borrowing-snapshot.js"
 import type { BorrowingState, PersonAsk } from "./borrowing-state.js"
 export type { PersonAsk } from "./borrowing-state.js"
 import { join } from "node:path"
@@ -38,11 +34,10 @@ import { acquireHostLock } from "./host-lock.js"
 /**
  * This device's own broker: the borrowing contract for borrowers on this device, such as a worktree taking files
  * from its project's main checkout or a Thread's harness taking a saved key. It decides by the protocol's one `step`,
- * as the account's broker does. Active decisions are SQLite rows; its lease log is JSON lines beside them
+ * as the account's broker does. Its state remains the legacy JSON snapshot; its lease log is JSON lines beside it
  * (names and versions, never a value).
  *
- * Every operation holds the folder's lock (kernel-held, so a crash frees it), reloads only after another connection
- * committed, steps and writes only changed rows. Brokers over one folder, in one process or several hosts, are one
+ * Every operation holds the folder's lock (kernel-held, so a crash frees it), reloads only after a file stamp changes, steps and atomically writes the compacted snapshot. Brokers over one folder, in one process or several hosts, are one
  * broker: a revoke one made is never undone by another's older copy. Each answers as the source for the kinds it was
  * given; an ask for a kind it can't answer waits in the state for a broker that can.
  *
@@ -67,7 +62,7 @@ type Kept = BorrowingState
 
 /** How long an operation waits for the folder's lock before it fails, saying so. */
 const LOCK_WAIT_MS = 30_000
-const MarkerSchema = z.object({ version: z.number().int().min(2), reads: z.number().int().nonnegative().optional(), state: z.null() }).loose()
+
 
 export class BorrowingLockTimeout extends Error {
   constructor(folder: string) {
@@ -80,9 +75,7 @@ export class LocalBorrowing implements Borrowing {
   readonly device: string
   readonly account: string
   readonly folder: string | undefined
-  #store: BorrowingStore | undefined
-  #stamp: string | undefined
-  #markerWritable = true
+  #store: BorrowingSnapshot | undefined
   #memory: Kept
   #closing: Promise<void> | undefined
   #queue: Promise<unknown> = Promise.resolve()
@@ -246,58 +239,14 @@ export class LocalBorrowing implements Borrowing {
   async #load(): Promise<Kept> {
     const folder = this.folder
     if (!folder) return this.#memory
-    const file = join(folder, "state.json")
-    const info = await stat(file).catch(error => { if (error.code === "ENOENT") return undefined; throw error })
-    const stamp = info ? `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}` : "missing"
-    if (!this.#store || stamp !== this.#stamp) {
-      // Only the tiny format marker is parsed here. A legacy snapshot is imported and trimmed off this thread.
-      const parsed = info && info.size < 1024 ? MarkerSchema.safeParse(JSON.parse(await readFile(file, "utf8"))) : undefined
-      if (parsed?.success) {
-        const marker = parsed.data
-        const access = jsonStoreAccess({ version: marker.version, reads: marker.reads ?? marker.version }, 2)
-        if (access === "refused") throw new Error("A newer Mako changed this device's borrowing state; update Mako to read it")
-        this.#markerWritable = access === "write"
-      } else {
-        this.#store?.close(); this.#store = undefined
-        if (!info && existsSync(join(folder, "state.sqlite"))) throw new Error("The borrowing state marker is missing; refusing to discard saved decisions")
-        await this.#migrate(folder)
-        this.#markerWritable = true
-      }
-      if (!existsSync(join(folder, "state.sqlite"))) throw new Error("The borrowing decisions database is missing; refusing to recreate grants")
-      this.#store ??= new BorrowingStore(join(folder, "state.sqlite"), this.account)
-      if (this.#markerWritable) this.#store.activate()
-      const after = await stat(file)
-      this.#stamp = `${after.dev}:${after.ino}:${after.size}:${after.mtimeMs}:${after.ctimeMs}`
-    }
+    this.#store ??= new BorrowingSnapshot(folder, this.account)
     return this.#store.read()
   }
 
-  /** A one-shot importer; joined before the lock is released, on success, failure or timeout. */
-  async #migrate(folder: string): Promise<void> {
-    const compiled = fileURLToPath(new URL("./borrowing-migrate-worker.js", import.meta.url))
-    const entry = existsSync(compiled) ? compiled : compiled.replace(/\.js$/, ".ts")
-    // Source runs need only the loader, never a parent's --expose-gc, profiler or --input-type flags.
-    const loaders = process.execArgv.flatMap((arg, index, args) => arg === "--import" || arg === "--require" ? [arg, args[index + 1]!] : arg.startsWith("--import=") || arg.startsWith("--require=") ? [arg] : [])
-    const worker = new Worker(entry, { workerData: { folder, account: this.account }, resourceLimits: { maxOldGenerationSizeMb: 256, maxYoungGenerationSizeMb: 4 }, execArgv: entry.endsWith(".ts") ? loaders : [] })
-    let timer: NodeJS.Timeout | undefined
-    try {
-      await new Promise<void>((resolve, reject) => {
-        timer = setTimeout(() => reject(new Error("Migrating this device's borrowing decisions took too long")), 120_000)
-        worker.once("message", (reply: { ok: boolean; error?: string }) => reply.ok ? resolve() : reject(new Error(reply.error ?? "The borrowing migration failed")))
-        worker.once("error", reject)
-        worker.once("exit", code => reject(new Error(`The borrowing importer exited before answering (${code})`)))
-      })
-    } finally {
-      clearTimeout(timer)
-      await worker.terminate()
-    }
-  }
-
-  /** Releases the connection after queued operations; no background writes remain. */
   close(): Promise<void> {
     if (this.#closing) return this.#closing
     // Drain this connection's work, without waiting for another process's broker lock just to close our handle.
-    const done = this.#queue.then(() => { this.#store?.close(); this.#store = undefined; this.#stamp = undefined })
+    const done = this.#queue.then(() => { this.#store = undefined })
     this.#queue = done.catch(() => undefined)
     return this.#closing = done
   }
@@ -311,8 +260,6 @@ export class LocalBorrowing implements Borrowing {
     const pushes: Array<[Borrower, BorrowPush]> = []
     const done = this.locked(async () => {
       const kept = structuredClone(await this.#load())
-      if (!this.#markerWritable) throw new Error("A newer Mako updated this device's borrowing state; this one cannot change it")
-      this.#store?.assertWritable()
       const events: LeaseEvent[] = []
       this.#effects = { events, pushes }
       try {

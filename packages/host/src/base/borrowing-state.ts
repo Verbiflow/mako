@@ -6,7 +6,7 @@ export type BorrowingState = { state: BrokerState; waiting: PersonAsk[]; unanswe
 
 /**
  * Keep live grants, grants still named by a lease/ask, and the last refusal for each identical reach. Historical
- * IDs remain permanent tombstones in the store: seeding an old secret version must never resurrect its grant.
+ * IDs remain in a separate append-only ledger: seeding an old secret version must never resurrect its grant.
  * The event log keeps the history. No live grant, consent, pending decision or ended-Thread mark is retired.
  */
 export function* compactGrants(kept: BorrowingState): Steps<void> {
