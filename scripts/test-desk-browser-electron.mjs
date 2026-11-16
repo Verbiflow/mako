@@ -88,16 +88,22 @@ async function relayedPages() {
 }
 
 /**
- * Whether Electron's own capture of the page's window still gets pixels, logged at each step that could stop a hidden
- * window drawing: on CI Macs the screenshot at the end timed out, and capturePage after it failed with UnknownVizError.
+ * Whether the page still answers CDP's screenshot, read after each step that could stop a hidden window drawing, and
+ * how it reports its visibility. On CI Macs the screenshot at the end timed out in the gate and the suites, while a hidden
+ * window alone captures there (awake or with the display asleep). Electron's capturePage would make the page draw and
+ * hide the cause, so it isn't used here.
  */
 async function drawable(step) {
   const [window] = BrowserWindow.getAllWindows()
-  if (!window) return console.log(`capture after ${step}: no window`)
+  if (!window) return console.log(`after ${step}: no window`)
+  const contents = window.webContents
+  const visibility = await contents.executeJavaScript("document.visibilityState").catch((failure) => `unread (${failure?.message ?? failure})`)
   const began = Date.now()
-  const image = await Promise.race([window.webContents.capturePage(), new Promise((resolve) => setTimeout(() => resolve(undefined), 5_000))])
-    .catch((failure) => new Error(String(failure?.message ?? failure)))
-  console.log(`capture after ${step}: ${image === undefined ? "no answer in 5 s" : image instanceof Error ? image.message : `${image.getSize().width}x${image.getSize().height}${image.isEmpty() ? " empty" : ""} in ${Date.now() - began} ms`}`)
+  const shot = await Promise.race([
+    contents.debugger.sendCommand("Page.captureScreenshot", { format: "png", optimizeForSpeed: true, captureBeyondViewport: false }).then(() => `in ${Date.now() - began} ms`, (failure) => `failed: ${failure?.message ?? failure}`),
+    new Promise((resolve) => setTimeout(() => resolve("no answer in 5 s"), 5_000)),
+  ])
+  console.log(`after ${step}: page ${visibility}, window visible=${window.isVisible()}, CDP screenshot ${shot}`)
 }
 
 async function main() {

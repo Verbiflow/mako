@@ -61,6 +61,8 @@ let host
 let removeRenderer = () => {}
 let cdp
 let agentViewsPid
+// What the host printed, for a failure: it's kept quiet unless MAKO_TEST_TRACE=1.
+let output = ""
 
 const until = async (read, label, ms = 90_000) => {
   const end = Date.now() + ms
@@ -92,11 +94,13 @@ const pageCall = async (body) => {
 try {
   host = spawnHost(env, { app: app && join(app, "Contents", "MacOS", "Mako"), stdio: ["ignore", "pipe", "pipe"] })
   if (app) console.log(`Fixture host from ${app}`)
-  let output = ""
   const trace = process.env.MAKO_TEST_TRACE === "1"
   host.stdout.on("data", (chunk) => { output += chunk; if (trace) process.stdout.write(chunk) })
   host.stderr.on("data", (chunk) => { output += chunk; if (trace) process.stderr.write(chunk) })
-  const info = await until(() => runtimeInfo(location.socket), "fixture host")
+  // A host that exited never answers: say so at once rather than wait out the limit.
+  const exited = once(host, "exit").then(([code, signal]) => { throw new Error(`The fixture host exited (${signal ?? `exit ${code}`}) before it answered`) })
+  exited.catch(() => {})
+  const info = await Promise.race([until(() => runtimeInfo(location.socket), "fixture host"), exited])
   console.log(`Fixture host ${info.pid} is ready`)
   assert.equal(info.pid, host.pid)
   assert.equal(info.fixture, true, "The host reports that it is a fixture desk")
@@ -216,6 +220,7 @@ for (const channel of ["mako:live-start", "mako:lifecycle-command", "mako:list-m
   console.error(error)
   // What the host said of the agent views app, for a failure that never reached its window.
   const said = await readFile(join(dataRoot, "logs", "host.log"), "utf8").catch(() => "")
+  if (output) console.error(`The host's last output:\n${output.slice(-3_000)}`)
   console.error(said.split("\n").filter((line) => /agent.views|desk-page|desktop (attached|detached)/i.test(line)).slice(-20).join("\n") || "host.log says nothing of the agent views app")
   process.exitCode = 1
 } finally {

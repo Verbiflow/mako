@@ -1,3 +1,4 @@
+import { ProviderFailureError, providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { Git } from "@mako/git"
 import assert from "node:assert/strict"
@@ -36,6 +37,9 @@ import { ownedSessions } from "@mako/host/conversations/session-report"
 import { ThreadArchives } from "@mako/host/threads/archives"
 import { ThreadLifecycle } from "@mako/host/threads/lifecycle"
 import { OlderRequestSchema } from "./fixtures/older-request-schema.ts"
+
+/** What a driver's native call rejects with when its provider refuses: its words admitted as evidence (`providerCall`, #799). */
+const providerRefusal = (message: string) => new ProviderFailureError(message, providerTextEvidence(message))
 
 const gitRunner = new Git()
 
@@ -2272,13 +2276,16 @@ async function settledVerdicts() {
     f.owner.submit(f.id, second, "second")
     await tick()
     f.owner.observe({ type: "live-session", session: { ...f.state, status: "running" } })
+    const rejected =
+      'Failed to run prompt: {"type":"invalid_request_error","message":"Item \'rs_0a1b\' of type \'reasoning\' was provided without its required following item."} (reasoning encrypted_content was not issued to this caller)'
     f.owner.observe({
       type: "live-session",
       session: {
         ...f.state,
         status: "failed",
-        error:
-          'Failed to run prompt: {"type":"invalid_request_error","message":"Item \'rs_0a1b\' of type \'reasoning\' was provided without its required following item."} (reasoning encrypted_content was not issued to this caller)',
+        error: rejected,
+        // A driver admits its provider's words as evidence (#799); a host catch's prose is never classified.
+        failureEvidence: providerTextEvidence(rejected),
       },
     })
     f.prompts[1]?.resolve()
@@ -2688,7 +2695,8 @@ async function providerExitContinued() {
         id,
         starts,
         prompts,
-        end: (patch) => emitters.at(-1)?.({ type: "live-session", session: session(bindings.at(-1) ?? id, patch) }),
+        // A driver ends a failed turn with its provider's words admitted as evidence (#799), as a native transport does.
+        end: (patch) => emitters.at(-1)?.({ type: "live-session", session: session(bindings.at(-1) ?? id, patch.error && !patch.failureEvidence ? { ...patch, failureEvidence: providerTextEvidence(patch.error) } : patch) }),
         update: (update) => emitters.at(-1)?.({ type: "live-update", id: bindings.at(-1) ?? id, update }),
         hooks,
         root,
@@ -2920,7 +2928,7 @@ async function heldUntilReset() {
     await f.owner.start("test-provider", "/tmp", { conversationId: f.id, initialRequest: { id: first, text: "limited", attachments: [] } })
     f.started.resolve(f.state)
     await tick()
-    f.prompts[0]!.reject(new Error("429 Too Many Requests: usage limit reached"))
+    f.prompts[0]!.reject(providerRefusal("429 Too Many Requests: usage limit reached"))
     await waitFor(() => f.owner.snapshot(f.id)?.requests[0]?.status === "failed", "the first message fails")
     assert.equal(f.owner.snapshot(f.id)?.requests[0]?.failure, "rate-limited")
     const at = Date.now() + 60_000
@@ -2961,7 +2969,7 @@ async function heldWakeResumes() {
     await f.owner.start("test-provider", "/tmp", { conversationId: f.id, initialRequest: { id: first, text: "limited", attachments: [] } })
     f.started.resolve(f.state)
     await tick()
-    f.prompts[0]!.reject(new Error("429 rate limit"))
+    f.prompts[0]!.reject(providerRefusal("429 rate limit"))
     await waitFor(() => f.owner.snapshot(f.id)?.requests[0]?.status === "failed", "the first message fails")
     f.owner.observe({ type: "live-session", session: { ...f.state, status: "ready" } })
     const later = randomUUID()
