@@ -193,6 +193,7 @@ const ActivityTimesRow = z.object({ session: z.string(), kind: z.enum(["turn", "
 const Count = z.object({ count: z.number() })
 const ThreadChangeRow = z.object({ seq: z.number(), moved: z.number() })
 const ChangeSeqRow = z.object({ change_seq: z.number() })
+const RootChangeRow = ChangeSeqRow.extend({ root: z.string() })
 const ThreadWriteRow = z.object({ seq: z.number(), root: z.string(), path: z.string(), at: z.number(), kind: z.string(), certainty: z.string() })
 const TurnChangesRow = z.object({ summary: z.string() })
 const TurnSeqRow = z.object({ turn: z.string(), seq: z.number() })
@@ -526,6 +527,21 @@ const CHANGE_TRACKING = `
   END;
 `
 
+/** Partition inputs have a clock per root: activity, stat refreshes and another checkout's writes don't move it. */
+const CHECKPOINT_CHANGES = `
+  CREATE TABLE IF NOT EXISTS checkpoint_root_changes (root TEXT PRIMARY KEY, seq INTEGER NOT NULL) WITHOUT ROWID;
+  INSERT OR IGNORE INTO checkpoint_root_changes (root, seq) SELECT id, 0 FROM roots;
+` + ["entries", "files", "roots"].flatMap((table) => ["INSERT", "DELETE", "UPDATE"].map((event) => {
+  const root = table === "roots" ? "id" : "root"
+  const columns = event !== "UPDATE" ? "" : table === "roots" ? " OF path, head, active" : table === "entries" ? " OF author, git, root, path, kind, from_path, before, after, map, gap, restores" : ""
+  const changed = event === "UPDATE" && table === "roots" ? " WHEN NEW.path IS NOT OLD.path OR NEW.head IS NOT OLD.head OR NEW.active IS NOT OLD.active" : ""
+  const from = event === "DELETE" ? "OLD" : "NEW"
+  return `CREATE TRIGGER IF NOT EXISTS checkpoint_${table}_${event.toLowerCase()} AFTER ${event}${columns} ON ${table}${changed} BEGIN
+    INSERT INTO checkpoint_root_changes (root, seq) VALUES (${from}.${root}, 1) ON CONFLICT(root) DO UPDATE SET seq = seq + 1;
+    ${event === "UPDATE" ? `INSERT INTO checkpoint_root_changes (root, seq) SELECT OLD.${root}, 1 WHERE OLD.${root} IS NOT NEW.${root} ON CONFLICT(root) DO UPDATE SET seq = seq + 1;` : ""}
+  END;`
+})).join("\n")
+
 /** What a Thread's work has reached: `key` moves with anything that could change it; `seq` and `moved` are only there when changes are tracked. */
 export interface ThreadVersion {
   key: string
@@ -561,6 +577,7 @@ export class JournalStore {
   private readonly db: DatabaseSync
   /** Whether this journal keeps `CHANGE_TRACKING`: once it does, it always will. */
   private tracked = false
+  private checkpointsTracked = false
   private readonly statements = new Map<string, StatementSync>()
 
   private constructor(path: string, db: DatabaseSync, id: string, device: string) {
@@ -587,6 +604,10 @@ export class JournalStore {
       if (!columns.includes(added.column)) db.exec(added.add)
     }
     db.exec(CHANGE_TRACKING)
+    // The clock becomes visible with every trigger installed, including to older writers sharing this journal.
+    db.exec("BEGIN IMMEDIATE")
+    try { db.exec(CHECKPOINT_CHANGES); db.exec("COMMIT") }
+    catch (error) { db.exec("ROLLBACK"); db.close(); throw error }
     const meta = new Map(db.prepare("SELECT key, value FROM meta").all().map((row) => MetaRow.parse(row)).map((row) => [row.key, row.value]))
     let id = meta.get("journal")
     if (!id || meta.get("schema") !== SCHEMA_VERSION) {
@@ -1378,6 +1399,16 @@ export class JournalStore {
   version(): string {
     const own = Count.parse(this.statement("SELECT total_changes() AS count").get()).count
     return `${this.dataVersion()}:${own}`
+  }
+
+  /** One indexed scalar for this checkout, shared by every writer. Older journals use their conservative version. */
+  checkpointVersion(checkout: string): string {
+    this.checkpointsTracked ||= Count.parse(this.statement("SELECT count(*) AS count FROM sqlite_master WHERE name = 'checkpoint_root_changes'").get()).count === 1
+    if (!this.checkpointsTracked) return `legacy:${this.version()}`
+    const found = this.statement("SELECT r.id AS root, coalesce(c.seq, 0) AS change_seq FROM roots r LEFT JOIN checkpoint_root_changes c ON c.root=r.id WHERE r.path=?").get(checkout)
+    if (!found) return `${this.id}:absent`
+    const row = RootChangeRow.parse(found)
+    return `${this.id}:${row.root}:${row.change_seq}`
   }
 
   /** A number that changes whenever another connection commits: a reader's cue that what it read is stale. */
