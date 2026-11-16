@@ -6,6 +6,12 @@ import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { hostLifecycle } from "@mako/host/base/host-lifecycle"
 import { HostCallLifetime } from "@mako/host/transport/call-lifetime"
+import { HostMethods } from "@mako/host/transport/methods"
+import { HostStopping } from "@mako/host/base/host-stopping"
+import { unwatchedWork } from "@mako/host/base/event-loop"
+import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
+import { runtimeFailure, runtimeFailureError } from "@mako/host/contracts/runtime"
+import { waitsFor } from "../src/state/delivery-policy"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { SessionMemory } from "@mako/host/threads/session-memory"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
@@ -44,6 +50,36 @@ await assert.rejects(lifetime.run(async () => { throw Error("must not start") })
 await tick(); assert.equal(storeOpen, true)
 reading.resolve(); await read; await drained
 assert.equal(completed, true); assert.equal(storeOpen, false)
+
+// A person's message sent while the host stops is a disconnect to its client, never a refusal: the outbox keeps it and
+// sends it again once the next host answers. One the stopping host refused never ran; one its stop cut may have, and
+// is asked again under its ID. As a plain error, the outbox took it as refused for good and handed it back.
+{
+  const stopping = new HostStopping()
+  const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value, breadcrumb: () => {}, declaring: async () => {}, work: unwatchedWork, stopping })
+  const answering = deferred()
+  const ran: string[] = []
+  methods.handle("mako:live-prompt", (async (_id: string, requestId: string) => {
+    ran.push(requestId)
+    if (requestId === "under-way") await new Promise<never>((_resolve, reject) => stopping.signal.addEventListener("abort", () => reject(stopping.signal.reason), { once: true }))
+    answering.resolve()
+    return null
+  }) as never)
+  const heard = async (call: Promise<unknown>) => {
+    const error = await call.then(() => undefined, (caught: Error) => caught)
+    assert.ok(error instanceof RuntimeDisconnectedError, `a disconnect, not ${String(error)}`)
+    const client = runtimeFailureError(runtimeFailure(error))
+    return { unconfirmed: (client as RuntimeDisconnectedError).unconfirmed, outbox: waitsFor(client) }
+  }
+  const underWay = methods.invoke("mako:live-prompt", ["c", "under-way", "the long one"])
+  await tick()
+  const drained = methods.close()
+  assert.deepEqual(await heard(methods.invoke("mako:live-prompt", ["c", "after-close", "sent as Mako quits"])), { unconfirmed: false, outbox: "Waiting for Mako to reconnect" }, "refused as the host stops: it never ran, and waits")
+  assert.ok(!ran.includes("after-close"), "it never ran")
+  await stopping.stop().catch(() => {})
+  assert.deepEqual(await heard(underWay), { unconfirmed: true, outbox: "Waiting for Mako to reconnect" }, "cut by the stop: asked again under its ID")
+  await drained
+}
 
 // Every adapter uses the same awaited close -> ownership-release boundary.
 for (const provider of [...registeredHarnessIds(), "future"]) {
