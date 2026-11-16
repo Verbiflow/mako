@@ -65,6 +65,7 @@ export type ResolvedPlace = { kind: "here" } | { kind: "away"; target: PlaceTarg
 
 const CapabilitiesSchema = z.object({
   orchestration: z.object({ version: z.number() }),
+  committedSource: z.literal(1).optional(),
   slots: z.object({ used: z.number(), of: z.number() }),
   harnesses: z.array(z.string()),
 })
@@ -80,6 +81,7 @@ const PlacedAnswerSchema = z.object({
   runsOn: z.string().optional(),
   note: z.string().optional(),
   deduped: z.literal(true).optional(),
+  sourceSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 }).loose()
 const CancelledSchema = z.object({ cancelled: z.literal(true), fin: PlacedAnswerSchema.optional() })
 const NoticedSchema = z.union([z.object({ heard: z.literal(true), deduped: z.literal(true).optional() }), RefusedSchema])
@@ -224,6 +226,11 @@ export class AgentPlaces {
    */
   async place(target: PlaceTarget, input: AgentsPlaceInput): Promise<AgentsPlaced | AgentRefused | { lost: string }> {
     const name = placeName(target)
+    if (input.workspace.source) {
+      const offers = await this.capabilities(target, name)
+      if ("refused" in offers) return offers
+      if (offers.committedSource !== 1) return { refused: "unsupported", why: `${name} cannot verify committed Fin sources. Update Mako there before placing this source.` }
+    }
     let answer: unknown
     try {
       answer = await this.deps.link.call(target, "mako:agents-place", [wire(input)])
@@ -234,6 +241,8 @@ export class AgentPlaces {
     const refused = RefusedSchema.safeParse(answer)
     if (refused.success) return asRefused(refused.data)
     const placed = PlacedAnswerSchema.safeParse(answer)
+    if (input.workspace.source && (!placed.success || placed.data.sourceSha256 !== input.workspace.source.sha256))
+      return { lost: "The placed Fin's source receipt did not match; its outcome must be recovered under the same operation." }
     if (!placed.success) return { refused: "unavailable", why: `${name} answered the start with something this Mako can't read: ${z.prettifyError(placed.error)}` }
     // SAFETY: PlacedAnswerSchema holds every field of AgentsPlaced to its type; `state` is one of ChildState's kinds.
     return placed.data as AgentsPlaced

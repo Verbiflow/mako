@@ -36,6 +36,7 @@ import { NativeRuns } from "./native-runs.js"
 import { declareAgentMethods } from "./agent-tools.js"
 import { placeLink } from "./place-link.js"
 import { PlacedCheckouts } from "./placed-checkouts.js"
+import { verifyFinSource } from "./fin-source.js"
 import type { AgentRefused, AgentsDirectInput, AgentsRespondInput, AgentsRedirectInput } from "../contracts/agents.js"
 import { Agents } from "./agents.js"
 import { continueOn as continuing, type ContinueOn } from "./continue-on.js"
@@ -437,6 +438,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       ...(away && { away }),
       remoteOf: (cwd) => deps.git.output(cwd, ["remote", "get-url", "origin"]).then((text) => text.trim() || undefined, () => undefined),
       checkoutOf: (remote) => checkouts.find(remote),
+      verifySource: (folder, source) => verifyFinSource(deps.git, folder, source),
     })
     deps.finCapacity?.subscribe(() => agents?.capacityChanged())
     await agents.resumeInSlices()

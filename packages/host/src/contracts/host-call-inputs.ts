@@ -387,6 +387,18 @@ const inputs = {
           branch: z.string().optional(),
           base: z.string().optional(),
           folder: z.string().optional(),
+          source: z
+            .object({
+              version: z.literal(1),
+              repository: z.object({
+                url: z.string(),
+                branch: z.string().optional(),
+              }),
+              commit: z.string(),
+              cwd: z.string(),
+              sha256: z.string(),
+            })
+            .optional(),
         }),
         mode: z.union([z.literal("wait"), z.literal("background")]).optional(),
         wake: z
@@ -1783,6 +1795,18 @@ const inputs = {
                 ]),
                 conversation: z.string().optional(),
                 heard: z.number().optional(),
+              })
+              .optional(),
+            source: z
+              .object({
+                version: z.literal(1),
+                repository: z.object({
+                  url: z.string(),
+                  branch: z.string().optional(),
+                }),
+                commit: z.string(),
+                cwd: z.string(),
+                sha256: z.string(),
               })
               .optional(),
             tuned: z

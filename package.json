@@ -334,7 +334,7 @@
     "test:host-probes": "tsx scripts/test-host-probes.ts",
     "test:probe-child-edges": "tsx scripts/test-probe-child-edges.ts",
     "test:fin-move": "tsx scripts/test-fin-move.ts",
-    "test:fins-placed": "tsx scripts/test-fins-placed.ts",
+    "test:fins-placed": "tsx scripts/test-fin-source.ts && tsx scripts/test-fins-placed.ts",
     "test:limit-replay": "tsx scripts/test-limit-replay.ts",
     "test:fin-fallback": "tsx scripts/test-limit-notice-actions.ts && tsx scripts/test-fin-fallback.ts && tsx scripts/test-limit-wake-room.ts && tsx scripts/test-limit-or-cut.ts && esbuild scripts/test-fin-moved-line.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-fin-moved-line.mjs --log-level=warning && node node_modules/.tmp/test-fin-moved-line.mjs",
     "test:fin-states": "tsx scripts/test-fin-states.ts",
