@@ -132,13 +132,42 @@ function shownManifests(manifests: ContextManifest[]): ContextManifest[] {
   return manifests.some((manifest) => manifest.resources) ? manifests.map(shownManifest) : manifests
 }
 
+type ShownRequest = LiveSnapshot["requests"][number]
+
+/**
+ * A request's attachments whose bytes a window never reads: a completed request's, each saved where `path` names it.
+ * The window draws a prompt from its turn's blocks, and resends or edits only a request that isn't completed. A Fin's
+ * nine screenshots were 4.6 MB of base64 in every read of its conversation.
+ */
+function savedAttachments(request: ShownRequest): boolean {
+  return request.status === "completed" && request.attachments.some((attachment) => attachment.data !== undefined && attachment.path !== undefined)
+}
+
+/** A request as a window reads it: no manifest's resources (`shownManifest`), no completed request's saved bytes. */
+function shownRequest(request: ShownRequest): ShownRequest {
+  const named = request.context?.some((manifest) => manifest.resources)
+  const saved = savedAttachments(request)
+  if (!named && !saved) return request
+  return {
+    ...request,
+    ...(named && request.context && { context: shownManifests(request.context) }),
+    ...(saved && { attachments: request.attachments.map((attachment) => {
+      if (attachment.data === undefined || attachment.path === undefined) return attachment
+      const shown = { ...attachment }
+      delete shown.data
+      return shown
+    }) }),
+  }
+}
+
 /**
  * What a window reads of a snapshot's requests and control: each the same object unless a manifest in it named its
- * resources (`shownManifest`). A 122 MB Fin's first read was 10 MB, 4.7 MB of it its transfers' and merges' manifests.
+ * resources (`shownManifest`) or a completed request held its attachments' bytes (`savedAttachments`). A 122 MB Fin's
+ * first read was 10 MB, 4.7 MB of it its transfers' and merges' manifests.
  */
 export function shownSnapshot(snapshot: LiveSnapshot): LiveSnapshot {
-  const requests = snapshot.requests.some((request) => request.context?.some((manifest) => manifest.resources))
-    ? snapshot.requests.map((request) => request.context ? { ...request, context: shownManifests(request.context) } : request)
+  const requests = snapshot.requests.some((request) => request.context?.some((manifest) => manifest.resources) || savedAttachments(request))
+    ? snapshot.requests.map(shownRequest)
     : snapshot.requests
   const control = snapshot.control
   const named = control && (control.merges.some((merge) => merge.manifest.resources) ||

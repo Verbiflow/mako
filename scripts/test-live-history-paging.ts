@@ -437,6 +437,10 @@ console.log("PASS: conditional refresh owner/epoch and eviction fences")
   source.requests = [
     { id: "00000000-0000-4000-8000-0000000000a1", text: "Go on", attachments: [], status: "completed", createdAt: 1, context: [manifest] },
     { id: "00000000-0000-4000-8000-0000000000a2", text: "Next", attachments: [], status: "completed", createdAt: 2 },
+    { id: "00000000-0000-4000-8000-0000000000a3", text: "Look", status: "completed", createdAt: 3,
+      attachments: [{ name: "shot.png", mimeType: "image/png", size: 3, data: "AAAA".repeat(20_000), path: "/data/attachments/shot.png" }] },
+    { id: "00000000-0000-4000-8000-0000000000a4", text: "Again", status: "failed", createdAt: 4,
+      attachments: [{ name: "shot.png", mimeType: "image/png", size: 3, data: "BBBB", path: "/data/attachments/shot.png" }] },
   ]
   source.control = ConversationControlSchema.parse({ merges: [{ id: "00000000-0000-4000-8000-0000000000b1", sourceId: "00000000-0000-4000-8000-0000000000b2", sourceRevision: 1, manifest, status: "consumed" }],
     activeBindingId: bindingId, bindings: [], transfers: [{ input: { id: "00000000-0000-4000-8000-0000000000c1", provider: "codex", text: "Go on", attachments: [] }, createdAt: 1, state: { kind: "accepted", bindingId, manifest } }] })
@@ -449,7 +453,10 @@ console.log("PASS: conditional refresh owner/epoch and eviction fences")
   assert.equal(shown.control!.merges[0]!.manifest.file, manifest.file)
   assert.deepEqual(shown.requests[1], source.requests[1], "a request with no manifest is as it was")
   assert.equal(source.requests[0]!.context![0]!.resources!.length, 2000, "the host's own snapshot keeps them")
-  console.log(`PASS: a window reads no transcript's resource paths (${Math.round(whole / 1024)} KB → ${Math.round(text.length / 1024)} KB)`)
+  assert.deepEqual(shown.requests[2]!.attachments, [{ name: "shot.png", mimeType: "image/png", size: 3, path: "/data/attachments/shot.png" }], "a completed request's saved bytes stay on the host")
+  assert.equal(shown.requests[3]!.attachments[0]!.data, "BBBB", "a failed request keeps its bytes, which Send again sends")
+  assert.ok(source.requests[2]!.attachments[0]!.data, "the host's own request keeps them")
+  console.log(`PASS: a window reads no transcript's resource paths, nor a completed request's saved attachment bytes (${Math.round(whole / 1024)} KB → ${Math.round(text.length / 1024)} KB)`)
 }
 
 await import("./test-released-live-turn")
