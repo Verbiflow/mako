@@ -4,7 +4,11 @@ import { join } from "node:path"
 import { followHostLog } from "@mako/host/base/host-log"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
+import type { ProviderFailureEvidence } from "@mako/host/contracts/provider-failure-evidence"
 import { ProviderFailureError, providerTextEvidence } from "@mako/host/contracts/provider-failure"
+import { capturedThread } from "@mako/host/conversations/live-context"
+import type { ThreadPage } from "@mako/sessions"
+import type { NativeResume } from "@mako/host/harnesses/live-driver"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import type { ProviderLiveDriver, ProviderStartOptions } from "@mako/host/harnesses/live-driver"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
@@ -13,8 +17,16 @@ import type { LiveDriverEvent, LiveStartOptions } from "@mako/host/contracts/liv
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { fixtureResume, noCapabilities } from "../fixtures/driver-capabilities.ts"
 
+interface CompactionFixtureControl {
+  failPrompt: boolean
+  rejectPrompt: boolean
+  holdPrompt: boolean
+  failure?: ProviderFailureEvidence
+}
+
 /** A real journal, dispatcher and transfer owner with a synthetic native protocol; never invokes a model. */
 export function compactionWorld(root: string, options: {
+  automatic?: boolean; history?(page: ThreadPage): Promise<ThreadPage | null>; inspect?: Extract<NativeResume, { kind: "native" }>["inspect"];
   id?: string; launch?: Pick<LiveStartOptions, "account" | "tuning" | "modeId">; saveAgainMs?: number; emit?(event: HostEvent): void; closing?(binding: string): Promise<void>; starting?(options: LiveStartOptions): Promise<void>
 } = {}) {
   mkdirSync(root, { recursive: true })
@@ -26,7 +38,7 @@ export function compactionWorld(root: string, options: {
   const events = new Map<string, (event: LiveDriverEvent) => void>()
   const native = new Map<string, string>()
   const configurations = new Map<string, ProviderStartOptions>()
-  const control = { failPrompt: false, rejectPrompt: false }
+  const control: CompactionFixtureControl = { failPrompt: false, rejectPrompt: false, holdPrompt: false }
   const unfollow = followHostLog(line => { if (line.level === "warn") logs.push(JSON.stringify(line)) })
   const state = (binding: string, status: LiveSessionState["status"] = "ready"): LiveSessionState => ({
     id: binding, nativeId: native.get(binding), nativePath: join(root, binding), harness: "compaction-fixture", cwd: root,
@@ -41,7 +53,7 @@ export function compactionWorld(root: string, options: {
     planning: { via: "setting", option: "plan", proposal: "Scripted native fixture", feedback: { kind: "next-message", reason: "Scripted native fixture" } },
     backgroundStop: { kind: "ends-with-turn", evidence: "Scripted native fixture" },
     turnRecovery: { kind: "manual", reason: "Scripted native fixture" },
-    resume: fixtureResume({ inspect: async () => ({ kind: "available", checkpoint: "scripted", strategy: "same-session" }), readTurn: async () => ({ kind: "unfinished" }) }),
+    resume: fixtureResume({ inspect: options.inspect ?? (async () => ({ kind: "available", checkpoint: "scripted", strategy: "same-session" })), readTurn: async () => ({ kind: "unfinished" }) }),
     provider: "compaction-fixture", available: () => true,
     start: async (_cwd, launch) => {
       launches.push(launch)
@@ -61,18 +73,28 @@ export function compactionWorld(root: string, options: {
       prompts.push({ binding, text })
       delivery.report({ kind: "accepted", source: "native-echo" })
       events.get(binding)?.({ type: "live-session", session: { ...state(binding, "running"), nativeRunId: randomUUID() } })
+      if (control.holdPrompt) return
       const error = control.failPrompt ? "context window exceeded" : undefined
       control.failPrompt = false
-      events.get(binding)?.({ type: "live-session", session: { ...state(binding, error ? "failed" : "ready"), lastStop: error ? "failed" : "completed", error, failureEvidence: error ? providerTextEvidence(error) : undefined } })
+      events.get(binding)?.({ type: "live-session", session: { ...state(binding, error ? "failed" : "ready"), lastStop: error ? "failed" : "completed", error, failureEvidence: error ? control.failure ?? providerTextEvidence(error) : undefined } })
     },
-    compaction: { kind: "supported", start: async (binding, action) => {
+    compaction: options.automatic ? { kind: "automatic", reason: "Scripted native fixture" } : { kind: "supported", start: async (binding, action) => {
       calls.push({ binding, action })
       events.get(binding)?.({ type: "live-session", session: state(binding, "running") })
     } },
     permission: async () => {}, cancel: async binding => { events.get(binding)?.({ type: "live-session", session: { ...state(binding), lastStop: "cancelled" } }) }, close: async binding => { await options.closing?.(binding) }, setMode: async () => {},
   }
   const owner = new LiveConversations({ appPath: root, root: join(root, "journals"), driver: () => driver,
-    history: async () => null, saveAgainMs: options.saveAgainMs, emit: event => options.emit?.(event), resumeVerdict: async () => ({ kind: "resumable", record: "same" }) })
+    history: async path => {
+      const snapshot = owner.snapshot(id)
+      const binding = snapshot?.control?.bindings.find(binding => binding.path === path)
+      if (!snapshot || !binding?.nativeId) return null
+      const page = capturedThread(snapshot, 0, true)
+      const ref = { ...page.ref }
+      delete ref.copyOnly
+      const nativePage: ThreadPage = { ...page, start: 0, total: page.entries.length, hasEarlier: false, ref: { ...ref, harness: "compaction-fixture", nativeId: binding.nativeId, path } }
+      return options.history ? options.history(nativePage) : nativePage
+    }, saveAgainMs: options.saveAgainMs, emit: event => options.emit?.(event), resumeVerdict: async () => ({ kind: "resumable", record: "same" }) })
   const result = (call: typeof calls[number], outcome: LiveActionResult) => {
     if (outcome.kind !== "uncertain") events.get(call.binding)?.({ type: "live-session", session: {
       ...state(call.binding, outcome.kind === "failed" ? "failed" : "ready"), ...outcome.kind === "failed" && { error: outcome.reason },

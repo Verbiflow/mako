@@ -1,3 +1,4 @@
+import { mock } from "node:test"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -66,7 +67,7 @@ for (const mode of ["stop", "archive"] as const) {
     assert.equal(world.prompts.length, 1)
     assert.equal(world.launches.at(-1)!.resume, undefined)
     console.log("PASS: failed replacement keeps the concrete cause; exact retry, target CAS, duplicate and stale controls preserve the queue")
-  } finally { await world.close(); rmSync(root, { recursive: true, force: true }) }
+  } finally { mock.timers.reset(); await world.close(); rmSync(root, { recursive: true, force: true }) }
 }
 {
   const root = mkdtempSync(join(tmpdir(), "mako-compact-storage-")), world = compactionWorld(root, { saveAgainMs: 10 })
@@ -106,7 +107,13 @@ for (const mode of ["stop", "archive"] as const) {
     await world.owner.close(id)
     const next = randomUUID()
     world.owner.submit(id, next, "carry on after Close")
+    const recovery = world.owner.snapshot(id)!.control!.compactionRecovery!
+    assert.equal(recovery.state.kind, "reconcile")
+    if (recovery.state.kind !== "reconcile") throw new Error("Expected unknown retry")
+    mock.timers.enable({ apis: ["Date"], now: recovery.state.deadline + 1 })
+    world.owner.wakeDue(Date.now())
     await until("replacement has delivered", () => world.owner.snapshot(id)!.requests.find(request => request.id === next)?.status === "completed")
+    mock.timers.reset()
     await world.close()
     // The old compact's deadline retained uncertainty in history; opening an older client may still acknowledge it.
     const journal = new LiveJournal(join(root, "journals"), id), saved = journal.read()!
@@ -124,5 +131,5 @@ for (const mode of ["stop", "archive"] as const) {
     assert.equal(world.owner.snapshot(id)!.session.connection, "connected")
     assert.equal(world.calls.length, 0)
     console.log("PASS: an old client's acknowledgement settles only the retired receipt, never the healthy replacement")
-  } finally { await world.close(); rmSync(root, { recursive: true, force: true }) }
+  } finally { mock.timers.reset(); await world.close(); rmSync(root, { recursive: true, force: true }) }
 }

@@ -181,25 +181,35 @@ export const RequestRetrySchema = z.object({
 })
 
 /** One host-owned compaction incident. Original action receipts stay truthful and immutable. */
-export const CompactionRecoverySchema = z.object({
+const CompactionRecoveryBaseSchema = z.object({
   id: z.string().uuid(),
-  actionId: z.string().uuid(),
   bindingId: z.string().uuid(),
-  retryActionId: z.string().uuid(),
   target: z.object({ provider: z.string(), account: z.string().optional(), tuning: ProviderSelectionSchema.optional(), modeId: z.string().optional() }),
   requestId: z.string().uuid().optional(),
   createdAt: z.number(),
   epoch: z.string(),
-  state: z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("retry") }),
-    z.object({ kind: z.literal("replace"), transferId: z.string().uuid() }),
-    z.object({ kind: z.literal("completed"), bindingId: z.string().uuid(), waiting: z.array(z.string().uuid()).optional() }),
-    z.object({ kind: z.literal("withdrawn"), reason: z.enum(["stop", "close", "archive", "restart-off", "superseded"]) }),
-  ]),
 })
+const CompactionFinalStateSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("replace"), transferId: z.string().uuid() }),
+  z.object({ kind: z.literal("completed"), bindingId: z.string().uuid(), waiting: z.array(z.string().uuid()).optional() }),
+  z.object({ kind: z.literal("withdrawn"), reason: z.enum(["stop", "close", "archive", "restart-off", "superseded"]) }),
+])
+const ActionCompactionRecoverySchema = CompactionRecoveryBaseSchema.extend({
+  origin: z.literal("action").optional(),
+  actionId: z.string().uuid(),
+  retryActionId: z.string().uuid(),
+  state: z.union([CompactionFinalStateSchema, z.object({ kind: z.literal("retry") }),
+    z.object({ kind: z.literal("reconcile"), actionId: z.string().uuid(), deadline: z.number(), at: z.number() })]),
+})
+export const NativeCompactionRecoverySchema = CompactionRecoveryBaseSchema.extend({
+  origin: z.literal("native"),
+  requestId: z.string().uuid(),
+  state: CompactionFinalStateSchema,
+})
+export const CompactionRecoverySchema = z.union([ActionCompactionRecoverySchema, NativeCompactionRecoverySchema])
 export type CompactionRecovery = z.infer<typeof CompactionRecoverySchema>
-export function compactionRecovering(recovery: CompactionRecovery | undefined): recovery is CompactionRecovery & { state: Extract<CompactionRecovery["state"], { kind: "retry" | "replace" }> } {
-  return recovery?.state.kind === "retry" || recovery?.state.kind === "replace"
+export function compactionRecovering(recovery: CompactionRecovery | undefined): recovery is CompactionRecovery & { state: Extract<CompactionRecovery["state"], { kind: "retry" | "reconcile" | "replace" }> } {
+  return recovery?.state.kind === "retry" || recovery?.state.kind === "reconcile" || recovery?.state.kind === "replace"
 }
 
 /** Recovery also owns the backlog between a committed replacement and native delivery. */
@@ -258,6 +268,8 @@ export const ConversationControlSchema = z.object({
     .refine(item => !item.decision || sameNativeApproval(item.identity, item.decision.identity), "Native decision belongs to another question")).max(2000).optional(),
   actions: z.array(LiveActionSchema).optional(),
   compactionRecovery: CompactionRecoverySchema.optional(),
+  /** New episodes and phases use a new wire field so older hosts can still read the rest of the journal. */
+  pendingCompactionRecovery: CompactionRecoverySchema.optional(),
   /** What its agent asked the person to let it do through Mako's tools, until they answer (`LiveAsks`). */
   asks: z.array(AgentAskSchema).max(32).optional(),
   merges: z
@@ -305,7 +317,8 @@ export const ConversationControlSchema = z.object({
   activeBindingId: z.string().uuid(),
   bindings: z.array(ProviderBindingSchema),
   transfers: z.array(ContextTransferSchema),
-})
+}).transform(({ pendingCompactionRecovery, ...control }) => pendingCompactionRecovery
+  ? { ...control, compactionRecovery: pendingCompactionRecovery } : control)
 export type ConversationControl = z.infer<typeof ConversationControlSchema>
 
 /** The answer a fork goes on from: a live turn's, the prompt before one, or a saved answer by its place and identity. */

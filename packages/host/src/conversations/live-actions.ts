@@ -214,6 +214,7 @@ export class LiveActions {
     const control = this.host.control(resident)
     action = { ...action, owner: { epoch: this.host.epoch, stop: this.host.stopMark(resident.snapshot.session.id) } }
     resident.snapshot = { ...resident.snapshot, control: { ...control, actions: [...(control.actions ?? []), action] } }
+    this.compactions().record(resident, action)
     try {
       this.host.flush(resident)
     } catch (error) {
@@ -248,7 +249,7 @@ export class LiveActions {
     }
     if (recoveryId) {
       const plan = this.host.control(resident).compactionRecovery
-      if (input.kind !== "compact" || plan?.id !== recoveryId || plan.state.kind !== "retry" || plan.retryActionId !== input.id || plan.bindingId !== this.host.control(resident).activeBindingId)
+      if (input.kind !== "compact" || plan?.id !== recoveryId || plan.origin === "native" || plan.state.kind !== "retry" || plan.retryActionId !== input.id || plan.bindingId !== this.host.control(resident).activeBindingId)
         throw new Error("The compaction recovery no longer owns this retry")
     }
     const driver = resident.driver

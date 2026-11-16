@@ -8,6 +8,7 @@ import { holdForSignIn } from "../contracts/sign-in-hold.js"
 import { hostWarn } from "../base/host-log.js"
 import { errorMessage } from "../base/error-message.js"
 import { drawnWhileOpening, liveUpdateWeight, queueLiveUpdate } from "@mako/sessions/live-content"
+import type { LiveCompactions } from "./live-compactions.js"
 import type { LiveActions } from "./live-actions.js"
 import type { LiveApprovals } from "./live-approvals.js"
 import type { LiveAssets } from "./live-assets.js"
@@ -27,6 +28,7 @@ type EventsAccess = Pick<LiveAccess,
 
 /** The parts a driver's events land in. */
 export interface EventParts {
+  compactions: LiveCompactions
   actions: LiveActions
   approvals: LiveApprovals
   questions: LiveQuestions
@@ -121,7 +123,7 @@ export class LiveEvents {
     const resident = this.access.resident(id)
     // A reconnect may recover retained evidence before the new driver is ready.
     // Its generation-fenced callback and exact saved native occurrence own admission.
-    if (!resident || (!resident.driver && event.type !== "live-approval-decision" && event.type !== "live-question" && event.type !== "live-question-answered")) return
+    if (!resident || (!resident.driver && !pendingCompactSuccess(resident, raw) && event.type !== "live-approval-decision" && event.type !== "live-question" && event.type !== "live-question-answered")) return
     // Opening streams the provider's saved history back; it is not new work.
     const replaying = resident.opening && Boolean(resident.snapshot.base || resident.snapshot.baseSource || resident.snapshot.blocks.length)
     let progressOnly = false
@@ -224,6 +226,10 @@ export class LiveEvents {
                 )
               : request
           ),
+        }
+        if (settling && !replaying && !gone) {
+          const settled = resident.snapshot.requests.find(request => request.id === settling.id)
+          if (settled) this.parts.compactions.automatic(resident, settled)
         }
         if (previousStatus === "running" && !gone) {
           const settled = finishedRequest && resident.snapshot.requests.find((request) => request.id === finishedRequest.id)
@@ -384,12 +390,23 @@ export function driverEvents(
   const residentGeneration = resident.generation
   resident.bindingGenerations.set(bindingId, bindingGeneration)
   return (event) => {
+    if (pendingCompactSuccess(resident, event)) { observe(event); return }
     if (
       resident.generation === residentGeneration &&
       resident.bindingGenerations.get(bindingId) === bindingGeneration
     )
       observe(event)
   }
+}
+
+/** Only an exact native completion may cross cleanup's fence, until its still-owned source is replaced. */
+function pendingCompactSuccess(resident: Resident, event: LiveDriverEvent): boolean {
+  if (event.type !== "live-action-result" || event.result.kind !== "completed") return false
+  const control = resident.snapshot.control, episode = control?.compactionRecovery
+  return Boolean(episode && episode.origin !== "native" && episode.bindingId === event.id && control?.activeBindingId === event.id &&
+    (episode.state.kind === "reconcile" || episode.state.kind === "replace") &&
+    control.actions?.some(action => action.bindingId === event.id && action.input.id === event.actionId &&
+      action.state.kind === "uncertain" && (episode.actionId === action.input.id || episode.retryActionId === action.input.id)))
 }
 
 /**
