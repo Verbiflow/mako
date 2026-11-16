@@ -65,7 +65,7 @@ import { OpenCodeDecoder, openCodeCatalogChange, openCodePluginsActivated, type 
 import { OpenCodeInteractions, openCodeApprovalDigest } from "./interactions.js"
 import { OpenCodeAgents } from "./agents.js"
 import { OpenCodeMcpHealth, openCodeStopped } from "./notices.js"
-import { openCodeCheckpoint, openCodeForkDeclined, inspectOpenCodeSession } from "./resume.js"
+import { openCodeCheckpoint, openCodeForkDeclined, inspectOpenCodeSession, openCodeTurnReader } from "./resume.js"
 import { acpMcpServers } from "../../tools/index.js"
 import { SIDE_QUESTION_ASIDE, untilStopped, withEarlierExchanges } from "../../contracts/live-side-questions.js"
 
@@ -831,6 +831,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       wake: "The next message starts a new `opencode serve` that reopens the session.",
       checkpoint: (path) => openCodeCheckpoint(stores, path),
       inspect: (binding) => inspectOpenCodeSession(stores, binding, probe),
+      readTurn: openCodeTurnReader(stores),
       locate: async (binding, _cwd, env) => binding.nativeId ? locateOpenCodeSession(stores, binding.nativeId, env) : undefined,
       elsewhere: {
         via: "OpenCode's `session.move` to the new folder as the session resumes there; it keeps the folder on the session and runs its tools in it.",

@@ -15,7 +15,7 @@ import type { Advertisement, GatewayFrame, GoingQuietReason, RuntimeFrame } from
 import { RuntimeThreads, type ThreadClaim } from "./runtime-outbox.js"
 import { type SshHandler, type SshSender, SshIncoming } from "./ssh.js"
 import type { SessionsReport } from "./thread-listing.js"
-import { ACTIVITY_VERSION, ADVERTISE_LINK_VERSION, COMPACT_LIVE_VERSION, LEND_LINK_VERSION, MEDIA_VERSION, NUMBERED_LIVE_VERSION, PORTS_VERSION, PROTOCOL_VERSION, QUIET_VERSION, SESSIONS_VERSION, SSH_VERSION, SUPPORTED_VERSIONS } from "./version.js"
+import { ACTIVITY_VERSION, ADVERTISE_LINK_VERSION, COMPACT_LIVE_VERSION, EPHEMERAL_LIVE_VERSION, LEND_LINK_VERSION, MEDIA_VERSION, NUMBERED_LIVE_VERSION, PORTS_VERSION, PROTOCOL_VERSION, QUIET_VERSION, SESSIONS_VERSION, SSH_VERSION, SUPPORTED_VERSIONS } from "./version.js"
 import { WireError } from "./wire-error.js"
 
 export class RuntimeRefusedError extends Error {
@@ -102,6 +102,12 @@ export type ServedRuntime = {
    * One in a live form above 1 (`form`) goes only on version 13 and later, where `watch` said its watchers read it.
    */
   live(conversation: string, event: Payload, numbered?: { n: number; correlationId?: string; form?: LiveForm }): boolean
+  /**
+   * A watched conversation's passing state (a running call's steps), which the gateway relays to its watchers that read
+   * such frames and keeps nothing of (`EPHEMERAL_LIVE_VERSION`); false, and nothing sent, on an older gateway or a
+   * closed link.
+   */
+  ephemeral(conversation: string, event: Payload): boolean
   /**
    * Says the runtime is going away on purpose, before it goes (`going-quiet`, version 8 on): the gateway takes its link
    * as down at once. False on an older gateway, which finds out from the missed heartbeats, or on a closed link.
@@ -373,6 +379,11 @@ export async function serveRuntime(
       if (form !== WHOLE_LIVE_FORM && first.version < COMPACT_LIVE_VERSION) return false
       if (numbered && first.version >= NUMBERED_LIVE_VERSION) link.send({ type: "live", conversation, event, n: numbered.n, ...(numbered.correlationId && { correlationId: numbered.correlationId }), ...(form !== WHOLE_LIVE_FORM && { form }) })
       else link.send({ type: "live", conversation, event })
+      return true
+    },
+    ephemeral: (conversation, event) => {
+      if (first.version < EPHEMERAL_LIVE_VERSION || link.closed) return false
+      link.send({ type: "live", conversation, event, ephemeral: true })
       return true
     },
     goingQuiet: (reason) => {

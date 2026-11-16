@@ -11,7 +11,6 @@ import type { NativeActivityObservation, NativeNotice } from "../contracts/nativ
 import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import {
   compactionEvent,
-  retriesEvent,
   type Compaction,
   type Retries,
   type TranscriptEvent,
@@ -23,6 +22,7 @@ import {
 } from "../contracts/native-decoding.js"
 import { retainUndeclaredTools, retainUnknown, type UnknownReason, type UnknownSeen } from "../base/native-unknown.js"
 import { topic } from "../base/topic.js"
+import { hostLog } from "../base/host-log.js"
 import { frameOf, frameTime } from "./native-stream.js"
 import { liveEffectsStatus } from "@mako/sessions/tool-effect-reading"
 import type { ToolEffects } from "@mako/sessions/tool-effects"
@@ -263,12 +263,6 @@ function answers(update: LiveUpdate): boolean {
   }
 }
 
-/** Whether the failure's own words already say `reason`, so the retries' line leaves it to them. */
-function said(reason: string, failure: readonly (string | undefined)[]): boolean {
-  const words = reason.trim().toLowerCase()
-  return failure.some((text) => text?.toLowerCase().includes(words))
-}
-
 export function createLiveEngine<
   Live extends EngineLive,
 >(hooks: LiveEngineHooks<Live> = {}): LiveEngineApi<Live> {
@@ -300,14 +294,10 @@ export function createLiveEngine<
   }
   const compacting = new WeakMap<Live, Compacting>()
   /**
-   * The provider's retries in progress. They end in one quiet marker:
-   * recovered, when the model answers; given up, when the provider reports
-   * the failure (an error marker, or an error in its state), which says the
-   * failure itself, so the marker keeps only words the failure doesn't. A turn that ends any other
-   * way (a Stop, a process gone) ends them unsaid, its own ending says why.
-   * Every end but the turn's is decoded from the harness's own messages and
-   * measured by the frames' clock, so a replay of the stream draws what the
-   * window drew.
+   * The provider's retries in progress, which the window shows as "Retrying" while they run (`NativeActivity`). They
+   * end in one line of the host's log, never the transcript: recovered, when the model answers, there's nothing left
+   * to say; given up, when the provider reports the failure (an error marker, or an error in its state), the failure
+   * says itself. A turn that ends any other way (a Stop, a process gone) ends them unsaid, its own ending says why.
    */
   const retrying = new WeakMap<Live, Retrying>()
   const retried = (live: Live, observation: Extract<NativeActivityObservation, { kind: "retrying" }>): void => {
@@ -319,14 +309,12 @@ export function createLiveEngine<
     if (reason) next.reason = reason
     retrying.set(live, next)
   }
-  /** `failure`: the words of what the provider gave up on, which say the failure once; the retries' line doesn't repeat them. */
-  const endRetries = (live: Live, outcome: Retries["outcome"] | undefined, failure: readonly (string | undefined)[] = []): void => {
+  const endRetries = (live: Live, outcome: Retries["outcome"] | undefined): void => {
     const held = retrying.get(live)
     if (!held) return
     retrying.delete(live)
     if (!outcome) return
-    const retries: Retries = { count: held.count, outcome, durationMs: Math.max(0, Math.round(clock() - held.since)) }
-    drawEvent(live, retriesEvent(retries, held.reason && !said(held.reason, failure) ? held.reason : undefined))
+    hostLog("live", "a provider's retries ended", { conversation: live.state.id, harness: live.state.harness, outcome, count: held.count, durationMs: Math.max(0, Math.round(clock() - held.since)), ...held.reason && { reason: held.reason } })
   }
   /** Compacting stops when the provider reports something else, or its turn ends; a retry is part of it. */
   const stopCompacting = (live: Live): void => {
@@ -362,7 +350,7 @@ export function createLiveEngine<
   const event = (live: Live, marker: TranscriptEvent, id?: string): void => {
     if (id && repeated(live, id)) return
     // The failure a provider retried and gave up on: its retries are summed up before it.
-    if (marker.tone === "error" || marker.limit) endRetries(live, "gave-up", [marker.label, marker.detail, marker.body])
+    if (marker.tone === "error" || marker.limit) endRetries(live, "gave-up")
     drawEvent(live, marker, id)
   }
   const drawEvent = (live: Live, marker: TranscriptEvent, id?: string, completes = false): void => {
@@ -427,7 +415,7 @@ export function createLiveEngine<
   const patch = (live: Live, change: Partial<LiveSessionState>): void => {
     if (change.status !== undefined && change.status !== "running")
       stopCompacting(live)
-    if (change.error) endRetries(live, "gave-up", [change.error])
+    if (change.error) endRetries(live, "gave-up")
     else if (change.status !== undefined && change.status !== "running") endRetries(live, undefined)
     const next: Partial<LiveSessionState> = { ...change }
     if ("error" in change && !("failureEvidence" in change)) next.failureEvidence = change.error ? { kind: "unknown", source: "host" } : undefined

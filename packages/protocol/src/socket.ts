@@ -18,7 +18,7 @@ import {
   type Subscription,
 } from "./gateway.js"
 import { PING } from "./heartbeat.js"
-import { type LiveForm, WHOLE_LIVE_FORM, readingLiveForm } from "./live-form.js"
+import { EPHEMERAL_PARAM, type LiveForm, WHOLE_LIVE_FORM, readingLiveForm } from "./live-form.js"
 import {
   BinaryMessageSchema,
   type MediaDelivery,
@@ -87,14 +87,15 @@ export function endpointOfTarget(target: Operation["target"]): ClientEndpoint {
  * The gateway's route a client's connection to `endpoint` opens, saying the live form its client reads (`live-form.ts`):
  * every subscription of that connection is sent in it. A client that reads only form 1 says nothing.
  */
-export function clientEndpointPath(endpoint: ClientEndpoint, form: LiveForm = WHOLE_LIVE_FORM): string {
+export function clientEndpointPath(endpoint: ClientEndpoint, form: LiveForm = WHOLE_LIVE_FORM, ephemeral = false): string {
   const path =
     endpoint.kind === "thread"
       ? `/v1/threads/${encodeURIComponent(endpoint.threadId)}/connect`
       : endpoint.kind === "runtime"
         ? `/v1/runtimes/${encodeURIComponent(endpoint.runtimeId)}/clients`
         : `/v1/accounts/${encodeURIComponent(endpoint.accountId)}/connect`
-  return readingLiveForm(path, form)
+  const reading = readingLiveForm(path, form)
+  return ephemeral ? `${reading}${reading.includes("?") ? "&" : "?"}${EPHEMERAL_PARAM}=1` : reading
 }
 
 export function endpointOfStream(stream: StreamId): ClientEndpoint {
@@ -367,6 +368,9 @@ export function clientSessionOverSockets(
             for (const resolve of waiting) resolve(frame.reply)
           } else if (frame.type === "event")
             connection.streams.get(frame.event.stream)?.push(frame.event)
+          // Passing state, no place in the stream: its subscription hands it on marked, so no cursor counts it.
+          else if (frame.type === "ephemeral")
+            connection.streams.get(frame.event.stream)?.push({ ...frame.event, seq: 0, ephemeral: true })
           else if (frame.type === "refused" && frame.stream) {
             connection.streams.get(frame.stream)?.close()
             connection.streams.delete(frame.stream)

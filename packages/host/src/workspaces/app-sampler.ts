@@ -1,4 +1,5 @@
-import type { AppMark } from "../contracts/thread-app.js"
+import { REMOTE_APP_LEASE_MS, type RemoteAppDemand } from "../contracts/remote-app.js"
+import type { AppMark, AppSamplingDemand } from "../contracts/thread-app.js"
 import { SAMPLE_EVERY_MS } from "./app-probe.js"
 import type { AppsLook } from "./environment-tools.js"
 
@@ -14,11 +15,15 @@ const IDLE_MS = 30_000
 const TRACE_MS = SAMPLE_EVERY_MS
 const MEMORY_MS = 30_000
 /**
- * How long a reader's ask keeps the sampler looking. Windows ask for the marks and each followed folder's app every
+ * How long an unopted reader's ask keeps the sampler looking. Windows ask for the marks and each followed folder's app every
  * 30 s while they show them (`thread-app-host.ts`), so a window open keeps it going and a host with none goes quiet:
  * looking with nobody to tell took main's idle host from 1.1–1.4% of a core to 3.5–4.5% (perf proof, 2026-11-12).
  */
 export const WANTED_MS = 90_000
+/** Demand is bounded even if callers keep inventing client identities. */
+const MAX_READERS = 128
+
+type Reader = { kind: "legacy"; until: number } | ({ kind: "window" } & AppSamplingDemand)
 
 interface SamplerDeps {
   look(): Promise<AppsLook>
@@ -29,6 +34,9 @@ interface SamplerDeps {
   /** Every window hears the marks when they change. */
   publish(marks: AppMark[]): void
   now?: () => number
+  /** Event connections that really exist, excluding observers; a payload never supplies its owner. */
+  connection?: (client: string) => string | undefined
+  invalidated?: () => void
 }
 
 /**
@@ -38,8 +46,8 @@ interface SamplerDeps {
  * trace and the memory look ride on the same looks, so the table is read once for all of them, off the host's loop
  * (`childProcessReader`), and only while some run is alive (`ThreadProcesses.tableFor`).
  *
- * `tick` is the one job (`HostJobs.every`, `SAMPLER_TICK_MS`). While someone reads the apps (`wanted`, within
- * `WANTED_MS`) it looks when one is due: at once after anything this host changed (`changed`), every second while an
+ * `tick` is the one job (`HostJobs.every`, `SAMPLER_TICK_MS`). While a visible connection owns demand (`follow`), or
+ * an unopted reader asked within `WANTED_MS`, it looks when one is due: after anything this host changed (`changed`), every second while an
  * app is settling, every four while one runs, and every half minute otherwise. With nobody reading it doesn't look at
  * all; the trace and the memory look run on their own times then, as they did before the sampler. A reader coming
  * back reads afresh (`current`), then hears the pushes.
@@ -54,8 +62,34 @@ export class ThreadAppSampler {
   private dirty = true
   /** Whether a run was alive at the last trace: a trace closes an app's as it stops, so one more runs after the last goes. */
   private tracedAlive = true
-  /** Until when someone reading the apps keeps the sampler looking. */
-  private wantedUntil = Number.NEGATIVE_INFINITY
+  private readonly remote = new Map<string, { conversation: string; generation: number; visible: boolean; until: number }>()
+  /** A remote view's passive lease cannot change any legacy reader or another page's demand. */
+  followRemote(client: string, conversation: string, demand: RemoteAppDemand): boolean {
+    this.prune()
+    const key = JSON.stringify([client, conversation, demand.view])
+    const before = this.remote.get(key)
+    if (before && demand.generation <= before.generation)
+      return demand.generation === before.generation && demand.visible === before.visible
+    if (!before && this.remote.size >= MAX_READERS) return false
+    const wasWatched = this.watched()
+    this.remote.set(key, { conversation, generation: demand.generation, visible: demand.visible, until: this.now() + REMOTE_APP_LEASE_MS })
+    if (demand.visible && !wasWatched) this.dirty = true
+    return true
+  }
+
+  remoteConversations(): ReadonlySet<string> {
+    this.prune()
+    return new Set([...this.remote.values()].filter((reader) => reader.visible).map((reader) => reader.conversation))
+  }
+
+  remoteActive(client: string, conversation: string, view: string): boolean {
+    this.prune()
+    return this.remote.get(JSON.stringify([client, conversation, view]))?.visible === true
+  }
+
+  private readonly readers = new Map<string, Reader>()
+  /** An overflowing legacy read retains the old bounded lease without retaining another identity. */
+  private overflowUntil = Number.NEGATIVE_INFINITY
 
   constructor(deps: SamplerDeps) {
     this.deps = deps
@@ -65,23 +99,73 @@ export class ThreadAppSampler {
   /** Something this host did may have changed the marks: the next tick looks. */
   changed(): void {
     this.dirty = true
+    this.deps.invalidated?.()
   }
 
-  /** Someone reads the apps (a window's marks or a folder's app, the ports): looks go on for `WANTED_MS`. */
-  wanted(): void {
-    this.wantedUntil = this.now() + WANTED_MS
+  /** Legacy reads renew their lease; a connection that opted in owns its demand independently of its data reads. */
+  wanted(client = "legacy"): void {
+    this.prune()
+    if (this.readers.get(client)?.kind === "window") return
+    const until = this.now() + WANTED_MS
+    if (!this.readers.has(client) && this.readers.size >= MAX_READERS) {
+      this.overflowUntil = until
+      return
+    }
+    this.readers.set(client, { kind: "legacy", until })
   }
 
-  /** The marks as last looked at, while someone has been reading them; looked at afresh when nobody had been. */
-  async current(): Promise<AppMark[]> {
-    const fresh = this.last !== undefined && this.watched()
-    this.wanted()
+  /**
+   * Opt in on this connection, including a hidden tombstone that prevents reads renewing its old lease. True accepts
+   * this generation, not receipt of any data; false leaves the caller on its existing behavior (or rejects a stale call).
+   */
+  follow(client: string, demand: AppSamplingDemand): boolean {
+    const connection = this.connection(client)
+    if (!connection || connection !== demand.connection) return false
+    const wasWatched = this.watched()
+    const previous = this.readers.get(client)
+    if (previous?.kind === "window" && demand.generation <= previous.generation)
+      return demand.generation === previous.generation && demand.visible === previous.visible
+    if (!previous && this.readers.size >= MAX_READERS) return false
+    this.readers.set(client, { kind: "window", connection: demand.connection, generation: demand.generation, visible: demand.visible })
+    if (demand.visible && !wasWatched) this.dirty = true
+    return true
+  }
+
+  /** A read-only binding for a real event connection; a client name alone cannot acquire demand. */
+  connection(client: string): string | undefined {
+    return this.deps.connection?.(client)
+  }
+
+  generation(client: string): number {
+    this.prune()
+    const reader = this.readers.get(client)
+    return reader?.kind === "window" ? reader.generation : 0
+  }
+
+  /** A visible return reads afresh; an opted-in hidden reader only reads the held marks, without waking the sampler. */
+  async current(client = "legacy"): Promise<AppMark[]> {
+    this.prune()
+    const reader = this.readers.get(client)
+    if (reader?.kind === "window" && !reader.visible) return this.last?.marks ?? []
+    const fresh = this.last !== undefined && this.watched() && (reader?.kind !== "window" || !this.dirty)
+    this.wanted(client)
     if (!fresh) await this.sample()
     return this.last?.marks ?? []
   }
 
   private watched(): boolean {
-    return this.now() < this.wantedUntil
+    this.prune()
+    if (this.now() < this.overflowUntil) return true
+    for (const reader of this.remote.values()) if (reader.visible) return true
+    for (const reader of this.readers.values()) if (reader.kind === "legacy" || reader.visible) return true
+    return false
+  }
+
+  private prune(): void {
+    const now = this.now()
+    for (const [key, reader] of this.remote) if (now >= reader.until) this.remote.delete(key)
+    for (const [client, reader] of this.readers)
+      if (reader.kind === "legacy" ? now >= reader.until : this.connection(client) !== reader.connection) this.readers.delete(client)
   }
 
   /** The job's wake: looks if one is due, and runs the trace and the memory look when theirs are. */

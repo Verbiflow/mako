@@ -249,6 +249,18 @@ function controlEffect(command: JsonObject): string | undefined {
       return undefined
   }
 }
+/** How a running cell's steps name any control call, reads too: "activate e12", "screenshot", "record start". */
+function controlStep(command: JsonObject): string {
+  const effect = controlEffect(command)
+  if (effect) return effect
+  switch (command.action) {
+    case "page":
+    case "native":
+      return namedCallSchema.safeParse(command).data?.name ?? String(command.action)
+    default:
+      return String(command.action)
+  }
+}
 /** Keys the driver repeats in every window-state result that agents rarely need. */
 const VERBOSE_WINDOW_STATE_KEYS = ["tree_markdown", "_note"]
 /**
@@ -3224,6 +3236,7 @@ export function createControlSession(
       },
       image: computerProgramImage,
       effect: unified ? controlEffect : undefined,
+      step: unified ? controlStep : undefined,
       fault: (detail) =>
         new ControlFault(detail.code, detail.message, detail.outcome),
     })

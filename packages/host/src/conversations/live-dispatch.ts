@@ -12,7 +12,8 @@ import { nativePromptReference } from "../contracts/native-prompt-identity.js"
 import { advancePromptDelivery, type PromptDelivery, type PromptDeliveryEvidence } from "../contracts/prompt-delivery.js"
 import { failureAfterRetry, transientCause, waitsAgain } from "../contracts/delivery-retry.js"
 import { nextInLine } from "../contracts/request-hold.js"
-import { ASK_EVERY_MS, DIGEST_WAITS, WAKES_PER_MINUTE } from "../contracts/children.js"
+import { ASK_EVERY_MS, DIGEST_WAITS, WAKES_PER_MINUTE, DIGEST_RESTART_HINT } from "../contracts/children.js"
+import type { NativePromptIdentityCapability } from "../contracts/native-prompt-identity.js"
 import { classifyProviderFailure, failureEvidenceOf } from "../contracts/provider-failure.js"
 import { SessionBusyError } from "../contracts/session-hold.js"
 import { holdForSignIn } from "../contracts/sign-in-hold.js"
@@ -27,7 +28,7 @@ import type { LiveAccess, Resident } from "./live-runtime.js"
 import type { LiveTransfers } from "./live-transfers.js"
 import { baseUnread } from "./base-source.js"
 import { turnStart, usageMark } from "./live-settlement.js"
-import { captureNativeHistory, transcriptHolds } from "./native-history.js"
+import { captureNativeHistory, transcriptHolds, digestReceipt } from "./native-history.js"
 import type { ConversationControl } from "../contracts/conversation-control.js"
 import { continueTurnPrompt } from "../contracts/turn-continuation.js"
 import type { ThreadPage } from "@mako/sessions"
@@ -50,21 +51,28 @@ export function nextQueued(snapshot: Pick<LiveSnapshot, "session" | "requests">)
 /**
  * Whether the harness's own transcript shows the Fin's brief `briefId` (`transcriptHolds`): under the message id it
  * was sent with, where the harness keeps that, or by its "You're fin:" line, which the brief sent again carries too. A
- * digest is known by its id alone.
- * False when its session has no transcript, or one Mako can't read.
+ * digest is known by native identity alone. Missing or unreadable evidence is unknown, never non-receipt.
  */
-async function briefInTranscript(snapshot: LiveSnapshot, control: ConversationControl, briefId: string, history: (path: string, before?: number) => Promise<ThreadPage | null>): Promise<boolean> {
+async function briefInTranscript(snapshot: LiveSnapshot, control: ConversationControl, briefId: string, history: (path: string, before?: number) => Promise<ThreadPage | null>, identity: (provider: string) => NativePromptIdentityCapability | undefined): Promise<"present" | "absent" | "unknown"> {
   const brief = snapshot.requests.find((request) => request.id === briefId)
   const bindingId = brief?.nativeDelivery?.bindingId ?? control.activeBindingId
-  const path = control.bindings.find((binding) => binding.id === bindingId)?.path
-  if (!brief || !path) return false
+  const binding = control.bindings.find((binding) => binding.id === bindingId)
+  const path = binding?.path
+  const capability = binding && identity(binding.provider)
+  if (!brief) return "unknown"
+  if (brief.digest) {
+    const known = digestReceipt(null, binding, brief, capability)
+    if (known !== "unknown") return known
+  }
+  if (!path) return "unknown"
   const page = await captureNativeHistory(path, history).catch((error) => {
     hostWarn("live", "a harness's transcript couldn't be read to see whether it had a Fin's brief", { conversation: snapshot.session.id, error: errorMessage({ error }) })
     return null
   })
   // A digest has no line of its own: any of them could be in what the Thread was told before, so only its id proves it.
   const marker = brief.digest ? "" : brief.text.split("\n").find((line) => line.includes("You're fin:")) ?? ""
-  return page ? transcriptHolds(page.entries, { attemptId: brief.nativeDelivery?.attemptId, marker }) : false
+  return brief.digest ? digestReceipt(page, binding, brief, capability)
+    : page && transcriptHolds(page.entries, { attemptId: brief.nativeDelivery?.attemptId, marker }) ? "present" : "unknown"
 }
 
 type DispatchAccess = Pick<LiveAccess,
@@ -381,9 +389,11 @@ export class LiveDispatch {
         if (review) return review.run(active, review.target, request.tuning, dispatch)
         // A Fin's brief carried again: a Continue goes in its place when the harness's own transcript shows the brief.
         // Read now, in its place in the queue, and sent through the same handoff and Stop as any message.
-        const words = request.continues?.brief && await briefInTranscript(resident.snapshot, this.access.control(resident), request.continues.brief, dependencies.history)
-          ? continueTurnPrompt("host-crashed", "mako")
-          : request.text
+        const sourceBrief = request.continues?.brief ? resident.snapshot.requests.find(item => item.id === request.continues!.brief) : undefined
+        const receipt = sourceBrief ? await briefInTranscript(resident.snapshot, this.access.control(resident), sourceBrief.id, dependencies.history, provider => dependencies.driver(provider)?.nativePromptIdentity) : undefined
+        const words = sourceBrief?.digest && receipt !== "absent"
+          ? `${continueTurnPrompt("host-crashed", "mako")}\n\n${DIGEST_RESTART_HINT}`
+          : receipt === "present" ? continueTurnPrompt("host-crashed", "mako") : request.text
         // A continuation says what moved since the cut, read here too, so nothing crosses the read (`TurnContinuation.since`).
         const since = request.continues?.since
         const moved = since !== undefined ? await cutAccount(cwd, since, request.continues!.reason, Date.now()).catch(() => undefined) : undefined
@@ -442,7 +452,12 @@ export class LiveDispatch {
             this.access.flush(resident)
           } catch (failure) {
             this.access.storageFailed(resident, { error: failure })
+            return
           }
+          // A canceled one is out of the line, and what waited behind it goes now: no turn is running to drain it at
+          // its end, so a Fin read as working for hours with its Apex's messages queued behind a canceled note
+          // (send-modes, 2026-11-15). One held keeps its place, and the ones behind it wait with it.
+          if (status === "canceled") this.drain(resident)
           return
         }
         const session = resident.snapshot.session

@@ -9,7 +9,7 @@ import type { Git } from "@mako/git"
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
 import type { Admission } from "../base/admission.js"
-import { readPull } from "../git/index.js"
+import { readPull, RequiredChecks } from "../git/index.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { HostEnvironment } from "../base/host-environment.js"
 import type { HostMethods } from "../transport/index.js"
@@ -360,6 +360,8 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     projects: join(environment.userRoot, "projects"),
     known: () => [...(threads.store?.worktrees().map((worktree) => worktree.repoRoot) ?? []), ...live.summaries().flatMap((summary) => summary.session.cwd ?? [])],
   })
+  // The checks each repository's branches require, read once and kept: a pull request wait settles only once they ran.
+  const requiredChecks = new RequiredChecks()
   if (threads.store) {
     agents = new Agents({
       store: () => threads.store ?? undefined,
@@ -418,7 +420,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       finCeiling: () => deps.finDefaults?.reading().ceiling ?? FIN_CEILING,
       capacity: new MacCapacity(),
       heldPulls: (repoRoot, branch) => workspaces.worktrees?.heldPulls(repoRoot, branch) ?? [],
-      readPull: (target) => readPull(target),
+      readPull: (target) => readPull(target, undefined, requiredChecks),
       ...(away && { away }),
       remoteOf: (cwd) => deps.git.output(cwd, ["remote", "get-url", "origin"]).then((text) => text.trim() || undefined, () => undefined),
       checkoutOf: (remote) => checkouts.find(remote),
@@ -673,6 +675,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     return rewound
   })
   methods.handle("mako:live-rewind-recover", () => live.recoverRewinds())
+  methods.handle("mako:live-prompt-versions", (id: string) => live.promptVersions(id))
   methods.handle("mako:live-action", (id: string, input: LiveActionInput) => live.act(id, input))
   // A separate method advertises atomic queued steering to clients whose UI
   // can update while the shared host remains alive. Keep live-action for

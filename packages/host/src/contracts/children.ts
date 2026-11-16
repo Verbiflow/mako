@@ -23,6 +23,23 @@ export const WAKES_PER_MINUTE = 6
 export const ASK_EVERY_MS = 10_000
 /** An idle Apex waits this long after a notice for the others of its burst, then wakes once for all of them. */
 export const WAKE_COALESCE_MS = 2_000
+/**
+ * A Fin that reads as working with nothing from it this long (no output, no step, no report) is named to its Apex once,
+ * in its digest (`QuietWatch`): a hung turn otherwise reads as working until the person asks. A command that runs this
+ * long makes no activity either, so the notice names it and the Apex decides.
+ */
+export const QUIET_MS = 15 * 60_000
+
+/** A quiet Fin as its Apex's digest says it: how long nothing came of it, and its last step, still running or not. */
+export function quietLine(quiet: { forMs: number; step?: string; running?: true }): string {
+  const forWords = stoodFor(quiet.forMs)
+  const how = !quiet.step
+    ? `has shown no activity for ${forWords}`
+    : quiet.running
+      ? `has shown no activity for ${forWords}, its last step still running: ${quiet.step}`
+      : `has shown no activity for ${forWords} since its last step: ${quiet.step}`
+  return `${how}. It still reads as working.`
+}
 
 export const FROM_AGENTS = `[mako · from ${YOUR_FINS}, not the person]`
 /**
@@ -644,3 +661,4 @@ export function childWord(state: ChildState): string {
       return state.outcome === "done" ? (state.decision?.on === "person" ? DONE_NEEDS_YOU : "Done") : state.outcome === "failed" ? "Failed" : "Stopped"
   }
 }
+export const DIGEST_RESTART_HINT = "Fin reports may have arrived around the restart; agents_list shows each Fin's latest."

@@ -125,8 +125,10 @@ export class LiveEvents {
     // Opening streams the provider's saved history back; it is not new work.
     const replaying = resident.opening && Boolean(resident.snapshot.base || resident.snapshot.baseSource || resident.snapshot.blocks.length)
     let progressOnly = false
-    if (showsActivity(event, resident.snapshot.session.status, replaying))
+    if (showsActivity(event, resident.snapshot.session.status, replaying)) {
       resident.activityAt = Date.now()
+      dependencies.agents?.()?.active?.(id)
+    }
     if (event.type === "live-session") {
       const previousStatus = resident.snapshot.session.status
       const usageBefore = usageMark(resident.snapshot.session.usage)

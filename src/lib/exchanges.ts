@@ -1,4 +1,5 @@
 import type { Block, ChatMessage } from "@/lib/types"
+import { TURN_FAILED } from "@mako/sessions/events"
 import { mergeMedia, type MediaCandidate } from "@mako/sessions/turn-media"
 import { textOf } from "@/lib/format"
 import { causeWords, eventLabel, foldLimitMoves } from "@/lib/transcript-events"
@@ -198,6 +199,16 @@ export function notesBesideContinuations(notes: readonly ExchangeNote[], respons
     const next = response[note.after]
     return !isInterruptedNote(note.message) || next?.role !== "user" || Boolean(next.steeringFor)
   })
+  return kept.length === notes.length ? notes : kept
+}
+
+/**
+ * The notes a turn shows when it ends on its failure row: the row says why it stopped, what to do, and the provider's
+ * words behind Details, so the provider's own "Turn failed" marker would say it a second time, in raw words.
+ */
+export function notesBesideFailure(notes: readonly ExchangeNote[], failed: boolean): readonly ExchangeNote[] {
+  if (!failed) return notes
+  const kept = notes.filter((note) => note.message.note?.label !== TURN_FAILED)
   return kept.length === notes.length ? notes : kept
 }
 

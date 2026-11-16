@@ -36,9 +36,9 @@ export function ExchangeFailure({ requestId }: { requestId?: string }) {
 /**
  * A turn that ended on an error a transcript recorded, with no live request
  * behind it to recover: the outcome in one line, named by the same rules a
- * live failure is (`describeProviderFailure`), or the provider's own first
- * line when no rule knows it; what to do, when a rule says; the provider's
- * whole words behind Details.
+ * live failure is (`describeProviderFailure`), "did not finish this turn"
+ * when its typed verdict is unknown; what to do, when a verdict says;
+ * the provider's words only behind Details, never as the line itself.
  */
 export function TurnError({ error, failure: failureKind }: { error: string; failure?: ProviderFailureKind }) {
   const [open, setOpen] = useState(false)
@@ -54,7 +54,7 @@ export function TurnError({ error, failure: failureKind }: { error: string; fail
     <div role="alert" data-event-error={failure.kind} className="flex items-start gap-2 text-ui">
       <CircleAlertIcon aria-hidden className="mt-[3px] size-3.5 shrink-0 text-negative" />
       <div className="min-w-0 flex-1">
-        <p className="text-foreground">{known ? failure.title : error.trim().split("\n", 1)[0]}</p>
+        <p className="text-foreground">{failure.title}</p>
         {known ? <p className="text-muted-foreground">{failure.guidance}</p> : null}
         <DetailsToggle className="-ml-1.5" open={open} onToggle={() => setOpen((value) => !value)} />
         <Collapse open={open}>
