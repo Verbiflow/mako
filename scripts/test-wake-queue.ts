@@ -47,6 +47,7 @@ interface Entry { id: string; text: string; notices: Notice[]; lines?: readonly 
 
 /** One Apex conversation as the queue would hold it, and every call the producer made. */
 function fakes(ready: () => ParentReady, now: () => number, steer: (text: string) => Promise<boolean> | false = () => false, current: (notice: Notice) => boolean = () => true) {
+  const counted = { line: "1 working" }
   const entries: Entry[] = []
   const delivered: string[] = []
   const unsent = () => entries.filter((entry) => entry.sent === undefined && !entry.canceled)
@@ -67,11 +68,11 @@ function fakes(ready: () => ParentReady, now: () => number, steer: (text: string
     steer: (_conversation, _id, text) => steer(text),
     assign: () => {},
     delivered: (reports) => delivered.push(...reports),
-    counts: () => "1 working",
+    counts: () => counted.line,
     current,
     now,
   }
-  return { entries, delivered, deps, open: () => unsent().at(-1) }
+  return { entries, delivered, deps, counted, open: () => unsent().at(-1) }
 }
 
 let reports = 0
@@ -225,6 +226,29 @@ try {
     settle(true)
     await pause(0)
     assert.equal(digest.canceled, undefined, "the steered digest isn't rewritten: the journal's steer took it")
+    wakes.dispose()
+  }
+  {
+    // The tree moved since the last notice (a Fin's state, so the counts line), with no notice of its own: the focus steer
+    // still goes, with the digest's words said as the tree stands now and stored first, since the journal's steer takes
+    // only a queued message's exact words (`steer-queued` refuses one that changed).
+    const steered: { request: string; text: string }[] = []
+    const f = fakes(() => "steer", () => 5_000_000, () => Promise.resolve(true))
+    const wakes = new AgentWakes({
+      ...f.deps,
+      focusMs: 50,
+      steerQueued: (_conversation, _id, request, text) => {
+        const queued = f.entries.find((entry) => entry.id === request)!
+        if (queued.text !== text) return Promise.resolve(false)
+        steered.push({ request, text })
+        return Promise.resolve(true)
+      },
+    })
+    wakes.notice("apex", "", notice())
+    f.counted.line = "0 working, 1 ended."
+    await pause(120)
+    assert.equal(steered.length, 1, "the digest is steered, not refused for words the tree's change made stale")
+    assert.match(steered[0]!.text, /0 working, 1 ended\./, "said as the tree stands now")
     wakes.dispose()
   }
   {

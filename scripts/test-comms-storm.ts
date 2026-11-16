@@ -31,7 +31,7 @@ const AFTER_MS = 20_000
 /** The shortest stretch of a turn that counts as time to think, uninterrupted. */
 const THINK_MS = 10_000
 
-type Invariant = "apexSteersPerMinute" | "apexThinkShare" | "apexTurnsPerMinuteAfter" | "resultWaitMaxMs" | "finBacklogTurns"
+type Invariant = "apexSteersPerMinute" | "apexThinkShare" | "apexTurnsAfter" | "resultWaitMaxMs" | "finBacklogTurns"
 type Bound = { max: number } | { min: number }
 interface Measure { name: Invariant; value: number; target: string; ok: boolean }
 
@@ -40,8 +40,12 @@ const INVARIANTS = {
   apexSteersPerMinute: { max: 1 },
   /** The share of the Apex's running turn spent in uninterrupted stretches of at least `THINK_MS`. */
   apexThinkShare: { min: 0.8 },
-  /** Turns the Apex takes per minute once its own turn ends, while the storm's results arrive. */
-  apexTurnsPerMinuteAfter: { max: 3 },
+  /**
+   * Turns the Apex takes in the `AFTER_MS` once its own turn ends: the storm's results should be one digest, one turn.
+   * Two leaves room for a straggler a slow runner finishes after the turn ends, which goes as a digest of its own; a
+   * rate over 20 s read one turn as 3 a minute, at its limit (CI, 2026-11-16).
+   */
+  apexTurnsAfter: { max: 2 },
   /** The longest any Fin's result waits between its report and the Apex hearing it, in ms. */
   resultWaitMaxMs: { max: APEX_TURN_MS + 5_000 },
   /** Turns a Fin takes, once its long turn ends, to hear what its Apex, the person and Mako left it meanwhile. */
@@ -119,7 +123,7 @@ async function interruption(): Promise<void> {
     for (let index = 1; index < cuts.length; index += 1) if (cuts[index]! - cuts[index - 1]! >= THINK_MS) thinking += cuts[index]! - cuts[index - 1]!
     record("apexThinkShare", thinking / (ended - began))
     const apexTurns = world.prompts.filter((prompt) => prompt.conversation === apex.conversation && prompt.at > ended && prompt.at <= ended + AFTER_MS)
-    record("apexTurnsPerMinuteAfter", apexTurns.length / (AFTER_MS / 60_000))
+    record("apexTurnsAfter", apexTurns.length)
     // Each part's result: when the Apex first heard it, by a turn or a steer.
     const heard = [...world.prompts.filter((prompt) => prompt.conversation === apex.conversation), ...world.steers.filter((steer) => steer.conversation === apex.conversation)]
       .filter((entry) => entry.text.includes(FROM_AGENTS))

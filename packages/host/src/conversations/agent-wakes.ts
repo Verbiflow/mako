@@ -301,7 +301,14 @@ export class AgentWakes {
       // The digest itself goes into the turn, taken from the queue in the journal's one write; what arrives meanwhile
       // starts a digest of its own, and one the harness refuses stays queued for the turn's end.
       this.focusing.add(open.id)
-      const took = this.deps.steerQueued(conversation, namedUuid(`steer:focus:${open.id}`), open.id, this.words(conversation, open.notices, open.lines ?? []))
+      // Said as the tree stands now, and stored so first: the steer takes the queued words exactly as they are, so the
+      // digest is rewritten with these before it goes (a Fin that moved since the last notice changed the counts).
+      const text = this.words(conversation, open.notices, open.lines ?? [])
+      if (!this.deps.rewrite(conversation, open.id, text, open.notices, open.lines ?? [])) {
+        this.focusing.delete(open.id)
+        return
+      }
+      const took = this.deps.steerQueued(conversation, namedUuid(`steer:focus:${open.id}`), open.id, text)
       if (!took) {
         this.focusing.delete(open.id)
         return
