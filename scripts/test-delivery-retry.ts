@@ -11,6 +11,7 @@ import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { AgentsWorld, HARNESSES, TESTED_HARNESSES, type Script } from "./lib/agents-world.ts"
 import { providerOutageControls } from "./lib/provider-outage-controls.ts"
+import { transientInterruptionControls, heldWakeLogControls } from "./lib/transient-interruption-controls.ts"
 import { usageResetControls } from "./lib/usage-reset-controls.ts"
 
 /**
@@ -140,6 +141,8 @@ async function goesOnce(world: AgentsWorld, conversation: string, words: string,
 }
 
 try {
+  await transientInterruptionControls(root)
+  await heldWakeLogControls(root)
   await usageResetControls(root)
   await providerOutageControls(root)
   // The policy: waits grow and repeat at ten minutes, so a usage limit is waited out; a session open elsewhere, half an hour.

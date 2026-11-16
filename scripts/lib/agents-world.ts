@@ -80,6 +80,7 @@ export interface ScriptedTurn {
  * these words.
  */
 export interface ScriptedEnd {
+  lastStop?: string
   limit?: UsageLimit
   fail?: string
   failureEvidence?: ProviderFailureEvidence
@@ -675,7 +676,7 @@ export class AgentsWorld {
           emit({ type: "live-update", id: binding, update: { kind: "text", text: reply } })
           if (end.limit) emit({ type: "live-update", id: binding, update: { kind: "event", label: "Rate limited", detail: "Reached your usage limit", tone: "warning", limit: end.limit } })
           const ended = { ...(this.live.snapshot(id)?.session ?? session), id: binding }
-          emit({ type: "live-session", session: end.fail ? { ...ended, status: "failed", lastStop: "failed", error: end.fail, failureEvidence: end.failureEvidence ?? providerTextEvidence(end.fail) } : { ...ended, status: "ready", failureEvidence: undefined } })
+          emit({ type: "live-session", session: end.fail ? { ...ended, status: "failed", lastStop: end.lastStop ?? "failed", error: end.fail, failureEvidence: end.failureEvidence ?? providerTextEvidence(end.fail) } : { ...ended, status: "ready", lastStop: undefined, error: undefined, failureEvidence: undefined } })
         })()
         this.running.add(turn)
         void turn.finally(() => this.running.delete(turn))
