@@ -1,5 +1,3 @@
-import { inSlices } from "@mako/sessions/slices"
-import { summaryRows, summaryTips, summaryChanges } from "./worktree-summary-rows.js"
 import { createHash, randomUUID } from "node:crypto"
 import { existsSync } from "node:fs"
 import { mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises"
@@ -372,7 +370,7 @@ export class ThreadWorktreeService {
   private readonly summaryWatches = new Map<string, GitDirWatch>()
   /** Who hears the summaries when they change (the windows); without one, an event only marks the worktree. */
   private summaryListener: ((summaries: WorktreeSummary[]) => void) | undefined
-  private summariesSaid: readonly string[] | undefined
+  private summariesSaid = ""
   private summaryTimer: NodeJS.Timeout | undefined
   private summaryTimerAt = 0
   private lastPullsOf: PullsOf | undefined
@@ -916,14 +914,15 @@ export class ThreadWorktreeService {
       const held = this.heldSummaries.get(worktree.path)
       return held ? [held.summary] : []
     })
-    await this.sayIfChanged(summaries)
+    this.sayIfChanged(summaries)
     return summaries
   }
 
-  private async sayIfChanged(summaries: WorktreeSummary[]): Promise<void> {
-    const { said, changed } = await inSlices(summaryRows(summaries, this.summariesSaid))
+  private sayIfChanged(summaries: WorktreeSummary[]): void {
+    const said = JSON.stringify(summaries)
+    if (said === this.summariesSaid) return
     this.summariesSaid = said
-    if (changed) this.summaryListener?.(summaries)
+    this.summaryListener?.(summaries)
   }
 
   /** Watches each listed worktree's Git directory and each repository's, and lets go of the rest. */
@@ -1088,7 +1087,7 @@ export class ThreadWorktreeService {
       this.heldSummaries.set(worktree.path, { summary, at: now, index, refs: summaryRefs(worktree, await factsOf(worktree.repoRoot)) })
       return summary
     })
-    await this.sayIfChanged(summaries)
+    this.sayIfChanged(summaries)
     return summaries
   }
 
@@ -1111,7 +1110,11 @@ export class ThreadWorktreeService {
       read(["for-each-ref", "--format=%(objectname) %(refname:short)", "refs/heads"]).catch(() => ""),
       this.starts.point(repoRoot, false).catch(() => null),
     ])
-    const tips = await inSlices(summaryTips(refs))
+    const tips = new Map<string, string>()
+    for (const line of refs.split("\n")) {
+      const space = line.indexOf(" ")
+      if (space > 0) tips.set(line.slice(space + 1), line.slice(0, space))
+    }
     return { into, tips, point }
   }
 
@@ -1218,7 +1221,7 @@ export class ThreadWorktreeService {
       path: worktree.path,
       into: into || null,
       ahead,
-      changes: await inSlices(summaryChanges(status)),
+      changes: status ? status.split("\n").length : 0,
       landing: squashedThere ? { kind: "merged", into: landing.into } : landing,
       pull,
       behind: behind && { from: behind.from, commits: behind.commits },
