@@ -67,7 +67,7 @@ const BAR_TONE = {
   done: "bg-positive/70",
 } satisfies Record<ChildGroup, string>
 
-type CrewRow =
+export type CrewRow =
   | { kind: "heading"; group: ChildGroup; count: number }
   | { kind: "child"; agent: NativeAgent; group: ChildGroup }
   | { kind: "settled"; done: number; idle: number; open: boolean }
@@ -80,7 +80,7 @@ const SETTLED: ReadonlySet<ChildGroup> = new Set(["idle", "done"])
  * as one "24 done · 1 idle" line, their groups under it once it's open. A done Fin with a decision still open, its
  * Apex's to make, is never folded: it stays listed under its own Done heading.
  */
-function buildRows(children: readonly NativeAgent[], settledOpen: boolean): CrewRow[] {
+export function buildRows(children: readonly NativeAgent[], settledOpen: boolean): CrewRow[] {
   const live: CrewRow[] = []
   const settled: CrewRow[] = []
   const counts = { done: 0, idle: 0 }
@@ -487,7 +487,7 @@ function LimitNoticeRow({ apex, ask, compact }: { apex: string; ask: PersonAsk; 
 }
 
 /** The settled Fins, folded: "24 done · 1 idle", which opens their list and closes it again. */
-function SettledLine({ row, onToggle }: { row: Extract<CrewRow, { kind: "settled" }>; onToggle: () => void }) {
+export function SettledLine({ row, onToggle }: { row: Extract<CrewRow, { kind: "settled" }>; onToggle: () => void }) {
   const words = [row.done ? `${row.done} done` : "", row.idle ? `${row.idle} idle` : ""].filter(Boolean).join(" · ")
   return (
     <button
@@ -616,12 +616,13 @@ function CrewCardBody({
           {rollupLine(counts)}
         </span>
         <CrewBar counts={counts} className={compact ? "w-14" : "w-24"} />
-        {!compact && stoppable ? (
+        {stoppable ? (
           <button
             type="button"
             onClick={stopAll}
             title={`Stop ${finsWord(stoppable)} under ${apexTitle}; the ${APEX_WORD} keeps running`}
-            className="pressable flex h-7 shrink-0 items-center gap-1.5 px-2 text-label text-faint hover:bg-fill-hover hover:text-foreground"
+            data-stop-all
+            className={cn("pressable flex shrink-0 items-center gap-1.5 px-2 text-label text-faint hover:bg-fill-hover hover:text-foreground", compact ? "h-9" : "h-7")}
           >
             <SquareIcon className="size-2.5 fill-current" aria-hidden />
             Stop all

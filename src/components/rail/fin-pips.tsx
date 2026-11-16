@@ -54,8 +54,8 @@ export const ApexCrewLine = memo(function ApexCrewLine({ thread }: { thread: str
   )
 })
 
-/** Beside the pips: how many Fins, and the done and idle ones the pips leave out. */
-function settledWords(pips: Pips): string {
+/** Beside the pips: how many Fins, and the done and idle ones the pips leave out. The desk's rail and the phone's list say it alike. */
+export function settledWords(pips: Pips): string {
   const { done, idle, total } = pipsCounts(pips)
   if (done + idle === 0 || done + idle === total) return finsWord(total)
   return [finsWord(total), done ? `${done} done` : "", idle ? `${idle} idle` : ""].filter(Boolean).join(" · ")
