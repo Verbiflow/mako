@@ -442,7 +442,12 @@ export class LiveDispatch {
             this.access.flush(resident)
           } catch (failure) {
             this.access.storageFailed(resident, { error: failure })
+            return
           }
+          // A canceled one is out of the line, and what waited behind it goes now: no turn is running to drain it at
+          // its end, so a Fin read as working for hours with its Apex's messages queued behind a canceled note
+          // (send-modes, 2026-11-15). One held keeps its place, and the ones behind it wait with it.
+          if (status === "canceled") this.drain(resident)
           return
         }
         const session = resident.snapshot.session

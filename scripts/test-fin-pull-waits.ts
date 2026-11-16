@@ -675,6 +675,26 @@ console.log("engine: watched from reports, rebuilt on start, pruned on stop; the
       await world.close()
     }
 
+    // A note refused at its handoff with a message queued behind it: the message still goes. The drain that refused the
+    // note went no further, and with no turn running nothing drained the queue again, so a Fin stood "working" for
+    // hours with its Apex's messages queued behind a canceled note (send-modes, 2026-11-15).
+    {
+      const { world, apex, fin, notes, supersede } = await waiting("withdrawn-then-queued")
+      const sent = await world.agents.send(apex.caller, { to: "one", text: "busy: look at the flaky test", clientKey: "busy" })
+      assert.ok(!("refused" in sent))
+      await until("the Fin to be busy", () => world.live.session(fin.conversation)?.status === "running")
+      await world.agents.pulls.tick()
+      await supersede("moved-on")
+      const after = await world.agents.send(apex.caller, { to: "one", text: "next: the queued instruction", clientKey: "next" })
+      assert.ok(!("refused" in after))
+      world.release(fin.conversation)
+      await world.settle(300)
+      assert.deepEqual(notes(), [], "the refused note isn't sent")
+      assert.ok(world.prompts.some((prompt) => prompt.conversation === fin.conversation && prompt.text.includes("next: the queued instruction")), "the message queued behind it goes")
+      assert.equal(world.live.held(fin.conversation)?.requests.filter((request) => request.status === "queued").length, 0, "nothing is left queued")
+      await world.close()
+    }
+
     // Reports in one millisecond keep the order they were taken in, whatever their ids say, read live and after a
     // restart: "supersede" and "a" both sort before "wait", and each was taken after it.
     {
