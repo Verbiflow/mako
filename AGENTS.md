@@ -1662,7 +1662,9 @@ host holds in memory is read where it lies (`ThreadHistoryDeps.cold`, a
 `ColdJournal` closed once read, one still being let go of included), a
 session's record paged newest first as its viewer pages it (`recordWindow`),
 never read whole, its turns counted once a page at a time into a tiny index kept
-per record (`RECORD_INDEXES`, one number a page, counted on only where it grew),
+per record (`RECORD_INDEXES`, one number a page and what `opensTurn` reads of
+its last prompt, with the view it was counted from: counted on only where an
+append extends that view, again after a rewrite, `extendsView`),
 so a later search parses its window and two pages more; the cache of records read
 whole keeps none past `OPENED_RECORD_CHARS`. At most `SEARCH_CHARS`
 (4M characters) a call, newest turns first and whole, numbered as `read`

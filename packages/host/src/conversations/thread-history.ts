@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
-import { exceeds, opensTurn, PAYLOAD_LIMITS, previewLines, PROSE_LIMITS, steeredMessages, steersShown, type Thread, type ThreadRef } from "@mako/sessions"
+import { exceeds, opensTurn, PAYLOAD_LIMITS, previewLines, PROSE_LIMITS, steeredMessages, steersShown, type Thread, type ThreadPage, type ThreadRef } from "@mako/sessions"
 import { attachmentDescription, describeToolDetails } from "@mako/sessions/content"
 import type { Entry } from "@mako/sessions/entries"
 import type { LiveSnapshot, LiveSummary } from "../contracts/live-conversations.js"
@@ -193,11 +193,12 @@ export interface ThreadHistoryTools {
 export function threadHistoryTools(deps: ThreadHistoryDeps): ThreadHistoryTools {
   const opened = new Map<string, { stamp: string; chars: number; thread: Promise<Thread | null> }>()
   /**
-   * Each searched record's turn openers, counted a chunk of `RECORD_CHUNK` entries at a time: the count, and its last
-   * entry when that's a prompt (the next chunk's first opener depends on it). Numbers, no entries kept but those; a
-   * record that grew keeps its whole chunks and counts on, one that shrank is counted again.
+   * Each searched record's turn openers, counted a chunk of `RECORD_CHUNK` entries at a time: the count, and what
+   * `opensTurn` reads of its last entry when that's a prompt (`PromptMark`, which the next chunk's first opener depends
+   * on), with the view it was counted from (`ViewIdentity`). Numbers only. A record whose view extends the counted one
+   * (an append) keeps its whole chunks and counts on; one rewritten (compacted, restored, decoded again) is counted again.
    */
-  const indexes = new Map<string, { total: number; chunks: { opens: number; last: Entry | undefined }[] }>()
+  const indexes = new Map<string, { total: number; view: ViewIdentity; chunks: { opens: number; last: PromptMark | undefined }[] }>()
 
   /** Entries `[from, to)` of a native record, a page at a time, as its viewer pages it; null when it can't be read. */
   async function entriesOf(path: string, from: number, to: number): Promise<Entry[] | null> {
@@ -213,24 +214,26 @@ export function threadHistoryTools(deps: ThreadHistoryDeps): ThreadHistoryTools 
   }
 
   /** A record's turn openers by chunk, counting only what it doesn't hold yet, giving way to the host between chunks. */
-  async function recordIndex(path: string, total: number) {
+  async function recordIndex(path: string, head: ThreadPage) {
+    const total = head.total
+    const view = identityOf(head)
     let index = indexes.get(path)
     indexes.delete(path)
-    if (index && index.total > total) index = undefined
+    if (index && !extendsView(index, view, total)) index = undefined
     const chunks = index ? index.chunks.slice(0, Math.floor(index.total / RECORD_CHUNK)) : []
     for (let from = chunks.length * RECORD_CHUNK; from < total; from += RECORD_CHUNK) {
       const entries = await entriesOf(path, from, Math.min(total, from + RECORD_CHUNK))
       if (!entries) return null
-      let previous = chunks.at(-1)?.last
+      let previous = promptBefore(chunks.at(-1)?.last)
       let opens = 0
       for (const entry of entries) {
         if (opensTurn(entry, previous)) opens += 1
         previous = entry
       }
-      chunks.push({ opens, last: previous?.type === "user" ? previous : undefined })
+      chunks.push({ opens, last: markOf(previous) })
       await new Promise((next) => setImmediate(next))
     }
-    const counted = { total, chunks }
+    const counted = { total, view, chunks }
     indexes.set(path, counted)
     for (const key of indexes.keys()) {
       if (indexes.size <= RECORD_INDEXES) break
@@ -248,7 +251,7 @@ export function threadHistoryTools(deps: ThreadHistoryDeps): ThreadHistoryTools 
     const head = await deps.catalog.page?.(path, undefined, 1)
     if (!head) return null
     const total = head.total
-    const index = await recordIndex(path, total)
+    const index = await recordIndex(path, head)
     if (!index) return null
     const turns = index.chunks.reduce((sum, chunk) => sum + chunk.opens, 0)
     // The entry the `n`th turn opens at, reading one chunk; `total` past the last.
@@ -261,7 +264,7 @@ export function threadHistoryTools(deps: ThreadHistoryDeps): ThreadHistoryTools 
         }
         const from = k * RECORD_CHUNK
         const entries = await entriesOf(path, from, Math.min(total, from + RECORD_CHUNK)) ?? []
-        let previous = index.chunks[k - 1]?.last
+        let previous = promptBefore(index.chunks[k - 1]?.last)
         for (const [i, entry] of entries.entries()) {
           if (opensTurn(entry, previous) && ++before === n) return from + i
           previous = entry
@@ -299,7 +302,7 @@ export function threadHistoryTools(deps: ThreadHistoryDeps): ThreadHistoryTools 
       const k = Math.floor(Math.max(0, start - 1) / RECORD_CHUNK)
       const from = Math.max(floor, k * RECORD_CHUNK)
       const prefix = start > from ? await entriesOf(path, from, start) ?? [] : []
-      const before = (i: number) => (i > 0 ? prefix[i - 1] : from === k * RECORD_CHUNK ? index.chunks[k - 1]?.last : undefined)
+      const before = (i: number) => (i > 0 ? prefix[i - 1] : from === k * RECORD_CHUNK ? promptBefore(index.chunks[k - 1]?.last) : undefined)
       // The window's own first entry opens a turn, or what precedes it in this chunk does.
       let at = window[0] && opensTurn(window[0], prefix.at(-1) ?? before(0)) ? prefix.length : -1
       for (let i = prefix.length - 1; at < 0 && i >= 0; i--) if (opensTurn(prefix[i]!, before(i))) at = i
@@ -389,7 +392,7 @@ export function threadHistoryTools(deps: ThreadHistoryDeps): ThreadHistoryTools 
       return thread ? recordOf(undefined, thread.entries) : null
     }
     const head = await deps.catalog.page(path, undefined, 1)
-    const index = head && await recordIndex(path, head.total)
+    const index = head && await recordIndex(path, head)
     if (!index) return null
     return { turns: index.chunks.reduce((sum, chunk) => sum + chunk.opens, 0), window: async (budget, asked) => (await recordWindow(path, budget, asked)) ?? { entries: [], offset: 0 } }
   }
@@ -1134,6 +1137,48 @@ function searchPattern(input: ThreadHistoryInput): RegExp {
   } catch (error) {
     throw new Error(`The regex doesn't parse: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
   }
+}
+
+/** What `opensTurn` reads of the entry before one: that it was a prompt, and its message's ID. */
+interface PromptMark {
+  messageId?: string
+}
+
+/** The view of a record an index was counted from: what a rewrite changes and an append moves forward. */
+interface ViewIdentity {
+  translator?: string
+  checkpoint?: number
+  revision?: string
+  bytes?: number
+}
+
+function identityOf(page: ThreadPage): ViewIdentity {
+  return { ...(page.translator !== undefined && { translator: page.translator }), ...(page.checkpoint !== undefined && { checkpoint: page.checkpoint }),
+    ...(page.ref.revision !== undefined && { revision: page.ref.revision }), ...(page.ref.bytes !== undefined && { bytes: page.ref.bytes }) }
+}
+
+/**
+ * Whether a record's view now (`view`, `total` entries) extends the one its index was counted from: unchanged, or an
+ * append (the same translator, a checkpoint unchanged or on, more bytes and no fewer entries). A rewrite to as many
+ * entries or more (a compaction, a restore, a new translator's decoding) doesn't, and is counted again.
+ */
+function extendsView(index: { total: number; view: ViewIdentity }, view: ViewIdentity, total: number): boolean {
+  const was = index.view
+  if (total < index.total || was.translator !== view.translator) return false
+  if (was.revision === view.revision && was.bytes === view.bytes && was.checkpoint === view.checkpoint) return total === index.total
+  const checkpointOn = was.checkpoint === view.checkpoint || (was.checkpoint !== undefined && view.checkpoint !== undefined && view.checkpoint >= was.checkpoint)
+  return was.bytes !== undefined && view.bytes !== undefined && view.bytes > was.bytes && checkpointOn
+}
+
+/** What an index keeps of a chunk's last entry: its message's ID when it's a prompt, else nothing. */
+function markOf(entry: Entry | undefined): PromptMark | undefined {
+  if (entry?.type !== "user") return undefined
+  return entry.messageId !== undefined ? { messageId: entry.messageId } : {}
+}
+
+/** The prompt a mark stands for, as `opensTurn` reads the entry before: a bare one with the same message's ID. */
+function promptBefore(mark: PromptMark | undefined): Entry | undefined {
+  return mark ? { type: "user", id: "", text: "", ...(mark.messageId !== undefined && { messageId: mark.messageId }) } : undefined
 }
 
 /** The entries that open a turn (`opensTurn`), by index, giving way to the host as a long record is counted. */

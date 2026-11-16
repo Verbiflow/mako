@@ -84,13 +84,16 @@ try {
   // The record is read a page at a time, as its viewer pages it: never opened whole. What each search parses is counted.
   let served = 0
   let opens = 0
+  // Its view as its viewer names it: an append moves its revision and bytes on, a rewrite changes them otherwise.
+  let revision = 1
+  let bytes = 1_000
   const page = async (path: string, before?: number, limit = 100) => {
     if (path !== recordPath) return null
     const end = Math.min(record.entries.length, before ?? record.entries.length)
     const start = Math.max(0, end - Math.min(200, Math.max(1, limit)))
     const entries = record.entries.slice(start, end)
     served += entries.reduce((sum, entry) => sum + ("text" in entry ? entry.text.length : 0), 0)
-    return { ref: record.ref, entries, start, total: record.entries.length, hasEarlier: start > 0 }
+    return { ref: { ...record.ref, revision: String(revision), bytes }, translator: "t1", entries, start, total: record.entries.length, hasEarlier: start > 0 }
   }
   const refusing = (refused: ColdRefused["refused"]) => history.threadHistoryTools({
     conversations: () => conversations, snapshot: (id) => world.live.historySnapshot(id), resident: () => false, cold: async () => ({ refused }),
@@ -119,10 +122,19 @@ try {
   assert.ok(/\[(?:\d+:)?2\.0[\]/]/.test(recordReached), `numbered as read numbers it: turn 2 is mark-2's: ${recordReached.slice(0, 300)}`)
   // A record that grew is counted only where it grew.
   for (let index = RECORD_TURNS + 1; index <= RECORD_TURNS + 10; index++) record.entries.push({ type: "user" as const, id: `r-${index}`, text: `Record mark-${index}: ${FILLER.slice(0, 3_000)}` })
+  revision += 1
+  bytes += 100
   served = 0
   const grown = await asRecord.answer(apex.conversation, { action: "search", thread: started.child!, query: `mark-${RECORD_TURNS + 10}:` })
   assert.match(grown, /^1 hit for "mark-2010:"/, grown.slice(0, 200))
   assert.ok(served <= SEARCH_CHARS + 4 * PAGE_CHARS, `a grown record counts where it grew, not all of it again: ${served}`)
+  // Rewritten to as many entries (compacted, restored, decoded again): its first ten prompts now one message's chunks,
+  // nine turns fewer. Its index is counted again, and its newest turn reads as the rewritten record numbers it.
+  record.entries = record.entries.map((entry, index) => (index < 10 && entry.type === "user" ? { ...entry, messageId: "one-message" } : entry))
+  revision += 1
+  bytes = 900
+  const rewritten = await asRecord.answer(apex.conversation, { action: "search", thread: started.child!, query: `mark-${RECORD_TURNS + 10}:` })
+  assert.match(rewritten, /\[(?:\d+:)?2001\.0[\]/]/, `a rewrite is counted again: the newest turn is 2001 now: ${rewritten.slice(0, 300)}`)
   console.log(`paged record: ${recordChars} characters; the first search parsed ${firstServed} (its count, once), later ones at most ${SEARCH_CHARS + 2 * PAGE_CHARS}`)
   const unsearchable = await refusing({ kind: "structural", why: "its journal keeps its own copy of its history" }).answer(apex.conversation, { action: "search", thread: started.child!, query: "marker" })
   assert.ok(unsearchable.includes("can't be searched here") && unsearchable.includes("thread_history read") && !unsearchable.includes("search again in a moment"), unsearchable)
