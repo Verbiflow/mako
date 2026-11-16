@@ -546,6 +546,15 @@ export interface PullTarget {
   cwd: string
 }
 
+/** Bounded diagnostics only: neither a command's stderr nor its response belongs in a PR wake or host log. */
+export class PullReadError extends Error {
+  readonly reason: "request" | "response"
+  constructor(reason: "request" | "response") {
+    super("GitHub could not supply a complete pull request reading.")
+    this.reason = reason
+  }
+}
+
 const READING_FIELDS = "state,url,headRefOid,baseRefName,author,statusCheckRollup,latestReviews"
 
 /** `owner/name` from a pull request's URL (`https://github.com/owner/name/pull/12`). */
@@ -632,31 +641,45 @@ function timeOf(text: string | undefined): number | undefined {
 
 /**
  * One pull request's state, checks and reviews for the watch (`PullReading`), with the same `gh pr view` and the same
- * normalising of checks and reviews `pull_request_status` reads with. Null when `gh` can't say.
+ * normalising of checks and reviews `pull_request_status` reads with. A bounded error when `gh` can't say.
  */
-export async function readPull(target: PullTarget, runner: GitHubRunner = gh, required?: RequiredChecks): Promise<PullReading | null> {
+export async function readPull(target: PullTarget, runner: GitHubRunner = gh, required?: RequiredChecks): Promise<PullReading> {
   const args = ["pr", "view", String(target.number), ...(target.repository ? ["--repo", target.repository] : []), "--json", READING_FIELDS]
-  let value: JsonValue
+  let output: string
   try {
-    value = JSON.parse(await runner(target.cwd, args))
-  } catch {
-    return null
+    output = await runner(target.cwd, args)
+  } catch (cause) {
+    if (cause instanceof GitHubRateLimitError || cause instanceof GitHubRepositoryLookupError) throw cause
+    throw new PullReadError("request")
   }
-  if (!isJsonObject(value)) return null
+  let value: JsonValue
+  try { value = JSON.parse(output) }
+  catch { throw new PullReadError("response") }
+  if (!isJsonObject(value)) throw new PullReadError("response")
   const state = stringValue(value.state)
   const url = stringValue(value.url)
-  if (!state || !url) return null
-  const checks = withoutSuperseded(parseJsonArray(value.statusCheckRollup, parseRawCheck) ?? [])
-  const reviews = parseJsonArray(value.latestReviews, parseRawReview) ?? []
+  if (!state || !["OPEN", "CLOSED", "MERGED"].includes(state) || !url) throw new PullReadError("response")
+  const rawChecks = parseJsonArray(value.statusCheckRollup, parseRawCheck)
+  const rawReviews = parseJsonArray(value.latestReviews, parseRawReview)
+  if (state === "OPEN" && value.statusCheckRollup === undefined) throw new PullReadError("response")
+  for (const [raw, parsed] of [[value.statusCheckRollup, rawChecks], [value.latestReviews, rawReviews]] as const)
+    if (raw !== undefined && raw !== null && (!Array.isArray(raw) || parsed?.length !== raw.length)) throw new PullReadError("response")
+  const checks = withoutSuperseded(rawChecks ?? [])
+  const reviews = rawReviews ?? []
   const author = parseOptionalUser(value.author)?.login
   const head = stringValue(value.headRefOid)
   const base = stringValue(value.baseRefName)
   const repository = target.repository ?? pullRefRepository(url)
   const requires = required && base && repository ? await required.read(target.cwd, repository, base) : undefined
+  const started = checks.flatMap(check => {
+    const at = timeOf(check.startedAt)
+    return at !== undefined && at > 0 ? [at] : []
+  })
   return {
     state: state === "MERGED" ? "merged" : state === "CLOSED" ? "closed" : "open",
     url,
     ...(head && /^[a-f0-9]{40,64}$/.test(head) && { head }),
+    ...(started.length && { headAt: Math.min(...started) }),
     ...(author && { author }),
     ...(requires && { required: requires }),
     checks: checks.map((raw) => {
