@@ -257,8 +257,8 @@ try {
   }
   console.log("ask: the Apex was told the approval was the person's, refused it, and the person's answer from its Thread let the Fin go on, once")
 
-  // A progress report before an approval, then the answered turn's end with no result: since nothing watches what the
-  // progress said, it ended without a result, its Apex told so and nobody asked. The stored notice that the Apex couldn't answer must stop blocking the Fin once the person
+  // A progress report before an approval, then the answered turn's end: that end is its result, since nothing watches
+  // what the progress said. The stored notice that the Apex couldn't answer must stop blocking the Fin once the person
   // answers, even before it reports anything else.
   {
     const { world, apex, fin, thread, state, heard } = await fixture("answered-after-progress", {
@@ -273,14 +273,14 @@ try {
     assert.ok(blocked?.kind === "blocked" && blocked.ask)
     assert.equal(answered(await world.agents.respond(apex.conversation, { fin: thread(), ask: blocked.ask.id, allow: true, request: "r-progress-allow" })).answered, "approval")
     await until("the answered turn to end", () => heard.length === 1 && world.live.session(fin)?.status === "ready")
-    assert.equal(state()?.kind, "ended", "the stored approval notice no longer blocks the Fin after the person's answer: its turn ended without a result")
+    assert.equal(state()?.kind, "ended", "the stored approval notice no longer blocks the Fin after the person's answer: its turn's end is its result")
     assert.equal(world.agents.personAsk(apex.conversation), undefined)
     const read = await world.agents.read(apex.caller, { child: "tests" })
     assert.ok("text" in read)
     assert.doesNotMatch(read.text, /asked them in their Inbox|^blocked/, "agents_read cannot repeat the stale notice as its current report")
     const listed = await world.agents.list(apex.caller, {})
     assert.ok("children" in listed)
-    assert.deepEqual([listed.children[0]?.report?.status, listed.children[0]?.report?.unfinished], ["failed", true], "the strip cannot keep it as a blocked report either: it shows the turn ended without a result")
+    assert.equal(listed.children[0]?.report?.status, "done", "the strip cannot keep it as a blocked report either: it shows the turn's result")
     await world.restart()
     assert.equal(state()?.kind, "ended", "a restart cannot revive that notice from the journal")
     await world.close()

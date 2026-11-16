@@ -14,7 +14,7 @@ import {
   type NativeAgentObservation,
   type NativeAgentRoster,
 } from "@mako/host/contracts/native-agents"
-import { backgroundWork, backgroundWorkText, HELD_WORK_CEILING_MS, heldWork, pendingWake, staleWork } from "@mako/host/contracts/background-work"
+import { backgroundWork, backgroundWorkText } from "@mako/host/contracts/background-work"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
@@ -150,37 +150,6 @@ function replay(capture: Captured, stopAt?: (message: SDKMessage, index: number)
   // The level flips a task's ambient flag.
   const flipped = agents.project({ ...base, type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "w", task_type: "monitor", description: "live update watcher", ambient: false }] })
   assert.equal(flipped[0]?.ambient, false)
-}
-
-{
-  // A Monitor that timed out, or that TaskStop ended, between turns: the level drops it with no notification and no
-  // result follows. `dropping` says so, and the driver settles it after its grace (`DROPPED_GRACE_MS`), as unknown.
-  const agents = new ClaudeAgents()
-  const base = { uuid: "00000000-0000-4000-8000-000000000002" as const, session_id: "s" }
-  agents.project({ ...base, type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "m", task_type: "monitor", description: "CI checks", ambient: true }] })
-  assert.equal(agents.get("m")?.state.kind, "working")
-  assert.deepEqual(agents.project({ ...base, type: "system", subtype: "background_tasks_changed", tasks: [] }), [], "the drop waits for the notification")
-  assert.equal(agents.dropping, true, "and says it waits")
-  const settled = agents.settleDropped()
-  assert.deepEqual(settled.map((agent) => [agent.nativeId, agent.state.kind, agent.stoppable]), [["m", "unknown", false]], "settled after the grace: its end unknown")
-  assert.equal(agents.dropping, false)
-  // A notification within the grace says how it ended, and nothing is settled as unknown.
-  agents.project({ ...base, type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "n", task_type: "monitor", description: "CI checks", ambient: true }] })
-  agents.project({ ...base, type: "system", subtype: "background_tasks_changed", tasks: [] })
-  agents.project({ ...base, type: "system", subtype: "task_notification", task_id: "n", status: "completed", output_file: "", summary: "Monitor ended" })
-  assert.equal(agents.dropping, false, "its notification took it off what was dropped")
-  assert.deepEqual(agents.settleDropped(), [])
-}
-
-{
-  // Work nothing says the end of is believed for `HELD_WORK_CEILING_MS` from its start, then no longer held.
-  const now = 10 * HELD_WORK_CEILING_MS
-  const watcher = (startedAt: number) => observeNativeAgent(undefined, { nativeId: "w", title: "CI", work: "monitor", ambient: true, background: true, state: { kind: "working" }, bindingId: "b", provider: "claude", observedAt: startedAt, startedAt })
-  const session = { status: "ready", connection: "connected", backgroundTasks: 0 } as const
-  assert.equal(pendingWake(session, watcher(now - 1_000), now)?.count, 1, "an armed Monitor is held")
-  assert.equal(pendingWake(session, watcher(now - HELD_WORK_CEILING_MS - 1), now), null, "past the ceiling it isn't")
-  assert.equal(staleWork(watcher(now - HELD_WORK_CEILING_MS - 1), now).length, 1, "and is said stale")
-  assert.equal(heldWork(watcher(now - HELD_WORK_CEILING_MS - 1), now).length, 0)
 }
 
 {

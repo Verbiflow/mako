@@ -260,17 +260,7 @@ export class ClaudeAgents {
     return changed
   }
 
-  /** Whether the level dropped a task no event has said the end of yet (`settleDropped`). */
-  get dropping(): boolean {
-    return this.dropped.size > 0
-  }
-
-  /**
-   * Tasks the level dropped that no event has said the end of: their end, unknown. A level or a result settles them,
-   * after the notification that may still follow the level; between turns neither may come (a Monitor that timed out,
-   * one TaskStop ended), so the driver settles them after a grace (`DROPPED_GRACE_MS`).
-   */
-  settleDropped(): NativeAgentObservation[] {
+  private settleDropped(): NativeAgentObservation[] {
     const settled: NativeAgentObservation[] = []
     for (const id of this.dropped) {
       const agent = this.agents.get(id)

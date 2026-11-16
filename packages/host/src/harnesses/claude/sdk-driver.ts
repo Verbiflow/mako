@@ -135,8 +135,6 @@ interface Live {
   told: Map<string, ProviderTurnCause>
   /** Tasks started in the foreground: their tool's result reports them, and their notification is not an event. */
   foreground: Set<string>
-  /** Settles what the level dropped once no event has said its end for `DROPPED_GRACE_MS` between turns. */
-  droppedTimer?: ReturnType<typeof setTimeout>
   /** The session's transcript, read forward for the notifications the SDK leaves out; made once its path is known. */
   tail?: ClaudeTranscriptTail
   /** Where kept copies of command output are (`KeptOutputs`). */
@@ -186,29 +184,9 @@ export interface ClaudeSdkDependencies {
 
 type Engine = LiveEngineApi<Live>
 
-/**
- * How long a task the level dropped waits for the notification that says how it ended, between turns: a level or a
- * result settles it in a turn, and nothing may come between them. A notification follows its level within a second.
- */
-const DROPPED_GRACE_MS = 5_000
-
-/** Between turns, settles what the level dropped once nothing said its end within `DROPPED_GRACE_MS`. */
-function settleDroppedLater(engine: Engine, live: Live): void {
-  clearTimeout(live.droppedTimer)
-  live.droppedTimer = undefined
-  if (!live.agents.dropping || live.state.status === "running") return
-  live.droppedTimer = setTimeout(() => {
-    live.droppedTimer = undefined
-    if (live.closed || live.state.status === "running") return
-    for (const observed of live.agents.settleDropped()) engine.emitAgent(live, observed)
-  }, DROPPED_GRACE_MS)
-  live.droppedTimer.unref()
-}
-
 function stop(live: Live): void {
   live.stream?.closed()
   live.closed = true
-  clearTimeout(live.droppedTimer)
   live.input.close()
   live.permissions.close()
   live.query.close()
@@ -443,7 +421,6 @@ async function pump(engine: Engine, live: Live): Promise<void> {
         message.compact_metadata.trigger === "manual" && live.compaction)
         live.compaction.confirmed = true
       for (const observed of live.agents.project(message)) engine.emitAgent(live, observed)
-      settleDroppedLater(engine, live)
       const agent = message.type === "system" && message.subtype === "task_notification" ? notifiedAgent(engine, live, message) : undefined
       if (message.type === "system" && message.subtype === "task_started" && message.is_backgrounded === false) live.foreground.add(message.task_id)
       if (message.type === "system" && message.subtype === "task_updated" && message.patch.is_backgrounded) live.foreground.delete(message.task_id)
