@@ -2107,8 +2107,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     // rewording it or flipping between two stays quiet.
     if (input.status === "progress" && !report.handoff) {
       const reports = this.store()!.reportsOf(edge.child)
-      const last = reports.findLastIndex((each) => each.status !== "progress")
-      const said = reports.slice(last + 1).flatMap((each) => each.waitingOn ?? [])
+      let from = reports.length
+      while (from > 0 && reports[from - 1]!.status === "progress") from -= 1
+      const said = reports.slice(from).flatMap((each) => each.waitingOn ?? [])
       if (awaitedAnew(said, report.waitingOn).length) report.awaits = true
     }
     const kept = this.keepReport(edge, report)
