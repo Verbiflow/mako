@@ -37,6 +37,18 @@ export const WINDOW_LIVE_FORM: WindowLiveForm = ROSTER_LIVE_FORM
 /** The query parameter a client's connection says the form it reads in. */
 export const LIVE_FORM_PARAM = "live"
 
+/**
+ * A client says it reads `ephemeral` frames (a watched conversation's passing state, `EPHEMERAL_LIVE_VERSION`) with this
+ * on its connection's URL, set to 1. A gateway sends them to no other connection: an older client closes on a frame it
+ * doesn't know.
+ */
+export const EPHEMERAL_PARAM = "ephemeral"
+
+/** Whether a client connection's URL says it reads `ephemeral` frames. */
+export function declaredEphemeral(url: URL): boolean {
+  return url.searchParams.get(EPHEMERAL_PARAM) === "1"
+}
+
 /** The form a reader says it reads, as text (a URL's parameter, a header): form 1 when it says none, the newest this build knows for a newer one. */
 export function saidLiveForm(said: string | null | undefined): LiveForm {
   const form = Number(said)
