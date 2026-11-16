@@ -101,6 +101,14 @@ try {
   }
   assert.equal((await conversationFiles.read(root, artifact, async () => otherData)).contents, "Another Thread's script", "Shared workspace caches do not share a data-file owner")
   assert.equal((await conversationFiles.read(root, artifact, ownedDataDir)).contents, "Owning Thread's script")
+  const newData = join(outer, "thread-data", "owned", "owner", "data")
+  await mkdir(join(newData, "flage-proof"), { recursive: true })
+  await writeFile(join(newData, artifact), "New per-Thread artifact")
+  const migratedDataDirs = async () => [newData, dataDir]
+  assert.equal((await conversationFiles.read(root, artifact, migratedDataDirs)).contents, "New per-Thread artifact", "new artifacts take precedence over legacy app data")
+  await rm(join(newData, artifact))
+  assert.equal((await conversationFiles.read(root, artifact, migratedDataDirs)).contents, "Owning Thread's script", "existing artifact links still resolve without moving bytes")
+  await assert.rejects(conversationFiles.read(root, "flage-proof/../../other/flage-proof/side-by-side.mts", migratedDataDirs), /No file named/, "multiple exact roots never authorize a sibling Thread traversal")
   await assert.rejects(conversationFiles.read(root, "side-by-side.mts", ownedDataDir), /No file named/, "The artifact route does not recursively scan the private data folder")
   await assert.rejects(conversationFiles.read(root, `./${artifact}`, ownedDataDir), /No file at/, "Explicit cwd paths never become data-folder paths")
   await assert.rejects(conversationFiles.read(root, "flage-proof/../../other/flage-proof/side-by-side.mts", ownedDataDir), /No file named/, "A data-folder fallback cannot traverse into another Thread")
@@ -302,8 +310,10 @@ try {
     await symlink(join(secrets, "id_rsa"), join(root, "linked-key"))
     await mkdir(dataDir, { recursive: true })
     await writeFile(join(dataDir, "notes.md"), "The Thread's data")
-    const remote = (path: string, purpose?: "preview") => conversationFiles.read(root, path, ownedDataDir, purpose, true)
+    await writeFile(join(newData, "notes.md"), "The Thread's new data")
+    const remote = (path: string, purpose?: "preview") => conversationFiles.read(root, path, migratedDataDirs, purpose, true)
     assert.equal((await remote("inside.md")).contents, "The Thread's own file", "a file in the Thread's folder reads")
+    assert.equal((await remote(join(newData, "notes.md"))).contents, "The Thread's new data", "the new per-Thread root is confined just like its legacy fallback")
     assert.equal((await remote(join(dataDir, "notes.md"))).contents, "The Thread's data", "and one in its data folder")
     for (const [path, why] of [
       [join(secrets, "id_rsa"), "an absolute path elsewhere"],

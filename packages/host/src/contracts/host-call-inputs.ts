@@ -1963,6 +1963,7 @@ const inputs = {
       ]),
     ]),
   "mako:live-turn-writers": () => z.tuple([z.string(), z.string(), z.string()]),
+  "mako:live-wait-stop": () => z.tuple([z.string(), z.string()]),
   "mako:lost-versions": () =>
     z.tuple([
       z.union([
@@ -3222,6 +3223,9 @@ const inputs = {
         mode: z.union([z.literal("remove"), z.literal("preview")]),
         idleDays: z.number(),
         kept: z.array(z.string()),
+        dataMode: z
+          .union([z.literal("remove"), z.literal("preview")])
+          .optional(),
       }),
     ]),
   "mako:thread-stop": () =>
@@ -3748,6 +3752,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:live-turn-undo", "conversations"],
   ["mako:live-turn-undo-preview", "conversations"],
   ["mako:live-turn-writers", "conversations"],
+  ["mako:live-wait-stop", "conversations"],
   ["mako:lost-versions", "attribution"],
   ["mako:machine-leaving", "application"],
   ["mako:machine-woke", "application"],

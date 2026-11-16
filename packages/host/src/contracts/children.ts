@@ -590,6 +590,7 @@ export function childLine(state: ChildState, now?: number): string | undefined {
     case "starting":
       return "Starting"
     case "working":
+      if (state.quiet) return quietRowWords(state.quiet, now)
       return state.phase ?? (state.answered && answeredWords(state.answered)) ?? readableStep(state.step) ?? "At work"
     case "blocked":
       return state.question
@@ -598,6 +599,17 @@ export function childLine(state: ChildState, now?: number): string | undefined {
     case "ended":
       return state.decision?.question ?? state.reason
   }
+}
+
+/**
+ * A quiet Fin's line on its row: how long nothing has come of it, and its last step then. "Quiet 18m · last step: Running
+ * npm test, still running". Without `now`, the time is left out (a surface that doesn't tick).
+ */
+export function quietRowWords(quiet: { since: number; step?: string; running?: true }, now?: number): string {
+  const time = now === undefined ? "" : stoodFor(now - quiet.since)
+  const head = time ? `Quiet ${time}` : "Quiet"
+  const step = readableStep(quiet.step)
+  return step ? `${head} · last step: ${step}${quiet.running ? ", still running" : ""}` : head
 }
 
 /** How long a Fin has stood as it does, one unit: "25s", "18m", "1h 4m", "3 d". Nothing under a second. */
@@ -654,7 +666,7 @@ export function childWord(state: ChildState): string {
     case "starting":
       return "Starting"
     case "working":
-      return "Working"
+      return state.quiet ? "Quiet" : "Working"
     case "blocked":
       return state.on === "lead" ? `Asks its ${APEX_WORD}` : state.on === "approval" ? "Needs approval" : "Needs your answer"
     case "idle":

@@ -203,6 +203,34 @@ try {
   await world.settle(300)
   assert.ok(apexTexts.some((text) => text.includes("- the quick check: the quick check ended while this Thread was moving")), JSON.stringify(apexTexts.slice(-1)))
 
+  // The person's waiting line: the conversation's snapshot carries the armed wait, each item ticked off as it's met, and
+  // its batch says so at once; Stop waiting ends the wait it names, waking no one, and the line clears by itself.
+  checkRunning = true
+  armed(await world.agents.turnWait(apex.caller, { description: "Waiting for both checks", on: [{ check: "quick" }, { check: "full" }], returnWhen: "all", seconds: 3600, clientKey: "line" }))
+  const lineWait = world.store.armedTurnWaitOf(apex.conversation)!
+  const lineOf = () => world.live.snapshot(apex.conversation)?.turnWait
+  assert.deepEqual(lineOf(), { wait: lineWait.id, description: "Waiting for both checks", items: [{ words: "the quick check", met: false }, { words: "the full check", met: false }], returnWhen: "all", endsBy: lineWait.endsBy })
+  const batches = () => world.events.flatMap((event) => event.type === "live-batch" && event.batch.id === apex.conversation && event.batch.turnWait !== undefined ? [event.batch.turnWait] : [])
+  const sent = batches().length
+  checkEnds.at(-2)!("the quick check passed")
+  await world.settle(50)
+  assert.deepEqual(lineOf()?.items, [{ words: "the quick check", met: true }, { words: "the full check", met: false }], "ticked off as it's met")
+  assert.deepEqual(batches().at(-1), lineOf(), "and a batch says so")
+  assert.ok(batches().length > sent)
+  const texts = apexTexts.length
+  assert.equal(world.agents.stopWaiting(apex.conversation, "an-older-wait"), false, "a wait it doesn't name is left as it is")
+  assert.ok(lineOf(), "still waiting")
+  assert.equal(world.agents.stopWaiting(apex.conversation, lineWait.id), true)
+  await world.settle(100)
+  assert.equal(lineOf(), undefined, "the line clears by itself")
+  assert.equal(batches().at(-1), null, "its batch says it ended")
+  assert.equal(world.store.turnWaitsOf(apex.conversation).find((wait) => wait.id === lineWait.id)?.cancelled?.by, "person")
+  assert.equal(apexTexts.length, texts, "waking no one")
+  armed(await world.agents.turnWait(apex.caller, { description: "Waiting an hour more", seconds: 3600, clientKey: "line-newer" }))
+  assert.equal(world.agents.stopWaiting(apex.conversation, lineWait.id), true, "a repeat says it ended")
+  assert.equal(lineOf()?.description, "Waiting an hour more", "and leaves a newer wait armed")
+  checkRunning = false
+
   // Stop and archive end the wait without waking anyone.
   armed(await world.agents.turnWait(apex.caller, { description: "Waiting an hour", seconds: 3600, clientKey: "stop" }))
   world.agents.threadStopped(apex.conversation, "stop")

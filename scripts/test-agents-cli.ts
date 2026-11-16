@@ -35,6 +35,7 @@ const sessions = join(scratch, "sessions")
 const location = runtimeLocation(dataRoot)
 const quoted = (text: string) => `'${text.replaceAll("'", "'\\''")}'`
 const ChangeSchema = z.looseObject({ kind: z.string(), text: z.string().optional() })
+const QueueSchema = z.object({ requests: z.array(z.object({ status: z.string() })) })
 let host: ChildProcess | undefined
 
 try {
@@ -107,17 +108,8 @@ exit 2
   const read = await agents(session, "read", started.child)
   assert.ok(read.text.length > 0, "its transcript reads back")
 
-  // The person's switch comes through the one operation too: the host says who asked, for this and for a move.
-  await invokeRuntime(location.socket, randomUUID(), "mako:live-transfer", [apex, { id: randomUUID(), provider: "grok", text: "Go on", attachments: [] }]).catch(() => undefined)
-  for (const deadline = Date.now() + 10_000; !/a Thread continues on a harness .* by=person/.test(await readFile(join(dataRoot, "logs/host.log"), "utf8")); await new Promise((settle) => setTimeout(settle, 50)))
-    assert.ok(Date.now() < deadline, "the person's switch reached continueOn")
-
-  // `mako agents move` is the same host call from a shell: to where it is, it answers so; a harness that isn't here is refused.
-  const here = await agents(session, "move", started.child, "grok")
-  assert.equal(here.moved?.[0]?.state, "here", JSON.stringify(here))
-  const nowhere = await agents(session, "move", started.child, "no-such-harness").catch((error: Error & { stdout?: string; stderr?: string }) => `${error.stdout}${error.stderr}`)
-  assert.match(JSON.stringify(nowhere), /unknown-harness/)
-
+  // A report may arrive while the Apex is already handling another: its queued digest deliberately blocks a switch.
+  // Hear both reports and drain that queue before testing a person's switch, rather than racing the second report.
   const names: string[] = listed.children.map((child: { name: string }) => child.name)
   for (const deadline = Date.now() + 30_000; ; ) {
     const history = await mako("history", apex)
@@ -129,11 +121,33 @@ exit 2
       assert.deepEqual(heard, names.map(() => 1), "each child's report reaches the Apex once")
       assert.deepEqual(names.map((name) => read.flatMap((each) => each.reports).filter((card) => card.name === name).length), names.map(() => 1), "and once as data")
       assert.ok(digests.length <= names.length, "in at most a wake a burst")
-      break
+      const snapshot = QueueSchema.parse(await invokeRuntime(location.socket, randomUUID(), "mako:live-snapshot", [apex]))
+      if (!snapshot.requests.some((request) => request.status === "queued")) break
     }
     assert.ok(Date.now() < deadline, `the Apex was woken with both reports: ${JSON.stringify(digests)}`)
     await new Promise((settle) => setTimeout(settle, 200))
   }
+
+  // The person's switch comes through the one operation too: the host says who asked, for this and for a move.
+  await invokeRuntime(location.socket, randomUUID(), "mako:live-transfer", [apex, { id: randomUUID(), provider: "grok", text: "Go on", attachments: [] }]).catch((error: Error) => {
+    console.error("mako:live-transfer failed:", error.message)
+    throw error
+  })
+  for (const deadline = Date.now() + 10_000; !/a Thread continues on a harness .* by=person/.test(await readFile(join(dataRoot, "logs/host.log"), "utf8")); await new Promise((settle) => setTimeout(settle, 50)))
+    assert.ok(Date.now() < deadline, "the person's switch reached continueOn")
+
+  // `mako agents move` is the same host call from a shell: to where it is, it answers so; a harness that isn't here is refused.
+  const here = await agents(session, "move", started.child, "grok")
+  assert.equal(here.moved?.[0]?.state, "here", JSON.stringify(here))
+  const nowhere = await agents(session, "move", started.child, "no-such-harness").catch((error: Error & { stdout?: string; stderr?: string }) => `${error.stdout}${error.stderr}`)
+  assert.match(JSON.stringify(nowhere), /unknown-harness/)
+
+  const switchedHistory = await mako("history", apex)
+  const switchedReports = switchedHistory.flatMap((line) => line.kind === "user" && line.text?.startsWith(FROM_AGENTS) ? [readFinReports(line.text)] : [])
+  assert.deepEqual(names.map((name) => switchedReports.map((report) => report.text).join("\n").split(`"${name}"`).length - 1), names.map(() => 1), "the switch does not repeat a report's words")
+  assert.deepEqual(names.map((name) => switchedReports.flatMap((report) => report.reports).filter((card) => card.name === name).length), names.map(() => 1), "or its report data")
+  assert.ok(switchedReports.length <= names.length, "the switch preserves the batched wakes")
+
   const refused = await run(process.execPath, [cli, "agents", "start", "grok", "--brief-file", briefFile, "--socket", location.socket, "--cwd", project, "--json"], { env }).then(() => undefined, (error: { code?: number; stdout?: string }) => error)
   assert.equal(refused?.code, 1, "a caller with no Session is refused")
   assert.equal(JSON.parse(refused?.stdout ?? "{}").refused, "no-parent")

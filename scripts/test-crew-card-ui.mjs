@@ -761,6 +761,68 @@ async function checkPage({ window, page, shots, base }) {
     "the phone's line leaves once the card is back"
   )
 
+  // A quiet Fin (`&fins=quiet`): still working, nothing from it for 18 minutes. Its row says so, with what to do about it.
+  window.setContentSize(1440, 900)
+  await window.loadURL(`${base}?mock&app=apex&fins=quiet`)
+  await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, quiet scene")
+  await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
+  await until("Boolean(document.querySelector('[data-composer]'))", "the Apex's composer, quiet scene")
+  await evaluate("window.apexScene.setRunning(false); true")
+  await until("Boolean(document.querySelector('[data-quiet-row]'))", "the quiet Fin's row")
+  const quietRow = await evaluate(`(() => { const row = document.querySelector('[data-quiet-row]'); return { text: row.innerText.replace(/\\s+/g, ' '), mark: row.querySelector('[data-live-mark]')?.dataset.liveMark, actions: [...row.querySelectorAll('[data-fin-action]')].map((node) => node.dataset.finAction), shimmer: Boolean(row.querySelector('.shimmer, [data-shimmer]')) } })()`)
+  console.log("QUIET", JSON.stringify(quietRow))
+  assert.match(quietRow.text, /Offline outbox retry/)
+  assert.match(quietRow.text, /Quiet 18m · last step: .+, still running/, "the row says how long, and its last step")
+  assert.equal(quietRow.mark, "quiet", "its mark is still, not working")
+  assert.deepEqual(quietRow.actions, ["message", "stop"], "and offers Message and Stop beside opening it")
+  await capture("quiet-row")
+  await evaluate("document.querySelector('[data-quiet-row] [data-fin-action=message]').click(); true")
+  await until("document.querySelector('[data-child-note=direct]')?.innerText.includes('Offline outbox retry')", "Message addresses the Apex's composer to the quiet Fin")
+  console.log("PASS: a quiet Fin reads quiet, says for how long, and offers Message and Stop")
+
+  // Every Fin row, in the crew card and the side rail, can be written to or stopped: on hover, always for a quiet one.
+  const rowActions = await evaluate(`(() => {
+    const crew = [...document.querySelectorAll('[data-crew] [data-fin-actions]')].map((node) => ({ fin: node.dataset.finActions, actions: [...node.querySelectorAll('[data-fin-action]')].map((each) => each.dataset.finAction), shown: getComputedStyle(node).opacity }))
+    const side = [...document.querySelectorAll('[data-child-row]')].map((row) => Boolean(row.parentElement.querySelector('[data-fin-actions]')))
+    return { crew, side }
+  })()`)
+  console.log("ROW ACTIONS", JSON.stringify(rowActions))
+  const stoppable = rowActions.crew.filter((row) => row.actions.includes("stop"))
+  assert.ok(stoppable.length >= 4, `working Fins offer Stop beside Message: ${JSON.stringify(rowActions.crew)}`)
+  assert.ok(rowActions.crew.every((row) => row.actions.includes("message") || row.actions.includes("resume") || row.actions.includes("retry") || row.actions.includes("stop")), "every row offers an action")
+  assert.equal(rowActions.crew.filter((row) => row.shown === "1").length, 1, "only the quiet Fin's actions show without hover")
+  assert.ok(rowActions.side.length > 0 && rowActions.side.every(Boolean), "the side rail's Fin rows offer them too")
+  console.log("PASS: every Fin row offers Message and Stop, shown on hover and always for a quiet Fin")
+
+  // The phone: the same quiet Fin in its Apex's compact crew card, still and saying so.
+  window.setContentSize(390, 844)
+  await window.loadURL(`${base}scripts/phone-apex.html?app=apex&fins=quiet&open=1ead1ead-0000-4000-8000-000000001ead`)
+  await until("Boolean(document.querySelector('[data-crew-row][data-quiet]'))", "the phone's quiet Fin row")
+  await evaluate("document.querySelector('[data-crew-row][data-quiet]').scrollIntoView({ block: 'center' }); true")
+  const phoneQuiet = await evaluate("document.querySelector('[data-crew-row][data-quiet]').innerText.replace(/\\s+/g, ' ')")
+  assert.match(phoneQuiet, /Quiet 18m · last step: .+, still running/, `the phone says it the same way: ${phoneQuiet}`)
+  await both("quiet-phone")
+  console.log("PASS: the phone's crew card shows the quiet Fin the same way")
+
+  // One crew list: the side rail folds finished and idle Fins as the card does, and the phone has Stop all too.
+  window.setContentSize(1440, 900)
+  await window.loadURL(`${base}?mock&app=apex`)
+  await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, one list")
+  await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
+  await evaluate("window.apexScene.setRunning(false); true")
+  await until("document.querySelectorAll('[data-crew-settled]').length === 2", "the card and the side rail each fold their settled Fins")
+  const folds = await evaluate("[...document.querySelectorAll('[data-crew-settled]')].map((node) => node.innerText.trim())")
+  assert.equal(folds[0], folds[1], `the two surfaces fold alike: ${JSON.stringify(folds)}`)
+  const deskWords = await evaluate("document.querySelector('.thread-jump-scope [data-fin-pips]')?.innerText.trim()")
+  window.setContentSize(390, 844)
+  await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
+  await until("Boolean(document.querySelector('[data-fin-pips]'))", "the phone's Apex row")
+  const phoneWords = await evaluate("document.querySelector('[data-fin-pips]').innerText.trim()")
+  assert.equal(phoneWords, deskWords, "the phone's list says the desk rail's words")
+  await window.loadURL(`${base}scripts/phone-apex.html?app=apex&open=1ead1ead-0000-4000-8000-000000001ead`)
+  await until("Boolean(document.querySelector('[data-crew] [data-stop-all]'))", "Stop all on the phone's crew card")
+  console.log(`PASS: one crew list: the side rail folds as the card does (${folds[0]}), the phone says "${phoneWords}" and has Stop all`)
+
   assert.deepEqual(
     errors.filter(
       (message) =>

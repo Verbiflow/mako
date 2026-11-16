@@ -66,6 +66,13 @@ const DECIDED = new Map<string, ChildState>([
 ])
 const DECISIONS_SCENE = new URLSearchParams(globalThis.location?.search).get("fins") === "decisions"
 
+/**
+ * `&fins=quiet`: "Offline outbox retry" reads as working and nothing has come of it for 18 minutes, its last step a
+ * command still running (`ChildState`'s `quiet`, from `QuietWatch`).
+ */
+const QUIET_SCENE = new URLSearchParams(globalThis.location?.search).get("fins") === "quiet"
+const QUIET_STATE: ChildState = { kind: "working", step: "Shell npm run test:outbox", quiet: { since: Date.now() - 18 * 60_000, step: "Shell npm run test:outbox", running: true } }
+
 /** The twelve, as the prototype has them: 2 need you, 5 working (one asking its Apex), 2 queued, 3 done. */
 /**
  * `&ask=fin`: "Dictation fallback"'s agent asked to move its Thread, as its Apex's host builds its row (`askWaiting`,
@@ -92,7 +99,7 @@ const CHILDREN: ChildFixture[] = ([
   { name: "swipe", title: "Thread list swipe", harness: "codex", model: "gpt-5.6-sol", state: { kind: "ended", outcome: "done", reason: "Swipe to archive now springs back below the threshold; PR on your branch." }, minutes: 31, toolUses: 52, objective: "Make the list's swipe to archive spring back below its threshold." },
   { name: "deep-links", title: "Settings deep links", harness: "claude", model: "claude-opus-5-5", state: { kind: "idle" }, minutes: 27, toolUses: 19, objective: "Open each settings page from a link." },
   { name: "pull-refresh", title: "Pull to refresh", harness: "grok", model: "grok-4.7", state: { kind: "ended", outcome: "done", reason: "Pull to refresh reads the account list again and keeps its place." }, minutes: 40, toolUses: 33, objective: "Pull to refresh reads the account list again." },
-] satisfies ChildFixture[]).map((fixture): ChildFixture => (DECISIONS_SCENE && DECIDED.has(fixture.name) ? { ...fixture, state: DECIDED.get(fixture.name)! } : fixture)).concat(PLACED_SCENE ? [PLACED_FIXTURE] : [])
+] satisfies ChildFixture[]).map((fixture): ChildFixture => (DECISIONS_SCENE && DECIDED.has(fixture.name) ? { ...fixture, state: DECIDED.get(fixture.name)! } : QUIET_SCENE && fixture.name === "outbox" ? { ...fixture, state: QUIET_STATE } : fixture)).concat(PLACED_SCENE ? [PLACED_FIXTURE] : [])
 
 /**
  * `&fins=limit`: the tree on 2026-11-05, as the host says it. Cursor ran out: three of its Fins moved to Claude Code,
@@ -146,7 +153,7 @@ function shown(state: ChildState, child: string, at: number, placed = false): Ch
       return { thread: { starting: state.step }, journal: {} }
     case "working":
       return {
-        thread: { working: true, ...(state.step && { step: state.step }) },
+        thread: { working: true, ...(state.step && { step: state.step }), ...(state.quiet && { quiet: state.quiet }) },
         journal: state.phase ? { latest: { id: `report:${child}:phase`, child: ThreadIdSchema.parse(child), status: "progress", summary: state.phase, ownerGeneration: 1, at } } : {},
       }
     case "blocked":
@@ -470,6 +477,16 @@ export function apexSnapshot(): LiveSnapshot {
       ...((ASK_SCENE === "move" || ASK_SCENE === "back") && { asks: [{ id: "1ead1ead-7000-4000-8000-0000000000a5", at: STARTED, want: ASK_SCENE === "back" ? { kind: "back" as const } : { kind: "move" as const, move: "1ead1ead-7000-4000-8000-0000000000a6", handsOff: true } }] }),
     },
     nativeAgents: { agents: apexFins(), limited: false },
+    // `wait=1`: its agent waits for CI on a pull request and a Fin, one met already (`TurnWaitLine`).
+    ...search.get("wait") === "1" && {
+      turnWait: {
+        wait: "1ead1ead-9000-4000-8000-00000000a1a1",
+        description: "Waiting for CI on #412",
+        items: [{ words: "acme/app#412 checks", met: true }, { words: "fin:sheet-motion", met: false }],
+        returnWhen: "all" as const,
+        endsBy: Date.now() + 20 * 60 * 60_000,
+      },
+    },
   }
 }
 

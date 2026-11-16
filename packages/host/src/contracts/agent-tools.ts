@@ -568,26 +568,15 @@ export function afterStart(wake: WakeOn, waited?: StartWaited): string {
  * proposes changes to it; it's written here once.
  */
 export const ORCHESTRATION_INSTRUCTIONS = [
-  `agents_*: other Threads this Thread starts, its ${FIN_WORD}s, which work for it; it is their ${APEX_WORD}.`,
-  "Background, parallel, cross-harness or remote work goes through `agents_start` (from a shell, `mako agents start` is the same tool).",
-  "Use `agents_start` for parallel or background work even when your harness has its own subagent tool; keep that tool for a quick look you wait for.",
-  "Start a Thread only when parallel work helps: a one-file change, a question, or work that needs your own context is faster in your turn.",
-  `Pass \`model\`, \`reasoning\` or \`fast\` only as the person said them ("Codex on high", "the fast one"); left out, a ${FIN_WORD} runs on what the person uses.`,
-  `Don't run an agent CLI with nohup: one you start from your shell still shows as your ${FIN_WORD}, but it can't report or ask, and a message to it has to stop its run.`,
-  `Each device runs as many ${FIN_WORD}s at once as its capacity, from its hardware and what a ${FIN_WORD} costs there, or the person's own number; past it a start is refused unless you pass \`queue: true\`, which starts it when one ends.`,
-  `When a ${FIN_WORD}'s harness runs out or should change, move it with \`agents_move\`: the same Thread goes on there with its whole conversation. Never start a new ${FIN_WORD} to take over from one.`,
-  `To attach another Thread to a ${FIN_WORD}'s work, pass \`context: [{ thread }]\`, never a path in the brief.`,
-  `To run work in order, pass \`after: [<${FIN_WORD} names>]\`: it starts once those finish, and if one fails or is stopped you're woken to decide instead.`,
+  `agents_*: other Threads this Thread starts, its ${FIN_WORD}s; it is their ${APEX_WORD}.`,
+  "Parallel, background, cross-harness or remote work goes through `agents_start`, even when your harness has its own subagent tool (keep that for a quick look you wait for); a one-file change, a question, or work that needs your own context is faster in your turn. Never run an agent CLI with nohup: it can't report or ask.",
   `After starting, end your turn: reports wake you. Don't poll \`agents_list\` or wait in a loop; when your next step needs a ${FIN_WORD}'s result, start it with \`mode: "wait"\`.`,
-  `The person writes to this Thread, not to its ${FIN_WORD}s: a message for one of them goes there with \`agents_send\` (\`forward: true\`) as your first call, then end your turn.`,
-  `A ${FIN_WORD}'s question or approval that wakes you is yours to answer with \`agents_answer\`, within your own access (approvals only on full access); leave it to the person with \`person: true\` when it's theirs to decide. One you leave unanswered for a minute goes to the person too.`,
-  `If you're a ${FIN_WORD}, started by another Thread (your ${APEX_WORD}), call \`agents_report\` when you finish, are blocked, or need a decision (with its options and the one you recommend); ending your turn without one reports how it ended. Finished but leaving a decision (a merge, a choice between results)? Report done with the question and options, and \`decides\` saying who decides: \`apex\` or \`person\`. Ready for review, or waiting on your ${APEX_WORD} or the person, is done with an \`action\` saying what they do next, never progress: progress is only for a turn that goes on, and a turn that ends on progress waiting on nothing Mako watches is reported as its result.`,
+  `The person writes to this Thread: a message for a ${FIN_WORD} goes there with \`agents_send\` (\`forward: true\`) as your first call, then end your turn. Answer a ${FIN_WORD}'s question with \`agents_answer\` within your access, or \`person: true\` when it's theirs.`,
+  `A ${FIN_WORD} whose harness runs out or should change moves with \`agents_move\`; never start a new one to take over.`,
+  `If you're a ${FIN_WORD}, call \`agents_report\` when you finish, are blocked, or need a decision; finished work that leaves a decision is done with its question, options and \`decides\`. Ready for review, or waiting on your ${APEX_WORD} or the person, is done with an \`action\`, never progress: progress is for a turn that goes on; a turn ending on progress that waits on nothing Mako watches reports as its result.`,
   REPORT_FOLLOW_UP_INSTRUCTIONS,
-  `To wait on a pull request, report progress with \`waitingOn\` naming it and what you wait for (checks, review or merge), then end your turn instead of polling its checks, because Mako wakes you with its outcome.`,
-  "Use pull_request_status for PR/CI status and waitingOn so Mako wakes you. Never use gh --watch. If direct gh status polling is necessary, poll no faster than once per 60 seconds per repository, reuse the response, and do not start an independent polling loop. A state-changing operation may have one targeted readback. On a secondary 403 or 429, stop requests across your work until Retry-After or the rate-limit reset permits them; without a header, wait at least 60 seconds and increase the wait after repeated limits. Fetch a terminal failure log once.",
-  `Other ${APEX_WORD}es of the person: read them with \`agents_list\` \`scope: apexes\` before touching shared files or branches; reading never wakes them.`,
-  `Message another ${APEX_WORD} (\`agents_send\` \`to: apex:<title>\`) only when the person asked you to, or when you need something only it can give or decide (it owns the files or branch you'd change, or its work blocks yours).`,
-  "Never message for status, thanks or acknowledgement: their digest already says how they stand. One message with everything it needs; its reply wakes you; don't reply to a reply unless it asks you something.",
+  "To wait on a pull request, report progress with `waitingOn` (checks, review or merge) and end your turn: Mako wakes you. Read PR and CI status with pull_request_status, never gh --watch. If you poll gh yourself: at most once a minute per repository; after a 403/429 stop all GitHub calls until Retry-After.",
+  `Read the person's other ${APEX_WORD}es with \`agents_list\` \`scope: apexes\` before touching shared files or branches; reading never wakes them. Message one only when the person asked or it alone can give or decide what you need.`,
 ].join(" ")
 
 /** A Fin as the front door's note shows it to its Apex: typed facts the host already holds, never its transcript. */
@@ -689,6 +678,9 @@ const START = [
   "By default it returns at once and its reports wake you (mode background, wake decisions): use that whenever you have other work or can end your turn.",
   "Use mode wait only when your next step can't go on without its result: you get the result here if it comes within " + WAIT_WORDS + ", else your turn ends and the result starts your next one.",
   "Don't wait or poll after starting.",
+  "Pass model, reasoning or fast only as the person said them (\"Codex on high\", \"the fast one\"); left out, it runs on what the person uses.",
+  "Past this device's capacity a start is refused unless you pass queue: true, which starts it when one ends; after: [names] starts it once those finish.",
+  "Never run an agent CLI with nohup instead: it shows as your Fin but can't report or ask.",
 ].join(" ")
 
 export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
@@ -828,7 +820,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
       description: [
         `Answer what one of this Thread's ${FIN_WORD}s waits on: the question its report asks, or its harness's own question or approval. The ${FIN_WORD} goes on at once.`,
         "Answer within your own access: an approval only when this Thread is on full access, a question on any.",
-        "Leave it to the person (person: true) when it's theirs to decide; it reaches them on every device with its options.",
+        "Leave it to the person (person: true) when it's theirs to decide; it reaches them on every device with its options. One you leave unanswered for a minute goes to the person too.",
       ].join(" "),
       fields: {
         to: `The ${FIN_WORD}'s name (fin:<name>) or Thread ID.`,
@@ -853,7 +845,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         `An idle or finished ${FIN_WORD} takes it as its next task in its own Thread. A working one takes it as deliver says: queue (the default) after its turn, for more to do; steer, into the turn it's running, when the message changes what it's doing now; interrupt, stopping that turn first, when what it's running is wrong.`,
         `One running in an agent CLI your shell started is stopped and its session resumed here with the message, its last step maybe cut short.`,
         `It returns at once, saying when that ${FIN_WORD}'s harness lets it hear the message; what the ${FIN_WORD} does reports back as its work does.`,
-        `Another ${APEX_WORD} (apex:<title>) hears it after its turn (steer only when its current work is wrong); its reply wakes you once; at most 3 an hour to one.`,
+        `Another ${APEX_WORD} (apex:<title>) hears it after its turn (steer only when its current work is wrong); its reply wakes you once; at most 3 an hour to one. Message one only when the person asked, or it owns the files or branch you'd change, or its work blocks yours; never for status, thanks or acknowledgement. One message with everything it needs; don't reply to a reply unless it asks you something.`,
       ].join(" "),
       fields: {
         to: `The ${FIN_WORD}'s name (fin:<name> as your note lists it) or Thread ID; another ${APEX_WORD}: apex:<title or Thread ID>.`,

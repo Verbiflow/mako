@@ -108,7 +108,8 @@ export const ChildStateSchema = z.discriminatedUnion("kind", [
     apexStopped: z.literal(true).optional(),
   }),
   z.object({ kind: z.literal("starting"), step: z.enum(["placing", "preparing", "booting", "launching"]) }),
-  z.object({ kind: z.literal("working"), step: note.optional(), phase: note.optional(), answered: FinAnsweredSchema.optional() }),
+  /** `quiet`: nothing came of it since `since`, past `QUIET_MS` (`QuietWatch`), its last step then and whether that still ran. */
+  z.object({ kind: z.literal("working"), step: note.optional(), phase: note.optional(), answered: FinAnsweredSchema.optional(), quiet: z.object({ since: z.number(), step: note.optional(), running: z.literal(true).optional() }).optional() }),
   /** `waitingOn`: what its last report said it waits on, since `since`, the report's time; Mako wakes it on a pull request's outcome. */
   z.object({ kind: z.literal("idle"), waitingOn: waitingOn.optional(), since: z.number().optional() }),
   z.object({ kind: z.literal("blocked"), question: note, on: z.enum(["lead", "person", "approval"]), ask: FinAskSchema.optional(), waitingOn: waitingOn.optional() }),

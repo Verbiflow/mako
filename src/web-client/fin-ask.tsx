@@ -14,8 +14,9 @@ import { noteAnswered } from "./install"
  * The answer is the person's own, and reaches the Fin as its next step. In the Inbox (`from`, its Apex's name) the same
  * card sits in the page, the Apex named before the Fin.
  */
-export function FinAskCard({ apex, ask, more, answerTyped, from }: { apex: string; ask: PersonAsk; more: number; answerTyped: (answer: ((text: string) => boolean) | null) => void; from?: string }) {
+export function FinAskCard({ apex, ask, more, answerTyped, from, onOpen }: { apex: string; ask: PersonAsk; more: number; answerTyped: (answer: ((text: string) => boolean) | null) => void; from?: string; onOpen?: () => void }) {
   const [sent, setSent] = useState<FinAnswer | undefined>(undefined)
+  const [words, setWords] = useState("")
   const send = (answer: FinAnswer) => {
     if (sent) return
     setSent(answer)
@@ -86,6 +87,30 @@ export function FinAskCard({ apex, ask, more, answerTyped, from }: { apex: strin
             ))
           )}
         </div>
+        {/* In the Inbox there's no dock composer under the card: its own field, and the Thread to open. */}
+        {from && !approval ? (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault()
+              if (words.trim()) send({ answer: words.trim() })
+            }}
+          >
+            <input
+              data-fin-typed
+              value={words}
+              onChange={(event) => setWords(event.target.value)}
+              disabled={Boolean(sent)}
+              aria-label={`Answer ${ask.title} in your own words`}
+              placeholder={options.length ? "Or your own words" : "Your answer"}
+              className="web-ask-input"
+            />
+          </form>
+        ) : null}
+        {from && onOpen ? (
+          <div className="web-ask-options" data-row role="group" aria-label="More">
+            <button type="button" data-fin-open className="web-ask-option" onClick={onOpen}>Open {from}</button>
+          </div>
+        ) : null}
       </div>
     </div>
   )

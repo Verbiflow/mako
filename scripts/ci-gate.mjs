@@ -38,6 +38,8 @@ export const STEPS = [
   [3, "npm run test:transcript-events"],
   [12, "npm run test:stage"],
   [0, "npm run test:fin-words"],
+  // An Apex under a 30-Fin storm and a Fin's backlog, each held to its targets; timed, so it runs alone (`ALONE`).
+  [65, "npm run test:comms-storm"],
   [2, "npm run test:setup"],
   [1, "npm run test:fin-row-time"],
   [0, "npm run test:steer-notices"],
@@ -99,6 +101,8 @@ export const STEPS = [
   [74, "npm run test:agents-wake"],
   [3, "npm run test:fins-reach-released-apex"],
   [68, "npm run test:fin-pull-waits"],
+  // The mako server's instructions fit Claude's 4,096-character cut, every rule inside it.
+  [1, "npm run test:mako-instructions"],
   // A turn's wait: armed, met, timed and fired once through restarts, a cancel racing it and a sleep.
   [1, "npm run test:turn-waits"],
   [12, "npm run test:fin-resume"],
@@ -475,8 +479,9 @@ const ALONE = [
   /scripts\/test-terminal-backpressure\.mjs\b/,
   // It times idle cuts in a recording against the wall clock to within 120 ms; beside another part it missed by 230.
   /scripts\/test-control-recording-idle\.ts\b/,
-  // The agent views app it starts, and the desk it loads from a cold Vite, took past 90 s beside another lane's Electron.
+  // Beside another lane's Electron, the host took 73 s to start the agent views app, and createTarget passed 90 s.
   /scripts\/test-fixture-desk\.mjs\b/,
+  /scripts\/test-comms-storm\.ts\b/,
 ]
 
 /** Evidence a failed step leaves, by its npm script, run after it: its own exit stays the result. */

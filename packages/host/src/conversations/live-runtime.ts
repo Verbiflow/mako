@@ -227,6 +227,8 @@ export interface ConversationChildren {
   edgeWritten?(op: string): void
   /** The conversation's Fins as roster entries, the same array until one of them changes. */
   roster(conversation: string): readonly import("../contracts/native-agents.js").NativeAgent[]
+  /** The conversation's armed wait as its waiting line reads (`turnWaitLine`), the same object until it changes. */
+  turnWaitLine?(conversation: string): import("../contracts/turn-waits.js").TurnWaitLine | undefined
   /** Whether the conversation hears its Thread's Fins move: its Thread's newest Session's. Its Fins hold no other. */
   showsFins?(conversation: string): boolean
   /** Stops one of them, by its Thread: false when it isn't the conversation's or has nothing running. */

@@ -17,8 +17,8 @@ export function ThreadScratchSection() {
     finally { setBusy(false) }
   }
   return <section>
-    <h3 className="text-ui font-medium">Disposable Thread scratch</h3>
-    <p className="mt-0.5 pb-3 text-label text-muted-foreground">Preview only by default. Registered clones, benchmark worlds and packaging scratch can go after their Thread ends or seven idle days, when no provider, terminal or process uses them. Ordinary Thread data and unregistered folders stay. A .keep file in a scratch root keeps it.</p>
+    <h3 className="text-ui font-medium">Thread data and scratch</h3>
+    <p className="mt-0.5 pb-3 text-label text-muted-foreground">Preview only by default. New Fin data folders can go after their Thread finishes, every ancestor closes or is archived, and nothing uses them. Personal Threads and unknown owners are kept. Disposable scratch can also expire after the idle limit. Shared app state and legacy folders stay. A .keep file retains either root.</p>
     {report ? <ListCard>
       <SettingRow title="Scratch cleanup" description="Removal checks after startup, hourly and on Thread events. Enabling it authorizes removal of eligible registered scratch on the next pass. Preview never removes files.">
         <select aria-label="Scratch cleanup" disabled={busy} value={report.settings.mode} onChange={event => {
@@ -26,16 +26,22 @@ export function ThreadScratchSection() {
           if (mode === "preview" || mode === "remove") void save({ ...report.settings, mode })
         }}><option value="preview">Preview only</option><option value="remove">Remove disposable scratch</option></select>
       </SettingRow>
-      <SettingRow title="Idle days" description="An ended Thread does not need this wait. Unknown or active ownership always keeps its files.">
+      <SettingRow title="Thread data cleanup" description="Separate opt-in for registered Fin data, including proof and test outputs. An open Apex keeps its tree’s data. Shared app state and legacy roots never qualify. Preview never removes files.">
+        <select aria-label="Thread data cleanup" disabled={busy} value={report.settings.dataMode ?? "preview"} onChange={event => {
+          const dataMode = event.target.value
+          if (dataMode === "preview" || dataMode === "remove") void save({ ...report.settings, dataMode })
+        }}><option value="preview">Preview only</option><option value="remove">Remove finished Fins' data</option></select>
+      </SettingRow>
+      <SettingRow title="Idle days" description="Applies only to disposable scratch. Thread data always needs a finished owner. Unknown or active ownership keeps its files.">
         <input aria-label="Scratch idle days" type="number" min={1} max={3650} value={report.settings.idleDays} disabled={busy} onChange={event => {
           const idleDays = event.target.valueAsNumber
           if (Number.isInteger(idleDays) && idleDays >= 1 && idleDays <= 3650) void save({ ...report.settings, idleDays })
         }} />
       </SettingRow>
-      {report.entries.slice(0, 100).map(row => <SettingRow key={row.thread} title={row.title ?? `Thread ${row.thread}`} description={`${row.reason} ${row.privateBytes === null ? "Exclusive bytes are not measured on this host." : `${formatBytes(row.privateBytes)} private bytes.`} No files were removed by this preview.`}>
-        <Toggle label={`Keep scratch for ${row.title ?? row.thread}`} on={report.settings.kept.includes(row.thread)} onChange={() => void save({ ...report.settings, kept: report.settings.kept.includes(row.thread) ? report.settings.kept.filter(thread => thread !== row.thread) : [...report.settings.kept, row.thread] })} />
+      {report.entries.slice(0, 100).map(row => <SettingRow key={`${row.thread}:${row.kind}`} title={`${row.title ?? `Thread ${row.thread}`} · ${row.kind === "data" ? "data" : "scratch"}`} description={`${row.reason} ${row.privateBytes === null ? "Exclusive bytes are not measured on this host." : `${formatBytes(row.privateBytes)} private bytes.`} No files were removed by this preview.`}>
+        <Toggle label={`Keep data and scratch for ${row.title ?? row.thread}`} on={report.settings.kept.includes(row.thread)} onChange={() => void save({ ...report.settings, kept: report.settings.kept.includes(row.thread) ? report.settings.kept.filter(thread => thread !== row.thread) : [...report.settings.kept, row.thread] })} />
       </SettingRow>)}
-      {!report.entries.length ? <p className="text-label text-faint">No registered scratch yet. Existing Thread data is kept.</p> : null}
+      {!report.entries.length ? <p className="text-label text-faint">No registered roots yet. Existing Thread and app data stay in place.</p> : null}
       {report.entries.length > 100 ? <p className="text-label text-faint">Showing 100 of {report.entries.length} registered folders.</p> : null}
       <Action tone="outline" size="xs" disabled={busy} onClick={() => void read()}>Preview scratch</Action>
     </ListCard> : null}

@@ -321,7 +321,7 @@ const requestsOf = (conversation: string): LiveRequest[] => owner.snapshot(conve
 
 async function until(what: string, check: () => boolean, ms = 10_000): Promise<void> {
   for (const deadline = Date.now() + ms; !check(); await delay(2))
-    if (Date.now() > deadline) throw new Error(`timed out: ${what}`)
+    if (Date.now() > deadline) throw new Error(`timed out (seed ${SEED}): ${what}`)
 }
 
 /** Restarts the host under the clients, as a quit and reopen does: in-flight calls fail, its journal is read again. */

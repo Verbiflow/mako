@@ -235,6 +235,8 @@ export class LiveConversations {
         // A journal keeps no children: their engine says how they are now, and a window that holds the last revision
         // hears what moved while none was in memory.
         if (this.takeChildren(resident)) this.schedule(resident)
+        // Nor its wait: the Thread store says whether one is armed now.
+        if (this.takeWait(resident)) this.schedule(resident)
         // A switch that waited behind another when the last host ended goes on, as it was asked to.
         if (this.transfers.pending(resident)?.behind) queueMicrotask(() => this.dispatch.drain(resident))
       },
@@ -2069,6 +2071,25 @@ export class LiveConversations {
     return true
   }
 
+  /**
+   * The conversation's armed wait changed (armed, an item met, fired, ended): its windows' waiting line reads it
+   * again, at once. One not in memory reads it when it's next loaded.
+   */
+  waitChanged(id: string): void {
+    const resident = this.records.get(id)
+    if (!resident || this.records.isReleased(resident) || !this.takeWait(resident)) return
+    this.keep(resident)
+  }
+
+  /** Whether the snapshot took a change of its wait's line. */
+  private takeWait(resident: Resident): boolean {
+    const turnWait = this.dependencies.agents?.()?.turnWaitLine?.(resident.snapshot.session.id)
+    if (turnWait === resident.snapshot.turnWait) return false
+    if (turnWait && resident.snapshot.turnWait && JSON.stringify(turnWait) === JSON.stringify(resident.snapshot.turnWait)) return false
+    resident.snapshot = { ...resident.snapshot, turnWait }
+    return true
+  }
+
   /** Whether the roster took a change of its children. */
   private takeChildren(resident: Resident): boolean {
     const agents = this.dependencies.agents?.()?.roster(resident.snapshot.session.id)
@@ -2323,6 +2344,7 @@ export class LiveConversations {
             : undefined,
         goal: previous.goal !== snapshot.goal ? (snapshot.goal ?? null) : undefined,
         side: previous.side !== snapshot.side ? (snapshot.side ?? null) : undefined,
+        turnWait: previous.turnWait !== snapshot.turnWait ? (snapshot.turnWait ?? null) : undefined,
         historyFailure: previous.historyFailure !== snapshot.historyFailure ? (snapshot.historyFailure ?? null) : undefined,
         harnessTurns: previous.harnessTurns !== snapshot.harnessTurns ? snapshot.harnessTurns : undefined,
         spentThrough: previous.spentThrough !== snapshot.spentThrough ? (snapshot.spentThrough ?? null) : undefined,

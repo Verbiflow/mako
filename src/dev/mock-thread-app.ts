@@ -25,7 +25,7 @@ import {
   installThreadAppDriver,
   putAppMarks,
   putRoom,
-  putThreadApp,
+  putThreadApp as putAppView,
   threadAppStore,
   type AppOutputKey,
   type ThreadAppView,
@@ -35,6 +35,9 @@ const CWD = "/Users/you/mako"
 const HOST = "rail-re-render-audit.thread.localhost"
 const PORT = 20140
 const MB = 1024 ** 2
+
+/** The fixture's supplied values stand in for host reads, not optimistic local changes. */
+const putThreadApp = (cwd: string, view: ThreadAppView) => putAppView(cwd, view, "read")
 
 const dim = (text: string) => `\x1b[2m${text}\x1b[0m`
 const green = (text: string) => `\x1b[32m${text}\x1b[0m`
@@ -200,8 +203,7 @@ export function mockSetupMoment(moment: MockSetupMoment): void {
 export function installMockThreadApp(): void {
   const scenario = new URLSearchParams(location.search).get("app")
   if (!scenario) return
-  // The strip follows the folder on screen, as the host's driver does, so the sidebar marks it from the strip's view.
-  threadAppStore.set({ followed: [CWD] })
+  const watched = new Map<string, number>()
   const outputs = new Map<AppOutputKey, string>()
   const listeners = new Map<AppOutputKey, Set<(text: string, reset: boolean) => void>>()
   const timers = new Set<ReturnType<typeof setTimeout>>()
@@ -390,6 +392,21 @@ export function installMockThreadApp(): void {
   }
 
   installThreadAppDriver({
+    watch: (cwd) => {
+      watched.set(cwd, (watched.get(cwd) ?? 0) + 1)
+      threadAppStore.set({ followed: [...watched.keys()] })
+      const view = threadAppStore.get().byCwd[cwd]
+      if (view) putThreadApp(cwd, view)
+      let stopped = false
+      return () => {
+        if (stopped) return
+        stopped = true
+        const count = (watched.get(cwd) ?? 1) - 1
+        if (count) watched.set(cwd, count)
+        else watched.delete(cwd)
+        threadAppStore.set((state) => ({ followed: [...watched.keys()], fresh: state.fresh.filter((folder) => watched.has(folder)) }))
+      }
+    },
     start,
     restart: start,
     stop: () => {

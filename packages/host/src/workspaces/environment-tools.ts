@@ -340,7 +340,8 @@ export function commandEnvironment(environment?: ThreadEnvironment): NodeJS.Proc
   delete base.ELECTRON_RUN_AS_NODE
   delete base.MAKO_CONVERSATIONS_TOKEN
   applyControlEnvironment(base)
-  applyThreadEnvironment(base, environment)
+  // App state must never follow an agent's retirable artifact root, even if its launch binding reaches this caller.
+  applyThreadEnvironment(base, environment && { ...environment, threadDataDir: undefined })
   return base
 }
 
@@ -2499,7 +2500,7 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
     "app_start",
     {
       description:
-        "Run this Thread's own copy of the app when you need it running to try or test your change, instead of starting a dev server yourself. Starts the recipe's processes (or one target's, such as web or desktop) on this Thread's ports and waits up to about 25 seconds for each to be ready: its port answering, or its ready command passing. They keep running after your turn and after Mako restarts, and stay out of other Threads' way. A process whose port something else holds is refused, naming who holds it; when this Mac is critically short of memory, the start waits in line and goes ahead by itself once there's room. Returns each process's state and, for one that crashed, the end of its log; for one whose ready command hasn't passed, what its latest try printed.",
+        "Run this Thread's own copy of the app when you need it running to try or test your change, instead of starting a dev server yourself. Starts the recipe's processes (or one target's, such as web or desktop) on this Thread's ports and waits up to about 25 seconds for each to be ready: its port answering, or its ready command passing. They keep running after your turn and after Mako restarts, and stay out of other Threads' way. A process whose port something else holds is refused, naming who holds it; when this Mac is critically short of memory, the start waits in line and goes ahead by itself once there's room. Returns each process's state and, for one that crashed, the end of its log; for one whose ready command hasn't passed, what its latest try printed. In plan mode, app_status, app_logs and app_probe still read the app; if this is refused, the user can press Run app.",
       inputSchema: aimed,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },

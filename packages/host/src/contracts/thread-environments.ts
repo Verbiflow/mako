@@ -23,14 +23,16 @@ export interface ThreadEnvironmentValues {
 
 /** A Thread's values as its agents receive them: its folder's app's. */
 export interface ThreadEnvironment extends Omit<ThreadEnvironmentValues, "usedAt"> {
-  /** The agent's own Thread; every Thread in the app's folder shares its values. Absent for an app a person runs from the desk. */
+  /** The agent's own Thread. App ports/state may be shared; artifacts follow this ID. Absent for a desk-run app. */
   thread?: ThreadId
   /** The conversation's Session, which an agent CLI its shell runs is found by (`AgentRuns`). */
   session?: string
   /** `THREAD_PORT_COUNT` ports from `port`. */
   ports: number
-  /** Private to the Thread and kept for its life; outside the checkout, so Git never sees it. */
+  /** App state, shared by Threads using the same checkout. Recipe {data} always resolves here. */
   dataDir: string
+  /** Agent artifacts owned by this Thread; absent on app processes and legacy launch bindings. */
+  threadDataDir?: string
   /** Disposable, separately owned per Thread; never the shared app data folder. */
   scratchDir?: string
   /** The project recipe's names for these values, such as `PORT`, resolved for this Thread. */
