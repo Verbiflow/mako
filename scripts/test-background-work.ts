@@ -170,6 +170,13 @@ function replay(capture: Captured, stopAt?: (message: SDKMessage, index: number)
   agents.project({ ...base, type: "system", subtype: "task_notification", task_id: "n", status: "completed", output_file: "", summary: "Monitor ended" })
   assert.equal(agents.dropping, false, "its notification took it off what was dropped")
   assert.deepEqual(agents.settleDropped(), [])
+  // A level that briefly leaves a live Monitor out, then lists it again, ended nothing.
+  agents.project({ ...base, type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "o", task_type: "monitor", description: "CI checks", ambient: true }] })
+  agents.project({ ...base, type: "system", subtype: "background_tasks_changed", tasks: [] })
+  agents.project({ ...base, type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "o", task_type: "monitor", description: "CI checks", ambient: true }] })
+  assert.equal(agents.dropping, false, "listed again, it isn't dropped")
+  assert.deepEqual(agents.settleDropped(), [], "and is never settled unknown")
+  assert.equal(agents.get("o")?.state.kind, "working")
 }
 
 {

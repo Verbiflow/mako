@@ -188,9 +188,10 @@ type Engine = LiveEngineApi<Live>
 
 /**
  * How long a task the level dropped waits for the notification that says how it ended, between turns: a level or a
- * result settles it in a turn, and nothing may come between them. A notification follows its level within a second.
+ * result settles it in a turn, and nothing may come between them. A notification follows its level within a second
+ * as a rule; a slow one past this still reaches the Fin, whose result then stands alone (`Agents.current`).
  */
-const DROPPED_GRACE_MS = 5_000
+const DROPPED_GRACE_MS = 30_000
 
 /** Between turns, settles what the level dropped once nothing said its end within `DROPPED_GRACE_MS`. */
 function settleDroppedLater(engine: Engine, live: Live): void {
