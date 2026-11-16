@@ -9,6 +9,7 @@ import {
   type HarnessUpdateCommand,
   type HarnessUpdateInfo,
   type HarnessUpdates,
+  updateFailureWords,
 } from "../contracts/harness-updates.js"
 import { compareVersions, parseVersion } from "../contracts/runtime-version.js"
 import { runtimeVersions } from "../contracts/harness-versions.js"
@@ -183,6 +184,9 @@ const DEFAULTS: Timing = {
 /** The tail of an updater's output kept for the receipt and the log. */
 const OUTPUT_TAIL = 16 * 1024
 const REGISTRY_BODY_LIMIT = 256 * 1024
+
+/** What an updater or installer printed as it failed: the host's log keeps it, and the person reads a sentence. */
+class UpdaterOutput extends Error {}
 
 export class RuntimeUpdates {
   private readonly options: RuntimeUpdatesOptions & Timing
@@ -911,12 +915,14 @@ export class RuntimeUpdates {
       await this.persist()
       return done
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      hostWarn("runtime", "install failed", { provider, error: message })
       const failed = withoutPhase({
         ...(this.updates[provider] ?? current),
         result: {
           at: startedAt,
           outcome: "failed",
-          message: error instanceof Error ? error.message : String(error),
+          message,
         },
       })
       this.updating.delete(provider)
@@ -968,15 +974,14 @@ export class RuntimeUpdates {
           .slice(-3)
           .join(" ")
           .slice(-600)
-        throw new Error(
-          tail || `${plan.command} exited with ${outcome.code ?? "a signal"}`
-        )
+        throw new UpdaterOutput(tail || `${plan.command} exited with ${outcome.code ?? "a signal"}`)
       }
       return null
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       hostWarn("runtime", `${action} command failed`, { provider, error: message })
-      return message
+      // What the updater printed is the log's; the person reads why in a sentence (`updateFailureWords`).
+      return error instanceof UpdaterOutput ? updateFailureWords(message) : message
     } finally {
       release()
     }
