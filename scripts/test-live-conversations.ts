@@ -19,6 +19,7 @@ import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP } from "@mako/host/contracts/providers-acp"
 import { LIVE_FRAME_MS, type LiveDriverEvent } from "@mako/host/contracts/live-conversations"
+import { LONG_ANSWER_CHARS, LONG_ANSWER_FLUSH_MS } from "@mako/host/conversations/answer-pace"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
@@ -2143,6 +2144,55 @@ async function batchesLeadThenPace() {
   }
 }
 
+/**
+ * A long answer going on goes out at a reader's pace (`LONG_ANSWER_FLUSH_MS`), not each frame: every word, in order, in
+ * far fewer batches. A paragraph's end and a change of another kind still go on the frame, with what waited.
+ */
+async function longAnswerPaced() {
+  const f = fixture()
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+  try {
+    await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
+    f.started.resolve(f.state)
+    await tick()
+    f.owner.snapshot(f.id)
+    const say = (text: string) => f.owner.observe({ type: "live-update", id: f.id, update: { kind: "text", text } })
+    say("word ".repeat(LONG_ANSWER_CHARS / 5))
+    await sleep(LIVE_FRAME_MS * 2)
+    f.events.length = 0
+    const batches = () => f.events.filter((event) => event.type === "live-batch").length
+    const started = performance.now()
+    for (let word = 0; word < 120; word++) {
+      say(` w${word}`)
+      await sleep(10)
+    }
+    await sleep(LONG_ANSWER_FLUSH_MS + 50)
+    const elapsed = performance.now() - started
+    const count = batches()
+    assert.ok(count >= 2 && count <= Math.ceil(elapsed / LONG_ANSWER_FLUSH_MS) + 2, `${count} batches in ${Math.round(elapsed)} ms`)
+    const text = f.events.flatMap((event) => (event.type === "live-batch" ? event.batch.updates : [])).map((update) => (update.kind === "text" ? update.text : "")).join("")
+    assert.ok(text.startsWith(" w0 w1") && text.endsWith(" w119"), "every word, in order")
+    // A paragraph's end goes on the frame.
+    await sleep(LONG_ANSWER_FLUSH_MS)
+    f.events.length = 0
+    say(" end.\n\nNext")
+    await sleep(LIVE_FRAME_MS + 20)
+    assert.equal(batches(), 1, "a paragraph's end isn't held for the reader's pace")
+    // A tool call goes on the frame and carries the words held before it.
+    await sleep(LIVE_FRAME_MS)
+    f.events.length = 0
+    say(" more words")
+    await sleep(5)
+    say(" and more")
+    f.owner.observe({ type: "live-update", id: f.id, update: { kind: "tool", id: "build", title: "Build", status: "running" } })
+    await sleep(LIVE_FRAME_MS + 20)
+    const kinds = f.events.flatMap((event) => (event.type === "live-batch" ? event.batch.updates.map((update) => update.kind) : []))
+    assert.ok(kinds.includes("tool") && kinds.includes("text"), `the tool call went on the frame with the words before it (${kinds})`)
+  } finally {
+    await f.cleanup()
+  }
+}
+
 async function coalescedToolBursts() {
   const f = fixture()
   try {
@@ -2964,6 +3014,7 @@ await providerExitContinued()
 await restartContinued()
 await coalescedToolBursts()
 await batchesLeadThenPace()
+await longAnswerPaced()
 await quietTurnsCarryLastActivity()
 await nativeActivityLastsItsTurn()
 await failureIsolationAndAssets()
