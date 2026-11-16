@@ -3,6 +3,9 @@ import { ChevronRightIcon } from "lucide-react"
 import { AgentGroup } from "@/components/transcript/agent-group"
 import { CompactPresentationContext, type CompactSteps } from "@/components/transcript/compact-presentation"
 import { ToolRow } from "@/components/transcript/tool-row"
+import { RunningStep } from "@/components/transcript/tool-steps"
+import { useRunningSteps } from "@/components/transcript/use-running-steps"
+import type { ToolCall } from "@/extend/slots"
 import { Shimmer } from "@/components/ui/shimmer"
 import { groupAgentCalls } from "@/lib/agent-groups"
 import { formatDuration } from "@/lib/format"
@@ -45,6 +48,7 @@ export function PhoneSteps({ run }: { run: CompactSteps }) {
             <span key={line.newest} className={cn("min-w-0 truncate", fresh && "web-steps-new", !failed && !run.interrupted && line.count && "text-faint")}>
               {line.running ? <Shimmer className="min-w-0 truncate">{line.newest}</Shimmer> : line.newest}
             </span>
+            {line.running && newest ? <LineSteps call={newest} /> : null}
           </>
         ) : null}
         <ChevronRightIcon aria-hidden className="size-4 shrink-0 text-faint" />
@@ -63,6 +67,15 @@ export function PhoneSteps({ run }: { run: CompactSteps }) {
       </Sheet>
     </>
   )
+}
+
+/**
+ * A running `js` call's step and its count, in the line beside its words, as the desk's row says them
+ * (`RunningStep`): the line is all a phone shows of a run until it's opened, so a long program shows how it goes there.
+ */
+function LineSteps({ call }: { call: ToolCall }) {
+  const steps = useRunningSteps(call)
+  return steps ? <RunningStep steps={steps} /> : null
 }
 
 /** A run's calls as the desk's rows, agents started together as one group; only steps begun just now rise in. */

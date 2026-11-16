@@ -4,6 +4,8 @@ import { createRoot } from "react-dom/client"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { applyLiveSnapshot } from "@/state/live-recovery"
+import { toolStepped } from "@/state/tool-steps"
+import type { ToolSteps } from "@mako/host/contracts/tool-steps"
 import { acpStore } from "@/state/acp"
 import { threadsStore } from "@/state/thread-store"
 import { store } from "@/state/session"
@@ -144,7 +146,7 @@ const requests: LiveRequest[] = [
   request("33333333-3333-4333-8333-333333333333", "Explain what changed", scene.after, modeAfter),
 ]
 
-function snapshot(status: "ready" | "running", extra: LiveRequest[] = []): LiveSnapshot {
+function snapshot(status: "ready" | "running", extra: LiveRequest[] = [], running?: LiveSnapshot["blocks"]): LiveSnapshot {
   return {
     session: {
       id: conversation,
@@ -173,7 +175,7 @@ function snapshot(status: "ready" | "running", extra: LiveRequest[] = []): LiveS
       { type: "text", text: "All 42 payment tests pass." },
       { type: "user", text: requests[2]!.text, requestId: requests[2]!.id },
       { type: "text", text: answer },
-      ...(status === "running" ? [{ type: "user" as const, text: "Now check the webhook retries too", requestId: "44444444-4444-4444-8444-444444444444" }] : []),
+      ...(status === "running" ? running ?? [{ type: "user" as const, text: "Now check the webhook retries too", requestId: "44444444-4444-4444-8444-444444444444" }] : []),
     ],
     control: { activeBindingId: conversation, bindings: [], merges: [], transfers: [], actions: [] },
     ...(agents && { nativeAgents: { agents: namedRoster(conversation, agents), limited: false } }),
@@ -226,6 +228,18 @@ const check = {
       { id: "55555555-5555-4555-8555-555555555555", text, attachments: [], status: "queued", tuning: requests[2]!.tuning },
     ])
     applyLiveSnapshot(current)
+  },
+  /**
+   * A turn running a `mako-computer` `js` call, its steps as the host relays them (`tool-steps`, applied as the client
+   * applies a heard line); `null` once the call answers. The turn stays running until `setRunning(false)`.
+   */
+  jsCall(steps: ToolSteps | null) {
+    const asked = "66666666-6666-4666-8666-666666666666"
+    applyLiveSnapshot(snapshot("running", [{ id: asked, text: "Check the session, round by round", attachments: [], status: "dispatching", tuning: requests[2]!.tuning, mode: modeAfter }], [
+      { type: "user", text: "Check the session, round by round", requestId: asked },
+      { type: "tool", id: "js-call", name: "mcp__mako-computer__js", title: "mako-computer: js", toolKind: "other", input: JSON.stringify({ title: "Check the session, round by round", code: "await control.status()" }), status: steps ? "in_progress" : "completed", ...(!steps && { output: "twelve rounds checked" }) },
+    ]))
+    toolStepped(conversation, steps)
   },
   /** The recognizer hears `words`, settled or still being heard. */
   say(words: string, final = false) {
