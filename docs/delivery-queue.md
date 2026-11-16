@@ -145,9 +145,13 @@ schedules, and a failing schedule is pinned there.
     message goes, the plain messages from the same sender queued right behind
     it and admitted after it (no attachments, grants, pause, edit, hold, digest
     or continuation, and the same `notification`) go with it, in order, within
-    `JOINED_MAX` and `JOINED_CHARS` (`foldQueued`). Until then each is its own
-    row; a folded one is canceled with `joinedInto`, never dropped, and its ID
-    resolves to the message that carried it. An interrupt's message goes alone.
+    `JOINED_MAX` and `JOINED_CHARS` (`foldQueued`). The fold is written only
+    as the send commits, in the write that records it handed over: a send that
+    goes no further (a Stop, a withdrawal, a refusal, a write that fails) leaves
+    every row as it was. Until then each is its own row; a folded one is
+    canceled with `joinedInto`, never dropped, and its ID resolves to the
+    message that carried it, which never folds again. An interrupt's message
+    goes alone, and another Apex's message, owed its own reply, never folds.
 
 ## What each failure leaves
 

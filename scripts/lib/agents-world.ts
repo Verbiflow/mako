@@ -208,6 +208,8 @@ export interface WorldOptions {
   references?: AgentsDeps["references"]
   /** A harness refusing a prompt before taking it, with its words: nothing was sent. A promise answers late, as a slow refusal does. */
   refusePrompt?: (conversation: string, harness: string) => string | undefined | Promise<string | undefined>
+  /** A refusal of a prompt before it's sent, as the harness's own error (`TurnInProgressError`, say): thrown after "not-accepted". */
+  refusePromptWith?: (conversation: string, harness: string) => Error | undefined
   /**
    * Each harness's accounts in the person's order, read as they stand (change one to spend it), and which is
    * selected: with them a Fin whose account runs out moves (`AgentsDeps.accounts`), and every launch goes through
@@ -636,6 +638,11 @@ export class AgentsWorld {
       },
       prompt: async (binding, text, _attachments, settings, dispatch) => {
         const id = this.live.ownerOf(binding)
+        const refusal = this.options.refusePromptWith?.(id, harness)
+        if (refusal) {
+          dispatch.report({ kind: "not-accepted", source: "preflight", reason: refusal.message })
+          throw refusal
+        }
         const refused = await this.options.refusePrompt?.(id, harness)
         if (refused) {
           dispatch.report({ kind: "not-accepted", source: "preflight", reason: refused })

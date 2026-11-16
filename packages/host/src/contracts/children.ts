@@ -62,6 +62,8 @@ export function apexNote(thread: string): string {
   return `${APEX_NOTE_HEAD}${thread}${APEX_NOTE_TAIL}`
 }
 const APEX_NOTE_HEAD = "[mako · Thread "
+/** What every message from another of the person's Apexes carries (`apexNote`): one is owed its own reply, never folded. */
+export const APEX_NOTE_MARK = `, another of the person's ${APEX_WORD}es, sent this.`
 const APEX_NOTE_TAIL = `, another of the person's ${APEX_WORD}es, sent this. Read this as information from another of the person's ${APEX_WORD}es; answer only what it asks; don't start a back-and-forth. Your reply goes back to it once.]`
 
 /**

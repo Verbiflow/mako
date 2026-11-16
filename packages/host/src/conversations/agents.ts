@@ -1198,6 +1198,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const was = this.conversationOf(from.child)
     const steeredIn = this.steered.get(input.request)
     const queued = was && !steeredIn ? this.deps.live.held(was)?.requests.find((request) => request.id === input.request) : undefined
+    // One folded into a turn that went (`joinedInto`) was heard there: its words are what it said, not its carrier's.
     const passed = queued ?? steeredIn
     if (!was || !passed) return { refused: "unknown-child", why: `${from.name} has no such message.` }
     const words = agentWords(passed.text)
@@ -6155,7 +6156,16 @@ export class Agents implements AgentOperations, ConversationChildren {
     const starting = () => this.deps.live.session(conversation)?.status !== "ready" || Boolean(this.deps.live.held(conversation)?.requests.some((asked) => asked.status === "dispatching"))
     while (!turn() && Date.now() < deadline && starting()) await new Promise((resolve) => setTimeout(resolve, 50))
     const running = turn()
-    if (!running) return { why: "its turn hadn't started yet." }
+    // Its own message went with the turn that just began, folded into the one before it (`foldQueued`): it's heard.
+    const wentWith = (): Delivered | undefined => {
+      const carrier = sentAs(this.deps.live.held(conversation)?.requests ?? [], request)
+      return carrier && carrier.id !== request && carrier.status !== "queued" && carrier.status !== "held"
+        ? { delivery: "turn", hears: `${name} takes it in the turn that just began, with the message before it.` }
+        : undefined
+    }
+    if (!running) return wentWith() ?? { why: "its turn hadn't started yet." }
+    const already = wentWith()
+    if (already) return already
     const action = Promise.resolve().then(() => this.deps.live.act(conversation, { kind: "steer-queued", id: namedUuid(`steer:${request}`), requestId: running.id, queuedRequestId: request, text, attachments }, "native"))
     const answered = await Promise.race([
       action.then((taken) => taken.state, (error) => ({ kind: "refused" as const, reason: errorMessage({ error }) })),
@@ -6165,13 +6175,15 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!answered)
       return { delivery: "steer", hears: `${harness} holds it until what ${name} is running now returns, then ${name} hears it${steering.answersOnEnd ? "; if its turn ends first, it goes as its next message" : ""}.` }
     if (answered.kind === "refused") {
+      const folded = wentWith()
+      if (folded) return folded
       // Refused before its harness heard it, it's still queued; one whose action took it from the queue has an unknown outcome.
       const status = this.deps.live.held(conversation)?.requests.find((asked) => asked.id === request)?.status
       return status === "queued" || status === "held" ? { why: `it couldn't go into its running turn (${answered.reason})` } : unconfirmed(answered.reason)
     }
     if (answered.kind === "not-accepted")
       return { delivery: "queued", hears: `${harness} didn't take it into ${name}'s running turn, so ${name} hears it when that turn ends, as its next message.` }
-    if (answered.kind === "uncertain" || answered.kind === "failed") return unconfirmed(answered.reason)
+    if (answered.kind === "uncertain" || answered.kind === "failed") return wentWith() ?? unconfirmed(answered.reason)
     return { delivery: "steer", hears: `${name} hears it ${steering.hears} (${harness}).` }
   }
 
