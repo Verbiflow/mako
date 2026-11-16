@@ -21,6 +21,7 @@ export const STEPS = [
   [21, "npm run test:protocol"],
   [1, "npx tsx scripts/test-host-liveness.ts"],
   [19, "npx tsx scripts/test-host-lifecycle.ts"],
+  [4, "npx tsx scripts/test-host-lock.ts holder-readiness"],
   [0, "npm run test:loop-profile"],
   [34, "npm run test:machine-runtime"],
   [6, "npx tsx scripts/test-cloud-sign-ins.ts"],
@@ -90,7 +91,7 @@ export const STEPS = [
   [16, "npm run test:usage"],
   [144, "npm test -w @mako/sessions"],
   // Fins held by the tree's budget, woken, resumed, moved, and what each reads as.
-  [127, "CASES=statesAndEntries,rosterAndLists,uploadsFollowParents,startsAndWakes,explicitReports,refusals,launchesBeforeTheirEdge,stopHoldsUntilCancelled,linkTellsUnreadableFromGone,followedStopStuck,harnessLadders,stopAllUnqueues,unreadableQueuedStarts,settingsFollowTheBinding,startedFinsOldQueueRow,stoppedApexHolds,listsReadNoJournal,finsMoveInTheNewestSession,aSessionNeedsYou,followsShellRuns,relinkedRuns,messagesReachLinkedRuns,finRules npm run test:background-agents"],
+  [127, "CASES=statesAndEntries,rosterAndLists,uploadsFollowParents,startsAndWakes,explicitReports,refusals,startRate,launchesBeforeTheirEdge,stopHoldsUntilCancelled,linkTellsUnreadableFromGone,followedStopStuck,harnessLadders,stopAllUnqueues,unreadableQueuedStarts,settingsFollowTheBinding,startedFinsOldQueueRow,stoppedApexHolds,listsReadNoJournal,finsMoveInTheNewestSession,aSessionNeedsYou,followsShellRuns,relinkedRuns,messagesReachLinkedRuns,finRules npm run test:background-agents"],
   [127, "CASES=storeKeeps,readOnlyStoreVersion,finLimit,afterOrder,slotsGoAtOnce,followedStopHoldsUntilExit,followedStopUnknownIdentity,followedStopStaleIdentity,queueProjection,edgeWriteMovesTheLine,accessFits,finReadingsLoadNothing,finsAtWorkByBinding,activityTellsNoOne,progressGoesWhereItsRead,anySessionAsks,finModels,limitedHarnesses,apexStops,staleEndsStayOut,waitingFins,ownSessionIsNoChild npm run test:background-agents"],
   [32, "npm run test:build-slots"],
   [0, "npm run test:agents-migrate"],
@@ -98,12 +99,15 @@ export const STEPS = [
   [74, "npm run test:agents-wake"],
   [3, "npm run test:fins-reach-released-apex"],
   [68, "npm run test:fin-pull-waits"],
+  // A turn's wait: armed, met, timed and fired once through restarts, a cancel racing it and a sleep.
+  [1, "npm run test:turn-waits"],
   [12, "npm run test:fin-resume"],
   [31, "npm run test:git-helper"],
   [32, "npm run test:fin-reopen"],
   [4, "npm run test:roster-refresh"],
   [33, "npm run test:resume-holds"],
   [36, "npm run test:fin-states"],
+  [20, "npm run test:fin-quiet"],
   // What comes back: a crash, a recovery or a Fin moved, with its queue kept through SIGKILL.
   [40, "MAKO_TEST_HARNESSES=claude npm run test:fin-move"],
   [40, "MAKO_TEST_HARNESSES=codex npm run test:fin-move"],
@@ -377,10 +381,10 @@ function workspaceParts(seconds, command, name) {
 /** Every step's parts, each part once: a part two chains share runs in the first. */
 /**
  * Parts run as several, each with an environment its test reads (`CASES`, `MAKO_TEST_HARNESSES`), so one long test
- * spreads over shards: test-watch-backend's four cases took 6, 14, 58 and 29 s, one part of 108 to 138 s.
+ * spreads over shards: test-watch-backend's four native cases took 6, 14, 58 and 29 s, one part of 108 to 138 s.
  */
 const SPLITS = {
-  "tsx scripts/test-watch-backend.ts": ["CASES=silentCanary", "CASES=degradedFseventsd", "CASES=sharedChildAndCrash,lateCanary"],
+  "tsx scripts/test-watch-backend.ts": ["CASES=silentCanary", "CASES=degradedFseventsd", "CASES=historyReaderTermination,sharedChildAndCrash,lateCanary"],
 }
 
 /** `unit` as the parts `SPLITS` makes of it; a test that doesn't read the variable runs once, as it is. */

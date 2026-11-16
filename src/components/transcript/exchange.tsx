@@ -5,6 +5,7 @@ import { ProposedPlanCard } from "./proposed-plan"
 import { ChangingLabel } from "@/components/ui/changing-label"
 import { Collapse } from "@/components/ui/collapse"
 import { RewindButton, PromptRewindButton } from "./rewind-button"
+import { PromptVersionSwitcher } from "./prompt-versions"
 import { useCopy } from "@/components/ui/use-copy"
 import { completeLiveAnswer } from "@/state/live-history"
 import { copyPromptSelection } from "./prompt-clipboard"
@@ -19,7 +20,7 @@ import { PlanSummary } from "./tool-details"
 import { ReviewFindings, ReviewRequest } from "./review-card"
 import { TranscriptAttachments } from "./attachment-collection"
 import { memo, useContext, useMemo, useState, type ReactNode } from "react"
-import { Prose } from "@/components/transcript/markdown"
+import { Prose, type AnswerMedia } from "@/components/transcript/markdown"
 import { AgentWordsCard } from "@/components/transcript/agent-words"
 import { RoutedLine } from "@/components/transcript/routed-line"
 import { agentWords } from "@mako/host/contracts/children"
@@ -57,7 +58,7 @@ import type { SentProse } from "@/lib/prompt-markdown"
 import {
   exchangeRequests,
   isContinuation,
-  notesBesideContinuations,
+  notesBesideContinuations, notesBesideFailure,
   notesBesideStop,
   responseSections,
   responseText,
@@ -183,13 +184,15 @@ function TurnExchange({
   const continuedPrompt = useMemo(() => (exchange.prompt ? isContinuation(exchange.prompt) : undefined), [exchange.prompt])
   // The request the turn stands on now: its newest continuation's, else its prompt's.
   const standing = turnRequest(exchange)
-  const failureRow = useContext(FailedRequestsContext).has(standing ?? "")
+  const failedRequests = useContext(FailedRequestsContext)
+  const failureRow = failedRequests.has(standing ?? "")
   const stopShown = Boolean(interrupted) && !streaming
   const exchangeNote = useContext(ExchangeNoteContext)
-  const notes = useMemo(
+  const kept = useMemo(
     () => notesBesideContinuations(stopShown ? notesBesideStop(exchange.system, exchange.response.length) : exchange.system, exchange.response),
     [exchange.system, exchange.response, stopShown]
   )
+  const notes = useMemo(() => notesBesideFailure(kept, failedRequests.has(standing ?? "")), [kept, failedRequests, standing])
   const answered = useMemo(
     () => responseSections(exchange.response, notes),
     [exchange.response, notes]
@@ -335,7 +338,7 @@ function TurnExchange({
             <ReviewFindings report={review} />
           </div>
         ) : null}
-        {streaming ? null : exchangeRequests(exchange).map((requestId) => <TurnChanges key={requestId} requestId={requestId} />)}
+        {exchangeRequests(exchange).map((requestId) => <TurnChanges key={requestId} requestId={requestId} streaming={streaming} />)}
         <ExchangeFailure requestId={standing} />
         {exchange.response.length > 0 || interrupted ? (
           // A turn that ends on its failure row says there why it stopped, and what to do; the footer doesn't repeat it.
@@ -628,6 +631,7 @@ function Prompt({ message }: { message: ChatMessage }) {
   )
   const { copied, copy } = useCopy(reused.text, reused.records)
   const note = useContext(PromptNoteContext)
+  const { liveId } = useTranscriptSource()
   const compose = () =>
     window.dispatchEvent(
       new CustomEvent("mako:compose", {
@@ -685,6 +689,7 @@ function Prompt({ message }: { message: ChatMessage }) {
         */}
       <div className="mt-1 mr-[34px] flex min-h-7 items-center justify-end gap-0.5 px-0.5 text-label text-muted-foreground">
         {note?.(message.requestId)}
+        {liveId && message.requestId ? <PromptVersionSwitcher conversation={liveId} requestId={message.requestId} /> : null}
         {message.timestamp ? (
           <span className="tabular px-1 text-faint">{formatTime(message.timestamp)}</span>
         ) : null}
@@ -1190,9 +1195,9 @@ function Response({
           streaming={message.streaming}
         />
       ))}
-      {text ? <Prose text={text} streaming={message.streaming} previewedFiles={previewedFiles} answerId={message.id} /> : null}
+      {text ? <Prose text={text} streaming={message.streaming} previewedFiles={previewedFiles} answerId={message.id} keeps={landedMedia(message)} /> : null}
 
-      {message.error ? <TurnError error={message.error} /> : null}
+      {message.error ? <TurnError error={message.error} failure={message.failure} /> : null}
 
     </div>
   )
@@ -1517,4 +1522,9 @@ function ForkButton({ exchange }: { exchange: ExchangeData }) {
       </PopoverContent>
     </Popover>
   )
+}
+
+/** A landed answer's embeds are kept as it saw them (`AnswerMedia`); a streaming one, or one with no time, keeps none yet. */
+function landedMedia(message: ChatMessage): AnswerMedia | undefined {
+  return !message.streaming && message.timestamp !== undefined ? { callId: `answer:${message.id}`, at: message.timestamp } : undefined
 }

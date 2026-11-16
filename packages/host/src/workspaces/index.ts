@@ -1,5 +1,6 @@
 import { ThreadScratch, SCRATCH_PASS_MS } from "./thread-scratch.js"
 import { declareThreadScratchMethods } from "./thread-scratch-methods.js"
+import { AppOutputHints } from "./app-output-hints.js"
 import type { BuildSlots } from "./build-slots.js"
 import { sessionAccessTier } from "../contracts/access.js"
 import type { GitHubPerson } from "../contracts/github-person.js"
@@ -86,6 +87,7 @@ export { applyThreadEnvironment, CLOUD_MACHINE_INSTRUCTIONS, threadEnvironmentIn
 export { childBackend, probeDelivery, type FileHistory } from "./watch-backend.js"
 export { administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd } from "./file-events-service.js"
 export { childProcessReader, type ProcessReader } from "./watch-backend.js"
+export { ViewHints, declareViewHints } from "./view-hints.js"
 export { WatchReadings } from "./watch-readings.js"
 export { watchTree } from "./tree-watcher.js"
 export { watchOutsideGitDir } from "./git-dir-watch.js"
@@ -351,11 +353,17 @@ export interface WorkspaceMovers {
   appTools: EnvironmentTools | undefined
   /** The apps' marks, looked at once for every window and pushed when they change. */
   sampler: ThreadAppSampler | undefined
+  outputHints: AppOutputHints | undefined
   /** The `mako` server's tools: the Thread's worktree, its app and recipe, and its pull request. */
   agentTools: MakoTools[]
 }
 
 export interface WorkspaceMoversDeps {
+  appChanged?: () => void
+  outputChanged?: (fields: string[]) => void
+  watchOutputs?: WatchBackend
+  /** Connected windows, excluding observers, which may own app sampling demand. */
+  windowStream?: (client: string) => string | undefined
   /**
    * Whether a secret a recipe names (`secretNames`) has a value here, checked before a cloud start: in this host's
    * environment, or on a cloud machine in a carried file the account's secret store gave its checkout.
@@ -411,7 +419,10 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     move: async (id, bring) => (await worktreeMove().carry(id, { lead: true, tell: true, bring })).session.id,
     follow: async (id, told, lead, haste) => { await worktreeMove().carry(id, { lead: false, tell: told, after: lead, ...haste && { haste } }) },
     announce: (state) => emit({ type: "workspace-moves", moves: state }),
-    failed: (_id, message) => emit({ type: "notice", level: "error", message }),
+    failed: (id, message) => {
+      hostWarn("moves", "a workspace move failed", { conversation: id, error: message })
+      emit({ type: "notice", level: "error", message: "The agent didn't move to its own branch; it goes on where it was." })
+    },
   })
   const leaves = new WorktreeLeaves({
     quiet: (id) => live.relocation(id).kind !== "wait",
@@ -420,7 +431,10 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
       await worktrees.remove(path)
     },
     removed: () => worktreesChanged(worktrees, emit),
-    failed: (message) => emit({ type: "notice", level: "error", message }),
+    failed: (message) => {
+      hostWarn("worktrees", "a worktree couldn't be removed", { error: message })
+      emit({ type: "notice", level: "error", message: "A worktree couldn't be removed; it stays where it is." })
+    },
   })
   // The sampler is made from the tools, which tell it when the line for memory moves.
   const sampling: SamplerSlot = {}
@@ -455,17 +469,29 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
   // One look at every app for every window, pushed when it changes, with the trace and each running copy's memory peak
   // (toward its project's "about N at once") on the same looks.
   const sampler = appTools && processes ? new ThreadAppSampler({
+    invalidated: deps.appChanged,
+    demandChanged: () => outputHints?.reconcile(true),
+    connection: deps.windowStream,
     look: () => appTools.look(),
     trace: appTools.traceApps,
     memory: async () => { await processes.memory() },
-    publish: (marks) => emit({ type: "thread-app-marks", marks }),
+    publish: (marks) => {
+      emit({ type: "thread-app-marks", marks })
+      deps.appChanged?.()
+    },
+  }) : undefined
+  const outputHints = sampler && processes && deps.watchOutputs ? new AppOutputHints({
+    wanted: () => sampler.outputWanted(),
+    watch: (app, listener) => processes.watchOutputFiles(app, deps.watchOutputs!, listener),
+    changed: fields => deps.outputChanged?.(fields),
+    warn: message => deps.warn(message, {}),
   }) : undefined
   if (sampler) sampling.sampler = sampler
   if (sampler && processes) {
     processes.onChange(() => sampler.changed())
-    deps.jobs.every("sample thread apps", SAMPLER_TICK_MS, sampler.tick)
+    deps.jobs.every("sample thread apps", SAMPLER_TICK_MS, async () => { outputHints?.reconcile(); await sampler.tick() })
   }
-  return { worktreeMoves, moves, leaves, appTools, sampler, agentTools: agentTools(deps, moves, leaves, appTools) }
+  return { worktreeMoves, moves, leaves, appTools, sampler, outputHints, agentTools: agentTools(deps, moves, leaves, appTools) }
 }
 
 /** Where the apps' sampler is kept once made, for the tools made before it. */
@@ -555,6 +581,8 @@ export function declareWorkspaceMethods(methods: MethodTable, { workspaces, move
   declareMoveMethods(methods, movers.moves, (target) => moveHold(live, movers.worktreeMoves, movers.moves, target), workspaces.worktrees)
   declarePlanBuildMethods(methods, workspaces.planBuilds)
   declareCheckoutHeadMethods(methods, workspaces.checkoutHeads)
-  declareThreadAppMethods(methods, movers.appTools?.desk, movers.sampler)
+  declareThreadAppMethods(methods, movers.appTools?.desk, movers.sampler, apps => movers.outputHints?.ready(apps) ?? false)
   return files
 }
+
+export { declareRemoteAppMethods } from "./app-methods.js"

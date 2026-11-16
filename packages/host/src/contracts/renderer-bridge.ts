@@ -1,5 +1,8 @@
 import type { ThreadScratchReport, ThreadScratchSettings } from "./thread-scratch.js"
+import type { RemoteAppDemand, RemoteAppReply, RemoteAppSnapshot } from "./remote-app.js"
 import type { FileFindResults, FileFolders, FileFoldersOptions, FileGrepOptions, FileGrepResults } from "./file-index.js"
+import type { PromptVersionsByRequest } from "./live-conversations.js"
+import type { UnopenedConversation } from "./unopened-conversations.js"
 import type { AgentAskAnswer } from "./agent-asks.js"
 import type { GitRemoteInput, GitRemoteResult, ExternalEditor, FileContents, FileReadPurpose, GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitHubStatus, GitStatus, GitPushInput, PullRequest, SearchOptions, SearchResults, StagedFile, WorkspaceFile } from "./git-workspace-search.js"
 import type { TurnFileHunks, TurnFileWriters, TurnUndoPreview, TurnUndoResult, TurnUndoScope } from "./turn-review.js"
@@ -27,9 +30,12 @@ import type { MediaChecks, MediaConfirmation } from "./turn-media.js"
 import type { MoveOutcome, WorkspaceMoveAnswer, WorkspaceMoveHold, WorkspaceMoveTarget, WorkspaceMoves } from "./workspace-moves.js"
 import type { PlanBuild, PlanBuildClaim, PlanBuildTarget, PlanBuilds } from "./plan-builds.js"
 import type { AccessChoices } from "./access-choices.js"
+import type { JsonValue } from "./json.js"
+import type { PreferenceName, PreferenceValues } from "./preferences.js"
 import type { FinChoicesReading, FinPolicy, RoleRules } from "./fin-tuning.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
-import type { AppActionOutcome, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProbeView, RoomView, ThreadAppView } from "./thread-app.js"
+import type { AppActionOutcome, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProbeView, AppSamplingDemand, AppSamplingReply, RoomView, ThreadAppView } from "./thread-app.js"
+import type { ViewHintsStatus } from "./view-hints.js"
 import type { ThreadPlacement } from "./thread-identity.js"
 import type {
   LifecycleState,
@@ -77,6 +83,7 @@ import type { SyncStatus } from "./sync-status.js"
 import type { SyncReadings } from "./sync-readings.js"
 import type { MakoFootprint } from "./mako-footprint.js"
 import type { FileEventsService } from "./file-events-service.js"
+import type { McpSignIns } from "./mcp-sign-ins.js"
 import type { CloudTurnOn } from "./cloud-turn-on.js"
 import type { SetupFix, SimulatorSetup } from "./simulator-setup.js"
 import type { SimulatorsActInput, SimulatorsActResult, SimulatorsListed, SimulatorsOpenInput, SimulatorsOpenResult, SimulatorsReleaseInput, SimulatorsReleaseResult, SimulatorsWatchInput, SimulatorsWatchResult } from "./simulators.js"
@@ -188,6 +195,10 @@ export function createMakoBridge(transport: BridgeTransport) {
     threadAppOutput: (cwd: string, key: AppOutputKey, cursor?: AppOutputCursor) =>
       invokeTrustedHost<AppOutputChunk>("mako:thread-app-output", cwd, key, cursor),
     threadAppMarks: () => invokeTrustedHost<AppMark[]>("mako:thread-app-marks"),
+    followThreadApps: (demand?: AppSamplingDemand) => invokeTrustedHost<AppSamplingReply>("mako:thread-app-demand", demand),
+    followConversationApp: (conversation: string, demand: RemoteAppDemand) => invokeTrustedHost<RemoteAppReply>("mako:conversation-app-demand", conversation, demand),
+    conversationApp: (conversation: string, view: string) => invokeTrustedHost<RemoteAppSnapshot>("mako:conversation-app", conversation, view),
+    viewHints: () => invokeTrustedHost<ViewHintsStatus | null>("mako:view-hints"),
     probeThreadApp: (cwd: string) => invokeTrustedHost<AppProbeView>("mako:thread-app-probe", cwd),
     threadAppRoom: () => invokeTrustedHost<RoomView>("mako:thread-app-room"),
     stopThreadApps: (apps: string[]) => invokeTrustedHost<void>("mako:thread-app-stop-apps", apps),
@@ -235,6 +246,12 @@ export function createMakoBridge(transport: BridgeTransport) {
     chooseAccess: (harness: string, mode: string) => invokeTrustedHost<AccessChoices>("mako:access-choose", harness, mode),
     /** A window's own copy from before the host kept them, handed over once: taken only where no choice is made. */
     adoptAccessChoices: (modes: Record<string, string>) => invokeTrustedHost<AccessChoices>("mako:access-adopt", modes),
+    /** The preferences that follow the person's account (`contracts/preferences.ts`), as they're in effect now. */
+    preferences: () => invokeTrustedHost<PreferenceValues>("mako:preferences"),
+    /** The person changed one here (null: back to Mako's default): in effect at once, and the account's once it takes it. */
+    setPreference: (name: PreferenceName, value: JsonValue | null) => invokeTrustedHost<PreferenceValues>("mako:preference-set", name, value),
+    /** What a window kept before the account kept it, offered once with when it was edited (0: unknown). */
+    offerPreference: (name: PreferenceName, value: JsonValue, at: number) => invokeTrustedHost<PreferenceValues>("mako:preference-offer", name, value, at),
     /** Settings › Fins by harness, and the model the person last used on each (`contracts/fin-tuning.ts`). */
     finDefaults: () => invokeTrustedHost<FinChoicesReading>("mako:fin-defaults"),
     /** Fins on `harness` run on `settings`, or with null, on what the person uses there. */
@@ -394,6 +411,10 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<LiveSnapshot>("mako:live-rewind", id, input),
     liveRecoverRewinds: () =>
       invokeTrustedHost<LiveSnapshot[]>("mako:live-rewind-recover"),
+    /** A conversation's edited prompts' versions, by request: the conversation each was first sent in, then each fork. */
+    livePromptVersions: (id: string) => invokeTrustedHost<PromptVersionsByRequest>("mako:live-prompt-versions", id),
+    /** Saved conversations this host couldn't open as it started; their journals are kept for recovery. */
+    unopenedConversations: () => invokeTrustedHost<UnopenedConversation[]>("mako:unopened-conversations"),
     liveFork: (id: string, input: ForkInput) =>
       invokeTrustedHost<LiveSnapshot>("mako:live-fork", id, input),
     liveCapture: (id: string, path: string) =>
@@ -526,6 +547,10 @@ export function createMakoBridge(transport: BridgeTransport) {
     makoFootprint: () => invokeTrustedHost<MakoFootprint>("mako:mako-footprint"),
     /** macOS's file-change service as this host reads it; the host pushes `file-events-service` as it changes. */
     fileEventsService: () => invokeTrustedHost<FileEventsService>("mako:file-events-service"),
+    /** The MCP servers that need the person's sign-in; the host pushes `mcp-sign-ins` as they change. */
+    mcpSignIns: () => invokeTrustedHost<McpSignIns>("mako:mcp-sign-ins"),
+    /** Signs one in its harness's own way: a command Mako runs, or a page the window opens (`McpSignIn.url`). */
+    mcpSignIn: (harness: string, server: string) => invokeTrustedHost<McpSignIns>("mako:mcp-sign-in", harness, server),
     /** Restarts fseventsd through macOS's password dialog, evidence first, and answers with how it went. */
     fileEventsRestart: () => invokeTrustedHost<FileEventsService>("mako:file-events-restart"),
     /** "Not now", or closing the restart's outcome: not said again this episode or today unless it gets worse. */

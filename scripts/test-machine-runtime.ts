@@ -22,7 +22,7 @@ import { LIVE_FORM, PING, PONG, SUBPROTOCOL, WHOLE_LIVE_FORM, decodeRuntimeFrame
 import { createFakeGateway, type FakeGatewayOptions, type GatewayLogLine } from "@mako/protocol/fake-gateway"
 import { compactLiveBatch, type LiveBatch } from "@mako/host/contracts/live-conversations"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import { MachineRuntime, type MachineRuntimeOptions } from "@mako/host/usage/machine-runtime"
+import { MachineRuntime, PASSING_EVENTS, type MachineRuntimeOptions } from "@mako/host/usage/machine-runtime"
 import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import type { AgentMessage, ArtifactCapState, HostMessage, MachineRuntimeState } from "@mako/host/contracts/machine-agent"
 import { hostCallInput, hostOperations, hostReplyValue, toHostOperation } from "@mako/host/contracts/host-operations"
@@ -309,6 +309,22 @@ test("the machine tells its Thread when it works and when it stops, a silent tur
   assert.equal(only?.payload.n, 1)
   agent.tell({ type: "inspect" })
   await agent.until("one event counted, the readings not", () => agent.state()?.events.emitted === 1)
+  // Passing state never goes into the Thread's log (numbered, kept in its object's storage): a running call's steps, a
+  // view's hint, a viewer's file changing. Each as the host emits it, then one event that does belong there.
+  assert.ok(["tool-steps", "view-hint", "file-changed"].every((type) => PASSING_EVENTS.has(type)), "steps, hints and file pings are passing state")
+  const passing: HostEvent[] = [
+    { type: "tool-steps", conversationId: "c-1", steps: { steps: [{ call: "screenshot", phase: "running" }], total: 1 } },
+    { type: "tool-steps", conversationId: "c-1", steps: null },
+    { type: "view-hint", hint: { epoch: "e-1", revision: 7, domain: "apps", fields: ["state"] } },
+    { type: "file-changed", path: "/w/README.md" },
+  ]
+  for (const event of passing) agent.runtime.event("event", encodeRuntimeEvent(event))
+  for (const type of PASSING_EVENTS) agent.runtime.event("event", { type, payload: JSON.stringify({ type }) })
+  agent.runtime.event("event", hostEvent(2))
+  const after = await hostEvents(cloud.gateway, 2)
+  assert.deepEqual(after.map((line) => line.payload.n), [1, 2], "only the events that belong in the log reach it")
+  agent.tell({ type: "inspect" })
+  await agent.until("still only the two counted", () => agent.state()?.events.emitted === 2)
 })
 
 test("the machine reports the Sessions it owns on its link: everything at first, then what changed, never as a heartbeat, and everything again on a new link", async () => {
@@ -357,6 +373,9 @@ async function nextBatch(reader: Subscription): Promise<{ revision: number; form
     if (notice.success && notice.data.streamNotice === "reread") return { notice: "reread" }
   }
 }
+
+/** A relayed `tool-steps` event, by its total. */
+const StepsHeardSchema = z.object({ steps: z.object({ total: z.number() }).nullable() })
 
 /** What the gateway said each time the form every reader reads changed. */
 const formsSaid = (lines: GatewayLogLine[]) => lines.filter((line) => line.event === "live-form").map(({ form, readers, whole }) => ({ form, readers, whole }))
@@ -424,6 +443,65 @@ test("a watched conversation's updates go compact while every watcher reads that
   assert.deepEqual(await nextBatch(compact), { revision: 3, form: LIVE_FORM })
   compact.close()
   assert.deepEqual(formsSaid(lines), [{ form: 2, readers: 1, whole: 0 }, { form: 1, readers: 2, whole: 1 }, { form: 2, readers: 1, whole: 0 }], "each change logged with its watchers")
+})
+
+test("a watched conversation's running js steps reach the watchers that read passing state at most once a second, unnumbered, the newest each time, and its end at once", async () => {
+  const cloud = await machineGateway()
+  let clock = 1_000_000
+  const timers: Array<() => void> = []
+  const sessions = new SessionPublisher({ rows: () => undefined, now: () => clock, schedule: (run) => void timers.push(run) })
+  const agent = machineAgent({ dataRoot: join(scratch, "watch-steps"), sessions })
+  await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello"))
+  agent.tell({ type: "link", gatewayUrl: cloud.url, runtimeId: RUNTIME, credential: CREDENTIAL, machine: "m-0123456789abcdef", generation: 1 })
+  await agent.until("enrolled", () => agent.state()?.link === "connected")
+  const watcher = await cloud.gateway.connectClient(desktop, { ephemeral: true }).then((session) => session.subscribe({ stream: sessionStream(RUNTIME, "c-1"), after: 0 }))
+  // A watcher whose client doesn't read passing state: it hears the batches and never a step.
+  const plain = await cloud.gateway.connectClient(desktop, {}).then((session) => session.subscribe({ stream: sessionStream(RUNTIME, "c-1"), after: 0 }))
+  await agent.until("watched", () => sessions.readings().watched === 1)
+  const steps = (total: number) => ({ steps: [{ call: total % 2 ? "status" : "help", phase: "running" as const }], total })
+  const heard = async (): Promise<{ type: string; total: number | null }> => {
+    for (;;) {
+      const frame = await watcher.next(5_000)
+      const line = readEventLine(frame.event.text)
+      if (line?.type === "tool-steps") {
+        assert.deepEqual([frame.ephemeral, frame.seq], [true, 0], "steps are passing state, with no place in the stream")
+        return { type: line.type, total: StepsHeardSchema.parse(JSON.parse(line.payload)).steps?.total ?? null }
+      }
+      if (line?.type === "live-batch") return { type: line.type, total: RevisionSchema.parse(JSON.parse(line.payload)).batch.revision }
+    }
+  }
+  sessions.own({ type: "tool-steps", conversationId: "c-1", steps: steps(1) })
+  assert.deepEqual(await heard(), { type: "tool-steps", total: 1 }, "the first goes at once")
+  clock += 100
+  sessions.own({ type: "tool-steps", conversationId: "c-1", steps: steps(2) })
+  clock += 100
+  sessions.own({ type: "tool-steps", conversationId: "c-1", steps: steps(3) })
+  sessions.own(liveBatch(1))
+  assert.deepEqual(await heard(), { type: "live-batch", total: 1 }, "a batch isn't held behind the steps waiting")
+  assert.equal(timers.length, 1, "one send waits, however many came")
+  clock += 800
+  timers.shift()!()
+  assert.deepEqual(await heard(), { type: "tool-steps", total: 3 }, "the newest goes when its second is up; the one between never does")
+  clock += 100
+  sessions.own({ type: "tool-steps", conversationId: "c-1", steps: steps(4) })
+  sessions.own({ type: "tool-steps", conversationId: "c-1", steps: null })
+  assert.deepEqual(await heard(), { type: "tool-steps", total: null }, "the call's end goes at once")
+  clock += 1_000
+  for (const run of timers.splice(0)) run()
+  sessions.own(liveBatch(2))
+  assert.deepEqual(await heard(), { type: "live-batch", total: 2 }, "the steps waiting when the call ended never go after its end")
+  sessions.own({ type: "tool-steps", conversationId: "c-2", steps: steps(1) })
+  sessions.own(liveBatch(3))
+  assert.deepEqual(await heard(), { type: "live-batch", total: 3 }, "an unwatched conversation's steps go nowhere")
+  const plainHeard: string[] = []
+  for (;;) {
+    const line = readEventLine((await plain.next(5_000)).event.text)
+    if (line?.type) plainHeard.push(line.type)
+    if (plainHeard.filter((type) => type === "live-batch").length === 3) break
+  }
+  assert.deepEqual(plainHeard, ["live-batch", "live-batch", "live-batch"], "a watcher that doesn't read passing state hears the batches alone")
+  watcher.close()
+  plain.close()
 })
 
 test("a change a list shows on the machine goes out at once, not at its next tick", async () => {

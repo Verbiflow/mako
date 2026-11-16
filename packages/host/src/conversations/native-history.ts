@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto"
+import { z } from "zod"
 import { messagesFromEntries, type DecodedEntry, type ThreadPage } from "@mako/sessions"
 import type { Entry } from "@mako/sessions/entries"
 import type { ProviderBinding } from "../contracts/conversation-control.js"
+import type { LiveRequest } from "../contracts/live-conversations.js"
+import type { NativePromptIdentityCapability } from "../contracts/native-prompt-identity.js"
 import { nativeHistoryRevision } from "../contracts/native-history.js"
 export { nativeHistoryRevision } from "../contracts/native-history.js"
 
@@ -45,6 +48,20 @@ export async function captureNativeHistory(
 export function transcriptHolds(entries: readonly Entry[], prompt: { attemptId?: string; marker: string }): boolean {
   return entries.some((entry) => entry.type === "user" &&
     ((prompt.attemptId !== undefined && entry.messageId === prompt.attemptId) || (prompt.marker.length > 0 && entry.text.includes(prompt.marker))))
+}
+
+const SuppliedMessageIdSchema = z.string().uuid()
+/** Negative receipt evidence needs a complete, source-matched record whose adapter preserves supplied UUIDs as entry IDs. */
+export function digestReceipt(page: ThreadPage | null, binding: ProviderBinding | undefined, request: Pick<LiveRequest, "nativeDelivery">, identity: NativePromptIdentityCapability | undefined): "present" | "absent" | "unknown" {
+  const delivery = request.nativeDelivery
+  if (delivery?.evidence.kind === "accepted") return "present"
+  if (delivery?.gated && (delivery.evidence.kind === "prepared" || delivery.evidence.kind === "not-accepted")) return "absent"
+  if (!delivery?.gated || !binding?.path || !binding.nativeId || delivery.bindingId !== binding.id || identity?.kind !== "supplied-message-id" || !page ||
+      page.ref.harness !== binding.provider || page.ref.nativeId !== binding.nativeId || page.ref.path !== binding.path ||
+      page.preview || page.unread?.length || page.start !== 0 || page.hasEarlier || page.entries.length !== page.total) return "unknown"
+  const users = page.entries.filter(entry => entry.type === "user")
+  if (users.some(entry => entry.id === delivery.attemptId)) return "present"
+  return users.some(entry => !SuppliedMessageIdSchema.safeParse(entry.id).success) ? "unknown" : "absent"
 }
 
 /**

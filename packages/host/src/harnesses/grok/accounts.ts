@@ -1,3 +1,4 @@
+import { HostFailureError } from "../../contracts/provider-failure.js"
 import { existsSync } from "node:fs"
 import { mkdir, readdir, readFile, rm } from "node:fs/promises"
 import { z } from "zod"
@@ -223,7 +224,7 @@ async function accountEnv(root: AccountRoot, selection: string | null, base: Nod
   if (!existsSync(root.dir("grok", selection)))
     throw new Error("The selected Grok account no longer exists. Choose another account in Settings → Agents.")
   if (!existsSync(accountAuthPath(root, selection)))
-    throw new Error("The selected Grok account is signed out. Sign in again in Settings → Agents.")
+    throw new HostFailureError("auth", "The selected Grok account is signed out. Sign in again in Settings → Agents.")
   for (const key of AUTH_ENV) delete env[key]
   env.GROK_AUTH_PATH = accountAuthPath(root, selection)
   return env

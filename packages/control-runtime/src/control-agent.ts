@@ -6,6 +6,7 @@ import {
   type ControlCellReport,
   type ControlEffect,
   type ControlProgramOutput,
+  type ControlSteps,
 } from "@mako/control/program"
 import type { JsonObject, JsonValue } from "./json.js"
 import type { ControlSession } from "./control-session.js"
@@ -17,7 +18,9 @@ export type ControlAgentOperation = Extract<
 >
 export type ControlAgentRequest = (
   operation: ControlAgentOperation,
-  signal: AbortSignal
+  signal: AbortSignal,
+  /** A js call's steps so far, as its calls start and settle (`ControlProgramExecution.steps`). */
+  steps?: (steps: ControlSteps) => void
 ) => Promise<JsonValue>
 
 /**
@@ -74,7 +77,7 @@ function reportMeta(report: JsReport): JsonObject {
 export function controlAgent(
   session: Pick<ControlSession, "execute" | "resetProgram">
 ): ControlAgentRequest {
-  return async (operation, signal): Promise<JsonValue> => {
+  return async (operation, signal, steps): Promise<JsonValue> => {
     if (operation.method === "js-reset") {
       await session.resetProgram(signal)
       return {
@@ -98,6 +101,7 @@ export function controlAgent(
           report: (cell) => {
             report = cell
           },
+          ...steps && { steps },
         }
       )
       return {

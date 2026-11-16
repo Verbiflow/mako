@@ -5,8 +5,9 @@ import type { EntryOriginal } from "@mako/sessions/record-original"
 import { isTurnStart } from "@mako/sessions/live-content"
 import { mediaFacts } from "@mako/sessions/turn-media"
 import type { JsonObject, JsonValue } from "./json.js"
+import type { ContextManifest } from "./conversation-control.js"
 import type { LiveSnapshot } from "./live-conversations.js"
-import { LIVE_HISTORY_CHUNK_CHARS, type LiveHistoryChunk, type LiveHistoryCursor, type LiveHistoryPage, type LiveHistorySnapshot } from "./live-history.js"
+import { HISTORY_PARTS_IN_FLIGHT, LIVE_HISTORY_CHUNK_CHARS, type LiveHistoryChunk, type LiveHistoryCursor, type LiveHistoryPage, type LiveHistorySnapshot } from "./live-history.js"
 
 /**
  * How a view of a conversation's history goes to a window, whichever reader holds the view: a host's of its own
@@ -36,11 +37,46 @@ export class HistoryVersions {
   }
 }
 
+/**
+ * A view's live blocks as its pages read them: held in memory (`arrayBlocks`), or read from a journal where it lies, a
+ * page at a time (`ColdJournal`). `before` is what a page ending at `index` carries of the blocks before it.
+ */
+export interface HistoryBlocks {
+  readonly length: number
+  at(index: number): Entry | undefined
+  before(index: number, covered: number): PageCounts
+}
+
+/** What a page carries of the blocks before it: the turns that begin among those from `covered`, and the requests whose prompt is among them. */
+export interface PageCounts {
+  turnStart: number
+  earlierRequests: string[]
+}
+
+/** Blocks in memory, counted by walking them. */
+export function arrayBlocks(blocks: readonly Entry[]): HistoryBlocks {
+  return {
+    length: blocks.length,
+    at: (index) => blocks[index],
+    before(index, covered) {
+      let turnStart = 0
+      const earlierRequests: string[] = []
+      for (let at = 0; at < index; at++) {
+        const block = blocks[at]
+        if (block?.type === "user" && block.requestId) earlierRequests.push(block.requestId)
+        if (at >= covered && isTurnStart(block)) turnStart++
+      }
+      return { turnStart, earlierRequests }
+    },
+  }
+}
+
 /** The page of `source` ending at `before`: its live blocks back from there, then its saved entries once they're done. */
-export function historyPage(token: string, source: LiveSnapshot, before: LiveHistoryCursor, versions: HistoryVersions): LiveHistoryPage {
+export function historyPage(token: string, source: LiveSnapshot, before: LiveHistoryCursor, versions: HistoryVersions,
+  live: HistoryBlocks = arrayBlocks(source.blocks)): LiveHistoryPage {
   const covered = source.baseCoveredBlocks ?? 0
   const baseOrigin = source.base?.start ?? 0
-  if (before.blocks > source.blocks.length || before.blocks < covered || before.base < baseOrigin ||
+  if (before.blocks > live.length || before.blocks < covered || before.base < baseOrigin ||
     before.base > baseOrigin + (source.base?.entries.length ?? 0))
     throw new Error("Invalid retained history cursor")
   const blocks: Entry[] = []
@@ -49,7 +85,7 @@ export function historyPage(token: string, source: LiveSnapshot, before: LiveHis
   let blockStart = before.blocks
   let baseStart = before.base
   while (blockStart > covered && blocks.length < PAGE_ITEMS) {
-    const original = source.blocks[blockStart - 1]!
+    const original = live.at(blockStart - 1)!
     const preview = previewLive(original, blockStart - 1)
     const block = preview.type === "tool" && preview.historyRest ? { ...preview, historyVersion: versions.of(original) } : preview
     const size = JSON.stringify(block).length
@@ -70,13 +106,7 @@ export function historyPage(token: string, source: LiveSnapshot, before: LiveHis
       baseStart--
     }
   }
-  let turnStart = 0
-  const earlierRequests: string[] = []
-  for (let index = 0; index < blockStart; index++) {
-    const block = source.blocks[index]
-    if (block?.type === "user" && block.requestId) earlierRequests.push(block.requestId)
-    if (index >= covered && isTurnStart(block)) turnStart++
-  }
+  const { turnStart, earlierRequests } = live.before(blockStart, covered)
   const base: ThreadPage | null = source.base ? {
     ...source.base, entries: entries.reverse(), start: baseStart,
     hasEarlier: baseStart > baseOrigin || source.base.hasEarlier,
@@ -89,12 +119,13 @@ export function historyPage(token: string, source: LiveSnapshot, before: LiveHis
 }
 
 /** The pages of `source` from `from` to `to`, as one: what a window that let pages go reads back. */
-export function historyRange(token: string, source: LiveSnapshot, from: LiveHistoryCursor, to: LiveHistoryCursor, versions: HistoryVersions): LiveHistoryPage {
+export function historyRange(token: string, source: LiveSnapshot, from: LiveHistoryCursor, to: LiveHistoryCursor, versions: HistoryVersions,
+  live: HistoryBlocks = arrayBlocks(source.blocks)): LiveHistoryPage {
   if (from.blocks > to.blocks || from.base > to.base) throw new Error("Invalid retained history range")
   const parts: LiveHistoryPage[] = []
   let cursor = to
   while (cursor.blocks > from.blocks || cursor.base > from.base) {
-    const page = historyPage(token, source, cursor, versions)
+    const page = historyPage(token, source, cursor, versions, live)
     parts.push(page)
     const next = { blocks: page.history.blockStart, base: page.base?.start ?? 0 }
     if (next.blocks === cursor.blocks && next.base === cursor.base) throw new Error("That retained history range is unavailable.")
@@ -108,30 +139,102 @@ export function historyRange(token: string, source: LiveSnapshot, from: LiveHist
   const base = last.base ? { ...last.base, entries: allEntries.slice(from.base - (first.base?.start ?? 0)), start: from.base,
     hasEarlier: from.base > 0 || Boolean(source.base?.hasEarlier) } : null
   // Recompute the prefix's turn numbering from a page ending at `from`.
-  const prefix = historyPage(token, source, from, versions)
+  const prefix = historyPage(token, source, from, versions, live)
   const turnStart = prefix.history.turnStart + prefix.blocks.filter(isTurnStart).length
   return { blocks: allBlocks.slice(from.blocks - first.history.blockStart), base,
     history: { ...last.history, blockStart: from.blocks, blockEnd: to.blocks, turnStart,
       before: from.blocks > (source.baseCoveredBlocks ?? 0) || base?.hasEarlier ? from : null } }
 }
 
+/**
+ * A manifest as a window reads it: without `resources`, the path of every payload its transcript moved out, which only
+ * the agent reading the transcript opens and nothing a window shows names. One long Thread's were 942 KB, sent again
+ * in each request that carried the transcript and each transfer and merge that made it.
+ */
+function shownManifest(manifest: ContextManifest): ContextManifest {
+  if (!manifest.resources) return manifest
+  const shown = { ...manifest }
+  delete shown.resources
+  return shown
+}
+
+function shownManifests(manifests: ContextManifest[]): ContextManifest[] {
+  return manifests.some((manifest) => manifest.resources) ? manifests.map(shownManifest) : manifests
+}
+
+type ShownRequest = LiveSnapshot["requests"][number]
+
+/**
+ * A request's attachments whose bytes a window never reads: a completed request's, each saved where `path` names it.
+ * The window draws a prompt from its turn's blocks, and resends or edits only a request that isn't completed. A Fin's
+ * nine screenshots were 4.6 MB of base64 in every read of its conversation.
+ */
+function savedAttachments(request: ShownRequest): boolean {
+  return request.status === "completed" && request.attachments.some((attachment) => attachment.data !== undefined && attachment.path !== undefined)
+}
+
+/** A request as a window reads it: no manifest's resources (`shownManifest`), no completed request's saved bytes. */
+function shownRequest(request: ShownRequest): ShownRequest {
+  const named = request.context?.some((manifest) => manifest.resources)
+  const saved = savedAttachments(request)
+  if (!named && !saved) return request
+  return {
+    ...request,
+    ...(named && request.context && { context: shownManifests(request.context) }),
+    ...(saved && { attachments: request.attachments.map((attachment) => {
+      if (attachment.data === undefined || attachment.path === undefined) return attachment
+      const shown = { ...attachment }
+      delete shown.data
+      return shown
+    }) }),
+  }
+}
+
+/**
+ * What a window reads of a snapshot's requests and control: each the same object unless a manifest in it named its
+ * resources (`shownManifest`) or a completed request held its attachments' bytes (`savedAttachments`). A 122 MB Fin's
+ * first read was 10 MB, 4.7 MB of it its transfers' and merges' manifests.
+ */
+export function shownSnapshot(snapshot: LiveSnapshot): LiveSnapshot {
+  const requests = snapshot.requests.some((request) => request.context?.some((manifest) => manifest.resources) || savedAttachments(request))
+    ? snapshot.requests.map(shownRequest)
+    : snapshot.requests
+  const control = snapshot.control
+  const named = control && (control.merges.some((merge) => merge.manifest.resources) ||
+    control.transfers.some((transfer) => transfer.state.kind === "accepted" && transfer.state.manifest.resources))
+  if (requests === snapshot.requests && !named) return snapshot
+  return {
+    ...snapshot,
+    requests,
+    ...(control && named && {
+      control: {
+        ...control,
+        merges: control.merges.map((merge) => merge.manifest.resources ? { ...merge, manifest: shownManifest(merge.manifest) } : merge),
+        transfers: control.transfers.map((transfer) => transfer.state.kind === "accepted" && transfer.state.manifest.resources
+          ? { ...transfer, state: { ...transfer.state, manifest: shownManifest(transfer.state.manifest) } } : transfer),
+      },
+    }),
+  }
+}
+
 /** A capture's newest page, and the pages back to `from` when a window held those: the snapshot a read answers. */
-export function historyCapture(token: string, snapshot: LiveSnapshot, versions: HistoryVersions, from?: LiveHistoryCursor): LiveSnapshot {
-  const tail = historyPage(token, snapshot, { blocks: snapshot.blocks.length,
-    base: snapshot.base ? snapshot.base.start + snapshot.base.entries.length : 0 }, versions)
+export function historyCapture(token: string, snapshot: LiveSnapshot, versions: HistoryVersions, from?: LiveHistoryCursor,
+  live: HistoryBlocks = arrayBlocks(snapshot.blocks)): LiveSnapshot {
+  const tail = historyPage(token, snapshot, { blocks: live.length,
+    base: snapshot.base ? snapshot.base.start + snapshot.base.entries.length : 0 }, versions, live)
   // A background refresh keeps the range the reader explicitly loaded. It
   // must not throw away earlier pages while a large live event arrives.
-  if (!from) return { ...snapshot, ...tail }
+  if (!from) return { ...shownSnapshot(snapshot), ...tail }
   const target = { blocks: Math.max(snapshot.baseCoveredBlocks ?? 0, from.blocks), base: from.base }
   const pages = [tail]
   let page = tail
   while (page.history.before && (page.history.blockStart > target.blocks || (page.base?.start ?? 0) > target.base)) {
     if (page.history.before.blocks === (snapshot.baseCoveredBlocks ?? 0) && page.history.before.base === snapshot.base?.start) break
-    page = historyPage(token, snapshot, page.history.before, versions)
+    page = historyPage(token, snapshot, page.history.before, versions, live)
     pages.push(page)
   }
   pages.reverse()
-  return { ...snapshot, blocks: pages.flatMap(part => part.blocks),
+  return { ...shownSnapshot(snapshot), blocks: pages.flatMap(part => part.blocks),
     base: tail.base ? { ...tail.base, entries: pages.flatMap(part => part.base?.entries ?? []),
       start: page.base!.start, hasEarlier: page.base!.hasEarlier } : null,
     history: { ...tail.history, blockStart: page.history.blockStart, turnStart: page.history.turnStart, before: page.history.before } }
@@ -327,6 +430,11 @@ export class HistoryRecords {
     record.used = Date.now()
     const cached = record.recent.get(offset)
     if (cached) return cached
+    // A window asks for the next parts before the last arrives (`HISTORY_PARTS_IN_FLIGHT`): one ahead of this read's
+    // place moves the place there, keeping each part it passes for the ask that's on its way.
+    while (offset > record.offset && !record.next.done) this.#take(key, record)
+    // Past the end: the answer was shorter than the window guessed. It reads this empty last part and drops it.
+    if (record.next.done && offset >= record.offset) return { record: key, offset, data: "", total: record.offset, next: null }
     if (offset !== record.offset) {
       // Re-reading an older part is harmless. Rebuild its stream from the
       // pinned value with bounded memory, never from a newer journal snapshot.
@@ -339,13 +447,20 @@ export class HistoryRecords {
       }
     }
     if (record.next.done || record.offset !== offset) throw new Error("Invalid history read position")
+    return this.#take(key, record)
+  }
+
+  /** The part at this read's place, kept for an ask on its way, and the place moved past it. */
+  #take(key: string, record: HistoryRecord): LiveHistoryChunk {
+    if (record.next.done) throw new Error("Invalid history read position")
+    const offset = record.offset
     const data = record.next.value
     record.offset += data.length
     record.next = record.reader.next()
-    const chunk = { record: key, offset, data, total: record.next.done ? record.offset : undefined,
-      next: record.next.done ? null : record.offset }
+    const chunk: LiveHistoryChunk = { record: key, offset, data, total: record.next.done ? record.offset : undefined,
+      next: record.next.done ? null : record.offset, ahead: true }
     record.recent.set(offset, chunk)
-    if (record.recent.size > 2) record.recent.delete(record.recent.keys().next().value!)
+    if (record.recent.size > HISTORY_PARTS_IN_FLIGHT + 2) record.recent.delete(record.recent.keys().next().value!)
     return chunk
   }
 }

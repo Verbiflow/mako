@@ -310,7 +310,12 @@ can fix a number per device instead of Auto (Settings › Fins), and
 machine per Fin, is bounded by the plan and the daily spend ceiling only
 (`cloudCapacity`, `AgentsDeps.cloudLimits`), for when placement lands. Over
 every place the person's ceiling (`FIN_CEILING`, 64) is a safety net, and a
-tree's running budget (32) caps one Apex's fan-out. A refused start names
+tree's running budget (32) caps one Apex's fan-out. Finished Fins cost
+nothing, so no limit counts a tree's starts over its life; a start rate
+(`TREE_BUDGET`: 48 in any 10 minutes and 120 in any hour, queued starts
+counted) only stops an agent starting Fins in a loop, even one paced under
+the short window, refused with when it frees
+(`startRateWords`). A refused start names
 the places a start may name that have room. This Mac's load also shows in
 the start's answer when it's busy (`macLoad`, `mac`) beside the device's
 number (`atOnce`). `MAKO_FIN_SLOTS` fixes the number, as a test's host does.
@@ -445,7 +450,13 @@ read a minute after it's first watched, doubling while unchanged up to
 `PULL_WATCH_MAX_MS` (8 min), a minute again once it changes. A reading's
 outcome (`pullOutcome`, `contracts/pull-waits.ts`) matched to `until`
 (current-head checks settled, or one failed while others run, even before
-the report; a review submitted since, by anyone but the author; merged or
+the report, and only once every check its base branch requires has run
+(`required`, read over REST from its rulesets and branch protection by
+`RequiredChecks`, kept an hour, settling as before when unreadable); a head
+with no checks, or none of what's required, `NO_CHECKS_MS` (15 minutes) after
+the later of the report and when the watch first saw that head, said "checks:
+none after 15m" or "required checks missing after 15m: ci", so a wait on CI
+that never started ends; a review submitted since, by anyone but the author; merged or
 closed, which end any wait) is claimed once per Fin, retained dependency and observation
 (`ThreadStore.claimPullWake`, `agent_pull_wakes`) and delivered to the Fin,
 never its Apex, through `deliver` under a named request as Mako's words
@@ -486,7 +497,20 @@ mates' view and the `apexes` digest say how long it has been idle
 (`idleFor`, seconds, only while it isn't working) and its open pull requests
 (`openPRs`, `finPullRequests`): its worktree branch's as the worktree
 summaries last read them (`ThreadWorktreeService.heldPulls`) and those its
-reports name, with no read of GitHub of their own. A pull request is its
+reports name, with no read of GitHub of their own. A Fin that reads as
+working and does nothing is named to its Apex: the live engine's activity in
+its conversation (each stamp of `activityAt`, a turn or a steer its harness
+takes, its own report) moves its last moment, a map write, and its tree waits
+on one deadline for the earliest of its Fins' (`QuietWatch`,
+`conversations/fin-quiet.ts`). A Fin at work on Mako's live driver, waiting on
+nothing that explains a pause, that showed nothing for `QUIET_MS` (15 min) is
+said once a quiet stretch in its Apex's digest, under "gone quiet while
+working", with its last step and whether it still runs (`quietLine`): a
+notice kept nowhere, never a state, which leaves an unsent digest once the Fin
+moves again (`AgentWakes.current`), and only under the default `wake`. A long
+command counts as quiet; the line names it and the Apex decides. A Fin whose
+turn ended leaves the watch, and an idle one is never named
+(`test:fin-quiet`). A pull request is its
 repository's (`owner/name`, from its URL) and number (`pullRef`, `pullKey`),
 never its number alone, since a Thread can hold several repositories; a bare
 `#12` is the Fin's one repository's, or stays unqualified when it has several,
@@ -585,7 +609,10 @@ edits both through the same calls and previews only what each adds to the
 note, from the same functions (`roleRulesPreview`); `npm run test:person-rules` covers it. A worktree in a project folder of several
 repositories can be on a branch it names, adopted in each repository that
 has it and made from the newest start in the rest. A report (`agents_report`, else one
-implicit report at a turn's end) sends its Apex a notice; an idle Apex waits
+implicit report at a turn's end, which a completed turn also writes when its
+last report was progress that hands nothing on and names no wait Mako watches:
+a pull request the watch reads, an armed turn wait or its own Fins at work,
+`progressLeftUnwatched`) sends its Apex a notice; an idle Apex waits
 `WAKE_COALESCE_MS` and takes ONE turn with the digest, a busy one gets it at
 its next step where its harness steers there and at its turn's end where it
 doesn't, at most `WAKES_PER_MINUTE` an Apex (`agent-wakes.ts`): the Apex
@@ -772,7 +799,11 @@ deployed cloud.
 
 What an Apex and its Fins tell each other is kept short without dropping
 what the reader needs. Every `agents_*` answer is its JSON on one line
-(`agentToolText`), every field kept. A finished Fin's digest line
+(`agentToolText`), every field kept. `agents_list` lists what an Apex can act on (`foldList`): a Fin that ended over a day ago with
+nothing open is counted in `folded`, not listed; past `LIST_BUDGET_CHARS` (16 KB) idle and ended rows lose
+their pull requests, then fold, oldest first. A Fin needing attention (a question, an action, a decision, at work,
+waiting or blocked) is never folded, past the budget if it must be; `scope: all` lists every one. An Apex's 130 Fins were once 105 KB, about 26,000 tokens, a
+call (`test-agents-list-fold.ts`). A finished Fin's digest line
 (`finishedLine`) is its report's first paragraph past any heading, on one
 line, at most `FINISHED_CHARS`, with how many more characters the
 report holds (`agents_read` gives them), and every artifact by its ref with
@@ -790,7 +821,11 @@ which the digest lists under "hands work to another Fin" for the Apex to pass
 on with one `agents_send`. A progress report that says it hands work to
 another Fin of its Apex (`agents_report`'s `handoff: {to}`, or `fin:<name>` in
 its summary) is a handoff too and wakes the Apex; a Fin merely mentioned by
-its name or Thread is progress, and stays quiet. `npm run test:orch-comms` covers all three, and `test:orch-deliver` the
+its name or Thread is progress, and stays quiet. So is progress whose
+`waitingOn` first names a pull request's review or the person
+(`awaitedAnew`, `Report.awaits`): it wakes the Apex once, under "waits on
+someone else to act", since only the Apex or the person can bring that
+about, and the same wait narrated again stays quiet (`test:orch-comms`). `npm run test:orch-comms` covers all three, and `test:orch-deliver` the
 refusal.
 An Apex reads the person's other Apexes with `agents_list` `scope: apexes`
 (`AgentsApexes`): every tree's top Apex but its own whose conversation is
@@ -1454,7 +1489,20 @@ opening the file read-only, its rows handed over a part at a time,
 `journalRowSteps`) and its snapshot made on the loop from them; a reader
 that fails leaves the journal read on the loop as before. On a 60MB
 journal it held the loop 42–91 ms in all against 108–477 ms read on it
-(`bench:live-read`'s `journalRead*`). A history read from its session whose
+(`bench:live-read`'s `journalRead*`). A window's read of a conversation not in
+memory isn't one: it reads the journal where it lies (`ColdJournal`, a
+cold view), under one read transaction pinned on a read-only connection
+until the view is let go, so its pages read the rows as they were when it
+opened. It parses the metadata and requests, a slice at a time, and the
+blocks a page shows, by index; SQLite counts the turns and requests before
+a page. The conversation is read in only when something acts on it, which
+lets its cold views go (`historyLoaded`), and what they hold counts in the
+conversations' memory budget (`historyHeld`). One its last host left
+running or sending, or that keeps a base (`baseSource` or a copy), is read
+in as before (`LiveRecords.cold`). On copies of ten Fins' journals (22 to
+122 MB) the first reads took 2.4 s in all against 7.8 s, a 122 MB one's
+0.6 s against 1.8 s, and the host's RSS peaked at 0.9 GB against 1.6 GB
+(`test-cold-history.ts`). A history read from its session whose
 merge was overtaken is merged again on the next drain, not read again
 (`LiveSources.pagesRead`). `agents_report` never reads a journal: a
 notice for an Apex not in memory reads it in first (`readIn`), and the
@@ -1786,7 +1834,11 @@ once, and the rest of a burst one flush per frame (`LIVE_FRAME_MS`, 50 ms, in
 `contracts/live-conversations.ts`): windows, watching devices and the journal
 get the same batches. The frame is the window's paint frame (`StreamFrames`
 takes it): on 33 ms the batches beat against the paints, a third of them were
-painted over unseen and a word waited longer for its paint. Status changes,
+painted over unseen and a word waited longer for its paint. A long answer going
+on (past `LONG_ANSWER_CHARS`, 1,500, with nothing else changed) waits up to
+`LONG_ANSWER_FLUSH_MS` (400 ms) or a paragraph's end instead
+(`conversations/answer-pace.ts`): sent each frame, its batches were mostly
+envelope, 156 bytes a token to a phone with 7 of them its words. Status changes,
 questions and approvals don't wait for it. A batch says `activityAt` only when
 it moved into another second, and carries a whole value (a control, a request,
 a roster) only when its content changed (`sharedFields`); a message whose
@@ -3706,6 +3758,40 @@ handed to the host once (`mako:access-adopt`), taken only for harnesses with
 no choice yet. A move to the cloud carries each session's mode, and a return
 remembers the mode it ran in there (`rememberMode`).
 `scripts/test-access-choices.ts` covers the store.
+
+The person's preferences that follow them across Macs, the web and the phone
+have the same one owner, the account (`@mako/protocol/preferences`,
+`GET`/`PATCH /v1/preferences`, a `preferences-changed` event carrying only
+what changed, at a revision): the theme, the Fin settings (each harness's
+choice, the rules, the role rules, the ceiling, move-on-limit) and the
+harness order, named and typed in `contracts/preferences.ts`. Each key holds
+its value with when the person made that edit (`at`) and the edit's ID (`op`),
+and the later edit wins (`laterEdit`): the account keeps a write only if it's
+later than the one it holds, clamping a device's clock that runs ahead to its
+own (or just after the edit it holds), and an edit at 0 (a value kept before
+the account kept it, its time unknown) only fills one the account holds
+nothing for. The person's own edit is stamped at the later of the device's
+clock and just after the edit in effect (`PreferenceStore.change`, the web's
+`set`), so an edit made after seeing a value always wins over it, whatever
+that device's clock says. A window reaches them
+through its host (`PreferenceStore`, `mako:preferences`, `mako:preference-set`,
+`<user root>/preferences.json` with what it couldn't send yet laid over it);
+the web app and the phone read and write the account directly
+(`src/web-client/account-preferences.ts`), so they show with every Mac asleep.
+What a device kept before is offered once (`offer`), at 0: no file says when a
+choice in it was made (`fin-defaults.json` is written at nearly every session
+start), so a first sync only fills what the account holds nothing for and
+never replaces a choice made since on another device. The account is the
+source of truth and those two files only mirror it, for an older Mako sharing
+`~/.mako` (`FinDefaultsStore.mirror`, `mirrorHarnessOrder`); each mirror write
+marks what it wrote (`preferencesMirror`, `orderMirror`), so every host of the
+user (the app and its profiles) reads a file that still matches its mark as a
+mirror. A synced field that no longer matches it was changed by another
+program (an older Mako keeps the mark as it found it): that's its edit, made
+when the file changed, and it's sent. What's each device's own stays in
+its file: its number of Fins at once and the model it last used on each
+harness. `scripts/test-account-preferences.ts` covers the store, the merge and
+the mirror.
 
 ### Plan mode
 

@@ -1,3 +1,4 @@
+import { ProviderFailureError, providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
@@ -85,7 +86,7 @@ export async function verifiedSignInControls(root: string): Promise<void> {
     })
     host.liveDrivers.register({ ...original, provider, available: () => true, nativeSource: undefined,
       start: async (_cwd, options) => {
-        if ((control === "baseline-overlap" || control === "start-restart-gap" || control === "readmission") && accountOut.has("one")) throw new Error("Failed to authenticate: OAuth session expired and could not be refreshed")
+        if ((control === "baseline-overlap" || control === "start-restart-gap" || control === "readmission") && accountOut.has("one")) throw new ProviderFailureError("Failed to authenticate: OAuth session expired and could not be refreshed", providerTextEvidence("Failed to authenticate: OAuth session expired and could not be refreshed"))
         if (control === "reopening" && sent.length > 0) {
           reopening = true
           await new Promise<void>(resolve => { releaseOpen = resolve })
@@ -112,9 +113,9 @@ export async function verifiedSignInControls(root: string): Promise<void> {
         if (accountOut.has(names.get(id)!)) {
           if (control === "unknown") {
             dispatch.report({ kind: "uncertain", reason: "Fixture lost the acceptance response" })
-            throw new Error("Failed to authenticate: OAuth session expired and could not be refreshed")
+            throw new ProviderFailureError("Failed to authenticate: OAuth session expired and could not be refreshed", providerTextEvidence("Failed to authenticate: OAuth session expired and could not be refreshed"))
           }
-          emit({ type: "live-session", session: { ...session, status: "failed", lastStop: "failed", error: "Failed to authenticate: OAuth session expired and could not be refreshed" } })
+          emit({ type: "live-session", session: { ...session, status: "failed", lastStop: "failed", error: "Failed to authenticate: OAuth session expired and could not be refreshed", failureEvidence: providerTextEvidence("Failed to authenticate: OAuth session expired and could not be refreshed") } })
         } else {
           dispatch.report({ kind: "accepted", source: "native-response" })
           emit({ type: "live-update", id, update: { kind: "text", text: "Fixture completed" } })

@@ -1161,3 +1161,16 @@ export function traceOf(batch: Pick<LiveBatch, "revision" | "sessionChanges" | "
   const moment = batch.sessionChanges?.status !== undefined || batch.permissions !== undefined || batch.requests !== undefined || batch.requestChanges !== undefined
   return moment || batch.revision % TRACE_EVERY === 0 ? `${TRACE_PREFIX}${random()}` : undefined
 }
+
+/**
+ * The versions of one sent prompt: the conversation it was first sent in, then each fork made from just before it
+ * (a rewind to before it, the words written again), oldest first. `at` is the one asked about. A prompt never edited
+ * has one version.
+ */
+export interface PromptVersions {
+  conversations: string[]
+  at: number
+}
+
+/** A conversation's edited prompts' versions, by the request each is in it (`mako:live-prompt-versions`). */
+export type PromptVersionsByRequest = Record<string, PromptVersions>

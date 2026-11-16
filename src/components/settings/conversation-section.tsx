@@ -13,7 +13,7 @@ export function ConversationSection() {
   useEffect(() => {
     void conversationSettings.load()
   }, [])
-  const continueAfterRestart = settings?.continueAfterRestart ?? false
+  const continueAfterRestart = settings?.continueAfterRestart ?? true
   const awake = useKeepAwake((store) => store.state)
   useEffect(() => {
     void keepAwake.load()
@@ -36,7 +36,7 @@ export function ConversationSection() {
       </SettingRow>
       <SettingRow
         title="Continue interrupted turns after Mako restarts"
-        description="When an update or restart cuts a turn short, the agent picks it up once Mako is back, told what stopped with it. At most three times in five minutes; after a crash it waits for you"
+        description="After a restart, Mako checks what finished and picks up the remaining work. Stops stay stopped. At most three automatic continuations in five minutes"
       >
         <Toggle
           label="Continue interrupted turns after Mako restarts"

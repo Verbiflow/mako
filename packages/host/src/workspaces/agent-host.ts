@@ -1,4 +1,5 @@
 import type { Git } from "@mako/git"
+import { hostWarn } from "../base/host-log.js"
 import type { GitRemoteInput, GitRemoteResult, FileContents, GitCommitEntry, GitDiff, GitFile, GitCommitFile, GitStatus, SearchOptions, SearchResults, StagedFile, WorkspaceFile } from "../contracts/git-workspace-search.js"
 import { homedir } from "node:os"
 import { ensureChatsRoot } from "../threads/index.js"
@@ -382,8 +383,9 @@ export class AgentHost implements GitTab {
     return this.workspaceFiles.createText(cwd, path, text)
   }
 
-  async readWorkspaceFile(path: string): Promise<FileContents> {
-    return this.workspaceFiles.read(path)
+  /** `confined`: another device's read, through the gateway: only this workspace's folders (`openConfined`). */
+  async readWorkspaceFile(path: string, confined = false): Promise<FileContents> {
+    return this.workspaceFiles.read(path, confined ? { confined } : undefined)
   }
 
   async resolvePath(path: string): Promise<string> {
@@ -492,11 +494,8 @@ export class AgentHost implements GitTab {
       if (generation === this.gitPushGeneration && this.workspace === workspace && this.foreground) this.emit({ type: "git", git, cause })
     } catch (error) {
       if (generation !== this.gitPushGeneration || this.workspace !== workspace || !this.foreground) return
-      this.emit({
-        type: "notice",
-        level: "error",
-        message: error instanceof Error ? error.message : String(error),
-      })
+      // The next change reads Git again; the panel keeps what it last showed.
+      hostWarn("git", "the workspace's status couldn't be read", { error: error instanceof Error ? error.message : String(error) })
     }
   }
 

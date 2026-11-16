@@ -1,5 +1,7 @@
 import { HostStopping } from "../base/host-stopping.js"
-import { withHostClient, hostHistoryPaging } from "../base/host-client.js"
+import { GATEWAY_ALLOWED, MACHINE_REFUSED, gatewayAllows } from "../contracts/gateway-allowed.js"
+import { GATEWAY_REFUSED } from "../contracts/host-operations.js"
+import { GATEWAY_CLIENT, withHostClient, hostHistoryPaging } from "../base/host-client.js"
 import { hostCallSchema, hostChannels, isHostChannel, type HostArguments, type HostCallInput, type HostChannel } from "../contracts/host-call-inputs.js"
 import type { MethodTable } from "../base/methods.js"
 import type { HostWork } from "../base/event-loop.js"
@@ -8,6 +10,7 @@ import { CLIENT_CALL_ON_SOCKET, isClientCall } from "../contracts/client-calls.j
 import { EncodedAnswer, decodeRuntimeValue, encodeRuntimeValue, type EncodedValue } from "../contracts/runtime-value.js"
 import { HostCallLifetime } from "./call-lifetime.js"
 import { RepeatedCalls } from "./repeated-calls.js"
+import { FailedCalls } from "./failed-calls.js"
 import { ControlPreviewSchema, type ControlPreview } from "@mako/control-runtime/contracts"
 import { z } from "zod"
 
@@ -42,6 +45,8 @@ export class HostMethods implements MethodTable {
   private video: ((args: unknown[]) => Promise<Uint8Array>) | undefined
   private readonly lifetime: HostCallLifetime
   private readonly repeated = new RepeatedCalls()
+  /** Every failed call is said in the host's log (`FailedCalls`), whichever transport carried it. */
+  private readonly failed = new FailedCalls()
   private readonly options: HostMethodsOptions
 
   constructor(options: HostMethodsOptions) {
@@ -66,7 +71,13 @@ export class HostMethods implements MethodTable {
       // An answer already encoded, the owner's or another call's, had its history paged by whoever encoded it.
       const owner = await this.options.route(channel, parsed)
       if (owner.handled) return encoded(owner.value)
-      const value = await listener(...parsed)
+      let value: Awaited<Result>
+      try {
+        value = await listener(...parsed)
+      } catch (error) {
+        this.failed.note(channel, { error })
+        throw error
+      }
       if (value instanceof EncodedAnswer) return encoded(value.value)
       return local(hostHistoryPaging() ? this.options.presentHistory(value) : value)
     }))
@@ -89,6 +100,9 @@ export class HostMethods implements MethodTable {
     this.refuseOutsideFixture(channel)
     if (channel === "mako:control-preview" || channel === "mako:control-video") throw new Error("Preview delivery requires a matching binary-capable client. Update the Mako client and host.")
     if (!isHostChannel(channel)) throw new Error("Unknown Mako host method")
+    // The gateway refuses these by name first (`fromHostOperation`); this is the table's own word, whatever the door.
+    if (client.startsWith(GATEWAY_CLIENT) && !gatewayAllows(channel, client))
+      throw new Error(GATEWAY_ALLOWED.has(channel) ? MACHINE_REFUSED : GATEWAY_REFUSED)
     const call = await this.declared(channel)
     this.repeated.note(client, channel, args, correlationId)
     return withHostClient(client, () => call(args), history, correlationId)

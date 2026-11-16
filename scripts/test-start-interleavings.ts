@@ -82,7 +82,7 @@ async function run(seed: number, root: string): Promise<void> {
   const steps = schedule(next)
   const limit = seed % 3 === 0 ? 1 : 4
   // Tight tree budgets in some schedules, so the tree's running and started bounds bind as often as the device's.
-  const budget = seed % 4 === 0 ? { running: 1, started: 3 } : seed % 4 === 1 ? { running: 2, started: 100 } : { running: 32, started: 100 }
+  const budget = { windowMs: 3_600_000, ...(seed % 4 === 0 ? { running: 1, started: 3 } : seed % 4 === 1 ? { running: 2, started: 100 } : { running: 32, started: 100 }) }
   const gates: Gate[] = []
   const running = new Set<string>()
   // Runs a Thread's shell started and linked: real processes that take a few milliseconds to go after SIGTERM.
@@ -271,7 +271,7 @@ async function sameKeyThenStopAll(root: string): Promise<void> {
  * Two starts of different keys deciding together take the tree's last running place or its last started one once:
  * the second is refused, never both admitted past the budget.
  */
-async function budgetsTakenOnce(root: string, budget: { running: number; started: number }): Promise<void> {
+async function budgetsTakenOnce(root: string, budget: { running: number; started: number; windowMs: number }): Promise<void> {
   const gates: (() => void)[] = []
   const w = new AgentsWorld({
     root: join(root, `budget-${budget.running}-${budget.started}`),
@@ -340,8 +340,8 @@ async function failedStartFreesItsPlace(root: string): Promise<void> {
 const root = mkdtempSync(join(tmpdir(), "mako-start-interleavings-"))
 try {
   await sameKeyThenStopAll(root)
-  await budgetsTakenOnce(root, { running: 1, started: 100 })
-  await budgetsTakenOnce(root, { running: 4, started: 1 })
+  await budgetsTakenOnce(root, { running: 1, started: 100, windowMs: 3_600_000 })
+  await budgetsTakenOnce(root, { running: 4, started: 1, windowMs: 3_600_000 })
   await failedStartFreesItsPlace(root)
   for (const seed of [...Array.from({ length: SCHEDULES }, (_, at) => at + 1), ...FAILED_ONCE.filter((seed) => seed > SCHEDULES)]) await run(seed, root)
 } finally {

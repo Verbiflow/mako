@@ -1,3 +1,5 @@
+import { codexFailureEvidence } from "./codex/failure.js"
+import { HostFailureError, ProviderFailureError } from "../contracts/provider-failure.js"
 import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import { STARTUP_TOTAL_MS } from "./provider-startup.js"
 import { CodexAgentRunsSchema } from "./codex/agent-status.js"
@@ -5,7 +7,7 @@ import type { CodexDecoded, CodexEffect } from "./codex/decoder.js"
 import { z } from "zod"
 import { CodexIdentityResponseSchema, CodexInitializeSchema } from "./codex/native-context.js"
 import { CodexGoalClearResultSchema, CodexGoalSetResultSchema } from "./codex/goals.js"
-import { isNumber, stringValue, type JsonRpcId } from "../base/json-values.js"
+import { isNumber, objectValue, stringValue, type JsonRpcId } from "../base/json-values.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import {
   parseJsonRpcEnvelope,
@@ -248,9 +250,8 @@ function settleRpc(
   clearTimeout(pending.timer)
   if (message.error) {
     pending.reject(
-      new Error(
-        stringValue(message.error.message) ?? "Codex JSON-RPC request failed"
-      )
+      new ProviderFailureError(stringValue(message.error.message) ?? "Codex JSON-RPC request failed",
+        codexFailureEvidence(stringValue(message.error.message), objectValue(message.error.data)?.codexErrorInfo))
     )
     return
   }
@@ -519,7 +520,7 @@ function beginRpcRequest<M extends RpcMethod>(
   parseResult: RpcResultParser<M>
 ): Promise<RpcResults[M]> {
   if (context.exited || context.child.stdin.destroyed)
-    return Promise.reject(new Error("Codex app-server is not running"))
+    return Promise.reject(new HostFailureError("network", "Codex app-server is not running"))
   const id = ++context.nextRequestId
   return new Promise<RpcResults[M]>((resolve, reject) => {
     // A turn/start or review/start the app-server has not answered may
@@ -528,7 +529,7 @@ function beginRpcRequest<M extends RpcMethod>(
     // exit rejects.
     const timer = method === "turn/start" || method === "review/start" ? undefined : setTimeout(() => {
       context.pending.delete(rpcKey(id))
-      reject(new Error(`Codex app-server did not answer ${method}`))
+      reject(new HostFailureError("launch-stalled", `Codex app-server did not answer ${method}`))
     }, method === "account/read" ? 5_000 : ["initialize", "thread/start", "thread/resume", "thread/fork"].includes(method)
       ? STARTUP_TOTAL_MS
       : RPC_TIMEOUT_MS)
@@ -540,7 +541,7 @@ function beginRpcRequest<M extends RpcMethod>(
       settleResult: (value) => {
         const parsed = parseResult(value)
         if (parsed.valid) resolve(parsed.value)
-        else reject(new Error(parsed.message))
+        else reject(new HostFailureError("unknown", parsed.message))
       },
       timer,
     }
@@ -548,7 +549,7 @@ function beginRpcRequest<M extends RpcMethod>(
     if (!sendRpc(context, { jsonrpc: "2.0", id, method, params })) {
       clearTimeout(timer)
       context.pending.delete(rpcKey(id))
-      reject(new Error("Failed to write to Codex app-server"))
+      reject(new HostFailureError("network", "Failed to write to Codex app-server"))
     }
   })
 }

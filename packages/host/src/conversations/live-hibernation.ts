@@ -1,3 +1,4 @@
+import { failureEvidenceOf, HostFailureError } from "../contracts/provider-failure.js"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { resumable, type ProviderBinding } from "../contracts/conversation-control.js"
@@ -20,7 +21,7 @@ export const PROVIDER_WARM_LIMIT = 2
 
 type HibernationAccess = Pick<LiveAccess,
   "dependencies" | "residents" | "resident" | "load" | "flush" | "noteWork" | "drain" | "moves" | "retireFromAccount" | "locateNativePath" |
-  "failedStart" | "returnFromRemovedWorktree" | "driverEvents">
+  "failedStart" | "returnFromRemovedWorktree" | "driverEvents" | "reconcileCut" | "restartContinued">
 
 /**
  * Which conversations keep a provider process: a ready one stays warm for
@@ -427,8 +428,9 @@ export class LiveHibernation {
           connection: "disconnected",
           status: "failed",
           error: message,
+          failureEvidence: { kind: "resume-failed", source: "host" },
         },
-        requests: this.access.failedStart(resident, { error: message }, true),
+        requests: this.access.failedStart(resident, { error: new HostFailureError("resume-failed", message) }, true),
       }
       this.access.flush(resident)
       return
@@ -450,6 +452,20 @@ export class LiveHibernation {
     let held = false
     let startedSession: LiveSessionState | undefined
     try {
+      const request = resident.snapshot.requests.find((request) => request.status === "queued")
+      if (!await this.access.reconcileCut(resident, request?.continues)) {
+        if (resident.generation === generation && !resident.closing && !resident.driver) {
+          const completed = request && resident.snapshot.requests.find((candidate) => candidate.id === request.continues?.requestId)?.status === "completed"
+          resident.snapshot = { ...resident.snapshot, session: { ...resident.snapshot.session, status: "ready", connection: "hibernated" },
+            requests: completed ? resident.snapshot.requests.map((candidate) => candidate === request ? { ...candidate, status: "canceled" as const } : candidate) : resident.snapshot.requests }
+          this.access.flush(resident)
+          if (completed && request?.continues) {
+            this.access.restartContinued(resident.snapshot.session.id, request.continues.requestId)
+            if (resident.snapshot.requests.some((candidate) => candidate.status === "queued")) await this.wakeNow(resident)
+          }
+        }
+        return
+      }
       const verdict = await dependencies.resumeVerdict?.(binding)
       if (!verdict || !resumable(verdict, "moved"))
         throw reconnectError(verdict)
@@ -629,6 +645,7 @@ export class LiveHibernation {
           executionContext: closed ? binding.executionContext : resident.snapshot.session.executionContext,
           status: waits ? "ready" : "failed",
           error: waits ? undefined : message,
+          failureEvidence: waits ? undefined : failureEvidenceOf({ error }),
         },
         requests,
       }

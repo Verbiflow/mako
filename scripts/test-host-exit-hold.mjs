@@ -12,6 +12,8 @@ import { testScratch } from "./lib/test-scratch.mjs"
  * seconds after its exit, every thread already ended (15 s on a CI runner, 2026-11-13, in test:node-host-secrets), and
  * the next host, a restart's or an update's, waited on the lock all that while. `MAKO_EXIT_HOLD_MS` keeps the exiting
  * process alive as that one was; the data root must be free well before it's gone.
+ * Cleanup before the release can take longer than this trailing hold under load. Check the order, not cleanup's
+ * duration against the hold: the hold starts only after cleanup and release have finished.
  *
  *   npm run build:electron && node scripts/test-host-exit-hold.mjs
  */
@@ -30,24 +32,27 @@ try {
     cwd: resolve("."),
     env: { ...process.env, HOME: home, MAKO_EXIT_HOLD_MS: String(HOLD_MS) },
   })
+  const occupied = await acquireHostLock(dataRoot)
+  if (occupied.kind === "held") await occupied.release()
+  assert.equal(occupied.kind, "taken", "a running host keeps exclusive ownership of its data root")
   const asked = Date.now()
   await invokeRuntime(host.socket, crypto.randomUUID(), "mako:lifecycle-command", [{ kind: "wait", action: "quit" }]).catch(() => undefined)
   let freedAt
+  let stillThere = false
   for (const deadline = asked + HOLD_MS + 15_000; Date.now() < deadline; await delay(50)) {
     const lock = await acquireHostLock(dataRoot)
     if (lock.kind === "held") {
       freedAt = Date.now() - asked
+      stillThere = alive(host.info.pid)
       await lock.release()
       break
     }
   }
   assert.ok(freedAt !== undefined, "the data root is let go")
-  const stillThere = alive(host.info.pid)
   for (const deadline = asked + HOLD_MS + 15_000; alive(host.info.pid) && Date.now() < deadline; ) await delay(50)
   const goneAt = Date.now() - asked
   assert.ok(!alive(host.info.pid), "and the process goes too, once its exit is done")
   assert.ok(stillThere, `the data root was free while the exiting process was still there (freed ${freedAt} ms, gone ${goneAt} ms)`)
-  assert.ok(freedAt < HOLD_MS - 1_000, `the data root was free ${freedAt} ms after the quit, not once the process went (${goneAt} ms)`)
   console.log(JSON.stringify({ freedMs: freedAt, goneMs: goneAt }))
   console.log("host exit hold: a quitting host lets go of its data root as it finishes, whatever its process's exit takes after")
 } finally {

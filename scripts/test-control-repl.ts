@@ -18,6 +18,8 @@ import {
   ControlProgramRuntime,
   ControlProgramError,
   programErrorText,
+  STEPS_EVERY_MS,
+  type ControlSteps,
 } from "@mako/control/program"
 import { browserFixture } from "./browser-control-fixture.js"
 
@@ -105,6 +107,35 @@ try {
   const second = await js("await control.browsers()")
   assert.doesNotMatch(text(second), /Mako browser and computer use/)
   summary.repeatDiscoveryBytes = Buffer.byteLength(JSON.stringify(second))
+  // A js call asked for its steps hears them as its calls move, at most one frame a STEPS_EVERY_MS, each the whole
+  // state; the same call again in a row is one step; the reply is the same as without them. A frame still waiting
+  // when the reply goes is dropped: the reply ends the call, so this program waits before it returns.
+  {
+    const frames: ControlSteps[] = []
+    const heard: number[] = []
+    const started = performance.now()
+    const stepped = z.object({ content: z.array(z.object({ type: z.string(), text: z.string().optional() })) }).parse(
+      await invokeControlSession(descriptor, {
+        method: "js",
+        code: "for (let i = 0; i < 3; i++) { await control.status(); await new Promise((r) => setTimeout(r, 300)) } await control.browsers(); await new Promise((r) => setTimeout(r, 400)); 'stepped'",
+        timeout_ms: 10_000,
+      }, signal, (steps) => {
+        frames.push(steps)
+        heard.push(performance.now() - started)
+      })
+    )
+    assert.match(JSON.stringify(stepped.content), /stepped/, "the reply is the program's, as without steps")
+    assert.ok(frames.length >= 3, `heard ${frames.length} frames`)
+    for (let i = 1; i < heard.length; i++)
+      assert.ok(heard[i]! - heard[i - 1]! >= STEPS_EVERY_MS - 20, `frames ${heard.map(Math.round).join(", ")} ms came closer than ${STEPS_EVERY_MS} ms`)
+    assert.ok(frames.some((frame) => frame.steps.some((step) => step.call === "status" && step.times === 3)), JSON.stringify(frames))
+    const last = frames.at(-1)!
+    assert.equal(last.total, 4, "every call counted")
+    assert.deepEqual(last.steps.map((step) => step.call), ["status", "targets"], "one step for the three status calls, then control.browsers() as the call it made")
+    const plain = await invokeControlSession(descriptor, { method: "js", code: "await control.status(); 'plain'" }, signal)
+    assert.match(JSON.stringify(plain), /plain/, "a request that asks for no steps is answered as before")
+    summary.stepFrames = frames.length
+  }
   const latency: number[] = []
   for (let i = 0; i < 30; i++) {
     const started = performance.now()

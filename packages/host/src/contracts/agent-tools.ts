@@ -94,7 +94,8 @@ export interface AgentsStarted {
   why?: string
   /** The Fins it starts after (`after`) that haven't finished yet, by name. */
   after?: string[]
-  tree: { running: number; started: number; of: { running: number; started: number } }
+  /** `started` counts the starts within the budget's window (`of.windowMs`) and `startedHour` within the hour, never over the tree's life. */
+  tree: { running: number; started: number; startedHour?: number; of: { running: number; started: number; windowMs?: number; hourly?: number } }
   /** The person's Fins at work on this device, every tree's, and how many run on it at once: its capacity, or their own number. */
   atOnce?: { working: number; of: number }
   /** Set while this Mac is busy (`macLoad`): it starts anyway, and says so, so heavy work goes one at a time. */
@@ -137,10 +138,26 @@ export interface AgentsListInput {
    * (`AgentsCrew`); `apexes`, the person's other Apexes on this host (`AgentsApexes`); `threads`, the conversations
    * on this device an `@` picker offers, newest first (`AgentsThreads`).
    */
-  scope?: "children" | "tree" | "crew" | "apexes" | "threads"
+  scope?: "children" | "tree" | "all" | "crew" | "apexes" | "threads"
   /** With `threads`: words of a title, a Thread ID or a Fin's name. */
   query?: string
 }
+
+/**
+ * What a `children` or `tree` list leaves out (`foldList`): every Fin that ended more than `LIST_ENDED_FOR_MS` ago with
+ * nothing open, and past `LIST_BUDGET_CHARS` of rows, idle and ended ones, after their bulk. A Fin needing attention (a
+ * question, an action, a decision, at work, waiting or blocked) is always listed, past the budget if it must be.
+ * `scope: all` lists every one. An Apex's list once held every Fin it ever started: 130 of them were 105 KB, about 26,000
+ * tokens, a call.
+ */
+export interface AgentsListFolded {
+  /** Fins left out, by where each stands. */
+  idle: number
+  ended: number
+  note: string
+}
+export const LIST_ENDED_FOR_MS = 24 * 60 * 60_000
+export const LIST_BUDGET_CHARS = 16 * 1024
 /** The conversations `agents_list` with `scope: threads` found, each by the ref `context` and `thread_history` take. */
 export interface AgentsThreads {
   threads: { ref: string; title?: string; harness: string; updatedAt?: string }[]
@@ -232,7 +249,7 @@ export interface OtherApex {
 }
 /** The open Fins one Apex's digest names; the rest are counted. */
 export const APEX_DIGEST_FINS = 8
-export type AgentsListResult = { children: AgentStrip[]; tree: AgentsStarted["tree"] } | AgentsCrew | AgentsApexes | AgentsThreads | AgentRefused
+export type AgentsListResult = { children: AgentStrip[]; tree: AgentsStarted["tree"]; folded?: AgentsListFolded } | AgentsCrew | AgentsApexes | AgentsThreads | AgentRefused
 
 /** Explicit summary's short-lived PR details; the engine, UI and default tool output keep full facts. */
 export interface AgentPullsSummary {
@@ -246,6 +263,7 @@ export interface AgentPullsSummary {
 export type AgentsListModelResult = AgentsListResult | {
   children: (AgentStrip | (Omit<AgentStrip, "openPRs"> & { pulls: AgentPullsSummary }))[]
   tree: AgentsStarted["tree"]
+  folded?: AgentsListFolded
 }
 
 export interface AgentsReadInput {
@@ -563,7 +581,7 @@ export const ORCHESTRATION_INSTRUCTIONS = [
   `After starting, end your turn: reports wake you. Don't poll \`agents_list\` or wait in a loop; when your next step needs a ${FIN_WORD}'s result, start it with \`mode: "wait"\`.`,
   `The person writes to this Thread, not to its ${FIN_WORD}s: a message for one of them goes there with \`agents_send\` (\`forward: true\`) as your first call, then end your turn.`,
   `A ${FIN_WORD}'s question or approval that wakes you is yours to answer with \`agents_answer\`, within your own access (approvals only on full access); leave it to the person with \`person: true\` when it's theirs to decide. One you leave unanswered for a minute goes to the person too.`,
-  `If you're a ${FIN_WORD}, started by another Thread (your ${APEX_WORD}), call \`agents_report\` when you finish, are blocked, or need a decision (with its options and the one you recommend); ending your turn without one reports how it ended. Finished but leaving a decision (a merge, a choice between results)? Report done with the question and options, and \`decides\` saying who decides: \`apex\` or \`person\`.`,
+  `If you're a ${FIN_WORD}, started by another Thread (your ${APEX_WORD}), call \`agents_report\` when you finish, are blocked, or need a decision (with its options and the one you recommend); ending your turn without one reports how it ended. Finished but leaving a decision (a merge, a choice between results)? Report done with the question and options, and \`decides\` saying who decides: \`apex\` or \`person\`. Ready for review, or waiting on your ${APEX_WORD} or the person, is done with an \`action\` saying what they do next, never progress: progress is only for a turn that goes on, and a turn that ends on progress waiting on nothing Mako watches is reported as its result.`,
   REPORT_FOLLOW_UP_INSTRUCTIONS,
   `To wait on a pull request, report progress with \`waitingOn\` naming it and what you wait for (checks, review or merge), then end your turn instead of polling its checks, because Mako wakes you with its outcome.`,
   "Use pull_request_status for PR/CI status and waitingOn so Mako wakes you. Never use gh --watch. If direct gh status polling is necessary, poll no faster than once per 60 seconds per repository, reuse the response, and do not start an independent polling loop. A state-changing operation may have one targeted readback. On a secondary 403 or 429, stop requests across your work until Retry-After or the rate-limit reset permits them; without a header, wait at least 60 seconds and increase the wait after repeated limits. Fetch a terminal failure log once.",
@@ -726,7 +744,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     mcp: {
       name: "agents_list",
       description: `This Thread's ${FIN_WORD}s as they stand: name, harness, state, last step and last report. Every PR fact stays inline by default. Explicit presentation summary replaces large PR arrays with counts: open and draft are known open; reported means its current state is unknown. Pass each read object to agents_read, then follow pulls.next as offset. These details expire at expiresAt, at most 30 minutes from capture, or on host restart; they require the same caller Session and current access. After that the original facts cannot be recovered; a new list gives current facts. Use full for lasting evidence. Reports wake you on their own, so read this when you need the whole picture, not to wait. A ${FIN_WORD} reads its ${APEX_WORD} and the other ${FIN_WORD}s it started with scope crew, before work another of them may be doing. Scope apexes reads the person's other ${APEX_WORD}es without waking them.`,
-      fields: { scope: `children (default): your ${FIN_WORD}s; tree, which adds every ${FIN_WORD} below them; or, from a ${FIN_WORD}, crew: your ${APEX_WORD} and the other ${FIN_WORD}s it started, what each was asked and last reported; or apexes: the person's other ${APEX_WORD}es, each with its folder, branch, ${FIN_WORD} counts and digest; or threads: the conversations on this device, each with the ref context and thread_history take.`, query: `With scope threads: words of a title, a Thread ID or a ${FIN_WORD}'s name.`, presentation: "full (default): every PR fact inline. summary: explicit opt-in to counts and same-Session PR pages lost at expiresAt or host restart; relisting cannot recover the original facts. Other scopes stay full." },
+      fields: { scope: `children (default): your ${FIN_WORD}s that are at work, waiting, idle or need a decision, and those that ended in the last day; what needs you is always listed, and other idle or ended ones may be counted in folded; all: every one of them; tree, which adds every ${FIN_WORD} below them, folded the same way; or, from a ${FIN_WORD}, crew: your ${APEX_WORD} and the other ${FIN_WORD}s it started, what each was asked and last reported; or apexes: the person's other ${APEX_WORD}es, each with its folder, branch, ${FIN_WORD} counts and digest; or threads: the conversations on this device, each with the ref context and thread_history take.`, query: `With scope threads: words of a title, a Thread ID or a ${FIN_WORD}'s name.`, presentation: "full (default): every PR fact inline. summary: explicit opt-in to counts and same-Session PR pages lost at expiresAt or host restart; relisting cannot recover the original facts. Other scopes stay full." },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
   },
@@ -769,7 +787,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     filled: [],
     mcp: {
       name: "agents_report",
-      description: `Tell this Thread's ${APEX_WORD}, the Thread that started it, how its work stands: done, failed, blocked or needs-input (which wake it), or progress (which doesn't, unless it hands work to another Fin: handoff, or fin:<name> in its summary). Its first sentence is the line it reads. ${REPORT_FOLLOW_UP_INSTRUCTIONS}`,
+      description: `Tell this Thread's ${APEX_WORD}, the Thread that started it, how its work stands: done, failed, blocked or needs-input (which wake it), or progress (which doesn't, unless it hands work to another Fin: handoff, or fin:<name> in its summary). Progress is for work that goes on; "ready for review" or waiting on your ${APEX_WORD} is done with an action. Its first sentence is the line it reads. ${REPORT_FOLLOW_UP_INSTRUCTIONS}`,
       fields: {
         status: "done, failed, blocked, needs-input or progress.",
         summary: "What happened, first sentence first; where to read more.",

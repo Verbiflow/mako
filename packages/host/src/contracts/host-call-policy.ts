@@ -17,6 +17,7 @@
 export type HostCallReplay = "read" | "replay" | "never"
 
 const reads = [
+  "mako:view-hints",
   /**
    * A client's tabs, conversations and models as they are, opening its first tab if it has none: asked twice, the same
    * answer. A cloud start asks it first, so marked so, its Thread sends it on without waiting for the disk.
@@ -77,6 +78,10 @@ const reads = [
   "mako:thread-purposes",
   "mako:thread-titles",
   "mako:thread-app-marks",
+  /** Connection-local sampling demand; replaying its generation cannot undo a newer demand. */
+  "mako:thread-app-demand",
+  "mako:conversation-app-demand",
+  "mako:conversation-app",
   /** Reads the app's processes and files; what it records of them only moves its own read point forward. */
   "mako:thread-app-probe",
   "mako:thread-app-room",
@@ -108,6 +113,7 @@ const reads = [
   "mako:plan-builds",
   "mako:harness-descriptors",
   "mako:access-choices",
+  "mako:preferences",
   "mako:thread-continuation-plan",
   "mako:thread-restore-plan",
   /** Weighs a Thread's harnesses against what the cloud says it runs; changes nothing. */
@@ -159,8 +165,16 @@ const reads = [
   "mako:sync-readings",
   /** Mako's processes from `ps`, and its file watching from memory. */
   "mako:mako-footprint",
+  /** A conversation's turn media, judged by its records: asked twice, the same answers. */
+  "mako:live-turn-media",
+  /** A prompt's versions, from the host's fork index: asked twice, the same answer. */
+  "mako:live-prompt-versions",
   /** fseventsd's health from memory; the restart is never repeated by a client (`mako:file-events-restart`). */
   "mako:file-events-service",
+  /** The servers that need sign-in, from memory. */
+  "mako:mcp-sign-ins",
+  /** The saved conversations this host couldn't open, from memory. */
+  "mako:unopened-conversations",
   /** The continues in the cloud this Mac pressed or its list says, from memory. */
   "mako:continue-readings",
   /** Asks the account what a continue would take now; asked twice, it's asked twice. */
@@ -411,6 +425,10 @@ const replays = [
   "mako:access-choose",
   /** `AccessChoiceStore.adopt`: takes only where no choice is made, so a repeat takes nothing. */
   "mako:access-adopt",
+  /** `PreferenceStore.set`: the same value again is the same preference in effect. */
+  "mako:preference-set",
+  /** `PreferenceStore.offer`: each preference is offered once, so a repeat offers nothing. */
+  "mako:preference-offer",
   /** `PlanBuilds.record`: keyed by plan id, and a build no newer than the recorded one changes nothing. */
   "mako:plan-build-record",
   /** `PlanBuilds.claim`: the claim id; a repeat gets the first answer. */

@@ -168,6 +168,39 @@ export function runGatewayConformance(
   )
 
   scenario(
+    "passing state (`ephemeral`) reaches only the watchers that read it, takes no number, and is never kept: past a tail's worth of it, a watcher back resumes from the tail",
+    async (gateway) => {
+      const runtime = await gateway.connectRuntime()
+      runtime.send({ type: "enroll", runtimeId: "rt-live", versions: SUPPORTED_VERSIONS, build: "conformance", threads: [] })
+      expect(await runtime.next(), "enrolled")
+      const reads = (await gateway.connectClient(phone, { ephemeral: true })).subscribe({ stream: sessionStream("rt-live", "c-1"), after: 0 })
+      assert.deepEqual(expect(await runtime.next(), "watch").conversations, ["c-1"])
+      const other = (await gateway.connectClient(desktop)).subscribe({ stream: sessionStream("rt-live", "c-1"), after: 0 })
+      const head = notice(await reads.next()).head
+      notice(await other.next())
+      const passing = (text: string) => runtime.send({ type: "live", conversation: "c-1", ephemeral: true, event: Payload.encoded(text) })
+      live(runtime, 1, "kept 1")
+      passing("passing")
+      live(runtime, 2, "kept 2")
+      const [first, between, second] = [await reads.next(), await reads.next(), await reads.next()]
+      assert.deepEqual([first.seq, first.event.text], [head + 1, "kept 1"])
+      assert.deepEqual([between.ephemeral, between.seq, between.event.text], [true, 0, "passing"], "passing state, with no place in the stream")
+      assert.deepEqual([second.seq, second.event.text], [head + 2, "kept 2"], "the next update's number follows the last kept one's")
+      const [plain1, plain2] = [await other.next(), await other.next()]
+      assert.deepEqual([plain1.event.text, plain2.event.text], ["kept 1", "kept 2"], "a watcher that didn't say it reads passing state hears none")
+      // More passing state than a tail holds, then one more update: a watcher back after "kept 1" resumes from the tail.
+      for (let index = 0; index < 600; index++) passing(`passing ${index}`)
+      live(runtime, 3, "kept 3")
+      for (;;) if ((await other.next()).event.text === "kept 3") break
+      const back = (await gateway.connectClient(desktop)).subscribe({ stream: sessionStream("rt-live", "c-1"), after: head + 1 })
+      const resumed = notice(await back.next())
+      assert.equal(resumed.streamNotice, "head", "resumed, not told to read the conversation again")
+      const missed = [await back.next(), await back.next()]
+      assert.deepEqual(missed.map((frame) => [frame.seq, frame.event.text]), [[head + 2, "kept 2"], [head + 3, "kept 3"]], "only what was kept, in order")
+    }
+  )
+
+  scenario(
     "a watcher back from a dropped link gets what it missed from what the gateway kept, then live updates, each once",
     async (gateway) => {
       const { runtime, stream } = await watched(gateway)

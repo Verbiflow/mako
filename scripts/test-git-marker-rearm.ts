@@ -35,6 +35,46 @@ try {
   await watching.close(); watching = undefined
   mock.restoreAll(); syncBuiltinESMExports()
 
+  // A first push creates several missing parents. Their event may arrive before a replacement native handle exists.
+  for (const gap of ["target", "ancestor", "close"] as const) {
+    const directory = join(root, `registration-${gap}`)
+    const parent = join(directory, "parent"), middle = join(parent, "middle"), marker = join(middle, "prefix")
+    fs.mkdirSync(directory)
+    const armed: { path: string; notify(): void; closes: number }[] = []
+    let heard = 0
+    mock.method(fs, "watch", (path: fs.PathLike, _options: fs.WatchOptions, listener: fs.WatchListener<string>) => {
+      // The new parent/target appears after the replacement arm's stamp, before its watch can hear an event.
+      if (String(path) === parent) fs.mkdirSync(gap === "ancestor" ? middle : marker, { recursive: true })
+      const handle = { path: String(path), notify: () => listener("rename", String(path) === directory ? "parent" : String(path) === middle ? "prefix" : "middle"), closes: 0 }
+      armed.push(handle)
+      return Object.assign(new EventEmitter(), { close() { handle.closes++ }, ref() { return this }, unref() { return this }, [Symbol.dispose]() { this.close() } })
+    })
+    syncBuiltinESMExports()
+    watching = watchGitMarkersHere(directory, () => heard++, ["parent/middle/prefix"])
+    await watching.ready
+    fs.mkdirSync(parent)
+    armed[0]!.notify()
+    assert.equal(armed.length, 2, "recovery yields instead of recursively arming while the file system changes")
+    if (gap === "close") await watching.close()
+    await new Promise(resolve => setImmediate(resolve))
+    if (gap === "close") {
+      assert.equal(armed.length, 2, "close cancels a queued registration repair")
+      assert.equal(heard, 0, "a queued repair cannot announce after close")
+    } else if (gap === "ancestor") {
+      assert.equal(armed.at(-1)!.path, middle, "even while the target is still missing, follow its newly appeared nearest parent")
+      assert.equal(heard, 0)
+      fs.mkdirSync(marker)
+      armed.at(-1)!.notify()
+      assert.equal(heard, 1, "the deeper parent still hears the first ref")
+    } else assert.equal(heard, 1, "a target created during replacement handle registration is announced")
+    armed[0]!.notify()
+    assert.equal(heard, gap === "close" ? 0 : 1, "retired handle events cannot notify again")
+    await watching.close(); watching = undefined
+    await new Promise(resolve => setImmediate(resolve))
+    assert.ok(armed.every(handle => handle.closes === 1), "every acquired handle closes exactly once")
+    mock.restoreAll(); syncBuiltinESMExports()
+  }
+
   const run = promisify(execFile)
   const git = (...args: string[]) => run("git", args, { cwd: root })
   await git("init", "-q", "-b", "main")
@@ -150,6 +190,25 @@ console.log("ready without a process hold");
     assert.ok(streams.every(stream => stream.releases === 1), "every acquired proxy is released once")
   } finally {
     await terminal.closeSummaries(); await terminal.settled(); thirdStore.close(); await thirdRunner.close()
+  }
+  const fourthRunner = new Git(), fourthStore = new ThreadStore(join(root, "summary.sqlite"))
+  let refusedStarts = 0, refusedPullInvalidations = 0
+  const neverReady = new ThreadWorktreeService(fourthRunner, join(root, "summary-refused-owner"), fourthStore,
+    undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, async () => { refusedPullInvalidations++ },
+    async (_root, _ignore, _listener, native) => {
+      if (native?.kind === "git-markers" && native.markers.includes("FETCH_HEAD")) {
+        refusedStarts++
+        throw new Error("fixture Git directory cannot be watched")
+      }
+      return { unsubscribe: async () => {} }
+    })
+  try {
+    for (let pass = 0; pass < 3; pass++) await neverReady.summaries()
+    await neverReady.settled()
+    assert.equal(refusedStarts, 3, "an initially unwatchable directory is retried on later passes")
+    assert.equal(refusedPullInvalidations, 0, "an initial watch refusal must not defeat the PR list's cache on every pass")
+  } finally {
+    await neverReady.closeSummaries(); await neverReady.settled(); fourthStore.close(); await fourthRunner.close()
   }
   console.log("Git markers: rearm, remote push, non-persistent lifetime, late close and bounded parallel summaries passed")
 } finally {

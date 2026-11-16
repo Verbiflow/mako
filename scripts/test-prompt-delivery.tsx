@@ -8,7 +8,7 @@ import { stagePrompt, removePendingPrompt } from "../src/state/acp-pending"
 import { beginStart } from "../src/state/acp-start"
 import { autoContinuePending, continueTurnPrompt, promptDelivery, recoverableRequests, makoPrompts, savedMakoPrompt, turnStopLabel, turnStops, turnWords } from "../src/state/prompt-delivery"
 import { autoContinueCandidate, crashedChildTurn, savedContinuation } from "@mako/host/contracts/turn-continuation"
-import { classifyProviderFailure } from "@mako/host/contracts/provider-failure"
+import { classifyProviderFailure, providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import { failureAfterRetry, GIVE_UP_MS, nextRetry } from "@mako/host/contracts/delivery-retry"
 import { resetWords } from "@mako/host/contracts/account-usage"
 import { FailureRow } from "../src/components/transcript/failure-row"
@@ -232,7 +232,7 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   assert.equal(autoContinueCandidate([dropped, { ...request, status: "canceled" }]), dropped, "a canceled request after it does not change the candidate")
   assert.equal(autoContinueCandidate([dropped, { ...request, status: "queued" }]), undefined, "a queued prompt behind it is the user's next word")
   assert.equal(autoContinueCandidate([quit]), undefined, "only a dropped connection or an exited provider earns an automatic continuation")
-  // After Mako's own restart, with the person's choice on, Mako's exit earns one too; a crash never does.
+  // With restart continuation on, both an intentional exit and a crash are candidates; Stop and Off still stand.
   const now = 10 * 60_000
   const cut = (id: string, at: number, continues?: string): LiveRequest => ({
     ...request, id, status: "interrupted", interruption: { reason: "host-quit", at },
@@ -240,7 +240,10 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   })
   const quitAt = cut("11111111-1111-4111-8111-000000000001", now - 1_000)
   assert.equal(autoContinueCandidate([quitAt], true, now), quitAt, "a turn Mako's exit cut short is continued after the restart")
-  assert.equal(autoContinueCandidate([{ ...quitAt, status: "uncertain", interruption: { reason: "host-crashed", at: now } }], true, now), undefined, "a crash waits for the person")
+  const crashCandidate: LiveRequest = { ...quitAt, status: "uncertain", interruption: { reason: "host-crashed", at: now } }
+  assert.equal(autoContinueCandidate([crashCandidate], true, now), crashCandidate, "a crash is eligible under the default-on restart contract")
+  assert.equal(autoContinueCandidate([crashCandidate], false, now), undefined, "explicit Off does not admit crash recovery")
+  assert.equal(autoContinueCandidate([{ ...crashCandidate, pause: "stop" }], true, now), undefined, "a person's Stop still prevents crash recovery")
   assert.equal(autoContinueCandidate([dropped], true, now), dropped, "the restart flag adds to the dropped turns, it doesn't replace them")
   const chain = [quitAt]
   for (let index = 2; index <= 4; index++) chain.push(cut(`11111111-1111-4111-8111-00000000000${index}`, now - 60_000 + index, chain.at(-1)!.id))
@@ -270,7 +273,9 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   assert.equal(turnStopLabel("provider-exited", "Cursor"), "Cursor stopped unexpectedly")
   assert.match(continueTurnPrompt("provider-exited", "mako"), /process stopped.*restarted/)
   assert.deepEqual(turnStops([quit, exited], false).get(exited.id), { reason: "provider-exited", continuable: true, automatic: false })
-  assert.equal(classifyProviderFailure("stream disconnected before completion: error sending request for url").kind, "network", "Codex's dropped stream is a dropped connection")
+  const droppedStream = "stream disconnected before completion: error sending request for url"
+  assert.equal(classifyProviderFailure(droppedStream, undefined, providerTextEvidence(droppedStream)).kind, "network", "Codex's native dropped stream is a dropped connection")
+  assert.equal(classifyProviderFailure(droppedStream).kind, "unknown", "unmarked host prose does not attest to a native connection loss")
 }
 // The recovery panel lists a stopped turn only when the transcript does not show it.
 {

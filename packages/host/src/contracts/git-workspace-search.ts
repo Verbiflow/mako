@@ -111,6 +111,8 @@ export interface GitHubStatus {
   defaultBranch?: string
   /** A failed lookup is not evidence that the remote or sign-in is missing. Epoch milliseconds, shared with the host's cooldown. */
   limited?: { until: number }
+  /** Repository metadata is temporarily unavailable; the known login still works for unrelated integrations. */
+  repoLookup?: { state: "failed"; until: number }
 }
 
 export interface CheckSummary {

@@ -46,6 +46,7 @@ export const POLICY = [
   "Merge a pull request or a branch only when the person asks, or when this Thread is on full access and merging is the next step of its work.",
   "Never put a token, key, password or other secret in your output, a commit, or a report.",
   "Report only what you ran and saw. Say what wasn't run or verified.",
+  "Link files with ordinary Markdown links to their absolute path, optionally followed by :line, so the person can open them.",
 ].join("\n")
 
 /** The blocks for one launch: `routes`, then `policy`. Both are once per session, then again when the text changes. */

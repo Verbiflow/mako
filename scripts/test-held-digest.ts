@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { mock } from "node:test"
+import { providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import { join } from "node:path"
 import { holdForRetry, RESET_MARGIN_MS } from "@mako/host/contracts/delivery-retry"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
@@ -52,7 +53,7 @@ function worldOf(name: string, words = LIMIT) {
     limits.knocks.push(turn.conversation)
     if (limits.speaking.has(turn.conversation)) turn.world.live.observe({ type: "live-update", id: turn.conversation, update: { kind: "text", text: "Reading the reports." } })
     const session = turn.world.live.snapshot(turn.conversation)!.session
-    turn.world.live.observe({ type: "live-session", session: { ...session, status: "failed", error: LIMIT } })
+    turn.world.live.observe({ type: "live-session", session: { ...session, status: "failed", error: LIMIT, failureEvidence: providerTextEvidence(LIMIT) } })
     return new Promise<string>(() => {})
   }
   const world = new AgentsWorld({

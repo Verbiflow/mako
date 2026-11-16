@@ -1,6 +1,7 @@
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { FinChoicesReading, FinPolicy, RoleRules } from "@mako/host/contracts/fin-tuning"
 import { getMako } from "@/lib/bridge"
+import { quietly } from "@/lib/quiet-retry"
 import { createHook, createStore } from "./store"
 
 /**
@@ -30,7 +31,7 @@ export async function chooseFinDefault(harness: string, settings: SessionSetting
     store.set({ reading: { ...before, chosen } })
   }
   try {
-    store.set({ reading: await getMako().chooseFinDefault(harness, settings) })
+    store.set({ reading: await quietly("Fin default", () => getMako().chooseFinDefault(harness, settings)) })
   } catch (error) {
     store.set({ reading: before })
     throw error
@@ -42,7 +43,7 @@ export async function chooseMoveOnLimit(on: boolean): Promise<void> {
   const before = store.get().reading
   if (before) store.set({ reading: { ...before, moveOnLimit: on } })
   try {
-    store.set({ reading: await getMako().chooseFinMoveOnLimit(on) })
+    store.set({ reading: await quietly("Fin move on limit", () => getMako().chooseFinMoveOnLimit(on)) })
   } catch (error) {
     store.set({ reading: before })
     throw error
@@ -54,7 +55,7 @@ export async function saveRoleRules(role: RoleRules, text: string): Promise<void
   const before = store.get().reading
   if (before) store.set({ reading: { ...before, policy: { ...before.policy, [role]: text || undefined } } })
   try {
-    store.set({ reading: await getMako().saveRoleRules(role, text) })
+    store.set({ reading: await quietly("role rules", () => getMako().saveRoleRules(role, text)) })
   } catch (error) {
     store.set({ reading: before })
     throw error
@@ -66,7 +67,7 @@ export async function saveFinPolicy(policy: FinPolicy): Promise<void> {
   const before = store.get().reading
   if (before) store.set({ reading: { ...before, policy } })
   try {
-    store.set({ reading: await getMako().saveFinPolicy(policy) })
+    store.set({ reading: await quietly("Fin rules", () => getMako().saveFinPolicy(policy)) })
   } catch (error) {
     store.set({ reading: before })
     throw error
@@ -83,7 +84,7 @@ export async function setFinLimit(limit: number | null): Promise<void> {
     store.set({ reading: next })
   }
   try {
-    store.set({ reading: await getMako().setFinLimit(limit) })
+    store.set({ reading: await quietly("Fin limit", () => getMako().setFinLimit(limit)) })
   } catch (error) {
     store.set({ reading: before })
     throw error
@@ -95,7 +96,7 @@ export async function setFinCeiling(ceiling: number): Promise<void> {
   const before = store.get().reading
   if (before) store.set({ reading: { ...before, ceiling } })
   try {
-    store.set({ reading: await getMako().setFinCeiling(ceiling) })
+    store.set({ reading: await quietly("Fin ceiling", () => getMako().setFinCeiling(ceiling)) })
   } catch (error) {
     store.set({ reading: before })
     throw error

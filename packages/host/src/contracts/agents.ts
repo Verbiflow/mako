@@ -159,9 +159,10 @@ export type ChildSpec = z.infer<typeof ChildSpecSchema>
  * Where a Fin's report goes (6.6): a notice that wakes its Apex (`apex`), a
  * question the person answers in the Fin's Thread (`person`), or nowhere but
  * the Fin's strip and `agents_read` (`none`). Progress never wakes, but for a
- * handoff to another Fin (`Report.handoff`), which reaches the Apex as a result
- * does. A `wait` spawn's result always reaches its Apex, settled-only: as the
- * Apex's next turn, never steered into the turn that's running.
+ * handoff to another Fin (`Report.handoff`) or a wait newly on someone else
+ * (`Report.awaits`), which reach the Apex as a result does (`handoff`). A
+ * `wait` spawn's result always reaches its Apex, settled-only: as the Apex's
+ * next turn, never steered into the turn that's running.
  */
 export function reportRoute(asked: Pick<ChildSpec, "mode" | "wake">, status: ReportStatus, handoff = false): "apex" | "person" | "none" {
   if (status === "progress" && !handoff) return "none"
@@ -217,6 +218,43 @@ export function pullRef(text: string): PullRef | undefined {
 /** The key two names of a pull request share only when they're the same one: its repository and number, or the number alone for a bare `#12`. */
 export function pullKey(ref: Pick<PullRef, "repository" | "number">): string {
   return `${ref.repository ?? ""}#${ref.number}`
+}
+
+/** Progress its Apex isn't woken for: neither a handoff to another Fin nor a wait newly on someone else. */
+export function quietProgress(report: Pick<Report, "status" | "handoff" | "awaits">): boolean {
+  return report.status === "progress" && !report.handoff && !report.awaits
+}
+
+/** The waits only someone else ends, each by what makes two the same: a pull request's review, or the person for one thing. */
+function othersWaits(items: readonly WaitingOn[] | undefined): Map<string, WaitingOn> {
+  const keyed = new Map<string, WaitingOn>()
+  for (const item of items ?? []) {
+    if (item.kind === "person") keyed.set(`person:${item.what.trim().toLowerCase()}`, item)
+    if (item.kind !== "pull-request" || item.until !== "review") continue
+    const pull = pullRef(item.ref)
+    const number = item.number ?? pull?.number
+    keyed.set(`review:${number === undefined ? item.ref.trim().toLowerCase() : pullKey({ repository: (item.repository ?? pull?.repository)?.toLowerCase(), number })}`, item)
+  }
+  return keyed
+}
+
+/**
+ * What a report newly waits on that only someone else brings about (a pull request's review, the person), against
+ * the report before it: empty when the earlier report named the same. On 2026-11-15 a Fin reported "ready for your
+ * review" as progress waiting on #810's review, and its Apex, who routes reviews, never heard.
+ */
+export function awaitedAnew(before: readonly WaitingOn[] | undefined, now: readonly WaitingOn[] | undefined): WaitingOn[] {
+  const earlier = othersWaits(before)
+  return [...othersWaits(now)].filter(([key]) => !earlier.has(key)).map(([, item]) => item)
+}
+
+/**
+ * Whether `now` names only waits on someone else that `before` named already: at least one, every one a pull
+ * request's review or the person (`othersWaits`), none new. Progress that only says such a wait again tells its Apex
+ * nothing new; one naming no wait, a wait in other words, or a pull request's checks does.
+ */
+export function othersOnly(before: readonly WaitingOn[] | undefined, now: readonly WaitingOn[] | undefined): boolean {
+  return Boolean(now?.length) && othersWaits(now).size > 0 && now!.every((item) => othersWaits([item]).size > 0) && !awaitedAnew(before, now).length
 }
 
 /**
@@ -516,6 +554,12 @@ export const ReportSchema = z.object({
    * message to a sibling, which it can't send itself (`text`, relayed). It wakes the Apex, who passes it on. Host-owned.
    */
   handoff: z.object({ to: z.string().max(200), child: ThreadIdSchema.optional(), text: z.string().max(16_000).optional() }).optional(),
+  /**
+   * Progress that first names a wait only someone else ends: a pull request's review, or the person (`awaitedAnew`).
+   * It wakes the Apex once, so a Fin saying "ready for your review" isn't left waiting on a review nobody was asked
+   * for; the same wait narrated again stays quiet. Host-owned.
+   */
+  awaits: z.literal(true).optional(),
   /** The child owner's generation when it was written: a report from a stale owner is refused. */
   ownerGeneration: z.number().int().positive(),
   at: z.number(),
@@ -540,6 +584,11 @@ export const NoticeSchema = z.object({
   reply: z.literal(true).optional(),
   /** A done report's question: who decides it (`decisionOn`). */
   decision: z.enum(["lead", "person"]).optional(),
+  /**
+   * Not a report: a Fin that reads as working went quiet (`QuietWatch`), since `since`, for `forMs`, its last step and
+   * whether that step still runs. Its report is the digest's words alone, kept nowhere, and changes how the Fin reads in nothing.
+   */
+  quiet: z.object({ since: z.number(), forMs: z.number(), step: z.string().max(400).optional(), running: z.literal(true).optional() }).optional(),
 })
 export type Notice = z.infer<typeof NoticeSchema>
 
@@ -891,14 +940,37 @@ export function modeWithin(ladder: readonly LiveSessionMode[] | undefined, tier:
   return best
 }
 
-/** The tree's budgets, held by its authority: the top Apex's host in 8.1. No depth: cycles are refused instead. */
+/**
+ * The tree's budgets, held by its authority: the top Apex's host in 8.1. No depth: cycles are refused instead. What a
+ * tree runs at once is the resource limit; how fast it starts Fins only guards against an agent spawning in a loop.
+ * Finished Fins cost nothing, so no limit counts them over the tree's life: a tree that had started 100 over two
+ * weeks once refused every new Fin (2026-11-15).
+ */
 export interface TreeBudget {
   /** Threads running at once across the tree. */
   running: number
-  /** Threads started in total. */
+  /** Threads started (or waiting to start) within any `windowMs`. */
   started: number
+  windowMs: number
+  /** And within any hour (`HOUR_MS`): a loop of quick Fins kept just under the short window still stops. */
+  hourly: number
 }
-export const TREE_BUDGET: TreeBudget = { running: 32, started: 100 }
+export const HOUR_MS = 60 * 60_000
+/**
+ * 48 starts in any 10 minutes and 120 in any hour: four times the busiest 10 minutes this Mac's trees had over two
+ * weeks (11), nearly four times the busiest hour (31), and room for a whole fan-out at the running limit. A loop
+ * starting one every few seconds meets the first in minutes, and one paced under it meets the second within the hour,
+ * rather than going on at 288 an hour.
+ */
+export const TREE_BUDGET: TreeBudget = { running: 32, started: 48, windowMs: 10 * 60_000, hourly: 120 }
+
+/** Why a start was refused for one of its tree's start windows, and when enough of its starts leave it for one more. */
+export function startRateWords(window: { windowMs: number }, started: number, frees: number | undefined, now: number): string {
+  const minutes = Math.round(window.windowMs / 60_000)
+  const span = window.windowMs === HOUR_MS ? "hour" : `${minutes} minutes`
+  const wait = frees === undefined ? undefined : Math.max(1, Math.ceil((frees - now) / 60_000))
+  return `This tree started ${started} ${FIN_WORD}s in the last ${span}, its limit on starts (a guard against starting ${FIN_WORD}s in a loop; finished ones don't count against it). ${wait === undefined ? "It frees as the ones waiting start and age out." : `The next start frees in ${wait} minute${wait === 1 ? "" : "s"}, at ${new Date(frees!).toISOString().slice(11, 16)} UTC.`} Reuse an existing ${FIN_WORD} with agents_send meanwhile.`
+}
 
 /** The host's Fins for Diagnostics: how many, how many run (and of those, how many a process Mako didn't start runs), and each tree against its budgets. */
 export interface AgentsDiagnostics {

@@ -19,6 +19,7 @@ import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP } from "@mako/host/contracts/providers-acp"
 import { LIVE_FRAME_MS, type LiveDriverEvent } from "@mako/host/contracts/live-conversations"
+import { LONG_ANSWER_CHARS, LONG_ANSWER_FLUSH_MS } from "@mako/host/conversations/answer-pace"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
@@ -1770,18 +1771,21 @@ async function failureIsolationAndAssets() {
         .every((event) => JSON.stringify(event.batch.updates).length < 256_000)
     )
     await f.owner.stop()
-    writeFileSync(join(f.root, `${randomUUID()}.sqlite`), "corrupt journal")
+    const corrupt = randomUUID()
+    writeFileSync(join(f.root, `${corrupt}.sqlite`), "corrupt journal")
+    // A journal that can't be opened is kept for recovery, said in the host's log, and listed for the rail and
+    // Diagnostics (`unopened`) rather than toasted at every start.
+    const kept: HostLogLine[] = []
+    const stopHearing = followHostLog((line) => { if (line.message === "a saved conversation couldn't be opened; its journal is kept") kept.push(line) })
     const recovered = new LiveConversations(f.dependencies)
     try {
       assert.equal(recovered.snapshot(f.id)?.blocks.length, 2)
-      assert.ok(
-        f.events.some(
-          (event) =>
-            event.type === "notice" &&
-            event.message.includes("preserved for recovery")
-        )
-      )
+      assert.equal(kept.length, 1, "the corrupt journal is said in the log")
+      assert.ok(!f.events.some((event) => event.type === "notice"), "and never as a toast")
+      assert.deepEqual(recovered.unopened().map(({ conversation, journal }) => [conversation, journal]), [[corrupt, join(f.root, `${corrupt}.sqlite`)]], "it's listed with its kept journal")
+      assert.ok(recovered.unopened()[0]?.error, "with what opening it met")
     } finally {
+      stopHearing()
       await recovered.stop()
     }
   } finally {
@@ -1860,7 +1864,11 @@ function fillDisk() {
 async function unsavedTurnIsMakos() {
   const f = fixture()
   const said: HostLogLine[] = []
-  const stopHearing = followHostLog((line) => { if (line.message === "Mako stops the provider's turn") said.push(line) })
+  const unsaved: HostLogLine[] = []
+  const stopHearing = followHostLog((line) => {
+    if (line.message === "Mako stops the provider's turn") said.push(line)
+    if (line.message === "a conversation couldn't be saved; its turn stops") unsaved.push(line)
+  })
   let disk: ReturnType<typeof fillDisk> | undefined
   try {
     await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
@@ -1876,8 +1884,9 @@ async function unsavedTurnIsMakos() {
     f.owner.observe({ type: "live-update", id: f.id, update: { kind: "text", id: "a1", text: " and its styles" } })
     await waitFor(() => f.cancels() === 1, "the unsaved conversation's turn was not stopped")
     assert.deepEqual(said.map((line) => [line.level, line.fields?.why, line.fields?.request, line.fields?.error]), [["warn", "not-saved", request, "database or disk is full"]])
-    const notice = f.events.find((event) => event.type === "notice")
-    assert.match(notice?.type === "notice" ? notice.message : "", /^Mako couldn't save this conversation, so it stopped the agent's turn\. .*database or disk is full$/)
+    // Its row says so in the conversation and saving goes again by itself: the host's words are the log's, never a toast.
+    assert.equal(f.events.find((event) => event.type === "notice"), undefined, "no toast for what the row says and Mako retries")
+    assert.deepEqual(unsaved.map((line) => [line.level, line.fields?.request, line.fields?.error]), [["warn", request, "database or disk is full"]])
     // The person presses Stop too, which can't be saved yet either; the provider reports the end while the disk is full.
     await assert.rejects(f.owner.cancel(f.id), /database or disk is full/)
     f.owner.observe({ type: "live-session", session: { ...f.state, status: "ready", lastStop: "cancelled" } })
@@ -2138,6 +2147,55 @@ async function batchesLeadThenPace() {
     assert.ok(count >= 3 && count <= Math.ceil(elapsed / LIVE_FRAME_MS) + 2, `${count} batches in ${Math.round(elapsed)} ms`)
     const text = f.events.flatMap((event) => (event.type === "live-batch" ? event.batch.updates : [])).map((update) => (update.kind === "text" ? update.text : "")).join("")
     assert.ok(text.startsWith("The w0 w1") && text.endsWith(" w79"), "every word, in order")
+  } finally {
+    await f.cleanup()
+  }
+}
+
+/**
+ * A long answer going on goes out at a reader's pace (`LONG_ANSWER_FLUSH_MS`), not each frame: every word, in order, in
+ * far fewer batches. A paragraph's end and a change of another kind still go on the frame, with what waited.
+ */
+async function longAnswerPaced() {
+  const f = fixture()
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+  try {
+    await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
+    f.started.resolve(f.state)
+    await tick()
+    f.owner.snapshot(f.id)
+    const say = (text: string) => f.owner.observe({ type: "live-update", id: f.id, update: { kind: "text", text } })
+    say("word ".repeat(LONG_ANSWER_CHARS / 5))
+    await sleep(LIVE_FRAME_MS * 2)
+    f.events.length = 0
+    const batches = () => f.events.filter((event) => event.type === "live-batch").length
+    const started = performance.now()
+    for (let word = 0; word < 120; word++) {
+      say(` w${word}`)
+      await sleep(10)
+    }
+    await sleep(LONG_ANSWER_FLUSH_MS + 50)
+    const elapsed = performance.now() - started
+    const count = batches()
+    assert.ok(count >= 2 && count <= Math.ceil(elapsed / LONG_ANSWER_FLUSH_MS) + 2, `${count} batches in ${Math.round(elapsed)} ms`)
+    const text = f.events.flatMap((event) => (event.type === "live-batch" ? event.batch.updates : [])).map((update) => (update.kind === "text" ? update.text : "")).join("")
+    assert.ok(text.startsWith(" w0 w1") && text.endsWith(" w119"), "every word, in order")
+    // A paragraph's end goes on the frame.
+    await sleep(LONG_ANSWER_FLUSH_MS)
+    f.events.length = 0
+    say(" end.\n\nNext")
+    await sleep(LIVE_FRAME_MS + 20)
+    assert.equal(batches(), 1, "a paragraph's end isn't held for the reader's pace")
+    // A tool call goes on the frame and carries the words held before it.
+    await sleep(LIVE_FRAME_MS)
+    f.events.length = 0
+    say(" more words")
+    await sleep(5)
+    say(" and more")
+    f.owner.observe({ type: "live-update", id: f.id, update: { kind: "tool", id: "build", title: "Build", status: "running" } })
+    await sleep(LIVE_FRAME_MS + 20)
+    const kinds = f.events.flatMap((event) => (event.type === "live-batch" ? event.batch.updates.map((update) => update.kind) : []))
+    assert.ok(kinds.includes("tool") && kinds.includes("text"), `the tool call went on the frame with the words before it (${kinds})`)
   } finally {
     await f.cleanup()
   }
@@ -2472,7 +2530,7 @@ async function restartContinued() {
   const server = { nativeId: "dev-server", title: "Dev server", work: "command" as const, detail: "npm run dev", background: true, state: { kind: "working" as const } }
   let owner = open()
   try {
-    assert.deepEqual(owner.conversationSettings(), { continueAfterRestart: false }, "off unless the person turns it on")
+    assert.deepEqual(owner.conversationSettings(), { continueAfterRestart: true }, "on unless the person turns it off")
     assert.deepEqual(owner.setConversationSettings({ continueAfterRestart: true }), { continueAfterRestart: true })
     assert.deepEqual(events.at(-1), { type: "conversation-settings", settings: { continueAfterRestart: true } }, "every window hears the choice")
     await owner.start("test-provider", root, { conversationId: id })
@@ -2964,6 +3022,7 @@ await providerExitContinued()
 await restartContinued()
 await coalescedToolBursts()
 await batchesLeadThenPace()
+await longAnswerPaced()
 await quietTurnsCarryLastActivity()
 await nativeActivityLastsItsTurn()
 await failureIsolationAndAssets()

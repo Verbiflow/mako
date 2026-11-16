@@ -142,7 +142,22 @@ async function checkWindow() {
     await press(preview("forFins"))
     await capture("fields-dark.png", "[aria-label='Your rules for Fins']")
 
-    /* The phone: the same two rules, saved through the same host call, with the same toggles. */
+    /* A save that doesn't go keeps the person's words in the field, marked unsaved; leaving the field again saves them. */
+    await evaluate(`window.__saveRoleRules = window.mako.saveRoleRules; window.mako.saveRoleRules = () => Promise.reject(new Error("The host refused it.")); true`)
+    await press(field("forApexes"))
+    await page.debugger.sendCommand("Input.insertText", { text: " Or five." })
+    await press("main p")
+    await until(`document.querySelector("[data-role-unsaved=forApexes]") !== null`, "the field is marked unsaved")
+    assert.equal(await evaluate(`document.querySelector(${JSON.stringify(field("forApexes"))}).value`), "Ask me before starting more than four Fins. Or five.", "the typed words stay")
+    assert.equal((await saved()).forApexes, "Ask me before starting more than four Fins.", "the host still holds what it saved")
+    await capture("unsaved-dark.png", "[data-role-rules=forApexes]")
+    await evaluate(`window.mako.saveRoleRules = window.__saveRoleRules; true`)
+    await press(field("forApexes"))
+    await press("main p")
+    await until(`window.mako.finDefaults().then((reading) => reading.policy.forApexes === "Ask me before starting more than four Fins. Or five.")`, "saved on the next blur")
+    await until(`document.querySelector("[data-role-unsaved=forApexes]") === null`, "the mark goes once saved")
+
+    /* The phone: the same two rules, saved to the account they follow (every Mac hears them), with the same toggles. */
     window.setSize(390, 844)
     await window.loadURL(`${process.env.MAKO_ROLE_RULES_URL}scripts/phone-fins.html`)
     const phone = (role) => `textarea[data-role-rules=${role}]`
@@ -152,7 +167,7 @@ async function checkWindow() {
     await press(phone("forApexes"))
     await page.debugger.sendCommand("Input.insertText", { text: "Ask me before starting more than four Fins." })
     await press("header h1")
-    await until(`window.mako.finDefaults().then((reading) => reading.policy.forFins === "Run the tests you touch before you report." && reading.policy.forApexes === "Ask me before starting more than four Fins.")`, "the phone saved both")
+    await until(`window.accountPreferences()["fins.forFins"] === "Run the tests you touch before you report." && window.accountPreferences()["fins.forApexes"] === "Ask me before starting more than four Fins."`, "the phone saved both to the account")
     assert.equal((await saved()).rules.length, 3, "the model rules are kept")
     const toggles = await evaluate(`[...document.querySelectorAll("button[aria-expanded]")].map((button) => button.innerText.trim())`)
     assert.deepEqual(toggles, ["What every Fin reads", "What every Apex reads"])
@@ -168,7 +183,7 @@ async function checkWindow() {
     await press(`button[aria-expanded]`)
     await until(`document.querySelector("[data-role-preview=forFins]") !== null`)
     await capture("phone-light.png", phone("forFins"))
-    console.log("PASS: the kit's fields under the model rules, saved on blur, Escape discards, each toggle with only what the rules add; the same on the phone; desk and phone captures in light and dark")
+    console.log("PASS: the kit's fields under the model rules, saved on blur, Escape discards, each toggle with only what the rules add, a save that fails keeps the words marked unsaved; the same on the phone; desk and phone captures in light and dark")
   } finally {
     clearTimeout(timer)
     window.destroy()

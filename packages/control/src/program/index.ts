@@ -16,6 +16,16 @@ export {
   type ControlProgramOutput,
 } from "./runtime.js"
 export {
+  ControlStepSchema,
+  ControlStepsSchema,
+  STEPS_EVERY_MS,
+  STEPS_KEPT,
+  StepLog,
+  throttledSteps,
+  type ControlStep,
+  type ControlSteps,
+} from "./steps.js"
+export {
   INLINE_IMAGE_COUNT,
   INLINE_IMAGE_BYTES,
   INLINE_TEXT_BUDGET,

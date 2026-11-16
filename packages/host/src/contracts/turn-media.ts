@@ -34,8 +34,11 @@ type Digest = string
 export interface MediaCheck {
   callId: CallId
   path: MediaPath
-  /** How the records say it came about: `named` is only evidence, kept when the file changed while the call ran. */
-  evidence: "shown" | "produced" | "wrote" | "named"
+  /**
+   * How the records say it came about: `named` is only evidence, kept when the file changed while the call ran.
+   * `embedded`: an answer's words embed it (`![](/tmp/shot.png)`), kept as it was when the answer landed (`endedAt`).
+   */
+  evidence: "shown" | "produced" | "wrote" | "named" | "embedded"
   startedAt?: Instant
   endedAt?: Instant
   /** The copy `show` kept, when its result said; for a file the turn's record of changes names, the content the turn left. */
@@ -44,7 +47,7 @@ export interface MediaCheck {
 
 /**
  * A turn's checks, answered in one call, in order.
- * @wire z.array(z.object({ callId: z.string().min(1).max(512), path: z.string().min(2).max(4_096).startsWith("/"), evidence: z.enum(["shown", "produced", "wrote", "named"]), startedAt: z.number().int().nonnegative().max(8_640_000_000_000_000).optional(), endedAt: z.number().int().nonnegative().max(8_640_000_000_000_000).optional(), digest: z.string().regex(/^[a-f0-9]{64}$/).optional() })).max(200)
+ * @wire z.array(z.object({ callId: z.string().min(1).max(512), path: z.string().min(2).max(4_096).startsWith("/"), evidence: z.enum(["shown", "produced", "wrote", "named", "embedded"]), startedAt: z.number().int().nonnegative().max(8_640_000_000_000_000).optional(), endedAt: z.number().int().nonnegative().max(8_640_000_000_000_000).optional(), digest: z.string().regex(/^[a-f0-9]{64}$/).optional() })).max(200)
  */
 export type MediaChecks = MediaCheck[]
 

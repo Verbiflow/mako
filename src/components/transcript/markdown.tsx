@@ -2,7 +2,9 @@ import { rehypeAssetGroups } from "@/lib/markdown-asset-groups"
 import { ListItem } from "./list-item"
 import { DiagramPreview, HighlightedCode } from "./code-preview"
 import { TranscriptAttachment } from "./attachment"
-import { markdownMedia, previewableMediaUrl } from "@/lib/transcript-media"
+import { embeddedCheck, keptEmbed, markdownMedia, previewableMediaUrl } from "@/lib/transcript-media"
+import { useMediaAnswers } from "@/state/turn-media"
+import type { AttachmentContent } from "@mako/sessions"
 import { Paragraph } from "./paragraph"
 import { useParsedProse } from "./use-parsed-prose"
 import {
@@ -20,7 +22,7 @@ import {
 import type { PromptReference, SentProse } from "@/lib/prompt-markdown"
 import { isSkillName } from "@/lib/skill-references"
 import { ProseStreamingContext } from "./prose-layout-context"
-import { fenceSegments, streamingMarkdown } from "@/lib/streaming-markdown"
+import { streamPieces, streamingMarkdown } from "@/lib/streaming-markdown"
 import { StreamFrames } from "@/lib/stream-frames"
 import { ChangingLabel } from "@/components/ui/changing-label"
 import { useCopy } from "@/components/ui/use-copy"
@@ -57,17 +59,16 @@ import { ReviewFence } from "./review-card"
  * streams it is also the most frequently repeated: parsing the whole answer on
  * every token is O(n) per token, so a long reply costs O(n²) before it lands.
  *
- * The obvious fix — split at blank lines and memoize the settled blocks — is
- * wrong. Markdown is not context-free at a blank line: a list with spaced
- * items would parse as several separate lists, and a setext heading would lose
- * its underline. Correctness has to come first here.
+ * Splitting at every blank line and memoizing the settled blocks would be
+ * wrong: Markdown is not context-free at a blank line, and a list with spaced
+ * items would parse as several separate lists. Correctness comes first.
  *
- * A closed code fence at the left edge is a boundary where it is: the fence
- * ends any list or quote above it and its lines are never Markdown, so what
- * comes after it parses the same alone (`fenceSegments`, which keeps a
- * document with definitions or HTML blocks whole). While an answer streams,
- * each piece before its last such fence is parsed once and kept; only the
- * piece being written is parsed again.
+ * So an answer is cut only at a blank line before a line that starts a block
+ * of its own (not a list item, nor an item's indented text) outside code
+ * (`streamPieces`, which keeps a document with definitions or HTML blocks
+ * whole): what comes after such a cut parses the same alone. While an answer
+ * streams, each piece before the last is parsed once and kept; only the piece
+ * being written is parsed again.
  *
  * That piece is rate-limited rather than parsed per token: the first token of
  * a burst paints at once, then at most every 50 ms, longer for a long piece
@@ -91,6 +92,18 @@ const EMPTY_SKILLS = new Map<string, SentSkill>()
 /** What a sent prompt's appendix said about each `$skill`, so its chip can say the same. */
 const PromptSkillsContext =
   createContext<ReadonlyMap<string, SentSkill>>(EMPTY_SKILLS)
+
+/** A landed answer whose embedded media the host keeps (`AnswerMedia`): absent for prose that keeps none. */
+const AnswerMediaContext = createContext<AnswerMedia | undefined>(undefined)
+
+/**
+ * The answer an embed (`![](/tmp/shot.png)`) belongs to: the key the host keeps its copy under, and when the answer
+ * landed, so the copy is the file as the answer saw it. A screenshot `/tmp` later loses still draws from it.
+ */
+export interface AnswerMedia {
+  callId: string
+  at: number
+}
 
 /**
  * Settled prose, rendered once per text. `Markdown` is a pure function of
@@ -125,8 +138,11 @@ export const Prose = memo(function Prose({
   sent,
   previewedFiles,
   answerId,
+  keeps,
 }: {
   text: string
+  /** A landed answer's: the media it embeds is kept and drawn from Mako's copy. */
+  keeps?: AnswerMedia
   className?: string
   /** The reply's message id, when this is an answer's prose: its words can be quoted in a reply (`quote-reply.tsx`). */
   answerId?: string
@@ -145,10 +161,10 @@ export const Prose = memo(function Prose({
   }, [sent])
   const throttled = useThrottled(text, Boolean(streaming))
   // A streaming answer draws only whole structure, and keeps the pieces
-  // before its last closed fence as parsed; the last piece is the one that grows.
+  // before the last as parsed (`streamPieces`); the last piece is the one that grows.
   const pieced = Boolean(streaming) && !sent && !urlTransform
   const pieces = useMemo(
-    () => (pieced ? fenceSegments(streamingMarkdown(throttled)) : [throttled]),
+    () => (pieced ? streamPieces(streamingMarkdown(throttled)) : [throttled]),
     [pieced, throttled]
   )
   const growing = pieces.at(-1) ?? ""
@@ -211,6 +227,7 @@ export const Prose = memo(function Prose({
       data-prose-worker={hasTree || undefined}
     >
       <ProseStreamingContext value={Boolean(streaming)}>
+        <AnswerMediaContext value={keeps}>
         <PromptReferencesContext value={referenceMap}>
           <PromptSkillsContext value={skillMap}>
             {kept.map((piece, index) => (
@@ -219,6 +236,7 @@ export const Prose = memo(function Prose({
             {rendered}
           </PromptSkillsContext>
         </PromptReferencesContext>
+        </AnswerMediaContext>
       </ProseStreamingContext>
     </div>
   )
@@ -235,7 +253,7 @@ function keptUrl(url: string): boolean {
 const ANSWER_PLUGINS = prosePlugins()
 
 /**
- * A piece of a streaming answer before its last closed fence. Its text no
+ * A piece of a streaming answer before its last cut (`streamPieces`). Its text no
  * longer changes, so it is parsed once and React skips it on every later
  * frame of the stream.
  */
@@ -336,8 +354,18 @@ function MarkdownTable({ children }: ComponentProps<"table">) {
 }
 
 function MarkdownMedia({ src, alt }: ComponentProps<"img">) {
+  const keeps = useContext(AnswerMediaContext)
   if (!src) return <span>{alt || "Image unavailable"}</span>
-  return <TranscriptAttachment attachment={markdownMedia(src, alt)} />
+  return <KeptMarkdownMedia attachment={markdownMedia(src, alt)} keeps={keeps} />
+}
+
+/**
+ * An embed in a landed answer, drawn from the copy the host kept of it when there is one (`embedded`), else from the
+ * file where it is: the same as before the copy, and what a file the answer saw changed since comes back as.
+ */
+function KeptMarkdownMedia({ attachment, keeps }: { attachment: AttachmentContent; keeps: AnswerMedia | undefined }) {
+  const [answer] = useMediaAnswers([embeddedCheck(attachment, keeps)])
+  return <TranscriptAttachment attachment={keptEmbed(attachment, answer)} />
 }
 
 function CitationLink({ href, children, ...rest }: ComponentProps<"a"> & { "data-bare-file"?: boolean | string }) {
