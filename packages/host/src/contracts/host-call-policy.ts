@@ -77,6 +77,8 @@ const reads = [
   "mako:thread-purposes",
   "mako:thread-titles",
   "mako:thread-app-marks",
+  /** Connection-local sampling demand; replaying its generation cannot undo a newer demand. */
+  "mako:thread-app-demand",
   /** Reads the app's processes and files; what it records of them only moves its own read point forward. */
   "mako:thread-app-probe",
   "mako:thread-app-room",

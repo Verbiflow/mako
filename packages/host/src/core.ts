@@ -1694,6 +1694,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     return back.kind === "back" ? { kind: "restored", thread: cloudThread } : { kind: "refused", thread: cloudThread, reason: back.reason }
   }
   const workspaceMovers = openWorkspaceMovers({
+    windowStream: (client) => web()?.windowStream(client),
     git,
     buildSlots,
     dataRoot: environment.dataRoot,
