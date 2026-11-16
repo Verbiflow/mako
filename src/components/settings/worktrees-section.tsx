@@ -1,3 +1,4 @@
+import { SnapshotBudgetSection } from "./snapshot-budget-section"
 import { ThreadScratchSection } from "./thread-scratch-section"
 import { useCallback, useEffect, useState } from "react"
 import { FolderOpenIcon, RefreshCwIcon, Trash2Icon } from "lucide-react"
@@ -114,6 +115,7 @@ export function WorktreesSection() {
       <BranchSettings />
       <RetentionSettings />
       <ThreadScratchSection />
+      <SnapshotBudgetSection />
 
       <section>
         <h3 className="text-ui font-medium">On this Mac</h3>
