@@ -5,7 +5,7 @@ import { controlNote } from "../control/index.js"
 import { ExecutionAccountChanged, ExecutionIdentityMismatch, HandoffRefused, TurnInProgressError, type PromptDispatch } from "../harnesses/index.js"
 import { digestAsks } from "../contracts/agents.js"
 import { FRONT_DOOR_GUIDANCE } from "../contracts/agent-tools.js"
-import { JOINED_CHARS, JOINED_MAX, type LiveRequest, type LiveSnapshot } from "../contracts/live-conversations.js"
+import { foldedSeparator, JOINED_CHARS, JOINED_MAX, type FoldedBy, type LiveRequest, type LiveSnapshot } from "../contracts/live-conversations.js"
 import { APEX_NOTE_MARK } from "../contracts/children.js"
 import { promptFingerprint } from "./live-assets.js"
 import { quietSwitch } from "../contracts/conversation-control.js"
@@ -107,8 +107,8 @@ export function foldQueued(requests: readonly LiveRequest[], next: LiveRequest, 
     length += request.text.length
   }
   if (!folded.length) return undefined
-  const said = (request: LiveRequest) => folder(request) === "mako" ? "Mako's note" : folder(next) === "mako" && !folded.slice(0, folded.indexOf(request)).some((each) => folder(each) !== "mako") ? "a message" : "the next message from the same sender"
-  const text = [next.text, ...folded.map((request) => `[mako · ${said(request)}, sent ${new Date(request.createdAt ?? Date.now()).toISOString()}]\n${request.text}`)].join("\n\n")
+  const by = (request: LiveRequest): FoldedBy => folder(request) === "mako" ? "mako" : folder(next) === "mako" && !folded.slice(0, folded.indexOf(request)).some((each) => folder(each) !== "mako") ? "agent" : "same"
+  const text = next.text + folded.map((request) => `${foldedSeparator(by(request), request.createdAt ?? Date.now())}${request.text}`).join("")
   const joined = [...next.joined ?? [], ...folded.map((request) => ({ id: request.id, at: request.createdAt ?? Date.now() }))]
   const request: LiveRequest = { ...next, text, joined, inputDigest: promptFingerprint(text, next.attachments, next.tuning) }
   const gone = new Set(folded.map((each) => each.id))
@@ -392,8 +392,7 @@ export class LiveDispatch {
     // A request held back behind a turn the provider was still running
     // already shows its message from that attempt.
     const shown = request.nativeDelivery?.evidence.kind === "not-accepted"
-    if (!shown && (text || request.attachments.length))
-      resident.updates.push({
+    const drawn: Extract<Resident["updates"][number], { kind: "user" }> | undefined = !shown && (text || request.attachments.length) ? {
         kind: "user",
         at: toldAt,
         provider: resident.snapshot.session.harness,
@@ -414,7 +413,10 @@ export class LiveDispatch {
                   reason: "Attachment bytes were not retained",
                 },
         })),
-      })
+      } : undefined
+    // A folded send draws its prompt as the handoff commits the fold, in the same write: one that goes no further (a
+    // Stop, a note withdrawn meanwhile, which sends it again worked out anew) drew nothing, so nothing is drawn twice.
+    if (drawn && !folded) resident.updates.push(drawn)
     try {
       this.access.flush(resident)
     } catch (error) {
@@ -436,6 +438,10 @@ export class LiveDispatch {
       if (handoff && (!own || target?.status !== "dispatching" || target.nativeDelivery?.evidence.kind !== "prepared")) throw new HandoffRefused("superseded")
       if (handoff && target?.pause === "stop") throw new HandoffRefused("stopped")
       if (handoff && target && dependencies.agents?.()?.admits?.(resident.snapshot.session.id, target) === false) throw new HandoffRefused("withdrawn")
+      // Each note it was to carry is admitted again here, as its own send would be: one withdrawn since the fold was
+      // planned sends the carrier back to the queue, to be worked out again without it (and refused there alone).
+      if (handoff && folded?.requests.some((planned) => planned.joinedInto === request.id && dependencies.agents?.()?.admits?.(resident.snapshot.session.id, resident.snapshot.requests.find((each) => each.id === planned.id) ?? planned) === false))
+        throw new HandoffRefused("refold")
       if (!own || !target?.nativeDelivery) return
       const delivery = target.nativeDelivery
       const next = advancePromptDelivery(delivery.evidence, evidence)
@@ -457,11 +463,13 @@ export class LiveDispatch {
       // messages folded into it leave the queue, each pointing at it. One the person changed meanwhile stays as it is.
       if (handoff && folded) {
         resident.snapshot = { ...resident.snapshot, requests: commitFold(resident.snapshot.requests, request.id, folded.request, folded.requests) }
+        if (drawn) resident.updates.push(drawn)
         hostLog("live", "messages went as one turn", { conversation: resident.snapshot.session.id, request: request.id, joined: folded.request.joined?.length ?? 0 })
       }
       // Unwritten, the handoff didn't happen: the request reads as it did, prepared, so no later write says it was sent;
       // nor was anything folded into it.
       const unsent = () => {
+        if (folded && drawn) resident.updates = resident.updates.filter((update) => update !== drawn)
         const was = new Map(beforeFold.map((item) => [item.id, item]))
         resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((item) => (item.id === request.id ? target : folded && was.has(item.id) && item.joinedInto === request.id ? was.get(item.id)! : item)) }
       }
@@ -548,9 +556,10 @@ export class LiveDispatch {
         // Refused at its handoff, so never sent: it waits, held, and a Stop's mark on it keeps it the Stop's. One whose
         // reason went away is canceled, never to go.
         if (error instanceof HandoffRefused) {
-          const status = error.why === "withdrawn" ? "canceled" : "held"
+          const status = error.why === "withdrawn" ? "canceled" : error.why === "refold" ? "queued" : "held"
           resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((candidate) =>
-            candidate === target ? { ...candidate, status, error: undefined, snapshots: undefined } : candidate) }
+            // Refolded, it goes again as never sent: no delivery of its own was attempted, and it drew nothing.
+            candidate === target ? { ...candidate, status, error: undefined, snapshots: undefined, ...status === "queued" && { nativeDelivery: undefined, nativePrompt: undefined } } : candidate) }
           dependencies.workspaceSnapshots?.abandonRun(request.id)
           hostWarn("live", "a message went no further than its handoff", { conversation: resident.snapshot.session.id, request: request.id, why: error.why })
           try {
@@ -562,7 +571,7 @@ export class LiveDispatch {
           // A canceled one is out of the line, and what waited behind it goes now: no turn is running to drain it at
           // its end, so a Fin read as working for hours with its Apex's messages queued behind a canceled note
           // (send-modes, 2026-11-15). One held keeps its place, and the ones behind it wait with it.
-          if (status === "canceled") this.drain(resident)
+          if (status === "canceled" || status === "queued") this.drain(resident)
           return
         }
         const session = resident.snapshot.session
