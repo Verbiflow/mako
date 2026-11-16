@@ -173,6 +173,7 @@ export const LiveRequestSchema = z.object({
   createdAt: z.number().nonnegative().optional(),
   admissionOrder: z.number().int().positive().optional(),
   notification: z.literal(true).optional(),
+  expects: z.literal("answer").optional(),
   joined: z.array(z.object({ id: z.string().max(200), at: z.number() })).max(JOINED_MAX).optional(),
   joinedInto: z.string().max(200).optional(),
   dispatchedAt: z.number().optional(),

@@ -954,7 +954,7 @@ export class LiveConversations {
     targetBindingId?: string,
     displayText?: string,
     actor?: Actor,
-    marks: Pick<LiveRequest, "goal" | "review" | "verbatim" | "wake" | "digest" | "pause" | "grants" | "notification"> = {}
+    marks: Pick<LiveRequest, "goal" | "review" | "verbatim" | "wake" | "digest" | "pause" | "grants" | "notification" | "expects"> = {}
   ): LiveRequest {
     // Settings may finish resolving after stop cleared the residents. A replay's earlier admission may be durable;
     // callers must read its receipt from the next host under the same ID, not treat this as a definitive refusal.

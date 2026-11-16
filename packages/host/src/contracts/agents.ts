@@ -222,8 +222,8 @@ export function pullKey(ref: Pick<PullRef, "repository" | "number">): string {
 }
 
 /** Progress its Apex isn't woken for: neither a handoff to another Fin nor a wait newly on someone else. */
-export function quietProgress(report: Pick<Report, "status" | "handoff" | "awaits">): boolean {
-  return report.status === "progress" && !report.handoff && !report.awaits
+export function quietProgress(report: Pick<Report, "status" | "handoff" | "awaits" | "answers">): boolean {
+  return report.status === "progress" && !report.handoff && !report.awaits && !report.answers?.length
 }
 
 /** The waits only someone else ends, each by what makes two the same: a pull request's review, or the person for one thing. */
@@ -541,6 +541,8 @@ export const ReportSchema = z.object({
   retainsQuestion: z.literal(true).optional(),
   /** This Fin explicitly withdraws/replaces these report questions; an unrelated report settles nothing. */
   supersedes: z.array(z.string().min(1).max(600)).max(8).optional(),
+  /** Its Apex's messages this report answers, by request ID: each reply owed for them is settled (`Agents.owedOf`). */
+  answers: z.array(z.string().min(1).max(200)).max(8).optional(),
   /** Who decides a done report's question (`decisionOn`): its Apex when absent, or the person. */
   decides: z.enum(["apex", "person"]).optional(),
   /**
@@ -610,6 +612,11 @@ export const NoticeSchema = z.object({
    * whether that step still runs. Its report is the digest's words alone, kept nowhere, and changes how the Fin reads in nothing.
    */
   quiet: z.object({ since: z.number(), forMs: z.number(), step: z.string().max(400).optional(), running: z.literal(true).optional() }).optional(),
+  /**
+   * Not a report: a message its Apex sent, which the Fin's harness took at `at`, still unanswered after `turns` of its
+   * turns ended, a reminder among them (`Agents.owedOf`). Its report is the digest's words alone, kept nowhere.
+   */
+  unanswered: z.object({ request: z.string(), at: z.number(), turns: z.number(), line: z.string().max(400) }).optional(),
 })
 export type Notice = z.infer<typeof NoticeSchema>
 

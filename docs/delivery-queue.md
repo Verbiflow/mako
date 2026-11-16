@@ -169,6 +169,21 @@ schedules, and a failing schedule is pinned there.
    riding in a turn that goes anyway causes none and isn't counted. An interrupt's message goes
    alone, and another Apex's message, owed its own reply, never folds.
 
+17. **A question its Apex asked is owed an answer once the Fin's harness takes
+    it.** Only one the Apex said needs one (`agents_send`'s `expects: "answer"`):
+    a task's answer is its result, which has its own route, and a brief, a
+    `reply: none` message, an answer to the Fin's own question and Mako's own words
+    owe nothing more. Not before it's taken: a report from before can't answer it.
+    It's taken as its own turn once handed over, inside the turn it was folded into
+    once that was, or by the running turn a steer of it reached. Any report after
+    it settles it but progress, and progress does when it hands work on, waits on
+    someone else, or names the question in `answers`; such progress wakes the Apex.
+    A turn of the Fin's that ends still owing it hears one reminder on its next
+    turn, naming the request; a second that ends owing it tells the Apex once, in
+    its digest, under the request's own notice ID, which the queue's receipt keeps
+    once across a restart (`Agents.owedOf`, worked out from the journal and the
+    store, never kept). The person's own messages to a Fin owe it nothing here.
+
 ## What each failure leaves
 
 Host failures carry a typed kind; mixed catches and decoder sinks never infer a

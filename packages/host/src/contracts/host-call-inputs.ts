@@ -278,6 +278,7 @@ const inputs = {
           question: z.string().optional(),
           retainsQuestion: z.literal(true).optional(),
           supersedes: z.array(z.string()).optional(),
+          answers: z.array(z.string()).optional(),
           decides: z.union([z.literal("person"), z.literal("apex")]).optional(),
           waitingOn: z
             .array(
@@ -544,6 +545,7 @@ const inputs = {
           )
           .optional(),
         handoff: z.object({ to: z.string() }).optional(),
+        answers: z.array(z.string()).optional(),
         clientKey: z.string(),
       }),
     ]),
@@ -595,6 +597,7 @@ const inputs = {
           ])
           .optional(),
         reply: z.literal("none").optional(),
+        expects: z.literal("answer").optional(),
         context: z.array(z.object({ thread: z.string() })).optional(),
         clientKey: z.string(),
       }),

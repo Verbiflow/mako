@@ -374,6 +374,8 @@ export interface LiveRequest {
   admissionOrder?: number
   /** An agent's informational message, whose successful turn needs no synthetic completion report. */
   notification?: true
+  /** A question its Apex asked that the Fin owes an answer, not only a result (`Agents.owedOf`, delivery rule 17). */
+  expects?: "answer"
   /**
    * The messages from the same sender queued right behind this one that went with it as its one turn (`foldQueued`), in
    * order, each by its request ID and when it was admitted: their words follow its own. A repeat or a handoff naming
