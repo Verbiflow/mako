@@ -623,8 +623,9 @@ an Apex (`agent-wakes.ts`): the Apex never polls. `npm run test:comms-storm`
 holds both ways this can go wrong: a 30-Fin storm around a working Apex
 (steers per minute, the share of its turn left uninterrupted, its turns once
 free, the longest a result waits), a Fin's backlog after a long turn (the
-turns it takes to hear it all) and an Apex's inbox (the person's message and a
-Fin's result that came during its turn); targets Mako misses are in its
+turns it takes to hear it all), an Apex's inbox (the person's message and a
+Fin's result that came during its turn) and an Apex's second check-in (what a
+list and a note cost once one Fin of 30 changed); targets Mako misses are in its
 `EXPECTED_FAILING`. A steer the harness doesn't take goes as the Apex's next turn,
 never dropped. The digest is an entry in the Apex's own queue
 (`LiveRequest.digest`), its reports heard once it's there, so the queue
@@ -812,7 +813,18 @@ what the reader needs. Every `agents_*` answer is its JSON on one line
 nothing open is counted in `folded`, not listed; past `LIST_BUDGET_CHARS` (16 KB) idle and ended rows lose
 their pull requests, then fold, oldest first. A Fin needing attention (a question, an action, a decision, at work,
 waiting or blocked) is never folded, past the budget if it must be; `scope: all` lists every one. An Apex's 130 Fins were once 105 KB, about 26,000 tokens, a
-call (`test-agents-list-fold.ts`). A finished Fin's digest line
+call (`test-agents-list-fold.ts`). Each Fin has a change mark the host keeps
+(`FinChanges`): when its state, report, open questions or pull requests last
+changed as the host read them, a working Fin's step and a queued one's place in
+line not counting. Each row says it (`changedAt`) and each list answers a
+`mark`; with `since: <mark>` only the Fins that changed since are listed and the
+rest counted in `unchanged`. The front door's note names a Fin unchanged since
+the last note it gave that Apex on one line instead of describing it again,
+always describing one that waits on an answer or a decision. The marks live for
+the host's life, so after a restart every Fin reads as changed once
+(`test-fin-changes.ts`). An Apex of 30 Fins checking in again after one
+reported read 5% of its first list and 29% of its first note (`test:comms-storm`'s
+check-in). A finished Fin's digest line
 (`finishedLine`) is its report's first paragraph past any heading, on one
 line, at most `FINISHED_CHARS`, with how many more characters the
 report holds (`agents_read` gives them), and every artifact by its ref with
