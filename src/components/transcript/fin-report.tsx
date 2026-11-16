@@ -91,7 +91,7 @@ const FinReport = memo(function FinReport({ card, timestamp }: { card: FinReport
               const body = (
                 <>
                   {option.label}
-                  {recommended ? <span className="opacity-65">recommended</span> : null}
+                  {recommended ? <span className="opacity-65">Recommended</span> : null}
                 </>
               )
               const look = cn(
