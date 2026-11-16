@@ -13,7 +13,6 @@ import { agentMessageOrder } from "./agent-message-order.js"
 import type { WaitSubscription } from "../contracts/agent-tools.js"
 import type { Waiting } from "../contracts/notifications.js"
 import { finMovedText, finResumedText } from "../contracts/resume-account.js"
-import { usageLimitWords } from "../contracts/provider-failure.js"
 import { isLimitAsk, limitNoticeId, limitNoticeLine, limitNoticeWords, movedLine, movedWords, outOfAccountsLine, placeKey, stepKey, type AccountContinuation, type FallbackAccount, type FallbackConnection, type FallbackStep, type FinMove } from "../contracts/fin-fallback.js"
 import { errorMessage } from "../base/error-message.js"
 import { z } from "zod"
@@ -4007,7 +4006,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       const accounts = await moves.accounts(harness, pinned, true)
       const from = accounts.find((account) => account.name === pinned) ?? accounts.find((account) => account.active)
       // The harness's own word for the limit, the words it refused with, or the account's reading has to say it ran out.
-      if (!limit && !usageLimitWords(wait?.retry?.reason) && !from?.spent) return
+      if (!limit && wait?.retry?.cause !== "rate-limited" && !from?.spent) return
       if (!wait && from?.name !== resting) return
       const session = this.deps.live.session(conversation)
       const model = this.settingsOf(conversation)?.model

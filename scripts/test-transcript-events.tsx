@@ -4,6 +4,7 @@
 // render through the production components and projections; the screenshots
 // of the same cases come from `scripts/test-transcript-events-ui.mjs`.
 import assert from "node:assert/strict"
+import { providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import { renderToStaticMarkup } from "react-dom/server"
 import { entriesFromMessages, type DecodedEntry as ThreadEntry, type Entry, type RecordRef } from "@mako/sessions"
 import { backgroundReminderTurn, claudeTaskTurn, grokSubagentTurn, grokTaskTurn, parseClaudeTaskNotification } from "@mako/sessions/harnesses"
@@ -11,6 +12,8 @@ import { compactionEvent, mcpServerFailedEvent, modelChangedEvent, retriesEvent,
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { backgroundCommandTurn, CODEX_GOAL, codexGoalTurn, outputTail, subagentTurn } from "@mako/sessions/provider-turn"
 import { Exchange } from "../src/components/transcript/exchange"
+import { FailedRequestsContext } from "../src/components/transcript/failed-requests"
+import type { LiveRequest } from "../src/lib/types"
 import { TranscriptSourceContext } from "../src/components/transcript/source-context"
 import { MoveDividersContext } from "../src/components/transcript/transcript-notes"
 import { entriesToMessages } from "../src/lib/entry-messages"
@@ -522,15 +525,40 @@ const quit = draw([prompted("q", "Refactor the store")], { stops: { q: { reason:
 assert.match(quit, /data-turn-stopped="host-quit"[^>]*>[^]*?lucide-triangle-alert[^"]*text-caution/)
 assert.match(quit, /Continue turn/)
 
+const nativeError = "Request failed: 529 Overloaded\nTry again in a moment."
 const errored = draw([{ id: "e", prompt: { id: "e", role: "user", blocks: [{ type: "text", text: "Summarize" }] },
-  response: [{ id: "e-a", role: "assistant", blocks: [{ type: "text", text: "Reading." }], error: "Request failed: 529 Overloaded\nTry again in a moment." }], system: [] }])
-assert.match(errored, /role="alert" data-event-error="rate-limited"/)
-assert.match(text(errored), /Cursor is over its rate limit or capacity\s*Wait for capacity to return or choose another model\./, "a recorded failure is named by the rules a live one is")
+  response: [{ id: "e-a", role: "assistant", blocks: [{ type: "text", text: "Reading." }], error: nativeError, failure: providerTextEvidence(nativeError).kind }], system: [] }])
+assert.match(errored, /role="alert" data-event-error="provider-unavailable"/)
+assert.match(text(errored), /Cursor.s service failed on its side/, "the native boundary's service verdict survives exchange splitting and rendering")
+const unmarkedLimit = draw([{ id: "host-error", prompt: { id: "host-error", role: "user", blocks: [{ type: "text", text: "Summarize" }] },
+  response: [{ id: "host-answer", role: "assistant", blocks: [], error: "You have hit your usage limit." }], system: [] }])
+assert.match(unmarkedLimit, /data-event-error="unknown"/, "a renderer never promotes unmarked message prose to a quota")
 const unnamed = draw([{ id: "u", prompt: { id: "u", role: "user", blocks: [{ type: "text", text: "Summarize" }] },
   response: [{ id: "u-a", role: "assistant", blocks: [{ type: "text", text: "Reading." }], error: "Tool schema mismatch in step 4\nat validate (schema.ts:12)" }], system: [] }])
 assert.match(text(unnamed), /did not finish this turn\s*Details/, "a failure no rule knows is named, not shown as the provider's raw line")
 assert.doesNotMatch(text(unnamed), /Tool schema mismatch/, "the provider's own words wait behind Details, closed")
 assert.doesNotMatch(errored, /rounded-lg border border-negative/, "no tinted card")
+// A typed live failure keeps main's one-row treatment: neither the native event nor the cut footer repeats it.
+{
+  const request: LiveRequest = { id: "one-typed-failure", text: "Summarize", attachments: [], status: "failed",
+    error: nativeError, failure: "provider-unavailable", failureEvidence: providerTextEvidence(nativeError) }
+  const exchanges = streamed([{ kind: "user", requestId: request.id, text: request.text },
+    { kind: "event", label: "Turn failed", detail: nativeError, tone: "error" }], "cursor")
+  const one = renderToStaticMarkup(
+    <TranscriptSourceContext value={{ liveId: LIVE }}>
+      <FailedRequestsContext value={new Map([[request.id, request]])}>
+        {exchanges.map(exchange => <Exchange key={exchange.id} exchange={exchange}
+          interrupted={{ reason: "connection-lost", continuable: true, automatic: false }} />)}
+      </FailedRequestsContext>
+    </TranscriptSourceContext>
+  )
+  assert.equal(one.match(/data-failure-row=/g)?.length, 1, "the typed live outcome has exactly one failure row")
+  assert.match(one, /data-failure="provider-unavailable"/, "the native verdict reaches the one live recovery row")
+  assert.match(text(one), /The provider.s service failed/)
+  assert.doesNotMatch(one, /data-event="Turn failed"|data-turn-stopped/, "native marker and interruption footer do not duplicate its outcome")
+  assert.doesNotMatch(text(one), /Request failed: 529 Overloaded/, "raw provider words remain behind Details")
+}
+
 
 const separator = draw([{ id: "x", prompt: { id: "x", role: "user", blocks: [{ type: "text", text: "Go" }] }, response: [],
   system: [{ after: 0, message: { id: "sys", role: "system", blocks: [{ type: "text", text: "Session resumed from a checkpoint" }] } }] }])

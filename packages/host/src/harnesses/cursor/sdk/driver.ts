@@ -1,3 +1,4 @@
+import { failureEvidenceOf, providerTextEvidence } from "../../../contracts/provider-failure.js"
 import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../../../contracts/native-prompt-identity.js"
 import { applyControlEnvironment } from "../../../control/index.js"
@@ -314,6 +315,7 @@ function finishTurn(engine: Engine, live: Live, reported: SdkRunResult): void {
         status: "failed",
         lastStop: lost ? CONNECTION_LOST_STOP : retriesExhausted(result) ? RETRIES_EXHAUSTED_STOP : "failed",
         error: message.slice(0, 2000),
+        failureEvidence: lost ? { kind: "network", source: "host" } : providerTextEvidence(message),
       })
       break
     }
@@ -772,6 +774,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           connection: "disconnected",
           lastStop: live.state.status === "running" ? "failed" : live.state.lastStop,
           error: live.state.status === "running" ? `Cursor's SDK process exited (${detail})` : live.state.error,
+          failureEvidence: live.state.failureEvidence,
         })
       })
       // After the handler above, which draws the exit into the stream: the child is gone, so the launch's stream is finished.
@@ -945,7 +948,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         if (live.turn === turn) {
           const message = error instanceof Error ? error.message : String(error)
           settleTurn(engine, live, "error", message)
-          engine.patch(live, { status: "failed", lastStop: "failed", error: message })
+          engine.patch(live, { status: "failed", lastStop: "failed", error: message, failureEvidence: failureEvidenceOf({ error }) })
         }
         throw error
       }

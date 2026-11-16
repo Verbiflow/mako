@@ -1,3 +1,4 @@
+import { HostFailureError } from "./provider-failure.js"
 /**
  * The one sentence a refusal uses when another Mako host has a session live.
  * Shared by the ledger (`session-memory.ts`), which raises it before a
@@ -13,9 +14,9 @@ export function heldReason(hostLabel: string): string {
  * or this host's own process for it still closing. Either lets go by itself,
  * so a message waiting on it is sent again (`retryCause` "busy").
  */
-export class SessionBusyError extends Error {
+export class SessionBusyError extends HostFailureError {
   constructor(holder: string) {
-    super(heldReason(holder))
+    super("resume-failed", heldReason(holder))
     this.name = "SessionBusyError"
   }
 }

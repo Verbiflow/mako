@@ -1,7 +1,10 @@
+import { NATIVE_VERIFICATION_REASONS } from "@mako/host/contracts/native-verification"
 import assert from "node:assert/strict"
 import {
   PROVIDER_FAILURE_KINDS,
   classifyProviderFailure,
+  classifyProviderText,
+  providerTextEvidence,
   classifyStartFailure,
   describeProviderFailure,
 } from "@mako/host/contracts/provider-failure"
@@ -21,9 +24,6 @@ const cases: [string, string][] = [
   ["This model's maximum context length is 128000 tokens", "context-exhausted"],
   ["401 Unauthorized: invalid api key", "auth"],
   ["auth_required", "auth"],
-  ["The runtime could not verify the reopened account's native identity. Retry after sign-in is available; the saved conversation was preserved.", "launch-stalled"],
-  ["The runtime could not verify the reopened native service authority. No prompt was dispatched.", "launch-stalled"],
-  ["The runtime could not verify the reopened account selection. No prompt was dispatched.", "launch-stalled"],
   ["Failed to authenticate: OAuth session expired and could not be refreshed", "auth"],
   ["Not logged in. Run `cursor-agent login`.", "auth"],
   ["Your plan does not include this model", "plan"],
@@ -91,20 +91,25 @@ const cases: [string, string][] = [
 ]
 
 for (const [text, kind] of cases)
-  assert.equal(classifyProviderFailure(text).kind, kind, `"${text.slice(0, 60)}" → ${kind}`)
+  assert.equal(classifyProviderText(text).kind, kind, `"${text.slice(0, 60)}" → ${kind}`)
 
 assert.equal(classifyProviderFailure('API Error: 401 {"error":{"type":"some_new_error"}}', "Claude", { kind: "unknown", source: "provider-error" }).kind, "auth", "unlisted provider JSON must retain the ordinary 401 sign-in verdict")
 assert.equal(classifyStartFailure('API Error: 401 {"error":{"type":"some_new_error"}}', true, { kind: "unknown", source: "provider-error" }), "auth", "startup uses the same fallback")
 assert.equal(classifyProviderFailure("unrecognised failure", "Claude", { kind: "unknown", source: "provider-error" }).kind, "unknown", "fallback does not invent a cause when the text has none")
 
+for (const text of Object.values(NATIVE_VERIFICATION_REASONS)) {
+  assert.equal(classifyProviderFailure(text, undefined, { kind: "unknown", source: "provider-error" }).kind, "launch-stalled", "only legacy stored prose uses the exact host refusal matcher")
+  assert.notEqual(providerTextEvidence(text).kind, "rate-limited")
+}
+
 // A specific fault wins over the broad HTTP family it could also trip: a
 // rejected transcript arrives as a 400 invalid_request_error.
 assert.equal(
-  classifyProviderFailure("400 invalid_request_error: reasoning encrypted_content was not issued to this caller").kind,
+  classifyProviderText("400 invalid_request_error: reasoning encrypted_content was not issued to this caller").kind,
   "transcript-rejected"
 )
 // A context overflow that mentions "request too large" is still context, not capacity.
-assert.equal(classifyProviderFailure("413 request too large: too many tokens").kind, "context-exhausted")
+assert.equal(classifyProviderText("413 request too large: too many tokens").kind, "context-exhausted")
 
 // Only the transient kinds offer Send again.
 const retriable = new Set(PROVIDER_FAILURE_KINDS.filter((kind) => describeProviderFailure(kind).retriable))
@@ -121,11 +126,11 @@ assert.match(describeProviderFailure("transcript-rejected", "OpenCode").guidance
 // failure to resume; a recognisable cause keeps its own kind either way.
 assert.equal(classifyStartFailure("weird driver text", true), "resume-failed")
 assert.equal(classifyStartFailure("weird driver text", false), "unknown")
-assert.equal(classifyStartFailure("401 Unauthorized", true), "auth")
+assert.equal(classifyStartFailure("401 Unauthorized", true, providerTextEvidence("401 Unauthorized")), "auth")
 assert.equal(classifyStartFailure(reconnectRefusal({ kind: "held", by: "Mako (dev)" }), true), "resume-failed")
 assert.equal(classifyStartFailure(reconnectRefusal(undefined), true), "resume-failed")
 
 console.log(`Provider failure classification: ${cases.length} texts, priority, retriability and start failures passed`)
 
-assert.equal(classifyStartFailure("Codex app-server sent an oversized JSON-RPC message", true), "transport-limit")
+assert.equal(classifyStartFailure("Codex app-server sent an oversized JSON-RPC message", true, providerTextEvidence("Codex app-server sent an oversized JSON-RPC message")), "transport-limit")
 assert.doesNotMatch(describeProviderFailure("resume-failed").guidance, /process.*open/)

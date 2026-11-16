@@ -1,3 +1,4 @@
+import { HostFailureError, ProviderFailureError } from "../contracts/provider-failure.js"
 import type { AuthMethod } from "@agentclientprotocol/sdk"
 import { heavy } from "../base/heavy-packages.js"
 import { UNATTENDED_SIGN_IN } from "./live-driver.js"
@@ -22,24 +23,25 @@ export async function openAuthenticatedSession<Value>(
     return session
   } catch (error) {
     const { RequestError } = await heavy.acpSdk.load("ACP sign-in")
+    const native = error instanceof ProviderFailureError ? error.cause : error
     if (
-      !(error instanceof RequestError) ||
-      error.code !== RequestError.authRequired().code
+      !(native instanceof RequestError) ||
+      native.code !== RequestError.authRequired().code
     )
       throw error
     flow.signal.throwIfAborted()
-    if (flow.unattended) throw new Error(UNATTENDED_SIGN_IN, { cause: error })
+    if (flow.unattended) throw new HostFailureError("auth", UNATTENDED_SIGN_IN, { cause: error })
     const methods = flow.methods.filter((method) => !("type" in method))
     if (!methods.length)
-      throw new Error(
+      throw new HostFailureError("auth",
         "This provider requires authentication, but did not advertise a supported sign-in method.",
         { cause: error }
       )
     const selected = await untilStopped(flow.select(methods), flow.signal)
     if (!selected)
-      throw new Error("Provider sign-in was cancelled.", { cause: error })
+      throw new HostFailureError("auth", "Provider sign-in was cancelled.", { cause: error })
     if (!methods.some((method) => method.id === selected))
-      throw new Error(
+      throw new HostFailureError("auth",
         "The selected provider sign-in method is no longer available.",
         { cause: error }
       )
@@ -57,7 +59,7 @@ function untilStopped<Value>(
   signal: AbortSignal
 ): Promise<Value> {
   return new Promise((resolve, reject) => {
-    const abort = () => reject(new Error("Provider startup was cancelled."))
+    const abort = () => reject(new HostFailureError("launch-failed", "Provider startup was cancelled."))
     signal.addEventListener("abort", abort, { once: true })
     work
       .then(resolve, reject)

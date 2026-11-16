@@ -1,3 +1,4 @@
+import { HostFailureError } from "../../contracts/provider-failure.js"
 import { hostFetch } from "../../base/host-stopping.js"
 import { createHash } from "node:crypto"
 import { homedir } from "node:os"
@@ -367,7 +368,7 @@ export function createCursorAccountCapability(
       if (!selection || selection === "default") return env
       const credential = await saved(selection)
       if (expired(credential))
-        throw new Error("The selected Cursor account's login expired. Sign in again in Settings → Agents.")
+        throw new HostFailureError("auth", "The selected Cursor account's login expired. Sign in again in Settings → Agents.")
       env.CURSOR_API_KEY = credential.apiKey
       env[CURSOR_ACCOUNT_ENV] = selection
       return env

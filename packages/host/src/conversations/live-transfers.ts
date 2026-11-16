@@ -14,7 +14,7 @@ import type {
 import { heldReason, SessionBusyError } from "../contracts/session-hold.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import type { LiveRequest, TurnContinuation, LiveSnapshot } from "../contracts/live-conversations.js"
-import { classifyStartFailure, failureEvidenceOf } from "../contracts/provider-failure.js"
+import { classifyStartFailure, failureEvidenceOf, HostFailureError } from "../contracts/provider-failure.js"
 import { NativeVerificationPendingError } from "../contracts/native-verification.js"
 import { failureAfterRetry, nextRetry, transientCause } from "../contracts/delivery-retry.js"
 import { arriving, departing } from "../contracts/request-hold.js"
@@ -44,7 +44,7 @@ function arrival(requests: readonly LiveRequest[], arrived: LiveRequest, ahead: 
 export function reconnectError(verdict: ResumeVerdict | undefined): Error {
   return verdict?.kind === "held" ? new SessionBusyError(verdict.by)
     : verdict?.kind === "unavailable" && verdict.retry ? new NativeVerificationPendingError(verdict.reason)
-      : new Error(reconnectRefusal(verdict))
+      : new HostFailureError("resume-failed", reconnectRefusal(verdict))
 }
 
 export function reconnectRefusal(verdict: ResumeVerdict | undefined): string {

@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto"
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import { createClaudeSdkDriver } from "@mako/host/harnesses/claude/sdk-driver"
 import { installHostLog } from "@mako/host/base/host-log"
-import { classifyStartFailure } from "@mako/host/contracts/provider-failure"
+import { classifyStartFailure, failureEvidenceOf } from "@mako/host/contracts/provider-failure"
 import { admitted } from "./fixtures/admitted-start.ts"
 
 // Exercise the real SDK handshake and driver's spawn boundary without sending
@@ -51,7 +51,7 @@ try {
     await assert.rejects(driver.start(root, admitted("claude", { conversationId: failedId, emit() {} })), (error: Error) => {
       assert.match(error.message, /exit/i)
       assert.match(error.message, /private-startup-payload/, "the person sees what Claude said; only the durable log omits it")
-      assert.equal(classifyStartFailure(error.message, false), "launch-failed")
+      assert.equal(classifyStartFailure(error.message, false, failureEvidenceOf({ error })), "launch-failed")
       return true
     })
     assert.ok(performance.now() - failedAt < 5_000, "process exit must fail before the silence deadline")

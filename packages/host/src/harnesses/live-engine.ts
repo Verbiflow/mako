@@ -427,6 +427,7 @@ export function createLiveEngine<
     if (change.error) endRetries(live, "gave-up")
     else if (change.status !== undefined && change.status !== "running") endRetries(live, undefined)
     const next: Partial<LiveSessionState> = { ...change }
+    if ("error" in change && !("failureEvidence" in change)) next.failureEvidence = change.error ? { kind: "unknown", source: "host" } : undefined
     // SAFETY: `next` is a copy of a Partial<LiveSessionState>, so its own keys are LiveSessionState's.
     for (const key of Object.keys(next) as (keyof LiveSessionState)[])
       if (next[key] !== live.state[key] && isDeepStrictEqual(next[key], live.state[key]))

@@ -1,5 +1,6 @@
+import { HostFailureError } from "../contracts/provider-failure.js"
 import type { WalPrimer, WalCheckpoint } from "./wal-primer.js"
-import { ProviderFailureEvidenceSchema } from "../contracts/provider-failure-evidence.js"
+import { ProviderFailureEvidenceSchema, storedFailureEvidence } from "../contracts/provider-failure-evidence.js"
 import { LiveInputQuestionSchema } from "../contracts/live-questions.js"
 import { ApprovalOriginSchema, NativeApprovalIdentitySchema } from "../contracts/approval-response.js"
 import { PromptDeliverySchema } from "../contracts/prompt-delivery.js"
@@ -97,11 +98,33 @@ export const HarnessTurnSchema = z.object({ id: z.string(), kind: z.enum(["turn"
  * one they read it as, with the exact one beside it (`OLDER_READING`), so a
  * journal this build writes still opens in a build before it.
  */
+/** Only owned evidence slots are encoded; native permission/tool payloads remain opaque. */
+const RequestEvidenceFieldsSchema = z.looseObject({ failureEvidence: ProviderFailureEvidenceSchema.optional() })
+const RequestEvidencePatchSchema = z.looseObject({ set: RequestEvidenceFieldsSchema.optional() })
+function logRow(event: MakoLogEvent): string {
+  if (event.kind === "request") {
+    const fields = RequestEvidenceFieldsSchema.parse(event.value)
+    if (fields.failureEvidence) return JSON.stringify({ ...fields, failureEvidence: storedFailureEvidence(fields.failureEvidence) })
+  } else if (event.kind.startsWith("request.")) {
+    const fields = RequestEvidencePatchSchema.parse(event.value)
+    if (fields.set?.failureEvidence) return JSON.stringify({ ...fields, set: { ...fields.set, failureEvidence: storedFailureEvidence(fields.set.failureEvidence) } })
+  }
+  return JSON.stringify(event.value)
+}
+
+/** Restore only the owned slots before replay, keeping unknown and native payload fields verbatim. */
+function readLogValue(kind: string, value: MakoLogEvent["value"]): MakoLogEvent["value"] {
+  if (kind === "request") return LogValueSchema.parse(RequestEvidenceFieldsSchema.parse(value))
+  if (kind.startsWith("request.")) return LogValueSchema.parse(RequestEvidencePatchSchema.parse(value))
+  return value
+}
+
 function requestRow(request: LiveRequest): string {
-  const { interruption, continues } = request
-  if (!interruption && !continues) return JSON.stringify(request)
+  const { interruption, continues, failureEvidence } = request
+  const stored = { ...request, failureEvidence: failureEvidence && storedFailureEvidence(failureEvidence) }
+  if (!interruption && !continues) return JSON.stringify(stored)
   return JSON.stringify({
-    ...request,
+    ...stored,
     ...interruption && { interruption: { ...interruption, ...savedReason(interruption.reason) } },
     ...continues && { continues: { ...continues, ...savedReason(continues.reason) } },
   })
@@ -485,7 +508,7 @@ function* makoLogRowSteps(db: DatabaseSync): Steps<MakoLogEntry[]> {
     const read = rows.all(last, ROWS_PER_STEP * 4)
     for (const row of read) {
       const entry = LogRowSchema.parse(row)
-      entries.push({ ...entry, value: LogValueSchema.parse(JSON.parse(entry.value)) })
+      entries.push({ ...entry, value: readLogValue(entry.kind, LogValueSchema.parse(JSON.parse(entry.value))) })
       last = entry.seq
     }
     if (read.length < ROWS_PER_STEP * 4) return entries
@@ -650,9 +673,9 @@ export function journalSummary(metadata: string) {
  * A commit the journal couldn't make: the conversation isn't saved (`storageFailed`). Anything else that goes wrong
  * taking in what a provider said is not this, and doesn't stop its turn.
  */
-export class JournalWriteError extends Error {
+export class JournalWriteError extends HostFailureError {
   constructor(cause: unknown) {
-    super(errorMessage({ error: cause }), { cause })
+    super("unknown", errorMessage({ error: cause }), { cause })
     this.name = "JournalWriteError"
   }
 }
@@ -1030,7 +1053,7 @@ export class LiveJournal {
   private appendLog(events: readonly MakoLogEvent[], origin: "host" | "journal"): void {
     const insert = this.db.prepare("INSERT INTO log (at, kind, value, origin, schema) VALUES (?, ?, ?, ?, ?)")
     const at = Date.now()
-    for (const event of events) insert.run(at, event.kind, JSON.stringify(event.value), origin, MAKO_LOG_SCHEMA)
+    for (const event of events) insert.run(at, event.kind, logRow(event), origin, MAKO_LOG_SCHEMA)
   }
 
   /** `grown`: tool blocks of `next` that differ from `previous` only by these appends (`deliverLiveUpdates`). */
@@ -1053,7 +1076,7 @@ export class LiveJournal {
       if (!previous || writeOptions || this.messageBase || metadataChanged(previous, next))
         this.db
           .prepare("INSERT OR REPLACE INTO metadata VALUES (1, ?)")
-          .run(JSON.stringify({ ...metadata, session, nativeAgents: providerRoster(metadata.nativeAgents), control: controlRow(metadata.control), base: undefined, activityAt: undefined, nativeActivity: undefined, side: undefined, historyFailure: undefined, spentThrough: undefined }))
+          .run(JSON.stringify({ ...metadata, session: { ...session, failureEvidence: session.failureEvidence && storedFailureEvidence(session.failureEvidence) }, nativeAgents: providerRoster(metadata.nativeAgents), control: controlRow(metadata.control), base: undefined, activityAt: undefined, nativeActivity: undefined, side: undefined, historyFailure: undefined, spentThrough: undefined }))
       this.db.prepare("INSERT OR REPLACE INTO progress VALUES (1, ?)").run(next.revision)
       // An unread base stays unread here: Mako's own blocks can follow it
       // meanwhile, and nothing reaches its harness until it is read.

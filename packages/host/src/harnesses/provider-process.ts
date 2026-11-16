@@ -1,3 +1,4 @@
+import { HostFailureError } from "../contracts/provider-failure.js"
 import { hostSpawn, closeHostChild, endHostChildWithParent } from "../base/host-command.js"
 import type { ChildProcess, ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process"
 import { statSync } from "node:fs"
@@ -11,11 +12,11 @@ import { endChildInput } from "@mako/sessions/child-input"
  * installed" for a binary that was there, every two minutes, for a
  * worktree an e2e test had deleted.
  */
-export class MissingWorkingDirectoryError extends Error {
+export class MissingWorkingDirectoryError extends HostFailureError {
   readonly cwd: string
 
   constructor(cwd: string) {
-    super(`The folder ${cwd} no longer exists. Open this in a folder that exists.`)
+    super("missing-folder", `The folder ${cwd} no longer exists. Open this in a folder that exists.`)
     this.name = "MissingWorkingDirectoryError"
     this.cwd = cwd
   }
@@ -62,11 +63,11 @@ export function providerProcessGone(child: ChildProcess): boolean {
 export type ProviderProcessEnd = "exited" | "outlived"
 
 /** A close that couldn't prove its process gone. Whoever holds the process's place keeps it, and a later close tries again. */
-export class ProviderProcessOutlivedError extends Error {
+export class ProviderProcessOutlivedError extends HostFailureError {
   readonly pid: number | undefined
 
   constructor(pid: number | undefined) {
-    super(`A provider process${pid ? ` (pid ${pid})` : ""} is still running after Mako tried to end it.`)
+    super("resume-failed", `A provider process${pid ? ` (pid ${pid})` : ""} is still running after Mako tried to end it.`)
     this.name = "ProviderProcessOutlivedError"
     this.pid = pid
   }

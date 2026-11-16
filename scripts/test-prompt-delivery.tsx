@@ -8,7 +8,7 @@ import { stagePrompt, removePendingPrompt } from "../src/state/acp-pending"
 import { beginStart } from "../src/state/acp-start"
 import { autoContinuePending, continueTurnPrompt, promptDelivery, recoverableRequests, makoPrompts, savedMakoPrompt, turnStopLabel, turnStops, turnWords } from "../src/state/prompt-delivery"
 import { autoContinueCandidate, crashedChildTurn, savedContinuation } from "@mako/host/contracts/turn-continuation"
-import { classifyProviderFailure } from "@mako/host/contracts/provider-failure"
+import { classifyProviderFailure, providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import { failureAfterRetry, GIVE_UP_MS, nextRetry } from "@mako/host/contracts/delivery-retry"
 import { resetWords } from "@mako/host/contracts/account-usage"
 import { FailureRow } from "../src/components/transcript/failure-row"
@@ -273,7 +273,9 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   assert.equal(turnStopLabel("provider-exited", "Cursor"), "Cursor stopped unexpectedly")
   assert.match(continueTurnPrompt("provider-exited", "mako"), /process stopped.*restarted/)
   assert.deepEqual(turnStops([quit, exited], false).get(exited.id), { reason: "provider-exited", continuable: true, automatic: false })
-  assert.equal(classifyProviderFailure("stream disconnected before completion: error sending request for url").kind, "network", "Codex's dropped stream is a dropped connection")
+  const droppedStream = "stream disconnected before completion: error sending request for url"
+  assert.equal(classifyProviderFailure(droppedStream, undefined, providerTextEvidence(droppedStream)).kind, "network", "Codex's native dropped stream is a dropped connection")
+  assert.equal(classifyProviderFailure(droppedStream).kind, "unknown", "unmarked host prose does not attest to a native connection loss")
 }
 // The recovery panel lists a stopped turn only when the transcript does not show it.
 {
