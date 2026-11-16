@@ -6,7 +6,7 @@
 // The window is the desktop's and the browser the host's, as in Mako: the
 // host asks over /desktop on its socket (DesktopChannel), and the desktop's
 // DesktopLink makes the window and relays every DevTools message both ways.
-import { app, BrowserWindow, screen } from "electron"
+import { app, BrowserWindow } from "electron"
 import assert from "node:assert/strict"
 import { writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -20,7 +20,6 @@ import { BrowserService } from "../packages/control-runtime/dist/browser-service
 import { BrowserCommandSchema } from "../packages/control-runtime/dist/contracts/browser-control.js"
 import { testScratch } from "./lib/test-scratch.mjs"
 
-
 const root = testScratch("mako-desk-browser-")
 app.setPath("userData", join(root, "profile"))
 const html = `<!doctype html><title>Desk check</title><body style="margin:0;height:3000px"><h1>Desk check</h1><button id="b" onclick="document.getElementById('out').textContent='clicked'">Press me</button><input id="i" aria-label="Name" value="old"><select id="s" aria-label="Colour"><option value="r">Red</option><option value="b">Blue</option></select><a id="dl" href="data:text/plain,hello%20download" download="hello.txt">Download</a><iframe name="embed" srcdoc="<p>inner frame text</p>"></iframe><div id="out"></div><script>document.getElementById('i').addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('out').textContent+=' enter'});document.getElementById('s').addEventListener('change',e=>{document.getElementById('out').textContent+=' colour='+e.target.value});setTimeout(()=>{const late=document.createElement('p');late.id='late';late.textContent='late arrival';document.body.appendChild(late)},700)</script></body>`
@@ -30,37 +29,18 @@ const watchdog = setTimeout(() => {
   app.exit(2)
 }, 60_000)
 
-/**
- * The page's size: a desk's 1600 by 1000, or what the screen's work area holds of it. A CI Mac's screen held a 1600 px
- * window to 1585, and a check that passed only on wide screens checked nothing there; the viewport is asserted against
- * the size the window took.
- */
-function deskSize() {
-  const { width, height } = screen.getPrimaryDisplay().workAreaSize
-  return { width: Math.min(1600, width), height: Math.min(1000, height) }
-}
-/**
- * The page's viewport: the content size the window took, less the page's own scrollbar. A Mac with no trackpad (a CI
- * runner) draws scrollbars 15 px wide beside a page this tall; one that overlays them takes nothing.
- */
-let pageSize
-
 // Electron emits ready only after the ESM entry finishes evaluating, so the
 // work runs from a function instead of a top-level await.
 async function hiddenWindow() {
-  const size = deskSize()
   const window = new BrowserWindow({
-    width: size.width,
-    height: size.height,
+    width: 1600,
+    height: 1000,
     show: false,
     enableLargerThanScreen: true,
     webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
   })
-  window.setContentSize(size.width, size.height)
+  window.setContentSize(1600, 1000)
   await window.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html))
-  const [width, height] = window.getContentSize()
-  const scrollbar = await window.webContents.executeJavaScript("innerWidth - document.documentElement.clientWidth")
-  pageSize = [width - scrollbar, height]
   return window
 }
 
@@ -103,7 +83,7 @@ async function main() {
   const { navigation: _navigation, ...target } = await run({ action: "open", browser: "mako" })
   const observed = await run({ action: "observe", target, interactiveOnly: true })
   assert.deepEqual([...new Set(observed.nodes.map((node) => node.role))].sort(), ["button", "combobox", "link", "option", "textbox"])
-  assert.deepEqual([observed.viewport.width, observed.viewport.height], pageSize, "the viewport is the window's content, less its scrollbar")
+  assert.deepEqual([observed.viewport.width, observed.viewport.height], [1600, 1000])
   const button = observed.nodes.find((node) => node.role === "button")
   const input = observed.nodes.find((node) => node.role === "textbox")
   await run({ action: "click", target, at: { ref: button.ref } })
@@ -171,25 +151,21 @@ async function main() {
   assert.equal(download.state, "completed")
   assert.equal(download.path, join(root, "hello.txt"))
 
-  // Screenshots, before history: on CI Macs (Electron 43.4.0), a back that lands the page in its original renderer
-  // process leaves it no compositor surface. CDP's screenshot then never answers and Electron's capturePage fails with
-  // UnknownVizError: 5 of 5 such backs in 20 runs, against 0 of 15 that got a new process; with the back-forward cache
-  // off, and whether the window was hidden or shown. That is Electron's to fix; here the captures come first.
-  const shot = await run({ action: "screenshot", target, format: "png", maxSide: 800 })
-  writeFileSync(join(root, "viewport.png"), Buffer.from(shot.data, "base64"))
-  assert.equal(shot.coordinates.imageWidth, 800)
-  assert.equal(shot.coordinates.devicePixelRatio > 0, true)
-  // The download clicked through the page, so refs come from a new observation.
-  const again = await run({ action: "observe", target, interactiveOnly: true })
-  const buttonAgain = again.nodes.find((node) => node.role === "button")
-  const element = await run({ action: "screenshot", target, format: "png", ref: buttonAgain.ref })
-  assert.ok(element.coordinates.imageWidth < 200, "element capture is scoped to the button")
   // History: a second document, then back.
   await run({ action: "navigate", target, url: "data:text/html;charset=utf-8," + encodeURIComponent(second) })
   const back = await run({ action: "history", target, go: "back" })
   assert.equal(back.moved, true)
   const title = await run({ action: "evaluate", target, expression: "document.title" })
   assert.equal(title.result.value, "Desk check")
+  const shot = await run({ action: "screenshot", target, format: "png", maxSide: 800 })
+  writeFileSync(join(root, "viewport.png"), Buffer.from(shot.data, "base64"))
+  assert.equal(shot.coordinates.imageWidth, 800)
+  assert.equal(shot.coordinates.devicePixelRatio > 0, true)
+  // History navigation replaced the document, so refs come from a new observation.
+  const again = await run({ action: "observe", target, interactiveOnly: true })
+  const buttonAgain = again.nodes.find((node) => node.role === "button")
+  const element = await run({ action: "screenshot", target, format: "png", ref: buttonAgain.ref })
+  assert.ok(element.coordinates.imageWidth < 200, "element capture is scoped to the button")
   await run({ action: "close", target })
   assert.equal(desk.openPages, 0)
   // The desktop closes its window once the host's ask arrives.
@@ -206,14 +182,9 @@ main().then(
     clearTimeout(watchdog)
     app.exit(0)
   },
-  async (error) => {
+  (error) => {
     console.error("Desk browser check failed:", error?.stack ?? error)
     clearTimeout(watchdog)
-    // Whether Electron's own capture, which counts the hidden page as captured while it runs, gets pixels where CDP's didn't.
-    for (const window of BrowserWindow.getAllWindows()) {
-      const image = await Promise.race([window.webContents.capturePage(), new Promise((resolve) => setTimeout(() => resolve(undefined), 5_000))]).catch((failure) => new Error(String(failure?.message ?? failure)))
-      console.error(`capturePage of ${window.webContents.getURL().slice(0, 40)}: ${image === undefined ? "no answer in 5 s" : image instanceof Error ? image.message : `${image.getSize().width}x${image.getSize().height}, empty ${image.isEmpty()}`}`)
-    }
     app.exit(1)
   }
 )

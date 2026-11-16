@@ -807,10 +807,7 @@ export class LiveConversations {
   }
 
   setArchived(id: string, archived: boolean): void {
-    // A conversation not in memory is read in only when it has a compaction to withdraw, as its listing says:
-    // archiving otherwise reads no journal (a report over the host's conversations must load none of them).
-    const pending = archived && !this.records.has(id) && this.records.listing().some((summary) => summary.session.id === id && summary.hasCompactionRecovery)
-    const resident = this.records.has(id) || pending ? this.records.load(id) : undefined
+    const resident = this.records.load(id)
     if (archived && resident && this.compactions.withdraw(resident, "archive")) this.flush(resident)
     this.hibernation.setArchived(id, archived)
   }

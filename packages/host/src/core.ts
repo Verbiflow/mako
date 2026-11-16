@@ -171,8 +171,6 @@ export interface Core {
   prefetchSignedIn(harness: string): Promise<{ ms: number } | undefined>
   /** Work that holds a profile host up: turns, native runs, transfers. */
   activeWork(): boolean
-  /** An agent using the desk browser, which also holds a profile host up. */
-  deskBrowsing(): boolean
   /** That work, item by item, as the lifecycle lists it: what keeps a cloud machine running. */
   work(): LifecycleWork[]
   /** What tells the account's list of this host's Sessions, and relays a watched conversation to another device. */
@@ -2286,7 +2284,6 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     },
     media: controlVideoMedia(control.previews),
     activeWork: () => application.lifecycle.snapshot().work.length > 0,
-    deskBrowsing: () => control.deskBrowsing(),
     work: () => application.lifecycle.snapshot().work,
     sessions,
     lifecycleBlocked: () => application.lifecycle.blocked,

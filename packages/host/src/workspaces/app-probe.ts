@@ -113,8 +113,8 @@ export interface Open {
   listening: { port: number; pid: number }[]
   /** TCP connections they opened, to a port on this Mac or elsewhere; ones they accepted are left out. */
   connected: { host: string; port: number; local: boolean; pid: number }[]
-  /** Regular files they hold open, and the paths of sockets they bound (`socket`), by absolute path. */
-  files: { path: string; pid: number; writing: boolean; socket?: true }[]
+  /** Regular files they hold open, by absolute path. */
+  files: { path: string; pid: number; writing: boolean }[]
   cwds: Map<number, string>
   /** Each process's name, as the system shows it. */
   commands: Map<number, string>
@@ -157,7 +157,7 @@ export async function openBy(pids: number[]): Promise<Open> {
         found.files.push({ path: value, pid, writing: access === "w" || access === "u" })
       // A socket bound to a path names its file; a second copy binding the same path takes it over.
       else if (type === "unix" && isAbsolute(value))
-        found.files.push({ path: privateLinked(value), pid, writing: false, socket: true })
+        found.files.push({ path: privateLinked(value), pid, writing: false })
     }
   }
   // SQLite opens a database's -wal read-write even for a read-only connection, which never writes it.
@@ -464,13 +464,6 @@ export async function probeApp(input: ProbeInput): Promise<AppProbeView> {
     const shallow = deep ? (trace?.lost ?? []) : roots.history
     for (const found of await byTimes(since, shallow, home, kept, down?.at)) note(changed, found.folder, found.inner)
     if (deep) changedBy = "history"
-    // A socket a running process of the app has bound in /tmp is a change the app made there since it came up, whether or
-    // not the file system's history names it: a CI Mac's history named a file made in /tmp and never the app's socket.
-    if (!stopped)
-      for (const file of open.files) {
-        const at = file.socket && within(file.path, roots.scratch) ? folderOf(file.path, roots) : undefined
-        if (at && kept(at.folder)) note(changed, at.folder, at.inner)
-      }
     const sealed = onMac()
       ? ` In ${SEALED.map((name) => `~/${name}`).join(" and ")}, where macOS keeps sandboxed apps' data, only files the app held open for writing when Mako looked count: reading there makes macOS ask the user to let Mako access other apps' data.`
       : ""

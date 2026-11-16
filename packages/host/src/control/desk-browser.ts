@@ -26,11 +26,8 @@ export interface DeskBrowserOptions {
   /** Whether a navigation target stays inside Mako's own interface. */
   allowsUrl: (url: string) => boolean
   maxPages?: number
-  /** Close a window nobody has driven for this long; an agent's use holds a profile host up for as long (a quiet open
-   * connection is not use). Default 30 minutes. */
+  /** Close a window nobody has driven for this long. Default 30 minutes. */
   idleMs?: number
-  /** How long a page may take to come (the agent views app starting, the desk loading). Default 60 seconds. */
-  createMs?: number
   name?: string
   /** The host refuses every call outside the fixture allowlist. */
   fixture?: boolean
@@ -51,7 +48,6 @@ const navigateParams = z.object({ url: z.string() })
 const DEFAULT_MAX_PAGES = 4
 const DEFAULT_IDLE_MS = 30 * 60_000
 const REAP_INTERVAL_MS = 60_000
-const DEFAULT_CREATE_MS = 60_000
 
 interface Session {
   targetId: string
@@ -74,10 +70,6 @@ export class DeskBrowser {
   private stopReaping: (() => void) | undefined
   private readonly sessions = new Map<string, Session>()
   private readonly sockets = new Set<WebSocket>()
-  /** Pages asked for and not yet made: the agent views app can take seconds to start and load the desk. */
-  private creating = 0
-  /** When an agent last used the desk browser: connected, or sent anything. */
-  private lastUse = Number.NEGATIVE_INFINITY
   private readonly token = randomBytes(24).toString("base64url")
   private server: WebSocketServer | undefined
   private endpoint: string | undefined
@@ -138,9 +130,7 @@ export class DeskBrowser {
         return
       }
       this.sockets.add(socket)
-      this.used()
       socket.on("message", (raw) => {
-        this.used()
         void this.handle(socket, raw.toString())
       })
       socket.once("close", () => {
@@ -157,23 +147,10 @@ export class DeskBrowser {
     return this.pages.size
   }
 
-  /**
-   * Whether an agent is using the desk browser: waiting for a page, or having used it within `idleMs`. A profile host
-   * that stops when idle stays up meanwhile (a fixture host stopped 10 s into a page its agent was waiting for), but
-   * only meanwhile: a connection the browser service keeps open for its whole session, quiet, holds nothing.
-   */
-  busy(now = Date.now()): boolean {
-    return this.creating > 0 || now - this.lastUse < (this.options.idleMs ?? DEFAULT_IDLE_MS)
-  }
-
   reapIdle(now = Date.now()): void {
     const idleMs = this.options.idleMs ?? DEFAULT_IDLE_MS
     for (const [id, page] of this.pages)
       if (now - (this.lastActivity.get(id) ?? now) >= idleMs) page.destroy()
-  }
-
-  private used(now = Date.now()): void {
-    this.lastUse = now
   }
 
   private reply(socket: WebSocket, id: number, result: JsonObject): void {
@@ -260,23 +237,7 @@ export class DeskBrowser {
             )
             return
           }
-          this.creating += 1
-          const making = this.options.createPage(randomUUID())
-          const createMs = this.options.createMs ?? DEFAULT_CREATE_MS
-          let gaveUp: ReturnType<typeof setTimeout> | undefined
-          const page = await Promise.race([
-            making,
-            new Promise<never>((_, reject) => {
-              gaveUp = setTimeout(() => reject(new Error(`The desk window didn't open within ${Math.round(createMs / 1000)} seconds.`)), createMs)
-            }),
-          ]).catch((error: Error) => {
-            // A window that comes after the wait gave up is no one's: it's closed as it arrives.
-            void making.then((late) => late.destroy(), () => {})
-            throw error
-          }).finally(() => {
-            clearTimeout(gaveUp)
-            this.creating -= 1
-          })
+          const page = await this.options.createPage(randomUUID())
           this.pages.set(page.id, page)
           this.lastActivity.set(page.id, Date.now())
           page.onMessage((eventMethod, eventParams) => {

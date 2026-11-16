@@ -152,7 +152,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -165,7 +165,7 @@ jobs:
       - uses: ./.github/actions/build-control-runtime
         with:
           save: ${{ matrix.shard == 1 }}
-      - run: node scripts/ci-gate.mjs --mac ${{ matrix.shard }} 3
+      - run: node scripts/ci-gate.mjs --mac ${{ matrix.shard }} 2
         env:
           MAKO_TEST_EVIDENCE: ${{ runner.temp }}/test-evidence
       # A cancelled job (one past its timeout) too: its progress log names the part that was running.

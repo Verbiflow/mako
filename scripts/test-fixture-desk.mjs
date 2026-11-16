@@ -61,8 +61,6 @@ let host
 let removeRenderer = () => {}
 let cdp
 let agentViewsPid
-// What the host printed, for a failure: it's kept quiet unless MAKO_TEST_TRACE=1.
-let output = ""
 
 const until = async (read, label, ms = 90_000) => {
   const end = Date.now() + ms
@@ -94,13 +92,11 @@ const pageCall = async (body) => {
 try {
   host = spawnHost(env, { app: app && join(app, "Contents", "MacOS", "Mako"), stdio: ["ignore", "pipe", "pipe"] })
   if (app) console.log(`Fixture host from ${app}`)
+  let output = ""
   const trace = process.env.MAKO_TEST_TRACE === "1"
   host.stdout.on("data", (chunk) => { output += chunk; if (trace) process.stdout.write(chunk) })
   host.stderr.on("data", (chunk) => { output += chunk; if (trace) process.stderr.write(chunk) })
-  // A host that exited never answers: say so at once rather than wait out the limit.
-  const exited = once(host, "exit").then(([code, signal]) => { throw new Error(`The fixture host exited (${signal ?? `exit ${code}`}) before it answered`) })
-  exited.catch(() => {})
-  const info = await Promise.race([until(() => runtimeInfo(location.socket), "fixture host"), exited])
+  const info = await until(() => runtimeInfo(location.socket), "fixture host")
   console.log(`Fixture host ${info.pid} is ready`)
   assert.equal(info.pid, host.pid)
   assert.equal(info.fixture, true, "The host reports that it is a fixture desk")
@@ -168,7 +164,7 @@ for (const channel of ["mako:live-start", "mako:lifecycle-command", "mako:list-m
     removeRenderer = publishDevRendererRegistration(dirname(location.socket), { profile, sourceRoot: root, url })
     const desk = await until(async () => registeredDeskBrowsers().find((browser) => browser.profile === profile), "desk registration")
     assert.equal(desk.fixture, true, "Agents discovering the desk see a fixture desk")
-    console.log(`Desk registered as a fixture at ${new Date().toISOString()}`)
+    console.log("Desk registered as a fixture")
     cdp = new WebSocket(await desk.endpoint())
     await new Promise((done, fail) => { cdp.onopen = done; cdp.onerror = fail })
     let sequence = 0
@@ -181,16 +177,13 @@ for (const channel of ["mako:live-start", "mako:lifecycle-command", "mako:list-m
       if (message.error) held.fail(new Error(message.error.message))
       else held.done(message.result)
     }
-    // The first target starts the agent views app, an Electron cold start that a loaded CI Mac running another
-    // Electron check beside it took past 30 s; its later calls answer in milliseconds.
-    const send = (method, params = {}, sessionId, ms = 30_000) => new Promise((done, fail) => {
+    const send = (method, params = {}, sessionId) => new Promise((done, fail) => {
       const id = ++sequence
-      const timer = setTimeout(() => { pending.delete(id); fail(new Error(`${method} timed out after ${ms / 1000} s`)) }, ms)
+      const timer = setTimeout(() => { pending.delete(id); fail(new Error(`${method} timed out`)) }, 30_000)
       pending.set(id, { done: (value) => { clearTimeout(timer); done(value) }, fail: (error) => { clearTimeout(timer); fail(error) } })
       cdp.send(JSON.stringify({ id, method, params, sessionId }))
     })
-    console.log(`Target.createTarget sent at ${new Date().toISOString()}`)
-    const { targetId } = await send("Target.createTarget", {}, undefined, 90_000)
+    const { targetId } = await send("Target.createTarget", {})
     const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true })
     const evaluate = async (expression) => {
       const result = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, sessionId)
@@ -219,10 +212,6 @@ for (const channel of ["mako:live-start", "mako:lifecycle-command", "mako:list-m
   }
 } catch (error) {
   console.error(error)
-  // The end of the host's log, beside this test's own times, for a failure that never reached its window.
-  const said = await readFile(join(dataRoot, "logs", "host.log"), "utf8").catch(() => "")
-  if (output) console.error(`The host's last output:\n${output.slice(-3_000)}`)
-  console.error(said.split("\n").slice(-80).join("\n") || "host.log says nothing of the agent views app")
   process.exitCode = 1
 } finally {
   cdp?.close()

@@ -1,4 +1,3 @@
-import { ConversationControlSchema, compactionPending } from "@mako/host/contracts/conversation-control"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { Git } from "@mako/git"
 import { ProviderFailureError, providerTextEvidence } from "@mako/host/contracts/provider-failure"
@@ -860,15 +859,6 @@ async function boundsWarmProviders() {
  * the memory readout, by the work it ran as.
  */
 async function bulkLoadsAreNamed() {
-  // #881 journals a native or reconciling recovery under a new wire field (here a native one, its replacement pending); read back it is the control's
-  // compactionRecovery, which the listing's hasCompactionRecovery is made from, so archiving an unloaded conversation
-  // still reads it in to withdraw what's pending (setArchived).
-  const binding = randomUUID()
-  const folded = ConversationControlSchema.parse({ activeBindingId: binding, bindings: [], transfers: [],
-    pendingCompactionRecovery: { id: randomUUID(), origin: "native", requestId: randomUUID(), bindingId: binding, createdAt: 1, epoch: "fixture",
-      target: { provider: "test-provider" }, state: { kind: "replace", transferId: randomUUID() } } })
-  assert.equal(folded.compactionRecovery?.origin, "native", "the wire field folds into compactionRecovery")
-  assert.ok(compactionPending(folded.compactionRecovery), "and reads as pending, as the archive listing needs")
   const root = mkdtempSync(join(tmpdir(), "mako-live-bulk-"))
   const work = namedWork()
   const ids = Array.from({ length: BULK_LOADS + 1 }, () => randomUUID())
@@ -923,21 +913,6 @@ async function bulkLoadsAreNamed() {
       owner.submit(id, randomUUID(), "seed")
     }
     await waitFor(() => owner.residency().memory.unloaded === ids.length, "the idle conversations were not all unloaded")
-    // The seed turns leave providers warm, whose idle timers hibernate them on their own; one that fired during the
-    // report read its conversation back in (gate 21: loaded 1). The host is quiet before the report is measured.
-    await waitFor(() => { const residency = owner.residency(); return residency.active + residency.warm === 0 && residency.memory.loaded === 0 },
-      `the seeded providers hibernated and nothing stayed in memory: ${JSON.stringify(owner.residency().memory.loads)}`)
-    const loadsBefore = JSON.stringify(owner.residency().memory.loads)
-    // Every load from here on, with its stack: work's name follows its timers and listeners (AsyncLocalStorage), so a
-    // name alone can't tell the report's own read from a timer it happened to schedule.
-    const strays: string[] = []
-    const records = owner["records"]
-    const noteLoad = records["noteLoad"].bind(records)
-    records["noteLoad"] = () => {
-      const by = noteLoad()
-      strays.push(`as ${by}:\n${(new Error().stack ?? "").split("\n").slice(2, 14).join("\n")}`)
-      return by
-    }
 
     // The report, over every conversation of the host, loads none: it's a function of the listing.
     const archives = new ThreadArchives(join(root, "archives.sqlite"))
@@ -959,15 +934,10 @@ async function bulkLoadsAreNamed() {
     const rows = work.run("tell the account this host's Sessions", () => ownedSessions(sources))
     assert.equal(rows.length, ids.length, "every conversation is listed")
     for (const id of ids) assert.equal(work.run("archive check", () => lifecycle.archived({ kind: "live", id })), false)
-    work.run("archive", () => lifecycle.archive({ id: randomUUID(), target: { kind: "live", id: ids[0]! }, archived: true }))
-    assert.equal(work.run("report again", () => ownedSessions(sources)).length, ids.length - 1, "an archived conversation leaves the list, by its listing's keys")
-    const reportOrLifecycle = ["tell the account this host's Sessions", "archive check", "archive", "report again"]
-    assert.deepEqual(owner.residency().memory.loads.filter((load) => reportOrLifecycle.includes(load.by)), [],
-      `neither the report nor the lifecycle read a journal in: loads were ${loadsBefore}, now ${JSON.stringify(owner.residency().memory.loads)}, from:\n${strays.join("\n--\n")}`)
-    if (strays.length) console.log(`bulkLoadsAreNamed: the host read ${strays.length} conversation(s) in, from:\n${strays.join("\n--\n")}`)
+    lifecycle.archive({ id: randomUUID(), target: { kind: "live", id: ids[0]! }, archived: true })
+    assert.equal(ownedSessions(sources).length, ids.length - 1, "an archived conversation leaves the list, by its listing's keys")
+    assert.equal(owner.residency().memory.loaded, 0, "neither the report nor the lifecycle read a journal in")
     assert.equal(warned.length, 0, "and nothing was named for loading in bulk")
-    // What a stray load left in memory goes, so the readers below are measured alone.
-    for (const id of ids) records.release(id)
 
     // A reader that does load in bulk is named: once in the log, and in the readout by what it loaded.
     work.run("a list reading journals", () => { for (const id of ids) owner.snapshot(id) })
@@ -975,7 +945,7 @@ async function bulkLoadsAreNamed() {
     assert.equal(warned[0]?.message, "one reader is loading conversations in bulk")
     assert.deepEqual([warned[0]?.fields?.by, warned[0]?.fields?.loads], ["a list reading journals", BULK_LOADS])
     const memory = owner.residency().memory
-    assert.deepEqual(memory.loads.filter((load) => load.by !== "unnamed work"), [{ by: "a list reading journals", count: ids.length }])
+    assert.deepEqual(memory.loads, [{ by: "a list reading journals", count: ids.length }])
     assert.ok(memory.held.length > 0 && memory.held.every((held) => held.by === "a list reading journals"), "each conversation in memory says who read it in")
     // One running as no work at all is named by who called it, or the log can only say "unnamed work".
     for (const id of ids) owner["records"].release(id)

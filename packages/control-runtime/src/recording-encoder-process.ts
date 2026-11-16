@@ -116,12 +116,8 @@ export class RecordingEncoderProcess {
       this.child.stdin.write(header)
       this.child.stdin.write(frame, (error) => {
         clearTimeout(timeout)
-        if (!error) return resolve()
-        // A write after the encoder exited fails as a destroyed stream, which says nothing; the encoder's own reason
-        // (its stderr) is recorded as it closes, a moment later.
-        const settled = new Promise<void>((done) => setTimeout(done, 1000).unref())
-        void Promise.race([this.closed, settled]).then(() =>
-          reject(new Error(this.failure ?? `Video encoder input failed: ${error.message}`)))
+        if (error) reject(error)
+        else resolve()
       })
       this.child.stdin.uncork()
     })

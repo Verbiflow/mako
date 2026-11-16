@@ -16,7 +16,6 @@ export const MAKO_PINS = [
   { package: "@cursor/sdk", version: "1.0.31", since: "2026-09-13T22:35:45-07:00", commit: "c5fe8133" },
   { package: "@cursor/sdk", version: "1.0.40", since: "2026-10-25T08:36:53Z", commit: "eedbf8ae" },
   { package: "@cursor/sdk", version: "1.2.0", since: "2026-10-30T14:30:12-07:00", commit: "72695faf" },
-  { package: "@cursor/sdk", version: "1.3.1", since: "2026-11-11T20:14:48-08:00", commit: "51f57506" },
 ] as const satisfies readonly MakoPin[]
 
 export interface MakoPin {

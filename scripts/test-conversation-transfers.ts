@@ -170,18 +170,7 @@ async function until(predicate: () => boolean) {
     await new Promise((resolve) => setTimeout(resolve, 2))
   }
 }
-/** Turns ended per session: one `finish` per prompt it was sent. */
-const finished = new Map<string, number>()
-/**
- * Ends the session's current turn, once its prompt has reached the provider. A submit or transfer is dispatched
- * asynchronously, so a turn ended before its prompt arrived was followed by the prompt marking the session running
- * again, with nothing left to end it: the next transfer waited behind it for good ("Timed out waiting for transfer
- * state", on main unchanged). A real harness can't answer a prompt it hasn't been sent.
- */
-async function finish(id: string, text: string) {
-  const done = finished.get(id) ?? 0
-  await until(() => sent.filter((dispatch) => dispatch.id === id).length > done)
-  finished.set(id, done + 1)
+function finish(id: string, text: string) {
   const session = sessions.get(id)
   assert.ok(session)
   emitters.get(id)?.at(-1)?.({
@@ -201,7 +190,7 @@ try {
   await owner.start("alpha", root, { conversationId: id })
   await until(() => owner.snapshot(id)?.session.status === "ready")
   owner.submit(id, randomUUID(), "Original task")
-  await finish(id, "Original answer with the decision: keep the parser")
+  finish(id, "Original answer with the decision: keep the parser")
   const request = command("beta", "Review the implementation")
   request.modeId = "plan"
   request.attachments.push({
@@ -271,7 +260,7 @@ try {
   )
   assert.deepEqual(noted, [["beta", `native-${beta.id}`, dirname(firstTransfer.state.manifest.file)]],
     "the transcript is noted as the session it opened, for the record store to keep with it")
-  await finish(beta.id, "Review found a missing attachment test")
+  finish(beta.id, "Review found a missing attachment test")
   assert.equal(
     observerMemory.heldBy("alpha", `native-${id}`),
     null,
@@ -348,9 +337,9 @@ try {
     () => owner.submit(id, randomUUID(), "racing message"),
     /switch is pending/
   )
-  await finish(id, "Fix applied")
+  finish(id, "Fix applied")
   await until(() => sent.length === 4)
-  await finish(beta.id, "Fix verified")
+  finish(beta.id, "Fix verified")
 
   const closedBeforeFailure = closed.length
   failDestination = true
@@ -368,7 +357,7 @@ try {
   )
   owner.submit(id, randomUUID(), "The source still works")
   assert.equal(sent.at(-1)?.id, beta.id)
-  await finish(beta.id, "Still connected")
+  finish(beta.id, "Still connected")
   assert.throws(
     () => owner.transfer(id, { ...failed, text: "different" }),
     /different content/
@@ -412,7 +401,7 @@ try {
   await until(() => owner.snapshot(forkId)?.session.status === "running")
   const forkBinding = owner.snapshot(forkId)?.control?.activeBindingId
   assert.ok(forkBinding)
-  await finish(forkBinding, "Fork findings")
+  finish(forkBinding, "Fork findings")
   assert.equal(
     owner
       .snapshot(id)
@@ -484,7 +473,7 @@ try {
   const ran = await mcpClient.callTool({ name: "js", arguments: { code: "1" } })
   assert.equal(ran.isError, undefined, JSON.stringify(ran))
   assert.throws(() => owner.authorizeAgent(id, randomUUID()), /no longer owns/)
-  await finish(beta.id, "Parent work completed")
+  finish(beta.id, "Parent work completed")
   const afterGrant = await mcpClient.callTool({ name: "js", arguments: { code: "1" } })
   assert.equal(afterGrant.isError, true, "a grant stops working once its turn ends")
 
@@ -522,7 +511,7 @@ try {
     randomUUID(),
     "Source remains usable after failed journal write"
   )
-  await finish(beta.id, "Still usable")
+  finish(beta.id, "Still usable")
 
   // A disconnected binding with a valid resume verdict continues through its
   // native session; Mako does not replay that session's own transcript into it.
@@ -546,7 +535,7 @@ try {
   if (reconnectTransfer?.state.kind === "accepted") {
     assert.ok(reconnectTransfer.state.manifest.fromBlock > 0)
     assert.equal(reconnectTransfer.state.manifest.includesBase, false)
-    await finish(reconnectTransfer.state.bindingId, "Reconnected")
+    finish(reconnectTransfer.state.bindingId, "Reconnected")
   }
   const activeBinding = owner.snapshot(id)!.control!.activeBindingId
   const activeSession = sessions.get(activeBinding)!
@@ -562,7 +551,7 @@ try {
   if (legacyTransfer.state.kind === "accepted") {
     assert.equal(legacyTransfer.state.bindingId, activeBinding, "unknown baseline reconnects the same binding")
     assert.equal(legacyTransfer.state.manifest.includesBase, false, "native history is not replayed as a new prompt")
-    await finish(activeBinding, "Legacy reconnect complete")
+    finish(activeBinding, "Legacy reconnect complete")
   }
   recordComparison = "same"
   const closingId = randomUUID()
@@ -583,7 +572,7 @@ try {
   await until(() =>
     sent.some((entry) => entry.text === "Seed retirement race")
   )
-  await finish(retirementId, "Seeded")
+  finish(retirementId, "Seeded")
   await until(
     () =>
       owner
@@ -620,7 +609,7 @@ try {
   await until(() => owner.snapshot(delegated)?.session.status === "ready")
   owner.submit(delegated, delegated, `Old delegated task ${delegated}`)
   await until(() => owner.snapshot(delegated)?.session.status === "running")
-  await finish(delegated, "The old child found the guard")
+  finish(delegated, "The old child found the guard")
   await until(() => owner.snapshot(delegated)?.requests.every((candidate) => candidate.status === "completed") === true)
   const count = sent.length
   await owner.stop()
@@ -675,7 +664,7 @@ try {
   )
   owner.submit(id, randomUUID(), "Carry on after the upgrade")
   await until(() => sent.at(-1)?.text.includes("Carry on after the upgrade") === true)
-  await finish(owner.snapshot(id)!.control!.activeBindingId, "Carried on")
+  finish(owner.snapshot(id)!.control!.activeBindingId, "Carried on")
   await until(() => owner.snapshot(id)?.session.status === "ready")
   assert.equal(sent.slice(count).some((dispatch) => dispatch.text.includes(delegated)), false, "nothing delivers an old child's result")
   assert.equal("children" in storedControl(id), false, "the parent's next write drops its old list of children")
@@ -697,7 +686,7 @@ try {
   owner.submit(retainedId, queuedId, "Queued attachment", attachments)
   unlinkSync(attachmentPath)
   owner.submit(retainedId, queuedId, "Queued attachment", attachments)
-  await finish(retainedId, "Ready for next request")
+  finish(retainedId, "Ready for next request")
   await until(
     () =>
       owner
@@ -719,7 +708,7 @@ try {
   owner.transfer(retainedId, retainedTransfer)
   unlinkSync(attachmentPath)
   owner.transfer(retainedId, retainedTransfer)
-  await finish(retainedId, "Ready to transfer")
+  finish(retainedId, "Ready to transfer")
   await until(
     () =>
       owner.snapshot(retainedId)?.session.harness === "beta" &&
@@ -739,16 +728,16 @@ try {
   owner.continueBinding(exactId, firstBinding, exactRequest, "Exact native message")
   await until(() => sent.some((item) => item.text === "Exact native message"))
   assert.equal(sent.filter((item) => item.text === "Exact native message").length, 1)
-  await finish(firstBinding, "Exact message complete")
+  finish(firstBinding, "Exact message complete")
   owner.transfer(exactId, command("beta", "Switch away"))
   await until(() => owner.snapshot(exactId)?.session.harness === "beta" && owner.snapshot(exactId)?.session.status === "running")
-  await finish(owner.snapshot(exactId)!.control!.activeBindingId, "Switched away")
+  finish(owner.snapshot(exactId)!.control!.activeBindingId, "Switched away")
   recordComparison = "moved"
   owner.transfer(exactId, command("alpha", "Make another alpha session"))
   await until(() => owner.snapshot(exactId)?.session.harness === "alpha" && owner.snapshot(exactId)?.session.status === "running")
   const secondBinding = owner.snapshot(exactId)!.control!.activeBindingId
   assert.notEqual(firstBinding, secondBinding)
-  await finish(secondBinding, "Second alpha complete")
+  finish(secondBinding, "Second alpha complete")
   await owner.stop()
   owner = createOwner()
   const historicalRequest = randomUUID()
@@ -759,7 +748,7 @@ try {
   assert.equal(sent.filter((item) => item.text.includes("Continue the first alpha")).length, 1)
   owner.continueBinding(exactId, firstBinding, historicalRequest, "Continue the first alpha", [], { model: "new-model" })
   assert.throws(() => owner.continueBinding(exactId, secondBinding, historicalRequest, "Continue the first alpha", [], { model: "new-model" }), /different content/)
-  await finish(firstBinding, "Historical continuation complete")
+  finish(firstBinding, "Historical continuation complete")
   await owner.stop()
   owner = createOwner()
   const coldRequest = randomUUID()

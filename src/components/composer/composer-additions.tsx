@@ -1,4 +1,4 @@
-import { useRef, useState } from "react"
+import { useState } from "react"
 import { AtSignIcon, BookOpenIcon, PaperclipIcon, PlugIcon, PlusIcon } from "lucide-react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Slot } from "@/extend/slot"
@@ -8,12 +8,9 @@ const itemClass = "pressable flex min-h-9 w-full items-center gap-3 px-3 py-2 te
 
 export function ComposerAdditions({ onAttach, onReference, ...controls }: ComposerControlSlotProps & { onAttach(): void; onReference(sigil: "@" | "/"): void }) {
   const [open, setOpen] = useState(false)
-  // The sigil goes into the composer, and focus with it, once the popover has closed: Radix returns focus to the trigger
-  // after the exit animation, which a frame's wait didn't outlast, and the composer was left with "@" and no focus.
-  const pending = useRef<"@" | "/" | undefined>(undefined)
   const reference = (sigil: "@" | "/") => {
-    pending.current = sigil
     setOpen(false)
+    requestAnimationFrame(() => onReference(sigil))
   }
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -22,14 +19,7 @@ export function ComposerAdditions({ onAttach, onReference, ...controls }: Compos
           <PlusIcon className="size-4" />
         </button>
       </PopoverTrigger>
-      <PopoverContent side="top" align="start" sideOffset={8} aria-label="Add to message" className="w-64 gap-0 p-1.5"
-        onCloseAutoFocus={(event) => {
-          const sigil = pending.current
-          if (!sigil) return
-          pending.current = undefined
-          event.preventDefault()
-          onReference(sigil)
-        }}>
+      <PopoverContent side="top" align="start" sideOffset={8} aria-label="Add to message" className="w-64 gap-0 p-1.5">
         <button type="button" className={itemClass} onClick={() => { onAttach(); setOpen(false) }}>
           <PaperclipIcon className="size-4 text-muted-foreground" />Attach a file
         </button>

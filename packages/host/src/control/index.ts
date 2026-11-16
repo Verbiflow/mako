@@ -71,8 +71,6 @@ export interface Control {
   simulatorTools: SimulatorTools
   /** The renderer a development host's windows load now; another checkout's dev server can register while it runs. */
   devServerUrl(): string | null
-  /** An agent is using the desk browser: connected, with a page open or waiting for one. It holds a profile host up. */
-  deskBrowsing(): boolean
   /** Mako's own computer-use driver, started once and shared. */
   ensureLocalControl(): Promise<string | null>
   /** The installed driver's version against the one Mako verified. */
@@ -312,8 +310,6 @@ export function openControl(
     simulators,
     simulatorTools,
     devServerUrl: () => activeDevServerUrl,
-    /** An agent is using the desk browser, which holds a profile host up (`DeskBrowser.busy`). */
-    deskBrowsing: () => deskBrowser.busy(),
     ensureLocalControl,
     driverStatus: () => driverVersions.status(resolveExecutable("cua-driver")),
     driverConnections: async () => ({ ...driver.status(), host: process.pid, workers: await sessions.processes() }),

@@ -61,10 +61,7 @@ async function checkWindow() {
   const until = async (code, what = code) => {
     const end = Date.now() + 15_000
     while (!(await evaluate(code))) {
-      if (Date.now() > end) {
-        const seen = await evaluate(`window.mako.finDefaults().then((reading) => JSON.stringify({ policy: reading.policy, focus: document.activeElement?.closest("[data-role-rules]")?.getAttribute("data-role-rules") ?? document.activeElement?.tagName }))`).catch(() => "unreadable")
-        throw new Error(`UI condition timed out: ${what}; the page had ${seen}`)
-      }
+      if (Date.now() > end) throw new Error(`UI condition timed out: ${what}`)
       await new Promise((done) => setTimeout(done, 40))
     }
   }
@@ -79,12 +76,6 @@ async function checkWindow() {
       await page.debugger.sendCommand("Input.dispatchMouseEvent", { type, button: "left", clickCount: 1, ...point })
   }
   const field = (role) => `[data-role-rules=${role}] textarea`
-  // Typing goes wherever focus is: a press on a loaded runner can land as the page re-renders after the other field's
-  // save, so a field is typed into only once it has focus.
-  const focusField = async (role) => {
-    await press(field(role))
-    await until(`document.activeElement === document.querySelector(${JSON.stringify(field(role))})`, `${role} has focus`)
-  }
   const preview = (role) => `[data-role-rules=${role}] button[aria-expanded]`
   const theme = (light) => evaluate(`document.documentElement.classList.toggle("light", ${light})`)
   const saved = () => evaluate("window.mako.finDefaults().then((reading) => reading.policy)")
@@ -102,9 +93,9 @@ async function checkWindow() {
     assert.ok(below, "the fields sit under the model rules")
 
     /* Typed and saved on blur, as a rule saves. */
-    await focusField("forFins")
+    await press(field("forFins"))
     await page.debugger.sendCommand("Input.insertText", { text: "Run the tests you touch before you report.\nNever push to main." })
-    await focusField("forApexes")
+    await press(field("forApexes"))
     await page.debugger.sendCommand("Input.insertText", { text: "Ask me before starting more than four Fins." })
     await press("main p")
     await until(`window.mako.finDefaults().then((reading) => reading.policy.forApexes === "Ask me before starting more than four Fins.")`, "both saved")
@@ -112,7 +103,7 @@ async function checkWindow() {
     assert.deepEqual((await saved()).rules.length, 3, "the model rules are kept")
 
     /* Escape reverts and saves nothing. */
-    await focusField("forApexes")
+    await press(field("forApexes"))
     await page.debugger.sendCommand("Input.insertText", { text: " Or five." })
     await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
     await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
@@ -153,7 +144,7 @@ async function checkWindow() {
 
     /* A save that doesn't go keeps the person's words in the field, marked unsaved; leaving the field again saves them. */
     await evaluate(`window.__saveRoleRules = window.mako.saveRoleRules; window.mako.saveRoleRules = () => Promise.reject(new Error("The host refused it.")); true`)
-    await focusField("forApexes")
+    await press(field("forApexes"))
     await page.debugger.sendCommand("Input.insertText", { text: " Or five." })
     await press("main p")
     await until(`document.querySelector("[data-role-unsaved=forApexes]") !== null`, "the field is marked unsaved")
@@ -161,7 +152,7 @@ async function checkWindow() {
     assert.equal((await saved()).forApexes, "Ask me before starting more than four Fins.", "the host still holds what it saved")
     await capture("unsaved-dark.png", "[data-role-rules=forApexes]")
     await evaluate(`window.mako.saveRoleRules = window.__saveRoleRules; true`)
-    await focusField("forApexes")
+    await press(field("forApexes"))
     await press("main p")
     await until(`window.mako.finDefaults().then((reading) => reading.policy.forApexes === "Ask me before starting more than four Fins. Or five.")`, "saved on the next blur")
     await until(`document.querySelector("[data-role-unsaved=forApexes]") === null`, "the mark goes once saved")

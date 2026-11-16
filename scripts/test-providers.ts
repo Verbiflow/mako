@@ -1,5 +1,4 @@
 import { claudeRuntime } from "@mako/host/harnesses/claude/runtime"
-import { OPENCODE_OLDEST } from "@mako/host/harnesses/opencode/version"
 import {
   codexExecutableCandidates,
   resolveCodexExecutable,
@@ -577,19 +576,7 @@ assert.deepEqual((await devin.fresh("start", { model: "adaptive" })).args, [
 ])
 
 const openCode = providerHost.nativeRunners.get("opencode")!
-// The runner's arguments, whatever is installed: it resolves an installation first, so a stand-in answers its version
-// (a CI Mac has no OpenCode; this one passed only where someone had installed it).
-const openCodeHome = await mkdtemp(join(tmpdir(), "mako-opencode-"))
-const openCodeBin = join(openCodeHome, "opencode")
-await writeFile(openCodeBin, `#!/bin/sh\necho "${OPENCODE_OLDEST}"\n`)
-await chmod(openCodeBin, 0o755)
-const openCodeWas = process.env.OPENCODE_BIN_PATH
-process.env.OPENCODE_BIN_PATH = openCodeBin
-const openCodeFresh = await Promise.resolve(openCode.fresh("start", { model: "openai/gpt" })).finally(() => {
-  if (openCodeWas === undefined) delete process.env.OPENCODE_BIN_PATH
-  else process.env.OPENCODE_BIN_PATH = openCodeWas
-})
-await rm(openCodeHome, { recursive: true, force: true })
+const openCodeFresh = await openCode.fresh("start", { model: "openai/gpt" })
 assert.equal(openCodeFresh.args[0], "run")
 assert.equal(openCodeFresh.args.at(-1), "start")
 assert.ok(openCodeFresh.args.includes("openai/gpt"))

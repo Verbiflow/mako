@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, writeFile } from "node:fs/promises"
+import { writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { manualDevUpdates } from "../electron/dev-updates.mjs"
@@ -75,20 +75,13 @@ async function checkWindow() {
     while (!(await evaluate(code))) {
       if (Date.now() > deadline) {
         await capture("failure.png")
-        // Where CI keeps evidence (the job uploads it on failure), and what the composer and focus were, in the log.
-        if (process.env.MAKO_TEST_EVIDENCE) {
-          await mkdir(join(process.env.MAKO_TEST_EVIDENCE, "workspace-ui"), { recursive: true })
-          await writeFile(join(process.env.MAKO_TEST_EVIDENCE, "workspace-ui", "failure.png"), (await page.capturePage()).toPNG())
-        }
-        const seen = await evaluate(`JSON.stringify({ composer: document.querySelector('.composer-input')?.value, focus: document.activeElement ? document.activeElement.tagName + ' ' + [...document.activeElement.attributes].map(a => a.name + '=' + a.value.slice(0, 40)).join(' ').slice(0, 240) : null, focused: document.hasFocus() })`).catch(() => "unreadable")
-        throw new Error(`UI condition timed out: ${code}; the page had ${seen}`)
+        throw new Error(`UI condition timed out: ${code}`)
       }
       await new Promise((resolve) => setTimeout(resolve, 30))
     }
   }
-  // The press lands on whatever is drawn at the point; `exposed` says what covers the target rather than press it.
-  const click = async (selector, { exposed = false } = {}) => {
-    const point = await evaluate(`(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) throw new Error('Missing click target'); const r = node.getBoundingClientRect(); const x = Math.round(r.x + r.width / 2), y = Math.round(r.y + r.height / 2); const top = document.elementFromPoint(x, y); if (${exposed} && top && !node.contains(top)) throw new Error(${JSON.stringify(selector)} + ' covered by ' + top.tagName + ' ' + [...top.attributes].map(a => a.name + '=' + a.value.slice(0, 40)).join(' ').slice(0, 200)); return {x, y} })()`)
+  const click = async (selector) => {
+    const point = await evaluate(`(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) throw new Error('Missing click target'); const r = node.getBoundingClientRect(); return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)} })()`)
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point })
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point })
   }
@@ -122,8 +115,7 @@ async function checkWindow() {
   console.log("Startup composer refuses input until its draft target is known")
   await evaluate("document.fonts.ready.then(() => true)")
   const geometry = await evaluate(`(() => { const input = document.querySelector('.composer-input'); const send = document.querySelector('button[aria-label="Send"]'); return {height: input.getBoundingClientRect().height, width: send.getBoundingClientRect().width, radius: getComputedStyle(send).borderRadius}; })()`)
-  // One line tall at rest (#367's calm composer: `min-h-12`, where it had been 80 px).
-  assert.ok(geometry.height >= 48 && geometry.height < 80, `the empty composer is one line tall, not ${geometry.height} px`)
+  assert.ok(geometry.height >= 80)
   assert.equal(geometry.width, 32)
   assert.equal(geometry.radius, "0px")
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('.composer-input')).fontSize`), '16px')
@@ -133,8 +125,7 @@ async function checkWindow() {
   assert.ok(await evaluate(`document.querySelector('[aria-label="Attach a screenshot"]') !== null`))
   await capture('composer-add-menu.png')
   await click('[aria-label="Attach a screenshot"]')
-  // The picker lists what the host's driver finds: nothing on a CI runner, a Mac's own windows where someone works.
-  await until(`document.body.textContent.includes('No visible windows to capture') || document.querySelector('button[aria-label^="Capture "]') !== null`)
+  await until(`document.body.textContent.includes('No visible windows to capture')`)
   await capture('screenshot-picker.png')
   await page.debugger.sendCommand('Input.dispatchKeyEvent', {type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
   await page.debugger.sendCommand('Input.dispatchKeyEvent', {type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
@@ -144,9 +135,8 @@ async function checkWindow() {
   await evaluate(`window.dispatchEvent(new CustomEvent('mako:compose', {detail:{text:''}}))`)
   await click('button[aria-label="Add to message"]')
   await click('[data-add="skill"]')
-  // Skills and commands open on `/` since 2026-10-13 (470ea75a4), where they were `$`.
-  await until(`document.querySelector('.composer-input').value === '/' && document.activeElement === document.querySelector('.composer-input')`)
-  await until(`document.querySelector('[data-mention-menu="/"]') !== null`)
+  await until(`document.querySelector('.composer-input').value === '$' && document.activeElement === document.querySelector('.composer-input')`)
+  await until(`document.querySelector('[data-mention-menu="$"]') !== null`)
   await evaluate(`window.dispatchEvent(new CustomEvent('mako:compose', {detail:{text:''}})); window.addEventListener('mako:settings', event => {window.settingsSection = event.detail}, {once:true})`)
   // Replacing the draft from outside closes a menu opened for the old text.
   await until(`document.querySelector('[data-mention-menu]') === null`)
@@ -158,9 +148,7 @@ async function checkWindow() {
   await until(`document.querySelector('.composer-input').value === 'Keep this unfinished paragraph'`)
   await evaluate(`window.dispatchEvent(new CustomEvent('mako:compose', {detail: {text: 'Review [Screenshot.png]', attachments: [{id:'image', index:1, name:'Screenshot.png', reference:'[Screenshot.png]', kind:'image', mimeType:'image/png', size:42, stagedPath:'/retained/image.png', preview:${JSON.stringify(`${base}icons/app-icon.png`)}}]}}))`)
   await until(`document.querySelectorAll('[aria-label="Remove Screenshot.png"]').length === 1 && document.querySelector('[aria-label="Preview Screenshot.png"] canvas[data-ready]')?.width > 0`)
-  // The attachment's place in the draft is a context chip with nothing to press in the field (since 2026-10-13; it was
-  // an inline token, `data-attachment-reference`, that nothing draws now).
-  assert.equal(await evaluate(`(() => { const chip = document.querySelector('[data-context-chip]'); return chip ? chip.querySelector('button') : 'no chip' })()`), null)
+  assert.equal(await evaluate(`document.querySelector('[data-attachment-reference]').querySelector('button')`), null)
   await evaluate(`window.dispatchEvent(new CustomEvent('mako:compose', {detail: {text:'Review [Screenshot.png] [Second.png]', attachments:[{id:'second', index:2, name:'Second.png', reference:'[Second.png]', kind:'image', mimeType:'image/png', size:42, stagedPath:'/retained/second.png', preview:${JSON.stringify(`${base}icons/app-icon.png`)}}]}}))`)
   await until(`document.querySelectorAll('[aria-label="Attachments"] canvas[data-ready]').length === 2`)
   assert.equal(await evaluate(`(() => { const images = [...document.querySelectorAll('[aria-label="Attachments"] canvas')].map(image => image.getBoundingClientRect()); return images[0].top === images[1].top && images[1].left > images[0].right; })()`), true)
@@ -176,14 +164,11 @@ async function checkWindow() {
   await until(`!document.querySelector('[aria-label="Remove Screenshot.png"]')`)
   assert.equal(await evaluate(`document.querySelector('.composer-input').value`), "Review ")
   await click('nav[aria-label="Previous prompts"] button')
-  // The navigator's list stays open while the pointer rests on it or its button holds focus, and at this window's size it covers the prompt's actions.
-  await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", x: 4, y: 4 })
-  await evaluate(`document.activeElement?.blur()`)
   await evaluate(`(async () => { const {getMako} = await import('/src/lib/bridge.ts'); getMako().copy = async text => {window.copiedText = text}; document.querySelector('[aria-label="Copy question"]').scrollIntoView({block:'center'}); })()`)
-  await click('[aria-label="Copy question"]', { exposed: true })
+  await click('[aria-label="Copy question"]')
   await until(`window.copiedText === 'Keep the reply in the same Claude conversation.'`)
   await evaluate(`document.querySelector('[aria-label="Copy answer"]').scrollIntoView({block:'center'})`)
-  await click('[aria-label="Copy answer"]', { exposed: true })
+  await click('[aria-label="Copy answer"]')
   await until(`window.copiedText?.startsWith('The provider session ID now owns continuation.')`)
   await evaluate(`window.dispatchEvent(new CustomEvent('mako:compose', {detail:{text:Array.from({length:100}, (_, i) => 'Draft line ' + i).join('\\n')}}))`)
   await until(`document.querySelector('.composer-input').value.split('\\n').length === 100`)
@@ -215,19 +200,35 @@ async function checkWindow() {
   assert.equal(await evaluate(`document.querySelector('.composer-input').value`), "Review ")
   await click('[data-fixture="running"]')
   await click('.scroll-fade-scope > button')
-  // A running turn's motion, scrolled out of view and under reduced motion, is test:animations-ui's (gated in suites):
-  // this view draws no orb for a running turn now, so the checks of one that stood here are gone.
+  await until(`document.querySelectorAll('canvas.activity-orb').length === 1`)
+  await evaluate(`window.motionFrame = document.querySelector('canvas.activity-orb').toDataURL()`)
+  await until(`document.querySelector('canvas.activity-orb').toDataURL() !== window.motionFrame`)
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('[aria-label="Queued messages"]')).borderRadius`), "0px")
-  // The queue lines up with the composer's box (`.composer-box`), not the column around it, which #367 gave a margin.
-  assert.ok(await evaluate(`Math.abs(document.querySelector('[aria-label="Queued messages"]').getBoundingClientRect().width - document.querySelector('.composer-box').getBoundingClientRect().width) < 2`))
+  assert.ok(await evaluate(`Math.abs(document.querySelector('[aria-label="Queued messages"]').getBoundingClientRect().width - document.querySelector('[data-composer]').getBoundingClientRect().width) < 2`))
+  assert.equal(await evaluate(`document.querySelector('[data-agent-activity] canvas').getBoundingClientRect().width`), 20)
   assert.equal(await evaluate(`document.querySelectorAll('[data-agent-activity]').length`), 1)
   assert.equal(await evaluate(`Boolean(document.querySelector('[data-agent-activity] [data-size="64"]'))`), false)
   await capture("working.png")
+  await page.debugger.sendCommand("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] })
+  await new Promise((resolve) => setTimeout(resolve, 120))
+  const reducedFrame = await evaluate(`document.querySelector('canvas.activity-orb').toDataURL()`)
+  await new Promise((resolve) => setTimeout(resolve, 120))
+  assert.ok(await evaluate(`document.querySelector('canvas.activity-orb').toDataURL()`) === reducedFrame, "Reduced motion must freeze the canvas")
+  await page.debugger.sendCommand("Emulation.setEmulatedMedia", { features: [] })
+  await evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+  await evaluate(`(() => { const scroller = document.querySelector('canvas.activity-orb').closest('.scroll-fade-scroller'); scroller.dispatchEvent(new WheelEvent('wheel', {deltaY:-500,bubbles:true})); scroller.scrollTop = 0; })()`)
+  await until(`(() => { const canvas = document.querySelector('canvas.activity-orb'); return canvas.getBoundingClientRect().top >= canvas.closest('.scroll-fade-scroller').getBoundingClientRect().bottom; })()`)
+  await evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+  const offscreenFrame = await evaluate(`document.querySelector('canvas.activity-orb').toDataURL()`)
+  await new Promise((resolve) => setTimeout(resolve, 120))
+  assert.ok(await evaluate(`(() => { const canvas = document.querySelector('canvas.activity-orb'); return canvas.getBoundingClientRect().top >= canvas.closest('.scroll-fade-scroller').getBoundingClientRect().bottom; })()`), "The activity indicator must remain outside the viewport while measuring pause")
+  assert.ok(await evaluate(`document.querySelector('canvas.activity-orb').toDataURL()`) === offscreenFrame, "Offscreen motion must stop drawing")
   await click('.scroll-fade-scope > button')
   await click('[data-fixture="responding"]')
   await until(`document.querySelectorAll('[data-agent-activity]').length === 0`)
   await capture('responding-clean.png')
   await evaluate(`(async () => { const {acpStore, activeLiveAcp} = await import('/src/state/acp.ts'); const {applyLiveBatch} = await import('/src/state/live-recovery.ts'); const live = activeLiveAcp(acpStore.get()); applyLiveBatch({id: live.key, revision: live.revision + 1, updates: [], session: {...live.session, status: 'ready'}, requests: live.requests.map(request => ({...request, status: 'completed'}))}); })()`)
+  await until(`document.querySelectorAll('canvas.activity-orb').length === 0`)
   await evaluate(`(async () => { const {acpStore,activeLiveAcp} = await import('/src/state/acp.ts'); const {applyLiveBatch} = await import('/src/state/live-recovery.ts'); const live = activeLiveAcp(acpStore.get()); applyLiveBatch({id:live.key,revision:live.revision+1,updates:[],requests:live.requests.map((request,index) => ({...request,status:index === 0 ? 'interrupted' : 'completed'}))}); })()`)
   await until(`document.querySelector('[data-turn-stopped]') !== null`)
   assert.equal(await evaluate(`document.querySelector('[data-request-recovery]')`), null)
@@ -271,8 +272,7 @@ async function checkWindow() {
   assert.equal(await preview.webContents.executeJavaScript(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.get().quitWithAgents)`), "keep")
   preview.destroy()
   await window.loadURL(`${base}?mock`)
-  // The desk is up when its rail's top rows are (#337 replaced the "Thread view" group with them).
-  await until(`document.querySelector('nav[data-rail-top]') !== null`)
+  await until(`document.querySelector('[aria-label="Thread view"]') !== null`)
   assert.notEqual(await evaluate(`import('/src/state/session.ts').then(({store}) => store.get().meta?.cwd)`), "/Users/you/api")
   // A folder's actions join its row under the pointer, as they do for a person.
   const newThreadIn = async (folder) => {
@@ -297,8 +297,7 @@ async function checkWindow() {
   assert.equal(await evaluate(`import('/src/state/tabs.ts').then(({tabsStore}) => tabsStore.get().tabs.length)`), 2)
   console.log("Failed project New leaves the current thread in place")
   await window.loadURL(`${base}?mock`)
-  // The desk is up when its rail's top rows are (#337 replaced the "Thread view" group with them).
-  await until(`document.querySelector('nav[data-rail-top]') !== null`)
+  await until(`document.querySelector('[aria-label="Thread view"]') !== null`)
   assert.equal(await evaluate(`Boolean(document.querySelector('[data-composer] [aria-label="Show terminal"], [data-composer] [aria-label="Hide terminal"]'))`), false)
   await page.debugger.sendCommand('Input.dispatchKeyEvent', {type:'keyDown',key:'j',code:'KeyJ',windowsVirtualKeyCode:74,modifiers:4})
   await page.debugger.sendCommand('Input.dispatchKeyEvent', {type:'keyUp',key:'j',code:'KeyJ',windowsVirtualKeyCode:74,modifiers:4})
@@ -349,13 +348,11 @@ async function checkWindow() {
   assert.equal(await evaluate(`document.querySelector('[data-exchange="acp-request-request-favicon"]').textContent.includes('Read')`), true)
   console.log("PASS: streamed prose catches up with the full text while a turn is still running")
   assert.equal(await evaluate(`document.body.textContent.includes('Running now')`), false)
-  await until(`document.querySelector('.thread-jump-scope [data-folder-activity="working"] [data-live-mark]') !== null`)
+  await until(`document.querySelector('.thread-jump-scope [data-folder-activity="working"] canvas[data-size="20"]') !== null`)
   assert.equal(await evaluate(`document.querySelector('.thread-jump-scope [data-folder-activity="working"]').textContent`), '1 running')
   await page.debugger.sendCommand('Input.dispatchKeyEvent', {type:'keyDown',key:'Shift',code:'ShiftLeft',windowsVirtualKeyCode:16,modifiers:12})
   await until(`document.querySelector('.thread-jump-scope[data-jump-hints]') !== null`)
-  // Since #337 a row's live mark is at its start, where the jump hint is drawn: the hint stands over the mark while
-  // Shift is held (it ended before an orb at the row's end). Held here as it is, so a move of either is seen.
-  assert.equal(await evaluate(`(() => { const mark = document.querySelector('.thread-jump-scope [data-thread-row][data-jump-index] [data-live-mark]'); const row = mark.closest('[data-thread-row]'); const hint = getComputedStyle(row, '::after'); const left = mark.getBoundingClientRect().left - row.getBoundingClientRect().left; return parseFloat(hint.left) <= left + 2 && parseFloat(hint.left) + parseFloat(hint.width) > left; })()`), true)
+  assert.equal(await evaluate(`(() => { const canvas = document.querySelector('.thread-jump-scope [data-thread-row][data-jump-index] canvas[data-size="20"]'); const row = canvas.closest('[data-thread-row]'); const hint = getComputedStyle(row, '::after'); return parseFloat(hint.left) + parseFloat(hint.width) < canvas.getBoundingClientRect().left - row.getBoundingClientRect().left; })()`), true)
   await capture('project-shortcut-hints.png')
   await page.debugger.sendCommand('Input.dispatchKeyEvent', {type:'keyUp',key:'Shift',code:'ShiftLeft',windowsVirtualKeyCode:16,modifiers:0})
   await until(`document.querySelector('.thread-jump-scope[data-jump-hints]') === null`)
@@ -379,8 +376,7 @@ async function checkWindow() {
   await page.debugger.sendCommand('Input.dispatchKeyEvent', {type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
   await until(`document.querySelector('[role="menu"]') === null`)
   console.log("PASS: a row's actions menu stays anchored after the pointer leaves the row")
-  // The flat recent view is the rail's "Show" choice now (#337 removed the "Thread view" toggle): the same pref.
-  await evaluate(`import('/src/state/prefs.ts').then(({setPref}) => setPref('railGrouping', 'recent'))`)
+  await click('[aria-label="Thread view"] button[aria-pressed="false"]')
   await until(`document.querySelector('.thread-jump-scope [title="/fixture/only-live-project"]') === null`)
   assert.ok(await evaluate(`document.querySelectorAll('[data-thread-row]').length`) <= 80)
   await capture("recent-view.png")
@@ -391,7 +387,7 @@ async function checkWindow() {
   const gap = await evaluate(`document.querySelector('.prompt-prose > p').getBoundingClientRect().top - document.querySelector('.prompt-prose > ul').getBoundingClientRect().bottom`)
   assert.ok(gap >= 0 && gap <= 24, `The paragraph gap must be compact, received ${gap}px`)
   await evaluate(`import('/src/lib/bridge.ts').then(({getMako}) => { getMako().copy = async text => { window.copiedText = text } })`)
-  await click('[aria-label="Copy question"]', { exposed: true })
+  await click('[aria-label="Copy question"]')
   await until(`window.copiedText === document.querySelector('#prompt-format').dataset.source`)
   await capture("prompt-format.png")
   console.log("PASS: exact reported Markdown renders a bold bullet with a compact paragraph gap; copying preserves the original text")
