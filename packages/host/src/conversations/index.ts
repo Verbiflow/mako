@@ -243,6 +243,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     foreground: deps.foreground,
     work: deps.work,
     turns: deps.telemetry.turns,
+    checkpointTimedOut: (waitedMs) => deps.telemetry.checkpointTimedOut(waitedMs),
     opened: deps.opened,
     ownerCheck: deps.ownerCheck,
     memory: memory ?? undefined,

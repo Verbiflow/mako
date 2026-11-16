@@ -278,6 +278,8 @@ export interface Dependencies {
   workspaceSnapshots?: WorkspaceSnapshots
   /** How long a turn waits for its checkpoint to hold the workspace before it goes without (`BEFORE_CHECKPOINT_WAIT_MS`). */
   checkpointWaitMs?: number
+  /** A checkpoint missed dispatch: bounded diagnostic telemetry, never part of sending. */
+  checkpointTimedOut?(waitedMs: number): void
   /** Who changed each of these files (absolute) since `since`, as the attribution journal knows; undefined while it isn't open. */
   rewindWriters?(paths: readonly string[], since: number): FileWriters | undefined
   appPath: string
