@@ -7,7 +7,7 @@ import { join } from "node:path"
 import { z } from "zod"
 import type { AgentCaller, ChildState } from "@mako/host/contracts/agents"
 import type { AgentsSendResult } from "@mako/host/contracts/agent-tools"
-import { rollup } from "@mako/host/contracts/children"
+import { childLine, rollup } from "@mako/host/contracts/children"
 import { NativeAgentSchema } from "@mako/host/contracts/native-agents"
 import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
 import { FROM_AGENTS, WAKE_COALESCE_MS } from "@mako/host/conversations/agent-wakes"
@@ -73,6 +73,38 @@ async function startFin(world: AgentsWorld, caller: AgentCaller, name: string, h
 }
 
 try {
+  // A queued message is waiting for ownership, not running the Fin's stale last step.
+  {
+    let fin = "", checking = false
+    const world = new AgentsWorld({
+      root: join(root, "owner-check"), script: () => "done",
+      ownerCheck: conversation => checking && conversation === fin ? Date.now() : undefined,
+    })
+    try {
+      const apex = await world.apex("cursor", "full")
+      const started = await world.agents.start(apex.caller, { brief: { objective: "Check labels" }, harness: "claude", name: "labels", clientKey: "owner-check", cwd: world.root })
+      assert.ok(!("refused" in started) && started.conversation)
+      fin = started.conversation
+      await until("the first turn to finish", () => world.live.snapshot(fin)?.requests[0]?.status === "completed")
+      await world.agents.report(world.caller(fin), { status: "progress", summary: "Checking the old labels", clientKey: "old-step" })
+      checking = true
+      sent(await world.agents.send(apex.caller, { to: "labels", text: "check the next labels", deliver: "queue", clientKey: "owner-message" }))
+      await until("the owner hold", () => Boolean(requestOf(world, fin, "check the next labels")?.ownerCheck))
+      const waiting = stateOf(world, apex.conversation, "labels")
+      assert.equal(waiting?.kind, "working")
+      assert.equal(waiting?.kind === "working" && waiting.step, "Waiting to hear from your account")
+      assert.equal(waiting && childLine(waiting), "Waiting to hear from your account", "the current ownership wait replaces the old progress phase in the displayed row")
+      assert.equal(world.live.atWork(fin), false, "waiting on ownership holds no execution place")
+      const before = promptsOf(world, fin).length
+      checking = false
+      world.live.moves.ownerChecked()
+      await until("the held message to run", () => promptsOf(world, fin).length === before + 1)
+      world.live.moves.ownerChecked()
+      await pause(30)
+      assert.equal(promptsOf(world, fin).length, before + 1, "repeated owner callbacks never duplicate the message")
+      assert.equal(requestOf(world, fin, "check the next labels")?.ownerCheck, undefined)
+    } finally { await world.close() }
+  }
   for (const harness of HARNESSES) {
     // A message after a stop goes; what the stop paused waits for its Resume without holding anything else back.
     {

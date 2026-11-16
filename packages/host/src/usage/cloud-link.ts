@@ -1,4 +1,4 @@
-import { CLOSE_CODES, PING, subprotocols } from "@mako/protocol"
+import { CLOSE_CODES, PING, PONG, subprotocols } from "@mako/protocol"
 
 /**
  * One live connection from this Mac to the Mako cloud, kept open for as long as it's wanted: opened with the
@@ -9,7 +9,7 @@ import { CLOSE_CODES, PING, subprotocols } from "@mako/protocol"
  * - A dropped connection comes back with backoff and jitter, so a cloud restart isn't met by every Mac at once; a
  *   connection that stayed up a while starts the backoff over.
  * - An expired token is fetched fresh and the link reconnects at once; a removed device stops it.
- * - A connection that goes quiet for a minute, as after a laptop sleeps, is taken as gone; `wake` reconnects now.
+ * - An account heartbeat needs a pong by its deadline, even with no work sent. Other links retain their silence bound.
  * - Going away on purpose (`quiet`, as the Mac goes to sleep or shuts down), it closes at once and waits for `wake`.
  * - It reports "offline" only once it has been down for `offlineAfterMs`. A reconnect that's over in seconds, after
  *   a deploy or a network change, is never shown.
@@ -41,11 +41,12 @@ export type CloudLinkOptions = {
   log?: (message: string, fields?: Record<string, string | number | boolean>) => void
   /** A connection down this long is reported offline; anything shorter isn't shown. */
   offlineAfterMs?: number
+  /** Active account liveness; omitted on runtime links, which retain their existing pause/silence policy. */
+  heartbeat?: { everyMs: number; timeoutMs: number }
 }
 
 /** Each connection pings this often, so a dead one is found; the cloud's edge answers without waking anything. */
 export const PING_MS = 25_000
-/** Nothing heard for this long and the connection is presumed dead, as after a laptop sleeps. */
 const SILENT_MS = 60_000
 /** A link answered at least once a ping, quieter than this when woken, missed its heartbeat while asleep. */
 const WOKEN_QUIET_MS = PING_MS + 5_000
@@ -69,7 +70,7 @@ const BACKOFF_MS = [250, 1_000, 2_000, 5_000, 10_000, 30_000] as const
 const QUIET_HOLD_MS = 30_000
 const OFFLINE_AFTER_MS = 15_000
 
-type Open = { socket: WebSocket; token: string; opened: boolean; openedAt: number; lastHeard: number; detach: CloudLinkAttachment | undefined }
+type Open = { socket: WebSocket; token: string; opened: boolean; openedAt: number; lastHeard: number; detach: CloudLinkAttachment | undefined; pong?: NodeJS.Timeout }
 
 export class CloudLink {
   readonly #options: CloudLinkOptions
@@ -158,6 +159,7 @@ export class CloudLink {
       return
     }
     const asked = Date.now()
+    this.#clearPong(open)
     open.socket.send(PING)
     this.#after(RESUME_PROBE_MS, () => {
       if (open !== this.#open) return
@@ -230,7 +232,11 @@ export class CloudLink {
         const open: Open = { socket, token, opened: false, openedAt: 0, lastHeard: Date.now(), detach: undefined }
         this.#open = open
         socket.addEventListener("open", () => this.#opened(open))
-        socket.addEventListener("message", () => void (open.lastHeard = Date.now()))
+        socket.addEventListener("message", (event) => {
+          if (open !== this.#open) return
+          open.lastHeard = Date.now()
+          if (event.data === PONG) this.#clearPong(open)
+        })
         socket.addEventListener("close", (event) => this.#closed(open, event.code))
       },
       (error) => {
@@ -262,6 +268,7 @@ export class CloudLink {
 
   #closed(open: Open, code: number): void {
     if (open !== this.#open) return
+    this.#clearPong(open)
     this.#open = undefined
     open.detach?.close()
     if (open.socket.readyState === WebSocket.OPEN || open.socket.readyState === WebSocket.CONNECTING) open.socket.close(1000)
@@ -297,17 +304,39 @@ export class CloudLink {
   }
 
   #keepAlive(open: Open): void {
+    const heartbeat = this.#options.heartbeat
+    const every = heartbeat?.everyMs ?? PING_MS
     const tick = () => {
       if (open !== this.#open) return
-      if (Date.now() - open.lastHeard > SILENT_MS) {
+      if (!heartbeat && Date.now() - open.lastHeard > SILENT_MS) {
         this.#options.log?.(`cloud ${this.#options.name}: nothing heard for a minute; reconnecting`)
         this.#closed(open, 1006)
         return
       }
-      if (open.socket.readyState === WebSocket.OPEN) open.socket.send(PING)
-      this.#after(PING_MS, tick)
+      if (!heartbeat) {
+        if (open.socket.readyState === WebSocket.OPEN) open.socket.send(PING)
+      } else if (open.socket.readyState !== WebSocket.OPEN) {
+        this.#closed(open, 1006)
+        return
+      } else if (!open.pong) {
+        open.pong = this.#after(heartbeat.timeoutMs, () => {
+          if (open !== this.#open) return
+          this.#options.log?.(`cloud ${this.#options.name}: heartbeat unanswered; reconnecting`, { timeoutMs: heartbeat.timeoutMs })
+          this.#closed(open, 1006)
+        })
+        try { open.socket.send(PING) } catch { this.#closed(open, 1006); return }
+      }
+      this.#after(every, tick)
     }
-    this.#after(PING_MS, tick)
+    this.#after(every, tick)
+  }
+
+  #clearPong(open: Open): void {
+    if (open.pong) {
+      clearTimeout(open.pong)
+      this.#timers.delete(open.pong)
+      open.pong = undefined
+    }
   }
 
   /** Up: shown at once, and whatever was about to say offline doesn't. */
@@ -341,6 +370,7 @@ export class CloudLink {
   #drop(code: number): void {
     const open = this.#open
     this.#open = undefined
+    if (open) this.#clearPong(open)
     open?.detach?.close()
     if (open && (open.socket.readyState === WebSocket.OPEN || open.socket.readyState === WebSocket.CONNECTING)) open.socket.close(code)
   }

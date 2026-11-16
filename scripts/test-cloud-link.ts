@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { once } from "node:events"
+import { mock } from "node:test"
 import { setTimeout as sleep } from "node:timers/promises"
 import { WebSocketServer, type WebSocket as ServerSocket } from "ws"
 import { z } from "zod"
@@ -11,6 +12,93 @@ const SILENT_MS = 3_000
 const ANSWER_MS = 1_500
 /** A hang guard: what the probe or a reach opens comes well before the 25 s heartbeat would find a link dead. */
 const OPENS_MS = 20_000
+
+/** A half-open socket can still receive unrelated traffic; only its pong settles a heartbeat. */
+async function heartbeatDeadline(): Promise<void> {
+  const original = globalThis.WebSocket
+  class Socket extends EventTarget {
+    static readonly OPEN = 1
+    static readonly CONNECTING = 0
+    static readonly CLOSED = 3
+    static readonly all: Socket[] = []
+    readyState = Socket.CONNECTING
+    answers = false
+    pings = 0
+    constructor() {
+      super()
+      Socket.all.push(this)
+      queueMicrotask(() => { this.readyState = Socket.OPEN; this.dispatchEvent(new Event("open")) })
+    }
+    send(data: string): void {
+      if (data !== PING) return
+      this.pings += 1
+      if (this.answers) this.dispatchEvent(new MessageEvent("message", { data: PONG }))
+    }
+    close(): void { this.readyState = Socket.CLOSED; this.dispatchEvent(new Event("close")) }
+  }
+  const advance = async (ms: number) => { mock.timers.tick(ms); await Promise.resolve(); await Promise.resolve() }
+  mock.timers.enable({ apis: ["Date", "setTimeout"] })
+  Reflect.set(globalThis, "WebSocket", Socket)
+  let detached = 0
+  const link = new CloudLink({
+    name: "account", url: new URL("http://127.0.0.1/fixture"), token: async () => "fixture",
+    refused: () => {}, removed: () => {}, signedIn: () => true, onState: () => {},
+    attach: () => ({ close: () => { detached += 1 } }),
+    heartbeat: { everyMs: 100, timeoutMs: 50 },
+  })
+  try {
+    link.start()
+    await advance(0)
+    const first = Socket.all[0]!
+    await advance(100)
+    assert.equal(first.pings, 1, "an idle account socket is probed without any outgoing work")
+    first.dispatchEvent(new MessageEvent("message", { data: '{"type":"renewed"}' }))
+    await advance(49)
+    assert.equal(first.readyState, Socket.OPEN, "the pong has its full deadline")
+    await advance(1)
+    assert.equal(first.readyState, Socket.CLOSED, "unrelated traffic cannot hide a missing pong")
+    assert.equal(detached, 1, "the dead attachment ends once")
+    await advance(400)
+    const second = Socket.all[1]!
+    assert.ok(second, "the dead account reconnects without a person or another turn")
+    // A stale socket cannot acknowledge the replacement's heartbeat.
+    await advance(100)
+    first.dispatchEvent(new MessageEvent("message", { data: PONG }))
+    await advance(50)
+    assert.equal(second.readyState, Socket.CLOSED, "an old pong cannot settle a new socket's probe")
+    // This second short-lived connection takes the next backoff step (1 s, with 20% jitter).
+    await advance(1_500)
+    const healthy = Socket.all[2]!
+    healthy.answers = true
+    await advance(100)
+    await advance(50)
+    assert.equal(healthy.readyState, Socket.OPEN, "a timely pong keeps the connection")
+    assert.equal(healthy.pings, 1)
+    link.stop()
+    await advance(5_000)
+    assert.equal(Socket.all.length, 3, "Stop cancels heartbeat and reconnect timers")
+    const runtime = new CloudLink({
+      name: "runtime", url: new URL("http://127.0.0.1/fixture"), token: async () => "fixture",
+      refused: () => {}, removed: () => {}, signedIn: () => true, onState: () => {},
+      attach: () => ({ close() {} }),
+    })
+    try {
+      runtime.start()
+      await advance(0)
+      const socket = Socket.all[3]!
+      await advance(25_000)
+      assert.equal(socket.pings, 1)
+      await advance(5_000)
+      assert.equal(socket.readyState, Socket.OPEN, "runtime pause recovery retains its existing silence policy")
+    } finally { runtime.stop() }
+  } finally {
+    link.stop()
+    Reflect.set(globalThis, "WebSocket", original)
+    mock.timers.reset()
+  }
+}
+
+await heartbeatDeadline()
 
 const server = new WebSocketServer({ host: "127.0.0.1", port: 0 })
 await once(server, "listening")

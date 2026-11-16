@@ -150,7 +150,7 @@ import { SessionIdSchema, ThreadIdSchema, type Actor, type ThreadId } from "../c
 import { continuationsSpent, continueTurnPrompt, crashedChildTurn, CUT_BY, RESTART_CHAIN, STRANDED_AFTER_MS, strandedTurn } from "../contracts/turn-continuation.js"
 import { uniqueName, type KeptAnswer, type KeptMark, type KeptPullWake, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
 import { AgentRuns, lastStep, type ProcessReads, type RunEnd } from "./agent-runs.js"
-import { holdOf, keepsLine } from "../contracts/request-hold.js"
+import { holdOf, keepsLine, nextInLine } from "../contracts/request-hold.js"
 import { foldList } from "./agent-list-fold.js"
 import { AgentWakes, DIGEST_WAITS, firstParagraph, FROM_AGENTS, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
 import { namedUuid } from "./cloud-moves.js"
@@ -4949,7 +4949,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     const signedInWait = !busy && !waiting && held && signInResuming(signInPause(held.requests), held.requests)
       ? `${this.deps.harnessLabel(session.harness)} to resume after sign-in when an execution place opens` : undefined
     // A turn that ended on its own Fins' work or its move is still at work, on that.
-    const waits = resetWait || signedInWait || (!busy && !waiting && last?.status === "completed" ? this.waitsOn(edge, conversation) : undefined)
+    const ownerWait = !busy && !waiting && held && nextInLine(held.requests, session.status === "failed")?.ownerCheck
+      ? "your account" : undefined
+    const waits = ownerWait || resetWait || signedInWait || (!busy && !waiting && last?.status === "completed" ? this.waitsOn(edge, conversation) : undefined)
     const working = busy || waits !== undefined
     const workSince = waits ? held?.activityAt : last && (last.dispatchedAt ?? last.createdAt)
     const thread = this.store()?.thread(edge.child)
@@ -4973,7 +4975,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(working && { working }),
       ...(working && workSince !== undefined && { workSince }),
       ...(working && last && { workInputs: inputsOf(last.id, held?.control?.actions) }),
-      ...(waits ? { step: `Waiting for ${waits}`, awaiting: waits } : working && held && { step: lastStep(held.blocks.slice(-24), session.harness) }),
+      ...(waits ? { step: ownerWait ? "Waiting to hear from your account" : `Waiting for ${waits}`, awaiting: waits } : working && held && { step: lastStep(held.blocks.slice(-24), session.harness) }),
       ...(waiting && { waiting: this.waitingOf(edge, waiting.line, live.pendingAsk(conversation)) }),
       ...(!working && last?.status === "failed" && { ended: { outcome: "failed" as const, ...(last.error && { reason: last.error }), at: turnFailedAt(last, held?.activityAt, edge.createdAt) } }),
       ...(!working && last?.status === "interrupted" && last.interruption?.reason === "stopped" && { ended: { outcome: "stopped" as const, at: last.interruption.at } }),

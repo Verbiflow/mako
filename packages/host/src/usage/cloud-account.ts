@@ -1587,9 +1587,9 @@ export class CloudAccounts {
     return !this.#closed && this.#options.runtime !== undefined && this.#options.links !== false && servesDeviceRuntime(stored.account.entitlements)
   }
 
-  #link(name: string, path: string, attach: CloudLinkOptions["attach"]): CloudLink {
+  #link(kind: "account" | "runtime", path: string, attach: CloudLinkOptions["attach"]): CloudLink {
     const options: CloudLinkOptions = {
-      name,
+      name: kind,
       url: new URL(path, this.#require()),
       token: () => this.#connectionToken(),
       refused: (token) => {
@@ -1599,6 +1599,8 @@ export class CloudAccounts {
       removed: () => void this.#removed(),
       onState: () => this.#reportConnection(),
       signedIn: () => this.#stored !== undefined,
+      // A half-open account must not leave ownership checks waiting on the next turn or a network change.
+      ...(kind === "account" && { heartbeat: { everyMs: 5_000, timeoutMs: 3_000 } }),
     }
     if (this.#options.log) options.log = this.#options.log
     if (this.#options.offlineAfterMs !== undefined) options.offlineAfterMs = this.#options.offlineAfterMs
