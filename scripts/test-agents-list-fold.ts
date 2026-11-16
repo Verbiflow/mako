@@ -9,15 +9,16 @@ import { AgentsWorld } from "./lib/agents-world.ts"
 
 /**
  * An Apex's `agents_list` stays within `LIST_BUDGET_CHARS` however many Fins it ever started: a Fin that ended over a day
- * ago with nothing open is counted, not listed, and past the budget the rest fold by rank, what needs attention last.
- * `scope: all` lists every one. 130 Fins, an Apex's week, were 105 KB a call before.
+ * ago with nothing open is counted, not listed, and past the budget idle and ended rows lose their pull requests, then
+ * fold. A Fin needing attention is never folded, past the budget if it must be. `scope: all` lists every one. 130 Fins,
+ * an Apex's week, were 105 KB a call before.
  */
 const now = Date.UTC(2026, 10, 15, 12)
 const HOUR = 60 * 60_000
 const LINE = "Opened #812 with the four hot-site fixes; each measured inline against once, lint and tests pass."
 const strip = (index: number, state: AgentStrip["state"], movedAgo: number, extra: Partial<AgentStrip> = {}): AgentStrip => ({
   child: `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`, name: `fin-${index}`, harness: "claude", origin: "started", state, title: `fin-${index}`,
-  report: { status: "done", line: LINE, at: now - movedAgo }, waiting: "waiting on #812 checks",
+  report: { status: "done", line: LINE, at: now - movedAgo },
   openPRs: [{ repository: "acme/app", number: 800 + index, url: `https://github.com/acme/app/pull/${800 + index}`, state: "reported" }],
   startedAt: now - movedAgo - HOUR, ...extra,
 })
@@ -40,8 +41,7 @@ const decision = { question: "Merge it?", on: "lead" as const, ask: { kind: "rep
   const names = new Set(listed.children.map((each) => each.name))
   for (const asking of ["fin-105", "fin-106", "fin-107", "fin-100", "fin-104"]) assert.ok(names.has(asking), `${asking} needs attention or is at work, and is listed`)
   for (const index of [0, 50, 99]) assert.ok(!names.has(`fin-${index}`), `fin-${index} ended days ago and is counted, not listed`)
-  assert.equal(listed.children.length + listed.folded!.attention + listed.folded!.idle + listed.folded!.ended, strips.length, "every Fin is listed or counted")
-  assert.equal(listed.folded!.attention, 0, "nothing needing attention folds while there's room")
+  assert.equal(listed.children.length + listed.folded!.idle + listed.folded!.ended, strips.length, "every Fin is listed or counted")
   assert.match(listed.folded!.note, /scope all/)
   // The rows kept are in the list's order.
   const order = listed.children.map((each) => Number(each.name.slice(4)))
@@ -55,16 +55,41 @@ const decision = { question: "Merge it?", on: "lead" as const, ask: { kind: "rep
   const past = strip(2, { kind: "ended", outcome: "failed" }, LIST_ENDED_FOR_MS + 60_000)
   const listed = foldList([inside, past], now)
   assert.deepEqual(listed.children.map((each) => each.name), ["fin-1"])
-  assert.deepEqual({ ...listed.folded, note: undefined }, { attention: 0, idle: 0, ended: 1, note: undefined })
+  assert.deepEqual({ ...listed.folded, note: undefined }, { idle: 0, ended: 1, note: undefined })
   assert.equal(foldList([inside], now).folded, undefined, "nothing folded says nothing")
 }
 
-// More at work than the budget holds: the newest stay, the rest are counted as needing attention.
+// More needing attention than the budget holds: every one is listed, whatever it costs, and the idle and ended rows
+// beside them fold. A long-waiting question is the oldest-moved row, the first a fold by age would take.
 {
-  const strips = Array.from({ length: 60 }, (_, index) => strip(index, { kind: "working", step: "Building" }, index * 60_000))
+  const strips: AgentStrip[] = []
+  for (let index = 0; index < 50; index++) strips.push(strip(index, { kind: "working", step: "Building" }, index * 60_000))
+  strips.push(strip(50, { kind: "ended", outcome: "done" }, 9 * 24 * HOUR, { pendingQuestions: 2 }))
+  strips.push(strip(51, { kind: "idle" }, 8 * 24 * HOUR, { pendingActions: 1, idleFor: 8 * 24 * 3600 }))
+  strips.push(strip(52, { kind: "ended", outcome: "done" }, 7 * 24 * HOUR, { custodyActions: 1 }))
+  strips.push(strip(53, { kind: "ended", outcome: "done", decision }, 6 * 24 * HOUR))
+  strips.push(strip(54, { kind: "blocked", question: "Which branch?", on: "person" }, 5 * 24 * HOUR))
+  strips.push(strip(55, { kind: "idle" }, 4 * 24 * HOUR, { waiting: "waiting on #812 checks", idleFor: 4 * 24 * 3600 }))
+  for (let index = 56; index < 66; index++) strips.push(strip(index, { kind: "idle" }, HOUR, { idleFor: 3600 }))
+  for (let index = 66; index < 76; index++) strips.push(strip(index, { kind: "ended", outcome: "done" }, 2 * HOUR))
   const listed = foldList(strips, now)
-  assert.ok(JSON.stringify(listed).length <= LIST_BUDGET_CHARS)
-  assert.ok(listed.folded!.attention > 0 && listed.children.some((each) => each.name === "fin-0"), "the most recently moved are kept")
+  const names = new Set(listed.children.map((each) => each.name))
+  for (let index = 0; index < 56; index++) assert.ok(names.has(`fin-${index}`), `fin-${index} needs attention and is listed`)
+  assert.ok(JSON.stringify(listed).length > LIST_BUDGET_CHARS, "the answer goes past the budget for them")
+  assert.equal(listed.folded!.idle + listed.folded!.ended, 20, "the idle and ended rows fold")
+  assert.equal(listed.children.length, 56)
+  console.log(`attention: ${listed.children.length} Fins needing attention listed in ${(JSON.stringify(listed).length / 1024).toFixed(1)} KB, past the budget; ${listed.folded!.note}`)
+}
+
+// Just past the budget: idle and ended rows lose their pull requests before any of them folds.
+{
+  const strips: AgentStrip[] = []
+  for (let index = 0; index < 34; index++) strips.push(strip(index, { kind: "ended", outcome: "done" }, HOUR + index * 60_000))
+  const whole = JSON.stringify({ children: strips }).length
+  const listed = foldList(strips, now)
+  assert.ok(whole > LIST_BUDGET_CHARS - 1024, `the rows whole (${whole}) are past the budget`)
+  assert.equal(listed.folded, undefined, "none folds once their pull requests are left out")
+  assert.ok(listed.children.every((each) => each.openPRs === undefined), "their pull requests are agents_read's to give")
 }
 
 // Through the engine: an Apex with 60 Fins that each reported, its default list within the budget, scope all every one.
@@ -83,7 +108,7 @@ const decision = { question: "Merge it?", on: "lead" as const, ask: { kind: "rep
     for (const [index, child] of children.entries()) {
       const conversation = world.store.thread(ThreadIdSchema.parse(child))!.sessions.flatMap((session) => world.store.conversationsOf(session))[0]!
       const answer = await world.agents.report(world.caller(conversation), { status: "done", summary: `${LINE} ${"More words for the report. ".repeat(20)}`, clientKey: `done-${index}`,
-        artifacts: [{ kind: "pull-request", ref: `https://github.com/acme/app/pull/${900 + index}` }], waitingOn: [{ kind: "pull-request", ref: `acme/app#${900 + index}`, until: "checks" }] })
+        artifacts: [{ kind: "pull-request", ref: `https://github.com/acme/app/pull/${900 + index}` }] })
       assert.ok(!("refused" in answer), JSON.stringify(answer))
     }
     await world.settle(40, 60_000, "ignore")
@@ -91,7 +116,7 @@ const decision = { question: "Merge it?", on: "lead" as const, ask: { kind: "rep
     assert.ok("children" in listed && "tree" in listed)
     const size = JSON.stringify(listed).length
     assert.ok(size <= LIST_BUDGET_CHARS, `the default list is ${size} characters`)
-    assert.equal(listed.children.length + (listed.folded ? listed.folded.attention + listed.folded.idle + listed.folded.ended : 0), 60)
+    assert.equal(listed.children.length + (listed.folded ? listed.folded.idle + listed.folded.ended : 0), 60)
     const all = await world.agents.list(apex.caller, { scope: "all" })
     assert.ok("children" in all)
     assert.equal(all.children.length, 60, "scope all lists every Fin")
@@ -103,4 +128,4 @@ const decision = { question: "Merge it?", on: "lead" as const, ask: { kind: "rep
   }
 }
 
-console.log("agents_list: a Fin ended over a day ago is counted, not listed; past the budget the rest fold by rank; scope all lists every one")
+console.log("agents_list: a Fin ended over a day ago is counted, not listed; past the budget idle and ended rows lose their pull requests, then fold; what needs attention is never folded; scope all lists every one")
