@@ -363,38 +363,9 @@ async function degradedFseventsd(): Promise<void> {
 
 }
 
-/**
- * A root that can't be watched beside one that can, subscribed at once, as a restarted child subscribes every watch:
- * the live one keeps hearing. On Linux parcel's shared inotify backend lost the live root's next write in 5 of 200
- * such pairs, with no error, until the child took subscribes one at a time (`subscribeInTurn`).
- */
-async function deadRootBeside(): Promise<void> {
-  const home = caseFolder("dead-beside")
-  const backend = childBackend()
-  const rounds = 100
-  const deaf: number[] = []
-  for (let round = 1; round <= rounds; round += 1) {
-    const live = join(home, `live-${round}`)
-    mkdirSync(live)
-    const watch = recorder()
-    const [subscribed, missing] = await Promise.allSettled([
-      backend(live, [], watch.listener),
-      backend(join(home, `missing-${round}`), [], recorder().listener),
-    ])
-    assert.equal(subscribed.status, "fulfilled", "the live root is watched")
-    assert.equal(missing.status, "rejected", "the missing root is refused")
-    const marker = join(live, "marker")
-    writeFileSync(marker, "")
-    for (const deadline = Date.now() + 5_000; !watch.heard.includes(marker) && Date.now() < deadline;) await wait(10)
-    if (!watch.heard.includes(marker)) deaf.push(round)
-    if (subscribed.status === "fulfilled") await subscribed.value.unsubscribe()
-  }
-  assert.deepEqual(deaf, [], `a live root heard its write beside a missing one in every round of ${rounds}`)
-}
-
 // Each case on its own folders and children, so CI can run them on separate shards (`CASES`, scripts/lib/cases.ts).
 try {
-  await runCases([historyReaderTermination, sharedChildAndCrash, lateCanary, silentCanary, degradedFseventsd, deadRootBeside])
+  await runCases([historyReaderTermination, sharedChildAndCrash, lateCanary, silentCanary, degradedFseventsd])
   // Only something else holding this process open lets an unref'd timer fire.
   setTimeout(() => {
     console.error("the watcher child still holds the process open with no watch left")

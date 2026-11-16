@@ -16,22 +16,6 @@ import { CanaryTestSchema, HISTORY_SCRATCH, HistoryMarkSchema, MAX_EXCLUDED, Wat
  * crash costs a restart of this child, not the app.
  */
 
-/*
- * Every parcel subscribe and unsubscribe starts once the one before it has settled. On Linux they share parcel's
- * inotify backend, and two at once lost a live watch's events with no error: its subscribe resolved, it said ready,
- * and its writes were never heard. A root that couldn't be subscribed beside it (one removed while this child
- * restarted) did so in 5 of 200 rounds; an unsubscribe beside it, in about half. One after another, none.
- */
-let parcelTurn: Promise<unknown> = Promise.resolve()
-function inTurn<Value>(work: () => Promise<Value>): Promise<Value> {
-  const turn = parcelTurn.then(work)
-  parcelTurn = turn.catch(() => {})
-  return turn
-}
-function subscribeInTurn(...args: Parameters<typeof parcel.subscribe>): Promise<AsyncSubscription> {
-  return inTurn(() => parcel.subscribe(...args)).then((subscription) => ({ unsubscribe: () => inTurn(() => subscription.unsubscribe()) }))
-}
-
 const subscriptions = new Map<number, Promise<AsyncSubscription | undefined>>()
 /** Subscriptions still settling: a first inotify crawl holds parcel's lock, so the canary waits. */
 const settling = new Set<number>()
@@ -110,7 +94,8 @@ process.on("message", (raw) => {
     }
     directory.on("error", fail)
     return { unsubscribe: async () => { close() } }
-  }) : subscribeInTurn(asked.root, (error, events) => {
+  }) : parcel
+    .subscribe(asked.root, (error, events) => {
       if (!subscriptions.has(id)) return
       if (error) {
         const reason = dropReason(error)
@@ -307,7 +292,7 @@ async function probe(id: number, beats: number): Promise<void> {
   const lagsMs: number[] = []
   let subscription: AsyncSubscription | undefined
   try {
-    subscription = await subscribeInTurn(folder, (error, events) => {
+    subscription = await parcel.subscribe(folder, (error, events) => {
       if (error) return
       for (const event of events) {
         const hear = heard.get(event.path)
@@ -394,7 +379,8 @@ function startCanary(): void {
   }
   const current: Canary = { folder, heard: 0, misses: 0, waited: 0, lags: [], subscription: Promise.resolve(undefined) }
   canary = current
-  current.subscription = subscribeInTurn(folder, (error, events) => {
+  current.subscription = parcel
+    .subscribe(folder, (error, events) => {
       if (error || !events.length || (test?.deafWhile && existsSync(test.deafWhile))) return
       if (test?.lagMs) setTimeout(() => heard(current), test.lagMs)
       else heard(current)
