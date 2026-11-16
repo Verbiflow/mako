@@ -10,6 +10,7 @@ import type { ProviderProcessProbe } from "../../threads/index.js"
 import type { CodexEngine } from "../codex-app.js"
 import type { HarnessContext } from "../host.js"
 import { fileResumeEvidence } from "../native-continuation.js"
+import { readCodexTurn } from "./turn-outcome.js"
 import { NO_NATIVE_EXCLUSION } from "../../contracts/execution-context.js"
 import { codexLayer } from "./layer.js"
 
@@ -35,6 +36,7 @@ export function createCodexLiveDriver(probe: ProviderProcessProbe, context: Pick
       via: "`thread/resume` on the app-server with the thread ID.",
       wake: "The next message starts a new `codex app-server` that resumes the thread.",
       ...fileResumeEvidence(probe),
+      readTurn: readCodexTurn,
       elsewhere: {
         via: "`thread/resume` names the new folder as its `cwd`; Codex keeps rollouts by thread, and tells the model the new folder.",
         verified: "scripts/test-codex-resume-elsewhere-live.mjs against codex-cli 0.159.3 with a stand-in model.",

@@ -72,6 +72,8 @@ export interface RecordHooks {
   storageFailed(resident: Resident, boundary: FailureBoundary): void
   /** A journal was read in; what it names but doesn't keep is read now (`LiveSources.readBase`). */
   loaded(resident: Resident): void
+  /** Preserve recovery intent before healing a crash's journal; queued inputs still have their original provenance here. */
+  recovered?(previous: LiveSnapshot, snapshot: LiveSnapshot): void
   /** Entries of the conversation were paged: whatever still holds them warm (a window's view) may hold the paged ones instead. */
   paged?(id: string): void
   /** The conversation was let go: what still holds its entries (a window's view) lets them go too. */
@@ -240,6 +242,10 @@ export class LiveRecords {
     return this.unsettled.has(id)
   }
 
+  unsettledIds(): readonly string[] {
+    return [...this.unsettled]
+  }
+
   /** Whether `unload` let this resident go; a write through it is dropped. */
   isReleased(resident: Resident): boolean {
     return this.released.has(resident)
@@ -343,6 +349,7 @@ export class LiveRecords {
       return this.reload(journal, previous, unloaded, by)
     }
     const snapshot = afterRestart(previous, this.dependencies.root, (provider) => this.dependencies.driver(provider)?.backgroundStop.kind === "ends-with-turn")
+    this.hooks.recovered?.(previous, snapshot)
     journal.commit(snapshot, previous)
     const resident = residentOf(snapshot, journal, { usedAt: this.dependencies.now?.() ?? Date.now(), loadedBy: by })
     this.add(resident)
