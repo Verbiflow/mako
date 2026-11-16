@@ -5,14 +5,28 @@ import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { testScratch } from "./lib/test-scratch.mjs"
 
-// A DOM commit can grow the last turn before the virtualizer's ResizeObserver has
-// measured it and followed the end. Sample after that layout has painted, rather
-// than comparing a pre-paint upright offset with a painted sideways one.
-const newestGap = `() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => {
+// A commit can land even between two frame callbacks, before that frame's ResizeObserver delivery. Require the
+// geometry itself to settle across frames; elapsed frames alone don't prove the row was measured and followed.
+const newestGap = `() => new Promise((resolve, reject) => {
   const node = document.querySelector('[data-transcript-viewport]');
-  const turns = node.querySelectorAll('[data-exchange]');
-  resolve(Math.round(node.getBoundingClientRect().bottom - turns[turns.length - 1].getBoundingClientRect().bottom));
-})))`
+  let previous, frames = 0;
+  const sample = () => {
+    const turns = node.querySelectorAll('[data-exchange]');
+    const last = turns[turns.length - 1];
+    const viewport = node.getBoundingClientRect(), turn = last.getBoundingClientRect();
+    const geometry = [node.scrollTop, node.scrollHeight, node.clientHeight, viewport.bottom, turn.bottom, turn.height,
+      node.querySelector('[data-virtual-transcript]')?.getBoundingClientRect().height ?? 0,
+      node.querySelector('[data-steady-end]')?.getBoundingClientRect().height ?? 0, last.textContent.length];
+    if (previous && geometry.every((value, index) => Math.abs(value - previous[index]) < 0.5)) {
+      resolve(Math.round(viewport.bottom - turn.bottom));
+      return;
+    }
+    previous = geometry;
+    if (++frames >= 60) { reject(new Error('Newest turn geometry did not settle: ' + JSON.stringify(geometry))); return; }
+    requestAnimationFrame(sample);
+  };
+  requestAnimationFrame(sample);
+})`
 
 /**
  * Scrolling a transcript while its answer streams, by trusted touch at an iPhone's size on the phone's live Session
@@ -587,6 +601,15 @@ async function checkScroll() {
       window.scrollCheck.append('\\n\\nA later answer arrives after the stream stopped. This is an already admitted batch finishing its rendering.');
     })`)
     assert.ok(Math.abs(lateGap - uprightGap) <= 2, `a late batch at the end left ${lateGap} px below the newest turn, before ${uprightGap} px`)
+    assert.ok(await fromEnd() < 2, "the late batch stays pinned to the scroll end")
+    // A batch may commit between the reader's frame callbacks. Two elapsed frames alone don't mean its layout
+    // was measured: the virtualizer's ResizeObserver still runs later in that same frame, before paint.
+    const commitGap = await evaluate(`(() => {
+      requestAnimationFrame(() => requestAnimationFrame(() => window.scrollCheck.finish('\\n\\nA final admitted batch commits between frame callbacks. Its new paragraph grows the last turn before the virtualizer measures that row.')));
+      return (${newestGap})();
+    })()`)
+    assert.ok(Math.abs(commitGap - uprightGap) <= 2, `a commit between frames left ${commitGap} px below the newest turn, before ${uprightGap} px`)
+    assert.ok(await fromEnd() < 2, "a commit between frames stays pinned to the scroll end")
     await turn(true)
     const sidewaysGap = await belowNewest()
     await capture("turned-sideways-iphone-dark.png")
