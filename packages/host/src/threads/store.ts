@@ -1736,6 +1736,12 @@ export class ThreadStore {
     return this.sql("SELECT record FROM turn_waits WHERE state = 'armed' ORDER BY at, id").all().map(keptTurnWait)
   }
 
+  /** A conversation's waits in every state, oldest first: what a move reads to tell the agent which of them it ended. */
+  turnWaitsOf(conversation: string): TurnWait[] {
+    this.syncVersion()
+    return this.sql("SELECT record FROM turn_waits WHERE conversation = ? ORDER BY at, id").all(conversation).map(keptTurnWait)
+  }
+
   /** The wait a conversation has armed, if it has one. */
   armedTurnWaitOf(conversation: string): TurnWait | undefined {
     this.syncVersion()
@@ -1795,6 +1801,22 @@ export class ThreadStore {
       if (wait.cancelled || wait.delivered) return { wait }
       if (wait.state === "armed") return { wait: this.putTurnWait({ ...wait, state: "cancelled", cancelled: { at, by } }), ended: "cancelled" }
       return { wait: this.putTurnWait({ ...wait, cancelled: { at, by } }), ended: "retired" }
+    })
+  }
+
+  /**
+   * Arms again a wait a move ended (`cancelled.by: move`) that never fired, when the move didn't happen: the Thread
+   * stayed, so what it waited on still matters here. Any other wait is left as it is (`rearmed: false`).
+   */
+  rearmTurnWait(id: string): { wait: TurnWait | undefined; rearmed: boolean } {
+    return this.write(() => {
+      const held = this.sql("SELECT record FROM turn_waits WHERE id = ?").get(id)
+      if (!held) return { wait: undefined, rearmed: false }
+      const wait = keptTurnWait(held)
+      if (wait.state !== "cancelled" || wait.cancelled?.by !== "move" || wait.fired) return { wait, rearmed: false }
+      const rearmed: TurnWait = { ...wait, state: "armed" }
+      delete rearmed.cancelled
+      return { wait: this.putTurnWait(rearmed), rearmed: true }
     })
   }
 

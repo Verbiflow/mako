@@ -1155,6 +1155,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   const opened = await openConversations({
     elsewhere: (id) => late.cloudConversations?.has(id) ?? false,
+    watchCheck: (conversation, tier, onEnd) => late.movers?.appTools?.watchCheck(conversation, tier, onEnd) ?? Promise.resolve(false),
     ...(owner.start && { start: owner.start }),
     stopping: () => shell.closing(),
     streams,
@@ -1399,6 +1400,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       continueTurn: (conversationId, input) => void live.continueTurn(conversationId, input),
       waitingPrompts: (conversationId) => live.waitingPrompts(conversationId),
       carried: (conversationId, requestIds, to) => live.carried(conversationId, requestIds, to),
+      waitsDeparting: (conversationId, since) => late.conversations?.agents?.waitsDeparting(conversationId, since) ?? [],
+      waitsStayed: (conversationId, since) => late.conversations?.agents?.waitsStayed(conversationId, since),
     },
     step: (conversationId, move, step) => {
       // Every device's list says the move from its first step; its window and a device watching it hear each step.

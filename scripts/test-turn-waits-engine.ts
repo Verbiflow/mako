@@ -32,6 +32,9 @@ try {
   let releaseSlow: (() => void) | undefined
   const slowHeld = new Promise<void>((resolve) => { releaseSlow = resolve })
   let readGate: Promise<void> | undefined
+  // An app check as the environment tools would hear it: running or not, and its end said when the test says so.
+  let checkRunning = false
+  const checkEnds: Array<(words: string) => void> = []
   const script: Script = async (turn) => {
     const name = fins.get(turn.conversation)
     if (!name) {
@@ -48,7 +51,11 @@ try {
     }
     return "ok"
   }
-  const world = new AgentsWorld({ root, script, now, readPull: async (target) => {
+  const world = new AgentsWorld({ root, script, now, watchCheck: async (_conversation, _tier, onEnd) => {
+    if (!checkRunning) return false
+    checkEnds.push(onEnd)
+    return true
+  }, readPull: async (target) => {
     if (target.number === 372) {
       await readGate
       return { state: "open", url: "https://git.example.com/acme/app/pull/372", author: "fin-bot", checks: [], reviews: [] }
@@ -147,6 +154,54 @@ try {
   assert.equal(world.store.armedTurnWaitOf(apex.conversation), undefined, "nothing armed that could never end")
   releaseSlow!()
   readGate = undefined
+
+  // An app check: none running is never; one running is heard as it ends, and a restart watches it again.
+  const noCheck = await world.agents.turnWait(apex.caller, { description: "Waiting for the quick check", on: [{ check: "quick" }], clientKey: "no-check" })
+  assert.ok("refused" in noCheck && noCheck.refused === "never", JSON.stringify(noCheck))
+  checkRunning = true
+  armed(await world.agents.turnWait(apex.caller, { description: "Waiting for the quick check", on: [{ check: "quick" }], clientKey: "check" }))
+  assert.equal(checkEnds.length, 1)
+  await world.restart()
+  assert.equal(checkEnds.length, 2, "a restarted host watches the armed wait's check again")
+  checkEnds.at(-1)!("the quick check passed")
+  await world.settle(300)
+  const checked = apexTexts.find((text) => text.startsWith("Mako: the wait \"Waiting for the quick check\" is over."))
+  assert.equal(checked, "Mako: the wait \"Waiting for the quick check\" is over.\n- the quick check: the quick check passed")
+  checkRunning = false
+  // One whose check ended while the host was stopped is met at the start, saying so.
+  checkRunning = true
+  armed(await world.agents.turnWait(apex.caller, { description: "Waiting for the full check", on: [{ check: "full" }], clientKey: "full" }))
+  checkRunning = false
+  await world.restart()
+  await world.settle(300)
+  assert.ok(apexTexts.some((text) => text.includes("- the full check: the full check ended while Mako was stopped")), JSON.stringify(apexTexts.slice(-1)))
+
+  // A move ends the wait, and its note says to arm it again there; asked again, the handover says the same.
+  armed(await world.agents.turnWait(apex.caller, { description: "Waiting overnight", seconds: 36_000, clientKey: "move" }))
+  const since = now()
+  const first = world.agents.waitsDeparting(apex.conversation, since)
+  assert.deepEqual(first, ["Mako: your wait \"Waiting overnight\" ended when this Thread moved here. If you still need it, call wait again."])
+  assert.equal(world.store.armedTurnWaitOf(apex.conversation), undefined)
+  assert.deepEqual(world.agents.waitsDeparting(apex.conversation, since), first, "a handover asked again tells the same")
+  // The move refused after its hand-over: the Thread stayed, so the wait is armed again here, and fires as it would have.
+  world.agents.waitsStayed(apex.conversation, since)
+  assert.equal(world.store.armedTurnWaitOf(apex.conversation)?.description, "Waiting overnight", "armed again")
+  world.agents.waitsStayed(apex.conversation, since)
+  assert.equal(world.store.turnWaitsOf(apex.conversation).filter((wait) => wait.state === "armed").length, 1, "once")
+  // A check it waited on is watched again; one that ended meanwhile meets the wait, saying so.
+  checkRunning = true
+  armed(await world.agents.turnWait(apex.caller, { description: "Waiting for the moved check", on: [{ check: "quick" }], clientKey: "move-check" }))
+  const checkSince = now()
+  world.agents.waitsDeparting(apex.conversation, checkSince)
+  const watched = checkEnds.length
+  world.agents.waitsStayed(apex.conversation, checkSince)
+  await world.settle(50)
+  assert.equal(checkEnds.length, watched + 1, "its check is watched again")
+  world.agents.waitsDeparting(apex.conversation, checkSince)
+  checkRunning = false
+  world.agents.waitsStayed(apex.conversation, checkSince)
+  await world.settle(300)
+  assert.ok(apexTexts.some((text) => text.includes("- the quick check: the quick check ended while this Thread was moving")), JSON.stringify(apexTexts.slice(-1)))
 
   // Stop and archive end the wait without waking anyone.
   armed(await world.agents.turnWait(apex.caller, { description: "Waiting an hour", seconds: 3600, clientKey: "stop" }))

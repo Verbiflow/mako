@@ -140,6 +140,18 @@ export function turnWaitNote(wait: TurnWait, why: "met" | "time", at: number): s
   return lines.join("\n")
 }
 
+const NOTE_STARTS = ["the wait \"", "stopped waiting for \"", "the time you waited for has come", "your wait \""]
+
+/** A turn wait's note read back from its words, as a saved transcript keeps it: its first line, and the rest. */
+export function turnWaitWords(text: string): { line: string; detail?: string } | undefined {
+  const trimmed = text.trim()
+  if (!trimmed.startsWith(NOTE_HEAD)) return undefined
+  const [first = "", ...rest] = trimmed.slice(NOTE_HEAD.length).split("\n")
+  if (!NOTE_STARTS.some((start) => first.startsWith(start))) return undefined
+  const detail = rest.join("\n").trim()
+  return { line: first.charAt(0).toUpperCase() + first.slice(1), ...(detail && { detail }) }
+}
+
 /** The note an agent gets on arrival when its Thread moved with a wait armed: the move cancelled it. */
 export function turnWaitMovedNote(wait: Pick<TurnWait, "description">): string {
   return `${NOTE_HEAD}your wait "${wait.description}" ended when this Thread moved here. If you still need it, call wait again.`

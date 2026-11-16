@@ -24,6 +24,8 @@ export interface TurnWaitStore {
   cancelTurnWait(id: string, at: number, by: TurnWaitCancel): { wait: TurnWait | undefined; ended?: "cancelled" | "retired" }
   undeliveredTurnWaits(): TurnWait[]
   turnWaitOfRequest(request: string): TurnWait | undefined
+  turnWaitsOf?(conversation: string): TurnWait[]
+  rearmTurnWait?(id: string): { wait: TurnWait | undefined; rearmed: boolean }
 }
 
 export interface TurnWaitsDeps {
@@ -164,13 +166,13 @@ export class TurnWaits {
    * Every armed wait naming an item `matches` takes it as met: a Fin's result or end, a pull request's outcome. Answers
    * how many it met.
    */
-  metWhere(matches: (item: TurnWaitItem) => boolean, words: string): number {
+  metWhere(matches: (item: TurnWaitItem, wait: TurnWait) => boolean, words: string): number {
     const store = this.deps.store()
     if (!store || this.stopped) return 0
     let count = 0
     for (const wait of store.armedTurnWaits())
       for (const item of wait.items)
-        if (matches(item)) {
+        if (matches(item, wait)) {
           this.met(wait.id, item, words)
           count += 1
         }
@@ -182,6 +184,36 @@ export class TurnWaits {
     const store = this.deps.store()
     if (!store || this.stopped) return
     for (const wait of store.undeliveredTurnWaits()) if (wait.conversation === conversation) void this.send(wait)
+  }
+
+  /**
+   * The conversation's Thread leaves this host: its waits end (`move`), and what a move ended since `since` is answered,
+   * so a move's handover asked again tells the agent the same, once (the request it goes as is the move's).
+   */
+  departing(conversation: string, since: number): TurnWait[] {
+    this.cancelOf(conversation, "move")
+    return (this.deps.store()?.turnWaitsOf?.(conversation) ?? []).filter((wait) => wait.cancelled?.by === "move" && wait.cancelled.at >= since)
+  }
+
+  /**
+   * The move that ended the conversation's waits (`departing`, since `since`) didn't happen, so its Thread stayed: each
+   * goes back to armed, as it was, and is timed again. Answers the waits it armed again, for their checks to be watched.
+   */
+  stayed(conversation: string, since: number): TurnWait[] {
+    const store = this.deps.store()
+    if (!store?.turnWaitsOf || !store.rearmTurnWait || this.stopped) return []
+    const rearmed = store.turnWaitsOf(conversation)
+      .filter((wait) => wait.cancelled?.by === "move" && wait.cancelled.at >= since)
+      .flatMap((wait) => {
+        const back = store.rearmTurnWait!(wait.id)
+        return back.rearmed && back.wait ? [back.wait] : []
+      })
+    if (rearmed.length) {
+      hostLog("waits", "armed again: the move didn't happen", { conversation, waits: rearmed.map((wait) => wait.id).join(" ") })
+      this.deps.changed?.(conversation)
+      this.check()
+    }
+    return rearmed
   }
 
   /** At a note's handoff: it goes only while its wait wasn't cancelled since it fired. Any other request goes. */

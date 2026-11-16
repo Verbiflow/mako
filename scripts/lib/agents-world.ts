@@ -228,6 +228,8 @@ export interface WorldOptions {
   readingAccounts?: (harness: string, all: boolean) => Promise<void> | void
   /** A pull request as GitHub would say it stands (`AgentsDeps.readPull`): a stub, never the network. */
   readPull?: AgentsDeps["readPull"]
+  /** A conversation's app check under way, heard as it ends (`AgentsDeps.watchCheck`): a stub, never a real check. */
+  watchCheck?: AgentsDeps["watchCheck"]
   /** How this host reaches the person's other devices (`AgentsDeps.away`): with it, a Fin can be placed on one. */
   away?: AgentsDeps["away"]
   /** The Git remote a folder is a checkout of (`AgentsDeps.remoteOf`). */
@@ -403,6 +405,7 @@ export class AgentsWorld {
       ...(this.options.later && { later: this.options.later }),
       ...(this.options.heldPulls && { heldPulls: this.options.heldPulls }),
       ...(this.options.readPull && { readPull: this.options.readPull }),
+      ...(this.options.watchCheck && { watchCheck: this.options.watchCheck }),
       ...(this.options.now && { now: this.options.now }),
       ...(this.options.away && { away: this.options.away }),
       ...(this.options.remoteOf && { remoteOf: this.options.remoteOf }),

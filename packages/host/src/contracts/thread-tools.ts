@@ -115,8 +115,8 @@ export type AutomationActResult =
   | { outcome: "asked"; ask: string; next: string }
   | { refused: "unavailable" | "no-thread" | "no-automation" | "failed"; why: string }
 
-/** One thing a turn waits on, as the agent names it: a Fin of this Thread, or a pull request until checks, review or merge. */
-export type TurnWaitOn = { fin: string } | { pull: string; until?: "checks" | "review" | "merge" }
+/** One thing a turn waits on, as the agent names it: a Fin of this Thread, a pull request until checks, review or merge, or this Thread's app check under way. */
+export type TurnWaitOn = { fin: string } | { pull: string; until?: "checks" | "review" | "merge" } | { check: "quick" | "full"; target?: string }
 
 /**
  * A turn's wait (`contracts/turn-waits.ts`): start one, cancel it, or read it. A start names what it waits on, a time
@@ -254,14 +254,14 @@ export const WAIT_TOOL: ThreadToolDefinition = {
     name: "wait",
     description: [
       "Wait for your Fins, a pull request or a time, then end your turn: Mako wakes this Thread with a note once it's over, so never poll or sleep.",
-      "Name what you wait on in `on` ({fin: name} for its next result or end; {pull: \"owner/name#412\", until: checks|review|merge}), a time (`seconds`, or `at` as an ISO time), or both, the time then the longest it waits; up to 7 days.",
+      "Name what you wait on in `on` ({fin: name} for its next result or end; {pull: \"owner/name#412\", until: checks|review|merge}; {check: quick|full} for this Thread's app check under way, which app_check left running), a time (`seconds`, or `at` as an ISO time), or both, the time then the longest it waits; up to 7 days.",
       "`returnWhen: all` wakes on the last instead of the first. One wait per Thread: a new one replaces the last. A wait that could never end is refused.",
       "action cancel ends it; list says what it waits on. agents_wait is for a result you need within 30 seconds.",
     ].join(" "),
     fields: {
       action: "start (the default), cancel or list.",
       description: "start: 5 to 10 words the person reads while it waits, \"Waiting for CI on #412\".",
-      on: "start: what to wait on, up to 16: {fin} or {pull, until}.",
+      on: "start: what to wait on, up to 16: {fin}, {pull, until} or {check}.",
       seconds: "start: how long to wait, at most 604800 (7 days); with on, the longest.",
       at: "start: an ISO time to wake at, within 7 days; not with seconds.",
       returnWhen: "start: any (the default) or all.",

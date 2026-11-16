@@ -154,6 +154,8 @@ export interface ConversationsDeps {
   threads: Threads
   harnesses: Harnesses
   workspaces: Workspaces
+  /** A conversation's app check under way, heard as it ends (`EnvironmentTools.watchCheck`, built after the conversations). */
+  watchCheck?(conversation: string, tier: "quick" | "full", onEnd: (words: string) => void): Promise<boolean>
   telemetry: HostTelemetry
   /** This host's start on its data root, which its epoch carries (`takeHostStart`). */
   start?: import("../base/host-start.js").HostStart
@@ -422,6 +424,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       capacity: new MacCapacity(),
       heldPulls: (repoRoot, branch) => workspaces.worktrees?.heldPulls(repoRoot, branch) ?? [],
       readPull: (target) => readPull(target, undefined, requiredChecks),
+      watchCheck: (conversation, tier, onEnd) => deps.watchCheck?.(conversation, tier, onEnd) ?? Promise.resolve(false),
       ...(away && { away }),
       remoteOf: (cwd) => deps.git.output(cwd, ["remote", "get-url", "origin"]).then((text) => text.trim() || undefined, () => undefined),
       checkoutOf: (remote) => checkouts.find(remote),
@@ -737,12 +740,14 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     if (!continued) throw new Error("The selected native session is unavailable")
     return continued
   })
-  methods.handle("mako:live-prompt", async (id: string, requestId: string, text: string, attachments?: PromptAttachment[], tuning?: SessionSettings) => {
+  // `options.actor`: Mako's own words a move carries (a wait the move ended), drawn and read as Mako's, never the
+  // person's. A host that answers `mako:move-ready` with `promptActor` takes it; the device sends none to one that doesn't.
+  methods.handle("mako:live-prompt", async (id: string, requestId: string, text: string, attachments?: PromptAttachment[], tuning?: SessionSettings, options?: { actor?: { kind: "service"; name: "turn-wait" } }) => {
     const session = live.session(id)
     if (!session) throw new Error("This conversation is no longer available")
     deps.used?.(session.harness, tuning)
     return live.admitInOrder(id, profiles.resolveLaunch(session.harness, session.cwd, tuning),
-      (selected) => live.submit(id, requestId, text, attachments, selected))
+      (selected) => live.submit(id, requestId, text, attachments, selected, undefined, undefined, options?.actor))
   })
   // A failed message sent again at a time: a usage limit's reset.
   methods.handle("mako:live-hold-until", (id: string, requestId: string, input: { after: string; at: number }) =>
