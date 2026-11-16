@@ -8,6 +8,8 @@ import {
   ReplyEnvelopeSchema,
 } from "./envelope.js"
 import {
+  type EphemeralFrame,
+  EphemeralFrameEnvelopeSchema,
   type EventFrame,
   EventFrameEnvelopeSchema,
   StreamIdSchema,
@@ -72,6 +74,13 @@ export const GatewayClientFrameEnvelopeSchema = z.discriminatedUnion("type", [
     .object({ type: z.literal("event"), event: EventFrameEnvelopeSchema })
     .strict(),
   /**
+   * A watched conversation's passing state (`EPHEMERAL_LIVE_VERSION`), sent only on a connection that said it reads
+   * such frames (`EPHEMERAL_PARAM`): an older client closes on a frame it doesn't know.
+   */
+  z
+    .object({ type: z.literal("ephemeral"), event: EphemeralFrameEnvelopeSchema })
+    .strict(),
+  /**
    * A frame the gateway couldn't read, or a subscription it won't serve, and why. A call it couldn't
    * read is answered as a `reply` with its id where it has one.
    */
@@ -128,9 +137,10 @@ export type ClientFrame =
   | { type: "call"; operation: Operation }
   | (Extract<ClientFrameEnvelope, { type: "media-watch" }> & { request: Payload })
 export type GatewayClientFrame =
-  | Exclude<GatewayClientFrameEnvelope, { type: "reply" | "event" }>
+  | Exclude<GatewayClientFrameEnvelope, { type: "reply" | "event" | "ephemeral" }>
   | { type: "reply"; reply: Reply }
   | { type: "event"; event: EventFrame }
+  | { type: "ephemeral"; event: EphemeralFrame }
 
 /**
  * What a gateway answers to client text it couldn't read: a call is answered as a `bad-request` reply

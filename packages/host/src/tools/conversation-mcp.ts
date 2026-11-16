@@ -1,6 +1,7 @@
 import { NATIVE_OVERRIDE } from "../contracts/native-calls.js"
 import type { ControlAgentOperation } from "@mako/control-runtime/mcp"
 import type { JsonValue } from "@mako/control"
+import type { ToolSteps } from "../contracts/tool-steps.js"
 import { randomBytes } from "node:crypto"
 import { createServer, type IncomingMessage } from "node:http"
 import { z } from "zod"
@@ -119,9 +120,11 @@ async function readBody(request: IncomingMessage, maxBytes: number) {
  */
 export async function startConversationMcp(
   owner: AgentOwner,
-  control: (bindingId: string, operation: ControlAgentOperation, signal: AbortSignal) => Promise<JsonValue>,
+  control: (bindingId: string, operation: ControlAgentOperation, signal: AbortSignal, steps?: (steps: ToolSteps) => void) => Promise<JsonValue>,
   makoTools: readonly MakoTools[] = [],
-  gate?: CallGate
+  gate?: CallGate,
+  /** Hears a conversation's running js call's steps as they change, and `null` once it answered. */
+  stepsOf?: (conversationId: string, steps: ToolSteps | null) => void
 ) {
   const scopes = new Map<string, Scope>()
   const retire = (token: string, scope: Scope, reason: "revoked" | "server-closed") => {
@@ -183,9 +186,15 @@ export async function startConversationMcp(
       const disconnected = new AbortController()
       if (controlRequestId !== undefined) scope.controlRequests.set(controlRequestId, disconnected)
       const mcp = route === "computer"
-        ? createControlMcpServer((operation, signal) => {
+        ? createControlMcpServer(async (operation, signal) => {
             authorized()
-            return control(scope.bindingId, operation, AbortSignal.any([signal, disconnected.signal]))
+            const stepped = stepsOf && operation.method === "js" ? stepsOf : undefined
+            try {
+              return await control(scope.bindingId, operation, AbortSignal.any([signal, disconnected.signal]),
+                stepped && ((steps) => stepped(scope.conversationId, steps)))
+            } finally {
+              stepped?.(scope.conversationId, null)
+            }
           })
         : new McpServer({ name: "mako", version: "1.0.0" }, { instructions: MAKO_INSTRUCTIONS })
       if (route === "mako") for (const register of makoTools) register(mcp, authorized)

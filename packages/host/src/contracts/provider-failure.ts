@@ -1,5 +1,6 @@
 import type { ProviderFailureEvidence } from "./provider-failure-evidence.js"
 import type { FailureBoundary } from "./error-message.js"
+import { nativeVerificationPending } from "./native-verification.js"
 
 /**
  * What a failed turn means for the person reading it.
@@ -212,7 +213,9 @@ export function classifyProviderFailure(
   evidence?: ProviderFailureEvidence
 ): ProviderFailure {
   const text = failureText(message)
-  const kind = evidence && evidence.kind !== "unknown" ? evidence.kind : (usageLimitWords(text) ? "rate-limited" : rules.find((rule) => rule.match.test(text))?.kind ?? "unknown")
+  const kind = evidence && evidence.kind !== "unknown" ? evidence.kind
+    : nativeVerificationPending(text) ? "launch-stalled"
+      : (usageLimitWords(text) ? "rate-limited" : rules.find((rule) => rule.match.test(text))?.kind ?? "unknown")
   return describeProviderFailure(kind, providerLabel)
 }
 

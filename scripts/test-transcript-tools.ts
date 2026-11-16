@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { pairTools, foldTools } from "../src/lib/tools.ts"
-import { isInterruptedNote, notesBesideStop, promptLabel, responseSections, toExchanges } from "../src/lib/exchanges.ts"
+import { isInterruptedNote, notesBesideFailure, notesBesideStop, promptLabel, responseSections, toExchanges } from "../src/lib/exchanges.ts"
+import { turnFailedEvent } from "@mako/sessions/events"
 import { textOf } from "../src/lib/format.ts"
 import { entriesToMessages } from "../src/lib/entry-messages.ts"
 import type { Entry } from "@mako/sessions/entries"
@@ -355,7 +356,11 @@ assert.deepEqual(
   ["steer", "summary"],
   "With a Stopped footer, the provider's marker above or below the answer goes; a marker between parts of it stays"
 )
-console.log("Compaction and other notes render where they happened in a long answer; a stopped turn says so once")
+const failedNote = { message: { id: "failed", role: "system" as const, blocks: [{ type: "text" as const, text: "Turn failed · 529 Overloaded" }], note: turnFailedEvent("529 Overloaded") }, after: 1 }
+const besideFailure = [note("summary", "Context compacted", 0), failedNote]
+assert.deepEqual(notesBesideFailure(besideFailure, true).map((kept) => kept.message.id), ["summary"], "a turn on its failure row drops the provider's Turn failed marker, which says it again in raw words")
+assert.equal(notesBesideFailure(besideFailure, false), besideFailure, "without a failure row it's the turn's only word of it, and stays (the same array)")
+console.log("Compaction and other notes render where they happened in a long answer; a stopped turn says so once; a failed one once")
 
 // A turn the provider started itself opens its own exchange, headed by the
 // cause it reported, whether read from its native file or streamed live.

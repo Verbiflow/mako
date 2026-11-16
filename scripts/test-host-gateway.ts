@@ -26,7 +26,7 @@ import { invokeWithRecovery, type RecoveryLink } from "@mako/host/contracts/host
 import { startWebHost, type HostInvoke } from "@mako/host/transport/server"
 
 /** Strings tried in order for a string slot, until the slot's schema takes one. */
-const STRING_SAMPLES = ["text", "/text", "/tmp/text", "0".repeat(64)]
+const STRING_SAMPLES = ["text", "/text", "/tmp/text", "0".repeat(64), "3f6c2a1e-8b4d-4c7a-9e21-5d0b7f9a6c13"]
 /** Numbers tried in order for a number slot. */
 const NUMBER_SAMPLES = [7, 1, 0]
 

@@ -13,6 +13,7 @@ import { z } from "zod"
 import { FIXTURE_REFUSED_CODE } from "./fixture-desk-policy.js"
 import { hostChannels, type HostChannel } from "./host-call-inputs.js"
 import { gatewayCalls } from "./client-calls.js"
+import { MACHINE_REFUSED, runtimeAllows } from "./gateway-allowed.js"
 import { hostCallReplay, type HostCallReplay } from "./host-call-policy.js"
 import { HOST_CLOSED_CODE, HOST_RESTARTING_CODE } from "./host-connection.js"
 import { RuntimeArgsSchema, decodeRuntimeArgs, runtimeArgs, runtimeFailureError, type RuntimeFailure } from "./runtime.js"
@@ -94,6 +95,9 @@ export function fromHostOperation(operation: Operation): HostCallRequest | HostC
     return { kind: "refused", problem: problem("forbidden", GATEWAY_REFUSED, operation.correlationId, "not-applied", { status: 403, detail: `${GATEWAY_REFUSED} (${operation.op})` }) }
   if (!known)
     return { kind: "refused", problem: problem("not-found", "This host has no such call", operation.correlationId, "not-applied", { status: 404, detail: operation.op }) }
+  // A machine's call that is the person's: refused unrun, however the machine words its payload (`MACHINE_ALLOWED`).
+  if (operation.actor.kind === "runtime" && !runtimeAllows(known.channel, operation.actor.runtimeId))
+    return { kind: "refused", problem: problem("forbidden", MACHINE_REFUSED, operation.correlationId, "not-applied", { status: 403, detail: `${MACHINE_REFUSED} (${operation.op})` }) }
   const malformed = (detail: string): HostCallRefusal =>
     ({ kind: "refused", problem: problem("bad-request", "A host call's input is its arguments", operation.correlationId, "not-applied", { status: 400, detail }) })
   let decoded: unknown

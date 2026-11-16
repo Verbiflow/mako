@@ -19,6 +19,7 @@ import { acpToolFields } from "../packages/sessions/src/acp-tool-details.ts"
 import { MEDIA_META as COMPUTER_MEDIA_META, controlAgent } from "../packages/control-runtime/src/control-agent.ts"
 import { producedMedia } from "../packages/control/src/program/runtime.ts"
 import { registerShowTool, TurnMedia } from "../packages/host/src/media/index.ts"
+import { embeddedCheck, keptEmbed, markdownMedia } from "../src/lib/transcript-media.ts"
 import { entriesToMessages } from "../src/lib/entry-messages.ts"
 import { exchangeMedia, responseSections, toExchanges } from "../src/lib/exchanges.ts"
 import { changedMedia, placeMadeMedia, proseMediaSpellings, shelfMedia } from "../src/lib/media-shelf.ts"
@@ -346,6 +347,35 @@ const [placedFold] = turnFolds(placedSections, 1)
 assert.deepEqual([placedFold?.start, placedFold?.end, placedFold?.kept], [0, 3, [1]], "a settled turn folds its work, and what it made stays in view with its answer")
 const plain = responseSections(exchange.response)
 assert.equal(placeMadeMedia(plain, []), plain, "a turn that made nothing keeps its sections as they are")
+
+// An answer's own embed (`![](/tmp/shot.png)`) is kept as the answer saw it, and still draws once /tmp loses it.
+{
+  const media = new TurnMedia(join(root, "answer-store"))
+  const shot = join(shots, "embedded.png")
+  await writeFile(shot, PNG)
+  const landed = Math.round((await made(shot)).mtimeMs) + 1_000
+  const [embedded] = await media.confirm([{ callId: "answer:m1", path: shot, evidence: "embedded", endedAt: landed }])
+  assert.ok(embedded?.kind === "kept" && embedded.media.file !== shot && embedded.media.digest, "kept as Mako's copy, by its content")
+  await rm(shot)
+  const [again] = await media.confirm([{ callId: "answer:m1", path: shot, evidence: "embedded", endedAt: landed }])
+  assert.ok(again?.kind === "kept" && again.media.file === (embedded?.kind === "kept" ? embedded.media.file : ""), "the file gone, the answer still has its copy")
+  const drawn = keptEmbed(markdownMedia(shot), again)
+  assert.ok(drawn.source?.kind === "file" && drawn.source.path !== shot && drawn.source.originalPath === shot, "the embed draws the copy, naming where it was")
+  // One the answer never saw as it is now (changed since it landed) isn't kept: the embed reads the path as before.
+  const edited = join(shots, "edited.png")
+  await writeFile(edited, PNG)
+  await utimes(edited, new Date(), new Date(Date.now() + 120_000))
+  const [changed] = await media.confirm([{ callId: "answer:m2", path: edited, evidence: "embedded", endedAt: Date.now() - 60_000 }])
+  assert.equal(changed?.kind, "dropped")
+  const unchanged = keptEmbed(markdownMedia(edited), changed).source
+  assert.equal(unchanged?.kind === "file" ? unchanged.path : undefined, edited)
+  // Only a landed answer's absolute media is asked about.
+  assert.equal(embeddedCheck(markdownMedia(shot), undefined), undefined, "a streaming answer keeps nothing yet")
+  assert.equal(embeddedCheck(markdownMedia("./out/shot.png"), { callId: "answer:m3", at: 1 }), undefined, "a relative path isn't the host's to place")
+  assert.equal(embeddedCheck(markdownMedia("/tmp/notes.txt"), { callId: "answer:m3", at: 1 }), undefined, "text isn't media")
+  assert.deepEqual(embeddedCheck(markdownMedia(shot), { callId: "answer:m3", at: 5.4 }), { callId: "answer:m3", path: shot, evidence: "embedded", endedAt: 5 })
+  media.close()
+}
 
 // Every harness hears one line, and it reads plainly.
 assert.ok(SHOW_MEDIA_LINE.length < 260 && !SHOW_MEDIA_LINE.includes("\n"))

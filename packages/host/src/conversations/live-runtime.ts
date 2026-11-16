@@ -124,6 +124,8 @@ export interface Resident {
   /** See `LiveSnapshot.activityAt`; the next flush publishes it. */
   activityAt?: number
   timer: ReturnType<typeof setTimeout> | null
+  /** When `timer` flushes (`performance.now()`), so a change that can't wait as long brings it sooner. */
+  timerDue?: number
   /** When it last flushed (`performance.now()`): the next change waits until a batch's frame has passed since. */
   flushedAt?: number
   displayPrompt?: string
@@ -231,6 +233,8 @@ export interface ConversationChildren {
   stopChild(conversation: string, child: string): Promise<boolean>
   /** One of the conversation's requests settled. */
   settled(conversation: string, request: string): void
+  /** The live engine stamped activity in the conversation (`Resident.activityAt`): output, a step. Called for every stamp, so it must cost next to nothing. */
+  active?(conversation: string): void
   /** Its harness took input: a message as its turn, or a steer into the turn it runs. */
   inputDelivered?(conversation: string, input: Pick<LiveRequest, "id" | "text" | "actor"> & Partial<Pick<LiveRequest, "digest" | "continues" | "goal">>, delivery: "turn" | "steer"): void
   /** Whether the conversation's Thread is an Apex: it has Fins or queued spawns, or was started as one. */
@@ -421,6 +425,10 @@ export interface Dependencies {
  */
 export interface LiveAccess {
   stopMark(id: string): number
+  restartAllowed(id: string, requestId: string): boolean
+  restartContinued(id: string, requestId: string): void
+  /** Before opening a crashed turn's continuation, reconcile that exact turn from its native record. False means no send. */
+  reconcileCut(resident: Resident, continues: TurnContinuation | undefined): Promise<boolean>
   dependencies: Dependencies
   /** Compacts the journals this host closes with much of them free. */
   reclaims: JournalReclaims
