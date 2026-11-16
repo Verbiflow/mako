@@ -144,8 +144,9 @@ schedules, and a failing schedule is pinned there.
 16. **What waits for a turn goes as one turn, the person's words first.** When a
    queued message goes, what waits right behind it goes with it, in order: one
    agent's plain messages, Mako's notes (pull-request outcomes, wait notes), one
-   message from the person, and Fins' news, a digest waiting for the turn or for
-   its burst's window (one ahead of it too). Each is admitted after it, each still
+   message from the person, and Fins' news, a digest never sent before, waiting
+   for the turn or for its burst's window (one ahead of it too); one tried before
+   (sent, or resting after a limit) goes again alone, by its own retry. Each is admitted after it, each still
    admitted at the handoff, with no attachments, grants, pause, edit, hold,
    continuation or command, and the same `notification`, within `JOINED_MAX` and
    `JOINED_CHARS` (`foldQueued`). The person's message is never folded into

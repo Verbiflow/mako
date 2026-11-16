@@ -875,7 +875,8 @@ When a queued message goes, what waits right behind it goes with it as one
 turn (`foldQueued`, `docs/delivery-queue.md` rule 16): one agent's plain
 messages, Mako's notes (a pull request's outcome, a wait that fired,
 `FOLDED_SERVICES`), one message from the person, and Fins' news, a digest
-waiting for the turn or its window, each under a line saying who and when.
+never sent before waiting for the turn or its window (one tried before goes
+again alone, `freshNews`), each under a line saying who and when.
 The person's message carries the turn, its words first, and is never folded
 into another's; Fins' news never carries one. A note `admits` refuses goes
 alone, to be refused there, so a Fin back from a long turn, or an Apex the

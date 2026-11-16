@@ -87,9 +87,17 @@ function windowedDigest(request: LiveRequest): boolean {
   return request.status === "held" && request.wake?.after === DIGEST_WAITS && !request.digest?.resting
 }
 
+/**
+ * Fins' news never sent: one tried before (sent, or resting after a limit) goes again alone, as its own retry and
+ * receipt say (`delivery-retry.ts`, rule 15).
+ */
+function freshNews(request: LiveRequest): boolean {
+  return request.digest === undefined || (request.digest.sentAt === undefined && !request.digest.resting && !request.digest.heard)
+}
+
 /** A message that can go inside another's turn: waiting only for its turn (a digest, or its window), with nothing attached. */
 function joins(request: LiveRequest): boolean {
-  return plain(request) && (request.status === "queued" ? !request.wake : Boolean(request.digest) && windowedDigest(request)) &&
+  return plain(request) && freshNews(request) && (request.status === "queued" ? !request.wake : Boolean(request.digest) && windowedDigest(request)) &&
     !request.attachments.length && !request.grants?.length
 }
 
@@ -114,7 +122,7 @@ export interface FoldPlan {
  * `joinedInto`, its ID kept in `joined`. Undefined when none fold.
  */
 export function foldQueued(requests: readonly LiveRequest[], next: LiveRequest, admits: (request: LiveRequest) => boolean = () => true): FoldPlan | undefined {
-  if (next.status !== "queued" || next.wake || !plain(next)) return undefined
+  if (next.status !== "queued" || next.wake || !plain(next) || !freshNews(next)) return undefined
   // A person's message may bring what it attaches and grants: it carries the turn. Anyone else's goes alone with them.
   if (!personal(next) && (next.attachments.length || next.grants?.length)) return undefined
   const at = requests.indexOf(next)
