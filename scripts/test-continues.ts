@@ -193,7 +193,7 @@ try {
         confirm: (input) => threads.confirm(input),
         reclaim: (input) => threads.reclaim(input),
       },
-      snapshot: (id) => (id === conversation ? { session: { harness: "codex", nativeId: "n-1", nativePath: "/codex/n-1.jsonl", cwd: checkout, currentMode: null } } : null),
+      session: (id) => (id === conversation ? { harness: "codex", nativeId: "n-1", nativePath: "/codex/n-1.jsonl", cwd: checkout, currentMode: null } : undefined),
       checkout: () => ({ path: checkout, worktrees: [{ path: checkout }] }),
       repositoryOf: async () => ({ url: "https://github.com/ana/api", branch: "webhooks" }),
       sendRecords: async () => { throw new Error("a joined continue sends nothing: the account had it all") },
