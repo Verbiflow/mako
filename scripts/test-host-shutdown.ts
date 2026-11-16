@@ -12,6 +12,11 @@ import { unwatchedWork } from "@mako/host/base/event-loop"
 import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
 import { runtimeFailure, runtimeFailureError } from "@mako/host/contracts/runtime"
 import { waitsFor } from "../src/state/delivery-policy"
+import { createFakeGateway } from "@mako/protocol/fake-gateway"
+import { gatewayHostCalls, sendWithRepeats } from "@mako/host/contracts/gateway-host-calls"
+import { decodeRuntimeValue, encodeRuntimeValue } from "@mako/host/contracts/runtime-value"
+import { serveHostThroughGateway } from "@mako/host/transport/gateway"
+import { stoppedCallError, HostCallRefusedError } from "@mako/host/transport/call-lifetime"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { SessionMemory } from "@mako/host/threads/session-memory"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
@@ -79,6 +84,34 @@ assert.equal(completed, true); assert.equal(storeOpen, false)
   await stopping.stop().catch(() => {})
   assert.deepEqual(await heard(underWay), { unconfirmed: true, outbox: "Waiting for Mako to reconnect" }, "cut by the stop: asked again under its ID")
   await drained
+}
+
+// Through the gateway, a stopping host answers nothing for a call it didn't run: the gateway keeps a runtime's answer as
+// the operation's, so a refusal would be every repeat's for the client's whole 29 s of tries. Left to the link's close,
+// the repeat reaches the next host, which runs it.
+{
+  const gateway = createFakeGateway()
+  let stopping = true
+  const ran: string[] = []
+  const invoke = async (_channel: string, args: unknown[]) => {
+    if (stopping) throw stoppedCallError(new HostCallRefusedError())
+    ran.push(String(args[1]))
+    return encodeRuntimeValue("taken")
+  }
+  const mac = { runtimeId: "mac", build: "shutdown", invoke }
+  const actor = { kind: "client" as const, client: "web" as const, deviceId: "phone" }
+  const phone = gatewayHostCalls(await gateway.connectClient(actor), { runtimeId: "mac", actor, history: false })
+  let served = await serveHostThroughGateway(await gateway.connectRuntime(), mac)
+  const began = Date.now()
+  const sent = sendWithRepeats("mako:live-prompt", phone.call("mako:live-prompt", ["c", "sent-as-it-stops", "hello"]), { conversationId: "c", runtime: "mac" })
+  await new Promise((done) => setTimeout(done, 50))
+  served.close()
+  stopping = false
+  served = await serveHostThroughGateway(await gateway.connectRuntime(), mac)
+  assert.equal(decodeRuntimeValue(await sent), "taken", "the next host takes it")
+  assert.deepEqual(ran, ["sent-as-it-stops"], "once")
+  assert.ok(Date.now() - began < 5_000, `within a repeat or two, not the whole schedule: ${Date.now() - began} ms`)
+  served.close()
 }
 
 // Every adapter uses the same awaited close -> ownership-release boundary.

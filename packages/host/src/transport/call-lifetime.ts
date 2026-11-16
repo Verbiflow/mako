@@ -4,6 +4,9 @@ import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
 /** A call the stopping host never started: nothing of it happened, so its caller sends it again to the next host. */
 export class HostCallRefusedError extends HostStoppingError {}
 
+/** A call this host's stop ended, heard as a disconnect: no other host's word, and nothing the gateway should keep. */
+export class HostStoppedCallError extends RuntimeDisconnectedError {}
+
 /**
  * A call the host's stop ended, as its caller hears it: a disconnect, never a refusal. One it refused before starting
  * didn't happen (`unconfirmed: false`); one it cut may have, and is asked again under its ID, which the next host
@@ -11,8 +14,8 @@ export class HostCallRefusedError extends HostStoppingError {}
  * refused for good and handed it back (`waitsFor`).
  */
 export function stoppedCallError(error: unknown): unknown {
-  if (error instanceof HostCallRefusedError) return new RuntimeDisconnectedError(false)
-  if (error instanceof HostStoppingError) return new RuntimeDisconnectedError(true)
+  if (error instanceof HostCallRefusedError) return new HostStoppedCallError(false)
+  if (error instanceof HostStoppingError) return new HostStoppedCallError(true)
   return error
 }
 
