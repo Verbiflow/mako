@@ -1,55 +1,43 @@
 import { useEffect, useState } from "react"
-import { useAccounts } from "@/state/accounts"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { continueNext, nextPlace } from "@/state/fin-asks"
-import { promptDelivery } from "@/state/prompt-delivery"
+import { shallowEqual } from "@/state/store"
+import { usageLimitWait } from "@/state/usage-limit-wait"
 
-/** A Thread a limit holds, with somewhere to go: where, and the person's two answers. */
+/** A reset wait, with at most one opt-in alternative verified by the host. */
 export interface LimitContinue {
-  /** The harness it would go on: the offer's mark, as this is a choice of where to go. */
   harness: string
-  to: string
+  at: number
+  resets: boolean
+  to?: string
   busy: boolean
   go(): void
-  notNow(): void
 }
 
-/**
- * The one offer of a Thread a limit holds and Mako doesn't move by itself: a Thread with no Fins is the person's to
- * decide. The host says where it would go (`Agents.nextPlace`); nowhere, and there's no offer, only the queue's line
- * saying when it goes again. Another account to switch to is the same decision, and that offer has it. "Not now" stands
- * for this wait.
- */
+/** The queue owns recovery; this line says when and offers moving only when the host finds a next place. */
 export function useLimitContinue(): LimitContinue | null {
-  const key = useAcp((state) => activeLiveAcp(state)?.key)
-  const harness = useAcp((state) => activeLiveAcp(state)?.harness)
-  const since = useAcp((state) => {
-    const current = activeLiveAcp(state)
-    return current && promptDelivery(current).queued.find((prompt) => prompt.retry?.cause === "rate-limited" && prompt.pause !== "stop")?.retry?.since
-  })
-  const offered = useAccounts((state) => (harness ? state.limitOffers[harness] : undefined))
-  const [place, setPlace] = useState<{ key: string; to: string; harness: string }>()
+  const held = useAcp(state => {
+    const live = activeLiveAcp(state)
+    const wait = live && !live.copy ? usageLimitWait(live.requests ?? []) : undefined
+    return live && wait ? { key: live.key, harness: live.harness, ...wait } : null
+  }, shallowEqual)
+  const key = held?.key, harness = held?.harness
+  const wait = held ? `${held.request.id}:${held.at}` : undefined
+  const [place, setPlace] = useState<{ key: string; wait: string; to: string }>()
   const [busy, setBusy] = useState(false)
-  const [declined, setDeclined] = useState<string>()
-  const held = since !== undefined
   useEffect(() => {
-    if (!key || !held) return
+    if (!key || wait === undefined) return
     let current = true
-    void nextPlace(key).then((next) => {
-      if (current) setPlace(next ? { key, to: next.label, harness: next.harness } : undefined)
+    void nextPlace(key).then(next => {
+      if (current) setPlace(next ? { key, wait, to: next.label } : undefined)
     })
     return () => { current = false }
-  }, [key, held])
-  const wait = `${key}:${since}`
-  if (!key || !held || place?.key !== key || declined === wait || offered?.to) return null
+  }, [key, harness, wait])
+  if (!held) return null
   return {
-    harness: place.harness,
-    to: place.to,
+    harness: held.harness, at: held.at, resets: held.resets,
+    ...(place?.key === held.key && place.wait === wait && { to: place.to }),
     busy,
-    go: () => {
-      setBusy(true)
-      void continueNext(key).finally(() => setBusy(false))
-    },
-    notNow: () => setDeclined(wait),
+    go: () => { setBusy(true); void continueNext(held.key).finally(() => setBusy(false)) },
   }
 }
