@@ -2337,6 +2337,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         late.agentServers?.close()
         threads.close()
         await workspaces.close()
+        await secrets.close?.()
         conversationFiles.close()
         turnMedia.close()
         void workspaceClients.dispose()

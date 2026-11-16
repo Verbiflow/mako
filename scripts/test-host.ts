@@ -25,6 +25,7 @@ const TESTS = [
   "scripts/test-host-methods.ts",
   "scripts/test-secrets.ts",
   "scripts/test-secret-grants.ts",
+  "scripts/test-local-borrowing.ts",
   "scripts/test-borrow-capabilities.ts",
   "scripts/test-borrow-sessions.ts",
   "scripts/test-held-leases.ts",

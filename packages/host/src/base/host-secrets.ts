@@ -111,6 +111,8 @@ export interface DomainSecrets {
 
 /** A host's secrets: every domain's, and the desktop's handover of the key that opens them. */
 export interface HostSecretStore extends DomainSecrets {
+  /** After host calls drain, release an opened broker without opening a secret store just to stop it. */
+  close?(): Promise<void>
   readonly handover: SecretKeyHandover
   /** The broker the saved records stand as grants of (`GrantedSecrets`), seeded with every record saved before grants were kept. */
   borrowing(): Promise<LocalBorrowing | undefined>
@@ -154,6 +156,7 @@ export function hostSecretStore({ userRoot, appName }: Pick<HostEnvironment, "us
       const { secrets } = host()
       return secrets instanceof GrantedSecrets ? secrets.version(kind, name) : undefined
     },
+    close: async () => { if (opened?.secrets instanceof GrantedSecrets) await opened.secrets.broker.close() },
     adoptLegacy: (files) => {
       legacy.push(files)
     },
