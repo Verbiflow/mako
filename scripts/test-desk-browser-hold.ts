@@ -57,10 +57,7 @@ try {
   for (const deadline = Date.now() + 2_000; !lateDestroyed; await delay(20)) assert.ok(Date.now() < deadline, "a late window is closed")
   assert.equal(desk.openPages, 0)
 
-  // Reaping lets a quiet connection go.
-  const closed = new Promise((resolve) => { socket.onclose = resolve })
-  desk.reapIdle(Date.now() + IDLE_MS)
-  await closed
+  socket.close()
   console.log("desk browser hold: recent use and a page being made hold a profile host; a quiet open connection and a page that never came don't, and a late window is closed")
 } finally {
   desk.close()

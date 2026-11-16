@@ -26,8 +26,8 @@ export interface DeskBrowserOptions {
   /** Whether a navigation target stays inside Mako's own interface. */
   allowsUrl: (url: string) => boolean
   maxPages?: number
-  /** Close a window, or an agent's connection, nobody has driven for this long; recent use holds a profile host up for
-   * as long. Default 30 minutes. */
+  /** Close a window nobody has driven for this long; an agent's use holds a profile host up for as long (a quiet open
+   * connection is not use). Default 30 minutes. */
   idleMs?: number
   /** How long a page may take to come (the agent views app starting, the desk loading). Default 60 seconds. */
   createMs?: number
@@ -78,8 +78,6 @@ export class DeskBrowser {
   private creating = 0
   /** When an agent last used the desk browser: connected, or sent anything. */
   private lastUse = Number.NEGATIVE_INFINITY
-  /** When each connection last sent anything, for reaping one left open and quiet. */
-  private readonly socketUse = new Map<WebSocket, number>()
   private readonly token = randomBytes(24).toString("base64url")
   private server: WebSocketServer | undefined
   private endpoint: string | undefined
@@ -140,14 +138,13 @@ export class DeskBrowser {
         return
       }
       this.sockets.add(socket)
-      this.used(socket)
+      this.used()
       socket.on("message", (raw) => {
-        this.used(socket)
+        this.used()
         void this.handle(socket, raw.toString())
       })
       socket.once("close", () => {
         this.sockets.delete(socket)
-        this.socketUse.delete(socket)
         for (const [sessionId, session] of this.sessions)
           if (session.socket === socket) this.sessions.delete(sessionId)
       })
@@ -173,14 +170,10 @@ export class DeskBrowser {
     const idleMs = this.options.idleMs ?? DEFAULT_IDLE_MS
     for (const [id, page] of this.pages)
       if (now - (this.lastActivity.get(id) ?? now) >= idleMs) page.destroy()
-    // A connection quiet that long is let go: its agent reconnects when it next drives the desk.
-    for (const [socket, at] of this.socketUse)
-      if (now - at >= idleMs) socket.terminate()
   }
 
-  private used(socket: WebSocket, now = Date.now()): void {
+  private used(now = Date.now()): void {
     this.lastUse = now
-    this.socketUse.set(socket, now)
   }
 
   private reply(socket: WebSocket, id: number, result: JsonObject): void {
