@@ -1,3 +1,4 @@
+import type { AppKey } from "../contracts/thread-environments.js"
 import { REMOTE_APP_LEASE_MS, type RemoteAppDemand } from "../contracts/remote-app.js"
 import type { AppMark, AppSamplingDemand } from "../contracts/thread-app.js"
 import { SAMPLE_EVERY_MS } from "./app-probe.js"
@@ -125,7 +126,7 @@ export class ThreadAppSampler {
     const wasWatched = this.watched()
     const previous = this.readers.get(client)
     if (previous?.kind === "window" && demand.generation <= previous.generation)
-      return demand.generation === previous.generation && demand.visible === previous.visible && (demand.apps ?? true) === (previous.apps ?? true) && (demand.outputs ?? false) === (previous.outputs ?? false)
+      return demand.generation === previous.generation && demand.visible === previous.visible && (demand.apps ?? true) === (previous.apps ?? true) && (demand.outputs ?? []).join() === (previous.outputs ?? []).join()
     if (!previous && this.readers.size >= MAX_READERS) return false
     this.readers.set(client, { kind: "window", ...demand })
     this.deps.demandChanged?.()
@@ -155,9 +156,12 @@ export class ThreadAppSampler {
     return this.last?.marks ?? []
   }
 
-  outputWanted(): boolean {
+  outputWanted(): ReadonlySet<AppKey> {
     this.prune()
-    return [...this.readers.values()].some(reader => reader.kind === "window" && reader.visible && reader.outputs === true)
+    const apps = new Set<AppKey>()
+    for (const reader of this.readers.values())
+      if (reader.kind === "window" && reader.visible) for (const app of reader.outputs ?? []) apps.add(app)
+    return apps
   }
 
   private watched(): boolean {

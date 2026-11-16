@@ -1,4 +1,5 @@
 import type { MakoBridge } from "@mako/host/contracts/renderer-bridge"
+import type { AppKey } from "@mako/host/contracts/thread-environments"
 import { AppSamplingReplySchema } from "@mako/host/contracts/thread-app"
 import { ViewHintSchema, ViewHintsStatusSchema, type ViewDomain } from "@mako/host/contracts/view-hints"
 import { getMako } from "@/lib/bridge"
@@ -28,7 +29,8 @@ export class DeskRefetch {
   private outputReady = false
   private outputHeard = false
   private wantedApps = false
-  private wantedOutputs = false
+  private wantedOutputs: AppKey[] = []
+  private readonly outputs = new Map<AppKey, number>()
   private wanted: boolean | undefined
   private wantedRevision = 0
   private generation = 0
@@ -73,12 +75,13 @@ export class DeskRefetch {
           if (hint.fields.includes("watch-unavailable")) { this.outputReady = false; this.outputHeard = false }
           if (hint.fields.includes("watch-ready")) this.outputHeard = true
           this.reads.reschedule(DESK_SCOPE, "output")
-          if (this.wantedOutputs && !this.outputFollowing()) {
+          if (this.wantedOutputs.length > 0 && !this.outputFollowing()) {
             if (this.outputHeard) this.retryMs = 1_000
             this.retryDemand(this.wantedRevision)
           }
           if (hint.fields.length && hint.fields.every(field => field === "watch-ready")) return
         }
+        if (hint.domain === "apps") this.reads.invalidate(DESK_SCOPE, "output", hint.keys, ["state"])
         this.reads.invalidate(DESK_SCOPE, hint.domain, hint.keys, hint.fields)
       }
     })
@@ -86,7 +89,20 @@ export class DeskRefetch {
   }
   supports(domain: ViewDomain): boolean { return this.domains.has(domain) }
   appFollowing(): boolean { return this.following && this.wantedApps }
-  outputFollowing(): boolean { return this.following && this.wantedOutputs && this.outputReady && this.outputHeard }
+  outputFollowing(app?: AppKey): boolean { return this.following && this.wantedOutputs.length > 0 && (!app || this.wantedOutputs.includes(app)) && this.outputReady && this.outputHeard }
+  watchOutput(app: AppKey): () => void {
+    this.outputs.set(app, (this.outputs.get(app) ?? 0) + 1)
+    this.changed()
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      const count = this.outputs.get(app)! - 1
+      if (count) this.outputs.set(app, count)
+      else this.outputs.delete(app)
+      this.changed()
+    }
+  }
   readings() { return { ...this.counters, ...this.reads.readings() } }
 
   close(): void {
@@ -100,7 +116,7 @@ export class DeskRefetch {
     this.lifecycle++
     this.domains.clear(); this.epoch = undefined; this.revision = -1
     this.outputReady = false; this.outputHeard = false
-    this.wantedApps = false; this.wantedOutputs = false
+    this.wantedApps = false; this.wantedOutputs = []
     this.checked = false; this.checking = false; this.binding = undefined; this.wanted = undefined; this.following = false
     clearTimeout(this.retry); this.retry = undefined
     this.reads.reschedule(DESK_SCOPE)
@@ -111,10 +127,10 @@ export class DeskRefetch {
     if (!this.supports("apps")) return
     const shown = this.reads.visible && this.reads.connected(DESK_SCOPE)
     const apps = shown && this.reads.count(DESK_SCOPE, "apps") > 0
-    const outputs = shown && this.supports("output") && this.reads.count(DESK_SCOPE, "output") > 0
-    const wanted = apps || outputs
-    if (this.wanted === wanted && this.wantedApps === apps && this.wantedOutputs === outputs) return
-    if (this.wantedOutputs !== outputs) { this.outputReady = false; this.outputHeard = false }
+    const outputs = shown && this.supports("output") ? [...this.outputs.keys()].sort().slice(0, 64) : []
+    const wanted = apps || outputs.length > 0
+    if (this.wanted === wanted && this.wantedApps === apps && this.wantedOutputs.join() === outputs.join()) return
+    if (this.wantedOutputs.join() !== outputs.join()) { this.outputReady = false; this.outputHeard = false }
     this.wantedApps = apps; this.wantedOutputs = outputs
     this.wanted = wanted
     this.wantedRevision++
@@ -163,9 +179,9 @@ export class DeskRefetch {
       if (!current()) return
       if (reply.kind === "following") {
         this.following = this.wanted === true
-        this.outputReady = this.wantedOutputs && reply.outputs === true
+        this.outputReady = this.wantedOutputs.length > 0 && reply.outputs === true
         clearTimeout(this.retry); this.retry = undefined
-        if (this.wantedOutputs && !this.outputFollowing()) this.retryDemand(revision)
+        if (this.wantedOutputs.length > 0 && !this.outputFollowing()) this.retryDemand(revision)
         else this.retryMs = 1_000
         this.reads.reschedule(DESK_SCOPE, "apps")
         this.reads.reschedule(DESK_SCOPE, "output")

@@ -439,7 +439,7 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
   }) : undefined
   const outputHints = sampler && processes && deps.watchOutputs ? new AppOutputHints({
     wanted: () => sampler.outputWanted(),
-    watch: listener => processes.watchOutputFiles(deps.watchOutputs!, listener),
+    watch: (app, listener) => processes.watchOutputFiles(app, deps.watchOutputs!, listener),
     changed: fields => deps.outputChanged?.(fields),
     warn: message => deps.warn(message, {}),
   }) : undefined
@@ -537,7 +537,7 @@ export function declareWorkspaceMethods(methods: MethodTable, { workspaces, move
   declareMoveMethods(methods, movers.moves, (target) => moveHold(live, movers.worktreeMoves, movers.moves, target), workspaces.worktrees)
   declarePlanBuildMethods(methods, workspaces.planBuilds)
   declareCheckoutHeadMethods(methods, workspaces.checkoutHeads)
-  declareThreadAppMethods(methods, movers.appTools?.desk, movers.sampler, () => movers.outputHints?.ready() ?? false)
+  declareThreadAppMethods(methods, movers.appTools?.desk, movers.sampler, apps => movers.outputHints?.ready(apps) ?? false)
   return files
 }
 

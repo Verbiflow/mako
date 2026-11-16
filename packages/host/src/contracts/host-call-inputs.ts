@@ -3079,7 +3079,17 @@ const inputs = {
             .max(Number.MAX_SAFE_INTEGER),
           visible: z.boolean(),
           apps: z.boolean().optional(),
-          outputs: z.boolean().optional(),
+          outputs: z
+            .array(
+              z
+                .string()
+                .regex(
+                  /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|folder-[0-9a-f]{16})$/
+                )
+                .brand<"AppKey">()
+            )
+            .max(64)
+            .optional(),
         })
         .strict()
         .optional(),

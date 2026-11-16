@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { AppKeySchema, type AppKey } from "./thread-environments.js"
 
 /**
  * A folder's running app as the desk shows it: the strip's control and the
@@ -15,9 +16,9 @@ export const AppSamplingDemandSchema = z.object({
   visible: z.boolean(),
   /** An omitted scope is the original apps-only demand. Output does not imply sampling apps. */
   apps: z.boolean().optional(),
-  outputs: z.boolean().optional(),
+  outputs: z.array(AppKeySchema).max(64).optional(),
 }).strict()
-/** @wire z.object({ connection: z.string().uuid(), generation: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), visible: z.boolean(), apps: z.boolean().optional(), outputs: z.boolean().optional() }).strict() */
+/** @wire z.object({ connection: z.string().uuid(), generation: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), visible: z.boolean(), apps: z.boolean().optional(), outputs: z.array(z.string().regex(/^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|folder-[0-9a-f]{16})$/).brand<"AppKey">()).max(64).optional() }).strict() */
 export type AppSamplingDemand = z.infer<typeof AppSamplingDemandSchema>
 
 /** Reading binds to the current stream; following accepts demand, never receipt of the sampled data. */
@@ -278,6 +279,8 @@ export interface AppActionOutcome {
 }
 
 export interface AppOutputChunk {
+  /** The actual log owner, including an install handed over from a spare checkout. */
+  app?: AppKey
   text: string
   cursor: AppOutputCursor
   /** The output started over (a new run), so what was shown before goes. */

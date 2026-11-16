@@ -390,8 +390,9 @@ export class ThreadProcesses {
   }
 
   /** Output is written by detached runs. Its file changes are watched off the host thread, never piped through it. */
-  async watchOutputFiles(backend: WatchBackend, listener: WatchListener) {
-    return backend(this.dependencies.root, [], listener)
+  async watchOutputFiles(app: AppKey, backend: WatchBackend, listener: WatchListener) {
+    const folder = await realpath(this.folder(app))
+    return backend(folder, ["runs.json", "checkout", "project", "used", "up", "lock", "memory", "checkouts"].map(name => join(folder, name)), listener, { kind: "app-output" })
   }
 
   /** Hears that this host started or signalled a process, or changed a run's record: a look now would see something new. */

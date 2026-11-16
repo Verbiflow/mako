@@ -4,6 +4,7 @@ import { serveRuntime } from "@mako/protocol"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import { SessionPublisher } from "@mako/host/conversations/session-report"
 import { mock } from "node:test"
+import { AppKeySchema } from "@mako/host/contracts/thread-environments"
 import { AppOutputHints } from "@mako/host/workspaces/app-output-hints"
 import { ThreadAppSampler } from "@mako/host/workspaces/app-sampler"
 import { ViewHints } from "@mako/host/workspaces/view-hints"
@@ -17,11 +18,12 @@ import { appOutputReader } from "../src/state/thread-app-output"
 const flush = async () => { for (let i = 0; i < 80; i++) await Promise.resolve() }
 mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 })
 const tick = async (ms: number) => { mock.timers.tick(ms); await flush(); mock.timers.tick(0); await flush() }
+const app = AppKeySchema.parse(randomUUID())
 let needed = true, opens = 0, closes = 0
 const signals: string[][] = []
 const listeners: WatchListener[] = []
 const pending = Promise.withResolvers<WatchSubscription>()
-const watcher = new AppOutputHints({ wanted: () => needed, watch: listener => { opens++; listeners.push(listener); return pending.promise }, changed: fields => signals.push(fields), warn: () => {}, now: Date.now })
+const watcher = new AppOutputHints({ wanted: () => new Set(needed ? [app] : []), watch: (_app, listener) => { opens++; listeners.push(listener); return pending.promise }, changed: fields => signals.push(fields), warn: () => {}, now: Date.now })
 watcher.reconcile()
 await flush()
 needed = false; watcher.reconcile()
@@ -62,7 +64,7 @@ await watcher.close()
 // A deadline releases its caller without forgetting the late subscription, and close before start opens nothing.
 let lateCloses = 0
 const late = Promise.withResolvers<WatchSubscription>()
-const bounded = new AppOutputHints({ wanted: () => true, watch: () => late.promise, changed: () => {}, warn: () => {} })
+const bounded = new AppOutputHints({ wanted: () => new Set([app]), watch: () => late.promise, changed: () => {}, warn: () => {} })
 bounded.reconcile(); await flush()
 let closed = false
 const closing = bounded.close().then(() => { closed = true })
@@ -71,9 +73,39 @@ await tick(1); await closing; assert.equal(closed, true)
 late.resolve({ unsubscribe: async () => { lateCloses++ } }); await flush()
 assert.equal(lateCloses, 1, "a late acquired handle stays owned after the close deadline")
 let obsoleteStarts = 0
-const obsolete = new AppOutputHints({ wanted: () => true, watch: async () => { obsoleteStarts++; return { unsubscribe: async () => {} } }, changed: () => {}, warn: () => {} })
+const obsolete = new AppOutputHints({ wanted: () => new Set([app]), watch: async () => { obsoleteStarts++; return { unsubscribe: async () => {} } }, changed: () => {}, warn: () => {} })
 obsolete.reconcile(); const neverStarted = obsolete.close(); await flush(); await neverStarted
 assert.equal(obsoleteStarts, 0, "close before the opening microtask cannot start a child watch")
+
+
+// Demand is a union of actual log owners, deduplicated across visible windows and generation-fenced.
+const other = AppKeySchema.parse(randomUUID())
+const streams = new Map([["one", randomUUID()], ["two", randomUUID()]])
+const demandSampler = new ThreadAppSampler({ connection: client => streams.get(client), look: async () => ({ marks: [], signature: "", settling: false, alive: false }), publish: () => {} })
+const follow = (client: string, generation: number, outputs: typeof app[], visible = true) => demandSampler.follow(client, { connection: streams.get(client)!, generation, visible, apps: false, outputs })
+assert.equal(follow("one", 1, [app, app]), true)
+assert.equal(follow("two", 1, [app, other]), true)
+assert.deepEqual([...demandSampler.outputWanted()].sort(), [app, other].sort())
+assert.equal(follow("one", 2, [], false), true)
+assert.equal(follow("one", 1, [app]), false, "a late output list cannot undo a hide")
+assert.deepEqual([...demandSampler.outputWanted()].sort(), [app, other].sort())
+streams.delete("two")
+assert.equal(demandSampler.outputWanted().size, 0, "disconnected windows retain no app watches")
+
+// Independent app slots: changing one visible output does not retire another, and same-app readers share it.
+let wanted = new Set([app])
+const opened: typeof app[] = [], retired: typeof app[] = []
+const grouped = new AppOutputHints({ wanted: () => wanted, watch: async app => { opened.push(app); return { unsubscribe: async () => { retired.push(app) } } }, changed: () => {}, warn: () => {} })
+grouped.reconcile(); await flush()
+assert.deepEqual(opened, [app])
+wanted = new Set([app, other]); grouped.reconcile(); await flush()
+assert.deepEqual(opened, [app, other])
+grouped.reconcile(true); await flush()
+assert.equal(opened.length, 2, "confirming unchanged demand opens no duplicate watches")
+wanted = new Set([other]); grouped.reconcile(); await flush()
+assert.deepEqual(retired, [app]); assert.equal(grouped.ready([other]), true)
+wanted = new Set(); grouped.reconcile(); await grouped.close()
+assert.deepEqual(retired, [app, other])
 
 // Actual sampler -> host hints -> bridge owner -> shared reader, including compatibility and hidden/return.
 interface Result { mode: string; data: number; controls: number; hidden: number }
@@ -84,16 +116,16 @@ for (const mode of ["poll", "hints", "no-frames", "old-host"] as const) {
   const publisher = new ViewHints(event => { if (mode !== "no-frames") for (const subscriber of subscribers) subscriber(event) })
   let listener: WatchListener | undefined
   const sampler = new ThreadAppSampler({ connection: client => client === "window" ? connection : undefined, now: Date.now, demandChanged: () => output?.reconcile(true), look: async () => { looked++; return { marks: [], signature: "", settling: false, alive: false } }, publish: () => {} })
-  const output = new AppOutputHints({ wanted: () => sampler.outputWanted(), watch: async next => { watched++; listener = next; return { unsubscribe: async () => { released++ } } }, changed: fields => publisher.changed("output", fields), warn: () => {}, now: Date.now })
+  const output = new AppOutputHints({ wanted: () => sampler.outputWanted(), watch: async (_app, next) => { watched++; listener = next; return { unsubscribe: async () => { released++ } } }, changed: fields => publisher.changed("output", fields), warn: () => {}, now: Date.now })
   const reads = new ViewRefetch({ now: () => Date.now(), after: (run, ms) => { const timer = setTimeout(run, ms); return () => clearTimeout(timer) } })
   const owner = new DeskRefetch({ onEvent: subscriber => { subscribers.add(subscriber); return () => { subscribers.delete(subscriber) } }, viewHints: async () => ({ ...publisher.status(), domains: mode === "old-host" || mode === "poll" ? ["apps", "sync"] : ["apps", "sync", "output"] }), followThreadApps: async (demand?: AppSamplingDemand) => {
     controls++
     if (!demand) return { kind: "ready", connection, generation: sampler.generation("window") }
     if (mode === "old-host" || mode === "poll") assert.equal(demand.outputs, undefined, "older hosts receive their original exact payload")
     if (!sampler.follow("window", demand)) return { kind: "unavailable" }
-    return { kind: "following", ...(demand.outputs === true && { outputs: output.ready() }) }
+    return { kind: "following", ...(demand.outputs && { outputs: output.ready(demand.outputs) }) }
   } }, reads)
-  const subscribe = appOutputReader(owner, async (_cwd, _key, cursor) => { data++; return { text: "", cursor: cursor ?? { file: "fixture", offset: 0 }, reset: !cursor } })
+  const subscribe = appOutputReader(owner, async (_cwd, _key, cursor) => { data++; return { app, text: "", cursor: cursor ?? { file: "fixture", offset: 0 }, reset: !cursor } })
   const stopOutput = subscribe("/fixture", "process:web", () => {})
   await flush()
   for (let second = 0; second < 43; second++) { await tick(1_000); await sampler.tick() }
@@ -110,7 +142,7 @@ for (const mode of ["poll", "hints", "no-frames", "old-host"] as const) {
   const parked = data
   await tick(60_000)
   assert.equal(data, parked)
-  assert.equal(sampler.outputWanted(), false)
+  assert.equal(sampler.outputWanted().size, 0)
   assert.equal(output.ready(), false)
   reads.setVisible(true); await tick(0)
   for (let second = 0; second < 15; second++) { await tick(1_000); await sampler.tick() }
