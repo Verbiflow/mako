@@ -776,7 +776,12 @@ export class Agents implements AgentOperations, ConversationChildren {
     // Reads the machine for its capacity; a place that gains room says so (`capacityChanged`), and what waits goes then.
     this.quiet = new QuietWatch({
       now: () => this.now(),
-      later: (ms, run) => this.later(ms, run),
+      // Its own timer, not `later`: those are the engine's waits on answers, which tests count and step through.
+      later: (ms, run) => {
+        const timer = setTimeout(run, ms)
+        timer.unref()
+        return () => clearTimeout(timer)
+      },
       working: (child) => this.quietWorking(child),
       tree: (child) => this.rootOf(child),
       quiet: (child, since) => this.tellQuiet(child, since),
