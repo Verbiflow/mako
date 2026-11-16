@@ -1,6 +1,7 @@
 import { SnapshotBudgetSettingsSchema } from "../contracts/snapshot-budget.js"
 import type { SnapshotBudget } from "../workspaces/index.js"
 import { readSnapshotSettlement } from "./live-journal.js"
+import type { LimitNoticeChoice } from "../contracts/agents.js"
 import { noteCarried } from "@mako/sessions/record-carried"
 import { GATEWAY_CLIENT, hostClient } from "../base/host-client.js"
 import type { Foreground } from "../base/foreground.js"
@@ -900,11 +901,11 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   methods.handle("mako:agents-direct", (conversation: string, input: AgentsDirectInput) =>
     conversations.agents?.direct(conversation, input) ?? FINS_UNAVAILABLE)
   /** The person answering what one of an Apex's Fins asks them, from the Apex's Thread on any device (`Agents.respond`). */
-  methods.handle("mako:agents-next-place", async (conversation: string) => {
-    const next = await conversations.agents?.nextPlace(conversation)
-    return next ? { label: next.label, harness: next.harness } : null
+  methods.handle("mako:agents-next-place", async (conversation: string, notice?: string) => {
+    const next = await conversations.agents?.nextPlace(conversation, notice)
+    return next ? { label: next.label, harness: next.harness, ...(next.choice && { choice: next.choice }) } : null
   })
-  methods.handle("mako:agents-continue-next", async (conversation: string, id: string) => await conversations.agents?.continueNext(conversation, id) ?? false)
+  methods.handle("mako:agents-continue-next", async (conversation: string, id: string, choice?: LimitNoticeChoice) => await conversations.agents?.continueNext(conversation, id, choice) ?? false)
   methods.handle("mako:agents-respond", (conversation: string, input: AgentsRespondInput) =>
     conversations.agents?.respond(conversation, input) ?? FINS_UNAVAILABLE)
   methods.handle("mako:native-routing", () => conversations.nativeRouting())

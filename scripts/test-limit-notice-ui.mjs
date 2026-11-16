@@ -265,19 +265,32 @@ async function check() {
   assert.ok((await evaluate("window.apexScene.responds()")).some((respond) => respond.ask.startsWith("limit:")), "and telling the host")
   console.log("PASS: the Thread holds the notice, whatever else needs the person")
 
-  // 7. A Thread Mako doesn't move by itself: one card, saying what holds it, and one press.
-  const HOLD_AT_LIMIT = `import('/src/state/acp.ts').then(({ acpStore, activeAcp }) => { const state = acpStore.get(); const current = activeAcp(state); const at = Date.now() + 3 * 60 * 60_000; acpStore.set({ conversations: { ...state.conversations, [current.key]: { ...current, requests: [...(current.requests ?? []), { id: 'held-at-limit', text: 'Keep going.', attachments: [], status: 'held', retry: { at, until: at, attempt: 1, since: Date.now(), cause: 'rate-limited', reason: "You've hit your usage limit" } }] } } }) })`
-  await evaluate(HOLD_AT_LIMIT)
-  await until("Boolean(document.querySelector('[data-limit-continue]'))", "the card")
-  assert.match(await text("[data-limit-continue]"), /Codex can take this.*Continue on Codex.*Not now/, "only the choice, as its queue row says what holds it")
+  // 7. Automatic sending at reset stays in place; one optional action moves this Thread sooner.
+  const visibleLimitAction = `(() => { const button = [...document.querySelectorAll('[data-limit-continue] button')].find(node => node.innerText === 'Use Codex now'); if (!button) return false; const r = button.getBoundingClientRect(); return r.width > 0 && r.height > 0 && button.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)); })()`
+  const revealLimitAction = async (where) => {
+    await until("Boolean(document.querySelector('[data-limit-continue]'))", `${where}: its status`)
+    // Higher-priority fixture notices remain intact; open the existing stack to reach the info row.
+    await evaluate("[...document.querySelectorAll('[data-composer-notices] [data-notice-place=front] button')].find(button => button.innerText.trim().endsWith(' more'))?.click(); true")
+    await until(visibleLimitAction, where)
+  }
+  const HOLD_AT_LIMIT = `import('/src/state/acp.ts').then(({ acpStore, activeAcp }) => { const state = acpStore.get(); const current = activeAcp(state); const at = Date.now() + 3 * 60 * 60_000; acpStore.set({ conversations: { ...state.conversations, [current.key]: { ...current, requests: [...(current.requests ?? []), { id: 'held-at-limit', text: 'Keep going.', attachments: [], status: 'held', retry: { at, until: at, attempt: 1, since: Date.now(), cause: 'rate-limited', reason: "You've hit your usage limit" } }] } } }); return { key: current.key, at } })`
+  const held = await evaluate(HOLD_AT_LIMIT)
+  await revealLimitAction("the visible alternative action")
+  assert.match(await text("[data-limit-continue]"), /^Sends at .+Use Codex now$/, "automatic sending with one optional alternative")
+  assert.equal(await evaluate("document.querySelectorAll('[data-limit-continue] button').length"), 1, "one action")
+  assert.doesNotMatch(await text("[data-limit-continue]"), /Continue on|Not now|Resume|Send again/)
+  assert.equal(await evaluate("Number(document.querySelector('[data-usage-limit-wait]').dataset.usageLimitWait)"), held.at, "the status names the retained reset wait")
   assert.equal(await evaluate("document.querySelectorAll('[data-limit-continue]').length"), 1, "one card")
   await shoot("continue-card", "[data-limit-continue]")
-  // Another account to switch to is the same decision: one winner, not a stack.
+  // An account offer does not replace the automatic wait with another choice card.
   await evaluate("Promise.all([import('/src/state/accounts.ts'), import('/src/state/acp.ts')]).then(([{ accountsStore }, { acpStore, activeAcp }]) => { const harness = activeAcp(acpStore.get()).harness; accountsStore.set({ limitOffers: { [harness]: { harness, because: 'refused', from: { name: 'personal' }, to: { name: 'work' } } } }) })")
-  await until("!document.querySelector('[data-limit-continue]')", "the account offer to win")
+  await settle()
+  assert.equal(await evaluate("document.querySelectorAll('[data-limit-continue]').length"), 1, "the automatic wait remains the one status")
+  assert.equal(await evaluate("document.querySelectorAll('[data-account-limit]').length"), 0, "no duplicate account choice")
   await evaluate("import('/src/state/accounts.ts').then(({ accountsStore }) => accountsStore.set({ limitOffers: {} }))")
   await until("Boolean(document.querySelector('[data-limit-continue]'))", "the card back")
-  await evaluate("[...document.querySelectorAll('[data-limit-continue] button')].find((each) => each.innerText.includes('Continue on')).click(); true")
+  await revealLimitAction("the alternative action after account offers change")
+  await evaluate("[...document.querySelectorAll('[data-limit-continue] button')].find((each) => each.innerText.includes('Use Codex now')).click(); true")
   await until("window.apexScene.continues().length === 1", "the press to reach the host")
   assert.deepEqual(await evaluate("window.apexScene.continues()"), [await evaluate("import('/src/state/acp.ts').then(({ acpStore, activeAcp }) => activeAcp(acpStore.get()).key)")], "for this Thread, once")
   // The laptop's browser and a phone's dock have it too: being away from the desk is when it's needed.
@@ -291,14 +304,75 @@ async function check() {
     await until("Boolean(document.querySelector('[data-apex-count], [data-crew]'))", `${name}: its Thread`)
     // A phone's page opens the Thread before its conversation is the active one.
     for (const deadline = Date.now() + 30_000; !(await evaluate("import('/src/state/acp.ts').then(({ acpStore, activeAcp }) => Boolean(activeAcp(acpStore.get())))")); await new Promise((done) => setTimeout(done, 100))) assert.ok(Date.now() < deadline, `${name}: its conversation`)
-    await evaluate(HOLD_AT_LIMIT)
-    await until("Boolean(document.querySelector('[data-limit-continue]'))", `${name}: the card`)
-    assert.match(await text("[data-limit-continue]"), /Continue on Codex.*Not now/, `${name}: the same offer`)
+    const held = await evaluate(HOLD_AT_LIMIT)
+    await revealLimitAction(`${name}: the visible alternative action`)
+    assert.match(await text("[data-limit-continue]"), /^Sends at .+Use Codex now$/, `${name}: the same automatic wait`)
+    assert.equal(await evaluate("document.querySelectorAll('[data-limit-continue] button').length"), 1, `${name}: one action`)
+    assert.doesNotMatch(await text("[data-limit-continue]"), /Continue on|Not now|Resume|Send again/)
+    assert.equal(await evaluate("Number(document.querySelector('[data-usage-limit-wait]').dataset.usageLimitWait)"), held.at)
     await shoot(name, "[data-limit-continue]")
-    await evaluate("[...document.querySelectorAll('[data-limit-continue] button')].find((each) => each.innerText.includes('Not now')).click(); true")
-    await until("!document.querySelector('[data-limit-continue]')", `${name}: Not now ends it`)
+    const retained = await evaluate("import('/src/state/acp.ts').then(({ acpStore, activeAcp }) => activeAcp(acpStore.get()).requests.find(request => request.id === 'held-at-limit'))")
+    assert.equal(retained.status, "held", `${name}: leaving the action alone retains automatic sending`)
+    assert.equal(retained.retry.at, held.at, `${name}: no dismissal or second wait replaces the reset`)
   }
   console.log("PASS: a Thread a limit holds gets one card, on the desk, the laptop's browser and a phone")
+
+  // 8. A pending crew limit is status, not a Got it task. Its one action binds exact held work.
+  for (const [name, width, height, mobile, path] of [["crew-reset-desk", 1440, 900, false, "?mock&app=apex&fins=limit"], ["crew-reset-phone", 390, 844, true, "scripts/phone-apex.html?app=apex&fins=limit"]]) {
+    await viewport(width, height, mobile)
+    await load(`${base}${path}`)
+    if (mobile) {
+      await until("document.querySelectorAll('[data-fin-row]').length > 0", `${name}: rows`)
+      await evaluate("[...document.querySelectorAll('button, a')].find(each => each.innerText.includes('Mobile polish') && each.innerText.includes('12 Fins')).click(); true")
+    }
+    await until("Boolean(document.querySelector('[data-crew] [data-limit-notice]'))", `${name}: its notice`)
+    const at = await evaluate(`(() => {
+      window.apexScene.crewLimitRoom(false)
+      const at = Date.now() + 3 * 60 * 60_000
+      window.apexScene.setChildren(window.apexScene.children().map(agent => agent.child?.limitNotice ? { ...agent, child: { ...agent.child, limitNotice: { ...agent.child.limitNotice, waiting: { count: 1, at, resets: true, version: crypto.randomUUID() } } } } : agent))
+      return at
+    })()`)
+    await until(`document.querySelector('[data-limit-auto]')?.dataset.limitAuto === '${at}'`, `${name}: exact reset`)
+    assert.match(await text("[data-limit-notice]"), /1 Fin is waiting.*Resets at.*goes on by itself/)
+    assert.doesNotMatch(await text("[data-limit-notice]"), /Got it|Wait until|Continue on|Resume/)
+    assert.equal(await evaluate("document.querySelectorAll('[data-limit-notice] button').length"), 0, `${name}: no button with nowhere to go`)
+    await evaluate("document.querySelector('[data-limit-auto]').scrollIntoView({ block: 'center' }); true")
+    await until("(() => { const node = document.querySelector('[data-limit-auto]'); const r = node.getBoundingClientRect(); return node.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)); })()", `${name}: reset status is visible`)
+    await shoot(`${name}-no-room`, "[data-limit-notice]")
+    await screen(`${name}-no-room-full`)
+    await evaluate("import('/src/state/accounts.ts').then(async ({ accounts }) => { await accounts.reload(); return true })")
+    await until("import('/src/state/accounts.ts').then(({ accountsStore, usageKey }) => { const state = accountsStore.get(); return state.accounts.length > 0 && state.accounts.every(account => state.usage[usageKey(account.harness, account.name)]); })", `${name}: initial account readings arrived`)
+    await settle()
+    const reads = await evaluate("window.apexScene.crewReads()")
+    await evaluate("import('/src/state/accounts.ts').then(({ accountsStore }) => { const state = accountsStore.get(); accountsStore.set({ accounts: state.accounts.map(account => ({ ...account })) }); window.apexScene.setChildren(window.apexScene.children().map(agent => agent.child?.limitNotice ? { ...agent, title: agent.title + ' update', child: { ...agent.child } } : agent)); return true })")
+    await settle()
+    await page.capturePage()
+    assert.equal(await evaluate("window.apexScene.crewReads()"), reads, `${name}: unrelated roster narration does not read capacity again`)
+    await evaluate("window.apexScene.setChildren(window.apexScene.children().map(agent => agent.child?.limitNotice ? { ...agent, child: { ...agent.child, limitNotice: { ...agent.child.limitNotice, waiting: { ...agent.child.limitNotice.waiting, version: crypto.randomUUID() } } } } : agent)); true")
+    await until(`window.apexScene.crewReads() > ${reads}`, `${name}: a newer exact wait refreshes its action`)
+
+    await evaluate("window.apexScene.setChildren(window.apexScene.children().map(agent => agent.child?.limitNotice ? { ...agent, child: { ...agent.child, limitNotice: { ...agent.child.limitNotice, waiting: { ...agent.child.limitNotice.waiting, resets: false } } } } : agent)); true")
+    await until("document.querySelector('[data-limit-auto]')?.innerText.includes('Next try')", `${name}: unknown reset is an automatic retry`)
+    assert.doesNotMatch(await text("[data-limit-notice]"), /Resets at|Got it/)
+    await evaluate("import('/src/state/accounts.ts').then(({ accountsStore }) => { window.apexScene.crewLimitRoom(true); const state = accountsStore.get(); accountsStore.set({ usage: { ...state.usage, 'codex:crew-fixture': { status: 'ok', windows: [] } } }); return true })")
+    await until("Boolean(document.querySelector('[data-limit-use]'))", `${name}: real alternative`)
+    assert.match(await text("[data-limit-notice]"), /Use Codex now/)
+    assert.equal(await evaluate("document.querySelectorAll('[data-limit-notice] button').length"), 1, `${name}: one recovery action`)
+    await evaluate("document.querySelector('[data-limit-use]').scrollIntoView({ block: 'center' }); true")
+    await settle()
+    assert.ok(await evaluate("(() => { const button = document.querySelector('[data-limit-use]'); const r = button.getBoundingClientRect(); return button.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)); })()"), `${name}: the action is visible and clickable`)
+    await shoot(`${name}-use-other`, "[data-limit-notice]")
+    const before = await evaluate("window.apexScene.responds().length")
+    await evaluate("document.querySelector('[data-limit-use]').click(); true")
+    await until("window.apexScene.crewContinues().length === 1", `${name}: exact move reaches the host`)
+    const calls = await evaluate("window.apexScene.crewContinues()")
+    assert.equal(calls[0].choice.place, "codex")
+    assert.equal(calls[0].choice.waits.length, 1)
+    assert.ok(calls[0].choice.waits[0].request)
+    assert.equal(await evaluate("window.apexScene.responds().length"), before, `${name}: the move is never a Got it response`)
+    await until("!document.querySelector('[data-limit-notice]')", `${name}: recovery clears its notice`)
+  }
+  console.log("PASS: pending crew limits have exact reset/retry status, no dismissal with no room, and one verified move on desk and phone")
 
   assert.deepEqual(errors.filter((message) => !/Download the React DevTools/.test(message)), [])
   console.log("Limit notice UI: passed")
