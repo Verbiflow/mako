@@ -3897,6 +3897,13 @@ export class Agents implements AgentOperations, ConversationChildren {
   private progressLeftUnwatched(report: Report, conversation: string): boolean {
     // One that handed work on or first named a wait on someone else woke its Apex already: its turn's end says nothing new.
     if (report.status !== "progress" || report.handoff || report.awaits) return false
+    // Nor does one naming again, in other words or later, a wait on someone else that an earlier progress since the last
+    // result or question woke its Apex for (`awaits`), when it names nothing new.
+    const reports = this.store()!.reportsOf(report.child)
+    let from = reports.length
+    while (from > 0 && reports[from - 1]!.status === "progress") from -= 1
+    const since = reports.slice(from)
+    if (since.some((each) => each.awaits) && !awaitedAnew(since.filter((each) => each.id !== report.id).flatMap((each) => each.waitingOn ?? []), report.waitingOn).length) return false
     if (this.deps.readPull && report.waitingOn?.some((item) => waitedPull(item) !== undefined)) return false
     return !this.store()!.armedTurnWaits().some((wait) => wait.conversation === conversation)
   }
@@ -4912,7 +4919,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!conversation || !this.deps.live.atWork(conversation)) return false
     if (this.personWaiting(conversation) !== undefined || this.messageHold(conversation)) return false
     const reading = this.childReading(edge)
-    return reading.working === true && reading.awaiting === undefined && reading.waiting === undefined
+    // One whose last word handed its Apex a wait on someone else is waiting, not quiet.
+    return reading.working === true && reading.awaiting === undefined && reading.waiting === undefined && !this.latest.get(child)?.awaits
   }
 
   /**
