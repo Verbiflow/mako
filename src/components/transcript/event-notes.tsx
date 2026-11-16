@@ -19,6 +19,9 @@ export function EventNotes({ messages, inline, refused }: { messages: readonly C
   for (const message of messages) {
     const note = message.note
     if (!note) continue
+    // An MCP server that didn't start isn't this conversation's to say: one that needs sign-in is said once, with its
+    // way in, in the rail and Settings › MCP (`McpSignIns`), and any other is the host's log.
+    if (note.label === MCP_SERVER_FAILED) continue
     const last = runs.at(-1)
     if (note.setup && last && "notes" in last) {
       last.notes.push(note)

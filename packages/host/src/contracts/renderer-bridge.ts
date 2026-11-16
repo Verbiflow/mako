@@ -81,6 +81,7 @@ import type { SyncStatus } from "./sync-status.js"
 import type { SyncReadings } from "./sync-readings.js"
 import type { MakoFootprint } from "./mako-footprint.js"
 import type { FileEventsService } from "./file-events-service.js"
+import type { McpSignIns } from "./mcp-sign-ins.js"
 import type { CloudTurnOn } from "./cloud-turn-on.js"
 import type { SetupFix, SimulatorSetup } from "./simulator-setup.js"
 import type { SimulatorsActInput, SimulatorsActResult, SimulatorsListed, SimulatorsOpenInput, SimulatorsOpenResult, SimulatorsReleaseInput, SimulatorsReleaseResult, SimulatorsWatchInput, SimulatorsWatchResult } from "./simulators.js"
@@ -540,6 +541,10 @@ export function createMakoBridge(transport: BridgeTransport) {
     makoFootprint: () => invokeTrustedHost<MakoFootprint>("mako:mako-footprint"),
     /** macOS's file-change service as this host reads it; the host pushes `file-events-service` as it changes. */
     fileEventsService: () => invokeTrustedHost<FileEventsService>("mako:file-events-service"),
+    /** The MCP servers that need the person's sign-in; the host pushes `mcp-sign-ins` as they change. */
+    mcpSignIns: () => invokeTrustedHost<McpSignIns>("mako:mcp-sign-ins"),
+    /** Signs one in its harness's own way: a command Mako runs, or a page the window opens (`McpSignIn.url`). */
+    mcpSignIn: (harness: string, server: string) => invokeTrustedHost<McpSignIns>("mako:mcp-sign-in", harness, server),
     /** Restarts fseventsd through macOS's password dialog, evidence first, and answers with how it went. */
     fileEventsRestart: () => invokeTrustedHost<FileEventsService>("mako:file-events-restart"),
     /** "Not now", or closing the restart's outcome: not said again this episode or today unless it gets worse. */
