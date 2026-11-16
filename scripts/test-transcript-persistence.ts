@@ -135,6 +135,10 @@ try {
     "terminal-proof",
   ])
     assert.ok(carried.includes(content), `Replay retains ${content}`)
+  // Shiki stops styling a line past its tokenizeTimeLimit (500 ms), and the first call compiles the grammar: 100 to
+  // 160 ms cold on a Mac against 1 ms warm, past 500 on a loaded runner at a shard's start, where the comment came
+  // back unstyled. What's held here is the theme's variables, so they're read from a line tokenized warm.
+  await highlightCode("const warm = 0", "typescript")
   const tokens = await highlightCode(
     'const answer = "proof" // retained',
     "typescript"
