@@ -99,6 +99,8 @@ export const STEPS = [
   [74, "npm run test:agents-wake"],
   [3, "npm run test:fins-reach-released-apex"],
   [68, "npm run test:fin-pull-waits"],
+  // The mako server's instructions fit Claude's 4,096-character cut, every rule inside it.
+  [1, "npm run test:mako-instructions"],
   // A turn's wait: armed, met, timed and fired once through restarts, a cancel racing it and a sleep.
   [1, "npm run test:turn-waits"],
   [12, "npm run test:fin-resume"],
