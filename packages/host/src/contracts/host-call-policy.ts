@@ -304,6 +304,8 @@ const replays = [
   "mako:agents-continue-next",
   /** Cancelling a turn that has already stopped stops nothing. */
   "mako:live-cancel",
+  /** Stop waiting names the wait: one that already ended, or a newer one, is left as it is. */
+  "mako:live-wait-stop",
   /** Stopping a background task that has already ended stops nothing. */
   "mako:live-stop-agent",
   /** Closing a closed conversation is a no-op. */

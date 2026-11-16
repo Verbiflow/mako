@@ -673,6 +673,8 @@ export interface LiveSnapshot extends LiveSummary {
   nativeActivity?: NativeActivity
   /** Held by this host only, like `activityAt`; see `SideConversation`. */
   side?: import("./live-side-questions.js").SideConversation
+  /** The wait its agent armed for when its turn ends, as the person's waiting line reads it; absent once it isn't armed. Read from the Thread store, never kept in the journal. */
+  turnWait?: import("./turn-waits.js").TurnWaitLine
   /**
    * Why the history `baseSource` names could not be read, which neither its
    * harness nor the record store had. Held by this host only: the next load
@@ -702,6 +704,8 @@ export interface LiveBatch {
   goal?: import("./live-goals.js").ConversationGoal | null
   /** `null` when the side conversation closed; absent when it did not change. */
   side?: import("./live-side-questions.js").SideConversation | null
+  /** `null` when the wait ended (fired, cancelled); absent when it did not change. */
+  turnWait?: import("./turn-waits.js").TurnWaitLine | null
   /** `null` when the history was read after all; absent when it did not change. */
   historyFailure?: string | null
   /** Every turn Mako didn't send, when one was added; absent when none was. */
@@ -845,7 +849,7 @@ export function sharedSession(previous: LiveSessionState, next: LiveSessionState
 }
 
 /** The fields a batch carries whole whenever they are a new value; see `sharedFields`. */
-const WHOLE_FIELDS = ["control", "nativeAgents", "goal", "side", "harnessTurns", "spentThrough", "permissions", "nativeActivity"] as const
+const WHOLE_FIELDS = ["control", "nativeAgents", "goal", "side", "turnWait", "harnessTurns", "spentThrough", "permissions", "nativeActivity"] as const
 type Shared = Pick<LiveSnapshot, (typeof WHOLE_FIELDS)[number] | "requests">
 
 function keepField<Key extends keyof Shared>(target: Shared, source: Shared, key: Key): void {

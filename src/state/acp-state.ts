@@ -40,6 +40,8 @@ interface AcpConversationBase {
   nativeAgents?: LiveSnapshot["nativeAgents"]
   goal?: LiveSnapshot["goal"]
   side?: LiveSnapshot["side"]
+  /** The wait its agent armed, as the person's waiting line reads it (`TurnWaitLine`). */
+  turnWait?: LiveSnapshot["turnWait"]
   key: string
   draftKey: string
   harness: string
