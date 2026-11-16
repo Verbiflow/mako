@@ -88,6 +88,7 @@ import type { CloudRoute, DiagnosticEvents } from "../contracts/telemetry.js"
 import { CloudHarnessesSchema, type CloudHarnesses } from "../contracts/cloud-harnesses.js"
 import { errorMessage } from "../base/error-message.js"
 import { SecretLocked, type LegacyFiles, type SecretRecord, type Secrets } from "../base/secrets.js"
+import type { AccountEventCursors, AccountEventScope } from "./account-event-cursor.js"
 import { RequestTraces } from "./request-trace.js"
 import { CloudLink, PING_MS, type CloudLinkAttachment, type CloudLinkEnding, type CloudLinkOptions, type CloudLinkState } from "./cloud-link.js"
 
@@ -228,6 +229,11 @@ const StoredSchema = z.object({
 })
 type Stored = z.infer<typeof StoredSchema>
 
+/** A restarted stream keeps its cursor through a token rotation, but never through a different enrollment. */
+function eventScope(stored: Stored): AccountEventScope {
+  return { cloud: stored.cloud, account: stored.account.id, device: stored.device.id, createdAt: stored.device.createdAt }
+}
+
 /** A sign-out the cloud hasn't heard of yet: the device's credential, kept sealed only to remove the device there. */
 const UnfinishedSignOutSchema = z.object({ version: z.literal(1), cloud: z.string(), credential: z.string(), device: z.string() })
 type UnfinishedSignOut = z.infer<typeof UnfinishedSignOutSchema>
@@ -289,6 +295,8 @@ export type CloudAccountOptions = {
   /** Where the device credential is kept: a `mako-sign-in` record, one per data root. */
   secrets: Secrets
   secretName: string
+  /** Non-secret stream checkpoints; advancing one never replaces the device credential or its borrowing grant. */
+  eventCursors: AccountEventCursors
   openExternal: (url: string) => Promise<void>
   /** How this Mac names itself on the account's device list. */
   device: () => Promise<{ name: string; platform: string; appVersion: string }>
@@ -412,6 +420,7 @@ export class CloudAccounts {
   /** How far each call got, for the log line of one that fails or is slow. */
   readonly #traces = new RequestTraces(CORRELATION_HEADER)
   #closed = false
+  #closing: Promise<void> | undefined
   #ready: Promise<void>
 
   constructor(options: CloudAccountOptions) {
@@ -1330,7 +1339,8 @@ export class CloudAccounts {
     this.#runtimeLink?.quiet()
   }
 
-  close(): void {
+  close(): Promise<void> {
+    if (this.#closing) return this.#closing
     this.#goingQuiet("quit")
     this.#closed = true
     if (this.#seenSave) {
@@ -1342,6 +1352,7 @@ export class CloudAccounts {
     if (this.#signIn) this.#endSignIn()
     this.#disconnect()
     void this.#pool.close().catch(() => undefined)
+    return this.#closing = this.#writes.then(() => undefined)
   }
 
   // Signing in.
@@ -1410,7 +1421,13 @@ export class CloudAccounts {
     }
     if (!record) return undefined
     const stored = StoredSchema.parse(JSON.parse(record.value))
-    return stored.cloud === this.#cloud?.origin ? stored : undefined
+    if (stored.cloud !== this.#cloud?.origin) return undefined
+    const cursor = await this.#options.eventCursors.read(eventScope(stored)).catch((error: Error) => {
+      this.#options.log?.("cloud account event cursor not read; following from the saved credential", { error: error.message })
+      return undefined
+    })
+    const seen = Math.max(stored.seen ?? 0, cursor ?? 0)
+    return seen ? { ...stored, seen } : stored
   }
 
   /**
@@ -1444,7 +1461,10 @@ export class CloudAccounts {
   #saveSeen(): void {
     const stored = this.#stored
     if (!stored || this.#seen === undefined) return
-    void this.#save(stored).catch((error: Error) => this.#options.log?.("cloud account event not remembered as heard", { error: error.message }))
+    const scope = eventScope(stored), seen = this.#seen
+    const write = this.#writes.then(() => this.#options.eventCursors.write(scope, seen))
+    this.#writes = write.catch(() => undefined)
+    void write.catch((error: Error) => this.#options.log?.("cloud account event not remembered as heard", { error: error.message }))
   }
 
   async #forget(notice?: CloudSignedOutNotice): Promise<void> {
@@ -1718,7 +1738,7 @@ export class CloudAccounts {
    */
   #heard(frame: EventFrame): void {
     const stored = this.#stored
-    if (!stored || frame.stream !== accountStream(stored.account.id) || frame.seq <= (this.#seen ?? 0)) return
+    if (this.#closed || !stored || frame.stream !== accountStream(stored.account.id) || frame.seq <= (this.#seen ?? 0)) return
     const before = this.#seen
     this.#seen = frame.seq
     this.#rememberSeen()

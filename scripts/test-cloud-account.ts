@@ -11,7 +11,7 @@ import assert from "node:assert/strict"
 import { createHash, randomUUID } from "node:crypto"
 import { once } from "node:events"
 import { existsSync } from "node:fs"
-import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises"
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { createServer, type IncomingMessage } from "node:http"
 import { connect, createServer as createTcpServer, Socket } from "node:net"
 import type { AddressInfo } from "node:net"
@@ -47,6 +47,9 @@ import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import { QuietNoteSchema, type QuietNote } from "@mako/protocol/handoff"
 import { MOVE_REASON_MAX, MoveHandOverRequestSchema, MoveRefuseRequestSchema } from "@mako/protocol/moves"
 import { HandoffSchema, type Handoff } from "@mako/host/contracts/thread-execution"
+import { FileAccountEventCursors, memoryAccountEventCursors } from "@mako/host/usage/account-event-cursor"
+import { GrantedSecrets } from "@mako/host/base/secret-grants"
+import { memorySecrets } from "@mako/host/base/secrets"
 import { CloudAccounts, type CloudAccountOptions, type CloudRuntime } from "@mako/host/usage/cloud-account"
 import { declareCloudAccountMethods } from "@mako/host/usage/cloud-account-methods"
 import { RequestTraces } from "@mako/host/usage/request-trace"
@@ -446,6 +449,7 @@ function desktop(options: Partial<CloudAccountOptions> & { url: string | undefin
   const accounts = new CloudAccounts({
     secrets: secrets(),
     secretName: `cloud/${randomUUID()}`,
+    eventCursors: new FileAccountEventCursors(join(scratch, "account-events")),
     openExternal: async (url) => void opened.push(url),
     device: async () => ({ name: "Ada's MacBook Pro", platform: "macOS 26.0", appVersion: "0.4.0" }),
     onChange: (account: CloudAccount) => {
@@ -545,7 +549,7 @@ test("a held ownership check promptly replaces a half-open account, then returns
     mac.accounts.checkAccountWaiting()
     console.log(`  half-open account replaced itself in ${(performance.now() - began).toFixed(0)} ms`)
     assert.equal(mac.accounts.account().state.status, "signed-in", "a transport failure never signs the person out")
-  } finally { mac.accounts.close() }
+  } finally { await mac.accounts.close() }
 })
 
 test("after a sleep, a call to the cloud never waits on a pooled connection the network dropped", async () => {
@@ -692,7 +696,7 @@ test("the sign-in survives a restart and reconnects from the sealed credential",
   const secretName = "cloud/restart"
   const first = await signedIn(cloud, { secretName })
   assert.equal(((await stat(recordPath(secretName))).mode & 0o777).toString(8), "600")
-  first.accounts.close()
+  await first.accounts.close()
 
   const again = desktop({ url: cloud.url, secretName })
   const resumed = await again.accounts.ready()
@@ -763,7 +767,7 @@ test("a Mac removed while Mako was closed finds out on its first refresh", async
   const cloud = await fakeCloud()
   const secretName = "cloud/removed-offline"
   const mac = await signedIn(cloud, { secretName })
-  mac.accounts.close()
+  await mac.accounts.close()
   for (const device of cloud.devices.values()) device.removed = true
   const again = desktop({ url: cloud.url, secretName })
   assert.equal((await again.accounts.ready()).state.status, "signed-in", "it doesn't know yet")
@@ -778,7 +782,7 @@ test("a successor credential is kept before it's used, and used from the next re
   const device = [...cloud.devices.values()][0]
   assert.ok(device)
   const original = device.credential
-  first.accounts.close()
+  await first.accounts.close()
 
   // A day on, the cloud offers a successor with the next token: kept sealed, then used.
   cloud.options.rotate = true
@@ -789,7 +793,7 @@ test("a successor credential is kept before it's used, and used from the next re
   const successor = device.successor
   assert.ok(successor, "a successor was offered")
   assert.ok(!(await readFile(recordPath(secretName), "utf8")).includes(successor), "kept sealed, never in the clear")
-  again.accounts.close()
+  await again.accounts.close()
 
   // After a restart, the successor is this Mac's credential: the old one is never sent again.
   const later = desktop({ url: cloud.url, secretName })
@@ -798,14 +802,14 @@ test("a successor credential is kept before it's used, and used from the next re
   assert.equal(cloud.refreshedWith.at(-1), successor)
   assert.equal(device.credential, successor, "the cloud took the successor as the device's own")
   assert.ok(!cloud.refreshedWith.slice(cloud.refreshedWith.indexOf(successor)).includes(original), "the retired credential is never used again")
-  later.accounts.close()
+  await later.accounts.close()
 })
 
 test("a sign-in the cloud saw used from somewhere else signs this Mac out, saying so", async () => {
   const cloud = await fakeCloud()
   const secretName = "cloud/reused"
   const mac = await signedIn(cloud, { secretName })
-  mac.accounts.close()
+  await mac.accounts.close()
   const device = [...cloud.devices.values()][0]
   assert.ok(device)
   // Someone else's copy took over first: the credential this Mac holds is retired.
@@ -827,7 +831,9 @@ async function waitFor(check: () => boolean | Promise<boolean>, label: string): 
 /** The last account event the sealed sign-in under `secretName` says this Mac heard. */
 async function heardUpTo(secretName: string): Promise<number | undefined> {
   const record = await secrets().read("mako-sign-in", secretName)
-  return record ? z.object({ seen: z.number().optional() }).parse(JSON.parse(record.value)).seen : undefined
+  if (!record) return undefined
+  const saved = z.object({ cloud: z.string(), account: z.object({ id: z.string() }), device: z.object({ id: z.string(), createdAt: z.string() }), seen: z.number().optional() }).parse(JSON.parse(record.value))
+  return Math.max(saved.seen ?? 0, await new FileAccountEventCursors(join(scratch, "account-events")).read({ cloud: saved.cloud, account: saved.account.id, device: saved.device.id, createdAt: saved.device.createdAt }) ?? 0)
 }
 
 test("the account's stream says when a device joins, once, and a Mac that was off hears it when it's back", async () => {
@@ -847,7 +853,7 @@ test("the account's stream says when a device joins, once, and a Mac that was of
   await waitFor(() => heard.length === 2, "a removal is said, as this Mac's own")
   assert.deepEqual(heard[1], { seq: 3, type: "device-removed", mine: true }, "an unknown kind is passed over, never refused")
   // Heard, then kept: closing keeps the last one heard rather than wait for the next write.
-  first.accounts.close()
+  await first.accounts.close()
   await waitFor(async () => (await heardUpTo(secretName)) === 3, "the last event heard kept")
 
   // While this Mac was off a device joined; another joined before this Mac did, which isn't news to it.
@@ -858,7 +864,7 @@ test("the account's stream says when a device joins, once, and a Mac that was of
   await waitFor(() => cloud.subscribes.includes(`account:${cloud.account.id} after 3`), "followed on from the last event heard")
   await waitFor(() => again.length === 1, "what happened while it was off is said when it's back")
   assert.equal(again[0]?.seq, 4)
-  later.accounts.close()
+  await later.accounts.close()
   const fresh = await fakeCloud()
   fresh.announce(joined(randomUUID()), "2020-01-01T00:00:00.000Z")
   const seen: number[] = []
@@ -866,7 +872,7 @@ test("the account's stream says when a device joins, once, and a Mac that was of
   await waitFor(() => fresh.subscribes.length > 0, "followed")
   await new Promise((resolve) => setTimeout(resolve, 200))
   assert.deepEqual(seen, [], "a device that joined before this Mac did isn't news to it")
-  newMac.accounts.close()
+  await newMac.accounts.close()
 })
 
 test("a number the account's stream skipped, or one it says was lost, is said as a gap, so what lists the account reads it whole again", async () => {
@@ -898,35 +904,108 @@ test("each time the account's stream opens, and again once a dropped one is back
   await waitFor(() => linked === 2, "told again once it's back")
 })
 
-test("account events are told as they're heard, in order, while the keychain is still writing the last one heard, and it's kept with the newest", async () => {
+test("account event cursors are monotonic, identity-scoped and atomic without changing newer formats", async () => {
+  const directory = join(scratch, randomUUID())
+  const cursors = new FileAccountEventCursors(directory)
+  const scope = { cloud: "https://example.test", account: "account", device: "device", createdAt: "2026-01-01T00:00:00Z" }
+  assert.equal(await cursors.read(scope), undefined)
+  await Promise.all([cursors.write(scope, 7), cursors.write(scope, 3)])
+  const reopened = new FileAccountEventCursors(directory)
+  assert.equal(await reopened.read(scope), 7)
+  assert.equal(await reopened.read({ ...scope, createdAt: "2026-01-02T00:00:00Z" }), undefined)
+  const [name] = await readdir(directory)
+  assert.ok(name)
+  const file = join(directory, name)
+  const saved = JSON.parse(await readFile(file, "utf8"))
+  await writeFile(file, JSON.stringify({ ...saved, extra: { kept: true } }))
+  await reopened.write(scope, 8)
+  assert.deepEqual(JSON.parse(await readFile(file, "utf8")).extra, { kept: true })
+  const newer = JSON.stringify({ ...saved, version: 2, reads: 1 })
+  await writeFile(file, newer)
+  assert.equal(await reopened.read(scope), 7)
+  await assert.rejects(reopened.write(scope, 9), /cannot change/)
+  assert.equal(await readFile(file, "utf8"), newer)
+  await writeFile(file, JSON.stringify({ ...saved, version: 2, reads: 2 }))
+  await assert.rejects(reopened.read(scope), /newer Mako/)
+  await writeFile(file, " ".repeat(16 * 1024 + 1))
+  await assert.rejects(reopened.read(scope), /too large/)
+  await writeFile(file, JSON.stringify(saved))
+  await reopened.write(scope, 10)
+  assert.equal(await reopened.read(scope), 10, "a refused write does not poison the queue")
+})
+
+test("account events preserve the sign-in grant and its live lease, including across cursor persistence and restart", async () => {
   const cloud = await fakeCloud()
-  const secretName = "cloud/account-events-held"
-  const base = secrets()
-  // A keychain that answers late: every write waits until it's let go.
-  let letGo: () => void = () => {}
-  let held = false
-  const late: Secrets = {
-    durable: () => base.durable(),
-    read: (kind, name) => base.read(kind, name),
-    write: async (kind, name, value, options) => {
-      if (held) await new Promise<void>((resolve) => (letGo = resolve))
-      return base.write(kind, name, value, options)
-    },
-    delete: (kind, name) => base.delete(kind, name),
-    list: (kind) => base.list(kind),
+  const secretName = "cloud/stable-event-grant"
+  const inner = memorySecrets()
+  const granted = new GrantedSecrets(inner)
+  let writes = 0
+  const counted: Secrets = {
+    durable: () => granted.durable(), read: (kind, name) => granted.read(kind, name),
+    list: kind => granted.list(kind), delete: (kind, name) => granted.delete(kind, name),
+    write: (kind, name, value, options) => { writes++; return granted.write(kind, name, value, options) },
   }
+  const eventCursors = memoryAccountEventCursors()
   const heard: number[] = []
-  const mac = await signedIn(cloud, { secretName, secrets: late, onAccountEvent: (event) => heard.push(event.seq) })
-  await waitFor(() => cloud.subscribes.includes(`account:${cloud.account.id} after 0`), "followed the account's stream")
-  held = true
+  const mac = await signedIn(cloud, { secretName, secrets: counted, eventCursors, onAccountEvent: event => heard.push(event.seq) })
+  await waitFor(() => cloud.subscribes.includes(`account:${cloud.account.id} after 0`), "following")
+  const record = await inner.read("mako-sign-in", secretName)
+  assert.ok(record)
+  const originalGrants = await granted.broker.grants()
+  const lease = await granted.lend("mako-sign-in", secretName, { thread: "working", repository: "/work/example" }, "a running connection", "one-launch")
+  assert.ok("lease" in lease)
+  const scope = { cloud: cloud.url, account: cloud.account.id, device: [...cloud.devices.values()][0]!.id, createdAt: [...cloud.devices.values()][0]!.createdAt }
+  const baseline = writes
   const joined = () => ({ type: "device-joined", device: { id: randomUUID(), kind: "cli", name: "build-box", platform: "Linux", enrolledBy: "device-code", from: { city: "Frankfurt", region: null, country: "DE" } } })
   for (let event = 0; event < 5; event++) cloud.announce(joined())
-  await waitFor(() => heard.length === 5, "every event told, none waiting on the keychain")
-  assert.deepEqual(heard, [1, 2, 3, 4, 5], "in the order the stream said them")
-  held = false
-  mac.accounts.close()
+  await waitFor(async () => (await eventCursors.read(scope)) === 5 || writes > baseline, "cursor checkpoint or credential rewrite")
+  assert.equal(writes, baseline, "an event checkpoint must not rewrite the credential")
+  assert.equal((await inner.read("mako-sign-in", secretName))?.version, record.version)
+  assert.deepEqual(await granted.broker.grants(), originalGrants, "the original grant is reused")
+  assert.equal((await granted.broker.lease(lease.lease.id))?.ended, undefined, "the live lease stays valid")
+  assert.deepEqual(heard, [1, 2, 3, 4, 5])
+  await mac.accounts.close()
+  const again = desktop({ url: cloud.url, secretName, secrets: counted, eventCursors })
+  await again.accounts.ready()
+  await again.until(connected, "connected again")
+  await waitFor(() => cloud.subscribes.includes(`account:${cloud.account.id} after 5`), "resumed after the persisted cursor")
+  assert.equal(writes, baseline, "restarting does not mint a grant")
+  cloud.options.rotate = true
+  cloud.closeAll(4001)
+  await waitFor(() => writes > baseline, "a real credential successor saved")
+  await again.until(connected, "connected with the successor")
+  assert.equal(writes, baseline + 1)
+  assert.notEqual((await inner.read("mako-sign-in", secretName))?.version, record.version)
+  assert.equal((await granted.broker.lease(lease.lease.id))?.ended, "revoked", "real rotation still retires the old lease")
+  await again.accounts.close()
+})
+
+test("account events are delivered while their cursor write waits, and close joins the latest checkpoint", async () => {
+  const cloud = await fakeCloud()
+  const eventCursors = memoryAccountEventCursors()
+  let letGo: () => void = () => {}
+  let entered: () => void = () => {}
+  const waiting = new Promise<void>(resolve => { entered = resolve })
+  const release = new Promise<void>(resolve => { letGo = resolve })
+  const heard: number[] = []
+  const mac = await signedIn(cloud, {
+    eventCursors: { read: scope => eventCursors.read(scope), write: async (scope, seen) => { entered(); await release; await eventCursors.write(scope, seen) } },
+    onAccountEvent: event => heard.push(event.seq),
+  })
+  const joined = () => ({ type: "device-joined", device: { id: randomUUID(), kind: "cli", name: "build-box", platform: "Linux", enrolledBy: "device-code", from: { city: "Frankfurt", region: null, country: "DE" } } })
+  await waitFor(() => cloud.subscribes.length > 0, "following")
+  cloud.announce(joined())
+  await waiting
+  for (let event = 0; event < 4; event++) cloud.announce(joined())
+  await waitFor(() => heard.length === 5, "events delivered despite the blocked writer")
+  let closed = false
+  const closing = mac.accounts.close().then(() => { closed = true })
+  await Promise.resolve()
+  assert.equal(closed, false, "close joins the writer")
   letGo()
-  await waitFor(async () => (await heardUpTo(secretName)) === 5, "the newest kept")
+  await closing
+  const device = [...cloud.devices.values()][0]!
+  assert.equal(await eventCursors.read({ cloud: cloud.url, account: cloud.account.id, device: device.id, createdAt: device.createdAt }), 5)
 })
 
 test("a sign-out the cloud didn't hear is kept sealed and finished, here or after a restart, never leaving a working credential", async () => {
@@ -941,7 +1020,7 @@ test("a sign-out the cloud didn't hear is kept sealed and finished, here or afte
   assert.deepEqual(account.state, { status: "signed-out", finishing: true }, "signed out here at once, and said to be finishing")
   assert.equal(device.removed, false, "the cloud hasn't heard yet")
   assert.ok(!(await readFile(recordPath(`${secretName}.signing-out`), "utf8")).includes(device.credential), "the credential kept to finish it is sealed")
-  mac.accounts.close()
+  await mac.accounts.close()
 
   // After a restart, the sign-out is finished first: the device is removed in the cloud.
   const again = desktop({ url: cloud.url, secretName })
@@ -950,7 +1029,7 @@ test("a sign-out the cloud didn't hear is kept sealed and finished, here or afte
   assert.deepEqual(again.accounts.account().state, { status: "signed-out" }, "not said to be finishing")
   // It goes once the cloud has answered, after the cloud has removed the device.
   await waitFor(() => !existsSync(recordPath(`${secretName}.signing-out`)), "the credential it kept gone")
-  again.accounts.close()
+  await again.accounts.close()
 })
 
 test("signing out removes this device from the account", async () => {
@@ -1278,7 +1357,7 @@ test("a Mac going to sleep says so on its runtime's link first, which stays clos
   let otherLinked = 0
   const other = await signedIn(cloud, { runtime: laptop, onRuntimeLinked: () => { otherLinked += 1 } })
   await waitFor(() => otherLinked === 1 && cloud.runtimes().length === 1, "the other Mac's runtime")
-  other.accounts.close()
+  await other.accounts.close()
   await waitFor(() => cloud.quiets.length === 4, "quitting Mako")
   assert.equal(cloud.quiets.at(-1), "quit")
 })
@@ -1310,7 +1389,7 @@ test("a quiet note names a project folder's project worktree only to a gateway w
   await unlinked.accounts.quiet(note(project))
   assert.equal(cloud.notes.length, 1)
   assert.equal(last().project, undefined, "never sent blind")
-  unlinked.accounts.close()
+  await unlinked.accounts.close()
   // A gateway whose link agrees one before it: left out, and the rest of the note goes as it was.
   const before: CloudRuntime = {
     serve: (link, { runtimeId, credential, threads }) =>
@@ -1325,7 +1404,7 @@ test("a quiet note names a project folder's project worktree only to a gateway w
   const { project: _left, ...rest } = sent.threads[0]!
   assert.deepEqual(cloud.notes.at(-1), { ...sent, threads: [rest] }, "only the project left out")
   assert.deepEqual(recorded, [cloud.notes.at(-1)], "what a going-away records is the note as it went")
-  older.accounts.close()
+  await older.accounts.close()
   // A gateway whose link agreed it: named, and still once the link has dropped (a Mac going away often has none).
   let agreed = 0
   const mac = await signedIn(cloud, { runtime: laptop, onRuntimeLinked: () => { agreed += 1 } })
@@ -1336,7 +1415,7 @@ test("a quiet note names a project folder's project worktree only to a gateway w
   await waitFor(() => cloud.runtimes().length === 0, "the link closed for the sleep")
   await mac.accounts.quiet(note(project))
   assert.equal(last().project, project, "the version its link last agreed")
-  mac.accounts.close()
+  await mac.accounts.close()
 })
 
 test("a quiet note names a project folder's other repositories only to a gateway whose link agreed them", async () => {
@@ -1359,7 +1438,7 @@ test("a quiet note names a project folder's other repositories only to a gateway
   assert.equal(last().project, project, "the project, which it takes")
   assert.equal(last().others, undefined, "never the others sent blind")
   assert.equal(last().projectFrom, undefined, "nor the folder the project mirrors")
-  older.accounts.close()
+  await older.accounts.close()
   // A gateway whose link agreed them: both named.
   let agreed = 0
   const mac = await signedIn(cloud, { runtime: laptop, onRuntimeLinked: () => { agreed += 1 } })
@@ -1368,7 +1447,7 @@ test("a quiet note names a project folder's other repositories only to a gateway
   assert.equal(last().project, project)
   assert.deepEqual(last().others, others)
   assert.equal(last().projectFrom, projectFrom)
-  mac.accounts.close()
+  await mac.accounts.close()
 })
 
 test("a going-away records the very note that goes, though the link agreed a lower version after the note was made", async () => {
@@ -1401,7 +1480,7 @@ test("a going-away records the very note that goes, though the link agreed a low
   const before = cloud.notes.length
   await assert.rejects(mac.accounts.quiet(note, async () => { throw new Error("disk full") }), /disk full/)
   assert.equal(cloud.notes.length, before, "nothing sent")
-  mac.accounts.close()
+  await mac.accounts.close()
 })
 
 /** Another device's call to `runtimeId` through its session, as that device. */
