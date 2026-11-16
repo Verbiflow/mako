@@ -141,6 +141,14 @@ schedules, and a failing schedule is pinned there.
     attempt cannot silently resend the reports. Proven-unsent digests still wait
     out usage limits as digests; Stop, ordinary-Thread Off and native ownership guards remain in force.
 
+16. **What one sender queued goes as one turn.** When an agent's queued
+    message goes, the plain messages from the same sender queued right behind
+    it and admitted after it (no attachments, grants, pause, edit, hold, digest
+    or continuation, and the same `notification`) go with it, in order, within
+    `JOINED_MAX` and `JOINED_CHARS` (`foldQueued`). Until then each is its own
+    row; a folded one is canceled with `joinedInto`, never dropped, and its ID
+    resolves to the message that carried it. An interrupt's message goes alone.
+
 ## What each failure leaves
 
 | What happened | The switch | Its message |

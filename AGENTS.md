@@ -850,6 +850,13 @@ the turn it runs, for a correction to what it's doing now; `interrupt`, which
 stops that turn (`LiveConversations.interrupt`) and starts the next with the
 message, ahead of what was queued, which still follows in order. An idle Fin
 takes any as its next turn. A direct message, a redirect and an answer steer.
+When a queued message from an agent goes, the plain messages its sender
+queued right behind it, admitted after it, go with it as one turn, in order,
+each under a line saying when it was sent (`foldQueued`), so a Fin back from
+a long turn reads all of it at once; each row stays the person's to edit
+until it goes, and one folded is canceled with `joinedInto`, its ID kept in
+the carrier's `joined` for a repeat or a handoff. A steer that arrives as a
+turn is handed over waits for its run rather than queueing.
 A steer queues the message first and steers that request (`steer-queued`), so
 one the harness refuses, then or when its turn ends (Cursor's `answersOnEnd`),
 stays where it was queued and nothing sent after it overtakes it; the call
