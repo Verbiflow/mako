@@ -231,6 +231,11 @@ let cancelBurst: (() => void) | null = null
 /** Each Apex's run of Fins' asks announced, by subject: when the last came and the Fins it named. */
 const finAskRuns = new Map<string, { at: number; fins: string[] }>()
 
+/** How many Apexes' runs of Fins' asks are held: only those still open, for tests. */
+export function openFinAskRuns(): number {
+  return finAskRuns.size
+}
+
 /** "3 Fins need you: Sheet motion, Push wording and Thread list swipe": what one announcement of a run says. */
 export function finAsksLine(fins: readonly string[]): string {
   const names = fins.length > 1 ? `${fins.slice(0, -1).join(", ")} and ${fins.at(-1)}` : (fins[0] ?? "")
@@ -246,6 +251,8 @@ function finAskAnnouncement(item: NotificationItem, fin: string, now: number, st
   const run = finAskRuns.get(item.subject.id)
   const open = run && now - run.at < FIN_ASKS_COALESCE_MS && state.items.some((each) => !each.seen && each.subject.id === item.subject.id && asks(each.kind))
   const fins = open ? [...run.fins.filter((name) => name !== fin), fin] : [fin]
+  // A run past its window can't be joined again, so each write lets the ended ones go: the map holds only runs open now.
+  for (const [subject, each] of finAskRuns) if (now - each.at >= FIN_ASKS_COALESCE_MS) finAskRuns.delete(subject)
   finAskRuns.set(item.subject.id, { at: now, fins })
   if (fins.length < 2) return item
   return { ...item, kind: "needs-you", body: finAsksLine(fins), alongside: undefined }
