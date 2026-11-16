@@ -3,7 +3,9 @@ import { lstat, open } from "node:fs/promises"
 import { request } from "node:http"
 import { dirname, isAbsolute } from "node:path"
 import { randomUUID } from "node:crypto"
+import { z } from "zod"
 import { ControlFault } from "@mako/control/control"
+import { ControlStepsSchema, type ControlSteps } from "@mako/control/program"
 import {
   controlSessionBuild,
   SessionDescriptorSchema,
@@ -77,10 +79,42 @@ async function readDescriptor(file: string): Promise<SessionDescriptor> {
   }
 }
 
+/** A step frame of an NDJSON reply (`SessionRequest.steps`); the reply's own line has a `requestId` instead. */
+const StepFrameSchema = z.object({ steps: ControlStepsSchema }).strict()
+
+/**
+ * Splits an NDJSON reply as it arrives: each step frame goes to `steps` at
+ * once, and the rest, the reply's own line, is kept for the end.
+ */
+function stepFrames(steps: (steps: ControlSteps) => void) {
+  let partial = ""
+  let rest = ""
+  const line = (text: string) => {
+    if (!text.trim()) return
+    const frame = text.startsWith('{"steps":') ? StepFrameSchema.safeParse(JSON.parse(text)) : undefined
+    if (frame?.success) steps(frame.data.steps)
+    else rest += text
+  }
+  return {
+    take(chunk: Buffer): void {
+      const lines = (partial + chunk.toString("utf8")).split("\n")
+      partial = lines.pop() ?? ""
+      for (const text of lines) line(text)
+    },
+    reply(): string {
+      line(partial)
+      partial = ""
+      return rest
+    },
+  }
+}
+
 export async function requestControlSession(
   descriptor: SessionDescriptor,
   operation: SessionOperation,
-  signal: AbortSignal
+  signal: AbortSignal,
+  /** Asks for a js call's steps as they change (`SessionRequest.steps`). */
+  steps?: (steps: ControlSteps) => void
 ) {
   if (signal.aborted)
     throw new ControlFault(
@@ -104,6 +138,7 @@ export async function requestControlSession(
           },
           (response) => {
             const chunks: Buffer[] = []
+            const frames = steps ? stepFrames(steps) : undefined
             let bytes = 0
             response.on("data", (chunk: Buffer) => {
               bytes += chunk.length
@@ -111,13 +146,14 @@ export async function requestControlSession(
                 response.destroy(new Error("Session reply exceeds 32 MiB"))
                 return
               }
-              chunks.push(chunk)
+              if (frames) frames.take(chunk)
+              else chunks.push(chunk)
             })
             response.once("error", reject)
             response.once("end", () => {
               try {
                 const reply = SessionReplySchema.parse(
-                  JSON.parse(Buffer.concat(chunks).toString("utf8"))
+                  JSON.parse(frames ? frames.reply() : Buffer.concat(chunks).toString("utf8"))
                 )
                 if (reply.requestId !== requestId)
                   throw new Error("Session reply identity mismatch")
@@ -139,6 +175,7 @@ export async function requestControlSession(
             socket: undefined,
             requestId,
             operation,
+            ...steps && { steps: true },
           })
         )
       }
@@ -158,9 +195,10 @@ export async function requestControlSession(
 export async function invokeControlSession(
   descriptor: SessionDescriptor,
   operation: SessionOperation,
-  signal: AbortSignal
+  signal: AbortSignal,
+  steps?: (steps: ControlSteps) => void
 ) {
-  const reply = await requestControlSession(descriptor, operation, signal)
+  const reply = await requestControlSession(descriptor, operation, signal, steps)
   if (!reply.ok) throw new ControlFault(reply.fault.code, reply.fault.message, reply.fault.outcome)
   return reply.value
 }

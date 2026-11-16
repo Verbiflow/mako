@@ -139,6 +139,8 @@ export const SessionRequestSchema = z
     session: z.string(),
     requestId: z.string().uuid(),
     operation: SessionOperationSchema,
+    /** Answer as NDJSON: a js call's steps (`{ steps }`) as they change, then the reply as the last line. */
+    steps: z.literal(true).optional(),
   })
   .strict()
 export const SessionReplySchema = z.discriminatedUnion("ok", [
