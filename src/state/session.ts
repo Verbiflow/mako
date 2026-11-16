@@ -1,3 +1,4 @@
+import { finDefaultsStore } from "./fin-defaults"
 import { accounts } from "@/state/accounts"
 import { toolStepped } from "@/state/tool-steps"
 import { quietly } from "@/lib/quiet-retry"
@@ -418,6 +419,10 @@ function apply(event: HostEvent) {
   if (event.type === "provider-connections") {
     providerConnectionsStore.set({ connections: event.connections, loadedAt: Date.now() })
     void threads.refreshCapabilities()
+    return
+  }
+  if (event.type === "fin-defaults") {
+    finDefaultsStore.set({ reading: event.reading, failed: false })
     return
   }
   if (event.type === "cloud-account") {

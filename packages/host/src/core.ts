@@ -1,3 +1,4 @@
+import { cloudFinLimits } from "./conversations/index.js"
 import type { HostStopping } from "./base/host-stopping.js"
 import { randomBytes } from "node:crypto"
 import { recipesOverHttp } from "@mako/protocol/recipes-http"
@@ -973,11 +974,18 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   declareFinDefaultMethods(methods, finDefaults, () => {
     const reading = finCapacity.reading()
     return lent.count() ? { ...reading, lent: lent.words() } : reading
-  }, () => finCapacity.changed())
+  }, () => finCapacity.changed(), {
+    reading: () => cloudFinLimits(late.cloud?.heldCloudFinLimits?.()),
+  })
   // Every check run holds one of the builds capacity keeps room for, and the rest wait their turn.
   const buildSlots = new BuildSlots(() => finCapacity.builds())
   finCapacity.subscribe(() => buildSlots.changed())
   late.cloud = declareCloudAccountMethods(methods, {
+    finLimitsChanged: () => {
+      const reading = finCapacity.reading()
+      emit({ type: "fin-defaults", reading: { ...finDefaults.reading(), capacity: lent.count() ? { ...reading, lent: lent.words() } : reading, cloud: cloudFinLimits(late.cloud?.heldCloudFinLimits?.()) } })
+      late.conversations?.agents?.capacityChanged()
+    },
     ...(lending && {
       lending: {
         advertisement: () => late.advertiser?.current(),

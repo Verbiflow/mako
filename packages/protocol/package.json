@@ -37,7 +37,8 @@
     "./handoff": "./dist/handoff.js",
     "./source-project": "./dist/source-project.js",
     "./attribution": "./dist/attribution.js",
-    "./ids": "./dist/ids.js"
+    "./ids": "./dist/ids.js",
+    "./cloud-fins": "./dist/cloud-fins.js"
   },
   "files": [
     "dist"
