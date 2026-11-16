@@ -50,6 +50,15 @@ const SNIPPET_CHARS = 70
 /** Native sessions read whole, kept until there are more than this many or they hold more than this many characters. */
 const OPENED_THREADS = 4
 const OPENED_CHARS = 256 * 1024 * 1024
+/**
+ * Entries of a native record a search counts and reads at a time, newest first: a viewer's page, so what it parses past
+ * its budget is a page at most, and its index of turn openers is one number a page.
+ */
+const RECORD_CHUNK = 200
+/** Records whose turn openers a search keeps counted, the least recently searched let go first. */
+const RECORD_INDEXES = 64
+/** Nor one record past this many characters: it serves the call that opened it and isn't kept, whatever else is. */
+const OPENED_RECORD_CHARS = 64 * 1024 * 1024
 
 const ACTIONS = ["turns", "read", "search", "payload", "export"] as const
 /** `thread` for a search of the caller's whole tree. */
@@ -73,7 +82,7 @@ export interface ThreadHistoryDeps {
   /** The Thread store; null where it didn't open, and then a conversation is its own history. */
   store(): Pick<ThreadStore, "thread" | "sessionContents" | "edges"> | null
   /** Native sessions as the catalog reads them. */
-  catalog: Pick<ThreadCatalog, "list" | "nativePath" | "ref" | "open" | "entry">
+  catalog: Pick<ThreadCatalog, "list" | "nativePath" | "ref" | "open" | "entry"> & Partial<Pick<ThreadCatalog, "page">>
   /** A Session's whole transcript as a file, the bundle a switch and an `@` chip hand over: a conversation's, or a native session's. */
   bundle?: {
     live(conversation: string): Promise<{ file: string } | null>
@@ -183,6 +192,134 @@ export interface ThreadHistoryTools {
 /** The history tool's reader, with the native sessions it last read whole. */
 export function threadHistoryTools(deps: ThreadHistoryDeps): ThreadHistoryTools {
   const opened = new Map<string, { stamp: string; chars: number; thread: Promise<Thread | null> }>()
+  /**
+   * Each searched record's turn openers, counted a chunk of `RECORD_CHUNK` entries at a time: the count, and its last
+   * entry when that's a prompt (the next chunk's first opener depends on it). Numbers, no entries kept but those; a
+   * record that grew keeps its whole chunks and counts on, one that shrank is counted again.
+   */
+  const indexes = new Map<string, { total: number; chunks: { opens: number; last: Entry | undefined }[] }>()
+
+  /** Entries `[from, to)` of a native record, a page at a time, as its viewer pages it; null when it can't be read. */
+  async function entriesOf(path: string, from: number, to: number): Promise<Entry[] | null> {
+    const parts: Entry[][] = []
+    let before = to
+    while (before > from) {
+      const page = await deps.catalog.page!(path, before, before - from)
+      if (!page || !page.entries.length || page.start >= before) return page && before === to ? [] : null
+      parts.unshift(page.entries.slice(Math.max(0, from - page.start)))
+      before = page.start
+    }
+    return parts.flat()
+  }
+
+  /** A record's turn openers by chunk, counting only what it doesn't hold yet, giving way to the host between chunks. */
+  async function recordIndex(path: string, total: number) {
+    let index = indexes.get(path)
+    indexes.delete(path)
+    if (index && index.total > total) index = undefined
+    const chunks = index ? index.chunks.slice(0, Math.floor(index.total / RECORD_CHUNK)) : []
+    for (let from = chunks.length * RECORD_CHUNK; from < total; from += RECORD_CHUNK) {
+      const entries = await entriesOf(path, from, Math.min(total, from + RECORD_CHUNK))
+      if (!entries) return null
+      let previous = chunks.at(-1)?.last
+      let opens = 0
+      for (const entry of entries) {
+        if (opensTurn(entry, previous)) opens += 1
+        previous = entry
+      }
+      chunks.push({ opens, last: previous?.type === "user" ? previous : undefined })
+      await new Promise((next) => setImmediate(next))
+    }
+    const counted = { total, chunks }
+    indexes.set(path, counted)
+    for (const key of indexes.keys()) {
+      if (indexes.size <= RECORD_INDEXES) break
+      indexes.delete(key)
+    }
+    return counted
+  }
+
+  /**
+   * What of a native record a search reads within its `budget`, newest first, parsing only that (and, once per record
+   * and its appends, the counting of its turn openers, `recordIndex`): its entries from the opener of their first turn,
+   * within the turns `asked` names when it does, and how many turns come before, so they number as `read` numbers them.
+   */
+  async function recordWindow(path: string, budget: { left: number }, asked?: AskedTurns): Promise<{ entries: Entry[]; offset: number; total: number; turns: number } | null> {
+    const head = await deps.catalog.page?.(path, undefined, 1)
+    if (!head) return null
+    const total = head.total
+    const index = await recordIndex(path, total)
+    if (!index) return null
+    const turns = index.chunks.reduce((sum, chunk) => sum + chunk.opens, 0)
+    // The entry the `n`th turn opens at, reading one chunk; `total` past the last.
+    const openerAt = async (n: number): Promise<number> => {
+      let before = 0
+      for (const [k, chunk] of index.chunks.entries()) {
+        if (before + chunk.opens < n) {
+          before += chunk.opens
+          continue
+        }
+        const from = k * RECORD_CHUNK
+        const entries = await entriesOf(path, from, Math.min(total, from + RECORD_CHUNK)) ?? []
+        let previous = index.chunks[k - 1]?.last
+        for (const [i, entry] of entries.entries()) {
+          if (opensTurn(entry, previous) && ++before === n) return from + i
+          previous = entry
+        }
+      }
+      return total
+    }
+    const end = asked && asked.to < turns ? await openerAt(asked.to + 1) : total
+    const floor = asked ? Math.min(await openerAt(asked.from), end) : 0
+    // Newest chunks first, within the budget.
+    const kept: Entry[][] = []
+    let start = end
+    let read = 0
+    while (start > floor && budget.left > 0) {
+      const from = Math.max(floor, Math.floor((start - 1) / RECORD_CHUNK) * RECORD_CHUNK)
+      const entries = await entriesOf(path, from, start)
+      if (!entries) return null
+      let cut = entries.length
+      while (cut > 0 && budget.left > 0) {
+        cut -= 1
+        const chars = entryChars(entries[cut]!)
+        budget.left -= chars
+        read += chars
+      }
+      kept.unshift(entries.slice(cut))
+      start = from + cut
+      if (read >= SEARCH_READ_CHARS) {
+        read = 0
+        await new Promise((next) => setImmediate(next))
+      }
+    }
+    // A turn whole: back to the entry that opens it, a chunk's prefix read once, then the chunk before if need be.
+    let window = kept.flat()
+    for (;;) {
+      const k = Math.floor(Math.max(0, start - 1) / RECORD_CHUNK)
+      const from = Math.max(floor, k * RECORD_CHUNK)
+      const prefix = start > from ? await entriesOf(path, from, start) ?? [] : []
+      const before = (i: number) => (i > 0 ? prefix[i - 1] : from === k * RECORD_CHUNK ? index.chunks[k - 1]?.last : undefined)
+      // The window's own first entry opens a turn, or what precedes it in this chunk does.
+      let at = window[0] && opensTurn(window[0], prefix.at(-1) ?? before(0)) ? prefix.length : -1
+      for (let i = prefix.length - 1; at < 0 && i >= 0; i--) if (opensTurn(prefix[i]!, before(i))) at = i
+      if (at >= 0 || from <= floor) {
+        const from2 = at >= 0 ? at : 0
+        window = [...prefix.slice(from2), ...window]
+        budget.left -= prefix.slice(from2).reduce((sum, entry) => sum + entryChars(entry), 0)
+        start = from + from2
+        // Turns before: whole chunks from the index, then this chunk's own up to the window.
+        // A range that begins inside this chunk begins at its own opener: the turns before it are the range's own count.
+        let opens = from > k * RECORD_CHUNK && asked ? asked.from - 1 : index.chunks.slice(0, k).reduce((sum, chunk) => sum + chunk.opens, 0)
+        for (let i = 0; i < from2; i++) if (opensTurn(prefix[i]!, before(i))) opens += 1
+        return { entries: window, offset: start > 0 ? opens : 0, total, turns }
+      }
+      // No opener in this chunk before the window: all of it goes in, and the chunk before is read.
+      window = [...prefix, ...window]
+      budget.left -= prefix.reduce((sum, entry) => sum + entryChars(entry), 0)
+      start = from
+    }
+  }
 
   /** A native session whole, read again only once its catalog row moved. */
   function open(path: string): Promise<Thread | null> {
@@ -198,6 +335,11 @@ export function threadHistoryTools(deps: ThreadHistoryDeps): ThreadHistoryTools 
     opened.set(path, kept)
     void kept.thread.then((thread) => {
       kept.chars = thread ? thread.entries.reduce((sum, entry) => sum + entryChars(entry), 0) : 0
+      // One record too big to keep is let go once its caller has it: the newest alone once stayed, whatever its size.
+      if (kept.chars > OPENED_RECORD_CHARS) {
+        if (opened.get(path) === kept) opened.delete(path)
+        return
+      }
       let total = 0
       for (const value of opened.values()) total += value.chars
       for (const [key, value] of opened) {
@@ -229,6 +371,30 @@ export function threadHistoryTools(deps: ThreadHistoryDeps): ThreadHistoryTools 
   }
 
   /**
+   * A session's record as a search reads it: how many turns it holds, and the window of it a search reads (`windowOf`
+   * over entries already in memory, else `recordWindow` paging it newest first, never reading it whole). Null when it
+   * can't be read.
+   */
+  async function recordOf(path: string | undefined, held?: readonly Entry[]): Promise<{ turns: number; window(budget: { left: number }, asked?: AskedTurns): Promise<{ entries: Entry[]; offset: number }> } | null> {
+    if (held) {
+      const turns = (await openersOf(held)).length
+      return { turns, window: async (budget, asked) => {
+        const window = await windowOf(held, budget, asked)
+        return { entries: held.slice(window.start, window.end), offset: window.offset }
+      } }
+    }
+    if (!path) return { turns: 0, window: async () => ({ entries: [], offset: 0 }) }
+    if (!deps.catalog.page) {
+      const thread = await open(path)
+      return thread ? recordOf(undefined, thread.entries) : null
+    }
+    const head = await deps.catalog.page(path, undefined, 1)
+    const index = head && await recordIndex(path, head.total)
+    if (!index) return null
+    return { turns: index.chunks.reduce((sum, chunk) => sum + chunk.opens, 0), window: async (budget, asked) => (await recordWindow(path, budget, asked)) ?? { entries: [], offset: 0 } }
+  }
+
+  /**
    * A conversation for a search, read cold when no host holds it in memory: its newest turns within what the search has
    * left to read (`budget`), its session's record before its blocks included, whole turns from the one that opens the
    * window, numbered as `read` numbers them; or the turns `turns` asks for, when it names this Session. Nothing of it
@@ -247,25 +413,27 @@ export function threadHistoryTools(deps: ThreadHistoryDeps): ThreadHistoryTools 
       const { refused } = cold
       if (refused.kind === "busy") return { part: { ...part, missing: "it was being read in, let go of or run as this searched: search again in a moment" }, snapshot: null }
       if (!refused.record) return { part: { ...part, missing: `it can't be searched here (${refused.why}): thread_history read shows its turns` }, snapshot: null }
-      // Its history is its session's own record: searched there, through the bounded cache of sessions read whole.
-      const thread = await open(refused.record.path)
-      if (!thread) return { part: { ...part, missing: `its session's record couldn't be read on this device: thread_history read shows what Mako kept` }, snapshot: null }
-      const window = await windowOf(thread.entries, budget, mine)
+      // Its history is its session's own record: searched there, newest first, never read whole.
+      const record = await recordOf(refused.record.path)
+      if (!record) return { part: { ...part, missing: `its session's record couldn't be read on this device: thread_history read shows what Mako kept` }, snapshot: null }
+      const window = await record.window(budget, mine)
       part.harness = refused.record.harness
       part.path = refused.record.path
-      part.entries = thread.entries.slice(window.start, window.end)
+      part.entries = window.entries
       part.baseLength = part.entries.length
       if (window.offset) part.turnOffset = window.offset
-      if (thread.ref.title) part.title = thread.ref.title
+      const title = deps.catalog.ref(refused.record.path)?.title
+      if (title) part.title = title
       return { part, snapshot: null }
     }
     try {
       const { snapshot, journal } = cold
       const covered = Math.min(snapshot.baseCoveredBlocks ?? 0, journal.length)
-      // Its session's record before its blocks, through the bounded cache of native sessions read whole.
-      const base = await resumed({ openThread: open }, snapshot)
-      const baseOpeners = await openersOf(base)
-      const baseTurns = baseOpeners.length
+      // Its session's record before its blocks: the page it holds when that's all of it, else paged newest first.
+      const page = snapshot.base
+      const record = await recordOf(page?.ref.path, !page ? [] : page.start === 0 && !page.preview ? page.entries : undefined)
+      if (!record) return { part: { ...part, missing: "its session's record couldn't be read on this device: thread_history read shows what Mako kept" }, snapshot }
+      const baseTurns = record.turns
       const openers = journal.turnOpeners(covered)
       const opening = new Set(openers)
       // The block a turn of the journal's own starts at: base turns come first.
@@ -304,8 +472,8 @@ export function threadHistoryTools(deps: ThreadHistoryDeps): ThreadHistoryTools 
       }
       // The record before its blocks, as far as the budget goes, newest first, when the blocks were all read.
       const reached = start <= covered && (!mine || mine.from <= baseTurns)
-      const window = reached && budget.left > 0 ? await windowOf(base, budget, mine && { from: mine.from, to: Math.min(mine.to, baseTurns) }) : undefined
-      const kept = window ? base.slice(window.start, window.end) : []
+      const window = reached && budget.left > 0 ? await record.window(budget, mine && { from: mine.from, to: Math.min(mine.to, baseTurns) }) : undefined
+      const kept = window ? window.entries : []
       part.harness = snapshot.session.harness
       part.entries = [...kept, ...blocks]
       part.baseLength = kept.length

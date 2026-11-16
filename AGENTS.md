@@ -1659,8 +1659,12 @@ finds words in the Fin's whole history through `thread_history`'s search of its
 Thread, a page at a time (`AgentsDeps.history`, `test-agents-read-views.ts`).
 A search, `thread_history`'s own too, reads no journal in: a conversation no
 host holds in memory is read where it lies (`ThreadHistoryDeps.cold`, a
-`ColdJournal` closed once read, one still being let go of included), its base
-through the bounded cache of native sessions read whole, at most `SEARCH_CHARS`
+`ColdJournal` closed once read, one still being let go of included), a
+session's record paged newest first as its viewer pages it (`recordWindow`),
+never read whole, its turns counted once a page at a time into a tiny index kept
+per record (`RECORD_INDEXES`, one number a page, counted on only where it grew),
+so a later search parses its window and two pages more; the cache of records read
+whole keeps none past `OPENED_RECORD_CHARS`. At most `SEARCH_CHARS`
 (4M characters) a call, newest turns first and whole, numbered as `read`
 numbers them (`ColdJournal.turnOpeners`); what it left is named as a `turns`
 range that reaches it. It gives way to the host every 64 turns and between

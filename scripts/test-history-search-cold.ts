@@ -15,6 +15,8 @@ import { AgentsWorld, type Script } from "./lib/agents-world.ts"
 const TURNS = 420
 const FILLER = "filler words that pad each turn ".repeat(340)
 const LOOP_HOLD_MS = 250
+/** What one search reads of what no host holds in memory (`thread-history.ts`). */
+const SEARCH_CHARS = 4_000_000
 
 const root = mkdtempSync(join(tmpdir(), "mako-history-search-cold-"))
 const script: Script = (turn) => (turn.text.includes("You're fin:") ? "Started." : "ok")
@@ -79,22 +81,73 @@ try {
     ref: { harness: "codex", nativeId: "record", path: recordPath, title: "Its record", cwd: world.root, bytes: 1 },
     entries: Array.from({ length: RECORD_TURNS }, (_, index) => ({ type: "user" as const, id: `r-${index + 1}`, text: `Record mark-${index + 1}: ${FILLER.slice(0, 3_000)}` })),
   }
+  // The record is read a page at a time, as its viewer pages it: never opened whole. What each search parses is counted.
+  let served = 0
+  let opens = 0
+  const page = async (path: string, before?: number, limit = 100) => {
+    if (path !== recordPath) return null
+    const end = Math.min(record.entries.length, before ?? record.entries.length)
+    const start = Math.max(0, end - Math.min(200, Math.max(1, limit)))
+    const entries = record.entries.slice(start, end)
+    served += entries.reduce((sum, entry) => sum + ("text" in entry ? entry.text.length : 0), 0)
+    return { ref: record.ref, entries, start, total: record.entries.length, hasEarlier: start > 0 }
+  }
   const refusing = (refused: ColdRefused["refused"]) => history.threadHistoryTools({
     conversations: () => conversations, snapshot: (id) => world.live.historySnapshot(id), resident: () => false, cold: async () => ({ refused }),
-    store: () => world.store, catalog: { list: () => [], nativePath: () => undefined, ref: () => undefined, open: async (path) => (path === recordPath ? record : null), entry: async () => null },
+    store: () => world.store,
+    catalog: { list: () => [], nativePath: () => undefined, ref: () => undefined, open: async () => (opens++, null), entry: async () => null, page },
   })
   const asRecord = refusing({ kind: "structural", why: "its history is its session's own record", record: { path: recordPath, harness: "codex" } })
+  const recordChars = record.entries.reduce((sum, entry) => sum + ("text" in entry ? entry.text.length : 0), 0)
+  served = 0
   const newestInRecord = await asRecord.answer(apex.conversation, { action: "search", thread: started.child!, query: `mark-${RECORD_TURNS}:` })
   assert.match(newestInRecord, /^1 hit for "mark-2000:"/, newestInRecord.slice(0, 200))
+  const firstServed = served
+  // Once counted, a search parses the window it searches and no more: about SEARCH_CHARS, whatever the record's size.
+  served = 0
+  const again = await asRecord.answer(apex.conversation, { action: "search", thread: started.child!, query: `mark-${RECORD_TURNS - 1}:` })
+  assert.match(again, /^1 hit for "mark-1999:"/, again.slice(0, 200))
+  // At most its budget and two pages past it: one it trims, one it reads back to its first turn's opener.
+  const PAGE_CHARS = 200 * 3_100
+  assert.ok(served <= SEARCH_CHARS + 2 * PAGE_CHARS, `the second search parsed ${served} characters of a ${recordChars}-character record, past the ${SEARCH_CHARS} budget and two pages`)
+  assert.equal(opens, 0, "and never opened the record whole")
   const oldestInRecord = await asRecord.answer(apex.conversation, { action: "search", thread: started.child!, query: "mark-2:" })
   const recordCursor = /search again with turns: "(\d+:1-\d+)"/.exec(oldestInRecord)?.[1]
   assert.ok(oldestInRecord.startsWith('No match for "mark-2:"') && recordCursor, `a long record is held to the budget too: ${oldestInRecord.slice(0, 300)}`)
   const recordReached = await asRecord.answer(apex.conversation, { action: "search", thread: started.child!, query: "mark-2:", turns: recordCursor! })
   assert.match(recordReached, /^1 hit for "mark-2:" in turns/, recordReached.slice(0, 200))
+  assert.ok(/\[(?:\d+:)?2\.0[\]/]/.test(recordReached), `numbered as read numbers it: turn 2 is mark-2's: ${recordReached.slice(0, 300)}`)
+  // A record that grew is counted only where it grew.
+  for (let index = RECORD_TURNS + 1; index <= RECORD_TURNS + 10; index++) record.entries.push({ type: "user" as const, id: `r-${index}`, text: `Record mark-${index}: ${FILLER.slice(0, 3_000)}` })
+  served = 0
+  const grown = await asRecord.answer(apex.conversation, { action: "search", thread: started.child!, query: `mark-${RECORD_TURNS + 10}:` })
+  assert.match(grown, /^1 hit for "mark-2010:"/, grown.slice(0, 200))
+  assert.ok(served <= SEARCH_CHARS + 4 * PAGE_CHARS, `a grown record counts where it grew, not all of it again: ${served}`)
+  console.log(`paged record: ${recordChars} characters; the first search parsed ${firstServed} (its count, once), later ones at most ${SEARCH_CHARS + 2 * PAGE_CHARS}`)
   const unsearchable = await refusing({ kind: "structural", why: "its journal keeps its own copy of its history" }).answer(apex.conversation, { action: "search", thread: started.child!, query: "marker" })
   assert.ok(unsearchable.includes("can't be searched here") && unsearchable.includes("thread_history read") && !unsearchable.includes("search again in a moment"), unsearchable)
   const busy = await refusing({ kind: "busy" }).answer(apex.conversation, { action: "search", thread: started.child!, query: "marker" })
   assert.ok(busy.includes("search again in a moment"), busy)
+  // The cache of records read whole keeps none past its cap: one bigger serves the search that opened it and goes.
+  const huge = "y".repeat(1_000_000)
+  const hugePath = join(root, "huge.jsonl")
+  const hugeRecord: Thread = {
+    ref: { harness: "codex", nativeId: "huge", path: hugePath, title: "Huge", cwd: world.root, bytes: 1 },
+    entries: Array.from({ length: 70 }, (_, index) => ({ type: "user" as const, id: `h-${index}`, text: index === 69 ? `last-mark ${huge}` : huge })),
+  }
+  let hugeOpens = 0
+  const whole = history.threadHistoryTools({
+    conversations: () => conversations, snapshot: (id) => world.live.historySnapshot(id), resident: () => false,
+    cold: async () => ({ refused: { kind: "structural", why: "its history is its session's own record", record: { path: hugePath, harness: "codex" } } }),
+    store: () => world.store,
+    catalog: { list: () => [], nativePath: () => undefined, ref: () => undefined, open: async (path) => (path === hugePath ? (hugeOpens++, hugeRecord) : null), entry: async () => null },
+  })
+  await whole.answer(apex.conversation, { action: "search", thread: started.child!, query: "last-mark" })
+  await new Promise((resolve) => setImmediate(resolve))
+  const firstOpens = hugeOpens
+  await whole.answer(apex.conversation, { action: "search", thread: started.child!, query: "last-mark" })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.ok(firstOpens > 0 && hugeOpens === 2 * firstOpens, `a record past the cache's cap is opened again each time, never kept: ${firstOpens} then ${hugeOpens} opens`)
   console.log(`cold search: ${TURNS} turns, the newest found in ${took.toFixed(0)} ms holding the loop ${held.toFixed(0)} ms at most (idle ${yardstick.toFixed(0)} ms), nothing read in; older turns named (${cursor}) and reached`)
 } finally {
   await world.close()
