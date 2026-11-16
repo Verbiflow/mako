@@ -379,6 +379,8 @@ export interface AgentsDeps {
   processes?: ProcessReads
   /** `APEX_ANSWER_MS`, shorter in tests. */
   apexAnswerMs?: number
+  /** `FOCUS_MS`: how long a working Apex's turn runs before what waits for its end is steered in once; shorter in tests. */
+  focusMs?: number
   /** How long a working Fin may show no activity before its Apex hears it (`QuietWatch`); `QUIET_MS` without it. */
   quietMs?: number
   /**
@@ -788,6 +790,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       },
       rewrite: (conversation, request, text, notices, lines) => deps.live.rewriteWaiting(conversation, request, text, { notices: [...notices], ...(lines?.length && { lines: [...lines] }) }),
       steer: (conversation, id, text) => this.steer(conversation, id, text),
+      steerQueued: (conversation, id, request, text) => this.steerQueuedDigest(conversation, id, request, text),
+      ...(deps.focusMs !== undefined && { focusMs: deps.focusMs }),
       assign: (reports, request) => {
         this.store()?.assignWake(reports.filter(stored), request)
         for (const id of reports) if (id.startsWith(HELD_PREFIX)) this.heldIn(id.slice(HELD_PREFIX.length), request)
@@ -6085,6 +6089,19 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (child && this.store()?.edges().of(child)?.closedAt !== undefined) return "paused"
     if (!this.deps.live.atWork(conversation)) return "idle"
     return this.deps.live.steersAtStep(conversation) ? "steer" : "queue"
+  }
+
+  /** A queued digest itself into the Apex's running turn (`steer-queued`): taken from the queue once, or left where it was. */
+  private steerQueuedDigest(conversation: string, id: string, request: string, text: string): Promise<boolean> | false {
+    const running = this.deps.live.held(conversation)?.requests.find((asked) => asked.status === "dispatching")
+    if (!running) return false
+    this.digestSteers.add(id)
+    return this.deps.live.act(conversation, { kind: "steer-queued", id, requestId: running.id, queuedRequestId: request, text, attachments: [] }, "native").then(
+      (action) => action.state.kind === "accepted" || action.state.kind === "completed",
+      (error) => {
+        hostWarn("agents", "a digest could not join the running turn", { conversation, error: errorMessage({ error }) })
+        return false
+      }).finally(() => this.digestSteers.delete(id))
   }
 
   private steer(conversation: string, id: string, text: string): Promise<boolean> | false {

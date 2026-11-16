@@ -613,10 +613,18 @@ implicit report at a turn's end, which a completed turn also writes when its
 last report was progress that hands nothing on and names no wait Mako watches:
 a pull request the watch reads, an armed turn wait or its own Fins at work,
 `progressLeftUnwatched`) sends its Apex a notice; an idle Apex waits
-`WAKE_COALESCE_MS` and takes ONE turn with the digest, a busy one gets it at
-its next step where its harness steers there and at its turn's end where it
-doesn't, at most `WAKES_PER_MINUTE` an Apex (`agent-wakes.ts`): the Apex
-never polls. A steer the harness doesn't take goes as the Apex's next turn,
+`WAKE_COALESCE_MS` and takes ONE turn with the digest; a busy one is left to
+think: only a question or decision it can answer is steered into its running
+turn, at its next step where its harness steers there, and what else its
+Fins report waits for the turn's end as one digest, unless the turn is still
+running `FOCUS_MS` (2 minutes) after the first of it, when that digest is
+steered in once (`asksApex`, `armFocus`); at most `WAKES_PER_MINUTE` digests
+an Apex (`agent-wakes.ts`): the Apex never polls. `npm run test:comms-storm`
+holds both ways this can go wrong: a 30-Fin storm around a working Apex
+(steers per minute, the share of its turn left uninterrupted, its turns once
+free, the longest a result waits) and a Fin's backlog after a long turn (the
+turns it takes to hear it all); targets Mako misses are in its
+`EXPECTED_FAILING`. A steer the harness doesn't take goes as the Apex's next turn,
 never dropped. The digest is an entry in the Apex's own queue
 (`LiveRequest.digest`), its reports heard once it's there, so the queue
 keeps it through a crash, sends it once and retries it as any message: a

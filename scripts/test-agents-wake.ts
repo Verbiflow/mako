@@ -10,6 +10,7 @@ import { actionNotice } from "@mako/host/contracts/operation-recovery"
 import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
 import { agentToolSchema } from "@mako/host/conversations/agent-tools"
 import { FROM_AGENTS, WAKE_COALESCE_MS } from "@mako/host/conversations/agent-wakes"
+import { DIGEST_RESTART_HINT } from "@mako/host/contracts/children"
 import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
 
 /**
@@ -220,6 +221,54 @@ async function progressThenTurnEnd(): Promise<void> {
   }
 }
 
+/**
+ * The digest a long turn's focus window steers in is taken from the queue once: a host that crashes while the harness
+ * holds that steer never sends those results a second time, and drops none of them.
+ */
+async function focusSteerAcrossCrash(): Promise<void> {
+  await focusCrash("held")
+  await focusCrash("taken")
+}
+
+/** `held`: the host crashes while the harness still holds the steer. `taken`: the harness takes it and the host crashes at once. */
+async function focusCrash(how: "held" | "taken"): Promise<void> {
+  const w = new AgentsWorld({
+    root: join(root, `focus-crash-${how}`),
+    focusMs: 300,
+    steering: { claude: { lands: "step", hears: "at its next step", holds: true } },
+    script: async (turn) => {
+      if (turn.text.includes("You're fin:")) return `Done: ${turn.text.includes("Part one") ? "part one" : "part two"} checked.`
+      if (spoken(turn.text) === "go") {
+        for (const [key, objective] of [["one", "Part one"], ["two", "Part two"]])
+          started(await turn.world.agents.start(turn.caller, { brief: { objective }, harness: "codex", name: key, clientKey: key, cwd: turn.world.root }))
+        await turn.world.hold(turn.conversation)
+        return "Planned."
+      }
+      return "ok"
+    },
+  })
+  try {
+    const apex = await w.apex("claude", "full")
+    w.say(apex.conversation, "go")
+    await until("both results", () => w.store.edges().all.every((edge) => w.store.reportsOf(edge.child, 0).length > 0) && w.store.edges().all.length === 2)
+    await delay(800)
+    const digests = () => w.live.snapshot(apex.conversation)!.requests.filter((request) => request.digest)
+    assert.ok(digests().length >= 1, "the results wait as a digest while the Apex works")
+    if (how === "taken") assert.ok(w.answerSteer(apex.conversation, { kind: "accepted" }), "the harness takes the focus steer")
+    await w.crashed()
+    await w.settle(500, 30_000, "ignore")
+    const heard = [...w.prompts.filter((prompt) => prompt.conversation === apex.conversation), ...w.steers.filter((steer) => steer.conversation === apex.conversation)].map((entry) => entry.text).join("\n")
+    // Never twice. A digest whose steer the crash left unknown fails closed (delivery-queue rule 15): it isn't sent again,
+    // and the turn that goes on is told reports may have arrived around the restart.
+    const once = ["one", "two"].map((name) => heard.split(`• "${name}" (Codex)`).length - 1)
+    assert.ok(once.every((count) => count <= 1), `no result reached its Apex twice across the crash: ${heard}`)
+    if (once.some((count) => count === 0)) assert.ok(heard.includes(DIGEST_RESTART_HINT), `one not heard is said to have maybe arrived around the restart: ${heard}`)
+    if (how === "taken") assert.ok(once.every((count) => count === 1), `a steer the harness took is heard, once each: ${heard}`)
+  } finally {
+    await w.close()
+  }
+}
+
 /** `never`: nothing wakes the Apex, across a restart too; its report is there to read, and a question is the person's. */
 async function never(): Promise<void> {
   const w = world("never", async (turn) => {
@@ -389,7 +438,10 @@ async function refusedSteer(): Promise<void> {
     }
     if (spoken(turn.text).startsWith(FROM_AGENTS)) return "Going on."
     child = turn.conversation
-    return "Lint is clean."
+    // A question is what a working Apex is steered with (a finished result waits for its turn's end, FOCUS_MS).
+    const asked = await turn.world.agents.report(turn.caller, { status: "needs-input", summary: "Two configs.", question: "Which lint config?", clientKey: "q" })
+    assert.ok(!("refused" in asked), JSON.stringify(asked))
+    return "Asked."
   } })
   try {
     const apex = await w.apex("claude")
@@ -403,7 +455,7 @@ async function refusedSteer(): Promise<void> {
     assert.equal(actionNotice(held, []), undefined, "and the person hears nothing of a steer Mako sent by itself")
     w.release(apex.conversation)
     await until("the next turn", () => wakesOf(w, apex.conversation).length === 1)
-    assert.match(wakesOf(w, apex.conversation)[0]!.text, /"lint" \(Codex\) done: Lint is clean\./)
+    assert.match(wakesOf(w, apex.conversation)[0]!.text, /"lint" \(Codex\) is asking: Which lint config\?/)
     await w.settle()
     assert.equal(w.store.undeliveredReports().length, 0)
   } finally {
@@ -429,17 +481,16 @@ async function waitNeverSteers(): Promise<void> {
     await until("both children", () => answers.length === 1 && kids.size === 2)
     w.release(kids.get("count")!)
     w.release(kids.get("lint")!)
-    await until("the background report's steer", () => w.steers.length === 1, 6_000)
-    assert.match(w.steers[0]!.text, /1 finished:\n {2}• "lint" \(Codex\) done: Lint is clean\./)
-    assert.doesNotMatch(w.steers[0]!.text, /waited for/, "the waited-for result isn't steered into the running turn")
-    await delay(500)
-    assert.equal(wakesOf(w, apex.conversation).length, 0, "and doesn't start a turn while one runs")
+    await delay(WAKE_COALESCE_MS + 500)
+    assert.equal(w.steers.length, 0, "neither result is steered into the running turn: the Apex is left to think (FOCUS_MS)")
+    assert.equal(wakesOf(w, apex.conversation).length, 0, "and neither starts a turn while one runs")
     w.release(apex.conversation)
-    await until("the next turn", () => wakesOf(w, apex.conversation).length === 1)
-    assert.match(wakesOf(w, apex.conversation)[0]!.text, /The result you waited for:\n {2}• "count" \(Codex\) done:\n {4}There are 12 files\./)
+    await until("the next turn", () => wakesOf(w, apex.conversation).length >= 1)
     await w.settle()
-    assert.equal(w.steers.length, 1)
-    assert.equal(wakesOf(w, apex.conversation).length, 1)
+    const heard = wakesOf(w, apex.conversation).map((wake) => wake.text).join("\n")
+    assert.match(heard, /The result you waited for:\n {2}• "count" \(Codex\) done:\n {4}There are 12 files\./)
+    assert.match(heard, /"lint" \(Codex\) done: Lint is clean\./, "the background result goes at the turn's end too")
+    assert.equal(w.steers.length, 0)
   } finally {
     await w.close()
   }
@@ -579,6 +630,7 @@ try {
   await burst()
   await finishOnly()
   await progressThenTurnEnd()
+  await focusSteerAcrossCrash()
   await never()
   await waitSettles()
   await waitAsks("decisions")

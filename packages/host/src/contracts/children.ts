@@ -21,6 +21,13 @@ export const DIGEST_WAITS = "digest"
 export const WAKES_PER_MINUTE = 6
 /** Past that, a digest that asks something goes at most this often: well inside the minute its Apex has to answer. */
 export const ASK_EVERY_MS = 10_000
+/**
+ * An Apex at work on a turn is left to think: only a question or decision it can answer is steered into that turn. What
+ * else its Fins report waits for the turn's end as one digest, unless the turn is still running this long after the
+ * first of it, when that digest is steered in once (`AgentWakes`). A 30-Fin storm steered 40 times a minute into one
+ * turn before this (`test:comms-storm`).
+ */
+export const FOCUS_MS = 2 * 60_000
 /** An idle Apex waits this long after a notice for the others of its burst, then wakes once for all of them. */
 export const WAKE_COALESCE_MS = 2_000
 /**
