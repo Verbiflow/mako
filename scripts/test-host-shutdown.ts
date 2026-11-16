@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto"
 import { hostLifecycle } from "@mako/host/base/host-lifecycle"
 import { HostCallLifetime } from "@mako/host/transport/call-lifetime"
 import { HostMethods } from "@mako/host/transport/methods"
-import { HostStopping } from "@mako/host/base/host-stopping"
+import { HostStopping, HostStoppingError } from "@mako/host/base/host-stopping"
 import { unwatchedWork } from "@mako/host/base/event-loop"
 import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
 import { runtimeFailure, runtimeFailureError } from "@mako/host/contracts/runtime"
@@ -87,6 +87,22 @@ assert.equal(completed, true); assert.equal(storeOpen, false)
   await stopping.stop().catch(() => {})
   assert.deepEqual(await heard(underWay), { unconfirmed: true, outbox: "Waiting for Mako to reconnect" }, "cut by the stop: asked again under its ID")
   await drained
+}
+
+// Work that says what the stop means for it keeps its words: an unfinished sign-in is "Mako quit before sign-in
+// finished; sign in again.", a refusal its caller shows, never a disconnect a repeat would answer differently.
+{
+  const stopping = new HostStopping()
+  const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value, breadcrumb: () => {}, declaring: async () => {}, work: unwatchedWork, stopping })
+  methods.handle("mako:account-login-wait", async () => {
+    throw new HostStoppingError("Mako quit before sign-in finished; sign in again.")
+  })
+  const error = await methods.invoke("mako:account-login-wait", ["login"]).then(() => undefined, (caught: Error) => caught)
+  assert.ok(error && !(error instanceof RuntimeDisconnectedError), `its own words, not a disconnect: ${String(error)}`)
+  const client = runtimeFailureError(runtimeFailure(error))
+  assert.match(client.message, /Mako quit before sign-in finished; sign in again/)
+  assert.ok(!(client instanceof RuntimeDisconnectedError), "the client hears the words, not a reconnect")
+  assert.equal(waitsFor(client), undefined, "and shows them: nothing waits to send it again")
 }
 
 // Through the gateway, a stopping host answers nothing for a call it didn't run: the gateway keeps a runtime's answer as
