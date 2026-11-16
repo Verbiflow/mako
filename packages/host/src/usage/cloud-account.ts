@@ -88,7 +88,7 @@ import type { CloudRoute, DiagnosticEvents } from "../contracts/telemetry.js"
 import { CloudHarnessesSchema, type CloudHarnesses } from "../contracts/cloud-harnesses.js"
 import { errorMessage } from "../base/error-message.js"
 import { SecretLocked, type LegacyFiles, type SecretRecord, type Secrets } from "../base/secrets.js"
-import type { AccountEventCursors, AccountEventScope } from "./account-event-cursor.js"
+import { accountEventClock, type AccountEventClock, type AccountEventCursors, type AccountEventScope } from "./account-event-cursor.js"
 import { RequestTraces } from "./request-trace.js"
 import { CloudLink, PING_MS, type CloudLinkAttachment, type CloudLinkEnding, type CloudLinkOptions, type CloudLinkState } from "./cloud-link.js"
 
@@ -234,6 +234,10 @@ function eventScope(stored: Stored): AccountEventScope {
   return { cloud: stored.cloud, account: stored.account.id, device: stored.device.id, createdAt: stored.device.createdAt }
 }
 
+function hasEventScope(stored: Stored, scope: AccountEventScope): boolean {
+  return stored.cloud === scope.cloud && stored.account.id === scope.account && stored.device.id === scope.device && stored.device.createdAt === scope.createdAt
+}
+
 /** A sign-out the cloud hasn't heard of yet: the device's credential, kept sealed only to remove the device there. */
 const UnfinishedSignOutSchema = z.object({ version: z.literal(1), cloud: z.string(), credential: z.string(), device: z.string() })
 type UnfinishedSignOut = z.infer<typeof UnfinishedSignOutSchema>
@@ -245,6 +249,8 @@ const SIGN_OUT_RETRY_MS = 60_000
  * event heard twice changes nothing, so a restart within it only hears a few again.
  */
 const SEEN_SAVE_MS = 2_000
+/** Old binaries read the inline cursor: one compatibility save per hour, plus clean shutdown. */
+const INLINE_SEEN_MS = 60 * 60_000
 
 /** The record a host's sign-in is kept under; each data root signs in as its own device. */
 export function cloudSignInName(dataRoot: string): string {
@@ -297,6 +303,8 @@ export type CloudAccountOptions = {
   secretName: string
   /** Non-secret stream checkpoints; advancing one never replaces the device credential or its borrowing grant. */
   eventCursors: AccountEventCursors
+  /** The owner of cursor persistence deadlines; connection timing stays independent. */
+  eventClock?: AccountEventClock
   openExternal: (url: string) => Promise<void>
   /** How this Mac names itself on the account's device list. */
   device: () => Promise<{ name: string; platform: string; appVersion: string }>
@@ -388,7 +396,13 @@ export class CloudAccounts {
   #stored: Stored | undefined
   /** The last event of the account's stream this device heard: kept with `#stored` when it's next written. */
   #seen: number | undefined
-  #seenSave: NodeJS.Timeout | undefined
+  #seenSave: (() => void) | undefined
+  #inlineSave: (() => void) | undefined
+  readonly #eventClock: AccountEventClock
+  #inlineAt: number | undefined
+  #persisted: Stored | undefined
+  /** Latest normal credential save accepted in memory or on disk, never an older checkpoint snapshot. */
+  #checkpointSource: Stored | undefined
   /** Every write of the sign-in to the keychain, one after another, so a later one never lands under an earlier one. */
   #writes: Promise<unknown> = Promise.resolve()
   /** A sign-out the cloud hasn't heard of, held in memory when there's no keychain to keep it in. */
@@ -425,6 +439,7 @@ export class CloudAccounts {
 
   constructor(options: CloudAccountOptions) {
     this.#options = options
+    this.#eventClock = options.eventClock ?? accountEventClock()
     const parsed = parseCloud(options.url, options.fixture === true)
     this.#cloud = parsed.url
     this.#unavailable = parsed.problem
@@ -1343,11 +1358,14 @@ export class CloudAccounts {
     if (this.#closing) return this.#closing
     this.#goingQuiet("quit")
     this.#closed = true
+    this.#inlineSave?.()
+    this.#inlineSave = undefined
     if (this.#seenSave) {
-      clearTimeout(this.#seenSave)
+      this.#seenSave?.()
       this.#seenSave = undefined
       this.#saveSeen()
     }
+    this.#saveInline(true)
     if (this.#finishing) clearTimeout(this.#finishing)
     if (this.#signIn) this.#endSignIn()
     this.#disconnect()
@@ -1374,6 +1392,11 @@ export class CloudAccounts {
   async #signedIn(enrollment: z.infer<typeof EnrollmentSchema>): Promise<void> {
     const stored: Stored = { version: 1, cloud: this.#require().origin, credential: enrollment.credential, device: enrollment.device, account: enrollment.account }
     this.#seen = undefined
+    this.#persisted = undefined
+    this.#checkpointSource = undefined
+    this.#inlineAt = undefined
+    this.#inlineSave?.()
+    this.#inlineSave = undefined
     const saved = await this.#save(stored)
     const kept = this.#options.fixture ? "fixture" : saved ? "keychain" : "memory"
     this.#stored = stored
@@ -1406,6 +1429,7 @@ export class CloudAccounts {
     if (!stored || this.#closed) return
     this.#stored = stored
     this.#seen = stored.seen
+    this.#scheduleInline()
     this.#set({ status: "signed-in", account: stored.account, device: stored.device, connection: "connecting", runtime: this.#runtimeWanted(stored) ? "connecting" : "off", kept: "keychain" })
     this.#connect()
   }
@@ -1422,6 +1446,10 @@ export class CloudAccounts {
     if (!record) return undefined
     const stored = StoredSchema.parse(JSON.parse(record.value))
     if (stored.cloud !== this.#cloud?.origin) return undefined
+    this.#persisted = stored
+    this.#checkpointSource = stored
+    const savedAt = Date.parse(record.savedAt)
+    this.#inlineAt = stored.seen === undefined ? undefined : Number.isFinite(savedAt) ? savedAt : this.#eventClock.now()
     const cursor = await this.#options.eventCursors.read(eventScope(stored)).catch((error: Error) => {
       this.#options.log?.("cloud account event cursor not read; following from the saved credential", { error: error.message })
       return undefined
@@ -1435,34 +1463,73 @@ export class CloudAccounts {
    * write before it, with the last account event heard.
    */
   #save(stored: Stored): Promise<boolean> {
-    const { secrets, secretName } = this.#options
     const write = this.#writes.then(async () => {
-      if (!(await secrets.durable())) return false
-      const seen = this.#seen
-      await secrets.write("mako-sign-in", secretName, JSON.stringify(seen === undefined ? stored : { ...stored, seen }))
-      return true
+      const saved = await this.#writeCredential(stored)
+      this.#checkpointSource = stored
+      return saved
     })
     this.#writes = write.catch(() => undefined)
     return write
   }
 
+  /** Called only in the write queue, including by rare legacy-cursor checkpoints. */
+  async #writeCredential(stored: Stored): Promise<boolean> {
+    const { secrets, secretName } = this.#options
+    if (!(await secrets.durable())) return false
+    const seen = this.#seen
+    const kept = seen === undefined ? stored : { ...stored, seen }
+    await secrets.write("mako-sign-in", secretName, JSON.stringify(kept))
+    this.#persisted = kept
+    if (seen !== undefined) this.#inlineAt = this.#eventClock.now()
+    this.#scheduleInline()
+    return true
+  }
+
+  /** Keep rollback readers within an hour, without replacing the grant on every stream checkpoint. */
+  #scheduleInline(): void {
+    this.#inlineSave?.()
+    this.#inlineSave = undefined
+    if (this.#closed || this.#options.links === false || !this.#stored || !this.#persisted || this.#seen === undefined || this.#seen <= (this.#persisted.seen ?? 0)) return
+    const remaining = this.#inlineAt === undefined ? 0 : Math.max(0, Math.min(INLINE_SEEN_MS, this.#inlineAt + INLINE_SEEN_MS - this.#eventClock.now()))
+    if (remaining === 0) return this.#saveInline()
+    this.#inlineSave = this.#eventClock.after(remaining, () => { this.#inlineSave = undefined; this.#saveInline() })
+  }
+
+  #saveInline(shutdown = false): void {
+    if (this.#options.links === false) return // Status inspection never owns or changes the credential.
+    const scope = this.#stored && eventScope(this.#stored)
+    if (!scope) return
+    const write = this.#writes.then(async () => {
+      const current = this.#stored, persisted = this.#persisted, source = this.#checkpointSource, seen = this.#seen
+      if ((!shutdown && this.#closed) || !current || !persisted || !source || seen === undefined || seen <= (persisted.seen ?? 0)) return
+      // The queued request must not cross a sign-out/re-enrollment or restore a credential superseded in this queue.
+      if (!hasEventScope(current, scope) || !hasEventScope(persisted, scope) || !hasEventScope(source, scope)) return
+      if (!shutdown && this.#inlineAt !== undefined && this.#eventClock.now() - this.#inlineAt < INLINE_SEEN_MS) return this.#scheduleInline()
+      // Bound attempts too: a failed or ambiguous save must not turn the two-second checkpoint into a retry loop.
+      this.#inlineAt = this.#eventClock.now()
+      try { await this.#writeCredential({ ...current, credential: source.credential }) }
+      finally { this.#scheduleInline() }
+    })
+    this.#writes = write.catch(() => undefined)
+    void write.catch((error: Error) => this.#options.log?.("cloud account inline cursor not saved for older builds", { error: error.message }))
+  }
+
   /** Keeps the last account event heard soon, with every other heard meanwhile (`SEEN_SAVE_MS`). */
   #rememberSeen(): void {
     if (this.#seenSave) return
-    this.#seenSave = setTimeout(() => {
+    this.#seenSave = this.#eventClock.after(SEEN_SAVE_MS, () => {
       this.#seenSave = undefined
       // A token refresh in flight may be keeping a new credential: this waits for it, rather than write the old one after.
       if (this.#tokenRequest) return this.#rememberSeen()
       this.#saveSeen()
-    }, SEEN_SAVE_MS)
-    this.#seenSave.unref?.()
+    })
   }
 
   #saveSeen(): void {
     const stored = this.#stored
     if (!stored || this.#seen === undefined) return
     const scope = eventScope(stored), seen = this.#seen
-    const write = this.#writes.then(() => this.#options.eventCursors.write(scope, seen))
+    const write = this.#writes.then(async () => { await this.#options.eventCursors.write(scope, seen); this.#scheduleInline() })
     this.#writes = write.catch(() => undefined)
     void write.catch((error: Error) => this.#options.log?.("cloud account event not remembered as heard", { error: error.message }))
   }
@@ -1470,12 +1537,17 @@ export class CloudAccounts {
   async #forget(notice?: CloudSignedOutNotice): Promise<void> {
     this.#stored = undefined
     this.#seen = undefined
-    clearTimeout(this.#seenSave)
+    this.#inlineSave?.()
+    this.#inlineSave = undefined
+    this.#inlineAt = undefined
+    this.#seenSave?.()
     this.#seenSave = undefined
     this.#token = undefined
     this.#disconnect()
     // A write already begun lands first, so the sign-in it writes is removed after it, never brought back.
     await this.#writes
+    this.#persisted = undefined
+    this.#checkpointSource = undefined
     await this.#options.secrets.delete("mako-sign-in", this.#options.secretName)
     this.#set(notice ? { status: "signed-out", notice } : { status: "signed-out" })
   }
