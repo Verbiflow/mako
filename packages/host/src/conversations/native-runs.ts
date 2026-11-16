@@ -278,6 +278,7 @@ export class NativeRuns {
     let releaseSession: (() => void) | undefined
     let executionContext: ExecutionContext
     let accountLaunch: AccountLaunch
+    let dropped: string[] = []
     try {
       const launch = await this.host.accounts.launch(harness, process.env, { holder: { kind: "run" } })
       accountLaunch = launch
@@ -298,16 +299,11 @@ export class NativeRuns {
         ? await runner.prepare(options, env)
         : dropUncarried(options, runner.carries)
       assertPreparation()
-      // A setting the command line cannot carry is said out loud, never
-      // silently left behind: the ACP transport would have applied it.
+      // A setting the command line cannot carry is said on the reply's run, never silently left behind: the ACP
+      // transport would have applied it.
       if (prepared.dropped.length) {
-        const named = prepared.dropped.join(", ")
-        hostWarn("native", "settings dropped", { harness, key, dropped: named })
-        this.emit({
-          type: "notice",
-          level: "info",
-          message: `This ${harness} reply runs without ${named}: its command line cannot carry ${prepared.dropped.length === 1 ? "it" : "them"}.`,
-        })
+        dropped = prepared.dropped
+        hostWarn("native", "settings dropped", { harness, key, dropped: dropped.join(", ") })
       }
       ;({ command, args, env: commandEnv } = await build(prepared.options, env))
       assertPreparation()
@@ -345,7 +341,7 @@ export class NativeRuns {
     }
 
     executionContext.executable = executable
-    const state: ThreadRunState = { path: key, harness, status: "running", executionContext }
+    const state: ThreadRunState = { path: key, harness, status: "running", executionContext, ...dropped.length && { dropped } }
     const settled = ownedWorkCompletion()
     let resolveRun: (result: NativeRunResult) => void = () => {}
     const completed = captureOutput

@@ -14,7 +14,7 @@ import type {
 import { heldReason, SessionBusyError } from "../contracts/session-hold.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import type { LiveRequest, TurnContinuation, LiveSnapshot } from "../contracts/live-conversations.js"
-import { classifyStartFailure, failureEvidenceOf } from "../contracts/provider-failure.js"
+import { classifyStartFailure, failureEvidenceOf, HostFailureError } from "../contracts/provider-failure.js"
 import { NativeVerificationPendingError } from "../contracts/native-verification.js"
 import { failureAfterRetry, nextRetry, transientCause } from "../contracts/delivery-retry.js"
 import { arriving, departing } from "../contracts/request-hold.js"
@@ -44,7 +44,7 @@ function arrival(requests: readonly LiveRequest[], arrived: LiveRequest, ahead: 
 export function reconnectError(verdict: ResumeVerdict | undefined): Error {
   return verdict?.kind === "held" ? new SessionBusyError(verdict.by)
     : verdict?.kind === "unavailable" && verdict.retry ? new NativeVerificationPendingError(verdict.reason)
-      : new Error(reconnectRefusal(verdict))
+      : new HostFailureError("resume-failed", reconnectRefusal(verdict))
 }
 
 export function reconnectRefusal(verdict: ResumeVerdict | undefined): string {
@@ -292,6 +292,17 @@ export class LiveTransfers {
     try {
       this.save(resident, { ...transfer, behind: undefined, state: { kind: "preparing" } })
       await this.host.locateNativePath(resident)
+      if (!await this.host.reconcileCut(resident, transfer.continues)) {
+        if (owned()) {
+          this.retire(resident, transfer, "The cut turn finished or its continuation was withdrawn. Nothing was sent.")
+          if (transfer.continues && resident.snapshot.requests.find((request) => request.id === transfer.continues?.requestId)?.status === "completed") {
+            this.host.restartContinued(resident.snapshot.session.id, transfer.continues.requestId)
+            if (resident.snapshot.requests.some((request) => request.status === "queued") && this.host.reopens(resident)) await this.host.wake(resident)
+          }
+        }
+        return
+      }
+      if (!owned()) return
       this.host.returnFromRemovedWorktree(resident)
       const source = resident.snapshot
       const control = this.host.control(resident)
@@ -397,10 +408,13 @@ export class LiveTransfers {
       if (!owned()) return
       if (nativeForkDeclined) hostLog("transfer", "native fork declined", { conversation: source.session.id, provider: transfer.input.provider, reason: nativeForkDeclined })
       const nativeFork = nativeForkDeclined ? undefined : forkSource
+      // A crash can precede the native receipt: carry retained history as context, never repeat the uncertain brief
+      // as fresh input. An ordinary reconnect needs none because its native conversation already has it.
+      const crashed = transfer.continues?.auto && transfer.continues.reason === "host-crashed"
       const manifest = await prepareLiveContext({
         snapshot: source,
         root: join(this.host.dependencies.root, "context"),
-        fromBlock: reconnect ? source.blocks.length : prior?.coveredBlocks ?? 0,
+        fromBlock: reconnect && !crashed ? source.blocks.length : prior?.coveredBlocks ?? 0,
         includesBase: !nativeFork && !prior?.includesBase,
         bundles: this.host.bundles,
       })
@@ -671,6 +685,10 @@ export class LiveTransfers {
         throw error
       }
       phase.phase = "committed"
+      if (transfer.continues?.auto) {
+        try { this.host.restartContinued(source.session.id, transfer.continues.requestId) }
+        catch (error) { hostWarn("live", "a committed restart continuation's paused queue waits for recovery", { conversation: source.session.id, error: errorMessage({ error }) }) }
+      }
       const retiring = [...resident.connections].filter(
         ([dormantId]) => dormantId !== bindingId
       )
@@ -754,11 +772,7 @@ export class LiveTransfers {
           nativeId: prior?.nativeId,
           cause: movedByOwnTurn ? "interrupted turn" : "outside Mako",
         })
-        if (!movedByOwnTurn) this.host.dependencies.emit({
-          type: "notice",
-          level: "info",
-          message: "This session was continued outside Mako since its last turn here. Those turns are not in this transcript; the session itself carries them.",
-        })
+        if (!movedByOwnTurn) hostLog("transfer", "the session was continued outside Mako since its last turn here", { harness: transfer.input.provider, nativeId: prior?.nativeId })
       }
     } catch (error) {
       if (activated) {

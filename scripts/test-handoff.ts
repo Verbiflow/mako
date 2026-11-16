@@ -8,7 +8,8 @@ import { followHostLog } from "@mako/host/base/host-log"
 import { BRIEF_AGAIN } from "@mako/host/contracts/children"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { transcriptHolds } from "@mako/host/conversations/native-history"
-import { AgentsWorld, HARNESSES, type Heard, type Script } from "./lib/agents-world.ts"
+import { withoutMakoFraming } from "@mako/sessions"
+import { AgentsWorld, TESTED_HARNESSES, type Heard, type Script } from "./lib/agents-world.ts"
 
 /**
  * A Fin's brief through a host killed with SIGKILL at its handoff (`npm run test:handoff`), on each of the six
@@ -17,17 +18,17 @@ import { AgentsWorld, HARNESSES, type Heard, type Script } from "./lib/agents-wo
  *   `handOff`, every driver's last step before its transport call, sends nothing; the next host reads the brief as
  *   never sent, so it goes once, whole.
  * - `submitted`: the write holds, and the host dies before the transport call. Whether the harness had it is unknown,
- *   and its transcript doesn't show it: the next host sends the brief again, framed so a Fin that did get it carries
- *   on (`BRIEF_AGAIN`).
+ *   and its transcript doesn't show it: a new continuation checks prior results, with the original brief retained
+ *   in the transcript rather than replayed as a fresh task.
  * - `heard`: the harness took it and its transcript shows it: the next host continues the Fin's turn.
- * - `twice`: as `submitted`, and the next host dies the same way sending the brief again: the third sends it again too.
+ * - `twice`: as `submitted`, and the next host dies at its continuation handoff: the third continues that cut too.
  * - `reading`: as `submitted`, and the next host dies reading the transcript, its recovery admitted and proven unsent:
- *   the third host sends that recovery by itself, framed, in its place.
+ *   the third host sends that recovery in its place.
  * - `stopped-reading`: as `reading`, with the Fin stopped as the read began: the third host sends nothing.
  * - `stopped`: as `submitted`, and its Apex stops the Fin while the next host reads the transcript: nothing goes.
  * - `overtaken`: as `submitted`, and the person writes to the Fin while the next host reads the transcript: the
- *   brief goes first, in its own place, and then the person's words.
- * In none does a Fin that never had its brief get only "Continue where you left off".
+ *   continuation goes first, in its own place, and then the person's words.
+ * A continuation always carries the retained objective; uncertainty never causes a blind task replay.
  */
 const POINTS = ["unsaved", "submitted", "heard", "twice", "reading", "stopped-reading", "stopped", "overtaken"] as const
 type Point = (typeof POINTS)[number]
@@ -56,7 +57,7 @@ async function host(dir: string, harness: string, point: Point, again: boolean):
   let readOnly = false
   const commit = LiveJournal.prototype.commit
   mock.method(LiveJournal.prototype, "commit", function (this: LiveJournal, ...args: Parameters<LiveJournal["commit"]>) {
-    const submitted = args[0].requests.some((request) => request.text.includes(BRIEF) && request.nativeDelivery?.evidence.kind === "submitted")
+    const submitted = args[0].requests.some((request) => (again ? request.continues?.brief !== undefined : request.text.includes(BRIEF)) && request.nativeDelivery?.evidence.kind === "submitted")
     if (submitted && point === "unsaved") readOnly = true
     if (readOnly) throw Object.assign(new Error("attempt to write a readonly database"), { code: "ERR_SQLITE_ERROR", errcode: 8 })
     commit.apply(this, args)
@@ -86,15 +87,16 @@ async function host(dir: string, harness: string, point: Point, again: boolean):
   await new Promise(() => {})
 }
 
-function run(dir: string, harness: string, point: Point, again = false): Promise<{ signal: NodeJS.Signals | null; stderr: string }> {
+function run(dir: string, harness: string, point: Point, again = false): Promise<{ signal: NodeJS.Signals | null; stderr: string; timedOut: boolean }> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, ["--import", "tsx", import.meta.filename, "--host", dir, harness, point, ...again ? ["again"] : []], { stdio: ["ignore", "ignore", "pipe"] })
     let stderr = ""
     child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString() })
-    const timer = setTimeout(() => child.kill("SIGKILL"), 60_000)
+    let timedOut = false
+    const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL") }, 60_000)
     child.on("exit", (_code, signal) => {
       clearTimeout(timer)
-      resolve({ signal, stderr })
+      resolve({ signal, stderr, timedOut })
     })
   })
 }
@@ -136,20 +138,25 @@ async function check(dir: string, harness: string, point: Point): Promise<void> 
         return
       }
       await until(`${label}: both to go`, () => told().some((prompt) => prompt.text.includes("The person's words.")))
-      const order = told().map((prompt) => (prompt.text.includes(BRIEF) ? "brief" : prompt.text.includes("The person's words.") ? "person" : "other"))
-      assert.deepEqual(order.filter((each) => each !== "other"), ["brief", "person"], `${label}: the brief goes in its own place, ahead of what came after the crash`)
+      const order = told().map((prompt) => (withoutMakoFraming(prompt.text).startsWith(CONTINUE) ? "continuation" : prompt.text.includes("The person's words.") ? "person" : "other"))
+      assert.deepEqual(order.filter((each) => each !== "other"), ["continuation", "person"], `${label}: recovery keeps its place ahead of newer input`)
     }
     await until(`${label}: the Fin to be told`, () => told().length > 0)
     await pause(500)
-    const briefs = told().filter((prompt) => prompt.text.includes(BRIEF))
-    const continued = told().filter((prompt) => prompt.text.startsWith(CONTINUE))
-    if (point === "heard") {
-      assert.deepEqual([briefs.length, continued.length], [0, 1], `${label}: a Fin whose transcript has its brief is continued`)
-      return
+    const briefs = told().filter((prompt) => withoutMakoFraming(prompt.text).includes(BRIEF))
+    const continued = told().filter((prompt) => withoutMakoFraming(prompt.text).startsWith(CONTINUE))
+    if (point === "unsaved") {
+      assert.equal(briefs.length, 1, `${label}: the proven-unsent brief goes once`)
+      assert.equal(briefs[0]!.text.includes(BRIEF_AGAIN), false)
+      assert.equal(continued.length, 0)
+    } else {
+      assert.equal(briefs.length, 0, `${label}: no uncertain task is replayed as fresh input`)
+      assert.equal(continued.length, 1, `${label}: one continuation checks prior results`)
+      const file = continued[0]!.text.match(/is in ([^\n]+?transcript\.md)\./)?.[1]
+      assert.ok(file, `${label}: continuation carries retained history`)
+      assert.match(readFileSync(file, "utf8"), /You're fin:worker/)
+      assert.match(withoutMakoFraming(continued[0]!.text), /check the result/i)
     }
-    assert.equal(briefs.length, 1, `${label}: the brief went once`)
-    assert.equal(briefs[0]!.text.includes(BRIEF_AGAIN), point !== "unsaved", `${label}: framed as sent again only when it may have reached the Fin`)
-    assert.equal(continued.length, 0, `${label}: no bare "Continue" to a Fin that may never have had its brief`)
   } finally {
     await world.close()
   }
@@ -166,13 +173,15 @@ async function main(): Promise<void> {
   const failures: string[] = []
   try {
     for (const point of POINTS)
-      await Promise.all(HARNESSES.map(async (harness) => {
+      await Promise.all(TESTED_HARNESSES.map(async (harness) => {
         const dir = join(root, `${point}-${harness}`)
         try {
           const killed = await run(dir, harness, point)
+          assert.equal(killed.timedOut, false, `${point} on ${harness}: did not reach the intended crash point`)
           assert.equal(killed.signal, "SIGKILL", `${point} on ${harness}: ${killed.stderr.slice(-800)}`)
           if (point === "twice" || point === "reading" || point === "stopped-reading") {
             const again = await run(dir, harness, point, true)
+            assert.equal(again.timedOut, false, `${point} on ${harness}: second host did not reach the intended crash point`)
             assert.equal(again.signal, "SIGKILL", `${point} on ${harness}, the second host: ${again.stderr.slice(-800)}`)
           }
           await check(dir, harness, point)
@@ -187,7 +196,7 @@ async function main(): Promise<void> {
     console.error(`${failures.length} failed; their stores are in ${root}:\n${failures.join("\n")}`)
     process.exit(1)
   }
-  console.log("handoff: a brief the journal couldn't record as sent went once after SIGKILL; one recorded but maybe unsent went again as such; one its transcript showed was continued; on all six harnesses")
+  console.log("handoff: proven-unsent briefs go once; uncertain handoffs continue with retained objective, native receipt checks, Stop and FIFO preserved")
 }
 
 if (process.argv[2] === "--host") await host(process.argv[3]!, process.argv[4]!, POINTS.find((point) => point === process.argv[5]) ?? "unsaved", process.argv[6] === "again")

@@ -145,11 +145,52 @@ assert.throws(() => MessageAnchorSchema.parse({ index: 1, at: "2026-01-01T00:00:
     const said = (fork: LiveSnapshot) => fork.base?.entries.map((entry) => entry.type === "user" || entry.type === "text" ? entry.text : entry.type)
     assert.deepEqual(said(owner.fork(id, { id: randomUUID(), provider: "claude", point: { kind: "run", requestId: r1 } })), ["first", "one"],
       "an earlier covered answer forks from the live record up to it")
-    assert.deepEqual(said(owner.fork(id, { id: randomUUID(), provider: "claude", point: { kind: "before-run", requestId: r2 } })), ["first", "one"],
-      "a covered prompt's edge is the live record before it")
+    const rewound = owner.fork(id, { id: randomUUID(), provider: "claude", point: { kind: "before-run", requestId: r2 } })
+    assert.deepEqual(said(rewound), ["first", "one"], "a covered prompt's edge is the live record before it")
+    // A prompt edited twice, each time from the newest version: O, then F1 rewound before O's prompt, then F2 rewound
+    // before F1's. Every one reads the same three versions, oldest first, each at its own place.
+    const paused = { pause: "stop" as const }
+    const f1 = rewound.session.id
+    const second = owner.submit(f1, randomUUID(), "second, written again", [], undefined, undefined, undefined, undefined, paused)
+    assert.equal(owner.snapshot(f1)?.control?.ancestry?.firstRequest, second.id, "a fork's first request is kept with its ancestry")
+    assert.deepEqual(owner.promptVersions(id), { [r2]: { conversations: [id, f1], at: 0 } }, "the original holds the first of two, and r1 none")
+    assert.deepEqual(owner.promptVersions(f1), { [second.id]: { conversations: [id, f1], at: 1 } }, "the edit the second")
+    const later = owner.submit(f1, randomUUID(), "a follow-up", [], undefined, undefined, undefined, undefined, paused)
+    assert.equal(owner.promptVersions(f1)[later.id], undefined, "a fork's later prompts aren't versions of anything")
     const revision = JSON.stringify([ref.revision, ref.bytes, ref.updatedAt])
     const earlier = owner.fork(id, { id: randomUUID(), provider: "claude", point: { kind: "native", index: 1, revision, anchor: { index: 1, id: "a1" } } })
     assert.deepEqual(earlier.base?.entries.map((entry) => entry.id), ["u1", "a1"], "the panel names an earlier covered answer by its native message")
+    // F2, rewound from F1 before its prompt and written a third time, as its journal keeps it.
+    const f2 = randomUUID()
+    const third = randomUUID()
+    const f2Journal = new LiveJournal(root, f2)
+    f2Journal.commit({
+      session: { id: f2, harness: "claude", cwd: root, connection: "disconnected", status: "ready", modes: [], currentMode: null, configOptions: [] },
+      revision: 0, createdAt: Date.now() + 1_000, base: null, permissions: [],
+      requests: [{ id: third, text: "second, a third time", attachments: [], status: "completed" }],
+      blocks: [{ type: "user", requestId: third, text: "second, a third time" }],
+      control: {
+        activeBindingId: f2, bindings: [], transfers: [], actions: [], merges: [],
+        ancestry: { kind: "fork", parentId: f1, sourceRevision: 0, point: JSON.stringify({ kind: "before-run", requestId: second.id }), placement: "parent-thread", firstRequest: third },
+      },
+    })
+    f2Journal.close()
+    // The next host reads the chain from the journals' summaries, every fork unloaded but the one on screen.
+    const next = new LiveConversations({
+      root, appPath: root, driver: () => undefined, emit: () => {},
+      history: async () => ({ ref, entries, start: 0, total: entries.length, hasEarlier: false, checkpoint: 2 }),
+    })
+    try {
+      const chain = [id, f1, f2]
+      await next.refreshedSnapshot(id)
+      assert.deepEqual(next.promptVersions(id), { [r2]: { conversations: chain, at: 0 } }, "the original holds the first of three")
+      await next.refreshedSnapshot(f1)
+      assert.deepEqual(next.promptVersions(f1), { [second.id]: { conversations: chain, at: 1 } }, "the first edit the second")
+      await next.refreshedSnapshot(f2)
+      assert.deepEqual(next.promptVersions(f2), { [third]: { conversations: chain, at: 2 } }, "the second edit the third: the chain unbroken")
+    } finally {
+      await next.stop()
+    }
   } finally {
     await owner.stop()
     await rm(root, { recursive: true, force: true })

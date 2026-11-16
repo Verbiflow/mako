@@ -88,7 +88,7 @@ export type ResumeVerdict =
    * nothing could ever resume it: a message goes on in a new session of that harness, handed the whole conversation.
    */
   | { kind: "unavailable"; reason: string; lost?: true; retry?: never }
-  /** Ownership could not be observed now. Recheck it later; this never permits a replacement session. */
+  /** Native ownership or source could not be observed now. Recheck later; this never permits a replacement session. */
   | { kind: "unavailable"; reason: string; retry: true; lost?: never }
   /**
    * The harness keeps this record closed to resumes (a Codex archive, a
@@ -257,6 +257,11 @@ export const ConversationControlSchema = z.object({
       parentId: z.string().uuid(),
       sourceRevision: z.number().int().nonnegative(),
       point: z.string(),
+      /**
+       * The first request sent in the fork: for one made from just before a prompt (`before-run`), that prompt's next
+       * version (`LiveConversations.promptVersions`). Set as it's admitted, so the fork index knows it unloaded.
+       */
+      firstRequest: z.string().optional(),
       /** A fork made with this set joins its parent's Thread as a tab. Older forks have their own Thread. */
       placement: z.literal("parent-thread").optional(),
       /** The Session it was asked to go into (`ForkInput.session`). */

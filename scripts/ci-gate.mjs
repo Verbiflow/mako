@@ -91,7 +91,7 @@ export const STEPS = [
   [16, "npm run test:usage"],
   [144, "npm test -w @mako/sessions"],
   // Fins held by the tree's budget, woken, resumed, moved, and what each reads as.
-  [127, "CASES=statesAndEntries,rosterAndLists,uploadsFollowParents,startsAndWakes,explicitReports,refusals,launchesBeforeTheirEdge,stopHoldsUntilCancelled,linkTellsUnreadableFromGone,followedStopStuck,harnessLadders,stopAllUnqueues,unreadableQueuedStarts,settingsFollowTheBinding,startedFinsOldQueueRow,stoppedApexHolds,listsReadNoJournal,finsMoveInTheNewestSession,aSessionNeedsYou,followsShellRuns,relinkedRuns,messagesReachLinkedRuns,finRules npm run test:background-agents"],
+  [127, "CASES=statesAndEntries,rosterAndLists,uploadsFollowParents,startsAndWakes,explicitReports,refusals,startRate,launchesBeforeTheirEdge,stopHoldsUntilCancelled,linkTellsUnreadableFromGone,followedStopStuck,harnessLadders,stopAllUnqueues,unreadableQueuedStarts,settingsFollowTheBinding,startedFinsOldQueueRow,stoppedApexHolds,listsReadNoJournal,finsMoveInTheNewestSession,aSessionNeedsYou,followsShellRuns,relinkedRuns,messagesReachLinkedRuns,finRules npm run test:background-agents"],
   [127, "CASES=storeKeeps,readOnlyStoreVersion,finLimit,afterOrder,slotsGoAtOnce,followedStopHoldsUntilExit,followedStopUnknownIdentity,followedStopStaleIdentity,queueProjection,edgeWriteMovesTheLine,accessFits,finReadingsLoadNothing,finsAtWorkByBinding,activityTellsNoOne,progressGoesWhereItsRead,anySessionAsks,finModels,limitedHarnesses,apexStops,staleEndsStayOut,waitingFins,ownSessionIsNoChild npm run test:background-agents"],
   [32, "npm run test:build-slots"],
   [0, "npm run test:agents-migrate"],
@@ -99,12 +99,15 @@ export const STEPS = [
   [74, "npm run test:agents-wake"],
   [3, "npm run test:fins-reach-released-apex"],
   [68, "npm run test:fin-pull-waits"],
+  // A turn's wait: armed, met, timed and fired once through restarts, a cancel racing it and a sleep.
+  [1, "npm run test:turn-waits"],
   [12, "npm run test:fin-resume"],
   [31, "npm run test:git-helper"],
   [32, "npm run test:fin-reopen"],
   [4, "npm run test:roster-refresh"],
   [33, "npm run test:resume-holds"],
   [36, "npm run test:fin-states"],
+  [20, "npm run test:fin-quiet"],
   // What comes back: a crash, a recovery or a Fin moved, with its queue kept through SIGKILL.
   [40, "MAKO_TEST_HARNESSES=claude npm run test:fin-move"],
   [40, "MAKO_TEST_HARNESSES=codex npm run test:fin-move"],

@@ -1,3 +1,5 @@
+import { RemoteAppHintSchema, type RemoteAppHint } from "@mako/host/contracts/remote-app"
+import type { Owner } from "./start"
 import { LinkClosedError, NothingArrivedError, PROBE_ANSWER_MS, SILENT_WHILE_WORKING_MS, StreamCursor, followAgainInMs, sessionStream, type Actor, type Json, type Subscription } from "@mako/protocol"
 import { answerClientCall, isClientCall, openableLink, UNOPENABLE_LINK, type ClientAnswers } from "@mako/host/contracts/client-calls"
 import { HostCallInputs } from "@mako/host/contracts/host-call-inputs"
@@ -15,6 +17,7 @@ import { z } from "zod"
 import { applyLiveBatch, hydrateLive, listLive, unloadLive } from "@/state/live-recovery"
 import { watchLiveResidency } from "@/state/live-residency"
 import { acp } from "@/state/acp"
+import { toolStepped } from "@/state/tool-steps"
 import { acpStore } from "@/state/acp-state"
 import { threadsStore } from "@/state/thread-store"
 import { CONSOLE_LOG, type Gateway } from "./gateway"
@@ -47,6 +50,14 @@ const RECENT_TRANSCRIPTS = { bytes: 32 * 1024 * 1024, recent: 4 }
 const ASLEEP_MS = 15_000
 
 /** A move's step as its owner's stream carries it (`thread-move-step`, `thread-return-step`): read as far as its kind. */
+/** A running js call's steps as its owner relays them (`SessionReport`'s `#relaySteps`); `steps: null` once it answered. */
+const ToolStepsEventSchema = z.object({
+  type: z.literal("tool-steps"),
+  steps: z.object({
+    steps: z.array(z.object({ call: z.string(), phase: z.enum(["running", "done", "failed"]), times: z.number().int().optional() })),
+    total: z.number().int(),
+  }).nullable(),
+})
 const MoveStepEventSchema = z.object({ type: z.enum(["thread-move-step", "thread-return-step"]), move: z.string(), step: z.object({ kind: z.string() }).loose() })
 
 /** One owner's stream as this browser follows it: its conversations, and how many follow each. */
@@ -59,6 +70,8 @@ type Follow = { subscription?: Subscription; conversations: Set<string>; holds: 
  */
 export class WebConversations {
   readonly bridge: MakoBridge
+  readonly #appHint: ((owner: Owner, hint: RemoteAppHint) => void) | undefined
+  readonly #appsReconnected: ((owner: Owner) => void) | undefined
   readonly #gateway: Gateway
   readonly #deviceId: string
   readonly #row: (conversation: string) => ListedSession | undefined
@@ -77,7 +90,9 @@ export class WebConversations {
   readonly #asleep = new Map<string, number>()
   readonly #waking = new Map<string, ReturnType<typeof setTimeout>>()
 
-  constructor(options: { gateway: Gateway; deviceId: string; row: (conversation: string) => ListedSession | undefined }) {
+  constructor(options: { gateway: Gateway; deviceId: string; row: (conversation: string) => ListedSession | undefined; appHint?: (owner: Owner, hint: RemoteAppHint) => void; appsReconnected?: (owner: Owner) => void }) {
+    this.#appHint = options.appHint
+    this.#appsReconnected = options.appsReconnected
     this.#gateway = options.gateway
     this.#deviceId = options.deviceId
     this.#row = options.row
@@ -213,9 +228,10 @@ export class WebConversations {
    * every `ASLEEP_MS` with the smallest read there is while one of its conversations is open, and read live once it answers.
    */
   #watchForWaking(mac: string): void {
-    if (this.#waking.has(mac)) return
+    if (document.visibilityState !== "visible" || this.#waking.has(mac)) return
     this.#waking.set(mac, setTimeout(async () => {
       this.#waking.delete(mac)
+      if (document.visibilityState !== "visible") return
       const asked = this.#openOn(mac)[0]
       if (!asked || accountListStore.get().quiet.has(mac)) return void this.#asleep.delete(mac)
       try {
@@ -226,7 +242,7 @@ export class WebConversations {
         this.#watchForWaking(mac)
         return
       }
-      this.#back(mac, "a call it answered")
+      if (document.visibilityState === "visible") this.#back(mac, "a call it answered")
     }, ASLEEP_MS))
   }
 
@@ -400,6 +416,7 @@ export class WebConversations {
         const resumes = owner.kind === "cloud" ? cursor.last !== undefined : cursor.numbered
         const subscription = this.#gateway.session.subscribe({ stream: owner.stream, after: owner.kind === "cloud" ? (cursor.last ?? Number.MAX_SAFE_INTEGER) : cursor.resumeAfter() })
         follow.subscription = subscription
+        if (!first) this.#appsReconnected?.(this.#appOwner(owner))
         // Followed again where the stream can't be picked up (nothing heard yet, or a gateway that keeps nothing): what
         // went by meanwhile is read as a snapshot.
         if (!first && !resumes) for (const conversation of follow.conversations) this.#sync(conversation, true)
@@ -416,10 +433,16 @@ export class WebConversations {
             probedAt = Date.now()
             continue
           }
-          const verdict = cursor.heard({ seq: frame.seq, text: frame.event.text })
+          const verdict = cursor.heard({ seq: frame.seq, text: frame.event.text, ...frame.ephemeral && { ephemeral: true } })
+          // Passing state (steps and app hints): applied as it comes, moving no cursor and counting as no update.
+          if (verdict.kind === "ephemeral") {
+            this.#heard(frame.event.text, follow.conversations, owner)
+            continue
+          }
           if (verdict.kind === "notice" || verdict.kind === "duplicate") continue
           if (verdict.kind === "reread") {
             readings.reread()
+            this.#appsReconnected?.(this.#appOwner(owner))
             for (const conversation of follow.conversations) this.#sync(conversation, true)
             continue
           }
@@ -434,7 +457,7 @@ export class WebConversations {
           // A Mac's update is the Mac answering, live: one streaming a turn isn't said to be unreachable. (A cloud Thread's
           // stream is its log, which a sleeping machine's past still fills.)
           if (owner.kind === "device") answered(macPlace(owner.deviceId))
-          const heard = this.#heard(frame.event.text, follow.conversations)
+          const heard = this.#heard(frame.event.text, follow.conversations, owner)
           readings.heard(heard?.emittedAt, heard?.compact)
         }
         // A number skipped: asked for again at once after the last one heard. Gap after gap is a stream that fails.
@@ -484,6 +507,8 @@ export class WebConversations {
    * to its listing, read again when it's opened. A hidden page that holds less is the last iOS ends for memory.
    */
   releaseHidden(): void {
+    for (const timer of this.#waking.values()) clearTimeout(timer)
+    this.#waking.clear()
     const { activeKey, conversations } = acpStore.get()
     for (const conversation of Object.values(conversations)) {
       if (conversation.kind !== "live" || !conversation.hydrated || conversation.key === activeKey) continue
@@ -515,11 +540,23 @@ export class WebConversations {
    * One line of an owner's stream: a batch of an open conversation goes to the renderer's live state. Returns when its
    * owner emitted it, for a traced batch, and logs its trace.
    */
-  #heard(line: string, open: ReadonlySet<string>): { emittedAt?: number; compact: boolean } | undefined {
+  #appOwner(owner: ListedOwner): Owner { return owner.kind === "cloud" ? { kind: "cloud", threadId: owner.threadId } : { kind: "mac", deviceId: owner.deviceId } }
+
+  #heard(line: string, open: ReadonlySet<string>, owner: ListedOwner): { emittedAt?: number; compact: boolean } | undefined {
     const head = readEventLine(line)
     if (!head || head.channel !== "event" || !head.conversation || !open.has(head.conversation)) return undefined
+    if (head.type === "conversation-app-hint") {
+      const hint = RemoteAppHintSchema.safeParse(JSON.parse(head.payload))
+      if (hint.success && hint.data.conversationId === head.conversation) this.#appHint?.(this.#appOwner(owner), hint.data)
+      return undefined
+    }
     if (head.type === "thread-move-step" || head.type === "thread-return-step") {
       this.#moveStep(head.conversation, head.payload)
+      return undefined
+    }
+    if (head.type === "tool-steps") {
+      const event = ToolStepsEventSchema.safeParse(JSON.parse(head.payload)).data
+      if (event) toolStepped(head.conversation, event.steps)
       return undefined
     }
     if (head.type !== "live-batch") return undefined
@@ -555,6 +592,7 @@ export class WebConversations {
 
   /** After a sleep, a return or a network change: every followed stream that went quiet is followed again at once. */
   wake(): void {
+    if (document.visibilityState === "visible") for (const mac of this.#asleep.keys()) this.#watchForWaking(mac)
     this.#gateway.wake()
     for (const done of this.#waits) done()
   }

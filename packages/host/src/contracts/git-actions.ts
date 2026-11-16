@@ -41,9 +41,13 @@ export function githubRateLimitWords(retryAt: number): string {
     : `GitHub is rate limiting this login until ${deadline.toISOString().slice(11, 23)} UTC on ${deadline.toISOString().slice(0, 10)}.`
 }
 
+/** One safe retry message for repository metadata failures, shared by host and window. */
+export const GITHUB_REPOSITORY_LOOKUP_FAILED = "GitHub could not read this repository. Check repository access or try again; this does not mean its Git remote is missing."
+
 /** Why a pull request can't be opened from here, or null once GitHub is set up. */
 export function pullSetupReason(status: GitHubStatus): string | null {
   if (status.limited) return githubRateLimitWords(status.limited.until)
+  if (status.repoLookup) return GITHUB_REPOSITORY_LOOKUP_FAILED
   if (!status.installed) return "Install the GitHub CLI to open a pull request."
   if (!status.authenticated) return "Sign in to GitHub with gh auth login to open a pull request."
   if (!status.repo) return "Add a GitHub remote to open a pull request."

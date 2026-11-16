@@ -1,3 +1,4 @@
+import { HostFailureError } from "../../contracts/provider-failure.js"
 import { hostFetch } from "../../base/host-stopping.js"
 import { existsSync } from "node:fs"
 import { chmod, mkdir, readdir, readFile, readlink, rename, rm, symlink } from "node:fs/promises"
@@ -227,7 +228,7 @@ async function accountEnv(root: AccountRoot, selection: string | null, base: Nod
     throw new Error("The selected Devin account no longer exists. Choose another account in Settings → Agents.")
   const contents = await readFile(accountCredentials(root, selection), "utf8").catch(() => null)
   if (contents === null || !devinCredential(contents, "windsurf_api_key"))
-    throw new Error("The selected Devin account is signed out. Sign in again in Settings → Agents.")
+    throw new HostFailureError("auth", "The selected Devin account is signed out. Sign in again in Settings → Agents.")
   for (const key of AUTH_ENV) delete env[key]
   env.XDG_DATA_HOME = await linkDataHome(join(accountRoot(root, selection), "data"), devinDataHome(base))
   return env

@@ -284,6 +284,11 @@ export interface RequestWake {
   after: string
 }
 
+/** At most this many messages go with one (`LiveRequest.joined`); the rest go in a turn of their own. */
+export const JOINED_MAX = 32
+/** Nor past this many characters of words in all. */
+export const JOINED_CHARS = 64_000
+
 export interface LiveRequest {
   /**
    * Who sent it, assigned by the host at admission. Absent in older journals:
@@ -333,6 +338,14 @@ export interface LiveRequest {
   admissionOrder?: number
   /** An agent's informational message, whose successful turn needs no synthetic completion report. */
   notification?: true
+  /**
+   * The messages from the same sender queued right behind this one that went with it as its one turn (`foldQueued`), in
+   * order, each by its request ID and when it was admitted: their words follow its own. A repeat or a handoff naming
+   * one finds this message.
+   */
+  joined?: { id: string; at: number }[]
+  /** This message went as part of that one's turn (`joined`), so it's canceled here without being dropped. */
+  joinedInto?: string
   /** When it was sent to its harness, which is when its turn began: a message can wait long after it's admitted. */
   dispatchedAt?: number
   text: string
@@ -1161,3 +1174,16 @@ export function traceOf(batch: Pick<LiveBatch, "revision" | "sessionChanges" | "
   const moment = batch.sessionChanges?.status !== undefined || batch.permissions !== undefined || batch.requests !== undefined || batch.requestChanges !== undefined
   return moment || batch.revision % TRACE_EVERY === 0 ? `${TRACE_PREFIX}${random()}` : undefined
 }
+
+/**
+ * The versions of one sent prompt: the conversation it was first sent in, then each fork made from just before it
+ * (a rewind to before it, the words written again), oldest first. `at` is the one asked about. A prompt never edited
+ * has one version.
+ */
+export interface PromptVersions {
+  conversations: string[]
+  at: number
+}
+
+/** A conversation's edited prompts' versions, by the request each is in it (`mako:live-prompt-versions`). */
+export type PromptVersionsByRequest = Record<string, PromptVersions>

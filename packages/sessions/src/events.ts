@@ -223,7 +223,9 @@ export const MCP_SERVER_FAILED = "MCP server failed"
  */
 const MCP_REASONS: ReadonlyArray<readonly [RegExp, string]> = [
   [
-    /\b(?:sign[ -]?in|log[ -]?in|(?:re)?authentication|auth(?:orization)?)[ _-]required\b|\bneeds?[ _-]auth\b|\bunauthori[sz]ed\b|\b401\b/i,
+    // Codex 0.159 says "The todoist MCP server is not logged in. Run `codex mcp login todoist`." and "requires OAuth
+    // reauthentication"; Claude Code says "needs authentication".
+    /\b(?:sign[ -]?in|log[ -]?in|(?:re)?authentication|auth(?:orization)?)[ _-]required\b|\bneeds?[ _-]auth(?:entication)?\b|\bunauthori[sz]ed\b|\b401\b|\bnot (?:logged|signed) in\b|\brequires? (?:oauth )?(?:re)?auth/i,
     "sign-in required",
   ],
   [/\bsetup[ _-]required\b/i, "setup required"],
@@ -237,6 +239,19 @@ const MCP_REASONS: ReadonlyArray<readonly [RegExp, string]> = [
     "could not connect",
   ],
 ]
+
+/** What a `mcpServerFailedEvent` says: the server, and why in the shared words when one fits. */
+export interface McpFailure {
+  server: string
+  reason: string
+}
+
+/** The server and reason an MCP marker names (`mcpServerFailedEvent`); undefined for any other marker. */
+export function mcpFailure(marker: Pick<TranscriptEvent, "label" | "detail">): McpFailure | undefined {
+  if (marker.label !== MCP_SERVER_FAILED || !marker.detail) return undefined
+  const at = marker.detail.indexOf(" · ")
+  return at < 0 ? { server: marker.detail, reason: "" } : { server: marker.detail.slice(0, at), reason: marker.detail.slice(at + 3) }
+}
 
 /** An MCP server the harness could not start, in the same words on every harness. */
 export function mcpServerFailedEvent(

@@ -1,6 +1,7 @@
 import { NATIVE_OVERRIDE } from "../contracts/native-calls.js"
 import type { ControlAgentOperation } from "@mako/control-runtime/mcp"
 import type { JsonValue } from "@mako/control"
+import type { ToolSteps } from "../contracts/tool-steps.js"
 import { randomBytes } from "node:crypto"
 import { createServer, type IncomingMessage } from "node:http"
 import { z } from "zod"
@@ -58,6 +59,7 @@ const MAKO_INSTRUCTIONS = [
   "- project folder: a folder holding several repositories, such as `api` and `web`, that is a project of its own. Its worktree is a folder of the same shape: one worktree per repository, all on the Thread's branch. worktree_status lists the repositories by those names.",
   "- app: the project running from a checkout on this Thread's ports. Threads in the main checkout share its app; a worktree's app is its Thread's alone.",
   "- recipe: how every Thread of the project installs, starts and checks its app. Mako keeps one per project, for every branch.",
+  "wait: to wait on your Fins, a pull request or a time, call wait and end your turn; Mako wakes this Thread once it's over. Never poll or sleep for it.",
   "worktree_*: which checkout this Session edits in; moving it into this Thread's worktree, bringing ignored files from the main checkout, updating its branch from main, merging the branch and removing the worktree. In a project folder they act on every repository at once.",
   "pull_request_*: the pull request of the branch this Session edits on, through the user's GitHub login: its checks, reviews and failed logs; opening or updating it; merging it when the user asks, or on full access as the next step of its work. Each runs the same operation as the Git sidebar's button, so use them instead of `gh pr` commands. A project folder has one pull request per repository: pass repository to name one. Without it they act on the repository this Session's folder is inside, and from the project folder itself pull_request_status reports them all. Commit, push for other reasons, diff and log stay plain Git, run in the repository's own folder.",
   "app_*: this Thread's app. Use them to run and check your work instead of starting servers by hand. In plan mode, app_status, app_logs and app_probe still read the app; if app_start is refused, the user can press Run app.",
@@ -119,9 +121,11 @@ async function readBody(request: IncomingMessage, maxBytes: number) {
  */
 export async function startConversationMcp(
   owner: AgentOwner,
-  control: (bindingId: string, operation: ControlAgentOperation, signal: AbortSignal) => Promise<JsonValue>,
+  control: (bindingId: string, operation: ControlAgentOperation, signal: AbortSignal, steps?: (steps: ToolSteps) => void) => Promise<JsonValue>,
   makoTools: readonly MakoTools[] = [],
-  gate?: CallGate
+  gate?: CallGate,
+  /** Hears a conversation's running js call's steps as they change, and `null` once it answered. */
+  stepsOf?: (conversationId: string, steps: ToolSteps | null) => void
 ) {
   const scopes = new Map<string, Scope>()
   const retire = (token: string, scope: Scope, reason: "revoked" | "server-closed") => {
@@ -183,9 +187,15 @@ export async function startConversationMcp(
       const disconnected = new AbortController()
       if (controlRequestId !== undefined) scope.controlRequests.set(controlRequestId, disconnected)
       const mcp = route === "computer"
-        ? createControlMcpServer((operation, signal) => {
+        ? createControlMcpServer(async (operation, signal) => {
             authorized()
-            return control(scope.bindingId, operation, AbortSignal.any([signal, disconnected.signal]))
+            const stepped = stepsOf && operation.method === "js" ? stepsOf : undefined
+            try {
+              return await control(scope.bindingId, operation, AbortSignal.any([signal, disconnected.signal]),
+                stepped && ((steps) => stepped(scope.conversationId, steps)))
+            } finally {
+              stepped?.(scope.conversationId, null)
+            }
           })
         : new McpServer({ name: "mako", version: "1.0.0" }, { instructions: MAKO_INSTRUCTIONS })
       if (route === "mako") for (const register of makoTools) register(mcp, authorized)

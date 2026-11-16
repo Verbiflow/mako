@@ -1,5 +1,6 @@
+import { HostFailureError } from "../contracts/provider-failure.js"
 import type { WalPrimer, WalCheckpoint } from "./wal-primer.js"
-import { ProviderFailureEvidenceSchema } from "../contracts/provider-failure-evidence.js"
+import { ProviderFailureEvidenceSchema, storedFailureEvidence } from "../contracts/provider-failure-evidence.js"
 import { LiveInputQuestionSchema } from "../contracts/live-questions.js"
 import { ApprovalOriginSchema, NativeApprovalIdentitySchema } from "../contracts/approval-response.js"
 import { PromptDeliverySchema } from "../contracts/prompt-delivery.js"
@@ -31,7 +32,7 @@ import { ToolGrowthSchema, changedEntryStart, continues, growTool, type ToolGrow
 import { RunSnapshotsSchema } from "../contracts/workspace-snapshots.js"
 import { RequestChangesSchema } from "../contracts/turn-changes.js"
 import { TurnUndoneSchema } from "../contracts/turn-review.js"
-import { ACCOUNT_SWITCH_WAITS, MAX_INTERRUPTED_CALLS, savedReason, type LiveRequest, type LiveSnapshot } from "../contracts/live-conversations.js"
+import { ACCOUNT_SWITCH_WAITS, JOINED_MAX, MAX_INTERRUPTED_CALLS, savedReason, type LiveRequest, type LiveSnapshot } from "../contracts/live-conversations.js"
 import { PROVIDER_FAILURE_KINDS } from "../contracts/provider-failure.js"
 import { ActorSchema } from "../contracts/thread-identity.js"
 import { laterPrompt, personPromptedAt, type PromptedRequest } from "../contracts/worked-at.js"
@@ -44,6 +45,7 @@ import { RECLAIM_MIN_BYTES, journalOpened, type Reclaimed } from "./journal-recl
 import { cutOffRequests, mergedBaseSteps } from "./stream-merging.js"
 import { errorMessage } from "../base/error-message.js"
 import { EntrySchema, type Entry } from "@mako/sessions/entries"
+import type { PageCounts } from "../contracts/history-pages.js"
 import { sharedBase } from "./shared-entries.js"
 import { EntryPager, type PagedRows, type PagedTable } from "./paged-entries.js"
 import { atOnce, inSlices, StepsStopped, type Steps } from "@mako/sessions/slices"
@@ -97,11 +99,33 @@ export const HarnessTurnSchema = z.object({ id: z.string(), kind: z.enum(["turn"
  * one they read it as, with the exact one beside it (`OLDER_READING`), so a
  * journal this build writes still opens in a build before it.
  */
+/** Only owned evidence slots are encoded; native permission/tool payloads remain opaque. */
+const RequestEvidenceFieldsSchema = z.looseObject({ failureEvidence: ProviderFailureEvidenceSchema.optional() })
+const RequestEvidencePatchSchema = z.looseObject({ set: RequestEvidenceFieldsSchema.optional() })
+function logRow(event: MakoLogEvent): string {
+  if (event.kind === "request") {
+    const fields = RequestEvidenceFieldsSchema.parse(event.value)
+    if (fields.failureEvidence) return JSON.stringify({ ...fields, failureEvidence: storedFailureEvidence(fields.failureEvidence) })
+  } else if (event.kind.startsWith("request.")) {
+    const fields = RequestEvidencePatchSchema.parse(event.value)
+    if (fields.set?.failureEvidence) return JSON.stringify({ ...fields, set: { ...fields.set, failureEvidence: storedFailureEvidence(fields.set.failureEvidence) } })
+  }
+  return JSON.stringify(event.value)
+}
+
+/** Restore only the owned slots before replay, keeping unknown and native payload fields verbatim. */
+function readLogValue(kind: string, value: MakoLogEvent["value"]): MakoLogEvent["value"] {
+  if (kind === "request") return LogValueSchema.parse(RequestEvidenceFieldsSchema.parse(value))
+  if (kind.startsWith("request.")) return LogValueSchema.parse(RequestEvidencePatchSchema.parse(value))
+  return value
+}
+
 function requestRow(request: LiveRequest): string {
-  const { interruption, continues } = request
-  if (!interruption && !continues) return JSON.stringify(request)
+  const { interruption, continues, failureEvidence } = request
+  const stored = { ...request, failureEvidence: failureEvidence && storedFailureEvidence(failureEvidence) }
+  if (!interruption && !continues) return JSON.stringify(stored)
   return JSON.stringify({
-    ...request,
+    ...stored,
     ...interruption && { interruption: { ...interruption, ...savedReason(interruption.reason) } },
     ...continues && { continues: { ...continues, ...savedReason(continues.reason) } },
   })
@@ -141,6 +165,8 @@ export const LiveRequestSchema = z.object({
   createdAt: z.number().nonnegative().optional(),
   admissionOrder: z.number().int().positive().optional(),
   notification: z.literal(true).optional(),
+  joined: z.array(z.object({ id: z.string().max(200), at: z.number() })).max(JOINED_MAX).optional(),
+  joinedInto: z.string().max(200).optional(),
   dispatchedAt: z.number().optional(),
   text: z.string().max(1_000_000),
   attachments: z.array(PromptAttachmentSchema),
@@ -307,6 +333,15 @@ const BaseSchema = BaseFields.extend({ entries: z.array(EntrySchema) })
 /** A base stored before 2026-10-15, its entries grouped into messages and its indices counting them. */
 const MessageBaseSchema = BaseFields.extend({ entries: z.array(DecodedEntrySchema) })
 
+/** A journal's order of keys, an id, and a count, each read with a schema made once. */
+const KeyListSchema = z.array(z.string())
+const UuidSchema = z.string().uuid()
+const CountRow = z.object({ count: z.number() })
+/** The pragmas a journal's free space is read from, each schema made once. */
+const PageSizeRow = z.object({ page_size: z.number() })
+const PageCountRow = z.object({ page_count: z.number() })
+const FreelistRow = z.object({ freelist_count: z.number() })
+
 /** How many rows a journal's read (`LiveJournal.reading`) reads and parses between two stops. */
 const ROWS_PER_STEP = 128
 
@@ -461,7 +496,7 @@ export function* journalRowSteps(db: DatabaseSync, withLog: boolean): Steps<Jour
     yield
   }
   const orderRow = db.prepare("SELECT keys FROM request_order WHERE id=1").get()
-  const order = orderRow ? z.array(z.string()).safeParse(JSON.parse(RowKeysSchema.parse(orderRow).keys)).data : undefined
+  const order = orderRow ? KeyListSchema.safeParse(JSON.parse(RowKeysSchema.parse(orderRow).keys)).data : undefined
   const harnessTurns = db.prepare("SELECT value FROM harness_turns ORDER BY rowid").all()
     .map((row) => HarnessTurnSchema.parse(JSON.parse(RowSchema.parse(row).value)))
   const logBegun = Boolean(db.prepare("SELECT 1 AS found FROM log LIMIT 1").get())
@@ -476,7 +511,7 @@ function* makoLogRowSteps(db: DatabaseSync): Steps<MakoLogEntry[]> {
     const read = rows.all(last, ROWS_PER_STEP * 4)
     for (const row of read) {
       const entry = LogRowSchema.parse(row)
-      entries.push({ ...entry, value: LogValueSchema.parse(JSON.parse(entry.value)) })
+      entries.push({ ...entry, value: readLogValue(entry.kind, LogValueSchema.parse(JSON.parse(entry.value))) })
       last = entry.seq
     }
     if (read.length < ROWS_PER_STEP * 4) return entries
@@ -621,7 +656,7 @@ export function journalSummary(metadata: string) {
     threadPath,
     createdAt,
     ancestry: control?.ancestry
-      ? { parentId: control.ancestry.parentId, placement: control.ancestry.placement }
+      ? { parentId: control.ancestry.parentId, placement: control.ancestry.placement, point: control.ancestry.point, firstRequest: control.ancestry.firstRequest }
       : undefined,
     threadSession: control?.session,
     hasSessionQuestions: Boolean(control?.questions?.length),
@@ -641,9 +676,9 @@ export function journalSummary(metadata: string) {
  * A commit the journal couldn't make: the conversation isn't saved (`storageFailed`). Anything else that goes wrong
  * taking in what a provider said is not this, and doesn't stop its turn.
  */
-export class JournalWriteError extends Error {
+export class JournalWriteError extends HostFailureError {
   constructor(cause: unknown) {
-    super(errorMessage({ error: cause }), { cause })
+    super("unknown", errorMessage({ error: cause }), { cause })
     this.name = "JournalWriteError"
   }
 }
@@ -716,7 +751,7 @@ export class LiveJournal {
   }
 
   constructor(root: string, id: string) {
-    z.string().uuid().parse(id)
+    UuidSchema.parse(id)
     mkdirSync(root, { recursive: true })
     this.path = join(root, `${id}.sqlite`)
     this.releaseKey = join(realpathSync(root), `${id}.sqlite`)
@@ -1021,7 +1056,7 @@ export class LiveJournal {
   private appendLog(events: readonly MakoLogEvent[], origin: "host" | "journal"): void {
     const insert = this.db.prepare("INSERT INTO log (at, kind, value, origin, schema) VALUES (?, ?, ?, ?, ?)")
     const at = Date.now()
-    for (const event of events) insert.run(at, event.kind, JSON.stringify(event.value), origin, MAKO_LOG_SCHEMA)
+    for (const event of events) insert.run(at, event.kind, logRow(event), origin, MAKO_LOG_SCHEMA)
   }
 
   /** `grown`: tool blocks of `next` that differ from `previous` only by these appends (`deliverLiveUpdates`). */
@@ -1044,7 +1079,7 @@ export class LiveJournal {
       if (!previous || writeOptions || this.messageBase || metadataChanged(previous, next))
         this.db
           .prepare("INSERT OR REPLACE INTO metadata VALUES (1, ?)")
-          .run(JSON.stringify({ ...metadata, session, nativeAgents: providerRoster(metadata.nativeAgents), control: controlRow(metadata.control), base: undefined, activityAt: undefined, nativeActivity: undefined, side: undefined, historyFailure: undefined, spentThrough: undefined }))
+          .run(JSON.stringify({ ...metadata, session: { ...session, failureEvidence: session.failureEvidence && storedFailureEvidence(session.failureEvidence) }, nativeAgents: providerRoster(metadata.nativeAgents), control: controlRow(metadata.control), base: undefined, activityAt: undefined, nativeActivity: undefined, side: undefined, historyFailure: undefined, spentThrough: undefined }))
       this.db.prepare("INSERT OR REPLACE INTO progress VALUES (1, ?)").run(next.revision)
       // An unread base stays unread here: Mako's own blocks can follow it
       // meanwhile, and nothing reaches its harness until it is read.
@@ -1445,9 +1480,9 @@ export class LiveJournal {
 
   private mostlyFree(): boolean {
     try {
-      const { page_size: size } = z.object({ page_size: z.number() }).parse(this.db.prepare("PRAGMA page_size").get())
-      const { page_count: pages } = z.object({ page_count: z.number() }).parse(this.db.prepare("PRAGMA page_count").get())
-      const { freelist_count: free } = z.object({ freelist_count: z.number() }).parse(this.db.prepare("PRAGMA freelist_count").get())
+      const { page_size: size } = PageSizeRow.parse(this.db.prepare("PRAGMA page_size").get())
+      const { page_count: pages } = PageCountRow.parse(this.db.prepare("PRAGMA page_count").get())
+      const { freelist_count: free } = FreelistRow.parse(this.db.prepare("PRAGMA freelist_count").get())
       return free * size >= RECLAIM_MIN_BYTES && free * 4 >= pages
     } catch (error) {
       hostWarn("journal", "a journal's free space could not be read", { path: this.path, error: errorMessage({ error }) })
@@ -1630,7 +1665,7 @@ export function inspectJournal(root: string, id: string) {
     const base = header?.harness && header.nativeId && header.path && header.start !== null
       ? { start: header.start, hasEarlier: Boolean(header.hasEarlier), preview: Boolean(header.preview), ref: { harness: header.harness, nativeId: header.nativeId, path: header.path } }
       : null
-    const { count: blocks } = z.object({ count: z.number() }).parse(db.prepare("SELECT count(*) AS count FROM blocks").get())
+    const { count: blocks } = CountRow.parse(db.prepare("SELECT count(*) AS count FROM blocks").get())
     const pages = PragmaSchema.parse(db.prepare("SELECT (SELECT page_size FROM pragma_page_size) AS size, (SELECT page_count FROM pragma_page_count) AS pages, (SELECT freelist_count FROM pragma_freelist_count) AS free").get())
     const facts = { base, baseSource: metadata.baseSource, baseCoveredBlocks: metadata.baseCoveredBlocks, blocks: { length: blocks }, control: metadata.control }
     // What the sweep holds: the base as its refresh reads it again.
@@ -1664,7 +1699,189 @@ export function journalIds(root: string): string[] {
   mkdirSync(root, { recursive: true })
   return readdirSync(root).flatMap((name) => {
     if (!name.endsWith(".sqlite")) return []
-    const id = z.string().uuid().safeParse(name.slice(0, -7))
+    const id = UuidSchema.safeParse(name.slice(0, -7))
     return id.success ? [id.data] : []
   })
+}
+
+/** A block that begins a turn or names a request, as a cold journal's index holds it (`ColdJournal`). */
+const TurnRowSchema = z.object({ id: z.number().int().nonnegative(), type: z.string().nullable(), steering: z.number().int(), request: z.string().nullable() })
+const BlockCountSchema = z.object({ count: z.number().int().nonnegative(), last: z.number().int().nullable() })
+/** What a row's JSON begins with when its first key is the entry's type, which every journal so far writes. */
+const TYPED_ROWS = `value LIKE '{"type":"%'`
+const TURN_ROWS = `SELECT id, json_extract(value,'$.type') AS type, json_extract(value,'$.steeringFor') IS NOT NULL AS steering,
+  json_extract(value,'$.requestId') AS request FROM blocks`
+
+/**
+ * A journal read where it lies, for a window reading a conversation no host holds in memory (`LiveHistoryReader`'s cold
+ * views): one read transaction pinned on a read-only connection until `close`, so every page reads the rows as they were
+ * when it opened, whatever is written after, and nothing of the conversation is read in. `snapshot` is its metadata and
+ * requests with no blocks; a page reads its blocks by index (`at`), each kept for the view's life so a preview and the
+ * detail read later are the same entry, and the counts a page carries (`before`) come from an index of the blocks that
+ * begin a turn or name a request, made by SQLite once. A journal that keeps a copy of its history isn't read cold, nor
+ * one whose session's record merges with its blocks: those are read as a resident's are. One whose record covers every
+ * block is, its pages the record's.
+ *
+ * Reading a 122 MB journal in whole took 1.8 s and 50 to 100 MB of heap, all of it paged out again 15 s later.
+ */
+export class ColdJournal {
+  readonly snapshot: LiveSnapshot
+  readonly length: number
+  /** Its file as compaction names it (`journalOpened`): a cold view holds it, so nothing compacts it meanwhile. */
+  readonly key: string
+  readonly #db: DatabaseSync
+  readonly #block: ReturnType<DatabaseSync["prepare"]>
+  readonly #tail: ReturnType<DatabaseSync["prepare"]>
+  readonly #appended: ReadonlyMap<number, number>
+  readonly #read = new Map<number, Entry>()
+  #turns: z.infer<typeof TurnRowSchema>[] | undefined
+  #chars = 0
+
+  private constructor(db: DatabaseSync, key: string, snapshot: LiveSnapshot, length: number, appended: ReadonlyMap<number, number>) {
+    this.#db = db
+    this.key = key
+    this.snapshot = snapshot
+    this.length = length
+    this.#appended = appended
+    this.#block = db.prepare("SELECT value FROM blocks WHERE id=?")
+    this.#tail = db.prepare("SELECT value FROM block_appends WHERE block_id=? ORDER BY sequence")
+  }
+
+  /** Conversation `id`'s journal under `root`, read cold; undefined when there is none, or it keeps a base. */
+  static open(root: string, id: string): ColdJournal | undefined {
+    return atOnce(ColdJournal.opening(root, id))
+  }
+
+  /** `open` as `Steps`, its requests parsed `ROWS_PER_STEP` at a time: a long Fin's 793 held the loop 73 ms at once. */
+  static *opening(root: string, id: string): Steps<ColdJournal | undefined> {
+    const path = join(root, `${id}.sqlite`)
+    if (!existsSync(path)) return undefined
+    const key = join(realpathSync(root), `${id}.sqlite`)
+    // An opener takes away any older close's right to tidy the file, and cancels a compaction waiting for it.
+    journalOpened.publish(key)
+    const db = new DatabaseSync(path, { readOnly: true })
+    try {
+      db.exec("BEGIN")
+      const metadata = metadataRow(db)
+      const base = db.prepare("SELECT value FROM base WHERE id=1").get()
+      const kept = base !== undefined && RowSchema.parse(base).value !== "null"
+      if (!metadata || kept) {
+        ColdJournal.#end(db)
+        return undefined
+      }
+      const stored = MetadataSchema.parse(JSON.parse(metadata))
+      const counted = BlockCountSchema.parse(db.prepare("SELECT count(*) AS count, max(id) AS last FROM blocks").get())
+      // Blocks are kept by index; a journal whose ids say otherwise is read whole, as it always was. One whose history is
+      // its session's record is read cold only when that record covers every block with nothing to merge: its pages are
+      // the record's, read a page at a time (`LiveConversations.coldView`); one that merges reads them all.
+      const source = stored.baseSource
+      const recordOnly = source && !source.span && stored.baseLiveStart === undefined && (stored.baseCoveredBlocks ?? 0) === counted.count
+      if ((source && !recordOnly) || (counted.last ?? -1) !== counted.count - 1) {
+        ColdJournal.#end(db)
+        return undefined
+      }
+      const revision = ProgressSchema.safeParse(db.prepare("SELECT revision FROM progress WHERE id=1").get()).data?.revision ?? 0
+      const requests: LiveRequest[] = []
+      const requestRows = db.prepare("SELECT rowid AS at, value FROM requests WHERE rowid > ? ORDER BY rowid LIMIT ?")
+      for (let last = -1; ;) {
+        const rows = requestRows.all(last, ROWS_PER_STEP)
+        for (const row of rows) {
+          const request = RowAtSchema.parse(row)
+          requests.push(LiveRequestSchema.parse(JSON.parse(request.value)))
+          last = request.at
+        }
+        if (rows.length < ROWS_PER_STEP) break
+        yield
+      }
+      const orderRow = db.prepare("SELECT keys FROM request_order WHERE id=1").get()
+      const order = orderRow ? KeyListSchema.safeParse(JSON.parse(RowKeysSchema.parse(orderRow).keys)).data : undefined
+      if (order) inOrder(requests, order)
+      const harnessTurns = db.prepare("SELECT value FROM harness_turns ORDER BY rowid").all()
+        .map((row) => HarnessTurnSchema.parse(JSON.parse(RowSchema.parse(row).value)))
+      const appended = new Map<number, number>()
+      for (const value of db.prepare("SELECT block_id, count(*) AS count FROM block_appends GROUP BY block_id").all()) {
+        const row = AppendCountSchema.parse(value)
+        appended.set(row.block_id, row.count)
+      }
+      const snapshot: LiveSnapshot = {
+        ...stored,
+        revision: Math.max(stored.revision, revision),
+        ...harnessTurns.length && { harnessTurns },
+        base: null,
+        blocks: [],
+        requests,
+      }
+      return new ColdJournal(db, key, snapshot, counted.count, appended)
+    } catch (error) {
+      ColdJournal.#end(db)
+      throw error
+    }
+  }
+
+  static #end(db: DatabaseSync): void {
+    if (db.isTransaction) db.exec("ROLLBACK")
+    db.close()
+  }
+
+  /** Block `index` as the journal held it when this opened, its appends folded in; the same object each time. */
+  at(index: number): Entry | undefined {
+    if (index < 0 || index >= this.length) return undefined
+    const held = this.#read.get(index)
+    if (held) return held
+    const row = this.#block.get(index)
+    if (!row) return undefined
+    const value = RowSchema.parse(row).value
+    let entry = EntrySchema.parse(JSON.parse(value))
+    let chars = value.length
+    if (this.#appended.get(index)) {
+      for (const stored of this.#tail.all(index)) {
+        const text = RowSchema.parse(stored).value
+        const part = AppendValueSchema.parse(JSON.parse(text))
+        chars += text.length
+        if (part.kind === "text" && (entry.type === "text" || entry.type === "thinking")) entry = { ...entry, text: entry.text + part.text }
+        else if (part.kind === "tool" && entry.type === "tool") entry = growTool(entry, part.growth)
+        else throw new Error("Journal append has no matching block")
+      }
+    }
+    this.#read.set(index, entry)
+    this.#chars += chars
+    return entry
+  }
+
+  /**
+   * What a page ending at `index` carries of the blocks before it: how many turns begin among those from `covered`
+   * (`isTurnStart`), and the requests whose prompt is among them, as `historyPage` counts them over an array.
+   */
+  before(index: number, covered: number): PageCounts {
+    let turnStart = 0
+    const earlierRequests: string[] = []
+    for (const row of this.#turnRows()) {
+      if (row.id >= index) break
+      if (row.type === "user" && row.request) earlierRequests.push(row.request)
+      if (row.id >= covered && ((row.type === "user" && !row.steering) || row.type === "provider-turn")) turnStart++
+    }
+    return { turnStart, earlierRequests }
+  }
+
+  /** About what the blocks read so far weigh, for the views' budget. */
+  get chars(): number {
+    return this.#chars
+  }
+
+  /** Ends the read transaction and the connection; a view let go calls it once. */
+  close(): void {
+    if (!this.#db.isOpen) return
+    ColdJournal.#end(this.#db)
+  }
+
+  #turnRows(): z.infer<typeof TurnRowSchema>[] {
+    if (this.#turns) return this.#turns
+    // A row's JSON begins with its type: only those of a user or provider turn are parsed, unless one doesn't.
+    const typed = !this.#db.prepare(`SELECT 1 AS found FROM blocks WHERE NOT ${TYPED_ROWS} LIMIT 1`).get()
+    const rows = typed
+      ? this.#db.prepare(`${TURN_ROWS} WHERE value LIKE '{"type":"user"%' OR value LIKE '{"type":"provider-turn"%' ORDER BY id`).all()
+      : this.#db.prepare(`${TURN_ROWS} WHERE json_extract(value,'$.type') IN ('user','provider-turn') ORDER BY id`).all()
+    this.#turns = rows.map((row) => TurnRowSchema.parse(row))
+    return this.#turns
+  }
 }

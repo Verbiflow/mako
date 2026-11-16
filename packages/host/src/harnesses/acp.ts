@@ -1,3 +1,4 @@
+import { providerCall, failureEvidenceOf, ProviderFailureError, providerTextEvidence, HostFailureError, providerExitEvidence } from "../contracts/provider-failure.js"
 import { applyControlEnvironment } from "../control/index.js"
 import { applyThreadEnvironment } from "../workspaces/index.js"
 import type { ApprovalSubmission, NativeApprovalIdentity } from "../contracts/approval-response.js"
@@ -483,6 +484,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
         connection: "disconnected",
         nativePath: located(),
         backgroundTasks: 0,
+        failureEvidence: providerExitEvidence(stderrDetail(stderr)),
         error:
           stderrDetail(stderr) ||
           `${spec.command} exited${signal ? ` on ${signal}` : code === null ? "" : ` with code ${code}`}`,
@@ -725,10 +727,10 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     live.connection = connection
 
     try {
-      const initialized = await trace.step("handshake", () => watch.step("initialize", connection.initialize({
+      const initialized = await trace.step("handshake", () => watch.step("initialize", providerCall(connection.initialize({
           protocolVersion: PROTOCOL_VERSION,
           clientCapabilities: acpClientCapabilities(source),
-        })))
+        }))))
       let runtime = reportedRuntime(initialized.agentInfo?.version, "ACP initialize.agentInfo")
       const versionArgs = spec.versionArgs
       if (runtime.kind === "unavailable" && versionArgs) {
@@ -769,13 +771,13 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
           return response.kind === "choice" ? response.optionId : null
         },
         authenticate: async (methodId) => {
-          await trace.step("human-sign-in", () => connection.authenticate({ methodId }))
+          await trace.step("human-sign-in", () => providerCall(connection.authenticate({ methodId })))
         },
         open: async () => {
           if (!resume) {
-            const created = await trace.step("session-open", () => watch.step("session/new", connection.newSession(
+            const created = await trace.step("session-open", () => watch.step("session/new", providerCall(connection.newSession(
               newSessionRequest(workingDir, source, options.tuning, live.mcpServers, options.nativeCalls !== undefined)
-            )))
+            ))))
             record({ response: "session/new", result: created })
             return parseNewAcpSession(created)
           }
@@ -783,9 +785,9 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
           const resuming = source.resume
           if (resuming?.kind === "native" && resuming.beforeLoad)
             await trace.step("session-resume", () => resuming.beforeLoad!({ nativeId: resume, cwd: workingDir, env }))
-          const reply = await trace.step("session-resume", () => watch.step("session/load", connection.loadSession(
+          const reply = await trace.step("session-resume", () => watch.step("session/load", providerCall(connection.loadSession(
             loadSessionRequest(resume, workingDir, source, options.tuning, live.mcpServers, options.nativeCalls !== undefined)
-          )))
+          ))))
           record({ response: "session/load", result: reply })
           stream?.opened()
           return parseLoadedAcpSession(reply, resume)
@@ -825,7 +827,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
         const restored = sessionModes?.currentModeId ?? live.nativeMode ?? null
         const change = acpModeChange(policy, modes, requestedModeId, launchAccess, harness, restored)
         if (change.kind === "native" && change.nativeModeId !== restored) {
-          await trace.step("settings", () => watch.step("session/set_mode", connection.setSessionMode({ sessionId: session.sessionId, modeId: change.nativeModeId })))
+          await trace.step("settings", () => watch.step("session/set_mode", providerCall(connection.setSessionMode({ sessionId: session.sessionId, modeId: change.nativeModeId }))))
           if (sessionModes) sessionModes.currentModeId = change.nativeModeId
           live.nativeMode = change.nativeModeId
           live.configOptions = live.configOptions.map(option =>
@@ -880,7 +882,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       })
       // One that outlives this stays in `sessions` for the next close; what the start reports is why it failed.
       await liveClose(id).catch(() => undefined)
-      throw new Error(surfaced, { cause: error })
+      throw new ProviderFailureError(surfaced, error instanceof HostFailureError || surfaced === message ? failureEvidenceOf({ error }) : providerTextEvidence(surfaced), { cause: error })
     }
   }
 
@@ -896,8 +898,8 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       setModel: (model) => setLegacySessionModel(live, model),
       setOption: async (option, value) => {
         const response = value === true || value === false
-          ? await connection.setSessionConfigOption({ sessionId, configId: option.id, type: "boolean", value })
-          : await connection.setSessionConfigOption({ sessionId, configId: option.id, value })
+          ? await providerCall(connection.setSessionConfigOption({ sessionId, configId: option.id, type: "boolean", value }))
+          : await providerCall(connection.setSessionConfigOption({ sessionId, configId: option.id, value }))
         return response.configOptions
       },
     })
@@ -912,13 +914,13 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     const connection = live.connection
     const sessionId = live.sessionId
     if (!connection || !sessionId) return
-    await connection.request<void, LegacySessionModelRequest>(
+    await providerCall(connection.request<void, LegacySessionModelRequest>(
       "session/set_model",
       {
         sessionId,
         modelId,
       }
-    )
+    ))
     const usage = live.usage.observe(...live.models.switched(modelId))
     if (usage) update(live, { usage })
   }
@@ -996,7 +998,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     engine.emitUpdate(live, { kind: "user", text })
     live.sent?.(text, attachments.length)
     live.stream?.prompted({ text, shown: dispatch.shown, shownAt: dispatch.shownAt, attachments })
-    void turn.send(() => connection.prompt({ sessionId, prompt })).then(
+    void turn.send(() => providerCall(connection.prompt({ sessionId, prompt }))).then(
       () => dispatch.report({ kind: "accepted", source: "native-response" }),
       (error: Error) => dispatch.report({ kind: "uncertain", reason: error.message })
     )
@@ -1028,7 +1030,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     // The stream says the compaction was asked for, as `live.compaction` tells this host, so a replay words it as the person's too.
     live.stream?.prompted({ compaction: true })
     update(live, { status: "running", nativeRunId: actionId, lastStop: undefined, error: undefined })
-    operation.start(() => connection.prompt({ sessionId, prompt: [{ type: "text", text: spec.command }] }))
+    operation.start(() => providerCall(connection.prompt({ sessionId, prompt: [{ type: "text", text: spec.command }] })))
   }
 
   async function liveSteer(id: string, input: ProviderSteerInput): Promise<ProviderSteerResult> {
@@ -1044,7 +1046,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     const sessionId = live.sessionId
     if (steering !== "concurrent-prompt" && steering !== "interrupting-prompt") {
       if (input.attachments.length) return { kind: "not-accepted", reason: "This agent takes only text in the middle of a turn" }
-      const reply = await connection.extMethod(steering.extension, { sessionId, text: input.text })
+      const reply = await providerCall(connection.extMethod(steering.extension, { sessionId, text: input.text }))
       if (!steering.taken.safeParse(reply).success)
         return { kind: "not-accepted", reason: `The agent did not take the message: ${JSON.stringify(reply)?.slice(0, 200)}` }
       live.stream?.steered(input.text, input.shown)
@@ -1054,7 +1056,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     // The agent answers a prompt sent into its turn only when the whole turn
     // ends, and reads it at its next step: Mako shows it where it was sent,
     // as the agent's record places it, not after the answer it steered.
-    void turn.send(() => connection.prompt({ sessionId, prompt }), "steer").catch((error) =>
+    void turn.send(() => providerCall(connection.prompt({ sessionId, prompt })), "steer").catch((error) =>
       hostWarn("acp", "steered message refused", { harness: live.harness, conversation: id, error: errorMessage({ error }) }))
     live.stream?.steered(input.text, input.shown)
     return { kind: "accepted" }
@@ -1069,8 +1071,8 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     const connection = live.connection
     const peer: AcpSidePeer = {
       sessionId: live.sessionId,
-      extMethod: async (method, params) => z.json().parse(await connection.extMethod(method, params)),
-      prompt: (params) => connection.prompt(params),
+      extMethod: async (method, params) => z.json().parse(await providerCall(connection.extMethod(method, params))),
+      prompt: (params) => providerCall(connection.prompt(params)),
       listen: (listener) => {
         live.sideListener = listener
         return () => {
@@ -1106,7 +1108,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     const nativeMode = change.nativeModeId
     live.changingMode = true
     try {
-      await connection.setSessionMode({ sessionId, modeId: nativeMode })
+      await providerCall(connection.setSessionMode({ sessionId, modeId: nativeMode }))
       if (sessions.get(id) !== live || live.connection !== connection || live.sessionId !== sessionId || live.startup.signal.aborted)
         throw new Error("The session ended before its mode change was acknowledged.")
       live.nativeMode = nativeMode
@@ -1155,7 +1157,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     await background.stopOne({
       sessionId,
       running: live.state.backgroundTasks ?? 0,
-      request: async (method, params) => { await connection.request(method, params) },
+      request: async (method, params) => { await providerCall(connection.request(method, params)) },
       reopen: async () => { throw new Error("Stopping one task never reopens the session") },
     }, nativeId)
   }
@@ -1168,11 +1170,11 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       await background.stop({
         sessionId,
         running: live.state.backgroundTasks ?? 0,
-        request: async (method, params) => { await connection.request(method, params) },
+        request: async (method, params) => { await providerCall(connection.request(method, params)) },
         reopen: () => {
           const reopening = (async () => {
-            await connection.closeSession({ sessionId })
-            await connection.resumeSession({ sessionId, cwd: live.cwd, mcpServers: live.mcpServers, ...live.callHooks && { _meta: live.callHooks } })
+            await providerCall(connection.closeSession({ sessionId }))
+            await providerCall(connection.resumeSession({ sessionId, cwd: live.cwd, mcpServers: live.mcpServers, ...live.callHooks && { _meta: live.callHooks } }))
             live.providerTurnCause = undefined
           })().finally(() => {
             if (live.reopening === reopening) live.reopening = undefined

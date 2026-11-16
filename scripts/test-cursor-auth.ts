@@ -7,6 +7,7 @@ import {
   CURSOR_SDK_AUTH_TTL_MS,
   CursorSdkAuth,
   rejectionText,
+  CURSOR_UNREACHED,
   type CursorSdkProbeClient,
   type CursorSdkSpawnOptions,
 } from "@mako/host/harnesses/cursor/sdk/auth"
@@ -33,6 +34,8 @@ import { electronSecretEncryption } from "../electron/secure-storage-electron.ts
 const KEY_GOOD = "key_good_0123456789abcdef"
 const KEY_CLI = "key_cli_0123456789abcdef"
 const KEY_BAD = "key_bad_0123456789abcdef"
+/** A key whose check can't reach Cursor at all. */
+const KEY_OFFLINE = "key_offline_0123456789ab"
 const KEY_MINTED = "key_minted_0123456789abcdef"
 
 const xor: SecretEncryption = {
@@ -70,6 +73,7 @@ function fakeClient(fake: Fake, options: CursorSdkSpawnOptions): CursorSdkProbeC
           if (key === KEY_GOOD) return { email: "kash@example.com", apiKeyName: "laptop", createdAt: "2026-09-01T00:00:00Z" }
           if (key === KEY_CLI) return { email: "cli@example.com", apiKeyName: "cursor-agent", createdAt: "2026-09-01T00:00:00Z" }
           if (key === KEY_MINTED) return { email: "kash@example.com", apiKeyName: "Mako", createdAt: "2026-09-13T00:00:00Z" }
+          if (key === KEY_OFFLINE) throw new Error("fetch failed: getaddrinfo ENOTFOUND api.cursor.com")
           throw refuse()
         },
         authStatus: () =>
@@ -265,6 +269,7 @@ try {
     assert.equal(status.state.status, "signed-out")
     assert.ok(status.state.status === "signed-out" && status.state.problem?.source === "mako")
     assert.match(status.state.problem.message, /rejected the saved key/)
+    assert.doesNotMatch(status.state.problem.message, /Unauthorized|revoked\)/, "Cursor's own words are the log's")
     assert.equal((await auth.childEnv()).CURSOR_API_KEY, KEY_BAD, "the child still gets the key; the rejection is Cursor's to make")
     await auth.status()
     assert.equal(fake.spawned.length, 1, "a rejection is not re-asked at once")
@@ -277,7 +282,19 @@ try {
     const status = await auth.status()
     assert.ok(status.state.status === "signed-out" && status.state.problem)
     assert.match(status.state.problem.message, /CURSOR_API_KEY/)
-    assert.match(rejectionText("cli", "x"), /cursor-agent login/)
+    assert.match(rejectionText("cli"), /cursor-agent login/)
+  }
+
+  // A first check that couldn't reach Cursor says so in the row's words, not the network's, and is asked again soon.
+  {
+    const { auth, fake } = make({ env: { CURSOR_API_KEY: KEY_OFFLINE } })
+    const status = await auth.status()
+    assert.ok(status.state.status === "signed-out" && status.state.problem)
+    assert.equal(status.state.problem.message, CURSOR_UNREACHED)
+    const asked = fake.spawned.length
+    clock += CURSOR_SDK_AUTH_RETRY_MS
+    await auth.status()
+    assert.equal(fake.spawned.length, asked + 1, "asked again after the retry window, not the full TTL")
   }
 
   // An unreadable saved key cannot silently switch the executing identity to CLI/SDK.

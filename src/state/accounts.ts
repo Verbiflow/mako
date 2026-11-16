@@ -1,4 +1,6 @@
 import { createHook, createStore } from "@/state/store"
+import { errorMessage } from "@mako/host/contracts/error-message"
+import { quietly } from "@/lib/quiet-retry"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { toast } from "sonner"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
@@ -197,18 +199,15 @@ export const accounts = {
   async reload() {
     accountsStore.set({ loadedAt: Date.now() })
     try {
-      const catalog = await getMako().accounts()
+      const catalog = await quietly("accounts", () => getMako().accounts())
       accountsStore.set(catalog)
       for (const account of catalog.accounts) readUsage(account)
     } catch (error) {
       // Keep whatever list is already on screen — a transient refresh
       // failure must not blank two surfaces. Re-arm the staleness guard.
+      // The next look at accounts reads them again; the host's words go to its log.
       accountsStore.set({ loadedAt: undefined })
-      toast.error("Accounts could not be loaded", {
-        duration: ACTION_TOAST_MS,
-        description: error instanceof Error ? error.message : String(error),
-        action: { label: "Retry", onClick: () => accounts.load(true) },
-      })
+      console.warn(`Accounts went unread ${JSON.stringify({ error: errorMessage({ error }) })}`)
     }
   },
 

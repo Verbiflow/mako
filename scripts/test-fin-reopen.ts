@@ -252,13 +252,17 @@ async function movedThenHeld(): Promise<void> {
 async function reopenFails(): Promise<void> {
   const f = await world("claude")
   // Its records are there but can't be read: the next host can't reopen it, and nothing goes on in its place.
-  f.w.options.resumeVerdict = async () => ({ kind: "unavailable", reason: "Native session recovery evidence could not be read. Retry after its source is available." })
+  f.w.options.resumeVerdict = async () => ({ kind: "unavailable", retry: true, reason: "Native session recovery evidence could not be read. Retry after its source is available." })
   await f.w.restart()
   const said = await f.send("Still there?")
   // That cause clears by itself, so the message waits to go again: said so, never as taken.
   assert.ok(!("refused" in said), JSON.stringify(said))
   assert.equal(said.delivery, "queued")
-  assert.match(said.hears, /couldn't open labels's session yet \(.*could not be read.*\)\. This is saved and goes again by itself/)
+  assert.match(said.hears, /couldn't open labels's session yet \(The session's native verification is temporarily unavailable\. Mako will check it again before sending\.\)\. This is saved and goes again by itself/)
+  const held = f.w.live.snapshot(f.conversation())!.requests.find(request => request.text.includes("Still there?"))!
+  assert.equal(held.status, "held")
+  assert.equal(held.retry?.cause, "launch-stalled", "native read failure keeps the short verification backoff")
+  assert.equal(held.retry?.until, undefined, "native verification never waits for a quota reset")
   console.log(`reopen waits: "${said.hears}"`)
   await f.w.close()
   // One that doesn't clear (its harness is gone) refuses the message.

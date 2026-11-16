@@ -63,6 +63,10 @@ export class PullWatch {
   private readonly deps: PullWatchDeps
   private readonly watched = new Map<string, Watched>()
   private ticking: Promise<void> | undefined
+  /** When the watch first read each wait's current head (`wait key @ head`): a later push starts a no-checks clock again. */
+  private readonly seenHeads = new Map<string, number>()
+  /** Required checks already logged as never appearing, by pull request and name: said once, not every reading. */
+  private readonly unseenRequired = new Set<string>()
 
   constructor(deps: PullWatchDeps) {
     this.deps = deps
@@ -84,6 +88,8 @@ export class PullWatch {
     const now = this.deps.now()
     const wanted = new Map(waits.map((wait) => [wait.target.key, wait.target]))
     for (const key of this.watched.keys()) if (!wanted.has(key)) this.watched.delete(key)
+    const waiting = new Set(waits.map((wait) => wait.key))
+    for (const key of this.seenHeads.keys()) if (!waiting.has(key.slice(0, key.lastIndexOf("@")))) this.seenHeads.delete(key)
     for (const [key, target] of wanted) if (!this.watched.has(key)) this.watched.set(key, { target, dueAt: now, everyMs: PULL_WATCH_EVERY_MS })
     this.deps.watching?.(this.watched.size > 0)
     return waits
@@ -116,10 +122,19 @@ export class PullWatch {
       if (!reading) continue
       for (const wait of waits) {
         if (wait.target.key !== key) continue
-        const outcome = pullOutcome(reading, wait.until, wait.since)
+        const head = `${wait.key}@${reading.head ?? ""}`
+        if (!this.seenHeads.has(head)) this.seenHeads.set(head, this.deps.now())
+        const outcome = pullOutcome(reading, wait.until, wait.since, this.deps.now(), this.seenHeads.get(head))
         if (!outcome) continue
         const note = pullWakeNote(wait.pull, reading.url, outcome, reading.head)
         hostLog("agents", "pull request outcome", { wait: wait.key, child: wait.child, outcome: outcome.kind })
+        // A required check is named by its context, which an app or code scanning can report under another name: one
+        // that never appears may be a name that doesn't match, so the log says which, beside what did run.
+        const unseen = outcome.kind === "no-checks" ? (outcome.missing ?? []).filter((name) => !this.unseenRequired.has(`${wait.pullKey}:${name}`)) : []
+        if (unseen.length) {
+          for (const name of unseen) this.unseenRequired.add(`${wait.pullKey}:${name}`)
+          hostWarn("agents", "a required check never appeared", { pull: wait.pullKey, head: reading.head ?? "", missing: unseen.join(", "), ran: reading.checks.map((check) => check.name).join(", ") })
+        }
         try {
           const checks = reading.checks.filter((check) => outcome.kind !== "failed" || check.state === "failed")
             .map((check) => JSON.stringify([check.name, check.state, check.at ?? null])).sort()

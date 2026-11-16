@@ -17,7 +17,7 @@ import {
 import { projectAcp } from "@/state/live-projection"
 import { toast } from "sonner"
 import { hostConnectionStore } from "@/state/host-connection"
-import { quietTimer, waitsFor, withinPatience } from "@/state/delivery-policy"
+import { WAITING_FOR_MAKO, quietTimer, waitsFor, withinPatience } from "@/state/delivery-policy"
 import { commandId, durableAttachments, pendingMessages, saveMessage, settleMessage } from "@/state/message-outbox"
 
 function updateLive(
@@ -160,7 +160,8 @@ async function attemptSend(
     if (alreadyUnconfirmed || waiting) {
       // RPC and event connections fail independently. Recover this command
       // even if no stream disconnect/reconnect event ever arrives.
-      markWaiting(id, requestId, waiting ?? (error instanceof Error ? error.message : String(error)))
+      if (!waiting) console.warn(`A message waits for Mako ${JSON.stringify({ conversation: id, request: requestId, error: error instanceof Error ? error.message : String(error) })}`)
+      markWaiting(id, requestId, waiting ?? WAITING_FOR_MAKO)
       return true
     }
     settleMessage(requestId)

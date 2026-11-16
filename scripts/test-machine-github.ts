@@ -16,7 +16,7 @@ await writeFile(gh, `#!/bin/sh
 case "$1 $2" in
   "--version "*) echo "gh version 2.103.3" ;;
   "api user") echo '{"message":"Resource not accessible by integration"}' >&2; exit 1 ;;
-  "repo view") echo '{"nameWithOwner":"acme/shop","defaultBranchRef":{"name":"main"}}' ;;
+  "api repos/{owner}/{repo}") echo '{"full_name":"acme/shop","html_url":"https://github.com/acme/shop","default_branch":"main"}' ;;
   *) exit 1 ;;
 esac
 `)

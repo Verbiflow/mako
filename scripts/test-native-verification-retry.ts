@@ -1,3 +1,4 @@
+import { assessProviderResume } from "@mako/host/harnesses/provider-recovery"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -21,7 +22,7 @@ async function until(test: () => boolean, message: string) {
   }
 }
 
-async function check(provider: string, fault: "identity" | "probe" | "mismatch", stop = false) {
+async function check(provider: string, fault: "identity" | "probe" | "mismatch" | "read", stop = false) {
   const root = mkdtempSync(join(tmpdir(), "mako-verification-retry-"))
   const id = randomUUID()
   const reply = randomUUID()
@@ -33,7 +34,10 @@ async function check(provider: string, fault: "identity" | "probe" | "mismatch",
   let session: LiveSessionState
   const driver: ProviderLiveDriver = {
     ...noCapabilities,
-    resume: fixtureResume(),
+    resume: fixtureResume({ inspect: async () => {
+      if (fault === "read" && !healthy) throw new Error("Synthetic native source read failure")
+      return { kind: "available", checkpoint: "fixture-checkpoint", strategy: "same-session" }
+    } }),
     launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
     nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
     nativeExclusion: NO_NATIVE_EXCLUSION,
@@ -66,7 +70,7 @@ async function check(provider: string, fault: "identity" | "probe" | "mismatch",
   }
   const owner = new LiveConversations({
     root: join(root, "journals"), appPath: root, driver: () => driver, history: async () => null, emit: () => {},
-    resumeVerdict: (binding) => resumeVerdict(binding, {
+    resumeVerdict: (binding) => fault === "read" ? assessProviderResume(binding, driver) : resumeVerdict(binding, {
       provider,
       probe: async () => fault === "probe" && !healthy ? { kind: "unavailable", reason: "failed" } : { kind: "available", sessions: [] },
     }, async () => ({ kind: "available", checkpoint: "fixture-checkpoint" })),
@@ -114,6 +118,8 @@ for (const harness of registeredHarnessIds()) {
   await check(harness, "identity")
   await check(harness, "probe")
 }
+await check("codex", "read")
+await check("codex", "read", true)
 await check("codex", "mismatch")
 await check("codex", "identity", true)
 console.log("PASS: native verification holds unsent input, rechecks promptly without quota semantics, rebinds once, and preserves real identity conflicts and Stop")

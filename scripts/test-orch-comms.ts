@@ -158,6 +158,29 @@ async function crew(): Promise<void> {
     await world.settle(600, 20_000, "ignore")
     assert.ok(!apexHeard("Started the review of section 2.") && !apexHeard("Half the pages are written.") && !apexHeard("Waiting on api's PR"), "and wakes no one")
 
+    // Progress that first waits on a review, or on the person, waits on what only its Apex arranges or passes on: it
+    // wakes the Apex once. loop-holds reported "ready for your review" as progress on #810 (2026-11-15), and nobody
+    // heard; the same wait narrated again, or a wait on checks Mako watches, stays quiet.
+    const review = [{ kind: "pull-request" as const, ref: "acme/app#810", until: "review" as const }]
+    const ready = await world.agents.report(world.caller(docs), { status: "progress", summary: "Ready for review at 1a2b3c4.", waitingOn: review, clientKey: "awaits-review" })
+    assert.ok(!("refused" in ready) && ready.delivered === "notice", `a first wait on a review wakes the Apex: ${JSON.stringify(ready)}`)
+    await until("the Apex to hear the review it waits on", async () => apexHeard("Ready for review at 1a2b3c4."))
+    const asked = world.prompts.filter((prompt) => prompt.conversation === apex.conversation).at(-1)!.text
+    assert.ok(asked.includes("1 waits on someone else to act:") && asked.includes("waiting on #810 review"), asked)
+    const narrated = await world.agents.report(world.caller(docs), { status: "progress", summary: "Still waiting for the review.", waitingOn: review, clientKey: "awaits-review-again" })
+    assert.ok(!("refused" in narrated) && narrated.delivered === "none", "the same wait narrated again stays quiet")
+    // Flipping to another wait and back, or naming the same review by its URL, is still the wait it named.
+    const flipped = await world.agents.report(world.caller(docs), { status: "progress", summary: "CI first.", waitingOn: [{ kind: "pull-request", ref: "acme/app#810", until: "checks" }], clientKey: "awaits-flip" })
+    assert.ok(!("refused" in flipped) && flipped.delivered === "none")
+    const back = await world.agents.report(world.caller(docs), { status: "progress", summary: "Back to waiting for the review.", waitingOn: [{ kind: "pull-request", ref: "https://github.com/acme/app/pull/810", until: "review" }], clientKey: "awaits-back" })
+    assert.ok(!("refused" in back) && back.delivered === "none", `a wait named since its last result stays quiet, reworded or after another: ${JSON.stringify(back)}`)
+    const person = await world.agents.report(world.caller(docs), { status: "progress", summary: "Reviewed; the person merges it.", waitingOn: [...review, { kind: "person", what: "merge" }], clientKey: "awaits-person" })
+    assert.ok(!("refused" in person) && person.delivered === "notice", "a first wait on the person wakes the Apex")
+    const checks = await world.agents.report(world.caller(docs), { status: "progress", summary: "Pushed a fix; CI runs.", waitingOn: [{ kind: "pull-request", ref: "acme/app#811", until: "checks" }], clientKey: "awaits-checks" })
+    assert.ok(!("refused" in checks) && checks.delivered === "none", "a wait on checks Mako watches stays quiet")
+    await world.settle(600, 20_000, "ignore")
+    assert.ok(!apexHeard("Still waiting for the review.") && !apexHeard("Pushed a fix; CI runs."), "and wakes no one")
+
     const reviewer = await world.agents.start(world.caller(lead), { brief: { objective: "Review the router port for API compatibility." }, harness: "cursor", name: "compat", clientKey: "compat", cwd: world.root })
     assert.ok(!("refused" in reviewer) && reviewer.conversation)
     await world.settle(600, 20_000, "ignore")

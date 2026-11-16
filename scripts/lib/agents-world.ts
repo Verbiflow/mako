@@ -1,3 +1,4 @@
+import { ProviderFailureError, providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import type { ProviderFailureEvidence } from "@mako/host/contracts/provider-failure-evidence"
 import { randomUUID } from "node:crypto"
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
@@ -31,6 +32,7 @@ import { handOff } from "@mako/host/harnesses/prompt-dispatch"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import { ThreadStore } from "@mako/host/threads/store"
 import { fixtureResume, noCapabilities } from "../fixtures/driver-capabilities.ts"
+import type { NativeTurnReader } from "@mako/host/harnesses/native-turn"
 
 /** The host's jobs without the engine's room watch. */
 class WithoutRoomWatch extends HostJobs {
@@ -105,7 +107,10 @@ export interface WorldOptions {
   /** Whether a conversation's next request waits before it runs (`LiveDependencies.ownerCheck`), as the host's `ownerHold` says. */
   ownerCheck?: ConstructorParameters<typeof LiveConversations>[0]["ownerCheck"]
   script: Script
-  budget?: TreeBudget
+  /** Scripted native facts, never a provider/model call. Ordinary fixtures represent a killed, unfinished run. */
+  nativeTurn?: NativeTurnReader | false
+  nativeInspection?: Extract<ProviderLiveDriver["resume"], { kind: "native" }>["inspect"]
+  budget?: Partial<TreeBudget>
   /** Each event the host sends its windows, as it sends it. */
   events?: (event: HostEvent) => void
   /** What the host keeps of conversations in memory (`LiveDependencies.conversationMemory`); the host's own without it. */
@@ -184,6 +189,8 @@ export interface WorldOptions {
   steering?: Partial<Record<string, Pick<Extract<SteerCapability, { kind: "supported" }>, "lands" | "answersOnEnd" | "hears"> & { holds?: true }>>
   /** How long an ask waits on its Apex alone before the person is asked too (`AgentsDeps.apexAnswerMs`). */
   apexAnswerMs?: number
+  /** How long a working Fin may show no activity before its Apex hears it (`AgentsDeps.quietMs`). */
+  quietMs?: number
   /** The engine's timers for those waits (`AgentsDeps.later`): a fake clock a test advances itself. */
   later?: AgentsDeps["later"]
   /** The pull requests the host last read for a worktree's branch (`AgentsDeps.heldPulls`). */
@@ -202,6 +209,8 @@ export interface WorldOptions {
   references?: AgentsDeps["references"]
   /** A harness refusing a prompt before taking it, with its words: nothing was sent. A promise answers late, as a slow refusal does. */
   refusePrompt?: (conversation: string, harness: string) => string | undefined | Promise<string | undefined>
+  /** A refusal of a prompt before it's sent, as the harness's own error (`TurnInProgressError`, say): thrown after "not-accepted". */
+  refusePromptWith?: (conversation: string, harness: string) => Error | undefined
   /**
    * Each harness's accounts in the person's order, read as they stand (change one to spend it), and which is
    * selected: with them a Fin whose account runs out moves (`AgentsDeps.accounts`), and every launch goes through
@@ -221,6 +230,8 @@ export interface WorldOptions {
   readingAccounts?: (harness: string, all: boolean) => Promise<void> | void
   /** A pull request as GitHub would say it stands (`AgentsDeps.readPull`): a stub, never the network. */
   readPull?: AgentsDeps["readPull"]
+  /** A conversation's app check under way, heard as it ends (`AgentsDeps.watchCheck`): a stub, never a real check. */
+  watchCheck?: AgentsDeps["watchCheck"]
   /** How this host reaches the person's other devices (`AgentsDeps.away`): with it, a Fin can be placed on one. */
   away?: AgentsDeps["away"]
   /** The Git remote a folder is a checkout of (`AgentsDeps.remoteOf`). */
@@ -392,9 +403,11 @@ export class AgentsWorld {
       ...(this.options.lent && { lent: this.options.lent }),
       ...(this.options.processes && { processes: this.options.processes }),
       ...(this.options.apexAnswerMs !== undefined && { apexAnswerMs: this.options.apexAnswerMs }),
+      ...(this.options.quietMs !== undefined && { quietMs: this.options.quietMs }),
       ...(this.options.later && { later: this.options.later }),
       ...(this.options.heldPulls && { heldPulls: this.options.heldPulls }),
       ...(this.options.readPull && { readPull: this.options.readPull }),
+      ...(this.options.watchCheck && { watchCheck: this.options.watchCheck }),
       ...(this.options.now && { now: this.options.now }),
       ...(this.options.away && { away: this.options.away }),
       ...(this.options.remoteOf && { remoteOf: this.options.remoteOf }),
@@ -587,7 +600,11 @@ export class AgentsWorld {
       planning: { via: "setting", option: "plan", proposal: "Scripted model", feedback: { kind: "next-message", reason: "Scripted model" } },
       backgroundStop: { kind: "ends-with-turn", evidence: "Scripted model" },
       turnRecovery: { kind: "manual", reason: "Scripted model" },
-      resume: fixtureResume(this.options.elsewhere ? { elsewhere: { via: "Scripted model", verified: "Scripted model" } } : {}),
+      resume: fixtureResume({
+        inspect: this.options.nativeInspection ?? (async () => ({ kind: "available", checkpoint: "scripted-record", strategy: "same-session" })),
+        ...this.options.nativeTurn !== false && { readTurn: this.options.nativeTurn ?? (async () => ({ kind: "unfinished" })) },
+        ...this.options.elsewhere && { elsewhere: { via: "Scripted model", verified: "Scripted model" } },
+      }),
       ...((STEERS_AT_STEP.has(harness) || this.options.steering?.[harness]) && {
         steering: {
           kind: "supported" as const,
@@ -625,10 +642,15 @@ export class AgentsWorld {
       },
       prompt: async (binding, text, _attachments, settings, dispatch) => {
         const id = this.live.ownerOf(binding)
+        const refusal = this.options.refusePromptWith?.(id, harness)
+        if (refusal) {
+          dispatch.report({ kind: "not-accepted", source: "preflight", reason: refusal.message })
+          throw refusal
+        }
         const refused = await this.options.refusePrompt?.(id, harness)
         if (refused) {
           dispatch.report({ kind: "not-accepted", source: "preflight", reason: refused })
-          throw new Error(refused)
+          throw new ProviderFailureError(refused, providerTextEvidence(refused))
         }
         handOff(dispatch, { kind: "submitted", source: "transport-call" })
         const path = this.live.snapshot(id)?.session.nativePath ?? state(id).nativePath ?? ""
@@ -650,7 +672,7 @@ export class AgentsWorld {
           emit({ type: "live-update", id: binding, update: { kind: "text", text: reply } })
           if (end.limit) emit({ type: "live-update", id: binding, update: { kind: "event", label: "Rate limited", detail: "Reached your usage limit", tone: "warning", limit: end.limit } })
           const ended = { ...(this.live.snapshot(id)?.session ?? session), id: binding }
-          emit({ type: "live-session", session: end.fail ? { ...ended, status: "failed", lastStop: "failed", error: end.fail, failureEvidence: end.failureEvidence } : { ...ended, status: "ready", failureEvidence: undefined } })
+          emit({ type: "live-session", session: end.fail ? { ...ended, status: "failed", lastStop: "failed", error: end.fail, failureEvidence: end.failureEvidence ?? providerTextEvidence(end.fail) } : { ...ended, status: "ready", failureEvidence: undefined } })
         })()
         this.running.add(turn)
         void turn.finally(() => this.running.delete(turn))

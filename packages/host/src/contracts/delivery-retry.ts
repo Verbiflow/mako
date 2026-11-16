@@ -62,7 +62,7 @@ export function retryCause(kind: ProviderFailureKind, busy: boolean): RetryCause
  */
 export function transientCause(message: string, kind: ProviderFailureKind, busy: boolean, evidence?: ProviderFailureEvidence): RetryCause | undefined {
   if (busy) return "busy"
-  if (evidence?.kind === kind) return retryCause(kind, false)
+  if (evidence?.kind === kind && evidence.source !== "provider-text") return retryCause(kind, false)
   return permanentFailure(message) ? undefined : retryCause(kind, false)
 }
 

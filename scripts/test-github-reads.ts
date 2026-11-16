@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { GitHubReads } from "@mako/host/git/github-reads"
+import { GitHubReads, GitHubRepositoryLookupError } from "@mako/host/git/github-reads"
 
 let now = 0
 const calls: string[][] = []
@@ -25,6 +25,43 @@ const reader = new GitHubReads({
 })
 const list = ["pr", "list", "--state", "all", "--limit", "60", "--json", "number,state"]
 const view = ["pr", "view", "7", "--repo", "fixture/project", "--json", "statusCheckRollup"]
+
+// Outage refreshes and write preflights share the failed repository's original brief cooldown.
+let outageNow = 0, outageCalls = 0, unavailable = true
+const outage = new GitHubReads({ now: () => outageNow, common: async cwd => cwd.startsWith("/same/") ? "/same/git" : cwd, branch: async () => "fix", run: async (cwd, _args, _env, clock) => {
+  outageCalls++
+  assert.equal(clock(), outageNow, "the transport receives the reader's clock, not a separate wall clock")
+  if (unavailable && cwd.startsWith("/same/")) throw new GitHubRepositoryLookupError(clock() + 60_000)
+  return JSON.stringify({ nameWithOwner: "fixture/project", url: "https://github.com/fixture/project" })
+} })
+const repoArgs = ["repo", "view", "--json", "nameWithOwner"]
+await assert.rejects(outage.run("/same/first", repoArgs), error => error instanceof GitHubRepositoryLookupError && error.retryAt === 60_000)
+outage.forget()
+await outage.forgetRepository("/same/second")
+await assert.rejects(outage.run("/same/second", repoArgs), error => error instanceof GitHubRepositoryLookupError && error.retryAt === 60_000)
+assert.equal(outageCalls, 1, "refresh, alias and write-preflight invalidation cannot immediately retry an outage")
+await outage.run("/other", repoArgs)
+assert.equal(outageCalls, 2, "another repository remains available")
+outageNow = 59_999
+await assert.rejects(outage.run("/same/first", repoArgs))
+assert.equal(outageCalls, 2)
+outageNow = 60_000; unavailable = false
+assert.equal(JSON.parse(await outage.run("/same/second", repoArgs)).nameWithOwner, "fixture/project")
+assert.equal(outageCalls, 3, "the next read after expiry can recover")
+let started!: () => void, refuse!: (cause: Error) => void, pendingCalls = 0
+const entered = new Promise<void>(resolve => { started = resolve })
+const inFlight = new GitHubReads({ now: () => 0, common: async () => "/same/git", branch: async () => "fix", run: async () => {
+  pendingCalls++
+  started()
+  return new Promise<string>((_resolve, reject) => { refuse = reject })
+} })
+const firstPending = inFlight.run("/same/first", repoArgs)
+await entered
+inFlight.forget()
+const nextPending = inFlight.run("/same/second", repoArgs)
+refuse(new GitHubRepositoryLookupError(60_000))
+assert.ok((await Promise.allSettled([firstPending, nextPending])).every(result => result.status === "rejected"))
+assert.equal(pendingCalls, 1, "a refresh during the first outage lookup joins it instead of queuing an immediate second attempt")
 await Promise.all(Array.from({ length: 80 }, (_, i) => reader.run(`/checkout/${i}`, i % 2 ? view : list)))
 assert.equal(calls.filter(args => args[1] === "graphql" && !args.some(arg => arg.startsWith("number="))).length, 1, "all consumers join the same repository snapshot")
 assert.equal(peak, 1, "GitHub requests are serial across consumers and repositories")

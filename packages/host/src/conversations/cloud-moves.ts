@@ -81,7 +81,7 @@ function named<Value>(what: string, work: Promise<Value>): Promise<Value> {
 }
 
 /** What a machine answers when it's ready for a move: `carry`, that it takes one (`MoveCarry`). */
-const ReadyAnswerSchema = z.object({ folder: z.string(), carry: z.boolean().optional() }).loose()
+const ReadyAnswerSchema = z.object({ folder: z.string(), carry: z.boolean().optional(), promptActor: z.boolean().optional() }).loose()
 
 /** What a sleeping Mac's handoff must leave for the release and the hand-over after the pause. */
 const RELEASE_TAKES_MS = 4_000
@@ -179,6 +179,8 @@ export const MovePlanSchema = z.object({
   carry: z.object({ ref: MoveCarryRefSchema, manifest: MoveCarrySchema }).optional(),
   /** Whether the machine takes a carry, as its `mako:move-ready` answered: one before carries is sent the checkout alone. */
   takesCarry: z.boolean().optional(),
+  /** Whether the machine's `mako:live-prompt` takes Mako's actor, as its `mako:move-ready` answered: Mako's own note goes only to one that does. */
+  takesPromptActor: z.boolean().optional(),
   handoff: HandoffSchema.optional(),
   /** A move that pauses running turns to take them along (`ThreadHandOff`), and what it paused. */
   handingOff: z.object({
@@ -300,6 +302,13 @@ export type CloudMovesOptions = {
     continueTurn(conversationId: string, input: { requestId: string; reason: "handed-off"; continues: string; stopped?: readonly string[]; stayed?: true; actor: Actor }): void
     waitingPrompts(conversationId: string): Array<{ id: string; text: string; attachments: PromptAttachment[]; tuning?: SessionSettings; displayText?: string }>
     carried(conversationId: string, requestIds: readonly string[], to: "cloud"): void
+    /**
+     * The conversation leaves with this move: its turn waits end here, and each one's note for its agent there is
+     * answered, the same for a handover asked again (`since`, the move's start). Absent on a host that keeps none.
+     */
+    waitsDeparting?(conversationId: string, since: number): string[]
+    /** The move didn't go: the waits it ended (`waitsDeparting`, since `since`) are armed again here. */
+    waitsStayed?(conversationId: string, since: number): void
   }
   /** The settings and access a native session last ran with, as this Mac remembers them. */
   remembered(harness: string, nativeId: string): { modeId?: string; settings?: SessionSettings } | null | undefined
@@ -878,7 +887,9 @@ export class CloudMoves {
       named("Its sessions' records couldn't be sent ahead", this.#sendRecords(plan)),
       // Never queued: a cloud that can't start the machine now says so now, and the Thread stays here.
       named("Its cloud machine didn't get ready", this.#options.cloud.callThread(plan.cloudThread, "mako:move-ready", [{ folder: plan.folder, harnesses: [...new Set(plan.sessions.map((session) => session.harness))], launches: plan.sessions.map(({ harness, tuning }) => ({ harness, ...tuning && { tuning } })), ...repositories.length && { repositories } }], undefined, { refuseUnstarted: true }).then((answer) => {
-        plan.takesCarry = ReadyAnswerSchema.safeParse(decodeRuntimeValue(answer)).data?.carry === true
+        const ready = ReadyAnswerSchema.safeParse(decodeRuntimeValue(answer)).data
+        plan.takesCarry = ready?.carry === true
+        plan.takesPromptActor = ready?.promptActor === true
         plan.timings.ready = Date.now() - plan.began
       })),
     ])
@@ -991,8 +1002,24 @@ export class CloudMoves {
       if (session.tuning) options.tuning = session.tuning
       calls.push({ channel: "mako:live-start", args: [session.harness, session.cwd ?? plan.folder, options], key: `start\0${session.conversationId}` })
     }
-    for (const { conversationId, requestId, stopped } of plan.handingOff?.paused ?? [])
-      calls.push({ channel: "mako:live-continue-turn", args: [conversationId, namedUuid(`mako move\0${plan.move}\0${requestId}\0continue`), { reason: "handed-off", continues: requestId, ...stopped.length && { stopped } }], key: `continue\0${requestId}` })
+    // A wait the Thread's agent armed ends here; its agent hears so there, to arm it again: named among what the
+    // handoff stopped when a turn goes on there, else as a message of its own that starts its first turn there.
+    const waitNotes = new Map(plan.sessions.map(({ conversationId }) => [conversationId, this.#options.live.waitsDeparting?.(conversationId, plan.began) ?? []]))
+    for (const { conversationId, requestId, stopped } of plan.handingOff?.paused ?? []) {
+      const told = [...stopped, ...waitNotes.get(conversationId) ?? []]
+      waitNotes.delete(conversationId)
+      calls.push({ channel: "mako:live-continue-turn", args: [conversationId, namedUuid(`mako move\0${plan.move}\0${requestId}\0continue`), { reason: "handed-off", continues: requestId, ...told.length && { stopped: told } }], key: `continue\0${requestId}` })
+    }
+    // As Mako's words only: a machine whose `mako:live-prompt` takes no actor would draw it as the person's, and its
+    // agent would read it as their instruction, so there it's dropped; the wait still ended, and the person's line with it.
+    for (const [conversationId, notes] of waitNotes) {
+      if (!notes.length) continue
+      if (!plan.takesPromptActor) {
+        hostLog("moves", "a wait's note wasn't sent: the machine takes no actor on a prompt", { move: plan.move, conversation: conversationId, waits: notes.length })
+        continue
+      }
+      calls.push({ channel: "mako:live-prompt", args: [conversationId, namedUuid(`mako move\0${plan.move}\0${conversationId}\0turn-waits`), notes.join("\n\n"), [], undefined, { actor: { kind: "service", name: "turn-wait" } }], key: `turn-waits\0${conversationId}` })
+    }
     const carried = new Map<string, string[]>()
     for (const { conversationId } of plan.sessions) {
       const waiting = this.#options.live.waitingPrompts(conversationId)
@@ -1172,6 +1199,8 @@ export class CloudMoves {
     }
     const paused = plan.handingOff?.paused ?? []
     await this.#stayed(plan.move, plan.thread, plan.handingOff, paused, plan.sessions.map((session) => session.conversationId))
+    // The waits the hand-over ended go back to armed: nothing else would ever wake the agent that armed them.
+    for (const { conversationId } of plan.sessions) this.#options.live.waitsStayed?.(conversationId, plan.began)
     // A continue the cloud refused leaves the Thread here: what it paused as this Mac went off goes on here now.
     if (plan.continued) await this.#goOnHere((turn) => turn.thread === plan.thread)
     plan.phase = "kept-here"

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { classifyProviderFailure, permanentFailure, usageLimitWords, type ProviderFailureKind } from "@mako/host/contracts/provider-failure"
+import { classifyProviderText, permanentFailure, usageLimitWords, type ProviderFailureKind } from "@mako/host/contracts/provider-failure"
 import { limitReset } from "@mako/host/contracts/limit-reset"
 import { GIVE_UP_MS, nextRetry, RESET_MARGIN_MS, RETRY_STEPS_MS, retryWords, transientCause, waitsForReset } from "@mako/host/contracts/delivery-retry"
 import { LiveRequestSchema } from "@mako/host/conversations/live-journal"
@@ -19,10 +19,10 @@ const CURSOR = "Your team has reached its usage limit Please reach out to an adm
 const CLAUDE = "You've hit your weekly limit · resets 1pm (America/Los_Angeles)"
 
 for (const words of [CURSOR, CLAUDE]) {
-  assert.equal(classifyProviderFailure(words).kind, "rate-limited", words)
+  assert.equal(classifyProviderText(words).kind, "rate-limited", words)
   assert.equal(usageLimitWords(words), true, words)
   assert.equal(permanentFailure(words), false, words)
-  assert.equal(transientCause(words, classifyProviderFailure(words).kind, false), "rate-limited", words)
+  assert.equal(transientCause(words, classifyProviderText(words).kind, false), "rate-limited", words)
 }
 assert.equal(limitReset(CURSOR, NOW), new Date(2026, 10, 8).getTime(), "Cursor's date, from the start of that day here")
 // 1pm PST is 21:00Z, that same day: the next time that clock reads 1pm.
@@ -47,7 +47,7 @@ const forms: [string, ProviderFailureKind, number | undefined][] = [
   ["Rate limited", "rate-limited", undefined],
 ]
 for (const [words, kind, at] of forms) {
-  assert.equal(classifyProviderFailure(words).kind, kind, words)
+  assert.equal(classifyProviderText(words).kind, kind, words)
   if (at !== undefined) assert.equal(limitReset(words, NOW), at, words)
   assert.ok(transientCause(words, kind, false), words)
 }
@@ -65,7 +65,7 @@ assert.ok(limitReset("You've hit your limit · resets 1pm (Not/AZone)", NOW))
 assert.equal(usageLimitWords("Server at capacity"), false)
 // A limit's plan words don't make it the person's to fix: it clears at its reset.
 assert.equal(permanentFailure("You've hit your limit. Upgrade your plan to keep going."), false)
-assert.equal(classifyProviderFailure("You've hit your limit. Upgrade your plan to keep going.").kind, "rate-limited")
+assert.equal(classifyProviderText("You've hit your limit. Upgrade your plan to keep going.").kind, "rate-limited")
 // Only a plan's words give way to a limit: another cause the person must fix stands, in whichever order they're said.
 for (const words of [
   "You've hit your usage limit. 401 Unauthorized: invalid API key",
@@ -76,21 +76,21 @@ for (const words of [
 ]) {
   assert.equal(permanentFailure(words), true, words)
   assert.equal(usageLimitWords(words), false, words)
-  assert.equal(transientCause(words, classifyProviderFailure(words).kind, false), undefined, words)
+  assert.equal(transientCause(words, classifyProviderText(words).kind, false), undefined, words)
 }
 // So does a bare client error, which names no rule's words: the whole of what the person must fix, not a list of it.
 for (const status of ["400 Bad Request", "404 Not Found", "405 Method Not Allowed", "406 Not Acceptable", "409 Conflict", "410 Gone", "422 Unprocessable Entity"])
   for (const words of [`You've hit your usage limit. ${status}`, `${status}: You've hit your usage limit.`]) {
     assert.equal(permanentFailure(words), true, words)
     assert.equal(usageLimitWords(words), false, words)
-    assert.equal(transientCause(words, classifyProviderFailure(words).kind, false), undefined, words)
+    assert.equal(transientCause(words, classifyProviderText(words).kind, false), undefined, words)
   }
 // A limit's own payment words are a plan's: they give way to it, and alone stay the person's.
 assert.equal(usageLimitWords("You've hit your usage limit. 402 Payment Required"), true)
 assert.equal(permanentFailure("402 Payment Required"), true)
 // What it wasn't before: a plan that doesn't cover a model is still the person's, and a model's context is still that.
-assert.equal(classifyProviderFailure("Your plan does not include this model").kind, "plan")
-assert.equal(classifyProviderFailure("prompt is too long: 214031 tokens > 200000 maximum").kind, "context-exhausted")
+assert.equal(classifyProviderText("Your plan does not include this model").kind, "plan")
+assert.equal(classifyProviderText("prompt is too long: 214031 tokens > 200000 maximum").kind, "context-exhausted")
 console.log("limit words: Cursor's and Claude's exact lines and every harness's other forms read as usage limits, with their resets")
 
 // A reset three days off goes once, at it, and outlasts the six hours a limit with no reset is waited out.

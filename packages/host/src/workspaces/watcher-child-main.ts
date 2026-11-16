@@ -3,7 +3,7 @@ import { execFile, type ChildProcess } from "node:child_process"
 import { z } from "zod"
 import { watch, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
-import { basename, dirname, join } from "node:path"
+import { basename, dirname, join, resolve } from "node:path"
 import { watchGitMarkersHere } from "./git-marker-native.js"
 import { OTHER_APPS_DATA } from "../base/other-apps-data.js"
 import { membersOnly, parseTable, PS_ARGS, type RunLeader } from "./process-table.js"
@@ -61,17 +61,28 @@ process.on("message", (raw) => {
   const native = asked.native
   const opening = native ? Promise.resolve().then(async () => {
     if (!subscriptions.has(id)) return undefined
-    const notify = () => { if (subscriptions.has(id)) reply({ t: "events", id, events: [{ path: asked.root, type: "update" }] }) }
+    const notify = (_event?: string, filename?: string | Buffer | null) => {
+      if (!subscriptions.has(id)) return
+      if (native.kind !== "app-output") { reply({ t: "events", id, events: [{ path: asked.root, type: "update" }] }); return }
+      if (!existsSync(asked.root)) { fail(new Error("App output folder is gone")); return }
+      if (!filename) { reply({ t: "dropped", id }); return }
+      const path = resolve(asked.root, filename.toString())
+      if (!path.startsWith(asked.root + "/") || asked.ignore.some(ignore => path === ignore || path.startsWith(ignore + "/"))) return
+      // A new step directory may already contain its first log before a recursive backend arms that subdirectory.
+      if (path.endsWith(".steps")) { reply({ t: "dropped", id }); return }
+      if (!/\.log(?:\.1)?$/.test(path)) return
+      reply({ t: "events", id, events: [{ path, type: "update" }] })
+    }
     if (native.kind === "git-markers") {
       const markers = watchGitMarkersHere(asked.root, notify, native.markers)
       await markers.ready
       return { unsubscribe: async () => { markers.close() } }
     }
-    const directory = watch(asked.root, notify)
+    const directory = watch(asked.root, { recursive: native.kind === "app-output" }, notify)
     let closed = false
     const close = () => { if (!closed) { closed = true; directory.close() } }
     // Keep the handler after failure too: repeated errors from this handle must not crash every other watch.
-    directory.on("error", (error) => {
+    const fail = (error: Error) => {
       if (closed || subscriptions.get(id) !== subscription) return
       subscriptions.delete(id)
       settling.delete(id)
@@ -80,7 +91,8 @@ process.on("message", (raw) => {
       catch (failure) { message += `; closing it failed: ${failure instanceof Error ? failure.message : String(failure)}` }
       reply({ t: "failed", id, message })
       if (!subscriptions.size) stopCanary()
-    })
+    }
+    directory.on("error", fail)
     return { unsubscribe: async () => { close() } }
   }) : parcel
     .subscribe(asked.root, (error, events) => {

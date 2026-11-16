@@ -10,6 +10,7 @@ import { CLIENT_CALL_ON_SOCKET, isClientCall } from "../contracts/client-calls.j
 import { EncodedAnswer, decodeRuntimeValue, encodeRuntimeValue, type EncodedValue } from "../contracts/runtime-value.js"
 import { HostCallLifetime } from "./call-lifetime.js"
 import { RepeatedCalls } from "./repeated-calls.js"
+import { FailedCalls } from "./failed-calls.js"
 import { ControlPreviewSchema, type ControlPreview } from "@mako/control-runtime/contracts"
 import { z } from "zod"
 
@@ -44,6 +45,8 @@ export class HostMethods implements MethodTable {
   private video: ((args: unknown[]) => Promise<Uint8Array>) | undefined
   private readonly lifetime: HostCallLifetime
   private readonly repeated = new RepeatedCalls()
+  /** Every failed call is said in the host's log (`FailedCalls`), whichever transport carried it. */
+  private readonly failed = new FailedCalls()
   private readonly options: HostMethodsOptions
 
   constructor(options: HostMethodsOptions) {
@@ -68,7 +71,13 @@ export class HostMethods implements MethodTable {
       // An answer already encoded, the owner's or another call's, had its history paged by whoever encoded it.
       const owner = await this.options.route(channel, parsed)
       if (owner.handled) return encoded(owner.value)
-      const value = await listener(...parsed)
+      let value: Awaited<Result>
+      try {
+        value = await listener(...parsed)
+      } catch (error) {
+        this.failed.note(channel, { error })
+        throw error
+      }
       if (value instanceof EncodedAnswer) return encoded(value.value)
       return local(hostHistoryPaging() ? this.options.presentHistory(value) : value)
     }))

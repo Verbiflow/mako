@@ -1,3 +1,4 @@
+import { HostFailureError } from "../contracts/provider-failure.js"
 import { processIdentityMatches, START_READING_TOLERANCE_MS } from "../base/process-liveness.js"
 import { existsSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
@@ -163,10 +164,10 @@ function declinedHold(format: StoreFormat): NewerStoreReadOnlyError {
   return new NewerStoreReadOnlyError("how Mako keeps track of sessions", format, "can show this session but can't resume it")
 }
 
-export class SessionHeldError extends Error {
+export class SessionHeldError extends HostFailureError {
   readonly hold: SessionHold
   constructor(hold: SessionHold) {
-    super(heldReason(hold.hostLabel))
+    super("resume-failed", heldReason(hold.hostLabel))
     this.name = "SessionHeldError"
     this.hold = hold
   }

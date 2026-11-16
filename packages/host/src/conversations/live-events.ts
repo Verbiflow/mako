@@ -125,8 +125,10 @@ export class LiveEvents {
     // Opening streams the provider's saved history back; it is not new work.
     const replaying = resident.opening && Boolean(resident.snapshot.base || resident.snapshot.baseSource || resident.snapshot.blocks.length)
     let progressOnly = false
-    if (showsActivity(event, resident.snapshot.session.status, replaying))
+    if (showsActivity(event, resident.snapshot.session.status, replaying)) {
       resident.activityAt = Date.now()
+      dependencies.agents?.()?.active?.(id)
+    }
     if (event.type === "live-session") {
       const previousStatus = resident.snapshot.session.status
       const usageBefore = usageMark(resident.snapshot.session.usage)
@@ -199,8 +201,9 @@ export class LiveEvents {
           ? event.session
           : { ...event.session, status: "failed" as const, error: event.session.error ?? "The provider stopped before the turn started" }
         // Some providers finish their transport successfully after refusing work on a usage limit.
-        if (outcome.status === "ready" && settling && turnReply(resident, settling.id).limit)
-          outcome = { ...outcome, status: "failed", error: "Usage limit reached", failureEvidence: undefined }
+        const limit = settling && turnReply(resident, settling.id).limit
+        if (limit && (outcome.status === "ready" || outcome.status === "failed" && (!outcome.failureEvidence || outcome.failureEvidence.kind === "unknown")))
+          outcome = { ...outcome, status: "failed", error: outcome.error ?? "Usage limit reached", failureEvidence: { kind: "rate-limited", source: "native-limit" } }
         if (previousStatus !== "running" && settling)
           hostWarn("live", "a request's provider went away before its turn ran", {
             conversation: resident.snapshot.session.id, request: settling.id,

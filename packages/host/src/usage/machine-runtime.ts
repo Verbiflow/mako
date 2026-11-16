@@ -96,9 +96,9 @@ export type MachineRuntimeOptions = {
 
 /** What the machine asks of the publisher of its Sessions (`SessionPublisher`). */
 export type SessionPublishing = {
-  report(current: { link: RuntimeLink; served: Pick<ServedRuntime, "version" | "sessions" | "live"> } | undefined): void
+  report(current: { link: RuntimeLink; served: Pick<ServedRuntime, "version" | "sessions" | "live" | "ephemeral"> } | undefined): void
   /** The link is up and served: watched conversations go out on it at once, not from the next report. */
-  linked(current: { link: RuntimeLink; served: Pick<ServedRuntime, "version" | "sessions" | "live"> }): void
+  linked(current: { link: RuntimeLink; served: Pick<ServedRuntime, "version" | "sessions" | "live" | "ephemeral"> }): void
   watch(link: RuntimeLink, conversations: readonly string[], after?: Readonly<Record<string, number>>, forms?: Readonly<Record<string, LiveForm>>): void
 }
 
@@ -111,6 +111,19 @@ const MEDIA_FRAMES: ReadonlySet<GatewayFrame["type"]> = new Set(["media-watch", 
  * they don't go into the Thread's stream.
  */
 const MACHINE_ONLY_EVENTS: ReadonlySet<string> = new Set(["account-usage", "harness-profile", "runtime-updates"])
+
+/**
+ * Passing state: what a reader takes in the moment and is worth nothing after, sent as often as it changes. A Thread's
+ * stream is its log, every event numbered and kept in its object's storage, so none of these goes into it:
+ * - `tool-steps`, a running `mako-computer` js call's steps, up to four times a second while it runs;
+ * - `view-hint`, a window's hint to look at a view again (the apps one goes to a watched conversation's watchers as
+ *   passing state of its own, `conversation-app-hint`, which never comes here);
+ * - `file-changed`, the file a window's viewer holds changed on disk.
+ * Nothing reads them from a Thread's stream. `control-activity` is passing too, but a Mac reads a machine's from its
+ * Thread's stream for that Thread's control previews (`CloudConversations`), so it stays there until a Thread's
+ * stream carries passing state outside its log.
+ */
+export const PASSING_EVENTS: ReadonlySet<string> = new Set(["tool-steps", "view-hint", "file-changed"])
 
 /** How long a move's arrival waits for the agent to place the store's carried files again before it goes on without. */
 const CARRIED_REFRESH_MS = 20_000
@@ -242,7 +255,7 @@ export class MachineRuntime {
     const threads = this.#threads
     if (!threads) return
     // Named on the event as the host emits it, so a stream's batches are never parsed to find out.
-    if (event.type !== undefined && MACHINE_ONLY_EVENTS.has(event.type)) return
+    if (event.type !== undefined && (MACHINE_ONLY_EVENTS.has(event.type) || PASSING_EVENTS.has(event.type))) return
     const claims = threads.claims()
     if (!claims.length) return
     const line = gatewayEventLine(channel, event)

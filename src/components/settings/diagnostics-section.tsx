@@ -14,6 +14,7 @@ import { harnessLabel } from "@/lib/harness-label"
 import type { SessionReaderEvent, SessionReaderHistory } from "@mako/host/contracts/session-reader"
 import type { UnreadReport } from "@mako/host/contracts/unread-records"
 import { UnreadRecords } from "@/components/settings/unread-records"
+import { UnopenedConversations } from "@/components/settings/unopened-conversations"
 import { SyncReadout } from "@/components/settings/sync-readout"
 import { ContinueReadout } from "@/components/settings/continue-readout"
 import type { ContinueReading } from "@mako/host/contracts/cloud-continues"
@@ -177,6 +178,8 @@ export function DiagnosticsSection() {
           </IfCanReveal>
         </div>
       ) : null}
+
+      <UnopenedConversations />
 
       {reader ? <SessionReaderRow history={reader} /> : null}
 
@@ -385,7 +388,7 @@ function FinsReadout({ agents }: { agents: AgentsDiagnostics }) {
         {agents.notices} reports not yet delivered
       </p>
       <p className="mt-1 text-label leading-relaxed text-faint">
-        Each {APEX_WORD} and its {FIN_WORD}s run at most {agents.budget.running} at once and starts at most {agents.budget.started}.{" "}
+        Each {APEX_WORD} and its {FIN_WORD}s run at most {agents.budget.running} at once and start at most {agents.budget.started} in any {Math.round((agents.budget.windowMs ?? 600_000) / 60_000)} minutes{agents.budget.hourly ? <>, {agents.budget.hourly} in any hour</> : null}.{" "}
         {fullest.map((tree) => `${tree.running} running, ${tree.started} started`).join(" · ")}
       </p>
       <p className="mt-1 text-label leading-relaxed text-faint">

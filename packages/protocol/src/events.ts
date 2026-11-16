@@ -21,6 +21,19 @@ export const EventFrameEnvelopeSchema = z
   })
   .strict()
 
+/**
+ * What every hop reads of a stream's passing state (`ephemeral`, `EPHEMERAL_LIVE_VERSION`): an event without a place in
+ * the stream, so no `seq`. Nothing keeps it, and a reader that missed it reads the next one or none.
+ */
+export const EphemeralFrameEnvelopeSchema = z
+  .object({
+    v: z.literal(PROTOCOL_VERSION),
+    stream: StreamIdSchema,
+    at: z.iso.datetime(),
+    correlationId: CorrelationIdSchema.optional(),
+  })
+  .strict()
+
 /** Asks for every event after `after` (0 for all), then the live ones, in order. */
 export const SubscribeSchema = z
   .object({ stream: StreamIdSchema, after: z.number().int().nonnegative() })
@@ -28,7 +41,13 @@ export const SubscribeSchema = z
 
 export type StreamId = z.infer<typeof StreamIdSchema>
 export type EventFrameEnvelope = z.infer<typeof EventFrameEnvelopeSchema>
-export type EventFrame = EventFrameEnvelope & { event: Payload }
+/**
+ * A stream's event as its subscription hands it on. One marked `ephemeral` is passing state, not a place in the stream:
+ * its `seq` is 0, and a reader neither applies it to its cursor nor counts it (`LiveCursor.heard`).
+ */
+export type EventFrame = EventFrameEnvelope & { event: Payload; ephemeral?: true }
+export type EphemeralFrameEnvelope = z.infer<typeof EphemeralFrameEnvelopeSchema>
+export type EphemeralFrame = EphemeralFrameEnvelope & { event: Payload }
 export type Subscribe = z.infer<typeof SubscribeSchema>
 
 export type CursorStep =

@@ -4,6 +4,8 @@ import type { ProviderMcpSource } from "../../tools/index.js"
 
 export const claudeMcpSource: ProviderMcpSource = {
   provider: "claude",
+  // A claude.ai connector is signed in on claude.ai, where the account keeps it; Claude Code names it "claude.ai <name>".
+  login: (server) => (server.startsWith("claude.ai ") ? { kind: "page", url: "https://claude.ai/settings/connectors" } : undefined),
   readFormat: "named-map",
   command: () => "claude",
   // Claude Code keeps `.claude.json` inside CLAUDE_CONFIG_DIR, which Mako sets

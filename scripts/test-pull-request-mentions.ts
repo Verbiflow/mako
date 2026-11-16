@@ -68,6 +68,7 @@ assert.equal(pullMentionReason({ installed: false, authenticated: false }), "Ins
 assert.equal(pullMentionReason({ installed: true, authenticated: false }), "Sign in to GitHub to mention pull requests")
 assert.equal(pullMentionReason({ installed: true, authenticated: true, login: "you" }), "Add a GitHub remote to mention pull requests")
 assert.equal(pullMentionReason({ installed: true, authenticated: true, login: "you", repo: "o/r" }), null)
+assert.match(pullMentionReason({ installed: true, authenticated: true, repoLookup: { state: "failed", until: 60_000 } })!, /GitHub could not read this repository/)
 assert.equal(pullSearchFailure({ status: "unavailable", reason: "no-repository" }), "Add a GitHub remote to mention pull requests")
 assert.equal(pullSearchFailure({ status: "unavailable", reason: "failed", message: "\nerror connecting to api.github.com\ncheck your internet connection" }), "GitHub didn't answer: error connecting to api.github.com")
 

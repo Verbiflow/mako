@@ -17,6 +17,7 @@
 export type HostCallReplay = "read" | "replay" | "never"
 
 const reads = [
+  "mako:view-hints",
   /**
    * A client's tabs, conversations and models as they are, opening its first tab if it has none: asked twice, the same
    * answer. A cloud start asks it first, so marked so, its Thread sends it on without waiting for the disk.
@@ -77,6 +78,10 @@ const reads = [
   "mako:thread-purposes",
   "mako:thread-titles",
   "mako:thread-app-marks",
+  /** Connection-local sampling demand; replaying its generation cannot undo a newer demand. */
+  "mako:thread-app-demand",
+  "mako:conversation-app-demand",
+  "mako:conversation-app",
   /** Reads the app's processes and files; what it records of them only moves its own read point forward. */
   "mako:thread-app-probe",
   "mako:thread-app-room",
@@ -85,6 +90,7 @@ const reads = [
   "mako:worktree-ahead",
   "mako:worktree-inventory",
   "mako:worktree-retention",
+  "mako:thread-scratch",
   /** Measures Mako's folders with `du`; writes nothing. */
   "mako:storage",
   "mako:worktree-review",
@@ -161,8 +167,14 @@ const reads = [
   "mako:mako-footprint",
   /** A conversation's turn media, judged by its records: asked twice, the same answers. */
   "mako:live-turn-media",
+  /** A prompt's versions, from the host's fork index: asked twice, the same answer. */
+  "mako:live-prompt-versions",
   /** fseventsd's health from memory; the restart is never repeated by a client (`mako:file-events-restart`). */
   "mako:file-events-service",
+  /** The servers that need sign-in, from memory. */
+  "mako:mcp-sign-ins",
+  /** The saved conversations this host couldn't open, from memory. */
+  "mako:unopened-conversations",
   /** The continues in the cloud this Mac pressed or its list says, from memory. */
   "mako:continue-readings",
   /** Asks the account what a continue would take now; asked twice, it's asked twice. */
@@ -241,6 +253,8 @@ const reads = [
 const replays = [
   /** Replaces the same retirement settings; never removes a checkout in this call. */
   "mako:worktree-retention-set",
+  /** Replaces the same scratch settings; preview does not remove anything. */
+  "mako:thread-scratch-set",
   /** Snoozes fseventsd's notice until the day ends: a repeat sets the same snooze. */
   "mako:file-events-dismiss",
   /** `MakoStorage.free`: a pass asked for while one runs is that pass, and a second finds nothing more to free. */

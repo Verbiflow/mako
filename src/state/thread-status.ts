@@ -15,6 +15,7 @@ import { threadTitlesStore } from "@/state/thread-titles"
 import type { AttentionByPath, ThreadsState } from "@/state/thread-state"
 import { threadsStore } from "@/state/thread-store"
 import { agentAskDetail } from "@/state/agent-asks"
+import { noteRunDropped } from "@/state/native-run-dropped"
 import { finAskLine } from "@/state/fin-asks"
 
 export type ThreadStatus =
@@ -303,6 +304,7 @@ export function threadSubject(
 const lastRunStatus = new Map<string, ThreadRunState["status"]>()
 
 export function applyThreadRun(run: ThreadRunState) {
+  noteRunDropped(run)
   const { viewing, nativeRequests } = threadsStore.get()
   const queue = nativeRequests.some(
     (request) => request.input.path === run.path && request.status === "queued"
