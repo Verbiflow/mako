@@ -10,6 +10,8 @@ export interface ChangeFacts {
   pulls?: readonly FinPullRequest[]
   questions?: number
   actions?: number
+  /** Questions of its Apex it still owes an answer, past their reminder (`Agents.owedOf`). */
+  owes?: number
 }
 
 /**
@@ -41,6 +43,7 @@ export function changePrint(facts: ChangeFacts): string {
     (facts.pulls ?? []).map((pull) => [pull.repository ?? "", pull.number, pull.state]),
     facts.questions ?? 0,
     facts.actions ?? 0,
+    facts.owes ?? 0,
   ])
 }
 

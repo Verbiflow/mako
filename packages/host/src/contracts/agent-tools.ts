@@ -195,6 +195,8 @@ export interface AgentStrip {
   custodyActions?: number
   /** What it waits on outside its tree, in words (`waitingWords`): "waiting on #412 checks". */
   waiting?: string
+  /** Its Apex's questions it still owes an answer past their reminder, which its Apex was told of (`Agents.owedOf`). */
+  owes?: number
   /** Seconds since its last activity, while it isn't working (`idleFor`). */
   idleFor?: number
   /** Its open pull requests, from what the host holds (`finPullRequests`). */
@@ -360,6 +362,8 @@ export interface AgentsReportInput {
   waitingOn?: WaitingOn[]
   /** Work this hands to another Fin of your Apex, by its name or Thread: a progress report with it wakes your Apex to pass it on. */
   handoff?: { to: string }
+  /** Your Apex's messages this report answers, by the request ID its reminder names: a progress report with it wakes your Apex. */
+  answers?: string[]
   /** A repeat with the same key is the same report. */
   clientKey: string
 }
@@ -394,6 +398,8 @@ export interface AgentsSendInput {
   deliver?: FinDeliver
   /** An informational message: no automatic completion reply; explicit reports, questions and failures still report. */
   reply?: "none"
+  /** A question it owes an answer to, not only a result: progress settles it only when it names it in `answers`. */
+  expects?: "answer"
   /** Threads this message refers to, each attached as a person's chip attaches one. */
   context?: AgentContextInput[]
   /** A repeat with the same key is the same message. */
@@ -822,6 +828,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         question: "For blocked or needs-input: the decision you need. With done: the decision your finished work leaves (a merge, a pick between results), with its options.",
         decides: "With a done question: apex (default) or person, who decides it.",
         handoff: "Work you hand to another Fin of your Apex: {to: its name or Thread}. Progress with it, or naming fin:<name> in its summary, wakes your Apex to pass it on; a mere mention of a Fin doesn't.",
+        answers: "Request IDs of your Apex's messages this report answers, as a reminder names them. Any result settles a reply you owe; use this when progress is your answer: it then wakes your Apex.",
         waitingOn: 'Automatic wakes: {kind:"pull-request", ref:"owner/repo#412" or its URL, until:"checks"|"review"|"merge"}. {kind:"person",what} and {kind:"other",text} record prose only: NO automatic subscription, including for Actions runs or main-commit CI. Inspect subscriptions in the result; an unsupported/unavailable wait needs a verified external notification or an explicit owner to verify its outcome.',
         options: "For a decision: the answers to pick from, each a label of a few words and what it does (detail). The person can pick one with a tap.",
         recommended: "The option you recommend, by its place in options, from 0.",
@@ -888,6 +895,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         text: "Your own words: beneath the person's with forward, else the whole message.",
         deliver: `For a working ${FIN_WORD}: queue (default), steer or interrupt.`,
         reply: "none: information that needs no reply; failures, questions and explicit reports still reach you.",
+        expects: "answer: a question you need answered, not only a result. A report of its own settles it, or progress that names it in answers; else it is reminded once, then you hear it went unanswered.",
         context: `Threads this message refers to, as [{ thread }], each a thread:<harness>:<id> ref, a Thread ID or a ${FIN_WORD}'s name: attached as the person's @ chip attaches one.`,
         clientKey: "Your own key for this message: a repeat with it is the same message.",
       },

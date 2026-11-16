@@ -362,8 +362,9 @@ const DECIDES = new Set<Report["status"]>(["blocked", "needs-input"])
 export function digest(notices: readonly Notice[], counts: string): string {
   const results = notices.filter((notice) => notice.settledOnly)
   const replies = notices.filter((notice) => notice.reply)
-  const fins = notices.filter((notice) => !notice.settledOnly && !notice.reply && !notice.quiet)
+  const fins = notices.filter((notice) => !notice.settledOnly && !notice.reply && !notice.quiet && !notice.unanswered)
   const quiets = notices.filter((notice) => notice.quiet && !notice.settledOnly && !notice.reply)
+  const unanswered = notices.filter((notice) => notice.unanswered && !notice.settledOnly && !notice.reply)
   const asks = fins.filter((notice) => DECIDES.has(notice.report.status))
   const decided = fins.filter((notice) => notice.decision)
   const decisions = [...asks.filter((notice) => notice.report.for !== "person"), ...decided.filter((notice) => notice.decision === "lead")]
@@ -374,6 +375,8 @@ export function digest(notices: readonly Notice[], counts: string): string {
   const unfinished = ended.filter((notice) => notice.report.unfinished)
   const handoffs = fins.filter((notice) => notice.report.status === "progress" && notice.report.handoff)
   const awaiting = fins.filter((notice) => notice.report.status === "progress" && !notice.report.handoff && notice.report.awaits)
+  // Progress that answers its Apex's messages (`answers`): the reply it was owed.
+  const answering = fins.filter((notice) => notice.report.status === "progress" && !notice.report.handoff && !notice.report.awaits && notice.report.answers?.length)
   const lines = [FROM_AGENTS]
   // Every entry the digest writes has its twin here, from the same record, in the same order.
   const cards: FinReportCard[] = []
@@ -483,6 +486,25 @@ export function digest(notices: readonly Notice[], counts: string): string {
     }
     lines.push("  Nothing wakes it until that happens: ask for the review or tell the person, unless it's already under way.")
   }
+  if (answering.length) {
+    lines.push(`${answering.length} ${answering.length === 1 ? "answers" : "answer"} your message:`)
+    for (const notice of answering) {
+      const { label, report } = notice
+      lines.push(`  • ${label}: ${finishedLine(report)}`)
+      cards.push(card(notice, opening(report.summary) || "It answered your message."))
+      artifactLines(lines, report)
+    }
+  }
+  if (unanswered.length) {
+    lines.push(`${unanswered.length} ${unanswered.length === 1 ? "hasn't" : "haven't"} answered your message:`)
+    for (const notice of unanswered) {
+      const owed = notice.unanswered!
+      const words = `your message of ${new Date(owed.at).toISOString().slice(11, 16)} UTC, "${owed.line}", got no reply in ${owed.turns} of its turns, a reminder among them.`
+      lines.push(`  • ${notice.label}: ${words}`)
+      cards.push(card(notice, words))
+    }
+    lines.push("  agents_read shows what it said; agents_send asks again, or decide without it.")
+  }
   if (quiets.length) {
     lines.push(`${quiets.length} ${quiets.length === 1 ? "has" : "have"} gone quiet while working:`)
     for (const notice of quiets) {
@@ -493,7 +515,7 @@ export function digest(notices: readonly Notice[], counts: string): string {
     lines.push(`  agents_read shows what each is doing. A long command may be fine; otherwise agents_send asks it (deliver: steer reaches the turn it runs, interrupt cuts it), or agents_stop stops it.`)
   }
   lines.push(counts)
-  lines.push((results.length || replies.length) && !decisions.length && !persons.length && !finished.length && !handoffs.length && !awaiting.length && !quiets.length
+  lines.push((results.length || replies.length) && !decisions.length && !persons.length && !finished.length && !handoffs.length && !awaiting.length && !answering.length && !unanswered.length && !quiets.length
     ? "Go on with it: reply to the person, start more work, or end your turn."
     : "agents_read gives a report in full. Reply to the person, start more work, or end your turn.")
   return appendFinReports(lines.join("\n"), cards)

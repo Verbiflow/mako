@@ -1605,6 +1605,12 @@ export class ThreadStore {
     return row ? keptAnswer(row) : undefined
   }
 
+  /** The requests this Fin's answers went as (`KeptAnswer.request`): its Apex's answers to its questions, which owe no reply. */
+  answerRequests(child: string): Set<string> {
+    this.syncVersion()
+    return new Set(this.sql("SELECT record, delivered_at FROM agent_answers WHERE child_thread = ?").all(child).map((row) => keptAnswer(row).request))
+  }
+
   /** The answer that took an ask, if one did. */
   answerOf(ask: string): KeptAnswer | undefined {
     this.syncVersion()

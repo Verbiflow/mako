@@ -135,7 +135,7 @@ import {
   type FrontDoorChild,
   frontDoorNote,
 } from "../contracts/agent-tools.js"
-import { agentWords, answerText, apexAsk, apexNote, briefText, askWords, CHILD_GROUPS, childGroup, childLine, childStateOf, finName, fromApex, HANDED_OVER_NOTE, membershipLine, openAsk, type OpenAsk, PASSED_ON_NOTE, passedOn, personsApproval, QUIET_MS, quietLine, rollup, stoodFor, YOUR_APEX } from "../contracts/children.js"
+import { agentWords, answerText, isBrief, apexAsk, apexNote, briefText, askWords, CHILD_GROUPS, childGroup, childLine, childStateOf, finName, fromApex, HANDED_OVER_NOTE, membershipLine, openAsk, type OpenAsk, PASSED_ON_NOTE, passedOn, personsApproval, QUIET_MS, quietLine, rollup, stoodFor, YOUR_APEX } from "../contracts/children.js"
 import { KeyedAdmission } from "../base/keyed-admission.js"
 import type { FinAtWork } from "./fin-cost-sampler.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
@@ -259,6 +259,7 @@ interface Attaching {
   refs?: readonly string[]
   passedOn?: string[]
   notification?: true
+  expects?: "answer"
 }
 
 /** A steer the harness took, as `inputDelivered` reads it. */
@@ -1261,7 +1262,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const door = roster ? frontDoorNote(open.map((edge) => this.frontDoorChild(edge)), now, person && includeGuidance, whole ? undefined : this.doorSaid.get(conversation)) : []
     // On the marks' own clock: every change this note read came before it.
     if (roster && open.length) this.doorSaid.set(conversation, this.changes.tick(now))
-    const lines = [...rules, ...door, ...note, ...followUps]
+    const lines = [...rules, ...door, ...note, ...followUps, ...this.owedReminder(conversation)]
     hostLog("agents", "front door", { conversation, children: open.length, chars: lines.reduce((sum, line) => sum + line.length + 1, 0) })
     return lines
   }
@@ -1401,7 +1402,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     const child = this.childOfConversation(conversation)
     const edge = child ? this.store()?.edges().of(child) : undefined
     if (child && !this.deps.live.atWork(conversation)) this.quiet.forget(child)
-    if (edge && !edge.closedAt) this.turnEnded(edge, conversation, request)
+    if (edge && !edge.closedAt) {
+      this.turnEnded(edge, conversation, request)
+      this.owedAfterTurn(edge, conversation)
+    }
     if (!edge) this.apexLimit(conversation, request)
     this.crewCheckIn(conversation, request)
     void this.drain()
@@ -2383,6 +2387,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(input.question && { question: input.question }),
       ...(input.question?.trim() && (input.status === "done" || input.status === "blocked" || input.status === "needs-input") && { retainsQuestion: true as const }),
       ...(input.supersedes?.length && { supersedes: input.supersedes }),
+      ...(input.answers?.length && { answers: input.answers.slice(0, 8).map((id) => id.slice(0, 200)) }),
       ...(input.options?.length && { options: input.options.slice(0, ASK_OPTIONS).map((option) => ({ label: option.label.slice(0, 200), ...(option.detail && { detail: option.detail.slice(0, 600) }) })) }),
       ...(input.recommended !== undefined && input.recommended < (input.options?.length ?? 0) && { recommended: input.recommended }),
       ...(input.action && { action: input.action.slice(0, 400) }),
@@ -2495,7 +2500,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const attached = this.threadRefs(apex, input.context)
     if ("refused" in attached) return this.refuse(op, attached.refused, attached.why)
     this.toldBy(apex, edge, true)
-    const sent = await this.deliver(edge, request, text, attachments, { kind: "agent", session: SessionIdSchema.parse(apex.session) }, deliver, false, { ...(passedOnGrants ? { passedOn: passedOnGrants } : { refs: attached }), ...(input.reply === "none" && { notification: true }) })
+    const sent = await this.deliver(edge, request, text, attachments, { kind: "agent", session: SessionIdSchema.parse(apex.session) }, deliver, false, { ...(passedOnGrants ? { passedOn: passedOnGrants } : { refs: attached }), ...(input.reply === "none" && { notification: true }), ...(input.expects === "answer" && input.reply !== "none" && { expects: "answer" as const }) })
     if ("refused" in sent) return this.refuse(op, sent.refused, sent.why)
     this.heardFrom(apex, edge)
     const answer: AgentsSent = { child: edge.child, name: edge.name, request, delivery: sent.delivery, hears: sent.hears, ...(sent.deduped && { deduped: true as const }) }
@@ -4282,6 +4287,99 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /**
+   * The questions from its Apex (`agents_send`'s `expects: "answer"`) this Fin's harness took that it still owes an answer (`docs/delivery-queue.md`, rule 17),
+   * oldest first, each with when it was taken and how many of the Fin's turns have ended since without answering it. A
+   * reply owed opens only once its harness takes the message, as a turn or a steer, so a report from before can't
+   * answer it; its brief, a `reply: none` message, an answer to the Fin's own question, and Mako's own words owe none. Any report
+   * after it settles it but progress: progress only when it hands work on, waits on someone else, or names it in
+   * `answers`. Read from the journal and the store, never kept, so a restart reads it the same.
+   */
+  private owedOf(edge: ThreadParent, conversation: string): { request: LiveRequest; at: number; turns: number }[] {
+    const snapshot = this.deps.live.held(conversation) ?? this.deps.live.snapshot(conversation)
+    const store = this.store()
+    if (!snapshot || !store) return []
+    const { requests } = snapshot
+    const actions = snapshot.control?.actions ?? []
+    const answers = store.answerRequests(edge.child)
+    const reports = store.reportsOf(edge.child)
+    const ended = (request: LiveRequest) => request.status === "completed" || request.status === "failed" || request.status === "interrupted"
+    const owed: { request: LiveRequest; at: number; turns: number }[] = []
+    for (const request of requests) {
+      // Only a question its Apex said it expects an answer to: a task's answer is its result, which has its own route.
+      if (request.expects !== "answer" || request.actor?.kind !== "agent" || request.digest || request.continues || request.goal || answers.has(request.id) || isBrief(request.text)) continue
+      if (store.sessionPlacement(request.actor.session)?.thread !== edge.parent) continue
+      const taken = takenAs(request, requests, actions)
+      if (!taken) continue
+      if (answeredBy(reports, request.id, taken.at)) continue
+      const turns = requests.filter((each) => ended(each) && (each.id === taken.into || (each.dispatchedAt ?? -1) >= taken.at)).length
+      owed.push({ request, at: taken.at, turns })
+    }
+    return owed
+  }
+
+  /**
+   * How many of its Apex's questions a Fin still owes an answer past their reminder: its Apex was told, so its list
+   * shows the Fin whatever changed (`needsApex`). Read from what its Apex was told, the digests in the Apex's own queue
+   * (`Notice.unanswered`), and the Fin's reports in the store, so a Fin unloaded or hibernated since, as one that owes an
+   * answer usually is, still counts, and no journal is read in.
+   */
+  private owesApex(edge: ThreadParent): number {
+    const apex = this.frontOf(edge.parent, edge.parentSession)
+    const requests = (apex ? this.deps.live.held(apex) : undefined)?.requests ?? []
+    const told = new Map<string, number>()
+    for (const request of requests)
+      for (const notice of request.digest?.notices ?? [])
+        if (notice.unanswered && notice.report.child === edge.child) told.set(notice.unanswered.request, notice.unanswered.at)
+    if (!told.size) return 0
+    const reports = this.store()!.reportsOf(edge.child)
+    return [...told].filter(([request, at]) => !answeredBy(reports, request, at)).length
+  }
+
+  /**
+   * A Fin's reminder, once, on the turn after the first of its turns that ended without answering a message its Apex
+   * sent: by the request's ID, which `agents_report`'s `answers` takes when progress is its answer.
+   */
+  private owedReminder(conversation: string): string[] {
+    const child = this.childOfConversation(conversation)
+    const edge = child ? this.store()?.edges().of(child) : undefined
+    if (!edge || edge.closedAt) return []
+    return this.owedOf(edge, conversation).filter((owed) => owed.turns === 1).map((owed) => {
+      const line = noteLine(agentWords(owed.request.text)?.body ?? owed.request.text, 160)
+      return `You haven't answered your ${APEX_WORD}'s message of ${new Date(owed.at).toISOString().slice(11, 16)} UTC (request ${owed.request.id}): "${line}". Answer it in this turn's report; when progress is your answer, agents_report with answers: ["${owed.request.id}"].`
+    })
+  }
+
+  /**
+   * After a Fin's turn ends: a message it still owes a reply after two of its turns (the second carried the reminder,
+   * `frontDoor`) is said once to its Apex, in its digest, under its request's own notice ID, so the queue's receipt
+   * (`carried`) keeps it once across a restart.
+   */
+  private owedAfterTurn(edge: ThreadParent, conversation: string): void {
+    const apex = this.frontOf(edge.parent, edge.parentSession)
+    if (!apex) return
+    for (const owed of this.owedOf(edge, conversation)) {
+      if (owed.turns !== 2) continue
+      const words = agentWords(owed.request.text)
+      const line = noteLine(words?.body ?? owed.request.text, 160)
+      const report: Report = {
+        id: `owed:${owed.request.id}`,
+        child: ThreadIdSchema.parse(edge.child),
+        status: "progress",
+        summary: `It hasn't answered your message: "${line}"`,
+        implicit: true,
+        ownerGeneration: this.generation,
+        at: this.now(),
+      }
+      this.wakes.notice(apex, this.rootOf(edge.parent), {
+        id: `notice:owed:${owed.request.id}`, report, label: `"${edge.name}" (${this.deps.harnessLabel(this.harnessOf(edge))})`,
+        fin: { name: edge.name, harness: this.harnessOf(edge) }, from: this.store()!.thread(edge.child)?.sessions[0] ?? edge.parentSession,
+        unanswered: { request: owed.request.id, at: owed.at, turns: owed.turns, line },
+      })
+      hostLog("agents", "a reply owed went unanswered", { op: edge.op, request: owed.request.id, turns: owed.turns })
+    }
+  }
+
+  /**
    * A Fin's request that waits out its account's usage limit (held with its `retry`: the continuation Mako made of a
    * turn the limit cut, or a message its harness refused) goes on at the next step of its order instead (`FinMoves`).
    * The limit is the harness's own word for it (`TurnReply.limit`), else the account's own reading. Once per wait,
@@ -5580,6 +5678,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const pendingQuestions = this.pendingReports(edge).length
     const pendingActions = this.pendingActions(edge.parent, edge.child).total
     const custodyActions = this.store()!.reportCustody(edge.child).total
+    const owes = this.owesApex(edge)
     return {
       child: edge.child,
       name: edge.name,
@@ -5597,6 +5696,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(pendingQuestions && { pendingQuestions }),
       ...(pendingActions && { pendingActions }),
       ...(custodyActions && { custodyActions }),
+      ...(owes && { owes }),
       ...(waiting && { waiting }),
       ...(idle !== undefined && { idleFor: idle }),
       ...(pulls.length && { openPRs: pulls }),
@@ -6550,7 +6650,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     // What an agent writes is its words: only what `reachOf` passed goes as an item. A person's words are the window's.
     const written = actor?.kind === "agent" && !attaching.passedOn ? await this.withContext(words, attaching.refs ?? []) : { text: words, ...(attaching.passedOn?.length && { grants: attaching.passedOn }) }
     const message = written.text
-    const marks = { ...(written.grants && { grants: written.grants }), ...(attaching.notification && { notification: attaching.notification }) }
+    const marks = { ...(written.grants && { grants: written.grants }), ...(attaching.notification && { notification: attaching.notification }), ...(attaching.expects && { expects: attaching.expects }) }
     const conversation = this.conversationOf(edge.child)
     // A Fin reopening its session, as the next host relaunches one an exit cut, takes a message once that settles.
     if (conversation && !(await this.switchSettled(conversation)))
@@ -6949,7 +7049,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const changedAt = this.changes.at(edge.child, {
       state, ...(state.kind === "working" && { awaiting: this.childReading(edge).awaiting }),
       ...(latest && { report: { status: latest.status, at: latest.at } }), ...(held.length && { pulls: held }),
-      questions: this.pendingReports(edge).length, actions: this.pendingActions(edge.parent, edge.child).total,
+      questions: this.pendingReports(edge).length, actions: this.pendingActions(edge.parent, edge.child).total, owes: this.owesApex(edge),
     }, this.changes.tick(this.now()))
     return {
       name: edge.name,
@@ -7276,12 +7376,37 @@ function pullWaitReports(reports: Report[], key: string): Report[] {
 /** A listed Fin waiting on its Apex: a question or action open, blocked, or ended with a decision. */
 function needsApex(strip: AgentStrip): boolean {
   const { state } = strip
-  return Boolean(strip.pendingQuestions || strip.pendingActions || strip.custodyActions) || state.kind === "blocked" || (state.kind === "ended" && state.decision !== undefined)
+  return Boolean(strip.pendingQuestions || strip.pendingActions || strip.custodyActions || strip.owes) || state.kind === "blocked" || (state.kind === "ended" && state.decision !== undefined)
 }
 
 /** What a listed Fin's change mark reads of its row (`FinChanges`). */
 function stripChange(strip: AgentStrip): ChangeFacts {
-  return { state: strip.state, ...(strip.report && { report: { status: strip.report.status, at: strip.report.at } }), ...(strip.openPRs && { pulls: strip.openPRs }), questions: strip.pendingQuestions ?? 0, actions: strip.pendingActions ?? 0 }
+  return { state: strip.state, ...(strip.report && { report: { status: strip.report.status, at: strip.report.at } }), ...(strip.openPRs && { pulls: strip.openPRs }), questions: strip.pendingQuestions ?? 0, actions: strip.pendingActions ?? 0, owes: strip.owes ?? 0 }
+}
+
+/**
+ * Whether a Fin's reports since it took its Apex's question `request` at `at` answer it: any but progress, or progress
+ * that hands work on, waits on someone else, or names it in `answers` (`docs/delivery-queue.md` rule 17).
+ */
+function answeredBy(reports: readonly Report[], request: string, at: number): boolean {
+  return reports.some((report) => report.at >= at && (report.status !== "progress" || report.handoff || report.awaits || report.answers?.includes(request)))
+}
+
+/**
+ * When a Fin's harness took `request`, and the turn it went in: its own turn once handed over, the turn it was folded into
+ * (`joinedInto`) once that was, or the running turn a steer of it reached (`steer-queued`, accepted). Undefined while
+ * it hasn't been taken.
+ */
+function takenAs(request: LiveRequest, requests: readonly LiveRequest[], actions: readonly LiveAction[]): { at: number; into: string } | undefined {
+  if (request.status === "canceled") {
+    if (request.joinedInto !== undefined) {
+      const carrier = requests.find((each) => each.id === request.joinedInto)
+      return carrier && handedOver(carrier) ? { at: carrier.dispatchedAt ?? carrier.createdAt ?? 0, into: carrier.id } : undefined
+    }
+    const steer = actions.find((action) => action.input.kind === "steer-queued" && action.input.queuedRequestId === request.id && action.state.kind === "accepted")
+    return steer?.input.kind === "steer-queued" ? { at: steer.createdAt, into: steer.input.requestId } : undefined
+  }
+  return handedOver(request) ? { at: request.dispatchedAt ?? request.createdAt ?? 0, into: request.id } : undefined
 }
 
 /** The message a request ID went as: the one it was folded into when it went (`LiveRequest.joined`), else its own. */

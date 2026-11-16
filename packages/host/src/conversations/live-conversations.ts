@@ -682,6 +682,11 @@ export class LiveConversations {
   }
 
   /** Whether the conversation is in memory; one only on disk runs nothing, and `snapshot` would read it in. */
+  /** Lets go of conversation `id` now when nothing is using it, as the memory budget would; false when it can't. */
+  letGo(id: string): boolean {
+    return this.records.release(id)
+  }
+
   loaded(id: string): boolean {
     return this.records.has(id)
   }
@@ -954,7 +959,7 @@ export class LiveConversations {
     targetBindingId?: string,
     displayText?: string,
     actor?: Actor,
-    marks: Pick<LiveRequest, "goal" | "review" | "verbatim" | "wake" | "digest" | "pause" | "grants" | "notification"> = {}
+    marks: Pick<LiveRequest, "goal" | "review" | "verbatim" | "wake" | "digest" | "pause" | "grants" | "notification" | "expects"> = {}
   ): LiveRequest {
     // Settings may finish resolving after stop cleared the residents. A replay's earlier admission may be durable;
     // callers must read its receipt from the next host under the same ID, not treat this as a definitive refusal.

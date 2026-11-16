@@ -957,6 +957,21 @@ instruction order; it does not enforce a hold on external operations. Prose
 in `agents_answer` does not invoke Stop; admission order and host ownership
 are not a permission generation. Only explicit newer instructions may release
 a newer prose restriction; queue delivery is no release.
+A question an Apex sends a Fin with `agents_send`'s `expects: "answer"` is owed
+an answer once the Fin's harness takes it (`Agents.owedOf`,
+`docs/delivery-queue.md` rule 17); a task's answer is its result, so a plain
+message owes nothing more. Any later report settles it but progress, which does
+only when it hands work on, waits on someone else, or names it in
+`agents_report`'s `answers` (and then wakes the Apex). A turn that
+ends owing one hears one reminder on the next, naming the request; a second
+tells the Apex once in its digest ("hasn't answered your message",
+`Notice.unanswered`). From then its list row says so (`AgentStrip.owes`): it's
+part of its change mark and lists it under `since` whatever changed, as a Fin
+waiting on its Apex is, read from what its Apex was told (the digests in its own
+queue) and the Fin's reports in the store, so a Fin unloaded since still counts
+and nothing of it is read in. It's worked out
+from the journal and the store, never kept (`test-fin-owed.ts`, in
+`test:orch-comms`).
 `agents_send` with `reply: "none"` marks an informational message durably. A
 successful notification synthesizes no result and preserves an existing wait;
 failures, questions and explicit reports still report. A completed task turn
