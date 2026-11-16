@@ -85,9 +85,12 @@ export interface RowKey {
   values: RecordValue[]
 }
 
+/** A unit key's columns, read for every row a restore or a sweep names, so its schema is made once. */
+const RowKeyValuesSchema = z.record(z.string(), TaggedSchema)
+
 export function rowKeyOf(key: string): RowKey {
   const [, , table = "", encoded = "{}"] = key.split("\t")
-  const object = z.record(z.string(), TaggedSchema).parse(JSON.parse(encoded))
+  const object = RowKeyValuesSchema.parse(JSON.parse(encoded))
   return { table, columns: Object.keys(object), values: Object.values(object).map(untagged) }
 }
 
