@@ -403,11 +403,11 @@ export const MAC_STEPS = [
   [1, "npm run -s build:electron && node scripts/test-browser-extension.mjs"],
   [30, "tsx scripts/test-claude-sdk-startup.ts"],
   [9, "tsx scripts/test-control-page-verbs.ts"],
-  [23, "node scripts/test-fixture-desk.mjs"],
+  [23, "npm run -s build:electron && node scripts/test-fixture-desk.mjs"],
   [2, "tsx scripts/test-host-probes.ts"],
   [3, "tsx scripts/test-local-update-install.ts"],
   [25, "tsx scripts/test-native-driver-death.ts"],
-  [1, "node scripts/test-preload.mjs"],
+  [1, "npm run -s build:electron && node scripts/test-preload.mjs"],
   [2, "tsx scripts/test-providers.ts"],
   // Native idle trimming shifts packets with setts as the FFmpeg Mako ships (8.0.1) does; Ubuntu's 6.1 drops the held last frame, and native recording is the Mac's.
   [18, "tsx scripts/test-control-recording-idle.ts"],
