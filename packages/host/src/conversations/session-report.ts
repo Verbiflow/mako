@@ -14,6 +14,7 @@ import type { SessionExecution } from "../contracts/thread-execution.js"
 import { SessionIdSchema, ThreadIdSchema, type SessionId, type ThreadId, type ThreadPlacement } from "../contracts/thread-identity.js"
 import { COMPACT_LIVE_FORM, COMPACT_LIVE_VERSION, EPHEMERAL_LIVE_VERSION, Payload, SESSIONS_VERSION, WHOLE_LIVE_FORM, type LiveForm, type RuntimeLink, type ServedRuntime } from "@mako/protocol"
 import type { HostWork } from "../base/event-loop.js"
+import type { Foreground } from "../base/foreground.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { ToolSteps } from "../contracts/tool-steps.js"
 import { encodeRuntimeEvent, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
@@ -494,7 +495,7 @@ const REPORT_MS = 1_000
  * the whole list for a structural one, as it comes.
  */
 export const SWEEP_MS = 5 * 60_000
-/** A change is reported this soon after it, the first in a quiet stretch; the tick then paces the rest. */
+/** A change is reported this soon after it, the first in a quiet stretch; a deadline then paces the rest. */
 const SOON_MS = 200
 /** How long a change to a row's Fins alone waits for others with it: one report for a burst of steps. */
 export const FINS_COALESCE_MS = 250
@@ -517,7 +518,7 @@ const KEPT_UPDATES = 1_024
  * times a second over the socket, a phone once a second over the gateway.
  */
 const STEPS_RELAY_MS = 1_000
-/** The work a report runs as, on the host's tick and soon after a change alike: what it reads in is counted to it. */
+/** The work a report runs as, on its reconcile deadline and soon after a change alike: what it reads in is counted to it. */
 export const REPORT_WORK = "tell the account this host's Sessions"
 
 /**
@@ -560,7 +561,10 @@ export class SessionPublisher {
   readonly #sent: (() => void) | undefined
   readonly #rowsSent: (() => void) | undefined
   readonly #work: Pick<HostWork, "run">
+  readonly #foreground: Pick<Foreground, "idle"> | undefined
   readonly #schedule: (run: () => void, afterMs: number) => void
+  #closed = false
+  #deadline: { at: number; cancel(): void } | undefined
   #soonAsked = false
   readonly #shown: ((conversation: string) => ConversationShown | undefined) | undefined
   /** What a list shows of each conversation as its last batch left it, so a batch that moved it is told from one that didn't. */
@@ -615,13 +619,13 @@ export class SessionPublisher {
     rowsOfNative?: (paths: ReadonlySet<string>) => NativeRowsOf | undefined
     /**
      * What a list shows of one conversation now (`conversationShown`), read when its batch comes: a batch that moved it
-     * is reported on the next turn of the event loop. Without it, every batch waits for the tick.
+     * is reported on the next turn of the event loop. Without it, every batch waits for the normal deadline.
      */
     shown?: (conversation: string) => ConversationShown | undefined
     now?: () => number
     /**
-     * Reports on the link the host serves now, exactly as its tick does (`report` with that link): a change is
-     * reported so within `SOON_MS`. Without it, a change waits for the tick.
+     * Reports on the link the host serves now (`report` with that link), on a change or reconcile deadline.
+     * Without it, the caller must drive reports itself.
      */
     reportNow?: () => void
     /**
@@ -631,8 +635,10 @@ export class SessionPublisher {
     sent?: () => void
     /** Rows that changed went to the account: what follows the list (its Sessions' uploads) looks again now. */
     rowsSent?: () => void
-    /** Names the early report as the tick's job is named (`REPORT_WORK`), so what it reads in is counted to it. */
+    /** Names every report as `REPORT_WORK`, so what it reads in is counted to it. */
     work?: Pick<HostWork, "run">
+    /** The quiet reconcile is routine work; it waits behind a foreground start, as the old host job did. */
+    foreground?: Pick<Foreground, "idle">
     schedule?: (run: () => void, afterMs: number) => void
   }) {
     this.#appPosition = options.appPosition
@@ -647,13 +653,61 @@ export class SessionPublisher {
     this.#sent = options.sent
     this.#rowsSent = options.rowsSent
     this.#work = options.work ?? { run: (_label, fn) => fn() }
-    this.#schedule = options.schedule ?? ((run, afterMs) => setTimeout(run, afterMs).unref?.())
+    this.#foreground = options.foreground
+    const schedule = options.schedule ?? ((run, afterMs) => setTimeout(run, afterMs).unref?.())
+    this.#schedule = (run, afterMs) => schedule(() => { if (!this.#closed) run() }, afterMs)
     this.#n = this.#now()
   }
 
   /** The Sessions the account lists of this host as last worked out, every link's version alike; undefined until then. */
   listed(): readonly ReportedSession[] | undefined {
     return this.#listed
+  }
+
+  /** No report may read a store after the host releases it, even if an early callback was already queued. */
+  close(): void {
+    this.#closed = true
+    this.#cancelDeadline()
+    this.#current = undefined
+  }
+
+  #cancelDeadline(): void {
+    this.#deadline?.cancel()
+    this.#deadline = undefined
+  }
+
+  /** One owned wake for pending rows, a refused send, or the next whole-list reconcile; no one-second idle tick. */
+  #reportAfter(ms: number): void {
+    if (this.#closed || !this.#reportNow || !this.#current || this.#current.served.version < SESSIONS_VERSION) return
+    const at = this.#now() + ms
+    if (this.#deadline && this.#deadline.at <= at) return
+    this.#cancelDeadline()
+    const timer = setTimeout(() => {
+      if (this.#deadline !== deadline || this.#closed) return
+      const run = () => {
+        if (this.#deadline !== deadline || this.#closed) return
+        this.#deadline = undefined
+        this.#publish()
+      }
+      const quiet = !this.#dirty && !this.#urgent && !this.#touched.size && !this.#touchedNative.size
+      if (quiet && this.#foreground) void this.#foreground.idle().then(run)
+      else run()
+    }, Math.max(0, ms))
+    timer.unref?.()
+    const deadline = { at, cancel: () => clearTimeout(timer) }
+    this.#deadline = deadline
+  }
+
+  #publish(): void {
+    if (this.#closed || !this.#reportNow || !this.#current) return
+    try { this.#work.run(REPORT_WORK, this.#reportNow) }
+    catch (error) {
+      this.#reporter.forget()
+      this.#reportedLink = undefined
+      this.#dirty = true
+      hostWarn("sessions", "the account's Session report failed", { error: error instanceof Error ? error.message : String(error) })
+      this.#reportAfter(REPORT_MS)
+    }
   }
 
   /**
@@ -667,7 +721,7 @@ export class SessionPublisher {
     this.#soonAsked = true
     this.#schedule(() => {
       this.#soonAsked = false
-      this.#work.run(REPORT_WORK, reportNow)
+      this.#publish()
     }, SOON_MS)
   }
 
@@ -692,7 +746,7 @@ export class SessionPublisher {
     this.#soonAsked = true
     this.#schedule(() => {
       this.#soonAsked = false
-      this.#work.run(REPORT_WORK, reportNow)
+      this.#publish()
     }, SOON_MS)
   }
 
@@ -716,24 +770,33 @@ export class SessionPublisher {
       this.#shownAsked = false
       this.#shownAt.push(this.#now())
       if (this.#shownAt.length > SHOWN_PER_SECOND) this.#shownAt.shift()
-      this.#work.run(REPORT_WORK, reportNow)
+      this.#publish()
     }, this.#shownAt.length < SHOWN_PER_SECOND ? 0 : Math.max(0, this.#shownAt[0]! + 1_000 - this.#now()))
   }
 
-  /** Reports on the current link what changed since the last report there; called on the host's tick. */
+  /** Reports on the owning link what changed since the last report there, from a change or deadline. */
   report(current: SessionLink | undefined): void {
+    if (this.#closed) return
     // A link reported on before, served again after a moment without one, already holds the rows.
     if (current && current.link !== this.#reportedLink) this.#dirty = true
     this.#current = current
+    this.#cancelDeadline()
     if (!current || current.served.version < SESSIONS_VERSION) return
     const now = this.#now()
     const changed = this.#dirty || this.#touched.size > 0 || this.#touchedNative.size > 0
-    if (!this.#urgent && (now - this.#reportedAt < REPORT_MS || (!changed && now - this.#reportedAt < SWEEP_MS))) return
+    if (!this.#urgent && now - this.#reportedAt < REPORT_MS) {
+      this.#reportAfter(this.#reportedAt + REPORT_MS - now)
+      return
+    }
+    if (!changed && !this.#urgent && now - this.#wholeAt < SWEEP_MS) {
+      this.#reportAfter(this.#wholeAt + SWEEP_MS - now)
+      return
+    }
     const whole = this.#dirty || now - this.#wholeAt >= SWEEP_MS
     let some = whole ? undefined : this.#touched.size ? this.#withRowsOf(this.#touched) : this.#listed
     if (some && this.#touchedNative.size) some = this.#withNativeRows(some, this.#touchedNative)
     const all = some ?? this.#rows()
-    if (!all) return
+    if (!all) { this.#reportAfter(REPORT_MS); return }
     if (!some) this.#wholeAt = now
     this.#listed = all
     this.#touched.clear()
@@ -743,6 +806,7 @@ export class SessionPublisher {
     this.#urgent = false
     this.#reportedAt = now
     this.#reportedLink = current.link
+    this.#reportAfter(this.#wholeAt + SWEEP_MS - now)
     const reports = this.#reporter.reports(current.link, rows, (row) => {
       const at = this.#changedAt.get(row.conversation)
       return at === undefined ? undefined : new Date(at).toISOString()
@@ -753,9 +817,11 @@ export class SessionPublisher {
       this.#reporter.sent(rows)
       this.#rowsSent?.()
     } else {
-      // Told again in full on the next tick, as a new link is.
+      // Told again in full on its retry deadline, as a new link is.
       this.#reporter.forget()
       this.#reportedLink = undefined
+      this.#dirty = true
+      this.#reportAfter(REPORT_MS)
     }
   }
 
@@ -807,8 +873,10 @@ export class SessionPublisher {
    * waiting for the next report to learn of it, and what the gateway said it missed is sent.
    */
   linked(current: SessionLink): void {
+    if (this.#closed) return
     this.#current = current
     this.#resend()
+    this.#reportAfter(0)
   }
 
   /**
@@ -979,6 +1047,7 @@ export class SessionPublisher {
   #touch(conversation: string | undefined): void {
     if (conversation) this.#touched.add(conversation)
     else this.#dirty = true
+    this.#reportAfter(REPORT_MS)
   }
 
   /** A conversation's batch came: whether it moved what a list shows of it, which then goes at once (`showsChanged`). */
