@@ -113,6 +113,12 @@ try {
   console.error(error)
   process.exitCode = 1
 } finally {
+  // Its conversations are written until it stops: removing their folder first raced the last write (ENOTEMPTY).
+  try {
+    await owner.stop()
+  } catch (error) {
+    console.error("The conversations didn't stop:", error)
+  }
   rmSync(root, { recursive: true, force: true })
   process.exit()
 }
