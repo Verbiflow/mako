@@ -1,3 +1,4 @@
+import type { ThreadScratchReport, ThreadScratchSettings } from "./thread-scratch.js"
 import type { RemoteAppDemand, RemoteAppReply, RemoteAppSnapshot } from "./remote-app.js"
 import type { FileFindResults, FileFolders, FileFoldersOptions, FileGrepOptions, FileGrepResults } from "./file-index.js"
 import type { PromptVersionsByRequest } from "./live-conversations.js"
@@ -213,6 +214,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     worktreeRemoval: (path: string) => invokeTrustedHost<WorktreeRemoval>("mako:worktree-removal", path),
     skipWorktree: (conversationId: string) => invokeTrustedHost<void>("mako:worktree-skip", conversationId),
     worktreeAhead: (path: string) => invokeTrustedHost<number | null>("mako:worktree-ahead", path),
+    threadScratch: () => invokeTrustedHost<ThreadScratchReport>("mako:thread-scratch"),
+    setThreadScratch: (settings: ThreadScratchSettings) => invokeTrustedHost<ThreadScratchReport>("mako:thread-scratch-set", settings),
     worktreeRetention: () => invokeTrustedHost<WorktreeRetentionReport>("mako:worktree-retention"),
     setWorktreeRetention: (settings: WorktreeRetentionSettings) => invokeTrustedHost<WorktreeRetentionReport>("mako:worktree-retention-set", settings),
     worktreeInventory: () => invokeTrustedHost<WorktreeInventory>("mako:worktree-inventory"),

@@ -114,6 +114,7 @@ export { ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, regis
 /** Live turns and their journals, headless native runs, and who owns each conversation. */
 export interface Conversations {
   live: LiveConversations
+  scratchQuietSince(thread: import("../contracts/thread-identity.js").ThreadId): number | undefined
   finishedThreadAt(thread: import("../contracts/thread-identity.js").ThreadId): number | undefined
   /** Headless native runs, one writer per native session. */
   runs: NativeRuns
@@ -476,6 +477,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   return {
     live,
     finishedThreadAt: (thread) => retirementThreads?.finished(thread),
+    scratchQuietSince: (thread) => retirementThreads?.quietSince(thread),
     continueOn,
     runs,
     ...(agents && { agents }),
