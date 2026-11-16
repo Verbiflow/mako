@@ -7,14 +7,15 @@ const requests: {
   reject(error: Error): void
 }[] = []
 Object.assign(globalThis, {
-  window: {
+  document: Object.assign(new EventTarget(), { visibilityState: "visible" }),
+  window: Object.assign(new EventTarget(), {
     mako: {
       harnessTuning: (provider: string, cwd?: string) =>
         new Promise<HarnessProfile>((resolve, reject) =>
           requests.push({ provider, cwd, resolve, reject })
         ),
     },
-  },
+  }),
 })
 const { admitProfile, discoveryRetry, providers, providerStore, providerProfileKey } =
   await import("../src/state/providers.ts")
