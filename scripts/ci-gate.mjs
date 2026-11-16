@@ -16,6 +16,8 @@ import { runSuite } from "./lib/run-suite.mjs"
 
 /** [seconds, command] */
 export const STEPS = [
+  // Worktree trash claims across hosts sharing it, and an orphan's repository pruned (worktree-spares).
+  [3, "tsx scripts/test-trash-claims.ts"],
   // The protocol's conformance suite, every host call over the socket and the gateway, the host as a cloud machine's runtime and the way back from the cloud.
   [8, "node scripts/generate-host-inputs.mjs --check"],
   [21, "npm run test:protocol"],
