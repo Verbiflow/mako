@@ -1,5 +1,6 @@
 import { mock } from "node:test"
 import { COMPACTION_CONFIRMATION_MS } from "@mako/host/contracts/recovery"
+import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
 import { CompactionRecoverySchema } from "@mako/host/contracts/conversation-control"
 import assert from "node:assert/strict"
@@ -21,6 +22,9 @@ const CheckpointSchema = z.object({ phase: z.enum(phases), recovery: CompactionR
 const child = process.argv.indexOf("--child")
 if (child !== -1) {
   const [root, id, phase] = ChildArgsSchema.parse(process.argv.slice(child + 1))
+  const startedAt = performance.now()
+  const stage = (name: string) => writeFileSync(join(root, "child-stage.json"), JSON.stringify({ name, elapsed: performance.now() - startedAt }))
+  stage("loaded")
   let armed = false
   const world = compactionWorld(root, { id, automatic: phase === "native", launch: { tuning: { model: "fixture-model" } }, emit: () => {
     if (!armed) return
@@ -37,7 +41,9 @@ if (child !== -1) {
     renameSync(join(root, "checkpoint.tmp"), join(root, "checkpoint.json"))
     process.kill(process.pid, "SIGSTOP")
   } })
+  stage("constructed")
   await world.start()
+  stage("started")
   if (phase === "off" || phase === "uncertain-off") world.owner.setConversationSettings({ continueAfterRestart: false })
   if (phase === "native") {
     world.control.failPrompt = true
@@ -49,8 +55,10 @@ if (child !== -1) {
   world.owner.submit(id, randomUUID(), "first after crash")
   world.owner.submit(id, randomUUID(), "second after crash")
   armed = true
+  stage("armed")
   if (phase === "uncertain" || phase === "uncertain-off") {
     world.result(world.calls[0]!, { kind: "uncertain", reason: "Lost response before host crash" })
+    stage("uncertain-recorded")
     await new Promise(() => {})
   }
   world.fail(world.calls[0]!)
@@ -62,6 +70,7 @@ if (child !== -1) {
   throw new Error("child did not stop at its commit boundary")
 } else {
   for (const phase of phases) {
+    if (process.argv.some(arg => arg.startsWith("--case=")) && !process.argv.includes(`--case=${phase}`)) continue
     const root = mkdtempSync(join(tmpdir(), `mako-compact-crash-${phase}-`)), id = randomUUID()
     const processUnderTest = spawn(process.execPath, ["--import", "tsx", fileURLToPath(import.meta.url), "--child", root, id, phase], { stdio: ["ignore", "pipe", "pipe"] })
     let output = ""
@@ -114,7 +123,17 @@ if (child !== -1) {
         assert.equal(fresh.fork, undefined)
       }
       console.log(`PASS: actual process crash at ${phase}; journal identity, request order and restart policy retained`)
-    } catch (error) { console.error(output, world && JSON.stringify({ calls: world.calls, launches: world.launches, logs: world.logs, snapshot: world.owner.snapshot(id) })); throw error }
+    } catch (error) {
+      const stagePath = join(root, "child-stage.json"), journalPath = join(root, "journals", `${id}.sqlite`)
+      const stage = existsSync(stagePath) ? readFileSync(stagePath, "utf8") : "not-loaded"
+      let metadata: string | undefined
+      if (existsSync(journalPath)) {
+        const journal = new DatabaseSync(journalPath, { readOnly: true })
+        try { metadata = String(journal.prepare("SELECT value FROM metadata WHERE id=1").get()?.value) } finally { journal.close() }
+      }
+      console.error(JSON.stringify({ phase, stage, metadata, output }), world && JSON.stringify({ calls: world.calls, launches: world.launches, logs: world.logs, snapshot: world.owner.snapshot(id) }))
+      throw error
+    }
     finally {
       mock.timers.reset()
       if (processUnderTest.exitCode === null && processUnderTest.signalCode === null) processUnderTest.kill("SIGKILL")
