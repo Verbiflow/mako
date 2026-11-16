@@ -1,7 +1,7 @@
 import { appOutputReader } from "./thread-app-output"
 import { toast } from "sonner"
 import { getMako } from "@/lib/bridge"
-import { installThreadAppDriver, putAppMarks, putRoom, putThreadApp, targetOf, threadAppStore, type AppPhase, type ThreadAppView } from "@/state/thread-app"
+import { forgetThreadAppRead, installThreadAppDriver, putAppMarks, putRoom, putThreadApp, targetOf, threadAppStore, type AppPhase, type ThreadAppView } from "@/state/thread-app"
 import { deskRefetch, DESK_SCOPE } from "@/state/desk-refetch"
 import type { RefetchLease } from "@/lib/view-refetch"
 import type { AppActionOutcome } from "@mako/host/contracts/thread-app"
@@ -24,6 +24,13 @@ export function installHostThreadApp(): void {
   const mako = getMako()
   const owner = deskRefetch()
   const watched = new Map<string, Watched>()
+  let available = owner.reads.visible && owner.reads.connected(DESK_SCOPE)
+  owner.reads.onState(() => {
+    const next = owner.reads.visible && owner.reads.connected(DESK_SCOPE)
+    const retired = available && !next
+    available = next
+    if (retired) for (const cwd of watched.keys()) forgetThreadAppRead(cwd)
+  })
   let markWatchers = 0
   let roomWatchers = 0
   let marks: RefetchLease | undefined
@@ -33,6 +40,7 @@ export function installHostThreadApp(): void {
   const follow = (cwd: string, entry: Watched) => {
     entry.lease?.release()
     entry.target = aim(cwd)
+    forgetThreadAppRead(cwd)
     const target = entry.target
     entry.lease = owner.reads.watch(JSON.stringify(["host:app", cwd, target]), {
       scope: DESK_SCOPE, domain: "apps", key: cwd, fields: ["state", "checks", "recipe"],
@@ -52,7 +60,7 @@ export function installHostThreadApp(): void {
           if (Date.now() < expected.until && expected.from.includes(view.phase)) view = { ...view, phase: expected.to }
           else entry.expected = undefined
         }
-        putThreadApp(cwd, view)
+        putThreadApp(cwd, view, "read")
       },
     })
   }
@@ -131,7 +139,7 @@ export function installHostThreadApp(): void {
         entry = { count: 1 }
         watched.set(cwd, entry)
         follow(cwd, entry)
-        threadAppStore.set({ followed: [...watched.keys()] })
+        threadAppStore.set((state) => ({ followed: [...watched.keys()], fresh: state.fresh.filter((folder) => watched.has(folder)) }))
       }
       let stopped = false
       return () => {
@@ -141,7 +149,7 @@ export function installHostThreadApp(): void {
         if (!current || --current.count > 0) return
         current.lease?.release()
         watched.delete(cwd)
-        threadAppStore.set({ followed: [...watched.keys()] })
+        threadAppStore.set((state) => ({ followed: [...watched.keys()], fresh: state.fresh.filter((folder) => watched.has(folder)) }))
       }
     },
     probe: (cwd) => mako.probeThreadApp(cwd),
