@@ -1204,7 +1204,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     const text = words?.passedOn ? words.body : passed.text
     if (queued && (queued.status === "queued" || queued.status === "held"))
       this.deps.live.editQueued(was, { requestId: queued.id, expectedText: queued.text, change: { kind: "remove" } })
-    const withdrawn = queued !== undefined && ["queued", "held", "canceled"].includes(queued.status)
+    // One that already went folded into its sender's earlier message (`joinedInto`) was delivered, not withdrawn.
+    const withdrawn = queued !== undefined && (queued.status === "queued" || queued.status === "held" || (queued.status === "canceled" && !queued.joinedInto))
     const sent = await this.deliver(to, namedUuid(`redirect:${input.request}:${to.child}`), text, passed.attachments, undefined, "steer")
     if ("refused" in sent) return sent
     if (!sent.deduped) this.routes.redirected += 1

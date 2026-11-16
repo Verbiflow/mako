@@ -49,6 +49,11 @@ export function nextQueued(snapshot: Pick<LiveSnapshot, "session" | "requests">)
   return nextInLine(snapshot.requests, snapshot.session.status === "failed")
 }
 
+/** When a message was admitted, as its conversation counts: its `admissionOrder`, else its time. */
+function admitted(request: LiveRequest): number {
+  return request.admissionOrder ?? request.createdAt ?? 0
+}
+
 /** A message that can go with others from its sender: an agent's plain words, waiting for nothing but its turn. */
 function foldable(request: LiveRequest): boolean {
   return request.status === "queued" && request.actor?.kind === "agent" && !request.pause && !request.editing && !request.wake &&
@@ -60,7 +65,7 @@ function foldable(request: LiveRequest): boolean {
  * `next`, about to go, with the plain messages from its sender queued right behind it, as one turn: their words after
  * its own, in the order sent, each under a line saying when, so a Fin back from a long turn reads everything its sender
  * said since at once, not one message a turn (land-2, 2026-11-16: ten of its Apex's messages, ten turns, the newest
- * read last). Only an agent's plain messages fold, and only while nothing else stands between them (another sender, a
+ * read last). Only an agent's plain messages admitted after it fold, and only while nothing else stands between them (another sender, a
  * paused or edited message, one with attachments or a different `notification`), within `JOINED_MAX` and
  * `JOINED_CHARS`. Each folded message is canceled with `joinedInto`, its ID kept in `joined`. Undefined when none fold.
  */
@@ -72,6 +77,8 @@ export function foldQueued(requests: readonly LiveRequest[], next: LiveRequest):
   let length = next.text.length
   for (const request of behind) {
     if (!foldable(request) || request.actor?.kind !== "agent" || request.actor.session !== session || Boolean(request.notification) !== Boolean(next.notification)) break
+    // Only what came after it: one that went ahead of older messages (an interrupt's) goes alone, and they follow it.
+    if (admitted(request) <= admitted(next)) break
     if (folded.length >= JOINED_MAX || length + request.text.length > JOINED_CHARS) break
     folded.push(request)
     length += request.text.length
