@@ -1,3 +1,4 @@
+import type { ThreadScratchReport, ThreadScratchSettings } from "@mako/host/contracts/thread-scratch"
 import { useCallback, useEffect, useState } from "react"
 import { toast } from "sonner"
 import type { CheckoutHead, CheckoutHeads, LinkedCheckout } from "@mako/host/contracts/checkout-heads"
@@ -499,3 +500,7 @@ export async function archivedWithWorktree(worktree: ThreadWorktree, restore: ()
 /** Retirement previews never delete; saving a mode takes effect on a later host pass. */
 export const readWorktreeRetention = (): Promise<WorktreeRetentionReport> => getMako().worktreeRetention()
 export const saveWorktreeRetention = (settings: WorktreeRetentionSettings): Promise<WorktreeRetentionReport> => getMako().setWorktreeRetention(settings)
+
+/** Read-only preview; settings opt in separately. */
+export const readThreadScratch = (): Promise<ThreadScratchReport> => getMako().threadScratch()
+export const saveThreadScratch = (settings: ThreadScratchSettings): Promise<ThreadScratchReport> => getMako().setThreadScratch(settings)

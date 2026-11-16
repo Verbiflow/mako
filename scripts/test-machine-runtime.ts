@@ -22,7 +22,7 @@ import { LIVE_FORM, PING, PONG, SUBPROTOCOL, WHOLE_LIVE_FORM, decodeRuntimeFrame
 import { createFakeGateway, type FakeGatewayOptions, type GatewayLogLine } from "@mako/protocol/fake-gateway"
 import { compactLiveBatch, type LiveBatch } from "@mako/host/contracts/live-conversations"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import { MachineRuntime, type MachineRuntimeOptions } from "@mako/host/usage/machine-runtime"
+import { MachineRuntime, PASSING_EVENTS, type MachineRuntimeOptions } from "@mako/host/usage/machine-runtime"
 import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import type { AgentMessage, ArtifactCapState, HostMessage, MachineRuntimeState } from "@mako/host/contracts/machine-agent"
 import { hostCallInput, hostOperations, hostReplyValue, toHostOperation } from "@mako/host/contracts/host-operations"
@@ -309,14 +309,33 @@ test("the machine tells its Thread when it works and when it stops, a silent tur
   assert.equal(only?.payload.n, 1)
   agent.tell({ type: "inspect" })
   await agent.until("one event counted, the readings not", () => agent.state()?.events.emitted === 1)
+  // Passing state never goes into the Thread's log (numbered, kept in its object's storage): a running call's steps, a
+  // view's hint, a viewer's file changing. Each as the host emits it, then one event that does belong there.
+  assert.ok(["tool-steps", "view-hint", "file-changed"].every((type) => PASSING_EVENTS.has(type)), "steps, hints and file pings are passing state")
+  const passing: HostEvent[] = [
+    { type: "tool-steps", conversationId: "c-1", steps: { steps: [{ call: "screenshot", phase: "running" }], total: 1 } },
+    { type: "tool-steps", conversationId: "c-1", steps: null },
+    { type: "view-hint", hint: { epoch: "e-1", revision: 7, domain: "apps", fields: ["state"] } },
+    { type: "file-changed", path: "/w/README.md" },
+  ]
+  for (const event of passing) agent.runtime.event("event", encodeRuntimeEvent(event))
+  for (const type of PASSING_EVENTS) agent.runtime.event("event", { type, payload: JSON.stringify({ type }) })
+  agent.runtime.event("event", hostEvent(2))
+  const after = await hostEvents(cloud.gateway, 2)
+  assert.deepEqual(after.map((line) => line.payload.n), [1, 2], "only the events that belong in the log reach it")
+  agent.tell({ type: "inspect" })
+  await agent.until("still only the two counted", () => agent.state()?.events.emitted === 2)
 })
 
-test("the machine reports the Sessions it owns on its link: everything at first, then what changed, never as a heartbeat, and everything again on a new link", async () => {
+test("the machine reports the Sessions it owns on its link: everything at first, then what changed, never as a heartbeat, and everything again on a new link", async (t) => {
   const cloud = await machineGateway()
   const row = (state: ReportedSession["state"]): ReportedSession => ({ session: "0b8f3e1a-7c2d-4f6a-9e5b-1d3c8a7f2e60", thread: "6f1c9a52-0d4e-4b8e-9a51-3f2c7d1e8b40", conversation: "c-1", harness: "claude", title: "Retry the webhooks", state, createdAt: "2026-10-24T20:00:00.000Z", activityAt: "2026-10-24T20:00:00.000Z", generation: 1 })
   let rows: ReportedSession[] | undefined
-  const sessions = new SessionPublisher({ rows: () => rows })
+  let runtime: MachineRuntime | undefined
+  const sessions = new SessionPublisher({ rows: () => rows, reportNow: () => runtime?.reportSessions() })
+  const reports = t.mock.method(sessions, "report")
   const agent = machineAgent({ dataRoot: join(scratch, "sessions"), sessions })
+  runtime = agent.runtime
   await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello"))
   agent.tell({ type: "link", gatewayUrl: cloud.url, runtimeId: RUNTIME, credential: CREDENTIAL, machine: "m-0123456789abcdef", generation: 1 })
   await agent.until("enrolled", () => agent.state()?.link === "connected")
@@ -326,8 +345,10 @@ test("the machine reports the Sessions it owns on its link: everything at first,
   rows = [row("working")]
   await agent.until("everything said", () => cloud.gateway.reports(RUNTIME).length === 1)
   assert.deepEqual(cloud.gateway.reports(RUNTIME)[0]?.owned, [{ session: row("working").session, generation: 1 }])
-  // Unchanged across ticks and the second's throttle: nothing more.
+  // The machine's activity heartbeat continues, but an unchanged list owns no one-second report tick.
+  const beforeIdle = reports.mock.callCount()
   await new Promise((resolve) => setTimeout(resolve, 2_200))
+  assert.equal(reports.mock.callCount(), beforeIdle, "idle activity heartbeats never ask the publisher to report")
   assert.equal(cloud.gateway.reports(RUNTIME).length, 1, "nothing again while nothing changed")
   rows = [row("idle")]
   sessions.changed()
@@ -360,6 +381,7 @@ async function nextBatch(reader: Subscription): Promise<{ revision: number; form
 
 /** A relayed `tool-steps` event, by its total. */
 const StepsHeardSchema = z.object({ steps: z.object({ total: z.number() }).nullable() })
+const AppHintHeardSchema = z.looseObject({ conversationId: z.string(), revision: z.number() })
 
 /** What the gateway said each time the form every reader reads changed. */
 const formsSaid = (lines: GatewayLogLine[]) => lines.filter((line) => line.event === "live-form").map(({ form, readers, whole }) => ({ form, readers, whole }))
@@ -488,6 +510,59 @@ test("a watched conversation's running js steps reach the watchers that read pas
   plain.close()
 })
 
+test("a cloud Thread's running js steps and its app's hints reach its readers that read passing state, routed by conversation, unnumbered and never in its log", async () => {
+  const cloud = await machineGateway()
+  let clock = 1_000_000
+  const timers: Array<() => void> = []
+  let machine: MachineRuntime | undefined
+  // As the host composes it on a machine (`machinePassing`): the publisher's passing state goes to the Threads it runs.
+  const sessions = new SessionPublisher({ rows: () => undefined, now: () => clock, schedule: (run) => void timers.push(run), appsFollowing: () => new Set(["c-1"]), threadPassing: (event) => machine?.passing(event) })
+  const agent = machineAgent({ dataRoot: join(scratch, "thread-passing"), sessions })
+  machine = agent.runtime
+  await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello"))
+  agent.tell({ type: "link", gatewayUrl: cloud.url, runtimeId: RUNTIME, credential: CREDENTIAL, machine: "m-0123456789abcdef", generation: 1 })
+  await agent.until("enrolled", () => agent.state()?.link === "connected")
+  await cloud.gateway.assign("th-1", RUNTIME)
+  await agent.until("assigned", () => cloud.gateway.activity("th-1") !== undefined)
+  // A phone following the Thread, as every reader of a cloud Thread follows it; and a client that doesn't read passing state.
+  const phone = await cloud.gateway.connectClient(desktop, { ephemeral: true }).then((session) => session.subscribe({ stream: threadStream("th-1"), after: Number.MAX_SAFE_INTEGER }))
+  const plain = await cloud.gateway.connectClient(desktop, {}).then((session) => session.subscribe({ stream: threadStream("th-1"), after: Number.MAX_SAFE_INTEGER }))
+  const heard = async (reader: Subscription, type: string) => {
+    for (;;) {
+      const frame = await reader.next(5_000)
+      const line = readEventLine(frame.event.text)
+      if (line?.type === type) return { frame, line }
+    }
+  }
+  const steps = (total: number) => ({ steps: [{ call: "screenshot", phase: "running" as const }], total })
+  sessions.own({ type: "tool-steps", conversationId: "c-1", steps: steps(1) })
+  const first = await heard(phone, "tool-steps")
+  assert.deepEqual([first.frame.ephemeral, first.frame.seq, first.line.conversation], [true, 0, "c-1"], "steps are passing state, routed by their conversation")
+  assert.equal(StepsHeardSchema.parse(JSON.parse(first.line.payload)).steps?.total, 1)
+  // Throttled as a watcher's: the newest when its second is up.
+  clock += 100
+  sessions.own({ type: "tool-steps", conversationId: "c-1", steps: steps(2) })
+  sessions.own({ type: "tool-steps", conversationId: "c-1", steps: steps(3) })
+  assert.equal(timers.length, 1, "one send waits, however many came")
+  clock += 900
+  timers.shift()!()
+  assert.equal(StepsHeardSchema.parse(JSON.parse((await heard(phone, "tool-steps")).line.payload)).steps?.total, 3)
+  sessions.own({ type: "view-hint", hint: { epoch: "e-1", revision: 7, domain: "apps", fields: ["state"] } })
+  const hint = await heard(phone, "conversation-app-hint")
+  assert.deepEqual([hint.frame.ephemeral, hint.frame.seq, hint.line.conversation], [true, 0, "c-1"])
+  assert.deepEqual(AppHintHeardSchema.parse(JSON.parse(hint.line.payload)), { type: "conversation-app-hint", conversationId: "c-1", epoch: "e-1", revision: 7, fields: ["state"] })
+  // A kept event after it all: the client that doesn't read passing state hears it first, and the log holds it alone.
+  agent.runtime.event("event", hostEvent(1))
+  const kept = await plain.next(5_000)
+  assert.deepEqual([kept.ephemeral, HostEventLineSchema.parse(kept.event.decode()).payload.n], [undefined, 1], "nothing passing reached the plain reader before the kept event")
+  const log = await hostEvents(cloud.gateway, 1)
+  assert.deepEqual(log.map((line) => line.payload.n), [1])
+  agent.tell({ type: "inspect" })
+  await agent.until("only the kept event took a number", () => agent.state()?.threads?.[0]?.localSeq === 1 && agent.state()?.events.emitted === 1)
+  phone.close()
+  plain.close()
+})
+
 test("a change a list shows on the machine goes out at once, not at its next tick", async () => {
   const cloud = await machineGateway()
   const row = (state: ReportedSession["state"]): ReportedSession => ({ session: "0b8f3e1a-7c2d-4f6a-9e5b-1d3c8a7f2e60", thread: "6f1c9a52-0d4e-4b8e-9a51-3f2c7d1e8b40", conversation: "c-1", harness: "claude", state, createdAt: "2026-10-24T20:00:00.000Z", activityAt: "2026-10-24T20:00:00.000Z", generation: 1 })
@@ -495,8 +570,8 @@ test("a change a list shows on the machine goes out at once, not at its next tic
   let shown: ReportedSession["state"] = "working"
   // As composition makes it on a cloud machine: the early report goes on the machine's own link.
   let runtime: MachineRuntime | undefined
-  // The publisher's clock stands still, so after its first report its tick never reports again: only a change said at
-  // once is said at all.
+  // The publisher's clock stands still, so after its first report normal pacing never admits another one: only an
+  // urgent change is said at all.
   const frozen = Date.now()
   const sessions = new SessionPublisher({ rows: () => rows, shown: () => ({ state: shown }), reportNow: () => runtime?.reportSessions(), now: () => frozen })
   const agent = machineAgent({ dataRoot: join(scratch, "sessions-early"), sessions })
@@ -505,7 +580,7 @@ test("a change a list shows on the machine goes out at once, not at its next tic
   agent.tell({ type: "link", gatewayUrl: cloud.url, runtimeId: RUNTIME, credential: CREDENTIAL, machine: "m-0123456789abcdef", generation: 1 })
   await agent.until("enrolled", () => agent.state()?.link === "connected")
   rows = [row("working")]
-  await agent.until("everything said, at a tick", () => cloud.gateway.reports(RUNTIME).length === 1)
+  await agent.until("everything said on its own ready deadline", () => cloud.gateway.reports(RUNTIME).length === 1)
   // SAFETY: a host event as a live driver emits one, filled only as far as the publisher reads it.
   sessions.own({ type: "live-batch", batch: { id: "c-1", revision: 2, updates: [] } } as never)
   // The turn ends just after that tick: the next is a second away.

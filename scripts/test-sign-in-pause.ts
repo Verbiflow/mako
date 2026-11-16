@@ -1,3 +1,4 @@
+import { HostFailureError, ProviderFailureError, providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
@@ -66,7 +67,7 @@ try {
     host.liveDrivers.register({ ...original, provider, available: () => true, nativeSource: undefined,
       start: async (_cwd, options) => {
         opens++
-        if (refuseStart) throw new Error(`The selected ${label} account is signed out. Sign in again in Settings → Agents.`)
+        if (refuseStart) throw new HostFailureError("auth", `The selected ${label} account is signed out. Sign in again in Settings → Agents.`)
         const account = options.accountLaunch.account
         const context = launchContext("fixture-transport", { kind: "reported", via: "simulated initialization" }, account)
         context.store = { kind: "located", path: nativePath }
@@ -82,11 +83,11 @@ try {
         sent.push(text)
         if (mode === "refused-sign-out") {
           dispatch.report({ kind: "not-accepted", source: "preflight", reason: "simulated refusal" })
-          throw new Error("401 Unauthorized: Not logged in · Please run /login")
+          throw new ProviderFailureError("401 Unauthorized: Not logged in · Please run /login", providerTextEvidence("401 Unauthorized: Not logged in · Please run /login"))
         }
         if (mode === "uncertain-sign-out") {
           dispatch.report({ kind: "uncertain", reason: "simulated response loss" })
-          throw new Error(SIGNED_OUT)
+          throw new ProviderFailureError(SIGNED_OUT, providerTextEvidence(SIGNED_OUT))
         }
         event({ type: "live-session", session: { ...session, status: "running" } })
         dispatch.report({ kind: "accepted", source: "native-response" })
@@ -94,8 +95,8 @@ try {
         if (mode === "accepted-sign-out" || mode === "plan") {
           // Messages typed while the turn runs queue behind it.
           await delay(15)
-          event({ type: "live-session", session: { ...session, status: "failed", lastStop: "failed",
-            error: mode === "plan" ? "Your credit balance is too low to access the Anthropic API." : SIGNED_OUT } })
+          const error = mode === "plan" ? "Your credit balance is too low to access the Anthropic API." : SIGNED_OUT
+          event({ type: "live-session", session: { ...session, status: "failed", lastStop: "failed", error, failureEvidence: providerTextEvidence(error) } })
           return
         }
         event({ type: "live-session", session })

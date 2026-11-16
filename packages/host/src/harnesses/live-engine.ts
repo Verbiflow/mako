@@ -14,6 +14,7 @@ import {
   type Compaction,
   type Retries,
   type TranscriptEvent,
+  mcpFailure,
 } from "@mako/sessions/events"
 import type { JsonValue } from "../contracts/json.js"
 import {
@@ -209,6 +210,12 @@ export interface LiveToolEffects {
 
 export const liveToolEffects = topic<LiveToolEffects>("mako:tool-effects")
 
+/**
+ * An MCP server a session's harness couldn't start (`mcpServerFailedEvent`), as the engine draws its marker: kept by
+ * the host's MCP sign-ins (`McpSignIns`), which conversations no longer show. With no subscriber it costs a read.
+ */
+export const mcpSetupFailures = topic<{ harness: string; server: string; reason: string }>("mako:mcp-setup")
+
 /** What an engine hands on besides the session's events. */
 export interface LiveEngineHooks<Live extends EngineLive> {
   /** Each finished call's effects; the default publishes them on `liveToolEffects`. */
@@ -349,6 +356,8 @@ export function createLiveEngine<
   }
   const event = (live: Live, marker: TranscriptEvent, id?: string): void => {
     if (id && repeated(live, id)) return
+    const mcp = mcpFailure(marker)
+    if (mcp && mcpSetupFailures.heard) mcpSetupFailures.publish({ harness: live.state.harness, server: mcp.server, reason: mcp.reason })
     // The failure a provider retried and gave up on: its retries are summed up before it.
     if (marker.tone === "error" || marker.limit) endRetries(live, "gave-up")
     drawEvent(live, marker, id)
@@ -418,6 +427,7 @@ export function createLiveEngine<
     if (change.error) endRetries(live, "gave-up")
     else if (change.status !== undefined && change.status !== "running") endRetries(live, undefined)
     const next: Partial<LiveSessionState> = { ...change }
+    if ("error" in change && !("failureEvidence" in change)) next.failureEvidence = change.error ? { kind: "unknown", source: "host" } : undefined
     // SAFETY: `next` is a copy of a Partial<LiveSessionState>, so its own keys are LiveSessionState's.
     for (const key of Object.keys(next) as (keyof LiveSessionState)[])
       if (next[key] !== live.state[key] && isDeepStrictEqual(next[key], live.state[key]))

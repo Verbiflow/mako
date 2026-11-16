@@ -141,7 +141,33 @@ schedules, and a failing schedule is pinned there.
     attempt cannot silently resend the reports. Proven-unsent digests still wait
     out usage limits as digests; Stop, ordinary-Thread Off and native ownership guards remain in force.
 
+16. **What one sender queued goes as one turn, with Mako's notes.** When an
+    agent's or Mako's queued message goes, the plain messages from the same
+    agent and Mako's notes (pull-request outcomes, wait notes) queued right
+    behind it and admitted after it, each still admitted at the handoff, (no attachments, grants, pause, edit, hold, digest
+    or continuation, and the same `notification`) go with it, in order, within
+    `JOINED_MAX` and `JOINED_CHARS` (`foldQueued`). The fold is written only
+    as the send commits, in the write that records it handed over: a send that
+    goes no further (a Stop, a withdrawal, a refusal, a write that fails) leaves
+    every row as it was. Until then each is its own row; a folded one is
+    canceled with `joinedInto`, never dropped, and its ID resolves to the
+    message that carried it, which never folds again. An interrupt's message
+    goes alone, and another Apex's message, owed its own reply, never folds.
+
 ## What each failure leaves
+
+Host failures carry a typed kind; mixed catches and decoder sinks never infer a
+quota from host prose. Native adapters classify structured error variants and HTTP
+status before admitting provider text. Only that provider-text boundary recognises
+known native wrapper headings. An exact matcher for older saved native-verification
+refusals remains a legacy read path; new verification failures carry their short
+retry kind directly.
+An exception while inspecting native recovery evidence returns a typed retryable
+unavailability. Permanent unavailability still refuses; neither result permits a
+replacement session without the existing source and ownership checks.
+Transcript-only error messages carry an optional typed verdict through exchange
+splitting to the renderer. Without a verdict they show their original first line;
+the renderer never guesses a quota from unmarked or legacy error prose.
 
 | What happened | The switch | Its message |
 | --- | --- | --- |

@@ -8,6 +8,7 @@ import { BrowserConnections } from "./browser-connections"
 import { Shimmer } from "@/components/ui/shimmer"
 import { authoring, useAuthoring } from "@/state/native-authoring"
 import { McpPlaces } from "./mcp-places"
+import { McpSignInsList } from "./mcp-sign-ins"
 
 export function McpSection() {
   const state = useMcp((value) => value)
@@ -47,6 +48,7 @@ export function McpSection() {
 
   return (
     <div>
+      <McpSignInsList />
       <BrowserConnections />
       {state.permissions?.supported ? (
         <section

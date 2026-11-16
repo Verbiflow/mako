@@ -162,6 +162,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
           await machine?.refreshCarried()
         },
         reportMachineSessions: () => machine?.reportSessions(),
+        machinePassing: (event) => machine?.passing(event),
         machineGitHubPerson: async () => machine?.githubPerson(),
         web: () => web,
         closing: () => closing,
@@ -237,7 +238,14 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         // The core's publisher, once it's loaded: events reach it through the core's own tap.
         sessions: {
           report: (current) => core.current()?.sessions.report(current),
-          linked: (current) => core.current()?.sessions.linked(current),
+          linked: (current) => {
+            const loaded = core.current()
+            if (loaded) loaded.sessions.linked(current)
+            else void core.load("the machine's Session publisher").then(() => {
+              // Enrolment can beat the lazy core. Once ready, use the runtime's link then, never a captured old one.
+              machine?.reportSessions()
+            }).catch((error: Error) => hostWarn("machine", "the Session publisher did not load", { error: error.message }))
+          },
           watch: (link, conversations, after, forms) => core.current()?.sessions.watch(link, conversations, after, forms),
         },
         media: () => core.current()?.media,

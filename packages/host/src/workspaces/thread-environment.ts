@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { mkdir } from "node:fs/promises"
 import { connect } from "node:net"
 import { basename, join } from "node:path"
+import { hostWarn } from "../base/host-log.js"
 import { ThreadIdSchema, type ThreadId } from "../contracts/thread-identity.js"
 import { worktreeCheckout, worktreeSlug } from "../contracts/thread-worktrees.js"
 import {
@@ -21,7 +22,7 @@ import { checkoutOf, processPort, projectRoot, readRecipe, recipeValues } from "
 import { linkedCarry, linkedEntries, missingEntries, missingText } from "./worktree-carry.js"
 import type { Recipe, RecipeAccounts, RecipeWhere } from "./thread-recipe.js"
 
-const VARIABLES = ["MAKO_SESSION_ID", "MAKO_THREAD_ID", "MAKO_THREAD_HOST", "MAKO_THREAD_PORT", "MAKO_THREAD_PORTS", "MAKO_THREAD_URL", "MAKO_THREAD_DATA_DIR", "MAKO_THREAD_VALUES"] as const
+const VARIABLES = ["MAKO_SESSION_ID", "MAKO_THREAD_ID", "MAKO_THREAD_HOST", "MAKO_THREAD_PORT", "MAKO_THREAD_PORTS", "MAKO_THREAD_URL", "MAKO_THREAD_DATA_DIR", "MAKO_APP_DATA_DIR", "MAKO_THREAD_SCRATCH_DIR", "MAKO_THREAD_VALUES"] as const
 /** Lists the recipe's names Mako set, so a Mako started inside a Thread can clear them. */
 const RECIPE_NAMES = "MAKO_THREAD_VALUES"
 /** A Thread unused this long gives its ports to a new one when every block is held. */
@@ -46,7 +47,9 @@ export function applyThreadEnvironment(env: NodeJS.ProcessEnv, environment?: Thr
   env.MAKO_THREAD_PORT = String(environment.port)
   env.MAKO_THREAD_PORTS = String(environment.ports)
   env.MAKO_THREAD_URL = threadUrl(environment)
-  env.MAKO_THREAD_DATA_DIR = environment.dataDir
+  env.MAKO_APP_DATA_DIR = environment.dataDir
+  env.MAKO_THREAD_DATA_DIR = environment.threadDataDir ?? environment.dataDir
+  if (environment.scratchDir) env.MAKO_THREAD_SCRATCH_DIR = environment.scratchDir
   const values = Object.entries(environment.values ?? {})
   for (const [name, value] of values) env[name] = value
   if (values.length) env[RECIPE_NAMES] = values.map(([name]) => name).join(",")
@@ -71,7 +74,9 @@ export function threadEnvironmentInstructions(environment: ThreadEnvironment, pl
     ? "This machine is this Thread's alone, but its agents share it: never stop a process you didn't start."
     : "Other Threads' agents share this machine: never stop a process you didn't start, and if the project needs a fixed port that is taken, say so instead."
   const values = `This Thread's own values, already in your shell's environment: ports ${environment.port}-${last} (MAKO_THREAD_PORT, MAKO_THREAD_PORTS), host ${environment.host} (${threadUrl(environment)} is MAKO_THREAD_URL; the name keeps this Thread's cookies apart), and a private data folder (MAKO_THREAD_DATA_DIR). Run anything you start for this Thread on those ports. ${sharing}`
-  return [values, WORKTREE_INSTRUCTIONS, missingInstructions(environment), recipeInstructions(environment)].filter(Boolean).join(" ")
+  const scratch = environment.scratchDir ? `Disposable clones, benchmark worlds and packaging scratch go in ${environment.scratchDir} (MAKO_THREAD_SCRATCH_DIR). This root belongs only to this Thread. It can be removed after the Thread ends or its idle limit once the person enables scratch cleanup; keep evidence elsewhere or put a .keep file in the root to retain it.` : undefined
+  const data = environment.threadDataDir ? "Agent proofs, test homes, clones and builds go in MAKO_THREAD_DATA_DIR. It belongs to this Thread. A Fin’s root can be retired after that Fin finishes and every ancestor closes or is archived, once cleanup is enabled; personal Threads are kept; a .keep file retains it. Shared app state stays in MAKO_APP_DATA_DIR and recipe {data}; it is not retired with the Thread." : undefined
+  return [values, data, scratch, WORKTREE_INSTRUCTIONS, missingInstructions(environment), recipeInstructions(environment)].filter(Boolean).join(" ")
 }
 
 function missingInstructions(environment: ThreadEnvironment): string | undefined {
@@ -110,7 +115,7 @@ function threadUrl(environment: ThreadEnvironment): string {
 export interface ThreadEnvironmentDependencies {
   git: Git
   store: ThreadStore
-  /** Threads' data folders, one per Thread ID. */
+  /** Existing app data namespace, keyed by AppKey; never migrated or adopted for Thread retirement. */
   dataRoot: string
   /** Where Mako keeps projects' recipes, one file per repository. */
   recipesRoot?: string
@@ -121,6 +126,9 @@ export interface ThreadEnvironmentDependencies {
   /** Whether anything accepts connections on a local port. */
   listening?: (port: number) => Promise<boolean>
   now?: () => number
+  scratch?: (thread: ThreadId) => Promise<string>
+  /** Separate registered agent artifacts; app state remains at dataRoot/<AppKey>. */
+  threadData?: { path(thread: ThreadId): string; ensure(thread: ThreadId): Promise<string> }
 }
 
 /**
@@ -149,12 +157,27 @@ export class ThreadEnvironments {
    */
   async forLaunch(conversationId: string, title?: string, cwd?: string): Promise<ThreadEnvironment | undefined> {
     const environment = await this.forConversation(conversationId, title, cwd)
+    if (environment?.thread && this.dependencies.threadData) {
+      environment.threadDataDir = this.dependencies.threadData.path(environment.thread)
+      try { await this.dependencies.threadData.ensure(environment.thread) }
+      catch {
+        // Never fall back to shared app state or adopt an incomplete generation for retirement.
+        hostWarn("threads", "Thread data registration failed; its path remains separate and is kept for review.", { thread: environment.thread })
+      }
+    }
+    if (environment?.thread && this.dependencies.scratch) {
+      try { environment.scratchDir = await this.dependencies.scratch(environment.thread) }
+      catch {
+        delete environment.scratchDir
+        hostWarn("threads", "Scratch preparation failed; launching without disposable scratch.", { thread: environment.thread })
+      }
+    }
     if (environment) this.launched.set(conversationId, environment)
     else this.launched.delete(conversationId)
     return environment
   }
 
-  /** The same values, resolved now, for a conversation whose agent is already running. */
+  /** App-command values, resolved now. Agent-only data is added by forLaunch, never here. */
   async forConversation(conversationId: string, title?: string, cwd?: string): Promise<ThreadEnvironment | undefined> {
     const { store } = this.dependencies
     const placed = store.journalPlacement(conversationId)
@@ -170,6 +193,8 @@ export class ThreadEnvironments {
       ports: THREAD_PORT_COUNT,
       dataDir: this.dataDir(values.app),
     }
+    const launched = this.launched.get(conversationId)
+    if (launched?.thread === placed.thread && launched.scratchDir) environment.scratchDir = launched.scratchDir
     await mkdir(environment.dataDir, { recursive: true, mode: 0o700 })
     if (!checkout) return environment
     let read: Awaited<ReturnType<typeof readRecipe>>
@@ -260,19 +285,20 @@ export class ThreadEnvironments {
     return found
   }
 
-  /** Where an app's own data lives; removing its worktree deletes it. */
+  /** Existing app state stays here; Thread artifact retirement never removes it. */
   dataDir(app: AppKey): string {
     return join(this.dependencies.dataRoot, AppKeySchema.parse(app))
   }
 
   /** File reads use the owner's data folder without claiming ports, creating folders or reading recipes. */
-  async fileDataDir(owner: { cwd?: string; thread?: ThreadId; conversationId?: string }): Promise<string | undefined> {
+  async fileDataDir(owner: { cwd?: string; thread?: ThreadId; conversationId?: string }): Promise<string | string[] | undefined> {
     const launched = owner.conversationId ? this.launchedWith(owner.conversationId) : undefined
-    if (launched) return launched.dataDir
+    if (launched) return launched.threadDataDir ? [launched.threadDataDir, launched.dataDir] : launched.dataDir
     const thread = owner.thread ?? (owner.conversationId ? this.dependencies.store.journalPlacement(owner.conversationId)?.thread : undefined)
     const checkout = owner.cwd ? await checkoutOf(this.git, owner.cwd) : undefined
     if (!thread && !checkout) return undefined
-    return this.dataDir(this.appFor(thread, checkout).app)
+    const appData = this.dataDir(this.appFor(thread, checkout).app)
+    return thread && this.dependencies.threadData ? [this.dependencies.threadData.path(thread), appData] : appData
   }
 
   /** What the conversation's running agent process was started with. */

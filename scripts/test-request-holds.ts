@@ -1,3 +1,4 @@
+import { ProviderFailureError, providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -59,7 +60,7 @@ async function childHost(dir: string, harness: string): Promise<void> {
     starting: () => {
       if (!fail) return
       fail = false
-      throw new Error("[unavailable] Server at capacity")
+      throw new ProviderFailureError("[unavailable] Server at capacity", providerTextEvidence("[unavailable] Server at capacity"))
     },
   })
   const { conversation } = await world.apex(harness, "full")
@@ -160,7 +161,7 @@ try {
         starting: () => {
           if (!fail) return
           fail = false
-          throw new Error("[unavailable] Server at capacity")
+          throw new ProviderFailureError("[unavailable] Server at capacity", providerTextEvidence("[unavailable] Server at capacity"))
         },
       })
       const { conversation } = await world.apex(harness, "full")

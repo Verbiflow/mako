@@ -1,3 +1,5 @@
+import type { ProviderFailureEvidence } from "../../contracts/provider-failure-evidence.js"
+import { providerCall, failureEvidenceOf, providerExitEvidence } from "../../contracts/provider-failure.js"
 import { configureOpenCodeCalls } from "./call-plugin.js"
 import { realpath } from "node:fs/promises"
 import { openCodeModelRoutes } from "./connections.js"
@@ -344,7 +346,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       // model it no longer routes; the refreshed catalog's default replaces it.
       const offered = catalog.limits.has(openCodeLaunchId(live.model))
       if (live.modelFromDefault && !offered && catalog.defaultModel && !live.turn) {
-        await live.api.client.session.switchModel({ sessionID: root, model: catalog.defaultModel })
+        await providerCall(live.api.client.session.switchModel({ sessionID: root, model: catalog.defaultModel }))
         live.model = catalog.defaultModel
       }
       const modes = openCodeSessionModes(catalog.agents)
@@ -362,7 +364,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     usage(live)
   }
 
-  function finish(live: Live, outcome: { kind: "succeeded" } | { kind: "failed"; message: string; type?: string; exited?: true } | { kind: "interrupted"; reason: string }) {
+  function finish(live: Live, outcome: { kind: "succeeded" } | { kind: "failed"; message: string; failureEvidence: ProviderFailureEvidence; type?: string; exited?: true } | { kind: "interrupted"; reason: string }) {
     const turn = live.turn
     if (!turn) return
     live.turn = null
@@ -385,7 +387,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     else if (outcome.kind === "interrupted") engine.patch(live, { status: "ready", lastStop: "cancelled", error: undefined })
     else {
       hostWarn("opencode", "turn failed", { conversation: live.state.id, type: outcome.type ?? "", error: outcome.message })
-      const failure: Partial<LiveSessionState> = { status: "failed", lastStop: outcome.type === "aborted" ? "cancelled" : "failed", error: outcome.message.slice(0, 2000) }
+      const failure: Partial<LiveSessionState> = { status: "failed", lastStop: outcome.type === "aborted" ? "cancelled" : "failed", error: outcome.message.slice(0, 2000), failureEvidence: outcome.failureEvidence }
       // The host tells a process that died under the turn from a turn that
       // failed by both arriving in one update.
       if (outcome.exited) failure.connection = "disconnected"
@@ -397,10 +399,10 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
   /** End every shell the conversation's sessions left running. */
   async function endShells(live: Live): Promise<void> {
     const location = { directory: live.cwd }
-    const listed = await live.api.client.shell.list({ location })
+    const listed = await providerCall(live.api.client.shell.list({ location }))
     await Promise.all((live.decoder?.shells.ending(listed.data) ?? []).map(shell => {
       live.stopped.add(shell.id)
-      return live.api.client.shell.remove({ id: shell.id, location })
+      return providerCall(live.api.client.shell.remove({ id: shell.id, location }))
     }))
   }
 
@@ -412,7 +414,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       live.childSettling.set(sessionID, [...(live.childSettling.get(sessionID) ?? []), settle])
       live.stopped.add(sessionID)
       try {
-        if ((await live.api.client.session.interrupt({ sessionID })).interrupted) await settled
+        if ((await providerCall(live.api.client.session.interrupt({ sessionID }))).interrupted) await settled
       } finally {
         const rest = live.childSettling.get(sessionID)?.filter(waiter => waiter !== settle) ?? []
         if (rest.length) live.childSettling.set(sessionID, rest)
@@ -456,7 +458,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
   function readMcp(live: Live): void {
     live.mcpReads = live.mcpReads.then(async () => {
       if (live.closed || live.state.connection !== "connected") return
-      const listed = await live.api.client.mcp.list({ location: { directory: live.cwd } })
+      const listed = await providerCall(live.api.client.mcp.list({ location: { directory: live.cwd } }))
       if (!live.closed) mark(live, live.mcp.observe(listed.data))
     }).catch(error => {
       if (!live.closed) hostWarn("opencode", "MCP server status could not be read", { conversation: live.state.id, error: errorText({ error }) })
@@ -537,8 +539,8 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         if (live.turn?.inboxId === fact.inbox) live.turn.delivered = true
         if (live.stopNotices.delete(fact.inbox) && live.turn?.kind === "provider") {
           live.turn.stopRequested = true
-          live.api.client.session.interrupt({ sessionID: root }).catch(error =>
-            hostWarn("opencode", "The turn started on a stopped task's notice was not interrupted", { conversation: live.state.id, error: errorText({ error }) }))
+          providerCall(live.api.client.session.interrupt({ sessionID: root }).catch(error =>
+            hostWarn("opencode", "The turn started on a stopped task's notice was not interrupted", { conversation: live.state.id, error: errorText({ error }) })))
         }
         return
       }
@@ -552,7 +554,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         if (live.turn?.delivered) finish(live, { kind: "succeeded" })
         return
       case "failed":
-        if (live.turn?.delivered) finish(live, { kind: "failed", message: fact.error.message, type: fact.error.type })
+        if (live.turn?.delivered) finish(live, { kind: "failed", message: fact.error.message, failureEvidence: fact.error.failureEvidence, type: fact.error.type })
         return
       case "interrupted": {
         const stopped = openCodeStopped(fact.reason, live.turn?.stopRequested === true)
@@ -566,7 +568,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       case "compaction-failed":
         // Compaction Mako asked for fails its action and turn; any other would leave no trace.
         if (live.turn?.kind === "compaction" && (!fact.inbox || fact.inbox === live.turn.inboxId))
-          finish(live, { kind: "failed", message: fact.error.message, type: fact.error.type })
+          finish(live, { kind: "failed", message: fact.error.message, failureEvidence: fact.error.failureEvidence, type: fact.error.type })
         else engine.event(live, compactionFailedEvent(fact.error.message), fact.source)
         return
     }
@@ -617,7 +619,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
 
   async function nativeToolName(live: Live, event: ToolCallEvent): Promise<string | undefined> {
     try {
-      const message = await live.api.client.session.message.get({ sessionID: event.data.sessionID, messageID: event.data.assistantMessageID })
+      const message = await providerCall(live.api.client.session.message.get({ sessionID: event.data.sessionID, messageID: event.data.assistantMessageID }))
       if (message.type !== "assistant") return undefined
       for (const part of message.content) if (part.type === "tool" && part.id === event.data.id) return part.name
       return undefined
@@ -633,25 +635,25 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     const decoder = live.decoder
     if (!root || !decoder || !live.interactions) return
     for (const sessionID of [root, ...decoder.children]) await live.interactions.reconcile(sessionID)
-    const background = decoder.shells.reconcile((await live.api.client.shell.list({ location: { directory: live.cwd } })).data)
+    const background = decoder.shells.reconcile((await providerCall(live.api.client.shell.list({ location: { directory: live.cwd } }))).data)
     if (background !== undefined) engine.patch(live, { backgroundTasks: background })
     for (const item of decoder.shells.drain()) engine.emitAgent(live, item)
     const turn = live.turn
-    const active = await live.api.client.session.active()
+    const active = await providerCall(live.api.client.session.active())
     // Busy with nothing bound: the start was among the missed events.
     if (!turn) {
       if (active[root] && !live.turn && !live.closed) openProviderTurn(live)
       return
     }
     if (active[root] || live.turn !== turn) return
-    const session = await live.api.client.session.get({ sessionID: root })
+    const session = await providerCall(live.api.client.session.get({ sessionID: root }))
     if (live.turn !== turn) return
     if (!turn.enqueued) {
-      const inbox = await live.api.client.session.inbox.list({ sessionID: root })
+      const inbox = await providerCall(live.api.client.session.inbox.list({ sessionID: root }))
       if (inbox.some(item => item.id === turn.inboxId)) return
     }
     turn.delivered = true
-    if (session.outcome === "failed") finish(live, { kind: "failed", message: "OpenCode reported the turn failed while Mako was reconnecting" })
+    if (session.outcome === "failed") finish(live, { kind: "failed", message: "OpenCode reported the turn failed while Mako was reconnecting", failureEvidence: { kind: "unknown", source: "host" } })
     else if (session.outcome === "interrupted") finish(live, { kind: "interrupted", reason: "reconnect" })
     else finish(live, { kind: "succeeded" })
   }
@@ -661,8 +663,8 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     if (!live.root || live.closed) return false
     try {
       const [inbox, active] = await Promise.all([
-        live.api.client.session.inbox.list({ sessionID: live.root }),
-        live.api.client.session.active(),
+        providerCall(live.api.client.session.inbox.list({ sessionID: live.root })),
+        providerCall(live.api.client.session.active()),
       ])
       if (live.turn !== turn) return true
       if (turn.enqueued || (turn.inboxId && inbox.some(item => item.id === turn.inboxId)) || active[live.root]) {
@@ -733,14 +735,14 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     live.turn = turn
     engine.patch(live, { status: "running", nativeRunId: actionId, lastStop: undefined, error: undefined })
     try {
-      await live.api.client.session.compact({ sessionID: live.root, id: inboxId })
+      await providerCall(live.api.client.session.compact({ sessionID: live.root, id: inboxId }))
       dispatch?.report({ kind: "accepted", source: "native-response", referenceId: inboxId })
     } catch (error) {
       // As with a prompt, a lost response is not a lost request: native state decides.
       if (live.turn === turn && !turn.enqueued && !(await admitted(live, turn))) {
         live.turn = null
         live.emit({ type: "live-action-result", id: live.state.id, actionId, result: { kind: "uncertain", reason: errorText({ error }) } })
-        engine.patch(live, { status: "failed", lastStop: "failed", error: errorText({ error }) })
+        engine.patch(live, { status: "failed", lastStop: "failed", error: errorText({ error }), failureEvidence: failureEvidenceOf({ error }) })
       }
       throw error
     }
@@ -775,7 +777,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const live = requireLive(id)
       if (!live.decoder?.shells.background(nativeId)) throw new Error("That shell is no longer running")
       live.stopped.add(nativeId)
-      await live.api.client.shell.remove({ id: nativeId, location: { directory: live.cwd } })
+      await providerCall(live.api.client.shell.remove({ id: nativeId, location: { directory: live.cwd } }))
     },
     startPrefetch: {
       via: "The native server through what a start waits on: its folder's plugins active and its catalog read, with its binary read alongside. On a copy, a server after it was up with its plugins active in 0.85–1.0 s, against 1.25–1.3 s after its binary read alone and 2.0–2.3 s cold; the run ahead itself takes 2.2–2.8 s, so a start that comes sooner stops it (2026-10-20).",
@@ -817,7 +819,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       async ask(id, { question, earlier, signal }) {
         const live = requireLive(id)
         const prompt = `${SIDE_QUESTION_ASIDE}\n\n${withEarlierExchanges(question, earlier)}`
-        const generated = await untilStopped(live.api.client.session.generate({ sessionID: live.root, prompt }), signal)
+        const generated = await untilStopped(providerCall(live.api.client.session.generate({ sessionID: live.root, prompt })), signal)
         return generated.text
       },
       close: async () => {},
@@ -888,9 +890,9 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         const running = live.state.status === "running"
         const detail = api.stderr().trim().split("\n").slice(-3).join("\n") || `OpenCode exited${signal ? ` on ${signal}` : code === null ? "" : ` with code ${code}`}`
         hostWarn("opencode", "native API process exited during a session", { conversation: live.state.id, code: code ?? "", signal: signal ?? "" })
-        if (running) finish(live, { kind: "failed", message: detail, exited: true })
+        if (running) finish(live, { kind: "failed", message: detail, failureEvidence: providerExitEvidence(api.stderr().trim()), exited: true })
         stop(live)
-        engine.patch(live, { status: "failed", connection: "disconnected", error: detail })
+        engine.patch(live, { status: "failed", connection: "disconnected", error: detail, failureEvidence: providerExitEvidence(api.stderr().trim()) })
       })
       // The server is gone, whether Mako closed it or it exited: the launch's stream is finished.
       void api.exited.then(() => live.nativeStream?.ended(), () => live.nativeStream?.ended())
@@ -1013,7 +1015,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const merged: SessionSettings = { ...live.state.settings, ...settings, options: { ...live.state.settings?.options, ...settings?.options } }
       const ref = preparePrompt(dispatch, () => openCodeRequestedModel(live.catalog, merged, live.model))
       if (!sameOpenCodeModel(live.model, ref)) {
-        await preparePromptAsync(dispatch, () => live.api.client.session.switchModel({ sessionID: live.root, model: ref }))
+        await preparePromptAsync(dispatch, () => providerCall(live.api.client.session.switchModel({ sessionID: live.root, model: ref })))
         selectModel(live, ref)
         live.modelFromDefault = false
       }
@@ -1035,19 +1037,19 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       live.nativeStream?.prompted({ text, shown: dispatch.shown, shownAt: dispatch.shownAt, run: inboxId, attachments })
       try {
         if (slash?.kind === "command") {
-          await live.api.client.session.command({ sessionID: live.root, name: slash.name, text: slash.rest, files })
+          await providerCall(live.api.client.session.command({ sessionID: live.root, name: slash.name, text: slash.rest, files }))
           dispatch.report({ kind: "accepted", source: "native-response" })
         } else {
           const skill = slash?.kind === "skill" ? live.catalog.skills.get(slash.name) : undefined
-          const inbox = await live.api.client.session.prompt({ sessionID: live.root, id: inboxId, text: skill ? slash!.rest : text, files,
-            skills: skill ? [{ id: skill.id }] : undefined })
+          const inbox = await providerCall(live.api.client.session.prompt({ sessionID: live.root, id: inboxId, text: skill ? slash!.rest : text, files,
+            skills: skill ? [{ id: skill.id }] : undefined }))
           dispatch.report({ kind: "accepted", source: "native-response", referenceId: inbox.id })
         }
       } catch (error) {
         // A lost response is not a lost send. Native state decides; the host never resends.
         if (live.turn === turn && !turn.enqueued && !(await admitted(live, turn))) {
           live.turn = null
-          engine.patch(live, { status: "failed", lastStop: "failed", error: errorText({ error }) })
+          engine.patch(live, { status: "failed", lastStop: "failed", error: errorText({ error }), failureEvidence: failureEvidenceOf({ error }) })
         }
         throw error
       }
@@ -1067,7 +1069,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const turn = live?.turn
       if (!live?.root || live.closed || live.state.status !== "running" || !turn || turn.kind === "compaction" || live.state.nativeRunId !== input.expectedRunId)
         return { kind: "not-accepted", reason: "The OpenCode turn has already changed" }
-      await live.api.client.session.prompt({ sessionID: live.root, id: messageIds.next(), text: input.text, files: promptFiles(input.attachments), delivery: "steer" })
+      await providerCall(live.api.client.session.prompt({ sessionID: live.root, id: messageIds.next(), text: input.text, files: promptFiles(input.attachments), delivery: "steer" }))
       live.nativeStream?.steered(input.text, input.shown)
       return { kind: "accepted" }
     } },
@@ -1075,7 +1077,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const live = requireLive(id)
       if (!live.state.modes.some(mode => mode.id === modeId)) throw new Error(`OpenCode does not offer the mode "${modeId}" here`)
       const agent = openCodeAgentForMode(modeId, live.launchAccess)
-      await live.api.client.session.switchAgent({ sessionID: live.root, agent })
+      await providerCall(live.api.client.session.switchAgent({ sessionID: live.root, agent }))
       engine.patch(live, { currentMode: openCodeModeForAgent(agent, live.launchAccess) })
     },
     /** Stop ends the turn, its subagents, and every shell the conversation left running. */
@@ -1095,7 +1097,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       turn.stopRequested = true
       let interrupted: boolean
       try {
-        interrupted = (await live.api.client.session.interrupt({ sessionID: live.root })).interrupted
+        interrupted = (await providerCall(live.api.client.session.interrupt({ sessionID: live.root }))).interrupted
       } catch (error) {
         // An unacknowledged interrupt is not a stopped turn. End the server so
         // its exit marks the session disconnected before anything continues it.
@@ -1107,7 +1109,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       // No running execution: the item was still queued or already finished.
       if (!interrupted && live.turn === turn) {
         if (turn.inboxId && !turn.delivered)
-          await live.api.client.session.inbox.cancel({ sessionID: live.root, inboxID: turn.inboxId }).catch(() => {})
+          await providerCall(live.api.client.session.inbox.cancel({ sessionID: live.root, inboxID: turn.inboxId }).catch(() => {}))
         finish(live, { kind: "interrupted", reason: "user" })
       }
     },

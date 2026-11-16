@@ -3,7 +3,7 @@ import { FailedRequestsContext } from "./failed-requests"
 import { ChevronRightIcon, CircleAlertIcon, MoreHorizontalIcon } from "lucide-react"
 import { recoveryGlyph } from "./recovery-glyph"
 import { compactionAvailable } from "@mako/host/contracts/recovery"
-import { classifyProviderFailure } from "@mako/host/contracts/provider-failure"
+import { describeProviderFailure, PROVIDER_FAILURE_KINDS, type ProviderFailureKind } from "@mako/host/contracts/provider-failure"
 import { Collapse } from "@/components/ui/collapse"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu"
 import { useCopy } from "@/components/ui/use-copy"
@@ -36,11 +36,11 @@ export function ExchangeFailure({ requestId }: { requestId?: string }) {
 /**
  * A turn that ended on an error a transcript recorded, with no live request
  * behind it to recover: the outcome in one line, named by the same rules a
- * live failure is (`classifyProviderFailure`), "did not finish this turn"
- * when no rule knows it; what to do, when a rule says; the provider's words
- * only behind Details, never as the line itself.
+ * live failure is (`describeProviderFailure`), "did not finish this turn"
+ * when its typed verdict is unknown; what to do, when a verdict says;
+ * the provider's words only behind Details, never as the line itself.
  */
-export function TurnError({ error }: { error: string }) {
+export function TurnError({ error, failure: failureKind }: { error: string; failure?: ProviderFailureKind }) {
   const [open, setOpen] = useState(false)
   const { liveId } = useTranscriptSource()
   useHarnessIdentity()
@@ -48,7 +48,7 @@ export function TurnError({ error }: { error: string }) {
     const conversation = liveId ? state.conversations[liveId] : undefined
     return conversation?.kind === "live" ? conversation.session.harness : undefined
   })
-  const failure = classifyProviderFailure(error, harness ? harnessLabel(harness) : "The agent")
+  const failure = describeProviderFailure(PROVIDER_FAILURE_KINDS.find(kind => kind === failureKind) ?? "unknown", harness ? harnessLabel(harness) : "The agent")
   const known = failure.kind !== "unknown"
   return (
     <div role="alert" data-event-error={failure.kind} className="flex items-start gap-2 text-ui">

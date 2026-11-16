@@ -317,6 +317,30 @@ await withStore("a wait that comes due during sleep fires once on wake, saying i
   store.close()
 })
 
+await withStore("a note the conversation couldn't take goes when it can take input again", async (path) => {
+  const store = open(path)
+  const clock = new Clock()
+  const busy = host(store, clock, "later")
+  const wait = armed(busy.waits.arm({ conversation: CONVERSATION, thread: THREAD, clientKey: "busy", description: "Waiting a minute", seconds: 60 }))
+  clock.advance(60_000)
+  await busy.waits.settled()
+  assert.equal(busy.sent.length, 1)
+  assert.equal(store.undeliveredTurnWaits().map((each) => each.id).join(), wait.id, "held, not lost")
+  busy.waits.retry("conv-other")
+  await busy.waits.settled()
+  assert.equal(busy.sent.length, 1, "another conversation settling sends nothing")
+  busy.answer = "taken"
+  busy.waits.retry(CONVERSATION)
+  await busy.waits.settled()
+  assert.equal(busy.sent.length, 2, "its own turn settling sends it, with no timer and no restart")
+  assert.equal(busy.sent[1]!.fired!.request, busy.sent[0]!.fired!.request, "under the same request")
+  assert.equal(store.undeliveredTurnWaits().length, 0)
+  busy.waits.retry(CONVERSATION)
+  await busy.waits.settled()
+  assert.equal(busy.sent.length, 2, "delivered: never again")
+  store.close()
+})
+
 await withStore("a time with things to wait on is the cap: it fires with what's still pending", async (path) => {
   const store = open(path)
   const clock = new Clock()

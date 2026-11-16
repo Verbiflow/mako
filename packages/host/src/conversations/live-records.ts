@@ -1,5 +1,6 @@
 import type { Reclaimed } from "./journal-reclaim.js"
 import { join } from "node:path"
+import type { UnopenedConversation } from "../contracts/unopened-conversations.js"
 import { disconnectedContext } from "../base/execution-context.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -15,11 +16,11 @@ import { personPromptedAt } from "../contracts/worked-at.js"
 import type { JournalFacts } from "../threads/index.js"
 import { isTurnStart, reduceLiveUpdates } from "@mako/sessions/live-content"
 import type { Entry } from "@mako/sessions/entries"
-import { StepsStopped } from "@mako/sessions/slices"
+import { inSlices, StepsStopped } from "@mako/sessions/slices"
 import { closeCutOffCalls, recordCutOffCalls } from "./interrupted-turn.js"
 import { clearAutoContinue } from "./live-auto-continue.js"
 import { JournalReaders } from "./journal-readers.js"
-import { LiveJournal, journalIds, storedRequest } from "./live-journal.js"
+import { ColdJournal, LiveJournal, journalIds, storedRequest } from "./live-journal.js"
 import { backfillMemory } from "./live-ledger.js"
 import { conversationControl, residentOf, type Dependencies, type Resident } from "./live-runtime.js"
 import { interruptRequests, requestTurnEnd } from "./live-settlement.js"
@@ -41,6 +42,9 @@ export const CONVERSATION_MEMORY = { bytes: 128 * 1024 * 1024, recent: 2, sweepM
  * second, and the host ran out of heap 90 seconds after each start.
  */
 export const BULK_LOADS = 8
+
+/** The residency plan's name for what windows' cold views hold, counted as pinned. */
+const COLD_VIEWS = "cold history views"
 
 /**
  * What a conversation keeps in memory of its newest finished entries, by
@@ -147,6 +151,9 @@ export class LiveRecords {
    */
   readonly forks = new Map<string, ForkFacts>()
 
+  /** Saved conversations `open` couldn't read: kept for recovery, and said in the rail and Diagnostics. */
+  readonly unopened: UnopenedConversation[] = []
+
   /** Lists every saved journal, as the host before this one left it, for the Thread store to register. */
   open(): JournalFacts[] {
     const { dependencies } = this
@@ -191,11 +198,9 @@ export class LiveRecords {
           journal.close()
         }
       } catch (error) {
-        dependencies.emit({
-          type: "notice",
-          level: "error",
-          message: `Saved conversation ${id} could not be opened. Its journal has been preserved for recovery. ${errorMessage({ error })}`,
-        })
+        // Kept for recovery, and said where the person looks (`unopened`) rather than as a toast at every start.
+        hostWarn("live", "a saved conversation couldn't be opened; its journal is kept", { conversation: id, error: errorMessage({ error }) })
+        this.unopened.push({ conversation: id, journal: join(dependencies.root, `${id}.sqlite`), error: errorMessage({ error }) })
       }
     }
     return journals
@@ -391,6 +396,51 @@ export class LiveRecords {
     return (resident.snapshot.control?.bindings ?? []).flatMap((binding) => (binding.nativeId ? [{ provider: binding.provider, nativeId: binding.nativeId }] : []))
   }
 
+  /**
+   * Conversation `id` read where it lies (`ColdJournal`), for a window's read of one no host holds in memory: none when
+   * it's in memory, being read in or let go, or when its last host wrote it running or sending; then the window's read
+   * makes it resident as before. One the last host left is shown as reading it in would leave it (`afterRestart`); one
+   * this host let go, exactly as it went (`reload`).
+   */
+  async cold(id: string): Promise<{ journal: ColdJournal; snapshot: LiveSnapshot; still: () => boolean } | undefined> {
+    const readable = () => !this.stopping() && !this.residents.has(id) && !this.reading.has(id) && !this.releasing.has(id) && this.recovered.has(id)
+    if (!readable()) return undefined
+    let journal: ColdJournal | undefined
+    try {
+      journal = await inSlices(ColdJournal.opening(this.dependencies.root, id), undefined, () => this.stopping())
+    } catch (error) {
+      // Cut by the host's stop: the opening closed what it opened, and nothing's wrong with the journal.
+      if (error instanceof StepsStopped) return undefined
+      throw error
+    }
+    if (!journal) return undefined
+    // Read in, or let go, while it opened: read as that left it.
+    if (!readable()) {
+      journal.close()
+      return undefined
+    }
+    const saved = journal.snapshot
+    // One a window's read might refresh from its harness's own record (`LiveSources.refreshedSnapshot`: a single binding
+    // that holds the history, or none written yet, as a session continued outside Mako) is read in, where that runs.
+    const bindings = saved.control?.bindings ?? []
+    const binding = bindings.length === 1 ? bindings[0] : undefined
+    // One whose history is its session's record reads that record's newest page as it opens, as such a refresh would.
+    const refreshable = !saved.baseSource && Boolean(binding?.path && binding.nativeId) &&
+      (journal.length === 0 || (binding!.includesBase && onlyOpening(journal, binding!.coveredBlocks ?? 0)))
+    if (refreshable || saved.session.status === "running" || saved.requests.some((request) => request.status === "dispatching")) {
+      journal.close()
+      return undefined
+    }
+    const unloaded = this.unloaded.get(id)
+    if (!unloaded) return { journal, still: readable, snapshot: afterRestart(saved, this.dependencies.root, (provider) => this.dependencies.driver(provider)?.backgroundStop.kind === "ends-with-turn") }
+    const session = unloaded.commands ? { ...saved.session, commands: unloaded.commands } : saved.session
+    return { journal, still: readable, snapshot: {
+      ...saved, session,
+      ...unloaded.activityAt !== undefined && { activityAt: unloaded.activityAt },
+      ...unloaded.nativeActivity && { nativeActivity: unloaded.nativeActivity },
+    } }
+  }
+
   /** Lets go of a conversation now when nothing is using it, as the memory budget would. */
   release(id: string): boolean {
     const resident = this.residents.get(id)
@@ -457,13 +507,15 @@ export class LiveRecords {
   }
 
   private memoryPlan(): ResidencyPlan {
+    // What windows' cold views hold (`ColdJournal`) is memory too: it leaves the conversations in memory that much less.
+    const cold = this.dependencies.historyHeld?.() ?? 0
     return residencyPlan(
-      [...this.residents.values()].map((resident) => ({
+      [...[...this.residents.values()].map((resident) => ({
         id: resident.snapshot.session.id,
         usedAt: resident.usedAt ?? 0,
         weight: residentWeight(this.weights, resident),
         pinned: this.pinned(resident),
-      })),
+      })), ...cold ? [{ id: COLD_VIEWS, usedAt: 0, weight: cold, pinned: true }] : []],
       this.memoryBudget()
     )
   }
@@ -671,6 +723,15 @@ export function endedTurnsOnRead(previous: Pick<LiveSnapshot, "session" | "reque
     if (end) return active || end.kind !== "finished" ? end : undefined
     return active && idle ? { kind: "finished" } : undefined
   })
+}
+
+/** Whether a cold journal's blocks past `covered` are only the notices a session gives as it opens, as `refreshedSnapshot` asks. */
+function onlyOpening(journal: ColdJournal, covered: number): boolean {
+  for (let index = covered; index < journal.length; index++) {
+    const block = journal.at(index)
+    if (block?.type !== "event" || block.setup !== true) return false
+  }
+  return true
 }
 
 /**

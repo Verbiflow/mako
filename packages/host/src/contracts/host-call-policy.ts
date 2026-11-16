@@ -90,6 +90,7 @@ const reads = [
   "mako:worktree-ahead",
   "mako:worktree-inventory",
   "mako:worktree-retention",
+  "mako:thread-scratch",
   /** Measures Mako's folders with `du`; writes nothing. */
   "mako:storage",
   "mako:worktree-review",
@@ -170,6 +171,10 @@ const reads = [
   "mako:live-prompt-versions",
   /** fseventsd's health from memory; the restart is never repeated by a client (`mako:file-events-restart`). */
   "mako:file-events-service",
+  /** The servers that need sign-in, from memory. */
+  "mako:mcp-sign-ins",
+  /** The saved conversations this host couldn't open, from memory. */
+  "mako:unopened-conversations",
   /** The continues in the cloud this Mac pressed or its list says, from memory. */
   "mako:continue-readings",
   /** Asks the account what a continue would take now; asked twice, it's asked twice. */
@@ -248,6 +253,8 @@ const reads = [
 const replays = [
   /** Replaces the same retirement settings; never removes a checkout in this call. */
   "mako:worktree-retention-set",
+  /** Replaces the same scratch settings; preview does not remove anything. */
+  "mako:thread-scratch-set",
   /** Snoozes fseventsd's notice until the day ends: a repeat sets the same snooze. */
   "mako:file-events-dismiss",
   /** `MakoStorage.free`: a pass asked for while one runs is that pass, and a second finds nothing more to free. */
@@ -297,6 +304,8 @@ const replays = [
   "mako:agents-continue-next",
   /** Cancelling a turn that has already stopped stops nothing. */
   "mako:live-cancel",
+  /** Stop waiting names the wait: one that already ended, or a newer one, is left as it is. */
+  "mako:live-wait-stop",
   /** Stopping a background task that has already ended stops nothing. */
   "mako:live-stop-agent",
   /** Closing a closed conversation is a no-op. */

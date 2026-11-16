@@ -6,7 +6,7 @@ import type { LiveSessionState } from "../contracts/providers-acp.js"
  * `ready` with its own stop reason, a turn whose prompt call failed is
  * `failed` with that error.
  */
-export function turnVerdict(result: AcpTurnResult): Pick<LiveSessionState, "status" | "lastStop" | "error"> {
-  if (result.kind === "failed") return { status: "failed", lastStop: "failed", error: result.error }
+export function turnVerdict(result: AcpTurnResult): Pick<LiveSessionState, "status" | "lastStop" | "error" | "failureEvidence"> {
+  if (result.kind === "failed") return { status: "failed", lastStop: "failed", error: result.error, failureEvidence: result.failureEvidence }
   return { status: "ready", lastStop: result.stopReason }
 }

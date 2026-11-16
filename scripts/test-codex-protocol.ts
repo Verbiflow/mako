@@ -1,6 +1,7 @@
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
 import type { NativeAgentObservation } from "@mako/host/contracts/native-agents"
 import assert from "node:assert/strict"
+import { failureEvidenceOf } from "@mako/host/contracts/provider-failure"
 import { LineAssembler } from "@mako/sessions"
 import { spawn } from "node:child_process"
 import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
@@ -279,6 +280,17 @@ const context: ProtocolContext = {
 }
 
 const request = `${JSON.stringify({ id: 4, method: "approval/request", params: { reason: "test" } })}\n`
+let rpcFailure: Error | undefined
+context.pending.set("string:quota-response", {
+  method: "config/read", timer: undefined, resolve() {},
+  reject(error) { rpcFailure = error },
+  parseResult: () => ({ valid: false, message: "not a successful fixture response" }), settleResult() {},
+})
+consumeStdout(context, Buffer.from(JSON.stringify({ id: "quota-response", error: {
+  code: -32000, message: "Native request failed", data: { codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } } },
+} }) + "\n"))
+assert.ok(rpcFailure)
+assert.deepEqual(failureEvidenceOf({ error: rpcFailure }), { kind: "rate-limited", source: "native-limit" }, "native RPC errors retain structured quota evidence before prose fallback")
 consumeStdout(context, Buffer.from(request.slice(0, 12)))
 assert.equal(requests.length, 0)
 consumeStdout(context, Buffer.from(request.slice(12)))

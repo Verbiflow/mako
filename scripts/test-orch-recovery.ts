@@ -242,11 +242,21 @@ async function scenario(base: string, which: Scenario): Promise<void> {
       assert.equal(settled.reports.at(-1)?.summary, "Worked it out.", "its Apex's Continue let it finish")
       break
     }
-    case "apex":
-    case "quit": {
+    case "apex": {
       const picked = apex.filter((prompt) => opensContinuation(prompt.text))
       assert.equal(picked.length, 1, `the Apex's own cut turn was continued once (${which})`)
-      assert.match(picked[0]!.text, which === "quit" ? /Mako closed before you finished the previous turn/ : /Mako closed unexpectedly/)
+      assert.match(picked[0]!.text, /Mako closed unexpectedly/)
+      assert.equal(settled.reports.at(-1)?.status, "done", "and its Fin finished")
+      break
+    }
+    case "quit": {
+      // A working Apex hears its Fin's result at its turn's end (FOCUS_MS), so at the quit a digest may wait: the next
+      // host then sends the account of the cut turn with it, one turn, rather than a continuation of its own.
+      const picked = apex.filter((prompt) => opensContinuation(prompt.text))
+      const told = apex.filter((prompt) => !opensContinuation(prompt.text) && /Your previous turn was cut short at [\d:]+: Mako closed while this turn was running/.test(prompt.text))
+      assert.equal(picked.length + told.length, 1, `the Apex heard once that its turn was cut (quit): ${picked.length} continued, ${told.length} told`)
+      if (picked.length) assert.match(picked[0]!.text, /Mako closed before you finished the previous turn/)
+      else assert.ok(told[0]!.text.includes(FROM_AGENTS) && told[0]!.text.includes("Worked it out."), "with its Fin's result in the same turn")
       assert.equal(settled.reports.at(-1)?.status, "done", "and its Fin finished")
       break
     }

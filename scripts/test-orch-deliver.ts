@@ -5,10 +5,13 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AgentsSendResult, AgentsSent } from "@mako/host/contracts/agent-tools"
-import { agentWords } from "@mako/host/contracts/children"
+import { agentWords, apexNote } from "@mako/host/contracts/children"
+import type { LiveRequest } from "@mako/host/contracts/live-conversations"
+import { foldQueued } from "@mako/host/conversations/live-dispatch"
 import { actionNotice } from "@mako/host/contracts/operation-recovery"
 import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
 import { agentMessageOrder } from "@mako/host/conversations/agent-message-order"
+import { TurnInProgressError } from "@mako/host/harnesses/index"
 import { AgentsWorld, type WorldOptions } from "./lib/agents-world.ts"
 import { ranOut } from "./lib/ran-out.ts"
 
@@ -133,6 +136,157 @@ async function queueByDefault(): Promise<void> {
   }
 }
 
+/**
+ * Messages an Apex queues behind a long turn go as one turn when it ends, in order, not one a turn: land-2 (2026-11-16)
+ * took ten in ten turns and read its Apex's newest last. A repeat finds the message it joined; a notification goes apart.
+ */
+async function queuedJoinOneTurn(): Promise<void> {
+  const { world, apex, fin, work, release, prompts } = await team("joined", "codex", ["claude"])
+  try {
+    await work()
+    const before = prompts(fin.claude!).length
+    const first = sent(await world.agents.send(apex.caller, { to: "claude", text: "First: land #801.", clientKey: "j1" }))
+    assert.equal(first.hears, "claude hears it when its current turn ends, as its next message.")
+    const second = sent(await world.agents.send(apex.caller, { to: "claude", text: "Second: #801 is superseded; land #805 instead.", clientKey: "j2" }))
+    assert.equal(second.delivery, "queued")
+    assert.equal(world.live.snapshot(fin.claude!)!.requests.filter((request) => request.status === "queued").length, 2, "each waits as its own message, for the person to edit or remove")
+    const again = sent(await world.agents.send(apex.caller, { to: "claude", text: "Second: #801 is superseded; land #805 instead.", clientKey: "j2" }))
+    assert.equal(again.deduped, true, "a repeat finds the message it joined")
+    const note = sent(await world.agents.send(apex.caller, { to: "claude", text: "FYI: CI is slow today.", reply: "none", clientKey: "j3" }))
+    assert.equal(note.delivery, "queued")
+    await release()
+    const turns = prompts(fin.claude!).slice(before)
+    assert.equal(turns.length, 2, `one turn for both instructions, one for the notification: ${JSON.stringify(turns)}`)
+    const joined = turns[0]!
+    assert.ok(joined.includes("First: land #801.") && joined.indexOf("First: land #801.") < joined.indexOf("Second: #801 is superseded"), `in the order sent: ${joined}`)
+    assert.match(joined, /\[mako · the next message from the same sender, sent \d{4}-\d\d-\d\dT/)
+    assert.equal(joined.split("Second: #801 is superseded").length - 1, 1, "the repeat added nothing")
+    assert.equal(turns[1], "FYI: CI is slow today.", "a notification goes on its own")
+    const requests = world.live.snapshot(fin.claude!)!.requests
+    const carrier = requests.find((request) => request.joined?.length)
+    assert.deepEqual(carrier?.joined?.map((each) => each.id), [second.request], "the folded message keeps its ID")
+    assert.deepEqual(requests.find((request) => request.id === second.request)?.joinedInto, carrier?.id, "and says where it went")
+    const late = sent(await world.agents.send(apex.caller, { to: "claude", text: "Second: #801 is superseded; land #805 instead.", clientKey: "j2" }))
+    assert.equal(late.deduped, true, "a repeat after it went finds it")
+  } finally {
+    await world.close()
+  }
+}
+
+/** Another Apex's message is owed its own reply, so it never folds, and nothing folds into it. */
+function apexMessagesNeverFold(): void {
+  const actor = { kind: "agent" as const, session: SessionIdSchema.parse(randomUUID()) }
+  const message = (id: string, text: string, order: number): LiveRequest => ({ id, text, attachments: [], status: "queued", actor, admissionOrder: order })
+  const plain = [message("a", "First.", 1), message("b", "Second.", 2)]
+  assert.ok(foldQueued(plain, plain[0]!), "plain messages from one sender fold")
+  const fromApex = [message("a", `${apexNote("t-1")}\n\nFirst.`, 1), message("b", `${apexNote("t-1")}\n\nSecond.`, 2)]
+  assert.equal(foldQueued(fromApex, fromApex[0]!), undefined, "messages from another Apex each go as their own turn")
+  const mixed = [message("a", "First.", 1), message("b", `${apexNote("t-1")}\n\nSecond.`, 2)]
+  assert.equal(foldQueued(mixed, mixed[0]!), undefined, "and never into another")
+}
+
+/** A gate on a Fin's next send: held between its dispatch and its handoff until the test opens it. */
+function sendGate() {
+  let open: () => void = () => {}
+  const gate = { on: false, fin: "", entered: false, opened: new Promise<void>((resolve) => { open = resolve }), open: () => open() }
+  const refusePrompt = async (conversation: string) => {
+    if (gate.on && conversation === gate.fin) { gate.on = false; gate.entered = true; await gate.opened }
+    return undefined
+  }
+  return { gate, refusePrompt }
+}
+
+/** A fold is written only as its send commits: a Stop before that leaves every message as it was, its own row, editable. */
+async function foldUndoneOnStop(): Promise<void> {
+  const { gate, refusePrompt } = sendGate()
+  const { world, apex, fin, work } = await team("fold-stop", "codex", ["claude"], { refusePrompt })
+  try {
+    gate.fin = fin.claude!
+    await work()
+    const ids: string[] = []
+    for (const [key, words] of [["a", "First: A."], ["b", "Second: B."], ["c", "Third: C."]] as const)
+      ids.push(sent(await world.agents.send(apex.caller, { to: "claude", text: words, clientKey: `fold-${key}` })).request)
+    gate.on = true
+    world.release(fin.claude!)
+    await until("the folded send to wait at its handoff", () => gate.entered)
+    await world.agents.stop(apex.caller, { child: "claude", reason: "pausing" })
+    gate.open()
+    await world.settle(300, 20_000, "ignore")
+    const rows = () => world.live.snapshot(fin.claude!)!.requests
+    const [carrier, b, c] = ids.map((id) => rows().find((request) => request.id === id)!)
+    assert.equal(carrier!.status, "held", "the carrier the Stop reached waits, held")
+    assert.equal(carrier!.joined, undefined, "with nothing folded into it")
+    assert.ok(!carrier!.text.includes("Second: B.") && carrier!.text.endsWith("First: A."), `its own words: ${carrier!.text}`)
+    for (const row of [b, c]) {
+      assert.equal(row!.joinedInto, undefined, "each folded message is its own row again")
+      assert.ok(row!.status === "held" || row!.status === "queued", `and still waits: ${row!.status}`)
+    }
+    world.live.editQueued(fin.claude!, { requestId: carrier!.id, expectedText: carrier!.text, change: { kind: "remove" } })
+    for (const id of [ids[1]!, ids[2]!]) {
+      const row = rows().find((request) => request.id === id)!
+      assert.ok(row.status === "held" || row.status === "queued", "removing the carrier takes nothing else with it")
+    }
+  } finally {
+    await world.close()
+  }
+}
+
+/** A send its harness refuses before taking it (a turn of its own in progress) leaves the queue as it was, and the fold is worked out again, never added to. */
+async function foldAfterTurnInProgress(): Promise<void> {
+  let refuse = false
+  let fins: Record<string, string> = {}
+  const { world, apex, fin, work, release, prompts } = await team("fold-busy", "codex", ["claude"], {
+    refusePromptWith: (conversation) => {
+      if (!refuse || conversation !== fins.claude) return undefined
+      refuse = false
+      return new TurnInProgressError("Claude")
+    },
+  })
+  fins = fin
+  try {
+    await work()
+    const before = prompts(fin.claude!).length
+    const ids: string[] = []
+    for (const [key, words] of [["a", "First: A."], ["b", "Second: B."], ["c", "Third: C."]] as const)
+      ids.push(sent(await world.agents.send(apex.caller, { to: "claude", text: words, clientKey: `busy-${key}` })).request)
+    refuse = true
+    await release()
+    await until("the fold to go once the harness takes it", () => prompts(fin.claude!).length > before)
+    await world.settle(300, 20_000, "ignore")
+    const turns = prompts(fin.claude!).slice(before)
+    assert.equal(turns.length, 1, `one turn: ${JSON.stringify(turns)}`)
+    for (const words of ["First: A.", "Second: B.", "Third: C."]) assert.equal(turns[0]!.split(words).length - 1, 1, `${words} once`)
+    const carrier = world.live.snapshot(fin.claude!)!.requests.find((request) => request.id === ids[0])!
+    assert.deepEqual(carrier.joined?.map((each) => each.id), [ids[1], ids[2]], "joined names the two it carried, once each")
+    assert.ok((carrier.joined?.length ?? 0) <= 32)
+  } finally {
+    await world.close()
+  }
+}
+
+/** A steer sent as a turn is handed to its harness, before it runs, waits for it and goes into it, rather than queueing (land-2's 911d68d2). */
+async function steerAsATurnBegins(): Promise<void> {
+  const { gate, refusePrompt } = sendGate()
+  const { world, apex, fin, work, steers } = await team("steer-race", "codex", ["claude"], { refusePrompt })
+  try {
+    gate.fin = fin.claude!
+    await work()
+    sent(await world.agents.send(apex.caller, { to: "claude", text: "Next: the docs.", clientKey: "race-a" }))
+    gate.on = true
+    world.release(fin.claude!)
+    await until("the next turn to wait at its handoff", () => gate.entered)
+    assert.equal(world.live.session(fin.claude!)?.status, "ready", "no run yet: the session still reads ready")
+    const answer = beforeAnswered(world.agents.send(apex.caller, { to: "claude", text: "And skip the changelog.", deliver: "steer", clientKey: "race-b" }))
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    gate.open()
+    const steered = sent(await answer)
+    assert.equal(steered.delivery, "steer", `it went into the turn that began: ${JSON.stringify(steered)}`)
+    await until("the steer to reach that turn", () => steers(fin.claude!).includes("And skip the changelog."))
+  } finally {
+    await world.close()
+  }
+}
+
 /** Steered into a step harness's turn, from an Apex on another harness: the answer is the Fin's harness's, not the Apex's. */
 async function steerAcrossHarnesses(): Promise<void> {
   const { world, apex, fin, work, release, prompts, steers } = await team("steer", "cursor", ["claude", "codex"])
@@ -193,7 +347,10 @@ async function cursorHoldsASteer(): Promise<void> {
     assert.match(second.hears, /^cursor hears it when its current turn ends, as its next message: it couldn't go into its running turn/)
     assert.ok(world.answerSteer(fin.cursor!, { kind: "not-accepted", reason: "The run ended before taking it." }), "Cursor answers the steer it held as its run ends")
     await release()
-    assert.deepEqual(prompts(fin.cursor!).slice(-2), ["Drop the retry loop.", "And the second retry."], "each as a message of its own, in order")
+    // Both still waiting when the turn ended, both from its Apex: one turn, in order (`foldQueued`).
+    const after = prompts(fin.cursor!).at(-1)!
+    assert.ok(after.startsWith("Drop the retry loop.") && after.indexOf("Drop the retry loop.") < after.indexOf("And the second retry."), `both, in order, as its next turn: ${after}`)
+    assert.equal(prompts(fin.cursor!).filter((text) => text.includes("Drop the retry loop.")).length, 1, "once")
     assert.equal(steers(fin.cursor!).length, 0)
     await work()
     const taken = sent(await world.agents.send(apex.caller, { to: "cursor", text: "Skip the flaky test.", deliver: "steer", clientKey: "c3" }))
@@ -272,7 +429,8 @@ async function aRowCountsItsTurn(): Promise<void> {
 async function notificationDoesNotReportCompletion(): Promise<void> {
   let fin = ""
   let holdNotice = true
-  const world = new AgentsWorld({ root: join(root, "notifications"), script: async (turn) => {
+  // A real host reads the pull request it waits on, so that wait is watched and its turn's end stays quiet.
+  const world = new AgentsWorld({ root: join(root, "notifications"), readPull: async () => null, script: async (turn) => {
     if (turn.text.includes("You're fin:")) {
       await turn.world.agents.report(turn.caller, { status: "progress", summary: "Waiting for integration.", waitingOn: [{ kind: "pull-request", ref: "acme/app#7", until: "merge" }], clientKey: "wait" })
       return "Waiting."
@@ -416,7 +574,7 @@ async function siblingRefusalNamesRelay(): Promise<void> {
 }
 
 try {
-  await runCases([siblingRefusalNamesRelay, notificationDoesNotReportCompletion, notificationsAcrossApexes, oldQueuedKeepsNewerInstructions, aRowCountsItsTurn, idleTakesATurn, queueByDefault, steerAcrossHarnesses, refusedSteerQueues, cursorHoldsASteer, interruptGoesFirst, forwardTakesTheChoice], (name) => console.log(`ok ${name}`))
+  await runCases([siblingRefusalNamesRelay, notificationDoesNotReportCompletion, notificationsAcrossApexes, oldQueuedKeepsNewerInstructions, aRowCountsItsTurn, idleTakesATurn, queueByDefault, queuedJoinOneTurn, apexMessagesNeverFold, foldUndoneOnStop, foldAfterTurnInProgress, steerAsATurnBegins, steerAcrossHarnesses, refusedSteerQueues, cursorHoldsASteer, interruptGoesFirst, forwardTakesTheChoice], (name) => console.log(`ok ${name}`))
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

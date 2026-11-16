@@ -6,9 +6,12 @@ import { readingLive, receivingLive } from "../src/state/live-door"
 import { failAroundTheDoor } from "./live-door-watch"
 import { stagePrompt, removePendingPrompt } from "../src/state/acp-pending"
 import { beginStart } from "../src/state/acp-start"
-import { autoContinuePending, continueTurnPrompt, promptDelivery, recoverableRequests, makoPrompts, savedMakoPrompt, turnStopLabel, turnStops, turnWords } from "../src/state/prompt-delivery"
+import { autoContinuePending, continueTurnPrompt, foldedPromptParts, promptDelivery, recoverableRequests, makoPrompts, savedMakoPrompt, turnStopLabel, turnStops, turnWords } from "../src/state/prompt-delivery"
+import { foldedSeparator } from "@mako/host/contracts/live-conversations"
+import { fromAgent, YOUR_APEX } from "@mako/host/contracts/children"
+import { pullWakeNote } from "@mako/host/contracts/pull-waits"
 import { autoContinueCandidate, crashedChildTurn, savedContinuation } from "@mako/host/contracts/turn-continuation"
-import { classifyProviderFailure } from "@mako/host/contracts/provider-failure"
+import { classifyProviderFailure, providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import { failureAfterRetry, GIVE_UP_MS, nextRetry } from "@mako/host/contracts/delivery-retry"
 import { resetWords } from "@mako/host/contracts/account-usage"
 import { FailureRow } from "../src/components/transcript/failure-row"
@@ -224,6 +227,35 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   assert.equal(turnWords([quit, asked], asked), "Run the suite and fix what fails", "anything else, its own words")
   const moved: LiveRequest = { ...request, id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", actor: { kind: "service", name: "workspace" } }
   assert.deepEqual([...makoPrompts([moved])], [[moved.id, { kind: "moved" }]], "the note after an agent's move is Mako's")
+  const waitNote = "Mako: your wait \"CI on #412\" ended when this Thread moved here. If you still need it, call wait again."
+  const waited: LiveRequest = { ...request, id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", text: waitNote, actor: { kind: "service", name: "turn-wait" } }
+  assert.deepEqual([...makoPrompts([waited])], [[waited.id, { kind: "wait", line: "Your wait \"CI on #412\" ended when this Thread moved here. If you still need it, call wait again." }]], "a wait's note a move carried is Mako's")
+  assert.deepEqual(savedMakoPrompt("Mako: the wait \"CI\" is over.\n- #412 checks: passed"), { kind: "wait", line: "The wait \"CI\" is over.", detail: "- #412 checks: passed" }, "read back by its words")
+  assert.equal(savedMakoPrompt("Mako: the waiting room is full"), undefined, "words that only begin like one are the person's")
+  {
+    // A message several went as (`foldQueued`) is drawn as its parts, each as who wrote it, live and saved alike.
+    const at = Date.parse("2026-11-16T08:00:00Z")
+    const apexSays = (words: string) => `${fromAgent(YOUR_APEX)}\n${words}`
+    const pullNote = pullWakeNote("acme/app#12", "https://git.example.com/acme/app/pull/12", { kind: "merged" })
+    const waitWords = "Mako: the wait \"CI\" is over.\n- #412 checks: passed"
+    const kinds = (text: string) => foldedPromptParts(text)?.map((part) => part.kind)
+    // Mako's note folded into its Apex's message: the Apex's card, then Mako's line, never inside the card.
+    const apexFirst = `${apexSays("Land #12.")}${foldedSeparator("mako", at)}${pullNote}`
+    assert.deepEqual(kinds(apexFirst), ["agent", "pull"])
+    const card = foldedPromptParts(apexFirst)![0]!
+    assert.ok(card.kind === "agent" && !card.raw.includes("Mako: PR"), "the Apex's card holds its own words only")
+    // A pull note carrying its Apex's messages: Mako's line, then the Apex's card, never the person's prompt.
+    const pullFirst = `${pullNote}${foldedSeparator("agent", at)}${apexSays("Then the docs.")}${foldedSeparator("same", at + 1)}${apexSays("And the changelog.")}`
+    assert.deepEqual(kinds(pullFirst), ["pull", "agent", "agent"])
+    const carrier: LiveRequest = { ...request, id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", text: pullFirst, actor: { kind: "service", name: "pull-watch" }, joined: [{ id: "x", at }, { id: "y", at }] }
+    assert.equal(makoPrompts([carrier]).get(carrier.id), undefined, "a carrier is drawn as its parts, not classed whole as Mako's")
+    // A wait's note carrying its Apex's message: the wait's line with its own detail, then the Apex's card.
+    const waitFirst = `${waitWords}${foldedSeparator("agent", at)}${apexSays("Merge it.")}`
+    const parts = foldedPromptParts(waitFirst)!
+    assert.deepEqual(parts.map((part) => part.kind), ["wait", "agent"])
+    assert.ok(parts[0]!.kind === "wait" && parts[0]!.detail === "- #412 checks: passed", "the wait's detail is its own, not the Apex's words")
+    assert.equal(foldedPromptParts(apexSays("Alone.")), undefined, "a message that went alone isn't split")
+  }
   assert.deepEqual(turnStops([dropped, continuation], true).get(dropped.id), { reason: "connection-lost", continuable: false, automatic: false })
   assert.equal(autoContinueCandidate([dropped]), dropped, "the newest dropped turn is Mako's to continue")
   assert.equal(autoContinueCandidate([dropped, continuation]), undefined, "a turn already continued is not continued again")
@@ -273,7 +305,9 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   assert.equal(turnStopLabel("provider-exited", "Cursor"), "Cursor stopped unexpectedly")
   assert.match(continueTurnPrompt("provider-exited", "mako"), /process stopped.*restarted/)
   assert.deepEqual(turnStops([quit, exited], false).get(exited.id), { reason: "provider-exited", continuable: true, automatic: false })
-  assert.equal(classifyProviderFailure("stream disconnected before completion: error sending request for url").kind, "network", "Codex's dropped stream is a dropped connection")
+  const droppedStream = "stream disconnected before completion: error sending request for url"
+  assert.equal(classifyProviderFailure(droppedStream, undefined, providerTextEvidence(droppedStream)).kind, "network", "Codex's native dropped stream is a dropped connection")
+  assert.equal(classifyProviderFailure(droppedStream).kind, "unknown", "unmarked host prose does not attest to a native connection loss")
 }
 // The recovery panel lists a stopped turn only when the transcript does not show it.
 {

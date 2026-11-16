@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
-import { classifyProviderFailure } from "../../contracts/provider-failure.js"
+import { classifyProviderText } from "../../contracts/provider-failure.js"
 import type { ProviderFailureEvidence } from "../../contracts/provider-failure-evidence.js"
 import { claudeFailureEvidence, claudePermissionRefusal, claudeRejectedCredential } from "./failure-evidence.js"
 import type { HostLogFields } from "../../base/host-log.js"
@@ -105,7 +105,7 @@ export function claudeAuthDiagnostics(
     /** Native failures only: consult the launch scope, never expose tokens or treat a wrapper as sign-out proof. */
     async failureEvidence(message: string | undefined): Promise<ProviderFailureEvidence | undefined> {
       if (!message) { nativeAuth = false; nativeRejected = false; nativePermission = false; return undefined }
-      const classified = classifyProviderFailure(message).kind
+      const classified = classifyProviderText(message).kind
       const auth = nativeAuth || /^Failed to authenticate[.:]/i.test(message) || classified === "auth" || classified === "permission" || claudeRejectedCredential(message) || claudePermissionRefusal(message)
       const rejected = nativeRejected
       const permission = nativePermission

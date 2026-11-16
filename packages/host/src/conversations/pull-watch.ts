@@ -1,13 +1,14 @@
-import { hostLog, hostWarn } from "../base/host-log.js"
+import { hostWarn } from "../base/host-log.js"
 import { createHash } from "node:crypto"
 import { errorMessage } from "../base/error-message.js"
-import { pullOutcome, pullWakeNote, type PullOutcome, type PullReading, type PullWaitUntil } from "../contracts/pull-waits.js"
-import type { PullTarget as ReadTarget } from "../git/index.js"
+import { PULL_READ_FAILED_MS, pullOutcome, pullWakeNote, type PullOutcome, type PullReading, type PullWaitUntil } from "../contracts/pull-waits.js"
+import { GitHubRateLimitError, type PullTarget as ReadTarget } from "../git/index.js"
 
 /** How often a watched pull request is read: the worktree summaries read a branch's pull requests no more often. */
 export const PULL_WATCH_EVERY_MS = 60_000
 /** The longest a pull request that keeps not changing goes unread: each unchanged reading doubles its wait up to this. */
 export const PULL_WATCH_MAX_MS = 8 * 60_000
+const READ_FAILURE_LOG_MS = 5 * 60_000
 
 /** Where a watched pull request is read: by repository and number, or by number in its Fin's folder for a bare `#412`. */
 export interface PullTarget extends ReadTarget {
@@ -50,6 +51,9 @@ interface Watched {
   everyMs: number
   /** The last reading, in a form two readings compare by. */
   seen?: string
+  last?: PullReading
+  failedSince?: number
+  warnedAt?: number
 }
 
 /**
@@ -65,6 +69,8 @@ export class PullWatch {
   private ticking: Promise<void> | undefined
   /** When the watch first read each wait's current head (`wait key @ head`): a later push starts a no-checks clock again. */
   private readonly seenHeads = new Map<string, number>()
+  /** Required checks already logged as never appearing, by pull request and name: said once, not every reading. */
+  private readonly unseenRequired = new Set<string>()
 
   constructor(deps: PullWatchDeps) {
     this.deps = deps
@@ -108,8 +114,13 @@ export class PullWatch {
       let reading: PullReading | null
       try {
         reading = await this.deps.read(watched.target)
-      } catch (error) {
-        hostWarn("agents", "a watched pull request could not be read", { pull: key, error: errorMessage({ error }) })
+      } catch (cause) {
+        if (cause instanceof GitHubRateLimitError) {
+          // An intentional reader pause breaks the continuous request-failure interval.
+          watched.failedSince = undefined
+          watched.dueAt = cause.retryAt
+          continue
+        }
         reading = null
       }
       const seen = reading ? JSON.stringify(reading) : undefined
@@ -117,28 +128,52 @@ export class PullWatch {
       if (seen !== undefined) watched.seen = seen
       watched.everyMs = changed ? PULL_WATCH_EVERY_MS : Math.min(watched.everyMs * 2, PULL_WATCH_MAX_MS)
       watched.dueAt = this.deps.now() + watched.everyMs
-      if (!reading) continue
+      if (!reading) {
+        const now = this.deps.now()
+        watched.failedSince ??= now
+        if (watched.warnedAt === undefined || now - watched.warnedAt >= READ_FAILURE_LOG_MS) {
+          watched.warnedAt = now
+          // A custom reader may throw arbitrary output. Log only the failure, never its command, stderr or response.
+          hostWarn("agents", "a watched pull request could not be read", { pull: key })
+        }
+        for (const wait of waits) if (wait.target.key === key && now - Math.max(wait.since, watched.failedSince) >= PULL_READ_FAILED_MS)
+          await this.fire(wait, { kind: "unreadable", minutes: PULL_READ_FAILED_MS / 60_000 }, watched.last)
+        continue
+      }
+      watched.failedSince = undefined
+      watched.last = reading
       for (const wait of waits) {
         if (wait.target.key !== key) continue
         const head = `${wait.key}@${reading.head ?? ""}`
         if (!this.seenHeads.has(head)) this.seenHeads.set(head, this.deps.now())
         const outcome = pullOutcome(reading, wait.until, wait.since, this.deps.now(), this.seenHeads.get(head))
         if (!outcome) continue
-        const note = pullWakeNote(wait.pull, reading.url, outcome, reading.head)
-        hostLog("agents", "pull request outcome", { wait: wait.key, child: wait.child, outcome: outcome.kind })
-        try {
-          const checks = reading.checks.filter((check) => outcome.kind !== "failed" || check.state === "failed")
-            .map((check) => JSON.stringify([check.name, check.state, check.at ?? null])).sort()
-          const observation = createHash("sha256").update(JSON.stringify([
-            reading.head ?? null, outcome.kind,
-            outcome.kind === "settled" || outcome.kind === "failed" ? checks : outcome,
-          ])).digest("hex")
-          await this.deps.fire({ ...wait, observation }, outcome, note)
-        } catch (error) {
-          hostWarn("agents", "a pull request's outcome didn't reach its Fin", { wait: wait.key, error: errorMessage({ error }) })
-        }
+        await this.fire(wait, outcome, reading)
       }
     }
     this.refresh()
+  }
+
+  /** Incomplete is once per head; unreadable is once per retained wait, even if its last-known head changes. */
+  private async fire(wait: PullWait, outcome: PullOutcome, reading?: PullReading): Promise<void> {
+    const note = pullWakeNote(wait.pull, reading?.url, outcome, reading?.head)
+    // A required check is named by its context, which an app or code scanning can report under another name: one
+    // that never appears may be a name that doesn't match, so the log says which, beside what did run.
+    const unseen = reading && outcome.kind === "no-checks" ? (outcome.missing ?? []).filter((name) => !this.unseenRequired.has(`${wait.pullKey}:${name}`)) : []
+    if (unseen.length) {
+      for (const name of unseen) this.unseenRequired.add(`${wait.pullKey}:${name}`)
+      hostWarn("agents", "a required check never appeared", { pull: wait.pullKey, head: reading?.head ?? "", missing: unseen.join(", "), ran: reading?.checks.map((check) => check.name).join(", ") })
+    }
+    try {
+      const checks = (reading?.checks ?? []).filter((check) => outcome.kind !== "failed" || check.state === "failed")
+        .map((check) => JSON.stringify([check.name, check.state, check.at ?? null])).sort()
+      const observation = createHash("sha256").update(JSON.stringify([
+        outcome.kind === "unreadable" ? null : reading?.head ?? null, outcome.kind,
+        outcome.kind === "settled" || outcome.kind === "failed" ? checks : outcome.kind === "incomplete" || outcome.kind === "unreadable" ? null : outcome,
+      ])).digest("hex")
+      await this.deps.fire({ ...wait, observation }, outcome, note)
+    } catch (error) {
+      hostWarn("agents", "a pull request's outcome didn't reach its Fin", { wait: wait.key, error: errorMessage({ error }) })
+    }
   }
 }

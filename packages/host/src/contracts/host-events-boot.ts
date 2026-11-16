@@ -8,6 +8,7 @@ import type { ThreadGroupChange } from "./thread-groups.js"
 import type { ThreadPurpose } from "./thread-purposes.js"
 import type { StoreFormats } from "./store-formats.js"
 import type { FileEventsService } from "./file-events-service.js"
+import type { McpSignIns } from "./mcp-sign-ins.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
 import type { Entry } from "@mako/sessions/entries"
 import type { WorktreeStep, WorktreeSummary } from "./thread-worktrees.js"
@@ -191,7 +192,11 @@ export type HostEventBody =
   | { type: "cloud-account-event"; seq: number; at: string; event: AccountDeviceEvent; mine: boolean }
   /** A runtime's installed or public version was read, or an update moved; window-wide. */
   | { type: "runtime-updates"; updates: HarnessUpdates }
-  | { type: "notice"; level: "info" | "success" | "error"; message: string }
+  /**
+   * Something the person should know or do, as a toast. Every notice that isn't news either does one thing (`action`:
+   * what fixes it) or isn't sent at all: what Mako handled itself, or nobody can act on, is said in the host's log.
+   */
+  | { type: "notice"; level: "info" | "success" | "error"; message: string; action?: NoticeAction }
   /** The file open in the viewer changed on disk (any writer). */
   | { type: "file-changed"; path: string }
   /** A file in the plugins directory changed; the renderer should re-read them. */
@@ -214,6 +219,8 @@ export type HostEventBody =
   | { type: "store-formats"; formats: StoreFormats }
   /** fseventsd's health changed, or a restart moved a step; window-wide. */
   | { type: "file-events-service"; service: FileEventsService }
+  /** The MCP servers that need the person's sign-in changed (`McpSignIns`); window-wide. */
+  | { type: "mcp-sign-ins"; reading: McpSignIns }
   /** These Threads' names changed, from any host; the rest are as they were. Window-wide. */
   | { type: "thread-titles"; titles: ThreadTitleEntry[] }
   /** Sessions were added to another Thread or split into a new one; window-wide. */
@@ -259,6 +266,12 @@ export type HostEventBody =
  * untagged event would be applied to whichever conversation happens to be on
  * screen. Absent only on window-wide events like `plugins-changed`.
  */
+/** A rewind the last host stopped in the middle of, which this one couldn't finish on its own. */
+export const REWIND_CUT_SHORT = "A rewind didn't finish when Mako last stopped, so some files may be only partly put back."
+
+/** The one thing a notice's button does: open Settings › Storage or Updates, restart Mako, or finish a rewind cut short. */
+export type NoticeAction = { label: string; does: "open-storage" | "open-updates" | "restart" | "recover-rewinds" }
+
 export type HostEvent = HostEventBody & { tabId?: string }
 
 /** Everything the renderer needs to draw one tab from cold. */

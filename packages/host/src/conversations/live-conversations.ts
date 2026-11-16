@@ -1,6 +1,7 @@
 import { z } from "zod"
 import type { PromptVersions, PromptVersionsByRequest } from "../contracts/live-conversations.js"
 import { randomBytes, randomUUID } from "node:crypto"
+import type { UnopenedConversation } from "../contracts/unopened-conversations.js"
 import { statSync } from "node:fs"
 import { join } from "node:path"
 import { Admission } from "../base/admission.js"
@@ -78,7 +79,7 @@ import { LiveForks } from "./live-forks.js"
 import { LiveGoals, turnReply, type TurnReply } from "./live-goals.js"
 import { LiveSideQuestions } from "./live-side-questions.js"
 import { LiveHibernation } from "./live-hibernation.js"
-import { JournalWriteError, LiveRequestSchema } from "./live-journal.js"
+import { JournalWriteError, LiveRequestSchema, type ColdJournal } from "./live-journal.js"
 import { JournalReclaims } from "./journal-reclaim.js"
 import { LiveLaunches, nativeStart } from "./live-launches.js"
 import { syncMemory } from "./live-ledger.js"
@@ -203,7 +204,7 @@ export class LiveConversations {
   private wakeTimer: { at: number; timer: ReturnType<typeof setTimeout> } | undefined
   private wakesStopped = false
   private stopSignInEvents?: () => void
-  private readonly reclaims = new JournalReclaims()
+  private readonly reclaims = new JournalReclaims((key) => this.dependencies.historyHolds?.(key) ?? false)
 
   constructor(dependencies: Dependencies) {
     this.dependencies = dependencies
@@ -230,9 +231,12 @@ export class LiveConversations {
       loaded: (resident) => {
         void this.sources.readBase(resident)
         this.counts.loaded(resident)
+        this.dependencies.historyLoaded?.(resident.snapshot.session.id)
         // A journal keeps no children: their engine says how they are now, and a window that holds the last revision
         // hears what moved while none was in memory.
         if (this.takeChildren(resident)) this.schedule(resident)
+        // Nor its wait: the Thread store says whether one is armed now.
+        if (this.takeWait(resident)) this.schedule(resident)
         // A switch that waited behind another when the last host ended goes on, as it was asked to.
         if (this.transfers.pending(resident)?.behind) queueMicrotask(() => this.dispatch.drain(resident))
       },
@@ -733,6 +737,34 @@ export class LiveConversations {
 
   refreshedSnapshot(id: string): Promise<LiveSnapshot | null> {
     return this.sources.refreshedSnapshot(id)
+  }
+
+  /**
+   * The last cold view of conversation `id`'s journal (file `key`) was let go: a compaction it put off goes now, unless
+   * the conversation is in memory again, whose journal's close decides it.
+   */
+  coldViewReleased(key: string, id: string): void {
+    if (this.records.has(id)) return
+    void this.reclaims.released(key)
+  }
+
+  /** Conversation `id` read where its journal lies, for a window, when nothing holds it in memory (`LiveRecords.cold`). */
+  async coldView(id: string): Promise<{ journal: ColdJournal; snapshot: LiveSnapshot; still: () => boolean } | undefined> {
+    const cold = await this.records.cold(id)
+    if (!cold) return undefined
+    // Its history is its session's record: the newest page of it, the rest read as a window pages back.
+    const source = cold.snapshot.baseSource
+    const base = source ? await this.sources.newestBase(source) : null
+    if (source && (!base || !cold.still())) {
+      cold.journal.close()
+      return undefined
+    }
+    // Its Fins, as reading it in adds them (`takeChildren`): the engine's, never the journal's.
+    const agents = this.dependencies.agents?.()?.roster(id)
+    const nativeAgents = agents ? withChildren(cold.snapshot.nativeAgents, agents) : cold.snapshot.nativeAgents
+    const read = base ? { ...cold.snapshot, base } : cold.snapshot
+    const snapshot = nativeAgents === read.nativeAgents ? read : { ...read, nativeAgents }
+    return { journal: cold.journal, still: cold.still, snapshot: this.stamp(snapshot) }
   }
 
   relocate(id: string, cwd: string): Promise<string | undefined> {
@@ -1330,6 +1362,11 @@ export class LiveConversations {
       if (versions) answers[request.id] = versions
     }
     return answers
+  }
+
+  /** Saved conversations this host couldn't open as it started; their journals are kept. */
+  unopened(): readonly UnopenedConversation[] {
+    return this.records.unopened
   }
 
   recoverRewinds() {
@@ -2030,15 +2067,35 @@ export class LiveConversations {
 
   /**
    * A line Mako writes into a conversation that no harness's record holds, as `recordDirect` does: a Fin's move to
-   * another account or harness when its own ran out. Said once: the same words again change nothing.
+   * another account or harness when its own ran out, and in its Apex's, a Fin's move or the person's stop of it
+   * (`membershipLine`). Said once unless `again`: the same words again change nothing; a stop is its own each time.
    */
-  recordNote(id: string, label: string, detail: string): boolean {
+  recordNote(id: string, label: string, detail: string, again = false): boolean {
     const resident = this.records.load(id)
     if (!resident) return false
     this.keep(resident)
-    if (reduceLiveUpdates(resident.snapshot.blocks, resident.updates).some((block) => block.type === "event" && block.label === label && block.detail === detail)) return true
+    if (!again && reduceLiveUpdates(resident.snapshot.blocks, resident.updates).some((block) => block.type === "event" && block.label === label && block.detail === detail)) return true
     queueLiveUpdate(resident, { kind: "event", label, detail })
     this.keep(resident)
+    return true
+  }
+
+  /**
+   * The conversation's armed wait changed (armed, an item met, fired, ended): its windows' waiting line reads it
+   * again, at once. One not in memory reads it when it's next loaded.
+   */
+  waitChanged(id: string): void {
+    const resident = this.records.get(id)
+    if (!resident || this.records.isReleased(resident) || !this.takeWait(resident)) return
+    this.keep(resident)
+  }
+
+  /** Whether the snapshot took a change of its wait's line. */
+  private takeWait(resident: Resident): boolean {
+    const turnWait = this.dependencies.agents?.()?.turnWaitLine?.(resident.snapshot.session.id)
+    if (turnWait === resident.snapshot.turnWait) return false
+    if (turnWait && resident.snapshot.turnWait && JSON.stringify(turnWait) === JSON.stringify(resident.snapshot.turnWait)) return false
+    resident.snapshot = { ...resident.snapshot, turnWait }
     return true
   }
 
@@ -2296,6 +2353,7 @@ export class LiveConversations {
             : undefined,
         goal: previous.goal !== snapshot.goal ? (snapshot.goal ?? null) : undefined,
         side: previous.side !== snapshot.side ? (snapshot.side ?? null) : undefined,
+        turnWait: previous.turnWait !== snapshot.turnWait ? (snapshot.turnWait ?? null) : undefined,
         historyFailure: previous.historyFailure !== snapshot.historyFailure ? (snapshot.historyFailure ?? null) : undefined,
         harnessTurns: previous.harnessTurns !== snapshot.harnessTurns ? snapshot.harnessTurns : undefined,
         spentThrough: previous.spentThrough !== snapshot.spentThrough ? (snapshot.spentThrough ?? null) : undefined,
@@ -2369,12 +2427,9 @@ export class LiveConversations {
     if (resident.storageFault) return
     resident.storageFault = true
     const error = errorMessage(boundary)
-    this.dependencies.emit({
-      type: "notice",
-      level: "error",
-      message: `Mako couldn't save this conversation, so it stopped the agent's turn. What isn't saved yet is kept until Mako can write it. ${error}`,
-    })
+    // Its row says so in the conversation (`not-saved`), and saving goes again by itself; a full disk has its own notice.
     const requestId = resident.snapshot.requests.find((request) => request.status === "dispatching")?.id
+    hostWarn("live", "a conversation couldn't be saved; its turn stops", { request: requestId, error })
     if (resident.driver && requestId && resident.stopping !== requestId) {
       resident.stopping = requestId
       resident.stoppingFor = STOPPED_FOR["not-saved"]

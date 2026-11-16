@@ -1,3 +1,5 @@
+import { openCodeFailureEvidence } from "./failure.js"
+import type { ProviderFailureEvidence } from "../../contracts/provider-failure-evidence.js"
 import type { NativeAgentObservation } from "../../contracts/native-agents.js"
 import type { OpenCodeEvent } from "@opencode/client"
 import { isOpenCodeInstruction, openCodeNoticeTurn, openCodeRetried, openCodeTurnFailed, type ProviderTurnCause } from "@mako/sessions"
@@ -16,7 +18,7 @@ import { openCodeIgnores } from "./notices.js"
 import { OPENCODE_REQUESTS, openCodeRequest, openCodeRequestSession, type OpenCodeRequest } from "./requests.js"
 
 /** OpenCode's own error on a failed execution or compaction. */
-export interface OpenCodeError { type: string; message: string }
+export interface OpenCodeError { type: string; message: string; failureEvidence: ProviderFailureEvidence }
 
 /** A notice OpenCode enqueued for itself, which may start a turn of its own. */
 export interface OpenCodeNotice {
@@ -315,13 +317,13 @@ export class OpenCodeDecoder {
       case "session.execution.succeeded":
         return turn({ type: "succeeded" })
       case "session.execution.failed":
-        return turn({ type: "failed", error: { type: event.data.error.type, message: event.data.error.message } })
+        return turn({ type: "failed", error: { type: event.data.error.type, message: event.data.error.message, failureEvidence: openCodeFailureEvidence(event.data.error) } })
       case "session.execution.interrupted":
         return turn({ type: "interrupted", reason: event.data.reason, source: this.reply ?? event.id })
       case "session.compaction.failed": {
         const failed: Extract<OpenCodeTurnFact, { type: "compaction-failed" }> = {
           type: "compaction-failed",
-          error: { type: event.data.error.type, message: event.data.error.message },
+          error: { type: event.data.error.type, message: event.data.error.message, failureEvidence: openCodeFailureEvidence(event.data.error) },
           source: this.compactionEnded(event.id, event.data.inputID),
         }
         if (event.data.inputID) failed.inbox = event.data.inputID

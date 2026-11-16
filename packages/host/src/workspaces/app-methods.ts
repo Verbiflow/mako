@@ -1,3 +1,4 @@
+import type { AppKey } from "../contracts/thread-environments.js"
 import type { RemoteAppDemand, RemoteAppReply, RemoteAppSnapshot } from "../contracts/remote-app.js"
 import type { MethodTable } from "../base/methods.js"
 import type { DeskApp } from "./environment-tools.js"
@@ -10,14 +11,17 @@ import type { ThreadAppSampler } from "./app-sampler.js"
  * A folder's app for the strip and the terminal dock: its view, its buttons, and what it printed. `target` is the one the person picked.
  * Without the Thread store there are no apps, and each call says so.
  */
-export function declareThreadAppMethods(methods: MethodTable, apps: DeskApp | undefined, sampler?: ThreadAppSampler) {
+export function declareThreadAppMethods(methods: MethodTable, apps: DeskApp | undefined, sampler?: ThreadAppSampler, outputReady?: (apps: readonly AppKey[]) => boolean) {
   const desk = (): DeskApp => {
     if (!apps) throw new Error("Thread apps need the Thread store, which this host couldn't open.")
     return apps
   }
   methods.handle("mako:thread-app-demand", (demand?: AppSamplingDemand): AppSamplingReply => {
     const client = hostClient()
-    if (demand) return { kind: sampler?.follow(client, demand) ? "following" : "unavailable" }
+    if (demand) {
+      if (!sampler?.follow(client, demand)) return { kind: "unavailable" }
+      return { kind: "following", ...(demand.outputs && { outputs: outputReady?.(demand.outputs) ?? false }) }
+    }
     const connection = sampler?.connection(client)
     return connection ? { kind: "ready", connection, generation: sampler?.generation(client) ?? 0 } : { kind: "unavailable" }
   })

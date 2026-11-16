@@ -310,7 +310,12 @@ can fix a number per device instead of Auto (Settings › Fins), and
 machine per Fin, is bounded by the plan and the daily spend ceiling only
 (`cloudCapacity`, `AgentsDeps.cloudLimits`), for when placement lands. Over
 every place the person's ceiling (`FIN_CEILING`, 64) is a safety net, and a
-tree's running budget (32) caps one Apex's fan-out. A refused start names
+tree's running budget (32) caps one Apex's fan-out. Finished Fins cost
+nothing, so no limit counts a tree's starts over its life; a start rate
+(`TREE_BUDGET`: 48 in any 10 minutes and 120 in any hour, queued starts
+counted) only stops an agent starting Fins in a loop, even one paced under
+the short window, refused with when it frees
+(`startRateWords`). A refused start names
 the places a start may name that have room. This Mac's load also shows in
 the start's answer when it's busy (`macLoad`, `mac`) beside the device's
 number (`atOnce`). `MAKO_FIN_SLOTS` fixes the number, as a test's host does.
@@ -604,11 +609,22 @@ edits both through the same calls and previews only what each adds to the
 note, from the same functions (`roleRulesPreview`); `npm run test:person-rules` covers it. A worktree in a project folder of several
 repositories can be on a branch it names, adopted in each repository that
 has it and made from the newest start in the rest. A report (`agents_report`, else one
-implicit report at a turn's end) sends its Apex a notice; an idle Apex waits
-`WAKE_COALESCE_MS` and takes ONE turn with the digest, a busy one gets it at
-its next step where its harness steers there and at its turn's end where it
-doesn't, at most `WAKES_PER_MINUTE` an Apex (`agent-wakes.ts`): the Apex
-never polls. A steer the harness doesn't take goes as the Apex's next turn,
+implicit report at a turn's end, which a completed turn also writes when its
+last report was progress that hands nothing on and names no wait Mako watches:
+a pull request the watch reads, an armed turn wait or its own Fins at work,
+`progressLeftUnwatched`) sends its Apex a notice; an idle Apex waits
+`WAKE_COALESCE_MS` and takes ONE turn with the digest; a busy one is left to
+think: only a question or decision it can answer is steered into its running
+turn, at its next step where its harness steers there, and what else its
+Fins report waits for the turn's end as one digest, unless the turn is still
+running `FOCUS_MS` (2 minutes) after the first of it, when that digest is
+steered in once (`asksApex`, `armFocus`); at most `WAKES_PER_MINUTE` digests
+an Apex (`agent-wakes.ts`): the Apex never polls. `npm run test:comms-storm`
+holds both ways this can go wrong: a 30-Fin storm around a working Apex
+(steers per minute, the share of its turn left uninterrupted, its turns once
+free, the longest a result waits) and a Fin's backlog after a long turn (the
+turns it takes to hear it all); targets Mako misses are in its
+`EXPECTED_FAILING`. A steer the harness doesn't take goes as the Apex's next turn,
 never dropped. The digest is an entry in the Apex's own queue
 (`LiveRequest.digest`), its reports heard once it's there, so the queue
 keeps it through a crash, sends it once and retries it as any message: a
@@ -813,7 +829,11 @@ which the digest lists under "hands work to another Fin" for the Apex to pass
 on with one `agents_send`. A progress report that says it hands work to
 another Fin of its Apex (`agents_report`'s `handoff: {to}`, or `fin:<name>` in
 its summary) is a handoff too and wakes the Apex; a Fin merely mentioned by
-its name or Thread is progress, and stays quiet. `npm run test:orch-comms` covers all three, and `test:orch-deliver` the
+its name or Thread is progress, and stays quiet. So is progress whose
+`waitingOn` first names a pull request's review or the person
+(`awaitedAnew`, `Report.awaits`): it wakes the Apex once, under "waits on
+someone else to act", since only the Apex or the person can bring that
+about, and the same wait narrated again stays quiet (`test:orch-comms`). `npm run test:orch-comms` covers all three, and `test:orch-deliver` the
 refusal.
 An Apex reads the person's other Apexes with `agents_list` `scope: apexes`
 (`AgentsApexes`): every tree's top Apex but its own whose conversation is
@@ -850,6 +870,15 @@ the turn it runs, for a correction to what it's doing now; `interrupt`, which
 stops that turn (`LiveConversations.interrupt`) and starts the next with the
 message, ahead of what was queued, which still follows in order. An idle Fin
 takes any as its next turn. A direct message, a redirect and an answer steer.
+When a queued message from an agent or Mako goes, the plain messages its
+agent sender and Mako's notes (a pull request's outcome, a wait that fired,
+`FOLDED_SERVICES`) queued right behind it, admitted after it, go with it as
+one turn, in order, each under a line saying who and when (`foldQueued`); a
+note `admits` refuses goes alone, to be refused there, so a Fin back from
+a long turn reads all of it at once; each row stays the person's to edit
+until it goes, and one folded is canceled with `joinedInto`, its ID kept in
+the carrier's `joined` for a repeat or a handoff. A steer that arrives as a
+turn is handed over waits for its run rather than queueing.
 A steer queues the message first and steers that request (`steer-queued`), so
 one the harness refuses, then or when its turn ends (Cursor's `answersOnEnd`),
 stays where it was queued and nothing sent after it overtakes it; the call
@@ -1477,7 +1506,20 @@ opening the file read-only, its rows handed over a part at a time,
 `journalRowSteps`) and its snapshot made on the loop from them; a reader
 that fails leaves the journal read on the loop as before. On a 60MB
 journal it held the loop 42–91 ms in all against 108–477 ms read on it
-(`bench:live-read`'s `journalRead*`). A history read from its session whose
+(`bench:live-read`'s `journalRead*`). A window's read of a conversation not in
+memory isn't one: it reads the journal where it lies (`ColdJournal`, a
+cold view), under one read transaction pinned on a read-only connection
+until the view is let go, so its pages read the rows as they were when it
+opened. It parses the metadata and requests, a slice at a time, and the
+blocks a page shows, by index; SQLite counts the turns and requests before
+a page. The conversation is read in only when something acts on it, which
+lets its cold views go (`historyLoaded`), and what they hold counts in the
+conversations' memory budget (`historyHeld`). One its last host left
+running or sending, or that keeps a base (`baseSource` or a copy), is read
+in as before (`LiveRecords.cold`). On copies of ten Fins' journals (22 to
+122 MB) the first reads took 2.4 s in all against 7.8 s, a 122 MB one's
+0.6 s against 1.8 s, and the host's RSS peaked at 0.9 GB against 1.6 GB
+(`test-cold-history.ts`). A history read from its session whose
 merge was overtaken is merged again on the next drain, not read again
 (`LiveSources.pagesRead`). `agents_report` never reads a journal: a
 notice for an Apex not in memory reads it in first (`readIn`), and the

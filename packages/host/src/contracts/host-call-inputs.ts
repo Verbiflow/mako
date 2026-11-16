@@ -300,6 +300,7 @@ const inputs = {
               text: z.string().optional(),
             })
             .optional(),
+          awaits: z.literal(true).optional(),
         }),
         standing: z
           .object({
@@ -1490,6 +1491,16 @@ const inputs = {
             .optional(),
         })
         .optional(),
+      z
+        .object({
+          actor: z
+            .object({
+              kind: z.literal("service"),
+              name: z.literal("turn-wait"),
+            })
+            .optional(),
+        })
+        .optional(),
     ]),
   "mako:live-prompt-versions": () => z.tuple([z.string()]),
   "mako:live-read": () =>
@@ -1729,6 +1740,7 @@ const inputs = {
                 name: z.union([
                   z.literal("handoff"),
                   z.literal("workspace"),
+                  z.literal("turn-wait"),
                   z.literal("goal"),
                   z.literal("catalog"),
                   z.literal("migration"),
@@ -1951,6 +1963,7 @@ const inputs = {
       ]),
     ]),
   "mako:live-turn-writers": () => z.tuple([z.string(), z.string(), z.string()]),
+  "mako:live-wait-stop": () => z.tuple([z.string(), z.string()]),
   "mako:lost-versions": () =>
     z.tuple([
       z.union([
@@ -1964,6 +1977,8 @@ const inputs = {
     z.tuple([z.union([z.literal("resume"), z.literal("unlock-screen")])]),
   "mako:mako-footprint": () => z.tuple([]),
   "mako:mcp-discover": () => z.tuple([]),
+  "mako:mcp-sign-in": () => z.tuple([z.string(), z.string()]),
+  "mako:mcp-sign-ins": () => z.tuple([]),
   "mako:mcp-sync-apply": () =>
     z.tuple([
       z.string(),
@@ -3078,6 +3093,18 @@ const inputs = {
             .nonnegative()
             .max(Number.MAX_SAFE_INTEGER),
           visible: z.boolean(),
+          apps: z.boolean().optional(),
+          outputs: z
+            .array(
+              z
+                .string()
+                .regex(
+                  /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|folder-[0-9a-f]{16})$/
+                )
+                .brand<"AppKey">()
+            )
+            .max(64)
+            .optional(),
         })
         .strict()
         .optional(),
@@ -3189,6 +3216,18 @@ const inputs = {
       z.object({ project: z.string().optional() }).optional(),
     ]),
   "mako:thread-run": () => z.tuple([z.string()]),
+  "mako:thread-scratch": () => z.tuple([]),
+  "mako:thread-scratch-set": () =>
+    z.tuple([
+      z.object({
+        mode: z.union([z.literal("remove"), z.literal("preview")]),
+        idleDays: z.number(),
+        kept: z.array(z.string()),
+        dataMode: z
+          .union([z.literal("remove"), z.literal("preview")])
+          .optional(),
+      }),
+    ]),
   "mako:thread-stop": () =>
     z.tuple([
       z.union([
@@ -3287,6 +3326,64 @@ const inputs = {
       ]),
       z.union([z.literal("full"), z.literal("concise")]),
     ]),
+  "mako:turn-wait": () =>
+    z.tuple([
+      z.union([
+        z.object({ kind: z.literal("agent"), session: z.string() }),
+        z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("apex"),
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+          forwards: z.string().optional(),
+          epoch: z.number().optional(),
+        }),
+      ]),
+      z.object({
+        action: z
+          .union([z.literal("list"), z.literal("cancel"), z.literal("start")])
+          .optional(),
+        description: z.string().optional(),
+        on: z
+          .array(
+            z.union([
+              z.object({ fin: z.string() }),
+              z.object({
+                pull: z.string(),
+                until: z
+                  .union([
+                    z.literal("checks"),
+                    z.literal("merge"),
+                    z.literal("review"),
+                  ])
+                  .optional(),
+              }),
+              z.object({
+                check: z.union([z.literal("full"), z.literal("quick")]),
+                target: z.string().optional(),
+              }),
+            ])
+          )
+          .optional(),
+        seconds: z.number().optional(),
+        at: z.string().optional(),
+        returnWhen: z.union([z.literal("any"), z.literal("all")]).optional(),
+        conversation: z.string().optional(),
+        clientKey: z.string(),
+      }),
+    ]),
+  "mako:unopened-conversations": () => z.tuple([]),
   "mako:unread-records": () => z.tuple([]),
   "mako:unwatch-file": () => z.tuple([]),
   "mako:update-state": () => z.tuple([]),
@@ -3655,11 +3752,14 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:live-turn-undo", "conversations"],
   ["mako:live-turn-undo-preview", "conversations"],
   ["mako:live-turn-writers", "conversations"],
+  ["mako:live-wait-stop", "conversations"],
   ["mako:lost-versions", "attribution"],
   ["mako:machine-leaving", "application"],
   ["mako:machine-woke", "application"],
   ["mako:mako-footprint", "usage"],
   ["mako:mcp-discover", "tools"],
+  ["mako:mcp-sign-in", "tools"],
+  ["mako:mcp-sign-ins", "tools"],
   ["mako:mcp-sync-apply", "tools"],
   ["mako:mcp-sync-preview", "tools"],
   ["mako:measure-update-again", "application"],
@@ -3815,6 +3915,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-restore-plan", "conversations"],
   ["mako:thread-return", "conversations"],
   ["mako:thread-run", "conversations"],
+  ["mako:thread-scratch", "workspaces"],
+  ["mako:thread-scratch-set", "workspaces"],
   ["mako:thread-stop", "threads"],
   ["mako:thread-titles", "threads"],
   ["mako:thread-titles-import", "threads"],
@@ -3823,6 +3925,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:threads-act", "conversations"],
   ["mako:threads-move", "conversations"],
   ["mako:transcript-document", "conversations"],
+  ["mako:turn-wait", "conversations"],
+  ["mako:unopened-conversations", "conversations"],
   ["mako:unread-records", "threads"],
   ["mako:unwatch-file", "workspaces"],
   ["mako:update-state", "application"],

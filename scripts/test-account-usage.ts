@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import { mock } from "node:test"
 import { type UsageWindow } from "@mako/host/contracts/accounts"
 import { bindingWindow, hasReset, limitOffer, mergeWindows, nextReset } from "@mako/host/contracts/account-usage"
@@ -716,7 +717,7 @@ assert.equal(claudeRateLimitWindow({ status: "allowed", rateLimitType: "five_hou
   const watch = spendWatch(() => "codex", () => allowed, (harness, refused) => ended.push([harness, refused]))
   const batch = (status: LiveSessionState["status"], error?: string): HostEvent => {
     const sessionChanges: Partial<LiveSessionState> = { status }
-    if (error) sessionChanges.error = error
+    if (error) Object.assign(sessionChanges, { error, failureEvidence: providerTextEvidence(error) })
     return { type: "live-batch", batch: { id: "c", revision: 1, updates: [], sessionChanges } }
   }
   watch(batch("running"))
@@ -728,7 +729,9 @@ assert.equal(claudeRateLimitWindow({ status: "allowed", rateLimitType: "five_hou
   watch(batch("failed", "Payment required: insufficient credits"))
   watch(batch("running"))
   watch(batch("failed", "ECONNRESET"))
-  assert.deepEqual(ended, [["codex", true], ["codex", false], ["codex", true], ["codex", false]])
+  watch(batch("running"))
+  watch({ type: "live-batch", batch: { id: "c", revision: 1, updates: [], sessionChanges: { status: "failed", error: "You've hit your usage limit." } } })
+  assert.deepEqual(ended, [["codex", true], ["codex", false], ["codex", true], ["codex", false], ["codex", false]], "unmarked host prose is not an account-limit refusal")
 }
 
 console.log(

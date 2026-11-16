@@ -1771,18 +1771,21 @@ async function failureIsolationAndAssets() {
         .every((event) => JSON.stringify(event.batch.updates).length < 256_000)
     )
     await f.owner.stop()
-    writeFileSync(join(f.root, `${randomUUID()}.sqlite`), "corrupt journal")
+    const corrupt = randomUUID()
+    writeFileSync(join(f.root, `${corrupt}.sqlite`), "corrupt journal")
+    // A journal that can't be opened is kept for recovery, said in the host's log, and listed for the rail and
+    // Diagnostics (`unopened`) rather than toasted at every start.
+    const kept: HostLogLine[] = []
+    const stopHearing = followHostLog((line) => { if (line.message === "a saved conversation couldn't be opened; its journal is kept") kept.push(line) })
     const recovered = new LiveConversations(f.dependencies)
     try {
       assert.equal(recovered.snapshot(f.id)?.blocks.length, 2)
-      assert.ok(
-        f.events.some(
-          (event) =>
-            event.type === "notice" &&
-            event.message.includes("preserved for recovery")
-        )
-      )
+      assert.equal(kept.length, 1, "the corrupt journal is said in the log")
+      assert.ok(!f.events.some((event) => event.type === "notice"), "and never as a toast")
+      assert.deepEqual(recovered.unopened().map(({ conversation, journal }) => [conversation, journal]), [[corrupt, join(f.root, `${corrupt}.sqlite`)]], "it's listed with its kept journal")
+      assert.ok(recovered.unopened()[0]?.error, "with what opening it met")
     } finally {
+      stopHearing()
       await recovered.stop()
     }
   } finally {
@@ -1861,7 +1864,11 @@ function fillDisk() {
 async function unsavedTurnIsMakos() {
   const f = fixture()
   const said: HostLogLine[] = []
-  const stopHearing = followHostLog((line) => { if (line.message === "Mako stops the provider's turn") said.push(line) })
+  const unsaved: HostLogLine[] = []
+  const stopHearing = followHostLog((line) => {
+    if (line.message === "Mako stops the provider's turn") said.push(line)
+    if (line.message === "a conversation couldn't be saved; its turn stops") unsaved.push(line)
+  })
   let disk: ReturnType<typeof fillDisk> | undefined
   try {
     await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
@@ -1877,8 +1884,9 @@ async function unsavedTurnIsMakos() {
     f.owner.observe({ type: "live-update", id: f.id, update: { kind: "text", id: "a1", text: " and its styles" } })
     await waitFor(() => f.cancels() === 1, "the unsaved conversation's turn was not stopped")
     assert.deepEqual(said.map((line) => [line.level, line.fields?.why, line.fields?.request, line.fields?.error]), [["warn", "not-saved", request, "database or disk is full"]])
-    const notice = f.events.find((event) => event.type === "notice")
-    assert.match(notice?.type === "notice" ? notice.message : "", /^Mako couldn't save this conversation, so it stopped the agent's turn\. .*database or disk is full$/)
+    // Its row says so in the conversation and saving goes again by itself: the host's words are the log's, never a toast.
+    assert.equal(f.events.find((event) => event.type === "notice"), undefined, "no toast for what the row says and Mako retries")
+    assert.deepEqual(unsaved.map((line) => [line.level, line.fields?.request, line.fields?.error]), [["warn", request, "database or disk is full"]])
     // The person presses Stop too, which can't be saved yet either; the provider reports the end while the disk is full.
     await assert.rejects(f.owner.cancel(f.id), /database or disk is full/)
     f.owner.observe({ type: "live-session", session: { ...f.state, status: "ready", lastStop: "cancelled" } })

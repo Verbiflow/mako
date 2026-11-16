@@ -4,7 +4,7 @@ import { Devices, type MachineSheetProps } from "@/components/settings/devices"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { Action, IconAction } from "@/components/ui/kit"
 import { useAcp } from "@/state/acp"
-import { cloudAccount, useCloudAccount } from "@/state/cloud-account"
+import { cloudAccount, useCloudAccount, watchAccountDetail } from "@/state/cloud-account"
 import { desktop } from "@/state/desktop"
 import { deviceEvidence, placeCounts } from "@/lib/device-places"
 import { shallowEqual } from "@/state/store"
@@ -59,15 +59,8 @@ function AccountDevices({ state, cloud }: { state: SignedIn; cloud: string | nul
   const { connection, device: current } = state
   useEffect(() => {
     if (connection !== "connected") return
-    void cloudAccount.loadDevices()
-    const refresh = () => void cloudAccount.loadDevices()
-    const timer = setInterval(refresh, 60_000)
-    window.addEventListener("focus", refresh)
-    return () => {
-      clearInterval(timer)
-      window.removeEventListener("focus", refresh)
-    }
-  }, [connection])
+    return watchAccountDetail("devices", state.account.id)
+  }, [connection, state.account.id])
   useEffect(() => () => cloudAccount.addingMachine(false), [])
   const counts = usePlaceCounts()
   const list = useMemo<CloudDevice[]>(() => devices?.list ?? [current], [devices, current])

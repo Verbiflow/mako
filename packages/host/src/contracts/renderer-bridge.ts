@@ -1,6 +1,8 @@
+import type { ThreadScratchReport, ThreadScratchSettings } from "./thread-scratch.js"
 import type { RemoteAppDemand, RemoteAppReply, RemoteAppSnapshot } from "./remote-app.js"
 import type { FileFindResults, FileFolders, FileFoldersOptions, FileGrepOptions, FileGrepResults } from "./file-index.js"
 import type { PromptVersionsByRequest } from "./live-conversations.js"
+import type { UnopenedConversation } from "./unopened-conversations.js"
 import type { AgentAskAnswer } from "./agent-asks.js"
 import type { GitRemoteInput, GitRemoteResult, ExternalEditor, FileContents, FileReadPurpose, GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitHubStatus, GitStatus, GitPushInput, PullRequest, SearchOptions, SearchResults, StagedFile, WorkspaceFile } from "./git-workspace-search.js"
 import type { TurnFileHunks, TurnFileWriters, TurnUndoPreview, TurnUndoResult, TurnUndoScope } from "./turn-review.js"
@@ -81,6 +83,7 @@ import type { SyncStatus } from "./sync-status.js"
 import type { SyncReadings } from "./sync-readings.js"
 import type { MakoFootprint } from "./mako-footprint.js"
 import type { FileEventsService } from "./file-events-service.js"
+import type { McpSignIns } from "./mcp-sign-ins.js"
 import type { CloudTurnOn } from "./cloud-turn-on.js"
 import type { SetupFix, SimulatorSetup } from "./simulator-setup.js"
 import type { SimulatorsActInput, SimulatorsActResult, SimulatorsListed, SimulatorsOpenInput, SimulatorsOpenResult, SimulatorsReleaseInput, SimulatorsReleaseResult, SimulatorsWatchInput, SimulatorsWatchResult } from "./simulators.js"
@@ -211,6 +214,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     worktreeRemoval: (path: string) => invokeTrustedHost<WorktreeRemoval>("mako:worktree-removal", path),
     skipWorktree: (conversationId: string) => invokeTrustedHost<void>("mako:worktree-skip", conversationId),
     worktreeAhead: (path: string) => invokeTrustedHost<number | null>("mako:worktree-ahead", path),
+    threadScratch: () => invokeTrustedHost<ThreadScratchReport>("mako:thread-scratch"),
+    setThreadScratch: (settings: ThreadScratchSettings) => invokeTrustedHost<ThreadScratchReport>("mako:thread-scratch-set", settings),
     worktreeRetention: () => invokeTrustedHost<WorktreeRetentionReport>("mako:worktree-retention"),
     setWorktreeRetention: (settings: WorktreeRetentionSettings) => invokeTrustedHost<WorktreeRetentionReport>("mako:worktree-retention-set", settings),
     worktreeInventory: () => invokeTrustedHost<WorktreeInventory>("mako:worktree-inventory"),
@@ -408,6 +413,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<LiveSnapshot[]>("mako:live-rewind-recover"),
     /** A conversation's edited prompts' versions, by request: the conversation each was first sent in, then each fork. */
     livePromptVersions: (id: string) => invokeTrustedHost<PromptVersionsByRequest>("mako:live-prompt-versions", id),
+    /** Saved conversations this host couldn't open as it started; their journals are kept for recovery. */
+    unopenedConversations: () => invokeTrustedHost<UnopenedConversation[]>("mako:unopened-conversations"),
     liveFork: (id: string, input: ForkInput) =>
       invokeTrustedHost<LiveSnapshot>("mako:live-fork", id, input),
     liveCapture: (id: string, path: string) =>
@@ -540,6 +547,10 @@ export function createMakoBridge(transport: BridgeTransport) {
     makoFootprint: () => invokeTrustedHost<MakoFootprint>("mako:mako-footprint"),
     /** macOS's file-change service as this host reads it; the host pushes `file-events-service` as it changes. */
     fileEventsService: () => invokeTrustedHost<FileEventsService>("mako:file-events-service"),
+    /** The MCP servers that need the person's sign-in; the host pushes `mcp-sign-ins` as they change. */
+    mcpSignIns: () => invokeTrustedHost<McpSignIns>("mako:mcp-sign-ins"),
+    /** Signs one in its harness's own way: a command Mako runs, or a page the window opens (`McpSignIn.url`). */
+    mcpSignIn: (harness: string, server: string) => invokeTrustedHost<McpSignIns>("mako:mcp-sign-in", harness, server),
     /** Restarts fseventsd through macOS's password dialog, evidence first, and answers with how it went. */
     fileEventsRestart: () => invokeTrustedHost<FileEventsService>("mako:file-events-restart"),
     /** "Not now", or closing the restart's outcome: not said again this episode or today unless it gets worse. */
@@ -1048,6 +1059,9 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<{ label: string; harness: string } | null>("mako:agents-next-place", conversation),
     agentsContinueNext: (conversation: string, id: string) =>
       invokeTrustedHost<boolean>("mako:agents-continue-next", conversation, id),
+    /** The person's Stop waiting: the conversation's wait it names ends, waking no one. */
+    liveWaitStop: (conversation: string, wait: string) =>
+      invokeTrustedHost<boolean>("mako:live-wait-stop", conversation, wait),
     agentsRespond: (conversation: string, input: AgentsRespondInput) =>
       invokeTrustedHost<AgentsAnswered | AgentRefused>("mako:agents-respond", conversation, input),
     /** Where each harness stands on an Apex's native spawns: its control, unverified on this version, or words alone. */

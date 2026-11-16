@@ -234,6 +234,13 @@ try {
     assert.deepEqual(edgeOf(r).tuned?.rerouted?.to, { why: "harness", harness: "codex" })
     assert.equal(r.world.agents.roster(r.apex.conversation)[0]!.child!.moved, line)
     assert.ok(noted(r, "Moved to Claude (work)") && noted(r, "Moved to Codex"), "each move is a line in its transcript")
+    // And in its Apex's, where the person reads the crew: the Fin's name, where it went, and why under it.
+    const apexLines = (r.world.live.snapshot(r.apex.conversation)?.blocks ?? []).flatMap((block) => (block.type === "event" ? [[block.label, block.detail]] : []))
+    const title = r.world.store.thread(edgeOf(r).child)?.title ?? edgeOf(r).name
+    assert.deepEqual(apexLines.filter(([label]) => label?.startsWith(`${title} moved to`)), [
+      [`${title} moved to Claude (work)`, `personal is at its limit until ${resetWords(RESET, clock())}`],
+      [`${title} moved to Codex`, `Claude (work) is at its limit until ${resetWords(RESET, clock())}`],
+    ], `each move is a line in its Apex's transcript too: ${JSON.stringify(apexLines)}`)
     const thread = edgeOf(r).child
     assert.deepEqual(r.world.store.reportsOf(thread, 0).map((report) => [report.status, report.summary]), [["done", "Labelled all 120."]], "one report, the turn that finished the work: no failure for a limit it moved past")
     await until("its Apex to hear", () => r.wakes.length === 1)

@@ -14,6 +14,8 @@ export type HistoryMark = z.infer<typeof HistoryMarkSchema>
 /** Native handles whose synchronous creation and close must stay off the host thread. */
 export const NativeWatchSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("directory") }),
+  /** Recursive app output, filtered to logs in the child before IPC. */
+  z.object({ kind: z.literal("app-output") }),
   z.object({ kind: z.literal("git-markers"), markers: z.array(z.string()) }),
 ])
 export type NativeWatch = z.infer<typeof NativeWatchSchema>

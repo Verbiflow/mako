@@ -70,7 +70,7 @@ export type MachineRuntimeOptions = {
   work(): LifecycleWork[]
   /**
    * What tells the account's list of its Sessions, and relays a watched conversation's live updates
-   * (`SessionPublisher`, which composition makes): reported on its link at each tick and whenever the publisher asks
+   * (`SessionPublisher`, which composition makes): reported on its link at the publisher's change and reconcile deadlines
    * (`reportSessions`), and told what's watched there.
    */
   sessions?: SessionPublishing | undefined
@@ -111,6 +111,19 @@ const MEDIA_FRAMES: ReadonlySet<GatewayFrame["type"]> = new Set(["media-watch", 
  * they don't go into the Thread's stream.
  */
 const MACHINE_ONLY_EVENTS: ReadonlySet<string> = new Set(["account-usage", "harness-profile", "runtime-updates"])
+
+/**
+ * Passing state: what a reader takes in the moment and is worth nothing after, sent as often as it changes. A Thread's
+ * stream is its log, every event numbered and kept in its object's storage, so none of these goes into it:
+ * - `tool-steps`, a running `mako-computer` js call's steps, up to four times a second while it runs;
+ * - `view-hint`, a window's hint to look at a view again (the apps one goes to a watched conversation's watchers as
+ *   passing state of its own, `conversation-app-hint`, which never comes here);
+ * - `file-changed`, the file a window's viewer holds changed on disk.
+ * They reach a Thread's readers as passing state instead (`passing`). `control-activity` is passing too, but a Mac reads a machine's from its
+ * Thread's stream for that Thread's control previews (`CloudConversations`), so it stays there until a Thread's
+ * stream carries passing state outside its log.
+ */
+export const PASSING_EVENTS: ReadonlySet<string> = new Set(["tool-steps", "view-hint", "file-changed"])
 
 /** How long a move's arrival waits for the agent to place the store's carried files again before it goes on without. */
 const CARRIED_REFRESH_MS = 20_000
@@ -232,6 +245,22 @@ export class MachineRuntime {
     clearTimeout(this.#report)
     this.#cloud?.stop()
     this.#cloud = undefined
+    this.#served = undefined
+    this.#options.sessions?.report(undefined)
+  }
+
+  /**
+   * Passing state for the Threads this runtime runs (`PASSING_EVENTS`, routed by its conversation): to each Thread's
+   * readers now, as a `passing` frame its object relays and never logs (link version 28). A gateway on an older link
+   * gets none, and the Thread's readers see the running call without its steps.
+   */
+  passing(event: RuntimeEvent): void {
+    const threads = this.#threads
+    if (!threads) return
+    const line = gatewayEventLine("event", event)
+    if (line.fit !== "whole") return
+    const payload = Payload.encoded(line.text)
+    for (const { threadId } of threads.claims()) threads.passing(threadId, payload, event.trace)
   }
 
   /**
@@ -242,7 +271,7 @@ export class MachineRuntime {
     const threads = this.#threads
     if (!threads) return
     // Named on the event as the host emits it, so a stream's batches are never parsed to find out.
-    if (event.type !== undefined && MACHINE_ONLY_EVENTS.has(event.type)) return
+    if (event.type !== undefined && (MACHINE_ONLY_EVENTS.has(event.type) || PASSING_EVENTS.has(event.type))) return
     const claims = threads.claims()
     if (!claims.length) return
     const line = gatewayEventLine(channel, event)
@@ -562,6 +591,7 @@ export class MachineRuntime {
   #attach(link: Link, threads: RuntimeThreads, socket: WebSocket, end: (ending: CloudLinkEnding) => void) {
     const runtimeLink = runtimeLinkOverSocket(socket)
     let closed = false
+    let serving: ServedRuntime | undefined
     const onFrame = (frame: GatewayFrame) => {
       if (frame.type === "assign" || frame.type === "fence") {
         hostLog("machine", frame.type === "assign" ? "runs a Thread" : "fenced from a Thread", { threadId: frame.threadId, generation: frame.generation })
@@ -575,6 +605,7 @@ export class MachineRuntime {
     serveHostThroughGateway(runtimeLink, { runtimeId: link.runtimeId, build: this.#options.build, threads, invoke: this.#options.invoke, media: this.#media, ports, ssh: this.#ssh, onFrame, watch: (conversations, after, forms) => this.#options.sessions?.watch(runtimeLink, conversations, after, forms) }).then(
       (served) => {
         if (closed) return served.close()
+        serving = served
         this.#served = served
         this.#servedLink = runtimeLink
         this.#options.sessions?.linked({ link: runtimeLink, served })
@@ -583,7 +614,10 @@ export class MachineRuntime {
         hostLog("machine", "enrolled", { runtimeId: link.runtimeId, claims: threads.claims().length, enrolls: this.#state.enrolls })
         this.#changed()
         void served.ended.then((problem) => {
-          if (this.#served === served) this.#served = undefined
+          if (this.#served === served) {
+            this.#served = undefined
+            this.#options.sessions?.report(undefined)
+          }
           this.#state.lastEnding = problem ? describe(problem) : "the connection closed"
           this.#changed()
           end(endingOf(problem))
@@ -599,6 +633,10 @@ export class MachineRuntime {
     return {
       close: () => {
         closed = true
+        if (serving && this.#served === serving) {
+          this.#served = undefined
+          this.#options.sessions?.report(undefined)
+        }
         runtimeLink.close()
       },
     }
@@ -609,6 +647,7 @@ export class MachineRuntime {
     this.#cloud?.stop()
     this.#cloud = undefined
     this.#served = undefined
+    this.#options.sessions?.report(undefined)
     this.#link = undefined
     this.#threads = undefined
     this.#state.unlinked = reason
@@ -651,8 +690,8 @@ export class MachineRuntime {
   }
 
   /**
-   * Reports the Sessions this machine owns on the link it serves now, as each tick does: what its publisher calls when
-   * a change a list shows can't wait for the tick (`SessionPublisher.showsChanged`).
+   * Reports the Sessions this machine owns on the link it serves now, when its publisher's change or reconcile
+   * deadline is due. The machine's activity heartbeat has its own clock.
    */
   reportSessions(): void {
     const served = this.#served
@@ -662,7 +701,6 @@ export class MachineRuntime {
   #watchClock(): void {
     const now = this.#now()
     this.#reportActivity(now)
-    this.reportSessions()
     const gapMs = now - this.#lastTick - TICK_MS
     this.#lastTick = now
     if (gapMs < RESUMED_GAP_MS) return

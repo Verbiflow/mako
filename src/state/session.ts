@@ -1,5 +1,7 @@
 import { accounts } from "@/state/accounts"
 import { toolStepped } from "@/state/tool-steps"
+import { quietly } from "@/lib/quiet-retry"
+import { errorMessage, type FailureBoundary } from "@mako/host/contracts/error-message"
 import { handOff } from "@/state/handoff"
 import { conversationSettings } from "@/state/conversation-settings"
 import { keepAwake } from "@/state/keep-awake"
@@ -13,6 +15,8 @@ import { applyThreadGroupChange, loadThreadGroups } from "@/state/thread-groups"
 import { applyThreadPurposes, loadThreadPurposes } from "@/state/thread-purposes"
 import { applyStoreFormats, loadStoreFormats } from "@/state/store-formats"
 import { applyFileEvents, loadFileEvents } from "@/state/file-events"
+import { applyMcpSignIns, loadMcpSignIns } from "@/state/mcp-sign-ins"
+import { loadUnopened } from "@/state/unopened-conversations"
 import { applyThreadTitles, loadThreadTitles } from "@/state/thread-titles"
 import { applyWorktreeSummaries, refreshWorktrees, refreshWorktreeSummaries } from "@/state/worktrees"
 import { github, githubStore } from "@/state/github"
@@ -56,6 +60,7 @@ import type {
   TreeNode,
 } from "@/lib/types"
 import { getMako, hasBridge } from "@/lib/bridge"
+import { REWIND_CUT_SHORT, type NoticeAction } from "@mako/host/contracts/host-events-boot"
 import { reconcileMessages } from "@/lib/reconcile"
 import { composerTurnRunning } from "@/lib/composer-action"
 import {
@@ -366,6 +371,10 @@ function apply(event: HostEvent) {
     applyFileEvents(event.service)
     return
   }
+  if (event.type === "mcp-sign-ins") {
+    applyMcpSignIns(event.reading)
+    return
+  }
   if (event.type === "thread-titles") {
     applyThreadTitles(event.titles)
     return
@@ -508,7 +517,7 @@ function absorb(id: string, event: HostEvent) {
     case "notice":
       // Errors from a hidden tab still surface — a failure you never see is
       // worse than an interruption — but they say which conversation raised it.
-      if (event.level === "error") report(event.message)
+      if (event.level === "error") notice(event)
       return
     default:
       return
@@ -643,9 +652,7 @@ function applyToActive(event: HostEvent) {
       }
       break
     case "notice":
-      if (event.level === "error") report(event.message)
-      else if (event.level === "success") toast.success(event.message)
-      else toast(event.message)
+      notice(event)
       break
   }
 }
@@ -654,17 +661,36 @@ function applyToActive(event: HostEvent) {
 /* actions — every mutation the UI can perform, in one place           */
 /* ------------------------------------------------------------------ */
 
+/**
+ * A failed action, in the host's words. No button: there's nothing one press fixes (Diagnostics, which a
+ * "Troubleshoot" button opened whatever the failure, fixes none of them).
+ */
 function report(message: string) {
-  toast.error(message, {
-    duration: ACTION_TOAST_MS,
-    action: {
-      label: "Troubleshoot",
-      onClick: () =>
-        window.dispatchEvent(
-          new CustomEvent("mako:settings", { detail: "diagnostics" })
-        ),
-    },
-  })
+  toast.error(message, { duration: ACTION_TOAST_MS })
+}
+
+/** What a notice's one button does (`NoticeAction`). */
+function act(action: NoticeAction): void {
+  if (action.does === "recover-rewinds") {
+    void getMako().liveRecoverRewinds().then(
+      () => toast.success("The rewind finished."),
+      (error: Error) => {
+        console.warn(`The rewind still didn't finish ${JSON.stringify({ error: error.message })}`)
+        toast.error(REWIND_CUT_SHORT, { duration: ACTION_TOAST_MS, description: "It still didn't finish.", action: { label: "Try again", onClick: () => act(action) } })
+      },
+    )
+    return
+  }
+  if (action.does === "restart") void updates.relaunch()
+  else window.dispatchEvent(new CustomEvent("mako:settings", { detail: action.does === "open-storage" ? "storage" : "updates" }))
+}
+
+/** A host's notice: news, or something to do with its one button. What Mako handled or nobody can act on isn't sent. */
+function notice(event: Extract<HostEvent, { type: "notice" }>): void {
+  const options = event.action ? { duration: ACTION_TOAST_MS, action: { label: event.action.label, onClick: () => act(event.action!) } } : undefined
+  if (event.level === "error") toast.error(event.message, options ?? { duration: ACTION_TOAST_MS })
+  else if (event.level === "success") toast.success(event.message, options)
+  else toast(event.message, options)
 }
 
 /** Reject after `ms`, so no await can strand the interface in a skeleton. */
@@ -790,34 +816,31 @@ function adoptBoot(boot: BootPayload) {
   if (!boot.archives) void threadLifecycle.load()
 }
 
+/**
+ * What the rail reads beside the list as a window starts and after each reconnect. Each is asked again once if the
+ * connection failed it; one that still fails leaves the rail as it can be without it (separate rows, agents' names)
+ * until the next reconnect reads it again, and goes to the host's log, not to the person: they can't do anything about it.
+ */
+function unread(what: string, failure: FailureBoundary): void {
+  console.warn(`The rail went without ${what} ${JSON.stringify({ error: errorMessage(failure) })}`)
+}
+
 async function loadGroups() {
-  try {
-    await loadThreadGroups()
-  } catch (error) {
-    toast.error("Threads with several sessions show as separate rows", { description: error instanceof Error ? error.message : String(error) })
-  }
-  try {
-    await loadThreadPurposes()
-  } catch (error) {
-    toast.error("Setup Threads show without their Setup label", { description: error instanceof Error ? error.message : String(error) })
-  }
+  await quietly("Thread groups", loadThreadGroups).catch((error) => unread("Thread groups", { error }))
+  await quietly("Thread purposes", loadThreadPurposes).catch((error) => unread("Thread purposes", { error }))
   // Which shared stores a newer Mako changed; the rail and Diagnostics say so. An older host without the method has none to say.
   await loadStoreFormats().catch(() => undefined)
   // fseventsd's health, for the notice above the desk; a host without the reading says nothing.
   await loadFileEvents().catch(() => undefined)
-  try {
-    await loadThreadTitles()
-  } catch (error) {
-    toast.error("Threads show their agents' names until Mako reconnects", { description: error instanceof Error ? error.message : String(error) })
-  }
+  // The MCP servers that need sign-in, said in the rail; a host without the reading has none to say.
+  await loadMcpSignIns().catch(() => undefined)
+  // Saved conversations the host couldn't open, for the rail and Diagnostics; a host without the reading has none.
+  await loadUnopened().catch(() => undefined)
+  await quietly("Thread titles", loadThreadTitles).catch((error) => unread("Thread titles", { error }))
 }
 
 async function loadWorktrees() {
-  try {
-    await refreshWorktrees()
-  } catch (error) {
-    toast.error("Threads in worktrees show under their worktree folder", { description: error instanceof Error ? error.message : String(error) })
-  }
+  await quietly("worktrees", refreshWorktrees).catch((error) => unread("worktrees", { error }))
 }
 
 export const actions = {

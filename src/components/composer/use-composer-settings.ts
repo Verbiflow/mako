@@ -3,7 +3,7 @@ import { usePrefs } from "@/state/prefs"
 import { acpForThread, activeAcp, useAcp } from "@/state/acp"
 import { useThreads } from "@/state/thread-store"
 import { useSession } from "@/state/session"
-import { providerProfileKey, providers, useProviders } from "@/state/providers"
+import { providerProfileKey, providers, useProviders, watchProviderProfile } from "@/state/providers"
 import {
   composerModelLabel,
   observedSessionSettings,
@@ -86,18 +86,7 @@ export function useComposerSettings(provider?: string) {
     (state) => state.contextErrors[providerProfileKey(harness, target.cwd)]
   )
 
-  useEffect(() => {
-    const reload = () => {
-      void providers.load(harness, false, target.cwd).catch(() => {})
-    }
-    void providers.load(harness, false, target.cwd).catch(() => {})
-    const interval = window.setInterval(reload, 300_000)
-    window.addEventListener("focus", reload)
-    return () => {
-      window.clearInterval(interval)
-      window.removeEventListener("focus", reload)
-    }
-  }, [harness, target.cwd, workspace])
+  useEffect(() => watchProviderProfile(harness, target.cwd), [harness, target.cwd])
 
   const { resolved, model, options } = resolveComposerSettingsInput({
     target,

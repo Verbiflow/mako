@@ -243,7 +243,7 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
   })
   declareThreadLifecycleMethods(methods, lifecycle, archives, emit)
   followNativeArchives(lifecycle, (subscriber) => catalog.subscribe(subscriber), emit)
-  declareThreadGroupMethods(methods, store, (thread) => live.announceGroup(thread), threads.storeProblem, (message) => emit({ type: "notice", level: "error", message }))
+  declareThreadGroupMethods(methods, store, (thread) => live.announceGroup(thread), threads.storeProblem, (message) => hostWarn("threads", "a Thread group change failed", { error: message }))
   declareThreadTitleMethods(methods, { store, emit })
   declareChatFolderMethods(methods)
   return lifecycle

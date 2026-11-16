@@ -1,3 +1,4 @@
+import type { ProviderFailureEvidence } from "../contracts/provider-failure-evidence.js"
 import type { CodexAgentRun } from "./codex/agent-status.js"
 import type { CodexIdentityResponse, CodexInitialize } from "./codex/native-context.js"
 import type { CodexAgentItem } from "./codex/agents.js"
@@ -107,6 +108,7 @@ export type Turn = {
     additionalDetails?: string | null
     /** The `CodexErrorInfo` variant, when Codex classified the error. */
     variant?: string
+    failureEvidence?: ProviderFailureEvidence
   } | null
 }
 

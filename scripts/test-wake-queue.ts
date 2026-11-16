@@ -47,6 +47,7 @@ interface Entry { id: string; text: string; notices: Notice[]; lines?: readonly 
 
 /** One Apex conversation as the queue would hold it, and every call the producer made. */
 function fakes(ready: () => ParentReady, now: () => number, steer: (text: string) => Promise<boolean> | false = () => false, current: (notice: Notice) => boolean = () => true) {
+  const counted = { line: "1 working" }
   const entries: Entry[] = []
   const delivered: string[] = []
   const unsent = () => entries.filter((entry) => entry.sent === undefined && !entry.canceled)
@@ -67,11 +68,11 @@ function fakes(ready: () => ParentReady, now: () => number, steer: (text: string
     steer: (_conversation, _id, text) => steer(text),
     assign: () => {},
     delivered: (reports) => delivered.push(...reports),
-    counts: () => "1 working",
+    counts: () => counted.line,
     current,
     now,
   }
-  return { entries, delivered, deps, open: () => unsent().at(-1) }
+  return { entries, delivered, deps, counted, open: () => unsent().at(-1) }
 }
 
 let reports = 0
@@ -172,22 +173,83 @@ try {
     assert.equal(f.entries[0]!.canceled, true, "a stale end leaves the older digest too")
   }
   {
-    // A running turn that takes a step's message hears a notice now; one it refuses joins the digest.
+    // A running turn that takes a step's message hears a question it can answer now; one it refuses joins the digest.
+    // A result waits for the turn's end, so a working Apex isn't steered by each report (`FOCUS_MS`).
     let answer = true
     const steered: string[] = []
     const f = fakes(() => "steer", () => 5_000_000, (text) => { steered.push(text); return Promise.resolve(answer) })
-    const wakes = new AgentWakes(f.deps)
-    wakes.notice("apex", "", notice())
+    const wakes = new AgentWakes({ ...f.deps, focusMs: 60_000 })
+    wakes.notice("apex", "", notice("blocked"))
     await pause(0)
     assert.equal(steered.length, 1)
     assert.equal(f.entries.length, 0, "taken by the running turn, nothing queued")
     answer = false
-    wakes.notice("apex", "", notice())
+    wakes.notice("apex", "", notice("blocked"))
     await pause(0)
     assert.equal(f.entries.length, 1, "a refused steer goes as a digest of its own")
+    wakes.notice("apex", "", notice())
+    assert.equal(steered.length, 2, "a finished Fin's result isn't steered into the turn")
     wakes.notice("apex", "", notice("done", { settledOnly: true }))
-    assert.equal(steered.length, 2, "a result is never steered")
-    assert.equal(f.open()!.notices.length, 2)
+    assert.equal(steered.length, 2, "nor is a waited-for result")
+    assert.equal(f.open()!.notices.length, 3)
+    wakes.dispose()
+  }
+  {
+    // A turn that runs past `FOCUS_MS` after the first result it left waiting hears what waits, once: the queued digest
+    // itself is steered in (`steer-queued`), so it leaves the queue in the journal's write. A notice that comes while the
+    // steer is out starts a digest of its own rather than joining one on its way, and one the harness refuses stays queued.
+    const steered: { request: string; text: string }[] = []
+    let settle: (answered: boolean) => void = () => {}
+    const f = fakes(() => "steer", () => 5_000_000, () => Promise.resolve(true))
+    const wakes = new AgentWakes({
+      ...f.deps,
+      focusMs: 50,
+      steerQueued: (_conversation, _id, request, text) => {
+        steered.push({ request, text })
+        return new Promise<boolean>((resolve) => { settle = resolve })
+      },
+    })
+    const first = notice()
+    wakes.notice("apex", "", first)
+    wakes.notice("apex", "", notice())
+    assert.equal(steered.length, 0, "nothing steered as the results come")
+    const digest = f.open()!
+    assert.equal(digest.notices.length, 2, "they wait as one digest")
+    await pause(120)
+    assert.equal(steered.length, 1, "past the focus window, the digest is steered in")
+    assert.equal(steered[0]!.request, digest.id, "the queued digest itself, not a copy of its words")
+    assert.match(steered[0]!.text, /2 finished:/)
+    const late = notice()
+    wakes.notice("apex", "", late)
+    assert.equal(digest.notices.length, 2, "a notice arriving while the steer is out doesn't join the digest on its way")
+    assert.ok(f.entries.some((entry) => entry.id !== digest.id && entry.notices.some((each) => each.id === late.id)), "it starts a digest of its own")
+    settle(true)
+    await pause(0)
+    assert.equal(digest.canceled, undefined, "the steered digest isn't rewritten: the journal's steer took it")
+    wakes.dispose()
+  }
+  {
+    // The tree moved since the last notice (a Fin's state, so the counts line), with no notice of its own: the focus steer
+    // still goes, with the digest's words said as the tree stands now and stored first, since the journal's steer takes
+    // only a queued message's exact words (`steer-queued` refuses one that changed).
+    const steered: { request: string; text: string }[] = []
+    const f = fakes(() => "steer", () => 5_000_000, () => Promise.resolve(true))
+    const wakes = new AgentWakes({
+      ...f.deps,
+      focusMs: 50,
+      steerQueued: (_conversation, _id, request, text) => {
+        const queued = f.entries.find((entry) => entry.id === request)!
+        if (queued.text !== text) return Promise.resolve(false)
+        steered.push({ request, text })
+        return Promise.resolve(true)
+      },
+    })
+    wakes.notice("apex", "", notice())
+    f.counted.line = "0 working, 1 ended."
+    await pause(120)
+    assert.equal(steered.length, 1, "the digest is steered, not refused for words the tree's change made stale")
+    assert.match(steered[0]!.text, /0 working, 1 ended\./, "said as the tree stands now")
+    wakes.dispose()
   }
   {
     // What rides a digest stays with it whatever happens to its reports, and is said once. Nothing takes it away but its going.

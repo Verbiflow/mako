@@ -227,6 +227,8 @@ export interface ConversationChildren {
   edgeWritten?(op: string): void
   /** The conversation's Fins as roster entries, the same array until one of them changes. */
   roster(conversation: string): readonly import("../contracts/native-agents.js").NativeAgent[]
+  /** The conversation's armed wait as its waiting line reads (`turnWaitLine`), the same object until it changes. */
+  turnWaitLine?(conversation: string): import("../contracts/turn-waits.js").TurnWaitLine | undefined
   /** Whether the conversation hears its Thread's Fins move: its Thread's newest Session's. Its Fins hold no other. */
   showsFins?(conversation: string): boolean
   /** Stops one of them, by its Thread: false when it isn't the conversation's or has nothing running. */
@@ -278,6 +280,8 @@ export interface Dependencies {
   workspaceSnapshots?: WorkspaceSnapshots
   /** How long a turn waits for its checkpoint to hold the workspace before it goes without (`BEFORE_CHECKPOINT_WAIT_MS`). */
   checkpointWaitMs?: number
+  /** A checkpoint missed dispatch: bounded diagnostic telemetry, never part of sending. */
+  checkpointTimedOut?(waitedMs: number): void
   /** Who changed each of these files (absolute) since `since`, as the attribution journal knows; undefined while it isn't open. */
   rewindWriters?(paths: readonly string[], since: number): FileWriters | undefined
   appPath: string
@@ -410,6 +414,12 @@ export interface Dependencies {
    */
   historyPaged?(id: string): void
   historyReleased?(id: string): void
+  /** Conversation `id` was read into memory: a view read where its journal lies (`ColdJournal`) is let go. */
+  historyLoaded?(id: string): void
+  /** What windows' cold views of journals hold, counted in the conversations' memory budget. */
+  historyHeld?(): number
+  /** Whether a window's cold view holds journal file `key`, which then isn't compacted (`JournalReclaims`). */
+  historyHolds?(key: string): boolean
   /** Test clock for deterministic residency decisions. */
   now?: () => number
   /** A conversation's work moved (running, waiting, finishing, none), with or without a batch: its row is told now. */

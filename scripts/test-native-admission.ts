@@ -12,6 +12,7 @@ import type { ResumeVerdict } from "@mako/host/contracts/conversation-control"
 import type { ThreadRef } from "@mako/sessions"
 import { ExecutionContextSchema } from "@mako/host/contracts/execution-context"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 
 const nativeStores = new NativeStores(false)
 
@@ -31,6 +32,7 @@ let resolutions = 0
 let credential = "admitted-fixture-credential"
 let refuseCredential = false
 let prepareStarted = () => {}
+let dropping: string[] = []
 const unregister = providerHost.nativeRunners.register({
   provider, transport: "fixture-headless", available: () => true, fastMode: "unsupported", carries: [],
   launchCredentials: { kind: "resolved", resolve: async env => {
@@ -38,7 +40,7 @@ const unregister = providerHost.nativeRunners.register({
     if (refuseCredential) throw new Error("Fixture credential unavailable")
     return { env: { ...env, NATIVE_FIXTURE_CREDENTIAL: credential }, credential: { kind: "configured", source: "fixture-record", revision: { kind: "reported", value: "fixture-revision", via: "fixture record" } } }
   } },
-  prepare: async (options, env) => { preparations++; assert.equal(env.NATIVE_FIXTURE_CREDENTIAL, "admitted-fixture-credential"); prepareStarted(); await prepareGate; return { options, dropped: [] } },
+  prepare: async (options, env) => { preparations++; assert.equal(env.NATIVE_FIXTURE_CREDENTIAL, "admitted-fixture-credential"); prepareStarted(); await prepareGate; return { options, dropped: dropping } },
   resume: (_id, _prompt, _options, env) => {
     assert.equal(env?.NATIVE_FIXTURE_CREDENTIAL, "admitted-fixture-credential", "command construction retains the prepared credential snapshot")
     return { command: process.execPath, args: pipeDescendant
@@ -184,6 +186,17 @@ try {
   assert.equal((await runs.wait(ref.path, 5_000)).state.status, "stopped")
   assert.throws(() => process.kill(descendant, 0), { code: "ESRCH" })
   assert.equal(releases, 4, "explicit Stop reaps the tree before releasing its claim")
+  // A setting the command line can't carry is said on the reply's run, for the line under that reply.
+  pipeDescendant = false
+  dropping = ["effort"]
+  const told: HostEvent[] = []
+  const saying = new NativeRuns(providerHost, (event) => told.push(event), { assessResume: async () => verdict, claimSession: claim })
+  assert.deepEqual((await saying.resume(ref, "a setting it can't carry", { captureOutput: true })).dropped, ["effort"])
+  assert.deepEqual((await saying.wait(ref.path)).state.dropped, ["effort"], "the settled run still says it")
+  assert.ok(!told.some((event) => event.type === "notice"), "never as a toast")
+  dropping = []
+  assert.equal((await saying.resume(ref, "a reply that carries everything", { captureOutput: true })).dropped, undefined)
+  await saying.wait(ref.path)
   console.log("Native admission: refusal, concurrent preparation, exact claims, leader exit with inherited pipes and lossless descendant output verified")
 } finally {
   await writeFile(join(root, "release-pipes"), "release").catch(() => {})

@@ -163,8 +163,9 @@ try {
       assert.match(afterRestart.hears, /paused for editing/)
       assert.equal(afterRestart.deduped, true)
       world.live.editQueued(fin, { requestId: readme.id, expectedText: readme.text, change: { kind: "resume" } })
-      await until("all four to go, in order", () => promptsOf(world, fin).length === 5)
-      assert.deepEqual(promptsOf(world, fin).slice(1).map((text) => /Then the README\.|Then the CHANGELOG\.|And the LICENSE\.|And the NOTICE\./.exec(text)?.[0]), ["Then the README.", "Then the CHANGELOG.", "And the LICENSE.", "And the NOTICE."])
+      // Its Apex's four messages, all waiting once the edit is done, go as one turn, in order (`foldQueued`).
+      await until("all four to go, in order", () => promptsOf(world, fin).length === 2)
+      assert.deepEqual([...promptsOf(world, fin)[1]!.matchAll(/Then the README\.|Then the CHANGELOG\.|And the LICENSE\.|And the NOTICE\./g)].map((found) => found[0]), ["Then the README.", "Then the CHANGELOG.", "And the LICENSE.", "And the NOTICE."])
       await world.close()
     }
 
@@ -195,9 +196,9 @@ try {
       assert.equal(requestOf(world, fin, "Then the README.")?.editing, true)
       assert.equal(promptsOf(world, fin).length, 1, `${harness}: nor does a restart send anything past it`)
       world.live.editQueued(fin, { requestId: readme.id, expectedText: readme.text, change: { kind: "resume" } })
-      await until("all three to go", () => promptsOf(world, fin).length === 4)
-      // The journal keeps the order the resume made (`request_order`), across the restart.
-      assert.deepEqual(promptsOf(world, fin).slice(1).map((text) => /Then the README\.|Carry on\.|Then the CHANGELOG\./.exec(text)?.[0]), ["Then the README.", "Carry on.", "Then the CHANGELOG."],
+      // All three are its Apex's, so they go as one turn (`foldQueued`), in the order the resume made (`request_order`), across the restart.
+      await until("all three to go", () => promptsOf(world, fin).length === 2)
+      assert.deepEqual([...promptsOf(world, fin)[1]!.matchAll(/Then the README\.|Carry on\.|Then the CHANGELOG\./g)].map((found) => found[0]), ["Then the README.", "Carry on.", "Then the CHANGELOG."],
         "the person's message, then the one that resumed the Fin, then what the stop paused")
       await world.close()
     }

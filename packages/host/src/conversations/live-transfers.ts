@@ -14,7 +14,7 @@ import type {
 import { heldReason, SessionBusyError } from "../contracts/session-hold.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import type { LiveRequest, TurnContinuation, LiveSnapshot } from "../contracts/live-conversations.js"
-import { classifyStartFailure, failureEvidenceOf } from "../contracts/provider-failure.js"
+import { classifyStartFailure, failureEvidenceOf, HostFailureError } from "../contracts/provider-failure.js"
 import { NativeVerificationPendingError } from "../contracts/native-verification.js"
 import { failureAfterRetry, nextRetry, transientCause } from "../contracts/delivery-retry.js"
 import { arriving, departing } from "../contracts/request-hold.js"
@@ -44,7 +44,7 @@ function arrival(requests: readonly LiveRequest[], arrived: LiveRequest, ahead: 
 export function reconnectError(verdict: ResumeVerdict | undefined): Error {
   return verdict?.kind === "held" ? new SessionBusyError(verdict.by)
     : verdict?.kind === "unavailable" && verdict.retry ? new NativeVerificationPendingError(verdict.reason)
-      : new Error(reconnectRefusal(verdict))
+      : new HostFailureError("resume-failed", reconnectRefusal(verdict))
 }
 
 export function reconnectRefusal(verdict: ResumeVerdict | undefined): string {
@@ -772,11 +772,7 @@ export class LiveTransfers {
           nativeId: prior?.nativeId,
           cause: movedByOwnTurn ? "interrupted turn" : "outside Mako",
         })
-        if (!movedByOwnTurn) this.host.dependencies.emit({
-          type: "notice",
-          level: "info",
-          message: "This session was continued outside Mako since its last turn here. Those turns are not in this transcript; the session itself carries them.",
-        })
+        if (!movedByOwnTurn) hostLog("transfer", "the session was continued outside Mako since its last turn here", { harness: transfer.input.provider, nativeId: prior?.nativeId })
       }
     } catch (error) {
       if (activated) {

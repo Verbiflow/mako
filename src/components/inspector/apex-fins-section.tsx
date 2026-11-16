@@ -1,4 +1,7 @@
 import { memo, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react"
+import { SettledLine } from "@/components/viewer/crew-card"
+import { buildRows } from "@/lib/crew-rows"
+import { FinRowActions } from "@/components/viewer/fin-row-actions"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { ChevronRightIcon } from "lucide-react"
 import { childGroup, childLine, childStateOf, childWord, rollup, rollupLabel, rollupLine, type ChildGroup } from "@mako/host/contracts/children"
@@ -25,8 +28,6 @@ const HEADINGS = {
   done: "Done",
 } satisfies Record<ChildGroup, string>
 
-type Row = { kind: "heading"; group: ChildGroup; count: number } | { kind: "child"; agent: NativeAgent }
-
 /**
  * An Apex's Fins in its Agents panel, above what its harness runs in the
  * turn: what needs the person, then at work, queued, failed and done, one
@@ -50,34 +51,21 @@ export function ApexFinsSection({
 }) {
   const section = useRef<HTMLDivElement>(null)
   const [margin, setMargin] = useState(0)
-  const rows = useMemo(() => {
-    const out: Row[] = []
-    let group: ChildGroup | undefined
-    let heading: Extract<Row, { kind: "heading" }> | undefined
-    for (const agent of children) {
-      const next = childGroup(childStateOf(agent))
-      if (next !== group) {
-        group = next
-        heading = { kind: "heading", group: next, count: 0 }
-        out.push(heading)
-      }
-      heading!.count += 1
-      out.push({ kind: "child", agent })
-    }
-    return out
-  }, [children])
+  // The crew card's own groups and fold: finished and idle Fins fold into one line here too.
+  const [settledOpen, setSettledOpen] = useState(false)
+  const rows = useMemo(() => buildRows(children, settledOpen), [children, settledOpen])
   useLayoutEffect(() => {
     if (section.current) setMargin(section.current.offsetTop)
   }, [])
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scroller.current,
-    estimateSize: (index) => (rows[index]?.kind === "heading" ? 28 : 60),
+    estimateSize: (index) => (rows[index]?.kind === "child" ? 60 : 28),
     overscan: 8,
     scrollMargin: margin,
     getItemKey: (index) => {
       const row = rows[index]
-      return row?.kind === "heading" ? `heading:${row.group}` : row ? `child:${row.agent.nativeId}` : index
+      return row?.kind === "heading" ? `heading:${row.group}` : row?.kind === "settled" ? "settled" : row ? `child:${row.agent.nativeId}` : index
     },
   })
   const counts = rollup(children)
@@ -113,13 +101,15 @@ export function ApexFinsSection({
               className="absolute inset-x-0 top-0"
               style={{ transform: `translateY(${item.start - virtualizer.options.scrollMargin}px)` }}
             >
-              {row.kind === "heading" ? (
+              {row.kind === "settled" ? (
+                <SettledLine row={row} onToggle={() => setSettledOpen((open) => !open)} />
+              ) : row.kind === "heading" ? (
                 <div data-child-group={row.group} className="flex h-7 items-end gap-1.5 px-1.5 pb-1 text-label text-faint">
                   <span className={row.group === "needs" ? "text-attention" : undefined}>{HEADINGS[row.group]}</span>
                   <span className="tabular">{row.count}</span>
                 </div>
               ) : (
-                <ChildRow agent={row.agent} onOpen={onOpen} lit={row.agent.child?.thread === open} />
+                <ChildRow agent={row.agent} onOpen={onOpen} conversation={conversation} lit={row.agent.child?.thread === open} />
               )}
             </div>
           )
@@ -130,7 +120,7 @@ export function ApexFinsSection({
 }
 
 /** One Fin as a strip: harness, name, state and time, then its question or phase, then what it runs as. Memoized on its entry. */
-const ChildRow = memo(function ChildRow({ agent, onOpen, nested = false, lit = false }: { agent: NativeAgent; onOpen?: (agent: NativeAgent) => void; nested?: boolean; lit?: boolean }) {
+const ChildRow = memo(function ChildRow({ agent, onOpen, conversation, nested = false, lit = false }: { agent: NativeAgent; onOpen?: (agent: NativeAgent) => void; conversation?: string; nested?: boolean; lit?: boolean }) {
   useHarnessIdentity()
   const state = childStateOf(agent)
   const group = childGroup(state)
@@ -142,7 +132,8 @@ const ChildRow = memo(function ChildRow({ agent, onOpen, nested = false, lit = f
     agent.usage?.toolUses !== undefined ? `${agent.usage.toolUses} ${agent.usage.toolUses === 1 ? "tool use" : "tool uses"}` : undefined,
   ].filter(Boolean)
   return (
-    <div className={cn("contain-turn", nested && "ml-5")}>
+    <div className={cn("contain-turn group/fin relative", nested && "ml-5")}>
+      <FinRowActions agent={agent} conversation={conversation} always={state.kind === "working" && state.quiet !== undefined} className="absolute top-1.5 right-1 z-[1] bg-surface" />
       <button
         type="button"
         data-child-row={agent.child?.thread}

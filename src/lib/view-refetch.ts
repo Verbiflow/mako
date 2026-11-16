@@ -1,5 +1,5 @@
 /** The existing stores own values; this only owns when their readers run. */
-export type RefetchDomain = "apps" | "sync" | "output" | "preview" | "devices" | "updates"
+export type RefetchDomain = "apps" | "sync" | "output" | "preview" | "devices" | "updates" | "account" | "providers"
 export interface RefetchClock {
   now(): number
   after(run: () => void, ms: number): () => void
@@ -38,6 +38,8 @@ const KNOWN_FIELDS = {
   preview: new Set(["all", "state", "recipe"]),
   devices: new Set(["all"]),
   updates: new Set(["all"]),
+  account: new Set(["all"]),
+  providers: new Set(["all"]),
 } satisfies Record<RefetchDomain, ReadonlySet<string>>
 const CLOCK: RefetchClock = {
   now: Date.now,
@@ -153,8 +155,8 @@ export class ViewRefetch {
     }
     this.changed()
   }
-  reschedule(scope: string): void {
-    for (const [id, entry] of this.entries) if (entry.options.scope === scope && !entry.running) {
+  reschedule(scope: string, domain?: RefetchDomain): void {
+    for (const [id, entry] of this.entries) if (entry.options.scope === scope && (domain === undefined || entry.options.domain === domain) && !entry.running) {
       entry.cancel?.(); entry.cancel = undefined; entry.due = undefined
       this.next(id, entry)
     }

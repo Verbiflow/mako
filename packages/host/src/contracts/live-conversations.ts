@@ -284,6 +284,45 @@ export interface RequestWake {
   after: string
 }
 
+/** At most this many messages go with one (`LiveRequest.joined`); the rest go in a turn of their own. */
+export const JOINED_MAX = 32
+/** Nor past this many characters of words in all. */
+export const JOINED_CHARS = 64_000
+
+/** Who wrote a part of a folded message, as its separator says it. */
+export type FoldedBy = "mako" | "same" | "agent"
+const FOLDED_SAID = { mako: "Mako's note", same: "the next message from the same sender", agent: "a message" } satisfies Record<FoldedBy, string>
+
+/** Who a separator's words name. */
+function foldedBy(said: string | undefined): FoldedBy {
+  return said === FOLDED_SAID.mako ? "mako" : said === FOLDED_SAID.same ? "same" : "agent"
+}
+const FOLDED_SEPARATOR = /\n\n\[mako · (Mako's note|the next message from the same sender|a message), sent (\d{4}-\d\d-\d\dT[\d:.]+Z)\]\n/g
+
+/** The line a folded message's part goes under (`foldQueued`): who wrote it and when. */
+export function foldedSeparator(by: FoldedBy, at: number): string {
+  return `\n\n[mako · ${FOLDED_SAID[by]}, sent ${new Date(at).toISOString()}]\n`
+}
+
+/**
+ * A message several went as (`LiveRequest.joined`), split back into its parts at their separators, each with who wrote
+ * it and when: the first is the carrier's own. Undefined for words with no separator, a message that went alone. Read
+ * from the words alone, so a saved transcript splits as a live one does.
+ */
+export function foldedParts(text: string): { by?: FoldedBy; at?: string; text: string }[] | undefined {
+  const parts: { by?: FoldedBy; at?: string; text: string }[] = []
+  let from = 0
+  let pending: { by: FoldedBy; at: string } | undefined
+  for (const found of text.matchAll(FOLDED_SEPARATOR)) {
+    parts.push({ ...pending, text: text.slice(from, found.index) })
+    pending = { by: foldedBy(found[1]), at: found[2] ?? "" }
+    from = found.index + found[0].length
+  }
+  if (!pending) return undefined
+  parts.push({ ...pending, text: text.slice(from) })
+  return parts
+}
+
 export interface LiveRequest {
   /**
    * Who sent it, assigned by the host at admission. Absent in older journals:
@@ -333,6 +372,14 @@ export interface LiveRequest {
   admissionOrder?: number
   /** An agent's informational message, whose successful turn needs no synthetic completion report. */
   notification?: true
+  /**
+   * The messages from the same sender queued right behind this one that went with it as its one turn (`foldQueued`), in
+   * order, each by its request ID and when it was admitted: their words follow its own. A repeat or a handoff naming
+   * one finds this message.
+   */
+  joined?: { id: string; at: number }[]
+  /** This message went as part of that one's turn (`joined`), so it's canceled here without being dropped. */
+  joinedInto?: string
   /** When it was sent to its harness, which is when its turn began: a message can wait long after it's admitted. */
   dispatchedAt?: number
   text: string
@@ -660,6 +707,8 @@ export interface LiveSnapshot extends LiveSummary {
   nativeActivity?: NativeActivity
   /** Held by this host only, like `activityAt`; see `SideConversation`. */
   side?: import("./live-side-questions.js").SideConversation
+  /** The wait its agent armed for when its turn ends, as the person's waiting line reads it; absent once it isn't armed. Read from the Thread store, never kept in the journal. */
+  turnWait?: import("./turn-waits.js").TurnWaitLine
   /**
    * Why the history `baseSource` names could not be read, which neither its
    * harness nor the record store had. Held by this host only: the next load
@@ -689,6 +738,8 @@ export interface LiveBatch {
   goal?: import("./live-goals.js").ConversationGoal | null
   /** `null` when the side conversation closed; absent when it did not change. */
   side?: import("./live-side-questions.js").SideConversation | null
+  /** `null` when the wait ended (fired, cancelled); absent when it did not change. */
+  turnWait?: import("./turn-waits.js").TurnWaitLine | null
   /** `null` when the history was read after all; absent when it did not change. */
   historyFailure?: string | null
   /** Every turn Mako didn't send, when one was added; absent when none was. */
@@ -832,7 +883,7 @@ export function sharedSession(previous: LiveSessionState, next: LiveSessionState
 }
 
 /** The fields a batch carries whole whenever they are a new value; see `sharedFields`. */
-const WHOLE_FIELDS = ["control", "nativeAgents", "goal", "side", "harnessTurns", "spentThrough", "permissions", "nativeActivity"] as const
+const WHOLE_FIELDS = ["control", "nativeAgents", "goal", "side", "turnWait", "harnessTurns", "spentThrough", "permissions", "nativeActivity"] as const
 type Shared = Pick<LiveSnapshot, (typeof WHOLE_FIELDS)[number] | "requests">
 
 function keepField<Key extends keyof Shared>(target: Shared, source: Shared, key: Key): void {

@@ -1,10 +1,11 @@
+import { ProviderFailureError, providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { GIVE_UP_MS, nextRetry, RETRY_STEPS_MS, transientCause, type RetryCause } from "@mako/host/contracts/delivery-retry"
-import { classifyProviderFailure } from "@mako/host/contracts/provider-failure"
+import { classifyProviderText } from "@mako/host/contracts/provider-failure"
 import { describeTransferRecovery } from "@mako/host/contracts/operation-recovery"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
@@ -44,7 +45,8 @@ async function until(what: string, done: () => boolean, timeoutMs = 8_000): Prom
 }
 
 const CAUSES: { cause: RetryCause; error: string }[] = [
-  { cause: "rate-limited", error: "[unavailable] Server at capacity" },
+  { cause: "provider-unavailable", error: "[unavailable] Server at capacity" },
+  { cause: "rate-limited", error: "429 Too Many Requests" },
   { cause: "provider-unavailable", error: "503 Service Unavailable" },
   { cause: "provider-unavailable", error: "Failed to authenticate. API Error: 503 Service Unavailable" },
   { cause: "network", error: "fetch failed" },
@@ -69,7 +71,7 @@ const script: Script = async (turn) => {
   if (!turn.text.includes("Stall")) return "Done."
   if (turn.text.includes("Stall later.")) await turn.world.hold(turn.conversation)
   const session = turn.world.live.snapshot(turn.conversation)!.session
-  turn.world.live.observe({ type: "live-session", session: { ...session, status: "failed", error: "[resource_exhausted] Error" } })
+  turn.world.live.observe({ type: "live-session", session: { ...session, status: "failed", error: "[resource_exhausted] Error", failureEvidence: providerTextEvidence("[resource_exhausted] Error") } })
   return new Promise<string>(() => {})
 }
 
@@ -87,7 +89,7 @@ function worldOf(name: string): FaultyWorld {
       const error = faults.start.get(conversation)
       if (!error) return
       faults.start.delete(conversation)
-      throw new Error(error)
+      throw new ProviderFailureError(error, providerTextEvidence(error))
     },
     resumeVerdict: async (binding) => {
       if (!faults.busy.delete(binding.id)) return { kind: "resumable", record: "same" }
@@ -164,9 +166,9 @@ try {
     assert.ok(GIVE_UP_MS["rate-limited"] >= 5 * 60 * 60_000, "a usage limit's five-hour window is waited out")
     // A cause the person must fix is never waited out, whatever transient words wrap it.
     for (const words of ["API error: 400 Bad Request: unknown model permanently-retired-model", "503 Service Unavailable: invalid api key", "429 Too Many Requests: your plan does not include this model"])
-      assert.equal(transientCause(words, classifyProviderFailure(words).kind, false), undefined, words)
+      assert.equal(transientCause(words, classifyProviderText(words).kind, false), undefined, words)
     for (const words of ["[unavailable] Server at capacity", "429 Too Many Requests", "fetch failed", "503 Service Unavailable"])
-      assert.ok(transientCause(words, classifyProviderFailure(words).kind, false), words)
+      assert.ok(transientCause(words, classifyProviderText(words).kind, false), words)
   }
   console.log("policy: waits grow to ten minutes and repeat; every cause ends in a failure past its bound; a permanent cause inside transient words is never retried")
 
@@ -210,8 +212,8 @@ try {
       await until("the Apex to sleep", () => world.live.session(apex.conversation)?.connection === "hibernated")
       faults.start.set(apex.conversation, "[unavailable] Server at capacity")
       world.release(fin)
-      await until(`${harness} apex: the wake for the report to wait`, () => requestOf(world, apex.conversation, FROM_AGENTS)?.retry?.cause === "rate-limited", 10_000)
-      waits(world, apex.conversation, FROM_AGENTS, "rate-limited", `${harness} apex`)
+      await until(`${harness} apex: the wake for the report to wait`, () => requestOf(world, apex.conversation, FROM_AGENTS)?.retry?.cause === "provider-unavailable", 10_000)
+      waits(world, apex.conversation, FROM_AGENTS, "provider-unavailable", `${harness} apex`)
       await goesOnce(world, apex.conversation, FROM_AGENTS, `${harness} apex`)
       await world.close()
     }
@@ -266,7 +268,7 @@ try {
       faults.start.set(conversation, "[unavailable] Server at capacity")
       await world.live.start(harness, world.root, { conversationId: conversation, initialRequest: { id: randomUUID(), text: "Brief.", attachments: [] } })
       await until(`${harness} first start: it to wait`, () => requestOf(world, conversation, "Brief.")?.status === "held")
-      waits(world, conversation, "Brief.", "rate-limited", `${harness} first start`)
+      waits(world, conversation, "Brief.", "provider-unavailable", `${harness} first start`)
       await goesOnce(world, conversation, "Brief.", `${harness} first start`)
       await world.close()
     }
@@ -430,7 +432,7 @@ try {
         script,
         starting: (conversation) => {
           if (under === "mid-turn" || world.live.snapshot(conversation)?.requests.some((request) => request.pause === "stop")) return
-          if (under === "first start waiting") throw new Error("[unavailable] Server at capacity")
+          if (under === "first start waiting") throw new ProviderFailureError("[unavailable] Server at capacity", providerTextEvidence("[unavailable] Server at capacity"))
           return new Promise<void>((_resolve, reject) => { fail = (words) => reject(new Error(words)) })
         },
       })
@@ -472,7 +474,7 @@ try {
       await until("its start to fail", () => world.live.session(conversation)?.status === "failed")
       faults.start.set(conversation, "[unavailable] Server at capacity")
       world.say(conversation, "Hello.")
-      await until(`${harness} transfer: it to wait`, () => world.live.snapshot(conversation)?.control?.transfers.some((transfer) => transfer.retry?.cause === "rate-limited") === true)
+      await until(`${harness} transfer: it to wait`, () => world.live.snapshot(conversation)?.control?.transfers.some((transfer) => transfer.retry?.cause === "provider-unavailable") === true)
       const transfers = () => world.live.snapshot(conversation)?.control?.transfers ?? []
       assert.ok(!transfers().some((transfer) => transfer.state.kind === "failed"), `${harness}: no failed transfer`)
       world.live.wakeDue(Date.now() + LATER)
@@ -491,7 +493,7 @@ try {
         script,
         starting: (_conversation) => {
           opens += 1
-          if (opens === 1 || (opens === 2 && under === "waiting")) throw new Error("[unavailable] Server at capacity")
+          if (opens === 1 || (opens === 2 && under === "waiting")) throw new ProviderFailureError("[unavailable] Server at capacity", providerTextEvidence("[unavailable] Server at capacity"))
           if (opens > 2) return
           return new Promise<void>((resolve, reject) => { open = (fails) => (fails ? reject(new Error("[unavailable] Server at capacity")) : resolve()) })
         },
@@ -623,8 +625,15 @@ try {
       assert.ok(!("refused" in sent), JSON.stringify(sent))
       await until(`${harness} late ${stop}: the send under way`, () => requestOf(world, fin, "Carry on.")?.status === "dispatching" && answer !== undefined)
       if (stop === "apex") await world.agents.stop(apex.caller, { child: "labels", reason: "enough" })
-      else if (stop === "person-fin") assert.equal(await world.agents.stopChild(apex.conversation, world.store.journalPlacement(fin)!.thread), true)
-      else await world.live.cancel(fin)
+      else if (stop === "person-fin") {
+        assert.equal(await world.agents.stopChild(apex.conversation, world.store.journalPlacement(fin)!.thread), true)
+        // The person's stop is a line in the Apex's transcript, once, where an Apex's own stop is its tool row.
+        const title = world.store.thread(world.store.journalPlacement(fin)!.thread)?.title ?? "labels"
+        const lines = (world.live.snapshot(apex.conversation)?.blocks ?? []).filter((block) => block.type === "event" && block.label === `${title} stopped by you`)
+        assert.equal(lines.length, 1, `${harness} late ${stop} ${outcome}: the Apex's transcript says the person stopped it`)
+        assert.equal(await world.agents.stopChild(apex.conversation, world.store.journalPlacement(fin)!.thread), true)
+        assert.equal((world.live.snapshot(apex.conversation)?.blocks ?? []).filter((block) => block.type === "event" && block.label === `${title} stopped by you`).length, 1, "a stop of one stopped already says nothing more")
+      } else await world.live.cancel(fin)
       answer!(outcome === "429" ? "429 Too Many Requests" : undefined)
       await until(`${harness} late ${stop} ${outcome}: its outcome`, () => requestOf(world, fin, "Carry on.")?.status === "held")
       assert.equal(requestOf(world, fin, "Carry on.")?.retry, undefined, `${harness} late ${stop} ${outcome}: an outcome after the Stop is no retry`)

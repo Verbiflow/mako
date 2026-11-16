@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { identifyTool, type ToolIdentity, type ToolSource } from "@mako/sessions/tool-identity"
 import { HARNESS_TOOL_SAMPLES } from "../src/dev/harness-tool-samples.ts"
+import { VOCABULARIES, type NativeTool } from "@mako/sessions/harnesses"
 
 const samples = HARNESS_TOOL_SAMPLES
 
@@ -18,6 +19,38 @@ for (const sample of samples) {
 }
 assert.equal(failures, 0, `${failures} identity mismatches`)
 console.log(`tool identity: ${samples.length} samples ok`)
+
+// Every harness's code-mode wrapper reads the tool a script calls however the script names it: dotted, or in brackets
+// (any quote, any spacing), which a server whose name isn't an identifier needs. A wrapper that draws its calls as rows
+// of their own names the cell by the call; one that doesn't is the call itself, so a running js call draws its steps.
+const scriptWrappers = VOCABULARIES.flatMap((vocabulary) =>
+  Object.entries<NativeTool>(vocabulary.tools).flatMap(([name, tool]) => (tool.wraps?.form === "script" ? [{ harness: vocabulary.harness, name, wraps: tool.wraps }] : [])),
+)
+assert.ok(scriptWrappers.length >= 2, `script wrappers: ${scriptWrappers.map((wrapper) => `${wrapper.harness}/${wrapper.name}`).join(", ")}`)
+const JS = `({ title: "Check the session", code: "await control.status()" })`
+const spellings = [
+  `tools["mako-computer"].js${JS}`,
+  `tools['mako-computer']['js']${JS}`,
+  `tools[ \`mako-computer\` ] . js${JS}`,
+  `tools["mcp__mako-computer__js"]${JS}`,
+]
+for (const wrapper of scriptWrappers) {
+  for (const spelling of spellings) {
+    const code = `const result = await ${spelling}\nreturn result`
+    const identity = identifyTool({ harness: wrapper.harness, name: wrapper.name, input: wrapper.wraps.key ? JSON.stringify({ [wrapper.wraps.key]: code }) : code })
+    const where = `${wrapper.harness}/${wrapper.name}: ${spelling}`
+    if (wrapper.wraps.callsShown) assert.deepEqual([identity.kind, identity.target], ["code", "Computer"], where)
+    else assert.deepEqual([identity.kind, identity.tool, identity.server, identity.via, identity.target], ["computer", "js", "mako-computer", wrapper.name, "Check the session"], where)
+  }
+  // An MCP tool of a server named as an identifier, in brackets and dotted alike.
+  for (const spelling of [`tools.mako["app_status"]()`, `tools.mako.app_status()`]) {
+    const code = `return await ${spelling}`
+    const identity = identifyTool({ harness: wrapper.harness, name: wrapper.name, input: wrapper.wraps.key ? JSON.stringify({ [wrapper.wraps.key]: code }) : code })
+    const label = wrapper.wraps.callsShown ? identity.target : identity.label
+    assert.equal(label, "Read the app's status", `${wrapper.harness}/${wrapper.name}: ${spelling}`)
+  }
+}
+console.log(`tool identity: ${scriptWrappers.length} code-mode wrappers read bracketed calls (${scriptWrappers.map((wrapper) => `${wrapper.harness} ${wrapper.name}`).join(", ")})`)
 
 // Blocks retained from before live tools carried `name` keep the native name in `toolKind`.
 for (const [source, kind] of [

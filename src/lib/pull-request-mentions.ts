@@ -1,3 +1,4 @@
+import { GITHUB_REPOSITORY_LOOKUP_FAILED } from "@mako/host/contracts/git-actions"
 import type { GitHubStatus } from "@/lib/types"
 import type { PullRequestDetail } from "@/lib/context-detail"
 import type { PullRequestListing, PullRequestSearchResult } from "@mako/host/contracts/pull-request-search"
@@ -39,6 +40,7 @@ export function pullRequestDetail(pull: PullRequestListing, repository?: string)
  */
 export function pullMentionReason(status: GitHubStatus | undefined): string | null {
   if (!status) return null
+  if (status.repoLookup) return GITHUB_REPOSITORY_LOOKUP_FAILED
   if (!status.installed) return "Install the gh CLI to mention pull requests"
   if (!status.authenticated) return "Sign in to GitHub to mention pull requests"
   if (!status.repo) return "Add a GitHub remote to mention pull requests"

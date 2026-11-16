@@ -52,6 +52,7 @@ import type { HarnessBehind, ThreadHarnessCheck } from "@mako/host/contracts/clo
 import type { UnreadReport } from "@mako/host/contracts/unread-records"
 import type { StoreFormats } from "@mako/host/contracts/store-formats"
 import type { FileEventsSample, FileEventsService } from "@mako/host/contracts/file-events-service"
+import type { McpSignIns } from "@mako/host/contracts/mcp-sign-ins"
 import type { EntryOriginal, OriginalPart } from "@mako/sessions/record-original"
 import type { LiveHistoryAddress, LiveHistoryRead } from "@mako/host/contracts/live-history"
 import { ENVIRONMENT_SETUP_PROMPT } from "@mako/host/contracts/thread-environments"
@@ -626,6 +627,20 @@ export function installMockBridge() {
    * that outcome. Any other scene reads a healthy service.
    */
   let mockFileEvents = mockFileEventsService(scene)
+  /**
+   * The MCP servers the mock's harnesses couldn't start: one signed in by Codex's command, a claude.ai connector, a
+   * Claude server needing sign-in it offers no way to start, and one Codex couldn't reach.
+   */
+  let mockMcpSignIns: McpSignIns = { servers: [
+    { harness: "claude", server: "claude.ai Gmail", reason: "sign-in required", way: "page", url: "https://claude.ai/settings/connectors", reportedAt: Date.now() },
+    { harness: "codex", server: "todoist", reason: "sign-in required", way: "command", reportedAt: Date.now() },
+    { harness: "claude", server: "linear", reason: "sign-in required", way: "settings", reportedAt: Date.now() },
+    { harness: "codex", server: "paper", reason: "could not connect", way: "settings", reportedAt: Date.now() },
+  ] }
+  const setMcpSignIns = (next: McpSignIns) => {
+    mockMcpSignIns = next
+    emit({ type: "mcp-sign-ins", reading: next })
+  }
   const setFileEvents = (next: FileEventsService) => {
     mockFileEvents = next
     emit({ type: "file-events-service", service: next })
@@ -1076,6 +1091,8 @@ export function installMockBridge() {
       ]
     },
     worktreeAhead: async () => null,
+    threadScratch: async () => ({ settings: { mode: "preview", idleDays: 7, kept: [] }, at: Date.now(), everyMs: 3_600_000, entries: [] }),
+    setThreadScratch: async (settings) => ({ settings, at: Date.now(), everyMs: 3_600_000, entries: [] }),
     worktreeRetention: async () => ({ settings: { mode: "preview", days: 7, kept: [] }, everyMs: 3_600_000, minimumPassMs: 600_000, repositoryFetches: 0, at: Date.now(), checkouts: [] }),
     setWorktreeRetention: async (settings) => ({ settings, everyMs: 3_600_000, minimumPassMs: 600_000, repositoryFetches: 0, at: Date.now(), checkouts: [] }),
     worktreeInventory: async () => (scene === "rail" ? railInventory(removedWorktrees) : { worktrees: [], spares: { count: 0, bytes: null } }),
@@ -3149,6 +3166,14 @@ export function installMockBridge() {
       emit({ type: "live-batch", batch: { id, revision: next.revision, updates: [], nativeAgents } })
       return true
     },
+    liveWaitStop: async (id: string, wait: string) => {
+      const snapshot = liveSnapshots.get(id)
+      if (snapshot?.turnWait?.wait !== wait) return false
+      const next = { ...snapshot, revision: snapshot.revision + 1, turnWait: undefined }
+      liveSnapshots.set(id, next)
+      emit({ type: "live-batch", batch: { id, revision: next.revision, updates: [], turnWait: null } })
+      return true
+    },
     liveCancel: async (id: string) => {
       const session = acpSessions.get(id)
       if (!session) return
@@ -3531,6 +3556,24 @@ export function installMockBridge() {
       const firstRequest = liveSnapshots.get(id)?.requests[0]?.id
       return versioned && firstRequest ? { [firstRequest]: { conversations: [id, `${id}-edited`], at: 0 } } : {}
     },
+    mcpSignIns: async () => mockMcpSignIns,
+    mcpSignIn: async (harness: string, server: string) => {
+      const known = mockMcpSignIns.servers.find((each) => each.harness === harness && each.server === server)
+      const others = mockMcpSignIns.servers.filter((each) => each !== known)
+      if (known?.way === "settings") return mockMcpSignIns
+      if (!known || known.way === "page") {
+        setMcpSignIns({ servers: others })
+        return mockMcpSignIns
+      }
+      setMcpSignIns({ servers: [...others, { ...known, state: { kind: "signing-in" } }] })
+      setTimeout(() => setMcpSignIns({ servers: mockMcpSignIns.servers.filter((each) => each.server !== server) }), 2_000)
+      return mockMcpSignIns
+    },
+    // `?mock&unopened` shows a saved conversation the host couldn't open.
+    unopenedConversations: async () =>
+      new URLSearchParams(globalThis.location?.search).has("unopened")
+        ? [{ conversation: "6f1c2a90-3b7e-4d2a-9c41-8e5b0f7d2a13", journal: "conversations/6f1c2a90-3b7e-4d2a-9c41-8e5b0f7d2a13.sqlite", error: "file is not a database" }]
+        : [],
     fileEventsRestart: async () => {
       const before = mockFileEvents
       setFileEvents({ ...before, restarting: "restarting" })

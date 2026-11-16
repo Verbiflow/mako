@@ -1,9 +1,13 @@
 import assert from "node:assert/strict"
+import { mock } from "node:test"
 import { renderToStaticMarkup } from "react-dom/server"
 import { IdentityRow } from "../src/components/identity/identity-row"
 import { IdentityMenu } from "../src/components/identity/identity-menu"
 import { cloudAccountStore } from "../src/state/cloud-account"
 import { github, githubStore } from "../src/state/github"
+import { store as sessionStore } from "../src/state/session"
+import { PullRequestCard } from "../src/components/inspector/pull-request"
+import type { GitHubStatus } from "../src/lib/types"
 import { CloudPersonSchema } from "@mako/host/contracts/cloud-account"
 import type { CloudAccount, CloudDevice, CloudPerson } from "../src/lib/types"
 
@@ -146,30 +150,87 @@ cloudAccountStore.set({ account: signedIn("connected") })
 githubStore.set({ status: { installed: true, authenticated: false, limited: { until: 1_000_100 } }, userAvatar: undefined })
 assert.doesNotMatch(text(), /Connect GitHub|gh auth login/)
 
-// The actual frontend cache waits until the shared deadline, then retries on demand without a polling timer.
-const originalClock = Date.now
+// An idle Changes panel retries once at the shared deadline, with no click or new demand.
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window")
-let clock = 1_000_000, statusReads = 0, avatarReads = 0
-Date.now = () => clock
-Object.defineProperty(globalThis, "window", { configurable: true, value: { mako: {
-  githubStatus: async () => { statusReads++; return statusReads === 1 ? { installed: true, authenticated: false, limited: { until: 1_000_100 } } : gh },
-  userAvatar: async () => { avatarReads++; return undefined },
-  pullRequest: async () => { throw new Error("A limited lookup must not ask for a PR") },
-} } })
+const originalGit = sessionStore.get().git
+const flush = () => new Promise<void>(resolve => setImmediate(resolve))
+const card = () => renderToStaticMarkup(<PullRequestCard />)
+mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 })
 try {
-  githubStore.set({ status: undefined, statusRoot: undefined, root: undefined, userAvatar: undefined })
-  await github.ensureStatus("fixture")
-  assert.equal(statusReads, 1)
-  assert.equal(avatarReads, 0, "a limited lookup does not ask for an avatar")
-  await github.refresh("fixture", "fix")
-  assert.equal(statusReads, 1, "refresh during cooldown reuses the known refusal")
-  clock = 1_000_100
-  await github.ensureStatus("fixture")
-  assert.equal(statusReads, 2, "the next demand at the deadline rechecks GitHub")
-  assert.equal(githubStore.get().status?.limited, undefined)
+  for (const failure of ["limited", "repoLookup"] as const) {
+    const root = `/fixture/${failure}`
+    const until = Date.now() + 1_000
+    let statusReads = 0, avatarReads = 0, pullReads = 0
+    const failed: GitHubStatus = { installed: true, authenticated: true, login: "ada-gh", ...(failure === "limited" ? { limited: { until } } : { repoLookup: { state: "failed", until } }) }
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { mako: {
+      githubStatus: async () => { statusReads++; return statusReads === 1 ? failed : gh },
+      userAvatar: async () => { avatarReads++; return undefined },
+      pullRequest: async () => { pullReads++; return null },
+    } } })
+    sessionStore.set({ git: { cwd: root, root, branch: "fix", ahead: 1, behind: 0, files: [] } })
+    githubStore.set({ status: undefined, statusRoot: undefined, root: undefined, userAvatar: undefined })
+    await github.refresh(root, "fix")
+    assert.equal(statusReads, 1)
+    assert.equal(pullReads, 0, "a refused lookup does not read a PR")
+    if (failure === "limited") assert.equal(avatarReads, 0)
+    assert.match(card(), failure === "limited" ? /rate limiting this login/ : /could not read this repository/)
+    assert.doesNotMatch(card(), /refresh the Changes panel|gh auth login/)
+    assert.match(card(), /Mako will retry automatically/)
+    await Promise.all([github.refresh(root, "fix"), github.ensureStatus(root)])
+    mock.timers.tick(999)
+    await flush()
+    assert.equal(statusReads, 1, "repeated demands share the original deadline, with no polling")
+    mock.timers.tick(1)
+    await flush()
+    assert.equal(statusReads, 2, "the deadline rechecks status without any person action")
+    assert.equal(pullReads, 1, "recovery reads the branch's PR too")
+    assert.equal(card(), "", "the actual card clears after automatic recovery")
+    mock.timers.tick(60_000)
+    await flush()
+    assert.equal(statusReads, 2, "success leaves no polling timer")
+  }
+
+  let statusReads = 0, pullReads = 0
+  let reply: GitHubStatus = { installed: true, authenticated: true, repoLookup: { state: "failed", until: Date.now() + 1_000 } }
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { mako: {
+    githubStatus: async () => { statusReads++; return reply },
+    userAvatar: async () => undefined,
+    pullRequest: async () => { pullReads++; return null },
+  } } })
+  const showRepository = (root: string) => sessionStore.set({ git: { cwd: root, root, branch: "fix", ahead: 1, behind: 0, files: [] } })
+  showRepository("/fixture/old")
+  await github.refresh("/fixture/old", "fix")
+  showRepository("/fixture/new")
+  mock.timers.tick(1_000)
+  await flush()
+  assert.equal(statusReads, 1, "a switched-away repository's timer cannot query the new repository")
+  reply = gh
+  await github.refresh("/fixture/new", "fix")
+  assert.equal(statusReads, 2)
+  assert.equal(pullReads, 1)
+
+  // An old deadline in a reply never becomes an immediate alarm loop.
+  showRepository("/fixture/expired")
+  reply = { installed: true, authenticated: true, limited: { until: Date.now() - 1 } }
+  await github.refresh("/fixture/expired", "fix")
+  mock.timers.tick(60_000)
+  await flush()
+  assert.equal(statusReads, 3, "an already-expired reply cannot schedule a retry loop")
+
+  // A newer status cancels the old deadline, rather than scheduling a timer per caller.
+  showRepository("/fixture/replaced")
+  reply = { installed: true, authenticated: true, limited: { until: Date.now() + 1_000 } }
+  await github.refresh("/fixture/replaced", "fix")
+  showRepository("/fixture/healthy")
+  reply = gh
+  await github.refresh("/fixture/healthy", "fix")
+  mock.timers.tick(1_000)
+  await flush()
+  assert.equal(statusReads, 5, "the replaced deadline cannot invalidate a healthy status")
 } finally {
-  Date.now = originalClock
+  mock.timers.reset()
+  sessionStore.set({ git: originalGit })
   if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow)
   else Reflect.deleteProperty(globalThis, "window")
 }
-console.log("GitHub limit UI: no sign-in prompt, no extra reads before deadline, demand refresh after deadline")
+console.log("GitHub refusal UI: one automatic deadline retry, idle cards clear, no polling")

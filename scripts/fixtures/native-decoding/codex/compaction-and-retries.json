@@ -444,7 +444,11 @@
           "patch": {
             "status": "failed",
             "lastStop": "failed",
-            "error": "You've hit your usage limit. Try again at 6:26 PM."
+            "error": "You've hit your usage limit. Try again at 6:26 PM.",
+            "failureEvidence": {
+              "kind": "rate-limited",
+              "source": "native-limit"
+            }
           }
         },
         {

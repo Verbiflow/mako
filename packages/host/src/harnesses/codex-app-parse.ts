@@ -1,3 +1,5 @@
+import { codexFailureEvidence } from "./codex/failure.js"
+import type { ProviderFailureEvidence } from "../contracts/provider-failure-evidence.js"
 import { CodexAsyncQuestionsSchema } from "./codex/questions.js"
 import { CodexReportedAccessSchema } from "./codex/access.js"
 import {
@@ -104,6 +106,7 @@ type ErrorNotification = {
   willRetry: boolean
   /** The `CodexErrorInfo` variant, when Codex classified the error. */
   variant?: string
+  failureEvidence: ProviderFailureEvidence
 }
 
 type ResolvedNotification = {
@@ -361,6 +364,7 @@ export function parseNotification(
         message: stringValue(error?.message) ?? "Codex encountered an error",
         willRetry: booleanValue(params.willRetry) === true,
         variant: errorVariant(error?.codexErrorInfo),
+        failureEvidence: codexFailureEvidence(stringValue(error?.message), error?.codexErrorInfo),
       }
     }
     case "serverRequest/resolved": {
@@ -546,7 +550,7 @@ function parseTurnError(
   const additionalDetails = optionalNullableString(root.additionalDetails)
   if (!message.valid || !additionalDetails.valid)
     return invalidResult("invalid turn error")
-  const error: Exclude<Turn["error"], null> = {}
+  const error: Exclude<Turn["error"], null> = { failureEvidence: codexFailureEvidence(message.value, root.codexErrorInfo) }
   if (message.value !== undefined) error.message = message.value
   if (additionalDetails.value !== undefined)
     error.additionalDetails = additionalDetails.value

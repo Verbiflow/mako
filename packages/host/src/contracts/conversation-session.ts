@@ -74,6 +74,8 @@ export interface ThreadRunState {
   error?: string
   /** Public facts for this headless launch; absent in older events. */
   executionContext?: ExecutionContext
+  /** Settings asked for that the harness's command line can't carry, so this reply runs without them ("effort"). */
+  dropped?: string[]
 }
 
 export type ThinkingLevel =
@@ -153,6 +155,8 @@ export interface ChatMessage {
   model?: string
   provider?: string
   error?: string
+  /** A supplied failure verdict, never inferred from this message's prose by the renderer. */
+  failure?: import("./provider-failure.js").ProviderFailureKind
   toolName?: string
   toolCallId?: string
   isError?: boolean
