@@ -59,6 +59,8 @@ const RowSchema = z.object({ value: z.string() })
 const SnapshotIdSchema = z.string().uuid()
 /** Files a checkpoint takes at most: Git reads again only the ones whose stat changed, so this is the listing's cost, not hashing's. */
 const MAX_FILES = 250_000
+/** Bound listing buffers across this host's captures, without queuing behind private packing. */
+const PRIVATE_READS = 8
 /** History only avoids a fresh capture. A slow native replay must leave time for that capture before the turn goes. */
 const CHECKPOINT_HISTORY_MS = 500
 /** Past this many changed paths a checkpoint reads the whole workspace again rather than only them. */
@@ -143,6 +145,8 @@ export class WorkspaceSnapshots {
   private readonly publications = new Map<string, Promise<unknown>>()
   /** Borrowed packs and results not yet handed to their run cannot be pruned. */
   private readonly pins = new Map<string, number>()
+  private privateReads = 0
+  private readonly waitingReads: (() => void)[] = []
   /** Workspaces whose files a rewind is rewriting. */
   private readonly restoring = new Set<string>()
   private readonly runs = new Map<string, ActiveRun>()
@@ -335,7 +339,7 @@ export class WorkspaceSnapshots {
       frozen?.()
     }
     try {
-      return await this.capturing(scope, async (gitDir, copied, fixed) => {
+      return await this.capturing(scope, async (gitDir, copied, fixed, finished) => {
         this.assertNoPending(scope)
         // Marked before anything is read: a change while it's taken is after the mark, so the next turn reads it again.
         // One shared with other runs names them, which a later turn alone there shouldn't say: it's never reused.
@@ -347,10 +351,10 @@ export class WorkspaceSnapshots {
         }
         const [staged, excludes] = mark ? await Promise.all([this.stagedDigest(scope), this.excludesStamp(scope)]) : []
         const increment = last?.kind === "changed" && frozen ? { prev: last.record, paths: last.paths } : undefined
-        const record = await this.captureLocked(scope, gitDir, "retained", shared, increment, {
-          pins,
+        const record = await this.captureLocked(scope, gitDir, pins, "retained", shared, increment, {
           copied,
           fixed,
+          finished,
         })
         if (owned && !owned.released) this.pin(owned.checkpoints, record.id)
         if (!record.shared?.length && mark && staged !== undefined && excludes !== undefined && (increment || this.plain.has(record.id)))
@@ -582,19 +586,24 @@ export class WorkspaceSnapshots {
     const target = this.get(targetId)
     this.assertIdle(target.scope)
     return this.locked(target.scope, async (gitDir) => {
-      this.assertNoPending(target.scope)
-      await this.validateRepository(target)
-      this.retain(target)
-      const current = await this.captureLocked(target.scope, gitDir)
-      const paths = await this.changedPaths(current, target)
-      this.retain(current)
-      await this.maintainLocked(current)
-      return {
-        target: this.summary(target),
-        current: this.summary(current),
-        changedFiles: paths.slice(0, 100),
-        changedFileCount: paths.length,
-        stagingChanged: target.indexDigest !== current.indexDigest,
+      const pins = new Set<string>()
+      try {
+        this.assertNoPending(target.scope)
+        await this.validateRepository(target)
+        this.retain(target)
+        const current = await this.captureLocked(target.scope, gitDir, pins)
+        const paths = await this.changedPaths(current, target)
+        this.retain(current)
+        await this.maintainLocked(current)
+        return {
+          target: this.summary(target),
+          current: this.summary(current),
+          changedFiles: paths.slice(0, 100),
+          changedFileCount: paths.length,
+          stagingChanged: target.indexDigest !== current.indexDigest,
+        }
+      } finally {
+        this.unpin(pins)
       }
     })
   }
@@ -921,32 +930,42 @@ export class WorkspaceSnapshots {
   }
 
   /** Copying the real index is exclusive; reading through independent saved indexes is not. */
-  private async capturing<T>(scope: string, work: (gitDir: string, copied: () => void, fixed: () => void) => Promise<T>, frozen: () => void): Promise<T> {
-    const { pending, ordered } = await this.queued(scope, () => this.lockedNow(scope, (gitDir) =>
-      new Promise<{ pending: Promise<T>; ordered: Promise<void> }>((copied) => {
-        // Promise's executor runs synchronously, so fixed is assigned before work can use it.
-        let fixed!: () => void
-        const read = new Promise<void>((resolve) => { fixed = resolve })
-        const previous = this.readers.get(scope) ?? Promise.resolve()
-        const ordered = Promise.all([previous, read]).then(() => undefined)
-        this.readers.set(scope, ordered)
-        void ordered.then(() => {
-          if (this.readers.get(scope) === ordered) this.readers.delete(scope)
-        })
-        const active = this.captures.get(scope) ?? new Set<Promise<unknown>>()
-        this.captures.set(scope, active)
-        const pending = work(gitDir, () => copied({ pending, ordered }), fixed)
-        active.add(pending)
-        // Failure also releases both barriers; it cannot strand the next capture or provider.
-        const ended = () => {
-          fixed()
-          copied({ pending, ordered })
-          active.delete(pending)
-          if (!active.size) this.captures.delete(scope)
-        }
-        void pending.then(ended, ended)
-      })
-    ))
+  private async capturing<T>(scope: string, work: (gitDir: string, copied: () => void, fixed: () => void, finished: () => void) => Promise<T>, frozen: () => void): Promise<T> {
+    const { pending, ordered } = await this.queued(scope, async () => {
+      // Fingerprints also list files; take a slot before those reads and before reserving the live index.
+      const finished = await this.reading()
+      try {
+        return await this.lockedNow(scope, (gitDir) =>
+          new Promise<{ pending: Promise<T>; ordered: Promise<void> }>((copied) => {
+            // Promise's executor runs synchronously, so fixed is assigned before work can use it.
+            let fixed!: () => void
+            const read = new Promise<void>((resolve) => { fixed = resolve })
+            const previous = this.readers.get(scope) ?? Promise.resolve()
+            const ordered = Promise.all([previous, read]).then(() => undefined)
+            this.readers.set(scope, ordered)
+            void ordered.then(() => {
+              if (this.readers.get(scope) === ordered) this.readers.delete(scope)
+            })
+            const active = this.captures.get(scope) ?? new Set<Promise<unknown>>()
+            this.captures.set(scope, active)
+            const pending = work(gitDir, () => copied({ pending, ordered }), fixed, finished)
+            active.add(pending)
+            // Failure also releases both barriers; it cannot strand the next capture or provider.
+            const ended = () => {
+              finished()
+              fixed()
+              copied({ pending, ordered })
+              active.delete(pending)
+              if (!active.size) this.captures.delete(scope)
+            }
+            void pending.then(ended, ended)
+          })
+        )
+      } catch (error) {
+        finished()
+        throw error
+      }
+    })
     await ordered
     // The index is unreserved and every earlier read is fixed before this provider can change files.
     frozen()
@@ -966,6 +985,19 @@ export class WorkspaceSnapshots {
       else this.pins.delete(id)
     }
     held.clear()
+  }
+
+  private async reading(): Promise<() => void> {
+    if (this.privateReads < PRIVATE_READS) this.privateReads++
+    else await new Promise<void>((resolve) => this.waitingReads.push(resolve))
+    let held = true
+    return () => {
+      if (!held) return
+      held = false
+      const next = this.waitingReads.shift()
+      if (next) next()
+      else this.privateReads--
+    }
   }
 
   private async lockedNow<T>(
@@ -1082,20 +1114,24 @@ export class WorkspaceSnapshots {
     gitDir: string,
     work: (current: SnapshotRecord) => Promise<T>
   ): Promise<T> {
-    const current = await this.captureLocked(scope, gitDir, "temporary")
+    const pins = new Set<string>()
+    let current: SnapshotRecord | undefined
     try {
+      current = await this.captureLocked(scope, gitDir, pins, "temporary")
       return await work(current)
     } finally {
-      await rm(join(this.root, current.id), { recursive: true, force: true })
+      this.unpin(pins)
+      if (current) await rm(join(this.root, current.id), { recursive: true, force: true })
     }
   }
   private async captureLocked(
     scope: string,
     gitDir: string,
+    pins: Set<string>,
     lifetime: "retained" | "temporary" = "retained",
     shared?: ReadonlySet<string>,
     since?: Increment,
-    read?: { copied: () => void; fixed: () => void; pins: Set<string> }
+    read?: { copied: () => void; fixed: () => void; finished: () => void }
   ): Promise<SnapshotRecord> {
     // Writer queries must include edits made during a multi-file read, not start after delayed publication.
     const createdAt = Date.now()
@@ -1118,6 +1154,7 @@ export class WorkspaceSnapshots {
     const hasIndex = existsSync(userIndex)
     const head = await this.head(scope)
     let record: SnapshotRecord
+    let releaseRead = read?.finished
     try {
       if (hasIndex) {
         if ((await lstat(userIndex)).size > Math.min(MAX_INDEX_BYTES, this.retention.maxSnapshotBytes))
@@ -1131,6 +1168,8 @@ export class WorkspaceSnapshots {
         await this.snapshotGit(scope, ["read-tree", "--empty"], workingIndex)
       }
       read?.copied()
+      // Preview and restore call directly under their exclusive rewind lock.
+      releaseRead ??= await this.reading()
       const savedIndex = hasIndex ? index : workingIndex
       const sparse = !since &&
         (
@@ -1196,7 +1235,7 @@ export class WorkspaceSnapshots {
           const row = this.db.prepare(`SELECT value FROM snapshots WHERE json_extract(value, '$.scope') = ?
             ORDER BY json_extract(value, '$.createdAt') DESC, id DESC LIMIT 1`).get(scope)
           const previous = row ? RecordSchema.parse(JSON.parse(RowSchema.parse(row).value)) : undefined
-          if (previous && read) this.pin(read.pins, previous.id)
+          if (previous) this.pin(pins, previous.id)
           return previous
         })
         if (previous?.storage && previous.gitDir === gitDir && previous.head === head) {
@@ -1248,6 +1287,13 @@ export class WorkspaceSnapshots {
       // Everything after this uses the saved indexes, trees and leased object stores, never live files.
       read?.fixed()
       if (since) entries = (await captureGit(["ls-files", "-z"], workingIndex)).split("\0").filter(Boolean).length
+      const files = entries + untracked.length
+      const plain = !sparse && !flagged.length && !embedded.length
+      flagged.length = 0
+      untracked = []
+      embedded = []
+      present.length = 0
+      releaseRead()
       const parents = stagedTree
         ? [
             "-p",
@@ -1296,7 +1342,7 @@ export class WorkspaceSnapshots {
         id,
         scope,
         createdAt,
-        files: entries + untracked.length,
+        files,
         gitDir,
         head,
         tree,
@@ -1305,14 +1351,12 @@ export class WorkspaceSnapshots {
         indexDigest,
       }
       if (shared?.size) record.shared = [...shared].slice(0, 64)
-      if (!sparse && !flagged.length && !embedded.length) this.plain.add(id)
+      if (plain) this.plain.add(id)
       if (lifetime === "temporary") return record
       await this.publishing(scope, async () => {
-        if (read) {
-          // Sealing copied every borrowed object this checkpoint adds to HEAD; admission may now expire its source.
-          this.unpin(read.pins)
-          this.pin(read.pins, id)
-        }
+        // Sealing copied every borrowed object this checkpoint adds to HEAD; admission may now expire its source.
+        this.unpin(pins)
+        this.pin(pins, id)
         // A pass removes at most 64 checkpoints; this one's room may take more.
         while (await this.pruneLocked(scope, gitDir, undefined, payloadBytes));
         if (
@@ -1331,6 +1375,8 @@ export class WorkspaceSnapshots {
     } catch (error) {
       await rm(directory, { recursive: true, force: true })
       throw error
+    } finally {
+      releaseRead?.()
     }
     writeFileSync(
       join(directory, "capture-owner.json"),

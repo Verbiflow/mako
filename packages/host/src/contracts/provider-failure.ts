@@ -1,5 +1,6 @@
 import type { ProviderFailureEvidence } from "./provider-failure-evidence.js"
 import { errorMessage, type FailureBoundary } from "./error-message.js"
+import { nativeVerificationPending } from "./native-verification-message.js"
 
 /**
  * Host failures carry their kind. Only native decoders and transports admit provider text for classification;
@@ -214,7 +215,7 @@ export function classifyProviderText(message: string | undefined, providerLabel 
 export function classifyProviderFailure(message: string | undefined, providerLabel = "The provider", evidence?: ProviderFailureEvidence): ProviderFailure {
   if (!evidence) return describeProviderFailure("unknown", providerLabel)
   return evidence.source === "provider-error" && evidence.kind === "unknown"
-    ? classifyProviderText(message, providerLabel)
+    ? nativeVerificationPending(message ?? "") ? describeProviderFailure("launch-stalled", providerLabel) : classifyProviderText(message, providerLabel)
     : describeProviderFailure(evidence.kind, providerLabel)
 }
 

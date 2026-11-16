@@ -7,6 +7,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import type { LiveSessionState } from "../contracts/providers-acp.js"
 import { sameNativeSource } from "./native-source.js"
 import { assessExecutionContext } from "../base/execution-context.js"
+import { NativeVerificationPendingError } from "../contracts/native-verification.js"
 
 /** Validate what actually opened before any prompt or saved-binding replacement.
  * Account selection may change intentionally; a reused native ID must still
@@ -40,7 +41,10 @@ export async function verifyRecoveredSession(binding: ProviderBinding, session: 
     hostLog("recovery", "native source import verified", { harness: binding.provider, binding: binding.id, via: receipt.via })
   }
   const compatibility = assessExecutionContext(binding.executionContext, session.executionContext, imported, driver.runtimeOldest?.())
-  if (compatibility.kind === "incompatible") throw new HostFailureError("resume-failed", compatibility.reason)
+  if (compatibility.kind === "incompatible") {
+    if (compatibility.retry) throw new NativeVerificationPendingError(compatibility.reason)
+    throw new HostFailureError("resume-failed", compatibility.reason)
+  }
   hostLog("recovery", "opened execution context assessed", {
     harness: binding.provider, binding: binding.id, outcome: compatibility.kind,
     missing: compatibility.kind === "unverified" ? compatibility.missing.join(",") : undefined,

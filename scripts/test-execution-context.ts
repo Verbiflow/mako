@@ -28,6 +28,10 @@ context.credential = { kind: "configured", source: "fixture", revision: { kind: 
 context.service = { kind: "reported", authority: "fixture-service", via: "native handshake" }
 assert.equal(assessExecutionContext(context, { ...context, service: { kind: "reported", authority: "other-service", via: "native handshake" } }, false).kind, "incompatible")
 assert.equal(assessExecutionContext(context, { ...context, service: undefined }, false).kind, "incompatible", "loss of previously reported service evidence cannot admit input")
+const missingService = assessExecutionContext(context, { ...context, service: undefined }, false)
+assert.ok(missingService.kind === "incompatible" && missingService.retry, "missing evidence is denied until a new verification succeeds")
+const conflictingWithMissingService = assessExecutionContext(context, { ...context, service: undefined, identity: reportedIdentity("other@example.test", "native", "account/read") }, false)
+assert.ok(conflictingWithMissingService.kind === "incompatible" && !conflictingWithMissingService.retry, "a known principal conflict outranks a separate missing-evidence read")
 assert.equal(assessExecutionContext(context, { ...context, account: { kind: "unavailable", reason: "selection unavailable" } }, false).kind, "incompatible", "loss of configured selection is not an intentional account switch")
 assert.equal(assessExecutionContext(context, { ...context, credential: undefined }, false).kind, "unverified", "older credential evidence remains missing")
 assert.equal(assessExecutionContext(context, { ...context, credential: { kind: "configured", source: "fixture", revision: { kind: "reported", value: "new-revision", via: "fixture" } } }, false).kind, "unverified", "changed credentials require compatibility proof even with the same principal")
