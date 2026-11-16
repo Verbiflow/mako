@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdtempSync, realpathSync, rmSync } from "node:fs"
+import { mkdtempSync, realpathSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Entry } from "@mako/sessions/entries"
@@ -102,6 +102,17 @@ const running = "00000000-0000-4000-9000-000000000002"
 const blocks = blocksOf(240)
 writeJournal(quiet, blocks)
 writeJournal(running, blocksOf(12), "running")
+// A journal that dropped most of what it held: its close would compact it.
+const shrunk = "00000000-0000-4000-9000-000000000009"
+{
+  const journal = new LiveJournal(host, shrunk)
+  const big = blocksOf(1200)
+  const full = snapshotOf(shrunk, big)
+  journal.commit(full)
+  const kept = big.slice(0, 40)
+  journal.commit({ ...snapshotOf(shrunk, kept), revision: 2 }, full)
+  journal.close()
+}
 const long = "00000000-0000-4000-9000-000000000003"
 writeJournal(long, blocksOf(3000))
 // One binding whose session holds the whole history: a read may refresh it from the harness's record, so it's read in.
@@ -139,7 +150,9 @@ const live = new LiveConversations({
   }),
   resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
 })
-reader = new LiveHistoryReader(undefined, undefined, undefined, (id) => live.held(id))
+// Compactions as the host asks for them, here the test's: a cold view puts one off, and its going asks again.
+const reclaims = new JournalReclaims((key) => reader.holds(key))
+reader = new LiveHistoryReader(undefined, undefined, undefined, (id) => live.held(id), (key) => void reclaims.released(key))
 try {
   // The newest page, read where the journal lies: nothing of the conversation is read in.
   const opened = await read<LiveSnapshot>(reader, live, quiet, { kind: "snapshot" })
@@ -210,6 +223,17 @@ try {
   const cold = await live.coldView(uncovered)
   assert.ok(cold, "a binding that covers none of it is read cold")
   cold.journal.close()
+
+  // A compaction asked for while a cold view holds the journal waits for the view, then runs when it goes.
+  const shrunkPath = join(host, `${shrunk}.sqlite`)
+  await read<LiveSnapshot>(reader, live, shrunk, { kind: "snapshot" })
+  const sizeBefore = statSync(shrunkPath).size
+  assert.deepEqual(await reclaims.reclaim(shrunkPath), { skipped: true }, "put off while the view holds it")
+  reader.released(shrunk)
+  await reclaims.settled()
+  const sizeAfter = statSync(shrunkPath).size
+  assert.ok(sizeAfter < sizeBefore / 2, `compacted once the view went: ${sizeBefore} -> ${sizeAfter} bytes`)
+  assert.equal(reclaims.released(join(realpathSync(host), `${shrunk}.sqlite`)), undefined, "and owed no longer")
 
   // Read in between the cold journal opening and its view being held: the view isn't held, the read is from memory.
   const read0 = await reader.read(raced, { kind: "snapshot" }, () => live.refreshedSnapshot(raced), async () => {

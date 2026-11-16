@@ -219,7 +219,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   const dataRoot = environment.dataRoot
   // `live` is made below; the reader asks it only once a read arrives.
   const history = new LiveHistoryReader(catalog.page, catalog.entry, deps.streams === undefined ? undefined : { record: catalog.original, streams: deps.streams },
-    (id) => live.held(id))
+    (id) => live.held(id), (key, id) => live.coldViewReleased(key, id))
   // Every resume, from the rail, a reconnect or a wake, first puts a session its harness deleted back from Mako's records.
   const restoring = restoringResume({
     assess: (binding) => harnesses.assessResume(binding),

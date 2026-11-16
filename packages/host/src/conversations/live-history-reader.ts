@@ -63,6 +63,8 @@ export class LiveHistoryReader {
   private readonly originals?: Originals
   /** What memory holds of a conversation now, without reading one only on disk back in. */
   private readonly held?: (id: string) => LiveSnapshot | undefined
+  /** The last cold view of conversation `id`'s journal file `key` was let go (`JournalReclaims.released`). */
+  private readonly coldReleased?: (key: string, id: string) => void
   private readonly gone = new Map<string, { id: string; why: string; at: number }>()
   private pruned = 0
   /** A weighing of the views a capture asked for, still to run (`pruneSoon`). */
@@ -73,7 +75,8 @@ export class LiveHistoryReader {
     nativeEntry?: (path: string, id: string) => Promise<Entry | null>,
     originals?: Originals,
     held?: (id: string) => LiveSnapshot | undefined,
-  ) { this.nativePage = nativePage; this.nativeEntry = nativeEntry; this.originals = originals; this.held = held }
+    coldReleased?: (key: string, id: string) => void,
+  ) { this.nativePage = nativePage; this.nativeEntry = nativeEntry; this.originals = originals; this.held = held; this.coldReleased = coldReleased }
 
   /**
    * Conversation `id`'s entries were paged (`paged-entries.ts`): its views of
@@ -307,7 +310,10 @@ export class LiveHistoryReader {
 
   private letGo(token: string, view: View, why: string): void {
     this.views.delete(token)
-    view.cold?.close()
+    if (view.cold) {
+      view.cold.close()
+      if (!this.holds(view.cold.key)) this.coldReleased?.(view.cold.key, view.id)
+    }
     this.gone.set(token, { id: view.id, why, at: Date.now() })
     if (this.gone.size > GONE_KEPT) this.gone.delete(this.gone.keys().next().value!)
   }

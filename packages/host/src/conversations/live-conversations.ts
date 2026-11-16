@@ -736,6 +736,15 @@ export class LiveConversations {
     return this.sources.refreshedSnapshot(id)
   }
 
+  /**
+   * The last cold view of conversation `id`'s journal (file `key`) was let go: a compaction it put off goes now, unless
+   * the conversation is in memory again, whose journal's close decides it.
+   */
+  coldViewReleased(key: string, id: string): void {
+    if (this.records.has(id)) return
+    void this.reclaims.released(key)
+  }
+
   /** Conversation `id` read where its journal lies, for a window, when nothing holds it in memory (`LiveRecords.cold`). */
   async coldView(id: string): Promise<{ journal: ColdJournal; snapshot: LiveSnapshot; still: () => boolean } | undefined> {
     const cold = await this.records.cold(id)
