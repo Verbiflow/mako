@@ -292,6 +292,7 @@ export type CloudAccountOptions = {
   device: () => Promise<{ name: string; platform: string; appVersion: string }>
   /** A fixture desk reaches nothing beyond this Mac, so it signs in only to a cloud on loopback. */
   fixture?: boolean
+  onFinLimitsChanged?: () => void
   onChange: (account: CloudAccount) => void
   log?: (message: string, fields?: Record<string, string | number | boolean>) => void
   /** Every call to the cloud, as it ends, for error reports. */
@@ -367,6 +368,9 @@ export class CloudAccounts {
   readonly #options: CloudAccountOptions
   readonly #cloud: URL | undefined
   readonly #unavailable: string | undefined
+  #finLimitsEpoch = 0
+  #finLimitsAttempt: { epoch: number; at: number } | undefined
+  #finLimitsPending: { epoch: number; task: Promise<CloudFinStatus | null> } | undefined
   #finLimits: { account: string; expiresAt: number; status: CloudFinStatus } | undefined
   #state: CloudAccountState = { status: "signed-out" }
   #stored: Stored | undefined
@@ -730,16 +734,39 @@ export class CloudAccounts {
     return response.status === 404 ? null : AccessChoicesAnswerSchema.parse(await response.json())
   }
 
-  /** Account limits, not a local estimate or authority to start a machine. Old gateways fail closed. */
+  /** Background refresh only: explicit account/link/job work calls this, never a Settings read. */
   async cloudFinLimits(): Promise<CloudFinStatus | null> {
     await this.#ready
     const account = this.#state.status === "signed-in" ? this.#state.account.id : undefined
     if (!account) return null
-    const response = await this.#call("cloud.fins.read", "GET", CLOUD_FINS_PATH, undefined, false, [404])
-    const status = response.status === 404 ? null : CloudFinStatusSchema.parse(await response.json())
-    if (this.#state.status !== "signed-in" || this.#state.account.id !== account) return null
-    this.#finLimits = status ? { account, expiresAt: Date.now() + 30_000, status } : undefined
-    return status
+    const epoch = this.#finLimitsEpoch
+    if (this.#finLimitsPending?.epoch === epoch) return this.#finLimitsPending.task
+    const held = this.heldCloudFinLimits()
+    if (held) return held
+    if (this.#finLimitsAttempt?.epoch === epoch && Date.now() - this.#finLimitsAttempt.at < 30_000) return null
+    this.#finLimitsAttempt = { epoch, at: Date.now() }
+    // Reserve the single flight before the transport callback can run.
+    const task = Promise.resolve().then(async () => {
+      try {
+        const response = await this.#call("cloud.fins.read", "GET", CLOUD_FINS_PATH, undefined, false, [404])
+        const status = response.status === 404 ? null : CloudFinStatusSchema.parse(await response.json())
+        if (epoch !== this.#finLimitsEpoch || this.#state.status !== "signed-in" || this.#state.account.id !== account) return null
+        this.#finLimits = status ? { account, expiresAt: Date.now() + 30_000, status } : undefined
+        this.#options.onFinLimitsChanged?.()
+        return status
+      } catch (error) {
+        if (epoch === this.#finLimitsEpoch) {
+          this.#finLimits = undefined
+          this.#options.onFinLimitsChanged?.()
+          this.#options.log?.("cloud Fin limits could not be read", { outcome: "failed" })
+        }
+        throw error
+      } finally {
+        if (this.#finLimitsPending?.epoch === epoch) this.#finLimitsPending = undefined
+      }
+    })
+    this.#finLimitsPending = { epoch, task }
+    return task
   }
 
   heldCloudFinLimits(): CloudFinStatus | undefined {
@@ -748,13 +775,17 @@ export class CloudAccounts {
 
   async reserveCloudFin(input: CloudFinStart) {
     const response = await this.#call("cloud.fins.reserve", "POST", `${CLOUD_FINS_PATH}/reserve`, input)
+    this.#finLimitsEpoch += 1
     this.#finLimits = undefined
+    this.#options.onFinLimitsChanged?.()
     return CloudFinAnswerSchema.parse(await response.json())
   }
 
   async cancelCloudFin(input: CloudFinStart) {
     const response = await this.#call("cloud.fins.cancel", "POST", `${CLOUD_FINS_PATH}/cancel`, input)
+    this.#finLimitsEpoch += 1
     this.#finLimits = undefined
+    this.#options.onFinLimitsChanged?.()
     return CloudFinAnswerSchema.parse(await response.json())
   }
 
@@ -1780,9 +1811,11 @@ export class CloudAccounts {
   }
 
   #set(state: CloudAccountState): void {
-    if (state.status !== "signed-in" || this.#state.status !== "signed-in" || state.account.id !== this.#state.account.id || state.account.entitlements.join() !== this.#state.account.entitlements.join()) this.#finLimits = undefined
+    const changed = state.status !== "signed-in" || this.#state.status !== "signed-in" || state.account.id !== this.#state.account.id || state.account.entitlements.join() !== this.#state.account.entitlements.join()
+    if (changed) { this.#finLimits = undefined; this.#finLimitsEpoch += 1 }
     this.#state = state
     this.#options.onChange(this.account())
+    if (changed) this.#options.onFinLimitsChanged?.()
   }
 
   /** The cloud's address, when this build has one; nothing is fetched to say so. */

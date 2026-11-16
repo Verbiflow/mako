@@ -177,13 +177,14 @@ function refused(harness: string, input: Partial<Omit<FinTuningInput, "label" | 
     const store = new FinDefaultsStore(file)
     const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value, breadcrumb: () => {}, declaring: async () => {}, work: unwatchedWork })
     let cloudReads = 0
-    declareFinDefaultMethods(methods, store, undefined, undefined, { refresh: async () => { cloudReads += 1 }, reading: () => ({ atOnce: 3, dailySpendCents: 100, spentTodayCents: 21 }) })
+    const cloud = { refresh: async () => { cloudReads += 1; throw new Error("a Settings read must not start a request") }, reading: () => ({ atOnce: 3, dailySpendCents: 100, spentTodayCents: 21 }) }
+    declareFinDefaultMethods(methods, store, undefined, undefined, cloud)
     const initial = decodeRuntimeValue(await methods.invoke("mako:fin-defaults", []))
     assert.deepEqual(initial, { ...store.reading(), cloud: { atOnce: 3, dailySpendCents: 100, spentTodayCents: 21 } })
-    assert.equal(cloudReads, 1, "Settings asks the account reader; no background poll")
+    assert.equal(cloudReads, 0, "a Settings read neither waits for nor starts network work")
     const changed = decodeRuntimeValue(await methods.invoke("mako:fin-limit-set", [5]))
     assert.deepEqual(changed, { ...store.reading(), cloud: { atOnce: 3, dailySpendCents: 100, spentTodayCents: 21 } }, "saving a setting keeps the account limits in the answer")
-    assert.equal(cloudReads, 1, "saving settings reuses the account client's bounded reading")
+    assert.equal(cloudReads, 0, "saving settings reuses the account client's bounded reading")
     store.setLimit(null)
     assert.deepEqual(store.reading(), { chosen: {}, used: {}, policy: { rules: [] }, ceiling: FIN_CEILING, moveOnLimit: true }, "nothing chosen: every harness's Fins run as the person does, this device on its capacity, and go on at the next account when theirs runs out")
     store.use("cursor", { model: "composer-2.5", options: { fast: "true" } })

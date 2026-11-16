@@ -235,6 +235,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   emit,
   fixture,
   signedIn,
+  finLimitsChanged,
   request,
   harnessSignIns,
   sessions,
@@ -250,6 +251,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   emit: (event: HostEvent) => void
   fixture: boolean
   signedIn?: () => void
+  finLimitsChanged?: () => void
   request?: (call: DiagnosticEvents["cloud.request"]) => void
   /** Shares this Mac's harness sign-ins with the account's cloud machines; a fixture desk shares none. */
   harnessSignIns?: (options: { dataRoot: string; store: HarnessSignInStore; onChange: (signIns: CloudSignInsState) => void }) => HarnessSignInSharing
@@ -350,11 +352,13 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       preferences?.again()
     },
     onAccountLinked: () => {
+      void cloud.cloudFinLimits().catch(() => {})
       for (const listener of threadListeners) listener("linked")
     },
     onRuntimeLinked: () => {
       for (const listener of runtimeListeners) listener()
     },
+    onFinLimitsChanged: () => finLimitsChanged?.(),
     onRequest: request,
     sessions,
     ...(lending && { lending }),
@@ -382,6 +386,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   const attention = attendable(machine, onMac())
     ? new CloudAttention({ idle: macIdleSeconds, say: (attending) => cloud.attend(attending), signedIn: () => status === "signed-in", log: (message, fields) => hostLog("cloud", message, fields) })
     : undefined
+  jobs.every("read the account's cloud Fin limits", 30_000, () => cloud.cloudFinLimits().then(() => {}, () => {}), { firstAfterMs: 0 })
   attention?.start(jobs)
 
   methods.handle("mako:cloud-account", () => cloud.ready())

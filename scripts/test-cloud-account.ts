@@ -85,7 +85,7 @@ const recordPath = (name: string) => join(vault, "mako-sign-in", ...`${name}.jso
 type FakeDevice = CloudDevice & { credential: string; removed: boolean; successor?: string | undefined; retired: string[] }
 
 /** The gateway's identity API, in memory. */
-async function fakeCloud({ runtimeEnrolled, finLimits }: { runtimeEnrolled?: Promise<void>; finLimits?: () => CloudFinStatus | null } = {}) {
+async function fakeCloud({ runtimeEnrolled, finLimits }: { runtimeEnrolled?: Promise<void>; finLimits?: () => CloudFinStatus | null | Promise<CloudFinStatus | null> } = {}) {
   const codes = new Map<string, { challenge: string; device: Pick<CloudDevice, "name" | "platform" | "appVersion"> }>()
   const devices = new Map<string, FakeDevice>()
   /** Every live socket: whose device, and whether it's the account's connection or the device's runtime's link. */
@@ -195,7 +195,7 @@ async function fakeCloud({ runtimeEnrolled, finLimits }: { runtimeEnrolled?: Pro
     const caller = verify(bearer)
     if (!caller) return send(401, JSON.stringify({ title: "The connection token isn't valid here" }))
     if (request.method === "GET" && url.pathname === "/v1/cloud/fins") {
-      const limits = finLimits?.()
+      const limits = await finLimits?.()
       return send(limits ? 200 : 404, limits ? JSON.stringify(limits) : undefined)
     }
     if (request.method === "GET" && url.pathname === "/v1/devices")
@@ -1476,20 +1476,62 @@ test("a grant or a revoke while signed in reads the sign-ins again, with nothing
 })
 
 
-test("cloud Fin limits come from the signed-in account and clear on sign-out; an old gateway grants nothing", async () => {
+test("cloud Fin limits come from the signed-in account and clear on sign-out; an old gateway grants nothing", async (t) => {
+  let now = Date.now()
+  t.mock.method(Date, "now", () => now)
   const limits: CloudFinStatus = { at: Date.now(), day: new Date().toISOString().slice(0, 10), planSandboxes: 3, sandboxCentsPerHour: 20, runningSandboxes: 1, dailySpendCents: 100, spentTodayCents: 4, reservedTodayCents: 21 }
   let answer: CloudFinStatus | null = limits
+  let pushed = 0
   const cloud = await fakeCloud({ finLimits: () => answer })
-  const mac = await signedIn(cloud)
+  const mac = await signedIn(cloud, { onFinLimitsChanged: () => { pushed += 1 } })
   assert.equal(mac.accounts.heldCloudFinLimits(), undefined)
   assert.deepEqual(await mac.accounts.cloudFinLimits(), limits)
   assert.deepEqual(mac.accounts.heldCloudFinLimits(), limits)
+  const pushes = pushed
+  assert.deepEqual(await mac.accounts.cloudFinLimits(), limits)
+  assert.equal(cloud.calls.filter((call) => call === "GET /v1/cloud/fins").length, 1, "a fresh cache never refetches")
+  assert.equal(pushed, pushes)
+  now += 30_001
   answer = null
   assert.equal(await mac.accounts.cloudFinLimits(), null)
   assert.equal(mac.accounts.heldCloudFinLimits(), undefined)
+  now += 30_001
   answer = limits
   await mac.accounts.cloudFinLimits()
   await mac.accounts.signOut()
   assert.equal(mac.accounts.heldCloudFinLimits(), undefined)
   assert.equal(await mac.accounts.cloudFinLimits(), null)
+})
+
+
+test("cloud Fin refresh is single-flight and publishes on completion", async () => {
+  const pending = Promise.withResolvers<CloudFinStatus | null>()
+  const cloud = await fakeCloud({ finLimits: () => pending.promise })
+  let pushed = 0
+  const mac = await signedIn(cloud, { onFinLimitsChanged: () => { pushed += 1 } })
+  const first = mac.accounts.cloudFinLimits()
+  const second = mac.accounts.cloudFinLimits()
+  await waitFor(() => cloud.calls.some((call) => call === "GET /v1/cloud/fins"), "the background refresh reached the fake cloud")
+  assert.equal(mac.accounts.heldCloudFinLimits(), undefined, "held reads stay immediate while the request waits")
+  assert.equal(cloud.calls.filter((call) => call === "GET /v1/cloud/fins").length, 1)
+  const before = pushed
+  const result: CloudFinStatus = { at: Date.now(), day: new Date().toISOString().slice(0, 10), unavailable: "policy", runningSandboxes: 0, reservedTodayCents: 0 }
+  pending.resolve(result)
+  assert.deepEqual(await first, result)
+  assert.deepEqual(await second, result)
+  assert.equal(pushed, before + 1, "subscribers hear the completed background result once")
+  assert.deepEqual(mac.accounts.heldCloudFinLimits(), result)
+})
+
+
+test("a late cloud Fin refresh after sign-out cannot restore the old account's limits", async () => {
+  const pending = Promise.withResolvers<CloudFinStatus | null>()
+  const cloud = await fakeCloud({ finLimits: () => pending.promise })
+  const mac = await signedIn(cloud)
+  const reading = mac.accounts.cloudFinLimits()
+  await waitFor(() => cloud.calls.some((call) => call === "GET /v1/cloud/fins"), "the old account's request started")
+  await mac.accounts.signOut()
+  pending.resolve({ at: Date.now(), day: new Date().toISOString().slice(0, 10), unavailable: "policy", runningSandboxes: 0, reservedTodayCents: 0 })
+  assert.equal(await reading, null)
+  assert.equal(mac.accounts.heldCloudFinLimits(), undefined)
 })
