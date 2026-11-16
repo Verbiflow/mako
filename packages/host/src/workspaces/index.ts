@@ -529,3 +529,5 @@ export function declareWorkspaceMethods(methods: MethodTable, { workspaces, move
   declareThreadAppMethods(methods, movers.appTools?.desk, movers.sampler)
   return files
 }
+
+export { declareRemoteAppMethods } from "./app-methods.js"

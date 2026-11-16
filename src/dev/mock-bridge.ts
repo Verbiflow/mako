@@ -1011,6 +1011,8 @@ export function installMockBridge() {
     threadAppMarks: async () => [],
     followThreadApps: async () => ({ kind: "unavailable" }),
     viewHints: async () => null,
+    followConversationApp: async () => ({ kind: "unavailable" }),
+    conversationApp: async () => ({ folder: "/fixture", app: { kind: "none", project: "fixture", root: "/fixture" } }),
     probeThreadApp: async () => {
       throw new Error("The mock desk runs no apps; ?app=<scenario> shows one.")
     },
