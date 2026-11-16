@@ -313,6 +313,7 @@ const inputs = {
           for: z.literal("person").optional(),
           told: z.literal(true).optional(),
           implicit: z.literal(true).optional(),
+          unfinished: z.literal(true).optional(),
           handoff: z
             .object({
               to: z.string(),
@@ -444,8 +445,10 @@ const inputs = {
             z.literal("transcript"),
             z.literal("pulls"),
             z.literal("actions"),
+            z.literal("outcome"),
           ])
           .optional(),
+        search: z.string().optional(),
         snapshot: z.string().optional(),
         offset: z.number().optional(),
         limit: z.number().optional(),

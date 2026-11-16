@@ -4,6 +4,8 @@ import type { ChildState, FinPullRequest, ReportStatus } from "../contracts/agen
 /** What says a Fin changed for its Apex: where it stands, its last report, what it asks or holds open, its pull requests. */
 export interface ChangeFacts {
   state: ChildState
+  /** A host-owned wait is a change of standing, even while both readings are logically working. */
+  awaiting?: string
   report?: { status: ReportStatus; at: number }
   pulls?: readonly FinPullRequest[]
   questions?: number
@@ -34,6 +36,7 @@ function standing(state: ChildState): string {
 export function changePrint(facts: ChangeFacts): string {
   return JSON.stringify([
     standing(facts.state),
+    facts.awaiting ?? null,
     facts.report ? [facts.report.status, facts.report.at] : null,
     (facts.pulls ?? []).map((pull) => [pull.repository ?? "", pull.number, pull.state]),
     facts.questions ?? 0,

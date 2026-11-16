@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { once } from "node:events"
+import { mock } from "node:test"
 import { setTimeout as sleep } from "node:timers/promises"
 import { WebSocketServer, type WebSocket as ServerSocket } from "ws"
 import { z } from "zod"
@@ -11,6 +12,151 @@ const SILENT_MS = 3_000
 const ANSWER_MS = 1_500
 /** A hang guard: what the probe or a reach opens comes well before the 25 s heartbeat would find a link dead. */
 const OPENS_MS = 20_000
+
+/** Idle accounts keep their old cadence; only current ownership waits get immediate probes. */
+async function heartbeatDeadline(): Promise<void> {
+  const original = globalThis.WebSocket
+  class Socket extends EventTarget {
+    static readonly OPEN = 1
+    static readonly CONNECTING = 0
+    static readonly CLOSED = 3
+    static readonly all: Socket[] = []
+    readyState = Socket.CONNECTING
+    answers = false
+    pings = 0
+    readonly at = Date.now()
+    constructor() {
+      super()
+      Socket.all.push(this)
+      queueMicrotask(() => { this.readyState = Socket.OPEN; this.dispatchEvent(new Event("open")) })
+    }
+    send(data: string): void {
+      if (data !== PING) return
+      this.pings += 1
+      if (this.answers) this.dispatchEvent(new MessageEvent("message", { data: PONG }))
+    }
+    close(): void { this.readyState = Socket.CLOSED; this.dispatchEvent(new Event("close")) }
+  }
+  const advance = async (ms: number) => { mock.timers.tick(ms); await Promise.resolve(); await Promise.resolve() }
+  mock.timers.enable({ apis: ["Date", "setTimeout"] })
+  mock.method(Math, "random", () => 0.5)
+  Reflect.set(globalThis, "WebSocket", Socket)
+  let waiting = false, readings = 0
+  const options = {
+    name: "account", url: new URL("http://127.0.0.1/fixture"), token: async () => "fixture",
+    refused() {}, removed() {}, signedIn: () => true, onState() {}, attach: () => ({ close() {} }),
+    waiting: () => { readings += 1; return waiting },
+  }
+  const idle = new CloudLink(options)
+  const failing = new CloudLink(options)
+  try {
+    idle.start()
+    await advance(0)
+    const first = Socket.all[0]!
+    const idleReadings = readings
+    await advance(5_000)
+    assert.equal(readings, idleReadings, "an idle link has no short polling timer")
+    assert.equal(first.pings, 0, "idle accounts have no five-second heartbeat")
+    await advance(20_000)
+    assert.equal(first.pings, 1, "idle accounts retain the 25-second heartbeat")
+    waiting = true
+    idle.checkWaiting()
+    assert.equal(first.pings, 2, "new ownership work probes at once")
+    idle.checkWaiting()
+    idle.checkWaiting()
+    assert.equal(first.pings, 2, "many held turns share one outstanding probe")
+    await advance(1_000)
+    first.dispatchEvent(new MessageEvent("message", { data: '{"type":"renewed"}' }))
+    await advance(2_000)
+    assert.equal(first.readyState, Socket.OPEN, "any inbound replay proves liveness, without a pong")
+    first.answers = true
+    await advance(2_000)
+    assert.equal(first.pings, 3, "only an ongoing wait keeps the short cadence")
+    await advance(3_000)
+    waiting = false
+    idle.checkWaiting()
+    const pings = first.pings, settledReadings = readings
+    await advance(5_000)
+    assert.equal(readings, settledReadings, "settled ownership cancels short timer wakeups as well as pings")
+    assert.equal(first.pings, pings, "settled ownership cancels the short timer")
+    idle.stop()
+    // Each link receives an initial replay but never a PONG. Its next probe times out after it has been open >5s.
+    // That timeout must never reset the growing backoff just because the open time exceeded STABLE_MS.
+    waiting = true
+    failing.start()
+    await advance(0)
+    const start = Socket.all.length - 1
+    const backoffs = [250, 1_000, 2_000, 5_000, 10_000, 30_000, 30_000]
+    for (const backoff of backoffs) {
+      const current = Socket.all.at(-1)!
+      assert.equal(current.pings, 1, "a replacement with work waiting probes immediately")
+      await advance(1_000)
+      current.dispatchEvent(new MessageEvent("message", { data: '{"type":"renewed"}' }))
+      await advance(2_000)
+      assert.equal(current.readyState, Socket.OPEN)
+      await advance(2_000)
+      assert.equal(current.pings, 2)
+      // A reply from an old socket cannot settle this connection's new probe.
+      first.dispatchEvent(new MessageEvent("message", { data: PONG }))
+      await advance(3_000)
+      assert.equal(current.readyState, Socket.CLOSED, "the current missing reply reaches its deadline")
+      await advance(backoff)
+      assert.notEqual(Socket.all.at(-1), current, "the successor opens at the growing backoff")
+    }
+    const gaps = Socket.all.slice(start + 1).map((socket, n) => socket.at - Socket.all[start + n]!.at)
+    assert.deepEqual(gaps, backoffs.map(delay => 8_000 + delay), "unanswered links grow to the 30-second backoff cap")
+    // No frame at all: the opening handshake is not a probe answer, even in the same millisecond.
+    const unanswered = Socket.all.at(-1)!
+    await advance(3_000)
+    assert.equal(unanswered.readyState, Socket.CLOSED)
+    await advance(30_000)
+    waiting = false
+    failing.checkWaiting()
+    const unproven = Socket.all.at(-1)!
+    await advance(8_000)
+    unproven.close()
+    const beforeUnproven = Socket.all.length
+    await advance(29_999)
+    assert.equal(Socket.all.length, beforeUnproven, "open time without any inbound frame is not stability")
+    await advance(1)
+    const proven = Socket.all.at(-1)!
+    proven.answers = true
+    waiting = true
+    failing.checkWaiting()
+    await advance(5_000)
+    await advance(3_000)
+    proven.close()
+    const beforeHealthy = Socket.all.length
+    await advance(249)
+    assert.equal(Socket.all.length, beforeHealthy)
+    await advance(1)
+    assert.equal(Socket.all.length, beforeHealthy + 1, "a genuinely answered, stable connection resets ordinary drop backoff")
+    failing.stop()
+    const opened = Socket.all.length
+    await advance(60_000)
+    assert.equal(Socket.all.length, opened, "Stop cancels probes and reconnects")
+    const runtime = new CloudLink({ ...options, name: "runtime", waiting: undefined })
+    try {
+      runtime.start()
+      await advance(0)
+      const socket = Socket.all.at(-1)!
+      await advance(25_000)
+      assert.equal(socket.pings, 1)
+      await advance(25_000)
+      assert.equal(socket.pings, 2)
+      await advance(25_000)
+      assert.equal(socket.readyState, Socket.CLOSED, "idle links retain their old 60-second silence policy")
+    } finally { runtime.stop() }
+  } finally {
+    idle.stop()
+    failing.stop()
+    Reflect.set(globalThis, "WebSocket", original)
+    mock.timers.reset()
+    mock.restoreAll()
+  }
+}
+
+await heartbeatDeadline()
 
 const server = new WebSocketServer({ host: "127.0.0.1", port: 0 })
 await once(server, "listening")

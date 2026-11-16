@@ -1,3 +1,4 @@
+import { threadHistoryTools } from "@mako/host/conversations/thread-history"
 import { ProviderFailureError, providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import type { ProviderFailureEvidence } from "@mako/host/contracts/provider-failure-evidence"
 import { randomUUID } from "node:crypto"
@@ -202,6 +203,8 @@ export interface WorldOptions {
   now?: () => number
   /** Whether a session may be resumed, as its harness's ownership check says; resumable without it. */
   resumeVerdict?: (binding: ProviderBinding) => Promise<ResumeVerdict>
+  /** Harnesses whose background work outlives their turn, as Claude Code's commands and Monitors do; any other ends with it. */
+  backgroundOutlivesTurn?: readonly string[]
   /** Hears the account each launch runs on, when it's pinned to one. */
   launchedOn?: (harness: string, account: string | undefined) => void
   /** The harnesses whose session goes on under another account (`ProviderLiveDriver.accountContinuation`). */
@@ -352,7 +355,18 @@ export class AgentsWorld {
       this.continued.push({ conversation: id, to, kind: continuation.kind, by: actor?.kind ?? "person" })
       return continuing(id, continuation, actor, stillDecided)
     }
+    // `thread_history`'s tools over this world's conversations, as the host builds them: `agents_read`'s search reads them.
+    const history = threadHistoryTools({
+      conversations: () => this.live.summaries(),
+      snapshot: (id) => this.live.historySnapshot(id),
+      resident: (id) => this.live.loaded(id),
+      cold: (id) => this.live.coldSearch(id),
+      store: () => this.store,
+      catalog: { list: () => [], nativePath: () => undefined, ref: () => undefined, open: async () => null, entry: async () => null },
+      bundle: { live: (id) => this.live.transcriptBundle(id), native: async () => null },
+    })
     const deps: AgentsDeps = {
+      history: () => history,
       store: () => this.store,
       catalog: this.options.catalog ?? emptyCatalog(),
       jobs: this.jobs,
@@ -604,7 +618,9 @@ export class AgentsWorld {
       nativeExclusion: NO_NATIVE_EXCLUSION,
       nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
       planning: { via: "setting", option: "plan", proposal: "Scripted model", feedback: { kind: "next-message", reason: "Scripted model" } },
-      backgroundStop: { kind: "ends-with-turn", evidence: "Scripted model" },
+      backgroundStop: this.options.backgroundOutlivesTurn?.includes(harness)
+        ? { kind: "ends-on-stop", how: "Scripted model: its background work outlives its turn, as Claude Code's does" }
+        : { kind: "ends-with-turn", evidence: "Scripted model" },
       turnRecovery: { kind: "manual", reason: "Scripted model" },
       resume: fixtureResume({
         inspect: this.options.nativeInspection ?? (async () => ({ kind: "available", checkpoint: "scripted-record", strategy: "same-session" })),

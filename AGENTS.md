@@ -230,7 +230,14 @@ counted as the larger of the roster's active non-ambient entries and the
 provider's own level (`backgroundTasks`), which can't wedge on a missed end.
 The window shows it as an hourglass on the row and tab, a quiet line at the
 transcript's end and the Agents panel; ambient watchers are listed and never
-counted. Claude's roster reads the SDK's task events and its
+counted there. What a provider still holds that wakes it, ambient watchers such
+as Claude's Monitor included, is `pendingWake`: a Fin's turn that ends on it
+waits on it, and a session holding it is never hibernated (`canHibernate`),
+since closing the process ends it and nothing would wake the Fin. An entry
+nothing says the end of is believed for `HELD_WORK_CEILING_MS` (6 hours) from
+its start, no longer (`heldWork`, `staleWork`), and a task Claude's level drops
+between turns with no notification is settled unknown after
+`DROPPED_GRACE_MS` (a Monitor that timed out or that TaskStop ended). Claude's roster reads the SDK's task events and its
 `background_tasks_changed` level (a Monitor reports as `local_bash`, so its
 kind comes from the `tool_use` that started it), Codex's the terminal list,
 Grok's its `background_tasks` list, Devin's its backgrounded exec calls and
@@ -515,12 +522,17 @@ repository's (`owner/name`, from its URL) and number (`pullRef`, `pullKey`),
 never its number alone, since a Thread can hold several repositories; a bare
 `#12` is the Fin's one repository's, or stays unqualified when it has several,
 and a line names the repository only when two could be confused. A Fin
-that ends a turn without `agents_report` while its own Fins work, or while a
-`worktree_move` it asked for is pending (`movePending`), hasn't finished.
-Its turn's end writes no report, and it reads as working with "Waiting for
-…" (`waitsOn`). Its result is the turn after that work ends: the one its
-Fins' reports wake, or, with nothing to wake it, that turn's reply
-(`checkAwaiting`). A message to it
+that ends a turn without `agents_report` while its own Fins work, while a
+`worktree_move` it asked for is pending (`movePending`), or while its harness
+holds work that wakes it (`pendingWake`: a background command, a subagent, a
+Monitor), hasn't finished. Its turn's end writes no report, and it reads as
+working with "Waiting for …" (`waitsOn`). Its result is the turn after that
+work ends: the one its Fins' reports or the harness's own turn wake, or, with
+nothing to wake it, that turn's reply (`checkAwaiting`). A harness process that
+ends while it held such work took the work with it: the Fin's end is a failed
+report saying so, at once; one whose work ended, or went past the ceiling,
+without its harness starting a turn on it ended without a result
+(`test:fin-turn-ends`). A message to it
 (`agents_send`, `takeOver`) stops the run, resumes its Session in the Fin's
 Thread on Mako's live driver at no more than its Apex's access, and arrives
 with `HANDED_OVER_NOTE` saying its last step may have been cut. From then on
@@ -612,7 +624,16 @@ has it and made from the newest start in the rest. A report (`agents_report`, el
 implicit report at a turn's end, which a completed turn also writes when its
 last report was progress that hands nothing on and names no wait Mako watches:
 a pull request the watch reads, an armed turn wait or its own Fins at work,
-`progressLeftUnwatched`) sends its Apex a notice; an idle Apex waits
+`progressLeftUnwatched`) sends its Apex a notice. A Fin whose word is progress
+(said this turn, or before a turn Mako's note started) that ends a turn with a
+reply and no result hasn't said it's done: its end is a report marked
+`unfinished` (kept as `failed`, so an older build never reads it as done) that
+reads "Ended without a result" in the list, its row, the phone and the digest
+(`reportWord`, `endedUnfinished`, its own digest section), wakes its Apex at
+once with its last words (`unfinishedSummary`), and asks nobody, so nothing
+reaches the person's Inbox; its Apex sends it on (the row's Continue) or takes
+the reply as its result. What was to start `after` it waits on (the digest
+says so) and starts once it reports done; a stop drops it. An idle Apex waits
 `WAKE_COALESCE_MS` and takes ONE turn with the digest; a busy one is left to
 think: only a question or decision it can answer is steered into its running
 turn, at its next step where its harness steers there, and what else its
@@ -823,7 +844,15 @@ listed and the rest counted in `unchanged`, but a Fin waiting on its Apex (a
 question, an action, a decision, a block) is always listed, and a mark this
 host can't read (another host's, an earlier life's, one ahead) lists every Fin. The front door's note names a Fin unchanged since
 the last note it gave that Apex on one line instead of describing it again,
-always describing one that waits on an answer or a decision. The marks live for
+always describing one that waits on an answer or a decision; a process that
+hasn't heard the note (a new one, one a compaction emptied, one a failed send
+left unsure) hears every Fin described. After its harness compacts or rewinds
+its history (`ConversationControl.rosterForgotten`, kept in its journal, so a
+restart or an unload between keeps it), the roster rides its next prompt
+whatever it is, a digest's too, and the handoff that sends it clears the flag in
+the same write; a send that's refused or fails leaves it for the next. So an
+Apex woken by a digest after a compaction still knows its Fins; its open
+questions and actions go with every prompt already. The marks live for
 the host's life, so after a restart every Fin reads as changed once
 (`test-fin-changes.ts`). An Apex of 30 Fins checking in again after one
 reported read 5% of its first list and 29% of its first note (`test:comms-storm`'s
@@ -1652,7 +1681,26 @@ writes both, and `thread_history` reads the caller's referenced threads and
 its own tree (`thread-tree.ts`): its Fins, its Apex and the Fins beside it, each
 by Thread ID or a Fin's name. `thread: "tree"` searches all of them, and `export`
 writes a Thread out through the bundle a switch and a chip hand over.
-`agents_read`'s transcript is a quick tail, and says where the whole is.
+`agents_read`'s transcript is a quick tail, and says where the whole is. Its
+`view: "outcome"` is the Fin's latest result (done, failed, blocked or
+needs-input) and how it stands, without the progress after it, and its `search`
+finds words in the Fin's whole history through `thread_history`'s search of its
+Thread, a page at a time (`AgentsDeps.history`, `test-agents-read-views.ts`).
+A search, `thread_history`'s own too, reads no journal in: a conversation no
+host holds in memory is read where it lies (`ThreadHistoryDeps.cold`, a
+`ColdJournal` closed once read, one still being let go of included), a
+session's record paged newest first as its viewer pages it (`recordWindow`),
+never read whole, its turns counted once a page at a time into a tiny index kept
+per record (`RECORD_INDEXES`, one number a page and what `opensTurn` reads of
+its last prompt, with the view it was counted from: counted on only where an
+append extends that view, again after a rewrite, `extendsView`),
+so a later search parses its window and two pages more; the cache of records read
+whole keeps none past `OPENED_RECORD_CHARS`. At most `SEARCH_CHARS`
+(4M characters) a call, newest turns first and whole, numbered as `read`
+numbers them (`ColdJournal.turnOpeners`); what it left is named as a `turns`
+range that reaches it. It gives way to the host every 64 turns and between
+Sessions. On 420 turns (4.6M characters) the newest took 45 ms, the loop held
+15 ms at most, nothing read in (`test-history-search-cold.ts`).
 
 Mako never writes a session a harness didn't. A conversation goes on in
 another harness as a new real session of that harness, whose first turn

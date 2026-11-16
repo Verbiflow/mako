@@ -1,5 +1,5 @@
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
-import { childStateOf } from "@mako/host/contracts/children"
+import { childStateOf, endedUnfinished } from "@mako/host/contracts/children"
 import { cn } from "@/lib/utils"
 import { acp } from "@/state/acp"
 import { address, addresseeOf } from "@/state/apex-fins"
@@ -18,11 +18,11 @@ export function FinRowActions({ agent, conversation, always = false, className }
 }) {
   const addressee = addresseeOf(agent)
   const state = childStateOf(agent)
-  const message = state.kind === "ended" && state.outcome === "failed" ? "Retry" : state.kind === "ended" && state.outcome === "stopped" ? "Resume" : "Message"
+  const message = endedUnfinished(state) ? "Continue" : state.kind === "ended" && state.outcome === "failed" ? "Retry" : state.kind === "ended" && state.outcome === "stopped" ? "Resume" : "Message"
   const canMessage = Boolean(conversation && addressee)
   const canStop = Boolean(conversation && agent.stoppable)
   if (!canMessage && !canStop) return null
-  const hint = message === "Message" ? `Write to ${agent.title} from this composer` : `Write to ${agent.title}: your message ${message === "Retry" ? "tries again from where it failed" : "resumes it"}`
+  const hint = message === "Message" ? `Write to ${agent.title} from this composer` : `Write to ${agent.title}: your message ${message === "Retry" ? "tries again from where it failed" : message === "Continue" ? "sends it on from where it ended" : "resumes it"}`
   return (
     <span
       data-fin-actions={agent.child?.thread}

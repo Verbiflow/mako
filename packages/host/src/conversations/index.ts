@@ -109,6 +109,7 @@ export { openMachineTracker, type MachineTracker } from "./machine-tracker.js"
 export type { MoveArrivalDeps } from "./move-arrival.js"
 export { declareCloudControlPreviewMethods } from "./cloud-control-previews.js"
 export { threadHistoryTools, registerThreadHistoryTools, type ThreadHistoryTools } from "./thread-history.js"
+import type { ThreadHistoryTools } from "./thread-history.js"
 export { Agents } from "./agents.js"
 export { AgentAnswerSchema, declareAgentMethods, registerAgentTools } from "./agent-tools.js"
 export { AgentAskGate, declareAgentAskMethods } from "./agent-ask-gate.js"
@@ -154,6 +155,8 @@ export interface Conversations {
 }
 
 export interface ConversationsDeps {
+  /** `thread_history`'s tools, built after conversations open: `agents_read`'s `search` reads through them. */
+  history?: () => ThreadHistoryTools | undefined
   environment: HostEnvironment
   /** The host has begun to stop: what it takes up as it starts ends at its next step, left for the next host. */
   stopping?(): boolean
@@ -379,6 +382,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   const requiredChecks = new RequiredChecks()
   if (threads.store) {
     agents = new Agents({
+      ...(deps.history && { history: deps.history }),
       store: () => threads.store ?? undefined,
       catalog,
       jobs: deps.jobs,

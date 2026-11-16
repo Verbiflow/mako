@@ -1,5 +1,5 @@
 import type { LiveSessionState } from "./providers-acp.js"
-import { isBusyNativeAgent, isProviderWork, type NativeAgent, type NativeAgentRoster, type NativeWork } from "./native-agents.js"
+import { isActiveNativeAgent, isBusyNativeAgent, isProviderWork, type NativeAgent, type NativeAgentRoster, type NativeWork } from "./native-agents.js"
 import { childGroup, childStateOf } from "./children.js"
 
 /**
@@ -54,6 +54,52 @@ export function backgroundWork(session: WorkSession | undefined, roster: NativeA
   const count = Math.max(held ? session.backgroundTasks ?? 0 : 0, named.length)
   if (!count) return null
   return { count, named, unnamed: count - named.length }
+}
+
+/**
+ * Whether a session's provider process is there to hold work: not closed, failed, disconnected or hibernated. Its
+ * background commands and watchers live in that process, so they end with it.
+ */
+export function providerHolds(session: WorkSession | undefined): boolean {
+  return session !== undefined && session.status !== "closed" && session.status !== "failed" && session.connection !== "disconnected" && session.connection !== "hibernated"
+}
+
+/**
+ * How long an entry the roster still shows at work is believed without word of it: past this from its start, it no
+ * longer keeps a Fin waiting or its session awake. Claude can drop a Monitor that timed out, or that TaskStop ended,
+ * with no event saying so; believed forever, its Fin read "Waiting for a monitor" and its session never slept, so
+ * nothing ever said the work had ended. Its own timeout isn't on the entry (Claude's Monitor input isn't read), so this
+ * is one ceiling, past a working day.
+ */
+export const HELD_WORK_CEILING_MS = 6 * 60 * 60_000
+
+/** Provider work the roster shows active, believed at `now` (`HELD_WORK_CEILING_MS`); every one without a time. */
+export function heldWork(roster: NativeAgentRoster | undefined, now?: number): NativeAgent[] {
+  return (roster?.agents ?? []).filter((agent) => isActiveNativeAgent(agent) && isProviderWork(agent) && !pastCeiling(agent, now))
+}
+
+/** Provider work the roster still shows active past `HELD_WORK_CEILING_MS`: no longer believed. */
+export function staleWork(roster: NativeAgentRoster | undefined, now: number): NativeAgent[] {
+  return (roster?.agents ?? []).filter((agent) => isActiveNativeAgent(agent) && isProviderWork(agent) && pastCeiling(agent, now))
+}
+
+function pastCeiling(agent: NativeAgent, now: number | undefined): boolean {
+  return now !== undefined && now - (agent.startedAt ?? agent.observedAt) > HELD_WORK_CEILING_MS
+}
+
+/**
+ * What a session's provider still holds that wakes it again when it settles: its background work (`backgroundWork`)
+ * and the watchers it armed, such as Claude Code's Monitor, which `backgroundWork` leaves out as ambient and which
+ * Claude's own level doesn't count either. A Fin that ended its turn on these is still at work on them, and a session
+ * holding them isn't put to sleep: closing its process ends them, and then nothing would wake it. A Fin started from it
+ * is a Thread of its own, waited on as one, never here. Null when the provider holds nothing, isn't there to hold it,
+ * or runs a turn. An entry past `HELD_WORK_CEILING_MS` at `now` isn't held.
+ */
+export function pendingWake(session: WorkSession | undefined, roster: NativeAgentRoster | undefined, now?: number): BackgroundWork | null {
+  if (!session || session.status === "running" || session.status === "starting" || !providerHolds(session)) return null
+  const named = heldWork(roster, now)
+  const count = Math.max(session.backgroundTasks ?? 0, named.length)
+  return count ? { count, named, unnamed: count - named.length } : null
 }
 
 const NOUNS = {
