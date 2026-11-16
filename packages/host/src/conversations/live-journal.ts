@@ -1716,8 +1716,9 @@ const TURN_ROWS = `SELECT id, json_extract(value,'$.type') AS type, json_extract
  * when it opened, whatever is written after, and nothing of the conversation is read in. `snapshot` is its metadata and
  * requests with no blocks; a page reads its blocks by index (`at`), each kept for the view's life so a preview and the
  * detail read later are the same entry, and the counts a page carries (`before`) come from an index of the blocks that
- * begin a turn or name a request, made by SQLite once. A journal that keeps a base (named by `baseSource`, or a copy)
- * isn't read cold: its history merges with blocks as a resident's does.
+ * begin a turn or name a request, made by SQLite once. A journal that keeps a copy of its history isn't read cold, nor
+ * one whose session's record merges with its blocks: those are read as a resident's are. One whose record covers every
+ * block is, its pages the record's.
  *
  * Reading a 122 MB journal in whole took 1.8 s and 50 to 100 MB of heap, all of it paged out again 15 s later.
  */
@@ -1768,8 +1769,12 @@ export class ColdJournal {
       }
       const stored = MetadataSchema.parse(JSON.parse(metadata))
       const counted = BlockCountSchema.parse(db.prepare("SELECT count(*) AS count, max(id) AS last FROM blocks").get())
-      // Blocks are kept by index; a journal whose ids say otherwise is read whole, as it always was.
-      if (stored.baseSource || (counted.last ?? -1) !== counted.count - 1) {
+      // Blocks are kept by index; a journal whose ids say otherwise is read whole, as it always was. One whose history is
+      // its session's record is read cold only when that record covers every block with nothing to merge: its pages are
+      // the record's, read a page at a time (`LiveConversations.coldView`); one that merges reads them all.
+      const source = stored.baseSource
+      const recordOnly = source && !source.span && stored.baseLiveStart === undefined && (stored.baseCoveredBlocks ?? 0) === counted.count
+      if ((source && !recordOnly) || (counted.last ?? -1) !== counted.count - 1) {
         ColdJournal.#end(db)
         return undefined
       }
