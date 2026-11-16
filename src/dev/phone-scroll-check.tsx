@@ -133,6 +133,10 @@ let part = 0
 const words = SENTENCES.join(" ").split(" ")
 
 const check = {
+  /** One already-admitted batch, including a late paint after the stream stops. */
+  append(text: string) {
+    applyLiveBatch({ id: conversation, epoch: "phone-scroll", revision: ++revision, updates: [{ kind: "text", id: "streaming", text }] })
+  },
   /** The turn's answer grows by `perBatch` words every `everyMs`, a paragraph each 40 words, as the host's batches do. */
   stream(everyMs = 50, perBatch = 3) {
     clearInterval(streaming)
@@ -143,7 +147,7 @@ const check = {
         part += 1
         if (part % 40 === 0) text += `\n\nPart ${part / 40}. `
       }
-      applyLiveBatch({ id: conversation, epoch: "phone-scroll", revision: ++revision, updates: [{ kind: "text", id: "streaming", text }] })
+      check.append(text)
     }, everyMs)
   },
   stop() {

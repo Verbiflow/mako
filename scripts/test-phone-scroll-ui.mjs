@@ -5,6 +5,15 @@ import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { testScratch } from "./lib/test-scratch.mjs"
 
+// A DOM commit can grow the last turn before the virtualizer's ResizeObserver has
+// measured it and followed the end. Sample after that layout has painted, rather
+// than comparing a pre-paint upright offset with a painted sideways one.
+const newestGap = `() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => {
+  const node = document.querySelector('[data-transcript-viewport]');
+  const turns = node.querySelectorAll('[data-exchange]');
+  resolve(Math.round(node.getBoundingClientRect().bottom - turns[turns.length - 1].getBoundingClientRect().bottom));
+})))`
+
 /**
  * Scrolling a transcript while its answer streams, by trusted touch at an iPhone's size on the phone's live Session
  * (`src/dev/phone-scroll-check.tsx`) and by wheel in a laptop's window on the desktop's (`transcript-scroll-check.tsx`):
@@ -562,8 +571,22 @@ async function checkScroll() {
       await send("Emulation.setDeviceMetricsOverride", { width: sideways ? 852 : 393, height: sideways ? 393 : 852, deviceScaleFactor: 3, mobile: true })
       await rest()
     }
-    const belowNewest = () => evaluate(`(() => { const node = ${scroller}; const turns = node.querySelectorAll('[data-exchange]'); return Math.round(node.getBoundingClientRect().bottom - turns[turns.length - 1].getBoundingClientRect().bottom) })()`)
+    const belowNewest = () => evaluate(`(${newestGap})()`)
     const uprightGap = await belowNewest()
+    // A host batch already admitted when streaming stopped can finish painting
+    // after rest() saw a stable scrollTop. Read at that exact commit boundary:
+    // the old synchronous measurement saw 0 px here, then 48 px after rotation.
+    const lateGap = await evaluate(`new Promise(resolve => {
+      const node = ${scroller};
+      const observer = new MutationObserver(() => {
+        if (!node.textContent.includes('A later answer arrives')) return;
+        observer.disconnect();
+        resolve((${newestGap})());
+      });
+      observer.observe(node, {childList: true, subtree: true, characterData: true});
+      window.scrollCheck.append('\\n\\nA later answer arrives after the stream stopped. This is an already admitted batch finishing its rendering.');
+    })`)
+    assert.ok(Math.abs(lateGap - uprightGap) <= 2, `a late batch at the end left ${lateGap} px below the newest turn, before ${uprightGap} px`)
     await turn(true)
     const sidewaysGap = await belowNewest()
     await capture("turned-sideways-iphone-dark.png")
@@ -571,7 +594,7 @@ async function checkScroll() {
     const backGap = await belowNewest()
     assert.ok(Math.abs(sidewaysGap - uprightGap) <= 2, `turned sideways at the end, the newest turn ended ${sidewaysGap} px above the transcript's bottom, upright ${uprightGap} px`)
     assert.ok(Math.abs(backGap - uprightGap) <= 2, `turned upright again, the newest turn ended ${backGap} px above the bottom, at first ${uprightGap} px`)
-    console.log(`Turned sideways and back at the end: the newest turn ended ${uprightGap}, ${sidewaysGap}, ${backGap} px above the bottom`)
+    console.log(`Turned sideways and back at the end: the newest turn ended ${uprightGap}, ${sidewaysGap}, ${backGap} px above the bottom; late batch ${lateGap} px`)
 
     // Light, read while streaming.
     await phone("light")

@@ -1712,6 +1712,7 @@ export function installMockBridge() {
       truncated: 0,
     }),
     listPlugins: async () => {
+      if (new URLSearchParams(location.search).get("plugins") === "none") return []
       const plugins = [
         {
           id: "thread-counter",
