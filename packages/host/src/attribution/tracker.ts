@@ -201,6 +201,8 @@ interface RootState {
   pending: Map<string, ObservationSource>
   /** Paths Git ignores that a Thread's own write named, not yet journaled: those are kept like any file. */
   adopted: Set<string>
+  /** Last dirty inventory plus newer observed dirty paths; a clean return is checked once, not on every shell. */
+  shellPaths: Set<string>
   firstHeard: number
   timer?: ReturnType<typeof setTimeout>
   /** Every flush and HEAD check for the root, one after another. */
@@ -491,7 +493,7 @@ export class LaptopTracker implements AttributionTracker {
 
   private state(root: StoredRoot, repo: TrackerRepository | null, stats: StatCache, files: Map<string, FileState>): RootState {
     const state: RootState = {
-      root, repo, stats, files, tracked: new Set(), pending: new Map(), adopted: new Set(), firstHeard: 0, chain: Promise.resolve(), muted: false, recent: [], headSeq: this.seq,
+      root, repo, stats, files, shellPaths: new Set([...files.values()].filter((file) => file.current !== file.base).map((file) => file.path)), tracked: new Set(), pending: new Map(), adopted: new Set(), firstHeard: 0, chain: Promise.resolve(), muted: false, recent: [], headSeq: this.seq,
       ignoreMoves: 0, rescanQueued: false, rescanning: false, rescanAgain: false, rescannedAt: -Infinity, rescanEvery: 0, losses: new HourCounts(), tracks: 0,
     }
     const replaced = this.states.get(root.id)
@@ -1374,6 +1376,8 @@ export class LaptopTracker implements AttributionTracker {
       state.files.set(path, next)
       this.store.saveFile(next)
     }
+    if (next.current !== next.base) state.shellPaths.add(path)
+    if (from) state.shellPaths.add(from)
     if (!settled) this.pending.set(seq, { seq, change, author })
     if (!settled && reconcilable(author) && this.options.uncertain) {
       const sessions = evidence.sessionsAt(change.changedAt, change.path)
@@ -1590,23 +1594,23 @@ export class LaptopTracker implements AttributionTracker {
     if (!commands.length) return
     const folders = call.checkout ? [call.checkout] : commands.flatMap((command) => command.kind === "command" && command.cwd ? [command.cwd] : [])
     for (const state of this.states.values()) {
-      if (!state.root.repository || call.endedAt < state.root.trackedAt) continue
+      if (!state.root.repository || state.asleep || call.endedAt < state.root.trackedAt) continue
       if (folders.some((folder) => within(state.root.path, folder) || within(folder, state.root.path)))
         this.shells.schedule(state.root.id, Math.max(TRAIL_MS, this.lateMs()))
     }
   }
 
-  /** Git's dirty/untracked inventory plus already-kept versions catches silent writes and returns to HEAD. */
+  /** Git's dirty/untracked inventory plus paths that left it catches silent writes and clean returns to HEAD. */
   private async refreshShell(id: string): Promise<void> {
     const found = this.states.get(id)
     if (!found) return
     await this.tracking.get(found.root.path)
     const state = this.states.get(id)
     if (!state) return
-    if (!state.repo || state.asleep) throw new Error("The checkout baseline is not ready for shell reconciliation")
+    if (!state.repo || state.asleep) return
     const repo = state.repo
     await this.checkedQueue(state, async () => {
-      if (this.states.get(id) !== state) return
+      if (this.states.get(id) !== state || state.asleep) return
       const checking = !state.moved
       if (checking) state.moved = await this.checkHead(state)
       try {
@@ -1615,9 +1619,18 @@ export class LaptopTracker implements AttributionTracker {
         if (this.states.get(id) !== state) return
         if (await repo.head() !== state.root.head) throw new Error("HEAD moved during shell reconciliation; its inventory must be read again")
         for (const path of inventory.tracked) state.tracked.add(path)
-        const paths = new Set([...inventory.changed, ...inventory.untracked, ...state.files.keys()])
-        for (const path of paths) if (!state.pending.has(path)) state.pending.set(path, "inventory")
-        await this.flush(state)
+        const previous = state.shellPaths
+        const current = new Set([...inventory.changed, ...inventory.untracked])
+        const paths = new Set([...current, ...previous])
+        // Observations arriving during this flush add their dirty paths to the new set.
+        state.shellPaths = current
+        try {
+          for (const path of paths) if (!state.pending.has(path)) state.pending.set(path, "inventory")
+          await this.flush(state)
+        } catch (error) {
+          for (const path of previous) state.shellPaths.add(path)
+          throw error
+        }
         this.log("shell Git inventory reconciled", { root: state.root.path, files: paths.size })
       } finally { if (checking) state.moved = undefined }
     })

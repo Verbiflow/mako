@@ -119,9 +119,40 @@ test("helper failures prevent false finalization, recover on retry, and a return
     w.fail(true)
     const rejected = assert.rejects(w.tracker.settled({ rescans: false }), /incomplete/)
     await flush(); await w.advance(3100); await rejected
-    w.fail(false); await w.tracker.settled({ rescans: false })
+    w.fail(false); await w.advance(2100); await w.tracker.settled({ rescans: false })
     const entries = w.tracker.changes(0).filter((entry) => entry.path === "a.ts")
     assert.equal(entries.length, 2, "a clean Git status still rechecks versions the journal already holds")
     assert.deepEqual(w.tracker.blame("repo", "a.ts"), [], "returned-to-HEAD lines retain the existing clean-file representation")
   } finally { w.fail(false); await w.close() }
+})
+
+
+test("clean historical line maps are not restatted on every shell inventory", async () => {
+  const w = await world()
+  try {
+    const state = w.tracker.rootStates().get("repo")!
+    assert(state.files instanceof Map)
+    const template = { root: "repo", base: null, baseSeq: 0, current: null, text: true, map: [] }
+    for (let i = 0; i < 5000; i++) state.files.set(`old-${i}.ts`, { ...template, path: `old-${i}.ts` })
+    const stated: string[] = []
+    const stat = w.fs.stat.bind(w.fs)
+    w.fs.stat = async (path) => { stated.push(path); return stat(path) }
+    w.start(); await w.advance(1); w.write("a.ts", "new dirty\n"); w.finish()
+    await w.tracker.settled()
+    assert(!stated.some((path) => path.includes("old-")), "historical line maps must not expand the live dirty set")
+  } finally { await w.close() }
+})
+
+
+test("a sleeping tracked root cannot poison the global reconciliation barrier", async () => {
+  const w = await world()
+  try {
+    await w.advance(7 * 60 * 60_000)
+    await w.tracker.sleepIdle()
+    assert(w.tracker.asleep("/repo"))
+    const before = w.inventories()
+    w.start(); w.finish()
+    await w.tracker.settled({ rescans: false })
+    assert.equal(w.inventories(), before)
+  } finally { await w.close() }
 })

@@ -76,7 +76,12 @@ export class CheckoutLeave {
   /** Takes the Thread's changes out of the main checkout, if every file is as the cloud has it; see the top of this file. */
   async leave(thread: string, project: string, repositories: readonly LeftRepository[], ledger: LeaveLedger): Promise<LeaveOutcome> {
     if (!repositories.some((repository) => repository.versions.length)) return { kind: "nothing" }
-    await ledger.heard()
+    try { await ledger.heard() } catch (error) {
+      const paths = [...new Set(repositories.flatMap((repository) => repository.versions.map((version) => version.path)))].sort()
+      await this.#keepStayed(thread, paths)
+      this.#log("a Thread the cloud took kept its changes: the journal has not caught up", { thread, stayed: paths.length, error: error instanceof Error ? error.message : String(error) })
+      return { kind: "stayed", paths }
+    }
     const stayed: string[] = []
     const rewrites: { repoRoot: string; head: string; files: InPlaceFile[] }[] = []
     for (const { root, versions } of repositories) {

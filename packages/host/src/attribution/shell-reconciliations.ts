@@ -1,6 +1,7 @@
 /** Coalesce live Git inventories, with a final pass after each command's measured delivery allowance. */
 const COALESCE_MS = 50
 const MAX_LAG_MS = 30_000
+const MIN_INTERVAL_MS = 2_000
 
 interface Request {
   due: number
@@ -13,6 +14,7 @@ interface Root {
   immediate?: number
   timer?: ReturnType<typeof setTimeout>
   running?: Promise<void>
+  startedAt?: number
   error?: Error
 }
 
@@ -48,16 +50,18 @@ export class ShellReconciliations {
     clearTimeout(root.timer)
     root.timer = undefined
     if (this.closed || root.running || !root.requests.length) return
-    const due = Math.min(root.immediate ?? Infinity, ...root.requests.map((request) => request.due))
+    const due = Math.max((root.startedAt ?? -Infinity) + MIN_INTERVAL_MS, Math.min(root.immediate ?? Infinity, ...root.requests.map((request) => request.due)))
     root.timer = setTimeout(() => { root.timer = undefined; void this.perform(root) }, Math.max(0, due - Date.now()))
     root.timer.unref?.()
   }
 
   private perform(root: Root, final = false): Promise<void> {
     if (root.running) return root.running
+    if (!final && Date.now() < (root.startedAt ?? -Infinity) + MIN_INTERVAL_MS) { this.arm(root); return Promise.resolve() }
     clearTimeout(root.timer)
     root.timer = undefined
     root.immediate = undefined
+    root.startedAt = Date.now()
     // A request ends only after a scan that began after its allowance. New commands cannot postpone older waits.
     const reached = new Set(root.requests.filter((request) => final || request.due <= Date.now()))
     const pending = Promise.resolve().then(() => this.refresh(root.id)).then(() => {
@@ -69,7 +73,7 @@ export class ShellReconciliations {
       root.requests = root.requests.filter((request) => !reached.has(request))
       for (const request of reached) request.done()
       root.running = undefined
-      if (!root.requests.length && !root.error && this.roots.get(root.id) === root) this.roots.delete(root.id)
+      // Keep the last start until untrack/close, so a newly arriving command still respects this root's spacing.
       this.arm(root)
     })
     root.running = pending
@@ -102,7 +106,7 @@ export class ShellReconciliations {
 
   async close(): Promise<void> {
     this.closed = true
-    const roots = [...this.roots.values()]
+    const roots = [...this.roots.values()].filter((root) => root.running || root.requests.length || root.error)
     roots.forEach((root) => clearTimeout(root.timer))
     await Promise.all(roots.map(async (root) => { await root.running; await this.perform(root, true) }))
     this.roots.clear()

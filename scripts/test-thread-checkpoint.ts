@@ -393,3 +393,20 @@ test("a Thread's changes leave the project folder only where the cloud has them 
   assert.match(cloudHasAll([...one, { root: "/p/web", sha256: b2, changes: 1 }], [a, b], [a, b]) ?? "", /\/p\/web/, "the second acknowledged anew after the note went: that one isn't on the machine")
   assert.match(cloudHasAll([], [a], [a]) ?? "", /nothing/)
 })
+
+
+test("an incomplete journal keeps the checkout and the existing stayed notice", async () => {
+  const f = await fixture("journal-not-ready")
+  try {
+    await plainEdits(f)
+    const taken = await f.capture()
+    const before = files(f.repo)
+    const folder = join(f.base, "leaving")
+    const leave = new CheckoutLeave(folder, runner, () => {})
+    const ledger = { ...leaveLedger(f), heard: async () => { throw new AggregateError([], "Shell reconciliation is incomplete") } }
+    const outcome = await leave.leave("T1", f.repo, [{ root: f.repo, versions: taken.versions }], ledger)
+    assert.deepEqual(outcome, { kind: "stayed", paths: taken.versions.map((version) => version.path).sort() })
+    assert.deepEqual(files(f.repo), before)
+    assert.deepEqual(await new CheckoutLeave(folder, runner, () => {}).stayed("T1"), taken.versions.map((version) => version.path).sort())
+  } finally { await f.tracker.close(); rmSync(f.base, { recursive: true, force: true }) }
+})

@@ -81,11 +81,17 @@ export class LiveTurnChanges {
     }
     const failed = (error: Error) =>
       hostWarn("attribution", "a turn's changes could not be counted", { conversation: resident.snapshot.session.id, request: requestId, error: errorMessage({ error }) })
+    let flushFailed = false
     const settle = () => {
       void (async () => {
         // A shell reconciliation (or its lag window) can have completed since the initial settling count.
-        await ledger.flushed()
-        if (!ledger.settledThrough(endedAt) && Date.now() - endedAt < GIVE_UP_MS) {
+        let flushed = true
+        try { await ledger.flushed(); flushFailed = false } catch (error) {
+          flushed = false
+          if (!flushFailed) failed(error instanceof Error ? error : new Error("The journal could not be flushed", { cause: error }))
+          flushFailed = true
+        }
+        if ((!flushed || !ledger.settledThrough(endedAt)) && Date.now() - endedAt < GIVE_UP_MS) {
           setTimeout(settle, ledger.settleMs / 4).unref?.()
           return false
         }
