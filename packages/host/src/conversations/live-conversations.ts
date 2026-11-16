@@ -78,7 +78,7 @@ import { LiveForks } from "./live-forks.js"
 import { LiveGoals, turnReply, type TurnReply } from "./live-goals.js"
 import { LiveSideQuestions } from "./live-side-questions.js"
 import { LiveHibernation } from "./live-hibernation.js"
-import { JournalWriteError, LiveRequestSchema } from "./live-journal.js"
+import { JournalWriteError, LiveRequestSchema, type ColdJournal } from "./live-journal.js"
 import { JournalReclaims } from "./journal-reclaim.js"
 import { LiveLaunches, nativeStart } from "./live-launches.js"
 import { syncMemory } from "./live-ledger.js"
@@ -230,6 +230,7 @@ export class LiveConversations {
       loaded: (resident) => {
         void this.sources.readBase(resident)
         this.counts.loaded(resident)
+        this.dependencies.historyLoaded?.(resident.snapshot.session.id)
         // A journal keeps no children: their engine says how they are now, and a window that holds the last revision
         // hears what moved while none was in memory.
         if (this.takeChildren(resident)) this.schedule(resident)
@@ -733,6 +734,12 @@ export class LiveConversations {
 
   refreshedSnapshot(id: string): Promise<LiveSnapshot | null> {
     return this.sources.refreshedSnapshot(id)
+  }
+
+  /** Conversation `id` read where its journal lies, for a window, when nothing holds it in memory (`LiveRecords.cold`). */
+  async coldView(id: string): Promise<{ journal: ColdJournal; snapshot: LiveSnapshot } | undefined> {
+    const cold = await this.records.cold(id)
+    return cold && { journal: cold.journal, snapshot: this.stamp(cold.snapshot) }
   }
 
   relocate(id: string, cwd: string): Promise<string | undefined> {

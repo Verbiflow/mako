@@ -37,11 +37,46 @@ export class HistoryVersions {
   }
 }
 
+/**
+ * A view's live blocks as its pages read them: held in memory (`arrayBlocks`), or read from a journal where it lies, a
+ * page at a time (`ColdJournal`). `before` is what a page ending at `index` carries of the blocks before it.
+ */
+export interface HistoryBlocks {
+  readonly length: number
+  at(index: number): Entry | undefined
+  before(index: number, covered: number): PageCounts
+}
+
+/** What a page carries of the blocks before it: the turns that begin among those from `covered`, and the requests whose prompt is among them. */
+export interface PageCounts {
+  turnStart: number
+  earlierRequests: string[]
+}
+
+/** Blocks in memory, counted by walking them. */
+export function arrayBlocks(blocks: readonly Entry[]): HistoryBlocks {
+  return {
+    length: blocks.length,
+    at: (index) => blocks[index],
+    before(index, covered) {
+      let turnStart = 0
+      const earlierRequests: string[] = []
+      for (let at = 0; at < index; at++) {
+        const block = blocks[at]
+        if (block?.type === "user" && block.requestId) earlierRequests.push(block.requestId)
+        if (at >= covered && isTurnStart(block)) turnStart++
+      }
+      return { turnStart, earlierRequests }
+    },
+  }
+}
+
 /** The page of `source` ending at `before`: its live blocks back from there, then its saved entries once they're done. */
-export function historyPage(token: string, source: LiveSnapshot, before: LiveHistoryCursor, versions: HistoryVersions): LiveHistoryPage {
+export function historyPage(token: string, source: LiveSnapshot, before: LiveHistoryCursor, versions: HistoryVersions,
+  live: HistoryBlocks = arrayBlocks(source.blocks)): LiveHistoryPage {
   const covered = source.baseCoveredBlocks ?? 0
   const baseOrigin = source.base?.start ?? 0
-  if (before.blocks > source.blocks.length || before.blocks < covered || before.base < baseOrigin ||
+  if (before.blocks > live.length || before.blocks < covered || before.base < baseOrigin ||
     before.base > baseOrigin + (source.base?.entries.length ?? 0))
     throw new Error("Invalid retained history cursor")
   const blocks: Entry[] = []
@@ -50,7 +85,7 @@ export function historyPage(token: string, source: LiveSnapshot, before: LiveHis
   let blockStart = before.blocks
   let baseStart = before.base
   while (blockStart > covered && blocks.length < PAGE_ITEMS) {
-    const original = source.blocks[blockStart - 1]!
+    const original = live.at(blockStart - 1)!
     const preview = previewLive(original, blockStart - 1)
     const block = preview.type === "tool" && preview.historyRest ? { ...preview, historyVersion: versions.of(original) } : preview
     const size = JSON.stringify(block).length
@@ -71,13 +106,7 @@ export function historyPage(token: string, source: LiveSnapshot, before: LiveHis
       baseStart--
     }
   }
-  let turnStart = 0
-  const earlierRequests: string[] = []
-  for (let index = 0; index < blockStart; index++) {
-    const block = source.blocks[index]
-    if (block?.type === "user" && block.requestId) earlierRequests.push(block.requestId)
-    if (index >= covered && isTurnStart(block)) turnStart++
-  }
+  const { turnStart, earlierRequests } = live.before(blockStart, covered)
   const base: ThreadPage | null = source.base ? {
     ...source.base, entries: entries.reverse(), start: baseStart,
     hasEarlier: baseStart > baseOrigin || source.base.hasEarlier,
@@ -90,12 +119,13 @@ export function historyPage(token: string, source: LiveSnapshot, before: LiveHis
 }
 
 /** The pages of `source` from `from` to `to`, as one: what a window that let pages go reads back. */
-export function historyRange(token: string, source: LiveSnapshot, from: LiveHistoryCursor, to: LiveHistoryCursor, versions: HistoryVersions): LiveHistoryPage {
+export function historyRange(token: string, source: LiveSnapshot, from: LiveHistoryCursor, to: LiveHistoryCursor, versions: HistoryVersions,
+  live: HistoryBlocks = arrayBlocks(source.blocks)): LiveHistoryPage {
   if (from.blocks > to.blocks || from.base > to.base) throw new Error("Invalid retained history range")
   const parts: LiveHistoryPage[] = []
   let cursor = to
   while (cursor.blocks > from.blocks || cursor.base > from.base) {
-    const page = historyPage(token, source, cursor, versions)
+    const page = historyPage(token, source, cursor, versions, live)
     parts.push(page)
     const next = { blocks: page.history.blockStart, base: page.base?.start ?? 0 }
     if (next.blocks === cursor.blocks && next.base === cursor.base) throw new Error("That retained history range is unavailable.")
@@ -109,7 +139,7 @@ export function historyRange(token: string, source: LiveSnapshot, from: LiveHist
   const base = last.base ? { ...last.base, entries: allEntries.slice(from.base - (first.base?.start ?? 0)), start: from.base,
     hasEarlier: from.base > 0 || Boolean(source.base?.hasEarlier) } : null
   // Recompute the prefix's turn numbering from a page ending at `from`.
-  const prefix = historyPage(token, source, from, versions)
+  const prefix = historyPage(token, source, from, versions, live)
   const turnStart = prefix.history.turnStart + prefix.blocks.filter(isTurnStart).length
   return { blocks: allBlocks.slice(from.blocks - first.history.blockStart), base,
     history: { ...last.history, blockStart: from.blocks, blockEnd: to.blocks, turnStart,
@@ -188,9 +218,10 @@ export function shownSnapshot(snapshot: LiveSnapshot): LiveSnapshot {
 }
 
 /** A capture's newest page, and the pages back to `from` when a window held those: the snapshot a read answers. */
-export function historyCapture(token: string, snapshot: LiveSnapshot, versions: HistoryVersions, from?: LiveHistoryCursor): LiveSnapshot {
-  const tail = historyPage(token, snapshot, { blocks: snapshot.blocks.length,
-    base: snapshot.base ? snapshot.base.start + snapshot.base.entries.length : 0 }, versions)
+export function historyCapture(token: string, snapshot: LiveSnapshot, versions: HistoryVersions, from?: LiveHistoryCursor,
+  live: HistoryBlocks = arrayBlocks(snapshot.blocks)): LiveSnapshot {
+  const tail = historyPage(token, snapshot, { blocks: live.length,
+    base: snapshot.base ? snapshot.base.start + snapshot.base.entries.length : 0 }, versions, live)
   // A background refresh keeps the range the reader explicitly loaded. It
   // must not throw away earlier pages while a large live event arrives.
   if (!from) return { ...shownSnapshot(snapshot), ...tail }
@@ -199,7 +230,7 @@ export function historyCapture(token: string, snapshot: LiveSnapshot, versions: 
   let page = tail
   while (page.history.before && (page.history.blockStart > target.blocks || (page.base?.start ?? 0) > target.base)) {
     if (page.history.before.blocks === (snapshot.baseCoveredBlocks ?? 0) && page.history.before.base === snapshot.base?.start) break
-    page = historyPage(token, snapshot, page.history.before, versions)
+    page = historyPage(token, snapshot, page.history.before, versions, live)
     pages.push(page)
   }
   pages.reverse()
