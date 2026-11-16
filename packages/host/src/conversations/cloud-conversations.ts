@@ -457,7 +457,7 @@ export class CloudConversations {
   constructor(options: CloudConversationsOptions) {
     this.#options = options
     this.#ownerCheck = new OwnerCheck({
-      ended: () => options.ownerChecked?.(),
+      ended: () => { options.account()?.checkAccountWaiting?.(); options.ownerChecked?.() },
       ...options.ownerCheckMs && { checkMs: options.ownerCheckMs.check, mostMs: options.ownerCheckMs.most },
     })
     this.#ownerCheck.away("start")
@@ -865,12 +865,20 @@ export class CloudConversations {
         if (!reached) this.#ownerCheck.unreached()
       })
     }
-    return this.#ownerCheck.waiting()
+    const waiting = this.#ownerCheck.waiting()
+    if (turn && waiting !== undefined) account?.checkAccountWaiting?.()
+    return waiting
+  }
+
+  /** A side-effect-free reading for the account link's adaptive probe. */
+  waitingForAccount(): boolean {
+    return this.#ownerCheck.waiting() !== undefined
   }
 
   dispose(): void {
     this.#closed = true
     this.#ownerCheck.close()
+    this.#options.account()?.checkAccountWaiting?.()
     clearTimeout(this.#waking)
     clearTimeout(this.#takeAgain)
     clearTimeout(this.#nativeLook)
@@ -1790,6 +1798,7 @@ export class CloudConversations {
         if (this.#closed) return
         if (!account?.sessionListings || !accountId) return this.#ownerCheck.none()
         const generation = this.#ownerCheck.asking()
+        account.checkAccountWaiting?.()
         try {
           this.#device = await account.deviceId()
           const [listings, devices, blocked] = await Promise.all([account.sessionListings(), account.devices?.().catch(() => undefined), account.cloudBlocked?.()])

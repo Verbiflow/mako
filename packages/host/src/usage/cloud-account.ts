@@ -292,6 +292,8 @@ export type CloudAccountOptions = {
   /** A fixture desk reaches nothing beyond this Mac, so it signs in only to a cloud on loopback. */
   fixture?: boolean
   onChange: (account: CloudAccount) => void
+  /** Whether local work is waiting for an authoritative account ownership answer. */
+  waitingForAccount?: () => boolean
   log?: (message: string, fields?: Record<string, string | number | boolean>) => void
   /** Every call to the cloud, as it ends, for error reports. */
   onRequest?: (call: DiagnosticEvents["cloud.request"]) => void
@@ -1248,6 +1250,11 @@ export class CloudAccounts {
     return this.#accountLink?.reach() ?? Promise.resolve(false)
   }
 
+  /** Ownership work began or ended: update the account link's short probe, without changing runtime presence. */
+  checkAccountWaiting(): void {
+    this.#accountLink?.checkWaiting()
+  }
+
   /**
    * This Mac is going to sleep, or shutting down: its runtime says so to the cloud while it still can, so the account's
    * other devices take it as quiet at once (`going-quiet`), and its link stays closed until the wake. A gateway too old
@@ -1599,8 +1606,7 @@ export class CloudAccounts {
       removed: () => void this.#removed(),
       onState: () => this.#reportConnection(),
       signedIn: () => this.#stored !== undefined,
-      // A half-open account must not leave ownership checks waiting on the next turn or a network change.
-      ...(kind === "account" && { heartbeat: { everyMs: 5_000, timeoutMs: 3_000 } }),
+      ...(kind === "account" && this.#options.waitingForAccount && { waiting: this.#options.waitingForAccount }),
     }
     if (this.#options.log) options.log = this.#options.log
     if (this.#options.offlineAfterMs !== undefined) options.offlineAfterMs = this.#options.offlineAfterMs

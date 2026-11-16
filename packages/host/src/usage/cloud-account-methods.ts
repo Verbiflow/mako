@@ -185,6 +185,8 @@ export interface CloudAccount {
   accountHeard?(): boolean
   /** The account's link tried now if it isn't heard, rather than at its next backoff step: whether it opened (`CloudLink.reach`). */
   reachAccount?(): Promise<boolean>
+  /** Ownership work began or ended: probe the account promptly only while that work waits. */
+  checkAccountWaiting?(): void
   /** After the machine slept or the host was paused: the sign-in may have lapsed meanwhile. */
   wake(): void
   /** The Mac is going to sleep or shutting down: its runtime tells the cloud first (`CloudAccounts.leaving`). */
@@ -238,12 +240,14 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   accessChoices,
   preferences,
   lending,
+  waitingForAccount,
 }: {
   environment: Pick<HostEnvironment, "dataRoot" | "version" | "build">
   secrets: DomainSecrets
   machine: MachineCapability
   emit: (event: HostEvent) => void
   fixture: boolean
+  waitingForAccount?: () => boolean
   signedIn?: () => void
   request?: (call: DiagnosticEvents["cloud.request"]) => void
   /** Shares this Mac's harness sign-ins with the account's cloud machines; a fixture desk shares none. */
@@ -318,6 +322,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       standing = next
     },
     log: (message, fields) => hostLog("cloud", message, fields),
+    ...(waitingForAccount && { waitingForAccount }),
     // Every window hears of the account's devices, so one that joined is said wherever this Mac is looked at. A change
     // to the account's Threads goes to what lists them, which tells windows of the conversations it changes.
     onAccountEvent: (heard) => {
@@ -476,6 +481,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     leaving: (why) => cloud.leaving(why),
     accountHeard: () => cloud.accountHeard(),
     reachAccount: () => cloud.reachAccount(),
+    checkAccountWaiting: () => cloud.checkAccountWaiting(),
     wake: () => {
       cloud.wake()
       sync?.wake()

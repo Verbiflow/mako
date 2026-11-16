@@ -978,6 +978,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const buildSlots = new BuildSlots(() => finCapacity.builds())
   finCapacity.subscribe(() => buildSlots.changed())
   late.cloud = declareCloudAccountMethods(methods, {
+    waitingForAccount: () => cloudConversations?.waitingForAccount() === true || late.awayNotes?.any() === true,
     ...(lending && {
       lending: {
         advertisement: () => late.advertiser?.current(),
@@ -1044,7 +1045,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   /** The account's archived cloud Threads, as its list last said them; undefined until a list is read this run. */
   let accountArchived: { account: string; archived: ReadonlyMap<string, ArchivedThread> } | undefined
   // A cloud machine runs its conversations itself; only a person's own Mac starts them on one.
-  const cloudConversations = fixtureDesk || config.machineAgentFd !== undefined
+  const cloudConversations: CloudConversations | undefined = fixtureDesk || config.machineAgentFd !== undefined
     ? undefined
     : new CloudConversations({
         account: () => late.cloud,
@@ -1442,8 +1443,12 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       deviceId: async () => late.cloud?.deviceId(),
       join: (session, listed) => cloudMoves.joinContinue(session, listed),
       released: unpark,
-      changed: (sessions) => emit({ type: "away-held", conversations: heldConversations(sessions) }),
+      changed: (sessions) => {
+        emit({ type: "away-held", conversations: heldConversations(sessions) })
+        late.cloud?.checkAccountWaiting?.()
+      },
     })
+    late.cloud?.checkAccountWaiting?.()
     // Asked again while any waits and the account couldn't answer: on the account's next link too, through the owner check.
     shell.jobs.every("ask the account whose the Sessions held as this Mac went away are", 30_000, async () => {
       // A going-away that didn't happen (this Mac still runs long after) is over: asking goes on.
