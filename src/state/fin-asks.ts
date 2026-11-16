@@ -1,6 +1,6 @@
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { toast } from "sonner"
-import type { LimitNoticeChoice, AgentsRespondInput } from "@mako/host/contracts/agents"
+import type { AgentsRespondInput } from "@mako/host/contracts/agents"
 import { askWords, finAskWaiting, openAsk, rosterChildren } from "@mako/host/contracts/children"
 import type { FinAsk, NativeAgent } from "@mako/host/contracts/native-agents"
 import { getMako, hasBridge } from "@/lib/bridge"
@@ -15,18 +15,14 @@ export interface PersonAsk {
   ask: FinAsk
   /** It finished, and this is the decision its work leaves: its words read "Done · needs you: …" (`askWords`). */
   done?: true
-  limit?: NonNullable<NonNullable<NativeAgent["child"]>["limitNotice"]>
 }
 
 /** Every ask of these Fins that's the person's, a done Fin's decision too, in the roster's order. */
 export function personAsks(children: readonly NativeAgent[]): PersonAsk[] {
   const asks: PersonAsk[] = []
   for (const agent of children) {
-    if (agent.child?.limitNotice) {
-      const notice = agent.child.limitNotice
-      asks.unshift({ fin: agent.child.thread, title: "Usage", harness: notice.harness, question: notice.line, limit: notice,
-        ask: { kind: "report", id: notice.id, options: notice.waiting ? [] : [{ label: "Got it" }] } })
-    }
+    // A limit's notice is the tree's, not this Fin's: it reads once, and first, and "Got it" tells the host it was seen.
+    if (agent.child?.limitNotice) asks.unshift({ fin: agent.child.thread, title: "Usage", harness: agent.child.limitNotice.harness, question: agent.child.limitNotice.line, ask: { kind: "report", id: agent.child.limitNotice.id, options: [{ label: "Got it" }] } })
     const open = agent.child?.state && openAsk(agent.child.state)
     if (!agent.child || !open || open.on === "lead" || !open.ask) continue
     asks.push({ fin: agent.child.thread, title: agent.title, harness: agent.provider, question: open.question, ask: open.ask, ...(open.done && { done: true as const }) })
@@ -39,7 +35,7 @@ export function personAsks(children: readonly NativeAgent[]): PersonAsk[] {
  * npm ci". Its Thread's Fins as they stand (`conversationRoster`), whichever of its Sessions it is.
  */
 export function finAskLine(state: AcpState, conversation: Pick<LiveAcpConversation, "threadId" | "nativeAgents">): string | undefined {
-  const ask = personAsks(rosterChildren(conversationRoster(state, conversation))).find(ask => !ask.limit?.waiting)
+  const ask = personAsks(rosterChildren(conversationRoster(state, conversation)))[0]
   return ask && finAskWaiting(ask.ask, ask.title, askWords(ask)).line
 }
 
@@ -72,15 +68,15 @@ export async function answerFin(apexConversation: string, ask: PersonAsk, answer
 }
 
 /** Where a Thread a limit holds could go on, as its card says it; undefined with nowhere, or with no host to ask. */
-export async function nextPlace(conversation: string, notice?: string): Promise<{ label: string; harness: string; choice?: LimitNoticeChoice } | undefined> {
+export async function nextPlace(conversation: string): Promise<{ label: string; harness: string } | undefined> {
   if (!hasBridge()) return undefined
-  return getMako().agentsNextPlace(conversation, notice).then((next) => next ?? undefined, () => undefined)
+  return getMako().agentsNextPlace(conversation).then((next) => next ?? undefined, () => undefined)
 }
 
 /** The person pressed that card. False when it didn't go, with a toast that says so. */
-export async function continueNext(conversation: string, choice?: LimitNoticeChoice, request: string = crypto.randomUUID()): Promise<boolean> {
+export async function continueNext(conversation: string): Promise<boolean> {
   try {
-    const went = await getMako().agentsContinueNext(conversation, request, choice)
+    const went = await getMako().agentsContinueNext(conversation, crypto.randomUUID())
     if (!went) toast("This Thread can't go on there now")
     return went
   } catch (error) {

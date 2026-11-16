@@ -78,7 +78,6 @@ import {
   FinReroutedSchema,
   type FinRerouted,
   type LimitNotice,
-  type LimitNoticeChoice,
   queuedWords,
   quietProgress,
   awaitedAnew,
@@ -433,11 +432,6 @@ function handedOver(request: LiveRequest): boolean {
 }
 
 /** A request waiting out a limit, which a move can take over: a Stop's latch leaves it where it is. */
-type RosterLimitNotice = NonNullable<NativeAgent["child"]>["limitNotice"]
-function sameLimitNotice(left: RosterLimitNotice, right: RosterLimitNotice): boolean {
-  return left?.id === right?.id && left?.waiting?.version === right?.waiting?.version && left?.waiting?.count === right?.waiting?.count && left?.waiting?.at === right?.waiting?.at && left?.waiting?.resets === right?.waiting?.resets
-}
-
 function waitsOnLimit(request: LiveRequest): boolean {
   return request.status === "held" && request.retry?.cause === "rate-limited" && request.pause !== "stop"
 }
@@ -1134,11 +1128,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const thread = store.journalPlacement(conversation)?.thread
     if (!thread) return NONE
     const held = this.rosters.get(thread)
-    if (held && !held.some(agent => {
-      if (!agent.child?.limitNotice) return false
-      const edge = this.store()?.edges().of(agent.child.thread)
-      return !edge || !sameLimitNotice(agent.child.limitNotice, this.noticeOn(edge))
-    })) return held
+    if (held && !held.some((agent) => agent.child?.limitNotice && agent.child.limitNotice.id !== this.standingNotice(this.rootOf(thread))?.id)) return held
     const children = store.edges().children(thread)
     const queued = this.queuedOf(thread)
     if (!children.length && !queued.length) return NONE
@@ -2511,32 +2501,9 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /** The notice of a limit its tree hit, on the first Fin it touched, while it stands. */
-  private noticeOn(edge: ThreadParent): NonNullable<NativeAgent["child"]>["limitNotice"] {
-    const root = this.rootOf(edge.child)
-    const notice = this.standingNotice(root)
-    if (notice?.fin !== edge.child) return undefined
-    const conversation = this.conversationOf(root)
-    const held = conversation ? this.noticeWaits(conversation, notice.id) : []
-    const first = held.map(({ wait }) => wait.retry!).sort((a, b) => (a.until ?? a.at) - (b.until ?? b.at))[0]
-    return { id: notice.id, line: notice.line, harness: notice.harness,
-      ...(first && { waiting: { count: held.length, at: first.until ?? first.at, resets: first.until !== undefined,
-        version: namedUuid(held.map(({ edge, wait }) => `${edge.parent}:${edge.child}:${edge.op}:${edge.asked.access}:${wait.id}`).sort().join("|")) } }) }
-  }
-
-  /** Only current, local, Mako-owned usage waits in this exact tree episode. Closed/Stop/external work never joins. */
-  private noticeWaits(conversation: string, id: string) {
-    const store = this.store()
-    const placed = store?.journalPlacement(conversation)
-    const root = placed && this.rootOf(placed.thread)
-    const notice = root && this.standingNotice(root)
-    if (!store || !placed || placed.thread !== root || !notice || notice.id !== id) return []
-    return treeEdges(store.edges(), root).flatMap(edge => {
-      const heldIn = this.conversationOf(edge.child)
-      if (!heldIn || !edge.asked.access || edge.closedAt !== undefined || (edge.run && !edge.run.ended) || this.inTurn(heldIn)) return []
-      if (this.deps.live.session(heldIn)?.harness !== notice.harness) return []
-      const wait = this.deps.live.held(heldIn)?.requests.find(request => waitsOnLimit(request) && request.retry?.until === notice.until)
-      return wait ? [{ edge, conversation: heldIn, wait, mark: this.deps.live.stopMark(heldIn) }] : []
-    })
+  private noticeOn(edge: ThreadParent): { id: string; line: string; harness: string } | undefined {
+    const notice = this.standingNotice(this.rootOf(edge.child))
+    return notice?.fin === edge.child ? { id: notice.id, line: notice.line, harness: notice.harness } : undefined
   }
 
   /** A tree's notice until it's seen or its reset has passed: by then it's no news. */
@@ -4203,7 +4170,7 @@ export class Agents implements AgentOperations, ConversationChildren {
    * there first with the move's words. `waiting` is undefined for a Thread that goes with its tree, which `resting`
    * names the account of. An Apex keeps the words of anything but its own continuation, and with nowhere to go it waits.
    */
-  private async moveOn(mover: Mover, conversation: string, harness: string, spent: Spent, waiting: { wait: LiveRequest; since: number | undefined } | undefined, report: () => void, resting?: string, chosen?: { place: string; valid(): boolean }): Promise<boolean | undefined> {
+  private async moveOn(mover: Mover, conversation: string, harness: string, spent: Spent, waiting: { wait: LiveRequest; since: number | undefined } | undefined, report: () => void, resting?: string): Promise<void> {
     const { thread, edge, apex, tier } = mover
     const { limit, visited } = spent
     const wait = waiting?.wait
@@ -4225,12 +4192,11 @@ export class Agents implements AgentOperations, ConversationChildren {
       const session = this.deps.live.session(conversation)
       const model = this.settingsOf(conversation)?.model
       const place: FinPlace = { harness, ...(from && { account: from.name }), ...(model && { model }) }
-      const order = await moves.order({ from: place, when: "mid-run", tier, ...(session?.cwd && { cwd: session.cwd }), visited, accounts, ...(chosen && { personAsked: true }) })
+      const order = await moves.order({ from: place, when: "mid-run", tier, ...(session?.cwd && { cwd: session.cwd }), visited, accounts })
       const now = this.now()
       const until = limit?.resetsAt ?? wait?.retry?.until ?? from?.spent?.until ?? undefined
       const label = (name: string) => this.deps.harnessLabel(name)
-      const step = chosen ? order.steps.find(step => stepKey(step) === chosen.place) : order.steps[0]
-      if (chosen && (!step || !chosen.valid())) return
+      const step = order.steps[0]
       if (!step) {
         // An Apex with nowhere to go stays and says so: what waits for it waits, and goes when something can run.
         if (!edge && wait) this.noteMove(mover, { harness, ...(from && { account: from.label }), ...(until !== undefined && { until }) })
@@ -4238,7 +4204,6 @@ export class Agents implements AgentOperations, ConversationChildren {
         if (stoppedSince() || !this.stillDecided(conversation, thread, wait.id, wait.id)) return
         if (wait.retry?.cause === "rate-limited") {
           // No available fallback does not cancel the queue's already-owned reset recovery.
-          this.noteMove(mover, { harness, ...(from && { account: from.label }), ...(until !== undefined && { until }) })
           moved = store.finishFinMove(thread, this.generation, "retired")
           this.awaiting.delete(edge.child)
           this.childMoved(edge, false)
@@ -4275,9 +4240,9 @@ export class Agents implements AgentOperations, ConversationChildren {
       }
       // It goes as any Thread does, yielding to a Stop. Nothing says it moved until it has: a Stop or a person taking
       // the wait back leaves no trace of it.
-      const decided = () => claimed !== undefined && !stoppedSince() && (!chosen || chosen.valid()) && this.stillDecided(conversation, thread, claimed, wait?.id)
+      const decided = () => claimed !== undefined && !stoppedSince() && this.stillDecided(conversation, thread, claimed, wait?.id)
       let worded = false
-      const retire = (why: string): undefined => {
+      const retire = (why: string) => {
         // Only what the move wrote is its to take back: words edited since stand.
         if (wait && said !== undefined && worded) this.deps.live.rewordWaiting(conversation, wait.id, said, wait.text, wait.displayText)
         moved = store.finishFinMove(thread, this.generation, "retired")
@@ -4286,7 +4251,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       }
       if (decided() && wait && said !== undefined) worded = this.deps.live.rewordWaiting(conversation, wait.id, wait.text, said)
       if (!decided() || (said !== undefined && !worded)) return retire("what it was decided on no longer holds")
-      const id = namedUuid(chosen ? `moved:${claimed}:${stepKey(step)}` : `moved:${wait?.id ?? `${conversation}:${claimed}`}`)
+      const id = namedUuid(`moved:${wait?.id ?? `${conversation}:${claimed}`}`)
       const first = wait && (edge || wait.continues) ? wait.id : undefined
       const snapshot = await this.deps.continueOn(conversation, { kind: "move", move: { id, to: target, ...(first && { first }), unlessStopped: true } }, actor, decided)
       if (this.stopped) return
@@ -4311,8 +4276,7 @@ export class Agents implements AgentOperations, ConversationChildren {
         this.forget(edge.parent)
         this.childMoved(rerouted!, false)
       }
-      if (wait && !chosen) this.moveIdle(this.rootOf(thread), harness, from?.name, until)
-      return moved || undefined
+      if (wait) this.moveIdle(this.rootOf(thread), harness, from?.name, until)
     } catch (error) {
       hostWarn("agents", "a Thread couldn't go on after its account ran out; it waits as before", { thread, error: errorMessage({ error }) })
     } finally {
@@ -4424,71 +4388,31 @@ export class Agents implements AgentOperations, ConversationChildren {
    * Where a Thread held by a limit could go on, for its card: one Mako doesn't move by itself, as a Thread with no Fins
    * is the person's to decide, and only with somewhere to go.
    */
-  async nextPlace(conversation: string, notice?: string): Promise<{ label: string; harness: string; target: ThreadTarget; choice?: LimitNoticeChoice } | undefined> {
-    if (notice !== undefined) {
-      const held = this.noticeWaits(conversation, notice)
-      for (const item of held) {
-        const next = await this.nextForWait(item.conversation, item.edge.asked.access!, this.store()!.finTurn(item.edge.child)?.visited ?? [])
-        if (next) return { ...next, choice: { notice, place: next.place,
-          waits: [item, ...held.filter(other => other !== item)].slice(0, 64).map(({ edge, wait }) => ({ thread: edge.child, request: wait.id })) } }
-      }
-      return undefined
-    }
+  async nextPlace(conversation: string): Promise<{ label: string; harness: string; target: ThreadTarget } | undefined> {
     const store = this.store()
-    const placed = store?.journalPlacement(conversation)
-    if (!store || !placed || store.edges().of(placed.thread) || (this.moves?.on() && store.edges().children(placed.thread).some(edge => edge.closedAt === undefined))) return undefined
-    return this.nextForWait(conversation, this.tierOfConversation(conversation) ?? "ask", [])
-  }
-
-  private async nextForWait(conversation: string, tier: AccessTier, visited: readonly string[]) {
     const moves = this.moves
-    const placed = this.store()?.journalPlacement(conversation)
+    const placed = store?.journalPlacement(conversation)
     const session = this.deps.live.session(conversation)
-    if (!moves || !placed || !session || !this.deps.live.held(conversation)?.requests.some(waitsOnLimit)) return undefined
+    if (!store || !moves || !placed || !session || !this.deps.live.held(conversation)?.requests.some(waitsOnLimit)) return undefined
+    if (store.edges().of(placed.thread) || (moves.on() && store.edges().children(placed.thread).some((edge) => edge.closedAt === undefined))) return undefined
     const pinned = this.deps.live.pinnedAccount(conversation, session.harness)
     const accounts = await moves.accounts(session.harness, pinned, true)
-    const from = accounts.find(account => account.name === pinned) ?? accounts.find(account => account.active)
+    const from = accounts.find((account) => account.name === pinned) ?? accounts.find((account) => account.active)
     const model = this.settingsOf(conversation)?.model
+    const tier = this.tierOfConversation(conversation) ?? "ask"
     const place: FinPlace = { harness: session.harness, ...(from && { account: from.name }), ...(model && { model }) }
-    const order = await moves.order({ from: place, when: "mid-run", tier, ...(session.cwd && { cwd: session.cwd }), visited, accounts, personAsked: true })
+    const order = await moves.order({ from: place, when: "mid-run", tier, ...(session.cwd && { cwd: session.cwd }), visited: [], accounts, personAsked: true })
     const step = order.steps[0]
     if (!step) return undefined
+    const label = (name: string) => this.deps.harnessLabel(name)
     const move: FinMove = { step, from: { harness: session.harness, ...(from && { account: from.label }) } }
     const apex: Apex = { session: placed.session, thread: placed.thread, conversation }
-    return { label: movedWords(move, name => this.deps.harnessLabel(name), this.now()).to.replace(/^Moved to /, ""),
-      harness: step.harness, place: stepKey(step), target: await this.targetOf(step, apex, tier, session.cwd) }
+    return { label: movedWords(move, label, this.now()).to.replace(/^Moved to /, ""), harness: step.harness, target: await this.targetOf(step, apex, tier, session.cwd) }
   }
 
-  /** An explicit press re-verifies the shown place and exact waits; it never adopts a newer request after a retry. */
-  async continueNext(conversation: string, id: string, choice?: LimitNoticeChoice): Promise<boolean> {
-    if (choice) {
-      const store = this.store()
-      if (!store || !this.moves) return false
-      const held = this.noticeWaits(conversation, choice.notice)
-      let moved = false
-      for (const item of held) {
-        if (!choice.waits.some(wait => wait.thread === item.edge.child && wait.request === item.wait.id) || this.moving.has(item.wait.id)) continue
-        const valid = () => this.noticeWaits(conversation, choice.notice).some(current => current.edge.op === item.edge.op && current.edge.parent === item.edge.parent && current.edge.child === item.edge.child && current.wait.id === item.wait.id && current.mark === item.mark)
-        if (!valid()) continue
-        const claim = `person:${id}:${item.wait.id}`
-        const turn = store.claimFinMove(item.edge.child, claim, this.generation, this.now())
-        if (!turn) continue
-        this.moving.add(item.wait.id)
-        const apex: Apex = { session: item.edge.parentSession, thread: item.edge.parent, ...(this.conversationOf(item.edge.parent) && { conversation: this.conversationOf(item.edge.parent)! }) }
-        try {
-          const result = await this.moveOn({ thread: item.edge.child, edge: item.edge, apex, tier: item.edge.asked.access! }, item.conversation,
-            this.deps.live.session(item.conversation)!.harness, { limit: undefined, visited: turn.visited },
-            { wait: item.wait, since: item.wait.createdAt }, () => {}, undefined, { place: choice.place, valid })
-          moved = result === true || moved
-        } finally { this.moving.delete(item.wait.id) }
-      }
-      if (moved && !this.noticeWaits(conversation, choice.notice).length) {
-        const placed = store.journalPlacement(conversation)
-        const notice = placed && this.standingNotice(placed.thread)
-        if (placed && notice?.id === choice.notice && store.seeLimitNotice(placed.thread, choice.notice)) this.noticeChanged(store.edges().of(notice.fin))
-      }
-      return moved
-    }
+  /** The person pressed the card: their Thread goes there as a switch of theirs would, whatever waits going with it. */
+  async continueNext(conversation: string, id: string): Promise<boolean> {
+    // A Stop while it finds the place outranks the press: one before the press doesn't, as a move after a Stop can go.
     const mark = this.deps.live.stopMark(conversation)
     const next = await this.nextPlace(conversation)
     if (!next || this.deps.live.stopMark(conversation) !== mark) return false
@@ -5027,7 +4951,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     this.sync()
     const held = this.entries.get(edge.child)
     // A notice past its reset leaves what's held whatever's next to say so: the Inbox and a phone read it from here.
-    if (held && (!held.child?.limitNotice || sameLimitNotice(held.child.limitNotice, this.noticeOn(edge)))) return held
+    if (held && (!held.child?.limitNotice || this.noticeOn(edge))) return held
     const read = childEntry(edge, this.childReading(edge), this.journalOf(edge.child))
     const notice = this.noticeOn(edge)
     const entry = notice && read.child ? { ...read, child: { ...read.child, limitNotice: notice } } : read

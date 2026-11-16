@@ -6,18 +6,14 @@ import { readingLive, receivingLive } from "../src/state/live-door"
 import { failAroundTheDoor } from "./live-door-watch"
 import { stagePrompt, removePendingPrompt } from "../src/state/acp-pending"
 import { beginStart } from "../src/state/acp-start"
-import { autoContinuePending, continueTurnPrompt, foldedPromptParts, promptDelivery, recoverableRequests, recoveriesByPlace, makoPrompts, savedMakoPrompt, turnStopLabel, turnStops, turnWords } from "../src/state/prompt-delivery"
+import { autoContinuePending, continueTurnPrompt, foldedPromptParts, promptDelivery, recoverableRequests, makoPrompts, savedMakoPrompt, turnStopLabel, turnStops, turnWords } from "../src/state/prompt-delivery"
 import { foldedSeparator } from "@mako/host/contracts/live-conversations"
 import { fromAgent, YOUR_APEX } from "@mako/host/contracts/children"
 import { pullWakeNote } from "@mako/host/contracts/pull-waits"
 import { autoContinueCandidate, crashedChildTurn, savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { classifyProviderFailure, providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import { failureAfterRetry, GIVE_UP_MS, nextRetry } from "@mako/host/contracts/delivery-retry"
-import { usageLimitWait, usageLimitSources } from "../src/state/usage-limit-wait"
-import { withoutWaitingLimitNotes } from "../src/lib/exchanges"
-import { ProducedNotice } from "../src/components/composer/composer-notices"
-import { useLimitContinueNotice, useAccountLimitNotice } from "../src/components/composer/account-notice"
-import { useFailureNotice } from "../src/components/viewer/failure-notice"
+import { resetWords } from "@mako/host/contracts/account-usage"
 import { FailureRow } from "../src/components/transcript/failure-row"
 import { PromptQueue } from "../src/components/composer/prompt-queue"
 import { projectLive } from "../src/state/live-projection"
@@ -324,11 +320,6 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   // block carries its id; the retained window still names it.
   const restored = recoverableRequests({ requests: [crashed, quit], blocks: [], history: { earlierRequests: [crashed.id] } }).map((item) => item.id)
   assert.deepEqual(restored, [quit.id], "a turn the native history shows is on screen; one that never reached the transcript stays reviewable")
-  const empty = { requests: [], get blocks(): Entry[] { throw new Error("An empty recovery must not scan transcript blocks") } }
-  assert.deepEqual(recoverableRequests(empty), [], "main's lazy history lookup survives wait suppression")
-  const places = recoveriesByPlace(empty)
-  assert.equal(places.onTurns.size, 0)
-  assert.deepEqual(places.apart, [])
 }
 // A dispatched request's prompt is the host's to show. A long turn leaves it
 // on an unloaded page; nothing stands in for it, with or without a window
@@ -565,33 +556,14 @@ console.log("PASS: a gateway outage shows its automatic retry time and reason, w
   const failed: LiveRequest = { ...request, status: "failed", failure: "rate-limited", error: retry.reason, retry }
   const continuation: LiveRequest = { ...second, status: "held", retry, continues: { requestId: failed.id, reason: "connection-lost", auto: true } }
   acpStore.set({ activeKey: conversationId })
-  applyLiveSnapshot({ ...snapshot, revision: 1, session: { ...snapshot.session, id: conversationId }, requests: [failed, continuation],
-    blocks: [{ type: "user", requestId: failed.id, text: failed.text }, { type: "event", label: "Rate limited", detail: "Reached your usage limit", limit: { resetsAt: reset } }] })
-  const live = current()
+  applyLiveSnapshot({ ...snapshot, revision: 1, session: { ...snapshot.session, id: conversationId }, requests: [failed, continuation] })
   const queue = renderToStaticMarkup(<PromptQueue />)
-  assert.equal(queue, "", "the automatic continuation isn't a second queue/status row")
-  const status = renderToStaticMarkup(<ProducedNotice use={useLimitContinueNotice} />)
-  assert.match(status, /Sends at /)
-  assert.match(status, new RegExp(`data-usage-limit-wait="${retry.at}"`), "the line uses the host's actual due time")
-  assert.doesNotMatch(status, /Resume|Send again|Not now/)
-  assert.equal(renderToStaticMarkup(<ProducedNotice use={useFailureNotice} />), "", "the recovery pointer does not repeat the active wait")
-  assert.equal(renderToStaticMarkup(<ProducedNotice use={useAccountLimitNotice} />), "", "account offers do not repeat the active wait")
-  assert.deepEqual(recoverableRequests(live), [], "the exact carried failure has no duplicate recovery row")
-  const waiting = usageLimitSources(live.requests!)
-  assert.deepEqual([...waiting].sort(), [failed.id, continuation.id].sort())
-  const projected = live.projection!.exchanges
-  const filtered = withoutWaitingLimitNotes(projected, waiting)
-  assert.equal(filtered.flatMap(exchange => exchange.system).length, 0, "the live limit marker gives way to the same quiet status")
-  assert.ok(projected.some(exchange => exchange.system.some(note => note.message.note?.limit)), "native history remains intact")
-  const sibling = { ...failed, id: "unrelated-failure", failure: "network" as const, retry: undefined }
-  assert.deepEqual(recoverableRequests({ ...live, requests: [failed, continuation, sibling] }).map(r => r.id), [sibling.id], "only the exact wait's chain is collapsed")
-  assert.equal(usageLimitWait([{ ...continuation, pause: "stop" }]), undefined, "Stop never promises an automatic send")
-  assert.equal(usageLimitWait([{ ...continuation, signIn: { harness: "codex", account: "fixture", credential: "fixture", at: 0 } }]), undefined, "sign-in is not a timed send")
-  assert.ok(recoverableRequests({ ...live, copy: { at: Date.now() } }).some(r => r.id === failed.id), "remote copies retain their own recovery and make no local send promise")
-  const unsent = { ...failed, status: "held" as const }
-  assert.equal(usageLimitWait([unsent])?.request.id, failed.id)
-  assert.equal(usageLimitWait([{ ...unsent, editing: true }]), undefined)
-  assert.equal(usageLimitWait([{ ...continuation, status: "completed" }]), undefined, "a completed wait clears the line")
+  assert.match(queue, /data-queue-retry="rate-limited"/)
+  assert.match(queue, /usage limit until/)
+  assert.ok(queue.includes(resetWords(reset, Date.now())), "the native reset is shown")
+  const ended = renderToStaticMarkup(<FailureRow conversationId={conversationId} request={failed} />)
+  assert.match(ended, /Continues by itself/)
+  assert.doesNotMatch(ended, /data-recovery-primary|Sign in|Continue turn/)
 }
 
 {

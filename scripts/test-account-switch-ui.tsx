@@ -1,5 +1,4 @@
 import assert from "node:assert/strict"
-import { LimitContinueLine } from "../src/web-client/limit-wait"
 import { renderToStaticMarkup } from "react-dom/server"
 import { useAccountLimitNotice, useAccountSwitchNotice, limitContinueNotice } from "../src/components/composer/account-notice"
 import { ProducedNotice } from "../src/components/composer/composer-notices"
@@ -156,22 +155,9 @@ assert.match(mismatch, /data-notice-tone="caution"/)
   assert.match(alone, /codex@example\.com is at 96% of its weekly limit · When it runs out, Fins go on with your next harness/)
   assert.match(switched(false), /codex@example\.com is at 96% of its weekly limit · When it runs out, Fins wait until it resets/, "Settings' switch off: they don't go on")
   assert.doesNotMatch(switched(undefined), /When it runs out/, "the switch unread: it says neither")
-  const at = Date.now() + 3_600_000
-  const card = limitContinueNotice({ harness: "claude", to: "Codex", at, resets: true, busy: false, go: () => {} })
-  assert.match(card.title, /^Sends at /, "the status names the automatic reset send")
-  assert.deepEqual(card.actions?.map((action) => [action.label, action.primary]), [["Use Codex now", true]], "one optional action, not another Resume or dismissal")
-  const aloneWait = limitContinueNotice({ harness: "claude", at, resets: true, busy: false, go: () => {} })
-  assert.equal(aloneWait.title, card.title)
-  assert.deepEqual(aloneWait.actions, [], "no invented alternative when every step is at its limit")
-  const phone = renderToStaticMarkup(<LimitContinueLine offer={{ harness: "claude", to: "Codex", at, resets: true, busy: false, go: () => {} }} />)
-  assert.match(phone, /Sends at /)
-  assert.match(phone, /Use Codex now/)
-  assert.equal((phone.match(/<button/g) ?? []).length, 1)
-  assert.doesNotMatch(phone, /Resume|Not now|can take this|web-ask/)
-  const noOther = renderToStaticMarkup(<LimitContinueLine offer={{ harness: "claude", at, resets: true, busy: false, go: () => {} }} />)
-  assert.doesNotMatch(noOther, /<button|undefined|Use /)
-  const unknownReset = limitContinueNotice({ harness: "claude", at, resets: false, busy: false, go: () => {} })
-  assert.match(unknownReset.title, /^Tries again at /, "an unknown reset is a retry time, not a promise that quota lifts")
+  const card = limitContinueNotice({ harness: "claude", to: "Claude Code", busy: false, go: () => {}, notNow: () => {} })
+  assert.equal(card.title, "Claude Code can take this", "only the choice, and only what's known: its queue row says what holds it")
+  assert.deepEqual(card.actions?.map((action) => [action.label, action.primary]), [["Continue on Claude Code", true], ["Not now", undefined]], "one press, or stay")
   assert.doesNotMatch(alone, /Switch to/)
   accountsStore.set({ limitOffers: { codex: offered } })
   accountsStore.set((state) => ({ limitOffers: { codex: { ...state.limitOffers.codex!, because: "refused" } } }))

@@ -1,4 +1,3 @@
-import type { LimitNoticeChoice } from "@mako/host/contracts/agents"
 import { fixtureHarnesses } from "./harness-fixtures"
 import type { ToolStep } from "@mako/host/contracts/tool-steps"
 import { FileIndexCore, type FileFoldersOptions, type FileGrepResults } from "@mako/host/contracts/file-index"
@@ -401,10 +400,6 @@ export function installMockBridge() {
   const returnCalls: string[] = []
   let refuseNextAgentAnswer = false
   const continueCalls: string[] = []
-  const crewContinueCalls: { conversation: string; request: string; choice: LimitNoticeChoice }[] = []
-  let crewLimitRoom = true
-  let crewNextCalls = 0
-  const crewWait = crypto.randomUUID()
   /** Sessions whose work is paused because the account signed out mid-turn, as the host pauses them. */
   const signInPauses = new Map<string, SignInHold>()
   /** Messages that already waited for this Mac to hear its account. */
@@ -567,12 +562,6 @@ export function installMockBridge() {
         emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: APEX_CONVERSATION, revision: next.revision, updates: [], control })) })
       },
       continues: () => [...continueCalls],
-      crewContinues: () => [...crewContinueCalls],
-      crewReads: () => crewNextCalls,
-      crewLimitRoom(value: boolean) {
-        crewLimitRoom = value
-        setChildren((liveSnapshots.get(APEX_CONVERSATION)?.nativeAgents?.agents ?? []).map(agent => ({ ...agent, ...(agent.child && { child: { ...agent.child } }) })))
-      },
       /**
        * The Apex's own turn starts or ends, as a wake or a settle would: ending it also settles its own still-
        * dispatching request (the digest it was reading), so the crew card draws in its place, the Fins in the
@@ -3669,26 +3658,9 @@ export function installMockBridge() {
       }
       return { to: direct.to, fin: direct.fin, delivery: direct.delivery }
     },
-    agentsNextPlace: async (conversation: string, notice?: string) => {
-      if (!notice) return { label: "Codex", harness: "codex" }
-      crewNextCalls++
-      const agent = liveSnapshots.get(conversation)?.nativeAgents?.agents.find(agent => agent.child?.limitNotice?.id === notice && agent.child.limitNotice.waiting)
-      return crewLimitRoom && agent?.child ? { label: "Codex", harness: "codex", choice: { notice, place: "codex", waits: [{ thread: agent.child.thread, request: agent.child.limitNotice!.waiting!.version ?? crewWait }] } } : null
-    },
-    agentsContinueNext: async (conversation: string, request: string, choice?: LimitNoticeChoice) => {
-      if (!choice) { continueCalls.push(conversation); return true }
-      crewContinueCalls.push({ conversation, request, choice })
-      const snapshot = liveSnapshots.get(conversation)
-      if (!snapshot?.nativeAgents || !crewLimitRoom) return false
-      const agents = snapshot.nativeAgents.agents.map(agent => {
-        if (agent.child?.limitNotice?.id !== choice.notice) return agent
-        const child = { ...agent.child }; delete child.limitNotice
-        return { ...agent, child }
-      })
-      const nativeAgents = { ...snapshot.nativeAgents, agents }
-      const next = { ...snapshot, revision: snapshot.revision + 1, nativeAgents }
-      liveSnapshots.set(conversation, next)
-      emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: conversation, revision: next.revision, updates: [], nativeAgents })) })
+    agentsNextPlace: async () => ({ label: "Codex", harness: "codex" }),
+    agentsContinueNext: async (conversation: string) => {
+      continueCalls.push(conversation)
       return true
     },
     // As the host answers it: the Fin goes on, and its entry says so in the Apex's next batch.

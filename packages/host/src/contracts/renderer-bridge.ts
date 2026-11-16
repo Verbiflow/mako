@@ -1,5 +1,4 @@
 import type { SnapshotBudgetReport, SnapshotBudgetSettings } from "./snapshot-budget.js"
-import type { LimitNoticeChoice } from "./agents.js"
 import type { ThreadScratchReport, ThreadScratchSettings } from "./thread-scratch.js"
 import type { RemoteAppDemand, RemoteAppReply, RemoteAppSnapshot } from "./remote-app.js"
 import type { FileFindResults, FileFolders, FileFoldersOptions, FileGrepOptions, FileGrepResults } from "./file-index.js"
@@ -1059,10 +1058,10 @@ export function createMakoBridge(transport: BridgeTransport) {
     agentsDirect: (conversation: string, input: AgentsDirectInput) =>
       invokeTrustedHost<AgentsDirected | AgentRefused>("mako:agents-direct", conversation, input),
     /** Where a Thread held by a limit could go on, for its card (`Agents.nextPlace`). */
-    agentsNextPlace: (conversation: string, notice?: string) =>
-      invokeTrustedHost<{ label: string; harness: string; choice?: LimitNoticeChoice } | null>("mako:agents-next-place", conversation, ...notice === undefined ? [] : [notice]),
-    agentsContinueNext: (conversation: string, id: string, choice?: LimitNoticeChoice) =>
-      invokeTrustedHost<boolean>("mako:agents-continue-next", conversation, id, ...choice === undefined ? [] : [choice]),
+    agentsNextPlace: (conversation: string) =>
+      invokeTrustedHost<{ label: string; harness: string } | null>("mako:agents-next-place", conversation),
+    agentsContinueNext: (conversation: string, id: string) =>
+      invokeTrustedHost<boolean>("mako:agents-continue-next", conversation, id),
     /** The person's Stop waiting: the conversation's wait it names ends, waking no one. */
     liveWaitStop: (conversation: string, wait: string) =>
       invokeTrustedHost<boolean>("mako:live-wait-stop", conversation, wait),

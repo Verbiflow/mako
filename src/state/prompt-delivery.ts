@@ -10,7 +10,6 @@ import type { OutdatedRestore } from "@mako/host/contracts/restore-plan"
 import type { LiveHistoryWindow } from "@mako/host/contracts/live-history"
 import { continueTurnPrompt, savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { goalContinuePrompt, goalStartPrompt } from "@mako/host/contracts/live-goals"
-import { usageLimitSources } from "@/state/usage-limit-wait"
 import { pullWakeWords } from "@mako/host/contracts/pull-waits"
 import { turnWaitWords } from "@mako/host/contracts/turn-waits"
 import { agentWords, type AgentWords } from "@mako/host/contracts/children"
@@ -331,19 +330,18 @@ function transcribes(input: Pick<DeliveryInput, "blocks" | "history">, id: strin
   return false
 }
 
-export function recoverableRequests(input: Pick<DeliveryInput, "blocks" | "history" | "requests" | "copy">): LiveRequest[] {
+export function recoverableRequests(input: Pick<DeliveryInput, "blocks" | "history" | "requests">): LiveRequest[] {
   // Read only when a request needs it: most conversations hold none of these.
   let visible: Set<string> | undefined
   const shown = (id: string) => (visible ??= transcribedRequests(input)).has(id)
-  const waiting = input.copy ? new Set<string>() : usageLimitSources(input.requests ?? [])
   // A turn the transcript shows carries its own stopped marker (`turnStops`);
   // only a stopped or unconfirmed message with no turn on screen needs a panel,
   // and a turn Mako couldn't save its failure row.
   return (input.requests ?? []).filter(
-    (request) => !waiting.has(request.id) && (
+    (request) =>
       endsOnFailureRow(request) ||
       (request.status === "uncertain" && !shown(request.id)) ||
-      (request.status === "interrupted" && !shown(request.id)))
+      (request.status === "interrupted" && !shown(request.id))
   )
 }
 
@@ -355,7 +353,7 @@ export function recoverableRequests(input: Pick<DeliveryInput, "blocks" | "histo
  * the last turn (`apart`), but only since the last answer: older ones are in
  * the saved messages list.
  */
-export function recoveriesByPlace(input: Pick<DeliveryInput, "blocks" | "history" | "requests" | "copy">) {
+export function recoveriesByPlace(input: Pick<DeliveryInput, "blocks" | "history" | "requests">) {
   const recoverable = recoverableRequests(input)
   const onTurns = new Map<string, LiveRequest>()
   const apart: LiveRequest[] = []

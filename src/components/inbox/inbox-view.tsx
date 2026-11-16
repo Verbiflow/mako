@@ -233,7 +233,6 @@ function AskMark({ item }: { item: InboxAsk }) {
 }
 
 function FinAnswers({ item, sending, send }: { item: FinInboxItem; sending: boolean; send: (answer: FinAnswer) => void }) {
-  if (item.ask.limit?.waiting) return <span className="text-label text-muted-foreground">Continues automatically. Open the Thread to use another account or harness now.</span>
   if (item.ask.ask.kind === "approval")
     return (
       <>

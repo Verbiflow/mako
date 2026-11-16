@@ -258,7 +258,7 @@ const asksKey = (conversation: Pick<LiveAcpConversation, "key" | "threadId">) =>
 
 /** The asks of a conversation's Thread's Fins that are the person's, as they stand (`conversationRoster`), by id. */
 function openFinAsks(conversation: LiveAcpConversation) {
-  const asks = personAsks(rosterChildren(conversationRoster(acpStore.get(), conversation))).filter(ask => !ask.limit?.waiting)
+  const asks = personAsks(rosterChildren(conversationRoster(acpStore.get(), conversation)))
   return new Map(asks.map((ask) => [`${ask.fin}:${ask.ask.id}`, ask]))
 }
 
