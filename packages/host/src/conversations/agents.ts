@@ -691,6 +691,8 @@ export class Agents implements AgentOperations, ConversationChildren {
    * `woke`, that its harness started a turn of its own since, on that work.
    */
   private readonly awaiting = new Map<string, { conversation: string; request: string; work?: string; woke?: true }>()
+  /** By Fin, what cancels the timer that looks at its held work's end again past `HELD_WORK_CEILING_MS`: one at a time. */
+  private readonly ceilings = new Map<string, () => void>()
   /** Fins' conversations whose cut turn is looked at once Mako's own continuation would have been scheduled (`watchCut`). */
   private readonly cutChecks = new Map<string, NodeJS.Timeout>()
   /** Messages on their way to each Fin (`deliver`), which a Stop marks: one may open a session before it has a queue to wait in. */
@@ -928,11 +930,25 @@ export class Agents implements AgentOperations, ConversationChildren {
       const waiting = conversation ? this.deps.live.waitingOn(conversation) : undefined
       return waiting !== undefined && report.id.endsWith(namedUuid(waiting.line))
     }
+    // Nor that its held work ended without waking it, once the work did wake it after all (a notification later than the
+    // driver's grace): it's at work on it, or said where it stands since. Its Apex hears one outcome, not two.
+    if (report.implicit && report.id.endsWith(":work-ended") && report.unfinished) {
+      const conversation = this.conversationOf(report.child)
+      if (conversation && this.deps.live.atWork(conversation)) return false
+      return this.store()?.reportsOf(report.child).at(-1)?.id === report.id
+    }
     if (!report.implicit || (report.status !== "done" && report.status !== "failed")) return true
     const edge = this.store()?.edges().of(report.child)
     if (!edge?.run || edge.closedAt !== undefined) return true
     const reading = this.childReading(edge)
     return !(reading.source === "followed" && reading.working)
+  }
+
+  /** A Fin no longer waits on what its turn ended on: its entry goes, and the timer that would look at it again. */
+  private stopAwaiting(child: string): void {
+    this.awaiting.delete(child)
+    this.ceilings.get(child)?.()
+    this.ceilings.delete(child)
   }
 
   /** `resume`, every conversation it reads read in first a slice at a time (`LiveConversations.readIn`): what a host starting calls. */
@@ -4167,13 +4183,13 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!ended || (ended.status !== "completed" && ended.status !== "failed" && ended.status !== "interrupted")) return
     // A turn cut short continues, by Mako's continuation or the next host's (`LeftTurn.always`), or its Apex hears it didn't.
     if (ended.signIn) {
-      this.awaiting.delete(edge.child)
+      this.stopAwaiting(edge.child)
       return this.childMoved(edge, false)
     }
     if (ended.status === "interrupted" && ended.interruption?.reason !== "stopped") return this.watchCut(conversation)
     if (this.limitMove(edge, conversation, ended, reply)) return
     if (this.deps.live.snapshot(conversation)?.requests.some(request => request.status === "held" && request.retry?.cause === "rate-limited" && request.continues?.auto && request.continues.requestId === ended.id)) {
-      this.awaiting.delete(edge.child)
+      this.stopAwaiting(edge.child)
       return this.childMoved(edge, false)
     }
     if (ended.status === "completed" && this.store()!.finTurn(edge.child)) this.store()!.clearFinTurn(edge.child)
@@ -4194,14 +4210,17 @@ export class Agents implements AgentOperations, ConversationChildren {
       const work = this.heldWork(conversation)
       this.awaiting.set(edge.child, { conversation, request, ...(work && { work }) })
       // Work nothing says the end of is believed for `HELD_WORK_CEILING_MS`: past it, its end is looked at again.
-      if (work) this.later(HELD_WORK_CEILING_MS + 1_000, () => {
+      this.ceilings.get(edge.child)?.()
+      this.ceilings.delete(edge.child)
+      if (work) this.ceilings.set(edge.child, this.later(HELD_WORK_CEILING_MS + 1_000, () => {
+        this.ceilings.delete(edge.child)
         const now = this.store()?.edges().of(edge.child)
         if (now && this.awaiting.get(edge.child)?.request === request) this.checkAwaiting(now)
-      })
+      }))
       hostLog("agents", "turn ended waiting", { op: edge.op, child: edge.child, on: waits })
       return this.childMoved(edge, false)
     }
-    this.awaiting.delete(edge.child)
+    this.stopAwaiting(edge.child)
     // Its word on where it stands: what it said this turn, else, for a turn Mako's own note started (a pull request's
     // outcome, a wait that fired), the progress it said before that and hasn't followed with a result. fin-models, woken
     // by #868's failed check, pushed a fix and ended its turn saying it would report when CI settled (2026-11-16): the
@@ -4406,7 +4425,7 @@ export class Agents implements AgentOperations, ConversationChildren {
           // No available fallback does not cancel the queue's already-owned reset recovery.
           this.noteMove(mover, { harness, ...(from && { account: from.label }), ...(until !== undefined && { until }) })
           moved = store.finishFinMove(thread, this.generation, "retired")
-          this.awaiting.delete(edge.child)
+          this.stopAwaiting(edge.child)
           this.childMoved(edge, false)
           hostLog("agents", "a Fin's fallback steps are exhausted; its usage-limit wait stays pending", { op: edge.op, harness })
           return
@@ -4699,7 +4718,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const held = this.awaiting.get(edge.child)
     if (!held || edge.closedAt !== undefined) return
     if (this.ready(held.conversation) !== "idle" || this.wakes.waits(held.conversation) || this.waitsOn(edge, held.conversation)) return
-    this.awaiting.delete(edge.child)
+    this.stopAwaiting(edge.child)
     // Its harness's process ended while what it waited on still ran: that work ended with it, and nothing wakes it now.
     const snapshot = this.deps.live.held(held.conversation)
     const newest = snapshot?.requests.filter((request) => request.status !== "queued" && request.status !== "held" && request.status !== "canceled").at(-1)

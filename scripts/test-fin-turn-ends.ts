@@ -148,6 +148,61 @@ async function monitorDropped(): Promise<void> {
   await f.w.close()
 }
 
+async function lateNotification(): Promise<void> {
+  const f = await world("monitor-late", async (turn) => {
+    if (!turn.text.includes("You're fin:")) return "ok"
+    turn.world.live.observe({ type: "live-agent", id: turn.conversation, agent: monitor({ kind: "working" }) })
+    return "Monitor is armed for #783; I'll act on its events."
+  })
+  const child = await f.start("queue", "Get #783 green")
+  await f.w.settle()
+  const conversation = f.conversationOf(child)
+  // The driver's grace passed with no notification: settled unknown, and the Fin ended without a result.
+  f.w.live.observe({ type: "live-agent", id: conversation, agent: monitor({ kind: "unknown", reason: "Claude no longer lists this task and did not say how it ended." }) })
+  await until("its end to be said", () => f.reports(child).length > 0)
+  assert.equal(f.reports(child)[0]!.unfinished, true)
+  // Then the notification comes after all: Claude starts a turn on it, and the Fin reports its result.
+  await harnessTurn(f.w, conversation, async () => {
+    f.w.live.observe({ type: "live-agent", id: conversation, agent: monitor({ kind: "completed" }) })
+    await f.w.agents.report(f.w.caller(conversation), { status: "done", summary: "#783 is green at 1a2b3c4.", clientKey: "green" })
+  })
+  await f.w.settle()
+  assert.match(f.heard(), /"queue" \(Claude\) done: #783 is green at 1a2b3c4\./, "its Apex hears the result")
+  assert.doesNotMatch(f.heard(), /ended without a result|ended without waking it/, "and not first that it ended without one: one outcome")
+  assert.equal(childWord((await f.state("queue")).state), "Done")
+  console.log("late notification: the result stands alone; the end the grace inferred never reaches its Apex")
+  await f.w.close()
+}
+
+async function oneCeilingTimer(): Promise<void> {
+  const armed: { ms: number; canceled: boolean }[] = []
+  const f = await world("monitor-timers", async (turn) => {
+    if (turn.text.includes("You're fin:")) turn.world.live.observe({ type: "live-agent", id: turn.conversation, agent: monitor({ kind: "working" }) })
+    return "Still watching #783."
+  }, { later: (ms) => { const timer = { ms, canceled: false }; armed.push(timer); return () => { timer.canceled = true } } })
+  const child = await f.start("queue", "Get #783 green")
+  await f.w.settle()
+  const conversation = f.conversationOf(child)
+  const live = () => armed.filter((timer) => timer.ms > HELD_WORK_CEILING_MS && !timer.canceled).length
+  assert.equal(live(), 1)
+  // Each turn that ends on the same Monitor arms its ceiling again: one stands.
+  for (let at = 0; at < 5; at += 1) {
+    f.w.say(conversation, `Check ${at}`)
+    await f.w.settle()
+  }
+  assert.ok(armed.filter((timer) => timer.ms > HELD_WORK_CEILING_MS).length >= 6, "armed on every turn's end")
+  assert.equal(live(), 1, "one ceiling timer per Fin")
+  // Its Monitor ends with a turn of its own, and its result: nothing is left armed.
+  await harnessTurn(f.w, conversation, async () => {
+    f.w.live.observe({ type: "live-agent", id: conversation, agent: monitor({ kind: "completed" }) })
+    await f.w.agents.report(f.w.caller(conversation), { status: "done", summary: "#783 is green.", clientKey: "green" })
+  })
+  await f.w.settle()
+  assert.equal(live(), 0, "cleared once it waits no more")
+  console.log("one ceiling timer per Fin, cleared once it waits no more")
+  await f.w.close()
+}
+
 async function monitorPastCeiling(): Promise<void> {
   let offset = 0
   const timers: { ms: number; run: () => void }[] = []
@@ -282,7 +337,7 @@ async function finishedWithoutReport(): Promise<void> {
 
 try {
   const only = process.argv.slice(2)
-  const cases = { monitorArmed, monitorDied, monitorDropped, monitorPastCeiling, promiseAfterWake, unfinished, unfinishedHoldsAfter, finishedWithoutReport }
+  const cases = { monitorArmed, monitorDied, monitorDropped, lateNotification, oneCeilingTimer, monitorPastCeiling, promiseAfterWake, unfinished, unfinishedHoldsAfter, finishedWithoutReport }
   for (const [name, run] of Object.entries(cases)) if (!only.length || only.includes(name)) await run()
 } finally {
   rmSync(root, { recursive: true, force: true })
