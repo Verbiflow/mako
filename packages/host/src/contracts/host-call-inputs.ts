@@ -3078,6 +3078,8 @@ const inputs = {
             .nonnegative()
             .max(Number.MAX_SAFE_INTEGER),
           visible: z.boolean(),
+          apps: z.boolean().optional(),
+          outputs: z.boolean().optional(),
         })
         .strict()
         .optional(),

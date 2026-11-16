@@ -37,6 +37,7 @@ interface SamplerDeps {
   /** Event connections that really exist, excluding observers; a payload never supplies its owner. */
   connection?: (client: string) => string | undefined
   invalidated?: () => void
+  demandChanged?: () => void
 }
 
 /**
@@ -124,9 +125,10 @@ export class ThreadAppSampler {
     const wasWatched = this.watched()
     const previous = this.readers.get(client)
     if (previous?.kind === "window" && demand.generation <= previous.generation)
-      return demand.generation === previous.generation && demand.visible === previous.visible
+      return demand.generation === previous.generation && demand.visible === previous.visible && (demand.apps ?? true) === (previous.apps ?? true) && (demand.outputs ?? false) === (previous.outputs ?? false)
     if (!previous && this.readers.size >= MAX_READERS) return false
-    this.readers.set(client, { kind: "window", connection: demand.connection, generation: demand.generation, visible: demand.visible })
+    this.readers.set(client, { kind: "window", ...demand })
+    this.deps.demandChanged?.()
     if (demand.visible && !wasWatched) this.dirty = true
     return true
   }
@@ -153,11 +155,16 @@ export class ThreadAppSampler {
     return this.last?.marks ?? []
   }
 
+  outputWanted(): boolean {
+    this.prune()
+    return [...this.readers.values()].some(reader => reader.kind === "window" && reader.visible && reader.outputs === true)
+  }
+
   private watched(): boolean {
     this.prune()
     if (this.now() < this.overflowUntil) return true
     for (const reader of this.remote.values()) if (reader.visible) return true
-    for (const reader of this.readers.values()) if (reader.kind === "legacy" || reader.visible) return true
+    for (const reader of this.readers.values()) if (reader.kind === "legacy" || reader.visible && (reader.apps ?? true)) return true
     return false
   }
 
