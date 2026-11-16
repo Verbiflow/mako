@@ -3,6 +3,7 @@ import { SettledLine } from "@/components/viewer/crew-card"
 import { buildRows } from "@/lib/crew-rows"
 import { FinRowActions } from "@/components/viewer/fin-row-actions"
 import { useVirtualizer } from "@tanstack/react-virtual"
+import { useRowRef } from "@/lib/virtual-row-ref"
 import { ChevronRightIcon } from "lucide-react"
 import { childGroup, childLine, childStateOf, childWord, rollup, rollupLabel, rollupLine, type ChildGroup } from "@mako/host/contracts/children"
 import { APEX_ROLE, APEX_WORD, FIN_WORD, finsWord } from "@mako/host/contracts/agents"
@@ -68,6 +69,7 @@ export function ApexFinsSection({
       return row?.kind === "heading" ? `heading:${row.group}` : row?.kind === "settled" ? "settled" : row ? `child:${row.agent.nativeId}` : index
     },
   })
+  const measureRow = useRowRef(virtualizer)
   const counts = rollup(children)
   const stoppable = children.filter((agent) => agent.stoppable).length
   const stopAll = () => {
@@ -97,7 +99,7 @@ export function ApexFinsSection({
             <div
               key={item.key}
               data-index={item.index}
-              ref={virtualizer.measureElement}
+              ref={measureRow}
               className="absolute inset-x-0 top-0"
               style={{ transform: `translateY(${item.start - virtualizer.options.scrollMargin}px)` }}
             >
