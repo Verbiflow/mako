@@ -300,6 +300,11 @@ export type CloudMovesOptions = {
     continueTurn(conversationId: string, input: { requestId: string; reason: "handed-off"; continues: string; stopped?: readonly string[]; stayed?: true; actor: Actor }): void
     waitingPrompts(conversationId: string): Array<{ id: string; text: string; attachments: PromptAttachment[]; tuning?: SessionSettings; displayText?: string }>
     carried(conversationId: string, requestIds: readonly string[], to: "cloud"): void
+    /**
+     * The conversation leaves with this move: its turn waits end here, and each one's note for its agent there is
+     * answered, the same for a handover asked again (`since`, the move's start). Absent on a host that keeps none.
+     */
+    waitsDeparting?(conversationId: string, since: number): string[]
   }
   /** The settings and access a native session last ran with, as this Mac remembers them. */
   remembered(harness: string, nativeId: string): { modeId?: string; settings?: SessionSettings } | null | undefined
@@ -991,8 +996,16 @@ export class CloudMoves {
       if (session.tuning) options.tuning = session.tuning
       calls.push({ channel: "mako:live-start", args: [session.harness, session.cwd ?? plan.folder, options], key: `start\0${session.conversationId}` })
     }
-    for (const { conversationId, requestId, stopped } of plan.handingOff?.paused ?? [])
-      calls.push({ channel: "mako:live-continue-turn", args: [conversationId, namedUuid(`mako move\0${plan.move}\0${requestId}\0continue`), { reason: "handed-off", continues: requestId, ...stopped.length && { stopped } }], key: `continue\0${requestId}` })
+    // A wait the Thread's agent armed ends here; its agent hears so there, to arm it again: named among what the
+    // handoff stopped when a turn goes on there, else as a message of its own that starts its first turn there.
+    const waitNotes = new Map(plan.sessions.map(({ conversationId }) => [conversationId, this.#options.live.waitsDeparting?.(conversationId, plan.began) ?? []]))
+    for (const { conversationId, requestId, stopped } of plan.handingOff?.paused ?? []) {
+      const told = [...stopped, ...waitNotes.get(conversationId) ?? []]
+      waitNotes.delete(conversationId)
+      calls.push({ channel: "mako:live-continue-turn", args: [conversationId, namedUuid(`mako move\0${plan.move}\0${requestId}\0continue`), { reason: "handed-off", continues: requestId, ...told.length && { stopped: told } }], key: `continue\0${requestId}` })
+    }
+    for (const [conversationId, notes] of waitNotes)
+      if (notes.length) calls.push({ channel: "mako:live-prompt", args: [conversationId, namedUuid(`mako move\0${plan.move}\0${conversationId}\0turn-waits`), notes.join("\n\n")], key: `turn-waits\0${conversationId}` })
     const carried = new Map<string, string[]>()
     for (const { conversationId } of plan.sessions) {
       const waiting = this.#options.live.waitingPrompts(conversationId)

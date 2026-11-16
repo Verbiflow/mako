@@ -10,7 +10,7 @@ import { Git } from "@mako/git"
 import { decodeOperation, ThreadFileHistorySchema } from "@mako/protocol"
 import { MoveCarrySchema, type MoveAnswer, type MoveCheckpoint, type MoveHandOverRequest } from "@mako/protocol/moves"
 import { fromHostOperation } from "@mako/host/contracts/host-operations"
-import { CloudMoves, cloudRuntimeOf, type CloudMovesOptions } from "@mako/host/conversations/cloud-moves"
+import { CloudMoves, cloudRuntimeOf, namedUuid, type CloudMovesOptions } from "@mako/host/conversations/cloud-moves"
 import type { TakenReady } from "@mako/host/conversations/cloud-readiness"
 import { captureMoveCheckpoint } from "@mako/host/workspaces/move-checkpoint"
 import { MoveNotQuietError } from "@mako/host/conversations/live-moves"
@@ -496,6 +496,37 @@ try {
     const again = await s.moves.move(s.conversation, id, { why: "asked" })
     assert.deepEqual(again, outcome, "asked again, the same, nothing paused or sent twice")
     assert.equal(s.gateway.calls.filter((call) => call.channel === "mako:live-continue-turn").length, 1)
+  }
+
+  // A turn wait the Thread's agent armed ends with the move, and its agent hears so there: named among what the handoff
+  // stopped when its turn goes on there, else as one message of its own, under the move's id, sent once.
+  {
+    const note = "Mako: your wait \"Waiting for CI on #412\" ended when this Thread moved here. If you still need it, call wait again."
+    const departed: number[] = []
+    const withWait = (base: CloudMovesOptions): CloudMovesOptions => ({ ...base, live: { ...base.live, waitsDeparting: (_conversationId, since) => (departed.push(since), [note]) } })
+    const s = setup("wait-handoff", { make: withWait })
+    const turn = randomUUID()
+    s.work.running = turn
+    s.busy.reasons.push("a tab is running a turn")
+    const outcome = await s.moves.move(s.conversation, move(), { why: "asked" })
+    assert.equal(outcome.kind, "moved", JSON.stringify(outcome))
+    const continued = s.gateway.calls.find((call) => call.channel === "mako:live-continue-turn")
+    assert.deepEqual(ArgsSchema.parse(continued?.args)[2], { reason: "handed-off", continues: turn, stopped: [note] }, "the continuation names the ended wait")
+    assert.ok(!s.gateway.calls.some((call) => call.channel === "mako:live-prompt"), "and no message of its own")
+
+    const idle = setup("wait-idle", { make: withWait })
+    const id = move()
+    const moved = await idle.moves.move(idle.conversation, id, { why: "asked" })
+    assert.equal(moved.kind, "moved", JSON.stringify(moved))
+    const prompts = idle.gateway.calls.filter((call) => call.channel === "mako:live-prompt")
+    assert.equal(prompts.length, 1, "an idle Thread hears it as one message")
+    const [conversation, requestId, text] = ArgsSchema.parse(prompts[0]?.args)
+    assert.equal(conversation, idle.conversation)
+    assert.equal(text, note)
+    assert.equal(requestId, namedUuid(`mako move\0${id}\0${idle.conversation}\0turn-waits`), "under the move's id, so a repeat runs once")
+    await idle.moves.move(idle.conversation, id, { why: "asked" })
+    assert.equal(idle.gateway.calls.filter((call) => call.channel === "mako:live-prompt").length, 1, "asked again, sent once")
+    assert.ok(departed.length >= 2 && departed.every((since) => since > 0), "asked with the move's start")
   }
 
   // A quit's handoff answers once this Mac let go (`released`), while the claim is still out; the move goes on in this

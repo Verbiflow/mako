@@ -194,6 +194,11 @@ export interface EnvironmentTools {
   ownPackages(conversationId: string): Promise<string>
   /** `steps` reruns only those of a check's named steps. */
   check(conversationId: string, tier: CheckTier, target?: string, steps?: string[]): Promise<string>
+  /**
+   * Hears the end of the Thread's app check of `tier` that's under way or waiting for a build slot (`onEnd`, with how it
+   * went), from the run's own exit; false when none is, which a wait on it could never outlast.
+   */
+  watchCheck(conversationId: string, tier: CheckTier, onEnd: (words: string) => void): Promise<boolean>
   port(conversationId: string, port: number): Promise<string>
   /** Saves the recipe as a draft only this Thread runs. */
   save(conversationId: string, recipe: Recipe, reason?: string): Promise<string>
@@ -1890,6 +1895,24 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     },
     async check(conversationId, tier, target, steps) {
       return checkIn(await withRecipe(conversationId), tier, again(conversationId), conversationId, target, steps)
+    },
+    async watchCheck(conversationId, tier, onEnd) {
+      const { app } = (await context(conversationId)).environment
+      // Listening first: a run that ends between the look and the listener is still heard.
+      let heard = false
+      const stop = deps.processes.onExit((exited, key) => {
+        if (heard || exited !== app || key !== runKey("check", tier)) return
+        heard = true
+        stop()
+        void checkRun(app, tier).then((status) => {
+          const state = status?.state
+          onEnd(state?.kind === "exited" ? (state.code === 0 ? `the ${tier} check passed` : `the ${tier} check failed (exit ${state.code}); app_check with tier "${tier}" gives its output`) : `the ${tier} check ended; app_check with tier "${tier}" reads how`)
+        }, () => onEnd(`the ${tier} check ended; app_check with tier "${tier}" reads how`))
+      })
+      const status = await checkRun(app, tier)
+      const going = status?.state.kind === "running" || status?.state.kind === "starting" || pendingChecks.has(slotKey(app, tier))
+      if (!going && !heard) stop()
+      return going || heard
     },
     async port(conversationId, port) {
       const { environment } = await context(conversationId)

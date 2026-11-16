@@ -154,6 +154,8 @@ export interface ConversationsDeps {
   threads: Threads
   harnesses: Harnesses
   workspaces: Workspaces
+  /** A conversation's app check under way, heard as it ends (`EnvironmentTools.watchCheck`, built after the conversations). */
+  watchCheck?(conversation: string, tier: "quick" | "full", onEnd: (words: string) => void): Promise<boolean>
   telemetry: HostTelemetry
   /** This host's start on its data root, which its epoch carries (`takeHostStart`). */
   start?: import("../base/host-start.js").HostStart
@@ -421,6 +423,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       capacity: new MacCapacity(),
       heldPulls: (repoRoot, branch) => workspaces.worktrees?.heldPulls(repoRoot, branch) ?? [],
       readPull: (target) => readPull(target, undefined, requiredChecks),
+      watchCheck: (conversation, tier, onEnd) => deps.watchCheck?.(conversation, tier, onEnd) ?? Promise.resolve(false),
       ...(away && { away }),
       remoteOf: (cwd) => deps.git.output(cwd, ["remote", "get-url", "origin"]).then((text) => text.trim() || undefined, () => undefined),
       checkoutOf: (remote) => checkouts.find(remote),

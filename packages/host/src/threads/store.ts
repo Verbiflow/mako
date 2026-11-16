@@ -1736,6 +1736,12 @@ export class ThreadStore {
     return this.sql("SELECT record FROM turn_waits WHERE state = 'armed' ORDER BY at, id").all().map(keptTurnWait)
   }
 
+  /** A conversation's waits in every state, oldest first: what a move reads to tell the agent which of them it ended. */
+  turnWaitsOf(conversation: string): TurnWait[] {
+    this.syncVersion()
+    return this.sql("SELECT record FROM turn_waits WHERE conversation = ? ORDER BY at, id").all(conversation).map(keptTurnWait)
+  }
+
   /** The wait a conversation has armed, if it has one. */
   armedTurnWaitOf(conversation: string): TurnWait | undefined {
     this.syncVersion()

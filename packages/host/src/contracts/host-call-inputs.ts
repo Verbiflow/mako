@@ -3333,6 +3333,10 @@ const inputs = {
                   ])
                   .optional(),
               }),
+              z.object({
+                check: z.union([z.literal("full"), z.literal("quick")]),
+                target: z.string().optional(),
+              }),
             ])
           )
           .optional(),

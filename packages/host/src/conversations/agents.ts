@@ -162,7 +162,7 @@ import type { TurnReply } from "./live-goals.js"
 import { PULL_WATCH_EVERY_MS, PullWatch, type PullWait } from "./pull-watch.js"
 import { QuietWatch } from "./fin-quiet.js"
 import { TurnWaits } from "./turn-waits.js"
-import { turnWaitItemKey, turnWaitItemWords, turnWaitLine, type TurnWait, type TurnWaitItem } from "../contracts/turn-waits.js"
+import { turnWaitItemKey, turnWaitItemWords, turnWaitLine, turnWaitMovedNote, type TurnWait, type TurnWaitItem } from "../contracts/turn-waits.js"
 import { AFTER_WAIT, type TurnWaitInput, type TurnWaitResult } from "../contracts/thread-tools.js"
 import { AgentPlaces, placeName, type AwayRefused, type OutboxNotice, type PlacedAsk, type PlaceLink } from "./agent-places.js"
 import type { PullOutcome, PullReading, PullWaitUntil } from "../contracts/pull-waits.js"
@@ -387,6 +387,8 @@ export interface AgentsDeps {
   later?(ms: number, run: () => void): () => void
   /** One pull request a Fin waits on, as GitHub says it stands now (`readPull`); without it nothing is watched. */
   readPull?(target: ReadTarget): Promise<PullReading | null>
+  /** A conversation's app check under way, heard as it ends (`EnvironmentTools.watchCheck`); false when none is. */
+  watchCheck?(conversation: string, tier: "quick" | "full", onEnd: (words: string) => void): Promise<boolean>
   now?(): number
 }
 
@@ -975,6 +977,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     // A turn's wait the last host fired and didn't deliver goes once; one met or due while it was down fires now.
     this.turnWaits.start()
+    this.rewatchChecks()
     this.pulls.refresh()
     for (const apex of new Set(edges.all.map((edge) => edge.parent))) {
       // A stopped Fin's wait for it to resume (`resumeFin`).
@@ -2984,8 +2987,16 @@ export class Agents implements AgentOperations, ConversationChildren {
     const met: Record<string, { at: number; words: string }> = {}
     const pulls = new Map<number, Extract<TurnWaitItem, { kind: "pull" }>>()
     const asked = input.on ?? []
+    const checks = new Map<number, Extract<TurnWaitItem, { kind: "check" }>>()
     for (const [index, on] of asked.entries()) {
-      if ("fin" in on) continue
+      if (!("check" in on)) continue
+      const item: Extract<TurnWaitItem, { kind: "check" }> = { kind: "check", tier: on.check, ...(on.target && { target: on.target }) }
+      if (!(await this.watchCheck(conversation, item)))
+        return { refused: "never", why: `No ${on.check} check of this Thread's app is running or waiting for a build slot: run app_check with tier "${on.check}" first, then wait on it.` }
+      checks.set(index, item)
+    }
+    for (const [index, on] of asked.entries()) {
+      if ("fin" in on || "check" in on) continue
       const ref = pullRef(on.pull)
       if (!ref) return { refused: "invalid", why: `${on.pull} isn't a pull request: name it as owner/name#412, #412 or its URL.` }
       const item: Extract<TurnWaitItem, { kind: "pull" }> = { kind: "pull", pull: pullKey(ref), ...(on.until && { until: on.until }) }
@@ -2998,7 +3009,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       pulls.set(index, item)
     }
     for (const [index, on] of asked.entries()) {
-      const pull = pulls.get(index)
+      const pull = pulls.get(index) ?? checks.get(index)
       if (pull) {
         items.push(pull)
         continue
@@ -3038,6 +3049,37 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(armed.replaced.length && { replaced: armed.replaced.map((wait) => wait.description) }),
       next: AFTER_WAIT.armed,
     }
+  }
+
+  /**
+   * Hears a conversation's app check end, and meets that conversation's waits on it. False when none runs or waits for
+   * a slot. A host that starts watches the armed waits' checks again (`resume`); one that ended while it was down meets
+   * its waits at once, saying so.
+   */
+  private async watchCheck(conversation: string, item: Extract<TurnWaitItem, { kind: "check" }>): Promise<boolean> {
+    if (!this.deps.watchCheck) return false
+    return await this.deps.watchCheck(conversation, item.tier, (words) => {
+      this.turnWaits.metWhere((each, wait) => wait.conversation === conversation && each.kind === "check" && each.tier === item.tier, words)
+    }).catch(() => false)
+  }
+
+  /** The armed waits' app checks, watched again by a host that starts: their runs' exits were the last host's to hear. */
+  private rewatchChecks(): void {
+    for (const wait of this.store()?.armedTurnWaits() ?? [])
+      for (const item of wait.items) {
+        if (item.kind !== "check" || wait.met[turnWaitItemKey(item)] !== undefined) continue
+        void this.watchCheck(wait.conversation, item).then((watching) => {
+          if (!watching) this.turnWaits.met(wait.id, item, `the ${item.tier} check ended while Mako was stopped; app_check with tier "${item.tier}" reads how`)
+        })
+      }
+  }
+
+  /**
+   * The conversation's Thread is leaving this host (a move's handover): its waits end, and the notes that tell its agent
+   * on arrival are answered, the same however often the handover is asked (`since`, the move's start).
+   */
+  waitsDeparting(conversation: string, since: number): string[] {
+    return this.turnWaits.departing(conversation, since).map(turnWaitMovedNote)
   }
 
   /** A pull request's state as a wait arms on it; nothing when it can't be read now, which refuses nothing. */
