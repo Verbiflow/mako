@@ -538,7 +538,7 @@ process.stdin.on("end", () => process.exit(0))
     await driver.compaction.start(id, actionId)
     push(event("session.compaction.failed", { sessionID: root, reason: "manual", inputID: compactID, error: { type: "compaction.failed", message: "Nothing to compact" } }))
     const result = await until("the compaction action", () => emitted.find(item => item.type === "live-action-result" && item.actionId === actionId))
-    assert.deepEqual(result.type === "live-action-result" && result.result, { kind: "failed", reason: "Nothing to compact" })
+    assert.deepEqual(result.type === "live-action-result" && result.result, { kind: "failed", reason: "Nothing to compact", failureEvidence: { kind: "unknown", source: "provider-text" } })
 
     const quiet: Array<[string, EventData]> = [
       ["tui.toast.show", { message: "MCP Authentication Required", variant: "warning" }],
@@ -553,6 +553,12 @@ process.stdin.on("end", () => process.exit(0))
     for (const [type, data] of quiet) push(event(type, data))
     push(event("session.renamed", { sessionID: root, title: "Settled" }))
     await until("the stream to drain", () => session()?.title === "Settled")
+
+    push(event("session.execution.started", { sessionID: root }))
+    await until("the native quota control to start", () => session()?.status === "running")
+    push(event("session.execution.failed", { sessionID: root, error: { type: "provider.rate-limit", message: "Native request failed" } }))
+    await until("the typed quota to reach the live session", () => session()?.status === "failed")
+    assert.deepEqual(session()?.failureEvidence, { kind: "rate-limited", source: "native-limit" }, "the real driver keeps the decoder's native type through the engine and live event")
 
     assert.equal(markers().filter(marker => marker.label === "MCP server failed").length, 1, "a server's repeated status is one marker")
     assert.equal(markers().filter(marker => marker.label === "Compaction failed").length, 1, "a compaction Mako asked for fails its action, not a second marker")

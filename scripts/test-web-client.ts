@@ -1338,6 +1338,9 @@ test("an open cloud Thread's app is read passively: an asleep machine is said as
   const opened = await readApp(client, owner, "/srv/api")
   assert.equal(sent[1]?.passive, undefined, "the person opening the app asks as themselves")
   assert.equal(opened?.servers[0]?.state, "ready")
+  const current = appsStore.get().apps
+  await readApp(client, owner, "/srv/api", { passive: true, current: () => false })
+  assert.equal(appsStore.get().apps, current, "a preview read retired by visibility or ownership cannot publish")
   appsStore.set({ apps: new Map(), conversations: new Map() })
   assert.ok(appKey(owner, "/srv/api"))
 })

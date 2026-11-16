@@ -341,30 +341,27 @@ async function check() {
   assert.equal(devin.opened().length, 2, "the ended announcement does not open a later turn")
   console.log("PASS: Stopping Devin's background subagent opens no turn, and leaves no announcement behind")
 
-  // How long a retry took is the clock's, so it isn't part of what's compared.
-  const clockless = (update) => (update.retries ? { ...update, retries: { ...update.retries, durationMs: 0 } } : update)
-  /** A turn's retry and quota stop, with what its retry came to. */
-  const retriedTurn = async (prompt, retried) => {
+  /** A turn's retry and quota stop: the retry is activity while it runs, and draws no marker once it ends. */
+  const retriedTurn = async (prompt) => {
     const before = devin.events.length
     await devin.prompt(prompt)
     const since = devin.events.slice(before)
     assert.deepEqual(since.flatMap((event) => event.type === "live-activity" ? [event.activity] : []),
       [{ kind: "retrying", attempt: 1, maxAttempts: 5, reason: "Stream interrupted" }])
-    assert.deepEqual(since.flatMap((event) => event.type === "live-update" && event.update.kind === "event" ? [clockless(event.update)] : []), [
-      retried,
+    assert.deepEqual(since.flatMap((event) => event.type === "live-update" && event.update.kind === "event" ? [event.update] : []), [
       // Devin's quota is a usage limit, as every harness's is, with nothing more it says of the window.
       { kind: "event", label: "Turn failed", detail: "Quota exhausted", body: "You have used all of your credits.", tone: "error", limit: {} },
-    ])
+    ], "the failure alone is a marker; the retry that came before is the host's log's")
     return since
   }
-  // On the wire: the retry, a reply, then the stop. The reply ended the retry, so it recovered; events in wire order say so.
-  const recovered = await retriedTurn("native-devin", { kind: "event", label: "Recovered after 1 retry", detail: "Stream interrupted", retries: { count: 1, durationMs: 0, outcome: "recovered" } })
+  // On the wire: the retry, a reply, then the stop. Events in wire order say so.
+  const recovered = await retriedTurn("native-devin")
   const shown = recovered.flatMap((event) => event.type === "live-activity" ? ["retry"] : event.type === "live-update" && event.update.kind === "text" && event.update.text === "Reconnected." ? ["reply"] : [])
   assert.deepEqual(shown, ["retry", "reply"], "an extension notification and the update after it reach the engine in wire order")
-  // The retry, then the stop, with no reply between: it gave up.
-  await retriedTurn("native-devin-gave-up", { kind: "event", label: "Retried once", detail: "Stream interrupted", retries: { count: 1, durationMs: 0, outcome: "gave-up" } })
+  // The retry, then the stop, with no reply between.
+  await retriedTurn("native-devin-gave-up")
   assert.equal(devin.opened().length, 2, "a failed prompted turn opens no provider turn")
-  console.log("PASS: Devin's connection retry and quota stop reach the conversation as activity and a failure marker, recovered by a reply and given up without one")
+  console.log("PASS: Devin's connection retry and quota stop reach the conversation as activity and one failure marker, the retry drawing nothing once it ends")
   await devin.close()
 
   // The agent's first output is the prompt's receipt, and a process that dies

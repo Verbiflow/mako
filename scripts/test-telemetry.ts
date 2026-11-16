@@ -405,6 +405,17 @@ test("the conversation owner reports a real turn through its journal commits", a
   assert.ok(!cloud.sent.some((request) => request.text.includes("CANARY")), "the prompt stays home")
 })
 
+test("checkpoint timeouts use diagnostic telemetry without Thread text or paths", async () => {
+  const { telemetry, cloud, time } = await open()
+  const { host: owner } = host(telemetry, time)
+  owner.checkpointTimedOut(10_123)
+  await telemetry.flush()
+  const events = cloud.sent.flatMap((request) => request.batch.events)
+  assert.equal(events.length, 1)
+  assert.equal(events[0].name, "error.reported")
+  assert.deepEqual(events[0].props, { kind: "checkpoint-timeout", name: "CheckpointTimeout", message: "A turn went without its rewind checkpoint after 10123 ms." })
+})
+
 test("a turn that fails or is cut short says how; one with no reading says so", () => {
   const before = snapshot([request({ status: "dispatching" }), request({ id: "request-2", status: "queued" })])
   const afterwards = snapshot([

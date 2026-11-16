@@ -271,6 +271,8 @@ export async function openWriter(settings: WriterSettings, ports: WriterPorts) {
     const tracker = local?.tracker
     switch (request.kind) {
       case "snapshot": return snapshot()
+      // The port's events before it were dispatched as they came, each into the tracker's pending paths.
+      case "heard": return
       case "wake":
         if (tracker) await Promise.all([...tracker.rootStates().values()].filter(({ root }) => (within(request.checkout, root.path) || within(root.path, request.checkout)) && tracker.asleep(root.path)).map(({ root }) => journal.writes.track(root.path)))
         return

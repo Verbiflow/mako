@@ -193,6 +193,7 @@ const ActivityTimesRow = z.object({ session: z.string(), kind: z.enum(["turn", "
 const Count = z.object({ count: z.number() })
 const ThreadChangeRow = z.object({ seq: z.number(), moved: z.number() })
 const ChangeSeqRow = z.object({ change_seq: z.number() })
+const RootChangeRow = ChangeSeqRow.extend({ root: z.string() })
 const ThreadWriteRow = z.object({ seq: z.number(), root: z.string(), path: z.string(), at: z.number(), kind: z.string(), certainty: z.string() })
 const TurnChangesRow = z.object({ summary: z.string() })
 const TurnSeqRow = z.object({ turn: z.string(), seq: z.number() })
@@ -209,8 +210,8 @@ const ThreadRow = z.object({ thread: z.string() })
 
 /** Entries `JournalStore.recency` reads a step: a window of the journal's numbering. */
 const RECENT_ENTRIES = 4_096
-/** Calls `JournalStore.recency` reads a step. */
-const RECENT_CALLS = 2_048
+/** Read, decode and fold at most this many calls per step; 2,048 took a whole 9 ms slice on CI x64. */
+const RECENT_CALLS = 512
 
 /** A page of a turn's entries (`JournalStore.entriesOfTurnPage`), and where the next starts; none after the last. */
 export interface TurnEntriesPage {
@@ -251,6 +252,18 @@ const CarriedActivityRow = z.object({
 })
 const CarriedPathRow = z.object({ journal: z.string(), kind: z.enum(["write", "name"]), seq: z.number(), at: z.number(), path: z.string(), to_path: z.string().nullable() })
 const Size = z.object({ bytes: z.number().nullable(), count: z.number() })
+// Every schema a row or a column is read with is made once here: one built per row compiles anew for each.
+const CarriedRootsSchema = z.array(z.object({ path: z.string(), repository: z.boolean() }))
+const NamedSchema = z.array(z.string())
+const CarriedEffectsSchema = z.array(CarriedEffectSchema)
+const MoveTotalsRow = z.object({ kind: z.enum(["move", "put-back", "bring"]), count: z.number(), files: z.number(), guessed: z.number(), offered: z.number() })
+const ChangedRootRow = z.object({ root: z.string(), files: z.number(), added: z.number(), removed: z.number(), threads: z.number() })
+const TableInfoRow = z.object({ name: z.string() })
+const ValueRow = z.object({ value: z.string() })
+const CarriedVersionRow = z.object({ count: z.number(), through: z.number().nullable(), at: z.number().nullable() })
+const CarriedStampRow = z.object({ through: z.number(), at: z.number() })
+const DataVersionRow = z.object({ data_version: z.number() })
+const KeyCountRow = z.object({ key: z.string(), count: z.number() })
 
 /** A call's, turn's or background work's key in the journal. */
 export interface ActivityKey {
@@ -514,6 +527,21 @@ const CHANGE_TRACKING = `
   END;
 `
 
+/** Partition inputs have a clock per root: activity, stat refreshes and another checkout's writes don't move it. */
+const CHECKPOINT_CHANGES = `
+  CREATE TABLE IF NOT EXISTS checkpoint_root_changes (root TEXT PRIMARY KEY, seq INTEGER NOT NULL) WITHOUT ROWID;
+  INSERT OR IGNORE INTO checkpoint_root_changes (root, seq) SELECT id, 0 FROM roots;
+` + ["entries", "files", "roots"].flatMap((table) => ["INSERT", "DELETE", "UPDATE"].map((event) => {
+  const root = table === "roots" ? "id" : "root"
+  const columns = event !== "UPDATE" ? "" : table === "roots" ? " OF path, head, active" : table === "entries" ? " OF author, git, root, path, kind, from_path, before, after, map, gap, restores" : ""
+  const changed = event === "UPDATE" && table === "roots" ? " WHEN NEW.path IS NOT OLD.path OR NEW.head IS NOT OLD.head OR NEW.active IS NOT OLD.active" : ""
+  const from = event === "DELETE" ? "OLD" : "NEW"
+  return `CREATE TRIGGER IF NOT EXISTS checkpoint_${table}_${event.toLowerCase()} AFTER ${event}${columns} ON ${table}${changed} BEGIN
+    INSERT INTO checkpoint_root_changes (root, seq) VALUES (${from}.${root}, 1) ON CONFLICT(root) DO UPDATE SET seq = seq + 1;
+    ${event === "UPDATE" ? `INSERT INTO checkpoint_root_changes (root, seq) SELECT OLD.${root}, 1 WHERE OLD.${root} IS NOT NEW.${root} ON CONFLICT(root) DO UPDATE SET seq = seq + 1;` : ""}
+  END;`
+})).join("\n")
+
 /** What a Thread's work has reached: `key` moves with anything that could change it; `seq` and `moved` are only there when changes are tracked. */
 export interface ThreadVersion {
   key: string
@@ -549,6 +577,7 @@ export class JournalStore {
   private readonly db: DatabaseSync
   /** Whether this journal keeps `CHANGE_TRACKING`: once it does, it always will. */
   private tracked = false
+  private checkpointsTracked = false
   private readonly statements = new Map<string, StatementSync>()
 
   private constructor(path: string, db: DatabaseSync, id: string, device: string) {
@@ -571,10 +600,14 @@ export class JournalStore {
     db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;")
     db.exec(MIGRATION)
     for (const added of ADDED_COLUMNS) {
-      const columns = db.prepare(`PRAGMA table_info(${added.table})`).all().map((row) => z.object({ name: z.string() }).parse(row).name)
+      const columns = db.prepare(`PRAGMA table_info(${added.table})`).all().map((row) => TableInfoRow.parse(row).name)
       if (!columns.includes(added.column)) db.exec(added.add)
     }
     db.exec(CHANGE_TRACKING)
+    // The clock becomes visible with every trigger installed, including to older writers sharing this journal.
+    db.exec("BEGIN IMMEDIATE")
+    try { db.exec(CHECKPOINT_CHANGES); db.exec("COMMIT") }
+    catch (error) { db.exec("ROLLBACK"); db.close(); throw error }
     const meta = new Map(db.prepare("SELECT key, value FROM meta").all().map((row) => MetaRow.parse(row)).map((row) => [row.key, row.value]))
     let id = meta.get("journal")
     if (!id || meta.get("schema") !== SCHEMA_VERSION) {
@@ -612,7 +645,7 @@ export class JournalStore {
     return this.statement("SELECT * FROM roots ORDER BY tracked_at").all().map((value) => {
       const row = RootRow.parse(value)
       return {
-        id: row.id, path: row.path, kind: row.kind, carry: row.carry ? z.array(z.string()).parse(JSON.parse(row.carry)) : undefined,
+        id: row.id, path: row.path, kind: row.kind, carry: row.carry ? NamedSchema.parse(JSON.parse(row.carry)) : undefined,
         repository: Boolean(row.repository), head: row.head, mark: row.mark, seenAt: row.seen_at, trackedAt: row.tracked_at, active: Boolean(row.active),
       }
     })
@@ -698,7 +731,7 @@ export class JournalStore {
 
   meta(key: string): string | undefined {
     const row = this.statement("SELECT value FROM meta WHERE key=?").get(key)
-    return row ? z.object({ value: z.string() }).parse(row).value : undefined
+    return row ? ValueRow.parse(row).value : undefined
   }
 
   /** Entries after `after`, without their line maps. */
@@ -1134,7 +1167,7 @@ export class JournalStore {
   noise(): NoiseRow[] {
     return this.statement("SELECT * FROM noise").all().map((value) => {
       const row = NoiseRowSchema.parse(value)
-      return { ...row, threads: z.array(z.string()).parse(JSON.parse(row.threads)) }
+      return { ...row, threads: NamedSchema.parse(JSON.parse(row.threads)) }
     })
   }
 
@@ -1231,17 +1264,17 @@ export class JournalStore {
       const row = CarriedRow.parse(value)
       parts.set(row.journal, {
         journal: row.journal, device: row.device, through: row.through, at: row.at,
-        roots: z.array(z.object({ path: z.string(), repository: z.boolean() })).parse(JSON.parse(row.roots)),
+        roots: CarriedRootsSchema.parse(JSON.parse(row.roots)),
         activity: [], writes: [], names: [],
       })
     }
     if (!parts.size) return []
     for (const value of this.statement("SELECT * FROM carried_activity WHERE thread=? ORDER BY started_at").all(thread)) {
       const row = CarriedActivityRow.parse(value)
-      const activity: CarriedActivity = { session: row.session, kind: row.kind, id: row.id, start: row.started_at, end: row.ended_at, named: z.array(z.string()).parse(JSON.parse(row.named)) }
+      const activity: CarriedActivity = { session: row.session, kind: row.kind, id: row.id, start: row.started_at, end: row.ended_at, named: NamedSchema.parse(JSON.parse(row.named)) }
       if (row.checkout) activity.checkout = row.checkout
       if (row.cwd) activity.cwd = row.cwd
-      if (row.effects) activity.effects = z.array(CarriedEffectSchema).parse(JSON.parse(row.effects))
+      if (row.effects) activity.effects = CarriedEffectsSchema.parse(JSON.parse(row.effects))
       parts.get(row.journal)?.activity.push(activity)
     }
     for (const value of this.statement("SELECT * FROM carried_paths WHERE thread=? ORDER BY seq").all(thread)) {
@@ -1255,7 +1288,7 @@ export class JournalStore {
 
   /** Changes whenever a part of the Thread's history is carried here: a part is only ever replaced by a later one. */
   carriedVersion(thread: string): string {
-    const row = z.object({ count: z.number(), through: z.number().nullable(), at: z.number().nullable() })
+    const row = CarriedVersionRow
       .parse(this.statement("SELECT count(*) AS count, sum(through) AS through, sum(at) AS at FROM carried WHERE thread=?").get(thread))
     return `${row.count}:${row.through ?? 0}:${row.at ?? 0}`
   }
@@ -1263,7 +1296,7 @@ export class JournalStore {
   /** When the part of a Thread's history kept from `journal` was taken. */
   carriedStamp(thread: string, journal: string): { through: number; at: number } | undefined {
     const row = this.statement("SELECT through, at FROM carried WHERE thread=? AND journal=?").get(thread, journal)
-    return row ? z.object({ through: z.number(), at: z.number() }).parse(row) : undefined
+    return row ? CarriedStampRow.parse(row) : undefined
   }
 
   /** Put a carried part in place of the one kept from its journal, whole. Run inside a transaction. */
@@ -1285,7 +1318,7 @@ export class JournalStore {
   moveTotals(since: number): Map<MoveRecord["kind"], { count: number; files: number; guessed: number; offered: number }> {
     const rows = this.statement("SELECT kind, count(*) AS count, sum(files) AS files, sum(guessed) AS guessed, sum(offered) AS offered FROM moves WHERE at >= ? GROUP BY kind").all(since)
     return new Map(rows.map((row) => {
-      const { kind, ...totals } = z.object({ kind: z.enum(["move", "put-back", "bring"]), count: z.number(), files: z.number(), guessed: z.number(), offered: z.number() }).parse(row)
+      const { kind, ...totals } = MoveTotalsRow.parse(row)
       return [kind, totals]
     }))
   }
@@ -1293,7 +1326,7 @@ export class JournalStore {
   changesSince(since: number): ChangesSince {
     const rows = this.statement(`SELECT root, count(DISTINCT path) AS files, coalesce(sum(added), 0) AS added, coalesce(sum(removed), 0) AS removed, count(DISTINCT thread) AS threads
       FROM entries WHERE at >= ? AND thread IS NOT NULL AND git IS NULL GROUP BY root`).all(since)
-    const roots = rows.map((row) => z.object({ root: z.string(), files: z.number(), added: z.number(), removed: z.number(), threads: z.number() }).parse(row))
+    const roots = rows.map((row) => ChangedRootRow.parse(row))
     const threads = Count.parse(this.statement("SELECT count(DISTINCT thread) AS count FROM entries WHERE at >= ? AND thread IS NOT NULL AND git IS NULL").get(since)).count
     return { roots, threads }
   }
@@ -1301,7 +1334,7 @@ export class JournalStore {
   /** How many entries each certainty has, for the ambiguity rate. */
   certaintyMix(since = 0): Map<string, number> {
     const rows = this.statement("SELECT certainty AS key, count(*) AS count FROM entries WHERE at >= ? GROUP BY certainty").all(since)
-    return new Map(rows.map((row) => z.object({ key: z.string(), count: z.number() }).parse(row)).map((row) => [row.key, row.count]))
+    return new Map(rows.map((row) => KeyCountRow.parse(row)).map((row) => [row.key, row.count]))
   }
 
   /**
@@ -1368,9 +1401,19 @@ export class JournalStore {
     return `${this.dataVersion()}:${own}`
   }
 
+  /** One indexed scalar for this checkout, shared by every writer. Older journals use their conservative version. */
+  checkpointVersion(checkout: string): string {
+    this.checkpointsTracked ||= Count.parse(this.statement("SELECT count(*) AS count FROM sqlite_master WHERE name = 'checkpoint_root_changes'").get()).count === 1
+    if (!this.checkpointsTracked) return `legacy:${this.version()}`
+    const found = this.statement("SELECT r.id AS root, coalesce(c.seq, 0) AS change_seq FROM roots r LEFT JOIN checkpoint_root_changes c ON c.root=r.id WHERE r.path=?").get(checkout)
+    if (!found) return `${this.id}:absent`
+    const row = RootChangeRow.parse(found)
+    return `${this.id}:${row.root}:${row.change_seq}`
+  }
+
   /** A number that changes whenever another connection commits: a reader's cue that what it read is stale. */
   dataVersion(): number {
-    return z.object({ data_version: z.number() }).parse(this.statement("PRAGMA data_version").get()).data_version
+    return DataVersionRow.parse(this.statement("PRAGMA data_version").get()).data_version
   }
 
   close(): void {

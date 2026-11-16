@@ -210,11 +210,7 @@ export function own(result: Partition, repoRoot: string): PartitionFile[] {
  * checkpoints, so a trigger may capture nothing when they match; only what the journal has heard is in it, so a write
  * it hasn't heard yet reads as unchanged.
  */
-export function threadFingerprint(head: string | null | undefined, partition: Partition, repoRoot: string): string {
-  const side = (version: PartitionFile["thread"]) => (version.kind === "absent" ? "-" : version.kind === "text" ? `t${contentRef(Buffer.from(version.text, "utf8"))}` : `c${version.ref}`)
-  const files = own(partition, repoRoot).map((file) => `${file.path}\0${file.current ?? "-"}\0${side(file.thread)}`).sort()
-  return [head ?? "-", ...files].join("\n")
-}
+export { threadFingerprint } from "../attribution/index.js"
 
 /** Captures the Thread's changes in `repoRoot` over HEAD; see the top of this file. */
 export async function captureThreadCheckpoint(input: ThreadCheckpointInput): Promise<ThreadCheckpoint> {

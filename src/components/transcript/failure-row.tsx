@@ -3,7 +3,7 @@ import { FailedRequestsContext } from "./failed-requests"
 import { ChevronRightIcon, CircleAlertIcon, MoreHorizontalIcon } from "lucide-react"
 import { recoveryGlyph } from "./recovery-glyph"
 import { compactionAvailable } from "@mako/host/contracts/recovery"
-import { classifyProviderFailure } from "@mako/host/contracts/provider-failure"
+import { describeProviderFailure, PROVIDER_FAILURE_KINDS, type ProviderFailureKind } from "@mako/host/contracts/provider-failure"
 import { Collapse } from "@/components/ui/collapse"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu"
 import { useCopy } from "@/components/ui/use-copy"
@@ -36,11 +36,11 @@ export function ExchangeFailure({ requestId }: { requestId?: string }) {
 /**
  * A turn that ended on an error a transcript recorded, with no live request
  * behind it to recover: the outcome in one line, named by the same rules a
- * live failure is (`classifyProviderFailure`), or the provider's own first
- * line when no rule knows it; what to do, when a rule says; the provider's
- * whole words behind Details.
+ * live failure is (`describeProviderFailure`), "did not finish this turn"
+ * when its typed verdict is unknown; what to do, when a verdict says;
+ * the provider's words only behind Details, never as the line itself.
  */
-export function TurnError({ error }: { error: string }) {
+export function TurnError({ error, failure: failureKind }: { error: string; failure?: ProviderFailureKind }) {
   const [open, setOpen] = useState(false)
   const { liveId } = useTranscriptSource()
   useHarnessIdentity()
@@ -48,13 +48,13 @@ export function TurnError({ error }: { error: string }) {
     const conversation = liveId ? state.conversations[liveId] : undefined
     return conversation?.kind === "live" ? conversation.session.harness : undefined
   })
-  const failure = classifyProviderFailure(error, harness ? harnessLabel(harness) : "The agent")
+  const failure = describeProviderFailure(PROVIDER_FAILURE_KINDS.find(kind => kind === failureKind) ?? "unknown", harness ? harnessLabel(harness) : "The agent")
   const known = failure.kind !== "unknown"
   return (
     <div role="alert" data-event-error={failure.kind} className="flex items-start gap-2 text-ui">
       <CircleAlertIcon aria-hidden className="mt-[3px] size-3.5 shrink-0 text-negative" />
       <div className="min-w-0 flex-1">
-        <p className="text-foreground">{known ? failure.title : error.trim().split("\n", 1)[0]}</p>
+        <p className="text-foreground">{failure.title}</p>
         {known ? <p className="text-muted-foreground">{failure.guidance}</p> : null}
         <DetailsToggle className="-ml-1.5" open={open} onToggle={() => setOpen((value) => !value)} />
         <Collapse open={open}>
@@ -114,7 +114,7 @@ export function FailureRow({ conversationId, request, quoted = false, compact = 
   const idle = useAcp((state) => {
     const live = state.conversations[conversationId]
     return live?.kind === "live" && compactionAvailable(live.session, live.control?.actions ?? [],
-      live.requests?.some((item) => item.status === "queued" || item.status === "dispatching") ?? false)
+      live.requests?.some((item) => item.status === "queued" || item.status === "dispatching") ?? false, live.control?.activeBindingId)
   })
   // Sent again already: a later request carries the same words, or a timed send waits for this one.
   const followed = useAcp((state) => {
@@ -327,8 +327,8 @@ function useVisibility(key: string) {
 }
 
 /**
- * Compact the conversation for this request, then send it again once the
- * compaction finished; a compaction that fails or is refused sends nothing.
+ * A directly completed compact keeps the existing client resend. The host owns failed-compaction
+ * recovery; its original failed receipt stops this client from also resending the original.
  */
 function compactAndRetry(conversationId: string, request: LiveRequest): Promise<boolean> {
   return acp.compact(request.id).then((accepted) => accepted ? new Promise<boolean>((resolve) => {

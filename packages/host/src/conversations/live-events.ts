@@ -8,6 +8,7 @@ import { holdForSignIn } from "../contracts/sign-in-hold.js"
 import { hostWarn } from "../base/host-log.js"
 import { errorMessage } from "../base/error-message.js"
 import { drawnWhileOpening, liveUpdateWeight, queueLiveUpdate } from "@mako/sessions/live-content"
+import type { LiveCompactions } from "./live-compactions.js"
 import type { LiveActions } from "./live-actions.js"
 import type { LiveApprovals } from "./live-approvals.js"
 import type { LiveAssets } from "./live-assets.js"
@@ -27,6 +28,7 @@ type EventsAccess = Pick<LiveAccess,
 
 /** The parts a driver's events land in. */
 export interface EventParts {
+  compactions: LiveCompactions
   actions: LiveActions
   approvals: LiveApprovals
   questions: LiveQuestions
@@ -45,9 +47,21 @@ function unheardDigest(request: LiveRequest): boolean {
   return request.status === "dispatching" && request.digest !== undefined && !request.digest.heard
 }
 
+/** Fins' news that went folded into the turn on its way (`joinedInto`), which its model hasn't shown it heard. */
+function unheardFolded(request: LiveRequest, requests: readonly LiveRequest[]): boolean {
+  return request.digest !== undefined && !request.digest.heard && request.joinedInto !== undefined &&
+    requests.some((carrier) => carrier.id === request.joinedInto && carrier.status === "dispatching")
+}
+
 export class LiveEvents {
   private readonly access: EventsAccess
   private readonly parts: EventParts
+
+  /** Its harness compacted or rewound its history: the next prompt carries an Apex's roster again (`rosterForgotten`). */
+  private forgotRoster(resident: Resident): void {
+    const control = this.access.control(resident)
+    if (!control.rosterForgotten) resident.snapshot = { ...resident.snapshot, control: { ...control, rosterForgotten: true } }
+  }
 
   constructor(access: EventsAccess, parts: EventParts) {
     this.access = access
@@ -121,12 +135,14 @@ export class LiveEvents {
     const resident = this.access.resident(id)
     // A reconnect may recover retained evidence before the new driver is ready.
     // Its generation-fenced callback and exact saved native occurrence own admission.
-    if (!resident || (!resident.driver && event.type !== "live-approval-decision" && event.type !== "live-question" && event.type !== "live-question-answered")) return
+    if (!resident || (!resident.driver && !pendingCompactSuccess(resident, raw) && event.type !== "live-approval-decision" && event.type !== "live-question" && event.type !== "live-question-answered")) return
     // Opening streams the provider's saved history back; it is not new work.
     const replaying = resident.opening && Boolean(resident.snapshot.base || resident.snapshot.baseSource || resident.snapshot.blocks.length)
     let progressOnly = false
-    if (showsActivity(event, resident.snapshot.session.status, replaying))
+    if (showsActivity(event, resident.snapshot.session.status, replaying)) {
       resident.activityAt = Date.now()
+      dependencies.agents?.()?.active?.(id)
+    }
     if (event.type === "live-session") {
       const previousStatus = resident.snapshot.session.status
       const usageBefore = usageMark(resident.snapshot.session.usage)
@@ -199,8 +215,9 @@ export class LiveEvents {
           ? event.session
           : { ...event.session, status: "failed" as const, error: event.session.error ?? "The provider stopped before the turn started" }
         // Some providers finish their transport successfully after refusing work on a usage limit.
-        if (outcome.status === "ready" && settling && turnReply(resident, settling.id).limit)
-          outcome = { ...outcome, status: "failed", error: "Usage limit reached", failureEvidence: undefined }
+        const limit = settling && turnReply(resident, settling.id).limit
+        if (limit && (outcome.status === "ready" || outcome.status === "failed" && (!outcome.failureEvidence || outcome.failureEvidence.kind === "unknown")))
+          outcome = { ...outcome, status: "failed", error: outcome.error ?? "Usage limit reached", failureEvidence: { kind: "rate-limited", source: "native-limit" } }
         if (previousStatus !== "running" && settling)
           hostWarn("live", "a request's provider went away before its turn ran", {
             conversation: resident.snapshot.session.id, request: settling.id,
@@ -221,6 +238,10 @@ export class LiveEvents {
                 )
               : request
           ),
+        }
+        if (settling && !replaying && !gone) {
+          const settled = resident.snapshot.requests.find(request => request.id === settling.id)
+          if (settled) this.parts.compactions.automatic(resident, settled)
         }
         if (previousStatus === "running" && !gone) {
           const settled = finishedRequest && resident.snapshot.requests.find((request) => request.id === finishedRequest.id)
@@ -252,6 +273,7 @@ export class LiveEvents {
         resident.snapshot = { ...resident.snapshot, ...turnSpendAt(resident.snapshot, bindingId, { ended: false, ownTurn: false, gone }) }
     } else if (event.type === "live-rewound") {
       resident.controlSaid = undefined
+      this.forgotRoster(resident)
       this.access.nativeRewound(resident, event.run)
     } else if (event.type === "live-goal") {
       this.access.goalObserved(resident, event.goal === null ? null : GoalObservationSchema.parse(event.goal))
@@ -274,7 +296,10 @@ export class LiveEvents {
         }),
       }
     } else if (event.type === "live-activity") {
-      if (event.activity?.kind === "compacting") resident.controlSaid = undefined
+      if (event.activity?.kind === "compacting") {
+        resident.controlSaid = undefined
+        this.forgotRoster(resident)
+      }
       const nativeActivity = observeNativeActivity(
         resident.snapshot.nativeActivity,
         resident.snapshot.session.status === "running" && !replaying ? event.activity : null
@@ -332,12 +357,17 @@ export class LiveEvents {
     // The model answering again is the end of a retry's wait.
     if (resident.snapshot.nativeActivity?.kind === "retrying" && prepared.some((update) => update.kind !== "user"))
       resident.snapshot = { ...resident.snapshot, nativeActivity: undefined }
-    if (prepared.some(modelAnswered) && resident.snapshot.requests.some(unheardDigest))
-      resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((request) => (unheardDigest(request) ? { ...request, digest: { ...request.digest!, heard: true as const } } : request)) }
+    const { requests } = resident.snapshot
+    const unheard = (request: LiveRequest): boolean => unheardDigest(request) || unheardFolded(request, requests)
+    if (prepared.some(modelAnswered) && requests.some(unheard))
+      resident.snapshot = { ...resident.snapshot, requests: requests.map((request) => (unheard(request) ? { ...request, digest: { ...request.digest!, heard: true as const } } : request)) }
     for (const update of prepared) {
       if (dispatching && update.kind === "user") continue
       // What the harness kept of its history may have dropped Mako's note.
-      if (update.kind === "event" && update.label === CONTEXT_COMPACTED) resident.controlSaid = undefined
+      if (update.kind === "event" && update.label === CONTEXT_COMPACTED) {
+        resident.controlSaid = undefined
+        this.forgotRoster(resident)
+      }
       resident.steps?.observe(update)
       if (queueLiveUpdate(resident, update) === "full") {
         this.access.keep(resident)
@@ -381,12 +411,23 @@ export function driverEvents(
   const residentGeneration = resident.generation
   resident.bindingGenerations.set(bindingId, bindingGeneration)
   return (event) => {
+    if (pendingCompactSuccess(resident, event)) { observe(event); return }
     if (
       resident.generation === residentGeneration &&
       resident.bindingGenerations.get(bindingId) === bindingGeneration
     )
       observe(event)
   }
+}
+
+/** Only an exact native completion may cross cleanup's fence, until its still-owned source is replaced. */
+function pendingCompactSuccess(resident: Resident, event: LiveDriverEvent): boolean {
+  if (event.type !== "live-action-result" || event.result.kind !== "completed") return false
+  const control = resident.snapshot.control, episode = control?.compactionRecovery
+  return Boolean(episode && episode.origin !== "native" && episode.bindingId === event.id && control?.activeBindingId === event.id &&
+    (episode.state.kind === "reconcile" || episode.state.kind === "replace") &&
+    control.actions?.some(action => action.bindingId === event.id && action.input.id === event.actionId &&
+      action.state.kind === "uncertain" && (episode.actionId === action.input.id || episode.retryActionId === action.input.id)))
 }
 
 /**

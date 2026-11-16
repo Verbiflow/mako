@@ -5,6 +5,7 @@ import { ProposedPlanCard } from "./proposed-plan"
 import { ChangingLabel } from "@/components/ui/changing-label"
 import { Collapse } from "@/components/ui/collapse"
 import { RewindButton, PromptRewindButton } from "./rewind-button"
+import { PromptVersionSwitcher } from "./prompt-versions"
 import { useCopy } from "@/components/ui/use-copy"
 import { completeLiveAnswer } from "@/state/live-history"
 import { copyPromptSelection } from "./prompt-clipboard"
@@ -19,7 +20,7 @@ import { PlanSummary } from "./tool-details"
 import { ReviewFindings, ReviewRequest } from "./review-card"
 import { TranscriptAttachments } from "./attachment-collection"
 import { memo, useContext, useMemo, useState, type ReactNode } from "react"
-import { Prose } from "@/components/transcript/markdown"
+import { Prose, type AnswerMedia } from "@/components/transcript/markdown"
 import { AgentWordsCard } from "@/components/transcript/agent-words"
 import { RoutedLine } from "@/components/transcript/routed-line"
 import { agentWords } from "@mako/host/contracts/children"
@@ -57,7 +58,7 @@ import type { SentProse } from "@/lib/prompt-markdown"
 import {
   exchangeRequests,
   isContinuation,
-  notesBesideContinuations,
+  notesBesideContinuations, notesBesideFailure,
   notesBesideStop,
   responseSections,
   responseText,
@@ -75,7 +76,7 @@ import { actions, shallowEqual, useSession } from "@/state/session"
 import { threads, useThreads } from "@/state/threads"
 import { continueTargets } from "@/state/descriptors"
 import { continueTurn } from "@/state/acp-queue"
-import { AUTO_CONTINUE_NOTE, endedAsChosen, savedMakoPrompt, stoppedWorkWords, turnStopLabel, type CarriedHistory, type MakoPrompt, type TurnStop } from "@/state/prompt-delivery"
+import { AUTO_CONTINUE_NOTE, endedAsChosen, foldedPromptParts, savedMakoPrompt, stoppedWorkWords, turnStopLabel, type CarriedHistory, type MakoPrompt, type TurnStop } from "@/state/prompt-delivery"
 import { viewer } from "@/state/viewer"
 import { carriedBecause } from "@/lib/restore-plan"
 import { wokeWords } from "@/lib/session-words"
@@ -104,6 +105,7 @@ import {
   GitForkIcon,
   GitPullRequestIcon,
   HistoryIcon,
+  HourglassIcon,
   LayersIcon,
   PencilLineIcon,
   MoonIcon,
@@ -179,17 +181,21 @@ function TurnExchange({
   const mako = sentByMako ?? savedByMako
   const promptText = exchange.prompt ? textOf(exchange.prompt.blocks) : undefined
   const fromAgent = useMemo(() => (promptText === undefined ? undefined : agentWords(promptText)), [promptText])
+  // A message several went as (`LiveRequest.joined`), split back into its parts, live and saved alike.
+  const folded = useMemo(() => (promptText === undefined ? undefined : foldedPromptParts(promptText)), [promptText])
   // `toExchanges` never opens a turn on a continuation; one handed in that way is still never drawn as the person's words.
   const continuedPrompt = useMemo(() => (exchange.prompt ? isContinuation(exchange.prompt) : undefined), [exchange.prompt])
   // The request the turn stands on now: its newest continuation's, else its prompt's.
   const standing = turnRequest(exchange)
-  const failureRow = useContext(FailedRequestsContext).has(standing ?? "")
+  const failedRequests = useContext(FailedRequestsContext)
+  const failureRow = failedRequests.has(standing ?? "")
   const stopShown = Boolean(interrupted) && !streaming
   const exchangeNote = useContext(ExchangeNoteContext)
-  const notes = useMemo(
+  const kept = useMemo(
     () => notesBesideContinuations(stopShown ? notesBesideStop(exchange.system, exchange.response.length) : exchange.system, exchange.response),
     [exchange.system, exchange.response, stopShown]
   )
+  const notes = useMemo(() => notesBesideFailure(kept, failedRequests.has(standing ?? "")), [kept, failedRequests, standing])
   const answered = useMemo(
     () => responseSections(exchange.response, notes),
     [exchange.response, notes]
@@ -294,6 +300,20 @@ function TurnExchange({
         {exchange.prompt ? (
           continuedPrompt ? (
             <TurnWentOn continued={continuedPrompt} message={exchange.prompt} provider={provider} />
+          ) : folded ? (
+            // A message several went as: each part drawn as who wrote it, Mako's notes as their lines, an Apex's as its card.
+            <>
+              {folded.map((part, index) =>
+                part.kind === "pull" ? (
+                  <PullWakeNote key={index} line={part.line} timestamp={exchange.prompt!.timestamp} origin={exchange.prompt!.origin} />
+                ) : part.kind === "wait" ? (
+                  <TurnWaitNote key={index} line={part.line} detail={part.detail} timestamp={exchange.prompt!.timestamp} origin={exchange.prompt!.origin} />
+                ) : part.kind === "agent" ? (
+                  <AgentWordsCard key={index} words={part.words} raw={part.raw} timestamp={exchange.prompt!.timestamp} />
+                ) : (
+                  <p key={index} className="whitespace-pre-wrap text-sm text-foreground">{part.text}</p>
+                ))}
+            </>
           ) : mako?.kind === "moved" ? (
             <MovedNote timestamp={exchange.prompt.timestamp} origin={exchange.prompt.origin} />
           ) : mako?.kind === "goal" ? (
@@ -302,6 +322,8 @@ function TurnExchange({
             <ReviewRequest target={mako.target} timestamp={exchange.prompt.timestamp} />
           ) : mako?.kind === "pull" ? (
             <PullWakeNote line={mako.line} timestamp={exchange.prompt.timestamp} origin={exchange.prompt.origin} />
+          ) : mako?.kind === "wait" ? (
+            <TurnWaitNote line={mako.line} detail={mako.detail} timestamp={exchange.prompt.timestamp} origin={exchange.prompt.origin} />
           ) : fromAgent && promptText ? (
             <AgentWordsCard words={fromAgent} raw={promptText} timestamp={exchange.prompt.timestamp} />
           ) : (
@@ -377,6 +399,8 @@ function continuedTitle({ reason, sender, stayed }: SavedContinuation, provider:
       return `${who} after the connection to ${provider} dropped`
     case "provider-exited":
       return sender === "mako" ? `Mako restarted ${provider} and continued the turn` : `${who} after ${provider} stopped unexpectedly`
+    case "compaction-failed":
+      return "The conversation could not be compacted"
     case "signed-out":
       return `${who} after ${provider} signed in again`
     case "host-quit":
@@ -526,6 +550,11 @@ function PullWakeNote({ line, timestamp, origin }: { line: string; timestamp?: n
   return <EventLine align="end" icon={GitPullRequestIcon} time={timestamp} data-pull-wake words={{ title: line }} action={<ShowOriginal origins={[origin]} />} />
 }
 
+/** A turn's wait that fired or ended, as Mako's line: what the agent was woken with, never the person's words. */
+function TurnWaitNote({ line, detail, timestamp, origin }: { line: string; detail?: string; timestamp?: number; origin?: MessageOrigin }) {
+  return <EventLine align="end" icon={HourglassIcon} time={timestamp} data-turn-wait words={{ title: line, detail }} action={<ShowOriginal origins={[origin]} />} />
+}
+
 const GOAL_NOTES = {
   continue: "Mako continued toward the goal",
   clear: "Mako cleared the unfinished goal to set the new one",
@@ -628,6 +657,7 @@ function Prompt({ message }: { message: ChatMessage }) {
   )
   const { copied, copy } = useCopy(reused.text, reused.records)
   const note = useContext(PromptNoteContext)
+  const { liveId } = useTranscriptSource()
   const compose = () =>
     window.dispatchEvent(
       new CustomEvent("mako:compose", {
@@ -685,6 +715,7 @@ function Prompt({ message }: { message: ChatMessage }) {
         */}
       <div className="mt-1 mr-[34px] flex min-h-7 items-center justify-end gap-0.5 px-0.5 text-label text-muted-foreground">
         {note?.(message.requestId)}
+        {liveId && message.requestId ? <PromptVersionSwitcher conversation={liveId} requestId={message.requestId} /> : null}
         {message.timestamp ? (
           <span className="tabular px-1 text-faint">{formatTime(message.timestamp)}</span>
         ) : null}
@@ -1190,9 +1221,9 @@ function Response({
           streaming={message.streaming}
         />
       ))}
-      {text ? <Prose text={text} streaming={message.streaming} previewedFiles={previewedFiles} answerId={message.id} /> : null}
+      {text ? <Prose text={text} streaming={message.streaming} previewedFiles={previewedFiles} answerId={message.id} keeps={landedMedia(message)} /> : null}
 
-      {message.error ? <TurnError error={message.error} /> : null}
+      {message.error ? <TurnError error={message.error} failure={message.failure} /> : null}
 
     </div>
   )
@@ -1517,4 +1548,9 @@ function ForkButton({ exchange }: { exchange: ExchangeData }) {
       </PopoverContent>
     </Popover>
   )
+}
+
+/** A landed answer's embeds are kept as it saw them (`AnswerMedia`); a streaming one, or one with no time, keeps none yet. */
+function landedMedia(message: ChatMessage): AnswerMedia | undefined {
+  return !message.streaming && message.timestamp !== undefined ? { callId: `answer:${message.id}`, at: message.timestamp } : undefined
 }

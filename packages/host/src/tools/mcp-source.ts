@@ -56,8 +56,16 @@ export interface McpJsonFormat {
   remote: "transport" | "implicit" | "remote"
 }
 
+/**
+ * How the person signs one of a harness's MCP servers in: the harness's own command (`codex mcp login <server>`,
+ * run with `ProviderMcpSource.command`), or the page where it's connected (claude.ai's connectors).
+ */
+export type McpLogin = { kind: "command"; args: string[] } | { kind: "page"; url: string }
+
 export interface ProviderMcpSource {
   provider: string
+  /** How a server that needs sign-in is signed in; nothing when the harness offers no way Mako can start. */
+  login?(server: string): McpLogin | undefined
   readFormat: McpReadFormat
   command(env: NodeJS.ProcessEnv): string | null
   userFiles(account: HarnessAccount): string[]

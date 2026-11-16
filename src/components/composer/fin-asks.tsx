@@ -14,6 +14,7 @@ import {
   useCrewCardVisible,
 } from "@/state/crew-card-view"
 import { answerFin, type FinAnswer, type PersonAsk } from "@/state/fin-asks"
+import { FinTypedAnswer } from "@/components/composer/fin-typed-answer"
 
 /**
  * One line while the crew card is scrolled away and Fins need the person:
@@ -136,7 +137,6 @@ const NO_ASKS: readonly PersonAsk[] = []
 
 function FinAskRow({ apex, ask }: { apex: string; ask: PersonAsk }) {
   const [sending, setSending] = useState(false)
-  const [words, setWords] = useState("")
   const send = (answer: FinAnswer) => {
     if (sending) return
     setSending(true)
@@ -224,31 +224,14 @@ function FinAskRow({ apex, ask }: { apex: string; ask: PersonAsk }) {
               >
                 {option.label}
                 {recommended ? (
-                  <span className="opacity-70">· recommended</span>
+                  <span className="opacity-70">Recommended</span>
                 ) : null}
               </button>
             )
           })
         )}
         {approval ? null : (
-          <form
-            className="flex min-w-48 flex-1"
-            onSubmit={(event) => {
-              event.preventDefault()
-              if (words.trim()) send({ answer: words.trim() })
-            }}
-          >
-            <input
-              value={words}
-              onChange={(event) => setWords(event.target.value)}
-              disabled={sending}
-              aria-label={`Answer ${ask.title} in your own words`}
-              placeholder={
-                options.length ? "Or answer in your own words" : "Your answer"
-              }
-              className="h-7 w-full border border-hairline bg-transparent px-2 text-label text-foreground placeholder:text-faint focus:border-foreground/30 focus:outline-none"
-            />
-          </form>
+          <FinTypedAnswer title={ask.title} options={options.length} disabled={sending} onAnswer={(words) => send({ answer: words })} />
         )}
       </div>
     </div>

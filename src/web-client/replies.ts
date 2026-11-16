@@ -18,11 +18,16 @@ export function offerReply(reply: CompactReply): () => void {
   }
 }
 
-export async function copyReply(text: string): Promise<void> {
+/**
+ * Copies `text`, saying so if the browser refused: in its words for why (a page not in focus, no permission), which
+ * are the console's, never the toast's.
+ */
+export async function copyText(text: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(text)
   } catch (error) {
-    toast.error("Not copied", { description: error instanceof Error ? error.message : String(error) })
+    console.warn(`Not copied ${JSON.stringify({ error: error instanceof Error ? error.message : String(error) })}`)
+    toast.error("Not copied", { description: "This browser didn't allow it." })
     throw error
   }
 }

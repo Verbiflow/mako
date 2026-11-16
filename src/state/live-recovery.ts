@@ -334,6 +334,7 @@ function takeSnapshot(snapshot: LiveSnapshot, replyBindingId?: string | null, co
     nativeAgents: snapshot.nativeAgents,
     goal: snapshot.goal,
     side: snapshot.side,
+    turnWait: snapshot.turnWait,
     requests: snapshot.requests,
     harnessTurns: snapshot.harnessTurns,
     spentThrough: snapshot.spentThrough,
@@ -568,6 +569,10 @@ function batchSide(batch: LiveBatch, current: { side?: LiveSnapshot["side"] }): 
   return batch.side === undefined ? current.side : (batch.side ?? undefined)
 }
 
+function batchTurnWait(batch: LiveBatch, current: { turnWait?: LiveSnapshot["turnWait"] }): LiveSnapshot["turnWait"] {
+  return batch.turnWait === undefined ? current.turnWait : (batch.turnWait ?? undefined)
+}
+
 function batchHistoryFailure(batch: LiveBatch, current: { historyFailure?: string }): string | undefined {
   return batch.historyFailure === undefined ? current.historyFailure : (batch.historyFailure ?? undefined)
 }
@@ -638,6 +643,7 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
       nativeAgents: batch.nativeAgents ? reconcileRoster(current.nativeAgents, batch.nativeAgents) : current.nativeAgents,
       goal: batchGoal(batch, current),
       side: batchSide(batch, current),
+      turnWait: batchTurnWait(batch, current),
       historyFailure: batchHistoryFailure(batch, current),
       harnessTurns: batch.harnessTurns ?? current.harnessTurns,
       spentThrough: batch.spentThrough === undefined ? current.spentThrough : (batch.spentThrough ?? undefined),
@@ -710,6 +716,7 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
     nativeAgents: batch.nativeAgents ? reconcileRoster(current.nativeAgents, batch.nativeAgents) : current.nativeAgents,
     goal: batchGoal(batch, current),
     side: batchSide(batch, current),
+    turnWait: batchTurnWait(batch, current),
     historyFailure: batchHistoryFailure(batch, current),
     harnessTurns: batch.harnessTurns ?? current.harnessTurns,
     spentThrough: batch.spentThrough === undefined ? current.spentThrough : (batch.spentThrough ?? undefined),

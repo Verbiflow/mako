@@ -45,9 +45,9 @@ export function holdOf(request: Pick<LiveRequest, "status" | "signIn" | "editing
   return { kind: "paused", by: "mako" }
 }
 
-/** Capacity and service waits belong to the provider; new messages cannot make either clear sooner. */
+/** Outages and startup waits belong to the provider; new messages cannot make them clear sooner. */
 export function waitsForProvider(request: Pick<LiveRequest, "retry">): boolean {
-  return request.retry?.cause === "provider-unavailable" || request.retry?.cause === "rate-limited"
+  return request.retry !== undefined && request.retry.cause !== "busy"
 }
 
 /** Whether new input releases a retry/resting digest. Provider waits keep their time; an explicit move can go now. */
@@ -153,10 +153,12 @@ export function departing(requests: readonly LiveRequest[], before: readonly Liv
 }
 
 /** When a reconnect waiting to go again (`ContextTransfer.retry`) is due, for the one timer and the listing. */
-export function transferDue(control: Pick<ConversationControl, "transfers"> | undefined): number | undefined {
+export function transferDue(control: Pick<ConversationControl, "transfers" | "compactionRecovery"> | undefined): number | undefined {
   let soonest: number | undefined
   for (const transfer of control?.transfers ?? [])
     if (transfer.state.kind === "queued" && transfer.retry && (soonest === undefined || transfer.retry.at < soonest)) soonest = transfer.retry.at
+  const recovery = control?.compactionRecovery
+  if (recovery?.state.kind === "reconcile") soonest = sooner(soonest, recovery.state.at)
   return soonest
 }
 

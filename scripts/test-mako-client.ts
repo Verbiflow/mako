@@ -55,6 +55,8 @@ exit 2
     MEASURE_STREAM_MS: "2500",
     // The turn stopped below runs until it's stopped: however long two CLIs take to start, it's still running.
     MEASURE_UNTIL_CANCELLED: "Once more",
+    // And it says it stopped a second and a half after it's asked, as a harness on a busy machine can.
+    MEASURE_CANCEL_ANSWER_MS: "1500",
   }
   for (const key of ["ELECTRON_RUN_AS_NODE", "VITE_DEV_SERVER_URL", "CLAUDE_CONFIG_DIR", "NODE_OPTIONS"]) delete env[key]
   host = spawn(process.execPath, [join(repo, "packages/host/dist/mako-host.js")], { env, stdio: ["ignore", "ignore", "pipe"] })
@@ -95,8 +97,13 @@ exit 2
   const detached = await mako("send", conversation, "Once more", "--detach")
   const { requestId } = z.object({ kind: z.literal("sent"), requestId: z.string() }).parse(detached[0])
   await new Promise((settle) => setTimeout(settle, 400))
+  // Stop asks the harness to stop; the turn reads stopped once the harness says so (the desk shows "Stopping…" until
+  // then). A client that reads right after Stop can still read it running, as a busy CI runner once did.
   await mako("stop", conversation)
-  const history = await mako("history", conversation)
+  const stoppedOf = (lines: Array<z.infer<typeof ChangeSchema>>) => lines.find((line) => line.kind === "request" && line.id === requestId)?.status
+  let history = await mako("history", conversation)
+  for (const deadline = Date.now() + 20_000; stoppedOf(history) === "dispatching" && Date.now() < deadline; history = await mako("history", conversation))
+    await new Promise((settle) => setTimeout(settle, 200))
   assert.deepEqual(history.filter((line) => line.kind === "user").length, 3, "each message, read back in order")
   assert.ok(text(history).length > text(first).length, "the turns' words, read back")
   const statuses = new Map(history.flatMap((line) => (line.kind === "request" ? [[z.string().parse(line.id), z.string().parse(line.status)] as const] : [])))

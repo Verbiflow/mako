@@ -1,5 +1,5 @@
-import { execFileSync } from "node:child_process"
-import { readdirSync, readFileSync, readlinkSync, rmSync } from "node:fs"
+import { spawnSync } from "node:child_process"
+import { readdirSync, readFileSync, readlinkSync, rmSync, statSync } from "node:fs"
 import { setTimeout as delay } from "node:timers/promises"
 
 /**
@@ -17,39 +17,62 @@ import { setTimeout as delay } from "node:timers/promises"
  * that has it, or a path under it, as its working folder or an open file. On
  * Linux, `/proc` also gives a process's `HOME`.
  */
-export function processesUsingSync(folder) {
+export function processesUsingSync(folder, includeSelf = false) {
   const inside = (path) => path === folder || path.startsWith(`${folder}/`)
   const found = new Map()
   if (process.platform === "linux") {
     for (const name of readdirSync("/proc")) {
       const pid = Number(name)
-      if (!Number.isInteger(pid) || pid === process.pid) continue
+      if (!Number.isInteger(pid) || !includeSelf && pid === process.pid) continue
       try {
+        if (statSync(`/proc/${pid}`).uid !== process.getuid()) continue
         const args = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").join(" ").trim()
-        const home = readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").find((entry) => entry.startsWith("HOME="))?.slice(5)
-        const files = [readlinkSync(`/proc/${pid}/cwd`), ...readdirSync(`/proc/${pid}/fd`).map((fd) => { try { return readlinkSync(`/proc/${pid}/fd/${fd}`) } catch { return "" } })]
-        if (args.includes(folder) || (home && inside(home)) || files.some(inside)) found.set(pid, args)
-      } catch {
-        // Gone, or another user's: either way not one this test started.
+        if (args.includes(folder)) { found.set(pid, args); continue }
+        let home
+        try {
+          home = readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").find((entry) => entry.startsWith("HOME="))?.slice(5)
+        } catch (error) {
+          // Linux exposes some process rows whose environment we are not permitted to inspect.
+          if (error?.code === "EACCES" || error?.code === "EPERM") continue
+          throw error
+        }
+        const files = [readlinkSync(`/proc/${pid}/cwd`), ...readdirSync(`/proc/${pid}/fd`).map((fd) => { try { return readlinkSync(`/proc/${pid}/fd/${fd}`) } catch (error) { if (error?.code === "ENOENT") return ""; throw error } })]
+        if ((home && inside(home)) || files.some(inside)) found.set(pid, args)
+      } catch (error) {
+        if (error?.code !== "ENOENT" && error?.code !== "ESRCH") throw new Error("Scratch process inspection was incomplete.", { cause: error })
       }
     }
     return [...found].map(([pid, args]) => ({ pid, args }))
   }
-  const listed = new Map(execFileSync("ps", ["-axww", "-o", "pid=,args="], { encoding: "utf8" }).trim().split("\n").map((line) => {
-    const [, pid, args] = /^\s*(\d+)\s+(.*)$/.exec(line) ?? []
-    return [Number(pid), args ?? ""]
-  }))
-  for (const [pid, args] of listed) if (pid !== process.pid && args.includes(folder)) found.set(pid, args)
-  let open = ""
-  try {
-    open = execFileSync("lsof", ["-nP", "-Fp", "+D", folder], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
-  } catch (error) {
-    // lsof exits 1 when nothing has a file there.
-    open = error?.stdout ?? ""
+  const listed = new Map()
+  const ps = spawnSync("ps", ["-axww", "-o", "pid=,args="], { encoding: "utf8", timeout: 5_000, maxBuffer: 16 * 1024 * 1024 })
+  if (ps.error || ps.signal || ps.status !== 0 || String(ps.stderr ?? "").trim()) throw new Error("Scratch process inspection was incomplete.")
+  const rows = String(ps.stdout ?? "").trim()
+  if (!rows) throw new Error("Scratch process inspection was empty.")
+  for (const line of rows.split("\n")) {
+    const match = /^\s*(\d+)\s+(.*)$/.exec(line)
+    if (!match || !Number.isSafeInteger(Number(match[1])) || Number(match[1]) <= 0) throw new Error("Scratch process inspection was malformed.")
+    listed.set(Number(match[1]), match[2])
   }
-  for (const line of open.split("\n")) {
-    const pid = Number(line.slice(1))
-    if (line.startsWith("p") && pid !== process.pid && listed.has(pid)) found.set(pid, listed.get(pid))
+  for (const [pid, args] of listed) if ((includeSelf || pid !== process.pid) && args.includes(folder)) found.set(pid, args)
+  // List open files, not the whole scratch tree: a clone can have millions of tiny files.
+  const lsof = spawnSync("lsof", ["-nP", "-F0pn", "-u", String(process.getuid?.())], { encoding: "utf8", timeout: 5_000, maxBuffer: 32 * 1024 * 1024 })
+  const open = String(lsof.stdout ?? "")
+  const empty = lsof.status === 1 && !open.trim() && !String(lsof.stderr ?? "").trim()
+  if (lsof.error || lsof.signal || (!empty && (lsof.status !== 0 || String(lsof.stderr ?? "").trim()))) throw new Error("Scratch open-file inspection was incomplete.")
+  if (!empty && !open.trim()) throw new Error("Scratch open-file inspection was empty.")
+  let pid
+  for (const raw of open.split("\0")) {
+    const field = raw.replace(/^\n/, "")
+    if (field.startsWith("p")) {
+      if (!/^p[1-9]\d*$/.test(field)) throw new Error("Scratch open-file inspection was malformed.")
+      pid = Number(field.slice(1))
+    } else if (field.startsWith("n")) {
+      if (!pid) throw new Error("Scratch open-file inspection had no process identity.")
+      if ((includeSelf || pid !== process.pid) && inside(field.slice(1).replace(/ \(deleted\)$/, ""))) found.set(pid, listed.get(pid) ?? "owned scratch open")
+    } else if (field.startsWith("f")) {
+      if (field === "fNOFD") throw new Error("Scratch open-file inspection was incomplete.")
+    } else if (field.trim()) throw new Error("Scratch open-file inspection was malformed.")
   }
   return [...found].map(([pid, args]) => ({ pid, args }))
 }
@@ -64,7 +87,7 @@ export async function processesLeftIn(folder, timeoutMs = 10_000) {
 
 /** One line per process, for a failure to name each. */
 export function describeProcesses(processes) {
-  return processes.map(({ pid, args }) => `  ${pid} ${args}`).join("\n")
+  return processes.map(({ pid }) => `  ${pid} still uses scratch`).join("\n")
 }
 
 /**

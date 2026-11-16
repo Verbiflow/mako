@@ -61,21 +61,68 @@ async function checkWindow() {
   const until = async (code, what = code) => {
     const end = Date.now() + 15_000
     while (!(await evaluate(code))) {
-      if (Date.now() > end) throw new Error(`UI condition timed out: ${what}`)
+      if (Date.now() > end) {
+        const seen = await evaluate(`window.mako.finDefaults().then((reading) => JSON.stringify({ policy: reading.policy, focus: document.activeElement?.closest("[data-role-rules]")?.getAttribute("data-role-rules") ?? document.activeElement?.tagName }))`).catch(() => "unreadable")
+        throw new Error(`UI condition timed out: ${what}; the page had ${seen}`)
+      }
       await new Promise((done) => setTimeout(done, 40))
     }
   }
+  // A press aims where the target was on a painted frame, and only once it held still for two: the fields render
+  // before the readings above them land and move them (16 px when those come half a second late), and a press sent
+  // before the page's first frame can reach nothing.
   const press = async (selector) => {
-    const point = await evaluate(`(() => {
+    const point = await evaluate(`(async () => {
       const found = document.querySelector(${JSON.stringify(selector)})
       found.scrollIntoView({ block: "center" })
-      const r = found.getBoundingClientRect()
-      return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }
+      // A frame, or a tenth of a second where the window paints none.
+      const frame = () => new Promise((done) => {
+        const read = () => { clearTimeout(timer); done(found.getBoundingClientRect()) }
+        const timer = setTimeout(read, 100)
+        requestAnimationFrame(read)
+      })
+      let before = await frame()
+      for (let frames = 0; frames < 60; frames += 1) {
+        const now = await frame()
+        if (now.x === before.x && now.y === before.y && now.width === before.width && now.height === before.height) break
+        before = now
+      }
+      return { x: Math.round(before.x + before.width / 2), y: Math.round(before.y + before.height / 2) }
     })()`)
     for (const type of ["mousePressed", "mouseReleased"])
       await page.debugger.sendCommand("Input.dispatchMouseEvent", { type, button: "left", clickCount: 1, ...point })
+    return point
   }
   const field = (role) => `[data-role-rules=${role}] textarea`
+  // Typing goes wherever focus is, so a field is typed into only once it has focus. A press that leaves focus
+  // elsewhere for 3 s is one of two things, told apart by what the page received of it. One the field received (a
+  // pointerdown or mousedown on its textarea) that still left focus elsewhere is a field a click doesn't focus, and
+  // fails at once. One that never reached it (none recorded on it; what's at the aimed point says where it went) is
+  // this check's aim, so it aims once more. CI's Linux runners twice left the first press with focus on the body, which no run here repeats.
+  const focusField = async (role) => {
+    const selector = JSON.stringify(field(role))
+    const focused = `document.activeElement === document.querySelector(${selector})`
+    for (let attempt = 1; ; attempt += 1) {
+      const from = await evaluate("window.__pointer.length")
+      const point = await press(field(role))
+      const end = Date.now() + 3_000
+      while (!(await evaluate(focused)) && Date.now() < end) await new Promise((done) => setTimeout(done, 40))
+      if (await evaluate(focused)) return
+      const seen = await evaluate(`JSON.stringify({ received: window.__pointer.slice(${from}), at: document.elementFromPoint(${point.x}, ${point.y})?.outerHTML.slice(0, 120), field: document.querySelector(${selector}).getBoundingClientRect().toJSON(), focus: document.activeElement?.tagName, viewport: [innerWidth, innerHeight, scrollY] })`)
+      const reached = await evaluate(`window.__pointer.slice(${from}).some(([type, , , , target]) => (type === "pointerdown" || type === "mousedown") && target === ${JSON.stringify(role)})`)
+      if (reached) throw new Error(`The ${role} field received a press at ${JSON.stringify(point)} and focus went elsewhere: ${seen}`)
+      console.error(`Pressing ${role} at ${JSON.stringify(point)} never reached the field (attempt ${attempt}): ${seen}`)
+      if (attempt === 2) throw new Error(`Two presses never reached the ${role} field: ${seen}`)
+    }
+  }
+  // What the page received of each press, from its load, for a press that missed.
+  const recordPointer = () => evaluate(`(() => {
+    window.__pointer = []
+    const began = performance.now()
+    for (const type of ["pointerdown", "mousedown", "focusin", "focusout"])
+      // Each as [type, ms since load, x, y, the role rules field it was on or the element's tag].
+      document.addEventListener(type, (event) => window.__pointer.push([type, Math.round(performance.now() - began), event.clientX, event.clientY, event.target.closest?.("[data-role-rules] textarea")?.closest("[data-role-rules]").dataset.roleRules ?? event.target.tagName]), true)
+  })()`)
   const preview = (role) => `[data-role-rules=${role}] button[aria-expanded]`
   const theme = (light) => evaluate(`document.documentElement.classList.toggle("light", ${light})`)
   const saved = () => evaluate("window.mako.finDefaults().then((reading) => reading.policy)")
@@ -85,6 +132,7 @@ async function checkWindow() {
   }, 60_000)
   try {
     await window.loadURL(`${process.env.MAKO_ROLE_RULES_URL}scripts/role-rules.html`)
+    await recordPointer()
     await until(`document.querySelector(${JSON.stringify(field("forFins"))}) !== null`, "the fields render")
     const labels = await evaluate(`[...document.querySelectorAll("[data-role-rules] label")].map((label) => label.innerText)`)
     assert.deepEqual(labels, ["For every Fin", "For every Apex"])
@@ -93,9 +141,9 @@ async function checkWindow() {
     assert.ok(below, "the fields sit under the model rules")
 
     /* Typed and saved on blur, as a rule saves. */
-    await press(field("forFins"))
+    await focusField("forFins")
     await page.debugger.sendCommand("Input.insertText", { text: "Run the tests you touch before you report.\nNever push to main." })
-    await press(field("forApexes"))
+    await focusField("forApexes")
     await page.debugger.sendCommand("Input.insertText", { text: "Ask me before starting more than four Fins." })
     await press("main p")
     await until(`window.mako.finDefaults().then((reading) => reading.policy.forApexes === "Ask me before starting more than four Fins.")`, "both saved")
@@ -103,7 +151,7 @@ async function checkWindow() {
     assert.deepEqual((await saved()).rules.length, 3, "the model rules are kept")
 
     /* Escape reverts and saves nothing. */
-    await press(field("forApexes"))
+    await focusField("forApexes")
     await page.debugger.sendCommand("Input.insertText", { text: " Or five." })
     await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
     await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
@@ -142,6 +190,21 @@ async function checkWindow() {
     await press(preview("forFins"))
     await capture("fields-dark.png", "[aria-label='Your rules for Fins']")
 
+    /* A save that doesn't go keeps the person's words in the field, marked unsaved; leaving the field again saves them. */
+    await evaluate(`window.__saveRoleRules = window.mako.saveRoleRules; window.mako.saveRoleRules = () => Promise.reject(new Error("The host refused it.")); true`)
+    await focusField("forApexes")
+    await page.debugger.sendCommand("Input.insertText", { text: " Or five." })
+    await press("main p")
+    await until(`document.querySelector("[data-role-unsaved=forApexes]") !== null`, "the field is marked unsaved")
+    assert.equal(await evaluate(`document.querySelector(${JSON.stringify(field("forApexes"))}).value`), "Ask me before starting more than four Fins. Or five.", "the typed words stay")
+    assert.equal((await saved()).forApexes, "Ask me before starting more than four Fins.", "the host still holds what it saved")
+    await capture("unsaved-dark.png", "[data-role-rules=forApexes]")
+    await evaluate(`window.mako.saveRoleRules = window.__saveRoleRules; true`)
+    await focusField("forApexes")
+    await press("main p")
+    await until(`window.mako.finDefaults().then((reading) => reading.policy.forApexes === "Ask me before starting more than four Fins. Or five.")`, "saved on the next blur")
+    await until(`document.querySelector("[data-role-unsaved=forApexes]") === null`, "the mark goes once saved")
+
     /* The phone: the same two rules, saved to the account they follow (every Mac hears them), with the same toggles. */
     window.setSize(390, 844)
     await window.loadURL(`${process.env.MAKO_ROLE_RULES_URL}scripts/phone-fins.html`)
@@ -168,7 +231,7 @@ async function checkWindow() {
     await press(`button[aria-expanded]`)
     await until(`document.querySelector("[data-role-preview=forFins]") !== null`)
     await capture("phone-light.png", phone("forFins"))
-    console.log("PASS: the kit's fields under the model rules, saved on blur, Escape discards, each toggle with only what the rules add; the same on the phone; desk and phone captures in light and dark")
+    console.log("PASS: the kit's fields under the model rules, saved on blur, Escape discards, each toggle with only what the rules add, a save that fails keeps the words marked unsaved; the same on the phone; desk and phone captures in light and dark")
   } finally {
     clearTimeout(timer)
     window.destroy()

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
-import { answerClientCall, CLIENT_CALLS, gatewayCalls, HOST_SCREEN_CALLS, isClientCall, openableLink, REMOTE_EDITORS, remoteEditorLink, socketCalls, type ClientAnswers, type RemoteEditor } from "@mako/host/contracts/client-calls"
+import { GATEWAY_ALLOWED } from "@mako/host/contracts/gateway-allowed"
+import { answerClientCall, CLIENT_CALLS, gatewayCalls, HOST_SCREEN_CALLS, isClientCall, isHostScreenCall, openableLink, REMOTE_EDITORS, remoteEditorLink, socketCalls, type ClientAnswers, type RemoteEditor } from "@mako/host/contracts/client-calls"
 import { hostCallSchema, hostChannels, isHostChannel } from "@mako/host/contracts/host-call-inputs"
 
 for (const call of CLIENT_CALLS) assert.ok(isHostChannel(call), `${call} is a host call`)
@@ -14,7 +15,8 @@ for (const call of HOST_SCREEN_CALLS) {
   assert.ok(offered.includes(call), `${call} is answered on the socket, for a client on the host's machine`)
   assert.ok(!remote.includes(call), `${call} is never carried by the gateway: a remote client would open a window nobody sees`)
 }
-assert.equal(remote.length, offered.length - HOST_SCREEN_CALLS.length)
+// Only what another device's clients send is carried, and only calls this host declares.
+assert.deepEqual(remote, offered.filter((call) => GATEWAY_ALLOWED.has(call) && !isHostScreenCall(call)))
 
 assert.equal(openableLink("https://example.com/a?b=c#d"), "https://example.com/a?b=c#d")
 assert.equal(openableLink("http://localhost:20010/"), "http://localhost:20010/")

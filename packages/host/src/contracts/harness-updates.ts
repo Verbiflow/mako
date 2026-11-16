@@ -34,10 +34,23 @@ export const HarnessUpdateResultSchema = z.object({
   outcome: z.enum(["installed", "updated", "unchanged", "failed"]),
   from: z.string().optional(),
   to: z.string().optional(),
-  /** The updater's own words on failure: the tail of what it printed. */
+  /** Why it failed, in Mako's sentence; what the updater itself printed is worded (`updateFailureWords`) and logged. */
   message: z.string().optional(),
 })
 export type HarnessUpdateResult = z.infer<typeof HarnessUpdateResultSchema>
+
+/** The sentences a failed update or install is said in; anything else an updater printed is the log's. */
+const UPDATE_FAILURES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\bEACCES\b|\bEPERM\b|permission denied|operation not permitted/i, "It needs permission to change the folder it's installed in."],
+  [/\bENOSPC\b|no space left/i, "The disk is full."],
+  [/\bENOTFOUND\b|\bETIMEDOUT\b|\bECONNRE(?:SET|FUSED)\b|\bEAI_AGAIN\b|getaddrinfo|could not resolve host|socket hang up|network|fetch failed/i, "The download didn't get through. Check the connection."],
+  [/\bEBUSY\b|text file busy|resource busy/i, "It's in use. Quit what's running it."],
+]
+
+/** What the person reads of what a failed updater or installer printed: one of `UPDATE_FAILURES`, else that it didn't finish. */
+export function updateFailureWords(printed: string): string {
+  return UPDATE_FAILURES.find(([pattern]) => pattern.test(printed))?.[1] ?? "The updater didn't finish."
+}
 
 export const HarnessUpdateInfoSchema = z.object({
   provider: z.string().optional(),

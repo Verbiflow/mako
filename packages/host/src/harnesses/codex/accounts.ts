@@ -1,3 +1,4 @@
+import { HostFailureError } from "../../contracts/provider-failure.js"
 import { z } from "zod"
 import { existsSync } from "node:fs"
 import {
@@ -306,12 +307,12 @@ async function accountEnv(
       "The selected Codex account no longer exists. Choose another account in Settings → Agents."
     )
   if (!existsSync(join(dir, "auth.json")))
-    throw new Error(
+    throw new HostFailureError("auth",
       "The selected Codex account is signed out. Sign in again in Settings → Agents."
     )
   const credentials = await readFile(join(dir, "auth.json"), "utf8")
   if (!hasCredentials(credentials))
-    throw new Error(
+    throw new HostFailureError("auth",
       "The selected Codex account's login is unreadable. Sign in again in Settings → Agents."
     )
   const home = await managedAccountHome(dir, join(homedir(), HOME), "sessions")

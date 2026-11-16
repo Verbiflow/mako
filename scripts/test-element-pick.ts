@@ -54,7 +54,9 @@ const chromium = spawn(
 )
 const endpoint = await new Promise<string>((done, fail) => {
   let stderr = ""
-  const timeout = setTimeout(() => fail(new Error("Chromium startup timed out")), 15_000)
+  // Chromium's own word that it listens is the signal; the wait is only a bound. A cold first start on a loaded Linux
+  // runner took past 15 s, and failing then said nothing of why.
+  const timeout = setTimeout(() => fail(new Error(`Chromium didn't say it listens within 60 s${chromium.exitCode === null ? "" : ` (it exited ${chromium.exitCode})`}: ${stderr.slice(-2_000)}`)), 60_000)
   chromium.once("error", fail)
   chromium.stderr.on("data", (chunk: Buffer) => {
     stderr = (stderr + chunk.toString()).slice(-16_384)

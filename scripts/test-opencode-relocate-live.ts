@@ -16,6 +16,10 @@ import { admitted } from "./fixtures/admitted-start.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { openCodeFreeModels } from "./opencode-free-models.ts"
 
+import { allowLiveProviderTest } from "./fixtures/live-provider-test.ts"
+
+allowLiveProviderTest()
+
 const nativeStores = new NativeStores(false)
 
 // An OpenCode session going on in another folder, as a Thread's move into its

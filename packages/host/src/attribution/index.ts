@@ -41,6 +41,7 @@ import type { RescanFootprint } from "../contracts/mako-footprint.js"
 import { SETTLE_MS } from "./tracker.js"
 import { TRAIL_MS } from "./evidence.js"
 
+export { threadFingerprint } from "./checkpoint-fingerprints.js"
 export { JournalStore } from "./journal-store.js"
 export { LaptopTracker, type TrackerOptions, type TrackerRepository } from "./tracker.js"
 export { changes, classOf, hunks, partition, restorable, shares, side, storedView, turnChanges, unattributed, writerOf, type ChangeClass, type CheckoutHunk, type CheckoutShares, type FileVersion, type JournalView, type Partition, type PartitionFile, type PartitionOptions, type Restorable, type Share, type ThreadChanges, type UncertainChange, type WholeHunk } from "./queries.js"
@@ -236,6 +237,8 @@ export interface Attribution {
    * work that runs on its own (a Thread's checkpoint as it writes) asks. Rejects if the worker can't answer.
    */
   partitionOffLoop(checkout: string, thread: string): Promise<Partition>
+  /** Constant-size identity, partitioning and hashing only on the journal reader. */
+  checkpointFingerprint(checkout: string, thread: string): Promise<string>
   /** How the checkout's changes divide by whose they are, for one Thread. */
   shares(checkout: string, thread: string): CheckoutShares
   /** Every change heard so far journaled. */
@@ -403,6 +406,13 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     }
     return offLoop.reader
   }
+
+  /**
+   * Every file event this host sent its writer taken before `settled` asks: the events go on the writer's port, and
+   * `settled` on the journal's socket, so without this the answer could come before a change heard just before it (a
+   * rename right as a turn ended, missing from a move's notice). A host with no writer of its own sends none.
+   */
+  const heardAll = (): Promise<void> => writer.command({ kind: "heard" }).then(() => undefined, () => undefined)
 
   const view = (): JournalView => {
     if (!reader) throw new Error("Mako's record of changes isn't open yet. Try again in a moment.")
@@ -577,12 +587,18 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       if (readerReleaseFailure) throw readerReleaseFailure.error
       return offLoopReader().partition(checkout, thread)
     },
+    checkpointFingerprint: async (checkout, thread) => {
+      wakeFor(checkout)
+      if (releasingReaders.size) await Promise.all(releasingReaders)
+      if (readerReleaseFailure) throw readerReleaseFailure.error
+      return offLoopReader().checkpointFingerprint(checkout, thread)
+    },
     shares: (checkout, thread) => {
       wakeFor(checkout)
       return shares(view(), checkout, thread)
     },
-    settled: () => journal.writes.settled(),
-    heard: () => journal.writes.settled({ rescans: false }),
+    settled: () => heardAll().then(() => journal.writes.settled()),
+    heard: () => heardAll().then(() => journal.writes.settled({ rescans: false })),
     async track(checkout) {
       const found = await locate(deps.git, checkout).catch(() => null)
       const roots = found ? [found.root] : await projectRepositories(deps.git, checkout).then((result) => ("roots" in result ? result.roots : []), () => [])

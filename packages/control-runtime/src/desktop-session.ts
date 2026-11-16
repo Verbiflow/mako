@@ -11,6 +11,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { ControlFault } from "@mako/control/control"
+import type { ControlSteps } from "@mako/control/program"
 import { listenPrivateControlSocket, type ControlCleanupPolicy } from "./private-socket.js"
 import { createLaunchFolder } from "./launch-folders.js"
 import { ControlWorkers, type ControlWorker, type ControlWorkerOptions } from "./control-workers.js"
@@ -131,10 +132,10 @@ export async function startDesktopControlSession(
   }
   if (!options.workers) void exited.then(() => workers.close())
   return {
-    request: (operation: SessionOperation, signal: AbortSignal) => {
+    request: (operation: SessionOperation, signal: AbortSignal, steps?: (steps: ControlSteps) => void) => {
       if (state === "ended")
         throw new ControlFault("session-closed", "This task's Local Control session is no longer active.", "not-dispatched")
-      return invokeControlSession(session(), operation, signal)
+      return invokeControlSession(session(), operation, signal, steps)
     },
     launch: { bin: directory, command, sessionFile } satisfies ControlLaunch,
     /** The worker serving this session, once it started and while it runs. */

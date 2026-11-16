@@ -80,6 +80,14 @@ for (const [text, kind] of [
   await tick()
   assert.deepEqual(completed, [], "a command reply alone never confirms compaction")
 }
+for (const stopReason of ["cancelled", "max_tokens"] as const) {
+  const results: LiveActionResult[] = []
+  new AcpCompaction(devinCompaction, result => results.push(result)).start(async () => ({ stopReason }))
+  await tick()
+  assert.equal(results[0]?.kind, "failed")
+  assert.equal(results[0]?.kind === "failed" ? results[0].cancelled : undefined, stopReason === "cancelled" ? true : undefined,
+    "a summary that runs out of room is a failure, not the person's cancellation")
+}
 mock.timers.enable({ apis: ["setTimeout"] })
 try {
   const timedOut: LiveActionResult[] = []

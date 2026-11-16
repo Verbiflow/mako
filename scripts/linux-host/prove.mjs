@@ -164,7 +164,7 @@ try {
       } else if (permissions.some((request) => request.kind === "authentication")) {
         result.state = "signed out"
         result.how = "the host asks how to sign in"
-      } else if (session.status === "failed" && classifyStartFailure(session.error, false) === "auth") {
+      } else if (session.status === "failed" && classifyStartFailure(session.error, false, session.failureEvidence) === "auth") {
         result.state = "signed out"
         result.how = session.error
       } else {

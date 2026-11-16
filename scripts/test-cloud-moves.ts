@@ -1,5 +1,11 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
+import { mock } from "node:test"
+import { DatabaseSync } from "node:sqlite"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { LiveRecords } from "@mako/host/conversations/live-records"
+import { LiveJournal } from "@mako/host/conversations/live-journal"
+import { AgentsWorld } from "./lib/agents-world.ts"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
@@ -10,7 +16,7 @@ import { Git } from "@mako/git"
 import { decodeOperation, ThreadFileHistorySchema } from "@mako/protocol"
 import { MoveCarrySchema, type MoveAnswer, type MoveCheckpoint, type MoveHandOverRequest } from "@mako/protocol/moves"
 import { fromHostOperation } from "@mako/host/contracts/host-operations"
-import { CloudMoves, cloudRuntimeOf, type CloudMovesOptions } from "@mako/host/conversations/cloud-moves"
+import { CloudMoves, cloudRuntimeOf, namedUuid, type CloudMovesOptions } from "@mako/host/conversations/cloud-moves"
 import type { TakenReady } from "@mako/host/conversations/cloud-readiness"
 import { captureMoveCheckpoint } from "@mako/host/workspaces/move-checkpoint"
 import { MoveNotQuietError } from "@mako/host/conversations/live-moves"
@@ -67,7 +73,7 @@ class Gateway {
   readonly handOvers = new Map<string, Promise<void>>()
   unreachable = 0
   /** What the machine answers when it's ready: one that takes a carry says so (`{ folder, carry: true }`). */
-  readyAnswer: { folder: string; carry: true } | undefined
+  readyAnswer: { folder: string; carry: true; promptActor?: true } | undefined
   answered(move: string, answer: MoveAnswer): MoveAnswer {
     const first = this.answers.get(move) ?? answer
     this.answers.set(move, first)
@@ -195,7 +201,7 @@ function setup(name: string, options: { worktree?: boolean; harnesses?: CloudMov
       confirm: (input) => threads.confirm(input),
       reclaim: (input) => threads.reclaim(input),
     },
-    snapshot: (id) => (id === conversation ? { session: { harness: "codex", nativeId: "n-1", nativePath: "/codex/n-1.jsonl", cwd: checkout, currentMode: "access:auto" } } : null),
+    session: (id) => (id === conversation ? { harness: "codex", nativeId: "n-1", nativePath: "/codex/n-1.jsonl", cwd: checkout, currentMode: "access:auto" } : undefined),
     checkout: () => (options.worktree === false ? undefined : { path: checkout, worktrees: [{ path: checkout }] }),
     repositoryOf: async () => repository,
     sendRecords: async (_link, paths) => {
@@ -256,6 +262,50 @@ const CarryArrivalSchema = z.object({ carry: z.object({ sha256: z.string() }).lo
 const CarryPlanSchema = z.object({ carry: z.object({ ref: z.object({ sha256: z.string() }).loose(), manifest: MoveCarrySchema }).optional() }).loose()
 
 try {
+  // The real live index supplies both resident and recovered session metadata without journal reads or commits.
+  {
+    const world = new AgentsWorld({ root: join(root, "metadata-world"), script: () => "Done." })
+    const { conversation } = await world.apex("codex")
+    world.say(conversation, "seed the native session")
+    await world.settle()
+    let live = world.live
+    const s = setup("metadata-plan", { make: (base) => ({ ...base, session: () => {
+      const found = live.session(conversation)
+      return found && { ...found, cwd: base.checkout(conversation)!.path }
+    } }) })
+    let cold: LiveConversations | undefined
+    const planWithoutJournals = async () => {
+      const noLoad = mock.method(LiveRecords.prototype, "load", () => { throw new Error("readiness loaded a conversation journal") })
+      const noCommit = mock.method(LiveJournal.prototype, "commit", () => { throw new Error("readiness committed a conversation journal") })
+      try { return await s.moves.readyPlan(s.conversation) }
+      finally { noLoad.mock.restore(); noCommit.mock.restore() }
+    }
+    try {
+      const warm = live.session(conversation)
+      assert.ok(warm?.nativeId && warm.nativePath, "the harness started and its native path is indexed")
+      assert.deepEqual((await planWithoutJournals()).paths, [warm.nativePath])
+      await world.close()
+      // A retired binding may name the same native session at its old path. Only the active binding is current.
+      const db = new DatabaseSync(join(world.root, "journals", `${conversation}.sqlite`))
+      try {
+        const row = z.object({ value: z.string() }).parse(db.prepare("SELECT value FROM metadata WHERE id=1").get())
+        const metadata = z.object({ control: z.object({ activeBindingId: z.string(), bindings: z.array(z.object({ id: z.string() }).loose()) }).loose() }).loose().parse(JSON.parse(row.value))
+        const binding = metadata.control.bindings.find((binding) => binding.id === metadata.control.activeBindingId)
+        assert.ok(binding)
+        metadata.control.bindings.unshift({ ...binding, id: randomUUID(), path: "/retired-binding/path" })
+        db.prepare("UPDATE metadata SET value=? WHERE id=1").run(JSON.stringify(metadata))
+      } finally { db.close() }
+      cold = new LiveConversations({ root: join(world.root, "journals"), appPath: world.root, driver: () => undefined, history: async () => null, emit: () => {} })
+      live = cold
+      assert.equal(live.held(conversation), undefined, "the journal is cold after reopening")
+      assert.deepEqual((await planWithoutJournals()).paths, [warm.nativePath], "the recovered listing still validates and carries the tab")
+      assert.equal(live.held(conversation), undefined, "planning left it cold")
+    } finally {
+      if (cold) await cold.stop()
+      else await world.close()
+      s.threads.close()
+    }
+  }
   // The whole way: ahead, released, arrived with what was sent after, claimed, confirmed, resumed under its own id.
   {
     const s = setup("moved")
@@ -498,6 +548,68 @@ try {
     assert.equal(s.gateway.calls.filter((call) => call.channel === "mako:live-continue-turn").length, 1)
   }
 
+  // A turn wait the Thread's agent armed ends with the move, and its agent hears so there: named among what the handoff
+  // stopped when its turn goes on there, else as one message of its own, under the move's id, sent once.
+  {
+    const note = "Mako: your wait \"Waiting for CI on #412\" ended when this Thread moved here. If you still need it, call wait again."
+    const departed: number[] = []
+    const withWait = (base: CloudMovesOptions): CloudMovesOptions => ({ ...base, live: { ...base.live, waitsDeparting: (_conversationId, since) => (departed.push(since), [note]) } })
+    const s = setup("wait-handoff", { make: withWait })
+    const turn = randomUUID()
+    s.work.running = turn
+    s.busy.reasons.push("a tab is running a turn")
+    const outcome = await s.moves.move(s.conversation, move(), { why: "asked" })
+    assert.equal(outcome.kind, "moved", JSON.stringify(outcome))
+    const continued = s.gateway.calls.find((call) => call.channel === "mako:live-continue-turn")
+    assert.deepEqual(ArgsSchema.parse(continued?.args)[2], { reason: "handed-off", continues: turn, stopped: [note] }, "the continuation names the ended wait")
+    assert.ok(!s.gateway.calls.some((call) => call.channel === "mako:live-prompt"), "and no message of its own")
+
+    const idle = setup("wait-idle", { make: withWait })
+    idle.gateway.readyAnswer = { folder: idle.checkout, carry: true, promptActor: true }
+    const id = move()
+    const moved = await idle.moves.move(idle.conversation, id, { why: "asked" })
+    assert.equal(moved.kind, "moved", JSON.stringify(moved))
+    const prompts = idle.gateway.calls.filter((call) => call.channel === "mako:live-prompt")
+    assert.equal(prompts.length, 1, "an idle Thread hears it as one message")
+    const [conversation, requestId, text] = ArgsSchema.parse(prompts[0]?.args)
+    assert.equal(conversation, idle.conversation)
+    assert.equal(text, note)
+    assert.deepEqual(ArgsSchema.parse(prompts[0]?.args)[5], { actor: { kind: "service", name: "turn-wait" } }, "as Mako's words, never the person's")
+    assert.equal(requestId, namedUuid(`mako move\0${id}\0${idle.conversation}\0turn-waits`), "under the move's id, so a repeat runs once")
+    await idle.moves.move(idle.conversation, id, { why: "asked" })
+    assert.equal(idle.gateway.calls.filter((call) => call.channel === "mako:live-prompt").length, 1, "asked again, sent once")
+    assert.ok(departed.length >= 2 && departed.every((since) => since > 0), "asked with the move's start")
+
+    // A machine from before `promptActor` would draw the note as the person's message: it isn't sent there.
+    const older = setup("wait-idle-older", { make: withWait })
+    older.gateway.readyAnswer = { folder: older.checkout, carry: true }
+    const olderMoved = await older.moves.move(older.conversation, move(), { why: "asked" })
+    assert.equal(olderMoved.kind, "moved", JSON.stringify(olderMoved))
+    assert.ok(!older.gateway.calls.some((call) => call.channel === "mako:live-prompt"), "dropped, not sent as the person's")
+  }
+
+  // A move refused after the hand-over ended the Thread's waits: the Thread stays, and its waits are armed again here,
+  // since the move's start, or nothing would ever wake its agent.
+  {
+    const stayed: Array<{ conversation: string; since: number }> = []
+    const departedAt: number[] = []
+    const s = setup("wait-refused", {
+      make: (base) => ({
+        ...base,
+        live: {
+          ...base.live,
+          waitsDeparting: (_conversationId, since) => (departedAt.push(since), ["Mako: your wait \"CI\" ended when this Thread moved here. If you still need it, call wait again."]),
+          waitsStayed: (conversation, since) => void stayed.push({ conversation, since }),
+        },
+      }),
+    })
+    s.gateway.arrival = new Error("the machine's clone isn't there")
+    const outcome = await s.moves.move(s.conversation, move())
+    assert.equal(outcome.kind, "kept-here", JSON.stringify(outcome))
+    assert.ok(departedAt.length > 0, "the hand-over ended the waits")
+    assert.deepEqual(stayed, [{ conversation: s.conversation, since: departedAt[0]! }], "and the refusal arms them again, since the move's start")
+  }
+
   // A quit's handoff answers once this Mac let go (`released`), while the claim is still out; the move goes on in this
   // host and the cloud. A sleep's wait for every move in flight (`settled`) needs this Mac only until the cloud has the
   // move: handed over, the cloud claims and starts it while the Mac sleeps.
@@ -680,11 +792,11 @@ try {
     const f: Setup = setup("own-branch-fork", { make: (base) => ({
       ...base,
       checkout: (id) => (forked && id === fork ? base.checkout(id) : undefined),
-      snapshot: (id) => {
-        const shown = base.snapshot(f.conversation)
-        if (!shown) return null
-        if (id === fork) return { session: { ...shown.session, nativeId: "n-2", nativePath: "/codex/n-2.jsonl" } }
-        return id === f.conversation ? { session: { ...shown.session, cwd: join(f.folder, "Users", "ada", "project") } } : null
+      session: (id) => {
+        const shown = base.session(f.conversation)
+        if (!shown) return undefined
+        if (id === fork) return { ...shown, nativeId: "n-2", nativePath: "/codex/n-2.jsonl" }
+        return id === f.conversation ? { ...shown, cwd: join(f.folder, "Users", "ada", "project") } : undefined
       },
       archived: (id) => forked && id === f.conversation,
       ownBranch: async (id) => {
@@ -704,7 +816,7 @@ try {
     const g: Setup = setup("own-branch-fork-unstarted", { make: (base) => ({
       ...base,
       checkout: (id) => (fresh && id === unstarted ? base.checkout(id) : undefined),
-      snapshot: (id) => (id === unstarted ? { session: { harness: "codex", cwd: g.checkout, currentMode: null } } : base.snapshot(id)),
+      session: (id) => (id === unstarted ? { harness: "codex", cwd: g.checkout, currentMode: null } : base.session(id)),
       archived: (id) => fresh && id === g.conversation,
       ownBranch: async () => ((fresh = true), unstarted),
     }) })
@@ -751,9 +863,9 @@ try {
       make: (base) => ({
         ...base,
         checkout: () => ({ path: project, worktrees: [{ path: api }, { path: join(project, "fix") }] }),
-        snapshot: (id) => {
-          const shot = base.snapshot(id)
-          return shot && { session: { ...shot.session, cwd: project } }
+        session: (id) => {
+          const shot = base.session(id)
+          return shot && { ...shot, cwd: project }
         },
       }),
     })

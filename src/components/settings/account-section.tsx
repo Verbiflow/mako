@@ -14,7 +14,7 @@ import { Avatar } from "@/components/ui/avatar"
 import { Action, Chip, ConnectionChip, Eyebrow, ListCard, ListCardRow, Segmented, Toggle } from "@/components/ui/kit"
 import { MakoTile } from "@/components/ui/mako-mark"
 import { HarnessIcon } from "@/components/ui/provider-icon"
-import { cloudAccount, useCloudAccount } from "@/state/cloud-account"
+import { cloudAccount, useCloudAccount, watchAccountDetail } from "@/state/cloud-account"
 import { handOff, useHandOff } from "@/state/handoff"
 import { setPref, usePrefs } from "@/state/prefs"
 import { useThreads } from "@/state/thread-store"
@@ -212,10 +212,10 @@ function SignedInView({ state, cloud }: { state: SignedIn; cloud: string | null 
       <TurnOnCard />
 
       {invited ? <SyncSection /> : null}
-      {invited ? <CloudSignIns /> : null}
+      {invited ? <CloudSignIns account={state.account.id} /> : null}
       {invited ? <HandOffSettings /> : null}
 
-      <Browsers connection={state.connection} />
+      <Browsers connection={state.connection} account={state.account.id} />
     </>
   )
 }
@@ -225,21 +225,11 @@ function SignedInView({ state, cloud }: { state: SignedIn; cloud: string | null 
  * sign-in for this Mac and the cloud, which keeps it fresh for both, so cloud Threads keep working while this Mac
  * sleeps; the rest are sent as they are. Nothing here signs in twice.
  */
-function CloudSignIns() {
+function CloudSignIns({ account }: { account: string }) {
   const signIns = useCloudAccount((store) => store.signIns)
   const busy = useCloudAccount((store) => store.busy === "share-sign-ins")
   const failure = useCloudAccount((store) => (store.failure?.action === "share-sign-ins" ? store.failure.message : undefined))
-  useEffect(() => {
-    void cloudAccount.loadSignIns()
-    // The cloud refreshes on its own schedule, so the rows are read again while they're shown.
-    const refresh = () => void cloudAccount.loadSignIns()
-    const timer = setInterval(refresh, 60_000)
-    window.addEventListener("focus", refresh)
-    return () => {
-      clearInterval(timer)
-      window.removeEventListener("focus", refresh)
-    }
-  }, [])
+  useEffect(() => watchAccountDetail("sign-ins", account), [account])
   const sharing = signIns?.sharing ?? true
   const rows = sharing ? (signIns?.harnesses ?? []) : []
   const lapsing = rows.some((row) => !row.rotates && row.status === "sent" && hoursLeft(row.expiresAt) < 24)
@@ -445,22 +435,15 @@ function hoursLeft(expiresAt: string | null): number {
  * the account with a click, so each is listed with what makes a stranger's stand out: which browser, where it signed
  * in and how, and where it was last used. Signing one out takes effect at once, and at the sign-in provider too.
  */
-function Browsers({ connection }: { connection: SignedIn["connection"] }) {
+function Browsers({ connection, account }: { connection: SignedIn["connection"]; account: string }) {
   const browsers = useCloudAccount((store) => store.browsers)
   const failure = useCloudAccount((store) => store.failure)
   const busy = useCloudAccount((store) => store.busy)
   const [confirming, setConfirming] = useState<string>()
   useEffect(() => {
     if (connection !== "connected") return
-    void cloudAccount.loadBrowsers()
-    const refresh = () => void cloudAccount.loadBrowsers()
-    const timer = setInterval(refresh, 60_000)
-    window.addEventListener("focus", refresh)
-    return () => {
-      clearInterval(timer)
-      window.removeEventListener("focus", refresh)
-    }
-  }, [connection])
+    return watchAccountDetail("browsers", account)
+  }, [connection, account])
   if (!browsers) {
     return failure?.action === "browsers" ? (
       <div className="flex flex-col gap-2">

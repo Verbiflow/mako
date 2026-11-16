@@ -5,6 +5,9 @@ import type {
   HarnessUpdates,
 } from "@mako/host/contracts/harness-updates"
 import { createHook, createStore } from "@/state/store"
+import { pageRefetch } from "@/state/view-refetch"
+import { DESK_SCOPE } from "@/state/desk-refetch"
+import type { ViewRefetch } from "@/lib/view-refetch"
 
 export interface DaemonInfo {
   pid: number
@@ -49,12 +52,61 @@ const requests = new Map<string, Promise<void>>()
 const loadedAt = new Map<string, number>()
 const generations = new Map<string, number>()
 const scopes = new Map<string, { provider: string; cwd: string }>()
-const retries = new Map<string, { timer: ReturnType<typeof setTimeout>; delay: number }>()
+interface DiscoveryRetry {
+  provider: string
+  cwd: string
+  delay: number
+  due: number
+  started: boolean
+  timer?: ReturnType<typeof setTimeout>
+}
+const retries = new Map<string, DiscoveryRetry>()
+let readers: ViewRefetch | undefined
 /** Backoff for asking again after a failed discovery; tests shorten it. */
 export const discoveryRetry = { firstMs: 10_000, maxMs: 120_000 }
 
+function providerReads(): ViewRefetch {
+  if (readers) return readers
+  const reads = readers = pageRefetch()
+  reads.onState(() => {
+    for (const [key, retry] of retries) {
+      if (!reads.visible || !reads.connected(DESK_SCOPE)) {
+        clearTimeout(retry.timer)
+        retry.timer = undefined
+      } else armRetry(key, retry)
+    }
+  })
+  return reads
+}
+
+function armRetry(key: string, retry: DiscoveryRetry): void {
+  const reads = providerReads()
+  if (retry.started || retry.timer !== undefined || !reads.visible || !reads.connected(DESK_SCOPE)) return
+  retry.timer = setTimeout(() => {
+    retry.timer = undefined
+    if (retries.get(key) !== retry || !reads.visible || !reads.connected(DESK_SCOPE)) return
+    retry.started = true
+    void providers.load(retry.provider, true, retry.cwd).catch(() => {})
+  }, Math.max(0, retry.due - Date.now()))
+}
+
+/** Composer and picker interests share the page's visibility, focus catch-up and five-minute reconcile. */
+export function watchProviderProfile(provider: string, cwd: string): () => void {
+  if (!hasBridge()) return () => {}
+  const key = providerProfileKey(provider, cwd)
+  const lease = providerReads().watch(JSON.stringify(["provider", provider, cwd]), {
+    scope: DESK_SCOPE, domain: "providers", key, fields: ["all"], every: () => 300_000,
+    read: async () => {
+      // The failed discovery already owns its deadline. A focus or periodic read must not defeat its backoff.
+      const retry = retries.get(key)
+      if (!retry || retry.started) await providers.load(provider, false, cwd).catch(() => {})
+    },
+  })
+  return () => lease.release()
+}
+
 /**
- * A failed discovery asks again on its own. The composer once waited for the
+ * A failed discovery asks again while the page can show it. The composer once waited for the
  * next window focus to recover from a timed-out `list_available_models`, and a
  * picker reading "Model unavailable" for that long looks like a broken account.
  */
@@ -64,12 +116,9 @@ function scheduleRetry(key: string, provider: string, cwd: string): void {
     ? Math.min(previous.delay * 2, discoveryRetry.maxMs)
     : discoveryRetry.firstMs
   if (previous) clearTimeout(previous.timer)
-  const timer = setTimeout(() => {
-    if (retries.get(key)?.timer !== timer) return
-    retries.set(key, { timer, delay })
-    void providers.load(provider, true, cwd).catch(() => {})
-  }, delay)
-  retries.set(key, { timer, delay })
+  const retry = { provider, cwd, delay, due: Date.now() + delay, started: false }
+  retries.set(key, retry)
+  armRetry(key, retry)
 }
 
 function clearRetry(key: string): void {

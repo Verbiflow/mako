@@ -113,8 +113,9 @@ export function openThreads({ environment, readOnly, ledger, harnesses, readFile
       subscribed,
       formats: {
         // Every shared store: the record store, unread index and kept outputs are another process's to write, so their files are read.
-        key: () => formatsKey(formats()),
-        changed: () => emit({ type: "store-formats", formats: formats() }),
+        read: formats,
+        key: formatsKey,
+        changed: (standing) => emit({ type: "store-formats", formats: standing }),
       },
     })
     : () => {}
@@ -243,7 +244,7 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
   })
   declareThreadLifecycleMethods(methods, lifecycle, archives, emit)
   followNativeArchives(lifecycle, (subscriber) => catalog.subscribe(subscriber), emit)
-  declareThreadGroupMethods(methods, store, (thread) => live.announceGroup(thread), threads.storeProblem, (message) => emit({ type: "notice", level: "error", message }))
+  declareThreadGroupMethods(methods, store, (thread) => live.announceGroup(thread), threads.storeProblem, (message) => hostWarn("threads", "a Thread group change failed", { error: message }))
   declareThreadTitleMethods(methods, { store, emit })
   declareChatFolderMethods(methods)
   return lifecycle

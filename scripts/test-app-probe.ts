@@ -122,12 +122,12 @@ setInterval(() => {
 }, 100)
 `)
 
-async function until<T>(what: string, read: () => Promise<T | undefined> | T | undefined, ms = 15_000): Promise<T> {
+async function until<T>(what: string | (() => string), read: () => Promise<T | undefined> | T | undefined, ms = 15_000): Promise<T> {
   const end = Date.now() + ms
   for (;;) {
     const found = await read()
     if (found !== undefined) return found
-    if (Date.now() > end) throw new Error(`Timed out waiting for ${what}`)
+    if (Date.now() > end) throw new Error(`Timed out waiting for ${what instanceof Function ? what() : what}`)
     await new Promise((resolve) => setTimeout(resolve, 150))
   }
 }
@@ -162,7 +162,10 @@ try {
   assert.ok(!running.pids.includes(leftover), "the escaped process is outside the run's tree")
   const leftovers = new Map(running.leftovers.map((entry) => [entry.pid, entry]))
   assert.equal(leftovers.get(sure)?.sure, true, `a process carrying the app's mark counts wherever it works: ${JSON.stringify(running.leftovers)}`)
-  assert.equal(leftovers.get(leftover)?.sure, false, "sleep's environment can't be read, so it counts by working in the checkout")
+  // Whether sleep's environment can be read is the machine's: a Mac protects its platform binaries' (`ps -E` shows
+  // none, and it counts by working in the checkout), a CI runner's Mac and Linux don't (its mark is read: sure).
+  const readable = (() => { try { return execFileSync("ps", ["-E", "-ww", "-o", "command=", "-p", String(leftover)], { encoding: "utf8" }).includes("MAKO_APP_RUN=") } catch { return false } })()
+  assert.equal(leftovers.get(leftover)?.sure, readable, readable ? "sleep's environment is read, and carries the app's mark" : "sleep's environment can't be read, so it counts by working in the checkout")
   assert.match(leftovers.get(leftover)!.command, /sleep 60/)
   assert.ok(!leftovers.has(started[2]!), "a process in the checkout whose environment shows no mark isn't the app's")
   assert.ok(running.since !== undefined && running.since <= Date.now())
@@ -207,8 +210,11 @@ try {
   }
   const folder = (view: AppProbeView, path: string) => view.changed.entries.find((entry) => entry.folder === path)
   const began = performance.now()
-  const view = await until("the history to show the deep writes", async () => {
+  // What the last read found, for a timeout to say which of the four writes the history hadn't shown.
+  let lastSeen = "nothing read"
+  const view = await until(() => `the history to show the deep writes; the last read had ${lastSeen}`, async () => {
     const found = await probeApp(await inputFor())
+    lastSeen = JSON.stringify({ changedBy: found.changedBy, folders: found.changed.entries.map((entry) => [entry.folder, entry.paths.slice(0, 6)]), notes: found.notes.filter((note) => note.includes("/private/tmp")) }).slice(0, 2_500)
     const entry = folder(found, join(support, "probe-app"))
     return entry?.paths.includes(join("deep", "a", "b", "state.json")) && folder(found, cache)?.paths.includes("blob") &&
       folder(found, join(support, "other-app"))?.paths.includes(join("x", "y", "z.txt")) &&

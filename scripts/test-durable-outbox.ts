@@ -145,6 +145,26 @@ async function until(test: () => boolean, ms = 10_000): Promise<void> {
   }
 }
 
+// Every not-yet refusal the host words is said in the row's words, never its internals or an instruction to send again;
+// a reason no rule names waits as "Waiting for Mako", its words going to the log.
+{
+  const { WAITING_FOR_MAKO, waitsFor } = await import("../src/state/delivery-policy")
+  for (const said of [
+    "Wait for the workspace rewind to finish before sending",
+    "Wait for this conversation to connect and finish its pending operation. Send the message again.",
+    "A provider switch is pending",
+    "Resolve the previous provider action before sending",
+    "Codex is still ending the previous turn",
+    "This session is moving to the cloud",
+  ]) {
+    const words = waitsFor(new Error(said))
+    assert.match(words ?? "", /^Waiting for /, said)
+    assert.doesNotMatch(words ?? "", /pending operation|provider action|again/i, said)
+  }
+  assert.equal(waitsFor(new Error("The agent execution owner is unavailable.")), undefined, "not a wait: the host refused it")
+  assert.equal(WAITING_FOR_MAKO, "Waiting for Mako")
+}
+
 if (!reloaded) {
   try {
     // 1. Mako is away: three messages are taken at once, each shown waiting and kept, and nothing is asked of the host.
@@ -171,13 +191,13 @@ if (!reloaded) {
     host.refusals = [new Error("Wait for the workspace rewind to finish before sending")]
     const first = crypto.randomUUID(), second = crypto.randomUUID()
     assert.equal(await sendTo(conversation, "first", [], first), true)
-    assert.equal(waiting(first), "Wait for the workspace rewind to finish before sending")
+    assert.equal(waiting(first), "Waiting for a rewind to finish", "in the row's words, not the host's")
     assert.equal(await sendTo(conversation, "second", [], second), true)
     assert.equal(waiting(second), "Waiting behind an earlier message")
     assert.equal(host.took.length, 0, "the second doesn't overtake the first")
     await sendWaitingNow(conversation)
     assert.deepEqual(host.took.map((each) => each.id), [first, second])
-    console.log("Durable outbox: busy — a not-yet refusal waits with the host's reason; later messages wait behind it; then both in order")
+    console.log("Durable outbox: busy — a not-yet refusal waits with its reason in the row's words; later messages wait behind it; then both in order")
 
     // 3. The host's event loop stalls 5 s: the next message is shown at once, and reaches the host after the first.
     reset()
@@ -198,7 +218,7 @@ if (!reloaded) {
     const lost = crypto.randomUUID()
     mock.method(bridge, "liveSnapshot", async () => { throw new RuntimeDisconnectedError(true) })
     assert.equal(await sendTo(conversation, "lost answer", [], lost), true)
-    assert.equal(waiting(lost), "Mako is busy and hasn't answered yet")
+    assert.equal(waiting(lost), "Waiting for Mako, which hasn't answered yet")
     host.answerLost = false
     mock.method(bridge, "liveSnapshot", async () => snapshot())
     await sendWaitingNow(conversation)

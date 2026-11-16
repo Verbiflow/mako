@@ -1,3 +1,4 @@
+import { TurnWaitSchema, type TurnWait, type TurnWaitCancel } from "../contracts/turn-waits.js"
 import { ReportActionSchema, ReportActionTargetSchema, ReportDispositionSchema, pendingReportAction, type ReportAction, type ReportActionTarget, type ReportActionsPage, type ReportDisposition } from "../contracts/report-actions.js"
 import { createHash, randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, realpathSync, renameSync } from "node:fs"
@@ -333,6 +334,8 @@ const MetaRowSchema = z.object({ value: z.string() })
 const SessionRowSchema = z.object({ session_id: z.string() })
 const LocatorRowSchema = z.object({ session_id: z.string(), harness: z.string(), native_id: z.string().nullable() })
 const LocatorPathRowSchema = z.object({ path: z.string(), harness: z.string() })
+/** An answered ask's row, read for every row each time a Fin's open asks are read, so its schema is made once. */
+const AnsweredAskRowSchema = z.object({ ask: z.string() })
 const SessionDetailSchema = z.object({
   id: z.string(),
   origin: z.string(),
@@ -637,6 +640,12 @@ CREATE INDEX IF NOT EXISTS agent_answers_op ON agent_answers(op);
 CREATE TABLE IF NOT EXISTS agent_pull_wakes (
   wait TEXT PRIMARY KEY, child_thread TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL, delivered_at INTEGER);
 CREATE INDEX IF NOT EXISTS agent_pull_wakes_waiting ON agent_pull_wakes(at) WHERE delivered_at IS NULL;
+CREATE TABLE IF NOT EXISTS turn_waits (
+  id TEXT PRIMARY KEY, conversation TEXT NOT NULL, state TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL,
+  request TEXT, delivered_at INTEGER);
+CREATE INDEX IF NOT EXISTS turn_waits_armed ON turn_waits(conversation) WHERE state = 'armed';
+CREATE INDEX IF NOT EXISTS turn_waits_unsent ON turn_waits(at) WHERE state = 'fired' AND delivered_at IS NULL;
+CREATE INDEX IF NOT EXISTS turn_waits_request ON turn_waits(request) WHERE request IS NOT NULL;
 `
 const RecordRowSchema = z.object({ record: z.string() })
 const LimitNoticeRowSchema = z.object({ root_thread: z.string(), record: z.string() })
@@ -689,6 +698,10 @@ export const KeptPullWakeSchema = z.object({
 export type KeptPullWake = z.infer<typeof KeptPullWakeSchema>
 function keptPullWake(row: Record<string, SQLOutputValue>): KeptPullWake {
   return KeptPullWakeSchema.parse(JSON.parse(RecordRowSchema.parse(row).record))
+}
+
+function keptTurnWait(row: Record<string, SQLOutputValue>): TurnWait {
+  return TurnWaitSchema.parse(JSON.parse(RecordRowSchema.parse(row).record))
 }
 
 /** A report its parent hasn't heard yet, and the request already named to carry it, if one was. */
@@ -789,7 +802,8 @@ export class ThreadStore {
   private edgesSeen: { revision: number; edges: ThreadEdges } | undefined
   /** The rows the last edges were read from, kept through commits: a read that finds the same keeps the same object. */
   private edgesKept: { records: string[]; native: Set<string>; edges: ThreadEdges } | undefined
-  private worktreesSeen: { revision: number; worktrees: ThreadWorktree[] } | undefined
+  /** Worktree inputs survive unrelated local commits; worktree/alias changes and foreign commits invalidate. */
+  private worktreesSeen: ThreadWorktree[] | undefined
   /** Who hears this device's worktrees change here (`onWorktrees`). */
   private readonly worktreeListeners = new Set<() => void>()
   private changeSeq = 0
@@ -1358,7 +1372,7 @@ export class ThreadStore {
     const known = this.depth === 0 ? this.reportAsksSeen.get(child) : undefined
     if (known) return known
     const reports = this.reportsOf(child)
-    const answered = new Set(this.sql("SELECT ask FROM agent_answers WHERE child_thread = ?").all(child).map((row) => z.object({ ask: z.string() }).parse(row).ask))
+    const answered = new Set(this.sql("SELECT ask FROM agent_answers WHERE child_thread = ?").all(child).map((row) => AnsweredAskRowSchema.parse(row).ask))
     const superseded = new Set(reports.flatMap((report) => report.supersedes ?? []))
     const latest = reports.at(-1)
     const open = reports.filter((report) => (report.retainsQuestion || report === latest) && !report.implicit &&
@@ -1592,6 +1606,12 @@ export class ThreadStore {
     return row ? keptAnswer(row) : undefined
   }
 
+  /** The requests this Fin's answers went as (`KeptAnswer.request`): its Apex's answers to its questions, which owe no reply. */
+  answerRequests(child: string): Set<string> {
+    this.syncVersion()
+    return new Set(this.sql("SELECT record, delivered_at FROM agent_answers WHERE child_thread = ?").all(child).map((row) => keptAnswer(row).request))
+  }
+
   /** The answer that took an ask, if one did. */
   answerOf(ask: string): KeptAnswer | undefined {
     this.syncVersion()
@@ -1691,6 +1711,143 @@ export class ThreadStore {
       if (wake.obsolete !== undefined) return
       this.sql("UPDATE agent_pull_wakes SET record = ?, delivered_at = coalesce(delivered_at, ?) WHERE wait = ?").run(JSON.stringify({ ...wake, obsolete: at }), at, wait)
     })
+  }
+
+  /**
+   * Arms a turn's wait (`contracts/turn-waits.ts`), in one write: the same id again finds the one armed first
+   * (`existed`), and a Thread's conversation holds one armed wait, so a newer one ends the one before it (`replaced`).
+   */
+  armTurnWait(input: TurnWait): { wait: TurnWait; replaced: TurnWait[]; existed: boolean } {
+    const wait = TurnWaitSchema.parse(input)
+    return this.write(() => {
+      const held = this.sql("SELECT record FROM turn_waits WHERE id = ?").get(wait.id)
+      if (held) return { wait: keptTurnWait(held), replaced: [], existed: true }
+      const replaced = this.sql("SELECT record FROM turn_waits WHERE conversation = ? AND state = 'armed' ORDER BY at, id").all(wait.conversation)
+        .map(keptTurnWait).map((before) => this.putTurnWait({ ...before, state: "cancelled", cancelled: { at: wait.createdAt, by: "replaced" } }))
+      this.sql("INSERT INTO turn_waits (id, conversation, state, record, at, request, delivered_at) VALUES (?, ?, ?, ?, ?, NULL, NULL)")
+        .run(wait.id, wait.conversation, wait.state, JSON.stringify(wait), wait.createdAt)
+      return { wait, replaced, existed: false }
+    })
+  }
+
+  /** A turn's wait by its id, in whatever state. */
+  turnWait(id: string): TurnWait | undefined {
+    this.syncVersion()
+    const row = this.sql("SELECT record FROM turn_waits WHERE id = ?").get(id)
+    return row ? keptTurnWait(row) : undefined
+  }
+
+  /** Every armed wait, oldest first: what a starting host watches again. */
+  armedTurnWaits(): TurnWait[] {
+    this.syncVersion()
+    return this.sql("SELECT record FROM turn_waits WHERE state = 'armed' ORDER BY at, id").all().map(keptTurnWait)
+  }
+
+  /** A conversation's waits in every state, oldest first: what a move reads to tell the agent which of them it ended. */
+  turnWaitsOf(conversation: string): TurnWait[] {
+    this.syncVersion()
+    return this.sql("SELECT record FROM turn_waits WHERE conversation = ? ORDER BY at, id").all(conversation).map(keptTurnWait)
+  }
+
+  /** The wait a conversation has armed, if it has one. */
+  armedTurnWaitOf(conversation: string): TurnWait | undefined {
+    this.syncVersion()
+    const row = this.sql("SELECT record FROM turn_waits WHERE conversation = ? AND state = 'armed' ORDER BY at DESC, id DESC").get(conversation)
+    return row ? keptTurnWait(row) : undefined
+  }
+
+  /**
+   * Keeps that one of an armed wait's items is met, the first time it is, so an `all` wait's progress survives a
+   * restart; and when `fire` answers a firing for the wait as it now stands (the item completed it), claims it in the
+   * same write, so no host stops between the two with a wait met and still armed.
+   */
+  noteTurnWaitMet(id: string, key: string, met: { at: number; words: string }, fire?: (wait: TurnWait) => NonNullable<TurnWait["fired"]> | undefined): { wait: TurnWait | undefined; claimed: boolean } {
+    return this.write(() => {
+      const held = this.sql("SELECT record FROM turn_waits WHERE id = ?").get(id)
+      if (!held) return { wait: undefined, claimed: false }
+      const before = keptTurnWait(held)
+      if (before.state !== "armed") return { wait: before, claimed: false }
+      const wait = before.met[key] === undefined ? { ...before, met: { ...before.met, [key]: met } } : before
+      const fired = fire?.(wait)
+      if (fired) return { wait: this.putTurnWait({ ...wait, state: "fired", fired }), claimed: true }
+      return { wait: wait === before ? before : this.putTurnWait(wait), claimed: false }
+    })
+  }
+
+  /** Claims a wait's one firing, in one write: only an armed wait fires, and only once (`claimed: false` after). */
+  claimTurnWait(id: string, fired: NonNullable<TurnWait["fired"]>): { wait: TurnWait | undefined; claimed: boolean } {
+    return this.write(() => {
+      const held = this.sql("SELECT record FROM turn_waits WHERE id = ?").get(id)
+      if (!held) return { wait: undefined, claimed: false }
+      const wait = keptTurnWait(held)
+      if (wait.state !== "armed") return { wait, claimed: false }
+      return { wait: this.putTurnWait({ ...wait, state: "fired", fired }), claimed: true }
+    })
+  }
+
+  /** A fired wait's note reached its conversation's queue. */
+  markTurnWaitDelivered(id: string, at: number): void {
+    this.write(() => {
+      const held = this.sql("SELECT record FROM turn_waits WHERE id = ?").get(id)
+      if (!held) return
+      const wait = keptTurnWait(held)
+      if (wait.state !== "fired" || wait.delivered || wait.cancelled) return
+      this.putTurnWait({ ...wait, delivered: { at } })
+    })
+  }
+
+  /**
+   * Ends a wait that hasn't woken anyone: an armed one is cancelled; a fired one whose note hasn't gone is retired,
+   * never sent (`ended: "retired"`); one delivered already, or ended before, is left as it is (`ended: undefined`).
+   */
+  cancelTurnWait(id: string, at: number, by: TurnWaitCancel): { wait: TurnWait | undefined; ended?: "cancelled" | "retired" } {
+    return this.write(() => {
+      const held = this.sql("SELECT record FROM turn_waits WHERE id = ?").get(id)
+      if (!held) return { wait: undefined }
+      const wait = keptTurnWait(held)
+      if (wait.cancelled || wait.delivered) return { wait }
+      if (wait.state === "armed") return { wait: this.putTurnWait({ ...wait, state: "cancelled", cancelled: { at, by } }), ended: "cancelled" }
+      return { wait: this.putTurnWait({ ...wait, cancelled: { at, by } }), ended: "retired" }
+    })
+  }
+
+  /**
+   * Arms again a wait a move ended (`cancelled.by: move`) that never fired, when the move didn't happen: the Thread
+   * stayed, so what it waited on still matters here. Any other wait is left as it is (`rearmed: false`).
+   */
+  rearmTurnWait(id: string): { wait: TurnWait | undefined; rearmed: boolean } {
+    return this.write(() => {
+      const held = this.sql("SELECT record FROM turn_waits WHERE id = ?").get(id)
+      if (!held) return { wait: undefined, rearmed: false }
+      const wait = keptTurnWait(held)
+      if (wait.state !== "cancelled" || wait.cancelled?.by !== "move" || wait.fired) return { wait, rearmed: false }
+      const rearmed: TurnWait = { ...wait, state: "armed" }
+      delete rearmed.cancelled
+      return { wait: this.putTurnWait(rearmed), rearmed: true }
+    })
+  }
+
+  /** Waits fired and not yet delivered, oldest first: what a starting host sends once, under the request each kept. */
+  undeliveredTurnWaits(): TurnWait[] {
+    this.syncVersion()
+    return this.sql("SELECT record FROM turn_waits WHERE state = 'fired' AND delivered_at IS NULL ORDER BY at, id").all()
+      .map(keptTurnWait).filter((wait) => !wait.cancelled)
+  }
+
+  /** The wait whose note goes as `request`, for its handoff to read it again. */
+  turnWaitOfRequest(request: string): TurnWait | undefined {
+    this.syncVersion()
+    const row = this.sql("SELECT record FROM turn_waits WHERE request = ?").get(request)
+    return row ? keptTurnWait(row) : undefined
+  }
+
+  private putTurnWait(wait: TurnWait): TurnWait {
+    const kept = TurnWaitSchema.parse(wait)
+    // A cancelled fired wait counts as delivered for the unsent index: nothing will send it.
+    const delivered = kept.delivered?.at ?? (kept.state === "fired" && kept.cancelled ? kept.cancelled.at : null)
+    this.sql("UPDATE turn_waits SET state = ?, record = ?, request = ?, delivered_at = ? WHERE id = ?")
+      .run(kept.state, JSON.stringify(kept), kept.fired?.request ?? null, delivered, kept.id)
+    return kept
   }
 
   /** Spawns waiting on a tree's running budget, oldest first. */
@@ -1858,6 +2015,7 @@ export class ThreadStore {
   }
 
   private worktreesMoved(): void {
+    this.worktreesSeen = undefined
     for (const listener of this.worktreeListeners) listener()
   }
 
@@ -1867,13 +2025,16 @@ export class ThreadStore {
    * project folder as `project`.
    */
   worktrees(): ThreadWorktree[] {
-    // Every summary, status and read of a worktree asks: read once per commit, as `groups` is.
+    // Summaries ask repeatedly: only worktree/alias changes need these rows again, not report/title commits.
     this.syncVersion()
-    const held = this.worktreesSeen
-    if (held && held.revision === this.revision && this.depth === 0) return [...held.worktrees]
-    const worktrees = this.readWorktrees()
-    if (this.depth === 0) this.worktreesSeen = { revision: this.revision, worktrees }
-    return [...worktrees]
+    const held = this.depth === 0 ? this.worktreesSeen : undefined
+    const worktrees = held ?? this.readWorktrees()
+    if (this.depth === 0) this.worktreesSeen = worktrees
+    // Cache row inputs, not resolved aliases: a local merge can change the winner without changing these rows.
+    return worktrees.map((worktree) => {
+      const thread = this.thread(worktree.thread)?.id ?? worktree.thread
+      return thread === worktree.thread ? worktree : { ...worktree, thread }
+    })
   }
 
   private readWorktrees(): ThreadWorktree[] {
@@ -1888,7 +2049,7 @@ export class ThreadStore {
         const row = WorktreeRowSchema.parse(found)
         const worktree: ThreadWorktree = {
           path: row.path,
-          thread: this.thread(ThreadIdSchema.parse(row.thread_id))?.id ?? ThreadIdSchema.parse(row.thread_id),
+          thread: ThreadIdSchema.parse(row.thread_id),
           repoRoot: row.repo_root,
           project: row.project,
           branch: row.branch,
@@ -3160,6 +3321,7 @@ export class ThreadStore {
    * as a worktree Mako didn't make.
    */
   private keepOneWorktreePerThread(): void {
+    this.worktreesSeen = undefined
     const seen = new Set<string>()
     for (const found of this.db.prepare("SELECT path, thread_id, device_id FROM thread_worktrees ORDER BY created_at").all()) {
       const row = z.object({ path: z.string(), thread_id: z.string(), device_id: z.string() }).parse(found)
@@ -3421,7 +3583,7 @@ export class ThreadStore {
     // Another host committed: a newer Mako may have raised the format since this one opened.
     if (!this.reader) this.format = readStoreFormat(this.db, "store_meta") ?? this.format
     this.executions.clear()
-    this.committed()
+    this.committed(true)
     this.consumeChanges(true)
   }
 
@@ -3447,8 +3609,8 @@ export class ThreadStore {
     this.changeSeq = rows.at(-1)?.seq ?? this.changeSeq
   }
 
-  /** A commit landed, this host's or another's (or a write was rolled back): what was read of many at once is read again. */
-  private committed(): void {
+  /** Invalidate shared views after a commit or rollback; worktree inputs have their own local boundaries. */
+  private committed(external = false): void {
     this.revision += 1
     this.executionsSeen.clear()
     this.titlesSeen.clear()
@@ -3459,7 +3621,7 @@ export class ThreadStore {
     this.forksSeen.clear()
     this.groupsSeen = undefined
     this.edgesSeen = undefined
-    this.worktreesSeen = undefined
+    if (external) this.worktreesSeen = undefined
   }
 
   private remember(key: string, placed: ThreadPlacement): void {

@@ -100,7 +100,7 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, e
   // Its own ask goes first. While the crew card is drawn, a Fin's ask lives there; the dock keeps only this Thread's own asks, plus one line when the card has scrolled away.
   const threadId = useAcp((state) => state.conversations[conversation]?.threadId)
   const card = useCrewCardVisible(threadId)
-  const finAsks = useThreadAsks(threadId)
+  const finAsks = useThreadAsks(threadId).filter(ask => !ask.limit?.waiting)
   const fin = ask || card !== null ? undefined : finAsks[0]
   const typedFin = fin !== undefined && fin.ask.kind !== "approval"
   const running = useAcp((state) => {

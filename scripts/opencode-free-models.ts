@@ -5,6 +5,7 @@ import { createOpenCodeDriver } from "@mako/host/harnesses/opencode/live-driver"
 import { discoverOpenCodeCatalog } from "@mako/host/harnesses/opencode/profile"
 import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { allowLiveProviderTest } from "./fixtures/live-provider-test.ts"
 import { admitted } from "./fixtures/admitted-start.ts"
 
 /** How long one model's one-word answer may take. */
@@ -18,7 +19,8 @@ const ANSWER_MS = 90_000
  * of the catalog's free models, Zen's default first, is asked for one word, until two answer.
  */
 export async function openCodeFreeModels(command: string, env: NodeJS.ProcessEnv, cwd: string): Promise<{ first: string; second: string }> {
-  const chosen = [process.env.MAKO_OPENCODE_MODEL, process.env.MAKO_OPENCODE_SECOND_MODEL]
+  allowLiveProviderTest(env)
+  const chosen = [env.MAKO_OPENCODE_MODEL, env.MAKO_OPENCODE_SECOND_MODEL]
   if (chosen[0] && chosen[1]) return { first: chosen[0], second: chosen[1] }
   const catalog = await discoverOpenCodeCatalog(command, env, cwd, new OpenCodeServers())
   const free = catalog.models.map((model) => model.id).filter((id) => id.startsWith("opencode/") && id.endsWith("-free"))

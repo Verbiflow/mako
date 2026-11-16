@@ -15,6 +15,8 @@ export { PromptAttachmentSchema } from "./prompt-attachments.js"
 
 export const ProviderSelectionSchema = SessionSettingsSchema
 export const TransferInputSchema = z.object({
+  /** Explicit retry of a failed compaction handoff; the host verifies the exact episode and destination. */
+  recoveryOf: z.string().uuid().optional(),
   bindingId: z.string().uuid().optional(),
   id: z.string().uuid(),
   provider: z.string().min(1),
@@ -87,7 +89,9 @@ export type ResumeVerdict =
    * It can't be reopened. `lost`: its harness has no record of it here (its identity or source was never located), so
    * nothing could ever resume it: a message goes on in a new session of that harness, handed the whole conversation.
    */
-  | { kind: "unavailable"; reason: string; lost?: true }
+  | { kind: "unavailable"; reason: string; lost?: true; retry?: never }
+  /** Native ownership or source could not be observed now. Recheck later; this never permits a replacement session. */
+  | { kind: "unavailable"; reason: string; retry: true; lost?: never }
   /**
    * The harness keeps this record closed to resumes (a Codex archive, a
    * Cursor desktop chat) and the catalog says so; continuing it starts a new
@@ -176,8 +180,47 @@ export const RequestRetrySchema = z.object({
   until: z.number().optional(),
 })
 
+/** One host-owned compaction incident. Original action receipts stay truthful and immutable. */
+const CompactionRecoveryBaseSchema = z.object({
+  id: z.string().uuid(),
+  bindingId: z.string().uuid(),
+  target: z.object({ provider: z.string(), account: z.string().optional(), tuning: ProviderSelectionSchema.optional(), modeId: z.string().optional() }),
+  requestId: z.string().uuid().optional(),
+  createdAt: z.number(),
+  epoch: z.string(),
+})
+const CompactionFinalStateSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("replace"), transferId: z.string().uuid() }),
+  z.object({ kind: z.literal("completed"), bindingId: z.string().uuid(), waiting: z.array(z.string().uuid()).optional() }),
+  z.object({ kind: z.literal("withdrawn"), reason: z.enum(["stop", "close", "archive", "restart-off", "superseded"]) }),
+])
+const ActionCompactionRecoverySchema = CompactionRecoveryBaseSchema.extend({
+  origin: z.literal("action").optional(),
+  actionId: z.string().uuid(),
+  retryActionId: z.string().uuid(),
+  state: z.union([CompactionFinalStateSchema, z.object({ kind: z.literal("retry") }),
+    z.object({ kind: z.literal("reconcile"), actionId: z.string().uuid(), deadline: z.number(), at: z.number() })]),
+})
+export const NativeCompactionRecoverySchema = CompactionRecoveryBaseSchema.extend({
+  origin: z.literal("native"),
+  requestId: z.string().uuid(),
+  state: CompactionFinalStateSchema,
+})
+export const CompactionRecoverySchema = z.union([ActionCompactionRecoverySchema, NativeCompactionRecoverySchema])
+export type CompactionRecovery = z.infer<typeof CompactionRecoverySchema>
+export function compactionRecovering(recovery: CompactionRecovery | undefined): recovery is CompactionRecovery & { state: Extract<CompactionRecovery["state"], { kind: "retry" | "reconcile" | "replace" }> } {
+  return recovery?.state.kind === "retry" || recovery?.state.kind === "reconcile" || recovery?.state.kind === "replace"
+}
+
+/** Recovery also owns the backlog between a committed replacement and native delivery. */
+export function compactionPending(recovery: CompactionRecovery | undefined): boolean {
+  return compactionRecovering(recovery) || recovery?.state.kind === "completed" && Boolean(recovery.state.waiting?.length)
+}
+
 export const ContextTransferSchema = z.object({
   inputDigest: z.string().optional(),
+  /** Internal same-harness transcript replacement; never a caller-supplied resume/fork verdict. */
+  compaction: z.object({ recoveryId: z.string().uuid(), bindingId: z.string().uuid() }).optional(),
   input: TransferInputSchema,
   /** Who asked for the handoff; kept beside the caller's input, never read from it. */
   actor: ActorSchema.optional(),
@@ -224,6 +267,15 @@ export const ConversationControlSchema = z.object({
   approvalObservations: z.array(z.object({ bindingId: z.string(), identity: NativeApprovalIdentitySchema, decision: NativeApprovalDecisionSchema.optional() })
     .refine(item => !item.decision || sameNativeApproval(item.identity, item.decision.identity), "Native decision belongs to another question")).max(2000).optional(),
   actions: z.array(LiveActionSchema).optional(),
+  compactionRecovery: CompactionRecoverySchema.optional(),
+  /**
+   * Its harness compacted or rewound its history since Mako's note last carried an Apex's roster: the next prompt,
+   * whatever it is, carries it, and the handoff that sends it clears this in the same write. Kept in the journal, so a
+   * restart, an unload or a failed send between keeps it.
+   */
+  rosterForgotten: z.literal(true).optional(),
+  /** New episodes and phases use a new wire field so older hosts can still read the rest of the journal. */
+  pendingCompactionRecovery: CompactionRecoverySchema.optional(),
   /** What its agent asked the person to let it do through Mako's tools, until they answer (`LiveAsks`). */
   asks: z.array(AgentAskSchema).max(32).optional(),
   merges: z
@@ -255,6 +307,11 @@ export const ConversationControlSchema = z.object({
       parentId: z.string().uuid(),
       sourceRevision: z.number().int().nonnegative(),
       point: z.string(),
+      /**
+       * The first request sent in the fork: for one made from just before a prompt (`before-run`), that prompt's next
+       * version (`LiveConversations.promptVersions`). Set as it's admitted, so the fork index knows it unloaded.
+       */
+      firstRequest: z.string().optional(),
       /** A fork made with this set joins its parent's Thread as a tab. Older forks have their own Thread. */
       placement: z.literal("parent-thread").optional(),
       /** The Session it was asked to go into (`ForkInput.session`). */
@@ -266,7 +323,8 @@ export const ConversationControlSchema = z.object({
   activeBindingId: z.string().uuid(),
   bindings: z.array(ProviderBindingSchema),
   transfers: z.array(ContextTransferSchema),
-})
+}).transform(({ pendingCompactionRecovery, ...control }) => pendingCompactionRecovery
+  ? { ...control, compactionRecovery: pendingCompactionRecovery } : control)
 export type ConversationControl = z.infer<typeof ConversationControlSchema>
 
 /** The answer a fork goes on from: a live turn's, the prompt before one, or a saved answer by its place and identity. */

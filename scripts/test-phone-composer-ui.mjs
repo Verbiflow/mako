@@ -382,6 +382,27 @@ async function checkPhone() {
     await capture("composer-queued-iphone-dark.png")
     console.log("Targets: queued edit and remove, the steps line, 44 px")
 
+    // 6b. A running js call's steps: the steps line is all a phone shows of a run, so the step it's on and its count are
+    // there, in its one line, and follow each frame the host relays; the call's answer takes them away.
+    const stepsLine = '[data-steps-line="live"]'
+    const lineSteps = () => evaluate(`(() => { const line = document.querySelector('${stepsLine}'); const step = line?.querySelector('[data-tool-step]'); return { step: step ? step.textContent.replace(/\\s+/g, ' ').trim() : null, height: line ? Math.round(line.getBoundingClientRect().height) : 0 } })()`)
+    await evaluate(`window.phoneCheck.jsCall({ steps: [{ call: "status", phase: "running" }], total: 1 }), true`)
+    await toEnd()
+    await until(`document.querySelector('${stepsLine} [data-tool-step]')?.textContent.includes('1 call')`, "the step and its count in the phone's steps line")
+    const first = await lineSteps()
+    assert.match(first.step, /status · 1 call$/, `the step it's on and the count: ${first.step}`)
+    await capture("js-steps-iphone-dark.png")
+    await evaluate(`window.phoneCheck.jsCall({ steps: [{ call: "status", phase: "done", times: 11 }, { call: "help", phase: "done", times: 11 }, { call: "status", phase: "done" }, { call: "help", phase: "running" }], total: 24 }), true`)
+    await until(`document.querySelector('${stepsLine} [data-tool-step]')?.textContent.includes('24 calls')`, "the next frame's step and count")
+    const later = await lineSteps()
+    assert.match(later.step, /help · 24 calls$/, `the newest frame's step and count: ${later.step}`)
+    assert.equal(later.height, first.height, "still one line")
+    await capture("js-steps-later-iphone-dark.png")
+    await evaluate("window.phoneCheck.jsCall(null), true")
+    await until(`!document.querySelector('${stepsLine} [data-tool-step]')`, "the step gone once the call answered")
+    await evaluate("window.phoneCheck.setRunning(false), true")
+    console.log(`Steps: the phone's steps line says "${first.step}", then "${later.step}", one line, gone at the answer`)
+
     // 7. A reload draws the same switch lines: they are the record's, not this page's memory.
     page.reload()
     await until("document.readyState === 'complete' && document.querySelectorAll('[data-switched]').length >= 2", "the reloaded page's switch lines")

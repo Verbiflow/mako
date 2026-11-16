@@ -1,8 +1,10 @@
+import { failureEvidenceOf, HostFailureError } from "../contracts/provider-failure.js"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { resumable, type ProviderBinding } from "../contracts/conversation-control.js"
 import { retriesBegun } from "../contracts/delivery-retry.js"
 import { goalWorking } from "../contracts/live-goals.js"
+import { heldWork } from "../contracts/background-work.js"
 import { disconnectNativeAgents, isActiveNativeAgent, isBusyProviderWork } from "../contracts/native-agents.js"
 import type { ConversationMemory, ProviderResidencyEntry, ProviderResidencySnapshot } from "../contracts/provider-residency.js"
 import type { LiveSessionState } from "../contracts/providers-acp.js"
@@ -20,7 +22,7 @@ export const PROVIDER_WARM_LIMIT = 2
 
 type HibernationAccess = Pick<LiveAccess,
   "dependencies" | "residents" | "resident" | "load" | "flush" | "noteWork" | "drain" | "moves" | "retireFromAccount" | "locateNativePath" |
-  "failedStart" | "returnFromRemovedWorktree" | "driverEvents">
+  "failedStart" | "returnFromRemovedWorktree" | "driverEvents" | "reconcileCut" | "restartContinued">
 
 /**
  * Which conversations keep a provider process: a ready one stays warm for
@@ -156,7 +158,6 @@ export class LiveHibernation {
   }
 
   canHibernate(resident: Resident, preparing = false, recoverAccount = false): boolean {
-    const native = resident.snapshot.nativeAgents?.agents ?? []
     const binding = activeBinding(resident)
     const driver = this.access.dependencies.driver(binding?.provider ?? "")
     return Boolean(
@@ -192,7 +193,10 @@ export class LiveHibernation {
             (request.status === "queued" && !this.access.moves.holdsQueued(resident) &&
               !(recoverAccount && (!request.nativeDelivery || request.nativeDelivery.evidence.kind === "not-accepted")))
         ) &&
-        !native.some(isBusyProviderWork)
+        // A watcher it armed (Claude's Monitor) is ambient, so no level counts it, but it lives in the provider's process:
+        // closing that ends the watcher, and then nothing wakes the session when what it watches happens. One past the
+        // ceiling without word of it is no longer believed (`heldWork`).
+        !heldWork(resident.snapshot.nativeAgents, this.access.dependencies.now?.() ?? Date.now()).length
     )
   }
 
@@ -427,8 +431,9 @@ export class LiveHibernation {
           connection: "disconnected",
           status: "failed",
           error: message,
+          failureEvidence: { kind: "resume-failed", source: "host" },
         },
-        requests: this.access.failedStart(resident, { error: message }, true),
+        requests: this.access.failedStart(resident, { error: new HostFailureError("resume-failed", message) }, true),
       }
       this.access.flush(resident)
       return
@@ -450,6 +455,20 @@ export class LiveHibernation {
     let held = false
     let startedSession: LiveSessionState | undefined
     try {
+      const request = resident.snapshot.requests.find((request) => request.status === "queued")
+      if (!await this.access.reconcileCut(resident, request?.continues)) {
+        if (resident.generation === generation && !resident.closing && !resident.driver) {
+          const completed = request && resident.snapshot.requests.find((candidate) => candidate.id === request.continues?.requestId)?.status === "completed"
+          resident.snapshot = { ...resident.snapshot, session: { ...resident.snapshot.session, status: "ready", connection: "hibernated" },
+            requests: completed ? resident.snapshot.requests.map((candidate) => candidate === request ? { ...candidate, status: "canceled" as const } : candidate) : resident.snapshot.requests }
+          this.access.flush(resident)
+          if (completed && request?.continues) {
+            this.access.restartContinued(resident.snapshot.session.id, request.continues.requestId)
+            if (resident.snapshot.requests.some((candidate) => candidate.status === "queued")) await this.wakeNow(resident)
+          }
+        }
+        return
+      }
       const verdict = await dependencies.resumeVerdict?.(binding)
       if (!verdict || !resumable(verdict, "moved"))
         throw reconnectError(verdict)
@@ -629,6 +648,7 @@ export class LiveHibernation {
           executionContext: closed ? binding.executionContext : resident.snapshot.session.executionContext,
           status: waits ? "ready" : "failed",
           error: waits ? undefined : message,
+          failureEvidence: waits ? undefined : failureEvidenceOf({ error }),
         },
         requests,
       }

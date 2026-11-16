@@ -203,6 +203,8 @@ export function logFor<T extends { seq: number; form?: LiveForm }>(events: reado
  */
 export type CursorVerdict =
   | { kind: "apply" }
+  /** Passing state (`ephemeral`): applied as it comes, and nothing of the cursor moves. */
+  | { kind: "ephemeral" }
   | { kind: "duplicate" }
   | { kind: "gap"; after: number }
   | { kind: "reread" }
@@ -242,7 +244,8 @@ export class StreamCursor {
     return this.#numbered && this.#last !== undefined ? this.#last : 0
   }
 
-  heard(frame: Pick<EventFrame, "seq"> & { text: string }): CursorVerdict {
+  heard(frame: Pick<EventFrame, "seq" | "ephemeral"> & { text: string }): CursorVerdict {
+    if (frame.ephemeral) return { kind: "ephemeral" }
     const notice = readStreamNotice(frame.text)
     if (notice) {
       const resuming = this.#numbered && this.#last !== undefined

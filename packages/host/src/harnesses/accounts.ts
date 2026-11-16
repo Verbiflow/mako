@@ -1,3 +1,4 @@
+import { HostFailureError } from "../contracts/provider-failure.js"
 /**
  * Several accounts per harness, one machine.
  *
@@ -74,10 +75,10 @@ export interface AccountLaunch {
   hold?: AccountHold
 }
 
-export class ExecutionAccountChanged extends Error {
+export class ExecutionAccountChanged extends HostFailureError {
   readonly reason: "selection" | "credentials"
   constructor(reason: "selection" | "credentials") {
-    super(reason === "selection"
+    super("unknown", reason === "selection"
       ? "The selected account changed. Reconnect this agent before sending; no prompt was dispatched and existing work was preserved."
       : "The account credentials changed. Reconnect this agent before sending; no prompt was dispatched and existing work was preserved.")
     this.name = "ExecutionAccountChanged"
@@ -86,9 +87,9 @@ export class ExecutionAccountChanged extends Error {
 }
 
 /** The native process reported a different identity than the account it was launched with. */
-export class ExecutionIdentityMismatch extends Error {
+export class ExecutionIdentityMismatch extends HostFailureError {
   constructor(principal: string, expected: string) {
-    super(`This agent is signed in as ${principal}, not ${expected}, the account this session started with. Nothing was sent. Sign ${expected} in again in Settings › Agents, or choose the account it is signed in as.`)
+    super("wrong-account", `This agent is signed in as ${principal}, not ${expected}, the account this session started with. Nothing was sent. Sign ${expected} in again in Settings › Agents, or choose the account it is signed in as.`)
     this.name = "ExecutionIdentityMismatch"
   }
 }

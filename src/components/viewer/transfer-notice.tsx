@@ -10,7 +10,9 @@ export function useTransferNotice(): ComposerNotice | null {
   const id = useAcp((state) => state.activeKey)
   const transfer = useAcp((state) => activeLiveAcp(state)?.control?.transfers.at(-1))
   const request = useAcp((state) => activeLiveAcp(state)?.requests?.find((item) => item.id === transfer?.input.id))
+  const episode = useAcp((state) => activeLiveAcp(state)?.control?.compactionRecovery)
   if (!transfer || transfer.state.kind === "accepted" || (transfer.state.kind === "failed" && transfer.state.removed)) return null
+  if (transfer.compaction?.recoveryId === episode?.id && (transfer.state.kind === "queued" || transfer.state.kind === "preparing")) return null
   const provider = labels[transfer.input.provider] ?? transfer.input.provider
   const state = transfer.state
   const recovery = describeTransferRecovery(transfer, provider, request)
@@ -26,7 +28,10 @@ export function useTransferNotice(): ComposerNotice | null {
         <p className="mt-1.5 whitespace-pre-wrap">{transfer.input.text}</p>
       </>
     ) : undefined,
-    actions: troubled && recovery.retryLabel
+    actions: transfer.compaction && state.kind === "failed" && ["auth", "permission", "sign-in-check", "wrong-account", "plan"].includes(state.failure ?? "")
+      ? [{ label: state.failure === "auth" ? "Sign in" : "Check account", primary: true,
+        onClick: () => window.dispatchEvent(new CustomEvent("mako:settings", { detail: "agents" })) }]
+      : troubled && recovery.retryLabel
       ? [{ label: recovery.retryLabel, primary: true, disabled: !id, onClick: () => { if (id) void retryTransfer(id, transfer.input.id) } }]
       : undefined,
     data: { "data-transfer-recovery": transfer.input.id },

@@ -6,6 +6,9 @@ export function hostClient(): string {
   return clients.getStore()?.id ?? "app"
 }
 
+/** What every call through the gateway is named by (`gatewayClientId`): another device, a browser, a machine. */
+export const GATEWAY_CLIENT = "gateway:"
+
 /** What `gatewayClientId` names a machine runtime's call through the gateway, and what follows `gateway:` in it. */
 export const MACHINE_CLIENT = "gateway:runtime:"
 

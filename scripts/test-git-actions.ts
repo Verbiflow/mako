@@ -52,7 +52,7 @@ const [a, b] = args
 if (a === "--version") out("gh version 2.0.0")
 else if (a === "api" && b === "user") out({ login: "you" })
 else if (a === "api" && b === "graphql") out({ data: { repository: { pullRequest: { reviewThreads: { nodes: db.threads } } } } })
-else if (a === "repo" && b === "view") out(flag("--json").includes("squash") ? db.methods : { nameWithOwner: "o/r", defaultBranchRef: { name: "main" } })
+else if (a === "api" && b === "repos/{owner}/{repo}") out({ full_name: "o/r", html_url: "https://github.com/o/r", default_branch: "main", allow_squash_merge: db.methods.squashMergeAllowed, allow_merge_commit: db.methods.mergeCommitAllowed, allow_rebase_merge: db.methods.rebaseMergeAllowed })
 else if (a === "pr" && b === "view") {
   const pull = db.pulls.filter((entry) => entry.headRefName === branch() && entry.repo === repo()).at(-1)
   pull ? out(pull) : fail("no pull requests found for branch " + branch())

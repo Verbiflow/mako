@@ -1,4 +1,8 @@
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
+import { mock } from "node:test"
+import { DatabaseSync } from "node:sqlite"
+import { CheckpointFingerprints, threadFingerprint } from "@mako/host/attribution/checkpoint-fingerprints"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -8,7 +12,7 @@ import { HostJobs } from "@mako/host/base/host-jobs"
 import { FakeClock, FakeEventSource } from "@mako/protocol/attribution-conformance"
 import { openAttribution } from "@mako/host/attribution/index"
 import { sharedJournalFolder } from "@mako/host/attribution/shared-journal"
-import { storedView, turnChanges } from "@mako/host/attribution/queries"
+import { partition, storedView, turnChanges } from "@mako/host/attribution/queries"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { nodeFileSystem } from "@mako/host/attribution/ports"
 import { contentRef } from "@mako/host/attribution/content"
@@ -228,3 +232,124 @@ test("a repeated tracker close joins the release even after the tracker is marke
   }
 })
 
+
+
+test("checkpoint identities ignore activity and stats, follow partition inputs, and bound retained Threads", async () => {
+  const folder = scratch()
+  const { store, refs } = journal(folder, Date.now())
+  const checkout = join(folder, "root")
+  const root = store.roots()[0]!
+  store.saveFile({ root: "r", path: "own.bin", base: null, baseSeq: 0, current: refs.young, text: false, map: [] })
+  store.insertEntry({ at: 1, changedAt: 1, root: "r", path: "own.bin", kind: "create", before: null, after: refs.young, text: false, stored: true, observed: "event", author: { certainty: "exact", author: { thread: "t", session: "s", turn: "turn" }, effect: "create" }, settled: true })
+  const cache = new CheckpointFingerprints(store)
+  const reader = new JournalReader(store.path)
+  let noScan: ReturnType<typeof mock.method> | undefined
+  try {
+    const expected = createHash("sha256").update(threadFingerprint(root.head, partition(storedView(store), checkout, "t"), checkout)).digest("hex")
+    assert.equal(cache.read(checkout, "t"), expected)
+    noScan = mock.method(store, "files", () => { throw new Error("unchanged checkpoint scanned its files") })
+    assert.equal(cache.read(checkout, "t"), expected, "no file read or hash on a cache hit")
+    const other = JournalStore.open(store.path, { device: "off-loop" })
+    try {
+      other.saveActivity({ session: "foreign", kind: "turn", id: "running", thread: "other", turn: "running", start: 2, end: null, named: [] })
+      assert.equal(cache.read(checkout, "t"), expected, "another Thread's live activity causes no file read or text hash")
+      store.saveRoot({ ...root, seenAt: root.seenAt + 1, mark: "observed" })
+      store.saveStat("r", "src/d.ts", { dev: 1, ino: 1, size: 1, mode: 0o100644, mtimeNs: 2n, ctimeNs: 2n, ref: refs.stat, checkedNs: 2n })
+      assert.equal(cache.read(checkout, "t"), expected, "observation bookkeeping does not hash unchanged content")
+      other.saveRoot({ ...root, id: "other-root", path: join(folder, "other") })
+      const foreign = contentRef(bytes("another checkout"))
+      other.putBlob(foreign, bytes("another checkout"), 3)
+      other.saveFile({ root: "other-root", path: "file", base: null, baseSeq: 0, current: foreign, text: false, map: [] })
+      assert.equal(cache.read(checkout, "t"), expected, "another checkout's content changes do no text work here")
+    } finally { other.close() }
+    // Only the head changed: a revision must invalidate even when the Thread wrote no new file.
+    store.saveRoot({ ...root, head: "new-head" })
+    assert.throws(() => cache.read(checkout, "t"), /scanned its files/, "a changed input really revisits the partition")
+    noScan.mock.restore()
+    const changed = cache.read(checkout, "t")
+    assert.notEqual(changed, expected)
+    assert.equal(await reader.checkpointFingerprint(checkout, "t"), changed)
+    // The main thread must not rebuild a partition or read a body when the worker answers.
+    noScan = mock.method(JournalStore.prototype, "files", () => { throw new Error("checkpoint read files on the host") })
+    assert.equal(await reader.checkpointFingerprint(checkout, "t"), changed)
+    noScan.mock.restore()
+    store.saveRoot(root)
+    assert.equal(await reader.checkpointFingerprint(checkout, "t"), expected, "the worker sees another connection's commit")
+    assert.notEqual(cache.read(checkout, "other"), expected, "one Thread never borrows another's identity")
+    for (let n = 0; n < 129; n++) cache.read(checkout, `other-${n}`)
+    noScan = mock.method(store, "files", () => { throw new Error("evicted checkpoint read again") })
+    assert.throws(() => cache.read(checkout, "other"), /evicted checkpoint/, "at most 128 tokens remain")
+  } finally {
+    noScan?.mock.restore()
+    await reader.close()
+    store.close()
+    rmSync(folder, { recursive: true, force: true })
+  }
+})
+
+test("checkpoint versions follow content and attribution across writers, survive rollback, and migrate old readers", () => {
+  const folder = scratch()
+  const { store, refs } = journal(folder, Date.now())
+  const checkout = store.roots()[0]!.path
+  const reader = JournalStore.open(store.path, { device: "reader", readOnly: true })
+  try {
+    const before = reader.checkpointVersion(checkout)
+    assert.throws(() => store.transaction(() => { store.putBlob(contentRef(bytes("rolled back")), bytes("rolled back"), 1); throw new Error("rollback") }), /rollback/)
+    assert.equal(reader.checkpointVersion(checkout), before, "a rolled-back content change is not a new input")
+    store.saveFile({ root: "r", path: "new", base: null, baseSeq: 0, current: refs.young, text: false, map: [] })
+    assert.notEqual(reader.checkpointVersion(checkout), before, "new file input invalidates a reader")
+    const seq = store.insertEntry({ at: 3, changedAt: 3, root: "r", path: "f", kind: "create", before: null, after: refs.young, text: false, stored: true, observed: "event", author: { certainty: "person", via: "no-activity" }, settled: false })
+    const inserted = reader.checkpointVersion(checkout)
+    store.settle(seq)
+    assert.equal(reader.checkpointVersion(checkout), inserted, "settlement alone does not change the partition")
+    store.updateAuthor(seq, { certainty: "exact", author: { thread: "t", session: "s", turn: "turn" }, effect: "create" }, true)
+    assert.notEqual(reader.checkpointVersion(checkout), inserted, "attribution can move lines between Threads")
+    const attributed = reader.checkpointVersion(checkout)
+    store.markGit(seq, true)
+    assert.notEqual(reader.checkpointVersion(checkout), attributed, "Git provenance can remove a Thread's lines")
+    const git = reader.checkpointVersion(checkout)
+    store.deleteFile("r", "src/c.ts")
+    assert.notEqual(reader.checkpointVersion(checkout), git, "removing a file changes the partition")
+  } finally { reader.close(); store.close() }
+  // A read-only reader can precede migration; installing the counter never leaves its old cache valid.
+  const old = new DatabaseSync(join(folder, "journal.sqlite"))
+  try {
+    for (const row of old.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'checkpoint_%'").all())
+      old.exec(`DROP TRIGGER ${String(row.name)}`)
+    old.exec("DROP TABLE checkpoint_root_changes")
+  } finally { old.close() }
+  const legacy = JournalStore.open(join(folder, "journal.sqlite"), { device: "old-reader", readOnly: true })
+  try {
+    assert.ok(legacy.checkpointVersion(checkout).startsWith("legacy:"))
+    const migrated = JournalStore.open(join(folder, "journal.sqlite"), { device: "new-owner" })
+    try { assert.ok(!legacy.checkpointVersion(checkout).startsWith("legacy:"), "the already-open reader adopts the new persisted counter") }
+    finally { migrated.close() }
+  } finally { legacy.close(); rmSync(folder, { recursive: true, force: true }) }
+})
+
+test("checkpoint caches keep separate root versions and revisit a missing text body when it arrives", () => {
+  const folder = scratch()
+  const { store } = journal(folder, Date.now())
+  const checkout = store.roots()[0]!.path
+  const elsewhere = join(folder, "elsewhere")
+  const cache = new CheckpointFingerprints(store)
+  let noScan: ReturnType<typeof mock.method> | undefined
+  try {
+    store.saveRoot({ ...store.roots()[0]!, id: "elsewhere", path: elsewhere })
+    const a = cache.read(checkout, "t"), b = cache.read(elsewhere, "t")
+    noScan = mock.method(store, "files", () => { throw new Error("unchanged roots were scanned again") })
+    assert.equal(cache.read(checkout, "t"), a)
+    assert.equal(cache.read(elsewhere, "t"), b)
+    noScan.mock.restore()
+    const base = bytes("base\n"), current = bytes("new\n"), before = contentRef(base), after = contentRef(current)
+    const seq = store.insertEntry({ at: 4, changedAt: 4, root: "r", path: "late", kind: "modify", before, after, text: true, stored: true, observed: "event", author: { certainty: "exact", author: { thread: "t", session: "s", turn: "turn" }, effect: "modify" }, settled: true })
+    store.saveFile({ root: "r", path: "late", base: before, baseSeq: 0, current: after, text: true, map: [{ ins: 0, origin: 0, length: 1, del: seq, over: 0 }, { ins: seq, origin: 0, length: 1, del: 0, over: 0 }] })
+    const incomplete = cache.read(checkout, "t"), version = store.checkpointVersion(checkout)
+    store.putBlob(before, base, 4); store.putBlob(after, current, 4)
+    assert.equal(store.checkpointVersion(checkout), version, "content arriving doesn't need a new file write")
+    const complete = cache.read(checkout, "t")
+    assert.notEqual(complete, incomplete, "an incomplete input was not cached as a complete checkpoint")
+    noScan = mock.method(store, "files", () => { throw new Error("complete unchanged input scanned again") })
+    assert.equal(cache.read(checkout, "t"), complete)
+  } finally { noScan?.mock.restore(); store.close(); rmSync(folder, { recursive: true, force: true }) }
+})

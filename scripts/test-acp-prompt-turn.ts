@@ -34,7 +34,7 @@ await assert.rejects(failing.send(async () => { throw new Error("Disconnected af
 remaining.resolve({ stopReason: "end_turn" })
 await running
 await tick()
-assert.deepEqual(failures, [{ kind: "failed", error: "Disconnected after dispatch" }])
+assert.deepEqual(failures, [{ kind: "failed", error: "Disconnected after dispatch", failureEvidence: { kind: "unknown", source: "host" } }])
 const refusedResults: AcpTurnResult[] = []
 const refused = new AcpPromptTurn((result) => refusedResults.push(result))
 const original = Promise.withResolvers<PromptResponse>()

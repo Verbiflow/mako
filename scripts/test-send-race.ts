@@ -12,6 +12,7 @@ import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { gatewayHostCalls, sendWithRepeats } from "@mako/host/contracts/gateway-host-calls"
 import { hostCallSchema } from "@mako/host/contracts/host-call-inputs"
 import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
+import { HostCallLifetime, stoppedCallError } from "@mako/host/transport/call-lifetime"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
@@ -45,6 +46,8 @@ import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts
  */
 const { values } = parseArgs({ options: { runs: { type: "string", default: "150" }, seed: { type: "string" } } })
 const RUNS = Number(values.runs)
+/** How long a client goes on asking again before the test calls its message lost: past any stop, even a runner's slowest. */
+const PROMPT_PATIENCE_MS = 60_000
 const SEED = values.seed === undefined ? Math.floor(Math.random() * 2 ** 31) : Number(values.seed)
 
 /** A small seeded generator (mulberry32), so a failing run is repeated with its seed. */
@@ -180,11 +183,25 @@ const arrivals = new Map<LiveConversations, string[]>()
 const admittedBy = new Map<string, LiveConversations>()
 
 /**
+ * This host life's calls, as `HostMethods` holds them (`HostCallLifetime`): a restart refuses new ones before its
+ * conversations stop, so a call sent meanwhile never meets a host halfway closed; one it refused reaches the client as
+ * a disconnect (`stoppedCallError`), which it asks again under its ID.
+ */
+let calls = new HostCallLifetime()
+
+/** A host call, as `HostMethods` runs it: inside this host life's calls. */
+function invoke(channel: string, args: unknown[]): Promise<EncodedValue> {
+  return calls.run(() => answer(channel, args)).catch((error: Error) => {
+    throw stoppedCallError(error)
+  })
+}
+
+/**
  * The host's methods these clients call, as `declareConversationMethods` declares them: a message resolves its
  * settings (here a few random milliseconds, as `resolveLaunch`'s real path and environment reads take) and is admitted
  * in the order it arrived.
  */
-async function invoke(channel: string, args: unknown[]): Promise<EncodedValue> {
+async function answer(channel: string, args: unknown[]): Promise<EncodedValue> {
   const host = owner
   if (channel === "mako:live-prompt") {
     const [id, requestId, text] = hostCallSchema("mako:live-prompt").parse(args)
@@ -240,6 +257,9 @@ type Sent = { text: string; client: Client; ids: string[]; steered?: string }
  */
 async function prompt(client: Client, conversation: string, message: Sent, losesReply: boolean, requestId: string = randomUUID()): Promise<void> {
   if (!message.ids.includes(requestId)) message.ids.push(requestId)
+  // As the outbox, it waits out a restart however long the host takes to stop, never a number of tries: a stop on a
+  // busy runner outlasted 400 of them.
+  const deadline = Date.now() + PROMPT_PATIENCE_MS
   for (let attempt = 0; ; attempt++) {
     try {
       await call(client, "mako:live-prompt", [conversation, requestId, message.text, [], undefined])
@@ -253,7 +273,7 @@ async function prompt(client: Client, conversation: string, message: Sent, loses
         message.steered = requestId
         return
       }
-      if (attempt > 400) throw new Error(`${client} never got ${message.text} in: ${words}; diagnostic=${JSON.stringify({ diagnosticRestart, diagnosticNotices })}`)
+      if (Date.now() > deadline) throw new Error(`${client} never got ${message.text} (seed ${SEED}) in: ${words}; diagnostic=${JSON.stringify({ diagnosticRestart, diagnosticNotices })}`)
       // As `attemptSend`: whatever the error, a host that holds the request took it.
       const snapshot = HeldSchema.safeParse(await call(client, "mako:live-snapshot", [conversation]).catch(() => null)).data
       if (snapshot?.requests.some((request) => request.id === requestId)) return
@@ -301,11 +321,12 @@ async function waited(conversation: string, message: Sent): Promise<void> {
   const requestId = randomUUID()
   message.ids.push(requestId)
   const take = async () => {
-    for (let attempt = 0; ; attempt++) {
+    const deadline = Date.now() + PROMPT_PATIENCE_MS
+    for (;;) {
       try {
         return await invoke("mako:live-prompt", [conversation, requestId, message.text, [], undefined])
       } catch (error) {
-        if (attempt > 400) throw error
+        if (Date.now() > deadline) throw error
         await delay(2 + random.int(6))
       }
     }
@@ -319,14 +340,18 @@ const requestsOf = (conversation: string): LiveRequest[] => owner.snapshot(conve
 
 async function until(what: string, check: () => boolean, ms = 10_000): Promise<void> {
   for (const deadline = Date.now() + ms; !check(); await delay(2))
-    if (Date.now() > deadline) throw new Error(`timed out: ${what}`)
+    if (Date.now() > deadline) throw new Error(`timed out (seed ${SEED}): ${what}`)
 }
 
 /** Restarts the host under the clients, as a quit and reopen does: in-flight calls fail, its journal is read again. */
 async function restart(): Promise<void> {
   diagnosticRestart = "closing"
+  // As the host stops: it admits no new call first, so one sent meanwhile is a disconnect its client asks again, never
+  // an answer from conversations halfway closed; those under way end as its stop ends them.
+  void calls.close()
   served.close()
   await owner.stop()
+  calls = new HostCallLifetime()
   diagnosticRestart = "opening"
   owner = openHost()
   diagnosticRestart = "opened"

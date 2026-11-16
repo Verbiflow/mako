@@ -150,10 +150,11 @@ try {
 
   world.release(first.conversation)
   await world.settle()
-  // A strip's `idleFor` reads the clock as each door answers, so it can tick between them: the rest is the same list.
+  // A strip's `idleFor` and the list's `mark` read the clock as each door answers, so they can tick between them: the
+  // rest is the same list.
   const lists = [await call(thread, "agents_list", {}), await call(stdio, "agents_list", {}), await command("list")].map((list) => ListedSchema.parse(list))
   assert.ok(lists[0]!.children.every((strip) => Number.isInteger(strip.idleFor)), "a finished Fin's strip says how long it's been idle")
-  const unclocked = (list: z.infer<typeof ListedSchema>) => ({ ...list, children: list.children.map((strip) => Object.fromEntries(Object.entries(strip).filter(([key]) => key !== "idleFor"))) })
+  const unclocked = (list: z.infer<typeof ListedSchema>) => ({ ...Object.fromEntries(Object.entries(list).filter(([key]) => key !== "mark")), children: list.children.map((strip) => Object.fromEntries(Object.entries(strip).filter(([key]) => key !== "idleFor"))) })
   assert.deepEqual(unclocked(lists[1]!), unclocked(lists[0]!))
   assert.deepEqual(unclocked(lists[2]!), unclocked(lists[0]!), "the same list through all three")
   const reads = [await call(thread, "agents_read", { child: "sidebar" }), await call(stdio, "agents_read", { child: "sidebar" }), await command("read", "sidebar")]
@@ -203,7 +204,9 @@ try {
   assert.ok("children" in fullFacts)
   const originalPulls = fullFacts.children.find(child => child.child === first.child)!.openPRs
   assert.equal(originalPulls?.length, 4)
-  assert.deepEqual(await call(thread, "agents_list", {}), await call(thread, "agents_list", { presentation: "full" }), "the model door defaults to complete PR facts")
+  // Each list's `mark` is its own clock reading.
+  const unmarked = (list: AgentAnswer) => Object.fromEntries(Object.entries(list).filter(([key]) => key !== "mark"))
+  assert.deepEqual(unmarked(await call(thread, "agents_list", {})), unmarked(await call(thread, "agents_list", { presentation: "full" })), "the model door defaults to complete PR facts")
   const summarized = z.object({ children: z.array(z.looseObject({ child: z.string(), pulls: z.object({ reported: z.number(), read: z.object({ child: z.string(), view: z.literal("pulls"), snapshot: z.string() }) }) })) }).parse(await call(thread, "agents_list", { presentation: "summary" }))
   const reference = summarized.children.find(child => child.child === first.child)!.pulls.read
   assert.equal(summarized.children[0].pulls.reported, 4, "historical references stay explicitly unknown")

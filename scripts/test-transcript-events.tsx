@@ -4,6 +4,7 @@
 // render through the production components and projections; the screenshots
 // of the same cases come from `scripts/test-transcript-events-ui.mjs`.
 import assert from "node:assert/strict"
+import { providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import { renderToStaticMarkup } from "react-dom/server"
 import { entriesFromMessages, type DecodedEntry as ThreadEntry, type Entry, type RecordRef } from "@mako/sessions"
 import { backgroundReminderTurn, claudeTaskTurn, grokSubagentTurn, grokTaskTurn, parseClaudeTaskNotification } from "@mako/sessions/harnesses"
@@ -11,6 +12,8 @@ import { compactionEvent, mcpServerFailedEvent, modelChangedEvent, retriesEvent,
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { backgroundCommandTurn, CODEX_GOAL, codexGoalTurn, outputTail, subagentTurn } from "@mako/sessions/provider-turn"
 import { Exchange } from "../src/components/transcript/exchange"
+import { FailedRequestsContext } from "../src/components/transcript/failed-requests"
+import type { LiveRequest } from "../src/lib/types"
 import { TranscriptSourceContext } from "../src/components/transcript/source-context"
 import { MoveDividersContext } from "../src/components/transcript/transcript-notes"
 import { entriesToMessages } from "../src/lib/entry-messages"
@@ -320,18 +323,13 @@ assert.deepEqual(notesLeft([treeLine]), ["Cursor ran out until Sun 12:00 AM PST"
 assert.deepEqual(notesLeft([limited]), ["Turn failed"], "nothing came of it: it stands")
 assert.equal(eventWords({ label: "Turn failed", detail: "Failed to authenticate: invalid API key. Claude usage limit reached.", tone: "error" }).tone, "error", "a fault only the person can fix stays a failure, whatever else it says")
 
-// A provider's retries, quiet either way: the count, its words and how long; the failure after them says itself.
-const recoveredWords = eventWords(retriesEvent({ count: 3, outcome: "recovered", durationMs: 41_000 }, "Overloaded (529)"))
-assert.deepEqual(recoveredWords, { glyph: "retry", title: "Recovered after 3 retries", detail: "Overloaded (529)", aside: "41s" })
-assert.deepEqual(eventWords(retriesEvent({ count: 1, outcome: "gave-up", durationMs: 62_000 }, "Overloaded (529)")),
-  { glyph: "retry", title: "Retried once", detail: "Overloaded (529)", aside: "1m 02s" })
+// A provider's retries that ended are the host's log's: a journal from before keeps their markers, and they draw nothing.
 const retries = draw(streamed([go, marker(retriesEvent({ count: 3, outcome: "recovered", durationMs: 41_000 }, "Overloaded (529)")), { kind: "text", id: "a3", text: "Here it is." },
   marker(retriesEvent({ count: 5, outcome: "gave-up", durationMs: 62_000 }))]))
-assert.match(text(retries), /Recovered after 3 retries Overloaded \(529\) 41s/)
-assert.match(text(retries), /Retried 5 times 1m 02s/)
-assert.doesNotMatch(retries, /text-negative|text-caution/, "retries are ambient whichever way they ended: the failure after them owns the attention")
-assert.deepEqual(entriesToMessages(reduceLiveUpdates([], [{ kind: "event", ...retriesEvent({ count: 2, outcome: "recovered", durationMs: 3_000 }) }]), { kind: "live", running: false, provider: "claude" }).messages[0]?.note?.retries,
-  { count: 2, outcome: "recovered", durationMs: 3_000 }, "the measure reaches the window from the blocks the journal keeps")
+assert.doesNotMatch(text(retries), /Recovered after|Retried/, "an old journal's retry markers draw nothing")
+assert.match(text(retries), /Here it is\./, "and what was around them draws as ever")
+assert.equal(entriesToMessages(reduceLiveUpdates([], [{ kind: "event", ...retriesEvent({ count: 2, outcome: "recovered", durationMs: 3_000 }) }]), { kind: "live", running: false, provider: "claude" }).messages.length, 0,
+  "no message is made of one")
 
 const long = draw(streamed([go, marker({ label: "Warning", detail: "Codex is ignoring 2 unrecognized configuration settings. Check for typos or deprecated settings in config.toml.", tone: "warning" })]))
 assert.match(long, /<button[^>]*data-event-line[^>]*aria-expanded="false"/, "a line too long to fit opens onto the whole of it")
@@ -359,10 +357,11 @@ console.log("Markers: one quiet line each in the tool column; attention is the h
 /* ------------------------------------------------------------------ */
 
 const setup = draw(streamed([...signIn.map(marker), go, { kind: "text", id: "a", text: "Going ahead." }]))
-assert.match(text(setup), /3 MCP servers need sign-in wisprflow, todoist, axiom/)
-assert.equal(setup.match(/data-event-line/g)?.length, 1, "three notices, one line")
+// A server that didn't start is said once, with its way in, in the rail and Settings › MCP (`McpSignIns`): never in the conversation.
+assert.doesNotMatch(text(setup), /MCP server/, "no MCP line in the conversation")
+assert.equal(setup.match(/data-event-line/g)?.length ?? 0, 0, "three notices, none drawn")
 const history = draw(saved([...signIn.map((note): ThreadEntry => ({ kind: "event", ...note })), { kind: "user", text: "Go" }, say("Going ahead.")]))
-assert.match(text(history), /3 MCP servers need sign-in/, "setup notices read back from history gather too")
+assert.doesNotMatch(text(history), /MCP server/, "nor read back from history")
 
 // What a session said as it opened sits under the prompt it opened for, whichever side of it the harness reported it on.
 const where = (exchanges: ExchangeData[]) => exchanges.map((exchange) => [exchange.prompt ? textOf(exchange.prompt.blocks) : exchange.id,
@@ -374,7 +373,7 @@ assert.deepEqual(before.map(([prompt]) => prompt), ["Run the suite"], "and leave
 const reopened = streamed([go, { kind: "text", id: "a", text: "Going ahead." }, ...signIn.map(marker), { kind: "user", text: "And QA?" }, { kind: "text", id: "b", text: "QA too." }])
 assert.deepEqual(where(reopened), [["Run the suite", []], ["And QA?", signIn.map((note) => `${note.label}@0`)]],
   "a session that opens again (a fork, a reconnect) reports under the next prompt, not at the end of the answer before it")
-assert.match(text(draw(reopened)), /And QA\? Y 3 MCP servers need sign-in wisprflow, todoist, axiom Claude Code QA too/)
+assert.match(text(draw(reopened)), /And QA\? Y Claude Code QA too/, "the notes keep their place; the conversation draws none of them")
 const midTurn = streamed([go, { kind: "text", id: "a", text: "Reading." }, marker(signIn[0]!), { kind: "text", id: "b", text: "Going ahead." }, { kind: "user", text: "And QA?" }])
 assert.deepEqual(where(midTurn)[0], ["Run the suite", [`${signIn[0]!.label}@1`]], "one inside an answer keeps its place")
 const unanswered = streamed([go, { kind: "text", id: "a", text: "Going ahead." }, marker(signIn[0]!)])
@@ -397,6 +396,16 @@ const prompted = (id: string, words = continueTurnPrompt("connection-lost", "mak
 })
 assert.match(text(draw([prompted("m", "You're on the Thread's own branch now.")], { mako: { m: { kind: "moved" } } })), /Mako moved this session onto its own branch/)
 assert.match(text(draw([prompted("g", "Continue toward the goal.")], { mako: { g: { kind: "goal", step: { step: "continue", turn: 3 } } } })), /Mako continued toward the goal turn 3/)
+// A wait's note, the one a move carries included, is Mako's line: never the person's prompt, with its actions.
+{
+  const note = "Mako: your wait \"CI on #412\" ended when this Thread moved here. If you still need it, call wait again."
+  const drawn = draw([prompted("w", note)], { mako: { w: { kind: "wait", line: "Your wait \"CI on #412\" ended when this Thread moved here. If you still need it, call wait again." } } })
+  assert.match(drawn, /data-turn-wait/)
+  assert.doesNotMatch(drawn, /data-prompt-actions/, "no person's prompt block")
+  const saved = draw([prompted("s", "Mako: the wait \"CI\" is over.\n- #412 checks: passed")])
+  assert.match(saved, /data-turn-wait/, "read back from a store by its words")
+  assert.doesNotMatch(saved, /data-prompt-actions/)
+}
 
 // A continuation is never a turn of its own, nor the person's words: the turn it continues goes on, as one turn,
 // whether Mako sent it or the person pressed Continue turn, live with its requests or read back from a store.
@@ -526,14 +535,40 @@ const quit = draw([prompted("q", "Refactor the store")], { stops: { q: { reason:
 assert.match(quit, /data-turn-stopped="host-quit"[^>]*>[^]*?lucide-triangle-alert[^"]*text-caution/)
 assert.match(quit, /Continue turn/)
 
+const nativeError = "Request failed: 529 Overloaded\nTry again in a moment."
 const errored = draw([{ id: "e", prompt: { id: "e", role: "user", blocks: [{ type: "text", text: "Summarize" }] },
-  response: [{ id: "e-a", role: "assistant", blocks: [{ type: "text", text: "Reading." }], error: "Request failed: 529 Overloaded\nTry again in a moment." }], system: [] }])
-assert.match(errored, /role="alert" data-event-error="rate-limited"/)
-assert.match(text(errored), /Cursor is over its rate limit or capacity\s*Wait for capacity to return or choose another model\./, "a recorded failure is named by the rules a live one is")
+  response: [{ id: "e-a", role: "assistant", blocks: [{ type: "text", text: "Reading." }], error: nativeError, failure: providerTextEvidence(nativeError).kind }], system: [] }])
+assert.match(errored, /role="alert" data-event-error="provider-unavailable"/)
+assert.match(text(errored), /Cursor.s service failed on its side/, "the native boundary's service verdict survives exchange splitting and rendering")
+const unmarkedLimit = draw([{ id: "host-error", prompt: { id: "host-error", role: "user", blocks: [{ type: "text", text: "Summarize" }] },
+  response: [{ id: "host-answer", role: "assistant", blocks: [], error: "You have hit your usage limit." }], system: [] }])
+assert.match(unmarkedLimit, /data-event-error="unknown"/, "a renderer never promotes unmarked message prose to a quota")
 const unnamed = draw([{ id: "u", prompt: { id: "u", role: "user", blocks: [{ type: "text", text: "Summarize" }] },
   response: [{ id: "u-a", role: "assistant", blocks: [{ type: "text", text: "Reading." }], error: "Tool schema mismatch in step 4\nat validate (schema.ts:12)" }], system: [] }])
-assert.match(text(unnamed), /Tool schema mismatch in step 4\s*Details/, "a failure no rule knows says the provider's own first line")
+assert.match(text(unnamed), /did not finish this turn\s*Details/, "a failure no rule knows is named, not shown as the provider's raw line")
+assert.doesNotMatch(text(unnamed), /Tool schema mismatch/, "the provider's own words wait behind Details, closed")
 assert.doesNotMatch(errored, /rounded-lg border border-negative/, "no tinted card")
+// A typed live failure keeps main's one-row treatment: neither the native event nor the cut footer repeats it.
+{
+  const request: LiveRequest = { id: "one-typed-failure", text: "Summarize", attachments: [], status: "failed",
+    error: nativeError, failure: "provider-unavailable", failureEvidence: providerTextEvidence(nativeError) }
+  const exchanges = streamed([{ kind: "user", requestId: request.id, text: request.text },
+    { kind: "event", label: "Turn failed", detail: nativeError, tone: "error" }], "cursor")
+  const one = renderToStaticMarkup(
+    <TranscriptSourceContext value={{ liveId: LIVE }}>
+      <FailedRequestsContext value={new Map([[request.id, request]])}>
+        {exchanges.map(exchange => <Exchange key={exchange.id} exchange={exchange}
+          interrupted={{ reason: "connection-lost", continuable: true, automatic: false }} />)}
+      </FailedRequestsContext>
+    </TranscriptSourceContext>
+  )
+  assert.equal(one.match(/data-failure-row=/g)?.length, 1, "the typed live outcome has exactly one failure row")
+  assert.match(one, /data-failure="provider-unavailable"/, "the native verdict reaches the one live recovery row")
+  assert.match(text(one), /The provider.s service failed/)
+  assert.doesNotMatch(one, /data-event="Turn failed"|data-turn-stopped/, "native marker and interruption footer do not duplicate its outcome")
+  assert.doesNotMatch(text(one), /Request failed: 529 Overloaded/, "raw provider words remain behind Details")
+}
+
 
 const separator = draw([{ id: "x", prompt: { id: "x", role: "user", blocks: [{ type: "text", text: "Go" }] }, response: [],
   system: [{ after: 0, message: { id: "sys", role: "system", blocks: [{ type: "text", text: "Session resumed from a checkpoint" }] } }] }])

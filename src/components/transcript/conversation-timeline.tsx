@@ -1,5 +1,7 @@
 import { Slot } from "@/extend/slot"
+import { quietly } from "@/lib/quiet-retry"
 import { elementScroll, measureElement, useVirtualizer, type Virtualizer } from "@tanstack/react-virtual"
+import { useRowRef } from "@/lib/virtual-row-ref"
 import { registerCommands } from "@/extend/commands"
 import {
   TranscriptSourceContext,
@@ -20,6 +22,7 @@ import {
   NAVIGATOR_WIDTH,
   TurnNavigator,
 } from "@/components/transcript/turn-navigator"
+import { useNavigatorPrompts } from "@/components/transcript/navigator-prompts"
 import {
   LEAD_EXCHANGE_ID,
   continuedFrom,
@@ -35,7 +38,6 @@ import { Orb } from "@/components/ui/orb/orb"
 import { liveReadingSource, nativeReadingSource, transcriptReaders, type TranscriptReading, type TranscriptPreviewIdentity } from "@/state/transcript-reading"
 import { loadReleasedLiveTurn } from "@/state/live-history"
 import { loadReleasedThreadTurn } from "@/state/thread-viewing"
-import { toast } from "sonner"
 import { TranscriptPaneContext } from "@/state/conversation-scope"
 import { SCROLL_WRITE_EVENT, TRANSCRIPT_END_EVENT, TranscriptEndContext } from "./transcript-end"
 import { READER_SCROLL_EVENT } from "@/lib/reader-scroll"
@@ -454,9 +456,10 @@ function ReleasedExchange({ id, label, height, viewport, load }: {
   const [failed, setFailed] = useState(false)
   const fetch = useCallback(() => {
     setFailed(false)
-    void load().catch(error => {
+    // Asked again once by itself; still failing, the row offers to load it again, and the host's words go to its log.
+    void quietly("an earlier turn", load).catch(error => {
       setFailed(true)
-      toast.error(error instanceof Error ? error.message : String(error))
+      console.warn(`An earlier turn didn't load ${JSON.stringify({ error: error instanceof Error ? error.message : String(error) })}`)
     })
   }, [load])
   useEffect(() => {
@@ -862,6 +865,7 @@ export function ConversationTimeline({
       if (viewport.current) owned(viewport.current)
     },
   })
+  const measureRow = useRowRef(rows)
   /**
    * A conversation that grows into a window is on screen as it crosses, and the virtualizer's first commit knows neither
    * the viewport nor its rows: it would mount the first turns at offset 0, and the column would paint empty until a seek
@@ -1846,6 +1850,9 @@ export function ConversationTimeline({
   // command's reader (the palette) to work through the whole list.
   const moving = useRef({ activeTurn, exchanges, jump })
   moving.current = { activeTurn, exchanges, jump }
+  // The navigator's jump, the same function for the transcript's life: `jump` changes with every streamed batch, and the
+  // navigator, memoized on its props, would otherwise draw again for each.
+  const jumpTo = useCallback((id: string) => moving.current.jump(id), [])
   useEffect(() => {
     const move = (offset: number) => {
       const { activeTurn, exchanges, jump } = moving.current
@@ -1874,6 +1881,7 @@ export function ConversationTimeline({
   }, [])
 
   const showNavigator = navigates && !isEmpty && exchanges.length >= 3
+  const navigatorPrompts = useNavigatorPrompts(exchanges)
   const woke = useMemo(() => wokeAfterRest(exchanges, askedAt), [exchanges, askedAt])
   const renderExchange = (exchange: ExchangeData) => exchange.unloaded !== undefined ? (
     <ReleasedExchange key={keys.get(exchange.id) ?? exchange.id} id={exchange.id} label={exchange.unloaded}
@@ -2003,7 +2011,7 @@ export function ConversationTimeline({
                     <div
                       key={row.key}
                       data-index={row.index}
-                      ref={rows.measureElement}
+                      ref={measureRow}
                       style={{ position: "absolute", top: 0, left: 0, width: "100%" }}
                     >
                       {renderExchange(exchanges[row.index]!)}
@@ -2026,9 +2034,9 @@ export function ConversationTimeline({
         </div>
         {showNavigator ? (
           <TurnNavigator
-            exchanges={exchanges}
+            exchanges={navigatorPrompts}
             activeId={activeTurn}
-            onJump={jump}
+            onJump={jumpTo}
             paneRef={pane}
           />
         ) : null}

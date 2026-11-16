@@ -1,4 +1,6 @@
+import type { LimitNoticeChoice } from "@mako/host/contracts/agents"
 import { fixtureHarnesses } from "./harness-fixtures"
+import type { ToolStep } from "@mako/host/contracts/tool-steps"
 import { FileIndexCore, type FileFoldersOptions, type FileGrepResults } from "@mako/host/contracts/file-index"
 import { mockAppshots } from "./mock-appshots"
 import { mockAuthoring } from "./mock-authoring"
@@ -43,7 +45,7 @@ import { continueTurnPrompt } from "@mako/host/contracts/turn-continuation"
 import { z } from "zod"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
-import { mcpServerFailedEvent } from "@mako/sessions/events"
+import { mcpServerFailedEvent, turnFailedEvent } from "@mako/sessions/events"
 import type { RecordRef } from "@mako/sessions/entries"
 import { restoreGate } from "@mako/sessions/record-writers"
 import type { RestorePlan } from "@mako/host/contracts/restore-plan"
@@ -51,6 +53,7 @@ import type { HarnessBehind, ThreadHarnessCheck } from "@mako/host/contracts/clo
 import type { UnreadReport } from "@mako/host/contracts/unread-records"
 import type { StoreFormats } from "@mako/host/contracts/store-formats"
 import type { FileEventsSample, FileEventsService } from "@mako/host/contracts/file-events-service"
+import type { McpSignIns } from "@mako/host/contracts/mcp-sign-ins"
 import type { EntryOriginal, OriginalPart } from "@mako/sessions/record-original"
 import type { LiveHistoryAddress, LiveHistoryRead } from "@mako/host/contracts/live-history"
 import { ENVIRONMENT_SETUP_PROMPT } from "@mako/host/contracts/thread-environments"
@@ -398,6 +401,10 @@ export function installMockBridge() {
   const returnCalls: string[] = []
   let refuseNextAgentAnswer = false
   const continueCalls: string[] = []
+  const crewContinueCalls: { conversation: string; request: string; choice: LimitNoticeChoice }[] = []
+  let crewLimitRoom = true
+  let crewNextCalls = 0
+  const crewWait = crypto.randomUUID()
   /** Sessions whose work is paused because the account signed out mid-turn, as the host pauses them. */
   const signInPauses = new Map<string, SignInHold>()
   /** Messages that already waited for this Mac to hear its account. */
@@ -560,6 +567,12 @@ export function installMockBridge() {
         emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: APEX_CONVERSATION, revision: next.revision, updates: [], control })) })
       },
       continues: () => [...continueCalls],
+      crewContinues: () => [...crewContinueCalls],
+      crewReads: () => crewNextCalls,
+      crewLimitRoom(value: boolean) {
+        crewLimitRoom = value
+        setChildren((liveSnapshots.get(APEX_CONVERSATION)?.nativeAgents?.agents ?? []).map(agent => ({ ...agent, ...(agent.child && { child: { ...agent.child } }) })))
+      },
       /**
        * The Apex's own turn starts or ends, as a wake or a settle would: ending it also settles its own still-
        * dispatching request (the digest it was reading), so the crew card draws in its place, the Fins in the
@@ -625,6 +638,20 @@ export function installMockBridge() {
    * that outcome. Any other scene reads a healthy service.
    */
   let mockFileEvents = mockFileEventsService(scene)
+  /**
+   * The MCP servers the mock's harnesses couldn't start: one signed in by Codex's command, a claude.ai connector, a
+   * Claude server needing sign-in it offers no way to start, and one Codex couldn't reach.
+   */
+  let mockMcpSignIns: McpSignIns = { servers: [
+    { harness: "claude", server: "claude.ai Gmail", reason: "sign-in required", way: "page", url: "https://claude.ai/settings/connectors", reportedAt: Date.now() },
+    { harness: "codex", server: "todoist", reason: "sign-in required", way: "command", reportedAt: Date.now() },
+    { harness: "claude", server: "linear", reason: "sign-in required", way: "settings", reportedAt: Date.now() },
+    { harness: "codex", server: "paper", reason: "could not connect", way: "settings", reportedAt: Date.now() },
+  ] }
+  const setMcpSignIns = (next: McpSignIns) => {
+    mockMcpSignIns = next
+    emit({ type: "mcp-sign-ins", reading: next })
+  }
   const setFileEvents = (next: FileEventsService) => {
     mockFileEvents = next
     emit({ type: "file-events-service", service: next })
@@ -858,6 +885,36 @@ export function installMockBridge() {
     ], true), 24_000)
   }
 
+  /**
+   * A `mako-computer` js call that clicks through a page for a while, its steps sent as the host sends them
+   * (`tool-steps`): the whole state at most every 250 ms, and `null` once it answers.
+   */
+  const playBrowserTurn = (id: string) => {
+    const code = 'const tab = await control.openTab({url:"http://localhost:5173/settings"})\nfor (const field of ["name","email","plan"]) await tab.locator({label:field}).fill("x")\nwhile (!(await tab.observe()).includes("Saved")) await control.wait(400)\nreturn await tab.screenshot()'
+    pushLive(id, [{ kind: "text", id: "browse-say", text: "I'll fill the settings form and wait for it to save." }, { kind: "tool", id: "browse", name: "mcp__mako-computer__js", title: "mako-computer: js", toolKind: "other", status: "in_progress", input: JSON.stringify({ code, title: "Fill the settings form" }) }])
+    const plan: ToolStep[][] = [
+      [{ call: "openTab", phase: "running" }],
+      [{ call: "openTab", phase: "done" }, { call: "fill", phase: "running" }],
+      [{ call: "openTab", phase: "done" }, { call: "fill", phase: "done", times: 3 }, { call: "observe", phase: "running" }],
+      [{ call: "openTab", phase: "done" }, { call: "fill", phase: "done", times: 3 }, { call: "observe", phase: "done" }, { call: "wait", phase: "running" }],
+    ]
+    const total = (steps: ToolStep[]) => steps.reduce((sum, step) => sum + (step.times ?? 1), 0)
+    plan.forEach((steps, index) => setTimeout(() => emit({ type: "tool-steps", conversationId: id, steps: { steps, total: total(steps) } }), 300 + index * 700))
+    // Then it polls: observe and wait in turn, the same two steps over and over, until the page says Saved.
+    for (let round = 1; round <= 6; round++) {
+      const steps: ToolStep[] = [{ call: "openTab", phase: "done" }, { call: "fill", phase: "done", times: 3 }, { call: "observe", phase: "done" }, { call: "wait", phase: "done" }]
+      for (let i = 0; i < round; i++) steps.push({ call: "observe", phase: "done" }, { call: "wait", phase: i === round - 1 ? "running" : "done" })
+      setTimeout(() => emit({ type: "tool-steps", conversationId: id, steps: { steps: steps.slice(-12), total: total(steps) } }), 300 + (plan.length + round) * 700)
+    }
+    setTimeout(() => {
+      emit({ type: "tool-steps", conversationId: id, steps: null })
+      pushLive(id, [
+        { kind: "tool-update", id: "browse", status: "completed", output: "Saved. Screenshot: /tmp/settings.png" },
+        { kind: "text", id: "browse-done", text: "The settings form saves." },
+      ], true)
+    }, 300 + (plan.length + 8) * 700)
+  }
+
   const startLiveReview = (id: string, target: ReviewTarget): LiveSnapshot => {
     const snapshot = liveSnapshots.get(id)
     if (!snapshot) throw new Error("This conversation is no longer available")
@@ -978,6 +1035,10 @@ export function installMockBridge() {
     takeTurnForThreadApp: async () => ({ problems: ["The mock desk runs no apps."] }),
     threadAppOutput: async () => ({ text: "", cursor: { file: "", offset: 0 }, reset: false }),
     threadAppMarks: async () => [],
+    followThreadApps: async () => ({ kind: "unavailable" }),
+    viewHints: async () => null,
+    followConversationApp: async () => ({ kind: "unavailable" }),
+    conversationApp: async () => ({ folder: "/fixture", app: { kind: "none", project: "fixture", root: "/fixture" } }),
     probeThreadApp: async () => {
       throw new Error("The mock desk runs no apps; ?app=<scenario> shows one.")
     },
@@ -1041,6 +1102,10 @@ export function installMockBridge() {
       ]
     },
     worktreeAhead: async () => null,
+    snapshotBudget: async () => ({ settings: { mode: "preview", maxBytes: 8 * 1024 ** 3 }, at: Date.now(), payloadBytes: 0, selectedBytes: 0, remainingBytes: 0, untrackedBytes: 0, inventoryKnown: true, entries: [] }),
+    setSnapshotBudget: async settings => ({ settings, at: Date.now(), payloadBytes: 0, selectedBytes: 0, remainingBytes: 0, untrackedBytes: 0, inventoryKnown: true, entries: [] }),
+    threadScratch: async () => ({ settings: { mode: "preview", idleDays: 7, kept: [] }, at: Date.now(), everyMs: 3_600_000, entries: [] }),
+    setThreadScratch: async (settings) => ({ settings, at: Date.now(), everyMs: 3_600_000, entries: [] }),
     worktreeRetention: async () => ({ settings: { mode: "preview", days: 7, kept: [] }, everyMs: 3_600_000, minimumPassMs: 600_000, repositoryFetches: 0, at: Date.now(), checkouts: [] }),
     setWorktreeRetention: async (settings) => ({ settings, everyMs: 3_600_000, minimumPassMs: 600_000, repositoryFetches: 0, at: Date.now(), checkouts: [] }),
     worktreeInventory: async () => (scene === "rail" ? railInventory(removedWorktrees) : { worktrees: [], spares: { count: 0, bytes: null } }),
@@ -1647,6 +1712,7 @@ export function installMockBridge() {
       truncated: 0,
     }),
     listPlugins: async () => {
+      if (new URLSearchParams(location.search).get("plugins") === "none") return []
       const plugins = [
         {
           id: "thread-counter",
@@ -2226,8 +2292,9 @@ export function installMockBridge() {
       if (cloud) {
         const from = mockHarnessesHere.get(provider)
         const reading = { provider, binary: `/Users/you/.nvm/versions/node/v24.19.0/bin/${provider}`, channel: "npm" as const, checkedAt: Date.now() }
+        // npm refused to write its global folder (EACCES): the host words it (`updateFailureWords`) and logs npm's own.
         if (mockHarnessScene === "failing")
-          return { ...reading, installed: from, result: { at: Date.now() - 1_200, outcome: "failed" as const, from, message: "npm error code EACCES: permission denied, mkdir '/usr/local/lib/node_modules/@openai'" } }
+          return { ...reading, installed: from, result: { at: Date.now() - 1_200, outcome: "failed" as const, from, message: "It needs permission to change the folder it's installed in." } }
         // The updater finished, but the binary Mako runs didn't move: the host names where the update went and what Mako runs.
         if (mockHarnessScene === "elsewhere")
           return { ...reading, installed: from, result: { at: Date.now() - 1_200, outcome: "failed" as const, from, message: `npm installed Codex ${cloud} into /opt/homebrew, but Mako runs ${reading.binary}, still ${from}.` } }
@@ -2893,6 +2960,8 @@ export function installMockBridge() {
         const updates: LiveUpdate[] = failing.unsent ? [] : [
           { kind: "user", requestId, text },
           ...failing.started || failing.kind === "host-quit" ? [{ kind: "text" as const, text: "Reading `src/net/retry.ts` and the two clients that call it." }] : [],
+          // As a harness does: a started turn that fails also writes its own marker, in its own words.
+          ...failing.started && failing.error ? [{ kind: "event" as const, ...turnFailedEvent(failing.error.split("\n", 1)[0], failing.error) }] : [],
         ]
         const session: LiveSessionState = failing.kind === "host-quit" || failing.kind === "uncertain"
           ? { ...snapshot.session, status: "ready", connection: "hibernated" }
@@ -2911,6 +2980,14 @@ export function installMockBridge() {
         acpSessions.set(id, session)
         emit({ type: "live-batch", batch: { id, revision: next.revision, updates, session, permissions: [asked], requests: next.requests } })
         return next.requests.at(-1)!
+      }
+      if (/in the browser/i.test(text)) {
+        const running: LiveRequest = { id: requestId, text, attachments, status: "dispatching" }
+        const session: LiveSessionState = { ...snapshot.session, status: "running" }
+        liveSnapshots.set(id, { ...snapshot, session, requests: [...snapshot.requests, running] })
+        pushLive(id, [{ kind: "user", requestId, text }])
+        playBrowserTurn(id)
+        return running
       }
       if (/run the (?:\w+ )?(?:tests|suite)/i.test(text)) {
         const running: LiveRequest = { id: requestId, text, attachments, status: "dispatching" }
@@ -3101,6 +3178,14 @@ export function installMockBridge() {
       const next = { ...snapshot, revision: snapshot.revision + 1, nativeAgents }
       liveSnapshots.set(id, next)
       emit({ type: "live-batch", batch: { id, revision: next.revision, updates: [], nativeAgents } })
+      return true
+    },
+    liveWaitStop: async (id: string, wait: string) => {
+      const snapshot = liveSnapshots.get(id)
+      if (snapshot?.turnWait?.wait !== wait) return false
+      const next = { ...snapshot, revision: snapshot.revision + 1, turnWait: undefined }
+      liveSnapshots.set(id, next)
+      emit({ type: "live-batch", batch: { id, revision: next.revision, updates: [], turnWait: null } })
       return true
     },
     liveCancel: async (id: string) => {
@@ -3481,6 +3566,30 @@ export function installMockBridge() {
     }),
     continueReadings: async () => mockContinues.readings(),
     fileEventsService: async () => mockFileEvents,
+    // `?versions` shows the first prompt of a conversation as edited once: its fork holds the second version.
+    livePromptVersions: async (id: string) => {
+      const versioned = new URLSearchParams(globalThis.location?.search).has("versions")
+      const firstRequest = liveSnapshots.get(id)?.requests[0]?.id
+      return versioned && firstRequest ? { [firstRequest]: { conversations: [id, `${id}-edited`], at: 0 } } : {}
+    },
+    mcpSignIns: async () => mockMcpSignIns,
+    mcpSignIn: async (harness: string, server: string) => {
+      const known = mockMcpSignIns.servers.find((each) => each.harness === harness && each.server === server)
+      const others = mockMcpSignIns.servers.filter((each) => each !== known)
+      if (known?.way === "settings") return mockMcpSignIns
+      if (!known || known.way === "page") {
+        setMcpSignIns({ servers: others })
+        return mockMcpSignIns
+      }
+      setMcpSignIns({ servers: [...others, { ...known, state: { kind: "signing-in" } }] })
+      setTimeout(() => setMcpSignIns({ servers: mockMcpSignIns.servers.filter((each) => each.server !== server) }), 2_000)
+      return mockMcpSignIns
+    },
+    // `?mock&unopened` shows a saved conversation the host couldn't open.
+    unopenedConversations: async () =>
+      new URLSearchParams(globalThis.location?.search).has("unopened")
+        ? [{ conversation: "6f1c2a90-3b7e-4d2a-9c41-8e5b0f7d2a13", journal: "conversations/6f1c2a90-3b7e-4d2a-9c41-8e5b0f7d2a13.sqlite", error: "file is not a database" }]
+        : [],
     fileEventsRestart: async () => {
       const before = mockFileEvents
       setFileEvents({ ...before, restarting: "restarting" })
@@ -3563,9 +3672,26 @@ export function installMockBridge() {
       }
       return { to: direct.to, fin: direct.fin, delivery: direct.delivery }
     },
-    agentsNextPlace: async () => ({ label: "Codex", harness: "codex" }),
-    agentsContinueNext: async (conversation: string) => {
-      continueCalls.push(conversation)
+    agentsNextPlace: async (conversation: string, notice?: string) => {
+      if (!notice) return { label: "Codex", harness: "codex" }
+      crewNextCalls++
+      const agent = liveSnapshots.get(conversation)?.nativeAgents?.agents.find(agent => agent.child?.limitNotice?.id === notice && agent.child.limitNotice.waiting)
+      return crewLimitRoom && agent?.child ? { label: "Codex", harness: "codex", choice: { notice, place: "codex", waits: [{ thread: agent.child.thread, request: agent.child.limitNotice!.waiting!.version ?? crewWait }] } } : null
+    },
+    agentsContinueNext: async (conversation: string, request: string, choice?: LimitNoticeChoice) => {
+      if (!choice) { continueCalls.push(conversation); return true }
+      crewContinueCalls.push({ conversation, request, choice })
+      const snapshot = liveSnapshots.get(conversation)
+      if (!snapshot?.nativeAgents || !crewLimitRoom) return false
+      const agents = snapshot.nativeAgents.agents.map(agent => {
+        if (agent.child?.limitNotice?.id !== choice.notice) return agent
+        const child = { ...agent.child }; delete child.limitNotice
+        return { ...agent, child }
+      })
+      const nativeAgents = { ...snapshot.nativeAgents, agents }
+      const next = { ...snapshot, revision: snapshot.revision + 1, nativeAgents }
+      liveSnapshots.set(conversation, next)
+      emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: conversation, revision: next.revision, updates: [], nativeAgents })) })
       return true
     },
     // As the host answers it: the Fin goes on, and its entry says so in the Apex's next batch.

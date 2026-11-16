@@ -234,7 +234,9 @@ async function check() {
   console.log("PANEL", JSON.stringify(panel))
   assert.match(panel.heading, /12 Fins · 2 need you · 5 working · 2 queued · 1 idle · 2 done/)
   assert.match(panel.heading, /Stop all/)
-  assert.deepEqual(panel.groups, ["Needs you 2", "Working 5", "Queued 2", "Idle 1", "Done 2"])
+  // Finished and idle Fins fold into one line, as the crew card folds them.
+  assert.deepEqual(panel.groups, ["Needs you 2", "Working 5", "Queued 2"])
+  assert.equal(await evaluate("document.querySelector('[data-apex-fins] [data-crew-settled]')?.innerText.trim()"), "2 done · 1 idle")
   await both("panel")
 
   // Opening a Fin opens it in place: its breadcrumb, its brief from the Apex first, the approval it waits on, its

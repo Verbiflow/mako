@@ -1,4 +1,5 @@
 import { useHarnessIdentity, useHarnessLabels } from "@/lib/harness-label"
+import { quietly } from "@/lib/quiet-retry"
 import { latestPendingQuestion } from "@mako/host/contracts/live-questions"
 import { carriedHistories, promptDelivery, recoveriesByPlace, makoPrompts, turnStops } from "@/state/prompt-delivery"
 import { FailureRow } from "@/components/transcript/failure-row"
@@ -16,17 +17,20 @@ import { WorktreeOpening } from "@/components/viewer/worktree-opening"
 import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { useStartedWorktree } from "@/state/worktrees"
 import { BackgroundWorkLine } from "./background-work-line"
+import { TurnWaitLineView } from "./turn-wait-line"
 import { CrewCard } from "./crew-card"
 import { useEffect, useMemo, useState } from "react"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
+import { usePacedProjection } from "./paced-projection"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import { scopedAcp, scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
 import { useThreads } from "@/state/threads"
 import { asksInSession, descriptorFor } from "@/state/descriptors"
 import { usePlanDecision } from "@/state/plan-mode"
 import { viewerHandedOff } from "@/state/thread-viewing"
-import { toast } from "sonner"
 import type { LivePermissionRequest, LiveRequest } from "@/lib/types"
+import { usageLimitSources } from "@/state/usage-limit-wait"
+import { withoutWaitingLimitNotes } from "@/lib/exchanges"
 import { harnessLabel } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import { bareCommand, identifyTool } from "@mako/sessions/tool-identity"
@@ -153,13 +157,15 @@ function HistoryReadNote({ state }: { state: "reading" | { failed: string } }) {
 function Blocks({ starting = false, continued = false, compact = false }: { starting?: boolean; continued?: boolean; compact?: boolean }) {
   const scope = useConversationScope()
   const session = useAcp((state) => scopedLiveAcp(state, scope)?.session ?? null)
-  const projection = useAcp((state) => scopedAcp(state, scope)?.projection)
+  // Paced while an answer streams: each batch the host sends drew the whole transcript again.
+  const projection = usePacedProjection(scope)
   const history = useAcp((state) => scopedAcp(state, scope)?.base)
   const historyWindow = useAcp((state) => scopedAcp(state, scope)?.history)
   // Stable from the first keystroke of a start through promotion and any
   // later binding: the transcript keeps its scroll position and its turns.
   const identity = useAcp((state) => scopedAcp(state, scope)?.draftKey ?? "none")
   const requests = useAcp((state) => scopedAcp(state, scope)?.requests ?? EMPTY_QUEUE)
+  const copy = useAcp(state => scopedLiveAcp(state, scope)?.copy)
   const sessionId = session?.id
   const [loadingEarlier, setLoadingEarlier] = useState(false)
   const loadEarlier = useMemo(
@@ -169,9 +175,10 @@ function Blocks({ starting = false, continued = false, compact = false }: { star
         : async () => {
             setLoadingEarlier(true)
             try {
-              await loadEarlierLive(sessionId)
+              await quietly("earlier turns", () => loadEarlierLive(sessionId))
             } catch (error) {
-              toast.error(error instanceof Error ? error.message : String(error))
+              // Still offered: reaching the top asks again. The host's words go to its log.
+              console.warn(`Earlier turns didn't load ${JSON.stringify({ error: error instanceof Error ? error.message : String(error) })}`)
             } finally {
               setLoadingEarlier(false)
             }
@@ -192,18 +199,20 @@ function Blocks({ starting = false, continued = false, compact = false }: { star
     session?.status === "starting" ||
     session?.status === "running"
   const interruptedRequests = useMemo(() => turnStops(requests, running), [requests, running])
-  const blocks = useAcp((state) => scopedLiveAcp(state, scope)?.blocks ?? EMPTY_QUEUE)
   const earlierRequests = useAcp((state) => scopedLiveAcp(state, scope)?.history?.earlierRequests)
-  // Only a conversation with a message to recover reads its turns for where each was said.
+  // Only a conversation with a message to recover reads its turns for where each was said, and only it follows them:
+  // the blocks change with every batch the host sends.
   const recovering = requests.some((request) => request.status === "failed" || request.status === "uncertain" || request.status === "interrupted")
+  const blocks = useAcp((state) => (recovering ? scopedLiveAcp(state, scope)?.blocks : undefined) ?? EMPTY_QUEUE)
   const recoveries = useMemo(
-    () => recovering ? recoveriesByPlace({ blocks, history: earlierRequests ? { earlierRequests } : undefined, requests }) : NO_RECOVERIES,
-    [recovering, blocks, earlierRequests, requests]
+    () => recovering ? recoveriesByPlace({ blocks, history: earlierRequests ? { earlierRequests } : undefined, requests, copy }) : NO_RECOVERIES,
+    [recovering, blocks, earlierRequests, requests, copy]
   )
   const madeByMako = useMemo(() => makoPrompts(requests), [requests])
   const carried = useMemo(() => carriedHistories(requests), [requests])
   const askedAt = useMemo(() => new Map(requests.flatMap((request) => (request.createdAt === undefined ? [] : [[request.id, request.createdAt] as const]))), [requests])
-  const exchanges = projection?.exchanges ?? EMPTY_QUEUE
+  const waitingLimits = useMemo(() => copy ? new Set<string>() : usageLimitSources(requests), [requests, copy])
+  const exchanges = useMemo(() => withoutWaitingLimitNotes(projection?.exchanges ?? EMPTY_QUEUE, waitingLimits), [projection?.exchanges, waitingLimits])
   const unread = useAcp((state) => scopedLiveAcp(state, scope)?.hydrated === false)
   const lastExchangeId = exchanges.at(-1)?.id
   const row = useAcp((state) => {
@@ -275,6 +284,8 @@ function Blocks({ starting = false, continued = false, compact = false }: { star
           />
           {/* The Fins stand through every turn and transition; only the background line waits for the turn's end. */}
           <CrewCard compact={compact} fallback={running ? null : <BackgroundWorkLine />} />
+          {/* The wait its agent armed for when its turn ends: said once the turn has. */}
+          {running ? null : <TurnWaitLineView />}
         </>
       }
     />

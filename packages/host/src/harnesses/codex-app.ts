@@ -1,3 +1,5 @@
+import type { ProviderFailureEvidence } from "../contracts/provider-failure-evidence.js"
+import { failureEvidenceOf, providerExitEvidence } from "../contracts/provider-failure.js"
 import { answersId, type PrefetchLaunch } from "./start-prefetch.js"
 import { applyControlEnvironment } from "../control/index.js"
 import { launchContext, observeNativeIdentity, reportedIdentity, reportedRuntime } from "../base/execution-context.js"
@@ -369,7 +371,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
       failLive(live, message)
       // One that outlives this stays in `sessions` for the next close; what the start reports is why it failed.
       await codexAppClose(id).catch(() => undefined)
-      throw new Error(message, { cause: error })
+      throw error
     }
   }
 
@@ -495,7 +497,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
         error instanceof Error && error.message
           ? error.message
           : "Codex rejected the turn"
-      updateState(live, { status: "failed", error: message, lastStop: "failed" })
+      updateState(live, { status: "failed", error: message, failureEvidence: failureEvidenceOf({ error }), lastStop: "failed" })
       throw new Error(message, { cause: error })
     } finally {
       resolveStarted()
@@ -779,16 +781,16 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
     live.child.on("exit", (code, signal) => {
       const detail = lastLine(live.stderrBuffer)
       const suffix = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`
-      handleProcessEnd(live, detail || `codex app-server exited with ${suffix}`)
+      handleProcessEnd(live, detail || `codex app-server exited with ${suffix}`, providerExitEvidence(detail))
     })
   }
 
   function protocolFatal(live: Live, message: string): void {
-    handleProcessEnd(live, message)
+    handleProcessEnd(live, message, { kind: "unknown", source: "host" })
     void endProviderProcess(live.child)
   }
 
-  function handleProcessEnd(live: Live, message: string): void {
+  function handleProcessEnd(live: Live, message: string, failureEvidence: ProviderFailureEvidence = { kind: "network", source: "host" }): void {
     if (live.exited) return
     const wasClosed = live.state.status === "closed"
     disposeLive(live, new Error(message))
@@ -797,6 +799,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
         status: "failed",
         connection: "disconnected",
         error: message,
+        failureEvidence,
         backgroundTasks: 0,
       })
   }

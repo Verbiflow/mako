@@ -10,6 +10,7 @@ import { actionNotice } from "@mako/host/contracts/operation-recovery"
 import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
 import { agentToolSchema } from "@mako/host/conversations/agent-tools"
 import { FROM_AGENTS, WAKE_COALESCE_MS } from "@mako/host/conversations/agent-wakes"
+import { childWord, DIGEST_RESTART_HINT } from "@mako/host/contracts/children"
 import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
 
 /**
@@ -146,6 +147,126 @@ async function finishOnly(): Promise<void> {
     assert.equal(wakes.length, 1, "its result wakes the Apex")
     assert.match(wakes[0]!.text, /1 finished:\n {2}• "[^"]+" \(Codex\) done: Merged it into main\./)
     assert.doesNotMatch(wakes[0]!.text, /needs a decision/)
+  } finally {
+    await w.close()
+  }
+}
+
+/**
+ * A turn that ends on progress waiting on nothing Mako watches is heard by its Apex, once, as ended without a result,
+ * with the Fin's last words: never its result, since it never said it was done (fin-models on #868, 2026-11-16, was
+ * said "done" on a promise), and never a question, which would reach the person once its Apex left it. Progress on a
+ * pull request the watch reads stays quiet until its outcome wakes the Fin (loop-holds' "ready for your review" on
+ * #810, 2026-11-15, woke nobody).
+ */
+async function progressThenTurnEnd(): Promise<void> {
+  const w = new AgentsWorld({
+    root: join(root, "progress-turn-end"),
+    readPull: async () => null,
+    script: async (turn) => {
+      if (!turn.text.includes("You're fin:")) return "ok"
+      const say = (summary: string, waitingOn?: Parameters<typeof turn.world.agents.report>[1]["waitingOn"]) =>
+        turn.world.agents.report(turn.caller, { status: "progress", summary, ...(waitingOn && { waitingOn }), clientKey: "said" })
+      if (turn.text.includes("Review")) { await say("Ready for review at 1a2b3c4."); return "" }
+      if (turn.text.includes("Merge")) { await say("Reviewed; it needs merging.", [{ kind: "person", what: "merge" }]); return "Over to the person." }
+      if (turn.text.includes("Drop prep")) {
+        await say("Reviewed; it needs merging.", [{ kind: "person", what: "merge" }])
+        // Then a word that names no wait, the #810 case: ready, nothing watched, so its end is its result.
+        await turn.world.agents.report(turn.caller, { status: "progress", summary: "Ready for review at 9f8e7d6.", clientKey: "said-ready" })
+        return ""
+      }
+      if (turn.text.includes("Other prep")) {
+        await say("Reviewed; it needs merging.", [{ kind: "person", what: "merge" }])
+        await turn.world.agents.report(turn.caller, { status: "progress", summary: "Waiting on the deploy window.", waitingOn: [{ kind: "other", text: "the deploy window" }], clientKey: "said-other" })
+        return "Waiting on the deploy window."
+      }
+      if (turn.text.includes("Reword")) {
+        await say("Reviewed; it needs merging.", [{ kind: "person", what: "merge" }])
+        // The same wait said again in other words, as narration does: nothing new for its Apex.
+        await turn.world.agents.report(turn.caller, { status: "progress", summary: "Still waiting for the person to merge it.", waitingOn: [{ kind: "person", what: "merge" }], clientKey: "said-again" })
+        return "Over to the person."
+      }
+      await say("Pushed; CI runs.", [{ kind: "pull-request", ref: "acme/app#5", until: "checks" }])
+      return "Waiting on CI."
+    },
+  })
+  try {
+    const apex = await w.apex("codex")
+    for (const [name, objective] of [["review", "Review prep"], ["merge", "Merge prep"], ["reword", "Reword prep"], ["drop", "Drop prep"], ["other", "Other prep"], ["ci", "CI prep"]])
+      started(await w.agents.start(apex.caller, { brief: { objective }, harness: "claude", name, clientKey: name, cwd: w.root }))
+    await w.settle()
+    const wakes = wakesOf(w, apex.conversation)
+    const heard = wakes.map((wake) => wake.text).join("\n")
+    assert.match(heard, /"review" \(Claude\): Nothing it waits on will wake it\. Its last words: "Ready for review at 1a2b3c4\."/, `progress then a silent turn end is said as ended without a result, never done: ${heard}`)
+    assert.match(heard, /"merge" \(Claude\): Reviewed; it needs merging\. · waiting on the person to merge/, "a first wait on the person wakes the Apex as it's said")
+    assert.equal(heard.match(/• "merge"/g)?.length, 1, "and once: its turn's end says nothing more")
+    assert.doesNotMatch(heard, /"ci"/, "progress on a pull request the watch reads stays quiet")
+    assert.ok(wakes.length >= 1 && wakes.length <= 2, `the burst wakes the Apex once or twice: ${wakes.length}`)
+    const results = (name: string) => w.store.reportsOf(w.store.edges().all.find((edge) => edge.name === name)!.child).filter((report) => report.implicit)
+    assert.equal(results("drop").length, 1, "a person wait, then progress naming no wait: its turn's end is its result")
+    assert.equal(results("other").length, 1, "a person wait, then a wait in other words: its turn's end is its result")
+    assert.match(heard, /"drop" \(Claude\): Nothing it waits on will wake it\. Its last words: "Ready for review at 9f8e7d6\."/, "and its Apex hears it")
+    assert.match(heard, /"other" \(Claude\): Nothing it waits on will wake it\. Its last words: "Waiting on the deploy window\."/)
+    assert.equal(heard.match(/• "reword"/g)?.length, 1, "a wait said again in other words wakes the Apex once")
+    const reword = w.store.reportsOf(w.store.edges().all.find((edge) => edge.name === "reword")!.child)
+    assert.deepEqual(reword.map((report) => [report.status, report.implicit ?? false]), [["progress", false], ["progress", false]], "and its turn's end adds no result")
+    assert.equal(heard.match(/• "review"/g)?.length, 1, "once")
+    const listed = await w.agents.list(apex.caller, {})
+    assert.ok("children" in listed)
+    const kind = (name: string) => listed.children.find((child) => child.name === name)?.state
+    assert.equal(childWord(kind("review")!), "Ended without a result", "its row never says done")
+    assert.match(heard, /3 ended without a result /, "apart from what finished")
+    assert.equal(kind("ci")?.kind, "idle", "the CI one waits")
+    const merge = w.store.reportsOf(w.store.edges().all.find((edge) => edge.name === "merge")!.child)
+    assert.deepEqual(merge.map((report) => [report.status, report.implicit ?? false]), [["progress", false]], "no turn-end result after a wait that woke the Apex")
+  } finally {
+    await w.close()
+  }
+}
+
+/**
+ * The digest a long turn's focus window steers in is taken from the queue once: a host that crashes while the harness
+ * holds that steer never sends those results a second time, and drops none of them.
+ */
+async function focusSteerAcrossCrash(): Promise<void> {
+  await focusCrash("held")
+  await focusCrash("taken")
+}
+
+/** `held`: the host crashes while the harness still holds the steer. `taken`: the harness takes it and the host crashes at once. */
+async function focusCrash(how: "held" | "taken"): Promise<void> {
+  const w = new AgentsWorld({
+    root: join(root, `focus-crash-${how}`),
+    focusMs: 300,
+    steering: { claude: { lands: "step", hears: "at its next step", holds: true } },
+    script: async (turn) => {
+      if (turn.text.includes("You're fin:")) return `Done: ${turn.text.includes("Part one") ? "part one" : "part two"} checked.`
+      if (spoken(turn.text) === "go") {
+        for (const [key, objective] of [["one", "Part one"], ["two", "Part two"]])
+          started(await turn.world.agents.start(turn.caller, { brief: { objective }, harness: "codex", name: key, clientKey: key, cwd: turn.world.root }))
+        await turn.world.hold(turn.conversation)
+        return "Planned."
+      }
+      return "ok"
+    },
+  })
+  try {
+    const apex = await w.apex("claude", "full")
+    w.say(apex.conversation, "go")
+    await until("both results", () => w.store.edges().all.every((edge) => w.store.reportsOf(edge.child, 0).length > 0) && w.store.edges().all.length === 2)
+    await delay(800)
+    const digests = () => w.live.snapshot(apex.conversation)!.requests.filter((request) => request.digest)
+    assert.ok(digests().length >= 1, "the results wait as a digest while the Apex works")
+    if (how === "taken") assert.ok(w.answerSteer(apex.conversation, { kind: "accepted" }), "the harness takes the focus steer")
+    await w.crashed()
+    await w.settle(500, 30_000, "ignore")
+    const heard = [...w.prompts.filter((prompt) => prompt.conversation === apex.conversation), ...w.steers.filter((steer) => steer.conversation === apex.conversation)].map((entry) => entry.text).join("\n")
+    // Never twice. A digest whose steer the crash left unknown fails closed (delivery-queue rule 15): it isn't sent again,
+    // and the turn that goes on is told reports may have arrived around the restart.
+    const once = ["one", "two"].map((name) => heard.split(`• "${name}" (Codex)`).length - 1)
+    assert.ok(once.every((count) => count <= 1), `no result reached its Apex twice across the crash: ${heard}`)
+    if (once.some((count) => count === 0)) assert.ok(heard.includes(DIGEST_RESTART_HINT), `one not heard is said to have maybe arrived around the restart: ${heard}`)
+    if (how === "taken") assert.ok(once.every((count) => count === 1), `a steer the harness took is heard, once each: ${heard}`)
   } finally {
     await w.close()
   }
@@ -320,7 +441,10 @@ async function refusedSteer(): Promise<void> {
     }
     if (spoken(turn.text).startsWith(FROM_AGENTS)) return "Going on."
     child = turn.conversation
-    return "Lint is clean."
+    // A question is what a working Apex is steered with (a finished result waits for its turn's end, FOCUS_MS).
+    const asked = await turn.world.agents.report(turn.caller, { status: "needs-input", summary: "Two configs.", question: "Which lint config?", clientKey: "q" })
+    assert.ok(!("refused" in asked), JSON.stringify(asked))
+    return "Asked."
   } })
   try {
     const apex = await w.apex("claude")
@@ -334,7 +458,7 @@ async function refusedSteer(): Promise<void> {
     assert.equal(actionNotice(held, []), undefined, "and the person hears nothing of a steer Mako sent by itself")
     w.release(apex.conversation)
     await until("the next turn", () => wakesOf(w, apex.conversation).length === 1)
-    assert.match(wakesOf(w, apex.conversation)[0]!.text, /"lint" \(Codex\) done: Lint is clean\./)
+    assert.match(wakesOf(w, apex.conversation)[0]!.text, /"lint" \(Codex\) is asking: Which lint config\?/)
     await w.settle()
     assert.equal(w.store.undeliveredReports().length, 0)
   } finally {
@@ -360,17 +484,16 @@ async function waitNeverSteers(): Promise<void> {
     await until("both children", () => answers.length === 1 && kids.size === 2)
     w.release(kids.get("count")!)
     w.release(kids.get("lint")!)
-    await until("the background report's steer", () => w.steers.length === 1, 6_000)
-    assert.match(w.steers[0]!.text, /1 finished:\n {2}• "lint" \(Codex\) done: Lint is clean\./)
-    assert.doesNotMatch(w.steers[0]!.text, /waited for/, "the waited-for result isn't steered into the running turn")
-    await delay(500)
-    assert.equal(wakesOf(w, apex.conversation).length, 0, "and doesn't start a turn while one runs")
+    await delay(WAKE_COALESCE_MS + 500)
+    assert.equal(w.steers.length, 0, "neither result is steered into the running turn: the Apex is left to think (FOCUS_MS)")
+    assert.equal(wakesOf(w, apex.conversation).length, 0, "and neither starts a turn while one runs")
     w.release(apex.conversation)
-    await until("the next turn", () => wakesOf(w, apex.conversation).length === 1)
-    assert.match(wakesOf(w, apex.conversation)[0]!.text, /The result you waited for:\n {2}• "count" \(Codex\) done:\n {4}There are 12 files\./)
+    await until("the next turn", () => wakesOf(w, apex.conversation).length >= 1)
     await w.settle()
-    assert.equal(w.steers.length, 1)
-    assert.equal(wakesOf(w, apex.conversation).length, 1)
+    const heard = wakesOf(w, apex.conversation).map((wake) => wake.text).join("\n")
+    assert.match(heard, /The result you waited for:\n {2}• "count" \(Codex\) done:\n {4}There are 12 files\./)
+    assert.match(heard, /"lint" \(Codex\) done: Lint is clean\./, "the background result goes at the turn's end too")
+    assert.equal(w.steers.length, 0)
   } finally {
     await w.close()
   }
@@ -509,6 +632,8 @@ try {
   await backgroundAnswersAtOnce()
   await burst()
   await finishOnly()
+  await progressThenTurnEnd()
+  await focusSteerAcrossCrash()
   await never()
   await waitSettles()
   await waitAsks("decisions")

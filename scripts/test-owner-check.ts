@@ -166,6 +166,7 @@ async function world(name: string, ownerCheckMs = { check: 10_000, most: 30_000 
   let heard = true
   let reaching: () => Promise<boolean> = async () => true
   let reaches = 0
+  const accountProbes: boolean[] = []
   const listeners = new Set<(heard: AccountListNotice) => void>()
   const op = randomUUID()
   const cloudThread = await continueCloudThread(op)
@@ -187,6 +188,7 @@ async function world(name: string, ownerCheckMs = { check: 10_000, most: 30_000 
     devices: async () => ({ devices: [], current: mac }),
     accountHeard: () => heard,
     reachAccount: () => (reaches++, reaching()),
+    checkAccountWaiting: () => accountProbes.push(router?.waitingForAccount() ?? false),
     onThreadListings: (listener) => {
       listeners.add(listener)
       return () => listeners.delete(listener)
@@ -226,7 +228,7 @@ async function world(name: string, ownerCheckMs = { check: 10_000, most: 30_000 
   })
   moves = new CloudMoves({
     folder: join(folder, "moves"), git, account: () => account, threads: () => threads, moves: owner.moves,
-    snapshot: (conversationId) => self().snapshot(conversationId) ?? null,
+    session: (conversationId) => self().session(conversationId),
     checkout: () => undefined,
     repositoryOf: async () => ({ url: "https://github.com/ana/api", branch: "webhooks" }),
     sendRecords: async () => { throw new Error("a joined continue sends nothing: the account had it all") },
@@ -262,6 +264,7 @@ async function world(name: string, ownerCheckMs = { check: 10_000, most: 30_000 
   return {
     owner, fx, router, moves, threads, id, placed, generation, row, op, cloudThread, machine, adopted, ended, request, readings,
     reads: () => reads,
+    accountProbes,
     reaches: () => reaches,
     answer: (next: () => Promise<SessionListings>) => { listing = next },
     link: (isHeard: boolean, reach?: () => Promise<boolean>) => {
@@ -305,9 +308,11 @@ scenario("a message typed before the list runs in the cloud, once, when the list
   await delay(50)
   assert.equal(w.request(typed)?.status, "queued", "it waits for the account")
   assert.ok(w.request(typed)?.ownerCheck, "and says what it waits for")
+  assert.equal(w.accountProbes.at(-1), true, "the actual held-turn path asks for the short account probe")
   assert.ok(!w.fx.prompts.some((prompt) => prompt.text === "typed before the list"), "nothing ran here")
   list.open({ sessions: [w.row({ continued: w.listed(w.op) })], seq: 2 })
   await until(() => w.ended.has(w.op), "the continue is joined")
+  assert.equal(w.accountProbes.at(-1), false, "hearing ownership returns the account to idle probes")
   const execution = w.threads.execution(w.placed.session)
   assert.equal(execution?.state, "elsewhere", "the Session runs in the cloud now")
   assert.equal(execution?.generation, w.generation + 2, "at the generation the cloud claimed")

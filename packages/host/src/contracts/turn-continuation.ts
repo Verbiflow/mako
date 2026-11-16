@@ -1,5 +1,6 @@
 import { INTERRUPTION_REASONS, type InterruptionReason, type LiveRequest } from "./live-conversations.js"
 import { RESUMED_OPENS } from "./resume-account.js"
+import { holdOf } from "./request-hold.js"
 
 /**
  * How long Mako waits after a turn ends on a dropped connection before it
@@ -14,11 +15,11 @@ const AUTO_CONTINUED: ReadonlySet<InterruptionReason> = new Set(["connection-los
 
 /**
  * Mako's own quit, restart or update, which the next host continues when the
- * person turned that on (`ConversationSettings.continueAfterRestart`). A host
- * that died (`host-crashed`) can't say whether the provider finished the turn,
- * so that one always waits for the person.
+ * person has not turned it off (`ConversationSettings.continueAfterRestart`).
+ * After a crash, native ownership/source and any exact outcome are read before
+ * a new continuation opens; an uncertain original is never replayed.
  */
-const RESTART_CONTINUED: ReadonlySet<InterruptionReason> = new Set(["host-quit"])
+const RESTART_CONTINUED: ReadonlySet<InterruptionReason> = new Set(["host-quit", "host-crashed"])
 
 /**
  * The loop guard on continuing after a restart: at most this many
@@ -31,7 +32,7 @@ export const RESTART_CHAIN_MS = 5 * 60_000
 
 /** How a person set Mako's conversations to behave. */
 export interface ConversationSettings {
-  /** Mako continues a turn its own quit, restart or update cut short once it is back (`host-quit`); off unless chosen. */
+  /** Mako continues a turn its own quit, restart or update cut short once it is back (`host-quit`); on unless explicitly disabled. */
   continueAfterRestart: boolean
 }
 
@@ -44,10 +45,12 @@ const SITUATIONS = {
     "Continue where you left off. Your connection dropped before you finished the previous turn, and its last steps may not have been saved. Check the result of any command or edit you were in the middle of before repeating it.",
   "provider-exited":
     "Continue where you left off. Your process stopped before you finished the previous turn and has been restarted; the work you did so far is in place. Check the result of any command or edit you were in the middle of before repeating it.",
+  "compaction-failed":
+    "Continue where you left off. Your conversation could not be compacted. Read the retained conversation and check the result of any command or edit before repeating it; the previous turn may have completed some work. Continue only what remains.",
   "signed-out":
     "Continue where you left off. Your sign-in expired before you finished the previous turn and has been renewed; the work you did so far is in place. Check the result of any command or edit you were in the middle of before repeating it.",
   "host-quit": "Continue where you left off. Mako closed before you finished the previous turn; pick it up from there.",
-  "host-crashed": "Continue where you left off. Mako closed before you finished the previous turn; pick it up from there.",
+  "host-crashed": "Continue where you left off. Mako closed unexpectedly while your previous turn was running. Read the native conversation and check the result of any command or edit before repeating it; that turn may already have finished. Continue only what remains.",
   stopped: "Continue where you left off. Mako closed before you finished the previous turn; pick it up from there.",
   "handed-off":
     "Continue where you left off. Mako stopped your work to hand this conversation to another machine; the work you did so far is in place. Check the result of any command or edit you were in the middle of before repeating it.",
@@ -131,8 +134,7 @@ export interface SavedContinuation {
  * The continuation `text` is, read back from a saved conversation by its
  * whole words: what cut the turn short, and who sent it. Builds before
  * October 2026 sent the same words whoever sent them, so such a text has no
- * `sender`: the store can't say whether Mako or the person sent it. A host
- * exit's three reasons share their words and read as `host-quit`.
+ * `sender`: the store can't say whether Mako or the person sent it. Older crash continuations share a quit's words and read as `host-quit`.
  */
 export function savedContinuation(text: string): SavedContinuation | undefined {
   // Asked of every prompt as it streams: anything else is told apart by its opening, without copying it.
@@ -186,10 +188,11 @@ export function autoContinueCandidate(requests: readonly LiveRequest[], restarte
   let newest: LiveRequest | undefined
   for (let index = requests.length - 1; index >= 0 && !newest; index -= 1) {
     const request = requests[index]
-    if (request && request.status !== "canceled") newest = request
+    const hold = request && holdOf(request)
+    if (request && request.status !== "canceled" && !(restarted && hold?.kind === "paused" && hold.by === "mako")) newest = request
   }
   const reason = newest?.interruption?.reason
-  if (!newest || newest.status !== "interrupted" || !reason) return undefined
+  if (!newest || (newest.status !== "interrupted" && !(restarted && newest.status === "uncertain" && reason === "host-crashed")) || newest.pause === "stop" || !reason) return undefined
   const restart = restarted && RESTART_CONTINUED.has(reason)
   if (!restart && !AUTO_CONTINUED.has(reason)) return undefined
   if (newest.continues?.auto && (!restart || chainedContinuations(requests, newest, now) >= RESTART_CHAIN)) return undefined
@@ -211,7 +214,7 @@ export function crashedChildTurn(requests: readonly LiveRequest[], now = Date.no
     if (request.status !== "canceled" && request.status !== "queued" && request.status !== "held") ran = request
   }
   // A turn a Stop had reached before the crash, its end unwritten, stays stopped (`LiveRequest.pause`).
-  if (ran?.interruption?.reason !== "host-crashed" || ran.pause === "stop") return undefined
+  if (ran?.interruption?.reason !== "host-crashed" || ran.pause === "stop" || ran.interruption.autoContinue) return undefined
   if (ran.continues?.auto && chainedContinuations(requests, ran, now) >= RESTART_CHAIN) return undefined
   if (requests.some((request) => request.continues?.requestId === ran.id)) return undefined
   return ran
@@ -257,6 +260,7 @@ export const CUT_BY = {
   "connection-lost": "its harness lost its connection",
   "provider-exited": "its harness's process exited",
   "signed-out": "its harness's account signed out",
+  "compaction-failed": "its conversation could not be compacted",
   "handed-off": "Mako handed its Thread to another machine",
   "not-saved": "Mako couldn't save its conversation",
   "goal-budget": "its goal reached its token budget",

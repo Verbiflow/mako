@@ -1,3 +1,4 @@
+import { HostFailureError, ProviderFailureError, providerTextEvidence } from "../../../contracts/provider-failure.js"
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { ProviderStartupWatch, type StartupWatchOptions } from "../../provider-startup.js"
 import { mkdirSync, readFileSync } from "node:fs"
@@ -38,13 +39,13 @@ function refusedField(error: z.ZodError): string {
 }
 
 /** A failure the child reported, carrying the SDK's own classification. */
-export class CursorSdkError extends Error {
+export class CursorSdkError extends ProviderFailureError {
   readonly kind: SdkWireError["kind"]
   readonly code: string | undefined
   readonly networkCauses: SdkWireError["networkCauses"]
   readonly retryable: boolean
   constructor(error: SdkWireError) {
-    super(error.message)
+    super(error.message, error.kind === "configuration" ? { kind: "unknown", source: "host" } : providerTextEvidence(error.message))
     this.name = "CursorSdkError"
     this.kind = error.kind
     this.networkCauses = error.networkCauses
@@ -54,9 +55,9 @@ export class CursorSdkError extends Error {
 }
 
 /** The child went away before answering; the request's effect is unknown. */
-export class CursorSdkDisconnectedError extends Error {
+export class CursorSdkDisconnectedError extends HostFailureError {
   constructor(message = "The Cursor SDK process closed before answering") {
-    super(message)
+    super("network", message)
     this.name = "CursorSdkDisconnectedError"
   }
 }

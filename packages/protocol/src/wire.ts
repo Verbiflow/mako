@@ -82,7 +82,7 @@ export function decodeEventFrame(text: string): EventFrame {
 }
 
 export function encodeRuntimeFrame(frame: RuntimeFrame): string {
-  if (frame.type === "event" || frame.type === "live") {
+  if (frame.type === "event" || frame.type === "live" || frame.type === "passing") {
     const { event, ...envelope } = frame
     return framed(envelope, event)
   }
@@ -100,6 +100,8 @@ export function decodeRuntimeFrame(text: string): RuntimeFrame {
     return { ...frame, event: required(payload, "An event") }
   if (frame.type === "live")
     return { ...frame, event: required(payload, "A live update") }
+  if (frame.type === "passing")
+    return { ...frame, event: required(payload, "A Thread's passing state") }
   if (frame.type === "reply")
     return { type: "reply", reply: withValue(frame.reply, payload) }
   return bare(frame, payload)
@@ -154,8 +156,12 @@ export function decodeClientFrame(text: string): ClientFrame {
 
 export function encodeGatewayClientFrame(frame: GatewayClientFrame): string {
   if (frame.type === "event") {
-    const { event, ...head } = frame.event
+    const { event, ephemeral: _ephemeral, ...head } = frame.event
     return framed({ type: "event", event: head }, event)
+  }
+  if (frame.type === "ephemeral") {
+    const { event, ...head } = frame.event
+    return framed({ type: "ephemeral", event: head }, event)
   }
   if (frame.type === "reply") {
     if (!frame.reply.ok)
@@ -173,6 +179,11 @@ export function decodeGatewayClientFrame(text: string): GatewayClientFrame {
     return {
       type: "event",
       event: { ...frame.event, event: required(payload, "An event") },
+    }
+  if (frame.type === "ephemeral")
+    return {
+      type: "ephemeral",
+      event: { ...frame.event, event: required(payload, "An ephemeral event") },
     }
   if (frame.type === "reply")
     return { type: "reply", reply: withValue(frame.reply, payload) }

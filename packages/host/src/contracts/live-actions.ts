@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { ProviderFailureEvidenceSchema } from "./provider-failure-evidence.js"
 import { PromptAttachmentSchema } from "./prompt-attachments.js"
 
 export const LiveActionInputSchema = z.discriminatedUnion("kind", [
@@ -24,7 +25,7 @@ export const LiveActionInputSchema = z.discriminatedUnion("kind", [
 export type LiveActionInput = z.infer<typeof LiveActionInputSchema>
 export const LiveActionResultSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("completed") }),
-  z.object({ kind: z.literal("failed"), reason: z.string() }),
+  z.object({ kind: z.literal("failed"), reason: z.string(), failureEvidence: ProviderFailureEvidenceSchema.optional(), cancelled: z.literal(true).optional() }),
   z.object({ kind: z.literal("uncertain"), reason: z.string() }),
 ])
 export type LiveActionResult = z.infer<typeof LiveActionResultSchema>
@@ -35,13 +36,15 @@ export const LiveActionSchema = z.object({
   createdAt: z.number(),
   /** Who sent it, as the host knows it. Absent in receipts kept before it was. */
   sender: z.enum(["person", "native"]).optional(),
+  /** A later Stop on the issuing host withdraws automated recovery, including a late result. */
+  owner: z.object({ epoch: z.string(), stop: z.number().int().nonnegative() }).optional(),
   /** Host-owned queue state restored only after an authoritative refusal. */
   queueStatus: z.enum(["queued", "held"]).optional(),
   state: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("dispatching") }),
     z.object({ kind: z.literal("accepted") }),
     z.object({ kind: z.literal("completed") }),
-    z.object({ kind: z.literal("failed"), reason: z.string() }),
+    z.object({ kind: z.literal("failed"), reason: z.string(), failureEvidence: ProviderFailureEvidenceSchema.optional(), cancelled: z.literal(true).optional() }),
     z.object({ kind: z.literal("not-accepted"), reason: z.string() }),
     z.object({ kind: z.literal("uncertain"), reason: z.string() }),
     z.object({

@@ -83,7 +83,15 @@ const SummaryIdentitySchema = z.object({ session: z.object({ id: z.string(), sta
 /** A cloud host's own `LiveSummary`, checked for the identity and revision this router reads. */
 const LiveSummarySchema = z.custom<LiveSummary>((value) => SummaryIdentitySchema.safeParse(value).success)
 /** A cloud host's own `LiveBatch`, whole or compact, checked for the revision a summary follows. */
-const LiveBatchSchema = z.custom<HeardLiveBatch>((value) => z.object({ revision: z.number() }).loose().safeParse(value).success)
+const RevisionSchema = z.object({ revision: z.number() }).loose()
+const LiveBatchSchema = z.custom<HeardLiveBatch>((value) => RevisionSchema.safeParse(value).success)
+const ThreadIdSchema = z.object({ threadId: z.string() }).partial()
+const LooseObjectSchema = z.object({}).loose()
+/**
+ * A live line's payload, made once: a zod schema built per batch compiles anew each time, and every batch a cloud
+ * Thread or another device streams is read here, on the host's loop.
+ */
+const LiveBatchLineSchema = z.object({ batch: LiveBatchSchema })
 
 const AppProcessSchema = z.object({
   name: z.string(),
@@ -449,7 +457,7 @@ export class CloudConversations {
   constructor(options: CloudConversationsOptions) {
     this.#options = options
     this.#ownerCheck = new OwnerCheck({
-      ended: () => options.ownerChecked?.(),
+      ended: () => { options.account()?.checkAccountWaiting?.(); options.ownerChecked?.() },
       ...options.ownerCheckMs && { checkMs: options.ownerCheckMs.check, mostMs: options.ownerCheckMs.most },
     })
     this.#ownerCheck.away("start")
@@ -808,7 +816,7 @@ export class CloudConversations {
       if (known && known.thread === placed.thread) {
         // A machine on an older image names the fork's Session itself, and once named one of the Thread's own (its
         // parent's, 2026-10-23): filed the same here, so both stores agree and it comes back with the Thread, and said.
-        hostWarn("cloud-conversations", "a fork in the cloud went into a Session its Thread already had; filed the same here", { conversationId: input.id, parent: entry.conversationId, parentSession: placed.session, session, sameAsParent: session === placed.session, machineThread: z.object({ threadId: z.string() }).partial().safeParse(decoded).data?.threadId, threadId: entry.threadId })
+        hostWarn("cloud-conversations", "a fork in the cloud went into a Session its Thread already had; filed the same here", { conversationId: input.id, parent: entry.conversationId, parentSession: placed.session, session, sameAsParent: session === placed.session, machineThread: ThreadIdSchema.safeParse(decoded).data?.threadId, threadId: entry.threadId })
         threads.adoptElsewhere({ operationId: namedUuid(`mako cloud fork\0${input.id}`), conversationId: input.id, session, actor: threads.person() })
       } else {
         if (session !== named) hostWarn("cloud-conversations", "the cloud machine named a fork's Session itself, as an older host does", { conversationId: input.id, named, session })
@@ -823,7 +831,7 @@ export class CloudConversations {
       this.#entries.set(forked.conversationId, forked)
       await this.#save()
     }
-    return encodeRuntimeValue({ ...z.object({}).loose().parse(decoded), elsewhere: CLOUD_FOLDER_WHERE })
+    return encodeRuntimeValue({ ...LooseObjectSchema.parse(decoded), elsewhere: CLOUD_FOLDER_WHERE })
   }
 
   /**
@@ -857,12 +865,20 @@ export class CloudConversations {
         if (!reached) this.#ownerCheck.unreached()
       })
     }
-    return this.#ownerCheck.waiting()
+    const waiting = this.#ownerCheck.waiting()
+    if (turn && waiting !== undefined) account?.checkAccountWaiting?.()
+    return waiting
+  }
+
+  /** A side-effect-free reading for the account link's adaptive probe. */
+  waitingForAccount(): boolean {
+    return this.#ownerCheck.waiting() !== undefined
   }
 
   dispose(): void {
     this.#closed = true
     this.#ownerCheck.close()
+    this.#options.account()?.checkAccountWaiting?.()
     clearTimeout(this.#waking)
     clearTimeout(this.#takeAgain)
     clearTimeout(this.#nativeLook)
@@ -1635,7 +1651,7 @@ export class CloudConversations {
     if (!target || target.threadId !== entry.threadId) return
     // In the compact live form, read only by the windows, which hold what it was written against; this reads the fields
     // it carries as they are.
-    const { batch } = z.object({ batch: LiveBatchSchema }).parse(JSON.parse(head.payload))
+    const { batch } = LiveBatchLineSchema.parse(JSON.parse(head.payload))
     const compact = head.form === COMPACT_LIVE_FORM
     this.#options.readings?.follow(entry.runtime ? entry.threadId : threadStream(entry.threadId)).heard(batch.emittedAt, compact)
     if (batch.trace) hostLog("sync", "traced update heard", { trace: batch.trace, conversation: target.conversationId, ...(batch.emittedAt !== undefined && { lagMs: Date.now() - batch.emittedAt }) })
@@ -1782,6 +1798,7 @@ export class CloudConversations {
         if (this.#closed) return
         if (!account?.sessionListings || !accountId) return this.#ownerCheck.none()
         const generation = this.#ownerCheck.asking()
+        account.checkAccountWaiting?.()
         try {
           this.#device = await account.deviceId()
           const [listings, devices, blocked] = await Promise.all([account.sessionListings(), account.devices?.().catch(() => undefined), account.cloudBlocked?.()])

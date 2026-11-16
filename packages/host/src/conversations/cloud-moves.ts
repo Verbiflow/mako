@@ -81,7 +81,7 @@ function named<Value>(what: string, work: Promise<Value>): Promise<Value> {
 }
 
 /** What a machine answers when it's ready for a move: `carry`, that it takes one (`MoveCarry`). */
-const ReadyAnswerSchema = z.object({ folder: z.string(), carry: z.boolean().optional() }).loose()
+const ReadyAnswerSchema = z.object({ folder: z.string(), carry: z.boolean().optional(), promptActor: z.boolean().optional() }).loose()
 
 /** What a sleeping Mac's handoff must leave for the release and the hand-over after the pause. */
 const RELEASE_TAKES_MS = 4_000
@@ -179,6 +179,8 @@ export const MovePlanSchema = z.object({
   carry: z.object({ ref: MoveCarryRefSchema, manifest: MoveCarrySchema }).optional(),
   /** Whether the machine takes a carry, as its `mako:move-ready` answered: one before carries is sent the checkout alone. */
   takesCarry: z.boolean().optional(),
+  /** Whether the machine's `mako:live-prompt` takes Mako's actor, as its `mako:move-ready` answered: Mako's own note goes only to one that does. */
+  takesPromptActor: z.boolean().optional(),
   handoff: HandoffSchema.optional(),
   /** A move that pauses running turns to take them along (`ThreadHandOff`), and what it paused. */
   handingOff: z.object({
@@ -258,8 +260,8 @@ export type CloudMovesOptions = {
     confirm(input: { operationId: string; receipt: ClaimReceipt; actor: Actor }): void
     reclaim(input: { operationId: string; refusal: Refusal; actor: Actor }): void
   }
-  /** What a move reads of a conversation: its native session, where it works, and its mode. */
-  snapshot(conversationId: string): { session: Pick<LiveSnapshot["session"], "harness" | "nativeId" | "nativePath" | "cwd" | "currentMode"> } | null
+  /** Resident or listed session metadata only: planning never loads or flushes a conversation journal. */
+  session(conversationId: string): Pick<LiveSnapshot["session"], "harness" | "nativeId" | "nativePath" | "cwd" | "currentMode"> | undefined
   /** The Thread's own checkout here, its worktree (a folder of them, one a repository, in a project of several); undefined for a Thread in the main checkout. */
   checkout(conversationId: string): { path: string; worktrees: Array<{ path: string }> } | undefined
   /**
@@ -300,6 +302,13 @@ export type CloudMovesOptions = {
     continueTurn(conversationId: string, input: { requestId: string; reason: "handed-off"; continues: string; stopped?: readonly string[]; stayed?: true; actor: Actor }): void
     waitingPrompts(conversationId: string): Array<{ id: string; text: string; attachments: PromptAttachment[]; tuning?: SessionSettings; displayText?: string }>
     carried(conversationId: string, requestIds: readonly string[], to: "cloud"): void
+    /**
+     * The conversation leaves with this move: its turn waits end here, and each one's note for its agent there is
+     * answered, the same for a handover asked again (`since`, the move's start). Absent on a host that keeps none.
+     */
+    waitsDeparting?(conversationId: string, since: number): string[]
+    /** The move didn't go: the waits it ended (`waitsDeparting`, since `since`) are armed again here. */
+    waitsStayed?(conversationId: string, since: number): void
   }
   /** The settings and access a native session last ran with, as this Mac remembers them. */
   remembered(harness: string, nativeId: string): { modeId?: string; settings?: SessionSettings } | null | undefined
@@ -602,8 +611,8 @@ export class CloudMoves {
       move, thread, asked: state.sessions[0]!.conversation, cloudThread: state.cloudThread, folder: state.folder,
       repository: CloudRepositorySchema.parse(state.repository), others: [], phase: "released", began: Date.now(), timings: {},
       sessions: state.sessions.map((carried) => {
-        const snapshot = this.#options.snapshot(carried.conversation)
-        return { session: carried.session, conversationId: carried.conversation, harness: carried.harness, nativeId: carried.nativeId, path: snapshot?.session.nativePath ?? "", ...carried.folder !== state.folder && { cwd: carried.folder }, ...carried.holdings && { holdings: carried.holdings } }
+        const session = this.#options.session(carried.conversation)
+        return { session: carried.session, conversationId: carried.conversation, harness: carried.harness, nativeId: carried.nativeId, path: session?.nativePath ?? "", ...carried.folder !== state.folder && { cwd: carried.folder }, ...carried.holdings && { holdings: carried.holdings } }
       }),
       continued: { by: state.by, at: state.at, behind: state.sessions.some((carried) => carried.freshness?.behind === true) },
       ...state.start && { checkpoint: state.start },
@@ -667,7 +676,7 @@ export class CloudMoves {
         if (going !== conversationId) this.#options.step(conversationId, move, { kind: "own-branch", to: going })
         conversationId = going
         // A fork has no session of its harness's until its first turn, so there's nothing of it to carry yet.
-        if (conversationId !== from && !this.#options.snapshot(conversationId)?.session.nativeId)
+        if (conversationId !== from && !this.#options.session(conversationId)?.nativeId)
           throw new Error("It's on its own branch now, as a conversation forked from this one, which starts with its next message. Send it one, then move it to the cloud.")
       }
       stage = conversationId === from ? "plan" : "plan-on-branch"
@@ -731,20 +740,20 @@ export class CloudMoves {
     // and the machine clones the others beside it; each goes by its own checkpoint.
     const worktrees = [...own?.worktrees ?? []].sort((left, right) => left.path.localeCompare(right.path))
     const project = own && worktrees.length > 1 ? own.path : undefined
-    const folder = project ? worktrees[0]?.path ?? "" : own?.path ?? this.#options.snapshot(conversationId)?.session.cwd ?? ""
+    const folder = project ? worktrees[0]?.path ?? "" : own?.path ?? this.#options.session(conversationId)?.cwd ?? ""
     const sessions: PlanSession[] = []
     for (const moving of threads.threadSessions(placed.thread)) {
       const conversation = moving.journals.includes(conversationId) ? conversationId : moving.journals.at(-1)
       if (conversation !== conversationId && conversation && this.#options.archived?.(conversation)) continue
-      const snapshot = conversation ? this.#options.snapshot(conversation) : null
-      const { nativeId, nativePath, harness, cwd } = snapshot?.session ?? {}
-      if (!conversation || !snapshot || !nativeId || !nativePath || !harness) throw new Error("Every tab in the Thread needs to have started before it moves: send a first message or close the empty tab.")
+      const session = conversation ? this.#options.session(conversation) : undefined
+      const { nativeId, nativePath, harness, cwd } = session ?? {}
+      if (!conversation || !session || !nativeId || !nativePath || !harness) throw new Error("Every tab in the Thread needs to have started before it moves: send a first message or close the empty tab.")
       const root = project ?? folder
       if (own && cwd !== root && !cwd?.startsWith(`${root}/`)) throw new Error(`A tab in this Thread works in ${cwd ?? "another folder"}, outside its worktree, so the Thread can't move.`)
       const remembered = this.#options.remembered(harness, nativeId)
       const planned: PlanSession = { session: moving.session, conversationId: conversation, harness, nativeId, path: nativePath }
       if (own && cwd && cwd !== folder) planned.cwd = cwd
-      const modeId = remembered?.modeId ?? snapshot.session.currentMode ?? undefined
+      const modeId = remembered?.modeId ?? session.currentMode ?? undefined
       if (modeId) planned.modeId = modeId
       if (remembered?.settings) planned.tuning = remembered.settings
       sessions.push(planned)
@@ -878,7 +887,9 @@ export class CloudMoves {
       named("Its sessions' records couldn't be sent ahead", this.#sendRecords(plan)),
       // Never queued: a cloud that can't start the machine now says so now, and the Thread stays here.
       named("Its cloud machine didn't get ready", this.#options.cloud.callThread(plan.cloudThread, "mako:move-ready", [{ folder: plan.folder, harnesses: [...new Set(plan.sessions.map((session) => session.harness))], launches: plan.sessions.map(({ harness, tuning }) => ({ harness, ...tuning && { tuning } })), ...repositories.length && { repositories } }], undefined, { refuseUnstarted: true }).then((answer) => {
-        plan.takesCarry = ReadyAnswerSchema.safeParse(decodeRuntimeValue(answer)).data?.carry === true
+        const ready = ReadyAnswerSchema.safeParse(decodeRuntimeValue(answer)).data
+        plan.takesCarry = ready?.carry === true
+        plan.takesPromptActor = ready?.promptActor === true
         plan.timings.ready = Date.now() - plan.began
       })),
     ])
@@ -991,8 +1002,24 @@ export class CloudMoves {
       if (session.tuning) options.tuning = session.tuning
       calls.push({ channel: "mako:live-start", args: [session.harness, session.cwd ?? plan.folder, options], key: `start\0${session.conversationId}` })
     }
-    for (const { conversationId, requestId, stopped } of plan.handingOff?.paused ?? [])
-      calls.push({ channel: "mako:live-continue-turn", args: [conversationId, namedUuid(`mako move\0${plan.move}\0${requestId}\0continue`), { reason: "handed-off", continues: requestId, ...stopped.length && { stopped } }], key: `continue\0${requestId}` })
+    // A wait the Thread's agent armed ends here; its agent hears so there, to arm it again: named among what the
+    // handoff stopped when a turn goes on there, else as a message of its own that starts its first turn there.
+    const waitNotes = new Map(plan.sessions.map(({ conversationId }) => [conversationId, this.#options.live.waitsDeparting?.(conversationId, plan.began) ?? []]))
+    for (const { conversationId, requestId, stopped } of plan.handingOff?.paused ?? []) {
+      const told = [...stopped, ...waitNotes.get(conversationId) ?? []]
+      waitNotes.delete(conversationId)
+      calls.push({ channel: "mako:live-continue-turn", args: [conversationId, namedUuid(`mako move\0${plan.move}\0${requestId}\0continue`), { reason: "handed-off", continues: requestId, ...told.length && { stopped: told } }], key: `continue\0${requestId}` })
+    }
+    // As Mako's words only: a machine whose `mako:live-prompt` takes no actor would draw it as the person's, and its
+    // agent would read it as their instruction, so there it's dropped; the wait still ended, and the person's line with it.
+    for (const [conversationId, notes] of waitNotes) {
+      if (!notes.length) continue
+      if (!plan.takesPromptActor) {
+        hostLog("moves", "a wait's note wasn't sent: the machine takes no actor on a prompt", { move: plan.move, conversation: conversationId, waits: notes.length })
+        continue
+      }
+      calls.push({ channel: "mako:live-prompt", args: [conversationId, namedUuid(`mako move\0${plan.move}\0${conversationId}\0turn-waits`), notes.join("\n\n"), [], undefined, { actor: { kind: "service", name: "turn-wait" } }], key: `turn-waits\0${conversationId}` })
+    }
     const carried = new Map<string, string[]>()
     for (const { conversationId } of plan.sessions) {
       const waiting = this.#options.live.waitingPrompts(conversationId)
@@ -1172,6 +1199,8 @@ export class CloudMoves {
     }
     const paused = plan.handingOff?.paused ?? []
     await this.#stayed(plan.move, plan.thread, plan.handingOff, paused, plan.sessions.map((session) => session.conversationId))
+    // The waits the hand-over ended go back to armed: nothing else would ever wake the agent that armed them.
+    for (const { conversationId } of plan.sessions) this.#options.live.waitsStayed?.(conversationId, plan.began)
     // A continue the cloud refused leaves the Thread here: what it paused as this Mac went off goes on here now.
     if (plan.continued) await this.#goOnHere((turn) => turn.thread === plan.thread)
     plan.phase = "kept-here"

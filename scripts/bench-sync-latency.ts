@@ -109,6 +109,13 @@ const STALL_MS = 8_000
 const TURN_BATCHES = 20
 /** A device is current once it shows every word the owner emitted more than this long ago. */
 const CURRENT_LAG_MS = 50
+/**
+ * And keeps up for this long of the answer after (or to the turn's end): current is where it keeps up again, not after
+ * the last word anywhere in the turn that came a little late. A long answer streams for seconds after a link is back,
+ * and a batch now and then comes 55 to 140 ms late on a quiet link too (the live hops' max); counted as staleness, one
+ * such batch 10 s on said a device caught up in 200 ms was current only after 10 s.
+ */
+const CURRENT_HOLD_MS = 500
 /** How much earlier than the owner's own packet another device's may come (both leave the owner's host at once). */
 const EARLY_MS = 20
 
@@ -251,6 +258,23 @@ function partsOf(line: string, payload: string) {
   return parts
 }
 
+/**
+ * The bytes of each field of a batch that `partsOf` counts as its envelope, by its name, and the line's own wrapper
+ * around the batch (`(wrapper)`: its type and the braces and commas between fields), so they add up to the envelope.
+ */
+function envelopeFieldsOf(payload: string): Map<string, number> {
+  const fields = new Map<string, number>()
+  const batch = PartsSchema.safeParse(JSON.parse(payload)).data?.batch
+  let measured = 0
+  for (const [key, value] of Object.entries(batch ?? {})) {
+    const bytes = JSON.stringify({ [key]: value }).length - 1
+    measured += bytes
+    if (key !== "updates" && !BATCH_PARTS.has(key)) fields.set(key, bytes)
+  }
+  fields.set("(wrapper)", payload.length - measured)
+  return fields
+}
+
 const PermissionSchema = z.object({ id: z.string(), options: z.array(z.object({ optionId: z.string(), kind: z.string().optional() }).loose()) }).loose()
 type Permission = z.infer<typeof PermissionSchema>
 /** What this bench reads of a live batch: its numbering, whether its history changed, its status and what it asks. */
@@ -262,7 +286,13 @@ const BatchSchema = z.object({
   permissions: z.array(PermissionSchema).optional(),
 }).loose()
 type Batch = z.infer<typeof BatchSchema>
-const batchOf = (payload: string): Batch => z.object({ batch: BatchSchema }).safeParse(JSON.parse(payload)).data?.batch ?? {}
+/**
+ * Made once, as every schema read per message here: a zod schema built for each one compiles anew each time, and on this
+ * bench's own thread, which times every arrival, that held it 50 to 110 ms at a time, so a batch seemed late to every
+ * device it reached at once (2026-11-15: 38 to 49 such stalls a run; none once made once).
+ */
+const BatchLineSchema = z.object({ batch: BatchSchema })
+const batchOf = (payload: string): Batch => BatchLineSchema.safeParse(JSON.parse(payload)).data?.batch ?? {}
 
 /**
  * A window's reading of a conversation's batches: a revision past the next one, or a notice that its history changed,
@@ -431,10 +461,13 @@ const skipped: Record<string, string> = {}
 const started = now()
 
 const DeltaSchema = z.object({ type: z.literal("response.output_text.delta"), delta: z.string() })
+const AccountEventSchema = z.object({ type: z.string(), sessions: z.array(z.unknown()).optional(), deviceId: z.string().optional(), since: z.string().nullable().optional() }).loose()
+const ListedRowsSchema = z.array(z.object({ conversation: z.string(), session: z.string(), state: z.string(), threadTitle: z.string().optional() }).loose())
 const model = await scriptedModel({
   pace: PACE,
   sent: (event) => {
-    const delta = DeltaSchema.safeParse(event).data?.delta
+    // Only a text delta is read: a parse that fails builds its error, for every other event the model sends.
+    const delta = event.type === "response.output_text.delta" ? DeltaSchema.safeParse(event).data?.delta : undefined
     if (delta !== undefined)
       for (const match of delta.matchAll(TOKEN)) if (!sentAt.has(match[1]!)) sentAt.set(match[1]!, now())
     if (event.type === "response.completed") note("model", "completed")
@@ -597,11 +630,11 @@ try {
         for (;;) {
           const frame = await stream.next()
           const at = now()
-          const event = z.object({ type: z.string(), sessions: z.array(z.unknown()).optional(), deviceId: z.string().optional(), since: z.string().nullable().optional() }).loose().parse(JSON.parse(frame.event.text))
+          const event = AccountEventSchema.parse(JSON.parse(frame.event.text))
           if (event.type === "device-quiet") note("phone", "device-quiet", { deviceId: event.deviceId, since: event.since })
           if (event.type === "sessions-unlisted" && session && event.sessions?.includes(session) && !unlisted.has("phone")) unlisted.set("phone", at)
           if (event.type !== "sessions-listed" || !C) continue
-          const mine = z.array(z.object({ conversation: z.string(), session: z.string(), state: z.string(), threadTitle: z.string().optional() }).loose()).parse(event.sessions).find((item) => item.conversation === C)
+          const mine = ListedRowsSchema.parse(event.sessions).find((item) => item.conversation === C)
           if (!mine) continue
           session = mine.session
           if (!listed.has("phone")) listed.set("phone", at)
@@ -973,10 +1006,23 @@ try {
     const end = Math.max(...words.map((word) => at("A", word)!)) + 3_000
     const devices = Object.fromEntries(disturbance.watchers.map((device) => {
       const name = device === "B" ? "secondMac" : device
-      // Behind from the moment a word it hasn't shown is older than the lag, until it shows it: current once the last such word is shown.
+      // Current from the first word, from the disturbance on, with everything before it shown and every word in the
+      // `CURRENT_HOLD_MS` of the answer after it on time: where it keeps up again. A word late after that is no staleness;
+      // how many and how late are said (`laterLateWords`, `laterMaxLagMs`) and held to a budget of their own.
       const missed = words.filter((word) => !Number.isFinite(shownAt(device, word)))
-      const late = words.filter((word) => shownAt(device, word) - at("A", word)! > CURRENT_LAG_MS).map((word) => shownAt(device, word))
-      const caughtUp = late.length ? Math.max(...late) : disturbance.back
+      const lag = (word: string) => shownAt(device, word) - at("A", word)!
+      const late = words.filter((word) => lag(word) > CURRENT_LAG_MS).map((word) => shownAt(device, word))
+      const from = words.findIndex((word) => at("A", word)! >= disturbance.at)
+      const keepsUp = from < 0 ? -1 : words.findIndex((word, index) => index >= from &&
+        words.every((other) => at("A", other)! < at("A", word)! || at("A", other)! > at("A", word)! + CURRENT_HOLD_MS || lag(other) <= CURRENT_LAG_MS))
+      const caughtUp = keepsUp < 0
+        ? (late.length ? Math.max(...late) : disturbance.back)
+        : Math.max(...words.slice(0, keepsUp + 1).map((word) => shownAt(device, word)))
+      const rest = keepsUp < 0 ? [] : words.slice(keepsUp + 1)
+      const after = rest.filter((word) => lag(word) > CURRENT_LAG_MS)
+      // How far behind it runs once current: a device that settled a steady few hundred ms behind passes every word's
+      // budget but isn't current. Its median lag over the rest of the turn is held to the lag that says current.
+      const restLags = rest.map(lag).sort((a, b) => a - b)
       // Where the turn's end was in what went missing: when the device showed the conversation idle again.
       const idle = disturbance.ended ? liveStates.get(device)?.find((item) => item.t > disturbance.at && item.state === "idle") : undefined
       return [name, {
@@ -984,6 +1030,9 @@ try {
         wordsMissed: missed.length,
         wordsReread: words.filter((word) => !saw(device, word) && reread.get(device)?.has(word)).length,
         timeToCurrentMs: missed.length ? null : Math.max(0, Math.round(caughtUp - disturbance.back)),
+        laterLateWords: after.length,
+        laterMaxLagMs: after.length ? Math.round(Math.max(...after.map(lag))) : 0,
+        laterMedianLagMs: restLags.length ? Math.round(restLags[Math.floor(restLags.length / 2)]!) : 0,
         rereads: rereads.filter((item) => item.device === device && item.t >= disturbance.at && item.t <= end).length,
       }]
     }))
@@ -1011,7 +1060,13 @@ try {
     const text = (summed.text ?? 0) / watchers
     // What each batch carries besides its words, at the plan's message every two tokens.
     const bytesPerTokenAtPlan = round(text / tokens + ((bytes / watchers - text) / messages) * BUDGETS.cost.messagesPerToken)
-    return [[hop, { messages: held.length, bytes, messagesPerToken: round((messages / tokens) * 100) / 100, bytesPerToken: round(bytes / watchers / tokens), frames, beyondFrames: Math.round(messages - frames), bytesPerTokenAtPlan, parts }]]
+    // What the envelope is, by field, and how many messages came in the whole form (a route ahead of each, every value
+    // whole), so a run over its cost names what it carried more of.
+    const fields: Record<string, number> = {}
+    for (const { payload } of held) for (const [field, fieldBytes] of envelopeFieldsOf(payload)) fields[field] = (fields[field] ?? 0) + fieldBytes
+    const envelope = Object.fromEntries(Object.entries(fields).sort(([, a], [, b]) => b - a).map(([field, fieldBytes]) => [field, round(fieldBytes / watchers / tokens)]))
+    const wholeMessages = held.filter(({ line, payload }) => line.length !== payload.length).length / watchers
+    return [[hop, { messages: held.length, bytes, messagesPerToken: round((messages / tokens) * 100) / 100, bytesPerToken: round(bytes / watchers / tokens), frames, beyondFrames: Math.round(messages - frames), bytesPerTokenAtPlan, parts, envelope, wholeMessages }]]
   }))
 
   const measured = { ...head, live, paint, status, reconnect, quiet: values.quiet && cloud.presence ? quiet : undefined, cost, skipped, seconds: Math.round((now() - started) / 1000) }
@@ -1034,6 +1089,9 @@ try {
     if ("stallNoticedMs" in measured) time(`reconnect.${name}.stallNoticedMs`, measured.stallNoticedMs, STALL_MS)
     for (const [device, seenThere] of Object.entries(measured.devices)) {
       time(`reconnect.${name}.${device}.timeToCurrentMs`, seenThere.timeToCurrentMs, BUDGETS.reconnect.currentMs)
+      // Caught up, it stays up: a word late after that by as much as a reconnect may take is a device falling behind again.
+      time(`reconnect.${name}.${device}.laterMaxLagMs`, seenThere.laterMaxLagMs, BUDGETS.reconnect.currentMs)
+      time(`reconnect.${name}.${device}.laterMedianLagMs`, seenThere.laterMedianLagMs, CURRENT_LAG_MS)
       count(`reconnect.${name}.${device}.wordsMissed`, seenThere.wordsMissed, BUDGETS.reconnect.wordsMissed)
       count(`reconnect.${name}.${device}.rereads`, seenThere.rereads, BUDGETS.reconnect.rereads)
       if ("turnEndShownMs" in seenThere) time(`reconnect.${name}.${device}.turnEndShownMs`, seenThere.turnEndShownMs, BUDGETS.reconnect.currentMs)

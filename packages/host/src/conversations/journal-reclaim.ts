@@ -28,6 +28,17 @@ export class JournalReclaims {
   private queue: Promise<unknown> = Promise.resolve()
   private readonly pending = new Set<Int32Array>()
   private stopped = false
+  /** Whether a window's cold view holds file `key` (`ColdJournal`): its read transaction would hold a compaction up. */
+  private readonly held: (key: string) => boolean
+  /**
+   * Compactions a cold view put off, by file: skipped while it held the file, or cancelled by its opening. Asked for
+   * again when the last view of the file is let go (`released`), so a journal a window looked at isn't left uncompacted.
+   */
+  private readonly owed = new Map<string, string>()
+
+  constructor(held: (key: string) => boolean = () => false) {
+    this.held = held
+  }
 
   reclaim(path: string): Promise<Reclaimed> {
     if (this.stopped) return Promise.resolve({ skipped: true })
@@ -36,18 +47,37 @@ export class JournalReclaims {
       if (error instanceof Error && "code" in error && error.code === "ENOENT") return Promise.resolve({ skipped: true })
       throw error
     }
+    this.owed.delete(key)
+    if (this.held(key)) {
+      this.owed.set(key, path)
+      return Promise.resolve({ skipped: true })
+    }
     const cancellation = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)
     const flag = new Int32Array(cancellation)
     const unwatch = journalOpened.subscribe(opened => {
       if (opened === key) Atomics.store(flag, 0, 1)
     })
     this.pending.add(flag)
-    const run = this.queue.then(() => Atomics.load(flag, 0) ? { skipped: true as const } : reclaimNow(path, cancellation)).finally(() => {
+    const run = this.queue.then(() => Atomics.load(flag, 0) ? { skipped: true as const } : reclaimNow(path, cancellation)).then((result) => {
+      // Cancelled by a cold view's opening: owed once the view goes, as one it skipped is.
+      if ("skipped" in result && !this.stopped && this.held(key)) this.owed.set(key, path)
+      return result
+    }).finally(() => {
       unwatch()
       this.pending.delete(flag)
     })
     this.queue = run.catch(() => {})
     return run
+  }
+
+  /**
+   * The last cold view of file `key` was let go: the compaction it put off, if any, is asked for again now. Only one it
+   * put off: a journal's close decides whether it needs one (`LiveJournal.close`), and the compaction itself doesn't.
+   */
+  released(key: string): Promise<Reclaimed> | undefined {
+    const path = this.owed.get(key)
+    if (!path || this.held(key)) return undefined
+    return this.reclaim(path)
   }
 
   /** Cancel queued work and join any native operation before the host lets go of its root. */

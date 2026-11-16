@@ -1,3 +1,4 @@
+import { failureEvidenceOf } from "../contracts/provider-failure.js"
 import { z } from "zod"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -350,6 +351,7 @@ export class LiveLaunches {
             status: waits ? "ready" : "failed",
             connection: closed ? "disconnected" : "connected",
             error: waits ? undefined : errorMessage({ error }),
+            failureEvidence: waits ? undefined : failureEvidenceOf({ error }),
           },
           requests,
         }

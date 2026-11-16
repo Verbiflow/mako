@@ -1,7 +1,8 @@
 import type { Block, ChatMessage } from "@/lib/types"
+import { TURN_FAILED } from "@mako/sessions/events"
 import { mergeMedia, type MediaCandidate } from "@mako/sessions/turn-media"
 import { textOf } from "@/lib/format"
-import { causeWords, eventLabel, foldLimitMoves } from "@/lib/transcript-events"
+import { causeWords, eventLabel, foldLimitMoves, limitFailure } from "@/lib/transcript-events"
 import { foldUsageLimits } from "@/lib/usage-limit-folds"
 import { opensContinuation, savedContinuation, type SavedContinuation } from "@mako/host/contracts/turn-continuation"
 import { savedResumeAccount } from "@mako/host/contracts/resume-account"
@@ -201,6 +202,16 @@ export function notesBesideContinuations(notes: readonly ExchangeNote[], respons
   return kept.length === notes.length ? notes : kept
 }
 
+/**
+ * The notes a turn shows when it ends on its failure row: the row says why it stopped, what to do, and the provider's
+ * words behind Details, so the provider's own "Turn failed" marker would say it a second time, in raw words.
+ */
+export function notesBesideFailure(notes: readonly ExchangeNote[], failed: boolean): readonly ExchangeNote[] {
+  if (!failed) return notes
+  const kept = notes.filter((note) => note.message.note?.label !== TURN_FAILED)
+  return kept.length === notes.length ? notes : kept
+}
+
 /** `notes` must be ordered by `after`; notes at zero belong above the answer and are skipped. */
 export function responseSections(
   messages: ChatMessage[],
@@ -221,6 +232,7 @@ export function responseSections(
     id: `${message.id}-part-${part++}`,
     blocks,
     error: undefined,
+    failure: undefined,
   })
   let note = 0
   while (notes[note]?.after === 0) note++
@@ -309,7 +321,10 @@ export function responseSections(
       sections.push({ kind: "prose", id: prose.id, message: prose })
     }
     const last = generated.at(-1)
-    if (last && message.error) last.error = message.error
+    if (last && message.error) {
+      last.error = message.error
+      last.failure = message.failure
+    }
   }
   placeNotes(messages.length)
   flushWork()
@@ -581,6 +596,12 @@ export function turnExchange(exchanges: readonly Exchange[]): Exchange | undefin
 
 /** Each turn's label, by the turn: a stream renders the navigator again every batch, and its turns are kept as they were. */
 const labels = new WeakMap<Exchange, string>()
+/**
+ * A label's most characters: two lines of the navigator's flyout, and more than a reader hears of it. Held whole, a
+ * session of long pasted prompts kept megabytes of labels for the navigator alone.
+ */
+export const PROMPT_LABEL_CHARS = 512
+const label = (text: string) => text.slice(0, PROMPT_LABEL_CHARS * 4).replace(/\s+/g, " ").trim().slice(0, PROMPT_LABEL_CHARS)
 
 export function promptLabel(exchange: Exchange): string {
   let label = labels.get(exchange)
@@ -589,14 +610,24 @@ export function promptLabel(exchange: Exchange): string {
 }
 
 function labelOf(exchange: Exchange): string {
-  if (exchange.unloaded !== undefined) return exchange.unloaded
+  if (exchange.unloaded !== undefined) return label(exchange.unloaded)
   const direct = exchange.direct?.note
-  if (direct?.direct) return `To ${direct.direct.to}: ${(direct.body ?? "").replace(/\s+/g, " ").trim()}`
+  if (direct?.direct) return label(`To ${direct.direct.to}: ${direct.body ?? ""}`)
   const cause = !exchange.prompt ? exchange.opener?.note?.cause : undefined
   if (cause) return eventLabel(causeWords(cause))
   const opening = exchange.prompt ?? exchange.opener
   const text = opening ? textOf(opening.blocks) : ""
-  const line = text.replace(/\s+/g, " ").trim()
+  const line = label(text)
   if (line) return line
   return exchange.response.length > 0 ? "Agent turn" : "Empty turn"
+}
+
+/** The local automatic wait already says this limit; keep the native marker in history, outside the live projection. */
+export function withoutWaitingLimitNotes(exchanges: Exchange[], waiting: ReadonlySet<string>): Exchange[] {
+  if (!waiting.size) return exchanges
+  return exchanges.map(exchange => {
+    if (!exchangeRequests(exchange).some(id => waiting.has(id))) return exchange
+    const system = exchange.system.filter(({ message }) => !message.note || (!message.note.limit && !limitFailure(message.note)))
+    return system.length === exchange.system.length ? exchange : { ...exchange, system }
+  })
 }

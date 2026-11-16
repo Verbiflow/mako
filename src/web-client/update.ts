@@ -1,3 +1,4 @@
+import { pageRefetch } from "@/state/view-refetch"
 import { z } from "zod"
 import { accountListStore } from "./account-list"
 import { busy } from "./busy"
@@ -57,12 +58,14 @@ export function takeUpdates(build: string | undefined, base: string): () => void
   let lastInput = Date.now()
   let waiting: ReturnType<typeof setInterval> | undefined
   let asking = false
+  let newer = false
   /** Stopped: a look still on its way finds nothing to do (its watcher of input is gone). */
   let stopped = false
   const touched = () => {
     lastInput = Date.now()
   }
   const reloadWhenQuiet = () => {
+    if (stopped || document.visibilityState !== "visible") return
     const moment: Moment = {
       sinceInput: Date.now() - lastInput,
       sheetOpen: document.querySelector(".web-sheet-layer[data-open], [role=menu], [role=dialog][data-state=open], [role=alertdialog]") !== null,
@@ -80,12 +83,15 @@ export function takeUpdates(build: string | undefined, base: string): () => void
     location.reload()
   }
   const check = async () => {
-    if (asking || waiting) return
+    if (stopped || document.visibilityState !== "visible" || asking || newer) return
     asking = true
     try {
       const answer = await fetch(new URL(`${base}build.json`, location.origin), { cache: "no-store" })
       const served = answer.ok ? BuildSchema.safeParse(await answer.json()).data?.build : undefined
-      if (newerBuild(build, served) && !waiting && !stopped) waiting = setInterval(reloadWhenQuiet, LOOK_EVERY_MS)
+      if (newerBuild(build, served) && !stopped) {
+        newer = true
+        if (document.visibilityState === "visible") waiting = setInterval(reloadWhenQuiet, LOOK_EVERY_MS)
+      }
     } catch {
       // Offline, or a host that serves no build's name: looked at again next time.
     } finally {
@@ -93,27 +99,33 @@ export function takeUpdates(build: string | undefined, base: string): () => void
     }
   }
   const shown = () => {
-    if (document.visibilityState === "visible") void check()
+    clearInterval(waiting)
+    waiting = undefined
+    if (document.visibilityState !== "visible") return
+    if (newer) waiting = setInterval(reloadWhenQuiet, LOOK_EVERY_MS)
   }
   let phase = accountListStore.get().phase
   const unsubscribe = accountListStore.subscribe(() => {
     const now = accountListStore.get().phase
-    if (now === "live" && phase !== "live") void check()
+    if (now === "live" && phase !== "live") lease.refresh({ immediate: true })
     phase = now
   })
   const inputs = ["pointerdown", "keydown", "touchstart", "wheel", "input"] as const
   for (const input of inputs) window.addEventListener(input, touched, { capture: true, passive: true })
   document.addEventListener("visibilitychange", shown)
   window.addEventListener(RETURNED_EVENT, shown)
-  const every = setInterval(() => void check(), CHECK_EVERY_MS)
-  void check()
+  const lease = pageRefetch().watch(`web:build:${base}`, {
+    scope: "web:build", domain: "updates", fields: ["all"],
+    every: () => newer ? undefined : CHECK_EVERY_MS,
+    read: check,
+  })
   return () => {
     stopped = true
     for (const input of inputs) window.removeEventListener(input, touched, { capture: true })
     document.removeEventListener("visibilitychange", shown)
     window.removeEventListener(RETURNED_EVENT, shown)
     unsubscribe()
-    clearInterval(every)
+    lease.release()
     clearInterval(waiting)
   }
 }

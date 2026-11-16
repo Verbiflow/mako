@@ -34,7 +34,7 @@ export function retryTransfer(id: string, transferId: string): Promise<boolean> 
   const transfer = live?.kind === "live" ? live.control?.transfers.find((item) => item.input.id === transferId) : undefined
   if (!transfer || !describeTransferRecovery(transfer, transfer.input.provider).retryLabel)
     return Promise.resolve(false)
-  const result = submitTransfer(id, { ...transfer.input, id: crypto.randomUUID() })
+  const result = submitTransfer(id, { ...transfer.input, id: crypto.randomUUID(), ...(transfer.compaction && { recoveryOf: transfer.input.id }) })
     .finally(() => retrying.delete(key))
   retrying.set(key, result)
   return result

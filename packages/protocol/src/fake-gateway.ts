@@ -44,11 +44,13 @@ import { type LiveForm, WHOLE_LIVE_FORM, readersForm, readsLiveForm } from "./li
 import {
   WireError,
   decodeEventFrame,
+  decodeGatewayClientFrame,
   decodeGatewayFrame,
   decodeOperation,
   decodeReply,
   decodeRuntimeFrame,
   encodeEventFrame,
+  encodeGatewayClientFrame,
   encodeGatewayFrame,
   encodeOperation,
   encodeReply,
@@ -181,6 +183,8 @@ export function createFakeGateway(
    * link finds what it missed.
    */
   const sessionStreams = new Map<string, { watchers: Map<Inbox<EventFrame>, LiveForm>; tail: LiveTail; idleSince?: number; form: LiveForm }>()
+  /** The watchers whose connection said it reads `ephemeral` frames (`EPHEMERAL_PARAM`). */
+  const ephemeralReaders = new WeakSet<Inbox<EventFrame>>()
   /** The highest number any session stream gave: a new stream's numbers start above it, and above the clock. */
   let liveHead = 0
   const nowMs = () => now().getTime()
@@ -542,6 +546,15 @@ export function createFakeGateway(
         )
       return connection.deliver({ type: "renewed", expiresAt })
     }
+    // A Thread's passing state: from its owner under its generation, to the readers that read it, now; never in its log.
+    if (frame.type === "passing") {
+      const target = threads.get(frame.threadId)
+      if (target?.owner !== connection.runtimeId || target.generation !== frame.generation) return
+      for (const reader of target.readers.keys())
+        if (ephemeralReaders.has(reader))
+          reader.push({ v: PROTOCOL_VERSION, stream: target.stream, seq: 0, at: now().toISOString(), ...(frame.correlationId && { correlationId: frame.correlationId }), event: frame.event, ephemeral: true })
+      return
+    }
     if (frame.type === "event") return record(connection, frame)
     if (frame.type === "activity") {
       // As an event is: only from the Thread's owner, under its generation.
@@ -570,6 +583,13 @@ export function createFakeGateway(
       const stream = sessionStream(connection.runtimeId, frame.conversation)
       const record = sessionStreams.get(stream)
       if (!record) return
+      // Passing state: to the watchers that read it, now, and into no tail, so it takes no number and pushes nothing out.
+      if (frame.ephemeral) {
+        for (const reader of record.watchers.keys())
+          if (ephemeralReaders.has(reader))
+            reader.push({ v: PROTOCOL_VERSION, stream, seq: 0, at: now().toISOString(), ...(frame.correlationId && { correlationId: frame.correlationId }), event: frame.event, ephemeral: true })
+        return
+      }
       const kept = record.tail.take(frame.event.text, now(), { ...(frame.n !== undefined && { n: frame.n }), ...(frame.correlationId && { correlationId: frame.correlationId }), ...(frame.form !== undefined && { form: frame.form }) })
       if (!kept) return
       liveHead = Math.max(liveHead, kept.seq)
@@ -788,6 +808,7 @@ export function createFakeGateway(
         subscribe(request): Subscription {
           const { stream, after } = SubscribeSchema.parse(request)
           const reader = new Inbox<EventFrame>()
+          if (connection.ephemeral) ephemeralReaders.add(reader)
           const target = stream.startsWith("thread:")
             ? thread(stream.slice("thread:".length))
             : undefined
@@ -816,8 +837,15 @@ export function createFakeGateway(
             delete record.idleSince
             if (reformStream(watched, record) || fresh) watchFrame(streamConversation(watched)!.runtimeId)
           }
-          const next = async (timeoutMs?: number) =>
-            decodeEventFrame(encodeEventFrame(await reader.next(timeoutMs)))
+          // Each frame crosses the wire's own encoding, as a socket's would: passing state as an `ephemeral` frame.
+          const next = async (timeoutMs?: number): Promise<EventFrame> => {
+            const frame = await reader.next(timeoutMs)
+            if (!frame.ephemeral) return decodeEventFrame(encodeEventFrame(frame))
+            const { seq: _seq, ephemeral: _ephemeral, generation: _generation, ...passing } = frame
+            const crossed = decodeGatewayClientFrame(encodeGatewayClientFrame({ type: "ephemeral", event: passing }))
+            if (crossed.type !== "ephemeral") throw new Error("An ephemeral frame crossed as another")
+            return { ...crossed.event, seq: 0, ephemeral: true }
+          }
           return {
             next,
             close: () => {

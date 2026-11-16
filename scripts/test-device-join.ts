@@ -29,6 +29,7 @@ import {
   servesDeviceRuntime,
 } from "@mako/protocol"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
+import { FileAccountEventCursors } from "@mako/host/usage/account-event-cursor"
 import { CloudAccounts, type CloudAccountOptions, type CloudRuntime, type DeviceCode } from "@mako/host/usage/cloud-account"
 import type { CloudAccountState, CloudDevice } from "@mako/host/contracts/cloud-account"
 import type { JsonValue } from "@mako/host/contracts/json"
@@ -209,6 +210,7 @@ function machine(options: Partial<CloudAccountOptions> & Pick<CloudAccountOption
   const waiters = new Set<() => void>()
   const accounts = new CloudAccounts({
     secretName: "cloud/device",
+    eventCursors: new FileAccountEventCursors(join(scratch, "account-events")),
     openExternal: async () => assert.fail("a device with no browser never opens one"),
     device: async () => ({ name: "build-box", platform: linuxPlatform("x64", 'NAME="Ubuntu"\nVERSION_ID="24.04"\n', "6.8.0"), appVersion: "0.4.0" }),
     onChange: (account) => {
@@ -288,7 +290,7 @@ test("a host started after the join runs as that device, its runtime link connec
   const root = join(scratch, "restart")
   const joining = machine({ url: gateway.url, secrets: machineStore(root).secrets, links: false })
   await joining.accounts.join(() => {})
-  joining.accounts.close()
+  await joining.accounts.close()
 
   const host = machine({ url: gateway.url, secrets: machineStore(root).secrets, runtime: server })
   const resumed = await host.accounts.ready()

@@ -24,6 +24,8 @@ import { liveVerb, QUIET_AFTER_MS, quietDuration } from "@/state/agent-activity"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { Ticking } from "@/components/ui/ticking"
+import { RunningStep, StepList } from "./tool-steps"
+import { useRunningSteps } from "./use-running-steps"
 import { HarnessContext, TurnRunningContext, useTranscriptSource } from "./source-context"
 import { ToolDetails } from "./tool-details"
 import { TranscriptAttachment } from "./attachment"
@@ -189,6 +191,7 @@ export function ToolWords({ call }: { call: ToolCall }) {
   const turnRunning = useContext(TurnRunningContext)
   const cwd = useTranscriptCwd()
   const running = call.pending && turnRunning
+  const steps = useRunningSteps(call)
   // Mako's own tools say what they did in their own words, the whole phrase in one face.
   const mako = makoCallWords(call, harnessLabel)
   if (mako && running)
@@ -213,6 +216,7 @@ export function ToolWords({ call }: { call: ToolCall }) {
           {namedByLabel(call.tool) ? `${toolLabel(call.tool)} ` : null}
           {summary}
         </Shimmer>
+        {steps ? <RunningStep steps={steps} /> : null}
         {call.startedAt !== undefined ? <RunningFor since={call.startedAt} /> : null}
       </>
     )
@@ -315,6 +319,7 @@ export function Ending({ call }: { call: ToolCall }) {
 }
 
 function DefaultBody({ call, dense }: { call: ToolCall; dense: boolean }) {
+  const steps = useRunningSteps(call)
   const args = hasToolArguments(call.arguments)
   const input = args ? formatToolArguments(call.arguments) : ""
 
@@ -329,6 +334,8 @@ function DefaultBody({ call, dense }: { call: ToolCall; dense: boolean }) {
       ) : null}
       {call.result ? (
         <Output text={call.result} dense={dense} isError={call.isError} running={call.pending} />
+      ) : steps ? (
+        <StepList steps={steps} />
       ) : call.pending ? (
         <p className="text-ui"><Shimmer text="Waiting for result…" /></p>
       ) : !call.isCanceled && !call.isCutOff && !call.attachments?.length && !call.details?.length ? (

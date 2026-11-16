@@ -191,7 +191,8 @@ function noteLiveOutcome(
     previousStatus === "running" &&
     session.status === "ready" &&
     queued.length === 0 &&
-    !/(?:cancel|interrupt|abort)/i.test(session.lastStop ?? "")
+    !/(?:cancel|interrupt|abort)/i.test(session.lastStop ?? "") &&
+    !quietWake(conversation)
   )
     noteOutcome({
       kind: "finished",
@@ -200,6 +201,18 @@ function noteLiveOutcome(
       detail: lastReplyText(conversation.blocks),
       quiet,
     })
+}
+
+/**
+ * A wake turn that said nothing to the person: its Apex read its Fins' digest and answered no words of its own. What
+ * the Fins asked is announced as their asks (`noteFinAsks`) and the crew card shows the rest, so a "finished" banner
+ * for it would be noise, once per wake.
+ */
+function quietWake(conversation: LiveAcpConversation): boolean {
+  const prompt = conversation.blocks.findLast((block) => block.type === "user")
+  if (prompt?.type !== "user" || !prompt.requestId) return false
+  const request = conversation.requests?.find((each) => each.id === prompt.requestId)
+  return Boolean(request?.digest) && !lastReplyText(conversation.blocks).trim()
 }
 
 /**
@@ -245,7 +258,7 @@ const asksKey = (conversation: Pick<LiveAcpConversation, "key" | "threadId">) =>
 
 /** The asks of a conversation's Thread's Fins that are the person's, as they stand (`conversationRoster`), by id. */
 function openFinAsks(conversation: LiveAcpConversation) {
-  const asks = personAsks(rosterChildren(conversationRoster(acpStore.get(), conversation)))
+  const asks = personAsks(rosterChildren(conversationRoster(acpStore.get(), conversation))).filter(ask => !ask.limit?.waiting)
   return new Map(asks.map((ask) => [`${ask.fin}:${ask.ask.id}`, ask]))
 }
 
@@ -270,7 +283,7 @@ export function noteFinAsks(conversation: LiveAcpConversation, quiet = false): v
     if (said.has(id)) continue
     const words = finAskWaiting(ask.ask, ask.title, askWords(ask))
     const marker = `fin:${id}`
-    noteOutcome({ kind: words.for, subject, marker, detail: words.line, quiet })
+    noteOutcome({ kind: words.for, subject, marker, detail: words.line, quiet, fin: ask.title })
     said.set(id, noticeId(subject, words.for, marker))
   }
   if (said.size) announcedFinAsks.set(key, said)

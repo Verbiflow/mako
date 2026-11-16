@@ -429,7 +429,8 @@ try {
   assert.equal(state.catalogs.at(-1).closed, false)
   assert.ok(
     state.events.some(
-      (e) => e.type === "notice" && e.message.includes("fixture scan failed")
+      // The scan's own words are the host log's (#761); the person is told the one thing that fixes it.
+      (e) => e.type === "notice" && e.message === "Your Threads couldn't be read." && e.action?.does === "restart"
     )
   )
   threads.stop()

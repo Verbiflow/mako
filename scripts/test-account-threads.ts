@@ -264,7 +264,7 @@ test("a publisher reports when something changed, reconciles every few minutes r
   let rows = [row(1)]
   const sent: SessionsReport[] = []
   const live: string[] = []
-  const served = (version = 5) => ({ version, sessions: (report: SessionsReport) => (sent.push(report), true), live: (conversation: string, event: Payload) => (live.push(`${conversation} ${event.text.length > 0}`), true) })
+  const served = (version = 5) => ({ version, sessions: (report: SessionsReport) => (sent.push(report), true), ephemeral: () => false, live: (conversation: string, event: Payload) => (live.push(`${conversation} ${event.text.length > 0}`), true) })
   const soon: Array<{ run: () => void; afterMs: number }> = []
   // The link the host serves now, as its account holds it: what a report soon after a change goes on, as the tick's does.
   let serving: SessionLink | undefined
@@ -456,7 +456,7 @@ test("a move's upload says how much went, a quarter second apart at most, and th
 
 test("a move's steps go to a device watching the conversation it was asked from, as its window hears them, and nowhere else", async () => {
   const live: string[] = []
-  const link = { link: await newLink(), served: { version: 11, sessions: () => true, live: (conversation: string, event: Payload) => (live.push(`${conversation} ${JSON.parse(splitRuntimeEventLine(event.text)?.payload ?? "{}").step?.kind}`), true) } }
+  const link = { link: await newLink(), served: { version: 11, sessions: () => true, ephemeral: () => false, live: (conversation: string, event: Payload) => (live.push(`${conversation} ${JSON.parse(splitRuntimeEventLine(event.text)?.payload ?? "{}").step?.kind}`), true) } }
   const publisher = new SessionPublisher({ rows: () => [row(1)], now: () => NOW, schedule: () => {} })
   publisher.report(link)
   // SAFETY: a host event as the moves emit it.
@@ -574,7 +574,7 @@ test("a batch that moves what a list shows of its conversation is reported on th
     reportNow: () => publisher.report(serving),
     schedule: (run, afterMs) => { soon.push({ run, afterMs }) },
   })
-  serving = { link: await newLink(), served: { version: 6, sessions: (report: SessionsReport) => (sent.push(report), true), live: () => true } }
+  serving = { link: await newLink(), served: { version: 6, sessions: (report: SessionsReport) => (sent.push(report), true), ephemeral: () => false, live: () => true } }
   publisher.report(serving)
   assert.equal(sent.length, 1, "everything, on a new link")
   // SAFETY: a host event as a live driver emits one, filled only as far as the publisher reads it.
@@ -649,7 +649,7 @@ test("an Apex's row says its Fins; a change to them alone waits a quarter second
     reportNow: () => publisher.report(serving),
     schedule: (run, afterMs) => { soon.push({ run, afterMs }) },
   })
-  serving = { link: await newLink(), served: { version: 19, sessions: (report: SessionsReport) => (sent.push(report), true), live: () => true } }
+  serving = { link: await newLink(), served: { version: 19, sessions: (report: SessionsReport) => (sent.push(report), true), ephemeral: () => false, live: () => true } }
   publisher.report(serving)
   // SAFETY: a host event as a live driver emits one, filled only as far as the publisher reads it.
   const batch = () => ({ type: "live-batch", batch: { id: "c-1", revision: 3, updates: [] } }) as never
@@ -727,7 +727,7 @@ test("a cloud machine's tick and an account with no link report on one publisher
   let computed = 0
   const sent: SessionsReport[] = []
   const publisher = new SessionPublisher({ rows: () => (computed++, [row(1)]), now: () => now, schedule: () => {} })
-  const link = { link: await newLink(), served: { version: 6, sessions: (report: SessionsReport) => (sent.push(report), true), live: () => true } }
+  const link = { link: await newLink(), served: { version: 6, sessions: (report: SessionsReport) => (sent.push(report), true), ephemeral: () => false, live: () => true } }
   publisher.report(link)
   for (let second = 0; second < 20; second++) {
     now += 1_000
@@ -758,7 +758,7 @@ test("a batch reworks its own conversation's row, never the whole list; the whol
     now: () => now,
     schedule: () => {},
   })
-  const link = { link: await newLink(), served: { version: 6, sessions: (report: SessionsReport) => (sent.push(report), true), live: () => true } }
+  const link = { link: await newLink(), served: { version: 6, sessions: (report: SessionsReport) => (sent.push(report), true), ephemeral: () => false, live: () => true } }
   publisher.report(link)
   assert.equal(whole, 1)
   // SAFETY: a host event as a live driver emits one, filled only as far as the publisher reads it.
@@ -806,7 +806,7 @@ test("a conversation's work moving with no batch (a checkpoint released, a start
     reportNow: () => publisher.report(serving),
     schedule: (run) => { soon.push(run) },
   })
-  serving = { link: await newLink(), served: { version: 6, sessions: (report: SessionsReport) => (sent.push(report), true), live: () => true } }
+  serving = { link: await newLink(), served: { version: 6, sessions: (report: SessionsReport) => (sent.push(report), true), ephemeral: () => false, live: () => true } }
   publisher.report(serving)
   state = "idle"
   publisher.conversationMoved("c-2")
@@ -867,7 +867,7 @@ test("a native session's write or catalog row reworks its own rows, never the wh
     now: () => now,
     schedule: () => {},
   })
-  const link = { link: await newLink(), served: { version: 6, sessions: (report: SessionsReport) => (sent.push(report), true), live: () => true } }
+  const link = { link: await newLink(), served: { version: 6, sessions: (report: SessionsReport) => (sent.push(report), true), ephemeral: () => false, live: () => true } }
   publisher.report(link)
   assert.equal(whole, 1)
   for (let tick = 1; tick <= 10; tick++) {
@@ -899,7 +899,7 @@ test("a native session's write or catalog row reworks its own rows, never the wh
 test("a watched conversation's batch too large for the gateway goes as the notice to read it again, as a cloud Thread's does", async () => {
   const live: string[] = []
   const publisher = new SessionPublisher({ rows: () => [row(1)], now: () => NOW, schedule: () => {} })
-  const link = { link: await newLink(), served: { version: 6, sessions: () => true, live: (_conversation: string, event: Payload) => (live.push(event.text), true) } }
+  const link = { link: await newLink(), served: { version: 6, sessions: () => true, ephemeral: () => false, live: (_conversation: string, event: Payload) => (live.push(event.text), true) } }
   publisher.report(link)
   publisher.watch(link.link, ["c-1"])
   // SAFETY: a batch as a live driver sends one, filled only as far as the gateway's bound reads it.
@@ -916,7 +916,7 @@ test("a watched conversation's batch too large for the gateway goes as the notic
 test("a watched conversation's updates go out on a link as soon as it's served; what the gateway didn't relay goes again on the next, from what it says it got, once; past what's kept, its watchers read it again", async () => {
   type Sent = { revision: number; n?: number; historyChanged?: boolean }
   const live: Sent[] = []
-  const served = { version: 9, sessions: () => true, live: (_conversation: string, event: Payload, numbered?: { n: number }) => {
+  const served = { version: 9, sessions: () => true, ephemeral: () => false, live: (_conversation: string, event: Payload, numbered?: { n: number }) => {
     const parts = splitRuntimeEventLine(event.text)
     const { batch } = z.object({ batch: z.object({ revision: z.number(), historyChanged: z.boolean().optional() }).loose() }).parse(JSON.parse(parts?.payload ?? "{}"))
     live.push({ revision: batch.revision, ...(numbered && { n: numbered.n }), ...(batch.historyChanged && { historyChanged: true }) })
@@ -970,7 +970,7 @@ test("a report says when it went, and each row whose list-shown fields changed s
   const sent: SessionsReport[] = []
   let shown: ConversationShown = { state: "idle" }
   const publisher = new SessionPublisher({ rows: () => rows, shown: () => shown, now: () => now, reportNow: () => {}, schedule: () => {} })
-  const link = { link: await newLink(), served: { version: 9, sessions: (report: SessionsReport) => (sent.push(report), true), live: () => true } }
+  const link = { link: await newLink(), served: { version: 9, sessions: (report: SessionsReport) => (sent.push(report), true), ephemeral: () => false, live: () => true } }
   publisher.report(link)
   // SAFETY: a host event as a live driver emits one, filled only as far as the publisher reads it.
   const batch = { type: "live-batch", batch: { id: "c-1", revision: 3, updates: [] } } as never

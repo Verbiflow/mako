@@ -1,6 +1,8 @@
 import type { AttachmentContent } from "@mako/sessions"
 import { attachmentFromUrl } from "@mako/sessions/content"
 import { markdownFileTarget } from "./file-citations"
+import { mediaKind } from "@mako/sessions/turn-media"
+import type { MediaCheck, MediaConfirmation } from "@mako/host/contracts/turn-media"
 
 // Preserve the public helper while sharing maintained MIME lookup with composer
 // and preview routing. No renderer-owned list of media extensions.
@@ -33,4 +35,22 @@ export function previewableMediaUrl(url: string): boolean {
     /^https?:\/\//i.test(url) ||
     /^data:(?:image|audio|video)\/[a-z0-9.+-]+;base64,/i.test(url)
   )
+}
+
+/**
+ * The check that keeps an embed in a landed answer (`embedded`): an absolute path to a picture, video, audio file,
+ * page or PDF, keyed by the answer and stamped with when it landed. None for prose that keeps nothing, a URL, or a
+ * relative path, which only the window that wrote it can place.
+ */
+export function embeddedCheck(attachment: AttachmentContent, keeps: { callId: string; at: number } | undefined): MediaCheck | undefined {
+  const path = attachment.source?.kind === "file" ? attachment.source.path : undefined
+  if (!keeps || !path?.startsWith("/") || !mediaKind(path)) return undefined
+  return { callId: keeps.callId, path, evidence: "embedded", endedAt: Math.round(keeps.at) }
+}
+
+/** The embed drawn from the host's copy once it kept one; as it was otherwise. */
+export function keptEmbed(attachment: AttachmentContent, answer: MediaConfirmation | undefined): AttachmentContent {
+  if (answer?.kind !== "kept" || attachment.source?.kind !== "file") return attachment
+  const { path } = attachment.source
+  return { ...attachment, source: { kind: "file", path: answer.media.file, ...(answer.media.file !== path && { originalPath: path }) } }
 }
