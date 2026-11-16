@@ -596,6 +596,9 @@ export class LiveDispatch {
         const instructions = asWritten || !dependencies.controlInstructions ? undefined : await dependencies.controlInstructions(active, resident.snapshot.session.id, { role: apex ? "apex" : "thread" })
         const rules = asWritten ? {} : (dependencies.agents?.()?.ruleLines(resident.snapshot.session.id) ?? {})
         const person = !request.actor || request.actor.kind === "person"
+        // Whether this binding's process heard Mako's note before (`standingLines`): one new, compacted or after a failed
+        // send hears every Fin described again, not named as unchanged.
+        const heardNote = resident.controlSaid?.bindingId === active && resident.controlSaid.generation === (resident.bindingGenerations.get(active) ?? 0)
         // Service-only turns need no routing paragraph. Once heard, keep its key through service turns, without repeating it.
         const guidance = apex && (person || resident.controlSaid?.lines.has("front-door-guidance"))
           ? `For messages from the person:\n${FRONT_DOOR_GUIDANCE.join("\n")}` : undefined
@@ -619,7 +622,7 @@ export class LiveDispatch {
             ...(standing?.lines ?? []),
             ...(instructions?.notices ?? []),
             ...(told ? [checkout ? `${told.account}\n${checkout}` : told.account] : []),
-            ...(dependencies.agents?.()?.frontDoor(resident.snapshot.session.id, request, false) ?? []),
+            ...(dependencies.agents?.()?.frontDoor(resident.snapshot.session.id, request, false, !heardNote) ?? []),
           ]),
           current.context.reduce((text, manifest) => contextPrompt(manifest, text, dependencies.harnessLabel), moved ? `${words}\n\n${moved}` : words),
         ].filter(Boolean).join("\n\n")
