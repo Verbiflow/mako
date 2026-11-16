@@ -40,7 +40,7 @@ const REPO_FIELDS = "url,nameWithOwner,defaultBranchRef,squashMergeAllowed,merge
 const FRESH_MS = 60_000
 const MAX_READS = 512
 
-type Runner = (cwd: string, args: string[], env?: Readonly<Record<string, string>>) => Promise<string>
+type Runner = (cwd: string, args: string[], env: Readonly<Record<string, string>> | undefined, now: () => number) => Promise<string>
 interface Entry { until: number; value: Promise<string>; etag?: string; body?: string; repository?: true; repositoryFailed?: true }
 interface Deps {
   run: Runner
@@ -236,7 +236,7 @@ export class GitHubReads {
       if (this.deps.now() < this.blockedUntil) throw new GitHubRateLimitError(this.blockedUntil)
       this.deps.trace?.("request", args[0]!)
       try {
-        const output = await this.deps.run(cwd, args, env)
+        const output = await this.deps.run(cwd, args, env, () => this.deps.now())
         if (this.deps.now() > this.blockedUntil + 15 * 60_000) this.failures = 0
         return output
       } catch (cause) {

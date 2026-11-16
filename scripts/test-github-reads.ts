@@ -28,9 +28,10 @@ const view = ["pr", "view", "7", "--repo", "fixture/project", "--json", "statusC
 
 // Outage refreshes and write preflights share the failed repository's original brief cooldown.
 let outageNow = 0, outageCalls = 0, unavailable = true
-const outage = new GitHubReads({ now: () => outageNow, common: async cwd => cwd.startsWith("/same/") ? "/same/git" : cwd, branch: async () => "fix", run: async (cwd) => {
+const outage = new GitHubReads({ now: () => outageNow, common: async cwd => cwd.startsWith("/same/") ? "/same/git" : cwd, branch: async () => "fix", run: async (cwd, _args, _env, clock) => {
   outageCalls++
-  if (unavailable && cwd.startsWith("/same/")) throw new GitHubRepositoryLookupError(outageNow + 60_000)
+  assert.equal(clock(), outageNow, "the transport receives the reader's clock, not a separate wall clock")
+  if (unavailable && cwd.startsWith("/same/")) throw new GitHubRepositoryLookupError(clock() + 60_000)
   return JSON.stringify({ nameWithOwner: "fixture/project", url: "https://github.com/fixture/project" })
 } })
 const repoArgs = ["repo", "view", "--json", "nameWithOwner"]

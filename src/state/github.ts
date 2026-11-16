@@ -16,7 +16,8 @@ import { GITHUB_PERSON_SETTINGS, MAKO_GITHUB_APP, personTokenWords, readPersonTo
  * Refreshed on demand rather than polled. A PR's checks do move on their own,
  * but polling GitHub every few seconds for a repo nobody is looking at is the
  * kind of background cost that shows up as a fan spinning — so it refreshes
- * when the panel appears, when the branch changes, and when you ask.
+ * when the panel appears, when the branch changes, and when you ask. A timed
+ * refusal gets one retry at its deadline so an idle panel can recover too.
  */
 
 export interface GitHubState {
@@ -38,8 +39,29 @@ let statusGeneration = 0
 let pullGeneration = 0
 let statusLoad: Promise<void> | null = null
 let statusLoadRoot: string | undefined
+let statusRetry: ReturnType<typeof setTimeout> | undefined
 /** Pull request reads in flight by repository and branch, so every panel that asks shares one. */
 const refreshing = new Map<string, Promise<void>>()
+
+function clearStatusRetry() {
+  clearTimeout(statusRetry)
+  statusRetry = undefined
+}
+
+/** One shared deadline, never a timer per card or a poll of GitHub. */
+function retryStatus(status: GitHubStatus, generation: number, root?: string) {
+  const until = Math.max(status.limited?.until ?? 0, status.repoLookup?.until ?? 0)
+  const delay = until - Date.now()
+  if (!Number.isFinite(delay) || delay <= 0) return
+  statusRetry = setTimeout(() => {
+    statusRetry = undefined
+    if (generation !== statusGeneration || githubStore.get().status !== status) return
+    const git = sessionStore.get().git
+    if (root !== undefined && root !== git?.root) return
+    if (git?.root) void github.refresh(git.root, git.branch)
+    else void github.ensureStatus(root)
+  }, delay)
+}
 
 async function readPull(root: string, branch?: string) {
   if (!hasBridge()) return
@@ -89,6 +111,7 @@ export const github = {
     if (statusLoad && (root === undefined || statusLoadRoot === root))
       return statusLoad
     const mine = ++statusGeneration
+    clearStatusRetry()
     if (root !== undefined) {
       pullGeneration += 1
       githubStore.set({
@@ -112,6 +135,7 @@ export const github = {
             ? githubStore.get().userAvatar
             : undefined,
         })
+        retryStatus(status, mine, root)
         void github.ensureUserAvatar()
       })
       .catch(() => {

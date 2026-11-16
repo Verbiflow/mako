@@ -134,10 +134,8 @@ function GitHubSetup({ status }: { status: GitHubStatus }) {
     : !status.authenticated
       ? "Sign in to GitHub before opening a pull request"
       : "Add a GitHub remote before opening a pull request"
-  const detail = status.limited
-    ? "Wait until then, then refresh the Changes panel."
-    : status.repoLookup
-      ? "Wait briefly, then refresh the Changes panel."
+  const detail = status.limited || status.repoLookup
+    ? "Mako will retry automatically."
     : !status.installed
     ? "Mako uses the gh CLI so it can reuse your existing GitHub account."
     : !status.authenticated
