@@ -772,7 +772,10 @@ deployed cloud.
 
 What an Apex and its Fins tell each other is kept short without dropping
 what the reader needs. Every `agents_*` answer is its JSON on one line
-(`agentToolText`), every field kept. A finished Fin's digest line
+(`agentToolText`), every field kept. `agents_list` lists what an Apex can act on (`foldList`): a Fin that ended over a day ago with
+nothing open is counted in `folded`, not listed, and past `LIST_BUDGET_CHARS` (16 KB) the rest fold by rank,
+what needs attention last; `scope: all` lists every one. An Apex's 130 Fins were once 105 KB, about 26,000 tokens, a
+call (`test-agents-list-fold.ts`). A finished Fin's digest line
 (`finishedLine`) is its report's first paragraph past any heading, on one
 line, at most `FINISHED_CHARS`, with how many more characters the
 report holds (`agents_read` gives them), and every artifact by its ref with

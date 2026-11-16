@@ -177,6 +177,7 @@ const inputs = {
             z.literal("crew"),
             z.literal("apexes"),
             z.literal("threads"),
+            z.literal("all"),
           ])
           .optional(),
         query: z.string().optional(),
