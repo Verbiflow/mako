@@ -80,6 +80,24 @@ async function heartbeatDeadline(): Promise<void> {
     assert.equal(readings, settledReadings, "settled ownership cancels short timer wakeups as well as pings")
     assert.equal(first.pings, pings, "settled ownership cancels the short timer")
     idle.stop()
+    const unnotified = new CloudLink(options)
+    try {
+      unnotified.start()
+      await advance(0)
+      const socket = Socket.all.at(-1)!
+      waiting = true
+      // A missed ownership-change notification must not disable both heartbeat policies.
+      await advance(24_999)
+      assert.equal(socket.pings, 0, "an unannounced wait adds no idle timer wakeups")
+      await advance(1)
+      assert.equal(socket.pings, 1, "keepalive starts the missing ownership probe")
+      await advance(2_999)
+      assert.equal(socket.readyState, Socket.OPEN)
+      await advance(1)
+      assert.equal(socket.readyState, Socket.CLOSED, "the recovered probe enforces its three-second deadline")
+      await advance(250)
+      assert.notEqual(Socket.all.at(-1), socket, "an unanswered unannounced wait reconnects")
+    } finally { unnotified.stop() }
     // Each link receives an initial replay but never a PONG. Its next probe times out after it has been open >5s.
     // That timeout must never reset the growing backoff just because the open time exceeded STABLE_MS.
     waiting = true

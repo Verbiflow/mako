@@ -338,8 +338,10 @@ export class CloudLink {
   #keepAlive(open: Open): void {
     const tick = () => {
       if (open !== this.#open) return
-      // Work waiting on ownership has its own immediate probe and deadline; idle links keep the old cadence.
-      if (!this.#options.waiting?.()) {
+      // Recover a missed wait notification; an existing fast probe keeps its own cadence and deadline.
+      if (this.#options.waiting?.()) {
+        if (!this.#waitingTimer) this.checkWaiting()
+      } else {
         if (Date.now() - open.lastHeard > SILENT_MS) {
           this.#options.log?.(`cloud ${this.#options.name}: nothing heard for a minute; reconnecting`)
           this.#closed(open, 1006, "unanswered")
