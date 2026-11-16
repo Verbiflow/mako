@@ -1,6 +1,8 @@
-import { memo, use, useState } from "react"
+import { memo, use, useMemo, useState } from "react"
 import { GitPullRequestIcon, LinkIcon } from "lucide-react"
 import type { FinReportCard } from "@mako/host/contracts/fin-reports"
+import { childStateOf, openAsk } from "@mako/host/contracts/children"
+import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { AgentAvatar } from "@/components/transcript/message-avatar"
 import { RoutedOpenContext } from "@/components/transcript/routed-open"
 import { useTranscriptSource } from "@/components/transcript/source-context"
@@ -25,8 +27,13 @@ function artifactName(artifact: NonNullable<FinReportCard["artifacts"]>[number])
  */
 export const FinReports = memo(function FinReports({ reports, timestamp }: { reports: readonly FinReportCard[]; timestamp?: number }) {
   const [shown, setShown] = useState(false)
-  const open = reports.filter(staysOpen)
-  const folded = reports.filter((card) => !staysOpen(card))
+  const source = useTranscriptSource()
+  const thread = useAcp((state) => (source.liveId ? state.conversations[source.liveId]?.threadId : undefined))
+  const children = useThreadChildren(thread)
+  const leadOpen = useMemo(() => openLeadDecisions(children), [children])
+  const keep = (card: FinReportCard) => staysOpen(card, leadOpen)
+  const open = reports.filter(keep)
+  const folded = reports.filter((card) => !keep(card))
   // One report, or one to fold, reads best as it is.
   if (folded.length < 2)
     return (
@@ -75,9 +82,27 @@ export const FinReports = memo(function FinReports({ reports, timestamp }: { rep
   )
 })
 
-/** What stays open in a crew update: what waits on the person, and a failure. Everything else folds into one line. */
-function staysOpen(card: FinReportCard): boolean {
-  return said(card).tone === "text-attention" || card.status === "failed" || (card.apex === true && card.status !== "done")
+/**
+ * What stays open in a crew update: what waits on the person, a failure, and a done Fin's decision that's its Apex's
+ * while it's still open (it's the person's too once it escalates). Everything else folds into one line.
+ */
+function staysOpen(card: FinReportCard, leadOpen: ReadonlySet<string>): boolean {
+  return (
+    said(card).tone === "text-attention" ||
+    card.status === "failed" ||
+    (card.apex === true && card.status !== "done") ||
+    (card.decides === "lead" && leadOpen.has(`${card.fin}:${card.report}`))
+  )
+}
+
+/** The done Fins' decisions still open for their Apex to make, as `<fin thread>:<report>`. */
+function openLeadDecisions(children: readonly NativeAgent[]): ReadonlySet<string> {
+  const open = new Set<string>()
+  for (const agent of children) {
+    const ask = openAsk(childStateOf(agent))
+    if (agent.child?.thread && ask?.done && ask.on === "lead" && ask.ask?.id) open.add(`${agent.child.thread}:${ask.ask.id}`)
+  }
+  return open
 }
 
 /** The update's head, one part a kind: "4 finished · Sheet motion needs you · 1 failed". */

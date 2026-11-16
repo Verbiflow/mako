@@ -845,6 +845,31 @@ async function checkPage({ window, page, shots, base }) {
   await both("crew-update-phone")
   console.log("PASS: a wake of six reports is one crew update, open where it needs the person, the rest on Show")
 
+  // A done Fin's decision its Apex still has to make stays open in the update, among three finished ones: it isn't folded away.
+  window.setContentSize(1440, 900)
+  await window.loadURL(`${base}?mock&app=apex&wake=crew&fins=decisions`)
+  await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, decisions wake")
+  await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
+  await evaluate("window.apexScene.setRunning(false); true")
+  await until("Boolean(document.querySelector('[data-crew-update]'))", "the crew update, decisions")
+  const leadUpdate = await evaluate(`(() => {
+    const block = document.querySelector('[data-crew-update]')
+    return {
+      open: [...block.querySelectorAll('[data-fin-report]')].map((node) => node.innerText.replace(/\\s+/g, ' ')),
+      fold: block.querySelector('[data-crew-update-fold]')?.innerText.replace(/\\s+/g, ' '),
+    }
+  })()`)
+  console.log("LEAD UPDATE", JSON.stringify(leadUpdate))
+  assert.equal(leadUpdate.open.length, 2, `the person's ask and the Apex's open decision stay open: ${JSON.stringify(leadUpdate.open)}`)
+  assert.ok(leadUpdate.open.some((text) => text.includes("Pull to refresh") && text.includes("asks its Apex")), "the Apex's decision is one of them")
+  assert.match(leadUpdate.fold ?? "", /^Thread list swipe, Haptics audit and 2 more finished 2 PRs Show$/, `the finished ones fold without it: ${leadUpdate.fold}`)
+  await page.sendInputEvent({ type: "mouseWheel", x: 800, y: 400, deltaX: 0, deltaY: 1200 })
+  await new Promise((done) => setTimeout(done, 200))
+  await evaluate("document.querySelector('[data-crew-update]').scrollIntoView({ block: 'center' }); true")
+  await new Promise((done) => setTimeout(done, 400))
+  await capture("crew-update-lead")
+  console.log("PASS: a done Fin's open decision for its Apex stays open in the crew update")
+
   assert.deepEqual(
     errors.filter(
       (message) =>
