@@ -159,9 +159,10 @@ export type ChildSpec = z.infer<typeof ChildSpecSchema>
  * Where a Fin's report goes (6.6): a notice that wakes its Apex (`apex`), a
  * question the person answers in the Fin's Thread (`person`), or nowhere but
  * the Fin's strip and `agents_read` (`none`). Progress never wakes, but for a
- * handoff to another Fin (`Report.handoff`), which reaches the Apex as a result
- * does. A `wait` spawn's result always reaches its Apex, settled-only: as the
- * Apex's next turn, never steered into the turn that's running.
+ * handoff to another Fin (`Report.handoff`) or a wait newly on someone else
+ * (`Report.awaits`), which reach the Apex as a result does (`handoff`). A
+ * `wait` spawn's result always reaches its Apex, settled-only: as the Apex's
+ * next turn, never steered into the turn that's running.
  */
 export function reportRoute(asked: Pick<ChildSpec, "mode" | "wake">, status: ReportStatus, handoff = false): "apex" | "person" | "none" {
   if (status === "progress" && !handoff) return "none"
@@ -217,6 +218,34 @@ export function pullRef(text: string): PullRef | undefined {
 /** The key two names of a pull request share only when they're the same one: its repository and number, or the number alone for a bare `#12`. */
 export function pullKey(ref: Pick<PullRef, "repository" | "number">): string {
   return `${ref.repository ?? ""}#${ref.number}`
+}
+
+/** Progress its Apex isn't woken for: neither a handoff to another Fin nor a wait newly on someone else. */
+export function quietProgress(report: Pick<Report, "status" | "handoff" | "awaits">): boolean {
+  return report.status === "progress" && !report.handoff && !report.awaits
+}
+
+/** The waits only someone else ends, each by what makes two the same: a pull request's review, or the person for one thing. */
+function othersWaits(items: readonly WaitingOn[] | undefined): Map<string, WaitingOn> {
+  const keyed = new Map<string, WaitingOn>()
+  for (const item of items ?? []) {
+    if (item.kind === "person") keyed.set(`person:${item.what.trim().toLowerCase()}`, item)
+    if (item.kind !== "pull-request" || item.until !== "review") continue
+    const pull = pullRef(item.ref)
+    const number = item.number ?? pull?.number
+    keyed.set(`review:${number === undefined ? item.ref.trim().toLowerCase() : pullKey({ repository: (item.repository ?? pull?.repository)?.toLowerCase(), number })}`, item)
+  }
+  return keyed
+}
+
+/**
+ * What a report newly waits on that only someone else brings about (a pull request's review, the person), against
+ * the report before it: empty when the earlier report named the same. On 2026-11-15 a Fin reported "ready for your
+ * review" as progress waiting on #810's review, and its Apex, who routes reviews, never heard.
+ */
+export function awaitedAnew(before: readonly WaitingOn[] | undefined, now: readonly WaitingOn[] | undefined): WaitingOn[] {
+  const earlier = othersWaits(before)
+  return [...othersWaits(now)].filter(([key]) => !earlier.has(key)).map(([, item]) => item)
 }
 
 /**
@@ -516,6 +545,12 @@ export const ReportSchema = z.object({
    * message to a sibling, which it can't send itself (`text`, relayed). It wakes the Apex, who passes it on. Host-owned.
    */
   handoff: z.object({ to: z.string().max(200), child: ThreadIdSchema.optional(), text: z.string().max(16_000).optional() }).optional(),
+  /**
+   * Progress that first names a wait only someone else ends: a pull request's review, or the person (`awaitedAnew`).
+   * It wakes the Apex once, so a Fin saying "ready for your review" isn't left waiting on a review nobody was asked
+   * for; the same wait narrated again stays quiet. Host-owned.
+   */
+  awaits: z.literal(true).optional(),
   /** The child owner's generation when it was written: a report from a stale owner is refused. */
   ownerGeneration: z.number().int().positive(),
   at: z.number(),

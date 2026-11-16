@@ -790,7 +790,11 @@ which the digest lists under "hands work to another Fin" for the Apex to pass
 on with one `agents_send`. A progress report that says it hands work to
 another Fin of its Apex (`agents_report`'s `handoff: {to}`, or `fin:<name>` in
 its summary) is a handoff too and wakes the Apex; a Fin merely mentioned by
-its name or Thread is progress, and stays quiet. `npm run test:orch-comms` covers all three, and `test:orch-deliver` the
+its name or Thread is progress, and stays quiet. So is progress whose
+`waitingOn` first names a pull request's review or the person
+(`awaitedAnew`, `Report.awaits`): it wakes the Apex once, under "waits on
+someone else to act", since only the Apex or the person can bring that
+about, and the same wait narrated again stays quiet (`test:orch-comms`). `npm run test:orch-comms` covers all three, and `test:orch-deliver` the
 refusal.
 An Apex reads the person's other Apexes with `agents_list` `scope: apexes`
 (`AgentsApexes`): every tree's top Apex but its own whose conversation is
