@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
-import { FinPips, settledWords } from "@/components/rail/fin-pips"
-import { apexPips, pipsCounts, pipsOf } from "@/state/fin-pips"
+import { FinPips } from "@/components/rail/fin-pips"
+import { apexPips, pipsCounts, pipsOf, settledWords } from "@/state/fin-pips"
 import { useAcp } from "@/state/acp-state"
 import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, InboxIcon, LaptopIcon, MoonIcon, ServerIcon, SquarePenIcon } from "lucide-react"
 import { askWords, childLine, childStateOf, childWord, finsAsChildren, rollup, rollupLabel } from "@mako/host/contracts/children"

@@ -1,5 +1,6 @@
 import { memo, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react"
-import { buildRows, SettledLine } from "@/components/viewer/crew-card"
+import { SettledLine } from "@/components/viewer/crew-card"
+import { buildRows } from "@/lib/crew-rows"
 import { FinRowActions } from "@/components/viewer/fin-row-actions"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { ChevronRightIcon } from "lucide-react"

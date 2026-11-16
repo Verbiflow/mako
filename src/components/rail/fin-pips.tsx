@@ -1,8 +1,7 @@
 import { rollupLabel } from "@mako/host/contracts/children"
-import { finsWord } from "@mako/host/contracts/agents"
 import { memo } from "react"
 import { observePhaseLockedAnimation } from "@/lib/visible-animation"
-import { apexPips, pipsCounts, type Pips } from "@/state/fin-pips"
+import { apexPips, pipsCounts, settledWords, type Pips } from "@/state/fin-pips"
 import { useAcp } from "@/state/acp-state"
 
 const PIP = new Map([["n", "needs"], ["w", "working"], ["l", "lead"], ["q", "queued"], ["i", "idle"], ["f", "failed"], ["d", "done"]])
@@ -53,10 +52,3 @@ export const ApexCrewLine = memo(function ApexCrewLine({ thread }: { thread: str
     </span>
   )
 })
-
-/** Beside the pips: how many Fins, and the done and idle ones the pips leave out. The desk's rail and the phone's list say it alike. */
-export function settledWords(pips: Pips): string {
-  const { done, idle, total } = pipsCounts(pips)
-  if (done + idle === 0 || done + idle === total) return finsWord(total)
-  return [finsWord(total), done ? `${done} done` : "", idle ? `${idle} idle` : ""].filter(Boolean).join(" · ")
-}
