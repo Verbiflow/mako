@@ -826,10 +826,12 @@ the last note it gave that Apex on one line instead of describing it again,
 always describing one that waits on an answer or a decision; a process that
 hasn't heard the note (a new one, one a compaction emptied, one a failed send
 left unsure) hears every Fin described. After its harness compacts or rewinds
-its history (`Resident.noteForgotten`), the roster rides its next prompt
-whatever it is, a digest's too, once, so an Apex woken by a digest after a
-compaction still knows its Fins; its open questions and actions go with every
-prompt already. The marks live for
+its history (`ConversationControl.rosterForgotten`, kept in its journal, so a
+restart or an unload between keeps it), the roster rides its next prompt
+whatever it is, a digest's too, and the handoff that sends it clears the flag in
+the same write; a send that's refused or fails leaves it for the next. So an
+Apex woken by a digest after a compaction still knows its Fins; its open
+questions and actions go with every prompt already. The marks live for
 the host's life, so after a restart every Fin reads as changed once
 (`test-fin-changes.ts`). An Apex of 30 Fins checking in again after one
 reported read 5% of its first list and 29% of its first note (`test:comms-storm`'s

@@ -70,7 +70,9 @@ const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 // Through the engine: a list's mark, `since` with a Fin that reported, and the front door's second note.
 {
   const root = mkdtempSync(join(tmpdir(), "mako-fin-changes-"))
-  const world = new AgentsWorld({ root, script: (turn) => (turn.text.includes("You're fin:") ? "Done for now." : "ok") })
+  // A prompt the Apex's harness refuses before taking it, while `refusing`.
+  let refusing = ""
+  const world = new AgentsWorld({ root, script: (turn) => (turn.text.includes("You're fin:") ? "Done for now." : "ok"), refusePrompt: (id) => (refusing && id === refusing ? "Not now: the test refuses it." : undefined) })
   try {
     const apex = await world.apex("claude", "full")
     const children: string[] = []
@@ -141,6 +143,25 @@ const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
     news("And after that.")
     await world.settle(300, 20_000, "ignore")
     assert.ok(!sentTo("And after that.").includes("- fin:alpha"), "once")
+    // Kept in its journal: a restart between the compaction and the digest still sends the roster.
+    world.live.observe({ type: "live-update", id: apex.conversation, update: { kind: "event", label: CONTEXT_COMPACTED } })
+    await world.settle(300, 20_000, "ignore")
+    await world.restart()
+    news("After the restart.")
+    await world.settle(300, 20_000, "ignore")
+    assert.ok(sentTo("After the restart.").includes("- fin:alpha"), `a restart keeps it: ${sentTo("After the restart.").slice(0, 400)}`)
+    // Cleared only once a send commits: one the harness refused leaves it for the next prompt it takes.
+    world.live.observe({ type: "live-update", id: apex.conversation, update: { kind: "event", label: CONTEXT_COMPACTED } })
+    await world.settle(300, 20_000, "ignore")
+    const heardBefore = world.prompts.filter((prompt) => prompt.conversation === apex.conversation).length
+    refusing = apex.conversation
+    news("Refused news.")
+    await world.settle(300, 20_000, "ignore")
+    refusing = ""
+    news("After the refusal.")
+    await world.settle(300, 20_000, "ignore")
+    const taken = world.prompts.filter((prompt) => prompt.conversation === apex.conversation).slice(heardBefore)
+    assert.ok(taken.length > 0 && taken[0]!.text.includes("- fin:alpha"), `the first prompt it took after a refused one carries the roster: ${taken.map((prompt) => prompt.text.slice(0, 120)).join(" | ")}`)
     const chars = (lines: readonly string[]) => lines.reduce((sum, line) => sum + line.length + 1, 0)
     console.log(`front door: ${chars(before)} characters with every Fin described, ${chars(after)} with one changed of three`)
   } finally {

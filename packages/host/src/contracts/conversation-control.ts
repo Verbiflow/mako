@@ -268,6 +268,12 @@ export const ConversationControlSchema = z.object({
     .refine(item => !item.decision || sameNativeApproval(item.identity, item.decision.identity), "Native decision belongs to another question")).max(2000).optional(),
   actions: z.array(LiveActionSchema).optional(),
   compactionRecovery: CompactionRecoverySchema.optional(),
+  /**
+   * Its harness compacted or rewound its history since Mako's note last carried an Apex's roster: the next prompt,
+   * whatever it is, carries it, and the handoff that sends it clears this in the same write. Kept in the journal, so a
+   * restart, an unload or a failed send between keeps it.
+   */
+  rosterForgotten: z.literal(true).optional(),
   /** New episodes and phases use a new wire field so older hosts can still read the rest of the journal. */
   pendingCompactionRecovery: CompactionRecoverySchema.optional(),
   /** What its agent asked the person to let it do through Mako's tools, until they answer (`LiveAsks`). */

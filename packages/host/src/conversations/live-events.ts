@@ -57,6 +57,12 @@ export class LiveEvents {
   private readonly access: EventsAccess
   private readonly parts: EventParts
 
+  /** Its harness compacted or rewound its history: the next prompt carries an Apex's roster again (`rosterForgotten`). */
+  private forgotRoster(resident: Resident): void {
+    const control = this.access.control(resident)
+    if (!control.rosterForgotten) resident.snapshot = { ...resident.snapshot, control: { ...control, rosterForgotten: true } }
+  }
+
   constructor(access: EventsAccess, parts: EventParts) {
     this.access = access
     this.parts = parts
@@ -267,7 +273,7 @@ export class LiveEvents {
         resident.snapshot = { ...resident.snapshot, ...turnSpendAt(resident.snapshot, bindingId, { ended: false, ownTurn: false, gone }) }
     } else if (event.type === "live-rewound") {
       resident.controlSaid = undefined
-      resident.noteForgotten = true
+      this.forgotRoster(resident)
       this.access.nativeRewound(resident, event.run)
     } else if (event.type === "live-goal") {
       this.access.goalObserved(resident, event.goal === null ? null : GoalObservationSchema.parse(event.goal))
@@ -292,7 +298,7 @@ export class LiveEvents {
     } else if (event.type === "live-activity") {
       if (event.activity?.kind === "compacting") {
         resident.controlSaid = undefined
-        resident.noteForgotten = true
+        this.forgotRoster(resident)
       }
       const nativeActivity = observeNativeActivity(
         resident.snapshot.nativeActivity,
@@ -360,7 +366,7 @@ export class LiveEvents {
       // What the harness kept of its history may have dropped Mako's note.
       if (update.kind === "event" && update.label === CONTEXT_COMPACTED) {
         resident.controlSaid = undefined
-        resident.noteForgotten = true
+        this.forgotRoster(resident)
       }
       resident.steps?.observe(update)
       if (queueLiveUpdate(resident, update) === "full") {

@@ -185,11 +185,6 @@ export interface Resident {
    * or rewinds its history and when a send fails, so the next prompt carries them all again.
    */
   controlSaid?: ControlSaid
-  /**
-   * Its harness compacted or rewound its history since Mako's note last went: an Apex's roster rides the next prompt,
-   * whatever it is, once (`Agents.frontDoor`'s `forgot`). A new process resumes its history, so it isn't set for one.
-   */
-  noteForgotten?: true
 }
 
 

@@ -50,6 +50,13 @@ export function nextQueued(snapshot: Pick<LiveSnapshot, "session" | "requests">)
   return nextInLine(snapshot.requests, snapshot.session.status === "failed")
 }
 
+/** A conversation's control once an Apex's roster went again after its harness forgot it (`rosterForgotten`). */
+function withoutRosterForgotten(control: ConversationControl): ConversationControl {
+  const rest = { ...control }
+  delete rest.rosterForgotten
+  return rest
+}
+
 /** When a message was admitted, as its conversation counts: its `admissionOrder`, else its time. */
 function admitted(request: LiveRequest): number {
   return request.admissionOrder ?? request.createdAt ?? 0
@@ -498,6 +505,9 @@ export class LiveDispatch {
       return
     }
     const generation = resident.generation
+    // Whether this prompt carries an Apex's roster after its harness forgot it (`rosterForgotten`): the handoff clears
+    // the flag in the write that records it sent, so a send that goes no further leaves it for the next.
+    let rosterWent = false
     const report = (evidence: PromptDeliveryEvidence): void => {
       const handoff = evidence.kind === "submitted"
       const target = resident.snapshot.requests.find((item) => item.id === request.id)
@@ -526,11 +536,14 @@ export class LiveDispatch {
         path: binding?.path,
       })
       const beforeFold = resident.snapshot.requests
+      const control = this.access.control(resident)
+      const rosterCleared = handoff && rosterWent && control.rosterForgotten === true
       resident.snapshot = {
         ...resident.snapshot,
         requests: resident.snapshot.requests.map((item) =>
           item === target ? { ...item, nativePrompt: prompt, nativeDelivery: { ...delivery, evidence: next } } : item
         ),
+        ...rosterCleared && { control: withoutRosterForgotten(control) },
       }
       // The handoff commits the fold with the send, in the one write: the carrier takes the words it sends and the
       // messages folded into it leave the queue, each pointing at it. One the person changed meanwhile stays as it is.
@@ -543,6 +556,7 @@ export class LiveDispatch {
       // nor was anything folded into it.
       const unsent = () => {
         if (folded && drawn) resident.updates = resident.updates.filter((update) => update !== drawn)
+        if (rosterCleared) resident.snapshot = { ...resident.snapshot, control: { ...this.access.control(resident), rosterForgotten: true } }
         const was = new Map(beforeFold.map((item) => [item.id, item]))
         resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((item) => (item.id === request.id ? target : folded && was.has(item.id) && item.joinedInto === request.id ? was.get(item.id)! : item)) }
       }
@@ -600,7 +614,8 @@ export class LiveDispatch {
         // send hears every Fin described again, not named as unchanged.
         const heardNote = resident.controlSaid?.bindingId === active && resident.controlSaid.generation === (resident.bindingGenerations.get(active) ?? 0)
         // A compaction or rewind since the note last went: the roster rides this prompt, whatever it is, once.
-        const forgot = !asWritten && resident.noteForgotten === true
+        const forgot = !asWritten && this.access.control(resident).rosterForgotten === true
+        rosterWent = forgot
         // Service-only turns need no routing paragraph. Once heard, keep its key through service turns, without repeating it.
         const guidance = apex && (person || resident.controlSaid?.lines.has("front-door-guidance"))
           ? `For messages from the person:\n${FRONT_DOOR_GUIDANCE.join("\n")}` : undefined
@@ -628,12 +643,12 @@ export class LiveDispatch {
           ]),
           current.context.reduce((text, manifest) => contextPrompt(manifest, text, dependencies.harnessLabel), moved ? `${words}\n\n${moved}` : words),
         ].filter(Boolean).join("\n\n")
-        if (forgot) resident.noteForgotten = undefined
         return driver.prompt(active, text, request.attachments, request.tuning, dispatch)
       })
       .catch(async (error) => {
-        // The harness may not have heard the note: the next prompt carries it whole.
+        // The harness may not have heard the note: the next prompt carries it whole, the roster it carried too.
         resident.controlSaid = undefined
+        if (rosterWent && generation === resident.generation) resident.snapshot = { ...resident.snapshot, control: { ...this.access.control(resident), rosterForgotten: true } }
         report({ kind: "uncertain", reason: errorMessage({ error }) })
         const target = resident.snapshot.requests.find(
           (candidate) =>
