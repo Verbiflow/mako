@@ -1,3 +1,4 @@
+import type { ViewRefetch } from "@/lib/view-refetch"
 import { useEffect } from "react"
 import { pageRefetch } from "@/state/view-refetch"
 import type { ThreadAppView } from "@mako/host/contracts/thread-app"
@@ -116,18 +117,23 @@ export async function readApp(client: AppReader, owner: Owner, folder: string, h
   try {
     app = { ...serversOf(await ownerCall<ThreadAppView>(client.gateway, client.deviceId, owner, "mako:thread-app", [folder], { passive: how.passive === true })), at: Date.now() }
   } catch (error) {
-    const held = appsStore.get().apps.get(key)
-    // The gateway's answer to a passive look at a sleeping machine: not applied, as nothing runs it now (the desk reads
-    // it the same way, `CloudConversations.#appView`).
-    if (how.passive && owner.kind === "cloud" && error instanceof RuntimeDisconnectedError && !error.unconfirmed)
-      app = { servers: (held?.servers ?? []).map((server) => ({ ...server, state: "stopped" })), runnable: true, asleep: true, reason: ASLEEP_REASON, at: Date.now() }
-    else app = { servers: held?.servers ?? [], runnable: false, reason: error instanceof Error ? error.message : String(error), at: Date.now() }
+    app = appReadFailure(key, how.passive && owner.kind === "cloud" && error instanceof RuntimeDisconnectedError && !error.unconfirmed
+      ? { kind: "asleep" }
+      : { kind: "failed", message: error instanceof Error ? error.message : String(error) })
   }
   if (how.current && !how.current()) return undefined
   const apps = new Map(appsStore.get().apps)
   apps.set(key, app)
   appsStore.set({ apps })
   return app
+}
+
+/** The same passive/asleep/error projection for snapshot and demand failures. */
+export function appReadFailure(key: string, failure: { kind: "asleep" } | { kind: "failed"; message: string }): ThreadApp {
+  const held = appsStore.get().apps.get(key)
+  if (failure.kind === "asleep")
+    return { servers: (held?.servers ?? []).map((server) => ({ ...server, state: "stopped" })), runnable: true, asleep: true, reason: ASLEEP_REASON, at: Date.now() }
+  return { servers: held?.servers ?? [], runnable: false, reason: failure.message, at: Date.now() }
 }
 
 /**
@@ -144,15 +150,21 @@ export function useThreadApp(client: WebClient, conversation: string, owner: Own
     const conversations = new Map(appsStore.get().conversations)
     conversations.set(conversation, appKey(asked, folder))
     appsStore.set({ conversations })
-    const key = appKey(asked, folder)
-    const lease = pageRefetch().watch(JSON.stringify(["web:app", client.deviceId, ownerKind, key]), {
-      scope: `web:${client.deviceId}:${ownerKind}:${ownerId}`, domain: "preview", key,
-      fields: ["state", "recipe"],
-      every: () => settling(appsStore.get().apps.get(key)) ? APP_STARTING_MS : APP_SETTLED_MS,
-      read: async (current) => { await readApp(client, asked, folder, { passive: true, current }) },
-    })
-    return () => lease.release()
+    if (client.appViews) return client.appViews.watch(conversation, asked, folder)
+    return followLegacyApp(client, asked, folder)
   }, [client, conversation, ownerKind, ownerId, folder, on])
+}
+
+/** The pre-hint policy, retained for older owners and isolated fixture clients. */
+export function followLegacyApp(client: AppReader, owner: Owner, folder: string, reads: ViewRefetch = pageRefetch()): () => void {
+  const key = appKey(owner, folder)
+  const lease = reads.watch(JSON.stringify(["web:app", client.deviceId, owner.kind, key]), {
+    scope: `web:${client.deviceId}:${owner.kind}:${owner.kind === "cloud" ? owner.threadId : owner.deviceId}`, domain: "preview", key,
+    fields: ["state", "recipe"],
+    every: () => settling(appsStore.get().apps.get(key)) ? APP_STARTING_MS : APP_SETTLED_MS,
+    read: async (current) => { await readApp(client, owner, folder, { passive: true, current }) },
+  })
+  return () => lease.release()
 }
 
 /** A grant's address, kept until a few minutes before it ends: opening the app again doesn't ask for another. */

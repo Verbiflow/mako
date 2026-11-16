@@ -148,6 +148,7 @@ import { continuationsSpent, continueTurnPrompt, crashedChildTurn, CUT_BY, RESTA
 import { uniqueName, type KeptAnswer, type KeptMark, type KeptPullWake, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
 import { AgentRuns, lastStep, type ProcessReads, type RunEnd } from "./agent-runs.js"
 import { holdOf, keepsLine } from "../contracts/request-hold.js"
+import { foldList } from "./agent-list-fold.js"
 import { AgentWakes, DIGEST_WAITS, firstParagraph, FROM_AGENTS, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
 import { namedUuid } from "./cloud-moves.js"
 import { carriedDigest } from "../contracts/delivery-retry.js"
@@ -2019,7 +2020,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     await this.listPlaced(apex, input, strips)
     const counts = this.treeCounts(this.rootOf(apex.thread))
-    return { children: strips, tree: this.treeAnswer(counts) }
+    const tree = this.treeAnswer(counts)
+    if (input.scope === "all") return { children: strips, tree }
+    return { ...foldList(strips, this.now()), tree }
   }
 
   /**
@@ -2754,7 +2757,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       child: ThreadIdSchema.parse(wait.child),
       report: wait.report,
       pull: wait.pullKey,
-      outcome: outcome.kind,
+      // Kept as every build sharing the store reads it: a head with no checks settled with none to run. Its note says so.
+      outcome: outcome.kind === "no-checks" ? "settled" : outcome.kind,
       request: namedUuid(`${key}:${outcome.kind}`),
       text: note,
       at: this.now(),

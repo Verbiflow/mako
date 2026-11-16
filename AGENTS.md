@@ -450,7 +450,13 @@ read a minute after it's first watched, doubling while unchanged up to
 `PULL_WATCH_MAX_MS` (8 min), a minute again once it changes. A reading's
 outcome (`pullOutcome`, `contracts/pull-waits.ts`) matched to `until`
 (current-head checks settled, or one failed while others run, even before
-the report; a review submitted since, by anyone but the author; merged or
+the report, and only once every check its base branch requires has run
+(`required`, read over REST from its rulesets and branch protection by
+`RequiredChecks`, kept an hour, settling as before when unreadable); a head
+with no checks, or none of what's required, `NO_CHECKS_MS` (15 minutes) after
+the later of the report and when the watch first saw that head, said "checks:
+none after 15m" or "required checks missing after 15m: ci", so a wait on CI
+that never started ends; a review submitted since, by anyone but the author; merged or
 closed, which end any wait) is claimed once per Fin, retained dependency and observation
 (`ThreadStore.claimPullWake`, `agent_pull_wakes`) and delivered to the Fin,
 never its Apex, through `deliver` under a named request as Mako's words
@@ -790,7 +796,11 @@ deployed cloud.
 
 What an Apex and its Fins tell each other is kept short without dropping
 what the reader needs. Every `agents_*` answer is its JSON on one line
-(`agentToolText`), every field kept. A finished Fin's digest line
+(`agentToolText`), every field kept. `agents_list` lists what an Apex can act on (`foldList`): a Fin that ended over a day ago with
+nothing open is counted in `folded`, not listed; past `LIST_BUDGET_CHARS` (16 KB) idle and ended rows lose
+their pull requests, then fold, oldest first. A Fin needing attention (a question, an action, a decision, at work,
+waiting or blocked) is never folded, past the budget if it must be; `scope: all` lists every one. An Apex's 130 Fins were once 105 KB, about 26,000 tokens, a
+call (`test-agents-list-fold.ts`). A finished Fin's digest line
 (`finishedLine`) is its report's first paragraph past any heading, on one
 line, at most `FINISHED_CHARS`, with how many more characters the
 report holds (`agents_read` gives them), and every artifact by its ref with

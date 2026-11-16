@@ -138,10 +138,26 @@ export interface AgentsListInput {
    * (`AgentsCrew`); `apexes`, the person's other Apexes on this host (`AgentsApexes`); `threads`, the conversations
    * on this device an `@` picker offers, newest first (`AgentsThreads`).
    */
-  scope?: "children" | "tree" | "crew" | "apexes" | "threads"
+  scope?: "children" | "tree" | "all" | "crew" | "apexes" | "threads"
   /** With `threads`: words of a title, a Thread ID or a Fin's name. */
   query?: string
 }
+
+/**
+ * What a `children` or `tree` list leaves out (`foldList`): every Fin that ended more than `LIST_ENDED_FOR_MS` ago with
+ * nothing open, and past `LIST_BUDGET_CHARS` of rows, idle and ended ones, after their bulk. A Fin needing attention (a
+ * question, an action, a decision, at work, waiting or blocked) is always listed, past the budget if it must be.
+ * `scope: all` lists every one. An Apex's list once held every Fin it ever started: 130 of them were 105 KB, about 26,000
+ * tokens, a call.
+ */
+export interface AgentsListFolded {
+  /** Fins left out, by where each stands. */
+  idle: number
+  ended: number
+  note: string
+}
+export const LIST_ENDED_FOR_MS = 24 * 60 * 60_000
+export const LIST_BUDGET_CHARS = 16 * 1024
 /** The conversations `agents_list` with `scope: threads` found, each by the ref `context` and `thread_history` take. */
 export interface AgentsThreads {
   threads: { ref: string; title?: string; harness: string; updatedAt?: string }[]
@@ -233,7 +249,7 @@ export interface OtherApex {
 }
 /** The open Fins one Apex's digest names; the rest are counted. */
 export const APEX_DIGEST_FINS = 8
-export type AgentsListResult = { children: AgentStrip[]; tree: AgentsStarted["tree"] } | AgentsCrew | AgentsApexes | AgentsThreads | AgentRefused
+export type AgentsListResult = { children: AgentStrip[]; tree: AgentsStarted["tree"]; folded?: AgentsListFolded } | AgentsCrew | AgentsApexes | AgentsThreads | AgentRefused
 
 /** Explicit summary's short-lived PR details; the engine, UI and default tool output keep full facts. */
 export interface AgentPullsSummary {
@@ -247,6 +263,7 @@ export interface AgentPullsSummary {
 export type AgentsListModelResult = AgentsListResult | {
   children: (AgentStrip | (Omit<AgentStrip, "openPRs"> & { pulls: AgentPullsSummary }))[]
   tree: AgentsStarted["tree"]
+  folded?: AgentsListFolded
 }
 
 export interface AgentsReadInput {
@@ -727,7 +744,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     mcp: {
       name: "agents_list",
       description: `This Thread's ${FIN_WORD}s as they stand: name, harness, state, last step and last report. Every PR fact stays inline by default. Explicit presentation summary replaces large PR arrays with counts: open and draft are known open; reported means its current state is unknown. Pass each read object to agents_read, then follow pulls.next as offset. These details expire at expiresAt, at most 30 minutes from capture, or on host restart; they require the same caller Session and current access. After that the original facts cannot be recovered; a new list gives current facts. Use full for lasting evidence. Reports wake you on their own, so read this when you need the whole picture, not to wait. A ${FIN_WORD} reads its ${APEX_WORD} and the other ${FIN_WORD}s it started with scope crew, before work another of them may be doing. Scope apexes reads the person's other ${APEX_WORD}es without waking them.`,
-      fields: { scope: `children (default): your ${FIN_WORD}s; tree, which adds every ${FIN_WORD} below them; or, from a ${FIN_WORD}, crew: your ${APEX_WORD} and the other ${FIN_WORD}s it started, what each was asked and last reported; or apexes: the person's other ${APEX_WORD}es, each with its folder, branch, ${FIN_WORD} counts and digest; or threads: the conversations on this device, each with the ref context and thread_history take.`, query: `With scope threads: words of a title, a Thread ID or a ${FIN_WORD}'s name.`, presentation: "full (default): every PR fact inline. summary: explicit opt-in to counts and same-Session PR pages lost at expiresAt or host restart; relisting cannot recover the original facts. Other scopes stay full." },
+      fields: { scope: `children (default): your ${FIN_WORD}s that are at work, waiting, idle or need a decision, and those that ended in the last day; what needs you is always listed, and other idle or ended ones may be counted in folded; all: every one of them; tree, which adds every ${FIN_WORD} below them, folded the same way; or, from a ${FIN_WORD}, crew: your ${APEX_WORD} and the other ${FIN_WORD}s it started, what each was asked and last reported; or apexes: the person's other ${APEX_WORD}es, each with its folder, branch, ${FIN_WORD} counts and digest; or threads: the conversations on this device, each with the ref context and thread_history take.`, query: `With scope threads: words of a title, a Thread ID or a ${FIN_WORD}'s name.`, presentation: "full (default): every PR fact inline. summary: explicit opt-in to counts and same-Session PR pages lost at expiresAt or host restart; relisting cannot recover the original facts. Other scopes stay full." },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
   },
