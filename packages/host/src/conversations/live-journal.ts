@@ -1916,7 +1916,7 @@ function* snapshotSettlementSteps(root: string, elsewhere: (id: string) => boole
           // A deleted cwd still holds its original scope; it is not a global evidence failure.
           if (existsSync(scope)) scope = realpathSync(scope)
           busy = elsewhere(id) || summary.hasSessionQuestions || summary.transferWakeAt !== undefined || !["ready", "failed", "closed"].includes(summary.session.status)
-          for (const row of db.prepare("SELECT json_extract(value, '$.status') AS status, json_extract(value, '$.snapshots') AS snapshots FROM requests").iterate()) {
+          for (const row of db.prepare("SELECT json_extract(value, '$.status') AS status, json_extract(value, '$.snapshots') AS snapshots FROM requests").all()) {
             yield
             const projected = SnapshotRequestRowSchema.parse(row)
             const settled = ["completed", "failed", "interrupted", "canceled"].includes(projected.status)
