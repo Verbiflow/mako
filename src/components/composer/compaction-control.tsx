@@ -26,7 +26,8 @@ export function CompactionControl({
         live.requests?.some(
           (request) =>
             request.status === "queued" || request.status === "dispatching"
-        ) ?? false
+        ) ?? false,
+        live.control?.activeBindingId
       )
     )
   })

@@ -380,7 +380,8 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     }
     if (turn.kind === "compaction" && turn.actionId) {
       const result: LiveActionResult = outcome.kind === "succeeded" ? { kind: "completed" }
-        : { kind: "failed", reason: outcome.kind === "failed" ? outcome.message : `Compaction was interrupted (${outcome.reason})` }
+        : { kind: "failed", reason: outcome.kind === "failed" ? outcome.message : `Compaction was interrupted (${outcome.reason})`,
+          ...(outcome.kind === "failed" ? { failureEvidence: outcome.failureEvidence } : { cancelled: true as const }) }
       live.emit({ type: "live-action-result", id: live.state.id, actionId: turn.actionId, result })
     }
     if (outcome.kind === "succeeded") engine.patch(live, { status: "ready", lastStop: turn.kind === "compaction" ? "completed" : "end_turn", error: undefined })

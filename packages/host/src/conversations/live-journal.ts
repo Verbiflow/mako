@@ -15,6 +15,7 @@ import {
   SessionSettingsSchema,
 } from "@mako/sessions/settings"
 import {
+  compactionPending,
   ContextManifestSchema,
   ConversationControlSchema,
   readStoredReason,
@@ -599,7 +600,7 @@ export type MakoLogEntry = Omit<z.infer<typeof LogRowSchema>, "value"> & MakoLog
  * router's word on a conversation it relays or reads from the account's copy, never a journal's. `parent` is its
  * Thread's edge, read from the Thread store whenever it's listed, and `children` its children's count, read from them.
  */
-type UnstoredMetadata = "hasSignInHold" | "parent" | "children" | "fins" | "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "turnWait" | "historyFailure" | "elsewhere" | "elsewhereKind" | "waitingOn" | "waitingFor" | "attention" | "threadTitle" | "quietSince" | "cloudContinue" | "movedAt" | "rail" | "copy" | "wakeAt" | "promptedAt" | "order"
+type UnstoredMetadata = "hasCompactionRecovery" | "hasSignInHold" | "parent" | "children" | "fins" | "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "turnWait" | "historyFailure" | "elsewhere" | "elsewhereKind" | "waitingOn" | "waitingFor" | "attention" | "threadTitle" | "quietSince" | "cloudContinue" | "movedAt" | "rail" | "copy" | "wakeAt" | "promptedAt" | "order"
 
 /**
  * Whether `next` holds metadata `previous` did not. Fields are compared by
@@ -661,6 +662,7 @@ export function journalSummary(metadata: string) {
       : undefined,
     threadSession: control?.session,
     hasSessionQuestions: Boolean(control?.questions?.length),
+    ...compactionPending(control?.compactionRecovery) && { hasCompactionRecovery: true },
     nativeBindings: control?.bindings ?? [{ provider: session.harness, nativeId: session.nativeId }],
     nativePaths: control?.bindings.flatMap((binding) =>
       binding.path ? [binding.path] : []
@@ -1587,7 +1589,7 @@ export function storedRetirementState(root: string, id: string): { finished: boo
       if (request.status === "queued" || request.status === "held" || request.status === "dispatching") pending = true
     }
     return {
-      finished: !pending && !summary.hasSessionQuestions && summary.transferWakeAt === undefined &&
+      finished: !pending && !summary.hasSessionQuestions && !summary.hasCompactionRecovery && summary.transferWakeAt === undefined &&
         (summary.session.status === "ready" || summary.session.status === "failed" || summary.session.status === "closed"),
       at: Math.max(summary.createdAt, statSync(path).mtimeMs, existsSync(`${path}-wal`) ? statSync(`${path}-wal`).mtimeMs : 0),
     }
@@ -1915,7 +1917,7 @@ function* snapshotSettlementSteps(root: string, elsewhere: (id: string) => boole
           scope = resolve(summary.session.cwd)
           // A deleted cwd still holds its original scope; it is not a global evidence failure.
           if (existsSync(scope)) scope = realpathSync(scope)
-          busy = elsewhere(id) || summary.hasSessionQuestions || summary.transferWakeAt !== undefined || !["ready", "failed", "closed"].includes(summary.session.status)
+          busy = elsewhere(id) || summary.hasSessionQuestions || summary.hasCompactionRecovery || summary.transferWakeAt !== undefined || !["ready", "failed", "closed"].includes(summary.session.status)
           for (const row of db.prepare("SELECT json_extract(value, '$.status') AS status, json_extract(value, '$.snapshots') AS snapshots FROM requests").all()) {
             yield
             const projected = SnapshotRequestRowSchema.parse(row)

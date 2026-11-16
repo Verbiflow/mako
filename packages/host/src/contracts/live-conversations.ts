@@ -98,6 +98,8 @@ export const INTERRUPTION_REASONS = [
    * process rather than being sent again.
    */
   "provider-exited",
+  /** The native summary failed; recovery continues from retained context, never by repeating the original. */
+  "compaction-failed",
   /**
    * The provider's account signed out after it had accepted the prompt. The
    * turn so far stands in its session; it continues only when the user
@@ -160,7 +162,7 @@ export type SavedReason = (typeof SAVED_REASONS)[number]
  * the nearest a build before it knows: Mako carried the turn to another machine;
  * `steered` reads as the person's Stop, which it was, for their message.
  */
-export const OLDER_READING = { "not-saved": "stopped", "goal-budget": "stopped", "machine-lost": "handed-off", steered: "stopped" } as const satisfies Record<Exclude<InterruptionReason, SavedReason>, SavedReason>
+export const OLDER_READING = { "not-saved": "stopped", "goal-budget": "stopped", "machine-lost": "handed-off", steered: "stopped", "compaction-failed": "connection-lost" } as const satisfies Record<Exclude<InterruptionReason, SavedReason>, SavedReason>
 
 function isSavedReason(reason: InterruptionReason): reason is SavedReason {
   return SAVED_REASONS.some((saved) => saved === reason)
@@ -494,6 +496,8 @@ export interface LiveRequest {
 }
 
 export interface LiveSummary {
+  /** A journaled compaction incident must recover even when no window opens its conversation. */
+  hasCompactionRecovery?: boolean
   /** A sign-out holds work here, including an accepted cut with no queued messages. No transcript read needed. */
   hasSignInHold?: boolean
   /** Saved session questions keep their conversation controls available after process exit. */

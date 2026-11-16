@@ -186,3 +186,37 @@ the renderer never guesses a quota from unmarked or legacy error prose.
 | Move: Stop after commit | `accepted` | every row on the target, held by the Stop |
 | Move: close fails | `failed`, `removed` | every row back where it was, no pending context |
 | Move: restart or crash before commit | `failed`, `removed` | every row where it was |
+
+## Confirmed compaction failure
+
+A native failed compact receipt and its host-owned `compactionRecovery` episode
+are committed together. A broken summary gets at most one new compact command,
+under the episode's recorded retry ID. A duplicate receipt, a restart or a second
+window never issues that command again. Dispatching, accepted and uncertain
+receipts do not prove non-delivery and are not replayed. A late confirmed result
+still settles a pending action. Uncertain compaction and automatic-only native
+compaction admission remain a separate recovery step.
+
+After the retry fails, the host quiesces the source and hands the retained
+transcript to a fresh session of the same harness, pinned account, model and mode.
+It never resumes or forks the failed source. Its existing transfer owner verifies
+source ownership and commits the replacement before dispatch. The episode owns
+the unchanged queued request IDs through native delivery, including a crash
+between replacement commit and the first prompt. Attachments, grants, per-request
+settings and queue order stay with those requests. An original failed or uncertain
+request with unknown delivery gets a linked discovery continuation that checks
+prior work; its original words, including any Fin digest payload, are never
+repeated. Only authoritative non-delivery (a preflight refusal, or a gated attempt
+still prepared) lets the exact original request go again after recovery.
+
+Stop, archive and Close withdraw automated recovery, including work waiting on
+source cleanup. Close leaves ordinary queued words intact: a new message reopens
+with a fresh replacement. Explicit restart Off prevents recovery on a new host;
+Fin/Apex policy remains unchanged. A failed journal write permits no native
+recovery effect; the existing storage retry resumes the same episode after saving.
+The composer projects one quiet recovery line, not the original failed receipt
+plus its retry and transfer. Typed sign-in, permission and service failures use
+their existing fixing action or wait rather than treating a provider-wide problem
+as a broken summary. A failed destination's explicit retry names `recoveryOf`: the
+host requires the exact failed handoff, current episode and unchanged destination
+before accepting a new operation. No unknown action is resent.

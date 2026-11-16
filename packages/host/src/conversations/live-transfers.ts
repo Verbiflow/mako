@@ -2,10 +2,11 @@ import { resumes, verifyRecoveredSession, departedBinding, restorableTotals } fr
 import { retireQuestionsForInput } from "../contracts/live-questions.js"
 import { knownApprovalOccurrences } from "./live-approvals.js"
 import { disconnectNativeAgents } from "../contracts/native-agents.js"
+import { isDeepStrictEqual } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
 import { join } from "node:path"
 import { admittedInPlace } from "../contracts/turn-continuation.js"
-import { STOP_RETIRED_MOVE, TransferInputSchema, carryingWords, quietSwitch, resumable, retiredMove, type ConversationControl } from "../contracts/conversation-control.js"
+import { STOP_RETIRED_MOVE, TransferInputSchema, carryingWords, quietSwitch, resumable, retiredMove, type CompactionRecovery, type ConversationControl } from "../contracts/conversation-control.js"
 import type {
   TransferInput,
   ContextTransfer,
@@ -66,6 +67,7 @@ export interface SwitchMove {
   /** What it was decided on still holds: read last, with nothing awaited before its commit. */
   wanted: () => boolean
   first?: string
+  compaction?: NonNullable<ContextTransfer["compaction"]>
 }
 
 const CLOSE_RETIRED_MOVE = "Its harness wouldn't let go of it. Nothing changed; ask again to move it."
@@ -121,6 +123,15 @@ export class LiveTransfers {
         )
       return resident.snapshot
     }
+    const recovery = control.compactionRecovery
+    if (command.recoveryOf) {
+      const failed = control.transfers.find(transfer => transfer.input.id === command.recoveryOf)
+      const same = failed && isDeepStrictEqual({ ...command, id: undefined, recoveryOf: undefined }, { ...failed.input, id: undefined, recoveryOf: undefined })
+      if (move || !same || failed.state.kind !== "failed" || failed.state.removed || !failed.compaction ||
+        recovery?.id !== failed.compaction.recoveryId || recovery.state.kind !== "replace" || recovery.state.transferId !== failed.input.id ||
+        recovery.bindingId !== control.activeBindingId) throw new Error("This compaction handoff or its destination changed. Nothing was sent.")
+      move = { compaction: failed.compaction, wanted: () => this.host.control(resident).compactionRecovery?.state.kind === "replace" }
+    }
     if (!move && !command.text.trim() && !command.attachments.length)
       throw new Error("A transfer needs a request or an attachment")
     if (this.pending(resident))
@@ -147,6 +158,7 @@ export class LiveTransfers {
       ...previous,
       control: {
         ...(continues?.auto ? control : retireQuestionsForInput(control, command.id)),
+        ...command.recoveryOf && recovery && { compactionRecovery: { ...recovery, state: { kind: "replace" as const, transferId: command.id } } },
         transfers: [
           ...control.transfers,
           {
@@ -158,6 +170,7 @@ export class LiveTransfers {
             state: { kind: "queued" },
             ...inFlight && { behind: inFlight },
             ...move?.first !== undefined && { first: move.first },
+            ...move?.compaction && { compaction: move.compaction },
           },
         ],
       },
@@ -257,6 +270,19 @@ export class LiveTransfers {
     for (const done of waiting ?? []) done(transfer)
   }
 
+  /** A durable same-harness replacement, not an ordinary quiet move whose authority disappears on restart. */
+  replaceCompaction(resident: Resident, recovery: CompactionRecovery): void {
+    if (recovery.state.kind !== "replace") return
+    const control = this.host.control(resident)
+    const binding = control.bindings.find(item => item.id === recovery.bindingId)
+    if (!binding || control.activeBindingId !== binding.id || control.compactionRecovery?.id !== recovery.id) return
+    const { account: name, tuning, modeId } = recovery.target
+    this.accept(resident.snapshot.session.id, { id: recovery.state.transferId, provider: binding.provider, text: "", attachments: [],
+      ...(name && { account: name }), ...(tuning && { tuning }), ...(modeId && { modeId }) }, { kind: "service", name: "auto-continue" }, undefined,
+      { wanted: () => this.host.control(resident).compactionRecovery?.state.kind === "replace", compaction: { recoveryId: recovery.id, bindingId: binding.id } })
+    this.start(resident)
+  }
+
   save(resident: Resident, transfer: ContextTransfer): void {
     const control = this.host.control(resident)
     resident.snapshot = {
@@ -280,7 +306,9 @@ export class LiveTransfers {
     const generation = resident.generation
     // This attempt goes on only while its own transfer is still the one waiting: a Stop holds it back (`stopHolds`)
     // without moving the resident's generation, so the source binding and its events stay live.
-    const owned = () => resident.generation === generation &&
+    const compactionWanted = () => !transfer.compaction || (this.host.control(resident).compactionRecovery?.id === transfer.compaction.recoveryId &&
+      this.host.control(resident).compactionRecovery?.state.kind === "replace" && this.host.control(resident).activeBindingId === transfer.compaction.bindingId)
+    const owned = () => resident.generation === generation && (phase.phase === "committed" || phase.phase === "closing" || compactionWanted()) &&
       (phase.phase === "committed" || phase.phase === "closing" || this.pending(resident)?.input.id === transfer.input.id)
     const phase: NonNullable<Resident["transferPhase"]> = { id: transfer.input.id, phase: "preparing" }
     resident.transferPhase = phase
@@ -291,6 +319,8 @@ export class LiveTransfers {
     let activated = false
     try {
       this.save(resident, { ...transfer, behind: undefined, state: { kind: "preparing" } })
+      if (transfer.compaction) await this.host.readBase(resident)
+      if (!owned()) return
       await this.host.locateNativePath(resident)
       if (!await this.host.reconcileCut(resident, transfer.continues)) {
         if (owned()) {
@@ -311,7 +341,7 @@ export class LiveTransfers {
         throw new Error("The selected native session is unavailable")
       const currentBinding = control.bindings.find((binding) => binding.id === control.activeBindingId)
       // Another account of its harness, where the session can't go on: a session of its own, handed the conversation.
-      const anew = quietSwitch(transfer) && currentBinding?.provider === transfer.input.provider
+      const anew = Boolean(transfer.compaction) || (quietSwitch(transfer) && currentBinding?.provider === transfer.input.provider)
       // The same, going back: a session another account made goes on under this one only where its harness can.
       const goesOn = (binding: { account?: string | undefined }) => !transfer.input.account || binding.account === transfer.input.account || this.host.dependencies.driver(transfer.input.provider)?.accountContinuation?.kind === "resumes"
       reconnect = (!target || target === control.activeBindingId) && !resident.driver && !anew && currentBinding?.provider === transfer.input.provider && Boolean(currentBinding?.nativeId)
@@ -397,7 +427,7 @@ export class LiveTransfers {
         .some((block) => block.type === "user" && block.requestId !== undefined)
       const forksNatively = this.host.dependencies.driver(transfer.input.provider)?.fork
       const forkSource =
-        !bindings.length &&
+        !transfer.compaction && !bindings.length &&
         control.ancestry?.nativeFork?.provider === transfer.input.provider &&
         forksNatively?.kind === "native"
           ? control.ancestry.nativeFork
@@ -617,7 +647,7 @@ export class LiveTransfers {
       const quiet = quietSwitch(transfer)
       // On another place the queue lands with it: every row stays a row, and a hold about the account it left goes.
       const leaving = previous.session.harness !== transfer.input.provider
-      const staying = quiet || leaving
+      const staying = transfer.compaction ? previous.requests : quiet || leaving
         ? arriving(previous.requests, { harness: transfer.input.provider, account: transfer.input.account, tuning: transfer.input.tuning }, leaving, transfer.first)
         : previous.requests
       // The transcript goes with the first to go: this switch's message, unless a row goes ahead of it.
@@ -650,6 +680,9 @@ export class LiveTransfers {
           // Its history goes with whichever goes next.
           ...merged && transcript.length > 0 && { merges: [...previousControl.merges, { id: transfer.input.id, sourceId: transfer.input.id, sourceRevision: 0, manifest, status: "pending" as const }] },
           activeBindingId: bindingId,
+          ...transfer.compaction && previousControl.compactionRecovery?.id === transfer.compaction.recoveryId && {
+            compactionRecovery: { ...previousControl.compactionRecovery, state: { kind: "completed" as const, bindingId, waiting: staying.filter(request => request.status === "queued").map(request => request.id) } },
+          },
           bindings: (prior ? latestBindings : unstarted ? latestBindings.map((candidate) => (candidate.id === unstarted.id ? { ...candidate, ...binding } : candidate)) : [...latestBindings, binding]).map(
             (candidate) =>
               candidate.id === bindingId

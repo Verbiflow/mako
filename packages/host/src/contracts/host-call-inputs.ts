@@ -1921,6 +1921,7 @@ const inputs = {
             path: z.string().optional(),
           })
         ),
+        recoveryOf: z.string().optional(),
         bindingId: z.string().optional(),
         displayText: z.string().optional(),
         tuning: z

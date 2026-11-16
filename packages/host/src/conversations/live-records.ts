@@ -4,7 +4,7 @@ import type { UnopenedConversation } from "../contracts/unopened-conversations.j
 import { disconnectedContext } from "../base/execution-context.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
-import { RESTART_RETIRED_MOVE, carryingWords, quietSwitch, retiredMove } from "../contracts/conversation-control.js"
+import { compactionPending, RESTART_RETIRED_MOVE, carryingWords, quietSwitch, retiredMove } from "../contracts/conversation-control.js"
 import type { Interruption, LiveRequest, LiveSnapshot, LiveSummary } from "../contracts/live-conversations.js"
 import { holdDue, holdOf, sooner, transferDue } from "../contracts/request-hold.js"
 import type { NativeActivity } from "../contracts/native-activity.js"
@@ -795,6 +795,7 @@ function afterRestart(previous: LiveSnapshot, root: string, endsWithTurn: (provi
           // message; a stranded one's retry carries the words its message has now.
           transfers: previous.control.transfers.map((transfer) => {
             // A move has no message to wait with, and what it was decided on went with the last host.
+            if (transfer.compaction && (transfer.state.kind === "queued" || transfer.state.kind === "preparing")) return { ...transfer, state: { kind: "queued" as const } }
             if (quietSwitch(transfer) && (transfer.state.kind === "queued" || transfer.state.kind === "preparing")) return retiredMove(transfer, RESTART_RETIRED_MOVE)
             const own = previous.requests.find((request) => request.id === transfer.input.id && (request.status === "queued" || request.status === "held"))
             if (own && (transfer.state.kind === "queued" || transfer.state.kind === "preparing"))
@@ -849,7 +850,7 @@ function afterRestart(previous: LiveSnapshot, root: string, endsWithTurn: (provi
             }
           // Messages still waiting are paused, as a quit pauses them (`closeForExit`): the queue says so and offers
           // Resume. Left queued behind a turn the restart cut short, nothing would ever send them and nothing said why.
-          : request.status === "queued"
+          : request.status === "queued" && !compactionPending(previous.control?.compactionRecovery)
             ? { ...request, status: "held" as const }
             : request
       )
@@ -915,6 +916,7 @@ function residentSummary(snapshot: LiveSnapshot): LiveSummary {
   const wakes = sooner(wakeAt(snapshot.requests), transferDue(snapshot.control))
   const promptedAt = personPromptedAt(snapshot.requests, snapshot.control?.actions)
   return {
+    ...compactionPending(snapshot.control?.compactionRecovery) && { hasCompactionRecovery: true },
     hasSignInHold: snapshot.requests.some(request => request.signIn && request.status !== "canceled"),
     hasSessionQuestions: Boolean(snapshot.control?.questions?.length),
     nativePaths: snapshot.control?.bindings.flatMap((binding) =>
