@@ -1,6 +1,5 @@
 // Explicit isolated fixture for scrolling a phone's live Session; never imported by the application entry point.
 import { createRoot } from "react-dom/client"
-import { flushSync } from "react-dom"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { applyLiveBatch, applyLiveSnapshot } from "@/state/live-recovery"
@@ -137,11 +136,6 @@ const check = {
   /** One already-admitted batch, including a late paint after the stream stops. */
   append(text: string) {
     applyLiveBatch({ id: conversation, epoch: "phone-scroll", revision: ++revision, updates: [{ kind: "text", id: "streaming", text }] })
-  },
-  /** A final admitted batch, committed at a chosen point in a rendering frame. No native harness is used. */
-  finish(text: string) {
-    flushSync(() => applyLiveBatch({ id: conversation, epoch: "phone-scroll", revision: ++revision,
-      sessionChanges: { status: "ready" }, updates: [{ kind: "text", id: "streaming", text }] }))
   },
   /** The turn's answer grows by `perBatch` words every `everyMs`, a paragraph each 40 words, as the host's batches do. */
   stream(everyMs = 50, perBatch = 3) {
