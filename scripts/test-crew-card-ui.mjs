@@ -821,6 +821,21 @@ async function checkPage({ window, page, shots, base }) {
   assert.equal(phoneWords, deskWords, "the phone's list says the desk rail's words")
   await window.loadURL(`${base}scripts/phone-apex.html?app=apex&open=1ead1ead-0000-4000-8000-000000001ead`)
   await until("Boolean(document.querySelector('[data-crew] [data-stop-all]'))", "Stop all on the phone's crew card")
+  // On the phone, Stop all asks first: one tap opens the question and stops nothing; Cancel closes it; Stop stops them.
+  const stopTitle = await evaluate("document.querySelector('[data-crew] [data-stop-all]').title")
+  await evaluate("document.querySelector('[data-crew] [data-stop-all]').click(); true")
+  await until("Boolean(document.querySelector('[data-stop-all-confirm]'))", "the phone's Stop all question")
+  const question = await evaluate("document.querySelector('[data-stop-all-confirm]').innerText.replace(/\\s+/g, ' ').trim()")
+  assert.match(question, /^Stop \d+ Fins\? The Apex keeps running\. Cancel Stop$/, `the question names how many: ${question}`)
+  assert.equal(await evaluate("document.querySelector('[data-crew] [data-stop-all]').title"), stopTitle, "a tap alone stops nothing")
+  await both("stop-all-confirm-phone")
+  await evaluate("[...document.querySelectorAll('[data-stop-all-confirm] button')].find((button) => button.innerText.trim() === 'Cancel').click(); true")
+  await until("!document.querySelector('[data-stop-all-confirm]') && Boolean(document.querySelector('[data-crew] [data-stop-all]'))", "Cancel leaves the Fins running")
+  await evaluate("document.querySelector('[data-crew] [data-stop-all]').click(); true")
+  await until("Boolean(document.querySelector('[data-stop-all-yes]'))", "the question again")
+  await evaluate("document.querySelector('[data-stop-all-yes]').click(); true")
+  await until("!document.querySelector('[data-stop-all-confirm]') && !document.querySelector('[data-crew] [data-stop-all]')", "Stop stops every Fin it can")
+  console.log(`PASS: the phone's Stop all asks first ("${question.replace(/ Cancel Stop$/, "")}"), Cancel keeps them, Stop stops them`)
   console.log(`PASS: one crew list: the side rail folds as the card does (${folds[0]}), the phone says "${phoneWords}" and has Stop all`)
 
   assert.deepEqual(
