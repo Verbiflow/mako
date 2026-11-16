@@ -178,10 +178,15 @@ export class LiveRecords {
               ancestry,
               session: threadSession ? SessionIdSchema.parse(threadSession) : undefined,
             })
+            // The metadata schema keeps the path on the binding, not session.nativePath. Recover the active
+            // session's path in this index too, so a metadata reader never loads its journal just to find it.
+            const binding = summary.session.nativeId ? found.nativeBindings.find((binding) => binding.provider === summary.session.harness && binding.nativeId === summary.session.nativeId) : undefined
+            const nativePath = binding && "path" in binding ? binding.path : undefined
             this.recovered.set(id, {
               ...summary,
               session: {
                 ...summary.session,
+                ...nativePath && { nativePath },
                 status:
                   summary.session.status === "closed"
                     ? "closed"

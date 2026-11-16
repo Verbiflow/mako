@@ -11,6 +11,7 @@ const READ_TIMEOUT_MS = 30_000
 export const JournalReadSchema = z.discriminatedUnion("kind", [
   z.object({ id: z.number(), kind: z.literal("activity-overlapping"), from: z.number(), to: z.number() }),
   z.object({ id: z.number(), kind: z.literal("blobs"), refs: z.array(z.string()).max(100_000) }),
+  z.object({ id: z.number(), kind: z.literal("checkpoint-fingerprint"), checkout: z.string(), thread: z.string() }),
   z.object({ id: z.number(), kind: z.literal("partition"), checkout: z.string(), thread: z.string() }),
   z.object({ id: z.number(), kind: z.literal("count-turn"), thread: z.string(), turn: z.string(), state: z.enum(["settling", "settled"]) }),
 ])
@@ -19,6 +20,7 @@ type JournalRead = z.infer<typeof JournalReadSchema>
 /** A value as SQLite gives it. */
 const SqlValueSchema = z.union([z.string(), z.number(), z.bigint(), z.null(), z.instanceof(Uint8Array)])
 const ReplySchema = z.union([
+  z.object({ id: z.number(), ok: z.literal(true), fingerprint: z.string().regex(/^[a-f0-9]{64}$/) }),
   z.object({ id: z.number(), ok: z.literal(true), rows: z.array(z.record(z.string(), SqlValueSchema)) }),
   z.object({ id: z.number(), ok: z.literal(true), blobs: z.array(z.object({ ref: z.string(), bytes: z.instanceof(Uint8Array) })) }),
   // A partition, as `partition()` made it in the worker from the same journal: its shape checked, its files passed through.
@@ -86,6 +88,17 @@ export class JournalReader {
       this.ask((id) => ({ id, kind: "partition", checkout, thread }), (reply) => {
         if (!reply.ok) reject(new Error(reply.error))
         else if ("partition" in reply) resolve(partitionOf(reply.partition))
+        else reject(new Error("The journal's reader answered another question."))
+      }, reject)
+    })
+  }
+
+  /** Checkpoint identity without transporting or hashing the partition's bodies on the caller. */
+  checkpointFingerprint(checkout: string, thread: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      this.ask((id) => ({ id, kind: "checkpoint-fingerprint", checkout, thread }), (reply) => {
+        if (!reply.ok) reject(new Error(reply.error))
+        else if ("fingerprint" in reply) resolve(reply.fingerprint)
         else reject(new Error("The journal's reader answered another question."))
       }, reject)
     })

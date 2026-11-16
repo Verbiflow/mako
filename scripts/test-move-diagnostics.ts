@@ -95,7 +95,7 @@ function cloud(label: string, kind: "plan" | "own-branch" | "fork", failure?: { 
       person: later,
     }),
     checkout: () => undefined,
-    snapshot: (id: string) => ({ session: { nativeId: id === conversation ? "native" : undefined, nativePath: join(root, "synthetic-session"), harness: "codex", cwd: root, currentMode: null } }),
+    session: (id: string) => ({ nativeId: id === conversation ? "native" : undefined, nativePath: join(root, "synthetic-session"), harness: "codex", cwd: root, currentMode: null }),
     remembered: () => undefined,
     // SAFETY: Early planning uses only git.succeeds; no Git command or later checkout operation may run.
     git: git as CloudMovesOptions["git"],

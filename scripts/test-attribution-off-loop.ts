@@ -1,4 +1,7 @@
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
+import { mock } from "node:test"
+import { CheckpointFingerprints, threadFingerprint } from "@mako/host/attribution/checkpoint-fingerprints"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -8,7 +11,7 @@ import { HostJobs } from "@mako/host/base/host-jobs"
 import { FakeClock, FakeEventSource } from "@mako/protocol/attribution-conformance"
 import { openAttribution } from "@mako/host/attribution/index"
 import { sharedJournalFolder } from "@mako/host/attribution/shared-journal"
-import { storedView, turnChanges } from "@mako/host/attribution/queries"
+import { partition, storedView, turnChanges } from "@mako/host/attribution/queries"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { nodeFileSystem } from "@mako/host/attribution/ports"
 import { contentRef } from "@mako/host/attribution/content"
@@ -228,3 +231,44 @@ test("a repeated tracker close joins the release even after the tracker is marke
   }
 })
 
+
+
+test("checkpoint identities cache unchanged inputs, invalidate every commit, and bound retained Threads", async () => {
+  const folder = scratch()
+  const { store, refs } = journal(folder, Date.now())
+  const checkout = join(folder, "root")
+  const root = store.roots()[0]!
+  store.saveFile({ root: "r", path: "own.bin", base: null, baseSeq: 0, current: refs.young, text: false, map: [] })
+  store.insertEntry({ at: 1, changedAt: 1, root: "r", path: "own.bin", kind: "create", before: null, after: refs.young, text: false, stored: true, observed: "event", author: { certainty: "exact", author: { thread: "t", session: "s", turn: "turn" }, effect: "create" }, settled: true })
+  const cache = new CheckpointFingerprints(store)
+  const reader = new JournalReader(store.path)
+  let noScan: ReturnType<typeof mock.method> | undefined
+  try {
+    const expected = createHash("sha256").update(threadFingerprint(root.head, partition(storedView(store), checkout, "t"), checkout)).digest("hex")
+    assert.equal(cache.read(checkout, "t"), expected)
+    noScan = mock.method(store, "files", () => { throw new Error("unchanged checkpoint scanned its files") })
+    assert.equal(cache.read(checkout, "t"), expected, "no file read or hash on a cache hit")
+    // Only the head changed: a revision must invalidate even when the Thread wrote no new file.
+    store.saveRoot({ ...root, head: "new-head" })
+    assert.throws(() => cache.read(checkout, "t"), /scanned its files/, "a changed input really revisits the partition")
+    noScan.mock.restore()
+    const changed = cache.read(checkout, "t")
+    assert.notEqual(changed, expected)
+    assert.equal(await reader.checkpointFingerprint(checkout, "t"), changed)
+    // The main thread must not rebuild a partition or read a body when the worker answers.
+    noScan = mock.method(JournalStore.prototype, "files", () => { throw new Error("checkpoint read files on the host") })
+    assert.equal(await reader.checkpointFingerprint(checkout, "t"), changed)
+    noScan.mock.restore()
+    store.saveRoot(root)
+    assert.equal(await reader.checkpointFingerprint(checkout, "t"), expected, "the worker sees another connection's commit")
+    assert.notEqual(cache.read(checkout, "other"), expected, "one Thread never borrows another's identity")
+    for (let n = 0; n < 129; n++) cache.read(checkout, `other-${n}`)
+    noScan = mock.method(store, "files", () => { throw new Error("evicted checkpoint read again") })
+    assert.throws(() => cache.read(checkout, "other"), /evicted checkpoint/, "at most 128 tokens remain")
+  } finally {
+    noScan?.mock.restore()
+    await reader.close()
+    store.close()
+    rmSync(folder, { recursive: true, force: true })
+  }
+})

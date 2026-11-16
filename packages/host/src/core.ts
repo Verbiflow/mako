@@ -1383,7 +1383,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     account: () => late.cloud,
     threads: () => threads.store ?? undefined,
     moves: live.moves,
-    snapshot: (id) => live.snapshot(id),
+    session: (id) => live.session(id),
     checkout: (id) => workspaces.worktrees?.threadCheckout(id),
     // A Thread in the main checkout goes onto its own branch first, as the person's "Move to its own branch" does, its
     // companions following; its agent isn't told, since nothing starts a turn on the way to the cloud.
@@ -1661,6 +1661,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           track: (checkout) => attribution.track(checkout),
           head: (repository) => attribution.head(repository),
           partition: (checkout, thread) => attribution.partitionOffLoop(checkout, thread),
+          fingerprint: (checkout, thread) => attribution.checkpointFingerprint(checkout, thread),
         }
       },
     })
