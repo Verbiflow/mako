@@ -20,10 +20,6 @@ import { BrowserService } from "../packages/control-runtime/dist/browser-service
 import { BrowserCommandSchema } from "../packages/control-runtime/dist/contracts/browser-control.js"
 import { testScratch } from "./lib/test-scratch.mjs"
 
-// A CI Mac is a VM whose GPU compositing never made the hidden window's frame: Chromium logged "ProduceOverlay ...
-// non-existent mailbox" and Page.captureScreenshot waited past its limit. Composited in software there, as on any Mac
-// without a working GPU; everywhere else the window is composited as the desk's are.
-if (process.env.CI) app.disableHardwareAcceleration()
 
 const root = testScratch("mako-desk-browser-")
 app.setPath("userData", join(root, "profile"))
@@ -61,9 +57,10 @@ async function hiddenWindow() {
     webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
   })
   window.setContentSize(size.width, size.height)
-  // A CI Mac's VM never composites a window that was never shown: CDP's screenshot timed out and Electron's capturePage
-  // failed with UnknownVizError. This window stands in for the desk's agent view; what's checked is the desk page's
-  // relay and the browser over it, so there it's shown without taking focus.
+  // A CI Mac's VM never composites a window that was never shown: hidden, Chromium logged "ProduceOverlay ...
+  // non-existent mailbox" and CDP's screenshot timed out; composited in software, CDP timed out and capturePage failed
+  // with UnknownVizError. This window stands in for the desk's agent view; what's checked is the desk page's relay and
+  // the browser over it, so there it's shown without taking focus.
   if (process.env.CI) window.showInactive()
   await window.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html))
   const [width, height] = window.getContentSize()

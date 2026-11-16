@@ -240,7 +240,7 @@ type Sent = { text: string; client: Client; ids: string[]; steered?: string }
  */
 async function prompt(client: Client, conversation: string, message: Sent, losesReply: boolean, requestId: string = randomUUID()): Promise<void> {
   if (!message.ids.includes(requestId)) message.ids.push(requestId)
-  for (let attempt = 0; ; attempt++) {
+  for (let attempt = 0, deadline = Date.now() + 30_000; ; attempt++) {
     try {
       await call(client, "mako:live-prompt", [conversation, requestId, message.text, [], undefined])
       // The answer was lost on its way back: the client asks again under the same ID.
@@ -253,7 +253,7 @@ async function prompt(client: Client, conversation: string, message: Sent, loses
         message.steered = requestId
         return
       }
-      if (attempt > 400) throw new Error(`${client} never got ${message.text} in: ${words}; diagnostic=${JSON.stringify({ diagnosticRestart, diagnosticNotices })}`)
+      if (Date.now() > deadline) throw new Error(`seed ${SEED}: ${client} never got ${message.text} in: ${words}; diagnostic=${JSON.stringify({ diagnosticRestart, diagnosticNotices })}`)
       // As `attemptSend`: whatever the error, a host that holds the request took it.
       const snapshot = HeldSchema.safeParse(await call(client, "mako:live-snapshot", [conversation]).catch(() => null)).data
       if (snapshot?.requests.some((request) => request.id === requestId)) return
@@ -300,12 +300,14 @@ async function steer(client: Client, conversation: string, message: Sent, id: st
 async function waited(conversation: string, message: Sent): Promise<void> {
   const requestId = randomUUID()
   message.ids.push(requestId)
+  // Taken again until the host has the conversation: bounded by time, since a restart under it reads the journal back
+  // in, which on a slow runner outlasted 400 tries (about 2 s).
   const take = async () => {
-    for (let attempt = 0; ; attempt++) {
+    for (const deadline = Date.now() + 30_000; ;) {
       try {
         return await invoke("mako:live-prompt", [conversation, requestId, message.text, [], undefined])
       } catch (error) {
-        if (attempt > 400) throw error
+        if (Date.now() > deadline) throw new Error(`seed ${SEED}: the Mac never took ${message.text} from the account: ${error instanceof Error ? error.message : String(error)}`)
         await delay(2 + random.int(6))
       }
     }
