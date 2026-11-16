@@ -4291,7 +4291,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (store.sessionPlacement(request.actor.session)?.thread !== edge.parent) continue
       const taken = takenAs(request, requests, actions)
       if (!taken) continue
-      if (reports.some((report) => report.at >= taken.at && (report.status !== "progress" || report.handoff || report.awaits || report.answers?.includes(request.id)))) continue
+      if (answeredBy(reports, request.id, taken.at)) continue
       const turns = requests.filter((each) => ended(each) && (each.id === taken.into || (each.dispatchedAt ?? -1) >= taken.at)).length
       owed.push({ request, at: taken.at, turns })
     }
@@ -4300,12 +4300,20 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /**
    * How many of its Apex's questions a Fin still owes an answer past their reminder: its Apex was told, so its list
-   * shows the Fin whatever changed (`needsApex`). Read only of a conversation in memory, so a list reads no journal in.
+   * shows the Fin whatever changed (`needsApex`). Read from what its Apex was told, the digests in the Apex's own queue
+   * (`Notice.unanswered`), and the Fin's reports in the store, so a Fin unloaded or hibernated since, as one that owes an
+   * answer usually is, still counts, and no journal is read in.
    */
   private owesApex(edge: ThreadParent): number {
-    const conversation = this.conversationOf(edge.child)
-    if (!conversation || !this.deps.live.held(conversation)) return 0
-    return this.owedOf(edge, conversation).filter((owed) => owed.turns >= 2).length
+    const apex = this.frontOf(edge.parent, edge.parentSession)
+    const requests = (apex ? this.deps.live.held(apex) : undefined)?.requests ?? []
+    const told = new Map<string, number>()
+    for (const request of requests)
+      for (const notice of request.digest?.notices ?? [])
+        if (notice.unanswered && notice.report.child === edge.child) told.set(notice.unanswered.request, notice.unanswered.at)
+    if (!told.size) return 0
+    const reports = this.store()!.reportsOf(edge.child)
+    return [...told].filter(([request, at]) => !answeredBy(reports, request, at)).length
   }
 
   /**
@@ -7355,6 +7363,14 @@ function needsApex(strip: AgentStrip): boolean {
 /** What a listed Fin's change mark reads of its row (`FinChanges`). */
 function stripChange(strip: AgentStrip): ChangeFacts {
   return { state: strip.state, ...(strip.report && { report: { status: strip.report.status, at: strip.report.at } }), ...(strip.openPRs && { pulls: strip.openPRs }), questions: strip.pendingQuestions ?? 0, actions: strip.pendingActions ?? 0, owes: strip.owes ?? 0 }
+}
+
+/**
+ * Whether a Fin's reports since it took its Apex's question `request` at `at` answer it: any but progress, or progress
+ * that hands work on, waits on someone else, or names it in `answers` (`docs/delivery-queue.md` rule 17).
+ */
+function answeredBy(reports: readonly Report[], request: string, at: number): boolean {
+  return reports.some((report) => report.at >= at && (report.status !== "progress" || report.handoff || report.awaits || report.answers?.includes(request)))
 }
 
 /**

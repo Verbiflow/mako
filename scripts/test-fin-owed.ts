@@ -79,6 +79,20 @@ const waiting = { kind: "pull-request" as const, ref: "acme/app#12", until: "che
     assert.ok("children" in since)
     const owing = since.children.find((strip) => strip.name === "lander")
     assert.equal(owing?.owes, 1, `a Fin owing its Apex an answer is listed though unchanged: ${JSON.stringify(since.children.map((strip) => [strip.name, strip.owes]))}`)
+    // Idle since, it's let go of, as one that owes an answer usually is: its list still shows what it owes, read from
+    // what its Apex was told, with nothing of the Fin read in.
+    const unloading = Date.now() + 20_000
+    // Its harness's process goes first, as an idle one's does (`hibernateIfIdle`), then its conversation.
+    while (!world.live.letGo(fin)) {
+      world.live.hibernateIfIdle(fin)
+      assert.ok(Date.now() < unloading, "the idle Fin let go of")
+      await pause(20)
+    }
+    assert.equal(world.live.loaded(fin), false)
+    const unloaded = await world.agents.list(apex.caller, { since: marked.mark })
+    assert.ok("children" in unloaded)
+    assert.equal(unloaded.children.find((strip) => strip.name === "lander")?.owes, 1, "an unloaded Fin still owes it, and is listed")
+    assert.equal(world.live.loaded(fin), false, "and listing it read nothing of it in")
     console.log("owed: progress on a watched wait left the question open; one reminder, then its Apex heard it once; a reply: none message owed nothing")
   } finally {
     await world.close()

@@ -963,7 +963,9 @@ ends owing one hears one reminder on the next, naming the request; a second
 tells the Apex once in its digest ("hasn't answered your message",
 `Notice.unanswered`). From then its list row says so (`AgentStrip.owes`): it's
 part of its change mark and lists it under `since` whatever changed, as a Fin
-waiting on its Apex is, read only of a conversation in memory. It's worked out
+waiting on its Apex is, read from what its Apex was told (the digests in its own
+queue) and the Fin's reports in the store, so a Fin unloaded since still counts
+and nothing of it is read in. It's worked out
 from the journal and the store, never kept (`test-fin-owed.ts`, in
 `test:orch-comms`).
 `agents_send` with `reply: "none"` marks an informational message durably. A

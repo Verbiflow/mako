@@ -682,6 +682,11 @@ export class LiveConversations {
   }
 
   /** Whether the conversation is in memory; one only on disk runs nothing, and `snapshot` would read it in. */
+  /** Lets go of conversation `id` now when nothing is using it, as the memory budget would; false when it can't. */
+  letGo(id: string): boolean {
+    return this.records.release(id)
+  }
+
   loaded(id: string): boolean {
     return this.records.has(id)
   }
