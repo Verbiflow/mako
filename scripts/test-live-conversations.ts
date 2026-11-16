@@ -1,3 +1,4 @@
+import { ConversationControlSchema, compactionPending } from "@mako/host/contracts/conversation-control"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { Git } from "@mako/git"
 import { ProviderFailureError, providerTextEvidence } from "@mako/host/contracts/provider-failure"
@@ -859,6 +860,15 @@ async function boundsWarmProviders() {
  * the memory readout, by the work it ran as.
  */
 async function bulkLoadsAreNamed() {
+  // #881 journals a native or reconciling recovery under a new wire field (here a native one, its replacement pending); read back it is the control's
+  // compactionRecovery, which the listing's hasCompactionRecovery is made from, so archiving an unloaded conversation
+  // still reads it in to withdraw what's pending (setArchived).
+  const binding = randomUUID()
+  const folded = ConversationControlSchema.parse({ activeBindingId: binding, bindings: [], transfers: [],
+    pendingCompactionRecovery: { id: randomUUID(), origin: "native", requestId: randomUUID(), bindingId: binding, createdAt: 1, epoch: "fixture",
+      target: { provider: "test-provider" }, state: { kind: "replace", transferId: randomUUID() } } })
+  assert.equal(folded.compactionRecovery?.origin, "native", "the wire field folds into compactionRecovery")
+  assert.ok(compactionPending(folded.compactionRecovery), "and reads as pending, as the archive listing needs")
   const root = mkdtempSync(join(tmpdir(), "mako-live-bulk-"))
   const work = namedWork()
   const ids = Array.from({ length: BULK_LOADS + 1 }, () => randomUUID())
