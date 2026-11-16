@@ -76,7 +76,7 @@ import { actions, shallowEqual, useSession } from "@/state/session"
 import { threads, useThreads } from "@/state/threads"
 import { continueTargets } from "@/state/descriptors"
 import { continueTurn } from "@/state/acp-queue"
-import { AUTO_CONTINUE_NOTE, endedAsChosen, savedMakoPrompt, stoppedWorkWords, turnStopLabel, type CarriedHistory, type MakoPrompt, type TurnStop } from "@/state/prompt-delivery"
+import { AUTO_CONTINUE_NOTE, endedAsChosen, foldedPromptParts, savedMakoPrompt, stoppedWorkWords, turnStopLabel, type CarriedHistory, type MakoPrompt, type TurnStop } from "@/state/prompt-delivery"
 import { viewer } from "@/state/viewer"
 import { carriedBecause } from "@/lib/restore-plan"
 import { wokeWords } from "@/lib/session-words"
@@ -181,6 +181,8 @@ function TurnExchange({
   const mako = sentByMako ?? savedByMako
   const promptText = exchange.prompt ? textOf(exchange.prompt.blocks) : undefined
   const fromAgent = useMemo(() => (promptText === undefined ? undefined : agentWords(promptText)), [promptText])
+  // A message several went as (`LiveRequest.joined`), split back into its parts, live and saved alike.
+  const folded = useMemo(() => (promptText === undefined ? undefined : foldedPromptParts(promptText)), [promptText])
   // `toExchanges` never opens a turn on a continuation; one handed in that way is still never drawn as the person's words.
   const continuedPrompt = useMemo(() => (exchange.prompt ? isContinuation(exchange.prompt) : undefined), [exchange.prompt])
   // The request the turn stands on now: its newest continuation's, else its prompt's.
@@ -298,6 +300,20 @@ function TurnExchange({
         {exchange.prompt ? (
           continuedPrompt ? (
             <TurnWentOn continued={continuedPrompt} message={exchange.prompt} provider={provider} />
+          ) : folded ? (
+            // A message several went as: each part drawn as who wrote it, Mako's notes as their lines, an Apex's as its card.
+            <>
+              {folded.map((part, index) =>
+                part.kind === "pull" ? (
+                  <PullWakeNote key={index} line={part.line} timestamp={exchange.prompt!.timestamp} origin={exchange.prompt!.origin} />
+                ) : part.kind === "wait" ? (
+                  <TurnWaitNote key={index} line={part.line} detail={part.detail} timestamp={exchange.prompt!.timestamp} origin={exchange.prompt!.origin} />
+                ) : part.kind === "agent" ? (
+                  <AgentWordsCard key={index} words={part.words} raw={part.raw} timestamp={exchange.prompt!.timestamp} />
+                ) : (
+                  <p key={index} className="whitespace-pre-wrap text-sm text-foreground">{part.text}</p>
+                ))}
+            </>
           ) : mako?.kind === "moved" ? (
             <MovedNote timestamp={exchange.prompt.timestamp} origin={exchange.prompt.origin} />
           ) : mako?.kind === "goal" ? (

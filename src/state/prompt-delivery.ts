@@ -12,6 +12,8 @@ import { continueTurnPrompt, savedContinuation } from "@mako/host/contracts/turn
 import { goalContinuePrompt, goalStartPrompt } from "@mako/host/contracts/live-goals"
 import { pullWakeWords } from "@mako/host/contracts/pull-waits"
 import { turnWaitWords } from "@mako/host/contracts/turn-waits"
+import { agentWords, type AgentWords } from "@mako/host/contracts/children"
+import { foldedParts } from "@mako/host/contracts/live-conversations"
 
 export { continueTurnPrompt }
 
@@ -90,6 +92,8 @@ export type MakoPrompt =
 export function makoPrompts(requests: readonly LiveRequest[]): Map<string, MakoPrompt> {
   const prompts = new Map<string, MakoPrompt>()
   for (const request of requests) {
+    // One several went as is drawn as its parts, each by who wrote it (`foldedPromptParts`), never as its carrier's.
+    if (request.joined?.length) continue
     if (request.actor?.kind === "service" && request.actor.name === "workspace") prompts.set(request.id, { kind: "moved" })
     else if (request.actor?.kind === "service" && request.actor.name === "goal" && request.goal) prompts.set(request.id, { kind: "goal", step: request.goal })
     else if (request.review) prompts.set(request.id, { kind: "review", target: request.review })
@@ -100,6 +104,30 @@ export function makoPrompts(requests: readonly LiveRequest[]): Map<string, MakoP
       prompts.set(request.id, { kind: "wait", ...turnWaitWords(request.text) ?? { line: request.text.trim().split("\n", 1)[0] ?? "" } })
   }
   return prompts
+}
+
+/** A part of a message several went as (`LiveRequest.joined`), drawn as who wrote it: Mako's line, an agent's card, or plain words. */
+export type FoldedPromptPart =
+  | { kind: "pull"; line: string; url?: string }
+  | { kind: "wait"; line: string; detail?: string }
+  | { kind: "agent"; words: AgentWords; raw: string }
+  | { kind: "words"; text: string }
+
+/**
+ * A message several went as, as its parts (`foldedParts`), each drawn as who wrote it: Mako's note as its line, an
+ * Apex's message as its card. Read from the words alone, so a saved transcript draws as a live one. Undefined for a
+ * message that went alone.
+ */
+export function foldedPromptParts(text: string): FoldedPromptPart[] | undefined {
+  const parts = foldedParts(text)
+  if (!parts) return undefined
+  return parts.map((part): FoldedPromptPart => {
+    const words = part.text.trim()
+    const mako = savedMakoPrompt(words)
+    if (mako?.kind === "pull" || mako?.kind === "wait") return mako
+    const agent = agentWords(words)
+    return agent ? { kind: "agent", words: agent, raw: words } : { kind: "words", text: words }
+  })
 }
 
 /**

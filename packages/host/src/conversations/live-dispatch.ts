@@ -5,7 +5,7 @@ import { controlNote } from "../control/index.js"
 import { ExecutionAccountChanged, ExecutionIdentityMismatch, HandoffRefused, TurnInProgressError, type PromptDispatch } from "../harnesses/index.js"
 import { digestAsks } from "../contracts/agents.js"
 import { FRONT_DOOR_GUIDANCE } from "../contracts/agent-tools.js"
-import { JOINED_CHARS, JOINED_MAX, type LiveRequest, type LiveSnapshot } from "../contracts/live-conversations.js"
+import { foldedSeparator, JOINED_CHARS, JOINED_MAX, type FoldedBy, type LiveRequest, type LiveSnapshot } from "../contracts/live-conversations.js"
 import { APEX_NOTE_MARK } from "../contracts/children.js"
 import { promptFingerprint } from "./live-assets.js"
 import { quietSwitch } from "../contracts/conversation-control.js"
@@ -56,8 +56,17 @@ function admitted(request: LiveRequest): number {
 }
 
 /** A message that can go with others from its sender: an agent's plain words, waiting for nothing but its turn. */
+/** Mako's own notes that go with the turn they wait for: a pull request's outcome, a wait that fired. */
+const FOLDED_SERVICES = new Set(["pull-watch", "turn-wait"])
+
+/** Who wrote a message that can go with others: an agent, by its Session, or Mako; undefined for anyone else. */
+function folder(request: LiveRequest): { agent: string } | "mako" | undefined {
+  if (request.actor?.kind === "agent") return { agent: request.actor.session }
+  return request.actor?.kind === "service" && FOLDED_SERVICES.has(request.actor.name) ? "mako" : undefined
+}
+
 function foldable(request: LiveRequest): boolean {
-  return request.status === "queued" && request.actor?.kind === "agent" && !request.pause && !request.editing && !request.wake &&
+  return request.status === "queued" && folder(request) !== undefined && !request.pause && !request.editing && !request.wake &&
     !request.retry && !request.digest && !request.continues && !request.signIn && !request.accountSwitch && !request.review &&
     !request.verbatim && !request.ownerCheck && !request.attachments.length && !request.grants?.length && !request.joinedInto &&
     // Folded once already, it carries what it carries; and another Apex's message is owed its own reply.
@@ -65,21 +74,32 @@ function foldable(request: LiveRequest): boolean {
 }
 
 /**
- * `next`, about to go, with the plain messages from its sender queued right behind it, as one turn: their words after
- * its own, in the order sent, each under a line saying when, so a Fin back from a long turn reads everything its sender
- * said since at once, not one message a turn (land-2, 2026-11-16: ten of its Apex's messages, ten turns, the newest
- * read last). Only an agent's plain messages admitted after it fold, and only while nothing else stands between them (another sender, a
- * paused or edited message, one with attachments or a different `notification`), within `JOINED_MAX` and
- * `JOINED_CHARS`. Each folded message is canceled with `joinedInto`, its ID kept in `joined`. Undefined when none fold.
+ * `next`, about to go, with what waits right behind it from its sender and from Mako, as one turn: their words after its
+ * own, in the order sent, each under a line saying who and when, so a Fin back from a long turn reads everything said
+ * since at once, not one message a turn (land-2, 2026-11-16: ten of its Apex's messages, ten turns, the newest read
+ * last; a pull request's outcome and a wait's note a turn each besides). One agent's plain messages and Mako's notes
+ * (`FOLDED_SERVICES`) admitted after it fold, only while nothing else stands between them (another agent, the person, a
+ * paused or edited message, one with attachments or a different `notification`, one `admits` refuses), within
+ * `JOINED_MAX` and `JOINED_CHARS`. Each folded message is canceled with `joinedInto`, its ID kept in `joined`.
+ * Undefined when none fold.
  */
-export function foldQueued(requests: readonly LiveRequest[], next: LiveRequest): { request: LiveRequest; requests: LiveRequest[] } | undefined {
-  if (!foldable(next) || next.actor?.kind !== "agent") return undefined
-  const session = next.actor.session
+export function foldQueued(requests: readonly LiveRequest[], next: LiveRequest, admits: (request: LiveRequest) => boolean = () => true): { request: LiveRequest; requests: LiveRequest[] } | undefined {
+  if (!foldable(next)) return undefined
+  const first = folder(next)
+  let session = first && first !== "mako" ? first.agent : undefined
   const behind = requests.slice(requests.indexOf(next) + 1).filter((request) => request.status === "queued" || request.status === "held")
   const folded: LiveRequest[] = []
   let length = next.text.length
   for (const request of behind) {
-    if (!foldable(request) || request.actor?.kind !== "agent" || request.actor.session !== session || Boolean(request.notification) !== Boolean(next.notification)) break
+    const by = folder(request)
+    if (!foldable(request) || !by || Boolean(request.notification) !== Boolean(next.notification)) break
+    // One agent's words, and Mako's: another agent's message is its own turn.
+    if (by !== "mako") {
+      if (session !== undefined && by.agent !== session) break
+      session = by.agent
+    }
+    // A note whose wait no longer holds (`Agents.admits`) goes alone, to be refused there.
+    if (!admits(request)) break
     // Only what came after it: one that went ahead of older messages (an interrupt's) goes alone, and they follow it.
     if (admitted(request) <= admitted(next)) break
     if (folded.length >= JOINED_MAX || length + request.text.length > JOINED_CHARS) break
@@ -87,7 +107,8 @@ export function foldQueued(requests: readonly LiveRequest[], next: LiveRequest):
     length += request.text.length
   }
   if (!folded.length) return undefined
-  const text = [next.text, ...folded.map((request) => `[mako · the next message from the same sender, sent ${new Date(request.createdAt ?? Date.now()).toISOString()}]\n${request.text}`)].join("\n\n")
+  const by = (request: LiveRequest): FoldedBy => folder(request) === "mako" ? "mako" : folder(next) === "mako" && !folded.slice(0, folded.indexOf(request)).some((each) => folder(each) !== "mako") ? "agent" : "same"
+  const text = next.text + folded.map((request) => `${foldedSeparator(by(request), request.createdAt ?? Date.now())}${request.text}`).join("")
   const joined = [...next.joined ?? [], ...folded.map((request) => ({ id: request.id, at: request.createdAt ?? Date.now() }))]
   const request: LiveRequest = { ...next, text, joined, inputDigest: promptFingerprint(text, next.attachments, next.tuning) }
   const gone = new Set(folded.map((each) => each.id))
@@ -306,7 +327,7 @@ export class LiveDispatch {
     const request = queued
     // What its sender queued right behind it goes with it, as one turn: its words are sent now, and the journal folds the
     // rows only as the handoff commits (`report`), so a send that goes no further leaves every row as it was.
-    const folded = foldQueued(resident.snapshot.requests, request)
+    const folded = foldQueued(resident.snapshot.requests, request, (each) => dependencies.agents?.()?.admits?.(resident.snapshot.session.id, each) !== false)
     const sends = folded?.request.text ?? request.text
     const previousSnapshot = resident.snapshot
     const previousUpdates = [...resident.updates]
@@ -371,8 +392,7 @@ export class LiveDispatch {
     // A request held back behind a turn the provider was still running
     // already shows its message from that attempt.
     const shown = request.nativeDelivery?.evidence.kind === "not-accepted"
-    if (!shown && (text || request.attachments.length))
-      resident.updates.push({
+    const drawn: Extract<Resident["updates"][number], { kind: "user" }> | undefined = !shown && (text || request.attachments.length) ? {
         kind: "user",
         at: toldAt,
         provider: resident.snapshot.session.harness,
@@ -393,7 +413,10 @@ export class LiveDispatch {
                   reason: "Attachment bytes were not retained",
                 },
         })),
-      })
+      } : undefined
+    // A folded send draws its prompt as the handoff commits the fold, in the same write: one that goes no further (a
+    // Stop, a note withdrawn meanwhile, which sends it again worked out anew) drew nothing, so nothing is drawn twice.
+    if (drawn && !folded) resident.updates.push(drawn)
     try {
       this.access.flush(resident)
     } catch (error) {
@@ -415,6 +438,10 @@ export class LiveDispatch {
       if (handoff && (!own || target?.status !== "dispatching" || target.nativeDelivery?.evidence.kind !== "prepared")) throw new HandoffRefused("superseded")
       if (handoff && target?.pause === "stop") throw new HandoffRefused("stopped")
       if (handoff && target && dependencies.agents?.()?.admits?.(resident.snapshot.session.id, target) === false) throw new HandoffRefused("withdrawn")
+      // Each note it was to carry is admitted again here, as its own send would be: one withdrawn since the fold was
+      // planned sends the carrier back to the queue, to be worked out again without it (and refused there alone).
+      if (handoff && folded?.requests.some((planned) => planned.joinedInto === request.id && dependencies.agents?.()?.admits?.(resident.snapshot.session.id, resident.snapshot.requests.find((each) => each.id === planned.id) ?? planned) === false))
+        throw new HandoffRefused("refold")
       if (!own || !target?.nativeDelivery) return
       const delivery = target.nativeDelivery
       const next = advancePromptDelivery(delivery.evidence, evidence)
@@ -436,11 +463,13 @@ export class LiveDispatch {
       // messages folded into it leave the queue, each pointing at it. One the person changed meanwhile stays as it is.
       if (handoff && folded) {
         resident.snapshot = { ...resident.snapshot, requests: commitFold(resident.snapshot.requests, request.id, folded.request, folded.requests) }
+        if (drawn) resident.updates.push(drawn)
         hostLog("live", "messages went as one turn", { conversation: resident.snapshot.session.id, request: request.id, joined: folded.request.joined?.length ?? 0 })
       }
       // Unwritten, the handoff didn't happen: the request reads as it did, prepared, so no later write says it was sent;
       // nor was anything folded into it.
       const unsent = () => {
+        if (folded && drawn) resident.updates = resident.updates.filter((update) => update !== drawn)
         const was = new Map(beforeFold.map((item) => [item.id, item]))
         resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((item) => (item.id === request.id ? target : folded && was.has(item.id) && item.joinedInto === request.id ? was.get(item.id)! : item)) }
       }
@@ -527,9 +556,10 @@ export class LiveDispatch {
         // Refused at its handoff, so never sent: it waits, held, and a Stop's mark on it keeps it the Stop's. One whose
         // reason went away is canceled, never to go.
         if (error instanceof HandoffRefused) {
-          const status = error.why === "withdrawn" ? "canceled" : "held"
+          const status = error.why === "withdrawn" ? "canceled" : error.why === "refold" ? "queued" : "held"
           resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((candidate) =>
-            candidate === target ? { ...candidate, status, error: undefined, snapshots: undefined } : candidate) }
+            // Refolded, it goes again as never sent: no delivery of its own was attempted, and it drew nothing.
+            candidate === target ? { ...candidate, status, error: undefined, snapshots: undefined, ...status === "queued" && { nativeDelivery: undefined, nativePrompt: undefined } } : candidate) }
           dependencies.workspaceSnapshots?.abandonRun(request.id)
           hostWarn("live", "a message went no further than its handoff", { conversation: resident.snapshot.session.id, request: request.id, why: error.why })
           try {
@@ -541,7 +571,7 @@ export class LiveDispatch {
           // A canceled one is out of the line, and what waited behind it goes now: no turn is running to drain it at
           // its end, so a Fin read as working for hours with its Apex's messages queued behind a canceled note
           // (send-modes, 2026-11-15). One held keeps its place, and the ones behind it wait with it.
-          if (status === "canceled") this.drain(resident)
+          if (status === "canceled" || status === "queued") this.drain(resident)
           return
         }
         const session = resident.snapshot.session

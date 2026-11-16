@@ -31,7 +31,7 @@ const AFTER_MS = 20_000
 /** The shortest stretch of a turn that counts as time to think, uninterrupted. */
 const THINK_MS = 10_000
 
-type Invariant = "apexSteersPerMinute" | "apexThinkShare" | "apexTurnsAfter" | "resultWaitMaxMs" | "finBacklogTurns"
+type Invariant = "apexSteersPerMinute" | "apexThinkShare" | "apexTurnsAfter" | "resultWaitMaxMs" | "finBacklogTurnsNoPerson" | "finBacklogTurns"
 type Bound = { max: number } | { min: number }
 interface Measure { name: Invariant; value: number; target: string; ok: boolean }
 
@@ -48,7 +48,9 @@ const INVARIANTS = {
   apexTurnsAfter: { max: 2 },
   /** The longest any Fin's result waits between its report and the Apex hearing it, in ms. */
   resultWaitMaxMs: { max: APEX_TURN_MS + 5_000 },
-  /** Turns a Fin takes, once its long turn ends, to hear what its Apex, the person and Mako left it meanwhile. */
+  /** Turns a Fin takes, once its long turn ends, to hear what its Apex and Mako left it meanwhile. */
+  finBacklogTurnsNoPerson: { max: 1 },
+  /** And with the person's message among them. */
   finBacklogTurns: { max: 1 },
 } satisfies Record<Invariant, Bound>
 
@@ -142,34 +144,40 @@ async function interruption(): Promise<void> {
 
 /** A Fin busy on a long turn while its Apex sends three messages, the person writes in its Thread and Mako leaves a note. */
 async function backlog(): Promise<void> {
-  let fin = ""
+  const fins = new Set<string>()
   const script: Script = async (turn) => {
-    if (turn.conversation === fin && turn.text.includes("Long work")) await turn.world.hold(turn.conversation)
+    if (fins.has(turn.conversation) && turn.text.includes("Long work")) await turn.world.hold(turn.conversation)
     return "ok"
   }
   const world = new AgentsWorld({ root: join(root, "backlog"), script })
   try {
     const apex = await world.apex("claude", "full")
-    const started = await world.agents.start(apex.caller, { brief: { objective: "Build the thing." }, harness: "codex", name: "builder", clientKey: "builder", cwd: world.root })
-    assert.ok(!("refused" in started) && started.conversation)
-    fin = started.conversation!
-    await world.settle(300, 20_000, "ignore")
-    world.say(fin, "Long work: the migration.")
-    await until("the Fin's long turn", () => world.live.session(fin)?.status === "running")
-    const words = ["Apex one: also the docs.", "Apex two: skip the changelog.", "Apex three: land after #12."]
-    for (const [index, text] of words.entries()) {
-      const sent = await world.agents.send(apex.caller, { to: "builder", text, clientKey: `backlog-${index}` })
-      assert.ok(!("refused" in sent), JSON.stringify(sent))
+    /** A Fin on a long turn, left three messages by its Apex, maybe one by the person, and Mako's note; its turns after. */
+    const run = async (name: string, person: boolean) => {
+      const started = await world.agents.start(apex.caller, { brief: { objective: "Build the thing." }, harness: "codex", name, clientKey: name, cwd: world.root })
+      assert.ok(!("refused" in started) && started.conversation)
+      const fin = started.conversation!
+      fins.add(fin)
+      await world.settle(300, 20_000, "ignore")
+      world.say(fin, "Long work: the migration.")
+      await until("the Fin's long turn", () => world.live.session(fin)?.status === "running")
+      const words = ["Apex one: also the docs.", "Apex two: skip the changelog.", "Apex three: land after #12."]
+      for (const [index, text] of words.entries()) {
+        const sent = await world.agents.send(apex.caller, { to: name, text, clientKey: `${name}-${index}` })
+        assert.ok(!("refused" in sent), JSON.stringify(sent))
+      }
+      if (person) world.say(fin, "Person: use the staging database.")
+      world.live.submit(fin, randomUUID(), "Mako: your wait on fin:docs ended: it finished.", [], undefined, undefined, undefined, { kind: "service", name: "turn-wait" })
+      const before = world.prompts.filter((prompt) => prompt.conversation === fin).length
+      world.release(fin)
+      await world.settle(500, 30_000, "ignore")
+      const turns = world.prompts.filter((prompt) => prompt.conversation === fin).slice(before)
+      for (const text of [...words, ...person ? ["Person: use the staging database."] : [], "Mako: your wait on fin:docs ended"])
+        assert.equal(turns.filter((turn) => turn.text.includes(text)).length, 1, `${text} reached ${name} exactly once`)
+      return turns.length
     }
-    world.say(fin, "Person: use the staging database.")
-    world.live.submit(fin, randomUUID(), "Mako: your wait on fin:docs ended: it finished.", [], undefined, undefined, undefined, { kind: "service", name: "turn-wait" })
-    const before = world.prompts.filter((prompt) => prompt.conversation === fin).length
-    world.release(fin)
-    await world.settle(500, 30_000, "ignore")
-    const turns = world.prompts.filter((prompt) => prompt.conversation === fin).slice(before)
-    for (const text of [...words, "Person: use the staging database.", "Mako: your wait on fin:docs ended"])
-      assert.equal(turns.filter((turn) => turn.text.includes(text)).length, 1, `${text} reached the Fin exactly once`)
-    record("finBacklogTurns", turns.length)
+    record("finBacklogTurnsNoPerson", await run("builder", false))
+    record("finBacklogTurns", await run("tester", true))
   } finally {
     await world.close()
   }

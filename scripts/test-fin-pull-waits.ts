@@ -525,9 +525,10 @@ console.log("engine: watched from reports, rebuilt on start, pruned on stop; the
     }
   }
   /** An Apex and one Fin whose first turn reports it waits on acme/app#7's merge; `busy` holds a turn of the Fin's that says so. */
-  const waiting = async (name: string, read: () => Promise<PullReading | null> = async () => MERGED, now?: () => number, retain = false) => {
+  const waiting = async (name: string, read: () => Promise<PullReading | null> = async () => MERGED, now?: () => number, retain = false, options: Partial<WorldOptions> = {}) => {
     const fin = { conversation: "", ready: false }
     const world: AgentsWorld = new AgentsWorld({
+      ...options,
       root: join(roots, name),
       ...(now && { now }),
       readPull: (target) => target.number === 7 ? read() : Promise.resolve(null),
@@ -612,7 +613,8 @@ console.log("engine: watched from reports, rebuilt on start, pruned on stop; the
         assert.ok(!("refused" in fin) && fin.conversation)
         const conversation = fin.conversation!
         const child = world.store.edges().all.find((edge) => edge.name === "one")!.child
-        const notes = () => world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.startsWith("Mako: PR"))
+        // Each note heard, whether its own turn or one of several Mako's notes went together in (`foldQueued`).
+        const notes = () => world.prompts.filter((prompt) => prompt.conversation === conversation).flatMap((prompt) => prompt.text.match(/^Mako: PR .*$/gm) ?? [])
         const report = () => world.agents.report(world.caller(conversation), { status: "progress", summary: "Other work finished; same dependencies remain.", waitingOn: waits, clientKey: `narration-${seq++}` })
         const tick = async () => { offset += PULL_WATCH_MAX_MS; await world.agents.pulls.tick(); await world.settle(100) }
         await world.settle(100)
@@ -627,7 +629,9 @@ console.log("engine: watched from reports, rebuilt on start, pruned on stop; the
         world.release(conversation)
         await world.settle(100)
         assert.equal(notes().length, 2, "both already-finished dependencies survive another dependency's narration")
-        assert.ok(queued.every((request) => world.live.held(conversation)!.requests.find((row) => row.id === request.id)?.status === "completed"), "the original unconsumed requests are retained")
+        const rows = world.live.held(conversation)!.requests
+        const went = (id: string) => { const row = rows.find((each) => each.id === id); return row?.joinedInto ? rows.find((each) => each.id === row.joinedInto) : row }
+        assert.ok(queued.every((request) => went(request.id)?.status === "completed"), "the original unconsumed requests are retained, each its own turn or folded into one that completed")
         await world.restart()
         await report()
         await tick()
@@ -789,6 +793,50 @@ console.log("engine: watched from reports, rebuilt on start, pruned on stop; the
       assert.deepEqual(notes(), [], "the refused note isn't sent")
       assert.ok(world.prompts.some((prompt) => prompt.conversation === fin.conversation && prompt.text.includes("next: the queued instruction")), "the message queued behind it goes")
       assert.equal(world.live.held(fin.conversation)?.requests.filter((request) => request.status === "queued").length, 0, "nothing is left queued")
+      await world.close()
+    }
+
+    // A note folded behind its Apex's message is admitted again at the handoff: one withdrawn between the plan and the
+    // send sends the message again without it, and the note goes alone, to be refused and retired, never sent.
+    {
+      let open: () => void = () => {}
+      const gate = { on: false, fin: "", entered: false, opened: new Promise<void>((resolve) => { open = resolve }) }
+      const { world, apex, fin, supersede } = await waiting("refold-at-handoff", undefined, undefined, false, {
+        refusePrompt: async (conversation) => {
+          if (gate.on && conversation === gate.fin) { gate.on = false; gate.entered = true; await gate.opened }
+          return undefined
+        },
+      })
+      gate.fin = fin.conversation
+      const busy = await world.agents.send(apex.caller, { to: "one", text: "busy: look at the flaky test", clientKey: "busy" })
+      assert.ok(!("refused" in busy))
+      await until("the Fin to be busy", () => world.live.session(fin.conversation)?.status === "running")
+      const carried = await world.agents.send(apex.caller, { to: "one", text: "next: carry the note", clientKey: "carry" })
+      assert.ok(!("refused" in carried))
+      await world.agents.pulls.tick()
+      const note = () => world.live.held(fin.conversation)!.requests.find((request) => request.actor?.kind === "service")
+      await until("the note to queue behind the message", () => note()?.status === "queued")
+      // Its turn says it still waits on #7, so the wait holds as the fold is planned; it's withdrawn only at the gate.
+      const still = await world.agents.report(world.caller(fin.conversation), { status: "progress", summary: "Still waiting on #7.", waitingOn: [{ kind: "pull-request", ref: "acme/app#7", until: "merge" }], clientKey: "still" })
+      assert.ok(!("refused" in still))
+      gate.on = true
+      world.release(fin.conversation)
+      await until("the folded send to wait at its handoff", () => gate.entered)
+      const planned = world.live.held(fin.conversation)!.requests.find((request) => request.text.includes("next: carry the note"))
+      assert.ok(planned?.status === "dispatching", "the message is on its way, its fold planned with the note")
+      await supersede("moved-on")
+      open()
+      await world.settle(300)
+      const heard = world.prompts.filter((prompt) => prompt.conversation === fin.conversation)
+      assert.equal(heard.filter((prompt) => prompt.text.includes("Mako: PR")).length, 0, `the withdrawn note went with nothing: ${JSON.stringify(heard.map((prompt) => prompt.text.slice(0, 120)))}`)
+      assert.equal(heard.filter((prompt) => prompt.text.includes("next: carry the note")).length, 1, "the message went once, worked out again without the note")
+      assert.equal(note()?.status, "canceled", "the note is refused alone")
+      assert.equal(note()?.joinedInto, undefined, "and was never folded into what went")
+      const drawn = world.live.snapshot(fin.conversation)!.blocks.flatMap((block) => (block.type === "user" && block.text.includes("next: carry the note") ? [block] : []))
+      assert.equal(drawn.length, 1, "the transcript draws the message once: the attempt that went no further drew nothing")
+      assert.ok(!drawn[0]!.text.includes("Mako: PR"), "and without the withdrawn note")
+      const child = world.store.edges().all.find((edge) => edge.name === "one")!.child
+      assert.ok(world.store.pullWakesFor(child).every((wake) => wake.obsolete !== undefined), "its claim is retired")
       await world.close()
     }
 

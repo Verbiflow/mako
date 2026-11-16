@@ -289,6 +289,40 @@ export const JOINED_MAX = 32
 /** Nor past this many characters of words in all. */
 export const JOINED_CHARS = 64_000
 
+/** Who wrote a part of a folded message, as its separator says it. */
+export type FoldedBy = "mako" | "same" | "agent"
+const FOLDED_SAID = { mako: "Mako's note", same: "the next message from the same sender", agent: "a message" } satisfies Record<FoldedBy, string>
+
+/** Who a separator's words name. */
+function foldedBy(said: string | undefined): FoldedBy {
+  return said === FOLDED_SAID.mako ? "mako" : said === FOLDED_SAID.same ? "same" : "agent"
+}
+const FOLDED_SEPARATOR = /\n\n\[mako · (Mako's note|the next message from the same sender|a message), sent (\d{4}-\d\d-\d\dT[\d:.]+Z)\]\n/g
+
+/** The line a folded message's part goes under (`foldQueued`): who wrote it and when. */
+export function foldedSeparator(by: FoldedBy, at: number): string {
+  return `\n\n[mako · ${FOLDED_SAID[by]}, sent ${new Date(at).toISOString()}]\n`
+}
+
+/**
+ * A message several went as (`LiveRequest.joined`), split back into its parts at their separators, each with who wrote
+ * it and when: the first is the carrier's own. Undefined for words with no separator, a message that went alone. Read
+ * from the words alone, so a saved transcript splits as a live one does.
+ */
+export function foldedParts(text: string): { by?: FoldedBy; at?: string; text: string }[] | undefined {
+  const parts: { by?: FoldedBy; at?: string; text: string }[] = []
+  let from = 0
+  let pending: { by: FoldedBy; at: string } | undefined
+  for (const found of text.matchAll(FOLDED_SEPARATOR)) {
+    parts.push({ ...pending, text: text.slice(from, found.index) })
+    pending = { by: foldedBy(found[1]), at: found[2] ?? "" }
+    from = found.index + found[0].length
+  }
+  if (!pending) return undefined
+  parts.push({ ...pending, text: text.slice(from) })
+  return parts
+}
+
 export interface LiveRequest {
   /**
    * Who sent it, assigned by the host at admission. Absent in older journals:
