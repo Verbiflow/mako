@@ -9,6 +9,7 @@ import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { AppKeySchema, type ThreadEnvironment } from "@mako/host/contracts/thread-environments"
 import { environmentTools } from "@mako/host/workspaces/environment-tools"
 import { portListening } from "@mako/host/workspaces/thread-environment"
+import { freeThreadBlock } from "./lib/thread-ports.ts"
 import { ThreadProcesses } from "@mako/host/workspaces/thread-processes"
 import { TraceRefresh } from "@mako/host/workspaces/app-probe"
 import { placedProofs, publishedVersion, readRecipe, readVersion, recipeIn, recipePath, RecipeSchema, type Recipe, type RecipeWhere } from "@mako/host/workspaces/thread-recipe"
@@ -70,18 +71,11 @@ process.on("SIGTERM", () => process.exit(0))
 const processes = new ThreadProcesses({ root: join(root, "records"), listening: portListening })
 const traces = new TraceRefresh()
 const recipesRoot = join(root, "recipes")
-async function freeBlock(from: number): Promise<number> {
-  for (let base = from; base < from + 2_000; base += 10) {
-    const busy = await Promise.all(Array.from({ length: 10 }, (_, index) => portListening(base + index)))
-    if (!busy.some(Boolean)) return base
-  }
-  throw new Error("no free ports for the test")
-}
-const thread = async (name: string, from: number): Promise<ThreadEnvironment> => {
+const thread = async (name: string, taken: number[] = []): Promise<ThreadEnvironment> => {
   const id = ThreadIdSchema.parse(randomUUID())
   const dataDir = join(root, "data", name)
   mkdirSync(dataDir, { recursive: true })
-  return { thread: id, app: AppKeySchema.parse(id), host: `${name}.thread.localhost`, port: await freeBlock(from), ports: 10, dataDir }
+  return { thread: id, app: AppKeySchema.parse(id), host: `${name}.thread.localhost`, port: await freeThreadBlock(taken), ports: 10, dataDir }
 }
 const secrets = new Set<string>()
 const hostIn = (environment: ThreadEnvironment, where: RecipeWhere) => environmentTools({
@@ -98,8 +92,8 @@ const hostIn = (environment: ThreadEnvironment, where: RecipeWhere) => environme
   settleMs: 10_000,
   pressure: async () => "normal",
 })
-const mac = await thread("mac", 44_000)
-const machine = await thread("machine", mac.port + 10)
+const mac = await thread("mac")
+const machine = await thread("machine", [mac.port])
 const local = hostIn(mac, MAC)
 const cloud = hostIn(machine, CLOUD)
 const recipe: Recipe = RecipeSchema.parse({
