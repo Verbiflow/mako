@@ -1,9 +1,12 @@
 import assert from "node:assert/strict"
+import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { frontDoorNote, type FrontDoorChild } from "@mako/host/contracts/agent-tools"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
+import { FROM_AGENTS } from "@mako/host/contracts/children"
+import { CONTEXT_COMPACTED } from "@mako/host/contracts/native-activity"
 import { FinChanges } from "@mako/host/conversations/fin-changes"
 import { AgentsWorld, type Script } from "./lib/agents-world.ts"
 
@@ -105,10 +108,39 @@ const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
     const described = after.filter((line) => line.startsWith("- fin:")).map((line) => line.slice("- fin:".length).split(" ")[0])
     assert.deepEqual(described, ["beta"], `the next note describes only what changed: ${after.join("\n")}`)
     assert.ok(after.some((line) => line.startsWith("Unchanged since the last note") && line.includes("fin:alpha") && line.includes("fin:gamma")), after.join("\n"))
+    // Mako's own prompts (a digest) carry no roster, but the first after its harness compacted or rewound does, every
+    // Fin described, once.
+    const digestActor = { kind: "agent" as const, session: world.store.journalPlacement(apex.conversation)!.session }
+    const heard = world.agents.frontDoor(apex.conversation, { actor: digestActor }, false, false)
+    assert.ok(!heard.some((line) => line.startsWith("- fin:")), `a digest to a process that heard the note carries no roster: ${heard.join("\n")}`)
+    const fresh = world.agents.frontDoor(apex.conversation, { actor: digestActor }, false, true)
+    assert.ok(!fresh.some((line) => line.startsWith("- fin:")), "nor one to a new process, which resumes its history")
+    const compacted = world.agents.frontDoor(apex.conversation, { actor: digestActor }, false, true, true)
+    assert.equal(compacted.filter((line) => line.startsWith("- fin:")).length, 3, `after a compaction, a digest carries the roster: ${compacted.join("\n")}`)
+    assert.ok(!compacted.some((line) => line.startsWith("If the message is for one of them")), "without the person's routing guidance")
     // A process that hasn't heard a note (new, compacted, after a failed send) hears every Fin described again.
     const whole = world.agents.frontDoor(apex.conversation, {}, false, true)
     assert.equal(whole.filter((line) => line.startsWith("- fin:")).length, 3, `a fresh context: each described: ${whole.join("\n")}`)
     assert.ok(!whole.some((line) => line.startsWith("Unchanged since")))
+    // Through dispatch: a digest before a compaction carries no roster, the first after one carries it, once.
+    const news = (words: string) => {
+      world.live.submit(apex.conversation, randomUUID(), `${FROM_AGENTS}\n${words}`, [], undefined, undefined, undefined, digestActor, { digest: { notices: [] } })
+    }
+    const sentTo = (words: string) => world.prompts.filter((prompt) => prompt.conversation === apex.conversation && prompt.text.includes(words)).at(-1)?.text ?? ""
+    // The process hears the note first, with the person's message.
+    world.say(apex.conversation, "How are they doing?")
+    await world.settle(300, 20_000, "ignore")
+    assert.ok(sentTo("How are they doing?").includes("- fin:"), "the person's message carries the roster")
+    news("Before the compaction.")
+    await world.settle(300, 20_000, "ignore")
+    assert.ok(sentTo("Before the compaction.") && !sentTo("Before the compaction.").includes("- fin:alpha"), "a digest to a process that heard the note: no roster")
+    world.live.observe({ type: "live-update", id: apex.conversation, update: { kind: "event", label: CONTEXT_COMPACTED } })
+    news("After the compaction.")
+    await world.settle(300, 20_000, "ignore")
+    assert.ok(sentTo("After the compaction.").includes("- fin:alpha"), `the first digest after a compaction carries the roster: ${sentTo("After the compaction.").slice(0, 600)}`)
+    news("And after that.")
+    await world.settle(300, 20_000, "ignore")
+    assert.ok(!sentTo("And after that.").includes("- fin:alpha"), "once")
     const chars = (lines: readonly string[]) => lines.reduce((sum, line) => sum + line.length + 1, 0)
     console.log(`front door: ${chars(before)} characters with every Fin described, ${chars(after)} with one changed of three`)
   } finally {

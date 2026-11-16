@@ -599,6 +599,8 @@ export class LiveDispatch {
         // Whether this binding's process heard Mako's note before (`standingLines`): one new, compacted or after a failed
         // send hears every Fin described again, not named as unchanged.
         const heardNote = resident.controlSaid?.bindingId === active && resident.controlSaid.generation === (resident.bindingGenerations.get(active) ?? 0)
+        // A compaction or rewind since the note last went: the roster rides this prompt, whatever it is, once.
+        const forgot = !asWritten && resident.noteForgotten === true
         // Service-only turns need no routing paragraph. Once heard, keep its key through service turns, without repeating it.
         const guidance = apex && (person || resident.controlSaid?.lines.has("front-door-guidance"))
           ? `For messages from the person:\n${FRONT_DOOR_GUIDANCE.join("\n")}` : undefined
@@ -622,10 +624,11 @@ export class LiveDispatch {
             ...(standing?.lines ?? []),
             ...(instructions?.notices ?? []),
             ...(told ? [checkout ? `${told.account}\n${checkout}` : told.account] : []),
-            ...(dependencies.agents?.()?.frontDoor(resident.snapshot.session.id, request, false, !heardNote) ?? []),
+            ...(dependencies.agents?.()?.frontDoor(resident.snapshot.session.id, request, false, !heardNote, forgot) ?? []),
           ]),
           current.context.reduce((text, manifest) => contextPrompt(manifest, text, dependencies.harnessLabel), moved ? `${words}\n\n${moved}` : words),
         ].filter(Boolean).join("\n\n")
+        if (forgot) resident.noteForgotten = undefined
         return driver.prompt(active, text, request.attachments, request.tuning, dispatch)
       })
       .catch(async (error) => {

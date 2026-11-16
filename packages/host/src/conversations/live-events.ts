@@ -267,6 +267,7 @@ export class LiveEvents {
         resident.snapshot = { ...resident.snapshot, ...turnSpendAt(resident.snapshot, bindingId, { ended: false, ownTurn: false, gone }) }
     } else if (event.type === "live-rewound") {
       resident.controlSaid = undefined
+      resident.noteForgotten = true
       this.access.nativeRewound(resident, event.run)
     } else if (event.type === "live-goal") {
       this.access.goalObserved(resident, event.goal === null ? null : GoalObservationSchema.parse(event.goal))
@@ -289,7 +290,10 @@ export class LiveEvents {
         }),
       }
     } else if (event.type === "live-activity") {
-      if (event.activity?.kind === "compacting") resident.controlSaid = undefined
+      if (event.activity?.kind === "compacting") {
+        resident.controlSaid = undefined
+        resident.noteForgotten = true
+      }
       const nativeActivity = observeNativeActivity(
         resident.snapshot.nativeActivity,
         resident.snapshot.session.status === "running" && !replaying ? event.activity : null
@@ -354,7 +358,10 @@ export class LiveEvents {
     for (const update of prepared) {
       if (dispatching && update.kind === "user") continue
       // What the harness kept of its history may have dropped Mako's note.
-      if (update.kind === "event" && update.label === CONTEXT_COMPACTED) resident.controlSaid = undefined
+      if (update.kind === "event" && update.label === CONTEXT_COMPACTED) {
+        resident.controlSaid = undefined
+        resident.noteForgotten = true
+      }
       resident.steps?.observe(update)
       if (queueLiveUpdate(resident, update) === "full") {
         this.access.keep(resident)

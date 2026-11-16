@@ -823,7 +823,13 @@ listed and the rest counted in `unchanged`, but a Fin waiting on its Apex (a
 question, an action, a decision, a block) is always listed, and a mark this
 host can't read (another host's, an earlier life's, one ahead) lists every Fin. The front door's note names a Fin unchanged since
 the last note it gave that Apex on one line instead of describing it again,
-always describing one that waits on an answer or a decision. The marks live for
+always describing one that waits on an answer or a decision; a process that
+hasn't heard the note (a new one, one a compaction emptied, one a failed send
+left unsure) hears every Fin described. After its harness compacts or rewinds
+its history (`Resident.noteForgotten`), the roster rides its next prompt
+whatever it is, a digest's too, once, so an Apex woken by a digest after a
+compaction still knows its Fins; its open questions and actions go with every
+prompt already. The marks live for
 the host's life, so after a restart every Fin reads as changed once
 (`test-fin-changes.ts`). An Apex of 30 Fins checking in again after one
 reported read 5% of its first list and 29% of its first note (`test:comms-storm`'s

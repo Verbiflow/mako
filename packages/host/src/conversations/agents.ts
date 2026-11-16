@@ -1193,8 +1193,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     return roleRuleLines(policy, { fin: edge !== undefined, apex: !edge || edge.role === APEX_ROLE || this.isApex(conversation), read })
   }
 
-  /** `whole`: its process hasn't heard a note before (new, compacted, a send failed), so every Fin is described. */
-  frontDoor(conversation: string, request: Pick<LiveRequest, "actor"> & Partial<Pick<LiveRequest, "id">>, includeGuidance = true, whole = false): string[] {
+  /**
+   * `whole`: its process hasn't heard a note before (new, compacted, a send failed), so every Fin is described. `forgot`:
+   * its harness compacted or rewound since the note last went, so the roster rides this prompt whoever's it is.
+   */
+  frontDoor(conversation: string, request: Pick<LiveRequest, "actor"> & Partial<Pick<LiveRequest, "id">>, includeGuidance = true, whole = false, forgot = false): string[] {
     const order = request.actor && request.actor.kind !== "person" ? agentMessageOrder(this.deps.live.snapshot(conversation), request.id, (session) => this.store()?.sessionPlacement(session)?.thread ?? session) : []
     const store = this.store()
     const thread = store?.journalPlacement(conversation)?.thread
@@ -1214,9 +1217,12 @@ export class Agents implements AgentOperations, ConversationChildren {
       "Source Apex alone records exact agents_settle dispositions. Dispatch/handoff/defer stay pending; receiver outcome alone resolves nothing. Reclaim returns custody to Apex. No automatic reminder/reply."] : []
     const person = !request.actor || request.actor.kind === "person"
     const now = this.now()
-    const door = person ? frontDoorNote(open.map((edge) => this.frontDoorChild(edge)), now, includeGuidance, whole ? undefined : this.doorSaid.get(conversation)) : []
+    // The roster goes before the person's words, and once before anything else after its harness compacted or rewound
+    // its history: a digest after a compaction otherwise reaches an Apex that no longer holds its Fins' picture.
+    const roster = person || (forgot && open.length > 0)
+    const door = roster ? frontDoorNote(open.map((edge) => this.frontDoorChild(edge)), now, person && includeGuidance, whole ? undefined : this.doorSaid.get(conversation)) : []
     // On the marks' own clock: every change this note read came before it.
-    if (person && open.length) this.doorSaid.set(conversation, this.changes.tick(now))
+    if (roster && open.length) this.doorSaid.set(conversation, this.changes.tick(now))
     const lines = [...rules, ...door, ...note, ...followUps]
     hostLog("agents", "front door", { conversation, children: open.length, chars: lines.reduce((sum, line) => sum + line.length + 1, 0) })
     return lines
