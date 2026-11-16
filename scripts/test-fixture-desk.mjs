@@ -218,10 +218,10 @@ for (const channel of ["mako:live-start", "mako:lifecycle-command", "mako:list-m
   }
 } catch (error) {
   console.error(error)
-  // What the host said of the agent views app, for a failure that never reached its window.
+  // What the host said of the agent views app, and what held its loop, for a failure that never reached its window.
   const said = await readFile(join(dataRoot, "logs", "host.log"), "utf8").catch(() => "")
   if (output) console.error(`The host's last output:\n${output.slice(-3_000)}`)
-  console.error(said.split("\n").filter((line) => /agent.views|desk-page|desktop (attached|detached)/i.test(line)).slice(-20).join("\n") || "host.log says nothing of the agent views app")
+  console.error(said.split("\n").filter((line) => /agent.views|desk-page|desktop (attached|detached)|held|profiled|slow|failed/i.test(line)).slice(-40).join("\n") || "host.log says nothing of the agent views app")
   process.exitCode = 1
 } finally {
   cdp?.close()
