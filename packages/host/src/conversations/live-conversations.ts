@@ -340,8 +340,8 @@ export class LiveConversations {
       switchAccount: (resident, request) => this.accounts.switchAccount(resident, request),
       accountSwitchWait: (resident) => this.accounts.accountSwitchWait(resident),
       scheduleAutoContinue: (resident, settled) => {
-        this.autoContinue.schedule(resident, settled)
         this.autoContinue.continueFailed(resident, settled)
+        this.autoContinue.schedule(resident, settled)
       },
       declineAutoContinue: (resident, keepProviderWait) => this.autoContinue.decline(resident, keepProviderWait),
       goalSettled: (resident, settled) => this.goals.settled(resident, settled),
@@ -1160,7 +1160,15 @@ export class LiveConversations {
       this.storageFailed(resident, { error })
       return false
     }
-    hostLog("live", "a held message's time came", { conversation: id, requests: ready.length })
+    for (const request of ready) {
+      const hold = holdOf(request)
+      hostLog("live", "a held message's time came", {
+        conversation: id, request: request.id,
+        hold: hold?.kind === "retry" ? "provider-retry" : hold?.kind === "resting" ? "resting-digest"
+          : hold?.kind === "until" ? hold.wake.after === DIGEST_WAITS ? "digest" : "scheduled" : hold?.kind ?? "unknown",
+        ...(hold?.kind === "retry" && { cause: hold.retry.cause, attempt: hold.retry.attempt }),
+      })
+    }
     try {
       this.release(resident)
     } catch (error) {
@@ -2059,13 +2067,14 @@ export class LiveConversations {
 
   /**
    * A line Mako writes into a conversation that no harness's record holds, as `recordDirect` does: a Fin's move to
-   * another account or harness when its own ran out. Said once: the same words again change nothing.
+   * another account or harness when its own ran out, and in its Apex's, a Fin's move or the person's stop of it
+   * (`membershipLine`). Said once unless `again`: the same words again change nothing; a stop is its own each time.
    */
-  recordNote(id: string, label: string, detail: string): boolean {
+  recordNote(id: string, label: string, detail: string, again = false): boolean {
     const resident = this.records.load(id)
     if (!resident) return false
     this.keep(resident)
-    if (reduceLiveUpdates(resident.snapshot.blocks, resident.updates).some((block) => block.type === "event" && block.label === label && block.detail === detail)) return true
+    if (!again && reduceLiveUpdates(resident.snapshot.blocks, resident.updates).some((block) => block.type === "event" && block.label === label && block.detail === detail)) return true
     queueLiveUpdate(resident, { kind: "event", label, detail })
     this.keep(resident)
     return true

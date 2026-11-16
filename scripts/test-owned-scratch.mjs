@@ -163,7 +163,7 @@ try {
 
 // Linux can expose an owned-looking /proc row while denying its environment.
 // Fake every process/filesystem observation here: no live /proc or UID is read.
-let deniedCode = "EACCES", deniedFile = "environ", heldFile = true
+let deniedCode = "EACCES", deniedFile = "environ", heldFile = true, heldArgs = false
 let removed = 0
 try {
   Object.defineProperty(process, "platform", { value: "linux", configurable: true })
@@ -176,6 +176,7 @@ try {
   })
   mock.method(fs, "readFileSync", path => {
     assert.doesNotMatch(path, /3000/, "another UID is skipped before reading its files")
+    if (path === "/proc/1000/cmdline" && heldArgs) return "fixture\0/fixture/scratch\0"
     if (path === `/proc/1000/${deniedFile}`) throw Object.assign(new Error("fixture denied"), { code: deniedCode })
     return path.endsWith("cmdline") ? "fixture\0" : "HOME=/outside\0"
   })
@@ -185,6 +186,11 @@ try {
   for (const code of ["EACCES", "EPERM", "ENOENT", "ESRCH"]) {
     deniedCode = code
     assert.deepEqual(processesUsingSync("/fixture/scratch", true).map(item => item.pid), [2000], `${code} environment refusal skips that row, but keeps every readable holder`)
+    if (code === "EACCES" || code === "EPERM") {
+      heldArgs = true
+      assert.deepEqual(processesUsingSync("/fixture/scratch", true).map(item => item.pid), [1000, 2000], `${code} cannot hide a holder already identified by its command line`)
+      heldArgs = false
+    }
   }
   heldFile = false
   await removeScratch("/fixture/scratch", 0)

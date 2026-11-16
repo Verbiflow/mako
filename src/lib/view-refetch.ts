@@ -1,5 +1,5 @@
 /** The existing stores own values; this only owns when their readers run. */
-export type RefetchDomain = "apps" | "sync" | "output" | "preview" | "devices" | "updates" | "account"
+export type RefetchDomain = "apps" | "sync" | "output" | "preview" | "devices" | "updates" | "account" | "providers"
 export interface RefetchClock {
   now(): number
   after(run: () => void, ms: number): () => void
@@ -39,6 +39,7 @@ const KNOWN_FIELDS = {
   devices: new Set(["all"]),
   updates: new Set(["all"]),
   account: new Set(["all"]),
+  providers: new Set(["all"]),
 } satisfies Record<RefetchDomain, ReadonlySet<string>>
 const CLOCK: RefetchClock = {
   now: Date.now,

@@ -1,3 +1,4 @@
+import type { SnapshotBudgetReport, SnapshotBudgetSettings } from "@mako/host/contracts/snapshot-budget"
 import type { ThreadScratchReport, ThreadScratchSettings } from "@mako/host/contracts/thread-scratch"
 import { useCallback, useEffect, useState } from "react"
 import { toast } from "sonner"
@@ -504,3 +505,6 @@ export const saveWorktreeRetention = (settings: WorktreeRetentionSettings): Prom
 /** Read-only preview; settings opt in separately. */
 export const readThreadScratch = (): Promise<ThreadScratchReport> => getMako().threadScratch()
 export const saveThreadScratch = (settings: ThreadScratchSettings): Promise<ThreadScratchReport> => getMako().setThreadScratch(settings)
+
+export const readSnapshotBudget = (): Promise<SnapshotBudgetReport> => getMako().snapshotBudget()
+export const saveSnapshotBudget = (settings: SnapshotBudgetSettings): Promise<SnapshotBudgetReport> => getMako().setSnapshotBudget(settings)

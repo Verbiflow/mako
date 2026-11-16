@@ -1685,7 +1685,10 @@ export class CloudAccounts {
           this.#options.onRuntimeLinked?.()
           void started.ended.then((problem) => {
             this.#claims = started.claims()
-            if (this.#served?.served === started) this.#served = undefined
+            if (this.#served?.served === started) {
+              this.#served = undefined
+              this.#options.sessions?.report(undefined)
+            }
             end(endingOf(problem))
           })
         },
@@ -1695,7 +1698,10 @@ export class CloudAccounts {
       close: () => {
         closed = true
         if (served) this.#claims = served.claims()
-        if (served && this.#served?.served === served) this.#served = undefined
+        if (served && this.#served?.served === served) {
+          this.#served = undefined
+          this.#options.sessions?.report(undefined)
+        }
         link.close()
       },
     }

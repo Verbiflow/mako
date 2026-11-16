@@ -1,6 +1,7 @@
 import { HostFailureError } from "../contracts/provider-failure.js"
 import type { WalPrimer, WalCheckpoint } from "./wal-primer.js"
 import { ProviderFailureEvidenceSchema, storedFailureEvidence } from "../contracts/provider-failure-evidence.js"
+import type { SnapshotSettlement } from "../contracts/snapshot-budget.js"
 import { LiveInputQuestionSchema } from "../contracts/live-questions.js"
 import { ApprovalOriginSchema, NativeApprovalIdentitySchema } from "../contracts/approval-response.js"
 import { PromptDeliverySchema } from "../contracts/prompt-delivery.js"
@@ -23,7 +24,7 @@ import {
   RequestRetrySchema,
 } from "../contracts/conversation-control.js"
 import { existsSync, mkdirSync, readdirSync, realpathSync, statSync } from "node:fs"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
 import { ExecutionContextSchema } from "../contracts/execution-context.js"
@@ -1884,4 +1885,57 @@ export class ColdJournal {
     this.#turns = rows.map((row) => TurnRowSchema.parse(row))
     return this.#turns
   }
+}
+
+const SnapshotRequestRowSchema = z.object({ status: z.string(), snapshots: z.string().nullable() })
+
+/** Only request status/checkpoint metadata, never transcript content or request text. */
+export function storedSnapshotSettlement(root: string, elsewhere: (id: string) => boolean = () => false): SnapshotSettlement {
+  return atOnce(snapshotSettlementSteps(root, elsewhere))
+}
+export function readSnapshotSettlement(root: string, elsewhere: (id: string) => boolean = () => false): Promise<SnapshotSettlement> {
+  return inSlices(snapshotSettlementSteps(root, elsewhere))
+}
+function* snapshotSettlementSteps(root: string, elsewhere: (id: string) => boolean): Steps<SnapshotSettlement> {
+  const result: SnapshotSettlement = { valid: true, settledIds: [], blockedScopes: [] }
+  try {
+    if (!existsSync(root)) return result
+    for (const name of readdirSync(root)) {
+      if (!name.endsWith(".sqlite")) continue
+      const id = name.slice(0, -7)
+      let scope: string | undefined
+      try {
+        const db = new DatabaseSync(join(root, name), { readOnly: true })
+        let busy: boolean
+        const ids: string[] = []
+        try {
+          const metadata = metadataRow(db)
+          if (!metadata) throw new Error("Conversation metadata is unavailable.")
+          const summary = journalSummary(metadata)
+          scope = resolve(summary.session.cwd)
+          // A deleted cwd still holds its original scope; it is not a global evidence failure.
+          if (existsSync(scope)) scope = realpathSync(scope)
+          busy = elsewhere(id) || summary.hasSessionQuestions || summary.transferWakeAt !== undefined || !["ready", "failed", "closed"].includes(summary.session.status)
+          for (const row of db.prepare("SELECT json_extract(value, '$.status') AS status, json_extract(value, '$.snapshots') AS snapshots FROM requests").all()) {
+            yield
+            const projected = SnapshotRequestRowSchema.parse(row)
+            const settled = ["completed", "failed", "interrupted", "canceled"].includes(projected.status)
+            if (!settled) busy = true
+            if (!projected.snapshots || !settled) continue
+            const snapshots = RunSnapshotsSchema.parse(JSON.parse(projected.snapshots))
+            if (snapshots.before.kind === "ready") ids.push(snapshots.before.snapshot.id)
+            if (snapshots.after?.kind === "ready") ids.push(snapshots.after.snapshot.id)
+          }
+        } finally { db.close() }
+        if (busy) result.blockedScopes.push(scope)
+        else result.settledIds.push(...ids)
+      } catch {
+        if (scope) result.blockedScopes.push(scope)
+        // No partial IDs from a failed journal become settlement evidence.
+        hostWarn("checkpoints", "A conversation's rewind evidence is unavailable; retaining its unproven checkpoints.")
+      }
+      yield
+    }
+  } catch { result.valid = false }
+  return result
 }

@@ -36,9 +36,10 @@ export class TurnInProgressError extends HostFailureError {
  * `withdrawn`: a message Mako sent by itself no longer holds, as what made it says (`ConversationChildren.admits`).
  */
 export class HandoffRefused extends HostFailureError {
-  readonly why: "stopped" | "superseded" | "unsaved" | "withdrawn"
+  /** `refold`: a note it was to carry no longer holds, so it goes again, worked out without that note. */
+  readonly why: "stopped" | "superseded" | "unsaved" | "withdrawn" | "refold"
   constructor(why: HandoffRefused["why"], options?: ErrorOptions) {
-    super("unknown", why === "stopped" ? "Stopped before it was sent" : why === "superseded" ? "Another send of this conversation took its place" : why === "withdrawn" ? "What it was sent for no longer holds" : "Mako couldn't save this message as sent, so it wasn't sent", options)
+    super("unknown", why === "stopped" ? "Stopped before it was sent" : why === "superseded" ? "Another send of this conversation took its place" : why === "withdrawn" ? "What it was sent for no longer holds" : why === "refold" ? "A note it was to carry no longer holds, so it goes again without it" : "Mako couldn't save this message as sent, so it wasn't sent", options)
     this.name = "HandoffRefused"
     this.why = why
   }

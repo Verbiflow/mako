@@ -21,6 +21,13 @@ export const DIGEST_WAITS = "digest"
 export const WAKES_PER_MINUTE = 6
 /** Past that, a digest that asks something goes at most this often: well inside the minute its Apex has to answer. */
 export const ASK_EVERY_MS = 10_000
+/**
+ * An Apex at work on a turn is left to think: only a question or decision it can answer is steered into that turn. What
+ * else its Fins report waits for the turn's end as one digest, unless the turn is still running this long after the
+ * first of it, when that digest is steered in once (`AgentWakes`). A 30-Fin storm steered 40 times a minute into one
+ * turn before this (`test:comms-storm`).
+ */
+export const FOCUS_MS = 2 * 60_000
 /** An idle Apex waits this long after a notice for the others of its burst, then wakes once for all of them. */
 export const WAKE_COALESCE_MS = 2_000
 /**
@@ -676,3 +683,18 @@ export function childWord(state: ChildState): string {
   }
 }
 export const DIGEST_RESTART_HINT = "Fin reports may have arrived around the restart; agents_list shows each Fin's latest."
+
+/**
+ * A change to an Apex's crew that happened outside its turn, said as a centred line in its transcript: a Fin moved to
+ * another account or harness ("Docs pass moved to Claude (work)", why under it), or stopped by the person ("Token sweep
+ * stopped by you"). A Fin it started or stopped itself is already its own tool row.
+ */
+export interface MembershipLine {
+  label: string
+  detail: string
+}
+
+export function membershipLine(change: { kind: "moved"; fin: string; to: string; why: string } | { kind: "stopped"; fin: string }): MembershipLine {
+  if (change.kind === "moved") return { label: `${change.fin} ${change.to.charAt(0).toLowerCase()}${change.to.slice(1)}`, detail: change.why }
+  return { label: `${change.fin} stopped by you`, detail: "A message to it resumes it." }
+}

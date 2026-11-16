@@ -728,13 +728,26 @@ interface ScriptCall {
 
 const MAX_SCRIPT = 20_000
 
+/**
+ * One step of a tool's name after `tools`: `.app_status`, or a name in brackets, which a server whose name isn't an
+ * identifier needs (`tools["mako-computer"].js(…)`, as OpenCode writes it on a cloud machine;
+ * `tools["mcp__mako-computer__js"](…)`), so the call is read as the tool it runs, not as a script, and a running js
+ * call's row draws its steps.
+ */
+const nameStep = (quote: number) => String.raw`(?:\s*\.\s*([\w$]+)|\[\s*(["'\x60])([^"'\x60\]]+)` + `\\${quote}` + String.raw`\s*\])`
+/** Groups: the first step's name (1 dotted, 3 bracketed), the second's (4, 6), and `search` (7). */
+const SCRIPT_CALL = String.raw`\btools${nameStep(2)}${nameStep(5)}?\s*\(|(?<![\w.])(search)\s*\(\s*\{`
+
 function scriptCalls(code: string): ScriptCall[] {
   const source = code.slice(0, MAX_SCRIPT)
   const calls: ScriptCall[] = []
-  const pattern = /\btools\.([\w$]+(?:\.[\w$]+)?)\s*\(|(?<![\w.])(search)\s*\(\s*\{/g
+  const pattern = new RegExp(SCRIPT_CALL, "g")
   for (let match = pattern.exec(source); match; match = pattern.exec(source)) {
-    const callName = match[1] ?? match[2]!
-    const open = source.indexOf("(", match.index)
+    const first = match[1] ?? match[3]
+    const second = match[4] ?? match[6]
+    const callName = first ? (second ? `${first}.${second}` : first) : match[7]!
+    // A `tools…(` match ends at its call's paren; `search` ends past it, at the object it passes.
+    const open = match[7] ? source.indexOf("(", match.index) : match.index + match[0].length - 1
     calls.push({ name: callName, input: literalArguments(source, open) })
   }
   return calls

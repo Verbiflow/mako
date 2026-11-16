@@ -169,7 +169,10 @@ export class LiveMoves {
   }
 
   begin(input: { move: MoveId; thread: ThreadId; target: ExecutionOwner; actor: Actor }): MoveBegan {
-    return this.store().beginMove(input)
+    const threads = this.store()
+    const began = threads.beginMove(input)
+    this.rowsMoved(moveJournalIds(threads, input.move))
+    return began
   }
 
   cancel(input: { operationId: string; move: MoveId; actor: Actor }): void {
@@ -177,6 +180,7 @@ export class LiveMoves {
     const journals = moveJournalIds(threads, input.move)
     threads.cancelMove(input)
     this.resume(journals)
+    this.rowsMoved(journals)
   }
 
   /**
@@ -195,12 +199,16 @@ export class LiveMoves {
     }))
     const closing = this.quiet(threads, input.move).filter((resident) => resident.driver)
     if (closing.length) throw new MoveNotQuietError(closing.map((resident) => `${label(resident)} is still connected to its provider`))
-    return threads.release(input)
+    const handoff = threads.release(input)
+    this.rowsMoved(moveJournalIds(threads, input.move))
+    return handoff
   }
 
   claim(input: { operationId: string; handoff: Handoff; actor: Actor }): ClaimReceipt {
     const receipt = this.store().claim(input)
-    this.resume(input.handoff.sessions.flatMap((session) => session.journals))
+    const journals = input.handoff.sessions.flatMap((session) => session.journals)
+    this.resume(journals)
+    this.rowsMoved(journals)
     return receipt
   }
 
@@ -217,6 +225,7 @@ export class LiveMoves {
     const journals = moveJournalIds(threads, input.refusal.move)
     threads.reclaim(input)
     this.resume(journals)
+    this.rowsMoved(journals)
   }
 
   /**
@@ -330,6 +339,15 @@ export class LiveMoves {
       return "can't pause its provider safely yet"
     }
     return undefined
+  }
+
+  /**
+   * A move's step changed whose its Sessions are: every one of its conversations' rows says so (`moving` while it goes,
+   * as before once it stays), not only those in memory, which `resume` reaches. A tab and a fork made on a machine are
+   * closed for the release; taken back after a refused return, their rows said `moving` until something else moved.
+   */
+  private rowsMoved(journals: readonly string[]): void {
+    for (const id of journals) this.access.dependencies.workMoved?.(id)
   }
 
   private resume(journals: readonly string[]): void {

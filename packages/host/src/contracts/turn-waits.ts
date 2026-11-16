@@ -14,6 +14,23 @@ export const WAIT_HORIZON_MAX_S = 7 * 24 * 60 * 60
 export const WAIT_ITEMS_MAX = 16
 /** How late a wait's time may fire and still read as on time; past it the note says the host was asleep or off. */
 export const WAIT_LATE_MS = 60_000
+/**
+ * The wait Mako arms itself when an Apex's turn ends with its Fins at work and none of its own armed: a check-in an
+ * hour on, the backstop to their reports (each still wakes it as ever), so nobody has to say "check on the Fins".
+ */
+export const CREW_WAIT = "Waiting for the crew"
+export const CREW_WAIT_S = 60 * 60
+/**
+ * How far the check-in backs off: each one that found the crew still at work with no report since doubles the next
+ * (1 h, 2 h, 4 h, 8 h, then 8 h on), so a Fin on a long, healthy job doesn't wake its Apex every hour. A report, or a
+ * turn anyone but the check-in started, brings it back to an hour.
+ */
+export const CREW_STEPS_MAX = 3
+
+/** The check-in's interval at a step of its backoff, in seconds. */
+export function crewWaitSeconds(step: number): number {
+  return CREW_WAIT_S * 2 ** Math.min(Math.max(0, step), CREW_STEPS_MAX)
+}
 
 export const TurnWaitItemSchema = z.discriminatedUnion("kind", [
   /** A Fin of this Thread: its next report, or its end. `fin` is its Thread, `name` how the note names it. */
@@ -84,6 +101,10 @@ export const TurnWaitSchema = z.object({
   delivered: z.object({ at: z.number() }).optional(),
   /** When and by whom it ended without firing, or, fired, before its note went (then never sent). */
   cancelled: z.object({ at: z.number(), by: TurnWaitCancelSchema }).optional(),
+  /** Mako's own crew check-in (`CREW_WAIT`), not the agent's `wait`: absent for the agent's. Its note is written as it's due. */
+  armedBy: z.literal("mako").optional(),
+  /** The crew check-in's step of its backoff (`crewWaitSeconds`): 0 is an hour. */
+  crewStep: z.number().int().min(0).max(16).optional(),
 })
 export type TurnWait = z.infer<typeof TurnWaitSchema>
 
@@ -140,7 +161,7 @@ export function turnWaitNote(wait: TurnWait, why: "met" | "time", at: number): s
   return lines.join("\n")
 }
 
-const NOTE_STARTS = ["the wait \"", "stopped waiting for \"", "the time you waited for has come", "your wait \""]
+const NOTE_STARTS = ["the wait \"", "stopped waiting for \"", "the time you waited for has come", "your wait \"", "an hour passed with ", "2 hours passed with ", "4 hours passed with ", "8 hours passed with "]
 
 /** A turn wait's note read back from its words, as a saved transcript keeps it: its first line, and the rest. */
 export function turnWaitWords(text: string): { line: string; detail?: string } | undefined {
@@ -150,6 +171,25 @@ export function turnWaitWords(text: string): { line: string; detail?: string } |
   if (!NOTE_STARTS.some((start) => first.startsWith(start))) return undefined
   const detail = rest.join("\n").trim()
   return { line: first.charAt(0).toUpperCase() + first.slice(1), ...(detail && { detail }) }
+}
+
+/** A Fin at work as the crew check-in reads it: its name, its line (`childLine`), and how long it has shown nothing. */
+export interface CrewFin {
+  name: string
+  line: string
+  quietMs?: number
+}
+
+/** The crew check-in's note, as it's due: each Fin still at work, what it does, and how long it has been quiet. */
+export function crewWaitNote(fins: readonly CrewFin[], quietFor: (ms: number) => string, waitedS = CREW_WAIT_S): string {
+  const count = fins.length === 1 ? "one of your Fins" : `${fins.length} of your Fins`
+  const hours = Math.round(waitedS / 3600)
+  const waited = hours <= 1 ? "an hour" : `${hours} hours`
+  return [
+    `${NOTE_HEAD}${waited} passed with ${count} at work and no word from them. Mako checks in when your turn ends with Fins at work and no wait of yours armed, less often while they go on with nothing to report.`,
+    ...fins.map((fin) => `- fin:${fin.name}: ${fin.line}${fin.quietMs !== undefined && quietFor(fin.quietMs) ? ` (quiet ${quietFor(fin.quietMs)})` : ""}`),
+    "Read one with agents_read, or send it a word with agents_send. Their reports wake you as ever: end your turn to wait for them.",
+  ].join("\n")
 }
 
 /** The note an agent gets on arrival when its Thread moved with a wait armed: the move cancelled it. */

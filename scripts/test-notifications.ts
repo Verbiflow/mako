@@ -8,7 +8,10 @@ import { asks, attentionSummary } from "@mako/host/contracts/notifications"
 import {
   BURST_SETTLE_MS,
   BURST_SUMMARY_FROM,
+  FIN_ASKS_COALESCE_MS,
+  openFinAskRuns,
   SUMMARY_SUBJECT,
+  markSeen,
   decideDelivery,
   flushNotificationBursts,
   installNotificationEnvironment,
@@ -801,6 +804,75 @@ assert.equal(notificationHeadline("finished", "Codex", []), "Codex finished")
   assert.deepEqual(unseenSubjects(notificationsStore.get().items), ["mako-thread:t1"], "two Sessions of one Thread count once")
   noteOutcome({ kind: "finished", subject: subjectFor("/solo"), marker: "t1" })
   assert.deepEqual(unseenSubjects(notificationsStore.get().items), ["thread:/solo", "mako-thread:t1"])
+  markAllSeen()
+  uninstall()
+}
+
+{
+  // A wake turn that said nothing to the person (its Apex read the digest and wrote no words) is no banner; one that
+  // answered in words is, as is any turn the person started.
+  reset()
+  const fake = fakeEnvironment()
+  fake.setFocused(false)
+  const uninstall = installNotificationEnvironment(fake.env)
+  const wake = { id: "wake-1", createdAt: 1, text: "From your Fins", attachments: [], status: "completed" as const, digest: { notices: [] } }
+  const asked = { id: "ask-1", createdAt: 1, text: "go", attachments: [], status: "completed" as const }
+  syncThreadStatus(liveConversation({ revision: 20, requests: [wake], blocks: [{ type: "user", text: "From your Fins", requestId: "wake-1" }, { type: "tool", id: "w", title: "wait", status: "completed" }] }), "running")
+  assert.equal(notificationsStore.get().items.length, 0, "a wake with nothing for the person says nothing")
+  syncThreadStatus(liveConversation({ revision: 21, requests: [wake], blocks: [{ type: "user", text: "From your Fins", requestId: "wake-1" }, { type: "text", text: "Swipe landed; merge it?" }] }), "running")
+  assert.equal(notificationsStore.get().items[0]?.body, "Swipe landed; merge it?", "a wake its Apex answered in words is said")
+  syncThreadStatus(liveConversation({ revision: 22, requests: [asked], blocks: [{ type: "user", text: "go", requestId: "ask-1" }] }), "running")
+  assert.ok(notificationsStore.get().items[0]?.id.endsWith(":finished:turn:22"), "the person's own turn finishing is said, words or none")
+  markAllSeen()
+  uninstall()
+}
+
+{
+  // Fins' asks on one Apex within ten seconds of each other are one announcement, each still an item of its own.
+  reset()
+  const fake = fakeEnvironment()
+  const uninstall = installNotificationEnvironment(fake.env)
+  fake.setFocused(false)
+  const apex = subjectFor("/apex", "Mobile polish")
+  const other = subjectFor("/other", "Billing")
+  const ask = (subject: NotificationSubject, fin: string) =>
+    noteOutcome({ kind: "question", subject, marker: `fin:${fin}`, detail: `${fin}: which one?`, fin })
+  ask(apex, "Sheet motion")
+  await fake.advance(BURST_SETTLE_MS)
+  assert.equal(fake.log.desktop.at(-1)?.body, "Sheet motion: which one?", "one Fin's ask says itself")
+  await fake.advance(2_000)
+  ask(apex, "Push wording")
+  await fake.advance(BURST_SETTLE_MS)
+  assert.equal(fake.log.desktop.at(-1)?.title, "Mobile polish")
+  assert.equal(fake.log.desktop.at(-1)?.body, "2 Fins need you: Sheet motion and Push wording", "a second within the window joins the first")
+  assert.ok(fake.log.dismissedDesktop.includes(apex.id), "in the place of the banner before it")
+  ask(other, "Webhooks")
+  await fake.advance(BURST_SETTLE_MS)
+  assert.equal(fake.log.desktop.at(-1)?.body, "Webhooks: which one?", "another Apex's Fin isn't joined to it")
+  await fake.advance(5_000)
+  ask(apex, "Thread list swipe")
+  await fake.advance(BURST_SETTLE_MS)
+  assert.equal(fake.log.desktop.at(-1)?.body, "3 Fins need you: Sheet motion, Push wording and Thread list swipe")
+  const items = notificationsStore.get().items.filter((item) => item.subject.id === apex.id && !item.seen)
+  assert.equal(items.length, 3, "each ask is still an item, retired when it's answered")
+  assert.equal(unseenSubjects(notificationsStore.get().items).length, 2, "and the badge counts Threads")
+  assert.equal(openFinAskRuns(), 2, "a run is held per Apex while it's open")
+  await fake.advance(FIN_ASKS_COALESCE_MS)
+  ask(apex, "Haptics")
+  await fake.advance(BURST_SETTLE_MS)
+  assert.equal(fake.log.desktop.at(-1)?.body, "Haptics: which one?", "past the window an ask is said alone")
+  assert.equal(openFinAskRuns(), 1, "the next write let the other Apex's ended run go")
+  // Seen asks end a run: the next ask is news of its own.
+  markSeen([apex.id])
+  ask(apex, "Share sheet")
+  await fake.advance(BURST_SETTLE_MS)
+  assert.equal(fake.log.desktop.at(-1)?.body, "Share sheet: which one?", "after the person looked, an ask is said alone")
+  // In front, the in-app toast joins them the same way, under the Apex's one toast.
+  fake.setFocused(true)
+  await fake.advance(1_000)
+  ask(apex, "Deep links")
+  assert.equal(fake.log.toasts.at(-1)?.body, "2 Fins need you: Share sheet and Deep links")
+  assert.equal(fake.log.toasts.at(-1)?.subject.id, apex.id, "one toast per Apex, so it replaces the one before")
   markAllSeen()
   uninstall()
 }

@@ -1,6 +1,6 @@
-import { ProviderFailureError, providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { Git } from "@mako/git"
+import { ProviderFailureError, providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import assert from "node:assert/strict"
 import { workingThreads } from "@mako/host/conversations/cloud-handoffs"
 import { ThreadIdSchema, SessionIdSchema } from "@mako/host/contracts/thread-identity"
@@ -37,9 +37,6 @@ import { ownedSessions } from "@mako/host/conversations/session-report"
 import { ThreadArchives } from "@mako/host/threads/archives"
 import { ThreadLifecycle } from "@mako/host/threads/lifecycle"
 import { OlderRequestSchema } from "./fixtures/older-request-schema.ts"
-
-/** What a driver's native call rejects with when its provider refuses: its words admitted as evidence (`providerCall`, #799). */
-const providerRefusal = (message: string) => new ProviderFailureError(message, providerTextEvidence(message))
 
 const gitRunner = new Git()
 
@@ -2246,6 +2243,9 @@ async function coalescedToolBursts() {
   }
 }
 
+/** This fixture is a native provider, so it supplies provider provenance just as a real decoder does. */
+function nativeFailure(error: string) { return { error, failureEvidence: providerTextEvidence(error) } }
+
 /**
  * A turn's verdict travels with its request: a Stop is recorded as the user's
  * interruption, and a failure carries the kind the provider's text classifies
@@ -2276,16 +2276,12 @@ async function settledVerdicts() {
     f.owner.submit(f.id, second, "second")
     await tick()
     f.owner.observe({ type: "live-session", session: { ...f.state, status: "running" } })
-    const rejected =
-      'Failed to run prompt: {"type":"invalid_request_error","message":"Item \'rs_0a1b\' of type \'reasoning\' was provided without its required following item."} (reasoning encrypted_content was not issued to this caller)'
     f.owner.observe({
       type: "live-session",
       session: {
         ...f.state,
         status: "failed",
-        error: rejected,
-        // A driver admits its provider's words as evidence (#799); a host catch's prose is never classified.
-        failureEvidence: providerTextEvidence(rejected),
+        ...nativeFailure('Failed to run prompt: {"type":"invalid_request_error","message":"Item \'rs_0a1b\' of type \'reasoning\' was provided without its required following item."} (reasoning encrypted_content was not issued to this caller)'),
       },
     })
     f.prompts[1]?.resolve()
@@ -2308,7 +2304,7 @@ async function settledVerdicts() {
         ...f.state,
         status: "failed",
         lastStop: CONNECTION_LOST_STOP,
-        error: "RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)",
+        ...nativeFailure("RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)"),
       },
     })
     f.prompts[2]?.resolve()
@@ -2358,7 +2354,7 @@ async function autoContinuedTurn() {
   const dropped: Partial<LiveSessionState> = {
     status: "failed",
     lastStop: CONNECTION_LOST_STOP,
-    error: "RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)",
+    ...nativeFailure("RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)"),
   }
   const tuning = { model: "model-a", options: { effort: "high" } }
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
@@ -2648,6 +2644,7 @@ async function providerExitContinued() {
       currentMode: null,
       configOptions: [],
       ...patch,
+      ...(patch.error && { failureEvidence: patch.failureEvidence ?? providerTextEvidence(patch.error) }),
     })
     const driver: ProviderLiveDriver = {
       ...fixtureCapabilities,
@@ -2695,8 +2692,7 @@ async function providerExitContinued() {
         id,
         starts,
         prompts,
-        // A driver ends a failed turn with its provider's words admitted as evidence (#799), as a native transport does.
-        end: (patch) => emitters.at(-1)?.({ type: "live-session", session: session(bindings.at(-1) ?? id, patch.error && !patch.failureEvidence ? { ...patch, failureEvidence: providerTextEvidence(patch.error) } : patch) }),
+        end: (patch) => emitters.at(-1)?.({ type: "live-session", session: session(bindings.at(-1) ?? id, patch) }),
         update: (update) => emitters.at(-1)?.({ type: "live-update", id: bindings.at(-1) ?? id, update }),
         hooks,
         root,
@@ -2813,6 +2809,11 @@ async function providerExitContinued() {
     end({ status: "failed", error: "stream disconnected before completion: error sending request" })
     const request = owner.snapshot(id)!.requests[0]
     assert.equal(request?.interruption?.reason, "connection-lost", "a turn that failed on a dropped connection is continued")
+    assert.equal(request.retry?.cause, "network")
+    const retry = owner.snapshot(id)!.requests.find(item => item.continues?.requestId === request.id)!
+    assert.equal(retry.status, "held", "a known-run dropped turn uses the durable outage backoff")
+    assert.equal(prompts.length, 1, "the continuation does not go before its due time")
+    owner.wakeDue(retry.retry!.at + 1)
     await waitFor(() => prompts.length === 2, "the continuation was not sent")
     assert.equal(starts.length, 1, "a live process is continued in place")
   })
@@ -2904,14 +2905,18 @@ async function providerExitContinued() {
     owner.submit(id, randomUUID(), "first")
     await dispatched(owner, id, 0)
     end({ status: "failed", error: "stream disconnected before completion" })
-    assert.ok(owner.snapshot(id)!.requests[0]?.interruption?.autoContinue)
+    const retry = owner.snapshot(id)!.requests.find(request => request.continues?.auto)!
+    assert.equal(retry.status, "held")
+    assert.equal(retry.retry?.cause, "network")
     await owner.cancel(id)
     end({ status: "running" })
     end({ status: "ready" })
     end({ status: "running" })
     end({ status: "failed", error: "stream disconnected before completion" })
+    owner.wakeDue(retry.retry!.at + 1)
     await sleep(60)
     assert.equal(owner.snapshot(id)!.requests[0]?.interruption?.autoContinue, undefined)
+    assert.equal(owner.snapshot(id)!.requests.find(request => request.id === retry.id)?.pause, "stop")
     assert.equal(prompts.length, 1, "a declined continuation is never sent later")
   })
 }
@@ -2928,7 +2933,7 @@ async function heldUntilReset() {
     await f.owner.start("test-provider", "/tmp", { conversationId: f.id, initialRequest: { id: first, text: "limited", attachments: [] } })
     f.started.resolve(f.state)
     await tick()
-    f.prompts[0]!.reject(providerRefusal("429 Too Many Requests: usage limit reached"))
+    f.prompts[0]!.reject(new ProviderFailureError("429 Too Many Requests: usage limit reached", providerTextEvidence("429 Too Many Requests: usage limit reached")))
     await waitFor(() => f.owner.snapshot(f.id)?.requests[0]?.status === "failed", "the first message fails")
     assert.equal(f.owner.snapshot(f.id)?.requests[0]?.failure, "rate-limited")
     const at = Date.now() + 60_000
@@ -2969,7 +2974,7 @@ async function heldWakeResumes() {
     await f.owner.start("test-provider", "/tmp", { conversationId: f.id, initialRequest: { id: first, text: "limited", attachments: [] } })
     f.started.resolve(f.state)
     await tick()
-    f.prompts[0]!.reject(providerRefusal("429 rate limit"))
+    f.prompts[0]!.reject(new ProviderFailureError("429 rate limit", providerTextEvidence("429 rate limit")))
     await waitFor(() => f.owner.snapshot(f.id)?.requests[0]?.status === "failed", "the first message fails")
     f.owner.observe({ type: "live-session", session: { ...f.state, status: "ready" } })
     const later = randomUUID()

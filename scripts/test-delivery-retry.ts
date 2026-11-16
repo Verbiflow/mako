@@ -11,6 +11,7 @@ import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { AgentsWorld, HARNESSES, TESTED_HARNESSES, type Script } from "./lib/agents-world.ts"
 import { providerOutageControls } from "./lib/provider-outage-controls.ts"
+import { transientInterruptionControls, heldWakeLogControls } from "./lib/transient-interruption-controls.ts"
 import { usageResetControls } from "./lib/usage-reset-controls.ts"
 
 /**
@@ -140,6 +141,8 @@ async function goesOnce(world: AgentsWorld, conversation: string, words: string,
 }
 
 try {
+  await transientInterruptionControls(root)
+  await heldWakeLogControls(root)
   await usageResetControls(root)
   await providerOutageControls(root)
   // The policy: waits grow and repeat at ten minutes, so a usage limit is waited out; a session open elsewhere, half an hour.
@@ -622,8 +625,15 @@ try {
       assert.ok(!("refused" in sent), JSON.stringify(sent))
       await until(`${harness} late ${stop}: the send under way`, () => requestOf(world, fin, "Carry on.")?.status === "dispatching" && answer !== undefined)
       if (stop === "apex") await world.agents.stop(apex.caller, { child: "labels", reason: "enough" })
-      else if (stop === "person-fin") assert.equal(await world.agents.stopChild(apex.conversation, world.store.journalPlacement(fin)!.thread), true)
-      else await world.live.cancel(fin)
+      else if (stop === "person-fin") {
+        assert.equal(await world.agents.stopChild(apex.conversation, world.store.journalPlacement(fin)!.thread), true)
+        // The person's stop is a line in the Apex's transcript, once, where an Apex's own stop is its tool row.
+        const title = world.store.thread(world.store.journalPlacement(fin)!.thread)?.title ?? "labels"
+        const lines = (world.live.snapshot(apex.conversation)?.blocks ?? []).filter((block) => block.type === "event" && block.label === `${title} stopped by you`)
+        assert.equal(lines.length, 1, `${harness} late ${stop} ${outcome}: the Apex's transcript says the person stopped it`)
+        assert.equal(await world.agents.stopChild(apex.conversation, world.store.journalPlacement(fin)!.thread), true)
+        assert.equal((world.live.snapshot(apex.conversation)?.blocks ?? []).filter((block) => block.type === "event" && block.label === `${title} stopped by you`).length, 1, "a stop of one stopped already says nothing more")
+      } else await world.live.cancel(fin)
       answer!(outcome === "429" ? "429 Too Many Requests" : undefined)
       await until(`${harness} late ${stop} ${outcome}: its outcome`, () => requestOf(world, fin, "Carry on.")?.status === "held")
       assert.equal(requestOf(world, fin, "Carry on.")?.retry, undefined, `${harness} late ${stop} ${outcome}: an outcome after the Stop is no retry`)
