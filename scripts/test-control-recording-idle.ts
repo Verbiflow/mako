@@ -46,17 +46,23 @@ const TimelineSchema = z.object({
 
 async function browserRecording(idle: "trim" | "keep") {
   const recording = await ControlRecording.create(page, { directory: root, fps: 30, cursor: false, idle }, async () => {})
+  // When each frame went, from the first: a loaded runner's timers fire late (a 300 ms wait took 467), and the
+  // recording measures what arrived, so the cuts are expected from these.
+  const began = performance.now()
   await recording.frame(red, 640, 360)
   await delay(300)
+  const greenAt = performance.now() - began
   await recording.frame(green, 640, 360)
   await delay(2500)
+  const blueAt = performance.now() - began
   await recording.frame(blue, 640, 360)
   await delay(2200)
+  const stoppedAt = performance.now() - began
   await recording.stop()
   const receipt = await recording.settled()
   assert.equal(receipt.status, "finished", JSON.stringify(receipt))
   const timeline = TimelineSchema.parse(JSON.parse(await readFile(receipt.timeline!, "utf8")))
-  return { receipt, timeline, video: receipt.video! }
+  return { receipt, timeline, video: receipt.video!, sent: { greenAt, blueAt, stoppedAt } }
 }
 
 try {
@@ -65,18 +71,20 @@ try {
   const hold = RECORDING_IDLE_HOLD_MS + 2000 / 30
   const cuts = trimmed.timeline.idle.trims
   assert.equal(cuts.length, 2, `A still middle and a still tail are each cut: ${JSON.stringify(cuts)}`)
-  assert.ok(Math.abs(cuts[0]!.trimmedMs - (2500 - hold)) < 80, JSON.stringify(cuts))
-  assert.ok(Math.abs(cuts[0]!.videoAt - (300 + hold)) < 120, JSON.stringify(cuts))
-  assert.ok(Math.abs(cuts[1]!.trimmedMs - (2200 - hold)) < 120, JSON.stringify(cuts))
+  const { greenAt, blueAt, stoppedAt } = trimmed.sent
+  const sent = JSON.stringify({ cuts, sent: trimmed.sent })
+  assert.ok(Math.abs(cuts[0]!.trimmedMs - (blueAt - greenAt - hold)) < 80, sent)
+  assert.ok(Math.abs(cuts[0]!.videoAt - (greenAt + hold)) < 120, sent)
+  assert.ok(Math.abs(cuts[1]!.trimmedMs - (stoppedAt - blueAt - hold)) < 120, sent)
   const removed = trimmed.receipt.idleTrimmedMs!
   assert.ok(Math.abs(removed - cuts[0]!.trimmedMs - cuts[1]!.trimmedMs) < 1)
-  assert.ok(Math.abs(trimmed.receipt.durationMs - 5000) < 250, "durationMs stays wall-clock")
+  assert.ok(Math.abs(trimmed.receipt.durationMs - stoppedAt) < 250, `durationMs stays wall-clock: ${trimmed.receipt.durationMs} vs ${stoppedAt}`)
   const encoded = await durationOf(trimmed.video)
   assert.ok(Math.abs(encoded - (trimmed.receipt.durationMs - removed)) < 70,
     `The video is wall-clock time less the cuts: ${encoded} vs ${trimmed.receipt.durationMs} - ${removed}`)
   assert.equal(await colourAt(trimmed.video, 0.1), "red")
-  assert.equal(await colourAt(trimmed.video, 1.0), "green", "The result of the second change shows for the hold")
-  assert.equal(await colourAt(trimmed.video, 1.5), "blue", "The next change follows one hold later, not 2.5 s later")
+  assert.equal(await colourAt(trimmed.video, (greenAt + hold / 2) / 1000), "green", "The result of the second change shows for the hold")
+  assert.equal(await colourAt(trimmed.video, (greenAt + hold + 150) / 1000), "blue", "The next change follows one hold later, not 2.5 s later")
 
   const kept = await browserRecording("keep")
   assert.equal(kept.timeline.idle.trims.length, 0)
