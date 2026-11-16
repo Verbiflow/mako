@@ -3,11 +3,12 @@ import { lstat, mkdir, readFile, readdir, realpath, rename, rm, rmdir, writeFile
 import { dirname, join, sep } from "node:path"
 import { z } from "zod"
 import { ThreadIdSchema, type ThreadId } from "../contracts/thread-identity.js"
+import type { ThreadStore } from "../threads/index.js"
 import type { ThreadScratchEntry, ThreadScratchReport, ThreadScratchSettings } from "../contracts/thread-scratch.js"
 
 export const SCRATCH_PASS_MS = 60 * 60_000
 export const ThreadScratchSettingsSchema = z.object({
-  mode: z.enum(["preview", "remove"]), idleDays: z.number().int().min(1).max(3650), kept: z.array(ThreadIdSchema).max(10_000),
+  mode: z.enum(["preview", "remove"]), dataMode: z.enum(["preview", "remove"]).default("preview"), idleDays: z.number().int().min(1).max(3650), kept: z.array(ThreadIdSchema).max(10_000),
 }).strict()
 const RecordSchema = z.object({
   thread: ThreadIdSchema, generation: z.string().uuid(), usedAt: z.number().finite(),
@@ -18,14 +19,17 @@ type Record = z.infer<typeof RecordSchema>
 const OwnerReceiptSchema = z.object({ pid: z.number().int().positive().max(2_147_483_647) })
 class ScratchRefused extends Error {}
 interface Deps {
-  /** The existing thread-data folder; only <ThreadId>/scratch is disposable. */
+  /** Only registered roots under this namespace are removable; legacy app folders are never adopted. */
   root: string
+  kind?: "data"
   /** Host-owned metadata, outside the disposable folder. */
   registry: string
   settings: string
   owner(thread: ThreadId): { quietAt: number; finishedAt?: number } | undefined
+  /** Data may outlive its Fin while any ancestor still relies on its packets. Unknown is a hold. */
+  ancestorsClosed?(thread: ThreadId): boolean
   title?(thread: ThreadId): string | undefined
-  using(path: string): Promise<string[]>
+  using(path: string, thread: ThreadId): Promise<string[]>
   /** A complete open-file snapshot; rejection is unknown, not an empty list. */
   openFiles(): Promise<string[]>
   /** Exclusive bytes where the platform can measure them; null is never represented as zero. */
@@ -33,7 +37,29 @@ interface Deps {
   now?(): number
 }
 
-/** One disposable root per Thread, never a shared app folder or a name-based sweep. */
+/** Every ancestor must be explicitly closed or archived, including a top Apex with no parent edge. */
+export function threadDataAncestorsClosed(store: Pick<ThreadStore, "thread" | "edges" | "threadConversations">, archived: ((conversation: string) => boolean | undefined) | undefined, thread: ThreadId): boolean {
+  const edges = store.edges(), edge = edges.of(thread)
+  if (!edge) return false
+  const seen = new Set<ThreadId>([thread])
+  let ancestor = edge.parent
+  for (;;) {
+    if (seen.has(ancestor) || !store.thread(ancestor)) return false
+    seen.add(ancestor)
+    const parent = edges.of(ancestor)
+    if (parent?.closedAt === undefined) {
+      const sessions = store.threadConversations([ancestor]).get(ancestor)
+      if (!sessions?.length || !sessions.every(journals => {
+        const current = journals.at(-1)
+        return current !== undefined && archived?.(current) === true
+      })) return false
+    }
+    if (!parent) return true
+    ancestor = parent.parent
+  }
+}
+
+/** One registered data or scratch root per Thread, never a shared app folder or a name-based sweep. */
 export class ThreadScratch {
   readonly #deps: Deps
   readonly #acquisitions = new Map<ThreadId, Promise<string>>()
@@ -42,7 +68,8 @@ export class ThreadScratch {
   #closed = false
   constructor(deps: Deps) { this.#deps = deps }
 
-  path(thread: ThreadId): string { return join(this.#deps.root, ThreadIdSchema.parse(thread), "scratch") }
+  get kind(): "scratch" | "data" { return this.#deps.kind ?? "scratch" }
+  path(thread: ThreadId): string { return join(this.#deps.root, ThreadIdSchema.parse(thread), this.kind) }
   #note(thread: ThreadId): string { return join(this.#deps.registry, `${ThreadIdSchema.parse(thread)}.json`) }
   #now(): number { return (this.#deps.now ?? Date.now)() }
 
@@ -51,7 +78,7 @@ export class ThreadScratch {
       if (error.code === "ENOENT") return null
       throw error
     })
-    return text === null ? { mode: "preview", idleDays: 7, kept: [] } : ThreadScratchSettingsSchema.parse(JSON.parse(text))
+    return text === null ? { mode: "preview", dataMode: "preview", idleDays: 7, kept: [] } : ThreadScratchSettingsSchema.parse(JSON.parse(text))
   }
 
   async configure(value: ThreadScratchSettings): Promise<void> {
@@ -78,7 +105,7 @@ export class ThreadScratch {
 
   async #identity(thread: ThreadId): Promise<NonNullable<Record["identity"]>> {
     const root = await realpath(this.#deps.root), path = this.path(thread)
-    const expected = join(root, thread, "scratch")
+    const expected = join(root, thread, this.kind)
     const info = await lstat(path, { bigint: true })
     if (!info.isDirectory() || info.isSymbolicLink() || await realpath(path) !== expected)
       throw new ScratchRefused("The scratch root or its parent is linked or no longer owned here.")
@@ -169,12 +196,12 @@ export class ThreadScratch {
   }
 
   async #inspect(thread: ThreadId, settings: ThreadScratchSettings, open: string[] | undefined): Promise<ThreadScratchEntry> {
-    const entry: ThreadScratchEntry = { thread, title: this.#deps.title?.(thread), path: this.path(thread), privateBytes: null, reason: "Ownership is unavailable.", eligible: false }
+    const entry: ThreadScratchEntry = { kind: this.kind, thread, title: this.#deps.title?.(thread), path: this.path(thread), privateBytes: null, reason: "Ownership is unavailable.", eligible: false }
     try {
       if (this.#closed) throw new ScratchRefused("The host is stopping.")
       const record = await this.#record(thread)
       if (record?.retiring) {
-        entry.retainedPath = join(dirname(entry.path), `.scratch-retiring-${record.generation}`)
+        entry.retainedPath = join(dirname(entry.path), `.${this.kind}-retiring-${record.generation}`)
         throw new ScratchRefused("A previous retirement is unconfirmed; its generation is kept for review.")
       }
       if (!record?.identity) throw new ScratchRefused("No complete ownership record; legacy and incomplete scratch are kept.")
@@ -186,15 +213,18 @@ export class ThreadScratch {
       if (!owner) throw new ScratchRefused("The Thread is active, elsewhere, or its state is unknown.")
       const quietAt = Math.max(owner.quietAt, record.usedAt)
       const finished = owner.finishedAt !== undefined && owner.finishedAt >= record.usedAt
+      if (this.kind === "data" && !finished) throw new ScratchRefused("Thread data requires a finished owner; idle alone is not enough.")
+      if (this.kind === "data" && this.#deps.ancestorsClosed?.(thread) !== true) throw new ScratchRefused("An ancestor Apex is open or its closure is unknown.")
       if (!finished && this.#now() - quietAt < settings.idleDays * 86_400_000)
         throw new ScratchRefused(`The Thread has not been quiet for ${settings.idleDays} days.`)
       if (!open) throw new ScratchRefused("Open-file inspection is unavailable.")
-      if ((await this.#deps.using(entry.path)).length || open.some(path => path === entry.path || path.startsWith(`${entry.path}${sep}`)))
+      if ((await this.#deps.using(entry.path, thread)).length || open.some(path => path === entry.path || path.startsWith(`${entry.path}${sep}`)))
         throw new ScratchRefused("A provider, terminal or process has this scratch open.")
       if (await this.#receiptHeld(entry.path)) throw new ScratchRefused("A scratch receipt's process is live or its absence is unknown.")
       entry.privateBytes = await this.#deps.privateBytes(entry.path)
       if (JSON.stringify(this.#deps.owner(thread)) !== JSON.stringify(owner) || JSON.stringify(await this.#record(thread)) !== JSON.stringify(record) ||
         JSON.stringify(await this.#identity(thread)) !== JSON.stringify(record.identity)) throw new ScratchRefused("The Thread or scratch changed during inspection.")
+      if (this.kind === "data" && this.#deps.ancestorsClosed?.(thread) !== true) throw new ScratchRefused("An ancestor reopened during inspection.")
       entry.eligible = true; entry.reason = finished ? "The Thread finished." : "Idle scratch."
     } catch (error) { entry.reason = error instanceof ScratchRefused ? error.message : "A scratch guard could not be read; it is kept for review." }
     return entry
@@ -218,7 +248,7 @@ export class ThreadScratch {
 
   async #run(): Promise<ThreadScratchReport> {
     const settings = await this.settings()
-    if (settings.mode === "preview" || this.#closed) return { settings, entries: [], at: this.#now(), everyMs: SCRATCH_PASS_MS }
+    if ((this.kind === "data" ? settings.dataMode : settings.mode) !== "remove" || this.#closed) return { settings, entries: [], at: this.#now(), everyMs: SCRATCH_PASS_MS }
     const report = await this.preview()
     for (const planned of report.entries) {
       if (!planned.eligible) continue
@@ -226,18 +256,19 @@ export class ThreadScratch {
         await this.#settingsLocked(() => this.#locked(planned.thread, async () => {
           const settings = await this.settings(), open = await this.#deps.openFiles()
           const current = await this.#inspect(planned.thread, settings, open)
-          if (settings.mode !== "remove" || !current.eligible || current.generation !== planned.generation) throw new ScratchRefused("Scratch retirement changed or was cancelled.")
+          if ((this.kind === "data" ? settings.dataMode : settings.mode) !== "remove" || !current.eligible || current.generation !== planned.generation) throw new ScratchRefused("Scratch retirement changed or was cancelled.")
           const record = await this.#record(planned.thread)
           if (!record?.identity || record.retiring) throw new ScratchRefused("Scratch ownership disappeared.")
-          const parent = dirname(planned.path), retired = join(parent, `.scratch-retiring-${record.generation}`)
+          const parent = dirname(planned.path), retired = join(parent, `.${this.kind}-retiring-${record.generation}`)
           if (this.#closed) throw new ScratchRefused("The host is stopping; scratch retirement was cancelled.")
           await this.#publish(this.#note(planned.thread), { ...record, retiring: true })
           if (this.#closed) throw new ScratchRefused("The host stopped after retirement intent; the generation is kept for review.")
+          if (this.kind === "data" && this.#deps.ancestorsClosed?.(planned.thread) !== true) throw new ScratchRefused("An ancestor reopened after retirement intent; the generation is kept for review.")
           await rename(planned.path, retired)
           const info = await lstat(retired, { bigint: true })
           if (String(info.dev) !== record.identity.device || String(info.ino) !== record.identity.inode || !info.isDirectory() || info.isSymbolicLink())
             throw new ScratchRefused("Scratch retirement identity is unknown; it is kept for review.")
-          // Never remove the Thread/app's data directory. Nested symlinks are removed as links, not followed.
+          // The registered generation only: never an app or legacy Thread folder. Nested links are not followed.
           await rm(retired, { recursive: true, force: false })
           await rm(this.#note(planned.thread))
           planned.removed = true

@@ -470,13 +470,14 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     emit,
     inUse: async (path) => [...conversationsIn(path, (status) => status !== "closed"), ...await shellsIn(path)],
     finished: (thread) => late.conversations?.finishedThreadAt(thread),
+    archived: (id) => late.archivedHere?.(id),
     scratchOwner: (thread) => {
       const quietAt = late.conversations?.scratchQuietSince(thread)
       return quietAt === undefined ? undefined : { quietAt, finishedAt: late.conversations?.finishedThreadAt(thread) }
     },
-    retirementUsers: async (path) => [
+    retirementUsers: async (path, thread) => [
       ...(late.conversations?.live.listed() ?? [])
-        .filter(({ session }) => (session.connection === "connected" || session.connection === "starting" || session.status === "running" || session.status === "starting") && (session.cwd === path || session.cwd.startsWith(`${path}/`)))
+        .filter(({ session }) => (session.connection === "connected" || session.connection === "starting" || session.status === "running" || session.status === "starting") && (session.cwd === path || session.cwd.startsWith(`${path}/`) || (thread !== undefined && store?.journalPlacement(session.id)?.thread === thread)))
         .map(() => "an open provider"),
       ...(await (await shell.terminals.load("worktree retirement")).runningShells())
         .filter((terminal) => terminal.cwd === path || terminal.cwd.startsWith(`${path}/`))
@@ -1224,6 +1225,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       workspaces.worktrees?.turnEnded(cwd)
       workspaces.retention?.changed()
       workspaces.scratch?.changed()
+      workspaces.threadData?.changed()
     },
     // Its row in the account's list says whether it works: said as its work moves, checkpoint and close included.
     workMoved: (id) => late.sessions?.conversationMoved(id),
@@ -1712,6 +1714,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       if (conversationId) void late.conversations?.agents?.archived(conversationId)
       workspaces.retention?.changed()
       workspaces.scratch?.changed()
+      workspaces.threadData?.changed()
     },
   })
   late.archivedHere = (conversationId) => lifecycle.archived({ kind: "live", id: conversationId })
