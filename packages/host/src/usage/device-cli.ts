@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { mkdir } from "node:fs/promises"
+import { join as joinPath } from "node:path"
 import { parseArgs } from "node:util"
 import { cloudUrl } from "../base/build-identity.js"
 import { errorMessage } from "../base/error-message.js"
@@ -8,6 +9,7 @@ import { acquireHostLock, hostLockHolder } from "../base/host-lock.js"
 import { hostSecretStore, secretKeyFile } from "../base/host-secrets.js"
 import { CloudAccountSchema, type CloudAccount, type CloudAccountState } from "../contracts/cloud-account.js"
 import { invokeRuntime, probeRuntime, runtimeLocation } from "../transport/index.js"
+import { FileAccountEventCursors } from "./account-event-cursor.js"
 import { CloudAccounts, cloudLegacyFiles, cloudSignInName, type DeviceCode } from "./cloud-account.js"
 import { describeThisDevice } from "./device-description.js"
 import { readJoinedCloud, writeJoinedCloud } from "../base/joined-cloud.js"
@@ -74,6 +76,7 @@ export async function deviceCommand(command: Command, args: string[]): Promise<n
       url: cloud,
       secrets: store.secrets,
       secretName: cloudSignInName(dataRoot),
+      eventCursors: new FileAccountEventCursors(joinPath(dataRoot, "account-events")),
       openExternal: async () => {},
       device: () => describeThisDevice(environment.version, values.name),
       onChange: () => {},
@@ -83,7 +86,7 @@ export async function deviceCommand(command: Command, args: string[]): Promise<n
       if (command === "join") return await join(accounts, environment, values.name)
       return await leave(await accounts.ready(), () => accounts.signOut())
     } finally {
-      accounts.close()
+      await accounts.close()
     }
   } catch (error) {
     console.error(`mako-host ${command}: ${errorMessage({ error })}`)
@@ -120,6 +123,7 @@ async function statusWithoutLock(environment: HostEnvironment, cloud: string, js
       url: cloud,
       secrets: store.secrets,
       secretName: cloudSignInName(dataRoot),
+      eventCursors: new FileAccountEventCursors(joinPath(dataRoot, "account-events")),
       openExternal: async () => {},
       device: () => describeThisDevice(environment.version, undefined),
       onChange: () => {},
@@ -129,7 +133,7 @@ async function statusWithoutLock(environment: HostEnvironment, cloud: string, js
       await accounts.ready()
       return report(accounts.account(), json, { host: "not running", kept: keyFile ?? "the keychain", checked: "not asked: the credential is a running host's, or a join's, to use" })
     } finally {
-      accounts.close()
+      await accounts.close()
     }
   } catch (error) {
     console.error(`mako-host status: ${errorMessage({ error })}`)

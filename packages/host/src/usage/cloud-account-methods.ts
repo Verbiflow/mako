@@ -1,8 +1,10 @@
+import { join } from "node:path"
 import type { CloudFinAnswer, CloudFinStart, CloudFinStatus } from "@mako/protocol/cloud-fins"
 import type { SourceProjectCommand, SourceProjectReceipt } from "@mako/protocol/source-project"
 import type { Advertisement, ClientSessionOverSockets } from "@mako/protocol"
 import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
 import { attendable, CloudAttention, macIdleSeconds } from "./cloud-attention.js"
+import { FileAccountEventCursors, memoryAccountEventCursors } from "./account-event-cursor.js"
 import { CLOUD_FIN_LIMITS_MS, CloudAccounts, cloudLegacyFiles, cloudSignInName, type BorrowArtifact, type CloudAccountOptions, type CloudThreadMaking, type WaitingClaim } from "./cloud-account.js"
 import { isAccountListEvent, type AccountListHeard } from "@mako/protocol/account-sessions"
 import type { SessionListings } from "@mako/protocol/thread-listing"
@@ -196,7 +198,7 @@ export interface CloudAccount {
   wake(): void
   /** The Mac is going to sleep or shutting down: its runtime tells the cloud first (`CloudAccounts.leaving`). */
   leaving?(why: "sleep" | "quit"): void
-  stop(): void
+  stop(): void | Promise<void>
 }
 
 
@@ -305,6 +307,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     url: cloudUrl(environment),
     secrets: secrets.secrets,
     secretName: cloudSignInName(dataRoot),
+    eventCursors: fixture ? memoryAccountEventCursors() : new FileAccountEventCursors(join(dataRoot, "account-events")),
     // A host with no screen (a server, or one started for a check) has no browser to open: the sign-in page waits in
     // the account's state, which says where it is, for whoever opens it.
     openExternal: async (url) => {
@@ -504,7 +507,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     stop: () => {
       attention?.stop()
       sync?.stop()
-      cloud.close()
+      return cloud.close()
     },
   }
 }
