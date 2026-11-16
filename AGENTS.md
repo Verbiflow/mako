@@ -310,7 +310,12 @@ can fix a number per device instead of Auto (Settings › Fins), and
 machine per Fin, is bounded by the plan and the daily spend ceiling only
 (`cloudCapacity`, `AgentsDeps.cloudLimits`), for when placement lands. Over
 every place the person's ceiling (`FIN_CEILING`, 64) is a safety net, and a
-tree's running budget (32) caps one Apex's fan-out. A refused start names
+tree's running budget (32) caps one Apex's fan-out. Finished Fins cost
+nothing, so no limit counts a tree's starts over its life; a start rate
+(`TREE_BUDGET`: 48 in any 10 minutes and 120 in any hour, queued starts
+counted) only stops an agent starting Fins in a loop, even one paced under
+the short window, refused with when it frees
+(`startRateWords`). A refused start names
 the places a start may name that have room. This Mac's load also shows in
 the start's answer when it's busy (`macLoad`, `mac`) beside the device's
 number (`atOnce`). `MAKO_FIN_SLOTS` fixes the number, as a test's host does.

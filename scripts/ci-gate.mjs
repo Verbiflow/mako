@@ -91,7 +91,7 @@ export const STEPS = [
   [16, "npm run test:usage"],
   [144, "npm test -w @mako/sessions"],
   // Fins held by the tree's budget, woken, resumed, moved, and what each reads as.
-  [127, "CASES=statesAndEntries,rosterAndLists,uploadsFollowParents,startsAndWakes,explicitReports,refusals,launchesBeforeTheirEdge,stopHoldsUntilCancelled,linkTellsUnreadableFromGone,followedStopStuck,harnessLadders,stopAllUnqueues,unreadableQueuedStarts,settingsFollowTheBinding,startedFinsOldQueueRow,stoppedApexHolds,listsReadNoJournal,finsMoveInTheNewestSession,aSessionNeedsYou,followsShellRuns,relinkedRuns,messagesReachLinkedRuns,finRules npm run test:background-agents"],
+  [127, "CASES=statesAndEntries,rosterAndLists,uploadsFollowParents,startsAndWakes,explicitReports,refusals,startRate,launchesBeforeTheirEdge,stopHoldsUntilCancelled,linkTellsUnreadableFromGone,followedStopStuck,harnessLadders,stopAllUnqueues,unreadableQueuedStarts,settingsFollowTheBinding,startedFinsOldQueueRow,stoppedApexHolds,listsReadNoJournal,finsMoveInTheNewestSession,aSessionNeedsYou,followsShellRuns,relinkedRuns,messagesReachLinkedRuns,finRules npm run test:background-agents"],
   [127, "CASES=storeKeeps,readOnlyStoreVersion,finLimit,afterOrder,slotsGoAtOnce,followedStopHoldsUntilExit,followedStopUnknownIdentity,followedStopStaleIdentity,queueProjection,edgeWriteMovesTheLine,accessFits,finReadingsLoadNothing,finsAtWorkByBinding,activityTellsNoOne,progressGoesWhereItsRead,anySessionAsks,finModels,limitedHarnesses,apexStops,staleEndsStayOut,waitingFins,ownSessionIsNoChild npm run test:background-agents"],
   [32, "npm run test:build-slots"],
   [0, "npm run test:agents-migrate"],

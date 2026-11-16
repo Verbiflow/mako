@@ -931,14 +931,37 @@ export function modeWithin(ladder: readonly LiveSessionMode[] | undefined, tier:
   return best
 }
 
-/** The tree's budgets, held by its authority: the top Apex's host in 8.1. No depth: cycles are refused instead. */
+/**
+ * The tree's budgets, held by its authority: the top Apex's host in 8.1. No depth: cycles are refused instead. What a
+ * tree runs at once is the resource limit; how fast it starts Fins only guards against an agent spawning in a loop.
+ * Finished Fins cost nothing, so no limit counts them over the tree's life: a tree that had started 100 over two
+ * weeks once refused every new Fin (2026-11-15).
+ */
 export interface TreeBudget {
   /** Threads running at once across the tree. */
   running: number
-  /** Threads started in total. */
+  /** Threads started (or waiting to start) within any `windowMs`. */
   started: number
+  windowMs: number
+  /** And within any hour (`HOUR_MS`): a loop of quick Fins kept just under the short window still stops. */
+  hourly: number
 }
-export const TREE_BUDGET: TreeBudget = { running: 32, started: 100 }
+export const HOUR_MS = 60 * 60_000
+/**
+ * 48 starts in any 10 minutes and 120 in any hour: four times the busiest 10 minutes this Mac's trees had over two
+ * weeks (11), nearly four times the busiest hour (31), and room for a whole fan-out at the running limit. A loop
+ * starting one every few seconds meets the first in minutes, and one paced under it meets the second within the hour,
+ * rather than going on at 288 an hour.
+ */
+export const TREE_BUDGET: TreeBudget = { running: 32, started: 48, windowMs: 10 * 60_000, hourly: 120 }
+
+/** Why a start was refused for one of its tree's start windows, and when enough of its starts leave it for one more. */
+export function startRateWords(window: { windowMs: number }, started: number, frees: number | undefined, now: number): string {
+  const minutes = Math.round(window.windowMs / 60_000)
+  const span = window.windowMs === HOUR_MS ? "hour" : `${minutes} minutes`
+  const wait = frees === undefined ? undefined : Math.max(1, Math.ceil((frees - now) / 60_000))
+  return `This tree started ${started} ${FIN_WORD}s in the last ${span}, its limit on starts (a guard against starting ${FIN_WORD}s in a loop; finished ones don't count against it). ${wait === undefined ? "It frees as the ones waiting start and age out." : `The next start frees in ${wait} minute${wait === 1 ? "" : "s"}, at ${new Date(frees!).toISOString().slice(11, 16)} UTC.`} Reuse an existing ${FIN_WORD} with agents_send meanwhile.`
+}
 
 /** The host's Fins for Diagnostics: how many, how many run (and of those, how many a process Mako didn't start runs), and each tree against its budgets. */
 export interface AgentsDiagnostics {

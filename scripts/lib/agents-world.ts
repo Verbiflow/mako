@@ -109,7 +109,7 @@ export interface WorldOptions {
   /** Scripted native facts, never a provider/model call. Ordinary fixtures represent a killed, unfinished run. */
   nativeTurn?: NativeTurnReader | false
   nativeInspection?: Extract<ProviderLiveDriver["resume"], { kind: "native" }>["inspect"]
-  budget?: TreeBudget
+  budget?: Partial<TreeBudget>
   /** Each event the host sends its windows, as it sends it. */
   events?: (event: HostEvent) => void
   /** What the host keeps of conversations in memory (`LiveDependencies.conversationMemory`); the host's own without it. */

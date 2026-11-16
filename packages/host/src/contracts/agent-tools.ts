@@ -94,7 +94,8 @@ export interface AgentsStarted {
   why?: string
   /** The Fins it starts after (`after`) that haven't finished yet, by name. */
   after?: string[]
-  tree: { running: number; started: number; of: { running: number; started: number } }
+  /** `started` counts the starts within the budget's window (`of.windowMs`) and `startedHour` within the hour, never over the tree's life. */
+  tree: { running: number; started: number; startedHour?: number; of: { running: number; started: number; windowMs?: number; hourly?: number } }
   /** The person's Fins at work on this device, every tree's, and how many run on it at once: its capacity, or their own number. */
   atOnce?: { working: number; of: number }
   /** Set while this Mac is busy (`macLoad`): it starts anyway, and says so, so heavy work goes one at a time. */
