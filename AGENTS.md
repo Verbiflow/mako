@@ -609,7 +609,10 @@ edits both through the same calls and previews only what each adds to the
 note, from the same functions (`roleRulesPreview`); `npm run test:person-rules` covers it. A worktree in a project folder of several
 repositories can be on a branch it names, adopted in each repository that
 has it and made from the newest start in the rest. A report (`agents_report`, else one
-implicit report at a turn's end) sends its Apex a notice; an idle Apex waits
+implicit report at a turn's end, which a completed turn also writes when its
+last report was progress that hands nothing on and names no wait Mako watches:
+a pull request the watch reads, an armed turn wait or its own Fins at work,
+`progressLeftUnwatched`) sends its Apex a notice; an idle Apex waits
 `WAKE_COALESCE_MS` and takes ONE turn with the digest, a busy one gets it at
 its next step where its harness steers there and at its turn's end where it
 doesn't, at most `WAKES_PER_MINUTE` an Apex (`agent-wakes.ts`): the Apex

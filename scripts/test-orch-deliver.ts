@@ -272,7 +272,8 @@ async function aRowCountsItsTurn(): Promise<void> {
 async function notificationDoesNotReportCompletion(): Promise<void> {
   let fin = ""
   let holdNotice = true
-  const world = new AgentsWorld({ root: join(root, "notifications"), script: async (turn) => {
+  // A real host reads the pull request it waits on, so that wait is watched and its turn's end stays quiet.
+  const world = new AgentsWorld({ root: join(root, "notifications"), readPull: async () => null, script: async (turn) => {
     if (turn.text.includes("You're fin:")) {
       await turn.world.agents.report(turn.caller, { status: "progress", summary: "Waiting for integration.", waitingOn: [{ kind: "pull-request", ref: "acme/app#7", until: "merge" }], clientKey: "wait" })
       return "Waiting."

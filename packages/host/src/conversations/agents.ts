@@ -81,6 +81,7 @@ import {
   queuedWords,
   quietProgress,
   awaitedAnew,
+  othersOnly,
   type Report,
   type ThreadParent,
   type TreeBudget,
@@ -3860,7 +3861,11 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** The end of a Fin's turn as its report: what `turnEnded` writes once nothing more goes on in it. */
   private turnReported(edge: ThreadParent, conversation: string, request: string, ended: LiveRequest, reply: TurnReply): void {
     const store = this.store()!
-    if (store.reportsOf(edge.child, (ended.createdAt ?? 0) - 1).some((report) => !report.implicit)) return this.childMoved(edge, false)
+    // What it said this turn stands, unless its last word was progress on nothing that will wake it: then the turn's end
+    // is its result, as a silent turn's is, and its Apex hears it. A Fin that said "ready for your review" as progress
+    // and ended its turn woke nobody (loop-holds on #810, 2026-11-15).
+    const said = store.reportsOf(edge.child, (ended.createdAt ?? 0) - 1).filter((report) => !report.implicit).at(-1)
+    if (said && !(ended.status === "completed" && this.progressLeftUnwatched(said, conversation))) return this.childMoved(edge, false)
     const waits = ended.status === "completed" ? this.waitsOn(edge, conversation) : undefined
     if (waits) {
       this.awaiting.set(edge.child, { conversation, request })
@@ -3868,7 +3873,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       return this.childMoved(edge, false)
     }
     this.awaiting.delete(edge.child)
-    const text = reply.text.trim()
+    const text = reply.text.trim() || (said && ended.status === "completed" ? said.summary.trim() : "")
     if (ended.status === "completed" && ended.notification) return this.childMoved(edge, false)
     const done = ended.status === "completed" && text.length > 0
     this.keepReport(edge, {
@@ -3876,10 +3881,32 @@ export class Agents implements AgentOperations, ConversationChildren {
       child: ThreadIdSchema.parse(edge.child),
       status: done ? "done" : "failed",
       summary: (ended.error || text || (ended.status === "completed" ? "Its turn ended without reporting a result." : "Its turn ended before it finished.")).slice(0, 16_000),
+      // What its progress said it waits on that nothing here watches (the person, other words) is why it stopped.
+      ...(said?.waitingOn?.length && { waitingOn: said.waitingOn }),
+      ...(said?.artifacts?.length && { artifacts: said.artifacts }),
       implicit: true,
       ownerGeneration: this.generation,
       at: this.now(),
     })
+  }
+
+  /**
+   * Whether a report made in a turn leaves its end unheard: progress that hands nothing on and names no wait something
+   * will end. A pull request the watch reads, a wait the turn armed (`turn_waits`) or a Fin of its own at work wakes it
+   * again, so that progress stays quiet; a wait on the person or in other words wakes nothing, so its Apex hears it.
+   */
+  private progressLeftUnwatched(report: Report, conversation: string): boolean {
+    // One that handed work on or first named a wait on someone else woke its Apex already: its turn's end says nothing new.
+    if (report.status !== "progress" || report.handoff || report.awaits) return false
+    // Nor does one naming again, in other words or later, a wait on someone else that an earlier progress since the last
+    // result or question woke its Apex for (`awaits`), when it names nothing new.
+    const reports = this.store()!.reportsOf(report.child)
+    let from = reports.length
+    while (from > 0 && reports[from - 1]!.status === "progress") from -= 1
+    const since = reports.slice(from)
+    if (since.some((each) => each.awaits) && othersOnly(since.filter((each) => each.id !== report.id).flatMap((each) => each.waitingOn ?? []), report.waitingOn)) return false
+    if (this.deps.readPull && report.waitingOn?.some((item) => waitedPull(item) !== undefined)) return false
+    return !this.store()!.armedTurnWaits().some((wait) => wait.conversation === conversation)
   }
 
   /**
@@ -4893,7 +4920,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!conversation || !this.deps.live.atWork(conversation)) return false
     if (this.personWaiting(conversation) !== undefined || this.messageHold(conversation)) return false
     const reading = this.childReading(edge)
-    return reading.working === true && reading.awaiting === undefined && reading.waiting === undefined
+    // One whose last word handed its Apex a wait on someone else is waiting, not quiet.
+    return reading.working === true && reading.awaiting === undefined && reading.waiting === undefined && !this.latest.get(child)?.awaits
   }
 
   /**
