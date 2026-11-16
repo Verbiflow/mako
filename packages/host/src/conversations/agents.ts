@@ -147,6 +147,7 @@ import { continuationsSpent, continueTurnPrompt, crashedChildTurn, CUT_BY, RESTA
 import { uniqueName, type KeptAnswer, type KeptMark, type KeptPullWake, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
 import { AgentRuns, lastStep, type ProcessReads, type RunEnd } from "./agent-runs.js"
 import { holdOf, keepsLine } from "../contracts/request-hold.js"
+import { foldList } from "./agent-list-fold.js"
 import { AgentWakes, DIGEST_WAITS, firstParagraph, FROM_AGENTS, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
 import { namedUuid } from "./cloud-moves.js"
 import { carriedDigest } from "../contracts/delivery-retry.js"
@@ -2013,7 +2014,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     await this.listPlaced(apex, input, strips)
     const counts = this.treeCounts(this.rootOf(apex.thread))
-    return { children: strips, tree: { ...counts, of: { ...this.budget } } }
+    const tree = { ...counts, of: { ...this.budget } }
+    if (input.scope === "all") return { children: strips, tree }
+    return { ...foldList(strips, this.now()), tree }
   }
 
   /**

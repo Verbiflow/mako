@@ -305,7 +305,7 @@
     "test:build-slots": "tsx scripts/test-build-slots.ts",
     "test:person-rules": "tsx scripts/test-person-rules.ts && esbuild scripts/test-role-rules-ui.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-role-rules-ui.mjs --log-level=warning && node node_modules/.tmp/test-role-rules-ui.mjs",
     "test:role-rules-window": "node scripts/test-role-rules-window.mjs",
-    "test:agents-doors": "npm run -s build --workspace @mako/client && tsx scripts/test-agents-doors.ts",
+    "test:agents-doors": "npm run -s build --workspace @mako/client && tsx scripts/test-agents-doors.ts && tsx scripts/test-agents-list-fold.ts",
     "test:agents-migrate": "tsx scripts/test-agents-migrate.ts",
     "test:agents-cli": "npm run -s build --workspace @mako/client && tsx scripts/test-agents-cli.ts",
     "test:thread-move-tool": "npm run -s build --workspace @mako/client && tsx scripts/test-thread-move-tool.ts && tsx --tsconfig tsconfig.app.json scripts/test-back-ask.ts && tsx scripts/test-move-diagnostics.ts",
