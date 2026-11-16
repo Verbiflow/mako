@@ -5,7 +5,6 @@ import { runtimeEventRouting, runtimeFailure, type RuntimeFailure } from "../con
 import { encodeRuntimeEvent, payloadFor, runtimeEventLine, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { HostInvoke } from "./server.js"
-import { HostStoppedCallError } from "./call-lifetime.js"
 
 /** Reads that take longer than this are logged even when tracing is off. */
 const SLOW_MS = 1_000
@@ -64,14 +63,6 @@ export function serveHostThroughGateway(link: RuntimeLink, options: GatewayHostO
     try {
       reply = hostSuccess(operation.id, await options.invoke(request.channel, request.args, client, request.history, operation.correlationId))
     } catch (error) {
-      // A host that is stopping answers the gateway nothing for a call its stop ended: the gateway keeps a runtime's
-      // answer as the operation's, so the client's repeats would all get it (about 29 s of `sendWithRepeats`) before a
-      // new operation reached the next host. The link's close is its answer, which the gateway keeps for no one, so a
-      // repeat goes on to whoever runs the Thread next and is settled there by its ID.
-      if (error instanceof HostStoppedCallError) {
-        hostLog("gateway", "operation left to the link's close: this host is stopping", { op: operation.op, correlationId: operation.correlationId })
-        return new Promise<Reply>(() => {})
-      }
       failure = runtimeFailure(error)
       reply = hostFailure(operation.id, operation.correlationId, failure)
     }

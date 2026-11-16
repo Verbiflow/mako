@@ -8,7 +8,7 @@ import type { HostWork } from "../base/event-loop.js"
 import { FixtureDeskRefusedError, fixtureDeskRefusal } from "../contracts/fixture-desk-policy.js"
 import { CLIENT_CALL_ON_SOCKET, isClientCall } from "../contracts/client-calls.js"
 import { EncodedAnswer, decodeRuntimeValue, encodeRuntimeValue, type EncodedValue } from "../contracts/runtime-value.js"
-import { HostCallLifetime, stoppedCallError } from "./call-lifetime.js"
+import { HostCallLifetime } from "./call-lifetime.js"
 import { RepeatedCalls } from "./repeated-calls.js"
 import { FailedCalls } from "./failed-calls.js"
 import { ControlPreviewSchema, type ControlPreview } from "@mako/control-runtime/contracts"
@@ -80,9 +80,7 @@ export class HostMethods implements MethodTable {
       }
       if (value instanceof EncodedAnswer) return encoded(value.value)
       return local(hostHistoryPaging() ? this.options.presentHistory(value) : value)
-    })).catch((error: Error) => {
-      throw stoppedCallError(error)
-    })
+    }))
     this.calls.set(channel, (args) => call(args, encodeRuntimeValue, (value) => value))
     if (channel === "mako:control-preview") {
       const preview = ControlPreviewSchema.nullable()
