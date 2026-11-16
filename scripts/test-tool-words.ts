@@ -84,6 +84,8 @@ const WORDS: readonly { tool: string; args: ToolArguments; answer?: string; labe
   { tool: "port_holder", args: { port: 5173 }, label: "Check port 5173", running: "Checking port 5173", done: "Checked port 5173" },
   { tool: "thread_move", args: { to: "cloud" }, label: "Move this Thread to the cloud", running: "Moving this Thread to the cloud", done: "Moved this Thread to the cloud" },
   { tool: "wait", args: { description: "Waiting for CI on #412" }, label: "Wait for CI on #412", running: "Waiting for CI on #412", done: "Waited for CI on #412" },
+  { tool: "wait", args: { description: "Waiting for CI on #412" }, answer: JSON.stringify({ outcome: "armed", wait: "w1", waitsOn: ["CI on #412"] }), label: "Wait for CI on #412", running: "Waiting for CI on #412", done: "Started waiting for CI on #412" },
+  { tool: "wait", args: { description: "Waiting for CI on #412" }, answer: JSON.stringify({ outcome: "already-done", met: ["CI on #412"] }), label: "Wait for CI on #412", running: "Waiting for CI on #412", done: "Didn't need to wait for CI on #412" },
   { tool: "wait", args: { action: "cancel" }, label: "Stop waiting", running: "Stopping the wait", done: "Stopped waiting" },
   { tool: "thread", args: { action: "rename", title: "Ship the importer" }, label: "Rename this Thread to Ship the importer", running: "Renaming this Thread to Ship the importer", done: "Renamed this Thread to Ship the importer" },
   { tool: "automation", args: { action: "list" }, label: "List the automations", running: "Listing the automations", done: "Listed the automations" },
