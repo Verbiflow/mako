@@ -52,6 +52,7 @@ import type { HarnessBehind, ThreadHarnessCheck } from "@mako/host/contracts/clo
 import type { UnreadReport } from "@mako/host/contracts/unread-records"
 import type { StoreFormats } from "@mako/host/contracts/store-formats"
 import type { FileEventsSample, FileEventsService } from "@mako/host/contracts/file-events-service"
+import type { McpSignIns } from "@mako/host/contracts/mcp-sign-ins"
 import type { EntryOriginal, OriginalPart } from "@mako/sessions/record-original"
 import type { LiveHistoryAddress, LiveHistoryRead } from "@mako/host/contracts/live-history"
 import { ENVIRONMENT_SETUP_PROMPT } from "@mako/host/contracts/thread-environments"
@@ -626,6 +627,20 @@ export function installMockBridge() {
    * that outcome. Any other scene reads a healthy service.
    */
   let mockFileEvents = mockFileEventsService(scene)
+  /**
+   * The MCP servers the mock's harnesses couldn't start: one signed in by Codex's command, a claude.ai connector, a
+   * Claude server needing sign-in it offers no way to start, and one Codex couldn't reach.
+   */
+  let mockMcpSignIns: McpSignIns = { servers: [
+    { harness: "claude", server: "claude.ai Gmail", reason: "sign-in required", way: "page", url: "https://claude.ai/settings/connectors", reportedAt: Date.now() },
+    { harness: "codex", server: "todoist", reason: "sign-in required", way: "command", reportedAt: Date.now() },
+    { harness: "claude", server: "linear", reason: "sign-in required", way: "settings", reportedAt: Date.now() },
+    { harness: "codex", server: "paper", reason: "could not connect", way: "settings", reportedAt: Date.now() },
+  ] }
+  const setMcpSignIns = (next: McpSignIns) => {
+    mockMcpSignIns = next
+    emit({ type: "mcp-sign-ins", reading: next })
+  }
   const setFileEvents = (next: FileEventsService) => {
     mockFileEvents = next
     emit({ type: "file-events-service", service: next })
@@ -3530,6 +3545,19 @@ export function installMockBridge() {
       const versioned = new URLSearchParams(globalThis.location?.search).has("versions")
       const firstRequest = liveSnapshots.get(id)?.requests[0]?.id
       return versioned && firstRequest ? { [firstRequest]: { conversations: [id, `${id}-edited`], at: 0 } } : {}
+    },
+    mcpSignIns: async () => mockMcpSignIns,
+    mcpSignIn: async (harness: string, server: string) => {
+      const known = mockMcpSignIns.servers.find((each) => each.harness === harness && each.server === server)
+      const others = mockMcpSignIns.servers.filter((each) => each !== known)
+      if (known?.way === "settings") return mockMcpSignIns
+      if (!known || known.way === "page") {
+        setMcpSignIns({ servers: others })
+        return mockMcpSignIns
+      }
+      setMcpSignIns({ servers: [...others, { ...known, state: { kind: "signing-in" } }] })
+      setTimeout(() => setMcpSignIns({ servers: mockMcpSignIns.servers.filter((each) => each.server !== server) }), 2_000)
+      return mockMcpSignIns
     },
     fileEventsRestart: async () => {
       const before = mockFileEvents

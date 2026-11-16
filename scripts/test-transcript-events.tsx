@@ -354,10 +354,11 @@ console.log("Markers: one quiet line each in the tool column; attention is the h
 /* ------------------------------------------------------------------ */
 
 const setup = draw(streamed([...signIn.map(marker), go, { kind: "text", id: "a", text: "Going ahead." }]))
-assert.match(text(setup), /3 MCP servers need sign-in wisprflow, todoist, axiom/)
-assert.equal(setup.match(/data-event-line/g)?.length, 1, "three notices, one line")
+// A server that didn't start is said once, with its way in, in the rail and Settings › MCP (`McpSignIns`): never in the conversation.
+assert.doesNotMatch(text(setup), /MCP server/, "no MCP line in the conversation")
+assert.equal(setup.match(/data-event-line/g)?.length ?? 0, 0, "three notices, none drawn")
 const history = draw(saved([...signIn.map((note): ThreadEntry => ({ kind: "event", ...note })), { kind: "user", text: "Go" }, say("Going ahead.")]))
-assert.match(text(history), /3 MCP servers need sign-in/, "setup notices read back from history gather too")
+assert.doesNotMatch(text(history), /MCP server/, "nor read back from history")
 
 // What a session said as it opened sits under the prompt it opened for, whichever side of it the harness reported it on.
 const where = (exchanges: ExchangeData[]) => exchanges.map((exchange) => [exchange.prompt ? textOf(exchange.prompt.blocks) : exchange.id,
@@ -369,7 +370,7 @@ assert.deepEqual(before.map(([prompt]) => prompt), ["Run the suite"], "and leave
 const reopened = streamed([go, { kind: "text", id: "a", text: "Going ahead." }, ...signIn.map(marker), { kind: "user", text: "And QA?" }, { kind: "text", id: "b", text: "QA too." }])
 assert.deepEqual(where(reopened), [["Run the suite", []], ["And QA?", signIn.map((note) => `${note.label}@0`)]],
   "a session that opens again (a fork, a reconnect) reports under the next prompt, not at the end of the answer before it")
-assert.match(text(draw(reopened)), /And QA\? Y 3 MCP servers need sign-in wisprflow, todoist, axiom Claude Code QA too/)
+assert.match(text(draw(reopened)), /And QA\? Y Claude Code QA too/, "the notes keep their place; the conversation draws none of them")
 const midTurn = streamed([go, { kind: "text", id: "a", text: "Reading." }, marker(signIn[0]!), { kind: "text", id: "b", text: "Going ahead." }, { kind: "user", text: "And QA?" }])
 assert.deepEqual(where(midTurn)[0], ["Run the suite", [`${signIn[0]!.label}@1`]], "one inside an answer keeps its place")
 const unanswered = streamed([go, { kind: "text", id: "a", text: "Going ahead." }, marker(signIn[0]!)])

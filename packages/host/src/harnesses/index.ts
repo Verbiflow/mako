@@ -55,7 +55,7 @@ export { verifyRecoveredSession } from "./provider-recovery.js"
 export { carriedUsage, departedBinding, restorableTotals, spendBetween } from "./session-usage.js"
 export { threadHarnesses } from "./thread-harnesses.js"
 export { usageHarnesses } from "./usage-harnesses.js"
-export { liveToolEffects, type LiveToolEffects } from "./live-engine.js"
+export { liveToolEffects, mcpSetupFailures, type LiveToolEffects } from "./live-engine.js"
 export { liveCallBounds, type LiveCallBounds } from "./call-bounds.js"
 export type { PromptDispatch } from "./prompt-dispatch.js"
 

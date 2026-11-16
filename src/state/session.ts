@@ -13,6 +13,7 @@ import { applyThreadGroupChange, loadThreadGroups } from "@/state/thread-groups"
 import { applyThreadPurposes, loadThreadPurposes } from "@/state/thread-purposes"
 import { applyStoreFormats, loadStoreFormats } from "@/state/store-formats"
 import { applyFileEvents, loadFileEvents } from "@/state/file-events"
+import { applyMcpSignIns, loadMcpSignIns } from "@/state/mcp-sign-ins"
 import { applyThreadTitles, loadThreadTitles } from "@/state/thread-titles"
 import { applyWorktreeSummaries, refreshWorktrees, refreshWorktreeSummaries } from "@/state/worktrees"
 import { github, githubStore } from "@/state/github"
@@ -364,6 +365,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "file-events-service") {
     applyFileEvents(event.service)
+    return
+  }
+  if (event.type === "mcp-sign-ins") {
+    applyMcpSignIns(event.reading)
     return
   }
   if (event.type === "thread-titles") {
@@ -805,6 +810,8 @@ async function loadGroups() {
   await loadStoreFormats().catch(() => undefined)
   // fseventsd's health, for the notice above the desk; a host without the reading says nothing.
   await loadFileEvents().catch(() => undefined)
+  // The MCP servers that need sign-in, said in the rail; a host without the reading has none to say.
+  await loadMcpSignIns().catch(() => undefined)
   try {
     await loadThreadTitles()
   } catch (error) {

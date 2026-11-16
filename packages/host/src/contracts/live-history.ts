@@ -61,10 +61,17 @@ export interface LiveHistoryChunk {
   total?: number
   data: string
   next: number | null
+  /** This host serves parts ahead of the one last read (`HISTORY_PARTS_IN_FLIGHT`); one from before it rebuilt the answer for each. */
+  ahead?: true
 }
 
 // A JSON-escaped frame is at most ~1.6 MiB, including pathological strings.
 export const LIVE_HISTORY_CHUNK_CHARS = 256 * 1024
+/**
+ * How many parts of one answer a window asks for at once. Asked one after another, a 3.6 MB answer was 15 round trips,
+ * each a gateway's from a phone; the host makes them in order either way, keeping those it passes (`HistoryRecords`).
+ */
+export const HISTORY_PARTS_IN_FLIGHT = 4
 
 /** What a read against a view the host let go says; a window reads the conversation again and retries against the new view. */
 export const HISTORY_VIEW_EXPIRED = "This history view expired. Open the conversation again to refresh it."

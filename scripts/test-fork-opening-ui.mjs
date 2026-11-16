@@ -110,15 +110,15 @@ async function check() {
       const text = await transcript()
       const history = text.indexOf(first)
       const prompt = text.indexOf(asked)
-      const notes = text.indexOf("2 MCP servers didn't start")
       const reply = text.indexOf(forked)
       assert.ok(history >= 0 && history < prompt, "the fork shows its parent's turns above its own")
-      assert.ok(prompt < notes && notes < reply, "what the fork's session said as it opened sits under the prompt it opened for, above its answer")
-      assert.match(text.slice(notes, reply), /paper, wisprflow/, "as one line naming both servers")
-      assert.equal(await evaluate("document.querySelectorAll('[data-event-line]').length"), 1, "and nothing else draws a note")
+      assert.ok(prompt < reply, "its answer under its prompt")
+      // The MCP servers its session couldn't start are said once in the rail and Settings › MCP (`McpSignIns`), not here.
+      assert.ok(!text.includes("MCP server"), "no MCP line in the conversation")
+      assert.equal(await evaluate("document.querySelectorAll('[data-event-line]').length"), 0, "and nothing else draws a note")
       await capture(`fork-${theme}.png`)
     }
-    console.log("✓ a fork draws what its session said as it opened under its first prompt, after its parent's turns, light and dark")
+    console.log("✓ a fork draws its parent's turns above its first prompt and none of its session's MCP setup notices, light and dark")
     clearTimeout(timer)
     app.exit(0)
   } catch (error) {

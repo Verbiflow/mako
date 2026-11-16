@@ -160,6 +160,30 @@ export class TurnWaits {
     })
   }
 
+  /**
+   * Every armed wait naming an item `matches` takes it as met: a Fin's result or end, a pull request's outcome. Answers
+   * how many it met.
+   */
+  metWhere(matches: (item: TurnWaitItem) => boolean, words: string): number {
+    const store = this.deps.store()
+    if (!store || this.stopped) return 0
+    let count = 0
+    for (const wait of store.armedTurnWaits())
+      for (const item of wait.items)
+        if (matches(item)) {
+          this.met(wait.id, item, words)
+          count += 1
+        }
+    return count
+  }
+
+  /** The conversation can take input again (its turn settled, its session opened): what it couldn't take goes now. */
+  retry(conversation: string): void {
+    const store = this.deps.store()
+    if (!store || this.stopped) return
+    for (const wait of store.undeliveredTurnWaits()) if (wait.conversation === conversation) void this.send(wait)
+  }
+
   /** At a note's handoff: it goes only while its wait wasn't cancelled since it fired. Any other request goes. */
   admits(request: string): boolean {
     const wait = this.deps.store()?.turnWaitOfRequest(request)
