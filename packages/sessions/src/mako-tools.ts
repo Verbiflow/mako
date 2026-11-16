@@ -363,12 +363,17 @@ const TOOLS: ReadonlyMap<string, MakoTool> = new Map<string, MakoTool>([
   ["thread_move", { group: "cloud", say: () => ({ verb: MOVE, what: "this Thread to the cloud" }) }],
   ["wait", {
     group: "agents",
-    say: ({ args }) => {
+    say: ({ args, answer }) => {
       const action = text(args["action"])
       if (action === "cancel") return { verb: verb("Stop waiting", "Stopping the wait", "Stopped waiting") }
       if (action === "list") return { verb: READ, what: "the wait" }
       const description = text(args["description"])
-      return { verb: verb("Wait", "Waiting", "Waited"), what: description ? description.replace(/^Waiting (?:for |on )?/i, "for ") : "for its work" }
+      const what = description ? description.replace(/^Waiting (?:for |on )?/i, "for ") : "for its work"
+      // The call returns once the wait is armed, long before it ends: the waiting line says when it does.
+      const outcome = answer?.["outcome"]
+      if (outcome === "armed") return { verb: verb("Wait", "Waiting", "Started waiting"), what }
+      if (outcome === "already-done") return { verb: verb("Wait", "Waiting", "Didn't need to wait"), what }
+      return { verb: verb("Wait", "Waiting", "Waited"), what }
     },
   }],
   ["thread", { group: "cloud", say: ({ args }) => threadWords(args) }],
