@@ -253,7 +253,7 @@ async function prompt(client: Client, conversation: string, message: Sent, loses
         message.steered = requestId
         return
       }
-      if (attempt > 400) throw new Error(`${client} never got ${message.text} in: ${words}; diagnostic=${JSON.stringify({ diagnosticRestart, diagnosticNotices })}`)
+      if (attempt > 400) throw new Error(`${client} never got ${message.text} (seed ${SEED}) in: ${words}; diagnostic=${JSON.stringify({ diagnosticRestart, diagnosticNotices })}`)
       // As `attemptSend`: whatever the error, a host that holds the request took it.
       const snapshot = HeldSchema.safeParse(await call(client, "mako:live-snapshot", [conversation]).catch(() => null)).data
       if (snapshot?.requests.some((request) => request.id === requestId)) return
@@ -319,7 +319,7 @@ const requestsOf = (conversation: string): LiveRequest[] => owner.snapshot(conve
 
 async function until(what: string, check: () => boolean, ms = 10_000): Promise<void> {
   for (const deadline = Date.now() + ms; !check(); await delay(2))
-    if (Date.now() > deadline) throw new Error(`timed out: ${what}`)
+    if (Date.now() > deadline) throw new Error(`timed out (seed ${SEED}): ${what}`)
 }
 
 /** Restarts the host under the clients, as a quit and reopen does: in-flight calls fail, its journal is read again. */

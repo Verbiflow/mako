@@ -212,7 +212,7 @@ export function newestSessionRow(rows: Iterable<ThreadRef>, session: { harness: 
 
 /** Where each Thread's environment keeps the files its conversations link to; Workspaces has them. */
 export interface ThreadFileHomes {
-  fileDataDir(owner: { cwd?: string; thread?: ThreadId }): Promise<string | undefined>
+  fileDataDir(owner: { cwd?: string; thread?: ThreadId }): Promise<string | string[] | undefined>
 }
 
 export interface ThreadCatalogDeps {
@@ -246,7 +246,7 @@ export interface ThreadCatalogDeps {
   lineage: Pick<Lineage, "load" | "annotate">
   harnesses: ThreadHarnesses
   /** A file in a workspace, as the conversation that linked it sees it; Workspaces reads it. */
-  readFile(cwd: string, path: string, dataDir?: () => Promise<string | undefined>, purpose?: FileReadPurpose): Promise<FileContents>
+  readFile(cwd: string, path: string, dataDir?: () => Promise<string | string[] | undefined>, purpose?: FileReadPurpose): Promise<FileContents>
   /** Which catalog readers this host can share: the reader code it loaded as it opened, and the archive they write. */
   catalogIdentity(): Promise<string>
   jobs: HostJobs

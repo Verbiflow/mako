@@ -23,6 +23,8 @@ export const conversationCalls: ReadonlySet<string> = new Set([
   // What its agent asked the person is its host's to answer.
   "mako:agent-ask-answer",
   "mako:agents-next-place", "mako:agents-continue-next",
+  // A conversation's wait is kept where it runs.
+  "mako:live-wait-stop",
 ])
 
 /** The conversation a call is aimed at, when it's one that goes to the host running it. */

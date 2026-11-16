@@ -165,7 +165,7 @@ import type { TurnReply } from "./live-goals.js"
 import { PULL_WATCH_EVERY_MS, PullWatch, type PullWait } from "./pull-watch.js"
 import { QuietWatch } from "./fin-quiet.js"
 import { TurnWaits } from "./turn-waits.js"
-import { turnWaitItemKey, turnWaitItemWords, turnWaitLine, turnWaitMovedNote, type TurnWait, type TurnWaitItem } from "../contracts/turn-waits.js"
+import { turnWaitItemKey, turnWaitItemWords, turnWaitLine, turnWaitMovedNote, type TurnWait, type TurnWaitItem, type TurnWaitLine } from "../contracts/turn-waits.js"
 import { AFTER_WAIT, type TurnWaitInput, type TurnWaitResult } from "../contracts/thread-tools.js"
 import { AgentPlaces, placeName, type AwayRefused, type OutboxNotice, type PlacedAsk, type PlaceLink } from "./agent-places.js"
 import type { PullOutcome, PullReading, PullWaitUntil } from "../contracts/pull-waits.js"
@@ -308,7 +308,7 @@ interface Crossing {
 type Live = Pick<
   LiveConversations,
   "session" | "held" | "nativeIds" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "rewordWaiting" | "adoptPin" | "wakeDue" | "snapshot" | "editQueued" | "switchSettled" | "stopMark" | "pinnedAccount" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "workOf" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "switching" | "readIn"
->
+> & Partial<Pick<LiveConversations, "waitChanged">>
 
 export interface AgentsDeps {
   store(): ThreadStore | undefined
@@ -837,7 +837,10 @@ export class Agents implements AgentOperations, ConversationChildren {
         timer.unref()
         return () => clearTimeout(timer)
       },
-      changed: () => this.pulls.refresh(),
+      changed: (conversation) => {
+        this.pulls.refresh()
+        this.deps.live.waitChanged?.(conversation)
+      },
     })
     this.places = deps.away && new AgentPlaces({
       link: deps.away,
@@ -1097,6 +1100,22 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   // ── ConversationChildren ──
+
+  /** The conversation's armed wait as the person's waiting line reads it: what it waits on, each item met or not. */
+  turnWaitLine(conversation: string): TurnWaitLine | undefined {
+    const armed = this.store()?.armedTurnWaitOf(conversation)
+    return armed && turnWaitLine(armed)
+  }
+
+  /**
+   * The person's Stop waiting on the line they saw: that wait ends, waking no one. A wait that already ended, or a newer
+   * one armed since, is left as it is, so a repeat stops nothing more. Answers whether it ended now or by them before.
+   */
+  stopWaiting(conversation: string, wait: string): boolean {
+    const armed = this.store()?.armedTurnWaitOf(conversation)
+    if (armed?.id !== wait) return this.store()?.turnWaitsOf(conversation).find((held) => held.id === wait)?.cancelled?.by === "person"
+    return this.turnWaits.cancel(armed.id, "person")?.cancelled?.by === "person"
+  }
 
   roster(conversation: string): readonly NativeAgent[] {
     const store = this.store()
@@ -2849,13 +2868,16 @@ export class Agents implements AgentOperations, ConversationChildren {
       child: ThreadIdSchema.parse(wait.child),
       report: wait.report,
       pull: wait.pullKey,
-      // Kept as every build sharing the store reads it: a head with no checks settled with none to run. Its note says so.
-      outcome: outcome.kind === "no-checks" ? "settled" : outcome.kind,
+      // Informational wakes keep the existing storage tag for older hosts; their notes and cursors say what happened.
+      outcome: outcome.kind === "no-checks" || outcome.kind === "incomplete" || outcome.kind === "unreadable" ? "settled" : outcome.kind,
       request: namedUuid(`${key}:${outcome.kind}`),
       text: note,
       at: this.now(),
     })
-    if (claimed) await this.sendPullWake(edge, wake)
+    if (claimed) {
+      hostLog("agents", "pull request outcome", { wait: wait.key, child: wait.child, outcome: outcome.kind })
+      await this.sendPullWake(edge, wake)
+    }
   }
 
   /**

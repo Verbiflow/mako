@@ -340,7 +340,8 @@ export function commandEnvironment(environment?: ThreadEnvironment): NodeJS.Proc
   delete base.ELECTRON_RUN_AS_NODE
   delete base.MAKO_CONVERSATIONS_TOKEN
   applyControlEnvironment(base)
-  applyThreadEnvironment(base, environment)
+  // App state must never follow an agent's retirable artifact root, even if its launch binding reaches this caller.
+  applyThreadEnvironment(base, environment && { ...environment, threadDataDir: undefined })
   return base
 }
 

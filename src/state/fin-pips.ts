@@ -1,3 +1,4 @@
+import { finsWord } from "@mako/host/contracts/agents"
 import { childGroup, childStateOf, type Rollup } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { threadAsking, threadRollup } from "@/state/fin-rollup"
@@ -52,4 +53,11 @@ export function useNeedsYouFins(thread: string | undefined): readonly NativeAgen
 export function pipsCounts(pips: Pips): Rollup {
   const count = (letter: string) => pips.split(letter).length - 1
   return { total: pips.length, needs: count("n"), working: count("w") + count("l"), queued: count("q"), idle: count("i"), failed: count("f"), done: count("d") }
+}
+
+/** Beside the pips: how many Fins, and the done and idle ones the pips leave out. The desk's rail and the phone's list say it alike. */
+export function settledWords(pips: Pips): string {
+  const { done, idle, total } = pipsCounts(pips)
+  if (done + idle === 0 || done + idle === total) return finsWord(total)
+  return [finsWord(total), done ? `${done} done` : "", idle ? `${idle} idle` : ""].filter(Boolean).join(" · ")
 }

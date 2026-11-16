@@ -12,7 +12,7 @@ import { NO_CHECKS_MS, pullOutcome, pullWakeNote, pullWakeWords, type PullReadin
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { PULL_WATCH_EVERY_MS, PULL_WATCH_MAX_MS, PullWatch, type PullWait } from "@mako/host/conversations/pull-watch"
-import { readPull, RequiredChecks } from "@mako/host/git/index"
+import { readPull, PullReadError, RequiredChecks } from "@mako/host/git/index"
 import { AgentsWorld, type Script, type WorldOptions } from "./lib/agents-world.ts"
 
 /*
@@ -133,7 +133,7 @@ console.log('words: "Mako: PR acme/app#371 checks settled: 2 failed (lint, e2e).
   const read = await readPull({ repository: "acme/app", number: 371, cwd: "/work" }, async (cwd, args) => (asked.push({ cwd, args }), printed))
   assert.deepEqual(asked, [{ cwd: "/work", args: ["pr", "view", "371", "--repo", "acme/app", "--json", "state,url,headRefOid,baseRefName,author,statusCheckRollup,latestReviews"] }])
   assert.deepEqual(read, {
-    state: "open", url: URL, head: "a".repeat(40), author: "fin-bot",
+    state: "open", url: URL, head: "a".repeat(40), headAt: Date.parse("2026-11-04T09:59:00Z"), author: "fin-bot",
     checks: [{ name: "lint", state: "failed", at: Date.parse("2026-11-04T10:00:00Z") }, { name: "deploy", state: "running", at: Date.parse("2026-11-04T09:59:00Z") }],
     reviews: [{ login: "ada", state: "approved", at: Date.parse("2026-11-04T10:05:00Z") }],
   })
@@ -165,7 +165,7 @@ console.log('words: "Mako: PR acme/app#371 checks settled: 2 failed (lint, e2e).
   const bare = await readPull({ number: 12, cwd: "/work" }, async (_cwd, args) => (asked.push({ cwd: _cwd, args }), JSON.stringify({ state: "MERGED", url: URL })))
   assert.deepEqual(asked.at(-1)?.args, ["pr", "view", "12", "--json", "state,url,headRefOid,baseRefName,author,statusCheckRollup,latestReviews"], "a bare number is read in the Fin's folder")
   assert.equal(bare?.state, "merged")
-  assert.equal(await readPull({ number: 1, cwd: "/work" }, async () => { throw new Error("gh: not logged in") }), null, "a reader that can't answer says nothing")
+  await assert.rejects(readPull({ number: 1, cwd: "/work" }, async () => { throw new Error("gh: not logged in") }), error => error instanceof PullReadError && error.reason === "request", "a reader failure reaches its watcher instead of silently becoming null")
 
   // The base branch's required checks, read over REST from its rulesets and branch protection, once per repository and branch.
   const apis: string[] = []

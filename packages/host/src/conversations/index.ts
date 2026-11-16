@@ -891,4 +891,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   methods.handle("mako:agents-respond", (conversation: string, input: AgentsRespondInput) =>
     conversations.agents?.respond(conversation, input) ?? FINS_UNAVAILABLE)
   methods.handle("mako:native-routing", () => conversations.nativeRouting())
+  /** The person's Stop waiting on a conversation's waiting line: the wait it names ends, waking no one (`Agents.stopWaiting`). */
+  methods.handle("mako:live-wait-stop", (conversation: string, wait: string) =>
+    conversations.agents?.stopWaiting(conversation, wait) ?? false)
 }

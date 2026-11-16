@@ -90,6 +90,7 @@ import {
   streamNoticeText,
   COMPACT_LIVE_FORM,
   COMPACT_LIVE_VERSION,
+  PASSING_THREAD_VERSION,
   WHOLE_LIVE_FORM,
   clientEndpointPath,
   declaredLiveForm,
@@ -115,7 +116,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 27)
+    assert.equal(SUPPORTED_VERSIONS.max, 28)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -1019,6 +1020,22 @@ describe("the live form", () => {
     await settle()
     assert.equal(old.form("th-1"), WHOLE_LIVE_FORM, "a link before the compact form never writes it")
     old.close()
+  })
+
+  test("a Thread's passing state goes only for a Thread this runtime runs, under its generation, on a link that speaks it, and is kept nowhere", () => {
+    const threads = new RuntimeThreads({ claims: [{ threadId: "th-1", generation: 3 }] })
+    const sent = []
+    const send = (frame) => sent.push(frame)
+    assert.equal(threads.passing("th-1", Payload.of("steps 0")), false, "no link, nothing sent and nothing held")
+    threads.attach(send, PASSING_THREAD_VERSION - 1)
+    assert.equal(threads.passing("th-1", Payload.of("steps 1")), false, "a link before passing state")
+    threads.attach(send, PASSING_THREAD_VERSION)
+    assert.equal(threads.passing("th-2", Payload.of("steps 2")), false, "a Thread it doesn't run")
+    assert.equal(threads.passing("th-1", Payload.of("steps 3"), "st-1"), true)
+    assert.deepEqual(sent.map((frame) => [frame.type, frame.threadId, frame.generation, frame.correlationId, frame.event.decode()]), [["passing", "th-1", 3, "st-1", "steps 3"]])
+    assert.deepEqual([threads.stats()[0].waiting, threads.stats()[0].localSeq], [0, 0], "nothing numbered, nothing waits on an ack")
+    threads.attach(send, PASSING_THREAD_VERSION)
+    assert.equal(sent.length, 1, "a new link sends none of it again")
   })
 
   test("a live update in the compact form goes only on a link that agreed it", async () => {

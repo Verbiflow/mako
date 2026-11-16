@@ -489,6 +489,16 @@ export function apexSnapshot(): LiveSnapshot {
       ...((ASK_SCENE === "move" || ASK_SCENE === "back") && { asks: [{ id: "1ead1ead-7000-4000-8000-0000000000a5", at: STARTED, want: ASK_SCENE === "back" ? { kind: "back" as const } : { kind: "move" as const, move: "1ead1ead-7000-4000-8000-0000000000a6", handsOff: true } }] }),
     },
     nativeAgents: { agents: apexFins(), limited: false },
+    // `wait=1`: its agent waits for CI on a pull request and a Fin, one met already (`TurnWaitLine`).
+    ...search.get("wait") === "1" && {
+      turnWait: {
+        wait: "1ead1ead-9000-4000-8000-00000000a1a1",
+        description: "Waiting for CI on #412",
+        items: [{ words: "acme/app#412 checks", met: true }, { words: "fin:sheet-motion", met: false }],
+        returnWhen: "all" as const,
+        endsBy: Date.now() + 20 * 60 * 60_000,
+      },
+    },
   }
 }
 

@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/menu"
 import { Shimmer } from "@/components/ui/shimmer"
 import { AppProbeMenu } from "@/components/stage/app-probe"
+import { AppMarkIcon } from "@/components/rail/app-mark"
 import { cn } from "@/lib/utils"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { openAppSetup } from "@/state/app-setup"
@@ -40,6 +41,8 @@ import { acpStore } from "@/state/acp-state"
 import { inboxView } from "@/state/inbox-view"
 import {
   checkMark,
+  appMarkOf,
+  appViewOf,
   checkTitle,
   copyAppFailure,
   formatAgo,
@@ -117,10 +120,13 @@ function AppMenu({ cwd, children }: { cwd: string; children: ReactNode }) {
  * checked, and each row opens that output in the terminal dock.
  */
 export function AppControl({ cwd, focused }: { cwd: string | undefined; focused: boolean }) {
-  const view = useThreadApp((state) => (cwd ? state.byCwd[cwd] : undefined))
+  const view = useThreadApp((state) => (cwd ? appViewOf(state, cwd) : undefined))
+  const mark = useThreadApp((state) => (cwd ? appMarkOf(state, cwd)?.state : undefined))
   const hidden = useThreadApp((state) => view?.kind === "none" && state.hidden.includes(view.root))
   const target = useThreadApp((state) => (cwd ? targetOf(state, cwd) : undefined))
-  if (!cwd || !view || hidden) return null
+  if (!cwd) return null
+  if (!view) return mark ? <span data-app-control="pending" className="mr-0.5 flex h-6 shrink-0 items-center px-2"><AppMarkIcon checkout={cwd} /></span> : null
+  if (hidden) return null
   if (view.kind === "asleep") return <AsleepControl cwd={cwd} view={view} />
   const state = view.kind === "ready" ? view.phase : view.kind
   const project = view.kind === "ready" ? cwd : view.root

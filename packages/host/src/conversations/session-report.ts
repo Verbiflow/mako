@@ -531,6 +531,7 @@ export class SessionPublisher {
   readonly #reporter = new SessionReporter()
   readonly #appPosition: (() => { epoch: string; revision: number }) | undefined
   readonly #appsFollowing: (() => ReadonlySet<string> | undefined) | undefined
+  readonly #threadPassing: ((event: RuntimeEvent) => void) | undefined
   readonly #rows: () => readonly ReportedSession[] | undefined
   readonly #rowsOf: ((conversations: ReadonlySet<string>) => readonly ReportedSession[] | undefined) | undefined
   readonly #rowsOfNative: ((paths: ReadonlySet<string>) => NativeRowsOf | undefined) | undefined
@@ -593,6 +594,12 @@ export class SessionPublisher {
   constructor(options: {
     appPosition?: () => { epoch: string; revision: number }
     appsFollowing?: () => ReadonlySet<string> | undefined
+    /**
+     * On a cloud machine: passing state (a running call's steps, an app's hint) for the Threads its runtime runs, whose
+     * readers follow the Thread's stream rather than a conversation's (`MachineRuntime.passing`). Each goes as it goes
+     * to a conversation's watchers, throttled alike, routed by its conversation.
+     */
+    threadPassing?: (event: RuntimeEvent) => void
     rows: () => readonly ReportedSession[] | undefined
     /**
      * The rows of these conversations alone, as `rows` would make them: a batch reworks its own conversation's row, never
@@ -630,6 +637,7 @@ export class SessionPublisher {
   }) {
     this.#appPosition = options.appPosition
     this.#appsFollowing = options.appsFollowing
+    this.#threadPassing = options.threadPassing
     this.#rows = options.rows
     this.#rowsOf = options.rowsOf
     this.#rowsOfNative = options.rowsOfNative
@@ -829,6 +837,8 @@ export class SessionPublisher {
   }
 
   #appHint(hint: RemoteAppHint): void {
+    // A cloud Thread's readers follow its stream, not the conversation's: on its machine the same hint goes there too.
+    this.#threadPassing?.({ type: hint.type, conversation: hint.conversationId, payload: JSON.stringify(hint) })
     const current = this.#watched(hint.conversationId)
     // Older gateways would keep a normal live frame. Send none: the preview keeps polling until real delivery proves
     // the hint path. Passing state takes neither the host's n nor a gateway tail slot, including the ready handshake.
@@ -937,13 +947,12 @@ export class SessionPublisher {
    */
   own(event: HostEvent): void {
     if (event.type === "view-hint") {
-      if (event.hint.domain !== "apps" || this.#watching?.link !== this.#current?.link) return
+      if (event.hint.domain !== "apps") return
       // Ephemeral metadata never enters the journal/replay tail or evicts a live batch. Reconnect and demand renewal
-      // reconcile the apps revision. Only watched conversations are named, and no local folder keys go out.
-      for (const conversation of this.#appsFollowing?.() ?? []) {
-        if (!this.#watching?.conversations.has(conversation)) continue
+      // reconcile the apps revision. Only conversations whose app a client follows are named (`#appHint` sends each to
+      // its watchers, and on a machine to its Thread), and no local folder keys go out.
+      for (const conversation of this.#appsFollowing?.() ?? [])
         this.#appHint({ type: "conversation-app-hint", conversationId: conversation, epoch: event.hint.epoch, revision: event.hint.revision, fields: event.hint.fields })
-      }
       return
     }
 
@@ -1033,10 +1042,13 @@ export class SessionPublisher {
   }
 
   #sendSteps(conversation: string, steps: ToolSteps | null): void {
+    const event = { type: "tool-steps" as const, conversationId: conversation, steps }
+    const routed = { type: event.type, conversation, payload: JSON.stringify(event) }
+    // A cloud Thread's readers follow its stream, not the conversation's: on its machine the same steps go there too.
+    this.#threadPassing?.(routed)
     const current = this.#watched(conversation)
     if (!current) return
-    const event = { type: "tool-steps" as const, conversationId: conversation, steps }
-    const line = gatewayEventLine("event", { type: event.type, conversation, payload: JSON.stringify(event) })
+    const line = gatewayEventLine("event", routed)
     if (line.fit === "whole") current.served.ephemeral(conversation, Payload.encoded(line.text))
   }
 

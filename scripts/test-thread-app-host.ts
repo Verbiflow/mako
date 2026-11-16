@@ -282,4 +282,69 @@ assert.equal(views, shared, "explicit consumers share the existing detail query"
 explicit()
 assert.deepEqual(threadAppStore.get().followed, [])
 
+// A returning strip must not present the previous interest's full detail while its new read is pending.
+const { createElement } = await import("react")
+const { renderToStaticMarkup } = await import("react-dom/server")
+const { AppControl } = await import("../src/components/stage/app-control")
+const control = () => renderToStaticMarkup(createElement(AppControl, { cwd: CWD, focused: true }))
+hostMarks = [{ checkout: CWD, state: "crashed" }]
+const releaseIndex = driver.watchMarks!()
+await until(() => appMarkOf(threadAppStore.get(), CWD)?.state === "crashed", "the live index before return")
+let finishReturn: (view: ThreadAppView) => void = () => {}
+heldView = new Promise((resolve) => { finishReturn = resolve })
+const releaseReturn = driver.watch!(CWD)
+assert.equal(threadAppStore.get().byCwd[CWD]?.kind, "ready", "the cache is retained for other consumers")
+assert.equal(control().includes('data-app-control="running"'), false, "cached running detail is hidden until the current interest reads")
+assert.ok(control().includes('data-app-mark="crashed"'), "the live mark stands while the detail is pending")
+finishReturn(ready("stopped"))
+await until(() => control().includes('data-app-control="stopped"'), "the current return read's stopped detail")
+releaseReturn()
+assert.equal(threadAppStore.get().fresh.includes(CWD), false, "last release clears only the read proof")
+assert.equal(threadAppStore.get().byCwd[CWD]?.kind, "ready")
+hostMarks = []
+for (const listener of hostListeners) listener({ type: "thread-app-marks", marks: hostMarks })
+assert.equal(control(), "", "a stopped live mark never exposes the cached Run action")
+
+let finishOld: (view: ThreadAppView) => void = () => {}
+let finishNew: (view: ThreadAppView) => void = () => {}
+heldView = new Promise((resolve) => { finishOld = resolve })
+const releaseOldDetail = driver.watch!(CWD)
+releaseOldDetail()
+heldView = new Promise((resolve) => { finishNew = resolve })
+const releaseNewDetail = driver.watch!(CWD)
+finishOld(ready("running"))
+await wait(20)
+assert.equal(control(), "", "an old interest's late reply cannot certify the current cache")
+const { putThreadApp } = await import("../src/state/thread-app")
+putThreadApp(CWD, ready("starting"))
+assert.equal(control(), "", "an optimistic update is not a read")
+finishNew(ready("stopped"))
+await until(() => control().includes('data-app-control="stopped"'), "the new interest's own read")
+
+const { deskRefetch } = await import("../src/state/desk-refetch")
+const readsOwner = deskRefetch().reads
+readsOwner.setVisible(false)
+assert.equal(control(), "", "hidden pages retire their read proof while retaining the cache")
+let finishShown: (view: ThreadAppView) => void = () => {}
+heldView = new Promise((resolve) => { finishShown = resolve })
+const beforeShown = views
+readsOwner.setVisible(true)
+await until(() => views === beforeShown + 1, "the shown page's catch-up read")
+assert.equal(control(), "")
+finishShown(ready("running"))
+await until(() => control().includes('data-app-control="running"'), "the shown page's current detail")
+
+for (const listener of hostListeners) listener({ type: "host-disconnected", message: "fixture reconnect" })
+assert.equal(control(), "", "a disconnected host cannot leave actionable cached detail")
+let finishConnected: (view: ThreadAppView) => void = () => {}
+heldView = new Promise((resolve) => { finishConnected = resolve })
+const beforeConnected = views
+for (const listener of hostListeners) listener({ type: "host-reconnected" })
+await until(() => views === beforeConnected + 1, "the reconnected host's read")
+assert.equal(control(), "")
+finishConnected(ready("stopped"))
+await until(() => control().includes('data-app-control="stopped"'), "the reconnected host's current detail")
+releaseNewDetail()
+releaseIndex()
+
 console.log("thread app host driver: a click shows its phase at once and holds it until the host catches up; output follows its cursor and starts over on a new run; a host that can't answer hides the control; a folder nothing shows isn't polled; the sidebar's marks come from one look while the rail shows them, the strip's view of its folder wins, and nothing is asked once the rail goes; a folder's picked target is what it starts, checks and views, and the first target stands in once the recipe drops it; a sleeping machine's app isn't polled, the host's word that it's waking or awake brings the next look, and a click on it shows it waking at once")

@@ -1059,6 +1059,9 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<{ label: string; harness: string } | null>("mako:agents-next-place", conversation),
     agentsContinueNext: (conversation: string, id: string) =>
       invokeTrustedHost<boolean>("mako:agents-continue-next", conversation, id),
+    /** The person's Stop waiting: the conversation's wait it names ends, waking no one. */
+    liveWaitStop: (conversation: string, wait: string) =>
+      invokeTrustedHost<boolean>("mako:live-wait-stop", conversation, wait),
     agentsRespond: (conversation: string, input: AgentsRespondInput) =>
       invokeTrustedHost<AgentsAnswered | AgentRefused>("mako:agents-respond", conversation, input),
     /** Where each harness stands on an Apex's native spawns: its control, unverified on this version, or words alone. */
