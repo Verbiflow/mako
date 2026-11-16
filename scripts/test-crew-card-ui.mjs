@@ -794,6 +794,16 @@ async function checkPage({ window, page, shots, base }) {
   assert.ok(rowActions.side.length > 0 && rowActions.side.every(Boolean), "the side rail's Fin rows offer them too")
   console.log("PASS: every Fin row offers Message and Stop, shown on hover and always for a quiet Fin")
 
+  // The phone: the same quiet Fin in its Apex's compact crew card, still and saying so.
+  window.setContentSize(390, 844)
+  await window.loadURL(`${base}scripts/phone-apex.html?app=apex&fins=quiet&open=1ead1ead-0000-4000-8000-000000001ead`)
+  await until("Boolean(document.querySelector('[data-crew-row][data-quiet]'))", "the phone's quiet Fin row")
+  await evaluate("document.querySelector('[data-crew-row][data-quiet]').scrollIntoView({ block: 'center' }); true")
+  const phoneQuiet = await evaluate("document.querySelector('[data-crew-row][data-quiet]').innerText.replace(/\\s+/g, ' ')")
+  assert.match(phoneQuiet, /Quiet 18m · last step: .+, still running/, `the phone says it the same way: ${phoneQuiet}`)
+  await both("quiet-phone")
+  console.log("PASS: the phone's crew card shows the quiet Fin the same way")
+
   assert.deepEqual(
     errors.filter(
       (message) =>
