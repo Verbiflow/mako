@@ -2716,7 +2716,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       child: ThreadIdSchema.parse(wait.child),
       report: wait.report,
       pull: wait.pullKey,
-      outcome: outcome.kind,
+      // Kept as every build sharing the store reads it: a head with no checks settled with none to run. Its note says so.
+      outcome: outcome.kind === "no-checks" ? "settled" : outcome.kind,
       request: namedUuid(`${key}:${outcome.kind}`),
       text: note,
       at: this.now(),

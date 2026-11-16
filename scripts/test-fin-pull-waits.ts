@@ -716,6 +716,49 @@ console.log("engine: watched from reports, rebuilt on start, pruned on stop; the
       await world.close()
     }
 
+    // A checks wait on a head whose CI never starts: the engine claims it, keeps it in a form every build reads, and the
+    // Fin hears "checks: none" once (#803, 2026-11-15).
+    {
+      let offset = 0
+      const fin = { conversation: "", ready: false }
+      const world: AgentsWorld = new AgentsWorld({
+        root: join(roots, "no-checks"),
+        now: () => Date.now() + offset,
+        readPull: async (target) => target.number === 8 ? { state: "open", url: "https://git.example.com/acme/app/pull/8", head: "e".repeat(40), checks: [], reviews: [] } : null,
+        script: async (turn) => {
+          if (turn.text.includes("You're fin:")) {
+            fin.conversation = turn.conversation
+            await turn.world.agents.report(turn.caller, { status: "progress", summary: "Waiting on #8's CI.", waitingOn: [{ kind: "pull-request", ref: "acme/app#8", until: "checks" }], clientKey: "wait" })
+            fin.ready = true
+          }
+          return "ok"
+        },
+      })
+      const apex = await world.apex("claude", "full")
+      const started = await world.agents.start(apex.caller, { harness: "codex", brief: { objective: "Land #8" }, name: "eight", clientKey: "eight", cwd: world.root })
+      assert.ok(!("refused" in started))
+      await until("the Fin to wait", () => fin.ready && world.live.session(fin.conversation)?.status === "ready")
+      const notes = () => world.prompts.filter((prompt) => prompt.conversation === fin.conversation && prompt.text.startsWith("Mako: PR"))
+      await world.agents.pulls.tick()
+      await world.settle(300, 20_000, "ignore")
+      assert.deepEqual(notes(), [], "no checks yet: still waiting")
+      offset += NO_CHECKS_MS + PULL_WATCH_MAX_MS
+      await world.agents.pulls.tick()
+      await world.settle(300, 20_000, "ignore")
+      assert.equal(notes().length, 1, "the Fin hears its head has no checks")
+      assert.match(notes()[0]!.text, /^Mako: PR acme\/app#8 checks: none after 15m; observed head e{40}\./)
+      const child = world.store.edges().all.find((edge) => edge.name === "eight")!.child
+      assert.deepEqual(world.store.pullWakesFor(child).map((wake) => wake.outcome), ["settled"], "kept as a settled outcome, which every build sharing the store reads")
+      offset += PULL_WATCH_MAX_MS
+      await world.agents.pulls.tick()
+      await world.restart()
+      offset += PULL_WATCH_MAX_MS
+      await world.agents.pulls.tick()
+      await world.settle(300, 20_000, "ignore")
+      assert.equal(notes().length, 1, "once, across a restart")
+      await world.close()
+    }
+
     // A note queued behind a running turn when Mako quits: the exit pauses it with the queue, and the next host sends it.
     {
       const { world, fin } = await waiting("queued-at-quit")
