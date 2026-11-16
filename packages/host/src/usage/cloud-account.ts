@@ -1,3 +1,4 @@
+import { CLOUD_FINS_PATH, CloudFinAnswerSchema, CloudFinStatusSchema, type CloudFinStart, type CloudFinStatus } from "@mako/protocol/cloud-fins"
 import { SOURCE_PROJECT_PATH, SourceProjectReceiptSchema, type SourceProjectCommand } from "@mako/protocol/source-project"
 import { stoppingSignal } from "../base/host-stopping.js"
 import { createHash, randomBytes, randomUUID } from "node:crypto"
@@ -366,6 +367,7 @@ export class CloudAccounts {
   readonly #options: CloudAccountOptions
   readonly #cloud: URL | undefined
   readonly #unavailable: string | undefined
+  #finLimits: { account: string; expiresAt: number; status: CloudFinStatus } | undefined
   #state: CloudAccountState = { status: "signed-out" }
   #stored: Stored | undefined
   /** The last event of the account's stream this device heard: kept with `#stored` when it's next written. */
@@ -726,6 +728,34 @@ export class CloudAccounts {
   async chooseAccess(choices: AccountAccessChoices, fill: boolean): Promise<AccessChoicesAnswer | null> {
     const response = await this.#call("access.choose", "PATCH", ACCESS_CHOICES_PATH, { choices, ...fill && { fill } }, false, [404])
     return response.status === 404 ? null : AccessChoicesAnswerSchema.parse(await response.json())
+  }
+
+  /** Account limits, not a local estimate or authority to start a machine. Old gateways fail closed. */
+  async cloudFinLimits(): Promise<CloudFinStatus | null> {
+    await this.#ready
+    const account = this.#state.status === "signed-in" ? this.#state.account.id : undefined
+    if (!account) return null
+    const response = await this.#call("cloud.fins.read", "GET", CLOUD_FINS_PATH, undefined, false, [404])
+    const status = response.status === 404 ? null : CloudFinStatusSchema.parse(await response.json())
+    if (this.#state.status !== "signed-in" || this.#state.account.id !== account) return null
+    this.#finLimits = status ? { account, expiresAt: Date.now() + 30_000, status } : undefined
+    return status
+  }
+
+  heldCloudFinLimits(): CloudFinStatus | undefined {
+    return this.#state.status === "signed-in" && this.#finLimits?.account === this.#state.account.id && this.#finLimits.expiresAt > Date.now() ? this.#finLimits.status : undefined
+  }
+
+  async reserveCloudFin(input: CloudFinStart) {
+    const response = await this.#call("cloud.fins.reserve", "POST", `${CLOUD_FINS_PATH}/reserve`, input)
+    this.#finLimits = undefined
+    return CloudFinAnswerSchema.parse(await response.json())
+  }
+
+  async cancelCloudFin(input: CloudFinStart) {
+    const response = await this.#call("cloud.fins.cancel", "POST", `${CLOUD_FINS_PATH}/cancel`, input)
+    this.#finLimits = undefined
+    return CloudFinAnswerSchema.parse(await response.json())
   }
 
   /** The preferences that follow the person, as the account keeps them; null from a cloud that doesn't keep them yet. */
@@ -1750,6 +1780,7 @@ export class CloudAccounts {
   }
 
   #set(state: CloudAccountState): void {
+    if (state.status !== "signed-in" || this.#state.status !== "signed-in" || state.account.id !== this.#state.account.id || state.account.entitlements.join() !== this.#state.account.entitlements.join()) this.#finLimits = undefined
     this.#state = state
     this.#options.onChange(this.account())
   }

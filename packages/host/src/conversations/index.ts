@@ -1,3 +1,4 @@
+import { cloudFinLimits } from "./fin-capacity.js"
 import { SnapshotBudgetSettingsSchema } from "../contracts/snapshot-budget.js"
 import type { SnapshotBudget } from "../workspaces/index.js"
 import { readSnapshotSettlement } from "./live-journal.js"
@@ -75,6 +76,7 @@ import { archivedByKeys, liveArchiveKeys } from "../contracts/thread-lifecycle.j
 import { harnessOrder } from "../contracts/harness-defaults.js"
 
 export { CloudConversations, folderRepository } from "./cloud-conversations.js"
+export { cloudFinLimits } from "./fin-capacity.js"
 export { FinCapacity } from "./fin-capacity-host.js"
 export { FinCostModel } from "./fin-cost.js"
 export { FinCostSampler } from "./fin-cost-sampler.js"
@@ -217,7 +219,7 @@ export interface ConversationsDeps {
    * The Mako account this host is signed in to, through which it reaches the person's other devices: with it a Fin can
    * be placed on one, and one placed here reports to its Apex's device. Without it Fins start here only.
    */
-  account?(): Pick<CloudAccount, "deviceId" | "devices" | "session"> | undefined
+  account?(): Pick<CloudAccount, "deviceId" | "devices" | "session" | "heldCloudFinLimits"> | undefined
 }
 
 export async function openConversations(deps: ConversationsDeps): Promise<Conversations> {
@@ -429,6 +431,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
         finLimit: () => deps.finCapacity!.atOnce(),
         observeCapacity: (working: number, mix: Readonly<Record<string, number>>, fins?: readonly { conversation: string; harness: string }[]) => deps.finCapacity!.observe(working, mix, fins),
       }),
+      cloudLimits: () => cloudFinLimits(deps.account?.()?.heldCloudFinLimits?.()),
       finCeiling: () => deps.finDefaults?.reading().ceiling ?? FIN_CEILING,
       capacity: new MacCapacity(),
       heldPulls: (repoRoot, branch) => workspaces.worktrees?.heldPulls(repoRoot, branch) ?? [],

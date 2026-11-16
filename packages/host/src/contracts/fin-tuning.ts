@@ -153,6 +153,7 @@ export interface FinCapacityReading {
  * (how many at once) and the daily spend ceiling they set. Absent, either one holds nothing.
  */
 export interface CloudFinLimits {
+  unavailable?: "no-cloud" | "policy" | "usage" | "price" | "unresolved" | "unavailable"
   atOnce?: number
   dailySpendCents?: number
   spentTodayCents?: number
@@ -163,6 +164,7 @@ export type FinPlaceLimit = { place: "device"; atOnce: number } | ({ place: "clo
 
 /** The cloud's bounds as Settings › Fins says them: "8 at once · $20.00 a day", or "By your plan". */
 export function cloudWords(limits: CloudFinLimits): string {
+  if (limits.unavailable) return "Cloud limits unavailable"
   const parts = [...limits.atOnce !== undefined ? [`${limits.atOnce} at once`] : [], ...limits.dailySpendCents !== undefined ? [`$${(limits.dailySpendCents / 100).toFixed(2)} a day`] : []]
   return parts.length ? parts.join(" · ") : "By your plan"
 }
@@ -170,6 +172,7 @@ export function cloudWords(limits: CloudFinLimits): string {
 /** Why a place takes no more Fins now, in the words a refused start or a queued one says; undefined while it has room. */
 export function placeFull(limit: FinPlaceLimit, working: number): string | undefined {
   if (limit.place === "device") return working >= limit.atOnce ? `${working} of the ${limit.atOnce} Fins this device runs at once are at work` : undefined
+  if (limit.unavailable) return "the account's cloud limits could not be confirmed"
   if (limit.atOnce !== undefined && working >= limit.atOnce) return `${working} of the ${limit.atOnce} cloud Fins the person's plan runs at once are at work`
   if (limit.dailySpendCents !== undefined && (limit.spentTodayCents ?? 0) >= limit.dailySpendCents)
     return `today's cloud spend reached the person's ceiling of $${(limit.dailySpendCents / 100).toFixed(2)}`

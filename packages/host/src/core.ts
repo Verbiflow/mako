@@ -1,3 +1,4 @@
+import { cloudFinLimits } from "./conversations/index.js"
 import type { HostStopping } from "./base/host-stopping.js"
 import { randomBytes } from "node:crypto"
 import { recipesOverHttp } from "@mako/protocol/recipes-http"
@@ -971,7 +972,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   declareFinDefaultMethods(methods, finDefaults, () => {
     const reading = finCapacity.reading()
     return lent.count() ? { ...reading, lent: lent.words() } : reading
-  }, () => finCapacity.changed())
+  }, () => finCapacity.changed(), async () => cloudFinLimits(await late.cloud?.cloudFinLimits?.().catch(() => null)))
   // Every check run holds one of the builds capacity keeps room for, and the rest wait their turn.
   const buildSlots = new BuildSlots(() => finCapacity.builds())
   finCapacity.subscribe(() => buildSlots.changed())

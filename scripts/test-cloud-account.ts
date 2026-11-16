@@ -1,3 +1,4 @@
+import type { CloudFinStatus } from "@mako/protocol/cloud-fins"
 import type { AccountEvent } from "@mako/protocol/account-events"
 /**
  * The desktop's Mako account against a fake cloud that speaks the gateway's
@@ -84,7 +85,7 @@ const recordPath = (name: string) => join(vault, "mako-sign-in", ...`${name}.jso
 type FakeDevice = CloudDevice & { credential: string; removed: boolean; successor?: string | undefined; retired: string[] }
 
 /** The gateway's identity API, in memory. */
-async function fakeCloud({ runtimeEnrolled }: { runtimeEnrolled?: Promise<void> } = {}) {
+async function fakeCloud({ runtimeEnrolled, finLimits }: { runtimeEnrolled?: Promise<void>; finLimits?: () => CloudFinStatus | null } = {}) {
   const codes = new Map<string, { challenge: string; device: Pick<CloudDevice, "name" | "platform" | "appVersion"> }>()
   const devices = new Map<string, FakeDevice>()
   /** Every live socket: whose device, and whether it's the account's connection or the device's runtime's link. */
@@ -193,6 +194,10 @@ async function fakeCloud({ runtimeEnrolled }: { runtimeEnrolled?: Promise<void> 
     }
     const caller = verify(bearer)
     if (!caller) return send(401, JSON.stringify({ title: "The connection token isn't valid here" }))
+    if (request.method === "GET" && url.pathname === "/v1/cloud/fins") {
+      const limits = finLimits?.()
+      return send(limits ? 200 : 404, limits ? JSON.stringify(limits) : undefined)
+    }
     if (request.method === "GET" && url.pathname === "/v1/devices")
       return send(200, JSON.stringify({ devices: [...devices.values()].filter((device) => !device.removed).map(publicDevice), current: caller.id }))
     if (request.method === "GET" && url.pathname === "/v1/browser-sessions") return send(200, JSON.stringify({ sessions: browsers }))
@@ -1468,4 +1473,23 @@ test("a grant or a revoke while signed in reads the sign-ins again, with nothing
   await until(undefined, "the grant")
   cloud.account.entitlements = []
   await until("no-cloud", "the revoke")
+})
+
+
+test("cloud Fin limits come from the signed-in account and clear on sign-out; an old gateway grants nothing", async () => {
+  const limits: CloudFinStatus = { at: Date.now(), day: new Date().toISOString().slice(0, 10), planSandboxes: 3, sandboxCentsPerHour: 20, runningSandboxes: 1, dailySpendCents: 100, spentTodayCents: 4, reservedTodayCents: 21 }
+  let answer: CloudFinStatus | null = limits
+  const cloud = await fakeCloud({ finLimits: () => answer })
+  const mac = await signedIn(cloud)
+  assert.equal(mac.accounts.heldCloudFinLimits(), undefined)
+  assert.deepEqual(await mac.accounts.cloudFinLimits(), limits)
+  assert.deepEqual(mac.accounts.heldCloudFinLimits(), limits)
+  answer = null
+  assert.equal(await mac.accounts.cloudFinLimits(), null)
+  assert.equal(mac.accounts.heldCloudFinLimits(), undefined)
+  answer = limits
+  await mac.accounts.cloudFinLimits()
+  await mac.accounts.signOut()
+  assert.equal(mac.accounts.heldCloudFinLimits(), undefined)
+  assert.equal(await mac.accounts.cloudFinLimits(), null)
 })

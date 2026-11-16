@@ -1,3 +1,6 @@
+import { HostMethods } from "@mako/host/transport/methods"
+import { unwatchedWork } from "@mako/host/base/event-loop"
+import { decodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 import assert from "node:assert/strict"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -5,7 +8,7 @@ import { join } from "node:path"
 import type { SessionModel } from "@mako/sessions/settings"
 import { normalizeOpenCodeModels } from "@mako/sessions/model-catalog"
 import { finTuningLine, finTuningWords, resolveFinTuning, type FinTuning, type FinTuningInput } from "@mako/host/contracts/fin-tuning"
-import { FinDefaultsStore } from "@mako/host/harnesses/fin-defaults"
+import { FinDefaultsStore, declareFinDefaultMethods } from "@mako/host/harnesses/fin-defaults"
 import { resetWords, spentUntil } from "@mako/host/contracts/account-usage"
 import { FIN_CEILING, FIN_CEILING_MAX, FIN_LIMIT_MAX, finPolicyNote } from "@mako/host/contracts/fin-tuning"
 import { recordedCatalog } from "./model-catalogs.ts"
@@ -172,6 +175,12 @@ function refused(harness: string, input: Partial<Omit<FinTuningInput, "label" | 
   try {
     const file = join(folder, "fin-defaults.json")
     const store = new FinDefaultsStore(file)
+    const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value, breadcrumb: () => {}, declaring: async () => {}, work: unwatchedWork })
+    let cloudReads = 0
+    declareFinDefaultMethods(methods, store, undefined, undefined, async () => { cloudReads += 1; return { atOnce: 3, dailySpendCents: 100, spentTodayCents: 21 } })
+    const initial = decodeRuntimeValue(await methods.invoke("mako:fin-defaults", []))
+    assert.deepEqual(initial, { ...store.reading(), cloud: { atOnce: 3, dailySpendCents: 100, spentTodayCents: 21 } })
+    assert.equal(cloudReads, 1, "Settings asks the account reader; no background poll")
     assert.deepEqual(store.reading(), { chosen: {}, used: {}, policy: { rules: [] }, ceiling: FIN_CEILING, moveOnLimit: true }, "nothing chosen: every harness's Fins run as the person does, this device on its capacity, and go on at the next account when theirs runs out")
     store.use("cursor", { model: "composer-2.5", options: { fast: "true" } })
     store.use("cursor", { options: { effort: "high" } })
