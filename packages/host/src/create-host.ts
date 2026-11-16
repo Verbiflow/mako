@@ -340,6 +340,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         !loaded && "starting",
         loaded?.lifecycleBlocked() && "lifecycle blocked",
         loaded?.activeWork() && "active work",
+        loaded?.deskBrowsing() && "an agent's desk browser",
         clients > 0 && `${clients} client${clients === 1 ? "" : "s"}`,
         leases > 0 && `${leases} launcher lease${leases === 1 ? "" : "s"}`,
       ].filter(Boolean)

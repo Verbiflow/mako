@@ -70,6 +70,8 @@ export class DeskBrowser {
   private stopReaping: (() => void) | undefined
   private readonly sessions = new Map<string, Session>()
   private readonly sockets = new Set<WebSocket>()
+  /** Pages asked for and not yet made: the agent views app can take seconds to start and load the desk. */
+  private creating = 0
   private readonly token = randomBytes(24).toString("base64url")
   private server: WebSocketServer | undefined
   private endpoint: string | undefined
@@ -145,6 +147,14 @@ export class DeskBrowser {
   /** Hidden desk windows currently open for agents. */
   get openPages(): number {
     return this.pages.size
+  }
+
+  /**
+   * Whether an agent is using the desk browser: connected to it, with a page open, or waiting for one. A profile host
+   * that stops when idle stays up meanwhile: a fixture host stopped 10 s into a page its agent was waiting for.
+   */
+  busy(): boolean {
+    return this.sockets.size > 0 || this.pages.size > 0 || this.creating > 0
   }
 
   reapIdle(now = Date.now()): void {
@@ -237,7 +247,8 @@ export class DeskBrowser {
             )
             return
           }
-          const page = await this.options.createPage(randomUUID())
+          this.creating += 1
+          const page = await this.options.createPage(randomUUID()).finally(() => { this.creating -= 1 })
           this.pages.set(page.id, page)
           this.lastActivity.set(page.id, Date.now())
           page.onMessage((eventMethod, eventParams) => {
