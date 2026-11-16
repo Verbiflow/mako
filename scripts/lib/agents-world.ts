@@ -105,7 +105,7 @@ export interface WorldOptions {
   /** Whether a conversation's next request waits before it runs (`LiveDependencies.ownerCheck`), as the host's `ownerHold` says. */
   ownerCheck?: ConstructorParameters<typeof LiveConversations>[0]["ownerCheck"]
   script: Script
-  budget?: TreeBudget
+  budget?: Partial<TreeBudget>
   /** Each event the host sends its windows, as it sends it. */
   events?: (event: HostEvent) => void
   /** What the host keeps of conversations in memory (`LiveDependencies.conversationMemory`); the host's own without it. */

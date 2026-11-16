@@ -385,7 +385,7 @@ function FinsReadout({ agents }: { agents: AgentsDiagnostics }) {
         {agents.notices} reports not yet delivered
       </p>
       <p className="mt-1 text-label leading-relaxed text-faint">
-        Each {APEX_WORD} and its {FIN_WORD}s run at most {agents.budget.running} at once and starts at most {agents.budget.started}.{" "}
+        Each {APEX_WORD} and its {FIN_WORD}s run at most {agents.budget.running} at once and start at most {agents.budget.started} in any {Math.round((agents.budget.windowMs ?? 600_000) / 60_000)} minutes.{" "}
         {fullest.map((tree) => `${tree.running} running, ${tree.started} started`).join(" · ")}
       </p>
       <p className="mt-1 text-label leading-relaxed text-faint">

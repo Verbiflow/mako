@@ -60,6 +60,7 @@ import {
   APEX_WORD,
   FIN_WORD,
   TREE_BUDGET,
+  startRateWords,
   type AgentCaller,
   type AgentRefused,
   type AgentsDiagnostics,
@@ -333,7 +334,7 @@ export interface AgentsDeps {
   accountContinuation?(harness: string): AccountContinuation | undefined
   /** Settings › Fins: "When an account runs out, continue on the next one"; absent, on. */
   moveOnLimit?(): boolean
-  budget?: TreeBudget
+  budget?: Partial<TreeBudget>
   /** How many of the person's Fins run at once on this device, every tree's: its capacity or their own number (`FinCapacity`); `FIN_LIMIT` without it. */
   finLimit?(): number
   /** Operations this device runs for another place's Threads under borrowing's leases: each takes a Fin's place here. */
@@ -571,7 +572,8 @@ const FILLED = "\0filled"
 const HELD_PREFIX = "after:"
 
 /** How many of a tree's Threads work now and how many it started, as its budget counts them. */
-type TreeCounts = { [Count in keyof TreeBudget]: number }
+/** What the tree runs now, and what it started within its window: `frees` is when the oldest of those leaves it. */
+type TreeCounts = { running: number; started: number; frees?: number }
 
 /** A `wait` start holding for its Fin: the Apex's conversation whose turn made the call, and how it hears the Fin move. */
 interface Hold {
@@ -704,7 +706,7 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   constructor(deps: AgentsDeps) {
     this.deps = deps
-    this.budget = deps.budget ?? TREE_BUDGET
+    this.budget = { ...TREE_BUDGET, ...deps.budget }
     this.generation = Math.max(1, Math.floor(this.now()))
     const accounts = deps.accounts
     this.moves = accounts && new FinMoves({
@@ -1375,7 +1377,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const counts = this.treeCounts(tree)
     if (counts.started >= this.budget.started) {
       const queued = store.queuedSpawns().filter((spawn) => spawn.tree === tree && !store.edges().byOp(spawn.op)).length
-      return this.refuse(op, "budget", `This tree started ${counts.started - queued} of its ${this.budget.started} Threads${queued ? ` and ${queued} more wait to` : ""}. This lifetime limit is not freed by stopping or finishing a Fin; reuse an existing Fin with agents_send.`)
+      return this.refuse(op, "budget", `${startRateWords(this.budget, counts.started, counts.frees, this.now())}${queued ? ` ${queued} of those still wait to start.` : ""}`)
     }
     // It waits only as its Apex asked: for the Fins it starts after, or with `queue` for a place, behind every spawn that waits for one already.
     const where = placeOf(input.place)
@@ -1385,7 +1387,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const why = after.length ? undefined : counts.running >= this.budget.running ? "tree-running" : full || waiting > 0 ? "place-full" : undefined
     if (why && !input.queue)
       return this.refuse(op, "budget", why === "tree-running"
-        ? `This tree runs ${counts.running} of its ${this.budget.running} Threads at once. Pass queue: true to start it when one ends.`
+        ? `This tree runs ${counts.running} ${FIN_WORD}s at once, its running limit of ${this.budget.running}; it frees when one ends. Pass queue: true to start it then.`
         : `${upper(full ?? `${working} ${FIN_WORD}s are at work here`)}${waiting ? ` and ${waiting} wait for one to end` : ""}.${this.elsewhere(where)} Pass queue: true to start it when one ends, or after: to start it after one of yours.`)
     if (why || after.length) {
       const record: QueuedStart = { lead: apex, input, tier, harness, tuned, ...(why && { why }), ...(after.length && { after }) }
@@ -1462,13 +1464,13 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (start.cancelled) return this.refuse(op, "conflict", `Its ${APEX_WORD} stopped it before it started.`)
     const counts = this.treeCounts(tree)
     if (counts.started >= this.budget.started)
-      return this.refuse(op, "budget", `This tree started ${counts.started} of its ${this.budget.started} Threads. This lifetime limit is not freed by stopping or finishing a Fin; reuse an existing Fin with agents_send.`)
+      return this.refuse(op, "budget", startRateWords(this.budget, counts.started, counts.frees, this.now()))
     const full = this.full(where)
     const waiting = this.waitingForRoom(where)
     const why = after.length ? undefined : counts.running >= this.budget.running ? "tree-running" : full || waiting > 0 ? "place-full" : undefined
     if (why && !input.queue)
       return this.refuse(op, "budget", why === "tree-running"
-        ? `This tree runs ${counts.running} of its ${this.budget.running} Threads at once. Pass queue: true to start it when one ends.`
+        ? `This tree runs ${counts.running} ${FIN_WORD}s at once, its running limit of ${this.budget.running}; it frees when one ends. Pass queue: true to start it then.`
         : `${upper(full ?? `${name} has ${FIN_WORD}s waiting for room`)}${waiting ? ` and ${waiting} wait for one to end` : ""}.${this.elsewhere(where)} Pass queue: true to start it when ${name} has room, or leave place out to start it here.`)
     // Its place by the device's own name, so every start there is counted under one key.
     const asked: AgentsStartInput = { ...input, place: where, harness, ...(input.model === undefined && ruled?.settings?.model && harness === ruled.harness && { model: ruled.settings.model }) }
@@ -5412,19 +5414,31 @@ export class Agents implements AgentOperations, ConversationChildren {
     const store = this.store()
     if (!store) return { running: 0, started: 0 }
     let running = 0
-    const started = new Set<string>()
+    // Each start once, at the first time it was asked for: queued, then given its edge, or launching now.
+    const started = new Map<string, number>()
+    const at = (op: string, time: number) => started.set(op, Math.min(started.get(op) ?? time, time))
+    const now = this.now()
     const visit = (parent: string, depth: number) => {
       if (depth > 10_000) return
       for (const edge of store.edges().children(parent)) {
-        started.add(edge.op)
+        at(edge.op, edge.createdAt)
         if (this.occupies(edge)) running += 1
         visit(edge.child, depth + 1)
       }
     }
     visit(root, 0)
-    for (const spawn of store.queuedSpawns()) if (spawn.tree === root) started.add(spawn.op)
-    for (const start of this.starts.values()) if (start.launching?.tree === root) started.add(start.op)
-    return { running: running + this.unwritten((launch) => launch.tree === root), started: started.size }
+    for (const spawn of store.queuedSpawns()) if (spawn.tree === root) at(spawn.op, spawn.at)
+    for (const start of this.starts.values()) if (start.launching?.tree === root) at(start.op, now)
+    // A spawn still waiting holds its place in the window, however long it waits: it hasn't started yet.
+    const waiting = new Set(store.queuedSpawns().filter((spawn) => spawn.tree === root && !store.edges().byOp(spawn.op)).map((spawn) => spawn.op))
+    const since = now - this.budget.windowMs
+    const recent = [...started].filter(([op, time]) => time > since || waiting.has(op))
+    const aging = recent.filter(([op]) => !waiting.has(op)).map(([, time]) => time)
+    return {
+      running: running + this.unwritten((launch) => launch.tree === root),
+      started: recent.length,
+      ...(aging.length && { frees: Math.min(...aging) + this.budget.windowMs }),
+    }
   }
 
 

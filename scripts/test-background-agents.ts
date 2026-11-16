@@ -171,8 +171,8 @@ function storeKeeps(): void {
 }
 
 /** Each child does `does` with its brief; an Apex's turns start what the test asks and end. */
-function world(name: string, does: Script, budget?: { running: number; started: number }) {
-  return new AgentsWorld({ root: join(root, name), script: does, ...(budget && { budget }) })
+function world(name: string, does: Script, budget?: { running: number; started: number; windowMs?: number }) {
+  return new AgentsWorld({ root: join(root, name), script: does, ...(budget && { budget: { windowMs: 10 * 60_000, ...budget } }) })
 }
 
 async function startsAndWakes(): Promise<void> {
@@ -1019,22 +1019,22 @@ async function refusals(): Promise<void> {
     const two = await w.agents.start(apex.caller, { brief, name: "two", clientKey: "2", cwd: w.root })
     assert.ok(!("refused" in one) && !("refused" in two))
     const unasked = await w.agents.start(apex.caller, { brief, name: "three", clientKey: "3-unasked", cwd: w.root })
-    assert.ok("refused" in unasked && unasked.refused === "budget" && /runs 2 of its 2 Threads at once\. Pass queue: true/.test(unasked.why), "past the running budget a spawn is refused unless it asks to wait")
+    assert.ok("refused" in unasked && unasked.refused === "budget" && /runs 2 Fins at once, its running limit of 2; it frees when one ends\. Pass queue: true/.test(unasked.why), "past the running budget a spawn is refused unless it asks to wait")
     const three = await w.agents.start(apex.caller, { brief, name: "three", queue: true, clientKey: "3", cwd: w.root })
     assert.ok(!("refused" in three) && three.state === "queued" && !three.child, "past the running budget a spawn that asks to wait queues")
     assert.match(three.why ?? "", /runs 2 of its 2 at once/)
     assert.equal(w.agents.roster(apex.conversation).length, 3, "a queued spawn shows, saying why")
     const four = await w.agents.start(apex.caller, { brief, name: "four", clientKey: "4", cwd: w.root })
-    assert.ok("refused" in four && four.refused === "budget", "past the started budget a spawn is refused, with the count, a queued one counted")
-    assert.match(four.why, /started 2 of its 3 Threads and 1 more wait to/)
+    assert.ok("refused" in four && four.refused === "budget", "past the start rate a spawn is refused, with the count, a queued one counted")
+    assert.match(four.why, /started 3 Fins in the last 10 minutes, its limit on starts .*1 of those still wait to start\./)
     const stopped = await w.agents.stop(apex.caller, { child: "one" })
     assert.deepEqual("stopped" in stopped && stopped.stopped, ["one"])
     await waitFor(() => w.store.edges().children(w.store.journalPlacement(apex.conversation)!.thread).length === 3, "the queued spawn to start when one ended")
     assert.equal(w.store.queuedSpawns().length, 0)
     const five = await w.agents.start(apex.caller, { brief, name: "five", clientKey: "5", cwd: w.root })
     assert.ok("refused" in five && five.refused === "budget")
-    assert.match(five.why, /started 3 of its 3/)
-    assert.match(five.why, /lifetime.*agents_send/, "finishing a Fin cannot free a lifetime start; reuse one")
+    assert.match(five.why, /started 3 Fins in the last 10 minutes/)
+    assert.match(five.why, /finished ones don't count against it\)\. The next start frees in (10|9) minutes, at \d\d:\d\d UTC\. Reuse an existing Fin with agents_send/, "it says when the window frees, and to reuse one meanwhile")
     const childCaller = w.caller(two.conversation!)
     const wider = await w.agents.start(childCaller, { brief, access: "full", clientKey: "w", cwd: w.root })
     assert.ok("refused" in wider && wider.refused === "access", "a child runs at most at its Apex's access")
@@ -1042,6 +1042,37 @@ async function refusals(): Promise<void> {
     assert.ok("refused" in six && six.refused === "budget", "a sub-Apex's spawn spends its tree's budget")
     const all = await w.agents.stop(apex.caller, { child: "all" })
     assert.deepEqual("stopped" in all && [...all.stopped].sort(), ["three", "two"], "stopping all stops what still runs")
+  } finally {
+    await w.close()
+  }
+}
+
+/**
+ * The start rate is a window, never a lifetime: a tree that started far more Fins than the limit over time still starts
+ * one once the window has passed, while a loop of starts inside one window is refused, saying when it frees.
+ */
+async function startRate(): Promise<void> {
+  const windowMs = 1_500
+  const w = world("start-rate", () => "done", { running: 32, started: 3, windowMs })
+  try {
+    const apex = await w.apex("opencode")
+    const start = (key: string) => w.agents.start(apex.caller, { brief: { objective: "Finish" }, name: key, clientKey: key, cwd: w.root })
+    let started = 0
+    for (let round = 0; round < 3; round += 1) {
+      for (const key of ["a", "b", "c"].map((each) => `${each}${round}`)) {
+        const answer = await start(key)
+        assert.ok(!("refused" in answer), `within the rate it starts: ${JSON.stringify(answer)}`)
+        started += 1
+      }
+      // A loop that goes on in the same window is refused, with when it frees.
+      const loop = await start(`loop${round}`)
+      assert.ok("refused" in loop && loop.refused === "budget", `a fourth start in the window is refused: ${JSON.stringify(loop)}`)
+      assert.match(loop.why, /started 3 Fins in the last \d+ minutes, its limit on starts .*The next start frees in 1 minute, at \d\d:\d\d UTC\./)
+      await new Promise((resolve) => setTimeout(resolve, windowMs + 100))
+    }
+    assert.equal(started, 9, "three windows started three times the limit: nothing counts a tree's Fins over its life")
+    const listed = await w.agents.list(apex.caller, {})
+    assert.ok("tree" in listed && listed.tree.started === 0 && listed.tree.of.windowMs === windowMs, `the tree's count is its window's: ${JSON.stringify("tree" in listed && listed.tree)}`)
   } finally {
     await w.close()
   }
@@ -2211,6 +2242,7 @@ try {
     startsAndWakes,
     explicitReports,
     refusals,
+    startRate,
     finLimit,
     afterOrder,
     slotsGoAtOnce,
