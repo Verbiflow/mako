@@ -294,6 +294,7 @@ export const STEPS = [
   [28, "tsx scripts/test-element-pick.ts"],
   [3, "tsx scripts/test-event-stream-limits.ts"],
   [3, "tsx scripts/test-git-stop.ts"],
+  [4, "tsx scripts/test-process-group-held.ts"],
   [4, "tsx scripts/test-grok-agents.ts"],
   [2, "tsx scripts/test-grok-connection.ts"],
   [2, "tsx --tsconfig tsconfig.app.json scripts/test-grok-store.ts"],
