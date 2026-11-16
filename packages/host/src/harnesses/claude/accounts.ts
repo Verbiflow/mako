@@ -711,7 +711,8 @@ export function claudeAccountCapability(root: AccountRoot): SelectableAccountCap
       const state = await readOptionalFile(claudeState(env))
       return credentialFingerprint([defaultHome(env), env.USER ?? null,
         principalFingerprint(await readCredentials(env), ClaudePrincipal),
-        principalFingerprint(state, ClaudeAccount),
+        // A first startup creates non-auth state; absent identity and an empty projection are the same principal.
+        principalFingerprint(state ?? "{}", ClaudeAccount),
         await homeSettings(defaultHome(env))])
     },
   }
