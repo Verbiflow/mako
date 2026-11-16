@@ -221,6 +221,7 @@ export function responseSections(
     id: `${message.id}-part-${part++}`,
     blocks,
     error: undefined,
+    failure: undefined,
   })
   let note = 0
   while (notes[note]?.after === 0) note++
@@ -309,7 +310,10 @@ export function responseSections(
       sections.push({ kind: "prose", id: prose.id, message: prose })
     }
     const last = generated.at(-1)
-    if (last && message.error) last.error = message.error
+    if (last && message.error) {
+      last.error = message.error
+      last.failure = message.failure
+    }
   }
   placeNotes(messages.length)
   flushWork()

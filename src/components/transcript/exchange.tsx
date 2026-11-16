@@ -1192,7 +1192,7 @@ function Response({
       ))}
       {text ? <Prose text={text} streaming={message.streaming} previewedFiles={previewedFiles} answerId={message.id} keeps={landedMedia(message)} /> : null}
 
-      {message.error ? <TurnError error={message.error} /> : null}
+      {message.error ? <TurnError error={message.error} failure={message.failure} /> : null}
 
     </div>
   )

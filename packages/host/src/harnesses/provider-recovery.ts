@@ -84,6 +84,6 @@ export async function assessProviderResume(binding: ProviderBinding, driver: Pro
       error: error instanceof Error ? error.name : "unknown",
       elapsedMs: Math.round((performance.now() - started) * 100) / 100,
     })
-    return { kind: "unavailable", reason: "Native session recovery evidence could not be read. Retry after its source is available." }
+    return { kind: "unavailable", retry: true, reason: "Native session recovery evidence could not be read. Retry after its source is available." }
   }
 }

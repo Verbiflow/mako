@@ -1,3 +1,4 @@
+import { providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -188,7 +189,7 @@ async function digestFirst(harness: string): Promise<void> {
   const script: Script = async (turn) => {
     if (turn.text.includes(FROM_AGENTS) && turn.harness === harness && failing) {
       const session = turn.world.live.snapshot(turn.conversation)!.session
-      turn.world.live.observe({ type: "live-session", session: { ...session, status: "failed", error: LIMIT } })
+      turn.world.live.observe({ type: "live-session", session: { ...session, status: "failed", error: LIMIT, failureEvidence: providerTextEvidence(LIMIT) } })
       return new Promise<string>(() => {})
     }
     if (turn.text.includes(FROM_AGENTS)) heard.push(turn.text)

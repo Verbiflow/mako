@@ -153,6 +153,8 @@ export interface ChatMessage {
   model?: string
   provider?: string
   error?: string
+  /** A supplied failure verdict, never inferred from this message's prose by the renderer. */
+  failure?: import("./provider-failure.js").ProviderFailureKind
   toolName?: string
   toolCallId?: string
   isError?: boolean

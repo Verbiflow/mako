@@ -4,6 +4,7 @@
 // render through the production components and projections; the screenshots
 // of the same cases come from `scripts/test-transcript-events-ui.mjs`.
 import assert from "node:assert/strict"
+import { providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import { renderToStaticMarkup } from "react-dom/server"
 import { entriesFromMessages, type DecodedEntry as ThreadEntry, type Entry, type RecordRef } from "@mako/sessions"
 import { backgroundReminderTurn, claudeTaskTurn, grokSubagentTurn, grokTaskTurn, parseClaudeTaskNotification } from "@mako/sessions/harnesses"
@@ -526,10 +527,14 @@ const quit = draw([prompted("q", "Refactor the store")], { stops: { q: { reason:
 assert.match(quit, /data-turn-stopped="host-quit"[^>]*>[^]*?lucide-triangle-alert[^"]*text-caution/)
 assert.match(quit, /Continue turn/)
 
+const nativeError = "Request failed: 529 Overloaded\nTry again in a moment."
 const errored = draw([{ id: "e", prompt: { id: "e", role: "user", blocks: [{ type: "text", text: "Summarize" }] },
-  response: [{ id: "e-a", role: "assistant", blocks: [{ type: "text", text: "Reading." }], error: "Request failed: 529 Overloaded\nTry again in a moment." }], system: [] }])
-assert.match(errored, /role="alert" data-event-error="rate-limited"/)
-assert.match(text(errored), /Cursor is over its rate limit or capacity\s*Wait for capacity to return or choose another model\./, "a recorded failure is named by the rules a live one is")
+  response: [{ id: "e-a", role: "assistant", blocks: [{ type: "text", text: "Reading." }], error: nativeError, failure: providerTextEvidence(nativeError).kind }], system: [] }])
+assert.match(errored, /role="alert" data-event-error="provider-unavailable"/)
+assert.match(text(errored), /Cursor.s service failed on its side/, "the native boundary's service verdict survives exchange splitting and rendering")
+const unmarkedLimit = draw([{ id: "host-error", prompt: { id: "host-error", role: "user", blocks: [{ type: "text", text: "Summarize" }] },
+  response: [{ id: "host-answer", role: "assistant", blocks: [], error: "You have hit your usage limit." }], system: [] }])
+assert.match(unmarkedLimit, /data-event-error="unknown"/, "a renderer never promotes unmarked message prose to a quota")
 const unnamed = draw([{ id: "u", prompt: { id: "u", role: "user", blocks: [{ type: "text", text: "Summarize" }] },
   response: [{ id: "u-a", role: "assistant", blocks: [{ type: "text", text: "Reading." }], error: "Tool schema mismatch in step 4\nat validate (schema.ts:12)" }], system: [] }])
 assert.match(text(unnamed), /Tool schema mismatch in step 4\s*Details/, "a failure no rule knows says the provider's own first line")
