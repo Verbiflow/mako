@@ -233,6 +233,8 @@ export interface ConversationChildren {
   stopChild(conversation: string, child: string): Promise<boolean>
   /** One of the conversation's requests settled. */
   settled(conversation: string, request: string): void
+  /** The live engine stamped activity in the conversation (`Resident.activityAt`): output, a step. Called for every stamp, so it must cost next to nothing. */
+  active?(conversation: string): void
   /** Its harness took input: a message as its turn, or a steer into the turn it runs. */
   inputDelivered?(conversation: string, input: Pick<LiveRequest, "id" | "text" | "actor"> & Partial<Pick<LiveRequest, "digest" | "continues" | "goal">>, delivery: "turn" | "steer"): void
   /** Whether the conversation's Thread is an Apex: it has Fins or queued spawns, or was started as one. */

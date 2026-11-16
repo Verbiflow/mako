@@ -107,6 +107,7 @@ export const STEPS = [
   [4, "npm run test:roster-refresh"],
   [33, "npm run test:resume-holds"],
   [36, "npm run test:fin-states"],
+  [20, "npm run test:fin-quiet"],
   // What comes back: a crash, a recovery or a Fin moved, with its queue kept through SIGKILL.
   [40, "MAKO_TEST_HARNESSES=claude npm run test:fin-move"],
   [40, "MAKO_TEST_HARNESSES=codex npm run test:fin-move"],
