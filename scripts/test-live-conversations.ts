@@ -913,6 +913,11 @@ async function bulkLoadsAreNamed() {
       owner.submit(id, randomUUID(), "seed")
     }
     await waitFor(() => owner.residency().memory.unloaded === ids.length, "the idle conversations were not all unloaded")
+    // The seed turns leave providers warm, whose idle timers hibernate them on their own; one that fired during the
+    // report read its conversation back in (gate 21: loaded 1). The host is quiet before the report is measured.
+    await waitFor(() => { const residency = owner.residency(); return residency.active + residency.warm === 0 && residency.memory.loaded === 0 },
+      `the seeded providers hibernated and nothing stayed in memory: ${JSON.stringify(owner.residency().memory.loads)}`)
+    const loadsBefore = JSON.stringify(owner.residency().memory.loads)
 
     // The report, over every conversation of the host, loads none: it's a function of the listing.
     const archives = new ThreadArchives(join(root, "archives.sqlite"))
@@ -936,7 +941,7 @@ async function bulkLoadsAreNamed() {
     for (const id of ids) assert.equal(work.run("archive check", () => lifecycle.archived({ kind: "live", id })), false)
     lifecycle.archive({ id: randomUUID(), target: { kind: "live", id: ids[0]! }, archived: true })
     assert.equal(ownedSessions(sources).length, ids.length - 1, "an archived conversation leaves the list, by its listing's keys")
-    assert.equal(owner.residency().memory.loaded, 0, "neither the report nor the lifecycle read a journal in")
+    assert.equal(owner.residency().memory.loaded, 0, `neither the report nor the lifecycle read a journal in: loads were ${loadsBefore}, now ${JSON.stringify(owner.residency().memory.loads)}`)
     assert.equal(warned.length, 0, "and nothing was named for loading in bulk")
 
     // A reader that does load in bulk is named: once in the log, and in the readout by what it loaded.
