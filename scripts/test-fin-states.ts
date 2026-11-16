@@ -77,7 +77,8 @@ try {
   {
     let fin = "", checking = false
     const world = new AgentsWorld({
-      root: join(root, "owner-check"), script: () => "done",
+      root: join(root, "owner-check"),
+      script: turn => turn.conversation === fin && turn.text.includes("check the next labels") ? turn.world.hold(fin).then(() => "done") : "done",
       ownerCheck: conversation => checking && conversation === fin ? Date.now() : undefined,
     })
     try {
@@ -96,6 +97,9 @@ try {
       assert.equal(waiting && childLine(waiting), "Waiting to hear from your account", "the current ownership wait replaces the old progress phase in the displayed row")
       assert.equal(world.live.atWork(fin), false, "waiting on ownership holds no execution place")
       const before = promptsOf(world, fin).length
+      world.agents.frontDoor(apex.conversation, {}, false)
+      const listed = await world.agents.list(apex.caller, { scope: "all" })
+      assert.ok("mark" in listed)
       checking = false
       world.live.moves.ownerChecked()
       await until("the held message to run", () => promptsOf(world, fin).length === before + 1)
@@ -103,7 +107,12 @@ try {
       await pause(30)
       assert.equal(promptsOf(world, fin).length, before + 1, "repeated owner callbacks never duplicate the message")
       assert.equal(requestOf(world, fin, "check the next labels")?.ownerCheck, undefined)
-    } finally { await world.close() }
+      await until("the resumed turn to be running", () => world.live.session(fin)?.status === "running")
+      const changed = await world.agents.list(apex.caller, { scope: "all", since: listed.mark })
+      assert.ok("children" in changed)
+      assert.ok(changed.children.some(child => child.name === "labels"), "an ownership wait settling is a real change even when both states read working")
+      assert.ok(world.agents.frontDoor(apex.conversation, {}, false).some(line => line.startsWith("- fin:labels")), "the front door also describes the changed wait instead of folding it as unchanged")
+    } finally { world.release(fin); await world.close() }
   }
   for (const harness of HARNESSES) {
     // A message after a stop goes; what the stop paused waits for its Resume without holding anything else back.

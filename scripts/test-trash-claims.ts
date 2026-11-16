@@ -1,7 +1,7 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync, spawn } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
@@ -53,6 +53,23 @@ try {
   await until("and its repository pruned, so the branch is free", () => !held("claimed"))
   git(repo, "branch", "-D", "claimed")
 
+  // A claim past a day claims nothing, even when its pid is alive again (reused): here the live pid is this process.
+  const stale = inTrash("stale")
+  writeFileSync(`${stale}.claim`, JSON.stringify({ pid: process.pid, at: Date.now() - 25 * 60 * 60_000 }))
+  await spares.sweep()
+  await until("a claim past a day leaves its folder to the sweep", () => !existsSync(stale))
+  await until("and the stale claim with it", () => !existsSync(`${stale}.claim`))
+  git(repo, "branch", "-D", "stale")
+
+  // A claim that can't be written moves nothing, and leaves nothing marked as being emptied.
+  chmodSync(trash, 0o500)
+  try {
+    await assert.rejects(spares.setAside(repo, join(root, "never-moved")), /EACCES|permission/i)
+  } finally {
+    chmodSync(trash, 0o700)
+  }
+  assert.equal(spares["emptying"].size, 0, "a failed claim leaves no folder marked as being emptied")
+
   // A crash mid-move: no claim at all.
   const orphan = inTrash("orphan")
   assert.ok(held("orphan"), "Git still records the moved worktree on its branch")
@@ -60,7 +77,7 @@ try {
   await until("an orphan is emptied", () => !existsSync(orphan))
   await until("and its repository pruned", () => !held("orphan"))
   git(repo, "branch", "-D", "orphan")
-  console.log("trash claims: another live process's claim is honoured, a dead one's isn't, and an emptied orphan's repository is pruned so its branch can go")
+  console.log("trash claims: another live process's claim is honoured, a dead one's and a day-old one's aren't, a claim that can't be written moves nothing, and an emptied orphan's repository is pruned so its branch can go")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

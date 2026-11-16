@@ -161,8 +161,12 @@ schedules, and a failing schedule is pinned there.
    that carried it, which never folds again. Each folded message reaches the
    conversation as its own sender's (rule 13). Fins' news a folded turn carried is
    heard when that turn's model answers; a turn that fails before it does sends the
-   news again as a digest of its own, once, and a crash after its handoff sends
-   rule 15's discovery hint, never the reports. An interrupt's message goes
+   news again as a digest of its own, once, waiting with that turn for its retry's
+   time (a limit's reset) rather than going alone into the same limit, and a crash
+   after its handoff sends rule 15's discovery hint, never the reports. Fins' news
+   held by the minute's budget (`WAKES_PER_MINUTE`) or the ask spacing
+   (`ASK_EVERY_MS`) still folds: those bound the turns a digest causes, and one
+   riding in a turn that goes anyway causes none and isn't counted. An interrupt's message goes
    alone, and another Apex's message, owed its own reply, never folds.
 
 ## What each failure leaves

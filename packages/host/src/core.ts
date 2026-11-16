@@ -1,3 +1,4 @@
+import { cloudFinLimits } from "./conversations/index.js"
 import type { HostStopping } from "./base/host-stopping.js"
 import { randomBytes } from "node:crypto"
 import { recipesOverHttp } from "@mako/protocol/recipes-http"
@@ -973,12 +974,19 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   declareFinDefaultMethods(methods, finDefaults, () => {
     const reading = finCapacity.reading()
     return lent.count() ? { ...reading, lent: lent.words() } : reading
-  }, () => finCapacity.changed())
+  }, () => finCapacity.changed(), {
+    reading: () => cloudFinLimits(late.cloud?.heldCloudFinLimits?.()),
+  })
   // Every check run holds one of the builds capacity keeps room for, and the rest wait their turn.
   const buildSlots = new BuildSlots(() => finCapacity.builds())
   finCapacity.subscribe(() => buildSlots.changed())
   late.cloud = declareCloudAccountMethods(methods, {
     waitingForAccount: () => cloudConversations?.waitingForAccount() === true || late.awayNotes?.any() === true,
+    finLimitsChanged: () => {
+      const reading = finCapacity.reading()
+      emit({ type: "fin-defaults", reading: { ...finDefaults.reading(), capacity: lent.count() ? { ...reading, lent: lent.words() } : reading, cloud: cloudFinLimits(late.cloud?.heldCloudFinLimits?.()) } })
+      late.conversations?.agents?.capacityChanged()
+    },
     ...(lending && {
       lending: {
         advertisement: () => late.advertiser?.current(),
@@ -1384,7 +1392,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     account: () => late.cloud,
     threads: () => threads.store ?? undefined,
     moves: live.moves,
-    snapshot: (id) => live.snapshot(id),
+    session: (id) => live.session(id),
     checkout: (id) => workspaces.worktrees?.threadCheckout(id),
     // A Thread in the main checkout goes onto its own branch first, as the person's "Move to its own branch" does, its
     // companions following; its agent isn't told, since nothing starts a turn on the way to the cloud.
@@ -1666,6 +1674,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           track: (checkout) => attribution.track(checkout),
           head: (repository) => attribution.head(repository),
           partition: (checkout, thread) => attribution.partitionOffLoop(checkout, thread),
+          fingerprint: (checkout, thread) => attribution.checkpointFingerprint(checkout, thread),
         }
       },
     })

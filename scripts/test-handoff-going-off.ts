@@ -27,8 +27,12 @@ import { WorkspaceMoves } from "@mako/host/workspaces/moves"
 import { moveSource, ThreadWorktreeMoves } from "@mako/host/workspaces/thread-worktree-moves"
 import { ThreadWorktreeService } from "@mako/host/workspaces/thread-worktrees"
 import type { MoveLedger } from "@mako/host/workspaces/worktree-move"
+import { threadFingerprint } from "@mako/host/workspaces/thread-checkpoint"
 import { applyMoveCheckpoint } from "@mako/host/workspaces/move-checkpoint"
 import { cloudHasAll } from "@mako/host/workspaces/leave-checkout"
+import { LiveRecords } from "@mako/host/conversations/live-records"
+import { LiveJournal } from "@mako/host/conversations/live-journal"
+import { mock } from "node:test"
 import { AgentsWorld, type Script } from "./lib/agents-world.ts"
 
 /**
@@ -251,7 +255,7 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
     account: () => account,
     threads: () => world.store,
     moves: world.live.moves,
-    snapshot: (id) => world.live.snapshot(id),
+    session: (id) => world.live.session(id),
     checkout: (id) => worktrees.threadCheckout(id),
     ownBranch,
     planned: (id) => threadMoves.planned(id),
@@ -314,7 +318,7 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
     sendRecords: async (_link, paths) => paths.map(() => ({ harness: "claude", nativeId: "n", versions: 1, held: 0, chunks: 1, bytes: 1, requests: 1, ms: 1, holdings: {} })),
     newCloudThread: () => `t-${randomBytes(8).toString("hex")}`,
     // As the host's: the journal heard, never its full settle; the partition read as the journal holds it.
-    ledger: () => ({ heard: () => tracker.settled(), settled: () => tracker.settled(), track: async () => {}, head: ledger.head, partition: (checkout, thread) => partition(view, checkout, thread) }),
+    ledger: () => ({ heard: () => tracker.settled(), settled: () => tracker.settled(), track: async () => {}, head: ledger.head, fingerprint: async (checkout, thread) => threadFingerprint(ledger.head(checkout), partition(view, checkout, thread), checkout), partition: (checkout, thread) => partition(view, checkout, thread) }),
   })
   const handOffs = new CloudHandOffs({
     file: join(base, "cloud", "handoff.json"),
@@ -413,6 +417,15 @@ async function atWork(h: Host) {
  * of it, since there is none yet.
  */
 async function keptReady(h: Host, work: Awaited<ReturnType<typeof atWork>>) {
+  // Planning reads session metadata; it must not load even a warm conversation or commit its pending frame.
+  const noLoad = mock.method(LiveRecords.prototype, "load", () => { throw new Error("readiness loaded a conversation journal") })
+  const noCommit = mock.method(LiveJournal.prototype, "commit", () => { throw new Error("readiness committed a conversation journal") })
+  try {
+    for (const conversation of conversations(work)) await h.cloudMoves.readyPlan(conversation)
+  } finally {
+    noLoad.mock.restore()
+    noCommit.mock.restore()
+  }
   const branches = sh(h.project, "branch", "--list", "mako/*")
   const planned = await h.threadMoves.planned(work.inProject)
   assert.ok(planned, "the project folder's Thread names the worktree its move would make")

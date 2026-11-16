@@ -200,6 +200,7 @@ const inputs = {
           ])
           .optional(),
         query: z.string().optional(),
+        since: z.string().optional(),
       }),
     ]),
   "mako:agents-move": () =>

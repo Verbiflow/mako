@@ -141,6 +141,11 @@ export interface AgentsListInput {
   scope?: "children" | "tree" | "all" | "crew" | "apexes" | "threads"
   /** With `threads`: words of a title, a Thread ID or a Fin's name. */
   query?: string
+  /**
+   * The `mark` an earlier list answered: only the Fins whose state, report, open questions or pull requests changed
+   * since are listed, and the rest are counted in `unchanged`.
+   */
+  since?: string
 }
 
 /**
@@ -196,6 +201,8 @@ export interface AgentStrip {
   /** For an Apex on another device: its device's count of what it has said of the Fin, so an older notice changes nothing after this (`Placed.said`). */
   said?: { owner: number; seq: number }
   startedAt: number
+  /** When its state, report, open questions or pull requests last changed, as this host saw them (`FinChanges`), in ticks of its clock (about epoch ms). */
+  changedAt?: number
 }
 /**
  * A Fin's view of the work it's part of (`agents_list` with `scope: crew`):
@@ -249,7 +256,19 @@ export interface OtherApex {
 }
 /** The open Fins one Apex's digest names; the rest are counted. */
 export const APEX_DIGEST_FINS = 8
-export type AgentsListResult = { children: AgentStrip[]; tree: AgentsStarted["tree"]; folded?: AgentsListFolded } | AgentsCrew | AgentsApexes | AgentsThreads | AgentRefused
+/**
+ * A list of an Apex's Fins: `mark` is when it was read, to pass as `since` next time; with `since`, `unchanged` counts
+ * the Fins left out because nothing about them changed.
+ */
+export interface AgentsListed {
+  children: AgentStrip[]
+  tree: AgentsStarted["tree"]
+  folded?: AgentsListFolded
+  /** This host's own mark (its life and a tick of its clock). Absent from a host before change marks. */
+  mark?: string
+  unchanged?: number
+}
+export type AgentsListResult = AgentsListed | AgentsCrew | AgentsApexes | AgentsThreads | AgentRefused
 
 /** Explicit summary's short-lived PR details; the engine, UI and default tool output keep full facts. */
 export interface AgentPullsSummary {
@@ -595,6 +614,8 @@ export interface FrontDoorChild {
   idleFor?: number
   /** Its open pull requests (`finPullRequests`): the crew view carries them, the note doesn't. */
   openPRs?: FinPullRequest[]
+  /** When its state, report, open questions or pull requests last changed, as the host saw them (`FinChanges`). */
+  changedAt?: number
 }
 
 /** Fins the note lists by name; the rest are counted, and `agents_list` has them. */
@@ -612,14 +633,21 @@ export const FRONT_DOOR_GUIDANCE = [
  * to route the message. It's read from typed state, so routing costs no read
  * of any transcript and no tool call before the one that sends it on.
  */
-export function frontDoorNote(fins: readonly FrontDoorChild[], now: number, includeGuidance = true): string[] {
+export function frontDoorNote(fins: readonly FrontDoorChild[], now: number, includeGuidance = true, seenAt?: number): string[] {
   if (!fins.length) return []
-  const listed = [...fins].sort((a, b) => routeOrder(a.state) - routeOrder(b.state)).slice(0, FRONT_DOOR_LISTED)
-  const more = fins.length - listed.length
+  // Since the last note (`seenAt`), a Fin nothing changed for is named, not described again; one that waits on an
+  // answer or a decision always is.
+  const same = (fin: FrontDoorChild) => seenAt !== undefined && fin.changedAt !== undefined && fin.changedAt <= seenAt && routeOrder(fin.state) > 0
+  const changed = fins.filter((fin) => !same(fin))
+  const unchanged = fins.filter(same)
+  const listed = [...changed].sort((a, b) => routeOrder(a.state) - routeOrder(b.state)).slice(0, FRONT_DOOR_LISTED)
+  const more = changed.length - listed.length
+  const named = unchanged.slice(0, FRONT_DOOR_LISTED).map((fin) => `fin:${fin.name} (${fin.state.kind === "ended" ? fin.state.outcome : fin.state.kind})`)
   return [
     `You're this Thread's ${APEX_WORD}: the person writes to you, and you decide who handles it. Your ${FIN_WORD}s now:`,
     ...listed.map((fin) => frontDoorLine(fin, now)),
     ...(more > 0 ? [`… and ${more} more (agents_list).`] : []),
+    ...(unchanged.length ? [`Unchanged since the last note (${ago(seenAt!, now)}): ${named.join(", ")}${unchanged.length > named.length ? ` and ${unchanged.length - named.length} more` : ""} (agents_list has each).`] : []),
     ...(includeGuidance ? FRONT_DOOR_GUIDANCE : []),
   ]
 }
@@ -735,8 +763,8 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     filled: [],
     mcp: {
       name: "agents_list",
-      description: `This Thread's ${FIN_WORD}s as they stand: name, harness, state, last step and last report. Every PR fact stays inline by default. Explicit presentation summary replaces large PR arrays with counts: open and draft are known open; reported means its current state is unknown. Pass each read object to agents_read, then follow pulls.next as offset. These details expire at expiresAt, at most 30 minutes from capture, or on host restart; they require the same caller Session and current access. After that the original facts cannot be recovered; a new list gives current facts. Use full for lasting evidence. Reports wake you on their own, so read this when you need the whole picture, not to wait. A ${FIN_WORD} reads its ${APEX_WORD} and the other ${FIN_WORD}s it started with scope crew, before work another of them may be doing. Scope apexes reads the person's other ${APEX_WORD}es without waking them.`,
-      fields: { scope: `children (default): your ${FIN_WORD}s that are at work, waiting, idle or need a decision, and those that ended in the last day; what needs you is always listed, and other idle or ended ones may be counted in folded; all: every one of them; tree, which adds every ${FIN_WORD} below them, folded the same way; or, from a ${FIN_WORD}, crew: your ${APEX_WORD} and the other ${FIN_WORD}s it started, what each was asked and last reported; or apexes: the person's other ${APEX_WORD}es, each with its folder, branch, ${FIN_WORD} counts and digest; or threads: the conversations on this device, each with the ref context and thread_history take.`, query: `With scope threads: words of a title, a Thread ID or a ${FIN_WORD}'s name.`, presentation: "full (default): every PR fact inline. summary: explicit opt-in to counts and same-Session PR pages lost at expiresAt or host restart; relisting cannot recover the original facts. Other scopes stay full." },
+      description: `This Thread's ${FIN_WORD}s as they stand: name, harness, state, last step and last report. Every PR fact stays inline by default. Explicit presentation summary replaces large PR arrays with counts: open and draft are known open; reported means its current state is unknown. Pass each read object to agents_read, then follow pulls.next as offset. These details expire at expiresAt, at most 30 minutes from capture, or on host restart; they require the same caller Session and current access. After that the original facts cannot be recovered; a new list gives current facts. Use full for lasting evidence. Reports wake you on their own, so read this when you need the whole picture, not to wait. Each answer carries a mark: pass it as since next time to list only the ${FIN_WORD}s that changed. A ${FIN_WORD} reads its ${APEX_WORD} and the other ${FIN_WORD}s it started with scope crew, before work another of them may be doing. Scope apexes reads the person's other ${APEX_WORD}es without waking them.`,
+      fields: { scope: `children (default): your ${FIN_WORD}s that are at work, waiting, idle or need a decision, and those that ended in the last day; what needs you is always listed, and other idle or ended ones may be counted in folded; all: every one of them; tree, which adds every ${FIN_WORD} below them, folded the same way; or, from a ${FIN_WORD}, crew: your ${APEX_WORD} and the other ${FIN_WORD}s it started, what each was asked and last reported; or apexes: the person's other ${APEX_WORD}es, each with its folder, branch, ${FIN_WORD} counts and digest; or threads: the conversations on this device, each with the ref context and thread_history take.`, query: `With scope threads: words of a title, a Thread ID or a ${FIN_WORD}'s name.`, since: "The mark an earlier list answered: only the Fins that changed since (state, report, open questions or pull requests) are listed, the rest counted in unchanged. A Fin waiting on you is always listed. A mark from another host or an earlier host life lists every Fin.", presentation: "full (default): every PR fact inline. summary: explicit opt-in to counts and same-Session PR pages lost at expiresAt or host restart; relisting cannot recover the original facts. Other scopes stay full." },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
   },

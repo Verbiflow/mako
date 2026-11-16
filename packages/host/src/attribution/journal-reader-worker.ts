@@ -3,6 +3,7 @@ import { parentPort, workerData } from "node:worker_threads"
 import { z } from "zod"
 import { decompress } from "./content.js"
 import { JournalReadSchema } from "./journal-reader.js"
+import { CheckpointFingerprints } from "./checkpoint-fingerprints.js"
 import { JournalStore } from "./journal-store.js"
 import { countTurnInSlices, partition, storedView } from "./queries.js"
 
@@ -17,6 +18,7 @@ let db: DatabaseSync | undefined
 let store: JournalStore | undefined
 let countView: ReturnType<typeof storedView> | undefined
 let countVersion = -1
+let fingerprints: CheckpointFingerprints | undefined
 const open = () => {
   if (db?.isOpen) return db
   db = new DatabaseSync(path, { readOnly: true })
@@ -39,6 +41,12 @@ parentPort?.on("message", async (message) => {
       }
       const count = await countTurnInSlices(countView, request.data.thread, request.data.turn, request.data.state)
       parentPort?.postMessage({ id, ok: true, count: count ?? null })
+      return
+    }
+    if (request.data.kind === "checkpoint-fingerprint") {
+      store ??= JournalStore.open(path, { device: "", readOnly: true })
+      fingerprints ??= new CheckpointFingerprints(store)
+      parentPort?.postMessage({ id, ok: true, fingerprint: fingerprints.read(request.data.checkout, request.data.thread) })
       return
     }
     if (request.data.kind === "partition") {

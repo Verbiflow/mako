@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { spawn } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { once } from "node:events"
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
 import { request } from "node:http"
@@ -241,14 +241,29 @@ for (const channel of ["mako:live-start", "mako:lifecycle-command", "mako:list-m
     }
   }
   if (agentViewsPid) {
+    // The host's stop ends the app's process group (SIGTERM, then SIGKILL), but macOS can keep an ended process for
+    // seconds as it tears it down, 15 s on a CI runner (#671), so its pid still answers. The app ends itself a minute
+    // after its last window closed, so only a bound well under that tells a host that let it run: 30 s.
     const alive = () => { try { process.kill(agentViewsPid, 0); return true } catch { return false } }
-    const end = Date.now() + 10_000
-    while (alive() && Date.now() < end) await new Promise((done) => setTimeout(done, 100))
+    const began = Date.now()
+    const watch = async (ms) => { while (alive() && Date.now() < began + ms) await new Promise((done) => setTimeout(done, 100)) }
+    await watch(10_000)
     if (alive()) {
-      console.error(`The agent views app ${agentViewsPid} outlived its host`)
+      // Slow: what it was doing, and what each side logged of its end.
+      console.log(`The agent views app ${agentViewsPid} was still there 10 s after its host quit:`)
+      console.log(spawnSync("ps", ["-o", "pid,ppid,stat,etime,command", "-p", String(agentViewsPid)], { encoding: "utf8" }).stdout.trim())
+      for (const file of [join(dataRoot, "logs", "host.log"), join(`${dataRoot}-ui-agent-views`, "logs", "desktop.log")]) {
+        const lines = (await readFile(file, "utf8").catch((error) => error.message)).split("\n")
+        const said = lines.filter((line) => /agent views|signal|quitting|leaving|desktop (attached|detached)|stopp|Could not stop/.test(line)).slice(-40)
+        console.log(`${file}:\n${said.join("\n") || lines.slice(-20).join("\n")}`)
+      }
+      await watch(30_000)
+    }
+    if (alive()) {
+      console.error(`The agent views app ${agentViewsPid} outlived its host by 30 s`)
       process.exitCode = 1
       process.kill(agentViewsPid, "SIGKILL")
-    } else console.log("The agent views app left with its host")
+    } else console.log(`The agent views app left with its host (${Date.now() - began} ms after it quit)`)
   }
   await server.close()
   await rm(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })

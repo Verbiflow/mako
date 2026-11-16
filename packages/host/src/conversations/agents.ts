@@ -152,6 +152,7 @@ import { uniqueName, type KeptAnswer, type KeptMark, type KeptPullWake, type Thr
 import { AgentRuns, lastStep, type ProcessReads, type RunEnd } from "./agent-runs.js"
 import { holdOf, keepsLine, nextInLine } from "../contracts/request-hold.js"
 import { foldList } from "./agent-list-fold.js"
+import { FinChanges, type ChangeFacts } from "./fin-changes.js"
 import { AgentWakes, DIGEST_WAITS, firstParagraph, FROM_AGENTS, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
 import { namedUuid } from "./cloud-moves.js"
 import { carriedDigest } from "../contracts/delivery-retry.js"
@@ -657,6 +658,10 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly starting = new Set<string>()
   /** The rules each conversation last read (`rulesNote`), as they were said. */
   private readonly rulesSaid = new Map<string, string>()
+  /** When each Fin last changed for its Apex (`FinChanges`): `agents_list`'s marks and the front door's read it. */
+  private readonly changes = new FinChanges()
+  /** When each Apex conversation's front door last listed its Fins: one unchanged since is counted, not described again. */
+  private readonly doorSaid = new Map<string, number>()
   private readonly waiters = new Set<() => void>()
   /** `wait` starts holding now: while one holds a Fin, its reports answer the start rather than wake its Apex. */
   private readonly holds = new Set<Hold>()
@@ -1188,7 +1193,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     return roleRuleLines(policy, { fin: edge !== undefined, apex: !edge || edge.role === APEX_ROLE || this.isApex(conversation), read })
   }
 
-  frontDoor(conversation: string, request: Pick<LiveRequest, "actor"> & Partial<Pick<LiveRequest, "id">>, includeGuidance = true): string[] {
+  /** `whole`: its process hasn't heard a note before (new, compacted, a send failed), so every Fin is described. */
+  frontDoor(conversation: string, request: Pick<LiveRequest, "actor"> & Partial<Pick<LiveRequest, "id">>, includeGuidance = true, whole = false): string[] {
     const order = request.actor && request.actor.kind !== "person" ? agentMessageOrder(this.deps.live.snapshot(conversation), request.id, (session) => this.store()?.sessionPlacement(session)?.thread ?? session) : []
     const store = this.store()
     const thread = store?.journalPlacement(conversation)?.thread
@@ -1206,7 +1212,12 @@ export class Agents implements AgentOperations, ConversationChildren {
     const followUps = actionLines.length ? ["Pending action-only reports (delivery/read is not disposition):", ...actionLines,
       `${actions.total} pending; source Apex uses agents_read on the source Fin with afterAction. Custodian uses agents_read {child: its own Thread ID, view: actions, afterAction} for full targets and more pages.`,
       "Source Apex alone records exact agents_settle dispositions. Dispatch/handoff/defer stay pending; receiver outcome alone resolves nothing. Reclaim returns custody to Apex. No automatic reminder/reply."] : []
-    const lines = [...rules, ...(!request.actor || request.actor.kind === "person" ? frontDoorNote(open.map((edge) => this.frontDoorChild(edge)), this.now(), includeGuidance) : []), ...note, ...followUps]
+    const person = !request.actor || request.actor.kind === "person"
+    const now = this.now()
+    const door = person ? frontDoorNote(open.map((edge) => this.frontDoorChild(edge)), now, includeGuidance, whole ? undefined : this.doorSaid.get(conversation)) : []
+    // On the marks' own clock: every change this note read came before it.
+    if (person && open.length) this.doorSaid.set(conversation, this.changes.tick(now))
+    const lines = [...rules, ...door, ...note, ...followUps]
     hostLog("agents", "front door", { conversation, children: open.length, chars: lines.reduce((sum, line) => sum + line.length + 1, 0) })
     return lines
   }
@@ -2162,8 +2173,22 @@ export class Agents implements AgentOperations, ConversationChildren {
     await this.listPlaced(apex, input, strips)
     const counts = this.treeCounts(this.rootOf(apex.thread))
     const tree = this.treeAnswer(counts)
-    if (input.scope === "all") return { children: strips, tree }
-    return { ...foldList(strips, this.now()), tree }
+    // Each Fin's change mark, read at one tick of this host's clock: `mark` is this list's, so what changed after it
+    // shows next time. A mark this host can't read (another host's, an earlier life's, one ahead) lists them all.
+    const now = this.now()
+    const tick = this.changes.tick(now)
+    for (const strip of strips) {
+      const edge = this.store()?.edges().of(strip.child)
+      const awaiting = strip.state.kind === "working" && edge ? this.childReading(edge).awaiting : undefined
+      strip.changedAt = this.changes.at(strip.child, { ...stripChange(strip), ...(awaiting && { awaiting }) }, tick)
+    }
+    const since = this.changes.since(input.since)
+    // What needs its Apex is listed whatever changed: a question, an action, a decision, a block (`needsApex`).
+    const changed = since === undefined ? strips : strips.filter((strip) => strip.changedAt! > since || needsApex(strip))
+    const unchanged = strips.length - changed.length
+    const marked = { tree, mark: this.changes.mark(tick), ...(since !== undefined && { unchanged }) }
+    if (input.scope === "all") return { children: changed, ...marked }
+    return { ...foldList(changed, now), ...marked }
   }
 
   /**
@@ -6726,9 +6751,17 @@ export class Agents implements AgentOperations, ConversationChildren {
       : undefined
     const state = this.stateOf(edge)
     const idle = facts ? this.idleOf(edge, state, this.childReading(edge)) : undefined
-    const pulls = facts ? this.openPRsOf(edge) : []
+    const held = this.openPRsOf(edge)
+    const pulls = facts ? held : []
+    // Read as `agents_list` reads its row (`stripChange`), so the two marks agree.
+    const changedAt = this.changes.at(edge.child, {
+      state, ...(state.kind === "working" && { awaiting: this.childReading(edge).awaiting }),
+      ...(latest && { report: { status: latest.status, at: latest.at } }), ...(held.length && { pulls: held }),
+      questions: this.pendingReports(edge).length, actions: this.pendingActions(edge.parent, edge.child).total,
+    }, this.changes.tick(this.now()))
     return {
       name: edge.name,
+      changedAt,
       harness: this.deps.harnessLabel(this.harnessOf(edge)),
       state,
       ...(idle !== undefined && { idleFor: idle }),
@@ -7048,6 +7081,17 @@ function pullWaitReports(reports: Report[], key: string): Report[] {
 }
 
 /** A pull request a report waits on, by repository and number; undefined for another kind or an invalid reference. */
+/** A listed Fin waiting on its Apex: a question or action open, blocked, or ended with a decision. */
+function needsApex(strip: AgentStrip): boolean {
+  const { state } = strip
+  return Boolean(strip.pendingQuestions || strip.pendingActions || strip.custodyActions) || state.kind === "blocked" || (state.kind === "ended" && state.decision !== undefined)
+}
+
+/** What a listed Fin's change mark reads of its row (`FinChanges`). */
+function stripChange(strip: AgentStrip): ChangeFacts {
+  return { state: strip.state, ...(strip.report && { report: { status: strip.report.status, at: strip.report.at } }), ...(strip.openPRs && { pulls: strip.openPRs }), questions: strip.pendingQuestions ?? 0, actions: strip.pendingActions ?? 0 }
+}
+
 /** The message a request ID went as: the one it was folded into when it went (`LiveRequest.joined`), else its own. */
 function sentAs(requests: readonly LiveRequest[], id: string): LiveRequest | undefined {
   return requests.find((request) => request.joined?.some((joined) => joined.id === id)) ?? requests.find((request) => request.id === id)

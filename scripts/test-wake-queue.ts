@@ -365,6 +365,42 @@ try {
     console.log("wakes: Fins' news a failed turn carried goes again as its own digest, once")
   }
 
+  // Fins' news folded into a turn that ran into a usage limit waits with that turn for the limit's reset: it isn't sent
+  // alone into the same limit, to rest under a lone digest's rules.
+  {
+    let failed = false
+    const script: Script = (turn) => {
+      if (turn.text.includes("Hold.")) return turn.world.hold(turn.conversation).then(() => "Held.")
+      if (turn.text.startsWith("Ship it.") && !failed) {
+        failed = true
+        turn.world.endWith(turn.conversation, { fail: "You have reached your usage limit. Try again later." })
+        return ""
+      }
+      return "ok"
+    }
+    const world = new AgentsWorld({ root: join(root, "folded-news-limit"), script })
+    const { conversation } = await world.apex("claude", "full")
+    world.say(conversation, "Hold.")
+    await until("the turn", () => world.live.session(conversation)?.status === "running")
+    world.say(conversation, "Ship it.")
+    const actor = { kind: "agent" as const, session: world.store.journalPlacement(conversation)!.session }
+    const news = randomUUID()
+    world.live.submit(conversation, news, `${FROM_AGENTS}\nDigest at the limit.`, [], undefined, undefined, undefined, actor, { digest: { notices: [notice()] }, wake: { at: Date.now() + 60_000, after: DIGEST_WAITS } })
+    world.release(conversation)
+    const again = () => world.live.snapshot(conversation)?.requests.find((request) => request.continues?.requestId === news && request.digest)
+    await until("the news to wait for the limit", () => again() !== undefined, 15_000)
+    await pause(500)
+    const heard = () => world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.includes("Digest at the limit."))
+    assert.equal(again()!.status, "held", "it waits")
+    assert.ok(again()!.retry, "for the turn's retry")
+    assert.equal(heard().length, 1, "not sent alone into the limit: only inside the turn that ran into it")
+    world.live.wakeDue(again()!.retry!.at + 1)
+    await until("the news to go once the limit's time comes", () => heard().length === 2, 15_000)
+    assert.ok(heard()[1]!.text.startsWith(FROM_AGENTS), "as a digest of its own")
+    await world.close()
+    console.log("wakes: Fins' news a turn carried into a usage limit waits for the limit's reset with it")
+  }
+
   for (const harness of TESTED_HARNESSES) {
     // The minute's budget is the queue's, as it sends: seven digests waiting for a busy Apex go six now, the seventh a minute after the first.
     {

@@ -1,8 +1,9 @@
+import type { CloudFinAnswer, CloudFinStart, CloudFinStatus } from "@mako/protocol/cloud-fins"
 import type { SourceProjectCommand, SourceProjectReceipt } from "@mako/protocol/source-project"
 import type { Advertisement, ClientSessionOverSockets } from "@mako/protocol"
 import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
 import { attendable, CloudAttention, macIdleSeconds } from "./cloud-attention.js"
-import { CloudAccounts, cloudLegacyFiles, cloudSignInName, type BorrowArtifact, type CloudAccountOptions, type CloudThreadMaking, type WaitingClaim } from "./cloud-account.js"
+import { CLOUD_FIN_LIMITS_MS, CloudAccounts, cloudLegacyFiles, cloudSignInName, type BorrowArtifact, type CloudAccountOptions, type CloudThreadMaking, type WaitingClaim } from "./cloud-account.js"
 import { isAccountListEvent, type AccountListHeard } from "@mako/protocol/account-sessions"
 import type { SessionListings } from "@mako/protocol/thread-listing"
 import type { WaitingInput, WaitingMessage } from "@mako/protocol/waiting"
@@ -148,6 +149,10 @@ export interface CloudAccount {
   devices?(): Promise<{ devices: Array<{ id: string; name: string; kind?: string; platform?: string }>; current: string }>
   /** The harness versions the cloud's machines run, or null from a cloud that doesn't say (`CloudAccounts.cloudHarnesses`). */
   cloudHarnesses?(): Promise<CloudHarnesses | null>
+  cloudFinLimits?(): Promise<CloudFinStatus | null>
+  heldCloudFinLimits?(): CloudFinStatus | undefined
+  reserveCloudFin?(input: CloudFinStart): Promise<CloudFinAnswer>
+  cancelCloudFin?(input: CloudFinStart): Promise<CloudFinAnswer>
   /** The person's access choices as the account keeps them, or null from a cloud that doesn't keep them yet. */
   accessChoices?(): Promise<AccessChoicesAnswer | null>
   /** Makes `choices` the account's (with `fill`, only where it has none); all of them after, or null as above. */
@@ -232,6 +237,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   emit,
   fixture,
   signedIn,
+  finLimitsChanged,
   request,
   harnessSignIns,
   sessions,
@@ -249,6 +255,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   fixture: boolean
   waitingForAccount?: () => boolean
   signedIn?: () => void
+  finLimitsChanged?: () => void
   request?: (call: DiagnosticEvents["cloud.request"]) => void
   /** Shares this Mac's harness sign-ins with the account's cloud machines; a fixture desk shares none. */
   harnessSignIns?: (options: { dataRoot: string; store: HarnessSignInStore; onChange: (signIns: CloudSignInsState) => void }) => HarnessSignInSharing
@@ -350,11 +357,13 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       preferences?.again()
     },
     onAccountLinked: () => {
+      void cloud.cloudFinLimits().catch(() => {})
       for (const listener of threadListeners) listener("linked")
     },
     onRuntimeLinked: () => {
       for (const listener of runtimeListeners) listener()
     },
+    onFinLimitsChanged: () => finLimitsChanged?.(),
     onRequest: request,
     sessions,
     ...(lending && { lending }),
@@ -382,6 +391,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   const attention = attendable(machine, onMac())
     ? new CloudAttention({ idle: macIdleSeconds, say: (attending) => cloud.attend(attending), signedIn: () => status === "signed-in", log: (message, fields) => hostLog("cloud", message, fields) })
     : undefined
+  jobs.every("read the account's cloud Fin limits", CLOUD_FIN_LIMITS_MS, () => cloud.cloudFinLimits(CLOUD_FIN_LIMITS_MS).then(() => {}, () => {}), { firstAfterMs: 0 })
   attention?.start(jobs)
 
   methods.handle("mako:cloud-account", () => cloud.ready())
@@ -452,6 +462,10 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     liveSent: () => cloud.liveSent(),
     devices: () => cloud.devices(),
     cloudHarnesses: () => cloud.cloudHarnesses(),
+    cloudFinLimits: () => cloud.cloudFinLimits(),
+    heldCloudFinLimits: () => cloud.heldCloudFinLimits(),
+    reserveCloudFin: (input) => cloud.reserveCloudFin(input),
+    cancelCloudFin: (input) => cloud.cancelCloudFin(input),
     accessChoices: () => cloud.accessChoices(),
     chooseAccess: (choices, fill) => cloud.chooseAccess(choices, fill),
     preferences: () => cloud.preferences(),

@@ -260,8 +260,8 @@ export type CloudMovesOptions = {
     confirm(input: { operationId: string; receipt: ClaimReceipt; actor: Actor }): void
     reclaim(input: { operationId: string; refusal: Refusal; actor: Actor }): void
   }
-  /** What a move reads of a conversation: its native session, where it works, and its mode. */
-  snapshot(conversationId: string): { session: Pick<LiveSnapshot["session"], "harness" | "nativeId" | "nativePath" | "cwd" | "currentMode"> } | null
+  /** Resident or listed session metadata only: planning never loads or flushes a conversation journal. */
+  session(conversationId: string): Pick<LiveSnapshot["session"], "harness" | "nativeId" | "nativePath" | "cwd" | "currentMode"> | undefined
   /** The Thread's own checkout here, its worktree (a folder of them, one a repository, in a project of several); undefined for a Thread in the main checkout. */
   checkout(conversationId: string): { path: string; worktrees: Array<{ path: string }> } | undefined
   /**
@@ -611,8 +611,8 @@ export class CloudMoves {
       move, thread, asked: state.sessions[0]!.conversation, cloudThread: state.cloudThread, folder: state.folder,
       repository: CloudRepositorySchema.parse(state.repository), others: [], phase: "released", began: Date.now(), timings: {},
       sessions: state.sessions.map((carried) => {
-        const snapshot = this.#options.snapshot(carried.conversation)
-        return { session: carried.session, conversationId: carried.conversation, harness: carried.harness, nativeId: carried.nativeId, path: snapshot?.session.nativePath ?? "", ...carried.folder !== state.folder && { cwd: carried.folder }, ...carried.holdings && { holdings: carried.holdings } }
+        const session = this.#options.session(carried.conversation)
+        return { session: carried.session, conversationId: carried.conversation, harness: carried.harness, nativeId: carried.nativeId, path: session?.nativePath ?? "", ...carried.folder !== state.folder && { cwd: carried.folder }, ...carried.holdings && { holdings: carried.holdings } }
       }),
       continued: { by: state.by, at: state.at, behind: state.sessions.some((carried) => carried.freshness?.behind === true) },
       ...state.start && { checkpoint: state.start },
@@ -676,7 +676,7 @@ export class CloudMoves {
         if (going !== conversationId) this.#options.step(conversationId, move, { kind: "own-branch", to: going })
         conversationId = going
         // A fork has no session of its harness's until its first turn, so there's nothing of it to carry yet.
-        if (conversationId !== from && !this.#options.snapshot(conversationId)?.session.nativeId)
+        if (conversationId !== from && !this.#options.session(conversationId)?.nativeId)
           throw new Error("It's on its own branch now, as a conversation forked from this one, which starts with its next message. Send it one, then move it to the cloud.")
       }
       stage = conversationId === from ? "plan" : "plan-on-branch"
@@ -740,20 +740,20 @@ export class CloudMoves {
     // and the machine clones the others beside it; each goes by its own checkpoint.
     const worktrees = [...own?.worktrees ?? []].sort((left, right) => left.path.localeCompare(right.path))
     const project = own && worktrees.length > 1 ? own.path : undefined
-    const folder = project ? worktrees[0]?.path ?? "" : own?.path ?? this.#options.snapshot(conversationId)?.session.cwd ?? ""
+    const folder = project ? worktrees[0]?.path ?? "" : own?.path ?? this.#options.session(conversationId)?.cwd ?? ""
     const sessions: PlanSession[] = []
     for (const moving of threads.threadSessions(placed.thread)) {
       const conversation = moving.journals.includes(conversationId) ? conversationId : moving.journals.at(-1)
       if (conversation !== conversationId && conversation && this.#options.archived?.(conversation)) continue
-      const snapshot = conversation ? this.#options.snapshot(conversation) : null
-      const { nativeId, nativePath, harness, cwd } = snapshot?.session ?? {}
-      if (!conversation || !snapshot || !nativeId || !nativePath || !harness) throw new Error("Every tab in the Thread needs to have started before it moves: send a first message or close the empty tab.")
+      const session = conversation ? this.#options.session(conversation) : undefined
+      const { nativeId, nativePath, harness, cwd } = session ?? {}
+      if (!conversation || !session || !nativeId || !nativePath || !harness) throw new Error("Every tab in the Thread needs to have started before it moves: send a first message or close the empty tab.")
       const root = project ?? folder
       if (own && cwd !== root && !cwd?.startsWith(`${root}/`)) throw new Error(`A tab in this Thread works in ${cwd ?? "another folder"}, outside its worktree, so the Thread can't move.`)
       const remembered = this.#options.remembered(harness, nativeId)
       const planned: PlanSession = { session: moving.session, conversationId: conversation, harness, nativeId, path: nativePath }
       if (own && cwd && cwd !== folder) planned.cwd = cwd
-      const modeId = remembered?.modeId ?? snapshot.session.currentMode ?? undefined
+      const modeId = remembered?.modeId ?? session.currentMode ?? undefined
       if (modeId) planned.modeId = modeId
       if (remembered?.settings) planned.tuning = remembered.settings
       sessions.push(planned)

@@ -228,7 +228,7 @@ async function world(name: string, ownerCheckMs = { check: 10_000, most: 30_000 
   })
   moves = new CloudMoves({
     folder: join(folder, "moves"), git, account: () => account, threads: () => threads, moves: owner.moves,
-    snapshot: (conversationId) => self().snapshot(conversationId) ?? null,
+    session: (conversationId) => self().session(conversationId),
     checkout: () => undefined,
     repositoryOf: async () => ({ url: "https://github.com/ana/api", branch: "webhooks" }),
     sendRecords: async () => { throw new Error("a joined continue sends nothing: the account had it all") },

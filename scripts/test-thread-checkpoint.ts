@@ -1,5 +1,6 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import { execFileSync } from "node:child_process"
 import { chmodSync, existsSync, mkdirSync, statSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -15,7 +16,7 @@ import { partition, type JournalView, type Partition } from "@mako/host/attribut
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { applyMoveCheckpoint } from "@mako/host/workspaces/move-checkpoint"
 import { CheckoutLeave, cloudHasAll } from "@mako/host/workspaces/leave-checkout"
-import { captureThreadCheckpoint, type ThreadCheckpointInput } from "@mako/host/workspaces/thread-checkpoint"
+import { threadFingerprint, captureThreadCheckpoint, type ThreadCheckpointInput } from "@mako/host/workspaces/thread-checkpoint"
 
 /*
  * One Thread's changes in a checkout it shares with the person and another Thread, captured as a checkpoint over HEAD
@@ -253,11 +254,13 @@ test("read on the journal's worker, the partition and the checkpoint are the sam
     const onThread = await f.ledger.partition(f.repo, "T1")
     const onWorker = await reader.partition(f.repo, "T1")
     assert.deepEqual(onWorker.files, onThread.files, "what the journal committed, divided the same")
+    const expected = createHash("sha256").update(threadFingerprint(f.ledger.head(f.repo), onThread, f.repo)).digest("hex")
+    assert.equal(await reader.checkpointFingerprint(f.repo, "T1"), expected, "the same mixed text and whole-file checkpoint identity, hashed on the worker")
     const here = await f.capture()
     const there = await f.capture({ ledger: { ...f.ledger, partition: (checkout, thread) => reader.partition(checkout, thread) } })
     assert.equal(there.checkpoint.sha256, here.checkpoint.sha256)
   } finally {
-    reader.close()
+    await reader.close()
   }
 })
 
