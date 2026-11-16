@@ -4,7 +4,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { resumes } from "../harnesses/index.js"
 import type { ProviderBinding } from "../contracts/conversation-control.js"
 import { BRIEF_AGAIN, DIGEST_AGAIN } from "../contracts/children.js"
-import { transientCause, unheardDigest, waitsAgain, carriedDigest } from "../contracts/delivery-retry.js"
+import { transientCause, unheardDigest, waitsAgain, carriedDigest, type RequestRetry } from "../contracts/delivery-retry.js"
 import type { Interruption, InterruptionReason, LiveRequest, TurnContinuation } from "../contracts/live-conversations.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import { AUTO_CONTINUE_DELAY_MS, autoContinueCandidate, continueTurnPrompt } from "../contracts/turn-continuation.js"
@@ -192,8 +192,9 @@ export class LiveAutoContinue {
     if (failed.status !== "failed" && !dropped) return
     // A turn a Stop latched isn't picked up again by itself (`LiveRequest.pause`).
     if (failed.pause === "stop") return
-    this.carryFoldedNews(resident, failed)
     const cause = transientCause(failed.error ?? "", failed.failure ?? "unknown", false, failed.failureEvidence)
+    // Fins' news the turn carried waits with it: until the time its retry says (a limit's reset), not into the same limit.
+    this.carryFoldedNews(resident, failed, cause ? waitsAgain(failed, cause, failed.error ?? "", Date.now(), turnReply(resident, failed.id).limit?.resetsAt)?.retry : undefined)
     // Only a turn its harness ran is continued: one it never took has nothing to pick up. A digest no model answered is
     // the exception, whatever ended it: it stays until one does.
     const ran = failed.nativeRun !== undefined || failed.nativeDelivery?.evidence.kind === "accepted"
@@ -245,10 +246,11 @@ export class LiveAutoContinue {
 
   /**
    * Fins' news that went folded into a turn (`joinedInto`) that failed before its model answered goes again by itself, as
-   * its own digest would (`unheardDigest`): queued right behind the failed turn, under the news's own receipt identity,
-   * once. The turn itself fails or goes on as it would have.
+   * its own digest would (`unheardDigest`): right behind the failed turn, under the news's own receipt identity, once,
+   * held with the turn's `retry` when it waits for one (a limit's reset) and queued at once when it doesn't. The turn
+   * itself fails or goes on as it would have.
    */
-  private carryFoldedNews(resident: Resident, failed: LiveRequest): void {
+  private carryFoldedNews(resident: Resident, failed: LiveRequest, retry?: RequestRetry): void {
     const news = resident.snapshot.requests.find((request) => request.joinedInto === failed.id && request.digest !== undefined && !request.digest.heard)
     if (!news?.digest || resident.snapshot.requests.some((request) => request.continues?.requestId === news.id)) return
     const request = LiveRequestSchema.parse({
@@ -260,7 +262,8 @@ export class LiveAutoContinue {
       digest: carriedDigest(news.digest),
       attachments: [],
       tuning: failed.tuning,
-      status: "queued",
+      status: retry ? "held" : "queued",
+      ...(retry && { retry }),
       continues: { requestId: news.id, reason: "connection-lost", auto: true },
     })
     request.inputDigest = promptFingerprint(request.text, request.attachments, request.tuning)

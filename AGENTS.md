@@ -897,7 +897,8 @@ stays the person's to edit until it goes, and one folded is canceled with
 `joinedInto`, its ID kept in the carrier's `joined` for a repeat or a
 handoff. Fins' news a folded turn carried keeps a digest's guarantees: a turn
 that fails before its model answers sends it again as its own digest
-(`carryFoldedNews`), and one a crash cuts after its handoff hears rule 15's
+(`carryFoldedNews`), held with that turn's retry when it waits for a limit's
+reset, and one a crash cuts after its handoff hears rule 15's
 discovery hint. A steer that arrives as a turn is handed over waits for its
 run rather than queueing.
 A steer queues the message first and steers that request (`steer-queued`), so
