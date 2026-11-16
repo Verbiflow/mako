@@ -191,7 +191,7 @@ let calls = new HostCallLifetime()
 
 /** A host call, as `HostMethods` runs it: inside this host life's calls. */
 function invoke(channel: string, args: unknown[]): Promise<EncodedValue> {
-  return calls.run(() => answer(channel, args)).catch((error: unknown) => {
+  return calls.run(() => answer(channel, args)).catch((error: Error) => {
     throw stoppedCallError(error)
   })
 }

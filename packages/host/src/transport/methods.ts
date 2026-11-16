@@ -80,7 +80,7 @@ export class HostMethods implements MethodTable {
       }
       if (value instanceof EncodedAnswer) return encoded(value.value)
       return local(hostHistoryPaging() ? this.options.presentHistory(value) : value)
-    })).catch((error: unknown) => {
+    })).catch((error: Error) => {
       throw stoppedCallError(error)
     })
     this.calls.set(channel, (args) => call(args, encodeRuntimeValue, (value) => value))

@@ -64,6 +64,8 @@ assert.equal(completed, true); assert.equal(storeOpen, false)
   const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value, breadcrumb: () => {}, declaring: async () => {}, work: unwatchedWork, stopping })
   const answering = deferred()
   const ran: string[] = []
+  // SAFETY: the table parses this call's arguments with its generated schema before the handler runs; the fixture reads
+  // only the request ID, a string there, and answers nothing the caller reads.
   methods.handle("mako:live-prompt", (async (_id: string, requestId: string) => {
     ran.push(requestId)
     if (requestId === "under-way") await new Promise<never>((_resolve, reject) => stopping.signal.addEventListener("abort", () => reject(stopping.signal.reason), { once: true }))
@@ -74,7 +76,8 @@ assert.equal(completed, true); assert.equal(storeOpen, false)
     const error = await call.then(() => undefined, (caught: Error) => caught)
     assert.ok(error instanceof RuntimeDisconnectedError, `a disconnect, not ${String(error)}`)
     const client = runtimeFailureError(runtimeFailure(error))
-    return { unconfirmed: (client as RuntimeDisconnectedError).unconfirmed, outbox: waitsFor(client) }
+    assert.ok(client instanceof RuntimeDisconnectedError, `the client hears a disconnect, not ${client.name}`)
+    return { unconfirmed: client.unconfirmed, outbox: waitsFor(client) }
   }
   const underWay = methods.invoke("mako:live-prompt", ["c", "under-way", "the long one"])
   await tick()

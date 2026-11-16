@@ -13,7 +13,7 @@ export class HostStoppedCallError extends RuntimeDisconnectedError {}
  * settles once. Heard as a plain failure, the renderer's outbox took a person's message sent during a quit's drain as
  * refused for good and handed it back (`waitsFor`).
  */
-export function stoppedCallError(error: unknown): unknown {
+export function stoppedCallError(error: Error): Error {
   if (error instanceof HostCallRefusedError) return new HostStoppedCallError(false)
   if (error instanceof HostStoppingError) return new HostStoppedCallError(true)
   return error
