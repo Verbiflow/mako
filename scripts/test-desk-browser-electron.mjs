@@ -87,6 +87,19 @@ async function relayedPages() {
   }
 }
 
+/**
+ * Whether Electron's own capture of the page's window still gets pixels, logged at each step that could stop a hidden
+ * window drawing: on CI Macs the screenshot at the end timed out, and capturePage after it failed with UnknownVizError.
+ */
+async function drawable(step) {
+  const [window] = BrowserWindow.getAllWindows()
+  if (!window) return console.log(`capture after ${step}: no window`)
+  const began = Date.now()
+  const image = await Promise.race([window.webContents.capturePage(), new Promise((resolve) => setTimeout(() => resolve(undefined), 5_000))])
+    .catch((failure) => new Error(String(failure?.message ?? failure)))
+  console.log(`capture after ${step}: ${image === undefined ? "no answer in 5 s" : image instanceof Error ? image.message : `${image.getSize().width}x${image.getSize().height}${image.isEmpty() ? " empty" : ""} in ${Date.now() - began} ms`}`)
+}
+
 async function main() {
   // The check ends with app.exit; closing its last window mustn't quit before the check reports.
   app.on("window-all-closed", () => {})
@@ -102,6 +115,7 @@ async function main() {
   await run({ action: "connect", browser: "mako" })
   const { navigation: _navigation, ...target } = await run({ action: "open", browser: "mako" })
   const observed = await run({ action: "observe", target, interactiveOnly: true })
+  await drawable("load")
   assert.deepEqual([...new Set(observed.nodes.map((node) => node.role))].sort(), ["button", "combobox", "link", "option", "textbox"])
   assert.deepEqual([observed.viewport.width, observed.viewport.height], pageSize, "the viewport is the window's content, less its scrollbar")
   const button = observed.nodes.find((node) => node.role === "button")
@@ -133,6 +147,7 @@ async function main() {
   const dismissed = await run({ action: "evaluate", target, expression: "window.second" })
   assert.equal(dismissed.result.value, false)
 
+  await drawable("dialogs")
   // selectOption fires change handlers.
   const select = observed.nodes.find((node) => node.role === "combobox") ?? (await run({ action: "observe", target, query: "Colour" })).nodes[0]
   const picked = await run({ action: "selectOption", target, ref: select.ref, label: "Blue" })
@@ -140,6 +155,7 @@ async function main() {
   const afterSelect = await run({ action: "evaluate", target, expression: "document.getElementById('out').textContent" })
   assert.match(afterSelect.result.value, /colour=b/)
 
+  await drawable("select")
   // wait resolves once the late element exists.
   const waited = await run({ action: "wait", target, for: { selector: "#late", text: "late arrival" }, timeoutMs: 5000 })
   assert.equal(waited.satisfied, true)
@@ -157,6 +173,7 @@ async function main() {
   const pdf = await run({ action: "pdf", target, path: join(root, "page.pdf") })
   assert.ok(pdf.bytes > 1000, "pdf has content")
 
+  await drawable("pdf")
   // Download through the anchor.
   const dlObserved = await run({ action: "observe", target, query: "Download" })
   let download
@@ -171,12 +188,14 @@ async function main() {
   assert.equal(download.state, "completed")
   assert.equal(download.path, join(root, "hello.txt"))
 
+  await drawable("download")
   // History: a second document, then back.
   await run({ action: "navigate", target, url: "data:text/html;charset=utf-8," + encodeURIComponent(second) })
   const back = await run({ action: "history", target, go: "back" })
   assert.equal(back.moved, true)
   const title = await run({ action: "evaluate", target, expression: "document.title" })
   assert.equal(title.result.value, "Desk check")
+  await drawable("history back")
   const shot = await run({ action: "screenshot", target, format: "png", maxSide: 800 })
   writeFileSync(join(root, "viewport.png"), Buffer.from(shot.data, "base64"))
   assert.equal(shot.coordinates.imageWidth, 800)
