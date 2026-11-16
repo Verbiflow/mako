@@ -29,6 +29,9 @@ try {
     }
     if (turn.text.includes("You're fin:")) {
       await held
+      // It reported progress mid-turn, so it finishes with its result, as Fins are told: a silent end after progress
+      // would ask its Apex how it goes on.
+      await turn.world.agents.report(turn.caller, { status: "done", summary: "Wrote the docs page; nothing left open.", clientKey: "docs-done" })
       return "Wrote the docs page; nothing left open."
     }
     return "ok"
