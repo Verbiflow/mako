@@ -2868,13 +2868,16 @@ export class Agents implements AgentOperations, ConversationChildren {
       child: ThreadIdSchema.parse(wait.child),
       report: wait.report,
       pull: wait.pullKey,
-      // Kept as every build sharing the store reads it: a head with no checks settled with none to run. Its note says so.
-      outcome: outcome.kind === "no-checks" ? "settled" : outcome.kind,
+      // Informational wakes keep the existing storage tag for older hosts; their notes and cursors say what happened.
+      outcome: outcome.kind === "no-checks" || outcome.kind === "incomplete" || outcome.kind === "unreadable" ? "settled" : outcome.kind,
       request: namedUuid(`${key}:${outcome.kind}`),
       text: note,
       at: this.now(),
     })
-    if (claimed) await this.sendPullWake(edge, wake)
+    if (claimed) {
+      hostLog("agents", "pull request outcome", { wait: wait.key, child: wait.child, outcome: outcome.kind })
+      await this.sendPullWake(edge, wake)
+    }
   }
 
   /**
