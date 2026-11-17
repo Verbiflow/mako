@@ -500,6 +500,11 @@ jobs:
   # every Mac for five days, while CI's short Linux /tmp passed. After the merge only: it builds the whole app.
   mac-package:
     if: github.event_name != 'pull_request'
+    # About a hundred main pushes a day would each queue a macOS job for five or six minutes; only the newest main commit
+    # packages, and `ci` takes this job's cancel as the newer one's to judge.
+    concurrency:
+      group: mac-package-${{ github.ref }}
+      cancel-in-progress: true
     runs-on: macos-15
     timeout-minutes: 45
     steps:
@@ -566,8 +571,13 @@ jobs:
     steps:
       - env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
+          PACKAGED: ${{ needs.mac-package.result }}
         run: |
           echo "$RESULTS"
+          # A newer main commit cancels this one's mac-package (its concurrency group), which packages the newer: that
+          # cancel passes, and only it. Any other job cancelled still fails.
+          cancelled=0
           for result in $RESULTS; do
-            case "$result" in success|skipped) ;; *) exit 1 ;; esac
+            case "$result" in success|skipped) ;; cancelled) cancelled=$((cancelled + 1)) ;; *) exit 1 ;; esac
           done
+          if [ "$cancelled" -gt 1 ] || { [ "$cancelled" -eq 1 ] && [ "$PACKAGED" != cancelled ]; }; then exit 1; fi
