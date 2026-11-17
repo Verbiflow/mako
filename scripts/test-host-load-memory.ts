@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { hostLoadOutcome } from "./lib/host-load-exit.ts"
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -65,3 +66,22 @@ try {
   process.env.PATH = realPath
   rmSync(folder, { recursive: true, force: true })
 }
+
+// A performance report never turns a crashed or unclosed host into a passing run, report-only or not.
+for (const reportOnly of [false, true]) {
+  for (const exit of [
+    { code: 1, signal: null, timedOut: false },
+    { code: null, signal: "SIGTERM" as const, timedOut: false },
+    { code: null, signal: null, timedOut: false },
+    { code: null, signal: null, timedOut: true },
+  ]) {
+    const result = hostLoadOutcome(exit, [], reportOnly)
+    assert.equal(result.code, 1)
+    assert.equal(result.failures.length, 1, "the run says why the host failed")
+  }
+}
+const cleanExit = { code: 0, signal: null, timedOut: false }
+assert.deepEqual(hostLoadOutcome(cleanExit, [], true), { failures: [], code: 0 })
+assert.deepEqual(hostLoadOutcome(cleanExit, ["slow"], true), { failures: ["slow"], code: 0 }, "report-only still relaxes only a performance budget")
+assert.equal(hostLoadOutcome(cleanExit, ["slow"], false).code, 1)
+console.log("Host-load acceptance: a nonzero, signalled, missing or timed-out host exit always fails")

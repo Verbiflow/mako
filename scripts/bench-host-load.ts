@@ -13,6 +13,7 @@ import { claudeSessionPath, makeWorld, TODAY, type WorldScale } from "./lib/host
 import { ownedScratch } from "./lib/owned-scratch.mjs"
 import { once } from "node:events"
 import { scriptedModel } from "./scripted-model.ts"
+import { hostLoadOutcome, type HostLoadExit } from "./lib/host-load-exit.ts"
 import { fakeCloud, type AccountReports } from "./lib/sync-bench-cloud.ts"
 import { createMakoBridge } from "@mako/host/contracts/renderer-bridge"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
@@ -46,7 +47,7 @@ import { followHostLoadOutputs } from "./lib/host-load-output.ts"
  * times that, or a probe failing. On one CI runner in one job, at this scale, the yardstick waited 14 ms on one tick in
  * a hundred; the host before #358 waited 3.3 s on one health check in a hundred and 20 s on a read, and the host
  * after it 74 ms and 605 ms: each limit is several times from either. Every number goes to the job's summary
- * (`GITHUB_STEP_SUMMARY`) whether it passes or not; `--report-only` judges without failing. `--cpu-prof <dir>` keeps the host's CPU profile and
+ * (`GITHUB_STEP_SUMMARY`) whether it passes or not; `--report-only` relaxes the performance budgets, while a host that crashed or didn't quit still fails the run, `--idle-only` included. `--cpu-prof <dir>` keeps the host's CPU profile and
  * prints the longest slices it held the loop for, named by the host's own functions; `--out <file>` keeps the report;
  * `--peak-limit-mb` fails on the host's peak resident memory, sampled each second, and on readings too few to say. Memory barely varies between
  * machines: 629 MB on a Mac and 669 MB on a CI runner at this scale, so `checks.yml` sets 1,500;
@@ -268,7 +269,8 @@ if (model) {
   // Its resident memory every 5 s, to tell a sawtooth of garbage from growth.
   const rssSeries: [number, number][] = []
   const snapshotsTaken: { why: string; file: string; rssMb: number | undefined }[] = []
-  const exited = new Promise<number | null>((done) => host!.once("exit", (code) => done(code)))
+  const exited = new Promise<HostLoadExit>((done) => host!.once("exit", (code, signal) => done({ code, signal, timedOut: false })))
+  const quitDeadline = () => delay(60_000).then((): HostLoadExit => ({ code: null, signal: null, timedOut: true }))
   // Its resident memory, the peak from outside: memory doesn't vary with a runner's speed the way a wait does.
   const memory: ResidentMemory = { peakKb: 0, readings: 0, misses: 0 }
   const hostPid = String(host.pid)
@@ -321,9 +323,13 @@ if (model) {
     clearInterval(footprint)
     clearInterval(series)
     host.kill("SIGTERM")
-    await Promise.race([exited, delay(60_000)])
-    if (values.out) writeFileSync(values.out, JSON.stringify({ scale: values.scale, host: hostScript, nodeArgs, idle }, null, 2))
-    await finish(0)
+    // A host that crashed or didn't quit fails the idle run too: it once waited out the deadline and passed either way.
+    const shutdown = await Promise.race([exited, quitDeadline()])
+    if (shutdown.timedOut) host.kill("SIGKILL")
+    if (values.out) writeFileSync(values.out, JSON.stringify({ scale: values.scale, host: hostScript, nodeArgs, idle, shutdown }, null, 2))
+    const outcome = hostLoadOutcome(shutdown, [], values["report-only"])
+    for (const failure of outcome.failures) say(`FAIL ${failure}`)
+    await finish(outcome.code)
   }
 
   // The Fins at work: the Apexes with Fins, and every Fin.
@@ -523,9 +529,10 @@ if (model) {
   const sampled = (performance.now() - sampling) / 1_000
   churn.kill("SIGKILL")
   host.kill("SIGTERM")
-  const code = await Promise.race([exited, delay(60_000).then(() => "timeout" as const)])
-  if (code === "timeout") host.kill("SIGKILL")
-  if (code !== 0) throw new Error(`Scratch host exited ${code}; failed quit`)
+  const shutdown = await Promise.race([exited, quitDeadline()])
+  if (shutdown.timedOut) host.kill("SIGKILL")
+  const quit = hostLoadOutcome(shutdown, [], true)
+  if (quit.code) throw new Error(`Scratch host failed its quit: ${quit.failures.join("; ")}`)
 
   const probed = z.object({ health: z.array(z.tuple([z.number(), z.number().nullable()])), reads: z.array(z.tuple([z.number(), z.number().nullable()])) }).parse(JSON.parse(readFileSync(probeOut, "utf8")))
   const summary = (times: [number, number | null][]) => {
