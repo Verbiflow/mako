@@ -785,6 +785,24 @@ async function run(seed: number, steps: number): Promise<Record<string, number>>
   assert.equal(acpStore.get().conversations[key]?.hydrated, false, "each let go again")
 }
 
+// A listed Session let go of while a message waited behind its turn: the batches that run that message and end its
+// turn say it finished. The listed path kept the queue it was let go with, so a turn's end never counted as the last.
+{
+  const key = "finished-after-queued", epoch = "000000001.fini"
+  const session = (status: "running" | "ready") => ({ id: key, harness: "codex", cwd: "/fixture", title: "Queued then done", status, connection: "connected" as const, modes: [], currentMode: null, configOptions: [] })
+  const first = { id: "first", text: "Do it", attachments: [], status: "dispatching" as const }
+  const next = { id: "next", text: "Then this", attachments: [], status: "queued" as const }
+  readSnapshot = async () => { throw new Error("no read expected") }
+  applyLiveSnapshot({ session: session("running"), epoch, revision: 1, createdAt: 1, blocks: [], requests: [first, next], permissions: [], base: null, nativeAgents: { agents: [], limited: false } })
+  assert.ok(unloadLive(key), "let go of while its next message waits")
+  applyLiveBatch({ id: key, revision: 2, epoch, updates: [], requests: [{ ...first, status: "completed" }, { ...next, status: "dispatching" }] })
+  applyLiveBatch({ id: key, revision: 3, epoch, updates: [], session: session("ready"), requests: [{ ...first, status: "completed" }, { ...next, status: "completed" }] })
+  for (let wait = 0; wait < 6; wait += 1) await turn()
+  assert.equal(acpStore.get().conversations[key]?.hydrated, false, "still only listed")
+  const finished = notificationsStore.get().items.filter((item) => item.kind === "finished" && item.subject.id === subjectId({ kind: "live", key }))
+  assert.equal(finished.length, 1, "its turn's end is said, once")
+}
+
 const only = process.env.SEED
 const seeds = only ? [Number(only)] : Array.from({ length: Number(process.env.SEEDS ?? 300) }, (_, at) => at + 1)
 const totals: Record<string, number> = {}
