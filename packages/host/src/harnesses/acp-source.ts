@@ -391,6 +391,21 @@ export interface AcpCallHooks {
   meta: JsonObject
   method: string
   answer(params: JsonObject, thread: CallThread): JsonObject
+  /**
+   * Where the hooks cover the agent's tools that may write and the agent waits for their answer: a turn's message
+   * goes at once and such a call waits for its checkpoint (`ProviderLiveDriver.firstWrite`, `WriteHolds`).
+   */
+  writes?: {
+    via: string
+    /** Whether a hook's call, answered so, is one that runs and may write. */
+    holds(params: JsonObject, answer: JsonObject): boolean
+    /**
+     * Whether the person's own setup runs code beside these hooks, so a launch can't hold writes: asked of the harness
+     * itself, as the launch runs it, with the MCP servers Mako passes it (`process`: run as a process and not Mako's
+     * own). True when it can't say.
+     */
+    personCodeRuns(launch: { executable: string; env: NodeJS.ProcessEnv; cwd: string; servers: readonly { name: string; process: boolean }[] }): Promise<boolean>
+  }
 }
 
 export interface AcpVendorRequests {

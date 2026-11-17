@@ -3,9 +3,16 @@ import { hostLog } from "../../base/host-log.js"
 import { routeShellCall } from "../../contracts/native-calls.js"
 import type { JsonObject } from "../../contracts/json.js"
 import type { AcpCallHooks } from "../acp-source.js"
+import { grokInspect, grokPersonCodeRuns } from "./person-code.js"
 
-/** Grok's shell tool, the one tool its hooks are registered for. */
+/** Grok's shell tool, whose calls Mako routes. */
 const GROK_SHELL = "run_terminal_command"
+/**
+ * Grok's tools that may write, which a turn's checkpoint holds before they run: its shell, its file edits
+ * (`search_replace`, or `hashline_edit` in the other file toolset) and its Write tool, by the names its hooks guide
+ * gives (1.0.70).
+ */
+const GROK_WRITES = [GROK_SHELL, "search_replace", "hashline_edit", "write"] as const
 
 const HookRun = z.object({
   hookEventName: z.string(),
@@ -28,7 +35,7 @@ const HookRun = z.object({
 export const GROK_CALL_HOOKS: AcpCallHooks = {
   meta: {
     "x.ai/hooks": {
-      pre_tool_use: [{ matcher: `^${GROK_SHELL}$`, hookCallbackIds: ["mako-pre"], timeout: 10 }],
+      pre_tool_use: [{ matcher: `^(${GROK_WRITES.join("|")})$`, hookCallbackIds: ["mako-pre"], timeout: 10 }],
       post_tool_use: [{ matcher: `^${GROK_SHELL}$`, hookCallbackIds: ["mako-post"], timeout: 10 }],
     },
   },
@@ -48,5 +55,13 @@ export const GROK_CALL_HOOKS: AcpCallHooks = {
       return { additionalContext: route.message }
     }
     return {}
+  },
+  writes: {
+    via: "Mako's `pre_tool_use` client hook for Grok's shell, file edits and Write tool, answered over ACP (`_x.ai/hooks/run`), which Grok awaits before the tool runs; only on a launch serving Mako's tools in a folder Grok trusts and reports none of the person's hooks, plugins, MCP or LSP servers for (`grok inspect --json`).",
+    holds(params, answer) {
+      const run = HookRun.safeParse(params)
+      return run.success && run.data.hookEventName === "pre_tool_use" && answer.decision !== "deny" && GROK_WRITES.some((tool) => tool === run.data.toolName)
+    },
+    personCodeRuns: ({ executable, env, cwd, servers }) => grokPersonCodeRuns(grokInspect(executable, env, cwd), { servers }),
   },
 }

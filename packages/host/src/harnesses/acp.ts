@@ -1,4 +1,6 @@
 import { providerCall, failureEvidenceOf, ProviderFailureError, providerTextEvidence, HostFailureError, providerExitEvidence } from "../contracts/provider-failure.js"
+import type { WriteHolds } from "./write-holds.js"
+import { CALL_GATE_HOLD_MS } from "./call-gate.js"
 import { applyControlEnvironment } from "../control/index.js"
 import { applyThreadEnvironment } from "../workspaces/index.js"
 import type { ApprovalSubmission, NativeApprovalIdentity } from "../contracts/approval-response.js"
@@ -263,6 +265,8 @@ export interface AcpEngineDependencies {
   approvalRoot: string
   /** Where streams go (`HarnessContext.streams`); without it none are written. */
   streams?: string
+  /** Where calls that may write wait for their turn's checkpoint (`HarnessContext.writeHolds`). */
+  writeHolds?: WriteHolds
 }
 
 export type AcpEngine = ReturnType<typeof createAcpEngine>
@@ -392,6 +396,13 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       previous: options.observedApprovals ?? [],
       publish: decision => send({ type: "live-approval-decision", id, decision }),
     }))
+    // This launch's writes are held only where Mako's hooks gate them and nothing the person set up runs beside them.
+    const writes = dependencies.writeHolds && options.nativeCalls ? source.callHooks?.writes : undefined
+    const makoServers = new Set(makoMcp.map((server) => server.name))
+    const holdsWrites = writes ? !await writes.personCodeRuns({
+      executable, env, cwd: workingDir,
+      servers: preparedServers.map((server) => ({ name: server.name, process: "command" in server && !makoServers.has(server.name) })),
+    }) : false
     const child = trace.sync("spawn", () => spawnProviderProcess(executable, spec.args, {
       cwd: workingDir,
       env: environmentForExecutable(executable, env),
@@ -440,6 +451,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       emit: send,
     }
     sessions.set(id, live)
+    dependencies.writeHolds?.attend(id, holdsWrites)
     let open: (sessionId: string | null) => void = () => undefined
     const opened = new Promise<string | null>((resolve) => { open = resolve })
     live.startup.signal.addEventListener("abort", () => open(null), { once: true })
@@ -520,8 +532,13 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
         return { outcome: { outcome: "selected" as const, optionId: chosen } }
       },
       async extMethod(method: string, params: JsonObject) {
-        // A call hook answers at once and records nothing: it's Mako's, not the transcript's.
-        if (source.callHooks?.method === method && options.nativeCalls) return source.callHooks.answer(params, options.nativeCalls())
+        // A call hook records nothing: it's Mako's, not the transcript's. It answers at once, but for a call that may
+        // write, which waits for its turn's checkpoint where the turn holds writes.
+        if (source.callHooks?.method === method && options.nativeCalls) {
+          const answer = source.callHooks.answer(params, options.nativeCalls())
+          if (source.callHooks.writes?.holds(params, answer)) await dependencies.writeHolds?.beforeWrite(id, undefined, CALL_GATE_HOLD_MS)
+          return answer
+        }
         const frame = record({ request: method, params })
         const vendor = decoder.request(method, params)
         // Grok asks about folder trust from a task it starts with the session, so the request can land before session/new's reply.
@@ -1189,6 +1206,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
   }
 
   async function liveClose(id: string): Promise<void> {
+    dependencies.writeHolds?.forget(id)
     const closing = closingSessions.get(id)
     if (closing) return closing
     const live = sessions.get(id)

@@ -12,6 +12,8 @@ import { join } from "node:path"
 import { CALL_GATE_HOLD_MS, gateDenies, heldAnswer, hookMayWrite, HookCall } from "@mako/host/harnesses/call-gate"
 import { codexPersonCodeRuns } from "@mako/host/harnesses/codex/person-code"
 import { openCodePersonCodeRuns } from "@mako/host/harnesses/opencode/person-code"
+import { GROK_CALL_HOOKS } from "@mako/host/harnesses/grok/call-hooks"
+import { grokPersonCodeRuns } from "@mako/host/harnesses/grok/person-code"
 import type { JsonObject } from "@mako/host/contracts/json"
 import { WriteHolds } from "@mako/host/harnesses/write-holds"
 import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
@@ -149,6 +151,33 @@ try {
     assert.equal(await openCodePersonCodeRuns({ plugins: async () => { throw new Error("gone") }, servers: async () => ({ data: [] }), config: async () => [] }, launch), true, "an OpenCode that can't say fails closed")
     assert.equal(await openCodePersonCodeRuns(ask([{ unexpected: true }]), launch), true, "an answer Mako can't read fails closed")
     console.log("PASS: an OpenCode launch holds writes only where OpenCode says none of the person's own code runs, and fails closed")
+  }
+
+  // Grok: its hook waits for its shell, edits and Write; and a launch holds them only where Grok says, for a folder it
+  // trusts, that none of the person's own code loads (`grok inspect --json`, 1.0.70's shape).
+  {
+    const writes = GROK_CALL_HOOKS.writes
+    assert.ok(writes)
+    const run = (toolName: string, hookEventName = "pre_tool_use") => ({ hookEventName, toolName, toolInput: {} })
+    for (const tool of ["run_terminal_command", "search_replace", "hashline_edit", "write"]) assert.equal(writes.holds(run(tool), {}), true, `${tool} waits`)
+    assert.equal(writes.holds(run("read_file"), {}), false, "a read doesn't")
+    assert.equal(writes.holds(run("write", "post_tool_use"), {}), false, "after the tool ran, nothing waits")
+    assert.equal(writes.holds(run("run_terminal_command"), { decision: "deny", reason: "no" }), false, "a denied call never runs")
+    const meta = JSON.stringify(GROK_CALL_HOOKS.meta)
+    for (const tool of ["search_replace", "hashline_edit", "write"]) assert.ok(meta.includes(tool), `Grok's pre-tool hook is registered for ${tool}`)
+    const said = (fields: JsonObject) => async () => JSON.stringify({ grokVersion: "1.0.70", projectTrusted: true, hooks: [], plugins: [], mcpServers: [], lspServers: [], agents: [{ name: "plan", source: { type: "builtin" } }], ...fields })
+    const launch = { servers: [{ name: "mako", process: false }] }
+    assert.equal(await grokPersonCodeRuns(said({}), launch), false, "a trusted folder with nothing of the person's")
+    assert.equal(await grokPersonCodeRuns(said({ projectTrusted: false }), launch), true, "an untrusted folder says nothing of what would load, so nothing is held")
+    assert.equal(await grokPersonCodeRuns(said({ hooks: [{ event: "pre_tool_use", hookType: "command", target: "true", source: { type: "user", path: "/Users/p/.grok/hooks" } }] }), launch), true, "a hook of the person's")
+    assert.equal(await grokPersonCodeRuns(said({ plugins: [{ name: "theirs" }] }), launch), true, "a plugin")
+    assert.equal(await grokPersonCodeRuns(said({ mcpServers: [{ name: "theirs" }] }), launch), true, "an MCP server Grok loads itself")
+    assert.equal(await grokPersonCodeRuns(said({ lspServers: [{ name: "tsserver" }] }), launch), true, "an LSP server")
+    assert.equal(await grokPersonCodeRuns(said({}), { servers: [{ name: "theirs", process: true }] }), true, "a process MCP server of the launch's")
+    assert.equal(await grokPersonCodeRuns(async () => { throw new Error("grok gone") }, launch), true, "a Grok that can't say fails closed")
+    assert.equal(await grokPersonCodeRuns(async () => "not json", launch), true, "an answer Mako can't read fails closed")
+    assert.equal(await grokPersonCodeRuns(said({ hooks: "none" }), launch), true, "an answer of another shape fails closed")
+    console.log("PASS: a Grok launch holds writes only where Grok trusts the folder and says none of the person's own code loads, and fails closed")
   }
 } finally {
   rmSync(root, { recursive: true, force: true })
