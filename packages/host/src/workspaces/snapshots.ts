@@ -389,8 +389,9 @@ export class WorkspaceSnapshots {
       const workspace = await this.workspace(cwd)
       // Only a workspace no other run shares: a checkpoint names the runs that shared it, and reusing one would name others.
       const unshared = reuse && !shared?.size
-      // A turn's own checkpoint, before or after it, alone in the workspace: it may follow on from the last one.
-      const follows = Boolean(owned) && !shared?.size
+      // A turn's own checkpoint, before or after it, may follow on from the last one, another run sharing the workspace
+      // or not: it reads only what changed since, and names its own runs (`shared`), never the last one's.
+      const follows = Boolean(owned)
       if (workspace.repositories.length === 1 && workspace.repositories[0] === workspace.scope) return await this.captureRepository(workspace.scope, shared, unshared, frozen, lease, follows)
       // Each repository is its own lock: they're taken side by side, and the workspace is held once all of them are.
       let held = 0
@@ -431,7 +432,7 @@ export class WorkspaceSnapshots {
     const scope = await this.scope(cwd)
     const pins = new Set<string>()
     const history = this.history
-    const marking = shared?.size || !history ? undefined : this.markHistory(history)
+    const marking = history ? this.markHistory(history) : undefined
     let told = false
     const tell = () => {
       if (told) return
@@ -443,10 +444,11 @@ export class WorkspaceSnapshots {
       return await this.capturing(scope, async (gitDir, copied, fixed, finished) => {
         this.assertNoPending(scope)
         // Marked before anything is read: a change while it's taken is after the mark, so the next turn reads it again.
-        // One shared with other runs names them, which a later turn alone there shouldn't say: it's never reused.
         const mark = await marking
         const last = reuse || follows ? await this.sinceLast(scope, pins) : undefined
-        if (last?.kind === "same" && reuse) {
+        // Reused whole only when it names no other run: one that does is followed on from with nothing to add, so the
+        // new checkpoint names this turn's runs alone.
+        if (last?.kind === "same" && reuse && !last.record.shared?.length) {
           if (owned && !owned.released) this.pin(owned.checkpoints, last.record.id)
           return this.summary(last.record)
         }
@@ -459,7 +461,7 @@ export class WorkspaceSnapshots {
         }, true)
         if (owned && !owned.released) this.pin(owned.checkpoints, record.id)
         // One that left a file out holds no reading of it for the next turn to follow on from.
-        if (!record.shared?.length && !record.unreadable?.length && mark && staged !== undefined && excludes !== undefined && (increment || this.plain.has(record.id)))
+        if (!record.unreadable?.length && mark && staged !== undefined && excludes !== undefined && (increment || this.plain.has(record.id)))
           this.lastTaken.set(scope, { id: record.id, mark, head: record.head, staged, excludes })
         else this.lastTaken.delete(scope)
         this.plain.delete(record.id)

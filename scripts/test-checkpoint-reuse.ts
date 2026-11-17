@@ -205,6 +205,48 @@ try {
   assert.notEqual(stillEnd.id, stillStart.id, "a quiet turn's end is its own checkpoint")
   assert.equal(commands.some((args) => args.includes("add") || args.includes("--others")), false, "and costs no read of the working tree")
   assert.equal(treeOf(join(root, "store"), stillEnd.id), treeOf(join(root, "store"), stillStart.id), "holding what its start held")
+
+  // Two turns at once in one checkout (two Threads in the main checkout): each checkpoint, start and end, still follows
+  // on from the last one, names the runs it shared the workspace with, and is tree for tree a whole capture.
+  const wholeNow = async (name: string) => {
+    const whole = new WorkspaceSnapshots(new Git(), join(root, name))
+    try {
+      return treeOf(join(root, name), (await whole.capture(cwd)).id)
+    } finally {
+      whole.close()
+    }
+  }
+  const followed = () => !commands.some((args) => args.includes("--others"))
+  const one = randomUUID(), two = randomUUID()
+  edit("a.txt", "before both\n")
+  commands.length = 0
+  const firstStart = await store.beginRun(one, cwd, () => {})
+  assert.ok(followed(), "the first turn's start follows on")
+  assert.equal(firstStart.shared, undefined, "alone so far, it names no other run")
+  edit("one.txt", "the first turn's file\n")
+  commands.length = 0
+  const secondStart = await store.beginRun(two, cwd, () => {})
+  assert.ok(followed(), "a turn starting beside another follows on too, rather than reading the whole working tree")
+  assert.deepEqual(secondStart.shared, [one], "and names the run it shares the workspace with")
+  assert.equal(treeOf(join(root, "store"), secondStart.id), await wholeNow("whole-shared-start"), "holding what a whole capture of that moment holds")
+  edit("two.txt", "the second turn's file\n")
+  edit("a.txt", "the first turn's edit\n")
+  commands.length = 0
+  const firstEnd = await store.endRun(one, () => {})
+  assert.ok(followed(), "the first turn's end follows on")
+  assert.deepEqual(firstEnd.shared, [two], "naming the run that shared it")
+  assert.equal(treeOf(join(root, "store"), firstEnd.id), await wholeNow("whole-shared-one-end"), "and holds the workspace as that turn ended")
+  edit("two.txt", "the second turn's last edit\n")
+  commands.length = 0
+  const secondEnd = await store.endRun(two, () => {})
+  assert.ok(followed(), "the second turn's end follows on")
+  assert.deepEqual(secondEnd.shared, [one], "naming the run that shared it")
+  assert.equal(treeOf(join(root, "store"), secondEnd.id), await wholeNow("whole-shared-two-end"), "and holds the workspace as it ended")
+  // A turn alone after them starts on what they left without naming them.
+  const later = await turn()
+  assert.equal(later.before.shared, undefined, "a turn alone afterwards names neither")
+  assert.notEqual(later.before.id, secondEnd.id, "and never takes as its own a checkpoint that names other runs")
+  assert.equal(treeOf(join(root, "store"), later.before.id), treeOf(join(root, "store"), secondEnd.id), "though it holds the same workspace")
   console.log(JSON.stringify({ toldMs: Math.round(toldAt), savedMs: Math.round(savedAt) }))
 
   // Reused, the wait is the history's read and two Git reads, not a capture.
@@ -286,7 +328,7 @@ try {
       whole.close()
     }
   }
-  console.log("checkpoint reuse: a quiet workspace's turn starts on its last checkpoint; a change, a staged path, a moved HEAD, a lost or unread history, or a shared workspace is captured")
+  console.log("checkpoint reuse: a quiet workspace's turn starts on its last checkpoint; a change, a staged path, a moved HEAD, or a lost or unread history is captured; a turn beside another follows on too, naming the runs it shares the workspace with")
 } finally {
   store.close()
   rmSync(root, { recursive: true, force: true })
