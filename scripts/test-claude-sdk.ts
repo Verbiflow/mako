@@ -970,6 +970,27 @@ console.log("PASS: A monitor's event and a command that settled mid-turn are dra
   assert.deepEqual(since(count), [{ label: "Turn failed", detail: "claude-opus-4-8 declined the request",
     body: "Opus 4.8's safeguards flagged this message.\n\nBlocked under the usage policy.", tone: "error" }],
   "a refusal is said once, not again as the turn's stop")
+  assert.equal(session()?.status, "failed", "a native refusal is failed even in a successful result envelope")
+  assert.equal(session()?.failureEvidence?.kind, "model-refusal", "the refusal has typed terminal evidence")
+  await prompt()
+  result({ result: "I cannot do that; please choose something else." })
+  await delay(0)
+  assert.equal(session()?.status, "ready", "ordinary assistant prose is not native refusal evidence")
+  assert.equal(session()?.failureEvidence, undefined, "a later successful turn clears refusal evidence")
+  await prompt()
+  result({ stop_reason: "refusal" })
+  await delay(0)
+  assert.equal(session()?.failureEvidence?.kind, "model-refusal", "the typed stop reason alone also settles as refusal")
+  await prompt()
+  send({ type: "system", subtype: "model_refusal_fallback", ...ids, trigger: "refusal", direction: "retry", scope: "session",
+    original_model: "claude-fable-5-1", fallback_model: "claude-opus-4-8", request_id: "fixture-fallback",
+    content: "The model changed after a refusal.", api_refusal_explanation: null })
+  result({ stop_reason: "end_turn" })
+  await delay(0)
+  assert.equal(session()?.status, "ready", "a successful native fallback remains successful")
+  assert.equal(session()?.failureEvidence, undefined)
+
+
 
   count = markers().length
   result({ terminal_reason: "hook_stopped" })

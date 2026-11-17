@@ -12,6 +12,8 @@ export const PROVIDER_FAILURE_KINDS = [
   "transcript-rejected",
   /** The conversation no longer fits the model's context window. */
   "context-exhausted",
+  /** The native protocol says the model declined this request; never inferred from assistant prose. */
+  "model-refusal",
   /** The provider's account is signed out or its key is invalid; signing in again fixes it. */
   "auth",
   /** The provider explicitly refused this account's permission, scope or organisation access. */
@@ -262,6 +264,12 @@ export function describeProviderFailure(
         retriable: false,
         title: `${providerLabel}'s context window is full`,
         guidance: "Compact the conversation or start a new thread and carry over what matters.",
+      }
+    case "model-refusal":
+      return {
+        kind, retriable: false,
+        title: `${providerLabel} declined the request`,
+        guidance: "Choose another model to continue from the conversation; check prior work before repeating it.",
       }
     case "auth":
       return {

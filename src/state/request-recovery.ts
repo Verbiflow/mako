@@ -92,6 +92,16 @@ export function requestRecovery(
       delivery: recovery.delivery,
       more: [{ kind: "copy" }],
     }
+  // The model declined it: the same words to the same model would be declined again, so nothing offers to send them.
+  if (request.status === "failed" && request.failure === "model-refusal")
+    return {
+      title: recovery.title,
+      guidance: recoveryGuidance(request, deliveryKnown(request), { ...context, reset: false }),
+      tone: "caution",
+      delivery: recovery.delivery,
+      primary: { kind: "restore" },
+      more: [{ kind: "copy" }],
+    }
   const failed = request.status === "failed"
   const reset = usageLimitReset(request, context.resetAt, now)
   const resend: RecoveryAction | undefined = recovery.resendLabel ? { kind: "resend", label: recovery.resendLabel } : undefined
@@ -198,6 +208,8 @@ function recoveryGuidance(
   if (context.reset)
     return delivered === "never" ? `It never reached ${agent}; Mako can send it when the limit resets.` : `${agent} stopped on its usage limit; Mako can send a copy when the limit resets.`
   switch (request.failure) {
+    case "model-refusal":
+      return `${agent} declined this request, so change what you ask or pick another model before sending it again.`
     case "network":
       return delivered === "received" ? `${agent} got it before the connection dropped; continue the turn rather than sending a copy.` : safe
     case "rate-limited":

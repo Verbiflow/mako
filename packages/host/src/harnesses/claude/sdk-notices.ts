@@ -34,6 +34,11 @@ export class ClaudeNotices {
     this.now = now
   }
 
+  /** Read before decoding the terminal result, which clears the turn's notice state. */
+  declined(message: SDKResultMessage): boolean {
+    return this.refused || message.stop_reason === "refusal"
+  }
+
   readonly hook: HookCallback = async (input) => {
     if (input.hook_event_name === "PostCompact" && !input.agent_id) this.summary = input.compact_summary
     return {}
@@ -80,6 +85,7 @@ export class ClaudeNotices {
           retryAt: this.now() + message.retry_delay_ms,
         } }]
       case "model_refusal_fallback":
+        this.refused = false
         return notice(modelChangedEvent(
           message.original_model,
           message.fallback_model,

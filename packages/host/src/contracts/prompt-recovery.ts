@@ -5,6 +5,7 @@ import { describeProviderFailure, type ProviderFailureKind } from "./provider-fa
 const FAILURE_TITLES = {
   "transcript-rejected": "Session history was rejected",
   "context-exhausted": "Conversation context is full",
+  "model-refusal": "The model declined the request",
   auth: "Sign-in required",
   permission: "Access refused",
   "sign-in-check": "Check your sign-in",

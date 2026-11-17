@@ -464,6 +464,7 @@ async function pump(engine: Engine, live: Live): Promise<void> {
           drawTranscript(engine, live, found)
         }
       }
+      const declined = message.type === "result" && live.decoder.declined(message)
       decode(engine, live, message)
       const unmet = live.goalCondition === undefined ? undefined : claudeGoalFeedback(message, live.goalCondition)
       if (unmet) live.emit({ type: "live-goal", id: live.state.id, goal: unmet })
@@ -499,19 +500,19 @@ async function pump(engine: Engine, live: Live): Promise<void> {
       }
       logTranscriptReads(live)
       // SDK subtype "success" also carries API failures; is_error is authoritative.
-      const nativeFailure = message.is_error
+      const nativeFailure = declined ? "The model declined the request" : message.is_error
         ? (message.subtype === "success" ? message.result : message.errors.join("\n")) ||
           claudeStopReason(message) || "Claude ended the turn with an error"
         : undefined
       const failure = nativeFailure?.slice(0, 2000)
       if (failure) live.authDiagnostics.failure(failure)
-      const failureEvidence = await live.authDiagnostics.failureEvidence(nativeFailure) ?? (nativeFailure ? providerTextEvidence(nativeFailure) : undefined)
+      const failureEvidence = declined ? { kind: "model-refusal" as const, source: "native-error" as const } : await live.authDiagnostics.failureEvidence(nativeFailure) ?? (nativeFailure ? providerTextEvidence(nativeFailure) : undefined)
       if (live.closed) return
       engine.patch(live, {
         nativePath: live.transcript.path,
         nativeForkId,
-        status: message.is_error ? "failed" : "ready",
-        lastStop: message.is_error ? "failed" : "completed",
+        status: message.is_error || declined ? "failed" : "ready",
+        lastStop: message.is_error || declined ? "failed" : "completed",
         error: failure,
         failureEvidence,
       })
