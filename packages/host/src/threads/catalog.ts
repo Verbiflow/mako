@@ -62,7 +62,7 @@ import { daemonIsForeign } from "./daemon-vintage.js"
 import { headlessNodeExecutable } from "../base/headless-node.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { onProviderChildChange } from "../base/provider-children.js"
-import type { HostJobs } from "../base/host-jobs.js"
+import { whileOn, type HostJobs, type JobDemand } from "../base/host-jobs.js"
 import { threadFileWorkspace } from "../contracts/thread-file-workspace.js"
 import type { WorktreeOrigins } from "./worktree-origins.js"
 import type { Lineage } from "./lineage.js"
@@ -217,6 +217,12 @@ export interface ThreadFileHomes {
 }
 
 export interface ThreadCatalogDeps {
+  /**
+   * On while anyone watches what this host's Sessions are doing (a window, the CLI, another host, a cloud machine's
+   * Thread): every harness's process probe runs only then, so an idle host with nothing open looks at no process table
+   * on a timer. Off, the probes stop and the activity last seen stands until they run again. Absent, they always run.
+   */
+  watched?: JobDemand
   /** Where this host keeps its catalog cache. */
   dataRoot: string
   /** What every host of the user shares (`HostEnvironment.userRoot`): the record store, views, archive and transcripts. */
@@ -553,6 +559,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   let stopMonitoring: (() => void) | null = null
   let activityEngine: ProviderActivityEngine | null = null
   let stopNudges: (() => void) | undefined
+  let stopWatching: (() => void) | undefined
   const providerActivity = new Map<string, ProviderActivitySession[]>()
   let emittedActivity = new Map<string, ExternalThreadActivity>()
   /** Daemon mode's synchronous view: filled once, patched by events. */
@@ -747,7 +754,25 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     stopNudges = onProviderChildChange(() => activityEngine?.nudge())
   }
 
+  /** The probes, while something watches (`ThreadCatalogDeps.watched`), else always. */
+  function followWatchers(): void {
+    stopWatching?.()
+    const watched = deps.watched
+    if (!watched) return monitorProviderProcesses()
+    stopWatching = whileOn(watched, monitorProviderProcesses, pauseProcessMonitor)
+  }
+
+  /** Nothing watches: the probes stop, and what they last saw stands, said again when they next run. */
+  function pauseProcessMonitor(): void {
+    stopNudges?.()
+    stopNudges = undefined
+    activityEngine?.stop()
+    activityEngine = null
+  }
+
   function stopProcessMonitor(): void {
+    stopWatching?.()
+    stopWatching = undefined
     stopNudges?.()
     stopNudges = undefined
     activityEngine?.stop()
@@ -767,7 +792,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     catalogLifetime = new AbortController()
     const signal = catalogLifetime.signal
     stopping = false
-    monitorProviderProcesses()
+    followWatchers()
     catalogStartup = catalogTask(signal, async () => {
       await lineage.load()
       signal.throwIfAborted()

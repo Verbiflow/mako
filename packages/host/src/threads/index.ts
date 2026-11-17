@@ -129,6 +129,7 @@ export function openThreads({ environment, readOnly, ledger, harnesses, readFile
     origins,
     lineage,
     catalog: threadCatalog({
+      watched: subscribed,
       dataRoot,
       userRoot,
       isolated: environment.isolated,

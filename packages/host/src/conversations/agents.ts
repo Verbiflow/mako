@@ -4,7 +4,7 @@ import type { Entry } from "@mako/sessions/entries"
 import { SessionSettingsSchema, type SessionModel, type SessionSettings } from "@mako/sessions/settings"
 import { writeMessage } from "@mako/sessions/context-wire"
 import { findThreadReference, parseThreadToken, referenceItems, threadReferenceId, threadToken } from "@mako/sessions/thread-references"
-import type { HostJobs } from "../base/host-jobs.js"
+import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { branchSince, checkoutSince } from "../base/checkout-since.js"
 import { cutAccount } from "./cut-account.js"
@@ -749,6 +749,11 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly wakingForRoom = new Set<string>()
   /** Fins holding a place now (`occupies`): one that lets go frees it for what waits, at once. */
   private readonly occupying = new Set<string>()
+  /**
+   * On while a Fin holds a place here or a start waits for room: the room watch reads this device's load and what its
+   * Fins cost then, and holds no timer otherwise, so an idle host wakes for none of it (`roomNeeded`).
+   */
+  private readonly rooms: JobDemand
   private stopped = false
   private readonly stopRoomWatch: () => void
   /** The pull requests Fins' latest reports say they wait on, read until each outcome wakes its Fin. */
@@ -866,7 +871,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       heard: (child) => this.quietChanged(child),
       ...(deps.quietMs !== undefined && { quietMs: deps.quietMs }),
     })
-    this.stopRoomWatch = deps.jobs.every(ROOM_WATCH_JOB, ROOM_EVERY_MS, () => this.observe(true))
+    this.rooms = deps.jobs.demand("Fins at work or waiting for room")
+    this.stopRoomWatch = deps.jobs.every(ROOM_WATCH_JOB, ROOM_EVERY_MS, () => this.observe(true), { needs: [this.rooms] })
     const read = deps.readPull
     const watching = deps.jobs.demand("pull requests Fins wait on")
     this.pulls = new PullWatch({
@@ -1068,6 +1074,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     // The places Fins hold as this host takes over, the turns the last one cut short going on among them: each that lets
     // go of one later wakes what waits (`childMoved`).
     for (const edge of edges.all) if (this.occupies(edge)) this.occupying.add(edge.child)
+    this.roomNeeded()
     // What Fins here left for Apexes on other devices is sent again, and the places holding this device's Fins are told it's back.
     this.places?.resume()
     this.knock()
@@ -5392,6 +5399,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     this.sync()
     if (this.store()?.edges().internalRuns.some((internal) => internal.child === edge.child)) {
       this.occupying.delete(edge.child)
+      this.roomNeeded()
       for (const conversation of this.conversationsOfThread(edge.parent)) {
         this.wakes.refresh(conversation)
         this.deps.live.childrenChanged(conversation, false)
@@ -5405,6 +5413,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const held = this.occupying.has(edge.child)
     if (holds) this.occupying.add(edge.child)
     else this.occupying.delete(edge.child)
+    this.roomNeeded()
     const released = held && !holds
     // Its Apex is on another device, and it stands otherwise than that device last heard, with nothing new to report
     // (its turn ended after a report it made itself, or someone here sent it on): its last report says so again.
@@ -6542,6 +6551,12 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!store) return
     change(store)
     this.queueRefresh()
+    this.roomNeeded()
+  }
+
+  /** Whether the room watch has anything to read for: a Fin holding a place here, or a start waiting for room. */
+  private roomNeeded(): void {
+    this.rooms.set(this.occupying.size > 0 || (this.store()?.queuedSpawns().length ?? 0) > 0)
   }
 
   /**

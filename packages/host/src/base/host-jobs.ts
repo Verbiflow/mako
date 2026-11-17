@@ -16,11 +16,23 @@ export interface JobOptions {
   runsWhileHeld?: boolean
 }
 
+/**
+ * Runs `on` now and whenever `demand` turns on, and `off` whenever it turns off: work that keeps timers of its own (the
+ * harnesses' process probes) held to a demand as a job is by `needs`. Returns the unsubscribe; it calls neither.
+ */
+export function whileOn(demand: JobDemand, on: () => void, off: () => void): () => void {
+  const stop = demand.onChange((now) => (now ? on() : off()))
+  if (demand.on) on()
+  return stop
+}
+
 /** A reason some recurring work is needed, such as an open window; whoever knows sets it on and off. */
 export interface JobDemand {
   readonly name: string
   readonly on: boolean
   set(on: boolean): void
+  /** Hears it turn on and off, for work that keeps timers of its own rather than a job's; returns the unsubscribe. */
+  onChange(listener: (on: boolean) => void): () => void
 }
 
 interface Job {
@@ -82,6 +94,7 @@ export class HostJobs {
   /** A demand jobs can need, off until set on. */
   demand(name: string): JobDemand {
     let on = false
+    const listeners = new Set<(on: boolean) => void>()
     const demand: JobDemand = {
       name,
       get on() {
@@ -91,6 +104,11 @@ export class HostJobs {
         if (next === on) return
         on = next
         for (const job of this.jobs.values()) if (job.needs.includes(demand)) this.resume(job)
+        for (const listener of listeners) listener(on)
+      },
+      onChange: (listener) => {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
       },
     }
     return demand
