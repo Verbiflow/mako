@@ -367,14 +367,25 @@ try {
     await owner.stop()
     owner = new LiveConversations({ ...dependencies, checkpointWaitMs: 200 })
     const conversation = randomUUID(), previous = randomUUID(), next = randomUUID()
+    // The checkpoint deadline is the test's from the start: the setup turn waits for its own freeze, however slow the
+    // machine (a real 200 ms deadline let a loaded CI runner's setup turn go late, its before-point rightly unavailable).
+    let expire: (() => void) | undefined
+    const schedule = globalThis.setTimeout
+    const timer = mock.method(globalThis, "setTimeout", (callback: (...args: unknown[]) => void, ms: number, ...args: unknown[]) => {
+      if (ms !== 200) return schedule(callback, ms, ...args)
+      expire = () => callback(...args)
+      return schedule(() => {}, 60_000).unref()
+    })
     await owner.start("test", cwd, { conversationId: conversation })
     const sentBefore = sent.length
     owner.submit(conversation, previous, "previous turn")
     await until(() => sent.length === sentBefore + 1 && owner.snapshot(conversation)?.requests[0].snapshots?.before.kind === "ready")
+    // The deadline the follow-up's checkpoint asks for is the one the test expires below.
+    expire = undefined
     writeFileSync(file, "the previous turn's last edit")
     const reading = Promise.withResolvers<void>(), releaseRead = Promise.withResolvers<void>()
     const original = gitRunner.run.bind(gitRunner)
-    let paused = false, expire: (() => void) | undefined
+    let paused = false
     const capture = mock.method(gitRunner, "run", async (input: RunOptions) => {
       if (!paused && input.args.includes("add") && input.args.includes("-A")) {
         paused = true
@@ -382,12 +393,6 @@ try {
         await releaseRead.promise
       }
       return original(input)
-    })
-    const schedule = globalThis.setTimeout
-    const timer = mock.method(globalThis, "setTimeout", (callback: (...args: unknown[]) => void, ms: number, ...args: unknown[]) => {
-      if (ms !== 200) return schedule(callback, ms, ...args)
-      expire = () => callback(...args)
-      return schedule(() => {}, 60_000).unref()
     })
     try {
       finish(conversation, "previous answer")
