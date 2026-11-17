@@ -1,10 +1,14 @@
 name: The harness builds Mako keeps
 description: >-
   The archives vendor/harness-builds/sources.json pins by sha256, in vendor/harness-builds/downloads: from the cache
-  when it holds them, else from the vendor while it still serves them. Devin withdraws each build a day or so after
-  it ships the next, so an image that downloaded the pinned build failed on every pull request once it was gone; the
-  cache, saved on main as soon as a pin changes (host-linux-x64.yml's push trigger), keeps the bytes Mako tested. A
-  cached archive is checked like a downloaded one before it is used, and a build in neither place fails with what to do.
+  when it holds them, else from the vendor while it still serves them, else from their kept release, which
+  harness-builds.yml publishes when a pin lands on main. Devin withdraws each build a day or so after it ships the next,
+  so an image that downloaded the pinned build failed on every pull request once it was gone. Every archive is checked
+  by its sha256 before it is used, and a build in no place fails saying where it looked and what to do.
+inputs:
+  token:
+    description: A token that reads this repository's releases.
+    required: true
 runs:
   using: composite
   steps:
@@ -14,6 +18,8 @@ runs:
         path: vendor/harness-builds/downloads
         key: harness-builds-${{ hashFiles('vendor/harness-builds/sources.json') }}
     - shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
       run: node scripts/fetch-harness-builds.mjs
     - if: steps.restore.outputs.cache-hit != 'true'
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

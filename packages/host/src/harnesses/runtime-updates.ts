@@ -12,7 +12,8 @@ import {
   updateFailureWords,
 } from "../contracts/harness-updates.js"
 import { compareVersions, parseVersion } from "../contracts/runtime-version.js"
-import { runtimeVersions } from "../contracts/harness-versions.js"
+import { runtimeVersions, type HarnessVersions } from "../contracts/harness-versions.js"
+import { errorMessage } from "../base/error-message.js"
 import type { RuntimeUpdateOffer } from "../contracts/restore-plan.js"
 import type { InstalledReading } from "@mako/sessions/record-writers"
 import { JsonObjectSchema, JsonValueSchema, jsonStoreAccess, unknownFields, type JsonObject } from "@mako/sessions/store-format"
@@ -140,6 +141,8 @@ export interface RuntimeUpdatesOptions {
   ) => Promise<string>
   latest?: (npmPackage: string, tag?: string) => Promise<string>
   githubLatest?: (repository: string) => Promise<string>
+  /** The newest build a harness's feed serves (`HarnessVersions.feed`), read before its `newest` installer runs. */
+  served?: (feed: HarnessVersions["feed"]) => Promise<string>
   run?: (
     command: string,
     args: string[],
@@ -897,6 +900,10 @@ export class RuntimeUpdates {
         throw new Error(
           after.error ?? failure ?? "The installed executable did not report a version"
         )
+      // A pinned install never lands below the pin unnoticed: a vendor that pulled a build may serve an older one.
+      const tested = source.versions && !source.versions.bundled ? source.versions.tested : undefined
+      if (tested && compareVersions(after.installed, tested) < 0)
+        throw new Error(`${label}'s installer put ${after.installed} in place, older than the ${tested} this Mako is tested with. Mako runs it, but chose no older build: update Mako, or install ${label} ${tested} or newer.`)
       if (failure !== null)
         hostWarn("runtime", "installer failed after installing", {
           provider,
@@ -971,9 +978,18 @@ export class RuntimeUpdates {
         const pinned = versions && !versions.bundled ? versions.tested : undefined
         if (pinned && [plan.command, ...plan.args].join(" ").includes(pinned) && unpublishedBuild(ended.output)) {
           const newest = source?.newest
-          if (!newest) throw new Error(unpublishedWords(current.label ?? provider, pinned))
+          if (!newest || !versions) throw new Error(unpublishedWords(current.label ?? provider, pinned))
           const fallback = resolveExecutable(newest.command, env)
           if (!fallback) throw new Error(unpublishedWords(current.label ?? provider, pinned))
+          // Never down: the vendor's newest only when it is at least the pin and what's installed. Devin has pulled a
+          // same-day build and served the one before it again.
+          const label = current.label ?? provider
+          const served = await (this.options.served ?? feedNewest)(versions.feed).catch((error) => {
+            throw new Error(`${unpublishedWords(label, pinned)} Mako couldn't read which ${label} its vendor serves now (${errorMessage({ error })}).`)
+          })
+          const floor = current.installed && compareVersions(current.installed, pinned) > 0 ? current.installed : pinned
+          if (compareVersions(served, floor) < 0)
+            throw new Error(`${label} ${pinned}, which this Mako is tested with, is no longer published, and the newest its vendor serves, ${served}, is older than ${floor === pinned ? "that" : `the ${floor} installed`}. Mako installs no older build; update Mako, or wait for ${label}'s next release.`)
           hostWarn("runtime", `${action} of a withdrawn build: running the vendor's newest`, { provider, pinned, command: [newest.command, ...newest.args].join(" ") })
           ended = await (this.options.run ?? spawnUpdate)(fallback, newest.args, env, this.options.updateTimeoutMs)
         }
@@ -1266,6 +1282,13 @@ async function npmRegistryLatest(
     z.object({ version: z.string() }),
     { limit: REGISTRY_BODY_LIMIT, what: "npm registry" }
   )
+  return answer.version
+}
+
+/** The newest version a harness's feed serves: npm's `latest`, or a vendor manifest's `version`. */
+async function feedNewest(feed: HarnessVersions["feed"]): Promise<string> {
+  if ("npm" in feed) return npmRegistryLatest(feed.npm)
+  const answer = await registryJson(feed.manifest, z.object({ version: z.string() }), { limit: REGISTRY_BODY_LIMIT, what: "The vendor's manifest" })
   return answer.version
 }
 

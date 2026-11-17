@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { mkdir, readFile, readlink, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { fetchBuilds, readBuilds, sha256 } from "./lib/harness-builds.mjs"
+import { fetchBuilds, keptRelease, readBuilds, sha256 } from "./lib/harness-builds.mjs"
 import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
@@ -38,10 +38,16 @@ const root = testScratch("mako-harness-builds-")
   await fetchBuilds([build], downloads, async (_url, file) => { fetched++; await writeFile(file, bytes) })
   await fetchBuilds([build], downloads, async () => { throw new Error("a kept copy is used without a download") })
   assert.equal(fetched, 1)
-  // Other bytes than the pinned build are refused, and a build in neither place says to move the pin.
-  await assert.rejects(fetchBuilds([build], join(root, "other"), async (_url, file) => writeFile(file, "not the build")), /served other bytes than its pinned sha256/)
-  await assert.rejects(fetchBuilds([build], join(root, "gone"), async () => { throw new Error("curl: (22) The requested URL returned error: 403") }),
-    /devin 9\.9\.9 \(devin-9\.9\.9-target\.tar\.gz\) is in no kept copy, and https:\/\/example\.invalid\/devin\.tar\.gz didn't serve it \(curl: \(22\) The requested URL returned error: 403\)\. The vendor has withdrawn it: move the pin/)
+  // Withdrawn by its vendor, it comes from its kept release; other bytes than the pinned build are refused anywhere, and
+  // a build in no place names each one and what to do.
+  const withdrawn = async () => { throw new Error("curl: (22) The requested URL returned error: 403") }
+  let asked
+  await fetchBuilds([build], join(root, "released"), withdrawn, async (kept, file) => { asked = keptRelease(kept); await writeFile(file, bytes) })
+  assert.equal(asked, "harness-builds-devin-9.9.9", "a kept build's release is a prerelease tag no Mako version can be")
+  assert.equal(sha256(await readFile(join(root, "released", build.archive))), build.sha256)
+  await assert.rejects(fetchBuilds([build], join(root, "other"), async (_url, file) => writeFile(file, "not the build"), async (_kept, file) => writeFile(file, "nor this")), /served other bytes than its pinned sha256/)
+  await assert.rejects(fetchBuilds([build], join(root, "gone"), withdrawn, async () => { throw new Error("release not found") }),
+    /devin 9\.9\.9 \(devin-9\.9\.9-target\.tar\.gz\) is in no kept copy: https:\/\/example\.invalid\/devin\.tar\.gz didn't serve it \(curl: \(22\) The requested URL returned error: 403\); release harness-builds-devin-9\.9\.9 didn't serve it \(release not found\)\. Publish it with the harness-builds workflow/)
 
   // Laid out as Devin's installer lays it: the build, `current`, the link on PATH and its distribution marker.
   await writeFile(join(downloads, "sources.json"), JSON.stringify({ builds: [build, { ...build, target: "another-target", archive: "absent.tar.gz" }] }))
@@ -56,5 +62,5 @@ const root = testScratch("mako-harness-builds-")
   await mkdir(without)
   execFileSync(process.execPath, ["scripts/linux-host/seed-harnesses.mjs", downloads, "opencode"], { env: { ...process.env, HOME: without } })
   await assert.rejects(readFile(join(without, ".local/bin/devin")))
-  console.log("PASS: kept harness builds come from a checked copy or the vendor's checked bytes, say when the vendor withdrew them, and lay out as the vendor's installer does")
+  console.log("PASS: kept harness builds come from a checked copy, the vendor's checked bytes or their kept release, say where each was missing, and lay out as the vendor's installer does")
 }
