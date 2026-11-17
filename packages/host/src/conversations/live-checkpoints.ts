@@ -23,6 +23,7 @@ export const BEFORE_CHECKPOINT_WAIT_MS = 10_000
 
 /** Turns kept open for reading their files; each holds one object reader. */
 const OPEN_TURNS = 4
+type ClosingCapture = { state: "reading" | "fixed" | "overlapped" }
 
 /** Captures run boundaries before dispatch/queue drain; rewind creates an idle
  * historical fork so no irreversible provider rollback participates in recovery. */
@@ -32,6 +33,8 @@ export class LiveCheckpoints {
   private readonly saving = new Map<string, Promise<void>>()
   /** Checkpoints of each conversation under way, a turn's start and its end alike: `checkpointing` while any is. */
   private readonly capturing = new WeakMap<Resident, number>()
+  /** A closing payload may finish later; only its live-file read must precede the next agent's writes. */
+  private readonly endings = new WeakMap<Resident, Set<ClosingCapture>>()
   /** The turns last read, newest last, by their two checkpoints. */
   private readonly turns = new Map<string, CheckpointComparison>()
   private readonly host: LiveAccess
@@ -66,6 +69,8 @@ export class LiveCheckpoints {
         this.host.residencyChanged(resident)
         return
       }
+      for (const ending of this.endings.get(resident) ?? [])
+        if (ending.state === "reading") ending.state = "overlapped"
       return run()
     }).catch((error) => {
       this.host.residencyChanged(resident)
@@ -213,10 +218,17 @@ export class LiveCheckpoints {
     const snapshots = this.host.dependencies.workspaceSnapshots
     if (!snapshots) return
     const release = this.hold(resident)
+    const endings = this.endings.get(resident) ?? new Set<ClosingCapture>()
+    this.endings.set(resident, endings)
+    const ending: ClosingCapture = { state: "reading" }
+    endings.add(ending)
     void snapshots
-      .endRun(requestId)
+      .endRun(requestId, () => { if (ending.state === "reading") ending.state = "fixed" })
       .then(
-        (snapshot): NonNullable<RunSnapshots["after"]> => ({
+        (snapshot): NonNullable<RunSnapshots["after"]> => ending.state === "overlapped" ? {
+          kind: "unavailable",
+          reason: "The next turn started before this closing checkpoint held the workspace, so it may hold the next turn's edits",
+        } : ({
           kind: "ready",
           snapshot,
         }),
@@ -246,6 +258,8 @@ export class LiveCheckpoints {
       })
       .catch((error) => this.host.storageFailed(resident, { error }))
       .finally(() => {
+        endings.delete(ending)
+        if (!endings.size) this.endings.delete(resident)
         release()
         // Whatever moved the generation meanwhile (a wake, a relaunch) drained while this held the queue: what waits goes now.
         // On 2026-11-11 a steer's message sat 15 minutes after Claude's stop woke its session during a slow snapshot.
