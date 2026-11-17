@@ -8,6 +8,7 @@ import type { AccountEvent } from "@mako/protocol/account-events"
  * served to the cloud as its runtime.
  */
 import assert from "node:assert/strict"
+import { spawn } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
 import { once } from "node:events"
 import { existsSync } from "node:fs"
@@ -47,7 +48,7 @@ import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import { QuietNoteSchema, type QuietNote } from "@mako/protocol/handoff"
 import { MOVE_REASON_MAX, MoveHandOverRequestSchema, MoveRefuseRequestSchema } from "@mako/protocol/moves"
 import { HandoffSchema, type Handoff } from "@mako/host/contracts/thread-execution"
-import { FileAccountEventCursors, memoryAccountEventCursors } from "@mako/host/usage/account-event-cursor"
+import { accountEventClock, FileAccountEventCursors, memoryAccountEventCursors } from "@mako/host/usage/account-event-cursor"
 import { GrantedSecrets } from "@mako/host/base/secret-grants"
 import { memorySecrets } from "@mako/host/base/secrets"
 import { CloudAccounts, type CloudAccountOptions, type CloudRuntime } from "@mako/host/usage/cloud-account"
@@ -828,6 +829,13 @@ async function waitFor(check: () => boolean | Promise<boolean>, label: string): 
     if (Date.now() > deadline) throw new Error(`timed out: ${label}`)
 }
 
+const InlineCursorSchema = z.object({ credential: z.string(), seen: z.number().optional() })
+async function inlineCursor(store: Secrets, name: string) {
+  const record = await store.read("mako-sign-in", name)
+  assert.ok(record)
+  return InlineCursorSchema.parse(JSON.parse(record.value))
+}
+
 /** The last account event the sealed sign-in under `secretName` says this Mac heard. */
 async function heardUpTo(secretName: string): Promise<number | undefined> {
   const record = await secrets().read("mako-sign-in", secretName)
@@ -934,7 +942,7 @@ test("account event cursors are monotonic, identity-scoped and atomic without ch
   assert.equal(await reopened.read(scope), 10, "a refused write does not poison the queue")
 })
 
-test("account events preserve the sign-in grant and its live lease, including across cursor persistence and restart", async () => {
+test("ordinary event checkpoints preserve grants; first checkpoint and clean shutdown keep the legacy cursor", async () => {
   const cloud = await fakeCloud()
   const secretName = "cloud/stable-event-grant"
   const inner = memorySecrets()
@@ -949,35 +957,240 @@ test("account events preserve the sign-in grant and its live lease, including ac
   const heard: number[] = []
   const mac = await signedIn(cloud, { secretName, secrets: counted, eventCursors, onAccountEvent: event => heard.push(event.seq) })
   await waitFor(() => cloud.subscribes.includes(`account:${cloud.account.id} after 0`), "following")
+  const enrollmentWrites = writes
+  const joined = () => ({ type: "device-joined", device: { id: randomUUID(), kind: "cli", name: "build-box", platform: "Linux", enrolledBy: "device-code", from: { city: "Frankfurt", region: null, country: "DE" } } })
+  for (let event = 0; event < 5; event++) cloud.announce(joined())
+  await waitFor(async () => (await inlineCursor(inner, secretName)).seen === 5, "first checkpoint inline for rollback")
+  assert.equal(writes, enrollmentWrites + 1, "fresh enrollment gets one initial compatibility save")
   const record = await inner.read("mako-sign-in", secretName)
   assert.ok(record)
   const originalGrants = await granted.broker.grants()
   const lease = await granted.lend("mako-sign-in", secretName, { thread: "working", repository: "/work/example" }, "a running connection", "one-launch")
   assert.ok("lease" in lease)
-  const scope = { cloud: cloud.url, account: cloud.account.id, device: [...cloud.devices.values()][0]!.id, createdAt: [...cloud.devices.values()][0]!.createdAt }
+  const device = [...cloud.devices.values()][0]!
+  const scope = { cloud: cloud.url, account: cloud.account.id, device: device.id, createdAt: device.createdAt }
   const baseline = writes
-  const joined = () => ({ type: "device-joined", device: { id: randomUUID(), kind: "cli", name: "build-box", platform: "Linux", enrolledBy: "device-code", from: { city: "Frankfurt", region: null, country: "DE" } } })
   for (let event = 0; event < 5; event++) cloud.announce(joined())
-  await waitFor(async () => (await eventCursors.read(scope)) === 5 || writes > baseline, "cursor checkpoint or credential rewrite")
-  assert.equal(writes, baseline, "an event checkpoint must not rewrite the credential")
+  await waitFor(async () => (await eventCursors.read(scope)) === 10, "ordinary sidecar checkpoint")
+  assert.equal(writes, baseline, "ordinary checkpoints do not rewrite the credential")
   assert.equal((await inner.read("mako-sign-in", secretName))?.version, record.version)
-  assert.deepEqual(await granted.broker.grants(), originalGrants, "the original grant is reused")
-  assert.equal((await granted.broker.lease(lease.lease.id))?.ended, undefined, "the live lease stays valid")
-  assert.deepEqual(heard, [1, 2, 3, 4, 5])
+  assert.deepEqual(await granted.broker.grants(), originalGrants)
+  assert.equal((await granted.broker.lease(lease.lease.id))?.ended, undefined)
+  assert.equal((await inlineCursor(inner, secretName)).seen, 5)
+  assert.deepEqual(heard, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+  const observer = desktop({ url: cloud.url, secretName, secrets: counted, eventCursors, links: false })
+  await observer.accounts.ready()
+  await observer.accounts.close()
+  assert.equal(writes, baseline, "a read-only status observer must not checkpoint the credential")
+  assert.equal((await inlineCursor(inner, secretName)).seen, 5)
   await mac.accounts.close()
-  const again = desktop({ url: cloud.url, secretName, secrets: counted, eventCursors })
+  assert.equal((await inlineCursor(inner, secretName)).seen, 10, "the old reader's inline value is current at clean shutdown")
+  assert.equal(writes, baseline + 1)
+  // An empty cursor port models an old binary that cannot read the sidecar, using only the sealed inline value.
+  const again = desktop({ url: cloud.url, secretName, secrets: counted, eventCursors: memoryAccountEventCursors() })
   await again.accounts.ready()
   await again.until(connected, "connected again")
-  await waitFor(() => cloud.subscribes.includes(`account:${cloud.account.id} after 5`), "resumed after the persisted cursor")
-  assert.equal(writes, baseline, "restarting does not mint a grant")
+  await waitFor(() => cloud.subscribes.includes(`account:${cloud.account.id} after 10`), "resumed at the legacy inline cursor")
+  assert.equal(writes, baseline + 1, "resuming a current inline value creates no grant")
+  const nextLease = await granted.lend("mako-sign-in", secretName, { thread: "working", repository: "/work/example" }, "a new connection", "next-launch")
+  assert.ok("lease" in nextLease)
   cloud.options.rotate = true
   cloud.closeAll(4001)
-  await waitFor(() => writes > baseline, "a real credential successor saved")
+  await waitFor(() => writes > baseline + 1, "a real credential successor saved")
   await again.until(connected, "connected with the successor")
-  assert.equal(writes, baseline + 1)
-  assert.notEqual((await inner.read("mako-sign-in", secretName))?.version, record.version)
-  assert.equal((await granted.broker.lease(lease.lease.id))?.ended, "revoked", "real rotation still retires the old lease")
+  assert.equal(writes, baseline + 2)
+  assert.equal((await granted.broker.lease(nextLease.lease.id))?.ended, "revoked")
   await again.accounts.close()
+  assert.equal(writes, baseline + 2, "a current inline cursor needs no extra quit save")
+})
+
+test("quit bounds the rollback checkpoint and drains its broker while another process holds the lock", { timeout: 40_000 }, async (t) => {
+  for (const mode of ["seeded", "cold", "hourly"]) await t.test(mode, async (t) => {
+    const cloud = await fakeCloud(), inner = memorySecrets()
+    const folder = join(scratch, randomUUID()), secretName = `cloud/quit-${mode}`
+    let granted = new GrantedSecrets(inner, folder)
+    const cursors = memoryAccountEventCursors()
+    const logs: string[] = [], log = (message: string) => { logs.push(message) }
+    let offset = 0
+    const clock = accountEventClock(), eventClock = { ...clock, now: () => clock.now() + offset }
+    let mac = await signedIn(cloud, { secretName, secrets: granted, eventCursors: cursors, eventClock, log })
+    const joined = () => ({ type: "device-joined", device: { id: randomUUID(), kind: "cli", name: "build-box", platform: "Linux", enrolledBy: "device-code", from: { city: "Frankfurt", region: null, country: "DE" } } })
+    await waitFor(() => cloud.subscribes.length > 0, "following")
+    cloud.announce(joined())
+    await waitFor(async () => (await inlineCursor(inner, secretName)).seen === 1, "first inline checkpoint")
+    if (mode === "cold") {
+      await mac.accounts.close()
+      await granted.broker.close()
+      granted = new GrantedSecrets(inner, folder)
+      mac = desktop({ url: cloud.url, secretName, secrets: granted, eventCursors: cursors, eventClock, log })
+      await mac.accounts.ready()
+      await mac.until(connected, "reopened without seeding grants")
+      await waitFor(() => cloud.subscribes.includes(`account:${cloud.account.id} after 1`), "following again")
+    }
+    const device = [...cloud.devices.values()][0]!
+    const scope = { cloud: cloud.url, account: cloud.account.id, device: device.id, createdAt: device.createdAt }
+    const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+      import { acquireHostLock } from "@mako/host/base/host-lock"
+      const lock = await acquireHostLock(process.argv[1], { purpose: "borrowing", waitMs: 0 })
+      if (lock.kind !== "held") throw new Error("The fixture couldn't hold the borrowing lock")
+      process.send("held")
+      process.on("message", async () => { await lock.release(); process.exit(0) })
+    `, folder], { stdio: ["ignore", "ignore", "inherit", "ipc"] })
+    const exited = once(child, "exit")
+    let deadline: ReturnType<typeof setTimeout> | undefined
+    try {
+      const [message] = await Promise.race([once(child, "message"), exited.then(() => { throw new Error("The lock holder exited before readiness") })])
+      assert.equal(message, "held")
+      const listing = t.mock.method(granted.broker, "grants")
+      if (mode === "hourly") offset = 60 * 60_000
+      cloud.announce(joined())
+      await waitFor(async () => await cursors.read(scope) === 2, "latest sidecar checkpoint")
+      if (mode === "hourly") await waitFor(() => listing.mock.callCount() > 0, "hourly checkpoint already waiting for the lock")
+      const started = performance.now()
+      await Promise.race([
+        (async () => { await mac.accounts.close(); await granted.broker.close() })(),
+        new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error("Quit did not drain within its checkpoint bound")), 4_000) }),
+      ])
+      assert.ok(logs.some(message => message.includes("quit cursor checkpoint skipped")), "the skipped checkpoint is logged")
+      assert.equal(child.exitCode, null, "quit did not require the other host to release its lock")
+      t.diagnostic(`quit and broker drain with held lock: ${Math.round(performance.now() - started)} ms`)
+    } finally {
+      clearTimeout(deadline)
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
+      await exited
+      await mac.accounts.close()
+      await granted.broker.close()
+    }
+  })
+})
+
+test("300 checkpoints create at most one compatibility grant per hour and the deadline needs no new event", { timeout: 30_000 }, async (t) => {
+  const cloud = await fakeCloud()
+  cloud.options.tokenSeconds = 24 * 60 * 60
+  const inner = memorySecrets(), granted = new GrantedSecrets(inner)
+  const given = t.mock.method(granted.broker, "grant")
+  const secretName = "cloud/hourly-inline"
+  let now = Date.now(), timerId = 0
+  const timers = new Map<number, { at: number; run: () => void }>()
+  const clock = { now: () => now, after(ms: number, run: () => void) { const id = ++timerId; timers.set(id, { at: now + ms, run }); return () => { timers.delete(id) } } }
+  const advance = (ms: number) => {
+    const target = now + ms
+    for (;;) {
+      const next = [...timers].sort((a, b) => a[1].at - b[1].at)[0]
+      if (!next || next[1].at > target) break
+      now = next[1].at; timers.delete(next[0]); next[1].run()
+    }
+    now = target
+  }
+  const savedAt: number[] = []
+  let heard = 0, checkpoint = 0
+  const counted: Secrets = {
+    durable: () => granted.durable(), read: (kind, name) => granted.read(kind, name), list: kind => granted.list(kind), delete: (kind, name) => granted.delete(kind, name),
+    write: async (kind, name, value, options) => { const saved = await granted.write(kind, name, value, options); savedAt.push(now); return saved },
+  }
+  const cursors = memoryAccountEventCursors()
+  let eventHeard: (() => void) | undefined
+  const mac = await signedIn(cloud, { secretName, secrets: counted, eventClock: clock,
+    eventCursors: { read: scope => cursors.read(scope), write: async (scope, seen) => { await cursors.write(scope, seen); checkpoint = seen } },
+    onAccountEvent: () => { heard++; eventHeard?.() },
+  })
+  await waitFor(() => cloud.subscribes.length > 0, "following")
+  const enrollment = savedAt.length
+  const turn = () => new Promise<void>(resolve => setImmediate(resolve))
+  const emit = async () => {
+    const received = new Promise<void>(resolve => { eventHeard = resolve })
+    cloud.announce({ type: "device-removed", deviceId: randomUUID(), reason: "removed", by: null })
+    await received
+    advance(2_000)
+    await turn()
+    assert.equal(checkpoint, heard)
+  }
+  await emit()
+  assert.equal(savedAt.length, enrollment + 1)
+  const first = savedAt.at(-1)!
+  for (let n = 1; n < 300; n++) { advance(10_000); await emit() }
+  assert.equal(savedAt.length, enrollment + 1, "300 two-second checkpoints do not mint more grants within the hour")
+  assert.equal((await inlineCursor(inner, secretName)).seen, 1)
+  assert.equal(checkpoint, 300)
+  advance(60 * 60_000 - (now - first))
+  await turn()
+  assert.equal(savedAt.length, enrollment + 2, "the owned deadline catches up even without a new event")
+  assert.equal(savedAt.at(-1)! - first, 60 * 60_000)
+  assert.equal((await inlineCursor(inner, secretName)).seen, 300)
+  assert.equal(given.mock.callCount(), enrollment + 2, "count actual grant creation, not lease events")
+  await mac.accounts.close()
+  assert.equal(savedAt.length, enrollment + 2, "no duplicate shutdown save when already current")
+  assert.equal(timers.size, 0, "shutdown cancels every persistence deadline")
+})
+
+test("clean shutdown cannot restore the old credential behind a queued rotation", { timeout: 15_000 }, async () => {
+  const cloud = await fakeCloud(), inner = memorySecrets(), cursors = memoryAccountEventCursors()
+  const secretName = "cloud/inline-rotation-order"
+  let hold = false, successor: string | undefined
+  let entered: () => void = () => {}, release: () => void = () => {}
+  const waiting = new Promise<void>(resolve => { entered = resolve })
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const late: Secrets = {
+    durable: () => inner.durable(), read: (kind, name) => inner.read(kind, name), list: kind => inner.list(kind), delete: (kind, name) => inner.delete(kind, name),
+    write: async (kind, name, value, options) => {
+      if (hold) { hold = false; successor = InlineCursorSchema.parse(JSON.parse(value)).credential; entered(); await gate }
+      return inner.write(kind, name, value, options)
+    },
+  }
+  const mac = await signedIn(cloud, { secretName, secrets: late, eventCursors: cursors })
+  const device = [...cloud.devices.values()][0]!
+  const scope = { cloud: cloud.url, account: cloud.account.id, device: device.id, createdAt: device.createdAt }
+  await waitFor(() => cloud.subscribes.length > 0, "following")
+  cloud.announce({ type: "device-removed", deviceId: randomUUID(), reason: "removed", by: null })
+  await waitFor(async () => (await inlineCursor(inner, secretName)).seen === 1, "first inline checkpoint")
+  cloud.announce({ type: "device-removed", deviceId: randomUUID(), reason: "removed", by: null })
+  await waitFor(async () => (await cursors.read(scope)) === 2, "new sidecar checkpoint")
+  const original = (await inlineCursor(inner, secretName)).credential
+  hold = true; cloud.options.rotate = true; cloud.closeAll(4001)
+  await waiting
+  let closed = false
+  const closing = mac.accounts.close().then(() => { closed = true })
+  await Promise.resolve()
+  assert.equal(closed, false, "close joins the credential write already in flight")
+  release()
+  await closing
+  const saved = await inlineCursor(inner, secretName)
+  assert.ok(successor && successor !== original)
+  assert.equal(saved.credential, successor, "the shutdown checkpoint never writes the captured old credential over its successor")
+  assert.equal(saved.seen, 2)
+})
+
+test("a compatibility checkpoint keeps a successor accepted while durable storage was unavailable", { timeout: 15_000 }, async () => {
+  const cloud = await fakeCloud(), inner = memorySecrets(), cursors = memoryAccountEventCursors()
+  const secretName = "cloud/inline-memory-rotation"
+  let available = true
+  let refusedSave: () => void = () => {}
+  const refused = new Promise<void>(resolve => { refusedSave = resolve })
+  const store: Secrets = {
+    durable: async () => { if (!available) refusedSave(); return available }, read: (kind, name) => inner.read(kind, name), list: kind => inner.list(kind), delete: (kind, name) => inner.delete(kind, name),
+    write: (kind, name, value, options) => inner.write(kind, name, value, options),
+  }
+  const mac = await signedIn(cloud, { secretName, secrets: store, eventCursors: cursors })
+  const device = [...cloud.devices.values()][0]!
+  const scope = { cloud: cloud.url, account: cloud.account.id, device: device.id, createdAt: device.createdAt }
+  await waitFor(() => cloud.subscribes.length > 0, "following")
+  cloud.announce({ type: "device-removed", deviceId: randomUUID(), reason: "removed", by: null })
+  await waitFor(async () => (await inlineCursor(inner, secretName)).seen === 1, "first inline checkpoint")
+  const original = (await inlineCursor(inner, secretName)).credential
+  const subscriptions = cloud.subscribes.length
+  available = false; cloud.options.rotate = true; cloud.closeAll(4001)
+  await refused
+  await waitFor(() => cloud.subscribes.length > subscriptions, "the new stream uses the accepted in-memory successor")
+  const successor = device.successor
+  assert.ok(successor && successor !== original)
+  assert.equal((await inlineCursor(inner, secretName)).credential, original, "the old credential is still on disk")
+  available = true; cloud.options.rotate = false
+  cloud.announce({ type: "device-removed", deviceId: randomUUID(), reason: "removed", by: null })
+  await waitFor(async () => (await cursors.read(scope)) === 2, "new sidecar checkpoint")
+  await mac.accounts.close()
+  const saved = await inlineCursor(inner, secretName)
+  assert.equal(saved.credential, successor, "a restored keychain receives the accepted successor, never the old durable snapshot")
+  assert.equal(saved.seen, 2)
 })
 
 test("account events are delivered while their cursor write waits, and close joins the latest checkpoint", async () => {

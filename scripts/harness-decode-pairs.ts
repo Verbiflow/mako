@@ -681,7 +681,8 @@ const codex: Recorder = {
 }
 
 const OPENCODE_TOOLS: ToolVocabulary = {
-  subagent: { start: ({ description, prompt, background }) => ({ name: "subagent", arguments: { agent: "general", description, prompt, ...background && { background } } }) },
+  // 2.3.0 dropped `background`: every subagent runs apart from its turn, and a `<subagent>` message wakes the session on its report.
+  subagent: { start: ({ description, prompt }) => ({ name: "subagent", arguments: { agent: "general", description, prompt } }), always: "background" },
   monitor: { absent: "OpenCode 2.1.4 defines no tool that watches a command and reports what it prints (native-tools/opencode-2.1.4.json)" },
   read: (path, lines) => ({ name: "read", arguments: { path, ...lines } }),
   shell: (command) => ({ name: "shell", arguments: { command } }),

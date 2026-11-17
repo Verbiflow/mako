@@ -1,13 +1,13 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.167.0"
+    "version": "0.169.0"
   },
   "about": "What colour is the attached image? Don't run commands. A prompt that carries an image, answered without a tool.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/11/06/rollout-2026-11-06T14-20-37-01a1b13b-9f1c-7092-ab6d-af84d0dfc6f9.jsonl",
+      "path": ".codex/sessions/2026/11/16/rollout-2026-11-16T15-54-01-01a1e6c8-2e5d-7612-83b1-9c62f245e1f5.jsonl",
       "known": []
     }
   ]

@@ -4292,7 +4292,8 @@ export class Agents implements AgentOperations, ConversationChildren {
    * reply owed opens only once its harness takes the message, as a turn or a steer, so a report from before can't
    * answer it; its brief, a `reply: none` message, an answer to the Fin's own question, and Mako's own words owe none. Any report
    * after it settles it but progress: progress only when it hands work on, waits on someone else, or names it in
-   * `answers`. Read from the journal and the store, never kept, so a restart reads it the same.
+   * `answers`. Only turns its model answered count (`completed`), so a turn a limit or a failure cut draws no reminder.
+   * Read from the journal and the store, never kept, so a restart reads it the same.
    */
   private owedOf(edge: ThreadParent, conversation: string): { request: LiveRequest; at: number; turns: number }[] {
     const snapshot = this.deps.live.held(conversation) ?? this.deps.live.snapshot(conversation)
@@ -4302,7 +4303,6 @@ export class Agents implements AgentOperations, ConversationChildren {
     const actions = snapshot.control?.actions ?? []
     const answers = store.answerRequests(edge.child)
     const reports = store.reportsOf(edge.child)
-    const ended = (request: LiveRequest) => request.status === "completed" || request.status === "failed" || request.status === "interrupted"
     const owed: { request: LiveRequest; at: number; turns: number }[] = []
     for (const request of requests) {
       // Only a question its Apex said it expects an answer to: a task's answer is its result, which has its own route.
@@ -4311,7 +4311,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       const taken = takenAs(request, requests, actions)
       if (!taken) continue
       if (answeredBy(reports, request.id, taken.at)) continue
-      const turns = requests.filter((each) => ended(each) && (each.id === taken.into || (each.dispatchedAt ?? -1) >= taken.at)).length
+      const turns = answeredTurns(requests, taken)
       owed.push({ request, at: taken.at, turns })
     }
     return owed
@@ -7390,6 +7390,15 @@ function stripChange(strip: AgentStrip): ChangeFacts {
  */
 function answeredBy(reports: readonly Report[], request: string, at: number): boolean {
   return reports.some((report) => report.at >= at && (report.status !== "progress" || report.handoff || report.awaits || report.answers?.includes(request)))
+}
+
+/**
+ * How many of a Fin's turns its model answered since it took a message (`taken`): the turn it went in and those after,
+ * each `completed`. One a limit, a failure or a stop cut owes nothing it couldn't answer, so it doesn't count toward a
+ * reminder or its Apex's line.
+ */
+export function answeredTurns(requests: readonly LiveRequest[], taken: { at: number; into: string }): number {
+  return requests.filter((each) => each.status === "completed" && (each.id === taken.into || (each.dispatchedAt ?? -1) >= taken.at)).length
 }
 
 /**

@@ -1,10 +1,9 @@
 import { execFile, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises"
+import { mkdir, readdir, readFile, realpath, writeFile } from "node:fs/promises"
 import { createServer, type ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
-import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import { createInterface } from "node:readline"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -18,6 +17,7 @@ import { resolveOpenCodeInstallation } from "@mako/host/harnesses/opencode/insta
 import { resolveCodexExecutable } from "@mako/host/harnesses/codex/executable"
 import { devinExecutable } from "@mako/host/harnesses/devin/executable"
 import { claudeSdkBinary, codexBinary } from "./harness-binaries.ts"
+import { sandboxed } from "./harness-sandbox.ts"
 
 /**
  * Records what a harness says about itself, names only, as the fixtures its
@@ -348,7 +348,7 @@ const listings = new Map<string, Listings>([
   ["devin", { executable: async () => devinExecutable(), skills: cliListing(["skills", "list"]), mcpConfig: cliListing(["mcp", "list"]) }],
 ])
 
-function sandboxed(sandbox: Sandbox, path: string): string {
+function probePath(sandbox: Sandbox, path: string): string {
   return path.startsWith("~/") ? join(sandbox.home, path.slice(2)) : join(sandbox.project, path)
 }
 
@@ -360,11 +360,11 @@ async function placeProbes(kind: "skills" | "mcpConfig", places: readonly string
     const name = `mako-probe-${String.fromCharCode(97 + index)}`
     names.set(name, place)
     if (kind === "skills") {
-      const dir = join(sandboxed(sandbox, place), name)
+      const dir = join(probePath(sandbox, place), name)
       await mkdir(dir, { recursive: true })
       await writeFile(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: Mako's probe of ${place}\n---\nProbe.\n`)
     } else {
-      files.set(sandboxed(sandbox, place), [...files.get(sandboxed(sandbox, place)) ?? [], name])
+      files.set(probePath(sandbox, place), [...files.get(probePath(sandbox, place)) ?? [], name])
     }
   }
   for (const [file, servers] of files) {
@@ -380,20 +380,12 @@ async function placeProbes(kind: "skills" | "mcpConfig", places: readonly string
 
 /** What the harness itself lists of the places its concepts declare, from a throwaway home and project. */
 async function listed(kind: "skills" | "mcpConfig", places: readonly string[], listing: Listing, executable: string, format: McpProbeFormat = "mcpServers"): Promise<Places> {
-  const root = await realpath(await mkdtemp(join(tmpdir(), `mako-${harness}-${kind}-`)))
-  try {
-    const home = join(root, "home")
-    const project = join(root, "project")
-    await mkdir(join(project, ".git"), { recursive: true })
-    const env = { ...process.env, HOME: home, CODEX_HOME: join(home, ".codex"), XDG_CONFIG_HOME: join(home, ".config"), XDG_DATA_HOME: join(home, ".local", "share"), TMPDIR: root }
-    const sandbox = { home, project, env }
+  return sandboxed(`mako-self-report-${kind}`, harness!, async (sandbox) => {
     const names = await placeProbes(kind, places, sandbox, format)
     const text = await listing(executable, sandbox)
     const found = [...names].filter(([name]) => text.includes(name)).map(([, place]) => place)
     return { via: "its own listing", listed: found, missing: places.filter((place) => !found.includes(place)) }
-  } finally {
-    await rm(root, { recursive: true, force: true })
-  }
+  })
 }
 
 interface Places {
@@ -428,24 +420,30 @@ async function claudeInit(): Promise<void> {
     agents: z.array(z.string()).optional(),
     capabilities: z.array(z.string()).optional(),
   }).loose()
-  const child = spawn(claudeSdkBinary(), ["-p", "--output-format", "stream-json", "--verbose", "--model", "haiku", "Reply with the single word ok."], {
-    stdio: ["ignore", "pipe", "ignore"],
-  })
-  let init: z.infer<typeof Init> | undefined
-  for await (const line of createInterface({ input: child.stdout })) {
-    let value: unknown
+  // Sealed: no sign-in, so `init` is all it sends, and nothing of this shell's,
+  // whose `MAKO_SESSION_ID` once made the run a Fin of the Thread that ran the bump.
+  const init = await sandboxed("mako-self-report-init", "claude", async ({ project, env }) => {
+    const child = spawn(claudeSdkBinary(), ["-p", "--output-format", "stream-json", "--verbose", "--model", "haiku", "Reply with the single word ok."], {
+      cwd: project,
+      env: { ...env, ANTHROPIC_BASE_URL: "http://127.0.0.1:9" },
+      stdio: ["ignore", "pipe", "ignore"],
+    })
     try {
-      value = JSON.parse(line)
-    } catch {
-      continue
+      for await (const line of createInterface({ input: child.stdout })) {
+        let value: unknown
+        try {
+          value = JSON.parse(line)
+        } catch {
+          continue
+        }
+        const parsed = Init.safeParse(value)
+        if (parsed.success) return parsed.data
+      }
+      return undefined
+    } finally {
+      child.kill()
     }
-    const parsed = Init.safeParse(value)
-    if (parsed.success) {
-      init = parsed.data
-      break
-    }
-  }
-  child.kill()
+  })
   if (!init) throw new Error("Claude exited before reporting system/init")
   const report = {
     harness,
