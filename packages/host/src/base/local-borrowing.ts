@@ -97,11 +97,11 @@ export class LocalBorrowing implements Borrowing {
     return () => this.#listeners.delete(listener)
   }
 
-  grant(grant: Grant): Promise<string | undefined> {
+  grant(grant: Grant, signal?: AbortSignal): Promise<string | undefined> {
     return this.#change(async (kept) => {
       if (this.#store?.hasEnded(grant.id)) return "That grant has ended; a new grant takes a new ID"
       return (await this.#step(kept, { type: "grant", grant, at: this.#now() })).rejected
-    })
+    }, signal)
   }
 
   borrow(need: Need): Promise<BorrowAnswer> {
@@ -120,8 +120,8 @@ export class LocalBorrowing implements Borrowing {
     return this.#change(async (kept) => void (await this.#step(kept, { type: "release", lease, at: this.#now() })))
   }
 
-  revoke(grant: string, by: Actor): Promise<void> {
-    return this.#change(async (kept) => void (await this.#step(kept, { type: "revoke", grant, by, at: this.#now() })))
+  revoke(grant: string, by: Actor, signal?: AbortSignal): Promise<void> {
+    return this.#change(async (kept) => void (await this.#step(kept, { type: "revoke", grant, by, at: this.#now() })), signal)
   }
 
   /** Every lease of a Thread here ends, its waiting asks with it, and the grants that end with it. */
@@ -165,8 +165,8 @@ export class LocalBorrowing implements Borrowing {
     return structuredClone(liveLeases((await this.#read()).state, filter))
   }
 
-  async grants(): Promise<Grant[]> {
-    return structuredClone(standingGrants((await this.#read()).state, this.#now()))
+  async grants(signal?: AbortSignal): Promise<Grant[]> {
+    return structuredClone(standingGrants((await this.#read(signal)).state, this.#now()))
   }
 
   async lease(id: string): Promise<{ lease: Lease; ended?: LeaseEnd } | undefined> {
@@ -194,9 +194,9 @@ export class LocalBorrowing implements Borrowing {
    * Runs `work` holding the folder's lock, for an adapter keeping a file of its own beside the state (what it placed):
    * read, changed and written back with no other broker between.
    */
-  locked<T>(work: () => Promise<T>): Promise<T> {
+  locked<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     if (this.#closing) return Promise.reject(new Error("This device's borrowing broker is closed"))
-    const next = this.#queue.then(() => this.#withLock(work))
+    const next = this.#queue.then(() => this.#withLock(work, signal))
     this.#queue = next.catch(() => undefined)
     return next
   }
@@ -218,15 +218,18 @@ export class LocalBorrowing implements Borrowing {
     return (this.#options.now ?? Date.now)()
   }
 
-  async #withLock<T>(work: () => Promise<T>): Promise<T> {
+  async #withLock<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    signal?.throwIfAborted()
     const folder = this.folder
     if (!folder) return work()
     await mkdir(folder, { recursive: true, mode: 0o700 })
     const until = Date.now() + LOCK_WAIT_MS
     for (;;) {
+      signal?.throwIfAborted()
       const lock = await acquireHostLock(folder, { purpose: "borrowing", waitMs: 0 })
       if (lock.kind === "held")
         try {
+          signal?.throwIfAborted()
           return await work()
         } finally {
           await lock.release()
@@ -251,12 +254,12 @@ export class LocalBorrowing implements Borrowing {
     return this.#closing = done
   }
 
-  #read(): Promise<Kept> {
-    return this.locked(() => this.#load())
+  #read(signal?: AbortSignal): Promise<Kept> {
+    return this.locked(() => this.#load(), signal)
   }
 
   /** One change: under the lock, the state as it is on disk, the change, asks waiting for this broker's sources, and the state written back. */
-  #change<T>(work: (kept: Kept) => Promise<T>): Promise<T> {
+  #change<T>(work: (kept: Kept) => Promise<T>, signal?: AbortSignal): Promise<T> {
     const pushes: Array<[Borrower, BorrowPush]> = []
     const done = this.locked(async () => {
       const kept = structuredClone(await this.#load())
@@ -270,7 +273,7 @@ export class LocalBorrowing implements Borrowing {
       } finally {
         this.#effects = undefined
       }
-    })
+    }, signal)
     return done.then((value) => {
       for (const [borrower, push] of pushes) for (const listener of this.#listeners) listener(structuredClone(borrower), structuredClone(push))
       return structuredClone(value)

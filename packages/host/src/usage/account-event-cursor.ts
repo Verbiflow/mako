@@ -4,6 +4,18 @@ import { join } from "node:path"
 import { z } from "zod"
 import { jsonStoreAccess } from "@mako/sessions/store-format"
 
+/** Owned persistence deadlines, separate from the connection's token/heartbeat clock. */
+export interface AccountEventClock {
+  now(): number
+  after(ms: number, run: () => void): () => void
+}
+export function accountEventClock(): AccountEventClock {
+  return {
+    now: () => Date.now(),
+    after(ms, run) { const timer = setTimeout(run, ms); timer.unref?.(); return () => clearTimeout(timer) },
+  }
+}
+
 /** The stream's identity, independent of credential rotation. No credential is kept in a cursor. */
 export interface AccountEventScope { cloud: string; account: string; device: string; createdAt: string }
 export interface AccountEventCursors {
