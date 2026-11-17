@@ -6,11 +6,18 @@ import { readingLive, receivingLive } from "../src/state/live-door"
 import { failAroundTheDoor } from "./live-door-watch"
 import { stagePrompt, removePendingPrompt } from "../src/state/acp-pending"
 import { beginStart } from "../src/state/acp-start"
-import { autoContinuePending, continueTurnPrompt, promptDelivery, recoverableRequests, makoPrompts, savedMakoPrompt, turnStopLabel, turnStops, turnWords } from "../src/state/prompt-delivery"
+import { autoContinuePending, continueTurnPrompt, foldedPromptParts, promptDelivery, recoverableRequests, recoveriesByPlace, makoPrompts, savedMakoPrompt, turnStopLabel, turnStops, turnWords } from "../src/state/prompt-delivery"
+import { foldedSeparator } from "@mako/host/contracts/live-conversations"
+import { FROM_AGENTS, fromAgent, YOUR_APEX } from "@mako/host/contracts/children"
+import { pullWakeNote } from "@mako/host/contracts/pull-waits"
 import { autoContinueCandidate, crashedChildTurn, savedContinuation } from "@mako/host/contracts/turn-continuation"
-import { classifyProviderFailure } from "@mako/host/contracts/provider-failure"
+import { classifyProviderFailure, providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import { failureAfterRetry, GIVE_UP_MS, nextRetry } from "@mako/host/contracts/delivery-retry"
-import { resetWords } from "@mako/host/contracts/account-usage"
+import { usageLimitWait, usageLimitSources } from "../src/state/usage-limit-wait"
+import { withoutWaitingLimitNotes } from "../src/lib/exchanges"
+import { ProducedNotice } from "../src/components/composer/composer-notices"
+import { useLimitContinueNotice, useAccountLimitNotice } from "../src/components/composer/account-notice"
+import { useFailureNotice } from "../src/components/viewer/failure-notice"
 import { FailureRow } from "../src/components/transcript/failure-row"
 import { PromptQueue } from "../src/components/composer/prompt-queue"
 import { projectLive } from "../src/state/live-projection"
@@ -224,6 +231,42 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   assert.equal(turnWords([quit, asked], asked), "Run the suite and fix what fails", "anything else, its own words")
   const moved: LiveRequest = { ...request, id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", actor: { kind: "service", name: "workspace" } }
   assert.deepEqual([...makoPrompts([moved])], [[moved.id, { kind: "moved" }]], "the note after an agent's move is Mako's")
+  const waitNote = "Mako: your wait \"CI on #412\" ended when this Thread moved here. If you still need it, call wait again."
+  const waited: LiveRequest = { ...request, id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", text: waitNote, actor: { kind: "service", name: "turn-wait" } }
+  assert.deepEqual([...makoPrompts([waited])], [[waited.id, { kind: "wait", line: "Your wait \"CI on #412\" ended when this Thread moved here. If you still need it, call wait again." }]], "a wait's note a move carried is Mako's")
+  assert.deepEqual(savedMakoPrompt("Mako: the wait \"CI\" is over.\n- #412 checks: passed"), { kind: "wait", line: "The wait \"CI\" is over.", detail: "- #412 checks: passed" }, "read back by its words")
+  assert.equal(savedMakoPrompt("Mako: the waiting room is full"), undefined, "words that only begin like one are the person's")
+  {
+    // A message several went as (`foldQueued`) is drawn as its parts, each as who wrote it, live and saved alike.
+    const at = Date.parse("2026-11-16T08:00:00Z")
+    const apexSays = (words: string) => `${fromAgent(YOUR_APEX)}\n${words}`
+    const pullNote = pullWakeNote("acme/app#12", "https://git.example.com/acme/app/pull/12", { kind: "merged" })
+    const waitWords = "Mako: the wait \"CI\" is over.\n- #412 checks: passed"
+    const kinds = (text: string) => foldedPromptParts(text)?.map((part) => part.kind)
+    // Mako's note folded into its Apex's message: the Apex's card, then Mako's line, never inside the card.
+    const apexFirst = `${apexSays("Land #12.")}${foldedSeparator("mako", at)}${pullNote}`
+    assert.deepEqual(kinds(apexFirst), ["agent", "pull"])
+    const card = foldedPromptParts(apexFirst)![0]!
+    assert.ok(card.kind === "agent" && !card.raw.includes("Mako: PR"), "the Apex's card holds its own words only")
+    // A pull note carrying its Apex's messages: Mako's line, then the Apex's card, never the person's prompt.
+    const pullFirst = `${pullNote}${foldedSeparator("agent", at)}${apexSays("Then the docs.")}${foldedSeparator("same", at + 1)}${apexSays("And the changelog.")}`
+    assert.deepEqual(kinds(pullFirst), ["pull", "agent", "agent"])
+    const carrier: LiveRequest = { ...request, id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", text: pullFirst, actor: { kind: "service", name: "pull-watch" }, joined: [{ id: "x", at }, { id: "y", at }] }
+    assert.equal(makoPrompts([carrier]).get(carrier.id), undefined, "a carrier is drawn as its parts, not classed whole as Mako's")
+    // A wait's note carrying its Apex's message: the wait's line with its own detail, then the Apex's card.
+    const waitFirst = `${waitWords}${foldedSeparator("agent", at)}${apexSays("Merge it.")}`
+    const parts = foldedPromptParts(waitFirst)!
+    assert.deepEqual(parts.map((part) => part.kind), ["wait", "agent"])
+    assert.ok(parts[0]!.kind === "wait" && parts[0]!.detail === "- #412 checks: passed", "the wait's detail is its own, not the Apex's words")
+    assert.equal(foldedPromptParts(apexSays("Alone.")), undefined, "a message that went alone isn't split")
+    // The person's message carrying the rest: their words as theirs, then the Apex's card, then Fins' news as its own.
+    const news = `${FROM_AGENTS}\n1 finished:\n  • "schema" (Codex) done:\n    Done: the schema checked.`
+    const personFirst = `Use staging.${foldedSeparator("agent", at)}${apexSays("Docs too.")}${foldedSeparator("fins", at + 1)}${news}`
+    const inbox = foldedPromptParts(personFirst)!
+    assert.deepEqual(inbox.map((part) => part.kind), ["words", "agent", "agent"])
+    assert.ok(inbox[0]!.kind === "words" && inbox[0]!.text === "Use staging.", "the person's words alone, first")
+    assert.ok(inbox[2]!.kind === "agent" && inbox[2]!.raw.startsWith(FROM_AGENTS) && !inbox[2]!.raw.includes("Docs too."), "Fins' news drawn as its own, apart from the Apex's card")
+  }
   assert.deepEqual(turnStops([dropped, continuation], true).get(dropped.id), { reason: "connection-lost", continuable: false, automatic: false })
   assert.equal(autoContinueCandidate([dropped]), dropped, "the newest dropped turn is Mako's to continue")
   assert.equal(autoContinueCandidate([dropped, continuation]), undefined, "a turn already continued is not continued again")
@@ -232,7 +275,7 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   assert.equal(autoContinueCandidate([dropped, { ...request, status: "canceled" }]), dropped, "a canceled request after it does not change the candidate")
   assert.equal(autoContinueCandidate([dropped, { ...request, status: "queued" }]), undefined, "a queued prompt behind it is the user's next word")
   assert.equal(autoContinueCandidate([quit]), undefined, "only a dropped connection or an exited provider earns an automatic continuation")
-  // After Mako's own restart, with the person's choice on, Mako's exit earns one too; a crash never does.
+  // With restart continuation on, both an intentional exit and a crash are candidates; Stop and Off still stand.
   const now = 10 * 60_000
   const cut = (id: string, at: number, continues?: string): LiveRequest => ({
     ...request, id, status: "interrupted", interruption: { reason: "host-quit", at },
@@ -240,7 +283,10 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   })
   const quitAt = cut("11111111-1111-4111-8111-000000000001", now - 1_000)
   assert.equal(autoContinueCandidate([quitAt], true, now), quitAt, "a turn Mako's exit cut short is continued after the restart")
-  assert.equal(autoContinueCandidate([{ ...quitAt, status: "uncertain", interruption: { reason: "host-crashed", at: now } }], true, now), undefined, "a crash waits for the person")
+  const crashCandidate: LiveRequest = { ...quitAt, status: "uncertain", interruption: { reason: "host-crashed", at: now } }
+  assert.equal(autoContinueCandidate([crashCandidate], true, now), crashCandidate, "a crash is eligible under the default-on restart contract")
+  assert.equal(autoContinueCandidate([crashCandidate], false, now), undefined, "explicit Off does not admit crash recovery")
+  assert.equal(autoContinueCandidate([{ ...crashCandidate, pause: "stop" }], true, now), undefined, "a person's Stop still prevents crash recovery")
   assert.equal(autoContinueCandidate([dropped], true, now), dropped, "the restart flag adds to the dropped turns, it doesn't replace them")
   const chain = [quitAt]
   for (let index = 2; index <= 4; index++) chain.push(cut(`11111111-1111-4111-8111-00000000000${index}`, now - 60_000 + index, chain.at(-1)!.id))
@@ -270,7 +316,9 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   assert.equal(turnStopLabel("provider-exited", "Cursor"), "Cursor stopped unexpectedly")
   assert.match(continueTurnPrompt("provider-exited", "mako"), /process stopped.*restarted/)
   assert.deepEqual(turnStops([quit, exited], false).get(exited.id), { reason: "provider-exited", continuable: true, automatic: false })
-  assert.equal(classifyProviderFailure("stream disconnected before completion: error sending request for url").kind, "network", "Codex's dropped stream is a dropped connection")
+  const droppedStream = "stream disconnected before completion: error sending request for url"
+  assert.equal(classifyProviderFailure(droppedStream, undefined, providerTextEvidence(droppedStream)).kind, "network", "Codex's native dropped stream is a dropped connection")
+  assert.equal(classifyProviderFailure(droppedStream).kind, "unknown", "unmarked host prose does not attest to a native connection loss")
 }
 // The recovery panel lists a stopped turn only when the transcript does not show it.
 {
@@ -283,6 +331,11 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   // block carries its id; the retained window still names it.
   const restored = recoverableRequests({ requests: [crashed, quit], blocks: [], history: { earlierRequests: [crashed.id] } }).map((item) => item.id)
   assert.deepEqual(restored, [quit.id], "a turn the native history shows is on screen; one that never reached the transcript stays reviewable")
+  const empty = { requests: [], get blocks(): Entry[] { throw new Error("An empty recovery must not scan transcript blocks") } }
+  assert.deepEqual(recoverableRequests(empty), [], "main's lazy history lookup survives wait suppression")
+  const places = recoveriesByPlace(empty)
+  assert.equal(places.onTurns.size, 0)
+  assert.deepEqual(places.apart, [])
 }
 // A dispatched request's prompt is the host's to show. A long turn leaves it
 // on an unloaded page; nothing stands in for it, with or without a window
@@ -519,14 +572,33 @@ console.log("PASS: a gateway outage shows its automatic retry time and reason, w
   const failed: LiveRequest = { ...request, status: "failed", failure: "rate-limited", error: retry.reason, retry }
   const continuation: LiveRequest = { ...second, status: "held", retry, continues: { requestId: failed.id, reason: "connection-lost", auto: true } }
   acpStore.set({ activeKey: conversationId })
-  applyLiveSnapshot({ ...snapshot, revision: 1, session: { ...snapshot.session, id: conversationId }, requests: [failed, continuation] })
+  applyLiveSnapshot({ ...snapshot, revision: 1, session: { ...snapshot.session, id: conversationId }, requests: [failed, continuation],
+    blocks: [{ type: "user", requestId: failed.id, text: failed.text }, { type: "event", label: "Rate limited", detail: "Reached your usage limit", limit: { resetsAt: reset } }] })
+  const live = current()
   const queue = renderToStaticMarkup(<PromptQueue />)
-  assert.match(queue, /data-queue-retry="rate-limited"/)
-  assert.match(queue, /usage limit until/)
-  assert.ok(queue.includes(resetWords(reset, Date.now())), "the native reset is shown")
-  const ended = renderToStaticMarkup(<FailureRow conversationId={conversationId} request={failed} />)
-  assert.match(ended, /Continues by itself/)
-  assert.doesNotMatch(ended, /data-recovery-primary|Sign in|Continue turn/)
+  assert.equal(queue, "", "the automatic continuation isn't a second queue/status row")
+  const status = renderToStaticMarkup(<ProducedNotice use={useLimitContinueNotice} />)
+  assert.match(status, /Sends at /)
+  assert.match(status, new RegExp(`data-usage-limit-wait="${retry.at}"`), "the line uses the host's actual due time")
+  assert.doesNotMatch(status, /Resume|Send again|Not now/)
+  assert.equal(renderToStaticMarkup(<ProducedNotice use={useFailureNotice} />), "", "the recovery pointer does not repeat the active wait")
+  assert.equal(renderToStaticMarkup(<ProducedNotice use={useAccountLimitNotice} />), "", "account offers do not repeat the active wait")
+  assert.deepEqual(recoverableRequests(live), [], "the exact carried failure has no duplicate recovery row")
+  const waiting = usageLimitSources(live.requests!)
+  assert.deepEqual([...waiting].sort(), [failed.id, continuation.id].sort())
+  const projected = live.projection!.exchanges
+  const filtered = withoutWaitingLimitNotes(projected, waiting)
+  assert.equal(filtered.flatMap(exchange => exchange.system).length, 0, "the live limit marker gives way to the same quiet status")
+  assert.ok(projected.some(exchange => exchange.system.some(note => note.message.note?.limit)), "native history remains intact")
+  const sibling = { ...failed, id: "unrelated-failure", failure: "network" as const, retry: undefined }
+  assert.deepEqual(recoverableRequests({ ...live, requests: [failed, continuation, sibling] }).map(r => r.id), [sibling.id], "only the exact wait's chain is collapsed")
+  assert.equal(usageLimitWait([{ ...continuation, pause: "stop" }]), undefined, "Stop never promises an automatic send")
+  assert.equal(usageLimitWait([{ ...continuation, signIn: { harness: "codex", account: "fixture", credential: "fixture", at: 0 } }]), undefined, "sign-in is not a timed send")
+  assert.ok(recoverableRequests({ ...live, copy: { at: Date.now() } }).some(r => r.id === failed.id), "remote copies retain their own recovery and make no local send promise")
+  const unsent = { ...failed, status: "held" as const }
+  assert.equal(usageLimitWait([unsent])?.request.id, failed.id)
+  assert.equal(usageLimitWait([{ ...unsent, editing: true }]), undefined)
+  assert.equal(usageLimitWait([{ ...continuation, status: "completed" }]), undefined, "a completed wait clears the line")
 }
 
 {

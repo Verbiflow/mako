@@ -2,7 +2,7 @@ import { type Problem, problemType } from "./envelope.js"
 import { COMPACT_LIVE_FORM, type LiveForm, WHOLE_LIVE_FORM } from "./live-form.js"
 import type { Payload } from "./payload.js"
 import type { GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
-import { COMPACT_LIVE_VERSION } from "./version.js"
+import { COMPACT_LIVE_VERSION, PASSING_THREAD_VERSION } from "./version.js"
 
 export type ThreadClaim = { threadId: string; generation: number }
 
@@ -128,6 +128,19 @@ export class RuntimeThreads {
 
   generation(threadId: string): number | undefined {
     return this.#runs.get(threadId)?.generation
+  }
+
+  /**
+   * A Thread's passing state (`PASSING_THREAD_VERSION`): to its readers now, under this runtime's generation for it,
+   * and kept nowhere, here or in the Thread. False, and nothing sent, when this runtime doesn't run the Thread, no link is
+   * attached, or the link's gateway is older.
+   */
+  passing(threadId: string, event: Payload, correlationId?: string): boolean {
+    const run = this.#runs.get(threadId)
+    const send = this.#send
+    if (!run || !send || this.#version < PASSING_THREAD_VERSION) return false
+    send({ type: "passing", threadId, generation: run.generation, event, ...(correlationId && { correlationId }) })
+    return true
   }
 
   /** Runs the Thread under `generation` from now on. The same generation again keeps what it's owed. */

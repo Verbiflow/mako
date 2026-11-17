@@ -99,11 +99,22 @@ async function stopGroup(child: ChildProcess, first: NodeJS.Signals | number): P
     await delay(20)
     if (!signal(0)) return
     // macOS can answer EPERM for a group made only of zombies; the table settles that case.
-    const { stdout } = await inspect("/bin/ps", ["-A", "-o", "pgid=,stat="], { timeout: 1_500, maxBuffer: 16 * 1024 * 1024 })
-    const rows = stdout.split("\n").map((line) => line.trim().split(/\s+/)).filter(([group, state]) => Number(group) > 0 && state)
-    if (!rows.length) throw new Error("The owned command's process group could not be checked")
-    if (rows.every(([group, state]) => Number(group) !== pid || state?.startsWith("Z"))) return
+    const rows = await processTable()
+    if (rows?.every(([group, state]) => Number(group) !== pid || state?.startsWith("Z"))) return
     if (Date.now() - began >= 100) signal("SIGKILL")
-    if (Date.now() - began >= 5_000) throw new Error(`Command process group ${pid} outlived SIGKILL`, { cause: denied })
+    if (Date.now() - began >= 5_000)
+      throw new Error(rows ? `Command process group ${pid} outlived SIGKILL` : "The owned command's process group could not be checked", { cause: denied })
   }
+}
+
+/**
+ * Every process's group and state, or nothing when the table couldn't be read this time. A `ps` whose timeout fires
+ * after it exited but before its exit was heard, as it does past an event loop held 1.5 s, answers no error and no
+ * rows (the timeout ends its pipes first). That once threw before the SIGKILL: a busy host's stop failed and left the
+ * command running. Unread, the group is asked again, killed on time all the same.
+ */
+async function processTable(): Promise<string[][] | undefined> {
+  const read = await inspect("/bin/ps", ["-A", "-o", "pgid=,stat="], { timeout: 1_500, maxBuffer: 16 * 1024 * 1024 }).catch(() => undefined)
+  const rows = read?.stdout.split("\n").map((line) => line.trim().split(/\s+/)).filter(([group, state]) => Number(group) > 0 && state)
+  return rows?.length ? rows : undefined
 }

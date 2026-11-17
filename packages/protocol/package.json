@@ -19,6 +19,7 @@
     "./saves": "./dist/saves.js",
     "./account-events": "./dist/account-events.js",
     "./access-choices": "./dist/access-choices.js",
+    "./preferences": "./dist/preferences.js",
     "./thread-listing": "./dist/thread-listing.js",
     "./attention": "./dist/attention.js",
     "./account-sessions": "./dist/account-sessions.js",
@@ -36,7 +37,8 @@
     "./handoff": "./dist/handoff.js",
     "./source-project": "./dist/source-project.js",
     "./attribution": "./dist/attribution.js",
-    "./ids": "./dist/ids.js"
+    "./ids": "./dist/ids.js",
+    "./cloud-fins": "./dist/cloud-fins.js"
   },
   "files": [
     "dist"

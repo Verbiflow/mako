@@ -11,9 +11,18 @@ export const HISTORY_SCRATCH = "mako-history"
 export const HistoryMarkSchema = z.object({ id: z.string().regex(/^\d+$/), at: z.string().regex(/^\d+$/) }).strict()
 export type HistoryMark = z.infer<typeof HistoryMarkSchema>
 
+/** Native handles whose synchronous creation and close must stay off the host thread. */
+export const NativeWatchSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("directory") }),
+  /** Recursive app output, filtered to logs in the child before IPC. */
+  z.object({ kind: z.literal("app-output") }),
+  z.object({ kind: z.literal("git-markers"), markers: z.array(z.string()) }),
+])
+export type NativeWatch = z.infer<typeof NativeWatchSchema>
+
 /** What the host asks of the watcher child. Ids are the host's and never reused. */
 export const WatcherRequestSchema = z.discriminatedUnion("t", [
-  z.object({ t: z.literal("sub"), id: z.number().int(), root: z.string(), ignore: z.array(z.string()) }),
+  z.object({ t: z.literal("sub"), id: z.number().int(), root: z.string(), ignore: z.array(z.string()), native: NativeWatchSchema.optional() }),
   z.object({ t: z.literal("unsub"), id: z.number().int() }),
   /** Where the history stands now. */
   z.object({ t: z.literal("mark"), id: z.number().int() }),

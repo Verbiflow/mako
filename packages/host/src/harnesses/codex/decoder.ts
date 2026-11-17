@@ -1,3 +1,5 @@
+import type { ProviderFailureEvidence } from "../../contracts/provider-failure-evidence.js"
+import { providerTextEvidence } from "../../contracts/provider-failure.js"
 import { codexCommand, codexErrorClass, codexWarningEvent, firstLine } from "@mako/sessions/codex-presentation"
 import { CodexRecords, type CodexRead } from "@mako/sessions/codex-records"
 import { event, mcpServerFailedEvent, type Compaction, type TranscriptEvent } from "@mako/sessions/events"
@@ -52,7 +54,7 @@ export type CodexEffect =
   /** Before the turn's state settles: requests it raised close. */
   | { type: "turn-ending"; turnId: string }
   /** After: background terminals are re-read, a compaction it ran resolves. */
-  | { type: "turn-ended"; turnId: string; error?: string; stop: string }
+  | { type: "turn-ended"; turnId: string; error?: string; stop: string; failureEvidence?: ProviderFailureEvidence }
   | { type: "compaction-item"; turnId: string }
   | { type: "server-request-resolved"; requestId: JsonRpcId }
   /** A subagent's thread started or finished a turn. */
@@ -539,7 +541,7 @@ export class CodexDecoder {
         if (notification.willRetry) {
           this.waiting = undefined
           out.push(decoded.activity(retrying(notification.message, notification.variant)))
-        } else out.push(decoded.state({ error: notification.message }))
+        } else out.push(decoded.state({ error: notification.message, failureEvidence: notification.failureEvidence }))
         return
       case "serverRequest/resolved":
         out.push(decoded.effect({ type: "server-request-resolved", requestId: notification.requestId }))
@@ -621,7 +623,7 @@ export class CodexDecoder {
   }
 
   private completeTurn(out: CodexDecoded[], turn: Turn): void {
-    const error = turn.error?.message || undefined
+    const error = turn.error?.message || (turn.error?.failureEvidence && turn.error.failureEvidence.kind !== "unknown" ? "Codex encountered an error" : undefined)
     const stop = turn.status === "inProgress" ? "completed" : turn.status
     this.currentTurnId = null
     this.goalTurnId = null
@@ -629,11 +631,11 @@ export class CodexDecoder {
     // Codex ends a stopped turn without finishing the cell calls it stopped.
     for (const id of this.running) if (stop === "interrupted") out.push(decoded.update({ kind: "tool-update", id, status: "canceled" }))
     this.running.clear()
-    const ended: CodexEffect = { type: "turn-ended", turnId: turn.id, stop }
+    const ended: CodexEffect = { type: "turn-ended", turnId: turn.id, stop, ...(error && { failureEvidence: turn.error?.failureEvidence ?? providerTextEvidence(error) }) }
     if (error) ended.error = error
     out.push(
       decoded.effect({ type: "turn-ending", turnId: turn.id }),
-      decoded.state({ status: error || stop === "failed" ? "failed" : "ready", lastStop: stop, error }),
+      decoded.state({ status: error || stop === "failed" ? "failed" : "ready", lastStop: stop, error, ...(error && { failureEvidence: turn.error?.failureEvidence ?? providerTextEvidence(error) }) }),
       decoded.effect(ended),
     )
   }

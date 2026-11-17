@@ -1,9 +1,9 @@
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { errorMessage } from "../base/error-message.js"
-import { APEX_WORD, decisionWords, FIN_WORD, reportAsk, reportPhase, waitingWords, type Notice, type Report } from "../contracts/agents.js"
+import { APEX_WORD, decisionWords, FIN_WORD, reportAsk, reportPhase, reportWord, UNFINISHED_WORDS, waitingWords, type Notice, type Report } from "../contracts/agents.js"
 import { appendFinReports, FIN_REPORTS_MAX, type FinReportCard } from "../contracts/fin-reports.js"
 import { FROM_AGENTS } from "../contracts/children.js"
-import { WAKE_COALESCE_MS } from "../contracts/children.js"
+import { FOCUS_MS, quietLine, WAKE_COALESCE_MS } from "../contracts/children.js"
 import { SessionIdSchema, type Actor } from "../contracts/thread-identity.js"
 import { namedUuid } from "./cloud-moves.js"
 
@@ -46,6 +46,12 @@ export interface AgentWakesDeps {
   rewrite(conversation: string, request: string, text: string, notices: readonly Notice[], lines?: readonly string[]): boolean
   /** Joins the digest to the running turn at its next step, resolving whether the harness took it; false when no turn could take one. */
   steer(conversation: string, id: string, text: string): Promise<boolean> | false
+  /**
+   * Steers the queued digest `request` itself into the running turn (the journal's `steer-queued`), so it's taken from
+   * the queue exactly once, in the same write, and one the harness refuses stays where it was queued; false when no turn
+   * could take it.
+   */
+  steerQueued?(conversation: string, id: string, request: string, text: string): Promise<boolean> | false
   /** The request named before it's sent, and the reports marked heard once it was (`ThreadStore`). */
   assign(reports: readonly string[], request: string): void
   delivered(reports: readonly string[], at: number): void
@@ -58,6 +64,17 @@ export interface AgentWakesDeps {
   /** Whether a notice still says how its Fin stands: an end the host inferred for a Fin that works again doesn't. */
   current?(notice: Notice): boolean
   now?(): number
+  /** How long a working Apex's turn runs before what waits for its end is steered in once (`FOCUS_MS`); a test shortens it. */
+  focusMs?: number
+}
+
+/**
+ * A notice its Apex can act on at once: a question or decision that is the Apex's to answer, never the person's; work
+ * a Fin hands it (`handoff`); a wait a Fin names on the Apex or the person (`awaits`).
+ */
+function asksApex(notice: Notice): boolean {
+  const { status, for: owner, handoff, awaits } = notice.report
+  return ((status === "blocked" || status === "needs-input") && owner !== "person") || notice.decision === "lead" || Boolean(handoff) || Boolean(awaits)
 }
 
 /**
@@ -83,6 +100,10 @@ export class AgentWakes {
   private reading = 0
   /** Conversations with a digest admitted, for `pending`. */
   private readonly digests = new Set<string>()
+  /** A working Apex's turn's focus timer: when it fires, what waits for the turn's end is steered in once. */
+  private readonly focus = new Map<string, ReturnType<typeof setTimeout>>()
+  /** Digests being steered into their Apex's turn: none joins or narrows one while it's out (`armFocus`). */
+  private readonly focusing = new Set<string>()
   private stopped = false
 
   constructor(deps: AgentWakesDeps) {
@@ -107,11 +128,20 @@ export class AgentWakes {
     const ready = this.deps.ready(conversation)
     // Kept unheard in the store: the host that has the Apex sends them on its start.
     if (ready === "gone") return
-    // A running turn that takes a message at its next step hears this now; a result waits for the turn's end.
-    if (ready === "steer" && !notice.settledOnly && !notice.wake) return this.steerIn(conversation, notice)
-    const open = this.deps.unsent(conversation).at(-1)
+    // A running turn that takes a message at its next step hears a question it can answer now. The rest waits for the
+    // turn's end as one digest, so the Apex isn't steered by each report while it works, unless its turn runs long.
+    if (ready === "steer" && !notice.settledOnly && !notice.wake) {
+      if (asksApex(notice)) return this.steerIn(conversation, notice)
+      this.armFocus(conversation)
+    }
+    const open = this.open(conversation)
     if (open) return this.join(conversation, open, notice)
     this.start(conversation, [notice], ready)
+  }
+
+  /** The newest digest still unsent that a notice may join: not one being steered in (`focusing`). */
+  private open(conversation: string): OpenDigest | undefined {
+    return this.deps.unsent(conversation).filter((digest) => !this.focusing.has(digest.id)).at(-1)
   }
 
   /**
@@ -121,6 +151,7 @@ export class AgentWakes {
   refresh(conversation: string): void {
     if (!this.deps.current) return
     for (const open of this.deps.unsent(conversation)) {
+      if (this.focusing.has(open.id)) continue
       const rest = open.notices.filter((notice) => this.deps.current!(notice))
       if (rest.length === open.notices.length) continue
       this.narrow(conversation, open, rest)
@@ -137,7 +168,7 @@ export class AgentWakes {
   withdraw(conversation: string, id: string): boolean {
     let found = false
     for (const open of this.deps.unsent(conversation)) {
-      if (!open.notices.some((notice) => notice.id === id)) continue
+      if (this.focusing.has(open.id) || !open.notices.some((notice) => notice.id === id)) continue
       found = true
       this.narrow(conversation, open, open.notices.filter((notice) => notice.id !== id))
     }
@@ -193,6 +224,8 @@ export class AgentWakes {
 
   dispose(): void {
     this.stopped = true
+    for (const timer of this.focus.values()) clearTimeout(timer)
+    this.focus.clear()
   }
 
   private now(): number {
@@ -253,6 +286,43 @@ export class AgentWakes {
     hostLog("agents", "wake", { conversation, request, how: "queued", coalesced: notices.length, ...(hold && { hold: hold === "paused" ? "paused" : new Date(hold.at).toISOString() }) })
   }
 
+  /**
+   * Once a turn has run `FOCUS_MS` past the first report it left waiting, what waits for its end is steered in, once, as
+   * one digest: an Apex on a long turn still hears its Fins, at most once a stretch. What the harness doesn't take
+   * stays for the turn's end.
+   */
+  private armFocus(conversation: string): void {
+    if (this.focus.has(conversation)) return
+    const timer = setTimeout(() => {
+      this.focus.delete(conversation)
+      if (this.stopped || this.deps.ready(conversation) !== "steer" || !this.deps.steerQueued) return
+      const open = this.open(conversation)
+      if (!open?.notices.length) return
+      // The digest itself goes into the turn, taken from the queue in the journal's one write; what arrives meanwhile
+      // starts a digest of its own, and one the harness refuses stays queued for the turn's end.
+      this.focusing.add(open.id)
+      // Said as the tree stands now, and stored so first: the steer takes the queued words exactly as they are, so the
+      // digest is rewritten with these before it goes (a Fin that moved since the last notice changed the counts).
+      const text = this.words(conversation, open.notices, open.lines ?? [])
+      if (!this.deps.rewrite(conversation, open.id, text, open.notices, open.lines ?? [])) {
+        this.focusing.delete(open.id)
+        return
+      }
+      const took = this.deps.steerQueued(conversation, namedUuid(`steer:focus:${open.id}`), open.id, text)
+      if (!took) {
+        this.focusing.delete(open.id)
+        return
+      }
+      void took.then((answered) => {
+        this.focusing.delete(open.id)
+        if (this.stopped) return
+        hostLog("agents", "wake", { conversation, request: open.id, how: answered ? "focus-steer" : "focus-steer refused", coalesced: open.notices.length })
+      })
+    }, this.deps.focusMs ?? FOCUS_MS)
+    timer.unref?.()
+    this.focus.set(conversation, timer)
+  }
+
   /** Into the running turn at its next step; what the harness doesn't take goes as a digest of its own. */
   private steerIn(conversation: string, notice: Notice): void {
     const request = namedUuid(`wake:${conversation}:${notice.report.id}`)
@@ -292,13 +362,21 @@ const DECIDES = new Set<Report["status"]>(["blocked", "needs-input"])
 export function digest(notices: readonly Notice[], counts: string): string {
   const results = notices.filter((notice) => notice.settledOnly)
   const replies = notices.filter((notice) => notice.reply)
-  const fins = notices.filter((notice) => !notice.settledOnly && !notice.reply)
+  const fins = notices.filter((notice) => !notice.settledOnly && !notice.reply && !notice.quiet && !notice.unanswered)
+  const quiets = notices.filter((notice) => notice.quiet && !notice.settledOnly && !notice.reply)
+  const unanswered = notices.filter((notice) => notice.unanswered && !notice.settledOnly && !notice.reply)
   const asks = fins.filter((notice) => DECIDES.has(notice.report.status))
   const decided = fins.filter((notice) => notice.decision)
   const decisions = [...asks.filter((notice) => notice.report.for !== "person"), ...decided.filter((notice) => notice.decision === "lead")]
   const persons = [...asks.filter((notice) => notice.report.for === "person"), ...decided.filter((notice) => notice.decision === "person")]
-  const finished = fins.filter((notice) => !notice.decision && (notice.report.status === "done" || notice.report.status === "failed"))
+  const ended = fins.filter((notice) => !notice.decision && (notice.report.status === "done" || notice.report.status === "failed"))
+  // A Fin whose turn ended without a result hasn't finished: said apart, for its Apex to send on or take its reply.
+  const finished = ended.filter((notice) => !notice.report.unfinished)
+  const unfinished = ended.filter((notice) => notice.report.unfinished)
   const handoffs = fins.filter((notice) => notice.report.status === "progress" && notice.report.handoff)
+  const awaiting = fins.filter((notice) => notice.report.status === "progress" && !notice.report.handoff && notice.report.awaits)
+  // Progress that answers its Apex's messages (`answers`): the reply it was owed.
+  const answering = fins.filter((notice) => notice.report.status === "progress" && !notice.report.handoff && !notice.report.awaits && notice.report.answers?.length)
   const lines = [FROM_AGENTS]
   // Every entry the digest writes has its twin here, from the same record, in the same order.
   const cards: FinReportCard[] = []
@@ -308,7 +386,7 @@ export function digest(notices: readonly Notice[], counts: string): string {
       const { label, report, decision } = notice
       const summary = report.summary.trim() || (report.status === "done" ? "It finished." : "It failed.")
       const text = summary.length > RESULT_CHARS ? `${summary.slice(0, RESULT_CHARS)}… (agents_read gives the rest)` : summary
-      lines.push(`  • ${label} ${report.status}:`, ...text.split("\n").map((line) => `    ${line}`))
+      lines.push(`  • ${label} ${reportWord(report)}:`, ...text.split("\n").map((line) => `    ${line}`))
       cards.push(card(notice, opening(report.summary) || (report.status === "done" ? "It finished." : "It failed.")))
       for (const artifact of report.artifacts ?? []) lines.push(`    ${artifact.kind}: ${artifact.ref}${artifact.label ? ` (${artifact.label})` : ""}`)
       if (decision && report.question) lines.push(`    ${decisionWords({ question: report.question, on: decision, ask: reportAsk(report) })}`)
@@ -370,8 +448,18 @@ export function digest(notices: readonly Notice[], counts: string): string {
     lines.push(`${finished.length} finished:`)
     for (const notice of finished) {
       const { label, report } = notice
-      lines.push(`  • ${label} ${report.status}: ${finishedLine(report)}`)
+      lines.push(`  • ${label} ${reportWord(report)}: ${finishedLine(report)}`)
       cards.push(card(notice, opening(report.summary) || (report.status === "done" ? "It finished." : "It failed.")))
+      artifactLines(lines, report)
+    }
+  }
+  if (unfinished.length) {
+    lines.push(`${unfinished.length} ${UNFINISHED_WORDS} (agents_send sends one on; or take its reply as its result):`)
+    for (const notice of unfinished) {
+      const { label, report } = notice
+      lines.push(`  • ${label}: ${finishedLine(report)}`)
+      if (notice.holds?.length) lines.push(`    Still waiting to start after it: ${notice.holds.join(", ")} (they start once it reports done; agents_stop on it drops them).`)
+      cards.push(card(notice, opening(report.summary) || "Its turn ended without a result."))
       artifactLines(lines, report)
     }
   }
@@ -387,8 +475,47 @@ export function digest(notices: readonly Notice[], counts: string): string {
     }
     lines.push(`  agents_send to each passes it on.`)
   }
+  if (awaiting.length) {
+    lines.push(`${awaiting.length} ${awaiting.length === 1 ? "waits" : "wait"} on someone else to act:`)
+    for (const notice of awaiting) {
+      const { label, report } = notice
+      const waiting = waitingWords(report.waitingOn)
+      lines.push(`  • ${label}: ${finishedLine(report)}${waiting ? ` · ${waiting}` : ""}`)
+      cards.push(card(notice, opening(report.summary) || waiting || "it waits on someone else."))
+      artifactLines(lines, report)
+    }
+    lines.push("  Nothing wakes it until that happens: ask for the review or tell the person, unless it's already under way.")
+  }
+  if (answering.length) {
+    lines.push(`${answering.length} ${answering.length === 1 ? "answers" : "answer"} your message:`)
+    for (const notice of answering) {
+      const { label, report } = notice
+      lines.push(`  • ${label}: ${finishedLine(report)}`)
+      cards.push(card(notice, opening(report.summary) || "It answered your message."))
+      artifactLines(lines, report)
+    }
+  }
+  if (unanswered.length) {
+    lines.push(`${unanswered.length} ${unanswered.length === 1 ? "hasn't" : "haven't"} answered your message:`)
+    for (const notice of unanswered) {
+      const owed = notice.unanswered!
+      const words = `your message of ${new Date(owed.at).toISOString().slice(11, 16)} UTC, "${owed.line}", got no reply in ${owed.turns} of its turns, a reminder among them.`
+      lines.push(`  • ${notice.label}: ${words}`)
+      cards.push(card(notice, words))
+    }
+    lines.push("  agents_read shows what it said; agents_send asks again, or decide without it.")
+  }
+  if (quiets.length) {
+    lines.push(`${quiets.length} ${quiets.length === 1 ? "has" : "have"} gone quiet while working:`)
+    for (const notice of quiets) {
+      const words = quietLine(notice.quiet!)
+      lines.push(`  • ${notice.label} ${words}`)
+      cards.push(card(notice, words))
+    }
+    lines.push(`  agents_read shows what each is doing. A long command may be fine; otherwise agents_send asks it (deliver: steer reaches the turn it runs, interrupt cuts it), or agents_stop stops it.`)
+  }
   lines.push(counts)
-  lines.push((results.length || replies.length) && !decisions.length && !persons.length && !finished.length && !handoffs.length
+  lines.push((results.length || replies.length) && !decisions.length && !persons.length && !finished.length && !handoffs.length && !awaiting.length && !answering.length && !unanswered.length && !quiets.length
     ? "Go on with it: reply to the person, start more work, or end your turn."
     : "agents_read gives a report in full. Reply to the person, start more work, or end your turn.")
   return appendFinReports(lines.join("\n"), cards)
@@ -404,6 +531,7 @@ function card(notice: Notice, line: string): FinReportCard {
     ...(notice.fin.harness && { harness: notice.fin.harness }),
     ...(notice.reply && { apex: true as const }),
     status: report.status,
+    ...(report.unfinished && { unfinished: true as const }),
     line: line.slice(0, 4_000),
     ...(report.options?.length && { options: report.options }),
     ...(report.recommended !== undefined && { recommended: report.recommended }),

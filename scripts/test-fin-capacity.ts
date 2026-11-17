@@ -1,3 +1,5 @@
+import { CloudFinStatusSchema, CloudFinStartSchema } from "@mako/protocol/cloud-fins"
+import { cloudFinLimits } from "@mako/host/conversations/fin-capacity"
 import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
 import { availableParallelism, tmpdir } from "node:os"
@@ -308,3 +310,15 @@ const GB = 1024 ** 3
 }
 
 console.log("fin capacity: each machine's number from its hardware and its Fins' cost, steady under one busy minute")
+
+// Account readings include held spend; unknown policy/usage cannot become unlimited local admission.
+{
+  const base = { at: 1, day: "2026-11-16", planSandboxes: 5, sandboxCentsPerHour: 20, runningSandboxes: 1, dailySpendCents: 100, spentTodayCents: 20, reservedTodayCents: 40 }
+  assert.equal(cloudFinLimits(CloudFinStatusSchema.parse(base)).spentTodayCents, 20)
+  assert.equal(cloudFinLimits(base).reservedTodayCents, 40)
+  assert.equal(cloudFinLimits(base).atOnce, 2)
+  assert.equal(cloudFinLimits(undefined).atOnce, 0)
+  assert.equal(cloudFinLimits({ ...base, unavailable: "usage" }).atOnce, 0)
+  assert.equal(CloudFinStatusSchema.safeParse({ at: 1, day: base.day, runningSandboxes: 0, reservedTodayCents: 0 }).success, false)
+  assert.equal(CloudFinStartSchema.safeParse({ op: "start:a:b", inputSha256: "a".repeat(64), thread: "t-" + "a".repeat(16), dailySpendCents: 9999 }).success, false, "no client policy overrides")
+}

@@ -1,4 +1,5 @@
 import { getMako, hasBridge } from "@/lib/bridge"
+import { quietly } from "@/lib/quiet-retry"
 import type { EntryOriginal } from "@mako/sessions/record-original"
 import type { RecordRef } from "@mako/sessions/entries"
 import type {
@@ -799,10 +800,8 @@ export const threadViewingActions = {
       let page: ThreadPage | null = null
       let before = viewing.pageStart
       for (let pages = 0; pages < EARLIER_PAGES_PER_LOAD; pages += 1) {
-        const fetched: ThreadPage | null = await getMako().pageThread(
-          viewing.ref.path,
-          before
-        )
+        const from = before
+        const fetched: ThreadPage | null = await quietly("earlier turns", () => getMako().pageThread(viewing.ref.path, from))
         if (fetched && !admitThreadPage(fetched, viewing.ref.path, version)) return
         if (threadCache.get(viewing.ref.path)?.loadingEarlier !== loadingEarlier) return
         if (!fetched) break
@@ -846,7 +845,8 @@ export const threadViewingActions = {
     } catch (error) {
       if (generation !== viewingGeneration || nativeSessionRefs.version(viewing.ref.path) !== version ||
           threadCache.get(viewing.ref.path)?.loadingEarlier !== loadingEarlier) return
-      toast.error(error instanceof Error ? error.message : String(error))
+      // The earlier turns stay offered: reaching them again asks again. The host's words go to its log.
+      console.warn(`Earlier turns didn't load ${JSON.stringify({ error: error instanceof Error ? error.message : String(error) })}`)
     } finally {
       // Compatible placement upgrades retain this operation's token. A new
       // read replaces it; retirement or a new worker cannot inherit cleanup.

@@ -1,10 +1,12 @@
+import { failureEvidenceOf } from "../contracts/provider-failure.js"
+import type { ProviderFailureEvidence } from "../contracts/provider-failure-evidence.js"
 import { randomUUID } from "node:crypto"
 import type { PromptResponse } from "@agentclientprotocol/sdk"
 import { errorMessage } from "../base/error-message.js"
 
 export type AcpTurnResult =
   | { kind: "completed"; stopReason: PromptResponse["stopReason"] }
-  | { kind: "failed"; error: string }
+  | { kind: "failed"; error: string; failureEvidence?: ProviderFailureEvidence }
 
 export class AcpPromptTurn {
   readonly id = randomUUID()
@@ -38,7 +40,7 @@ export class AcpPromptTurn {
         this.result = { kind: "completed", stopReason: response.stopReason }
     } catch (error) {
       if (kind === "prompt")
-        this.result = { kind: "failed", error: errorMessage({ error }) }
+        this.result = { kind: "failed", error: errorMessage({ error }), failureEvidence: failureEvidenceOf({ error }) }
       throw error
     } finally {
       this.pending -= 1

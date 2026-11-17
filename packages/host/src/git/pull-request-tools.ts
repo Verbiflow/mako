@@ -95,6 +95,9 @@ function standing(report: PullRequestReport): string {
 }
 
 /** The pull request tools for the calling conversation: the same operations as the Git sidebar's, one repository at a time. */
+/** How an agent reads GitHub without tripping its limits: Mako's tools and waits first, and slow, shared polling only when it must. */
+const GITHUB_POLLING = "Use this and waitingOn, so Mako wakes you, instead of gh --watch. If you must poll gh yourself, no faster than once per 60 seconds per repository, reusing the answer, with no polling loop of your own; a state-changing operation may have one readback. On a secondary 403 or 429, stop GitHub requests across your work until Retry-After or the rate-limit reset allows them (at least 60 seconds without a header, longer after repeated limits). Fetch a terminal failure's log once."
+
 export function pullRequestTools(deps: Deps): PullRequestTools {
   const report = (repository: ReachableRepository, logs = false) => pullRequestReport(deps.git, repository.root, { startedFrom: repository.startedFrom, logs })
   const toldFallback = new Set<string>()
@@ -219,7 +222,7 @@ export function registerPullRequestTools(server: McpServer, tools: PullRequestTo
     "pull_request_status",
     {
       description:
-        `Call before opening, updating or merging this branch's pull request, and when the user asks about its checks or reviews. Reads the pull request of the branch this Session edits on: each check with its state and link, reviews, unresolved review comments by file and line, whether GitHub would merge it, and with logs: true the end of each failed GitHub Actions job's output. With none open, says what opening one would do: the base it targets, the commits it carries, the repository's pull request template, and what's in the way. ${ONE_PER_REPOSITORY} in the project folder itself it reports every repository, each under its name. Changes nothing.`,
+        `Call before opening, updating or merging this branch's pull request, and when the user asks about its checks or reviews. Reads the pull request of the branch this Session edits on: each check with its state and link, reviews, unresolved review comments by file and line, whether GitHub would merge it, and with logs: true the end of each failed GitHub Actions job's output. With none open, says what opening one would do: the base it targets, the commits it carries, the repository's pull request template, and what's in the way. ${ONE_PER_REPOSITORY} in the project folder itself it reports every repository, each under its name. Changes nothing. ${GITHUB_POLLING}`,
       inputSchema: z.object({
         logs: z.boolean().optional().describe("Include the end of each failed GitHub Actions job's log."),
         repository: REPOSITORY,

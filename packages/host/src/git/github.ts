@@ -2,7 +2,7 @@ import { hostCommand } from "../base/host-command.js"
 import { hostFetch, hostStopping, type HostStopping } from "../base/host-stopping.js"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { GitHubReads, GitHubRateLimitError, githubRateLimit } from "./github-reads.js"
+import { GitHubReads, GitHubRateLimitError, GitHubRepositoryLookupError, githubRateLimit } from "./github-reads.js"
 import { hostLog } from "../base/host-log.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import { resolveExecutable } from "../base/executable.js"
@@ -13,6 +13,7 @@ import type { PullReading } from "../contracts/pull-waits.js"
 import type { WorktreeBranchPull, WorktreePull } from "../contracts/thread-worktrees.js"
 import { MERGE_METHODS, type MergeMethod } from "../contracts/git-actions.js"
 import { commonDirOf, type Git } from "@mako/git"
+import { z } from "zod"
 
 const run = hostCommand
 
@@ -32,6 +33,15 @@ const run = hostCommand
 /** Ceilings so a hung `gh` cannot hold a panel open forever. */
 const TIMEOUT = 15_000
 const MAX_BUFFER = 8 * 1024 * 1024
+const RepositoryResponse = z.object({
+  full_name: z.string().regex(/^[^/]+\/[^/]+$/),
+  html_url: z.string().url(),
+  default_branch: z.string().nullable().optional(),
+  allow_squash_merge: z.boolean().optional(),
+  allow_merge_commit: z.boolean().optional(),
+  allow_rebase_merge: z.boolean().optional(),
+})
+const CommandFailure = z.object({ stderr: z.string() })
 async function githubExecutable(): Promise<string> {
   const executable = resolveExecutable(process.env.GH_PATH ?? "gh")
   if (!executable) throw new Error("GitHub CLI was not found")
@@ -39,14 +49,44 @@ async function githubExecutable(): Promise<string> {
 }
 
 /** `env`: added to `gh`'s environment, as on a cloud machine to open a pull request as Mako's App (`MACHINE_GITHUB_AS`). */
-async function directGh(cwd: string, args: string[], env?: Readonly<Record<string, string>>): Promise<string> {
-  const { stdout } = await run(await githubExecutable(), args, {
-    cwd,
-    timeout: TIMEOUT,
-    maxBuffer: MAX_BUFFER,
-    ...env && { env: { ...process.env, ...env } },
-  })
-  return stdout
+async function directGh(cwd: string, args: string[], env?: Readonly<Record<string, string>>, now: () => number = Date.now): Promise<string> {
+  const repository = args[0] === "repo" && args[1] === "view" && args.includes("--json")
+  try {
+    const { stdout } = await run(await githubExecutable(), repository ? repositoryArgs(args, now) : args, {
+      cwd,
+      timeout: TIMEOUT,
+      maxBuffer: MAX_BUFFER,
+      ...env && { env: { ...process.env, ...env } },
+    })
+    if (!repository) return stdout
+    const value = RepositoryResponse.parse(JSON.parse(stdout))
+    return JSON.stringify({
+      nameWithOwner: value.full_name,
+      url: value.html_url,
+      defaultBranchRef: value.default_branch ? { name: value.default_branch } : null,
+      squashMergeAllowed: value.allow_squash_merge,
+      mergeCommitAllowed: value.allow_merge_commit,
+      rebaseMergeAllowed: value.allow_rebase_merge,
+    })
+  } catch (cause) {
+    if (!repository) throw cause
+    const limited = githubRateLimit(cause, now())
+    if (limited) throw limited
+    // Only gh's local remote-discovery refusal proves missing setup. HTTP/GraphQL/parse/timeout failures do not.
+    const failure = CommandFailure.safeParse(cause)
+    if (failure.success && /no git remotes found|none of the git remotes.*known GitHub host/i.test(failure.data.stderr)) throw cause
+    throw new GitHubRepositoryLookupError(now() + 60_000)
+  }
+}
+
+/** Keep gh's checkout/remote selection, but fetch repository metadata over REST instead of GraphQL repo view. */
+function repositoryArgs(args: string[], now: () => number): string[] {
+  const target = args[2]?.startsWith("--") ? undefined : args[2]
+  if (!target) return ["api", "repos/{owner}/{repo}"]
+  const parts = (target.startsWith("https://") ? target.slice(8) : target).replace(/\/$/, "").split("/")
+  const hostname = parts.length === 3 ? parts.shift() : undefined
+  if (parts.length !== 2 || parts.some(part => !/^[\w.-]+$/.test(part))) throw new GitHubRepositoryLookupError(now() + 60_000)
+  return ["api", `repos/${parts.join("/")}`, ...(hostname ? ["--hostname", hostname] : [])]
 }
 
 // Entries belong to the host that owns the key, not to the process; stopping a host releases its reader.
@@ -104,7 +144,7 @@ async function ghJson<TResult>(
     const value: JsonValue = JSON.parse(await gh(cwd, args, undefined, expectedHead))
     return parse(value)
   } catch (cause) {
-    if (cause instanceof GitHubRateLimitError) throw cause
+    if (cause instanceof GitHubRateLimitError || cause instanceof GitHubRepositoryLookupError) throw cause
     return null
   }
 }
@@ -184,6 +224,12 @@ export async function githubStatus(cwd: string): Promise<GitHubStatus> {
       defaultBranch: repo?.defaultBranch,
     }
   } catch (cause) {
+    if (cause instanceof GitHubRepositoryLookupError) return {
+      installed: true,
+      authenticated: Boolean(who?.login),
+      ...(who?.login && { login: who.login, userId: who.id }),
+      repoLookup: { state: "failed", until: cause.retryAt },
+    }
     if (!(cause instanceof GitHubRateLimitError)) throw cause
     return {
       installed: true,
@@ -500,7 +546,93 @@ export interface PullTarget {
   cwd: string
 }
 
-const READING_FIELDS = "state,url,headRefOid,author,statusCheckRollup,latestReviews"
+/** Bounded diagnostics only: neither a command's stderr nor its response belongs in a PR wake or host log. */
+export class PullReadError extends Error {
+  readonly reason: "request" | "response"
+  constructor(reason: "request" | "response") {
+    super("GitHub could not supply a complete pull request reading.")
+    this.reason = reason
+  }
+}
+
+const READING_FIELDS = "state,url,headRefOid,baseRefName,author,statusCheckRollup,latestReviews"
+
+/** `owner/name` from a pull request's URL (`https://github.com/owner/name/pull/12`). */
+function pullRefRepository(url: string): string | undefined {
+  const found = /^https?:\/\/[^/\s]+\/([\w.-]+)\/([\w.-]+)\/pull\/\d+/.exec(url)
+  return found ? `${found[1]}/${found[2]}` : undefined
+}
+
+/** How long a repository branch's required checks are kept once read; a failed read is tried again sooner. */
+export const REQUIRED_FRESH_MS = 60 * 60_000
+const REQUIRED_RETRY_MS = 10 * 60_000
+
+/** A ruleset rule as REST lists it for a branch; only `required_status_checks` names checks. */
+const BranchRulesSchema = z.array(z.looseObject({
+  type: z.string(),
+  parameters: z.looseObject({ required_status_checks: z.array(z.looseObject({ context: z.string() })).optional() }).optional(),
+}))
+/** A branch protection's required status checks: `contexts`, and `checks` with each one's app. */
+const ProtectionChecksSchema = z.looseObject({
+  contexts: z.array(z.string()).optional(),
+  checks: z.array(z.looseObject({ context: z.string() })).optional(),
+})
+
+function requiredNames(output: string, field: "rules" | "protection"): string[] | undefined {
+  const value: unknown = JSON.parse(output)
+  if (field === "rules") {
+    const rules = BranchRulesSchema.safeParse(value)
+    return rules.success ? rules.data.flatMap((rule) => rule.type === "required_status_checks" ? rule.parameters?.required_status_checks?.map((check) => check.context) ?? [] : []) : undefined
+  }
+  const protection = ProtectionChecksSchema.safeParse(value)
+  return protection.success ? [...protection.data.contexts ?? [], ...protection.data.checks?.map((check) => check.context) ?? []] : undefined
+}
+
+/**
+ * The checks a repository's branch requires before a merge, by name: its rulesets
+ * (`repos/{repo}/rules/branches/{branch}`) and its branch protection, read over REST once per repository and branch and
+ * kept `REQUIRED_FRESH_MS`. Undefined when neither can be read, so a caller settles as it did without them. One per
+ * host, made where the host is composed.
+ */
+export class RequiredChecks {
+  private readonly kept = new Map<string, { until: number; value: Promise<string[] | undefined> }>()
+  private readonly runner: GitHubRunner
+  private readonly now: () => number
+
+  constructor(runner: GitHubRunner = gh, now: () => number = () => Date.now()) {
+    this.runner = runner
+    this.now = now
+  }
+
+  read(cwd: string, repository: string, branch: string): Promise<string[] | undefined> {
+    const key = `${repository.toLowerCase()}@${branch}`
+    const kept = this.kept.get(key)
+    if (kept && kept.until > this.now()) return kept.value
+    const value = this.fetch(cwd, repository, branch)
+    const entry = { until: this.now() + REQUIRED_FRESH_MS, value }
+    this.kept.set(key, entry)
+    void value.then((names) => { if (names === undefined) entry.until = this.now() + REQUIRED_RETRY_MS })
+    return value
+  }
+
+  private async fetch(cwd: string, repository: string, branch: string): Promise<string[] | undefined> {
+    const path = encodeURIComponent(branch)
+    const read = async (api: string, field: "rules" | "protection") => {
+      try {
+        return requiredNames(await this.runner(cwd, ["api", api]), field)
+      } catch {
+        return undefined
+      }
+    }
+    const [rules, protection] = await Promise.all([
+      read(`repos/${repository}/rules/branches/${path}`, "rules"),
+      read(`repos/${repository}/branches/${path}/protection/required_status_checks`, "protection"),
+    ])
+    // An unprotected branch answers 404 for its protection: what the rulesets say is all there is.
+    if (rules === undefined && protection === undefined) return undefined
+    return [...new Set([...(rules ?? []), ...(protection ?? [])])]
+  }
+}
 
 function timeOf(text: string | undefined): number | undefined {
   const at = text ? Date.parse(text) : Number.NaN
@@ -509,29 +641,47 @@ function timeOf(text: string | undefined): number | undefined {
 
 /**
  * One pull request's state, checks and reviews for the watch (`PullReading`), with the same `gh pr view` and the same
- * normalising of checks and reviews `pull_request_status` reads with. Null when `gh` can't say.
+ * normalising of checks and reviews `pull_request_status` reads with. A bounded error when `gh` can't say.
  */
-export async function readPull(target: PullTarget, runner: GitHubRunner = gh): Promise<PullReading | null> {
+export async function readPull(target: PullTarget, runner: GitHubRunner = gh, required?: RequiredChecks): Promise<PullReading> {
   const args = ["pr", "view", String(target.number), ...(target.repository ? ["--repo", target.repository] : []), "--json", READING_FIELDS]
-  let value: JsonValue
+  let output: string
   try {
-    value = JSON.parse(await runner(target.cwd, args))
-  } catch {
-    return null
+    output = await runner(target.cwd, args)
+  } catch (cause) {
+    if (cause instanceof GitHubRateLimitError || cause instanceof GitHubRepositoryLookupError) throw cause
+    throw new PullReadError("request")
   }
-  if (!isJsonObject(value)) return null
+  let value: JsonValue
+  try { value = JSON.parse(output) }
+  catch { throw new PullReadError("response") }
+  if (!isJsonObject(value)) throw new PullReadError("response")
   const state = stringValue(value.state)
   const url = stringValue(value.url)
-  if (!state || !url) return null
-  const checks = withoutSuperseded(parseJsonArray(value.statusCheckRollup, parseRawCheck) ?? [])
-  const reviews = parseJsonArray(value.latestReviews, parseRawReview) ?? []
+  if (!state || !["OPEN", "CLOSED", "MERGED"].includes(state) || !url) throw new PullReadError("response")
+  const rawChecks = parseJsonArray(value.statusCheckRollup, parseRawCheck)
+  const rawReviews = parseJsonArray(value.latestReviews, parseRawReview)
+  if (state === "OPEN" && value.statusCheckRollup === undefined) throw new PullReadError("response")
+  for (const [raw, parsed] of [[value.statusCheckRollup, rawChecks], [value.latestReviews, rawReviews]] as const)
+    if (raw !== undefined && raw !== null && (!Array.isArray(raw) || parsed?.length !== raw.length)) throw new PullReadError("response")
+  const checks = withoutSuperseded(rawChecks ?? [])
+  const reviews = rawReviews ?? []
   const author = parseOptionalUser(value.author)?.login
   const head = stringValue(value.headRefOid)
+  const base = stringValue(value.baseRefName)
+  const repository = target.repository ?? pullRefRepository(url)
+  const requires = required && base && repository ? await required.read(target.cwd, repository, base) : undefined
+  const started = checks.flatMap(check => {
+    const at = timeOf(check.startedAt)
+    return at !== undefined && at > 0 ? [at] : []
+  })
   return {
     state: state === "MERGED" ? "merged" : state === "CLOSED" ? "closed" : "open",
     url,
     ...(head && /^[a-f0-9]{40,64}$/.test(head) && { head }),
+    ...(started.length && { headAt: Math.min(...started) }),
     ...(author && { author }),
+    ...(requires && { required: requires }),
     checks: checks.map((raw) => {
       const check = toCheck(raw)
       const at = timeOf(raw.completedAt ?? raw.startedAt)

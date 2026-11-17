@@ -6,24 +6,34 @@ const requests: {
   resolve(value: HarnessProfile): void
   reject(error: Error): void
 }[] = []
+// Told of each ask, for `waitFor`.
+let asked = () => {}
 Object.assign(globalThis, {
-  window: {
+  document: Object.assign(new EventTarget(), { visibilityState: "visible" }),
+  window: Object.assign(new EventTarget(), {
     mako: {
       harnessTuning: (provider: string, cwd?: string) =>
-        new Promise<HarnessProfile>((resolve, reject) =>
+        new Promise<HarnessProfile>((resolve, reject) => {
           requests.push({ provider, cwd, resolve, reject })
-        ),
+          asked()
+        }),
     },
-  },
+  }),
 })
 const { admitProfile, discoveryRetry, providers, providerStore, providerProfileKey } =
   await import("../src/state/providers.ts")
 discoveryRetry.firstMs = 20
 discoveryRetry.maxMs = 40
+// Waits for the bridge to be asked, not for a clock: a runner that stalls past a polled deadline fires every overdue
+// timer in one pass, earliest deadline first, and a 5 ms poll armed after the retry's 20 ms one ran first and read
+// 6 asks with the 7th already due behind it (CI's gate, 6 !== 7). The budget's timer is armed after the retry it waits
+// for, so it fires after it whatever the stall, and only a retry that never comes reaches it.
 const waitFor = async (count: number, budgetMs: number) => {
-  const until = Date.now() + budgetMs
-  while (requests.length < count && Date.now() < until)
-    await new Promise((resolve) => setTimeout(resolve, 5))
+  if (requests.length < count) await new Promise<void>((resolve) => {
+    const gaveUp = setTimeout(resolve, budgetMs)
+    asked = () => { if (requests.length >= count) { clearTimeout(gaveUp); resolve() } }
+  })
+  asked = () => {}
   assert.equal(requests.length, count)
 }
 const profile: HarnessProfile = {

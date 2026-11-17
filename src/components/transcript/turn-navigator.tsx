@@ -1,5 +1,6 @@
 import { memo, useEffect, useState, useRef, type ReactNode } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
+import { useRowRef } from "@/lib/virtual-row-ref"
 import { cn } from "@/lib/utils"
 import type { Exchange } from "@/lib/exchanges"
 import { promptLabel } from "@/lib/exchanges"
@@ -43,7 +44,8 @@ export const TurnNavigator = memo(function TurnNavigator({
   onJump,
   paneRef,
 }: {
-  exchanges: Exchange[]
+  /** The session's turns, from `useNavigatorPrompts`. */
+  exchanges: readonly Exchange[]
   activeId: string | null
   onJump: (id: string) => void
   /** The pane the navigator sits in, watched for available width. */
@@ -148,7 +150,7 @@ function Flyout({
   onJump,
   onHover,
 }: {
-  exchanges: Exchange[]
+  exchanges: readonly Exchange[]
   activeId: string | null
   onJump(id: string): void
   onHover(id: string): void
@@ -205,7 +207,7 @@ function NavigatorItems({
   className,
   render,
 }: {
-  exchanges: Exchange[]
+  exchanges: readonly Exchange[]
   estimate: number
   gap?: number
   className: string
@@ -223,6 +225,7 @@ function NavigatorItems({
     overscan: 6,
     useAnimationFrameWithResizeObserver: true,
   })
+  const measureRow = useRowRef(rows)
   const items = large
     ? rows.getVirtualItems()
     : exchanges.map((entry, index) => ({ index, key: entry.id, start: 0 }))
@@ -287,7 +290,7 @@ function NavigatorItems({
             key={item.key}
             data-navigator-index={item.index}
             data-index={item.index}
-            ref={large ? rows.measureElement : undefined}
+            ref={large ? measureRow : undefined}
             style={
               large
                 ? {

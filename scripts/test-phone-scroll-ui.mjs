@@ -5,6 +5,29 @@ import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { testScratch } from "./lib/test-scratch.mjs"
 
+// A commit can land even between two frame callbacks, before that frame's ResizeObserver delivery. Require the
+// geometry itself to settle across frames; elapsed frames alone don't prove the row was measured and followed.
+const newestGap = `() => new Promise((resolve, reject) => {
+  const node = document.querySelector('[data-transcript-viewport]');
+  let previous, frames = 0;
+  const sample = () => {
+    const turns = node.querySelectorAll('[data-exchange]');
+    const last = turns[turns.length - 1];
+    const viewport = node.getBoundingClientRect(), turn = last.getBoundingClientRect();
+    const geometry = [node.scrollTop, node.scrollHeight, node.clientHeight, viewport.bottom, turn.bottom, turn.height,
+      node.querySelector('[data-virtual-transcript]')?.getBoundingClientRect().height ?? 0,
+      node.querySelector('[data-steady-end]')?.getBoundingClientRect().height ?? 0, last.textContent.length];
+    if (previous && geometry.every((value, index) => Math.abs(value - previous[index]) < 0.5)) {
+      resolve(Math.round(viewport.bottom - turn.bottom));
+      return;
+    }
+    previous = geometry;
+    if (++frames >= 60) { reject(new Error('Newest turn geometry did not settle: ' + JSON.stringify(geometry))); return; }
+    requestAnimationFrame(sample);
+  };
+  requestAnimationFrame(sample);
+})`
+
 /**
  * Scrolling a transcript while its answer streams, by trusted touch at an iPhone's size on the phone's live Session
  * (`src/dev/phone-scroll-check.tsx`) and by wheel in a laptop's window on the desktop's (`transcript-scroll-check.tsx`):
@@ -150,7 +173,8 @@ const INSTRUMENT = `(() => {
     const before = top.get.call(node)
     write()
     const moved = top.get.call(node) - before
-    if (Math.abs(moved) >= 1) writes.push({ at: performance.now(), moved })
+    // Who wrote it, read only when a flick fails (\`flickRecord\`): a script write cancels a glide.
+    if (Math.abs(moved) >= 1) writes.push({ at: performance.now(), moved, top: top.get.call(node), stack: new Error().stack })
   }
   Object.defineProperty(Element.prototype, 'scrollTop', {
     configurable: true,
@@ -258,6 +282,12 @@ async function checkScroll() {
     return tasks.map((task) => ({ wall: task.dur / 1000, cpu: (task.tdur ?? task.dur) / 1000 }))
   }
   const now = () => evaluate("performance.now()")
+  /** A flick's record from `since` (page time) with the finger lifted at `lift` (a touch stamp, in seconds): see the flick. */
+  const flickRecord = (since, lift) => evaluate(`JSON.stringify({
+    lift: Math.round(${lift * 1000} - performance.timeOrigin - ${since}),
+    writes: window.__scrollWrites.filter(write => write.at >= ${since}).map(write => ({ at: Math.round(write.at - ${since}), moved: Math.round(write.moved), top: Math.round(write.top), by: write.stack.split('\\n').slice(3, 10).map(line => line.trim().replace(/\\(?https?:\\/\\/[^/]+/, '(').slice(0, 120)) })),
+    frames: window.__flickFrames.map(([at, fromEnd]) => [at - Math.round(${since}), fromEnd]),
+  })`)
   const centre = { x: 196, y: 380 }
   /**
    * Every touch is stamped with when the finger was there. Chromium reads a finger's speed from the stamps, not from
@@ -449,11 +479,19 @@ async function checkScroll() {
       // A long task is one with 50 ms of the page's own work, as the browser's are 50 ms of wall time. A task the page
       // waits in (a synchronous call to another process, a GPU readback) holds the thread with little work, so any task
       // of 150 ms of wall time fails too: the system taking the CPU from the page made 67 ms at most on the runner.
+      // What the flick met, printed only if it glides short: each script write to the scroller with its caller (one
+      // cancels a glide), when the finger lifted, and how far from the end it was each frame. 60 runs on a CI Mac and
+      // here never glided short; the one that did (535 px, #712's suites (1)) left nothing to say why.
+      await evaluate(`(() => { const node = ${scroller}; const frames = window.__flickFrames = []; window.__flickFraming = true; const step = () => { frames.push([Math.round(performance.now()), Math.round(node.scrollHeight - node.scrollTop - node.clientHeight)]); if (window.__flickFraming) requestAnimationFrame(step) }; requestAnimationFrame(step); return true })()`)
+      let lift = 0
       const work = await pageWork(async () => {
         await flick(400, 2_500)
+        lift = stamp
         await rest()
       })
       const flung = await fromEnd()
+      await evaluate("window.__flickFraming = false, true")
+      if (!(flung > 600)) console.log(`FLICK RECORD ${await flickRecord(since, lift)}`)
       assert.ok(flung > 600, `a flick of 400 px glided ${Math.round(flung)} px from the end`)
       const walls = await longTasks(since)
       const tasks = work.filter((task) => task.cpu >= 50).map((task) => Math.round(task.cpu))
@@ -547,8 +585,31 @@ async function checkScroll() {
       await send("Emulation.setDeviceMetricsOverride", { width: sideways ? 852 : 393, height: sideways ? 393 : 852, deviceScaleFactor: 3, mobile: true })
       await rest()
     }
-    const belowNewest = () => evaluate(`(() => { const node = ${scroller}; const turns = node.querySelectorAll('[data-exchange]'); return Math.round(node.getBoundingClientRect().bottom - turns[turns.length - 1].getBoundingClientRect().bottom) })()`)
+    const belowNewest = () => evaluate(`(${newestGap})()`)
     const uprightGap = await belowNewest()
+    // A host batch already admitted when streaming stopped can finish painting
+    // after rest() saw a stable scrollTop. Read at that exact commit boundary:
+    // the old synchronous measurement saw 0 px here, then 48 px after rotation.
+    const lateGap = await evaluate(`new Promise(resolve => {
+      const node = ${scroller};
+      const observer = new MutationObserver(() => {
+        if (!node.textContent.includes('A later answer arrives')) return;
+        observer.disconnect();
+        resolve((${newestGap})());
+      });
+      observer.observe(node, {childList: true, subtree: true, characterData: true});
+      window.scrollCheck.append('\\n\\nA later answer arrives after the stream stopped. This is an already admitted batch finishing its rendering.');
+    })`)
+    assert.ok(Math.abs(lateGap - uprightGap) <= 2, `a late batch at the end left ${lateGap} px below the newest turn, before ${uprightGap} px`)
+    assert.ok(await fromEnd() < 2, "the late batch stays pinned to the scroll end")
+    // A batch may commit between the reader's frame callbacks. Two elapsed frames alone don't mean its layout
+    // was measured: the virtualizer's ResizeObserver still runs later in that same frame, before paint.
+    const commitGap = await evaluate(`(() => {
+      requestAnimationFrame(() => requestAnimationFrame(() => window.scrollCheck.finish('\\n\\nA final admitted batch commits between frame callbacks. Its new paragraph grows the last turn before the virtualizer measures that row.')));
+      return (${newestGap})();
+    })()`)
+    assert.ok(Math.abs(commitGap - uprightGap) <= 2, `a commit between frames left ${commitGap} px below the newest turn, before ${uprightGap} px`)
+    assert.ok(await fromEnd() < 2, "a commit between frames stays pinned to the scroll end")
     await turn(true)
     const sidewaysGap = await belowNewest()
     await capture("turned-sideways-iphone-dark.png")
@@ -556,7 +617,7 @@ async function checkScroll() {
     const backGap = await belowNewest()
     assert.ok(Math.abs(sidewaysGap - uprightGap) <= 2, `turned sideways at the end, the newest turn ended ${sidewaysGap} px above the transcript's bottom, upright ${uprightGap} px`)
     assert.ok(Math.abs(backGap - uprightGap) <= 2, `turned upright again, the newest turn ended ${backGap} px above the bottom, at first ${uprightGap} px`)
-    console.log(`Turned sideways and back at the end: the newest turn ended ${uprightGap}, ${sidewaysGap}, ${backGap} px above the bottom`)
+    console.log(`Turned sideways and back at the end: the newest turn ended ${uprightGap}, ${sidewaysGap}, ${backGap} px above the bottom; late batch ${lateGap} px`)
 
     // Light, read while streaming.
     await phone("light")

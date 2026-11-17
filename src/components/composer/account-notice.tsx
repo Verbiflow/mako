@@ -8,6 +8,8 @@ import { accounts, useAccounts, type ProviderAccount } from "@/state/accounts"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import { useLimitContinue, type LimitContinue } from "@/state/limit-continue"
 import { loadFinDefaults, useFinDefaults } from "@/state/fin-defaults"
+import { usageLimitWait } from "@/state/usage-limit-wait"
+import { clockText } from "@/state/request-recovery"
 import { shallowEqual } from "@/state/store"
 import type { ComposerNotice, ComposerNoticeAction } from "@/extend/notices"
 
@@ -53,18 +55,17 @@ export function useAccountSwitchNotice(): ComposerNotice | null {
   }
 }
 
-/** The card of a Thread a limit holds, with somewhere to go: only the choice, as its queue row says what holds it. */
+/** One automatic reset wait, with an optional action to move sooner. */
 export function limitContinueNotice(offer: LimitContinue): ComposerNotice {
   return {
     id: "limit-continue",
     tone: "info",
     icon: <HarnessIcon harness={offer.harness} />,
-    title: `${offer.to} can take this`,
-    actions: [
-      { label: `Continue on ${offer.to}`, primary: true, disabled: offer.busy, title: "This Thread goes on there with its whole conversation, and what waits goes with it", onClick: offer.go },
-      { label: "Not now", onClick: offer.notNow },
-    ],
-    data: { "data-limit-continue": offer.to },
+    title: `${offer.resets ? "Sends" : "Tries again"} at ${clockText(offer.at)}`,
+    actions: offer.to ? [
+      { label: `Use ${offer.to} now`, primary: true, disabled: offer.busy, title: "This Thread goes on there with its whole conversation, and what waits goes with it", onClick: offer.go },
+    ] : [],
+    data: { "data-limit-continue": offer.to, "data-usage-limit-wait": String(offer.at) },
   }
 }
 
@@ -103,6 +104,10 @@ function noticeText(reading: AccountReading, session: LiveSessionState, label: s
  * A notice producer (`registerNotice`).
  */
 export function useAccountLimitNotice(): ComposerNotice | null {
+  const waiting = useAcp(state => {
+    const live = activeLiveAcp(state)
+    return Boolean(live && !live.copy && usageLimitWait(live.requests ?? []))
+  })
   const harness = useAcp((state) => activeLiveAcp(state)?.harness)
   const offer = useAccounts((state) => harness ? state.limitOffers[harness] : undefined)
   const active = useAccounts((state) => harness ? state.accounts.find((account) => account.harness === harness && account.active)?.name : undefined)
@@ -112,7 +117,7 @@ export function useAccountLimitNotice(): ComposerNotice | null {
   const onward = useFinDefaults((state) => state.reading?.moveOnLimit)
   const unread = Boolean(offer) && onward === undefined
   useEffect(() => { if (unread) void loadFinDefaults() }, [unread])
-  if (!harness || !offer || !label || (active !== undefined && active !== offer.from.name)) return null
+  if (waiting || !harness || !offer || !label || (active !== undefined && active !== offer.from.name)) return null
   const text = limitText(offer, label, onward)
   const to = offer.to && (offer.to.email ?? offer.to.name)
   return {

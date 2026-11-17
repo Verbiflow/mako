@@ -1,7 +1,7 @@
 import { isAbsolute, join } from "node:path"
 import { AuthoringFiles } from "./authoring-files.js"
 import type { MethodTable } from "../base/methods.js"
-import { deletePlugin, listPlugins, pluginsDir, watchPlugins, writePlugin } from "./plugins.js"
+import { deletePlugin, listPlugins, pluginsDir, watchPlugins, writePlugin, type PluginWatch, type PluginWatchPort } from "./plugins.js"
 import { mcpRegistry, type McpRegistry } from "./mcp-registry.js"
 import { integrationCatalog } from "./integrations.js"
 import { mcpSync, type McpSync } from "./mcp-sync.js"
@@ -18,7 +18,8 @@ import type { Control } from "../control/index.js"
 
 export { startConversationMcp, type ConversationMcp, type MakoTools, type ToolGrant } from "./conversation-mcp.js"
 export type { Catalog, HarnessAccount, ToolHarnesses } from "./harnesses.js"
-export type { ProviderMcpSource, McpJsonFormat } from "./mcp-source.js"
+export type { ProviderMcpSource, McpJsonFormat, McpLogin } from "./mcp-source.js"
+export { McpSignIns, declareMcpSignInMethods, type McpSetupFailure } from "./mcp-sign-ins.js"
 export { inEveryAncestor, scopedMcpWriteArgs } from "./mcp-source.js"
 export type { ProviderSkillSource } from "./skill-source.js"
 export type { AuthoringContext, AuthoringEdit, AuthoringFormat, AuthoringReading, AuthoringSourceSpec, ProviderAuthoringCapability, ProviderEditingCapability, ProviderMcpEditing, ReadSource } from "./editing-capability.js"
@@ -61,8 +62,8 @@ export function openTools(harnesses: ToolHarnesses, dataRoot: string, idle?: () 
   }
 }
 
-export function watchPluginChanges(dataRoot: string, emit: (event: HostEvent) => void): { close(): void } | null {
-  return watchPlugins(pluginsDir(dataRoot), () => emit({ type: "plugins-changed" }))
+export function watchPluginChanges(dataRoot: string, emit: (event: HostEvent) => void, watch: PluginWatchPort): PluginWatch {
+  return watchPlugins(pluginsDir(dataRoot), () => emit({ type: "plugins-changed" }), watch)
 }
 
 export interface ToolMethodsDeps {

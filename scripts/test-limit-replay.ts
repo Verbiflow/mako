@@ -1,3 +1,4 @@
+import { providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -51,9 +52,10 @@ async function tree(name: string, harness: string, accounts: Record<string, Worl
     if (state.holdMoved && turn.text.includes("[mako · moved after a usage limit]")) return turn.world.hold(turn.conversation).then(() => "Done.")
     const fin = NAMES.find((each) => turn.text.includes(`${each}: Report`))
     if (!fin || !turn.text.includes("You're fin:") || turn.harness !== harness) return `Done on ${turn.harness}.`
-    // A Fin that said where it stands and rests, its work not finished: idle, not done.
+    // A Fin that said where it stands and rests, its work not finished: idle, not done. It waits on something Mako
+    // watches (a pull request); progress naming nothing watched would end its turn as its result.
     if (fin === "idle") {
-      await turn.world.agents.report(turn.caller, { status: "progress", summary: "Waiting for the next part.", clientKey: "idle" })
+      await turn.world.agents.report(turn.caller, { status: "progress", summary: "Waiting for the next part.", waitingOn: [{ kind: "pull-request", ref: "acme/app#9", until: "merge" }], clientKey: "idle" })
       return "Standing by."
     }
     await turn.world.hold(turn.conversation)
@@ -64,6 +66,7 @@ async function tree(name: string, harness: string, accounts: Record<string, Worl
   const world = new AgentsWorld({
     root: join(root, name),
     script,
+    readPull: async () => null,
     accounts,
     selected: {},
     catalogs: CATALOGS,
@@ -188,7 +191,7 @@ async function digestFirst(harness: string): Promise<void> {
   const script: Script = async (turn) => {
     if (turn.text.includes(FROM_AGENTS) && turn.harness === harness && failing) {
       const session = turn.world.live.snapshot(turn.conversation)!.session
-      turn.world.live.observe({ type: "live-session", session: { ...session, status: "failed", error: LIMIT } })
+      turn.world.live.observe({ type: "live-session", session: { ...session, status: "failed", error: LIMIT, failureEvidence: providerTextEvidence(LIMIT) } })
       return new Promise<string>(() => {})
     }
     if (turn.text.includes(FROM_AGENTS)) heard.push(turn.text)

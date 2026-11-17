@@ -26,7 +26,7 @@ if (!process.versions.electron) {
     await writeFile(join(root, "recorder.mjs"), `
 import { appendFileSync } from "node:fs"
 const [name, ...args] = process.argv.slice(2)
-const values = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith("MAKO_THREAD_") || ["PORT", "API_URL", "STALE_NAME"].includes(key)))
+const values = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith("MAKO_THREAD_") || ["MAKO_APP_DATA_DIR", "PORT", "API_URL", "STALE_NAME"].includes(key)))
 appendFileSync(${JSON.stringify(join(root, "launches.jsonl"))}, JSON.stringify({ name, args, values }) + "\\n")
 if (args.includes("--version")) { console.log("2.0.0"); process.exit(0) }
 setTimeout(() => process.exit(1), 500)
@@ -44,6 +44,7 @@ setTimeout(() => process.exit(1), 500)
       CODEX_EXECUTABLE: join(bin, "codex"),
       OPENCODE_BIN_PATH: join(bin, "opencode"),
       MAKO_THREAD_ID: "inherited-from-the-parent",
+      MAKO_APP_DATA_DIR: "inherited-app-data",
       // Names a parent Mako mapped from its own Thread's recipe.
       MAKO_THREAD_VALUES: "STALE_NAME,PORT",
       STALE_NAME: "from-the-parent",
@@ -84,14 +85,15 @@ async function check() {
   )
   const cwd = join(root, "work")
   await mkdir(cwd)
-  const environment = { thread: randomUUID(), host: "fix-login.thread.localhost", port: 20_110, ports: 10, dataDir: join(root, "thread-data"), values: { PORT: "20110", API_URL: "http://fix-login.thread.localhost:20111" } }
+  const environment = { thread: randomUUID(), host: "fix-login.thread.localhost", port: 20_110, ports: 10, dataDir: join(root, "app-data"), threadDataDir: join(root, "thread-data"), values: { PORT: "20110", API_URL: "http://fix-login.thread.localhost:20111" } }
   const expected = {
     MAKO_THREAD_ID: environment.thread,
     MAKO_THREAD_HOST: environment.host,
     MAKO_THREAD_PORT: "20110",
     MAKO_THREAD_PORTS: "10",
     MAKO_THREAD_URL: "http://fix-login.thread.localhost:20110",
-    MAKO_THREAD_DATA_DIR: environment.dataDir,
+    MAKO_THREAD_DATA_DIR: environment.threadDataDir,
+    MAKO_APP_DATA_DIR: environment.dataDir,
     MAKO_THREAD_VALUES: "PORT,API_URL",
     PORT: "20110",
     API_URL: "http://fix-login.thread.localhost:20111",
@@ -152,7 +154,7 @@ async function check() {
   assert.notEqual(unplaced, launches.find((launch) => launch.name === "codex"), "the agent without a Thread was started too")
   assert.deepEqual(unplaced.values, {}, "an agent without a Thread never inherits the values of the Mako that started it")
   assert.ok(cursorEnv, "the Cursor child was prepared")
-  assert.deepEqual(Object.fromEntries(Object.entries(cursorEnv).filter(([key]) => key.startsWith("MAKO_THREAD_") || ["PORT", "API_URL", "STALE_NAME"].includes(key))), expected, "the Cursor child starts with exactly its Thread's values")
+  assert.deepEqual(Object.fromEntries(Object.entries(cursorEnv).filter(([key]) => key.startsWith("MAKO_THREAD_") || ["MAKO_APP_DATA_DIR", "PORT", "API_URL", "STALE_NAME"].includes(key))), expected, "the Cursor child starts with exactly its Thread's values")
   report.cursor = { start: "child options recorded before spawn" }
   console.log(JSON.stringify(report, null, 2))
   console.log("thread environment launch: all six harnesses start their agent with the Thread's values and its recipe's names for them, and an inherited value never leaks")

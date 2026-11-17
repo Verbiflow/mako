@@ -60,7 +60,7 @@ test("parts, the warning and the collectors", async () => {
   await storage.watch()
   await storage.watch()
   assert.equal(events.length, 1, "under the line, Mako says so once")
-  assert.match(JSON.stringify(events[0]), /9\.0 GB free.*Settings › Storage/)
+  assert.deepEqual(events[0], { type: "notice", level: "error", message: "This Mac has 9.0 GB free.", action: { label: "Free 1.0 GB", does: "open-storage" } }, "with the one thing that fixes it: what's left to free, in Settings › Storage")
   assert.deepEqual(triggers, ["low disk"], "and collects without waiting for the schedule")
   free = STORAGE_LOW_BYTES + GB
   await storage.watch()

@@ -2,6 +2,8 @@ import { AgentThreads } from "@/components/rail/agent-threads"
 import { StoreFormatLine } from "@/components/shell/store-format-line"
 import { TurnOnRailLine } from "@/components/settings/cloud-turn-on"
 import { SyncRailLine } from "@/components/settings/sync-section"
+import { McpSignInRailLine } from "@/components/settings/mcp-sign-ins"
+import { UnopenedRailLine } from "@/components/settings/unopened-conversations"
 import { Slot } from "@/extend/slot"
 import { useStoreFormats } from "@/state/store-formats"
 
@@ -17,6 +19,8 @@ export function SessionRail() {
     <aside className="flex h-full min-h-0 flex-col">
       <AgentThreads />
       <ThreadStoreLine />
+      <McpSignInRailLine />
+      <UnopenedRailLine />
       <TurnOnRailLine />
       <SyncRailLine />
       <Slot name="rail.footer" />

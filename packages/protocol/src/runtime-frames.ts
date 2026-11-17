@@ -68,6 +68,18 @@ export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
       form: LiveFormSchema.optional(),
     })
     .strict(),
+  /**
+   * A Thread's passing state (`PASSING_THREAD_VERSION`): an event its readers take in the moment, under the runtime's
+   * generation for the Thread. Not numbered, acknowledged or sent again, and never in the Thread's log.
+   */
+  z
+    .object({
+      type: z.literal("passing"),
+      threadId: ThreadIdSchema,
+      generation: GenerationSchema,
+      correlationId: CorrelationIdSchema.optional(),
+    })
+    .strict(),
   z.object({ type: z.literal("reply"), reply: ReplyEnvelopeSchema }).strict(),
   /**
    * Whether the runtime is working on the Thread (version 2 on): a turn, queued work or the harness's background
@@ -115,6 +127,8 @@ export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
       n: SeqSchema.optional(),
       correlationId: CorrelationIdSchema.optional(),
       form: LiveFormSchema.optional(),
+      /** Passing state, relayed and never kept (`EPHEMERAL_LIVE_VERSION`); it carries no `n`. */
+      ephemeral: z.literal(true).optional(),
     })
     .strict(),
   /** The runtime ended a stream it served (version 3 on, `media.ts`); its viewer hears why. */
@@ -322,9 +336,10 @@ export type RuntimeFrameEnvelope = z.infer<typeof RuntimeFrameEnvelopeSchema>
 export type GatewayFrameEnvelope = z.infer<typeof GatewayFrameEnvelopeSchema>
 
 export type RuntimeFrame =
-  | Exclude<RuntimeFrameEnvelope, { type: "event" | "reply" | "live" }>
+  | Exclude<RuntimeFrameEnvelope, { type: "event" | "reply" | "live" | "passing" }>
   | (Extract<RuntimeFrameEnvelope, { type: "event" }> & { event: Payload })
   | (Extract<RuntimeFrameEnvelope, { type: "live" }> & { event: Payload })
+  | (Extract<RuntimeFrameEnvelope, { type: "passing" }> & { event: Payload })
   | { type: "reply"; reply: Reply }
 export type GatewayFrame =
   | Exclude<GatewayFrameEnvelope, { type: "operation" | "media-watch" }>

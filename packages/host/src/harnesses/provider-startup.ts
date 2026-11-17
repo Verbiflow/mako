@@ -1,3 +1,4 @@
+import { HostFailureError, ProviderFailureError, providerTextEvidence } from "../contracts/provider-failure.js"
 import { AsyncLocalStorage } from "node:async_hooks"
 import type { EventEmitter } from "node:events"
 import { stripVTControlCharacters } from "node:util"
@@ -116,10 +117,15 @@ export class ProviderStartupWatch {
     if (!pending) return
     this.settle(pending, "exited")
     pending.reject(
-      new Error(
-        `${this.harness} ${exitDescription(code, signal)} during ${pending.name}${this.stderrLine()}`
-      )
+      this.exitFailure(`${this.harness} ${exitDescription(code, signal)} during ${pending.name}${this.stderrLine()}`)
     )
+  }
+
+  /** Only the process's stderr tail is provider text; the watch's diagnostic is a host fact. */
+  private exitFailure(message: string): Error {
+    const detail = stderrDetail(this.stderrTail())
+    const evidence = providerTextEvidence(detail)
+    return detail && evidence.kind !== "unknown" ? new ProviderFailureError(message, evidence) : new HostFailureError("launch-failed", message)
   }
 
   constructor(process: StartupProcess, options: StartupWatchOptions) {
@@ -146,12 +152,10 @@ export class ProviderStartupWatch {
   async step<Value>(name: string, work: Promise<Value>): Promise<Value> {
     // A refused step still owns `work`; its rejection must not go unhandled.
     work.catch(() => undefined)
-    if (this.pending) throw new Error(`${this.harness} startup step ${this.pending.name} is still pending`)
-    if (this.disposed) throw new Error(`${this.harness} startup watch was disposed before ${name}`)
+    if (this.pending) throw new HostFailureError("launch-failed", `${this.harness} startup step ${this.pending.name} is still pending`)
+    if (this.disposed) throw new HostFailureError("launch-failed", `${this.harness} startup watch was disposed before ${name}`)
     if (this.exit)
-      throw new Error(
-        `${this.harness} ${exitDescription(this.exit.code, this.exit.signal)} before ${name}${this.stderrLine()}`
-      )
+      throw this.exitFailure(`${this.harness} ${exitDescription(this.exit.code, this.exit.signal)} before ${name}${this.stderrLine()}`)
     const startedAt = this.now()
     return new Promise<Value>((resolve, reject) => {
       const pending: PendingStep = { name, startedAt, silence: null, total: null, reject }
@@ -161,7 +165,7 @@ export class ProviderStartupWatch {
         if (this.pending !== pending) return
         this.settle(pending, "timed-out")
         reject(
-          new Error(
+          new HostFailureError("launch-stalled",
             `${this.harness} did not finish ${name} within ${seconds(this.totalMs)}${this.describeOutput()}`
           )
         )
@@ -192,7 +196,7 @@ export class ProviderStartupWatch {
     const pending = this.pending
     if (pending) {
       this.settle(pending, "failed")
-      pending.reject(new Error(`${this.harness} startup was abandoned during ${pending.name}`))
+      pending.reject(new HostFailureError("launch-failed", `${this.harness} startup was abandoned during ${pending.name}`))
     }
     this.process.stdout.off("data", this.onStdout)
     this.process.stderr.off("data", this.onStderr)
@@ -221,7 +225,7 @@ export class ProviderStartupWatch {
       const after = finished.length ? ` after finishing ${finished.join(" and ")}` : ""
       const alive = this.exit ? exitDescription(this.exit.code, this.exit.signal) : "process still running"
       pending.reject(
-        new Error(
+        new HostFailureError("launch-stalled",
           `${this.harness} produced no output for ${seconds(quiet)} during ${pending.name}${after} (${alive})`
         )
       )

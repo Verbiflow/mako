@@ -75,7 +75,7 @@ const lifecycle = hostLifecycle({
   exit,
   log: (message, fields) => hostLog("lifecycle", message, fields),
   failed: async (error) => {
-    hostWarn("lifecycle", "shutdown failed", { error: String(error) })
+    hostWarn("lifecycle", "shutdown failed", { error: String(error), ...error instanceof AggregateError && { causes: error.errors.map(causeWords).join(" | ") } })
     await log.flush()
   },
 })
@@ -88,3 +88,10 @@ await host.start().catch(async (error: Error) => {
   console.error(`Mako's host couldn't start: ${error.message}`)
   await lifecycle.stop({ kind: "failed", error: error.stack ?? error.message })
 })
+
+/** An error with what caused it, each its own words: an aggregate's message alone named no step that failed to drain. */
+function causeWords(error: Error): string {
+  const words = [error.message]
+  for (let cause = error.cause; cause instanceof Error && words.length < 5; cause = cause.cause) words.push(cause.message)
+  return words.join(": ")
+}

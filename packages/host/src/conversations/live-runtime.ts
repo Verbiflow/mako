@@ -124,6 +124,8 @@ export interface Resident {
   /** See `LiveSnapshot.activityAt`; the next flush publishes it. */
   activityAt?: number
   timer: ReturnType<typeof setTimeout> | null
+  /** When `timer` flushes (`performance.now()`), so a change that can't wait as long brings it sooner. */
+  timerDue?: number
   /** When it last flushed (`performance.now()`): the next change waits until a batch's frame has passed since. */
   flushedAt?: number
   displayPrompt?: string
@@ -225,18 +227,22 @@ export interface ConversationChildren {
   edgeWritten?(op: string): void
   /** The conversation's Fins as roster entries, the same array until one of them changes. */
   roster(conversation: string): readonly import("../contracts/native-agents.js").NativeAgent[]
+  /** The conversation's armed wait as its waiting line reads (`turnWaitLine`), the same object until it changes. */
+  turnWaitLine?(conversation: string): import("../contracts/turn-waits.js").TurnWaitLine | undefined
   /** Whether the conversation hears its Thread's Fins move: its Thread's newest Session's. Its Fins hold no other. */
   showsFins?(conversation: string): boolean
   /** Stops one of them, by its Thread: false when it isn't the conversation's or has nothing running. */
   stopChild(conversation: string, child: string): Promise<boolean>
   /** One of the conversation's requests settled. */
   settled(conversation: string, request: string): void
+  /** The live engine stamped activity in the conversation (`Resident.activityAt`): output, a step. Called for every stamp, so it must cost next to nothing. */
+  active?(conversation: string): void
   /** Its harness took input: a message as its turn, or a steer into the turn it runs. */
   inputDelivered?(conversation: string, input: Pick<LiveRequest, "id" | "text" | "actor"> & Partial<Pick<LiveRequest, "digest" | "continues" | "goal">>, delivery: "turn" | "steer"): void
   /** Whether the conversation's Thread is an Apex: it has Fins or queued spawns, or was started as one. */
   isApex(conversation: string): boolean
   /** The person's front door, or the precedence of newer instructions that overtook an agent's queued message. */
-  frontDoor(conversation: string, request: Pick<LiveRequest, "actor"> & Partial<Pick<LiveRequest, "id">>, includeGuidance?: boolean): string[]
+  frontDoor(conversation: string, request: Pick<LiveRequest, "actor"> & Partial<Pick<LiveRequest, "id">>, includeGuidance?: boolean, whole?: boolean, forgot?: boolean): string[]
   /** The person's standing rules the conversation reads, as standing lines of Mako's note by name (`roleRuleLines`). */
   ruleLines(conversation: string): RoleRuleLines
   /** Whether a turn of the conversation a usage limit cut may go on now: a Fin's takes a place as anything else does. */
@@ -274,6 +280,8 @@ export interface Dependencies {
   workspaceSnapshots?: WorkspaceSnapshots
   /** How long a turn waits for its checkpoint to hold the workspace before it goes without (`BEFORE_CHECKPOINT_WAIT_MS`). */
   checkpointWaitMs?: number
+  /** A checkpoint missed dispatch: bounded diagnostic telemetry, never part of sending. */
+  checkpointTimedOut?(waitedMs: number): void
   /** Who changed each of these files (absolute) since `since`, as the attribution journal knows; undefined while it isn't open. */
   rewindWriters?(paths: readonly string[], since: number): FileWriters | undefined
   appPath: string
@@ -291,7 +299,7 @@ export interface Dependencies {
    * and then as they change (`standingLines`), and notices, each said once.
    * The note wraps them with anything Mako has to tell about the conversation itself.
    */
-  controlInstructions?(bindingId: string, conversationId: string, thread: Pick<RoutedThread, "role">): ControlInstructions
+  controlInstructions?(bindingId: string, conversationId: string, thread: Pick<RoutedThread, "role">): ControlInstructions | Promise<ControlInstructions>
   revokeTools?(bindingId: string, conversationId: string): void | Promise<void>
   /** The provider hibernates: its grants end, and what its agent built in Local Control waits for it to wake. Without this, `revokeTools`. */
   suspendTools?(bindingId: string, conversationId: string): void | Promise<void>
@@ -303,6 +311,12 @@ export interface Dependencies {
   accountEnv?(binding: ProviderBinding): Promise<NodeJS.ProcessEnv>
   /** The account a harness has selected and a digest of `account`'s credentials. Without it, work paused on a sign-out waits to be resumed by hand. */
   signInState?(harness: string, account: string): Promise<{ selected: string; credential: string }>
+  /** Opaque, durable receipt of a provider-verified login. Principal equality alone is not renewed authentication. */
+  signInProof?(harness: string, account: string): import("../harnesses/index.js").VerifiedSignIn | undefined
+  signInSequence?(harness: string): number | undefined
+  signInEvents?(listener: (receipt: import("../harnesses/index.js").VerifiedSignIn) => void): () => void
+  /** The archive/ownership boundary, checked again before automatic release. */
+  signInAllowed?(id: string): boolean
   /** Who has a saved binding's native session and whether its record moved; see `ResumeVerdict`. */
   resumeVerdict?(binding: ProviderBinding): Promise<ResumeVerdict>
   /** The same folder in the project a since-removed worktree holding `cwd` was made from; undefined while `cwd` is there. */
@@ -400,6 +414,12 @@ export interface Dependencies {
    */
   historyPaged?(id: string): void
   historyReleased?(id: string): void
+  /** Conversation `id` was read into memory: a view read where its journal lies (`ColdJournal`) is let go. */
+  historyLoaded?(id: string): void
+  /** What windows' cold views of journals hold, counted in the conversations' memory budget. */
+  historyHeld?(): number
+  /** Whether a window's cold view holds journal file `key`, which then isn't compacted (`JournalReclaims`). */
+  historyHolds?(key: string): boolean
   /** Test clock for deterministic residency decisions. */
   now?: () => number
   /** A conversation's work moved (running, waiting, finishing, none), with or without a batch: its row is told now. */
@@ -412,6 +432,11 @@ export interface Dependencies {
  * what it depends on; `LiveConversations` wires them.
  */
 export interface LiveAccess {
+  stopMark(id: string): number
+  restartAllowed(id: string, requestId: string): boolean
+  restartContinued(id: string, requestId: string): void
+  /** Before opening a crashed turn's continuation, reconcile that exact turn from its native record. False means no send. */
+  reconcileCut(resident: Resident, continues: TurnContinuation | undefined): Promise<boolean>
   dependencies: Dependencies
   /** Compacts the journals this host closes with much of them free. */
   reclaims: JournalReclaims

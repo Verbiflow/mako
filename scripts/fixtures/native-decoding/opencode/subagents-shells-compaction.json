@@ -885,7 +885,11 @@
               "type": "compaction-failed",
               "error": {
                 "type": "provider",
-                "message": "Context window exceeded"
+                "message": "Context window exceeded",
+                "failureEvidence": {
+                  "kind": "context-exhausted",
+                  "source": "provider-text"
+                }
               },
               "source": "msg_0026"
             }

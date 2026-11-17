@@ -1,3 +1,4 @@
+import { HostFailureError } from "../contracts/provider-failure.js"
 /**
  * Several accounts per harness, one machine.
  *
@@ -60,6 +61,7 @@ import { AccountUsageReadings } from "./account-usage-readings.js"
 import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import { bindingWindow, LIMIT_NEAR_PERCENT, limitOffer, spentUntil, windowsAt, type AccountLimitOffer, type HarnessLimit } from "../contracts/account-usage.js"
 import type { FallbackAccount } from "../contracts/fin-fallback.js"
+import { AccountSignIns, SignInRecoveryWriteError, type VerifiedSignIn } from "./account-sign-ins.js"
 
 /** Host-only, prepared once for an execution. Never serialize the environment. */
 export interface AccountLaunch {
@@ -73,10 +75,10 @@ export interface AccountLaunch {
   hold?: AccountHold
 }
 
-export class ExecutionAccountChanged extends Error {
+export class ExecutionAccountChanged extends HostFailureError {
   readonly reason: "selection" | "credentials"
   constructor(reason: "selection" | "credentials") {
-    super(reason === "selection"
+    super("unknown", reason === "selection"
       ? "The selected account changed. Reconnect this agent before sending; no prompt was dispatched and existing work was preserved."
       : "The account credentials changed. Reconnect this agent before sending; no prompt was dispatched and existing work was preserved.")
     this.name = "ExecutionAccountChanged"
@@ -85,9 +87,9 @@ export class ExecutionAccountChanged extends Error {
 }
 
 /** The native process reported a different identity than the account it was launched with. */
-export class ExecutionIdentityMismatch extends Error {
+export class ExecutionIdentityMismatch extends HostFailureError {
   constructor(principal: string, expected: string) {
-    super(`This agent is signed in as ${principal}, not ${expected}, the account this session started with. Nothing was sent. Sign ${expected} in again in Settings › Agents, or choose the account it is signed in as.`)
+    super("wrong-account", `This agent is signed in as ${principal}, not ${expected}, the account this session started with. Nothing was sent. Sign ${expected} in again in Settings › Agents, or choose the account it is signed in as.`)
     this.name = "ExecutionIdentityMismatch"
   }
 }
@@ -141,6 +143,7 @@ export class HarnessAccounts {
   readonly holds: AccountHolds
   /** Each account's usage, read from its provider on demand. */
   readonly usage: AccountUsageReadings
+  private readonly signIns: AccountSignIns
   /** Serializes identity mutations per provider so selecting and deleting cannot race. */
   private readonly mutations = new Map<string, Promise<unknown>>()
   private readonly removalListeners = new Set<(harness: string, name: string, event: AccountRemovalEvent) => void>()
@@ -155,6 +158,7 @@ export class HarnessAccounts {
     this.root = root
     this.holds = new AccountHolds(root)
     this.usage = new AccountUsageReadings(capabilities)
+    this.signIns = new AccountSignIns(root)
     this.holds.onReleased((provider, name) => {
       // Released before this check, so a removal marked after it reads no hold.
       if (existsSync(removalMarker(root, provider, name))) void this.completeRemoval(provider, name)
@@ -327,33 +331,55 @@ export class HarnessAccounts {
     target: AccountLoginTarget,
     options: { verify?: (env: NodeJS.ProcessEnv) => Promise<void>; confirmed?: boolean; previousEmail?: string }
   ): Promise<AccountLoginResult> {
-    return this.mutate(harness, async () => {
-      const capability = this.nativeLogin(harness)
-      const { name } = target
-      if (!options.confirmed) await capability.confirmAccountLogin?.(target)
-      const env = await capability.accountEnv(name, childProcessEnv(process.env))
-      await options.verify?.(env)
-      if (!target.renew) await clearLoginPending(this.root.dir(harness, name))
-      this.usage.forget(harness, name)
-      const listed = await capability.listAccounts(await this.root.readSelection(harness))
-      const email = listed.find((account) => account.name === name)?.email
-      if (target.renew) {
-        const result: AccountLoginResult = { status: "renewed", name }
-        if (email !== undefined) result.email = email
-        if (options.previousEmail !== undefined && email !== undefined && email !== options.previousEmail)
-          result.previousEmail = options.previousEmail
-        return result
+    const { result, receipt } = await this.mutate(harness, async () => {
+      const result = await this.finishVerifiedLogin(harness, target, options)
+      const verified = options.confirmed || options.verify !== undefined || this.nativeLogin(harness).confirmAccountLogin !== undefined
+      let receipt: VerifiedSignIn | undefined
+      if (verified && (result.status === "renewed" || result.status === "added")) {
+        try { receipt = await this.signIns.keep(harness, result.name) }
+        catch (error) { throw new SignInRecoveryWriteError({ error }) }
       }
-      const existing = email === undefined ? undefined : listed.find(
-        (account) => account.name !== name && account.email === email && !account.missing
-      )
-      if (existing) {
-        const { stillValid } = await capability.removeAccount(name)
-        if (stillValid) hostWarn("accounts", "A duplicate sign-in's key could not be revoked", { harness, reason: stillValid.reason })
-        return { status: "duplicate" as const, name: existing.name, email }
-      }
-      return email === undefined ? { status: "added" as const, name } : { status: "added" as const, name, email }
+      return { result, receipt }
     })
+    // The account mutation is released before a resumed session tries to launch on it.
+    if (receipt) this.signIns.publish(receipt)
+    return result
+  }
+
+  onSignedIn(listener: (receipt: VerifiedSignIn) => void): () => void { return this.signIns.onSignedIn(listener) }
+  signInProof(harness: string, account: string): VerifiedSignIn | undefined { return this.signIns.proof(harness, account) }
+  signInSequence(harness: string): number | undefined { return this.signIns.sequence(harness) }
+
+  private async finishVerifiedLogin(
+    harness: AccountHarness,
+    target: AccountLoginTarget,
+    options: { verify?: (env: NodeJS.ProcessEnv) => Promise<void>; confirmed?: boolean; previousEmail?: string }
+  ): Promise<AccountLoginResult> {
+    const capability = this.nativeLogin(harness)
+    const { name } = target
+    if (!options.confirmed) await capability.confirmAccountLogin?.(target)
+    const env = await capability.accountEnv(name, childProcessEnv(process.env))
+    await options.verify?.(env)
+    if (!target.renew) await clearLoginPending(this.root.dir(harness, name))
+    this.usage.forget(harness, name)
+    const listed = await capability.listAccounts(await this.root.readSelection(harness))
+    const email = listed.find((account) => account.name === name)?.email
+    if (target.renew) {
+      const result: AccountLoginResult = { status: "renewed", name }
+      if (email !== undefined) result.email = email
+      if (options.previousEmail !== undefined && email !== undefined && email !== options.previousEmail)
+        result.previousEmail = options.previousEmail
+      return result
+    }
+    const existing = email === undefined ? undefined : listed.find(
+      (account) => account.name !== name && account.email === email && !account.missing
+    )
+    if (existing) {
+      const { stillValid } = await capability.removeAccount(name)
+      if (stillValid) hostWarn("accounts", "A duplicate sign-in's key could not be revoked", { harness, reason: stillValid.reason })
+      return { status: "duplicate" as const, name: existing.name, email }
+    }
+    return email === undefined ? { status: "added" as const, name } : { status: "added" as const, name, email }
   }
 
   /** A sign-in that will not finish leaves nothing behind; an account being signed in again keeps what it had. */
@@ -498,8 +524,9 @@ export class HarnessAccounts {
 
   /**
    * What a session paused on a sign-out is measured against: the account a
-   * launch would use now, and a one-way digest of `account`'s credentials. A
-   * changed digest says someone signed in; nothing can be read back from it.
+   * launch would use now, and an opaque source-equality hint for deliberate
+   * Resume. Principal equality is not renewed authentication: automatic
+   * recovery uses the separately verified sign-in receipt and sequence.
    */
   async signInState(provider: string, account: string): Promise<{ selected: string; credential: string }> {
     const capability = this.capabilities.get(provider)

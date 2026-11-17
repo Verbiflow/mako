@@ -166,9 +166,6 @@ export function mockCloudAccount(emit: (event: HostEvent) => void) {
       removalsFail = fail
     },
   })
-  // `joined`: one joins a moment after the desk opens.
-  if (params.has("joined")) setTimeout(join, 1_500)
-
   const sync = mockSyncStatus(params.get("sync"))
   const turnOn = mockCloudTurnOn(
     emit,

@@ -1,10 +1,11 @@
+import { hostStopping } from "../base/host-stopping.js"
 import { hostCommand, hostFork } from "../base/host-command.js"
 import type { HostProbes, ProbeOptions } from "../base/host-stopping.js"
 import type { ChildProcess } from "node:child_process"
 import { z } from "zod"
 import { existsSync } from "node:fs"
 import { fileURLToPath } from "node:url"
-import { SLOW_DELIVERY_MS, WatcherReplySchema, type DropReason, type HistoryMark, type WatchEvent, type WatcherReply, type WatcherRequest } from "../contracts/watcher-child.js"
+import { SLOW_DELIVERY_MS, WatcherReplySchema, type DropReason, type HistoryMark, type WatchEvent, type WatcherReply, type WatcherRequest, type NativeWatch } from "../contracts/watcher-child.js"
 import { headlessNodeExecutable } from "../base/headless-node.js"
 import { onMac } from "../base/platform.js"
 import { WatchReadings, type ChildStart } from "./watch-readings.js"
@@ -28,7 +29,7 @@ export interface WatchSubscription {
 }
 
 /** Settles once the root is watched; rejects when it can't be. */
-export type WatchBackend = (root: string, ignore: readonly string[], listener: WatchListener) => Promise<WatchSubscription>
+export type WatchBackend = (root: string, ignore: readonly string[], listener: WatchListener, native?: NativeWatch) => Promise<WatchSubscription>
 
 /** The host's backend: every watch in one child, which `recover` starts again once fseventsd has, so every watch hears `dropped` and rescans. */
 export type ChildWatchBackend = WatchBackend & { recover(): void }
@@ -38,12 +39,15 @@ type ParcelSubscribe = (root: string, callback: ParcelCallback, options: { ignor
 
 /** A backend that calls `subscribe` in this process, as the watcher child does; tests pass a fake. */
 export function parcelBackend(subscribe: ParcelSubscribe): WatchBackend {
-  return (root, ignore, listener) =>
-    subscribe(root, (error, events) => (error ? listener.dropped() : listener.events(events)), { ignore: [...ignore] })
+  return (root, ignore, listener, native) => native
+    ? Promise.reject(new Error("Native watches require the watcher child."))
+    : subscribe(root, (error, events) => (error ? listener.dropped() : listener.events(events)), { ignore: [...ignore] })
 }
 
 /** No watch for this long lets the child go; the next one starts it again. */
 const IDLE_MS = 30_000
+/** Callers bound their own waits; keep a slow child's late subscription owned until this final deadline. */
+const READY_MS = 30_000
 /** A child that ran this long without crashing resets the backoff. */
 const STABLE_MS = 60_000
 /** Crashes in a row, each before `STABLE_MS`, after which every watch is given up. */
@@ -60,9 +64,11 @@ const RECYCLE_EVERY_MS = 10 * 60_000
 interface ChildWatch {
   root: string
   ignore: string[]
+  native?: NativeWatch
   listener: WatchListener
   /** Set until the first subscribe settles; a later "ready" follows a restart. */
   pending?: { resolve(): void; reject(error: Error): void }
+  readyTimer?: NodeJS.Timeout
 }
 
 /**
@@ -81,6 +87,7 @@ interface ChildWatch {
  * child after fseventsd started over: every watch hears `dropped`.
  */
 export function childBackend(script = defaultChildScript(), readings = new WatchReadings()): ChildWatchBackend {
+  const stopping = hostStopping()?.signal
   const watches = new Map<number, ChildWatch>()
   let child: ChildProcess | undefined
   let startedAt = 0
@@ -112,12 +119,20 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
     }
   }
 
+  // Native Git markers were persistent:false. Pending readiness and all other watches still hold their caller.
+  const keepsAlive = () => {
+    for (const watch of watches.values()) if (watch.pending || watch.native?.kind !== "git-markers") return true
+    return false
+  }
+
   const forget = (id: number) => {
+    const watch = watches.get(id)
     if (!watches.delete(id)) return
+    clearTimeout(watch?.readyTimer)
     readings.unwatched(id)
     post({ t: "unsub", id })
+    hold(keepsAlive())
     if (watches.size) return
-    hold(false)
     clearTimeout(idle)
     idle = setTimeout(() => {
       if (watches.size || !child) return
@@ -129,6 +144,18 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
       going.kill()
     }, IDLE_MS)
     idle.unref()
+  }
+
+  const limitReadiness = (id: number, watch: ChildWatch) => {
+    // A restart cannot extend the first deadline; an already-ready watch gets a new bound for recovery.
+    if (watch.readyTimer) return
+    const timer = setTimeout(() => {
+      if (watches.get(id) !== watch || watch.readyTimer !== timer) return
+      forget(id)
+      watch.pending?.reject(new Error("The file watcher did not become ready in time"))
+      watch.listener.gone()
+    }, READY_MS)
+    watch.readyTimer = timer
   }
 
   const onDelivery = (ok: boolean, lagMs: number | undefined) => {
@@ -161,12 +188,15 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
     switch (reply.t) {
       case "ready": {
         const pending = watch.pending
+        clearTimeout(watch.readyTimer)
+        watch.readyTimer = undefined
         watch.pending = undefined
         if (pending) {
           pending.resolve()
           if (muted) watch.listener.muted(true)
           if (late) watch.listener.late?.(true)
         } else watch.listener.dropped("restarted")
+        hold(keepsAlive())
         return
       }
       case "failed":
@@ -186,6 +216,8 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
   }
 
   const giveUp = () => {
+    clearTimeout(restart)
+    restart = undefined
     const lost = [...watches.values()]
     for (const id of watches.keys()) forget(id)
     crashes = 0
@@ -195,15 +227,20 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
     }
   }
 
+  stopping?.addEventListener("abort", giveUp, { once: true })
+
   const lost = (gone: ChildProcess) => {
     if (child !== gone) return
     child = undefined
     if (!watches.size) return
+    if (stopping?.aborted) return giveUp()
     crashes = Date.now() - startedAt >= STABLE_MS ? 1 : crashes + 1
     if (crashes >= MAX_CRASHES) return giveUp()
     restart = setTimeout(() => {
       restart = undefined
-      if (watches.size) start("crash")
+      if (watches.size) {
+        try { start("crash") } catch { giveUp() }
+      }
     }, 250 * 2 ** (crashes - 1))
   }
 
@@ -219,6 +256,7 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
     startedAt = Date.now()
     readings.started(next.pid, why)
     next.on("message", (raw) => {
+      if (child !== next || stopping?.aborted) return
       const reply = WatcherReplySchema.safeParse(raw)
       if (reply.success) onReply(reply.data)
     })
@@ -227,30 +265,43 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
       lost(next)
     })
     next.once("error", () => lost(next))
-    for (const [id, watch] of watches) post({ t: "sub", id, root: watch.root, ignore: watch.ignore })
+    for (const [id, watch] of watches) {
+      limitReadiness(id, watch)
+      post({ t: "sub", id, root: watch.root, ignore: watch.ignore, ...watch.native && { native: watch.native } })
+    }
+    hold(keepsAlive())
   }
 
-  const backend: WatchBackend = (root, ignore, listener) => {
+  const backend: WatchBackend = (root, ignore, listener, native) => {
+    if (stopping?.aborted) return Promise.reject(stopping.reason)
     clearTimeout(idle)
     const id = nextId++
     return new Promise<WatchSubscription>((resolve, reject) => {
       const unsubscribe = async () => forget(id)
-      watches.set(id, { root, ignore: [...ignore], listener, pending: { resolve: () => resolve({ unsubscribe }), reject } })
+      const watch = { root, ignore: [...ignore], ...native && { native }, listener, pending: { resolve: () => resolve({ unsubscribe }), reject } }
+      watches.set(id, watch)
+      limitReadiness(id, watch)
       readings.watched(id, root, ignore)
-      if (child) {
-        hold(true)
-        post({ t: "sub", id, root, ignore: [...ignore] })
-      } else if (!restart) start("first")
+      try {
+        if (child) {
+          hold(true)
+          post({ t: "sub", id, root, ignore: [...ignore], ...native && { native } })
+        } else if (!restart) start("first")
+      } catch (error) {
+        forget(id)
+        reject(error)
+      }
     })
   }
   // Streams registered with the fseventsd that's gone may never hear again: a new child registers each with the new one.
   const recover = () => {
+    if (stopping?.aborted) { giveUp(); return }
     if (!child || !watches.size) return
     const stale = child
     child = undefined
     ended.set(stale, "recovery")
     stale.kill()
-    start("recovery")
+    try { start("recovery") } catch { giveUp() }
   }
   return Object.assign(backend, { recover })
 }
@@ -305,6 +356,8 @@ export function markMs(mark: HistoryMark): number {
 const MARK_MS = 3_000
 /** A read of history this long is stuck, not slow: fseventsd has stopped answering. */
 const HISTORY_MS = 120_000
+/** A native history wait can stop Node exiting even after SIGTERM; only an actual exit ends retirement. */
+const HISTORY_EXIT_GRACE_MS = 500
 
 /**
  * The file system's history, read in a watcher child of its own: a read
@@ -320,10 +373,20 @@ export function childHistory(script = defaultChildScript(), readings = new Watch
   let nextId = 1
   let idle: NodeJS.Timeout | undefined
   const pending = new Map<number, { child: ChildProcess; settle(reply: WatcherReply): void; fail(error: Error): void; timer: NodeJS.Timeout }>()
+  const ending = new WeakSet<ChildProcess>()
 
   const end = (gone: ChildProcess, error: Error) => {
-    if (child === gone) child = undefined
-    gone.kill()
+    if (child === gone) { child = undefined; clearTimeout(idle) }
+    if (gone.pid !== undefined && gone.exitCode === null && gone.signalCode === null && !ending.has(gone)) {
+      ending.add(gone)
+      // Even an idle, unref'd child belongs to this host until it has really exited.
+      gone.ref()
+      const force = setTimeout(() => {
+        if (gone.exitCode === null && gone.signalCode === null) gone.kill("SIGKILL")
+      }, HISTORY_EXIT_GRACE_MS)
+      gone.once("exit", () => clearTimeout(force))
+      gone.kill("SIGTERM")
+    }
     for (const [id, request] of pending) {
       if (request.child !== gone) continue
       pending.delete(id)
@@ -367,9 +430,7 @@ export function childHistory(script = defaultChildScript(), readings = new Watch
     clearTimeout(idle)
     idle = setTimeout(() => {
       if (pending.size || !child) return
-      const going = child
-      child = undefined
-      going.kill()
+      end(child, new Error("The file system's history reader was idle"))
     }, IDLE_MS)
     idle.unref()
   }

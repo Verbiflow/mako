@@ -109,6 +109,8 @@ try {
     assert.ok(look.heldStamp("codex", thread.id), "with the stamp it was taken at")
   }
   assert.ok(logs.some((entry) => entry.text === "Session records backfill done" && entry.fields.captured === 5 && entry.fields.newBytes > 0), "the pass logs its counts and bytes")
+  // The pass ends in memory before it writes the file.
+  await until(async () => (await backfillProgress(recordsPath))?.endedAt, "the pass's progress beside the store")
   const saved = await backfillProgress(recordsPath)
   assert.equal(saved?.captured, 5, "and writes its progress beside the store")
 

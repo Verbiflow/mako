@@ -149,7 +149,7 @@ export async function providerOutageControls(root: string): Promise<void> {
           assert.ok(continuation.retry!.at > at)
           world.live.wakeDue(continuation.retry!.at + 1)
         }
-        await until(`${outcome}: continuation and both original message IDs completed`, () => [continuation.id, before.request, later.request].every(requestId => snapshot().requests.some(request => request.id === requestId && request.status === "completed")))
+        await until(`${outcome}: continuation and both original message IDs completed`, () => [continuation.id, before.request, later.request].every(requestId => snapshot().requests.some(request => (request.id === requestId || request.joined?.some(joined => joined.id === requestId)) && request.status === "completed")))
         assert.equal(snapshot().session.harness, "claude", "recovered in place, without a move")
         for (const text of ["Queued before outage", "Queued during outage"])
           assert.equal(world.prompts.filter(prompt => prompt.conversation === id && prompt.text.includes(text)).length, 1, `${text}: native admission once`)

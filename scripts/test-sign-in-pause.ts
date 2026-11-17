@@ -1,3 +1,4 @@
+import { HostFailureError, ProviderFailureError, providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
@@ -14,6 +15,7 @@ import type { LiveDriverEvent, LiveRequest } from "@mako/host/contracts/live-con
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { launchContext } from "@mako/host/base/execution-context"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { verifiedSignInControls } from "./lib/verified-sign-in-controls.ts"
 
 const nativeStores = new NativeStores(false)
 
@@ -38,6 +40,7 @@ const SIGNED_OUT = "Failed to authenticate: OAuth session expired and could not 
 type Mode = "ok" | "accepted-sign-out" | "refused-sign-out" | "uncertain-sign-out" | "plan"
 
 try {
+  await verifiedSignInControls(root)
   const peers = providerHost.liveDrivers.list()
   assert.ok(peers.length >= 6, "every harness registers a live driver")
   for (const original of [...peers, { ...peers[0]!, provider: "future" }]) {
@@ -64,7 +67,7 @@ try {
     host.liveDrivers.register({ ...original, provider, available: () => true, nativeSource: undefined,
       start: async (_cwd, options) => {
         opens++
-        if (refuseStart) throw new Error(`The selected ${label} account is signed out. Sign in again in Settings → Agents.`)
+        if (refuseStart) throw new HostFailureError("auth", `The selected ${label} account is signed out. Sign in again in Settings → Agents.`)
         const account = options.accountLaunch.account
         const context = launchContext("fixture-transport", { kind: "reported", via: "simulated initialization" }, account)
         context.store = { kind: "located", path: nativePath }
@@ -80,11 +83,11 @@ try {
         sent.push(text)
         if (mode === "refused-sign-out") {
           dispatch.report({ kind: "not-accepted", source: "preflight", reason: "simulated refusal" })
-          throw new Error("401 Unauthorized: Not logged in · Please run /login")
+          throw new ProviderFailureError("401 Unauthorized: Not logged in · Please run /login", providerTextEvidence("401 Unauthorized: Not logged in · Please run /login"))
         }
         if (mode === "uncertain-sign-out") {
           dispatch.report({ kind: "uncertain", reason: "simulated response loss" })
-          throw new Error(SIGNED_OUT)
+          throw new ProviderFailureError(SIGNED_OUT, providerTextEvidence(SIGNED_OUT))
         }
         event({ type: "live-session", session: { ...session, status: "running" } })
         dispatch.report({ kind: "accepted", source: "native-response" })
@@ -92,8 +95,8 @@ try {
         if (mode === "accepted-sign-out" || mode === "plan") {
           // Messages typed while the turn runs queue behind it.
           await delay(15)
-          event({ type: "live-session", session: { ...session, status: "failed", lastStop: "failed",
-            error: mode === "plan" ? "Your credit balance is too low to access the Anthropic API." : SIGNED_OUT } })
+          const error = mode === "plan" ? "Your credit balance is too low to access the Anthropic API." : SIGNED_OUT
+          event({ type: "live-session", session: { ...session, status: "failed", lastStop: "failed", error, failureEvidence: providerTextEvidence(error) } })
           return
         }
         event({ type: "live-session", session })

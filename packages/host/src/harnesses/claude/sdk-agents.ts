@@ -240,8 +240,10 @@ export class ClaudeAgents {
 
   /** The level: every live background task. Names what the edges missed, flags ambient changes, and marks what it dropped. */
   private level(tasks: Extract<SDKMessage, { subtype: "background_tasks_changed" }>["tasks"]): NativeAgentObservation[] {
-    const changed = this.settleDropped()
     const listed = new Set(tasks.map((task) => task.task_id))
+    // Listed again: a level that briefly left it out didn't end it, so it isn't settled with what was dropped.
+    for (const id of listed) this.dropped.delete(id)
+    const changed = this.settleDropped()
     for (const task of tasks) {
       const previous = this.agents.get(task.task_id)
       const pending = this.unlisted.get(task.task_id)
@@ -260,7 +262,17 @@ export class ClaudeAgents {
     return changed
   }
 
-  private settleDropped(): NativeAgentObservation[] {
+  /** Whether the level dropped a task no event has said the end of yet (`settleDropped`). */
+  get dropping(): boolean {
+    return this.dropped.size > 0
+  }
+
+  /**
+   * Tasks the level dropped that no event has said the end of: their end, unknown. A level or a result settles them,
+   * after the notification that may still follow the level; between turns neither may come (a Monitor that timed out,
+   * one TaskStop ended), so the driver settles them after a grace (`DROPPED_GRACE_MS`).
+   */
+  settleDropped(): NativeAgentObservation[] {
     const settled: NativeAgentObservation[] = []
     for (const id of this.dropped) {
       const agent = this.agents.get(id)

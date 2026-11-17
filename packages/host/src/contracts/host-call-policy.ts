@@ -17,6 +17,7 @@
 export type HostCallReplay = "read" | "replay" | "never"
 
 const reads = [
+  "mako:view-hints",
   /**
    * A client's tabs, conversations and models as they are, opening its first tab if it has none: asked twice, the same
    * answer. A cloud start asks it first, so marked so, its Thread sends it on without waiting for the disk.
@@ -77,6 +78,10 @@ const reads = [
   "mako:thread-purposes",
   "mako:thread-titles",
   "mako:thread-app-marks",
+  /** Connection-local sampling demand; replaying its generation cannot undo a newer demand. */
+  "mako:thread-app-demand",
+  "mako:conversation-app-demand",
+  "mako:conversation-app",
   /** Reads the app's processes and files; what it records of them only moves its own read point forward. */
   "mako:thread-app-probe",
   "mako:thread-app-room",
@@ -84,6 +89,9 @@ const reads = [
   "mako:worktrees",
   "mako:worktree-ahead",
   "mako:worktree-inventory",
+  "mako:worktree-retention",
+  "mako:snapshot-budget",
+  "mako:thread-scratch",
   /** Measures Mako's folders with `du`; writes nothing. */
   "mako:storage",
   "mako:worktree-review",
@@ -106,6 +114,7 @@ const reads = [
   "mako:plan-builds",
   "mako:harness-descriptors",
   "mako:access-choices",
+  "mako:preferences",
   "mako:thread-continuation-plan",
   "mako:thread-restore-plan",
   /** Weighs a Thread's harnesses against what the cloud says it runs; changes nothing. */
@@ -157,8 +166,16 @@ const reads = [
   "mako:sync-readings",
   /** Mako's processes from `ps`, and its file watching from memory. */
   "mako:mako-footprint",
+  /** A conversation's turn media, judged by its records: asked twice, the same answers. */
+  "mako:live-turn-media",
+  /** A prompt's versions, from the host's fork index: asked twice, the same answer. */
+  "mako:live-prompt-versions",
   /** fseventsd's health from memory; the restart is never repeated by a client (`mako:file-events-restart`). */
   "mako:file-events-service",
+  /** The servers that need sign-in, from memory. */
+  "mako:mcp-sign-ins",
+  /** The saved conversations this host couldn't open, from memory. */
+  "mako:unopened-conversations",
   /** The continues in the cloud this Mac pressed or its list says, from memory. */
   "mako:continue-readings",
   /** Asks the account what a continue would take now; asked twice, it's asked twice. */
@@ -235,6 +252,11 @@ const reads = [
  * content differs.
  */
 const replays = [
+  /** Replaces the same retirement settings; never removes a checkout in this call. */
+  "mako:worktree-retention-set",
+  /** Replaces the same scratch settings; preview does not remove anything. */
+  "mako:snapshot-budget-set",
+  "mako:thread-scratch-set",
   /** Snoozes fseventsd's notice until the day ends: a repeat sets the same snooze. */
   "mako:file-events-dismiss",
   /** `MakoStorage.free`: a pass asked for while one runs is that pass, and a second finds nothing more to free. */
@@ -284,6 +306,8 @@ const replays = [
   "mako:agents-continue-next",
   /** Cancelling a turn that has already stopped stops nothing. */
   "mako:live-cancel",
+  /** Stop waiting names the wait: one that already ended, or a newer one, is left as it is. */
+  "mako:live-wait-stop",
   /** Stopping a background task that has already ended stops nothing. */
   "mako:live-stop-agent",
   /** Closing a closed conversation is a no-op. */
@@ -405,6 +429,10 @@ const replays = [
   "mako:access-choose",
   /** `AccessChoiceStore.adopt`: takes only where no choice is made, so a repeat takes nothing. */
   "mako:access-adopt",
+  /** `PreferenceStore.set`: the same value again is the same preference in effect. */
+  "mako:preference-set",
+  /** `PreferenceStore.offer`: each preference is offered once, so a repeat offers nothing. */
+  "mako:preference-offer",
   /** `PlanBuilds.record`: keyed by plan id, and a build no newer than the recorded one changes nothing. */
   "mako:plan-build-record",
   /** `PlanBuilds.claim`: the claim id; a repeat gets the first answer. */

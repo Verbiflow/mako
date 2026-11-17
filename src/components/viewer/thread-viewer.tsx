@@ -1,5 +1,6 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { NativeRequestNotice } from "./native-request-notice"
+import { NativeRunDropped } from "./native-run-dropped"
 import { useConversationScope } from "@/state/conversation-scope"
 import { useEffect, useMemo, useState } from "react"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
@@ -106,6 +107,7 @@ export function ThreadViewer() {
       <NativeRequestNotice path={shown.ref.path} />
       {opening?.kind === "failed" && !held ? <RefreshFailedLine opening={opening.ref} error={opening.error} /> : null}
       <Conversation key={shown.ref.path} thread={shown} held={held} />
+      <NativeRunDropped path={shown.ref.path} />
     </div>
   )
 }

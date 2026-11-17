@@ -24,7 +24,8 @@ import { testScratch } from "./lib/test-scratch.mjs"
  * Three interleaved readings keep the work done at once as a positive control. The median of their paired
  * sliced/unsliced longest-hold ratios must stay under a quarter; both find exactly the same work. Every raw
  * sample is printed: one preemption on a shared runner cannot set the budget or alone fail the check.
- * An explicit-budget trivial producer also bounds active thread CPU per slice, and a bounded trailing window
+ * A trivial sliced producer plus the same reader run one step per turn calibrates active CPU on this runner;
+ * cooperative work can overrun by its last indivisible step. A bounded trailing window
  * catches work queued after settlement. The CPU bound measures cooperative work: GC-overlapping spans are
  * reported separately, since JavaScript cannot yield inside GC. Every span still counts toward the original
  * wall-time gate, including GC and time when this thread was not running. A root work began on meanwhile, after the reading or
@@ -35,14 +36,15 @@ const SAMPLES = 3
 const POSITIVE_HOLD_MS = 50
 const TIMES = 4
 const SLICE_BUDGET_MS = 8
-const CPU_TIMES = 1.5
+/** Record sub-millisecond steps for the granularity yardstick without retaining every idle heartbeat. */
+const STEP_CPU_FLOOR_MS = 0.05
 const TRAILING_TURNS = 3
 const cpuSink = new Uint32Array(1)
 const DAY = 86_400_000
 const root = realpathSync(testScratch("mako-attribution-holds-"))
 
 /** Longest wall gap and non-GC thread CPU span through work and a bounded trailing window. */
-async function longestHold<Value>(work: () => Promise<Value> | Value): Promise<{ value: Value; holdMs: number; cpuMs: number; gcCpuMs: number; allCpuMs: number }> {
+async function longestHold<Value>(work: () => Promise<Value> | Value, minimumCpuMs = SLICE_BUDGET_MS / 4): Promise<{ value: Value; holdMs: number; cpuMs: number; gcCpuMs: number; allCpuMs: number }> {
   let longest = 0
   let longestCpu = 0
   const spans: { start: number; end: number; cpu: number }[] = []
@@ -65,8 +67,8 @@ async function longestHold<Value>(work: () => Promise<Value> | Value): Promise<{
     const cpu = process.threadCpuUsage()
     const used = (cpu.user - lastCpu.user + cpu.system - lastCpu.system) / 1000
     longestCpu = Math.max(longestCpu, used)
-    // Tiny idle ticks cannot set the four-ms minimum reference, and need not fill the bounded record.
-    if (used >= SLICE_BUDGET_MS / 4) {
+    // Tiny idle ticks need not fill the bounded record; the step yardstick uses a lower floor.
+    if (used >= minimumCpuMs) {
       if (spans.length === 4_096) overflow = true
       else spans.push({ start: last, end: now, cpu: used })
     }
@@ -113,7 +115,7 @@ function useCpu(ms: number): void {
   }
 }
 
-/** A trivial producer with short steps: calibrate the explicit eight-ms budget beside each real sample. */
+/** A trivial producer with short steps: calibrate the slice budget beside each real sample. */
 function* referenceWork() {
   for (let step = 0; step < 320; step++) {
     useCpu(0.2)
@@ -156,7 +158,7 @@ function median(samples: readonly number[]): number {
   return [...samples].sort((a, b) => a - b)[Math.floor(samples.length / 2)]!
 }
 
-function judge(what: string, atOnce: readonly number[], sliced: readonly number[], cpu: readonly number[], reference: readonly number[], gc: readonly number[]): void {
+function judge(what: string, atOnce: readonly number[], sliced: readonly number[], cpu: readonly number[], reference: readonly number[], steps: readonly number[], gc: readonly number[]): void {
   const baseline = median(atOnce)
   const hold = median(sliced)
   const ratio = median(sliced.map((sample, index) => sample / atOnce[index]!))
@@ -164,12 +166,19 @@ function judge(what: string, atOnce: readonly number[], sliced: readonly number[
   assert.ok(baseline > POSITIVE_HOLD_MS, `${what}: the unsliced positive control must exceed ${POSITIVE_HOLD_MS} ms`)
   assert.ok(ratio < 1 / TIMES, `${what} in slices held the loop a median ${(ratio * 100).toFixed(1)}% of its paired unsliced hold, not under ${100 / TIMES}%`)
   const referenceCpu = median(reference)
-  const cpuRatio = median(cpu.map((sample, index) => sample / reference[index]!))
-  console.log(`${what}: longest non-GC thread-CPU holds [${cpu.map(ms => ms.toFixed(1))}] ms, reference [${reference.map(ms => ms.toFixed(1))}] ms; paired median ${cpuRatio.toFixed(2)} (under ${CPU_TIMES})`)
+  // inSlices checks its clock after a step, not inside SQLite or a diff. A trivial producer alone misses that
+  // overshoot. The same real producer, yielding after every step, measures its indivisible cost on this runner.
+  const budgets = reference.map((sample, index) => sample + steps[index]!)
+  const cpuRatio = median(cpu.map((sample, index) => sample / budgets[index]!))
+  console.log(`${what}: longest non-GC thread-CPU holds [${cpu.map(ms => ms.toFixed(1))}] ms, slice yardstick [${reference.map(ms => ms.toFixed(1))}] + one-step yardstick [${steps.map(ms => ms.toFixed(1))}] ms; paired median ${cpuRatio.toFixed(2)} (under 1)`)
   console.log(`${what}: GC-overlapping CPU spans [${gc.map(ms => ms.toFixed(1))}] ms; included in the wall gate`)
   assert.ok(referenceCpu >= SLICE_BUDGET_MS / 2, "the explicit-budget reference must exercise a real slice")
+  assert.ok(cpuRatio < 1, `${what}: active CPU exceeded its paired slice-plus-one-step yardstick`)
   assert.ok(cpu.every(ms => ms > 0), "each reading must observe non-GC cooperative CPU; missing evidence is not a pass")
-  assert.ok(cpuRatio < CPU_TIMES, `${what}: active CPU exceeded ${CPU_TIMES} times the explicit ${SLICE_BUDGET_MS}-ms reference slice`)
+  assert.ok(steps.every(ms => Number.isFinite(ms) && ms >= 0), "each sample needs a finite one-step yardstick")
+  const stepRatio = median(steps.map((sample, index) => sample / reference[index]!))
+  console.log(`${what}: indivisible step / paired slice reference median ${stepRatio.toFixed(2)} (under 1)`)
+  assert.ok(stepRatio < 1, `${what}: an indivisible step exceeded its paired slice reference`)
 
 }
 
@@ -184,7 +193,11 @@ async function countATurn(): Promise<void> {
   const checkout = join(root, "turn", "repo")
   store.saveRoot({ id: "r1", path: checkout, kind: "workspace", repository: false, head: null, mark: null, seenAt: started, trackedAt: started, active: true })
   const own: Attribution = { certainty: "exact", author: { thread: "T1", session: "S1", turn: "R1" }, effect: "modify" }
-  const other: Attribution = { certainty: "exact", author: { thread: "T2", session: "S2", turn: "T2-turn" }, effect: "modify" }
+  // The protocol permits sixteen competing writers; keep that decode cost in the indivisible-page yardstick.
+  const other: Attribution = {
+    certainty: "ambiguous", reason: "several-threads",
+    candidates: Array.from({ length: 16 }, (_, index) => ({ thread: `T${index + 2}`, session: `S${index + 2}`, turn: `T${index + 2}-turn` })),
+  }
   const version = (file: number, step: number) => {
     const text = Array.from({ length: LINES }, (_, line) => (line % 30 === step * 5 % 30 ? `line ${line} of file ${file}, step ${step}` : `line ${line} of file ${file}`)).join("\n")
     const bytes = new TextEncoder().encode(text)
@@ -211,20 +224,23 @@ async function countATurn(): Promise<void> {
     store.saveActivity({ kind: "turn", id: "R1", session: "S1", thread: "T1", turn: "R1", checkout, named: [], start: started, end: at + 1 })
   })
   const view = storedView(store)
-  const atOnceHolds: number[] = [], slicedHolds: number[] = [], slicedCpu: number[] = [], referenceCpu: number[] = [], slicedGc: number[] = []
+  const atOnceHolds: number[] = [], slicedHolds: number[] = [], slicedCpu: number[] = [], referenceCpu: number[] = [], stepCpu: number[] = [], slicedGc: number[] = []
   for (let sample = 0; sample < SAMPLES; sample++) {
     referenceCpu.push((await longestHold(() => inSlices(referenceWork(), SLICE_BUDGET_MS))).cpuMs)
     const atOnce = await longestHold(() => turnChanges(view, "T1", "R1", "settled", 0))
+    const granular = await longestHold(() => inSlices(countingTurn(view, "T1", "R1", "settled", 0), 0), STEP_CPU_FLOOR_MS)
+    stepCpu.push(granular.cpuMs)
+    assert.deepEqual(granular.value, atOnce.value, "the one-step yardstick counts exactly the same work")
     const sliced = await longestHold(() => inSlices(countingTurn(view, "T1", "R1", "settled", 0)))
     assert.equal(atOnce.value.own.files, FILES, "every file the turn wrote is counted")
-    assert.ok(atOnce.value.others.files > 0, "and the other Thread's writes meanwhile")
+    assert.deepEqual(atOnce.value.others, { files: 50, added: OTHERS * 2, removed: OTHERS }, "every competing write is counted across page boundaries")
     assert.deepEqual(sliced.value, atOnce.value, "counted in slices, the turn counts exactly as at once")
     atOnceHolds.push(atOnce.holdMs)
     slicedHolds.push(sliced.holdMs)
     slicedCpu.push(sliced.cpuMs)
     slicedGc.push(sliced.gcCpuMs)
   }
-  judge(`a turn of ${FILES} files written ${VERSIONS} times each`, atOnceHolds, slicedHolds, slicedCpu, referenceCpu, slicedGc)
+  judge(`a turn of ${FILES} files written ${VERSIONS} times each`, atOnceHolds, slicedHolds, slicedCpu, referenceCpu, stepCpu, slicedGc)
   const cut = await stoppedMidway("a count its journal closed under", () => countTurnInSlices(view, "T1", "R1", "settled"), () => store.close())
   assert.equal(cut, undefined, "a count its journal closed under counts nothing, and fails nothing")
 }
@@ -262,7 +278,8 @@ async function letGoOfIdleRoots(): Promise<void> {
     const worked = raw.prepare("SELECT checkout, cwd, MAX(coalesce(ended_at, ?)) AS at FROM activity GROUP BY checkout, cwd").all(now)
     return changed.length + worked.length
   }
-  const atOnceHolds: number[] = [], keptHolds: number[] = [], letGoHolds: number[] = [], keptCpu: number[] = [], letGoCpu: number[] = [], referenceCpu: number[] = [], keptGc: number[] = [], letGoGc: number[] = []
+  const yardstick = JournalStore.open(join(storage, "journal.sqlite"), { device: "attribution-holds", readOnly: true })
+  const atOnceHolds: number[] = [], keptHolds: number[] = [], letGoHolds: number[] = [], keptCpu: number[] = [], letGoCpu: number[] = [], referenceCpu: number[] = [], keptStepCpu: number[] = [], letGoStepCpu: number[] = [], keptGc: number[] = [], letGoGc: number[] = []
   for (let sample = 0; sample < SAMPLES; sample++) {
     if (sample) {
       await tracker.track({ id: "idle", path: folder, kind: "workspace" })
@@ -270,6 +287,12 @@ async function letGoOfIdleRoots(): Promise<void> {
     }
     referenceCpu.push((await longestHold(() => inSlices(referenceWork(), SLICE_BUDGET_MS))).cpuMs)
     const atOnce = await longestHold(() => readAtOnce(clock.now() + 15 * DAY))
+    const keptStep = await longestHold(() => inSlices(yardstick.recency(clock.now(), () => false), 0), STEP_CPU_FLOOR_MS)
+    assert.equal(keptStep.value.worked.size, 0, "the no-idle yardstick skips the call pages too")
+    keptStepCpu.push(keptStep.cpuMs)
+    const letGoStep = await longestHold(() => inSlices(yardstick.recency(clock.now() + 15 * DAY, () => true), 0), STEP_CPU_FLOOR_MS)
+    assert.ok(letGoStep.value.worked.size > 0, "the idle yardstick reads the same journal's call pages")
+    letGoStepCpu.push(letGoStep.cpuMs)
     // Tracked a moment ago: nobody let go, and where Threads worked isn't read.
     const kept = await longestHold(() => tracker.letGoIdle())
     assert.deepEqual(kept.value, [], "a root tracked a moment ago stays")
@@ -285,8 +308,9 @@ async function letGoOfIdleRoots(): Promise<void> {
     keptGc.push(kept.gcCpuMs)
     letGoGc.push(letGo.gcCpuMs)
   }
-  judge(`letting go of idle roots, no root idle (${ENTRIES.toLocaleString("en-US")} entries)`, atOnceHolds, keptHolds, keptCpu, referenceCpu, keptGc)
-  judge(`letting go of idle roots, one idle (${ENTRIES.toLocaleString("en-US")} entries, ${CALLS.toLocaleString("en-US")} calls)`, atOnceHolds, letGoHolds, letGoCpu, referenceCpu, letGoGc)
+  judge(`letting go of idle roots, no root idle (${ENTRIES.toLocaleString("en-US")} entries)`, atOnceHolds, keptHolds, keptCpu, referenceCpu, keptStepCpu, keptGc)
+  judge(`letting go of idle roots, one idle (${ENTRIES.toLocaleString("en-US")} entries, ${CALLS.toLocaleString("en-US")} calls)`, atOnceHolds, letGoHolds, letGoCpu, referenceCpu, letGoStepCpu, letGoGc)
+  yardstick.close()
   raw.close()
   // Cut by the tracker's close, as its host stops.
   let closed: Promise<void> | undefined
@@ -343,6 +367,7 @@ async function workBeginsMeanwhile(): Promise<void> {
 }
 
 try {
+  console.log(`attribution holds runtime: ${process.platform}/${process.arch}, Node ${process.version}, slice budget ${SLICE_BUDGET_MS} ms`)
   await observesDeferredWork()
   await workBeginsMeanwhile()
   await countATurn()

@@ -1,5 +1,6 @@
-import { existsSync, readFileSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
 import { appendFile } from "node:fs/promises"
+import { join } from "node:path"
 import { runSuite } from "./lib/run-suite.mjs"
 
 /**
@@ -15,11 +16,16 @@ import { runSuite } from "./lib/run-suite.mjs"
 
 /** [seconds, command] */
 export const STEPS = [
+  // What an agent's desk browser holds a profile host up for, and for how long (DeskBrowser.busy).
+  [2, "tsx scripts/test-desk-browser-hold.ts"],
+  // Worktree trash claims across hosts sharing it, and an orphan's repository pruned (worktree-spares).
+  [3, "tsx scripts/test-trash-claims.ts"],
   // The protocol's conformance suite, every host call over the socket and the gateway, the host as a cloud machine's runtime and the way back from the cloud.
   [8, "node scripts/generate-host-inputs.mjs --check"],
   [21, "npm run test:protocol"],
   [1, "npx tsx scripts/test-host-liveness.ts"],
   [19, "npx tsx scripts/test-host-lifecycle.ts"],
+  [4, "npx tsx scripts/test-host-lock.ts holder-readiness"],
   [0, "npm run test:loop-profile"],
   [34, "npm run test:machine-runtime"],
   [6, "npx tsx scripts/test-cloud-sign-ins.ts"],
@@ -36,6 +42,8 @@ export const STEPS = [
   [3, "npm run test:transcript-events"],
   [12, "npm run test:stage"],
   [0, "npm run test:fin-words"],
+  // An Apex under a 30-Fin storm and a Fin's backlog, each held to its targets; timed, so it runs alone (`ALONE`).
+  [65, "npm run test:comms-storm"],
   [2, "npm run test:setup"],
   [1, "npm run test:fin-row-time"],
   [0, "npm run test:steer-notices"],
@@ -89,7 +97,7 @@ export const STEPS = [
   [16, "npm run test:usage"],
   [144, "npm test -w @mako/sessions"],
   // Fins held by the tree's budget, woken, resumed, moved, and what each reads as.
-  [127, "CASES=statesAndEntries,rosterAndLists,uploadsFollowParents,startsAndWakes,explicitReports,refusals,launchesBeforeTheirEdge,stopHoldsUntilCancelled,linkTellsUnreadableFromGone,followedStopStuck,harnessLadders,stopAllUnqueues,unreadableQueuedStarts,settingsFollowTheBinding,startedFinsOldQueueRow,stoppedApexHolds,listsReadNoJournal,finsMoveInTheNewestSession,aSessionNeedsYou,followsShellRuns,relinkedRuns,messagesReachLinkedRuns,finRules npm run test:background-agents"],
+  [127, "CASES=statesAndEntries,rosterAndLists,uploadsFollowParents,startsAndWakes,explicitReports,refusals,startRate,launchesBeforeTheirEdge,stopHoldsUntilCancelled,linkTellsUnreadableFromGone,followedStopStuck,harnessLadders,stopAllUnqueues,unreadableQueuedStarts,settingsFollowTheBinding,startedFinsOldQueueRow,stoppedApexHolds,listsReadNoJournal,finsMoveInTheNewestSession,aSessionNeedsYou,followsShellRuns,relinkedRuns,messagesReachLinkedRuns,finRules npm run test:background-agents"],
   [127, "CASES=storeKeeps,readOnlyStoreVersion,finLimit,afterOrder,slotsGoAtOnce,followedStopHoldsUntilExit,followedStopUnknownIdentity,followedStopStaleIdentity,queueProjection,edgeWriteMovesTheLine,accessFits,finReadingsLoadNothing,finsAtWorkByBinding,activityTellsNoOne,progressGoesWhereItsRead,anySessionAsks,finModels,limitedHarnesses,apexStops,staleEndsStayOut,waitingFins,ownSessionIsNoChild npm run test:background-agents"],
   [32, "npm run test:build-slots"],
   [0, "npm run test:agents-migrate"],
@@ -97,12 +105,19 @@ export const STEPS = [
   [74, "npm run test:agents-wake"],
   [3, "npm run test:fins-reach-released-apex"],
   [68, "npm run test:fin-pull-waits"],
+  // The mako server's instructions fit Claude's 4,096-character cut, every rule inside it.
+  [1, "npm run test:mako-instructions"],
+  // A turn's wait: armed, met, timed and fired once through restarts, a cancel racing it and a sleep.
+  [1, "npm run test:turn-waits"],
   [12, "npm run test:fin-resume"],
   [31, "npm run test:git-helper"],
   [32, "npm run test:fin-reopen"],
   [4, "npm run test:roster-refresh"],
   [33, "npm run test:resume-holds"],
   [36, "npm run test:fin-states"],
+  // A Fin's turn's end with no report: work its harness holds, that work's process ending, a promise nothing wakes.
+  [10, "npm run test:fin-turn-ends"],
+  [20, "npm run test:fin-quiet"],
   // What comes back: a crash, a recovery or a Fin moved, with its queue kept through SIGKILL.
   [40, "MAKO_TEST_HARNESSES=claude npm run test:fin-move"],
   [40, "MAKO_TEST_HARNESSES=codex npm run test:fin-move"],
@@ -222,6 +237,162 @@ export const STEPS = [
   [207, "npm run -s test:execution-ownership"],
   [201, "npm run -s test:thread-worktrees"],
   [61, "npm run -s test:mcp"],
+  // Test files no part of CI ran before 2026-11-15, though npm scripts named them (test:thread-store, test:providers,
+  // test:native-agents, test:shared-continuation, test:live and others no workflow runs) or nothing did: each passed
+  // on main on a Mac before it came in, as its npm script runs it. Not yet here: test-thread-processes.ts (160 s, past
+  // a shard's floor, to be split), the manual proofs (live harnesses, packaged builds, arguments), the *-ui suites of
+  // those npm scripts, and the ones red on main (test:conversation-control's test-scratch-home.ts,
+  // test-control-recording-failures.ts, test-update-performance.ts, test-local-update-startup.ts,
+  // test-repository-discovery.ts, test-transcript-residency.ts).
+  [2, "tsx scripts/test-acp-background.ts"],
+  [2, "tsx scripts/test-acp-notifications.ts"],
+  [7, "node scripts/test-acp-provider-turn.mjs"],
+  [27, "tsx scripts/test-app-capacity.ts"],
+  [4, "tsx scripts/test-app-overview-reads.ts"],
+  [1, "esbuild scripts/test-app-probe-view.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-app-probe-view.mjs --log-level=warning"],
+  [1, "tsx scripts/test-app-sampler.ts"],
+  [1, "tsx scripts/test-application-lifecycle.ts"],
+  [2, "node scripts/test-application-runtime.mjs"],
+  [2, "tsx scripts/test-attachment-references.ts"],
+  [10, "tsx scripts/test-base-source.ts"],
+  [2, "tsx scripts/test-browser-capture.ts"],
+  [1, "tsx scripts/test-browser-default.ts"],
+  [1, "node scripts/test-browser-extension-activity.mjs"],
+  [1, "node scripts/test-browser-extension-downloads.mjs"],
+  [1, "node scripts/test-browser-extension-lifecycle.mjs"],
+  [1, "node scripts/test-browser-extension-router.mjs"],
+  [2, "tsx scripts/test-browser-focus.ts"],
+  [2, "tsx scripts/test-browser-preference.ts"],
+  [1, "tsx scripts/test-browser-profile-name.ts"],
+  [10, "tsx scripts/test-browser-recording.ts"],
+  [6, "tsx scripts/test-browser-video.ts"],
+  [5, "node scripts/test-catalog-readiness.mjs"],
+  [13, "tsx scripts/test-check-steps.ts"],
+  [1, "node scripts/test-checkout-copy.mjs"],
+  [3, "tsx scripts/test-child-residency.ts"],
+  [1, "node scripts/test-claude-permission-settings.mjs"],
+  [11, "tsx scripts/test-claude-runtime.ts"],
+  [6, "tsx scripts/test-closed-record-handoff.ts"],
+  [1, "tsx scripts/test-codex-activity.ts"],
+  [3, "tsx scripts/test-codex-agent-status.ts"],
+  [2, "tsx scripts/test-codex-executable.ts"],
+  [2, "tsx scripts/test-command-utf8.ts"],
+  [1, "tsx scripts/test-container-runtime.ts"],
+  [1, "tsx scripts/test-context-kinds.ts"],
+  [1, "tsx scripts/test-context-wire.ts"],
+  [3, "tsx scripts/test-continuation-plan.ts"],
+  [2, "tsx scripts/test-control-optional.ts"],
+  [10, "tsx scripts/test-control-recording-stream.ts"],
+  [3, "tsx scripts/test-control-recording.ts"],
+  [4, "tsx scripts/test-conversation-transfers.ts"],
+  [2, "node scripts/test-cursor-sdk-lifecycle.mjs"],
+  [2, "tsx scripts/test-daemon-claim.ts"],
+  [1, "node scripts/test-daemon-login.mjs"],
+  [3, "tsx scripts/test-device-cli.ts"],
+  [1, "tsx scripts/test-devin-agents.ts"],
+  [1, "tsx scripts/test-element-pick-state.ts"],
+  [28, "tsx scripts/test-element-pick.ts"],
+  [3, "tsx scripts/test-event-stream-limits.ts"],
+  [3, "tsx scripts/test-git-stop.ts"],
+  [4, "tsx scripts/test-process-group-held.ts"],
+  [4, "tsx scripts/test-grok-agents.ts"],
+  [2, "tsx scripts/test-grok-connection.ts"],
+  [2, "tsx --tsconfig tsconfig.app.json scripts/test-grok-store.ts"],
+  [11, "tsx scripts/test-harness-update-paths.ts"],
+  [2, "tsx scripts/test-heap-watch.ts"],
+  [1, "tsx scripts/test-host-idle.ts"],
+  [2, "tsx scripts/test-host-inputs.ts"],
+  [2, "tsx scripts/test-host-log.ts"],
+  [1, "tsx scripts/test-idle-app-marks.ts"],
+  [1, "tsx --tsconfig tsconfig.app.json scripts/test-incremental-projection.ts"],
+  [1, "tsx scripts/test-interrupted-turn.ts"],
+  [6, "node scripts/test-isolated-host.mjs"],
+  [2, "tsx --tsconfig tsconfig.app.json scripts/test-journal-deltas.ts"],
+  [4, "tsx scripts/test-kept-resume.ts"],
+  [3, "tsx scripts/test-line-comments.ts"],
+  [18, "tsx scripts/test-live-conversations.ts"],
+  [8, "tsx --tsconfig tsconfig.app.json scripts/test-live-goals.ts"],
+  [8, "tsx --tsconfig tsconfig.app.json scripts/test-live-history-paging.ts"],
+  [18, "tsx scripts/test-live-history-transport.ts --ui"],
+  [1, "tsx scripts/test-live-markers.ts"],
+  [4, "tsx --tsconfig tsconfig.app.json scripts/test-live-reviews.ts"],
+  [3, "tsx --tsconfig tsconfig.app.json scripts/test-live-side-questions.ts"],
+  [10, "tsx --tsconfig tsconfig.app.json scripts/test-live-view-recovery.ts"],
+  [8, "tsx scripts/test-local-build-source.ts"],
+  [5, "tsx scripts/test-machine-load.ts"],
+  [2, "tsx --tsconfig tsconfig.app.json scripts/test-mako-log.ts"],
+  [2, "tsx scripts/test-mcp-preflight.ts"],
+  [13, "tsx --tsconfig tsconfig.app.json scripts/test-merged-history.ts"],
+  [3, "tsx scripts/test-message-anchor.ts"],
+  [1, "tsx scripts/test-native-agents.ts"],
+  [11, "tsx scripts/test-native-history-refresh.ts"],
+  [1, "tsx scripts/test-native-history.ts"],
+  [1, "tsx scripts/test-native-recording.ts"],
+  [1, "tsx scripts/test-native-requests.ts"],
+  [2, "tsx scripts/test-native-rewind.ts"],
+  [1, "tsx scripts/test-native-tools.ts"],
+  [24, "node scripts/test-on-demand-catalog.mjs"],
+  [2, "tsx scripts/test-opencode-activity.ts"],
+  [1, "tsx scripts/test-opencode-background.ts"],
+  [1, "node scripts/test-opencode-native-runner.mjs"],
+  [1, "tsx scripts/test-opencode-updates.ts"],
+  [2, "tsx scripts/test-opening-notices.ts"],
+  [3, "tsx scripts/test-paged-entries.ts"],
+  [4, "node --expose-gc --import tsx scripts/test-pager-release.ts"],
+  [2, "tsx --tsconfig tsconfig.app.json scripts/test-parsed-markdown.tsx"],
+  [2, "tsx scripts/test-performance.ts"],
+  [3, "tsx scripts/test-pinned-builds.ts"],
+  [9, "tsx scripts/test-probe-child-edges.ts"],
+  [1, "tsx scripts/test-prompt-clipboard.ts"],
+  [1, "tsx scripts/test-provider-access.ts"],
+  [2, "tsx scripts/test-provider-failure.ts"],
+  [1, "tsx scripts/test-pull-request-mentions.ts"],
+  [1, "tsx scripts/test-pull-request-search.ts"],
+  [1, "node scripts/test-question-history-worker.mjs"],
+  [1, "tsx scripts/test-quote-reply.ts"],
+  [1, "tsx scripts/test-reader-history.ts"],
+  [28, "tsx scripts/test-recipe-authority.ts"],
+  [20, "tsx scripts/test-recipe-places.ts"],
+  [87, "tsx scripts/test-recipe-proof.ts"],
+  [30, "tsx scripts/test-record-reads.ts"],
+  [2, "tsx scripts/test-recording-render.ts"],
+  [3, "tsx scripts/test-refreshed-fork.ts"],
+  [2, "tsx scripts/test-release-timelines.ts"],
+  [3, "node scripts/test-remove-fixture-desk.mjs"],
+  [1, "tsx scripts/test-repeated-calls.ts"],
+  [3, "tsx scripts/test-replay-setup-notices.ts"],
+  [1, "tsx scripts/test-review-notes.ts"],
+  [9, "node scripts/test-role-rules-window.mjs"],
+  [1, "esbuild scripts/test-room-view.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-room-view.mjs --log-level=warning"],
+  [4, "tsx scripts/test-roster-turn-ends.ts"],
+  [1, "tsx scripts/test-run-output.ts"],
+  [2, "tsx scripts/test-runtime-updates.ts"],
+  [1, "tsx scripts/test-session-usage.ts"],
+  [1, "tsx scripts/test-shared-continuation-upgrade.ts"],
+  [7, "tsx scripts/test-shared-conversations.ts"],
+  [24, "tsx scripts/test-stop-outside-work.ts"],
+  [49, "node scripts/test-stop-provider-checks.mjs"],
+  [2, "tsx scripts/test-storage.ts"],
+  [4, "tsx scripts/test-store-formats-hosts.ts"],
+  [1, "tsx scripts/test-store-formats.ts"],
+  [1, "tsx --tsconfig tsconfig.app.json scripts/test-streaming-markdown.ts"],
+  [1, "tsx scripts/test-thread-activity.ts"],
+  [3, "tsx scripts/test-thread-environment.ts"],
+  [5, "tsx scripts/test-thread-execution-host.ts"],
+  [2, "tsx scripts/test-thread-execution.ts"],
+  [4, "tsx --tsconfig tsconfig.scripts.json scripts/test-thread-fins-order.ts"],
+  [4, "tsx scripts/test-thread-groups-host.ts"],
+  [2, "tsx scripts/test-thread-migration.ts"],
+  [1, "tsx scripts/test-thread-names.ts"],
+  [6, "tsx scripts/test-thread-store-hosts.ts"],
+  [1, "tsx scripts/test-thread-store-read-only.ts"],
+  [2, "tsx scripts/test-thread-store.ts"],
+  [3, "tsx scripts/test-trace-history-holds.ts"],
+  [1, "tsx scripts/test-transport-agreement.ts"],
+  [1, "node scripts/test-ui-feedback.mjs"],
+  [2, "node scripts/test-web-proxy.mjs"],
+  [2, "tsx scripts/test-window-shutdown.ts"],
+  [1, "tsx scripts/test-window-tree.ts"],
 ]
 
 /**
@@ -237,6 +408,20 @@ export const MAC_STEPS = [
   [8, "npm run -s test:desktop-crashes"],
   // It runs Claude's darwin-arm64 binary.
   [11, "npm run -s test:native-authoring"],
+  // Test files no CI ran until 2026-11-15 that pass on a Mac and not on Linux: they read macOS's ps and process titles,
+  // ~/Library, the native driver, or Electron's Mac behaviour (#783's Linux gate).
+  [22, "tsx scripts/test-app-probe.ts"],
+  [1, "npm run -s build:electron && node scripts/test-browser-extension.mjs"],
+  [30, "tsx scripts/test-claude-sdk-startup.ts"],
+  [9, "tsx scripts/test-control-page-verbs.ts"],
+  [23, "npm run -s build:electron && node scripts/test-fixture-desk.mjs"],
+  [2, "tsx scripts/test-host-probes.ts"],
+  [3, "tsx scripts/test-local-update-install.ts"],
+  [25, "tsx scripts/test-native-driver-death.ts"],
+  [1, "npm run -s build:electron && node scripts/test-preload.mjs"],
+  [2, "tsx scripts/test-providers.ts"],
+  // Native idle trimming shifts packets with setts as the FFmpeg Mako ships (8.0.1) does; Ubuntu's 6.1 drops the held last frame, and native recording is the Mac's.
+  [18, "tsx scripts/test-control-recording-idle.ts"],
 ]
 
 /**
@@ -260,10 +445,16 @@ const MAC_PARTS = [
 
 /** A step not yet measured. */
 const DEFAULT_SECONDS = 30
-/** Past this a step has hung. */
-const STEP_MS = 15 * 60_000
-/** So has one that says nothing for this long: `test:notifications` works quietly for over five minutes. */
-const QUIET_MS = 10 * 60_000
+/**
+ * Past this a part has hung, and is named, its processes listed and ended: well inside the job's 20 minutes, so a hang
+ * is a failure that says which part, never a job GitHub cancels with no log. The longest part runs 104 s.
+ * Main's run 43581631623 had gate (20) at 15 minutes a part: one hung, the job timed out at 20, and nothing said which.
+ */
+const STEP_MS = Number(process.env.CI_GATE_PART_MS ?? 4 * 60_000)
+/** So has one that says nothing for this long. */
+const QUIET_MS = 3 * 60_000
+/** A shard past this starts no new part, so its last part's limit still ends it before the job's 20 minutes. */
+const SHARD_MS = 12 * 60_000
 
 /** What a step needs on the runner beyond the job's own setup, by its npm script, installed once in a shard that picks it. */
 const NEEDS = {
@@ -277,6 +468,8 @@ const NEEDS = {
  * test:mcp's parts on the Mac read MCP configurations and computer use, and record nothing (ffmpeg took 31 s there).
  */
 const NEEDS_NOTHING = [/scripts\/test-mcp\.ts\b/, /scripts\/test-computer-tools\.ts\b/]
+/** What a part run outside an npm script needs, by its file: recording reads ffmpeg and ffprobe. */
+const NEEDS_BY_FILE = [[/scripts\/test-(native-recording|control-recording|control-recording-idle|control-recording-stream|browser-recording|browser-video)\.ts\b/, "ffmpeg"]]
 const INSTALL = {
   // Recording reads ffmpeg and ffprobe on PATH; the runner's image has neither.
   ffmpeg: process.platform === "darwin" ? "command -v ffmpeg >/dev/null || HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install ffmpeg" : "command -v ffmpeg >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg)",
@@ -291,6 +484,11 @@ const INSTALL = {
 const ALONE = [
   /scripts\/test-(app-overview-reads|attribution-holds|event-loop|git-helper|host-probes|idle-app-marks|probe-child-edges|resume-holds|trace-history-holds)\.ts\b/,
   /scripts\/test-terminal-backpressure\.mjs\b/,
+  // It times idle cuts in a recording against the wall clock to within 120 ms; beside another part it missed by 230.
+  /scripts\/test-control-recording-idle\.ts\b/,
+  // Beside another lane's Electron, the host took 73 s to start the agent views app, and createTarget passed 90 s.
+  /scripts\/test-fixture-desk\.mjs\b/,
+  /scripts\/test-comms-storm\.ts\b/,
 ]
 
 /** Evidence a failed step leaves, by its npm script, run after it: its own exit stays the result. */
@@ -370,10 +568,10 @@ function workspaceParts(seconds, command, name) {
 /** Every step's parts, each part once: a part two chains share runs in the first. */
 /**
  * Parts run as several, each with an environment its test reads (`CASES`, `MAKO_TEST_HARNESSES`), so one long test
- * spreads over shards: test-watch-backend's four cases took 6, 14, 58 and 29 s, one part of 108 to 138 s.
+ * spreads over shards: test-watch-backend's four native cases took 6, 14, 58 and 29 s, one part of 108 to 138 s.
  */
 const SPLITS = {
-  "tsx scripts/test-watch-backend.ts": ["CASES=silentCanary", "CASES=degradedFseventsd", "CASES=sharedChildAndCrash,lateCanary"],
+  "tsx scripts/test-watch-backend.ts": ["CASES=silentCanary", "CASES=degradedFseventsd", "CASES=historyReaderTermination,sharedChildAndCrash,lateCanary", "CASES=deadRootBeside"],
 }
 
 /** `unit` as the parts `SPLITS` makes of it; a test that doesn't read the variable runs once, as it is. */
@@ -457,7 +655,8 @@ if (!Number.isInteger(shard) || !Number.isInteger(count) || shard < 1 || shard >
 }
 
 /** What a part needs installed first (`NEEDS`), unless `NEEDS_NOTHING` says it needs nothing. */
-const needOf = ({ script, command }) => (NEEDS[script] && !NEEDS_NOTHING.some((rule) => rule.test(command)) ? NEEDS[script] : undefined)
+const needOf = ({ script, command }) =>
+  NEEDS[script] && !NEEDS_NOTHING.some((rule) => rule.test(command)) ? NEEDS[script] : NEEDS_BY_FILE.find(([rule]) => rule.test(command))?.[1]
 // A part that needs an install goes last in its lane, so the lane's other parts run while it installs.
 const planned = lanesOf(count).slice((shard - 1) * LANES, shard * LANES).map((lane) => lane.steps)
 const first = planned.flat().filter(isAlone)
@@ -509,9 +708,28 @@ function leave() {
 }
 
 const results = []
+const began = Date.now()
+/** What runs now, said as it starts, every minute while it runs, and into the evidence folder, which a cancelled job uploads too. */
+const now = new Map()
+const evidence = process.env.MAKO_TEST_EVIDENCE
+if (evidence) mkdirSync(evidence, { recursive: true })
+function progress(line) {
+  const stamped = `[gate ${Math.round((Date.now() - began) / 1000)} s] ${line}`
+  console.log(stamped)
+  if (evidence) appendFileSync(join(evidence, `gate-${mac ? "mac-" : ""}${shard}-progress.log`), `${stamped}\n`)
+}
+const heartbeat = setInterval(() => {
+  if (now.size) progress(`running: ${[...now].map(([command, at]) => `${command} (${Math.round((Date.now() - at) / 1000)} s)`).join("; ")}`)
+}, 60_000)
+heartbeat.unref()
 async function lane(steps) {
   for (const step of steps) {
     const { command, builds, script } = step
+    if (Date.now() - began > SHARD_MS) {
+      progress(`not started, the shard is past ${SHARD_MS / 60_000} minutes: ${command}`)
+      results.push({ command, code: null, seconds: 0 })
+      continue
+    }
     // A part's seconds are its builds' and its own, not a wait for the shard to itself (`ALONE`), which counted once made
     // test-git-helper read 116 s where it takes 37: `--learn` reads them, and the plan would size shards by the wait.
     let busy = 0
@@ -530,13 +748,17 @@ async function lane(steps) {
     await enter(ALONE.some((rule) => rule.test(command)))
     const waited = Math.round((Date.now() - waiting) / 1000)
     at = Date.now()
+    now.set(command, at)
+    progress(`started: ${command}`)
     try {
       if (code === 0) code = await runSuite("bash", ["-c", command], { limitMs: STEP_MS, quietMs: QUIET_MS, write })
     } finally {
+      now.delete(command)
       leave()
     }
-    const evidence = code !== 0 ? ON_FAILURE[script] : undefined
-    if (evidence) await runSuite("bash", ["-c", evidence], { limitMs: 3 * 60_000, quietMs: 3 * 60_000, write })
+    const diagnose = code !== 0 ? ON_FAILURE[script] : undefined
+    if (diagnose) await runSuite("bash", ["-c", diagnose], { limitMs: 3 * 60_000, quietMs: 3 * 60_000, write })
+    if (code === null) progress(`HUNG: ${command}; its processes are listed in its output below`)
     const seconds = Math.round((busy + Date.now() - at) / 1000)
     console.log(`::group::${command}\n${output}::endgroup::\n${code === 0 ? "passed" : "FAILED"}: ${command} in ${seconds} s${installed ? `\n(it waited ${installed} s for ${need} to install)` : ""}${waited ? `\n(it waited ${waited} s for its shard to itself)` : ""}`)
     results.push({ command, code, seconds })
@@ -545,6 +767,7 @@ async function lane(steps) {
 // The measuring parts first, alone, then the lanes side by side.
 await lane(first)
 await Promise.all(lanes.map(lane))
+clearInterval(heartbeat)
 
 const failed = results.filter(({ code }) => code !== 0)
 const lines = [

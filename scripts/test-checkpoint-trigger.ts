@@ -78,6 +78,7 @@ function world(options: { roots?: string[]; captureMs?: number; deaf?: boolean; 
     settled: hear,
     track: async () => {},
     head: () => "a".repeat(40),
+    fingerprint: async (root) => journal.get(root)!,
     partition: async (root): Promise<Partition> => ({ checkout: root, thread: "local-1", roots: [{ root: "r", path: root, head: null }], files: [{ root: "r", path: "a.ts", move: "lines", current: `sha256:${journal.get(root)}`, thread: { kind: "text", text: journal.get(root)! }, remaining: { kind: "absent" } }], whole: [], uncertain: [], unattributed: [], ms: 0 }),
   }
   const capture = async (input: ThreadCheckpointInput): Promise<ThreadCheckpoint> => {

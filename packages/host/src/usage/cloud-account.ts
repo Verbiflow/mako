@@ -1,3 +1,4 @@
+import { CLOUD_FINS_PATH, CloudFinAnswerSchema, CloudFinStatusSchema, type CloudFinStart, type CloudFinStatus } from "@mako/protocol/cloud-fins"
 import { SOURCE_PROJECT_PATH, SourceProjectReceiptSchema, type SourceProjectCommand } from "@mako/protocol/source-project"
 import { stoppingSignal } from "../base/host-stopping.js"
 import { createHash, randomBytes, randomUUID } from "node:crypto"
@@ -10,6 +11,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import { basename, join } from "node:path"
 import { AccountEventSchema, accountStream, type AccountEvent } from "@mako/protocol/account-events"
 import { ACCESS_CHOICES_PATH, AccessChoicesAnswerSchema, type AccessChoices as AccountAccessChoices, type AccessChoicesAnswer } from "@mako/protocol/access-choices"
+import { PREFERENCES_PATH, PreferencesAnswerSchema, type Preferences, type PreferencesAnswer } from "@mako/protocol/preferences"
 import { CORRELATION_HEADER } from "@mako/protocol/gateway-http"
 import { SessionListingsSchema, type SessionListings } from "@mako/protocol/thread-listing"
 import { WaitingInputSchema, WaitingMessageSchema, type WaitingInput, type WaitingMessage } from "@mako/protocol/waiting"
@@ -86,12 +88,15 @@ import type { CloudRoute, DiagnosticEvents } from "../contracts/telemetry.js"
 import { CloudHarnessesSchema, type CloudHarnesses } from "../contracts/cloud-harnesses.js"
 import { errorMessage } from "../base/error-message.js"
 import { SecretLocked, type LegacyFiles, type SecretRecord, type Secrets } from "../base/secrets.js"
+import type { AccountEventCursors, AccountEventScope } from "./account-event-cursor.js"
 import { RequestTraces } from "./request-trace.js"
 import { CloudLink, PING_MS, type CloudLinkAttachment, type CloudLinkEnding, type CloudLinkOptions, type CloudLinkState } from "./cloud-link.js"
 
 /** How long a browser sign-in may take; the cloud's sign-in request lasts as long. */
 const SIGN_IN_MS = 10 * 60_000
 const REQUEST_MS = 15_000
+/** Freshness for background refreshes; the last account reading survives this deadline. */
+export const CLOUD_FIN_LIMITS_MS = 30_000
 /** The slowest upload a move waits for before giving up: 100 KB a second. */
 const UPLOAD_BYTES_PER_MS = 100
 /** A call to the cloud: JSON in and out, never redirected, bounded in time. */
@@ -224,6 +229,11 @@ const StoredSchema = z.object({
 })
 type Stored = z.infer<typeof StoredSchema>
 
+/** A restarted stream keeps its cursor through a token rotation, but never through a different enrollment. */
+function eventScope(stored: Stored): AccountEventScope {
+  return { cloud: stored.cloud, account: stored.account.id, device: stored.device.id, createdAt: stored.device.createdAt }
+}
+
 /** A sign-out the cloud hasn't heard of yet: the device's credential, kept sealed only to remove the device there. */
 const UnfinishedSignOutSchema = z.object({ version: z.literal(1), cloud: z.string(), credential: z.string(), device: z.string() })
 type UnfinishedSignOut = z.infer<typeof UnfinishedSignOutSchema>
@@ -285,12 +295,17 @@ export type CloudAccountOptions = {
   /** Where the device credential is kept: a `mako-sign-in` record, one per data root. */
   secrets: Secrets
   secretName: string
+  /** Non-secret stream checkpoints; advancing one never replaces the device credential or its borrowing grant. */
+  eventCursors: AccountEventCursors
   openExternal: (url: string) => Promise<void>
   /** How this Mac names itself on the account's device list. */
   device: () => Promise<{ name: string; platform: string; appVersion: string }>
   /** A fixture desk reaches nothing beyond this Mac, so it signs in only to a cloud on loopback. */
   fixture?: boolean
+  onFinLimitsChanged?: () => void
   onChange: (account: CloudAccount) => void
+  /** Whether local work is waiting for an authoritative account ownership answer. */
+  waitingForAccount?: () => boolean
   log?: (message: string, fields?: Record<string, string | number | boolean>) => void
   /** Every call to the cloud, as it ends, for error reports. */
   onRequest?: (call: DiagnosticEvents["cloud.request"]) => void
@@ -365,6 +380,10 @@ export class CloudAccounts {
   readonly #options: CloudAccountOptions
   readonly #cloud: URL | undefined
   readonly #unavailable: string | undefined
+  #finLimitsEpoch = 0
+  #finLimitsAttempt: { epoch: number; at: number } | undefined
+  #finLimitsPending: { epoch: number; task: Promise<CloudFinStatus | null> } | undefined
+  #finLimits: { account: string; refreshAt: number; status: CloudFinStatus } | undefined
   #state: CloudAccountState = { status: "signed-out" }
   #stored: Stored | undefined
   /** The last event of the account's stream this device heard: kept with `#stored` when it's next written. */
@@ -401,6 +420,7 @@ export class CloudAccounts {
   /** How far each call got, for the log line of one that fails or is slow. */
   readonly #traces = new RequestTraces(CORRELATION_HEADER)
   #closed = false
+  #closing: Promise<void> | undefined
   #ready: Promise<void>
 
   constructor(options: CloudAccountOptions) {
@@ -725,6 +745,74 @@ export class CloudAccounts {
   async chooseAccess(choices: AccountAccessChoices, fill: boolean): Promise<AccessChoicesAnswer | null> {
     const response = await this.#call("access.choose", "PATCH", ACCESS_CHOICES_PATH, { choices, ...fill && { fill } }, false, [404])
     return response.status === 404 ? null : AccessChoicesAnswerSchema.parse(await response.json())
+  }
+
+  /** Background refresh only: explicit account/link/job work calls this, never a Settings read. */
+  async cloudFinLimits(dueWithinMs = 0): Promise<CloudFinStatus | null> {
+    await this.#ready
+    const account = this.#state.status === "signed-in" ? this.#state.account.id : undefined
+    if (!account) return null
+    const epoch = this.#finLimitsEpoch
+    if (this.#finLimitsPending?.epoch === epoch) return this.#finLimitsPending.task
+    const held = this.heldCloudFinLimits()
+    if (held && (this.#finLimits?.refreshAt ?? 0) > Date.now() + dueWithinMs) return held
+    if (this.#finLimitsAttempt?.epoch === epoch && Date.now() - this.#finLimitsAttempt.at < CLOUD_FIN_LIMITS_MS) return held ?? null
+    this.#finLimitsAttempt = { epoch, at: Date.now() }
+    // Reserve the single flight before the transport callback can run.
+    const task = Promise.resolve().then(async () => {
+      try {
+        const response = await this.#call("cloud.fins.read", "GET", CLOUD_FINS_PATH, undefined, false, [404])
+        const status = response.status === 404 ? null : CloudFinStatusSchema.parse(await response.json())
+        if (epoch !== this.#finLimitsEpoch || this.#state.status !== "signed-in" || this.#state.account.id !== account) return null
+        this.#finLimits = status ? { account, refreshAt: Date.now() + CLOUD_FIN_LIMITS_MS, status } : undefined
+        if (status) this.#finLimitsAttempt = undefined
+        this.#options.onFinLimitsChanged?.()
+        return status
+      } catch (error) {
+        if (epoch === this.#finLimitsEpoch) {
+          this.#options.log?.("cloud Fin limits could not be read", { outcome: "failed" })
+        }
+        throw error
+      } finally {
+        if (this.#finLimitsPending?.epoch === epoch) this.#finLimitsPending = undefined
+      }
+    })
+    this.#finLimitsPending = { epoch, task }
+    return task
+  }
+
+  heldCloudFinLimits(): CloudFinStatus | undefined {
+    return this.#state.status === "signed-in" && this.#finLimits?.account === this.#state.account.id ? this.#finLimits.status : undefined
+  }
+
+  async reserveCloudFin(input: CloudFinStart) {
+    const response = await this.#call("cloud.fins.reserve", "POST", `${CLOUD_FINS_PATH}/reserve`, input)
+    this.#finLimitsEpoch += 1
+    if (this.#finLimits) this.#finLimits.refreshAt = 0
+    this.#finLimitsAttempt = undefined
+    this.#options.onFinLimitsChanged?.()
+    return CloudFinAnswerSchema.parse(await response.json())
+  }
+
+  async cancelCloudFin(input: CloudFinStart) {
+    const response = await this.#call("cloud.fins.cancel", "POST", `${CLOUD_FINS_PATH}/cancel`, input)
+    this.#finLimitsEpoch += 1
+    if (this.#finLimits) this.#finLimits.refreshAt = 0
+    this.#finLimitsAttempt = undefined
+    this.#options.onFinLimitsChanged?.()
+    return CloudFinAnswerSchema.parse(await response.json())
+  }
+
+  /** The preferences that follow the person, as the account keeps them; null from a cloud that doesn't keep them yet. */
+  async preferences(): Promise<PreferencesAnswer | null> {
+    const response = await this.#call("preferences.read", "GET", PREFERENCES_PATH, undefined, false, [404])
+    return response.status === 404 ? null : PreferencesAnswerSchema.parse(await response.json())
+  }
+
+  /** Sends edits; each kept where it's later than the account's. All of them after, or null as above. */
+  async writePreferences(preferences: Preferences): Promise<PreferencesAnswer | null> {
+    const response = await this.#call("preferences.write", "PATCH", PREFERENCES_PATH, { preferences }, false, [404])
+    return response.status === 404 ? null : PreferencesAnswerSchema.parse(await response.json())
   }
 
   async devices(): Promise<{ devices: CloudDevice[]; current: string }> {
@@ -1235,6 +1323,11 @@ export class CloudAccounts {
     return this.#accountLink?.reach() ?? Promise.resolve(false)
   }
 
+  /** Ownership work began or ended: update the account link's short probe, without changing runtime presence. */
+  checkAccountWaiting(): void {
+    this.#accountLink?.checkWaiting()
+  }
+
   /**
    * This Mac is going to sleep, or shutting down: its runtime says so to the cloud while it still can, so the account's
    * other devices take it as quiet at once (`going-quiet`), and its link stays closed until the wake. A gateway too old
@@ -1246,7 +1339,8 @@ export class CloudAccounts {
     this.#runtimeLink?.quiet()
   }
 
-  close(): void {
+  close(): Promise<void> {
+    if (this.#closing) return this.#closing
     this.#goingQuiet("quit")
     this.#closed = true
     if (this.#seenSave) {
@@ -1258,6 +1352,7 @@ export class CloudAccounts {
     if (this.#signIn) this.#endSignIn()
     this.#disconnect()
     void this.#pool.close().catch(() => undefined)
+    return this.#closing = this.#writes.then(() => undefined)
   }
 
   // Signing in.
@@ -1326,7 +1421,13 @@ export class CloudAccounts {
     }
     if (!record) return undefined
     const stored = StoredSchema.parse(JSON.parse(record.value))
-    return stored.cloud === this.#cloud?.origin ? stored : undefined
+    if (stored.cloud !== this.#cloud?.origin) return undefined
+    const cursor = await this.#options.eventCursors.read(eventScope(stored)).catch((error: Error) => {
+      this.#options.log?.("cloud account event cursor not read; following from the saved credential", { error: error.message })
+      return undefined
+    })
+    const seen = Math.max(stored.seen ?? 0, cursor ?? 0)
+    return seen ? { ...stored, seen } : stored
   }
 
   /**
@@ -1360,7 +1461,10 @@ export class CloudAccounts {
   #saveSeen(): void {
     const stored = this.#stored
     if (!stored || this.#seen === undefined) return
-    void this.#save(stored).catch((error: Error) => this.#options.log?.("cloud account event not remembered as heard", { error: error.message }))
+    const scope = eventScope(stored), seen = this.#seen
+    const write = this.#writes.then(() => this.#options.eventCursors.write(scope, seen))
+    this.#writes = write.catch(() => undefined)
+    void write.catch((error: Error) => this.#options.log?.("cloud account event not remembered as heard", { error: error.message }))
   }
 
   async #forget(notice?: CloudSignedOutNotice): Promise<void> {
@@ -1574,9 +1678,9 @@ export class CloudAccounts {
     return !this.#closed && this.#options.runtime !== undefined && this.#options.links !== false && servesDeviceRuntime(stored.account.entitlements)
   }
 
-  #link(name: string, path: string, attach: CloudLinkOptions["attach"]): CloudLink {
+  #link(kind: "account" | "runtime", path: string, attach: CloudLinkOptions["attach"]): CloudLink {
     const options: CloudLinkOptions = {
-      name,
+      name: kind,
       url: new URL(path, this.#require()),
       token: () => this.#connectionToken(),
       refused: (token) => {
@@ -1586,6 +1690,7 @@ export class CloudAccounts {
       removed: () => void this.#removed(),
       onState: () => this.#reportConnection(),
       signedIn: () => this.#stored !== undefined,
+      ...(kind === "account" && this.#options.waitingForAccount && { waiting: this.#options.waitingForAccount }),
     }
     if (this.#options.log) options.log = this.#options.log
     if (this.#options.offlineAfterMs !== undefined) options.offlineAfterMs = this.#options.offlineAfterMs
@@ -1633,7 +1738,7 @@ export class CloudAccounts {
    */
   #heard(frame: EventFrame): void {
     const stored = this.#stored
-    if (!stored || frame.stream !== accountStream(stored.account.id) || frame.seq <= (this.#seen ?? 0)) return
+    if (this.#closed || !stored || frame.stream !== accountStream(stored.account.id) || frame.seq <= (this.#seen ?? 0)) return
     const before = this.#seen
     this.#seen = frame.seq
     this.#rememberSeen()
@@ -1672,7 +1777,10 @@ export class CloudAccounts {
           this.#options.onRuntimeLinked?.()
           void started.ended.then((problem) => {
             this.#claims = started.claims()
-            if (this.#served?.served === started) this.#served = undefined
+            if (this.#served?.served === started) {
+              this.#served = undefined
+              this.#options.sessions?.report(undefined)
+            }
             end(endingOf(problem))
           })
         },
@@ -1682,7 +1790,10 @@ export class CloudAccounts {
       close: () => {
         closed = true
         if (served) this.#claims = served.claims()
-        if (served && this.#served?.served === served) this.#served = undefined
+        if (served && this.#served?.served === served) {
+          this.#served = undefined
+          this.#options.sessions?.report(undefined)
+        }
         link.close()
       },
     }
@@ -1731,8 +1842,11 @@ export class CloudAccounts {
   }
 
   #set(state: CloudAccountState): void {
+    const changed = state.status !== "signed-in" || this.#state.status !== "signed-in" || state.account.id !== this.#state.account.id || state.account.entitlements.join() !== this.#state.account.entitlements.join()
+    if (changed) { this.#finLimits = undefined; this.#finLimitsEpoch += 1 }
     this.#state = state
     this.#options.onChange(this.account())
+    if (changed) this.#options.onFinLimitsChanged?.()
   }
 
   /** The cloud's address, when this build has one; nothing is fetched to say so. */

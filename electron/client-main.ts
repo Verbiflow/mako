@@ -359,6 +359,13 @@ async function openWindow(options: { preview?: boolean; agentView?: string; id?:
   }
   // The window loads while the host starts; its stream opens once the host answers.
   void hostReady.then(connect)
+  // A fresh document starts fresh demand counters. Retire the previous document's binding before its new one reads.
+  let documentStarted = false
+  window.webContents.on("did-start-navigation", (_event, _url, inPlace, mainFrame) => {
+    if (!mainFrame || inPlace) return
+    if (documentStarted) void hostReady.then(connect)
+    documentStarted = true
+  })
   window.once("closed", () => { client.dispose(); clients.delete(rendererId); agentViews.delete(rendererId); watchAgentViewsIdle(); finishClientShutdown() })
   window.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:\/\//i.test(url)) void shell.openExternal(url); return { action: "deny" } })
   if (!agentView) installAutomation(window, isDev)

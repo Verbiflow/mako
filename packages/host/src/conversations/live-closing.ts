@@ -8,7 +8,7 @@ import type { LiveApprovals } from "./live-approvals.js"
 import { recordCutOff } from "./live-auto-continue.js"
 import { releaseHold } from "./live-ledger.js"
 import type { LiveRecords } from "./live-records.js"
-import type { LeftTurn, LiveRestarts } from "./live-restarts.js"
+import type { LiveRestarts } from "./live-restarts.js"
 import { revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
 import { interruptRequests, unhandedRequest } from "./live-settlement.js"
 import type { LiveTransfers } from "./live-transfers.js"
@@ -51,7 +51,6 @@ export class LiveClosing {
   }
 
   async closeForExit(ids = this.parts.records.ids()): Promise<void> {
-    const left: LeftTurn[] = []
     const results = await Promise.allSettled(ids.map(async (id) => {
       const resident = this.access.resident(id)
       if (
@@ -66,17 +65,14 @@ export class LiveClosing {
       )
         return
       resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((request) => request.status === "queued" ? { ...request, status: "held" } : request) }
-      // A Fin's turn its Apex waits on, and an Apex's turn its open Fins' work rests on, go on in the next host, as a
-      // quit leaves them; the person's own stop where they are.
-      const cut = this.inTree(resident) ? this.cutForNextHost(resident) : undefined
-      if (cut) left.push(cut)
+      // The next host continues ordinary Threads by default, and Fins/Apexes regardless of that setting.
+      this.cutForNextHost(resident)
       this.access.flush(resident)
       let timer: ReturnType<typeof setTimeout> | undefined
       try {
         await Promise.race([this.close(id, true), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error("A provider did not finish closing. Mako stayed open; wait for it to settle before trying again.")), 30_000) })])
       } finally { clearTimeout(timer) }
     }))
-    this.parts.restarts.leave(left)
     const failure = results.find((result) => result.status === "rejected")
     if (failure?.status === "rejected") throw failure.reason
   }
@@ -90,7 +86,7 @@ export class LiveClosing {
    * ends with the harness's process, and the request names it, as the
    * continuation will tell the agent.
    */
-  private cutForNextHost(resident: Resident): LeftTurn | undefined {
+  private cutForNextHost(resident: Resident): void {
     // One never handed its harness is no turn to continue: it waits, as those queued do, to be sent again.
     resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map(unhandedRequest) }
     const running = resident.snapshot.requests.find((request) => request.status === "dispatching")
@@ -105,8 +101,12 @@ export class LiveClosing {
       ).map((request) => request.id === running.id && request.interruption && stopped.length ? { ...request, interruption: { ...request.interruption, stopped } } : request),
     }
     recordCutOff(resident, running.id, this.access.dependencies.root)
-    if (autoContinueCandidate(resident.snapshot.requests, true)?.id !== running.id) return undefined
-    return { conversationId: resident.snapshot.session.id, requestId: running.id, ...(this.inTree(resident) && { always: true as const }) }
+    if (autoContinueCandidate(resident.snapshot.requests.filter((request) => request.status !== "queued"), true)?.id !== running.id) return undefined
+    const waiting = resident.snapshot.requests.flatMap((request) =>
+      (request.status === "queued" || request.status === "held") && request.inputDigest && !request.pause && !request.editing && !request.signIn && !request.retry && !request.wake
+        ? [{ id: request.id, inputDigest: request.inputDigest }] : [])
+    // Publish intent before the healed journal or a slow provider close can outlive this host.
+    this.parts.restarts.leave([{ conversationId: resident.snapshot.session.id, requestId: running.id, waiting, ...(this.inTree(resident) && { always: true as const }) }])
   }
 
   /** Whether a conversation's Thread is a Fin, or an Apex with Fins still open (`ThreadStore.edges`). */
@@ -196,7 +196,7 @@ export class LiveClosing {
       nativeAgents: disconnectNativeAgents(resident.snapshot.nativeAgents),
       permissions: [],
       requests: resident.snapshot.requests.map((request) =>
-        request.status === "queued" || request.status === "dispatching"
+        request.status === "dispatching"
           ? {
               ...request,
               status: "uncertain",
@@ -315,7 +315,6 @@ export class LiveClosing {
     const { records } = this.parts
     const closing: Promise<unknown>[] = []
     const releases: Promise<void>[] = []
-    const left: LeftTurn[] = []
     releases.push(records.stop())
     this.parts.actions.stop()
     for (const resident of records.values()) {
@@ -371,8 +370,7 @@ export class LiveClosing {
       // In-memory continuation promises go with this host. A provider wait is already journaled with its due time,
       // so the next host owns it; stopping this host must not silently cancel the pending work.
       this.access.declineAutoContinue(resident, true)
-      const cut = this.cutForNextHost(resident)
-      if (cut) left.push(cut)
+      this.cutForNextHost(resident)
       // One conversation Mako can't save doesn't keep the others from saving how this host left them.
       try {
         this.access.flush(resident)
@@ -384,7 +382,6 @@ export class LiveClosing {
     }
     releases.push(records.stopCheckpoints(), this.access.reclaims.stop())
     records.clear()
-    this.parts.restarts.leave(left)
     return this.shutdown = Promise.all([Promise.allSettled(closing), Promise.allSettled(releases)]).then(([, released]) => {
       const failed = released.flatMap(result => result.status === "rejected" ? [result.reason] : [])
       if (failed.length) throw new AggregateError(failed, "Journal ownership could not be released as Mako stopped")

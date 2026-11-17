@@ -108,7 +108,8 @@ export const ChildStateSchema = z.discriminatedUnion("kind", [
     apexStopped: z.literal(true).optional(),
   }),
   z.object({ kind: z.literal("starting"), step: z.enum(["placing", "preparing", "booting", "launching"]) }),
-  z.object({ kind: z.literal("working"), step: note.optional(), phase: note.optional(), answered: FinAnsweredSchema.optional() }),
+  /** `quiet`: nothing came of it since `since`, past `QUIET_MS` (`QuietWatch`), its last step then and whether that still ran. */
+  z.object({ kind: z.literal("working"), step: note.optional(), phase: note.optional(), answered: FinAnsweredSchema.optional(), quiet: z.object({ since: z.number(), step: note.optional(), running: z.literal(true).optional() }).optional() }),
   /** `waitingOn`: what its last report said it waits on, since `since`, the report's time; Mako wakes it on a pull request's outcome. */
   z.object({ kind: z.literal("idle"), waitingOn: waitingOn.optional(), since: z.number().optional() }),
   z.object({ kind: z.literal("blocked"), question: note, on: z.enum(["lead", "person", "approval"]), ask: FinAskSchema.optional(), waitingOn: waitingOn.optional() }),
@@ -173,7 +174,11 @@ export const NativeAgentObservationSchema = z.object({
       /** Where it runs when that isn't its Apex's device (`place: device:<name>`): its row says the device. */
       place: z.string().max(220).optional(),
       /** The one notice of a limit its tree hit, on the first Fin it touched, until the person has seen it (`limitNoticeLine`). */
-      limitNotice: z.object({ id: z.string().min(1).max(600), line: z.string().max(512), harness: z.string().min(1).max(100) }).optional(),
+      limitNotice: z.object({
+        id: z.string().min(1).max(600), line: z.string().max(512), harness: z.string().min(1).max(100),
+        /** Current local held work, never inferred from the notice's prose. */
+        waiting: z.object({ count: z.number().int().positive(), at: z.number(), resets: z.boolean(), version: z.string().uuid().optional() }).optional(),
+      }).optional(),
     })
     .optional(),
   state: NativeAgentStateSchema,

@@ -10,7 +10,7 @@ export interface TurnLedger {
   placement(conversationId: string): { thread: string; session: string } | undefined
   /** Every change heard so far journaled. */
   flushed(): Promise<void>
-  /** Count a turn from the journal as it stands, a slice at a time; undefined while the journal isn't open. */
+  /** Count a turn off the host's thread; undefined while its journal is closed or has been replaced. */
   countTurn(thread: string, turn: string, state: TurnChanges["state"]): Promise<TurnChanges | undefined>
   /** Whether every change by `at` has its author for good. */
   settledThrough(at: number): boolean

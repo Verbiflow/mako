@@ -115,9 +115,41 @@ export type AutomationActResult =
   | { outcome: "asked"; ask: string; next: string }
   | { refused: "unavailable" | "no-thread" | "no-automation" | "failed"; why: string }
 
+/** One thing a turn waits on, as the agent names it: a Fin of this Thread, a pull request until checks, review or merge, or this Thread's app check under way. */
+export type TurnWaitOn = { fin: string } | { pull: string; until?: "checks" | "review" | "merge" } | { check: "quick" | "full"; target?: string }
+
+/**
+ * A turn's wait (`contracts/turn-waits.ts`): start one, cancel it, or read it. A start names what it waits on, a time
+ * (`seconds` or `at`), or both, the time then the longest it waits; Mako wakes the Thread with a note when it's over.
+ */
+export interface TurnWaitInput {
+  action?: "start" | "cancel" | "list"
+  /** start: a few words the person reads while it waits, "Waiting for CI on #412". */
+  description?: string
+  /** start: up to 16 things to wait on. */
+  on?: TurnWaitOn[]
+  /** start: seconds to wait, at most 604800 (7 days); with `on`, the longest it waits. */
+  seconds?: number
+  /** start: an ISO time to wake at, within 7 days; not with seconds. */
+  at?: string
+  /** start: wake on the first thing (`any`, the default) or the last (`all`). */
+  returnWhen?: "any" | "all"
+  /** The person's own call only (a shell outside any Thread): the conversation that waits. An agent waits in its own. */
+  conversation?: string
+  /** The caller's own key for this: a repeat with it is the same wait. */
+  clientKey: string
+}
+
+export type TurnWaitResult =
+  | { outcome: "armed"; wait: string; waitsOn: string[]; endsBy?: string; replaced?: string[]; next: string }
+  | { outcome: "already-done"; met: string[]; next: string }
+  | { outcome: "cancelled"; wait?: string }
+  | { outcome: "listed"; wait?: { id: string; description: string; waitsOn: { what: string; met: boolean }[]; returnWhen: "any" | "all"; endsBy?: string } }
+  | { refused: "unavailable" | "no-thread" | "not-yours" | "never" | "too-long" | "invalid" | "unknown-fin"; why: string }
+
 /** What the MCP door shows the model of an operation; its input schema is the host call's. */
 export interface ThreadToolDefinition {
-  channel: "mako:threads-move" | "mako:threads-act" | "mako:settings-act" | "mako:harnesses-act" | "mako:automations-act"
+  channel: "mako:threads-move" | "mako:threads-act" | "mako:settings-act" | "mako:harnesses-act" | "mako:automations-act" | "mako:turn-wait"
   replay: HostCallReplay
   /** Inputs the MCP door leaves out: an agent moves its own Thread. */
   filled: readonly "conversation"[]
@@ -214,8 +246,39 @@ export const AUTOMATION_TOOL: ThreadToolDefinition = {
   },
 }
 
+export const WAIT_TOOL: ThreadToolDefinition = {
+  channel: "mako:turn-wait",
+  replay: "replay",
+  filled: ["conversation"],
+  mcp: {
+    name: "wait",
+    description: [
+      "Wait for your Fins, a pull request or a time, then end your turn: Mako wakes this Thread with a note once it's over, so never poll or sleep.",
+      "Name what you wait on in `on` ({fin: name} for its next result or end; {pull: \"owner/name#412\", until: checks|review|merge}; {check: quick|full} for this Thread's app check under way, which app_check left running), a time (`seconds`, or `at` as an ISO time), or both, the time then the longest it waits; up to 7 days.",
+      "`returnWhen: all` wakes on the last instead of the first. One wait per Thread: a new one replaces the last. A wait that could never end is refused.",
+      "action cancel ends it; list says what it waits on. agents_wait is for a result you need within 30 seconds.",
+    ].join(" "),
+    fields: {
+      action: "start (the default), cancel or list.",
+      description: "start: 5 to 10 words the person reads while it waits, \"Waiting for CI on #412\".",
+      on: "start: what to wait on, up to 16: {fin}, {pull, until} or {check}.",
+      seconds: "start: how long to wait, at most 604800 (7 days); with on, the longest.",
+      at: "start: an ISO time to wake at, within 7 days; not with seconds.",
+      returnWhen: "start: any (the default) or all.",
+      clientKey: "Your own key for this: a repeat with it is the same wait.",
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+}
+
 /** Every tool on a `mako` server that acts for the person through one host call. */
-export const THREAD_TOOLS: readonly ThreadToolDefinition[] = [THREAD_MOVE_TOOL, THREAD_ACT_TOOL, SETTINGS_TOOL, HARNESS_TOOL, AUTOMATION_TOOL]
+export const THREAD_TOOLS: readonly ThreadToolDefinition[] = [THREAD_MOVE_TOOL, THREAD_ACT_TOOL, SETTINGS_TOOL, HARNESS_TOOL, AUTOMATION_TOOL, WAIT_TOOL]
+
+/** What a wait's answer tells an agent to do next. */
+export const AFTER_WAIT = {
+  armed: "End your turn now: Mako wakes this Thread with a note when the wait is over. Don't poll or sleep meanwhile.",
+  alreadyDone: "Everything it names is done already: go on in this turn.",
+} as const
 
 /** What an answer tells an agent to do next. */
 export const AFTER_ACT = {

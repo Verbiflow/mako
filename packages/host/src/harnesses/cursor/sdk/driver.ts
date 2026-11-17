@@ -1,3 +1,4 @@
+import { failureEvidenceOf, providerTextEvidence } from "../../../contracts/provider-failure.js"
 import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../../../contracts/native-prompt-identity.js"
 import { applyControlEnvironment } from "../../../control/index.js"
@@ -37,6 +38,7 @@ import { cursorConfigOptions, CursorDecoder, type CursorEffect } from "./decoder
 import { deliverDecoded, type Decoded, type DecodedSink } from "../../../contracts/native-decoding.js"
 import { nativeStream, streamRuntime, withFrame, type NativeStream } from "../../native-stream.js"
 import { cursorLegacyCheckpoint, cursorSdkCheckpoint } from "../resume.js"
+import { cursorTurnReader } from "../turn-outcome.js"
 import { cursorForkDeclined } from "./fork.js"
 import type {
   SdkEvent,
@@ -313,6 +315,7 @@ function finishTurn(engine: Engine, live: Live, reported: SdkRunResult): void {
         status: "failed",
         lastStop: lost ? CONNECTION_LOST_STOP : retriesExhausted(result) ? RETRIES_EXHAUSTED_STOP : "failed",
         error: message.slice(0, 2000),
+        failureEvidence: lost ? { kind: "network", source: "host" } : providerTextEvidence(message),
       })
       break
     }
@@ -679,6 +682,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       wake: "The next message starts a new SDK child that resumes the agent; a run its killed child left active is expired by the next one (`run-records.ts`).",
       checkpoint,
       inspect: inspectNativeSession,
+      readTurn: cursorTurnReader(dependencies.stores, dependencies.stateRoot, dependencies.home ?? homedir()),
       elsewhere: {
         via: "The SDK child files the agent under the new folder in its store (`relocateCursorAgent`), which finds an agent only under its own folder, then `Agent.resume`.",
         verified: "scripts/test-cursor-relocate.ts against SDK 1.0.31: not found from another folder as saved, resumed there with its checkpoint once filed; with real turns, the moved agent remembered its turn and its shell ran in the new folder after running in the old one.",
@@ -770,6 +774,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           connection: "disconnected",
           lastStop: live.state.status === "running" ? "failed" : live.state.lastStop,
           error: live.state.status === "running" ? `Cursor's SDK process exited (${detail})` : live.state.error,
+          failureEvidence: live.state.failureEvidence,
         })
       })
       // After the handler above, which draws the exit into the stream: the child is gone, so the launch's stream is finished.
@@ -943,7 +948,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         if (live.turn === turn) {
           const message = error instanceof Error ? error.message : String(error)
           settleTurn(engine, live, "error", message)
-          engine.patch(live, { status: "failed", lastStop: "failed", error: message })
+          engine.patch(live, { status: "failed", lastStop: "failed", error: message, failureEvidence: failureEvidenceOf({ error }) })
         }
         throw error
       }

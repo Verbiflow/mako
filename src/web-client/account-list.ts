@@ -1,4 +1,5 @@
 import { AccountEventSchema, accountStream } from "@mako/protocol/account-events"
+import type { Preferences } from "@mako/protocol/preferences"
 import { AccountSessions, isAccountListEvent } from "@mako/protocol/account-sessions"
 import { quietDevice, SessionListingsSchema, type ArchivedThread, type ListedSession, type SessionListings } from "@mako/protocol/thread-listing"
 import type { WaitingMessage } from "@mako/protocol/waiting"
@@ -117,6 +118,8 @@ export class AccountList {
   /** The subscription `park` closed: its end is ours, not a failure, even once shown again. */
   #letGo: Subscription | undefined
   #unpark: (() => void) | undefined
+  /** The preferences that follow the account, read as the list is and told what its stream says of them. */
+  #preferences: { heard(answer: { preferences: Preferences; revision: number }): void; sync(): Promise<void> } | undefined
   /** The list's read under way, which a follow and a refresh asked at once share. */
   #reading: Promise<SessionListings> | undefined
   #saveTimer: ReturnType<typeof setTimeout> | undefined
@@ -137,6 +140,14 @@ export class AccountList {
 
   start(): void {
     void this.#run()
+  }
+
+  /**
+   * The account's preferences are read whenever the list is read (a first follow, a show, a gap) and told what the
+   * stream says changed, so they're never staler than the list.
+   */
+  followPreferences(preferences: { heard(answer: { preferences: Preferences; revision: number }): void; sync(): Promise<void> }): void {
+    this.#preferences = preferences
   }
 
   /** Follow again now: the page came back into view, or the network did. */
@@ -206,9 +217,10 @@ export class AccountList {
   }
 
   /** The account's devices, read again: a device that joined is named once a row names it. */
-  async refreshDevices(): Promise<void> {
+  async refreshDevices(current: () => boolean = () => true): Promise<void> {
     this.#devicesAsked = Date.now()
     const { devices } = DevicesSchema.parse(await this.#gateway.rest("GET", "/v1/devices"))
+    if (!current()) return
     accountListStore.set({ devices: new Map(devices.map((device) => [device.id, device])) })
     // Whether each is quiet is said of every Mac the account has, one just named included.
     const { phase } = accountListStore.get()
@@ -240,6 +252,7 @@ export class AccountList {
         const devices = this.#devicesAsked ? undefined : this.refreshDevices().catch((error) => this.#failed({ error }))
         const listings = await this.#read()
         this.#list.listed(listings)
+        void this.#preferences?.sync()
         if (devices) await devices
         else if (this.#unnamedDevice()) await this.refreshDevices().catch((error) => this.#failed({ error }))
         this.#publish("live")
@@ -267,6 +280,10 @@ export class AccountList {
           if (parsed.success && (parsed.data.type === "device-joined" || parsed.data.type === "device-removed")) {
             if (parsed.data.type === "device-joined") heardDeviceJoined(parsed.data.device)
             void this.refreshDevices().catch((error) => this.#failed({ error }))
+            continue
+          }
+          if (parsed.success && parsed.data.type === "preferences-changed") {
+            this.#preferences?.heard({ preferences: parsed.data.preferences, revision: parsed.data.revision })
             continue
           }
           // A kind of event this build doesn't know is passed over, never refused.

@@ -50,7 +50,7 @@ import { activeLiveAcp, useAcp } from "@/state/acp"
 import { accountIdentity } from "@/lib/account-identity"
 import type { AccountConfirmation } from "@mako/host/contracts/execution-context"
 import { usePrefs } from "@/state/prefs"
-import { providerProfileKey, providers, useProviders } from "@/state/providers"
+import { providerProfileKey, providers, useProviders, watchProviderProfile } from "@/state/providers"
 import { shallowEqual } from "@/state/store"
 import { setComposerHarness } from "@/state/threads"
 import { formatTokens } from "@/lib/format"
@@ -267,9 +267,7 @@ function LoadoutRow({
   const profile = useProviders((state) => state.contexts[providerProfileKey(entry.harness, cwd)] ?? state.profiles[entry.harness])
   const availability = loadoutAvailability(entry, profile)
   const label = availability.label
-  useEffect(() => {
-    void providers.load(entry.harness, false, cwd).catch(() => {})
-  }, [entry.harness, cwd])
+  useEffect(() => watchProviderProfile(entry.harness, cwd), [entry.harness, cwd])
   return (
     <MenuItem onSelect={onChoose} title={availability.kind === "ready" ? undefined : availability.reason} className="group/loadout">
       <HarnessIcon harness={entry.harness} className="size-3.5" />

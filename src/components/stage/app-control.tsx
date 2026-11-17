@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/menu"
 import { Shimmer } from "@/components/ui/shimmer"
 import { AppProbeMenu } from "@/components/stage/app-probe"
+import { AppMarkIcon } from "@/components/rail/app-mark"
 import { cn } from "@/lib/utils"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { openAppSetup } from "@/state/app-setup"
@@ -40,6 +41,8 @@ import { acpStore } from "@/state/acp-state"
 import { inboxView } from "@/state/inbox-view"
 import {
   checkMark,
+  appMarkOf,
+  appViewOf,
   checkTitle,
   copyAppFailure,
   formatAgo,
@@ -104,23 +107,32 @@ function useNow(): number {
   return now
 }
 
+/** An open portal still shows details if its strip leaves the viewport. */
+function AppMenu({ cwd, children }: { cwd: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false)
+  useEffect(() => open ? threadAppDriver()?.watch?.(cwd) : undefined, [cwd, open])
+  return <Menu modal={false} onOpenChange={setOpen}>{children}</Menu>
+}
+
 /**
  * The Thread's own copy of its app, at the right of the strip beside the
  * checkout. It names one state; its menu says what's running and what was
  * checked, and each row opens that output in the terminal dock.
  */
 export function AppControl({ cwd, focused }: { cwd: string | undefined; focused: boolean }) {
-  const view = useThreadApp((state) => (cwd ? state.byCwd[cwd] : undefined))
+  const view = useThreadApp((state) => (cwd ? appViewOf(state, cwd) : undefined))
+  const mark = useThreadApp((state) => (cwd ? appMarkOf(state, cwd)?.state : undefined))
   const hidden = useThreadApp((state) => view?.kind === "none" && state.hidden.includes(view.root))
   const target = useThreadApp((state) => (cwd ? targetOf(state, cwd) : undefined))
-  useEffect(() => (cwd ? threadAppDriver()?.watch?.(cwd) : undefined), [cwd])
-  if (!cwd || !view || hidden) return null
+  if (!cwd) return null
+  if (!view) return mark ? <span data-app-control="pending" className="mr-0.5 flex h-6 shrink-0 items-center px-2"><AppMarkIcon checkout={cwd} /></span> : null
+  if (hidden) return null
   if (view.kind === "asleep") return <AsleepControl cwd={cwd} view={view} />
   const state = view.kind === "ready" ? view.phase : view.kind
   const project = view.kind === "ready" ? cwd : view.root
   if (view.kind === "ready" && view.phase === "stopped" && view.elsewhere) {
     return (
-      <Menu modal={false}>
+      <AppMenu cwd={cwd}>
         <WithSetup project={project}>
           <MenuTrigger asChild>
             <button type="button" data-app-control="stopped" className={cn(trigger, "mr-0.5", triggerTone(view))}>
@@ -136,7 +148,7 @@ export function AppControl({ cwd, focused }: { cwd: string | undefined; focused:
           </Action>
           <SetupItem project={project} />
         </MenuContent>
-      </Menu>
+      </AppMenu>
     )
   }
   if (view.kind === "ready" && view.phase === "stopped") {
@@ -161,7 +173,7 @@ export function AppControl({ cwd, focused }: { cwd: string | undefined; focused:
     )
   }
   return (
-    <Menu modal={false}>
+    <AppMenu cwd={cwd}>
       <WithSetup project={project}>
         <MenuTrigger asChild>
           <button type="button" data-app-control={state} className={cn(trigger, "mr-0.5", triggerTone(view))}>
@@ -181,7 +193,7 @@ export function AppControl({ cwd, focused }: { cwd: string | undefined; focused:
         )}
         {view.kind === "ready" || view.kind === "invalid" ? <SetupItem project={project} /> : null}
       </MenuContent>
-    </Menu>
+    </AppMenu>
   )
 }
 
@@ -236,7 +248,7 @@ function AsleepControl({ cwd, view }: { cwd: string; view: Asleep }) {
   // What paused with the machine; an app that wasn't running has nothing to show beyond saying so.
   const paused = last?.processes.filter((process) => process.state === "running" || process.state === "starting") ?? []
   return (
-    <Menu modal={false}>
+    <AppMenu cwd={cwd}>
       <MenuTrigger asChild>
         <button type="button" data-app-control={view.waking ? "waking" : "asleep"} className={cn(trigger, "mr-0.5", triggerTone(view))}>
           <TriggerLabel view={view} />
@@ -275,7 +287,7 @@ function AsleepControl({ cwd, view }: { cwd: string; view: Asleep }) {
           </>
         )}
       </MenuContent>
-    </Menu>
+    </AppMenu>
   )
 }
 
@@ -730,7 +742,7 @@ function picking(view: Ready): boolean {
 /** The other half of the Run button: which of the recipe's targets it runs. Picking one runs it. */
 function TargetPicker({ cwd, targets, target }: { cwd: string; targets: string[]; target: string }) {
   return (
-    <Menu modal={false}>
+    <AppMenu cwd={cwd}>
       <MenuTrigger asChild>
         <button
           type="button"
@@ -745,7 +757,7 @@ function TargetPicker({ cwd, targets, target }: { cwd: string; targets: string[]
         <MenuLabel>Run</MenuLabel>
         <TargetChoices targets={targets} target={target} onPick={(next) => { pickTarget(cwd, next); threadAppDriver()?.start(cwd) }} />
       </MenuContent>
-    </Menu>
+    </AppMenu>
   )
 }
 

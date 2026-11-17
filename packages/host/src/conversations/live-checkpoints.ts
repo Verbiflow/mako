@@ -28,6 +28,8 @@ const OPEN_TURNS = 4
  * historical fork so no irreversible provider rollback participates in recovery. */
 export class LiveCheckpoints {
   private readonly preparing = new Set<string>()
+  /** Before publication may finish after its closing capture, without holding the next send. */
+  private readonly saving = new Map<string, Promise<void>>()
   /** Checkpoints of each conversation under way, a turn's start and its end alike: `checkpointing` while any is. */
   private readonly capturing = new WeakMap<Resident, number>()
   /** The turns last read, newest last, by their two checkpoints. */
@@ -119,7 +121,7 @@ export class LiveCheckpoints {
           // Held after the turn went, it may already hold the turn's own edits: a rewind to it would keep them and the
           // turn's diff would leave them out, so it's never the turn's `before`. The capture still ran for `endRun`.
           before = late > 0
-            ? { kind: "unavailable", reason: `The checkpoint held the workspace ${Math.round(late / 1000)} s after the turn went, so it may hold the turn's own edits` }
+            ? { kind: "unavailable", timedOut: true, reason: `The checkpoint held the workspace ${Math.round(late / 1000)} s after the turn went, so it may hold the turn's own edits` }
             : { kind: "ready", snapshot }
         } catch (error) {
           before = { kind: "unavailable", reason: errorMessage({ error }) }
@@ -129,7 +131,9 @@ export class LiveCheckpoints {
           conversation, request: request.id, kind: before.kind, heldMs: heldAt === undefined ? null : heldAt - began,
           savedMs: Date.now() - began, ...wentAt !== undefined && { wentWithoutMs: wentAt - began },
         })
-        if (generation !== resident.generation) return
+        // The immutable boundary belongs to this request even if Stop/wake advanced its session generation while
+        // packing. Dispatch still checks generation in prompt(); a request removed by rewind keeps no late boundary.
+        if (generation !== resident.generation && !resident.snapshot.requests.some((item) => item.id === request.id)) return
         resident.snapshot = {
           ...resident.snapshot,
           requests: resident.snapshot.requests.map((item) =>
@@ -142,7 +146,10 @@ export class LiveCheckpoints {
       }
     })()
     // A failure after the turn went is the request's `before`, said above; one before it fails the start as ever.
-    void saved.catch(() => undefined)
+    this.saving.set(request.id, saved)
+    void saved.finally(() => {
+      if (this.saving.get(request.id) === saved) this.saving.delete(request.id)
+    }).catch(() => undefined)
     let timer: ReturnType<typeof setTimeout> | undefined
     const waited = new Promise<"late">((resolve) => {
       timer = setTimeout(() => resolve("late"), this.host.dependencies.checkpointWaitMs ?? BEFORE_CHECKPOINT_WAIT_MS)
@@ -153,12 +160,17 @@ export class LiveCheckpoints {
         // Never a send waiting minutes on its checkpoint: the turn goes, said so, and the capture lands on it if it ends.
         wentAt = Date.now()
         hostWarn("checkpoints", "a turn went before its checkpoint held the workspace", { conversation, request: request.id, waitedMs: wentAt - began })
+        try {
+          this.host.dependencies.checkpointTimedOut?.(wentAt - began)
+        } catch {
+          // Diagnostics must never prevent or delay provider dispatch.
+        }
         if (generation === resident.generation) {
           const reason = "The checkpoint was still waiting when the turn went"
           resident.snapshot = {
             ...resident.snapshot,
             requests: resident.snapshot.requests.map((item) =>
-              item.id === request.id && !item.snapshots?.before ? { ...item, snapshots: { ...item.snapshots, before: { kind: "unavailable", reason } } } : item
+              item.id === request.id && !item.snapshots?.before ? { ...item, snapshots: { ...item.snapshots, before: { kind: "unavailable", reason, timedOut: true } } } : item
             ),
           }
           this.host.flush(resident)
@@ -213,11 +225,15 @@ export class LiveCheckpoints {
           reason: errorMessage({ error }),
         })
       )
-      .then((after) => {
+      .then(async (after) => {
         // Still its turn's end after a wake or a relaunch moved the generation on; a request rewound away takes it with it.
         // Over before the batch that says it goes: what reads the conversation's work as its batch comes (the
         // account's list) reads it at rest, and no later batch would say so.
         release()
+        this.host.drain(resident)
+        // The closing files are saved, so another turn can start. Only the record waits: RunSnapshots requires
+        // before before it can attach after, and an independent closing pack can finish first.
+        await this.saving.get(requestId)?.catch(() => undefined)
         resident.snapshot = {
           ...resident.snapshot,
           requests: resident.snapshot.requests.map((item) =>

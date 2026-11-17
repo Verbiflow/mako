@@ -1,6 +1,7 @@
 import { NATIVE_OVERRIDE } from "../contracts/native-calls.js"
 import type { ControlAgentOperation } from "@mako/control-runtime/mcp"
 import type { JsonValue } from "@mako/control"
+import type { ToolSteps } from "../contracts/tool-steps.js"
 import { randomBytes } from "node:crypto"
 import { createServer, type IncomingMessage } from "node:http"
 import { z } from "zod"
@@ -9,6 +10,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { configuredListenPort } from "../base/listen-port.js"
 import { heavy } from "../base/heavy-packages.js"
 import { ORCHESTRATION_INSTRUCTIONS } from "../contracts/agent-tools.js"
+import { hostLog } from "../base/host-log.js"
 
 /** Whose agents call: it throws unless `bindingId` is the conversation's binding that is running now. */
 export interface AgentOwner {
@@ -34,7 +36,7 @@ export interface ToolGrant {
 /** `conversationId` for a scope's calls, throwing once its grant no longer holds. */
 function scopeAuthorizer(owner: AgentOwner, scope: Scope): () => string {
   return () => {
-    if (scope.revoked || scope.expiresAt < Date.now()) throw new Error("This task grant has expired")
+    if (scope.revoked) throw new Error("This task grant is no longer active")
     owner.authorizeAgent(scope.conversationId, scope.bindingId)
     return scope.conversationId
   }
@@ -43,30 +45,29 @@ function scopeAuthorizer(owner: AgentOwner, scope: Scope): () => string {
 interface Scope {
   conversationId: string
   bindingId: string
-  expiresAt: number
   revoked: boolean
   /** Calls under way, by path and JSON-RPC id: each server's client numbers its own requests. */
   controlRequests: Map<string, AbortController>
 }
 
 /** What an agent reads about the `mako` server before calling any of its tools. */
-const MAKO_INSTRUCTIONS = [
+export const MAKO_INSTRUCTIONS = [
   "Mako's tools for the Thread this Session belongs to. Each acts on this Thread only. Their words:",
-  "- main checkout: the project's own folder, the one the user works in.",
-  "- worktree: a Git worktree Mako made for one Thread, on that Thread's own branch.",
-  "- checkout: either of these; this Session edits in one.",
-  "- project folder: a folder holding several repositories, such as `api` and `web`, that is a project of its own. Its worktree is a folder of the same shape: one worktree per repository, all on the Thread's branch. worktree_status lists the repositories by those names.",
-  "- app: the project running from a checkout on this Thread's ports. Threads in the main checkout share its app; a worktree's app is its Thread's alone.",
-  "- recipe: how every Thread of the project installs, starts and checks its app. Mako keeps one per project, for every branch.",
-  "worktree_*: which checkout this Session edits in; moving it into this Thread's worktree, bringing ignored files from the main checkout, updating its branch from main, merging the branch and removing the worktree. In a project folder they act on every repository at once.",
-  "pull_request_*: the pull request of the branch this Session edits on, through the user's GitHub login: its checks, reviews and failed logs; opening or updating it; merging it when the user asks, or on full access as the next step of its work. Each runs the same operation as the Git sidebar's button, so use them instead of `gh pr` commands. A project folder has one pull request per repository: pass repository to name one. Without it they act on the repository this Session's folder is inside, and from the project folder itself pull_request_status reports them all. Commit, push for other reasons, diff and log stay plain Git, run in the repository's own folder.",
-  "app_*: this Thread's app. Use them to run and check your work instead of starting servers by hand. In plan mode, app_status, app_logs and app_probe still read the app; if app_start is refused, the user can press Run app.",
-  "recipe_*: recipe_guide explains how to set up or repair the recipe; recipe_save saves a draft only this Thread runs, and recipe_publish proves it and publishes it to every Thread. When your change alters how the project installs, starts or is checked, update the recipe in the same turn.",
+  "- main checkout: the project's own folder, the user's.",
+  "- worktree: a Git worktree Mako made for one Thread, on its own branch.",
+  "- checkout: either; this Session edits in one.",
+  "- project folder: several repositories as one project; its worktree has one per repository on the Thread's branch.",
+  "- app: the project running from a checkout on this Thread's ports.",
+  "- recipe: how every Thread of the project installs, starts and checks its app.",
+  "worktree_*: which checkout you edit in: worktree_move, never `git worktree add` or a new branch in the main checkout.",
+  "pull_request_*: this branch's pull request: its checks, reviews and merge; never `gh pr merge`.",
+  "app_*: run and check your work in this Thread's app, never a server started by hand. recipe_*: a change to how the project installs, starts or is checked updates the recipe in the same turn.",
+  `Mako refuses those routes; ${NATIVE_OVERRIDE} before one runs it anyway, never a worktree, and only when the Mako tool failed. Other native routes run with a note naming the better tool. Commit, push, diff and log stay plain Git.`,
+  "wait: to wait on your Fins, a pull request, an app check or a time, call wait and end your turn; Mako wakes you. Never poll or sleep.",
   "port_holder: who holds a port, before you assume it's free or stop anything.",
-  "thread_move: moves this Thread itself to the cloud, as Move to the cloud does, when the person asks to continue it there or keep it going while their Mac is closed. That's this Thread going on elsewhere, not new work for a Fin.",
-  `Mako refuses three routes around these tools: \`git worktree add\` and a new branch in the main checkout (use worktree_move, which takes a branch and a base), and \`gh pr merge\` (pull_request_merge). Other native routes, such as \`gh pr create\`, a dev server when the project has a recipe, an agent CLI, or another browser beside mako-computer, still run, with a one-line note naming the better Mako tool; weigh it and choose. ${NATIVE_OVERRIDE} before a refused command runs it anyway, but never a worktree: only when the Mako tool failed or can't do what was asked.`,
+  "thread_move: this Thread itself to the cloud, when the person asks. That's this Thread going on elsewhere, not new work for a Fin.",
+  "thread_history: this Thread's earlier turns in every harness, and the threads it referenced, read whole; use it instead of guessing.",
   `show: ${SHOW_MEDIA_LINE}`,
-  "thread_history: this Thread's earlier turns, every session and harness of it, and the threads its messages referenced, read whole: list, read, search, and any tool output in full. Use it instead of guessing what was said or done before, and when a transcript points to it.",
   ORCHESTRATION_INSTRUCTIONS,
 ].join("\n")
 
@@ -113,24 +114,35 @@ async function readBody(request: IncomingMessage, maxBytes: number) {
  * computer use, and `/mako` for the Thread's worktree, pull request, app and recipe.
  * Loopback only, and handed to each agent in its launch, never written to an
  * agent app's own settings. Credentials are ephemeral and scoped to a
- * currently executing provider binding; one grant opens both.
+ * currently executing provider binding; one grant opens both. A provider can stay resident for days, including
+ * between turns: its grant ends with explicit binding revocation or server closure, not elapsed wall time. Each
+ * operation still checks the current binding and running turn through `authorizeAgent`.
  */
 export async function startConversationMcp(
   owner: AgentOwner,
-  control: (bindingId: string, operation: ControlAgentOperation, signal: AbortSignal) => Promise<JsonValue>,
+  control: (bindingId: string, operation: ControlAgentOperation, signal: AbortSignal, steps?: (steps: ToolSteps) => void) => Promise<JsonValue>,
   makoTools: readonly MakoTools[] = [],
-  gate?: CallGate
+  gate?: CallGate,
+  /** Hears a conversation's running js call's steps as they change, and `null` once it answered. */
+  stepsOf?: (conversationId: string, steps: ToolSteps | null) => void
 ) {
   const scopes = new Map<string, Scope>()
+  const retire = (token: string, scope: Scope, reason: "revoked" | "server-closed") => {
+    scope.revoked = true
+    for (const pending of scope.controlRequests.values()) pending.abort()
+    scopes.delete(token)
+    hostLog("agent-tools", "retired a task grant", { conversation: scope.conversationId, binding: scope.bindingId, reason })
+  }
   const serveMako = makoTools.length > 0
   const server = createServer((request, response) => {
     void (async () => {
       const token = request.headers.authorization?.replace(/^Bearer /, "")
       const scope = token ? scopes.get(token) : undefined
-      if (!scope || scope.revoked || scope.expiresAt < Date.now()) {
+      if (!token || !scope || scope.revoked) {
         response.writeHead(401).end()
         return
       }
+      const authorized = scopeAuthorizer(owner, scope)
       const gated = gatePath(request.url)
       if (gated) {
         if (!gate || request.method !== "POST" || request.headers.origin) {
@@ -138,7 +150,7 @@ export async function startConversationMcp(
           return
         }
         const body = z.json().parse(JSON.parse(await readBody(request, 1024 * 1024)))
-        owner.authorizeAgent(scope.conversationId, scope.bindingId)
+        authorized()
         response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(gate(scope.conversationId, gated, body)))
         return
       }
@@ -173,15 +185,16 @@ export async function startConversationMcp(
       })
       const disconnected = new AbortController()
       if (controlRequestId !== undefined) scope.controlRequests.set(controlRequestId, disconnected)
-      const authorized = () => {
-        if (scope.revoked || scope.expiresAt < Date.now()) throw new Error("This task grant has expired")
-        owner.authorizeAgent(scope.conversationId, scope.bindingId)
-        return scope.conversationId
-      }
       const mcp = route === "computer"
-        ? createControlMcpServer((operation, signal) => {
+        ? createControlMcpServer(async (operation, signal) => {
             authorized()
-            return control(scope.bindingId, operation, AbortSignal.any([signal, disconnected.signal]))
+            const stepped = stepsOf && operation.method === "js" ? stepsOf : undefined
+            try {
+              return await control(scope.bindingId, operation, AbortSignal.any([signal, disconnected.signal]),
+                stepped && ((steps) => stepped(scope.conversationId, steps)))
+            } finally {
+              stepped?.(scope.conversationId, null)
+            }
           })
         : new McpServer({ name: "mako", version: "1.0.0" }, { instructions: MAKO_INSTRUCTIONS })
       if (route === "mako") for (const register of makoTools) register(mcp, authorized)
@@ -214,20 +227,15 @@ export async function startConversationMcp(
   const makoUrl = serveMako ? `http://127.0.0.1:${parsed.port}/mako` : undefined
   return {
     mint(bindingId: string, conversationId: string): ToolGrant {
-      for (const [token, scope] of scopes)
-        if (scope.expiresAt < Date.now()) {
-          for (const pending of scope.controlRequests.values()) pending.abort()
-          scopes.delete(token)
-        }
       const token = randomBytes(32).toString("base64url")
       const scope: Scope = {
         bindingId,
         conversationId,
-        expiresAt: Date.now() + 24 * 60 * 60 * 1_000,
         revoked: false,
         controlRequests: new Map(),
       }
       scopes.set(token, scope)
+      hostLog("agent-tools", "issued a task grant", { conversation: conversationId, binding: bindingId })
       const grant: ToolGrant = { token, computerUrl }
       if (makoUrl) {
         grant.makoUrl = makoUrl
@@ -247,9 +255,7 @@ export async function startConversationMcp(
           scope.bindingId === bindingId &&
           scope.conversationId === conversationId
         ) {
-          scope.revoked = true
-          for (const pending of scope.controlRequests.values()) pending.abort()
-          scopes.delete(token)
+          retire(token, scope, "revoked")
         }
     },
     /**
@@ -269,9 +275,7 @@ export async function startConversationMcp(
       await Promise.all(servers.map((each) => each.close()))
     },
     close() {
-      for (const scope of scopes.values())
-        for (const pending of scope.controlRequests.values()) pending.abort()
-      scopes.clear()
+      for (const [token, scope] of scopes) retire(token, scope, "server-closed")
       server.closeAllConnections()
       server.close()
     },

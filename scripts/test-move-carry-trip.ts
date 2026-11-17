@@ -137,7 +137,7 @@ try {
   // Getting ready: a repository the machine can't clone keeps the Thread on the Mac, saying which; then the real one.
   await assert.rejects(readyForMove(arrival, { folder: first, repositories: [{ path: join(project, "gone"), url: `file://${join(root, "gone.git")}` }] }), /couldn't clone .*gone\.git at .*\/gone:/)
   assert.ok(!existsSync(join(project, "gone")), "a clone that failed leaves nothing behind")
-  assert.deepEqual(await readyForMove(arrival, { folder: first, repositories: [{ path: second, url: `file://${remotes.api}` }] }), { folder: first, carry: true })
+  assert.deepEqual(await readyForMove(arrival, { folder: first, repositories: [{ path: second, url: `file://${remotes.api}` }] }), { folder: first, carry: true, promptActor: true })
   assert.ok(existsSync(join(second, ".git")), "cloned beside the first")
 
   // The arrival: both checkouts, the outside files, the history, before any session opens in its own folder.

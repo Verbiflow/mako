@@ -1,4 +1,5 @@
 import { approvalWords } from "@mako/host/contracts/children"
+import { FinTypedAnswer } from "@/components/composer/fin-typed-answer"
 import { memo, useEffect, useRef, useState } from "react"
 import { CheckIcon, ChevronRightIcon, XIcon } from "lucide-react"
 import { childStateOf } from "@mako/host/contracts/children"
@@ -232,6 +233,7 @@ function AskMark({ item }: { item: InboxAsk }) {
 }
 
 function FinAnswers({ item, sending, send }: { item: FinInboxItem; sending: boolean; send: (answer: FinAnswer) => void }) {
+  if (item.ask.limit?.waiting) return <span className="text-label text-muted-foreground">Continues automatically. Open the Thread to use another account or harness now.</span>
   if (item.ask.ask.kind === "approval")
     return (
       <>
@@ -256,6 +258,7 @@ function FinAnswers({ item, sending, send }: { item: FinInboxItem; sending: bool
           </button>
         )
       })}
+      <FinTypedAnswer title={item.ask.title} options={item.ask.ask.options?.length ?? 0} disabled={sending} onAnswer={(words) => send({ answer: words })} className="min-w-40 max-w-64" />
     </>
   )
 }

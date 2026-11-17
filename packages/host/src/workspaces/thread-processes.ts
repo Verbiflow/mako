@@ -1,10 +1,11 @@
+import type { WatchBackend, WatchListener } from "./watch-backend.js"
 import { hostSpawn, hostProbe } from "../base/host-command.js"
 import { hostStopping } from "../base/host-stopping.js"
 import { setTimeout as wait } from "node:timers/promises"
 import { spawn } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { mkdir, open, readdir, readFile, realpath, rename, rm, stat, truncate, writeFile } from "node:fs/promises"
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { join } from "node:path"
 import { z } from "zod"
 import { inside, workingDirectories } from "./app-probe.js"
@@ -388,6 +389,12 @@ export class ThreadProcesses {
     return { started, refused }
   }
 
+  /** Output is written by detached runs. Its file changes are watched off the host thread, never piped through it. */
+  async watchOutputFiles(app: AppKey, backend: WatchBackend, listener: WatchListener) {
+    const folder = await realpath(this.folder(app))
+    return backend(folder, ["runs.json", "checkout", "project", "used", "up", "lock", "memory", "checkouts"].map(name => join(folder, name)), listener, { kind: "app-output" })
+  }
+
   /** Hears that this host started or signalled a process, or changed a run's record: a look now would see something new. */
   onChange(listener: () => void): () => void {
     this.changeListeners.add(listener)
@@ -446,8 +453,9 @@ export class ThreadProcesses {
       if (record.port !== undefined) status.port = record.port
       if (record.ready !== undefined) status.ready = record.ready
       if (record.ready !== undefined && status.state.kind === "starting") {
-        const failure = ReadyFailureSchema.safeParse(await readFile(this.file(app, key, "unready"), "utf8").then((text) => JSON.parse(text), () => undefined))
-        if (failure.success) status.readyFailure = failure.data
+        // Read as it's being replaced, or by an older build that wrote it in place, the file can be empty: no failure yet.
+        const failure = await readFile(this.file(app, key, "unready"), "utf8").then(readyFailureIn, () => undefined)
+        if (failure) status.readyFailure = failure
       }
       const held = this.membersOf(rows, record).reduce((sum, row) => sum + row.rssKb * 1024, 0)
       if (held) status.memoryBytes = held
@@ -1318,7 +1326,9 @@ export class ThreadProcesses {
         }
         return
       }
-      if (await ours()) await writeFile(this.file(app, key, "unready"), JSON.stringify(tried), { mode: 0o600 })
+      // Replaced whole: written in place, a status read between the truncate and the write parsed an empty file and
+      // failed app_start ("Unexpected end of JSON input").
+      if (await ours()) await replaceFile(this.file(app, key, "unready"), JSON.stringify(tried))
       await wait(readyWait(this.now() - began), undefined, { signal }).catch((error) => { if (!signal?.aborted) throw error })
     }
   }
@@ -1359,10 +1369,7 @@ export class ThreadProcesses {
   }
 
   private async save(app: AppKey, runs: Record<string, Run>): Promise<void> {
-    const path = join(this.folder(app), "runs.json")
-    const temporary = `${path}.${process.pid}.tmp`
-    await writeFile(temporary, JSON.stringify({ runs }, null, 2), { mode: 0o600 })
-    await rename(temporary, path)
+    await replaceFile(join(this.folder(app), "runs.json"), JSON.stringify({ runs }, null, 2))
     this.sharedOverview = undefined
     for (const listener of this.changeListeners) listener()
   }
@@ -1620,4 +1627,21 @@ function completeCharacters(bytes: Buffer): Buffer {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** Writes a file whole: a reader sees the old content or the new, never an empty or partial one. */
+async function replaceFile(path: string, text: string): Promise<void> {
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`
+  await writeFile(temporary, text, { mode: 0o600 })
+  await rename(temporary, path)
+}
+
+/** The ready check's last failure in an `unready` file, or undefined for text that isn't one. */
+function readyFailureIn(text: string): ReadyFailure | undefined {
+  try {
+    const failure = ReadyFailureSchema.safeParse(JSON.parse(text))
+    return failure.success ? failure.data : undefined
+  } catch {
+    return undefined
+  }
 }

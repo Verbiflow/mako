@@ -3,6 +3,9 @@ import type { JoinedDevice } from "@mako/host/contracts/account-devices"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { createHook, createStore } from "@/state/store"
+import { pageRefetch } from "@/state/view-refetch"
+import { DESK_SCOPE } from "@/state/desk-refetch"
+import type { ViewRefetch } from "@/lib/view-refetch"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type { CloudAccount, CloudBrowserSession, CloudDevice, CloudSignInsState } from "@/lib/types"
 
@@ -45,6 +48,27 @@ export const cloudAccountStore = createStore<CloudAccountState>({})
 export const useCloudAccount = createHook(cloudAccountStore)
 
 let loading: Promise<void> | undefined
+let accountReaders: ViewRefetch | undefined
+
+/** Passive Settings reads share the page's visibility, connection and return catch-up owner. */
+export function watchAccountDetail(detail: "devices" | "browsers" | "sign-ins", account: string): () => void {
+  if (!hasBridge()) return () => {}
+  const reads = accountReaders = pageRefetch()
+  const lease = reads.watch(JSON.stringify(["account", account, detail]), {
+    scope: DESK_SCOPE, domain: "account", key: detail, fields: ["all"], every: () => 60_000,
+    read: async (current) => {
+      const active = () => {
+        const state = cloudAccountStore.get().account?.state
+        return current() && state?.status === "signed-in" && state.account.id === account
+      }
+      if (!active()) return
+      if (detail === "devices") await cloudAccount.loadDevices(active)
+      else if (detail === "browsers") await cloudAccount.loadBrowsers(active)
+      else await cloudAccount.loadSignIns(active)
+    },
+  })
+  return () => lease.release()
+}
 
 async function run(action: Action, work: () => Promise<CloudAccount | void>): Promise<boolean> {
   if (cloudAccountStore.get().busy) return false
@@ -81,13 +105,13 @@ export const cloudAccount = {
     }),
 
   /** Quietly: the list is a convenience, and a failed refresh keeps the last one shown. */
-  async loadDevices() {
+  async loadDevices(current: () => boolean = () => true) {
     if (!hasBridge()) return
     try {
-      const { devices, current } = await getMako().cloudDevices()
-      cloudAccountStore.set({ devices: { list: devices, current } })
+      const { devices, current: device } = await getMako().cloudDevices()
+      if (current()) cloudAccountStore.set({ devices: { list: devices, current: device } })
     } catch (error) {
-      if (!cloudAccountStore.get().devices)
+      if (current() && !cloudAccountStore.get().devices)
         cloudAccountStore.set({ failure: { action: "devices", message: error instanceof Error ? error.message : String(error) } })
     }
   },
@@ -102,12 +126,13 @@ export const cloudAccount = {
     }),
 
   /** Quietly, like the devices: a failed refresh keeps the last list shown. */
-  async loadBrowsers() {
+  async loadBrowsers(current: () => boolean = () => true) {
     if (!hasBridge()) return
     try {
-      cloudAccountStore.set({ browsers: await getMako().cloudBrowserSessions() })
+      const browsers = await getMako().cloudBrowserSessions()
+      if (current()) cloudAccountStore.set({ browsers })
     } catch (error) {
-      if (!cloudAccountStore.get().browsers)
+      if (current() && !cloudAccountStore.get().browsers)
         cloudAccountStore.set({ failure: { action: "browsers", message: error instanceof Error ? error.message : String(error) } })
     }
   },
@@ -125,10 +150,11 @@ export const cloudAccount = {
     }),
 
   /** Quietly, like the devices: the rows fill in, and the host's events keep them current. */
-  async loadSignIns() {
+  async loadSignIns(current: () => boolean = () => true) {
     if (!hasBridge()) return
     try {
-      cloudAccountStore.set({ signIns: await getMako().cloudSignIns() })
+      const signIns = await getMako().cloudSignIns()
+      if (current()) cloudAccountStore.set({ signIns })
     } catch {
       // The section shows the share switch either way; its rows come with the next event.
     }
@@ -172,7 +198,7 @@ const KIND_WORDS = { desktop: "A Mac", cli: "A terminal", runtime: "A machine", 
  */
 export function heardAccountEvent(heard: { event: AccountEvent; mine: boolean }): void {
   const { event, mine } = heard
-  if (cloudAccountStore.get().devices) void cloudAccount.loadDevices()
+  accountReaders?.invalidate(DESK_SCOPE, "account", ["devices"])
   if (mine) return
   if (event.type === "device-joined") {
     const { device } = event

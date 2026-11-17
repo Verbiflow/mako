@@ -12,17 +12,22 @@ export class DeliveryWaitError extends Error {
 }
 
 /**
- * Host refusals that only mean "not yet": the host is busy with something the message waits behind. Each is the
- * host's own words (`LiveConversations.submit`, `LiveActions.submit`, `executionRefusal`, the Cursor driver's prompt).
+ * Host refusals that only mean "not yet": the host is busy with something the message waits behind, matched by the
+ * host's own words (`LiveConversations.submit`, `LiveActions.submit`, `executionRefusal`, the Cursor driver's prompt)
+ * and said in the row's: the host's words name its internals ("pending operation", "provider action") and end in an
+ * instruction the person needn't follow, since the message goes by itself.
  */
-const BUSY = [
-  /Wait for the workspace rewind to finish/i,
-  /Wait for this conversation to connect and finish its pending operation/i,
-  /A provider switch is pending/i,
-  /Resolve the previous provider action/i,
-  /is still ending the previous turn/i,
-  /This session is moving to /i,
+const BUSY: ReadonlyArray<readonly [RegExp, string]> = [
+  [/Wait for the workspace rewind to finish/i, "Waiting for a rewind to finish"],
+  [/Wait for this conversation to connect and finish its pending operation/i, "Waiting for the agent to connect"],
+  [/A provider switch is pending/i, "Waiting for the switch to another agent"],
+  [/Resolve the previous provider action/i, "Waiting for the agent's last action to finish"],
+  [/is still ending the previous turn/i, "Waiting for the agent to end its last turn"],
+  [/This session is moving to /i, "Waiting for this session's move"],
 ]
+
+/** The row's words for a message that waits for a reason no rule names: the host's own words go to the log. */
+export const WAITING_FOR_MAKO = "Waiting for Mako"
 
 /**
  * Why a message the host didn't take waits in this device's outbox, in the words its row shows; undefined when the
@@ -30,10 +35,9 @@ const BUSY = [
  * takes once (`LiveConversations.submit`), so asking again never sends it twice.
  */
 export function waitsFor(error: Error): string | undefined {
-  if (error instanceof DeliveryWaitError || error instanceof HostCallTimeoutError) return "Mako is busy and hasn't answered yet"
+  if (error instanceof DeliveryWaitError || error instanceof HostCallTimeoutError) return "Waiting for Mako, which hasn't answered yet"
   if (isHostReconnectingError(error)) return "Waiting for Mako to reconnect"
-  if (BUSY.some((pattern) => pattern.test(error.message))) return error.message.replace(/\s*(Send (the message )?again[^.]*\.|Try again[^.]*\.)\s*$/i, "")
-  return undefined
+  return BUSY.find(([pattern]) => pattern.test(error.message))?.[1]
 }
 
 /** `promise`, or `DeliveryWaitError` once `ms` passed without its answer. */

@@ -10,7 +10,7 @@ import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { CloudRepositorySchema, type CloudRepository } from "../contracts/cloud-threads.js"
 import type { CloudAccount } from "../usage/index.js"
-import { captureMoveCheckpoint, captureThreadCheckpoint, threadFingerprint, type ThreadCheckpointInput } from "../workspaces/index.js"
+import { captureMoveCheckpoint, captureThreadCheckpoint, type ThreadCheckpointInput } from "../workspaces/index.js"
 import type { WorkingThread } from "./cloud-handoffs.js"
 
 /** How often a Thread at work is brought up to date in its cloud Thread standing by. */
@@ -134,6 +134,8 @@ export type ReadyPlan = {
 export type ReadinessLedger = ThreadCheckpointInput["ledger"] & {
   /** Every change heard so far journaled. */
   heard(): Promise<void>
+  /** Small token from the journal reader; no partition bodies or hashing on the host. */
+  fingerprint(checkout: string, thread: string): Promise<string>
 }
 
 /** How long a turn's end waits for the journal to have heard its last writes before it captures anyway. */
@@ -542,8 +544,7 @@ export class CloudReadiness {
     let sent: string | undefined
     const acknowledged = [...entry.acknowledged ?? []]
     for (const { root, branch, folder, url } of plan.repositories) {
-      const partition = await ledger.partition(root, thread)
-      const fingerprint = `${branch}\n${threadFingerprint(ledger.head(root), partition, root)}`
+      const fingerprint = `${branch}\n${await ledger.fingerprint(root, thread)}`
       const kept = acknowledged.findIndex((each) => each.root === root)
       if (cause !== "end" && kept >= 0 && last?.fingerprints.get(root) === fingerprint) {
         fingerprints.set(root, fingerprint)
@@ -553,7 +554,7 @@ export class CloudReadiness {
       const scratch = await this.#disk(mkdtemp(join(this.#options.scratch, "thread-")))
       try {
         const capture = this.#options.capture ?? captureThreadCheckpoint
-        const taken = await capture({ git: this.#options.git, ledger, thread, repoRoot: root, branch, folder: scratch, partition })
+        const taken = await capture({ git: this.#options.git, ledger, thread, repoRoot: root, branch, folder: scratch })
         if (kept < 0 || acknowledged[kept]!.checkpoint.sha256 !== taken.checkpoint.sha256) {
           await account.sendCheckpoint(entry.cloudThread, taken.checkpoint, taken.file)
           const now: Acknowledged = { root, checkpoint: taken.checkpoint, unpushed: taken.unpushed, left: taken.left, versions: taken.versions, ...folder && { folder }, ...url && { url }, at: Date.now() }

@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto"
-import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises"
+import { appendFile, mkdir } from "node:fs/promises"
+import { createReadStream } from "node:fs"
+import { createInterface } from "node:readline"
+import { BorrowingSnapshot } from "./borrowing-snapshot.js"
+import type { BorrowingState, PersonAsk } from "./borrowing-state.js"
+export type { PersonAsk } from "./borrowing-state.js"
 import { join } from "node:path"
 import {
   emptyBroker,
@@ -13,7 +18,6 @@ import {
   type Borrower,
   type Borrowing,
   type BrokerInput,
-  type BrokerState,
   type Capability,
   type Grant,
   type Kind,
@@ -30,12 +34,11 @@ import { acquireHostLock } from "./host-lock.js"
 /**
  * This device's own broker: the borrowing contract for borrowers on this device, such as a worktree taking files
  * from its project's main checkout or a Thread's harness taking a saved key. It decides by the protocol's one `step`,
- * as the account's broker does, and keeps its state in one file and its lease log as lines of JSON beside it (names
- * and versions, never a value).
+ * as the account's broker does. Its state remains the legacy JSON snapshot; its lease log is JSON lines beside it
+ * (names and versions, never a value).
  *
- * Every operation holds the folder's lock (kernel-held, so a crash frees it), reads the state as it is on disk, steps
- * and writes it back: any number of brokers over one folder, in one process or several hosts, are one broker, and a
- * revoke one of them made is never undone by another's older copy. Each answers as the source for the kinds it was
+ * Every operation holds the folder's lock (kernel-held, so a crash frees it), reloads only after a file stamp changes, steps and atomically writes the compacted snapshot. Brokers over one folder, in one process or several hosts, are one
+ * broker: a revoke one made is never undone by another's older copy. Each answers as the source for the kinds it was
  * given; an ask for a kind it can't answer waits in the state for a broker that can.
  *
  * Without a folder it keeps everything in memory: the same decisions, for a host that keeps nothing on disk.
@@ -54,13 +57,12 @@ export interface LocalBorrowingOptions {
   now?: () => number
 }
 
-export type PersonAsk = { ask: SourceAsk; at: number }
-
 /** Everything kept on disk: the broker's state, the asks waiting on the person, and asks no source here has answered. */
-type Kept = { state: BrokerState; waiting: PersonAsk[]; unanswered: SourceAsk[] }
+type Kept = BorrowingState
 
 /** How long an operation waits for the folder's lock before it fails, saying so. */
 const LOCK_WAIT_MS = 30_000
+
 
 export class BorrowingLockTimeout extends Error {
   constructor(folder: string) {
@@ -73,7 +75,9 @@ export class LocalBorrowing implements Borrowing {
   readonly device: string
   readonly account: string
   readonly folder: string | undefined
+  #store: BorrowingSnapshot | undefined
   #memory: Kept
+  #closing: Promise<void> | undefined
   #queue: Promise<unknown> = Promise.resolve()
   #log: LeaseEvent[] = []
   readonly #listeners = new Set<(borrower: Borrower, push: BorrowPush) => void>()
@@ -94,7 +98,10 @@ export class LocalBorrowing implements Borrowing {
   }
 
   grant(grant: Grant): Promise<string | undefined> {
-    return this.#change(async (kept) => (await this.#step(kept, { type: "grant", grant, at: this.#now() })).rejected)
+    return this.#change(async (kept) => {
+      if (this.#store?.hasEnded(grant.id)) return "That grant has ended; a new grant takes a new ID"
+      return (await this.#step(kept, { type: "grant", grant, at: this.#now() })).rejected
+    })
   }
 
   borrow(need: Need): Promise<BorrowAnswer> {
@@ -151,27 +158,36 @@ export class LocalBorrowing implements Borrowing {
 
   /** The asks waiting on the person here, oldest first. */
   async asks(): Promise<PersonAsk[]> {
-    return (await this.#read()).waiting.sort((left, right) => left.at - right.at)
+    return structuredClone((await this.#read()).waiting).sort((left, right) => left.at - right.at)
   }
 
   async leases(filter: { borrower?: Partial<Borrower>; grant?: string } = {}): Promise<Lease[]> {
-    return liveLeases((await this.#read()).state, filter)
+    return structuredClone(liveLeases((await this.#read()).state, filter))
   }
 
   async grants(): Promise<Grant[]> {
-    return standingGrants((await this.#read()).state, this.#now())
+    return structuredClone(standingGrants((await this.#read()).state, this.#now()))
   }
 
   async lease(id: string): Promise<{ lease: Lease; ended?: LeaseEnd } | undefined> {
     const held = (await this.#read()).state.leases[id]
     if (!held) return undefined
-    return held.ended ? { lease: held.lease, ended: held.ended.why } : { lease: held.lease }
+    return structuredClone(held.ended ? { lease: held.lease, ended: held.ended.why } : { lease: held.lease })
   }
 
   async *events(since = 0): AsyncIterable<LeaseEvent> {
     const folder = this.folder
-    const lines = folder ? (await readFile(join(folder, "events.jsonl"), "utf8").catch(() => "")).split("\n").filter(Boolean).map((line) => LeaseEventSchema.parse(JSON.parse(line))) : this.#log
-    for (const event of lines) if (event.at >= since) yield event
+    if (!folder) { for (const event of this.#log) if (event.at >= since) yield event; return }
+    const stream = createReadStream(join(folder, "events.jsonl"), { encoding: "utf8" })
+    const lines = createInterface({ input: stream, crlfDelay: Infinity })
+    try {
+      for await (const line of lines) if (line) {
+        const event = LeaseEventSchema.parse(JSON.parse(line))
+        if (event.at >= since) yield event
+      }
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error
+    } finally { lines.close(); stream.destroy() }
   }
 
   /**
@@ -179,6 +195,7 @@ export class LocalBorrowing implements Borrowing {
    * read, changed and written back with no other broker between.
    */
   locked<T>(work: () => Promise<T>): Promise<T> {
+    if (this.#closing) return Promise.reject(new Error("This device's borrowing broker is closed"))
     const next = this.#queue.then(() => this.#withLock(work))
     this.#queue = next.catch(() => undefined)
     return next
@@ -222,12 +239,16 @@ export class LocalBorrowing implements Borrowing {
   async #load(): Promise<Kept> {
     const folder = this.folder
     if (!folder) return this.#memory
-    const text = await readFile(join(folder, "state.json"), "utf8").catch(() => undefined)
-    if (!text) return { state: emptyBroker(this.account), waiting: [], unanswered: [] }
-    // SAFETY: only #save writes this file, whole and by rename, under the folder's lock, from the state `step` returned.
-    const saved = JSON.parse(text) as Partial<Kept> & { state: BrokerState }
-    if (saved.state.account !== this.account) return { state: emptyBroker(this.account), waiting: [], unanswered: [] }
-    return { state: saved.state, waiting: saved.waiting ?? [], unanswered: saved.unanswered ?? [] }
+    this.#store ??= new BorrowingSnapshot(folder, this.account)
+    return this.#store.read()
+  }
+
+  close(): Promise<void> {
+    if (this.#closing) return this.#closing
+    // Drain this connection's work, without waiting for another process's broker lock just to close our handle.
+    const done = this.#queue.then(() => { this.#store = undefined })
+    this.#queue = done.catch(() => undefined)
+    return this.#closing = done
   }
 
   #read(): Promise<Kept> {
@@ -238,7 +259,7 @@ export class LocalBorrowing implements Borrowing {
   #change<T>(work: (kept: Kept) => Promise<T>): Promise<T> {
     const pushes: Array<[Borrower, BorrowPush]> = []
     const done = this.locked(async () => {
-      const kept = await this.#load()
+      const kept = structuredClone(await this.#load())
       const events: LeaseEvent[] = []
       this.#effects = { events, pushes }
       try {
@@ -251,8 +272,8 @@ export class LocalBorrowing implements Borrowing {
       }
     })
     return done.then((value) => {
-      for (const [borrower, push] of pushes) for (const listener of this.#listeners) listener(borrower, push)
-      return value
+      for (const [borrower, push] of pushes) for (const listener of this.#listeners) listener(structuredClone(borrower), structuredClone(push))
+      return structuredClone(value)
     })
   }
 
@@ -313,8 +334,6 @@ export class LocalBorrowing implements Borrowing {
       return
     }
     if (events.length) await appendFile(join(folder, "events.jsonl"), events.map((event) => `${JSON.stringify(event)}\n`).join(""), { mode: 0o600 })
-    const temporary = join(folder, `.state.${process.pid}.${randomUUID()}.tmp`)
-    await writeFile(temporary, JSON.stringify(kept), { mode: 0o600 })
-    await rename(temporary, join(folder, "state.json"))
+    await this.#store!.write(kept)
   }
 }

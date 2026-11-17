@@ -1,5 +1,7 @@
+import { ConversationControlSchema, compactionPending } from "@mako/host/contracts/conversation-control"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { Git } from "@mako/git"
+import { ProviderFailureError, providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import assert from "node:assert/strict"
 import { workingThreads } from "@mako/host/conversations/cloud-handoffs"
 import { ThreadIdSchema, SessionIdSchema } from "@mako/host/contracts/thread-identity"
@@ -19,6 +21,7 @@ import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP } from "@mako/host/contracts/providers-acp"
 import { LIVE_FRAME_MS, type LiveDriverEvent } from "@mako/host/contracts/live-conversations"
+import { LONG_ANSWER_CHARS, LONG_ANSWER_FLUSH_MS } from "@mako/host/conversations/answer-pace"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
@@ -857,6 +860,15 @@ async function boundsWarmProviders() {
  * the memory readout, by the work it ran as.
  */
 async function bulkLoadsAreNamed() {
+  // #881 journals a native or reconciling recovery under a new wire field (here a native one, its replacement pending); read back it is the control's
+  // compactionRecovery, which the listing's hasCompactionRecovery is made from, so archiving an unloaded conversation
+  // still reads it in to withdraw what's pending (setArchived).
+  const binding = randomUUID()
+  const folded = ConversationControlSchema.parse({ activeBindingId: binding, bindings: [], transfers: [],
+    pendingCompactionRecovery: { id: randomUUID(), origin: "native", requestId: randomUUID(), bindingId: binding, createdAt: 1, epoch: "fixture",
+      target: { provider: "test-provider" }, state: { kind: "replace", transferId: randomUUID() } } })
+  assert.equal(folded.compactionRecovery?.origin, "native", "the wire field folds into compactionRecovery")
+  assert.ok(compactionPending(folded.compactionRecovery), "and reads as pending, as the archive listing needs")
   const root = mkdtempSync(join(tmpdir(), "mako-live-bulk-"))
   const work = namedWork()
   const ids = Array.from({ length: BULK_LOADS + 1 }, () => randomUUID())
@@ -911,6 +923,21 @@ async function bulkLoadsAreNamed() {
       owner.submit(id, randomUUID(), "seed")
     }
     await waitFor(() => owner.residency().memory.unloaded === ids.length, "the idle conversations were not all unloaded")
+    // The seed turns leave providers warm, whose idle timers hibernate them on their own; one that fired during the
+    // report read its conversation back in (gate 21: loaded 1). The host is quiet before the report is measured.
+    await waitFor(() => { const residency = owner.residency(); return residency.active + residency.warm === 0 && residency.memory.loaded === 0 },
+      `the seeded providers hibernated and nothing stayed in memory: ${JSON.stringify(owner.residency().memory.loads)}`)
+    const loadsBefore = JSON.stringify(owner.residency().memory.loads)
+    // Every load from here on, with its stack: work's name follows its timers and listeners (AsyncLocalStorage), so a
+    // name alone can't tell the report's own read from a timer it happened to schedule.
+    const strays: string[] = []
+    const records = owner["records"]
+    const noteLoad = records["noteLoad"].bind(records)
+    records["noteLoad"] = () => {
+      const by = noteLoad()
+      strays.push(`as ${by}:\n${(new Error().stack ?? "").split("\n").slice(2, 14).join("\n")}`)
+      return by
+    }
 
     // The report, over every conversation of the host, loads none: it's a function of the listing.
     const archives = new ThreadArchives(join(root, "archives.sqlite"))
@@ -932,10 +959,15 @@ async function bulkLoadsAreNamed() {
     const rows = work.run("tell the account this host's Sessions", () => ownedSessions(sources))
     assert.equal(rows.length, ids.length, "every conversation is listed")
     for (const id of ids) assert.equal(work.run("archive check", () => lifecycle.archived({ kind: "live", id })), false)
-    lifecycle.archive({ id: randomUUID(), target: { kind: "live", id: ids[0]! }, archived: true })
-    assert.equal(ownedSessions(sources).length, ids.length - 1, "an archived conversation leaves the list, by its listing's keys")
-    assert.equal(owner.residency().memory.loaded, 0, "neither the report nor the lifecycle read a journal in")
+    work.run("archive", () => lifecycle.archive({ id: randomUUID(), target: { kind: "live", id: ids[0]! }, archived: true }))
+    assert.equal(work.run("report again", () => ownedSessions(sources)).length, ids.length - 1, "an archived conversation leaves the list, by its listing's keys")
+    const reportOrLifecycle = ["tell the account this host's Sessions", "archive check", "archive", "report again"]
+    assert.deepEqual(owner.residency().memory.loads.filter((load) => reportOrLifecycle.includes(load.by)), [],
+      `neither the report nor the lifecycle read a journal in: loads were ${loadsBefore}, now ${JSON.stringify(owner.residency().memory.loads)}, from:\n${strays.join("\n--\n")}`)
+    if (strays.length) console.log(`bulkLoadsAreNamed: the host read ${strays.length} conversation(s) in, from:\n${strays.join("\n--\n")}`)
     assert.equal(warned.length, 0, "and nothing was named for loading in bulk")
+    // What a stray load left in memory goes, so the readers below are measured alone.
+    for (const id of ids) records.release(id)
 
     // A reader that does load in bulk is named: once in the log, and in the readout by what it loaded.
     work.run("a list reading journals", () => { for (const id of ids) owner.snapshot(id) })
@@ -943,7 +975,7 @@ async function bulkLoadsAreNamed() {
     assert.equal(warned[0]?.message, "one reader is loading conversations in bulk")
     assert.deepEqual([warned[0]?.fields?.by, warned[0]?.fields?.loads], ["a list reading journals", BULK_LOADS])
     const memory = owner.residency().memory
-    assert.deepEqual(memory.loads, [{ by: "a list reading journals", count: ids.length }])
+    assert.deepEqual(memory.loads.filter((load) => load.by !== "unnamed work"), [{ by: "a list reading journals", count: ids.length }])
     assert.ok(memory.held.length > 0 && memory.held.every((held) => held.by === "a list reading journals"), "each conversation in memory says who read it in")
     // One running as no work at all is named by who called it, or the log can only say "unnamed work".
     for (const id of ids) owner["records"].release(id)
@@ -1770,18 +1802,21 @@ async function failureIsolationAndAssets() {
         .every((event) => JSON.stringify(event.batch.updates).length < 256_000)
     )
     await f.owner.stop()
-    writeFileSync(join(f.root, `${randomUUID()}.sqlite`), "corrupt journal")
+    const corrupt = randomUUID()
+    writeFileSync(join(f.root, `${corrupt}.sqlite`), "corrupt journal")
+    // A journal that can't be opened is kept for recovery, said in the host's log, and listed for the rail and
+    // Diagnostics (`unopened`) rather than toasted at every start.
+    const kept: HostLogLine[] = []
+    const stopHearing = followHostLog((line) => { if (line.message === "a saved conversation couldn't be opened; its journal is kept") kept.push(line) })
     const recovered = new LiveConversations(f.dependencies)
     try {
       assert.equal(recovered.snapshot(f.id)?.blocks.length, 2)
-      assert.ok(
-        f.events.some(
-          (event) =>
-            event.type === "notice" &&
-            event.message.includes("preserved for recovery")
-        )
-      )
+      assert.equal(kept.length, 1, "the corrupt journal is said in the log")
+      assert.ok(!f.events.some((event) => event.type === "notice"), "and never as a toast")
+      assert.deepEqual(recovered.unopened().map(({ conversation, journal }) => [conversation, journal]), [[corrupt, join(f.root, `${corrupt}.sqlite`)]], "it's listed with its kept journal")
+      assert.ok(recovered.unopened()[0]?.error, "with what opening it met")
     } finally {
+      stopHearing()
       await recovered.stop()
     }
   } finally {
@@ -1860,7 +1895,11 @@ function fillDisk() {
 async function unsavedTurnIsMakos() {
   const f = fixture()
   const said: HostLogLine[] = []
-  const stopHearing = followHostLog((line) => { if (line.message === "Mako stops the provider's turn") said.push(line) })
+  const unsaved: HostLogLine[] = []
+  const stopHearing = followHostLog((line) => {
+    if (line.message === "Mako stops the provider's turn") said.push(line)
+    if (line.message === "a conversation couldn't be saved; its turn stops") unsaved.push(line)
+  })
   let disk: ReturnType<typeof fillDisk> | undefined
   try {
     await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
@@ -1876,8 +1915,9 @@ async function unsavedTurnIsMakos() {
     f.owner.observe({ type: "live-update", id: f.id, update: { kind: "text", id: "a1", text: " and its styles" } })
     await waitFor(() => f.cancels() === 1, "the unsaved conversation's turn was not stopped")
     assert.deepEqual(said.map((line) => [line.level, line.fields?.why, line.fields?.request, line.fields?.error]), [["warn", "not-saved", request, "database or disk is full"]])
-    const notice = f.events.find((event) => event.type === "notice")
-    assert.match(notice?.type === "notice" ? notice.message : "", /^Mako couldn't save this conversation, so it stopped the agent's turn\. .*database or disk is full$/)
+    // Its row says so in the conversation and saving goes again by itself: the host's words are the log's, never a toast.
+    assert.equal(f.events.find((event) => event.type === "notice"), undefined, "no toast for what the row says and Mako retries")
+    assert.deepEqual(unsaved.map((line) => [line.level, line.fields?.request, line.fields?.error]), [["warn", request, "database or disk is full"]])
     // The person presses Stop too, which can't be saved yet either; the provider reports the end while the disk is full.
     await assert.rejects(f.owner.cancel(f.id), /database or disk is full/)
     f.owner.observe({ type: "live-session", session: { ...f.state, status: "ready", lastStop: "cancelled" } })
@@ -2143,6 +2183,55 @@ async function batchesLeadThenPace() {
   }
 }
 
+/**
+ * A long answer going on goes out at a reader's pace (`LONG_ANSWER_FLUSH_MS`), not each frame: every word, in order, in
+ * far fewer batches. A paragraph's end and a change of another kind still go on the frame, with what waited.
+ */
+async function longAnswerPaced() {
+  const f = fixture()
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+  try {
+    await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
+    f.started.resolve(f.state)
+    await tick()
+    f.owner.snapshot(f.id)
+    const say = (text: string) => f.owner.observe({ type: "live-update", id: f.id, update: { kind: "text", text } })
+    say("word ".repeat(LONG_ANSWER_CHARS / 5))
+    await sleep(LIVE_FRAME_MS * 2)
+    f.events.length = 0
+    const batches = () => f.events.filter((event) => event.type === "live-batch").length
+    const started = performance.now()
+    for (let word = 0; word < 120; word++) {
+      say(` w${word}`)
+      await sleep(10)
+    }
+    await sleep(LONG_ANSWER_FLUSH_MS + 50)
+    const elapsed = performance.now() - started
+    const count = batches()
+    assert.ok(count >= 2 && count <= Math.ceil(elapsed / LONG_ANSWER_FLUSH_MS) + 2, `${count} batches in ${Math.round(elapsed)} ms`)
+    const text = f.events.flatMap((event) => (event.type === "live-batch" ? event.batch.updates : [])).map((update) => (update.kind === "text" ? update.text : "")).join("")
+    assert.ok(text.startsWith(" w0 w1") && text.endsWith(" w119"), "every word, in order")
+    // A paragraph's end goes on the frame.
+    await sleep(LONG_ANSWER_FLUSH_MS)
+    f.events.length = 0
+    say(" end.\n\nNext")
+    await sleep(LIVE_FRAME_MS + 20)
+    assert.equal(batches(), 1, "a paragraph's end isn't held for the reader's pace")
+    // A tool call goes on the frame and carries the words held before it.
+    await sleep(LIVE_FRAME_MS)
+    f.events.length = 0
+    say(" more words")
+    await sleep(5)
+    say(" and more")
+    f.owner.observe({ type: "live-update", id: f.id, update: { kind: "tool", id: "build", title: "Build", status: "running" } })
+    await sleep(LIVE_FRAME_MS + 20)
+    const kinds = f.events.flatMap((event) => (event.type === "live-batch" ? event.batch.updates.map((update) => update.kind) : []))
+    assert.ok(kinds.includes("tool") && kinds.includes("text"), `the tool call went on the frame with the words before it (${kinds})`)
+  } finally {
+    await f.cleanup()
+  }
+}
+
 async function coalescedToolBursts() {
   const f = fixture()
   try {
@@ -2184,6 +2273,9 @@ async function coalescedToolBursts() {
   }
 }
 
+/** This fixture is a native provider, so it supplies provider provenance just as a real decoder does. */
+function nativeFailure(error: string) { return { error, failureEvidence: providerTextEvidence(error) } }
+
 /**
  * A turn's verdict travels with its request: a Stop is recorded as the user's
  * interruption, and a failure carries the kind the provider's text classifies
@@ -2219,8 +2311,7 @@ async function settledVerdicts() {
       session: {
         ...f.state,
         status: "failed",
-        error:
-          'Failed to run prompt: {"type":"invalid_request_error","message":"Item \'rs_0a1b\' of type \'reasoning\' was provided without its required following item."} (reasoning encrypted_content was not issued to this caller)',
+        ...nativeFailure('Failed to run prompt: {"type":"invalid_request_error","message":"Item \'rs_0a1b\' of type \'reasoning\' was provided without its required following item."} (reasoning encrypted_content was not issued to this caller)'),
       },
     })
     f.prompts[1]?.resolve()
@@ -2243,7 +2334,7 @@ async function settledVerdicts() {
         ...f.state,
         status: "failed",
         lastStop: CONNECTION_LOST_STOP,
-        error: "RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)",
+        ...nativeFailure("RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)"),
       },
     })
     f.prompts[2]?.resolve()
@@ -2293,7 +2384,7 @@ async function autoContinuedTurn() {
   const dropped: Partial<LiveSessionState> = {
     status: "failed",
     lastStop: CONNECTION_LOST_STOP,
-    error: "RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)",
+    ...nativeFailure("RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)"),
   }
   const tuning = { model: "model-a", options: { effort: "high" } }
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
@@ -2472,7 +2563,7 @@ async function restartContinued() {
   const server = { nativeId: "dev-server", title: "Dev server", work: "command" as const, detail: "npm run dev", background: true, state: { kind: "working" as const } }
   let owner = open()
   try {
-    assert.deepEqual(owner.conversationSettings(), { continueAfterRestart: false }, "off unless the person turns it on")
+    assert.deepEqual(owner.conversationSettings(), { continueAfterRestart: true }, "on unless the person turns it off")
     assert.deepEqual(owner.setConversationSettings({ continueAfterRestart: true }), { continueAfterRestart: true })
     assert.deepEqual(events.at(-1), { type: "conversation-settings", settings: { continueAfterRestart: true } }, "every window hears the choice")
     await owner.start("test-provider", root, { conversationId: id })
@@ -2583,6 +2674,7 @@ async function providerExitContinued() {
       currentMode: null,
       configOptions: [],
       ...patch,
+      ...(patch.error && { failureEvidence: patch.failureEvidence ?? providerTextEvidence(patch.error) }),
     })
     const driver: ProviderLiveDriver = {
       ...fixtureCapabilities,
@@ -2747,6 +2839,11 @@ async function providerExitContinued() {
     end({ status: "failed", error: "stream disconnected before completion: error sending request" })
     const request = owner.snapshot(id)!.requests[0]
     assert.equal(request?.interruption?.reason, "connection-lost", "a turn that failed on a dropped connection is continued")
+    assert.equal(request.retry?.cause, "network")
+    const retry = owner.snapshot(id)!.requests.find(item => item.continues?.requestId === request.id)!
+    assert.equal(retry.status, "held", "a known-run dropped turn uses the durable outage backoff")
+    assert.equal(prompts.length, 1, "the continuation does not go before its due time")
+    owner.wakeDue(retry.retry!.at + 1)
     await waitFor(() => prompts.length === 2, "the continuation was not sent")
     assert.equal(starts.length, 1, "a live process is continued in place")
   })
@@ -2838,14 +2935,18 @@ async function providerExitContinued() {
     owner.submit(id, randomUUID(), "first")
     await dispatched(owner, id, 0)
     end({ status: "failed", error: "stream disconnected before completion" })
-    assert.ok(owner.snapshot(id)!.requests[0]?.interruption?.autoContinue)
+    const retry = owner.snapshot(id)!.requests.find(request => request.continues?.auto)!
+    assert.equal(retry.status, "held")
+    assert.equal(retry.retry?.cause, "network")
     await owner.cancel(id)
     end({ status: "running" })
     end({ status: "ready" })
     end({ status: "running" })
     end({ status: "failed", error: "stream disconnected before completion" })
+    owner.wakeDue(retry.retry!.at + 1)
     await sleep(60)
     assert.equal(owner.snapshot(id)!.requests[0]?.interruption?.autoContinue, undefined)
+    assert.equal(owner.snapshot(id)!.requests.find(request => request.id === retry.id)?.pause, "stop")
     assert.equal(prompts.length, 1, "a declined continuation is never sent later")
   })
 }
@@ -2862,7 +2963,7 @@ async function heldUntilReset() {
     await f.owner.start("test-provider", "/tmp", { conversationId: f.id, initialRequest: { id: first, text: "limited", attachments: [] } })
     f.started.resolve(f.state)
     await tick()
-    f.prompts[0]!.reject(new Error("429 Too Many Requests: usage limit reached"))
+    f.prompts[0]!.reject(new ProviderFailureError("429 Too Many Requests: usage limit reached", providerTextEvidence("429 Too Many Requests: usage limit reached")))
     await waitFor(() => f.owner.snapshot(f.id)?.requests[0]?.status === "failed", "the first message fails")
     assert.equal(f.owner.snapshot(f.id)?.requests[0]?.failure, "rate-limited")
     const at = Date.now() + 60_000
@@ -2903,7 +3004,7 @@ async function heldWakeResumes() {
     await f.owner.start("test-provider", "/tmp", { conversationId: f.id, initialRequest: { id: first, text: "limited", attachments: [] } })
     f.started.resolve(f.state)
     await tick()
-    f.prompts[0]!.reject(new Error("429 rate limit"))
+    f.prompts[0]!.reject(new ProviderFailureError("429 rate limit", providerTextEvidence("429 rate limit")))
     await waitFor(() => f.owner.snapshot(f.id)?.requests[0]?.status === "failed", "the first message fails")
     f.owner.observe({ type: "live-session", session: { ...f.state, status: "ready" } })
     const later = randomUUID()
@@ -2964,6 +3065,7 @@ await providerExitContinued()
 await restartContinued()
 await coalescedToolBursts()
 await batchesLeadThenPace()
+await longAnswerPaced()
 await quietTurnsCarryLastActivity()
 await nativeActivityLastsItsTurn()
 await failureIsolationAndAssets()

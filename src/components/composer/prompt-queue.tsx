@@ -1,3 +1,4 @@
+import { usageLimitWait } from "@/state/usage-limit-wait"
 import { clockText } from "@/state/request-recovery"
 import { retryWords, waitsForReset } from "@mako/host/contracts/delivery-retry"
 import { DIGEST_WAITS } from "@mako/host/contracts/children"
@@ -100,7 +101,7 @@ export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body
       )
   )
   const native = Boolean(viewingPath && viewingPath !== livePath)
-  const delivery = native ? nativeDelivery : liveDelivery
+  const listed = native ? nativeDelivery : liveDelivery
   const target: QueueTarget | null =
     native && viewingPath
       ? { kind: "native", path: viewingPath }
@@ -108,6 +109,8 @@ export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body
         ? { kind: "live", id }
         : null
   const accepted = useAcp((state) => activeLiveAcp(state)?.requests)
+  const limit = native || waitsFor ? undefined : usageLimitWait(accepted ?? [])
+  const delivery = limit?.request.continues?.auto ? listed.filter(request => request.id !== limit.request.id) : listed
   const [expanded, setExpanded] = useState(false)
   const [pageIndex, setPageIndex] = useState(0)
   if (!target || !delivery.length) return null
@@ -130,7 +133,7 @@ export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body
           {delivery.length} {delivery.length === 1 ? "message" : "messages"}
         </span>
         <span className="ml-auto truncate" data-queue-when>
-          {waitsFor
+          {limit ? null : waitsFor
             ? "Runs there once it's back"
             : delivery[0] && "signIn" in delivery[0] && delivery[0].signIn
               ? "Sends after Resume"
@@ -153,6 +156,7 @@ export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body
             key={request.id}
             target={target}
             request={request}
+            limitWait={request.id === limit?.request.id}
             onEdit={onEdit}
             editable={
               native ||
@@ -214,7 +218,7 @@ export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body
  */
 function OutboxLine({ conversation, request }: { conversation: string; request: PendingPrompt }) {
   const words = request.waiting
-    ? `Waiting · ${request.waiting.replace(/\.$/, "")}. It goes by itself${request.steering ? ", into the turn or after it" : ""}.`
+    ? `${request.waiting.replace(/\.$/, "")}. It goes by itself${request.steering ? ", into the turn or after it" : ""}.`
     : request.steering ? "Steering into the running turn…" : "Sending…"
   return (
     <div className="mt-1 flex items-center gap-2 text-label text-faint" data-outbox={request.waiting ? "waiting" : request.steering ? "steering" : "sending"}>
@@ -238,7 +242,9 @@ function QueueRow({
   request,
   editable,
   onEdit,
+  limitWait,
 }: {
+  limitWait: boolean
   target: QueueTarget
   request: PendingPrompt
   editable: boolean
@@ -377,7 +383,7 @@ function QueueRow({
             {continuation ? "Continues the turn where it stopped" : body || `${request.attachments.length} attachments`}
           </p>
           <div className="flex shrink-0 items-center gap-0.5 text-faint">
-            {request.status === "held" && !request.signIn ? <button type="button" data-queued-action="resume" aria-label={request.wake ? "Send this message now" : "Resume queued message"} disabled={busy} onClick={() => void change("resume")} className="pressable h-6 px-2 text-label text-foreground hover:bg-fill-hover disabled:opacity-40">{request.wake ? "Send now" : "Resume"}</button> : null}
+            {request.status === "held" && !request.signIn && !limitWait ? <button type="button" data-queued-action="resume" aria-label={request.wake ? "Send this message now" : "Resume queued message"} disabled={busy} onClick={() => void change("resume")} className="pressable h-6 px-2 text-label text-foreground hover:bg-fill-hover disabled:opacity-40">{request.wake ? "Send now" : "Resume"}</button> : null}
             {canSteer ? (
               <button
                 type="button"
@@ -417,7 +423,7 @@ function QueueRow({
           </div>
         </div>
       )}
-      {request.status === "held" && !editing && !request.signIn ? (
+      {request.status === "held" && !editing && !request.signIn && !limitWait ? (
         <p className="mt-1 text-label text-faint" data-queue-wake={request.wake?.at ?? request.retry?.at} data-queue-retry={request.retry?.cause}>
           {request.wake?.after === DIGEST_WAITS
             ? "Your Fins' news, going in a moment with whatever else they say."

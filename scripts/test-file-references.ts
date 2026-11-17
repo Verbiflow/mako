@@ -307,6 +307,69 @@ test("through a real journal: a Thread's renamed file resolves to its name now, 
   }
 })
 
+// `settled` is "every change heard so far journaled": the watch's events reach the writer on its port and `settled` on
+// the journal's socket, so a change heard just before it must be in its answer whichever channel the writer reads first.
+test("through a real journal: a change heard just before settled is in its answer, every time", async () => {
+  const repo = realpathSync(mkdtempSync(join(tmpdir(), "mako-file-references-heard-")))
+  const run = (...args: string[]) => execFileSync("git", args, { cwd: repo, stdio: "ignore" })
+  run("init", "-q", "-b", "main")
+  run("config", "user.email", "test@example.com")
+  run("config", "user.name", "Test")
+  const ROUNDS = 40
+  for (let round = 0; round < ROUNDS; round++) writeFileSync(join(repo, `file-${round}.ts`), `export const n = ${round}\n`)
+  run("add", "-A")
+  run("commit", "-q", "-m", "base")
+  const listeners = new Set<(paths: string[]) => void>()
+  const watch: TreeWatcher = (_root, changed) => {
+    listeners.add(changed)
+    return { ready: Promise.resolve(), close: () => listeners.delete(changed) }
+  }
+  const emit = (...paths: string[]) => { for (const changed of listeners) changed(paths) }
+  const userRoot = mkdtempSync(join(tmpdir(), "mako-file-references-heard-user-"))
+  const journal = await openAttribution({
+    dataRoot: userRoot,
+    userRoot,
+    label: "test",
+    git: new Git(),
+    watch,
+    jobs: new HostJobs(),
+    stores: () => [],
+    placement: (id) => (id === "c1" ? { thread: "T1", session: "S1" } : undefined),
+    session: (id) => (id === "c1" ? { cwd: repo, harness: "claude", record: join(userRoot, "c1.jsonl") } : undefined),
+  })
+  let revision = 0
+  const batch = (fields: Partial<LiveBatch>): LiveBatch => ({ id: "c1", revision: ++revision, updates: [], ...fields })
+  try {
+    // The Thread reads every file in a turn; after it, someone else renames each, as the move notice's case does.
+    journal.live(batch({ sessionChanges: { status: "running" } }))
+    await journal.track(repo)
+    const files = Array.from({ length: ROUNDS }, (_, round) => join(repo, `file-${round}.ts`))
+    journal.live(batch({ updates: [{ kind: "tool", id: "read", title: "Read", name: "Read", status: "in_progress", input: "{}" }] }))
+    journal.live(batch({ updates: [{ kind: "tool-update", id: "read", status: "completed", output: "ok", effects: files.map((path) => ({ kind: "read" as const, path })) }] }))
+    journal.live(batch({ sessionChanges: { status: "ready" } }))
+    await journal.settled()
+    const missed: number[] = []
+    for (let round = 0; round < ROUNDS; round++) {
+      const was = join(repo, `file-${round}.ts`)
+      const now = join(repo, `moved-${round}.ts`)
+      // A turn ends just before each rename, as in the move notice's case: the end goes on the journal's socket
+      // ahead of the rename's event on the writer's port, and `settled` follows on the socket.
+      journal.live(batch({ sessionChanges: { status: "running" } }))
+      journal.live(batch({ sessionChanges: { status: "ready" } }))
+      renameSync(was, now)
+      emit(was, now)
+      await journal.settled()
+      const [answer] = await journal.resolveFiles({ liveId: "c1" }, [`file-${round}.ts`])
+      if (!(answer?.kind === "file" && answer.file.path === now)) missed.push(round)
+    }
+    assert.deepEqual(missed, [], "each rename heard before settled is journaled by the time it answers")
+  } finally {
+    await journal.close()
+    rmSync(repo, { recursive: true, force: true })
+    rmSync(userRoot, { recursive: true, force: true })
+  }
+})
+
 test("through a real journal: renames from before tracking come from Git, an answer means what it meant when written, and a pick holds", async () => {
   const repo = realpathSync(mkdtempSync(join(tmpdir(), "mako-file-references-history-")))
   const hour = 3_600_000

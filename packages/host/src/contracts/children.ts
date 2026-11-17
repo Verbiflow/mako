@@ -1,7 +1,7 @@
 import { REPORT_FOLLOW_UP_INSTRUCTIONS } from "./report-actions.js"
 import { z } from "zod"
 import { LISTED_AFTER, LISTED_FINS, LISTED_WAITING_ON, type ListedFin, type ListedFinState } from "@mako/protocol/thread-listing"
-import { APEX_WORD, entryState, FIN_WORD, finsWord, LEGACY_APEX_WORD, waitingStateWords, type Brief, type ChildState } from "./agents.js"
+import { APEX_WORD, entryState, FIN_WORD, finsWord, LEGACY_APEX_WORD, UNFINISHED_WORDS, waitingStateWords, type Brief, type ChildState } from "./agents.js"
 import type { Block } from "./conversation-session.js"
 import { CHILDREN_BINDING, isProviderWork, type FinAnswered, type FinAsk, type NativeAgent, type NativeAgentRoster, type WaitingOn } from "./native-agents.js"
 import type { Waiting } from "@mako/protocol/attention"
@@ -21,8 +21,32 @@ export const DIGEST_WAITS = "digest"
 export const WAKES_PER_MINUTE = 6
 /** Past that, a digest that asks something goes at most this often: well inside the minute its Apex has to answer. */
 export const ASK_EVERY_MS = 10_000
+/**
+ * An Apex at work on a turn is left to think: only a question or decision it can answer is steered into that turn. What
+ * else its Fins report waits for the turn's end as one digest, unless the turn is still running this long after the
+ * first of it, when that digest is steered in once (`AgentWakes`). A 30-Fin storm steered 40 times a minute into one
+ * turn before this (`test:comms-storm`).
+ */
+export const FOCUS_MS = 2 * 60_000
 /** An idle Apex waits this long after a notice for the others of its burst, then wakes once for all of them. */
 export const WAKE_COALESCE_MS = 2_000
+/**
+ * A Fin that reads as working with nothing from it this long (no output, no step, no report) is named to its Apex once,
+ * in its digest (`QuietWatch`): a hung turn otherwise reads as working until the person asks. A command that runs this
+ * long makes no activity either, so the notice names it and the Apex decides.
+ */
+export const QUIET_MS = 15 * 60_000
+
+/** A quiet Fin as its Apex's digest says it: how long nothing came of it, and its last step, still running or not. */
+export function quietLine(quiet: { forMs: number; step?: string; running?: true }): string {
+  const forWords = stoodFor(quiet.forMs)
+  const how = !quiet.step
+    ? `has shown no activity for ${forWords}`
+    : quiet.running
+      ? `has shown no activity for ${forWords}, its last step still running: ${quiet.step}`
+      : `has shown no activity for ${forWords} since its last step: ${quiet.step}`
+  return `${how}. It still reads as working.`
+}
 
 export const FROM_AGENTS = `[mako · from ${YOUR_FINS}, not the person]`
 /**
@@ -45,6 +69,8 @@ export function apexNote(thread: string): string {
   return `${APEX_NOTE_HEAD}${thread}${APEX_NOTE_TAIL}`
 }
 const APEX_NOTE_HEAD = "[mako · Thread "
+/** What every message from another of the person's Apexes carries (`apexNote`): one is owed its own reply, never folded. */
+export const APEX_NOTE_MARK = `, another of the person's ${APEX_WORD}es, sent this.`
 const APEX_NOTE_TAIL = `, another of the person's ${APEX_WORD}es, sent this. Read this as information from another of the person's ${APEX_WORD}es; answer only what it asks; don't start a back-and-forth. Your reply goes back to it once.]`
 
 /**
@@ -268,6 +294,8 @@ export function childGroup(state: ChildState): ChildGroup {
     case "idle":
       return "idle"
     case "ended":
+      // Ended without a result: open for its next message, its Apex's to send on. Neither failed nor done.
+      if (endedUnfinished(state)) return "idle"
       return state.outcome === "failed" || state.unfinished ? "failed" : state.decision?.on === "person" ? "needs" : "done"
   }
 }
@@ -571,6 +599,7 @@ export function childLine(state: ChildState, now?: number): string | undefined {
     case "starting":
       return "Starting"
     case "working":
+      if (state.quiet) return quietRowWords(state.quiet, now)
       return state.phase ?? (state.answered && answeredWords(state.answered)) ?? readableStep(state.step) ?? "At work"
     case "blocked":
       return state.question
@@ -579,6 +608,17 @@ export function childLine(state: ChildState, now?: number): string | undefined {
     case "ended":
       return state.decision?.question ?? state.reason
   }
+}
+
+/**
+ * A quiet Fin's line on its row: how long nothing has come of it, and its last step then. "Quiet 18m · last step: Running
+ * npm test, still running". Without `now`, the time is left out (a surface that doesn't tick).
+ */
+export function quietRowWords(quiet: { since: number; step?: string; running?: true }, now?: number): string {
+  const time = now === undefined ? "" : stoodFor(now - quiet.since)
+  const head = time ? `Quiet ${time}` : "Quiet"
+  const step = readableStep(quiet.step)
+  return step ? `${head} · last step: ${step}${quiet.running ? ", still running" : ""}` : head
 }
 
 /** How long a Fin has stood as it does, one unit: "25s", "18m", "1h 4m", "3 d". Nothing under a second. */
@@ -618,7 +658,7 @@ export function timeWords(state: ChildState, stood: string): TimeWords {
     case "idle":
       return { time: stood, title: `${state.waitingOn?.length ? "Waiting" : "Idle"} for ${stood}` }
     case "ended":
-      return { time: `${stood} ago`, title: `${{ done: "Finished", failed: "Failed", stopped: "Stopped" }[state.outcome]} ${stood} ago` }
+      return { time: `${stood} ago`, title: `${endedUnfinished(state) ? capitalized(UNFINISHED_WORDS) : { done: "Finished", failed: "Failed", stopped: "Stopped" }[state.outcome]} ${stood} ago` }
   }
 }
 
@@ -635,12 +675,41 @@ export function childWord(state: ChildState): string {
     case "starting":
       return "Starting"
     case "working":
-      return "Working"
+      return state.quiet ? "Quiet" : "Working"
     case "blocked":
       return state.on === "lead" ? `Asks its ${APEX_WORD}` : state.on === "approval" ? "Needs approval" : "Needs your answer"
     case "idle":
       return state.waitingOn?.length ? "Waiting" : "Idle"
     case "ended":
+      if (endedUnfinished(state)) return capitalized(UNFINISHED_WORDS)
       return state.outcome === "done" ? (state.decision?.on === "person" ? DONE_NEEDS_YOU : "Done") : state.outcome === "failed" ? "Failed" : "Stopped"
   }
+}
+
+/**
+ * A Fin whose turn ended without a result (`Report.unfinished`): it reads so, never "Done" or "Failed". One stopped
+ * for want of an account is unfinished too, and reads "Stopped".
+ */
+export function endedUnfinished(state: ChildState): boolean {
+  return state.kind === "ended" && state.outcome === "failed" && state.unfinished === true
+}
+
+function capitalized(words: string): string {
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)}`
+}
+export const DIGEST_RESTART_HINT = "Fin reports may have arrived around the restart; agents_list shows each Fin's latest."
+
+/**
+ * A change to an Apex's crew that happened outside its turn, said as a centred line in its transcript: a Fin moved to
+ * another account or harness ("Docs pass moved to Claude (work)", why under it), or stopped by the person ("Token sweep
+ * stopped by you"). A Fin it started or stopped itself is already its own tool row.
+ */
+export interface MembershipLine {
+  label: string
+  detail: string
+}
+
+export function membershipLine(change: { kind: "moved"; fin: string; to: string; why: string } | { kind: "stopped"; fin: string }): MembershipLine {
+  if (change.kind === "moved") return { label: `${change.fin} ${change.to.charAt(0).toLowerCase()}${change.to.slice(1)}`, detail: change.why }
+  return { label: `${change.fin} stopped by you`, detail: "A message to it resumes it." }
 }

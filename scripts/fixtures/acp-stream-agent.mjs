@@ -10,6 +10,9 @@ const duration = Number(process.env.MEASURE_STREAM_MS ?? 20_000)
 const interval = Number(process.env.MEASURE_CHUNK_MS ?? 20)
 // A prompt with these words runs until it's cancelled, so a Stop can't lose a race with the turn's end.
 const untilCancelled = process.env.MEASURE_UNTIL_CANCELLED
+// How long a cancelled prompt takes to answer that it was cancelled, as a harness under load does: a Stop is asked
+// at once, and its turn reads as stopped only once the harness says so.
+const cancelAnswer = Number(process.env.MEASURE_CANCEL_ANSWER_MS ?? 0)
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const words = "the host reads each update decodes it journals it and sends it to every window watching".split(" ")
 const output = Array.from({ length: 40 }, (_, line) => `line ${line}: ${words.join(" ")}`).join("\n")
@@ -47,6 +50,7 @@ new AgentSideConnection((connection) => {
         }
         await pause(interval)
       }
+      if (cancelled && cancelAnswer) await pause(cancelAnswer)
       return { stopReason: cancelled ? "cancelled" : "end_turn" }
     },
     async cancel() {

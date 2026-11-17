@@ -1,4 +1,5 @@
 import type { Git } from "@mako/git"
+import { confinedRoots, openConfined } from "./confined-read.js"
 import { diagnosticFormat, officeFormat } from "../contracts/file-preview.js"
 import { fileContentType, mediaForContentType } from "./file-media.js"
 import type { ArtifactPreviews } from "./artifact-previews.js"
@@ -12,6 +13,7 @@ import {
   realpath,
   stat,
   writeFile,
+  type FileHandle,
 } from "node:fs/promises"
 import { homedir } from "node:os"
 import {
@@ -35,7 +37,7 @@ import { FolderIndex, type FolderIndexOptions } from "./file-index.js"
  * renderer. Above it the head is shown and the viewer says the rest was cut.
  */
 const FILE_VIEW_LIMIT = 2_000_000
-type ConversationDataDir = () => Promise<string | undefined>
+type ConversationDataDir = () => Promise<string | string[] | undefined>
 /**
  * `preview`: the read is for a preview the transcript shows unasked (an
  * embed, a path an answer names). Outside the Thread's folders only what a
@@ -43,7 +45,14 @@ type ConversationDataDir = () => Promise<string | undefined>
  * else comes back `withheld`, so an answer's `![](~/.ssh/id_rsa)` stays a
  * link rather than a key on screen.
  */
-type FileReadOptions = { relativeTo: "cwd"; dataDir?: ConversationDataDir; preview?: boolean }
+type FileReadOptions = { relativeTo?: "cwd"; dataDir?: ConversationDataDir; preview?: boolean; confined?: boolean; kept?: (real: string) => Promise<boolean> }
+
+/**
+ * Said of a file another device asked for that resolves, after its symlinks, outside the Thread's folders (its folder,
+ * its repository and its data folder). Only this Mac's own window reads a path anywhere on it; a device through the
+ * gateway reads the Thread's files, and nothing else is read or signed for it.
+ */
+export const OUTSIDE_THREAD_WORDS = "It's outside this Thread's folders, so it's only opened on the Mac it's on."
 /** Larger than this on its longer side, a picture gets a thumbnail for grid tiles; smaller, the tile draws it. */
 const THUMBNAIL_ABOVE = 960
 
@@ -198,15 +207,29 @@ export class WorkspaceFiles {
    * applied — a truncated file that does not say so is a lie about the code.
    */
   async read(requested: string, options?: FileReadOptions): Promise<FileContents> {
-    const { absolute, path } = await this.locate(requested, options)
-    const info = await stat(absolute)
+    const located = await this.locate(requested, options)
+    const { path } = located
+    // Another device's read is opened once, verified, and read only through that descriptor (`openConfined`).
+    const confined = options?.confined
+      ? await openConfined(located.absolute, await confinedRoots([this.cwdValue, await this.git.root().catch(() => null), await options.dataDir?.()].flat()), options.kept)
+      : undefined
+    if (options?.confined && !confined) return { path, contents: "", size: 0, binary: false, truncated: false, withheld: OUTSIDE_THREAD_WORDS }
+    try {
+      return await this.readAt(path, confined?.real ?? located.absolute, options, confined?.handle)
+    } finally {
+      await confined?.handle.close()
+    }
+  }
+
+  private async readAt(path: string, absolute: string, options: FileReadOptions | undefined, held: FileHandle | undefined): Promise<FileContents> {
+    const info = held ? await held.stat() : await stat(absolute)
     if (info.isDirectory()) throw new Error(`${path} is a directory`)
-    const prefixFile = await open(absolute, "r")
+    const prefixFile = held ?? await open(absolute, "r")
     const prefix = Buffer.alloc(Math.min(info.size, 4096))
     try {
       await prefixFile.read(prefix, 0, prefix.length, 0)
     } finally {
-      await prefixFile.close()
+      if (!held) await prefixFile.close()
     }
     const mimeType = await fileContentType(path, prefix)
     const media = mediaForContentType(mimeType)
@@ -229,7 +252,7 @@ export class WorkspaceFiles {
     if (media || officeFormat(path, mimeType) || prefix.includes(0)) {
       const previewUrl = filePreviewUrl(absolute, identity)
       const visual = media?.media === "image" || media?.media === "video"
-      const size = visual ? await this.dimensions(absolute, prefix, info.size, mimeType) : undefined
+      const size = visual ? await this.dimensions(absolute, prefix, info.size, mimeType, held) : undefined
       const large = size && Math.max(size.width, size.height) > THUMBNAIL_ABOVE && mimeType !== "image/svg+xml" && mimeType !== "image/gif"
       return {
         path,
@@ -246,7 +269,7 @@ export class WorkspaceFiles {
       }
     }
 
-    const handle = await open(absolute, "r")
+    const handle = held ?? await open(absolute, "r")
     try {
       const length = Math.min(info.size, FILE_VIEW_LIMIT)
       const buffer = Buffer.alloc(length)
@@ -294,13 +317,13 @@ export class WorkspaceFiles {
         ...(page && { mimeType, previewUrl: filePreviewUrl(absolute, identity, { folder: true }) }),
       }
     } finally {
-      await handle.close()
+      if (!held) await handle.close()
     }
   }
 
   /** Whether `absolute` sits in the folders this conversation works in: its checkout, its folder, or its Thread's data folder. */
   private async inside(absolute: string, dataDir?: ConversationDataDir): Promise<boolean> {
-    const roots = [this.cwdValue, await this.git.root().catch(() => null), await dataDir?.()]
+    const roots = [this.cwdValue, await this.git.root().catch(() => null), await dataDir?.()].flat()
     const real = await realpath(absolute).catch(() => absolute)
     for (const root of roots) {
       if (!root) continue
@@ -310,12 +333,12 @@ export class WorkspaceFiles {
     return false
   }
 
-  private async dimensions(absolute: string, prefix: Buffer, size: number, mimeType: string | undefined) {
-    const file = await open(absolute, "r")
+  private async dimensions(absolute: string, prefix: Buffer, size: number, mimeType: string | undefined, held?: FileHandle) {
+    const file = held ?? await open(absolute, "r")
     try {
       return await mediaDimensions(file, prefix, size, mimeType)
     } finally {
-      await file.close()
+      if (!held) await file.close()
     }
   }
 
@@ -355,10 +378,11 @@ export class WorkspaceFiles {
       (relativeTo === "cwd" && (requested.startsWith("./") || requested.startsWith("../"))))
       throw new Error(`No file at ${requested}`)
     // Agents also write into MAKO_THREAD_DATA_DIR and cite its relative path.
-    // Only the owner's exact path is tried, before the project's suffix index;
+    // The owner's exact artifact root, then its unchanged app/legacy root, precede the project suffix index;
     // never walk data folders or let a relative traversal select another owner.
-    const dataDir = await options?.dataDir?.()
-    if (dataDir) {
+    const dataDirs = [await options?.dataDir?.()].flat()
+    for (const dataDir of dataDirs) {
+      if (!dataDir) continue
       const root = resolve(dataDir)
       const candidate = resolve(root, requested)
       if (candidate.startsWith(`${root}${sep}`)) {
@@ -434,7 +458,9 @@ export class ConversationFiles {
     this.watch = watch
   }
 
-  read(cwd: string, path: string, dataDir?: ConversationDataDir, purpose?: FileReadPurpose): Promise<FileContents> {
+  /** `confined`: the caller is another device, through the gateway, which reads only the Thread's folders. */
+  /** `kept`: whether a resolved path outside the Thread's folders is one of its conversation's kept media copies. */
+  read(cwd: string, path: string, dataDir?: ConversationDataDir, purpose?: FileReadPurpose, confined = false, kept?: (real: string) => Promise<boolean>): Promise<FileContents> {
     const key = resolve(cwd)
     const now = Date.now()
     for (const [folder, held] of this.held)
@@ -451,7 +477,7 @@ export class ConversationFiles {
       reader?.files.index.close()
       if (oldest !== undefined) this.held.delete(oldest)
     }
-    return held.files.read(path, { relativeTo: "cwd", dataDir, preview: purpose === "preview" })
+    return held.files.read(path, { relativeTo: "cwd", dataDir, preview: purpose === "preview", confined, ...kept && { kept } })
   }
 
   /** The index of a conversation's folder, kept and watched until nobody has looked at it for `INDEX_KEPT_MS`. */

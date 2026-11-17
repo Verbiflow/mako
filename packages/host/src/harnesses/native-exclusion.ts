@@ -1,3 +1,4 @@
+import { HostFailureError } from "../contracts/provider-failure.js"
 import type { AdmittedStartOptions, ProviderLiveDriver } from "./live-driver.js"
 import type { LiveSessionState } from "../contracts/providers-acp.js"
 
@@ -15,14 +16,14 @@ export function withNativeExclusion(driver: ProviderLiveDriver): ProviderLiveDri
   const sessions = new Map<string, Promise<ExclusiveSession>>()
   const closing = new Map<string, Promise<void>>()
   const held = async <T>(id: string, operation: () => Promise<T>): Promise<T> => {
-    if (closing.has(id)) throw new Error("The native session is closing. No input was dispatched.")
+    if (closing.has(id)) throw new HostFailureError("resume-failed", "The native session is closing. No input was dispatched.")
     const session = sessions.get(id)
-    if (!session) throw new Error("The native execution lease is unavailable. No input was dispatched.")
+    if (!session) throw new HostFailureError("resume-failed", "The native execution lease is unavailable. No input was dispatched.")
     const opened = await session
     await opened.lease.assertHeld()
     // close may have started while a native assertion was in flight.
     if (closing.has(id) || sessions.get(id) !== session)
-      throw new Error("The native session changed during ownership verification. No input was dispatched.")
+      throw new HostFailureError("resume-failed", "The native session changed during ownership verification. No input was dispatched.")
     // Check and invoke in one job; do not yield between the owner fence and
     // dispatch. The native authority still fences actual native mutations.
     return operation()
@@ -50,7 +51,7 @@ export function withNativeExclusion(driver: ProviderLiveDriver): ProviderLiveDri
   }
   const start = async (cwd: string, options: AdmittedStartOptions): Promise<LiveSessionState> => {
     const id = options.conversationId
-    if (sessions.has(id) || closing.has(id)) throw new Error("This native binding already has an execution owner.")
+    if (sessions.has(id) || closing.has(id)) throw new HostFailureError("resume-failed", "This native binding already has an execution owner.")
     const operation = Promise.resolve().then(() => startExclusive.call(driver, cwd, options))
     sessions.set(id, operation)
     let opened: ExclusiveSession
@@ -60,7 +61,7 @@ export function withNativeExclusion(driver: ProviderLiveDriver): ProviderLiveDri
     }
     try {
       if (opened.session.id !== id || opened.session.harness !== driver.provider)
-        throw new Error("The native lease belongs to a different session.")
+        throw new HostFailureError("resume-failed", "The native lease belongs to a different session.")
       return await held(id, async () => opened.session)
     } catch (error) {
       // close owns release, including a concurrent close during acquisition.

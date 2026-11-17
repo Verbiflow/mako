@@ -1371,6 +1371,11 @@ diffs-container {
 .live-mark[data-live-mark="queued"] .live-mark-body {
   opacity: 0.35;
 }
+/* Quiet: a working Fin nothing has come of; it stopped moving and sank a little, dimmer than idle. */
+.live-mark[data-live-mark="quiet"] .live-mark-body {
+  opacity: 0.45;
+  transform: translateY(12%);
+}
 .live-mark[data-live-mark="idle"] .live-mark-body,
 .live-mark[data-live-mark="open"] .live-mark-body {
   opacity: 0.62;

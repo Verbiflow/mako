@@ -51,7 +51,8 @@ export interface ClientSession {
 }
 
 /** How a client connects: the live form it reads (`live-form.ts`, said on its connection's URL), form 1 when unsaid. */
-export type ClientConnection = { live?: LiveForm }
+/** How a client connects: the live form it reads, and whether it reads `ephemeral` frames (`EPHEMERAL_PARAM`). */
+export type ClientConnection = { live?: LiveForm; ephemeral?: boolean }
 
 /**
  * What the conformance suite drives. The fake gateway implements it in memory; the real gateway

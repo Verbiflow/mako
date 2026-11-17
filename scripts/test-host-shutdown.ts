@@ -6,6 +6,17 @@ import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { hostLifecycle } from "@mako/host/base/host-lifecycle"
 import { HostCallLifetime } from "@mako/host/transport/call-lifetime"
+import { HostMethods } from "@mako/host/transport/methods"
+import { HostStopping, HostStoppingError } from "@mako/host/base/host-stopping"
+import { unwatchedWork } from "@mako/host/base/event-loop"
+import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
+import { runtimeFailure, runtimeFailureError } from "@mako/host/contracts/runtime"
+import { waitsFor } from "../src/state/delivery-policy"
+import { createFakeGateway } from "@mako/protocol/fake-gateway"
+import { gatewayHostCalls, sendWithRepeats } from "@mako/host/contracts/gateway-host-calls"
+import { decodeRuntimeValue, encodeRuntimeValue } from "@mako/host/contracts/runtime-value"
+import { serveHostThroughGateway } from "@mako/host/transport/gateway"
+import { stoppedCallError, HostCallRefusedError } from "@mako/host/transport/call-lifetime"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { SessionMemory } from "@mako/host/threads/session-memory"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
@@ -44,6 +55,83 @@ await assert.rejects(lifetime.run(async () => { throw Error("must not start") })
 await tick(); assert.equal(storeOpen, true)
 reading.resolve(); await read; await drained
 assert.equal(completed, true); assert.equal(storeOpen, false)
+
+// A person's message sent while the host stops is a disconnect to its client, never a refusal: the outbox keeps it and
+// sends it again once the next host answers. One the stopping host refused never ran; one its stop cut may have, and
+// is asked again under its ID. As a plain error, the outbox took it as refused for good and handed it back.
+{
+  const stopping = new HostStopping()
+  const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value, breadcrumb: () => {}, declaring: async () => {}, work: unwatchedWork, stopping })
+  const answering = deferred()
+  const ran: string[] = []
+  // SAFETY: the table parses this call's arguments with its generated schema before the handler runs; the fixture reads
+  // only the request ID, a string there, and answers nothing the caller reads.
+  methods.handle("mako:live-prompt", (async (_id: string, requestId: string) => {
+    ran.push(requestId)
+    if (requestId === "under-way") await new Promise<never>((_resolve, reject) => stopping.signal.addEventListener("abort", () => reject(stopping.signal.reason), { once: true }))
+    answering.resolve()
+    return null
+  }) as never)
+  const heard = async (call: Promise<unknown>) => {
+    const error = await call.then(() => undefined, (caught: Error) => caught)
+    assert.ok(error instanceof RuntimeDisconnectedError, `a disconnect, not ${String(error)}`)
+    const client = runtimeFailureError(runtimeFailure(error))
+    assert.ok(client instanceof RuntimeDisconnectedError, `the client hears a disconnect, not ${client.name}`)
+    return { unconfirmed: client.unconfirmed, outbox: waitsFor(client) }
+  }
+  const underWay = methods.invoke("mako:live-prompt", ["c", "under-way", "the long one"])
+  await tick()
+  const drained = methods.close()
+  assert.deepEqual(await heard(methods.invoke("mako:live-prompt", ["c", "after-close", "sent as Mako quits"])), { unconfirmed: false, outbox: "Waiting for Mako to reconnect" }, "refused as the host stops: it never ran, and waits")
+  assert.ok(!ran.includes("after-close"), "it never ran")
+  await stopping.stop().catch(() => {})
+  assert.deepEqual(await heard(underWay), { unconfirmed: true, outbox: "Waiting for Mako to reconnect" }, "cut by the stop: asked again under its ID")
+  await drained
+}
+
+// Work that says what the stop means for it keeps its words: an unfinished sign-in is "Mako quit before sign-in
+// finished; sign in again.", a refusal its caller shows, never a disconnect a repeat would answer differently.
+{
+  const stopping = new HostStopping()
+  const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value, breadcrumb: () => {}, declaring: async () => {}, work: unwatchedWork, stopping })
+  methods.handle("mako:account-login-wait", async () => {
+    throw new HostStoppingError("Mako quit before sign-in finished; sign in again.")
+  })
+  const error = await methods.invoke("mako:account-login-wait", ["login"]).then(() => undefined, (caught: Error) => caught)
+  assert.ok(error && !(error instanceof RuntimeDisconnectedError), `its own words, not a disconnect: ${String(error)}`)
+  const client = runtimeFailureError(runtimeFailure(error))
+  assert.match(client.message, /Mako quit before sign-in finished; sign in again/)
+  assert.ok(!(client instanceof RuntimeDisconnectedError), "the client hears the words, not a reconnect")
+  assert.equal(waitsFor(client), undefined, "and shows them: nothing waits to send it again")
+}
+
+// Through the gateway, a stopping host answers nothing for a call it didn't run: the gateway keeps a runtime's answer as
+// the operation's, so a refusal would be every repeat's for the client's whole 29 s of tries. Left to the link's close,
+// the repeat reaches the next host, which runs it.
+{
+  const gateway = createFakeGateway()
+  let stopping = true
+  const ran: string[] = []
+  const invoke = async (_channel: string, args: unknown[]) => {
+    if (stopping) throw stoppedCallError(new HostCallRefusedError())
+    ran.push(String(args[1]))
+    return encodeRuntimeValue("taken")
+  }
+  const mac = { runtimeId: "mac", build: "shutdown", invoke }
+  const actor = { kind: "client" as const, client: "web" as const, deviceId: "phone" }
+  const phone = gatewayHostCalls(await gateway.connectClient(actor), { runtimeId: "mac", actor, history: false })
+  let served = await serveHostThroughGateway(await gateway.connectRuntime(), mac)
+  const began = Date.now()
+  const sent = sendWithRepeats("mako:live-prompt", phone.call("mako:live-prompt", ["c", "sent-as-it-stops", "hello"]), { conversationId: "c", runtime: "mac" })
+  await new Promise((done) => setTimeout(done, 50))
+  served.close()
+  stopping = false
+  served = await serveHostThroughGateway(await gateway.connectRuntime(), mac)
+  assert.equal(decodeRuntimeValue(await sent), "taken", "the next host takes it")
+  assert.deepEqual(ran, ["sent-as-it-stops"], "once")
+  assert.ok(Date.now() - began < 5_000, `within a repeat or two, not the whole schedule: ${Date.now() - began} ms`)
+  served.close()
+}
 
 // Every adapter uses the same awaited close -> ownership-release boundary.
 for (const provider of [...registeredHarnessIds(), "future"]) {

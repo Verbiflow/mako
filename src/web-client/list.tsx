@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
-import { finsWord } from "@mako/host/contracts/agents"
 import { FinPips } from "@/components/rail/fin-pips"
-import { apexPips, pipsCounts, pipsOf } from "@/state/fin-pips"
+import { apexPips, pipsCounts, pipsOf, settledWords } from "@/state/fin-pips"
 import { useAcp } from "@/state/acp-state"
 import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, InboxIcon, LaptopIcon, MoonIcon, ServerIcon, SquarePenIcon } from "lucide-react"
 import { askWords, childLine, childStateOf, childWord, finsAsChildren, rollup, rollupLabel } from "@mako/host/contracts/children"
@@ -548,7 +547,7 @@ function ApexLineOr({ thread, fins, children }: { thread: string; fins: LiveSumm
   return (
     <span role="img" aria-label={label} data-fin-pips={pips} data-fin-counts={label} className="flex h-4 min-w-0 items-center gap-2 text-label">
       <FinPips pips={pips} />
-      <span className="tabular min-w-0 truncate text-faint">{finsWord(pips.length)}</span>
+      <span className="tabular min-w-0 truncate text-faint">{settledWords(pips)}</span>
     </span>
   )
 }

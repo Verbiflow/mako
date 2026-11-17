@@ -22,8 +22,17 @@ export const JOBS = {
   ui: [/^src\//, /^electron\//, new RegExp(`^packages/(${UI_PACKAGES.join("|")})/`), /^public\//, /^mako-icons\//, /^tsconfig[\w.-]*\.json$/, /^packages\/host\/src\/(contracts|transport)\//, /^scripts\/test-[\w-]*-ui[\w-]*\./, /^scripts\/ci-suites\.mjs$/, /^scripts\/(ui-vite-server|ci-ui-warm)\.mjs$/, /^scripts\/lib\/ui-vite\.mjs$/, /^scripts\/lib\/test-/, /^index\.html$/, /^vite\./, /^tailwind/],
   // The gate's steps that pass only on a Mac (`ci-gate.mjs`'s `MAC_STEPS`): the host, its packages and their tests.
   macHost: [/^packages\//, /^electron\//, /^scripts\/(test-|lib\/|diagnose-|check-)/, /^scripts\/ci-gate\.mjs$/],
-  // The local updater's checks: the application domain, the update scripts and anything the packaged build reads.
-  updates: [/^packages\/host\/src\/application\//, /^scripts\/[\w-]*update[\w-]*\./, /^scripts\/ci-update-checks\.ts$/, /^electron\//, /^electron-builder/, /^build\//],
+  // The local updater's checks: the application domain, the update scripts and anything the packaged build reads; and
+  // the host's own life, which test:application holds (its start and stop, the socket and its calls, a stop's words to a
+  // sign-in): #859 changed how a stopped call is said in transport/ and broke a sign-in's answer, and passed its PR
+  // because this job didn't run there.
+  updates: [/^packages\/host\/src\/application\//, /^scripts\/[\w-]*update[\w-]*\./, /^scripts\/ci-update-checks\.ts$/, /^electron\//, /^electron-builder/, /^build\//,
+    /^packages\/host\/src\/(transport|base)\//, /^packages\/host\/src\/(create-host|core|host-main|host-config)\.ts$/, /^packages\/host\/src\/harnesses\/account-login\.ts$/,
+    // How each harness signs in and keeps its accounts, which a stop's sign-in answer runs through, and what imports
+    // account-login (`--check-update-scope`, in lint, holds the rule to every importer).
+    /^packages\/host\/src\/harnesses\/(account[\w-]*|accounts[\w-]*|acp-authentication|index)\.ts$/, /^packages\/host\/src\/harnesses\/[\w-]+\/(accounts|auth[\w-]*)\.ts$/,
+    /^packages\/host\/src\/harnesses\/[\w-]+\/sdk\/auth[\w-]*\.ts$/, /^packages\/host\/src\/contracts\/(host-call-inputs|host-call-policy|renderer-bridge)\.ts$/,
+    /^scripts\/test-(application-|stop-|host-idle|window-shutdown|git-stop|daemon-login|isolated-host|local-build|checkout-copy|command-utf8)/],
   // Decode and live-path timings measured against the base: the decoders, readers, live host and the window's reduction.
   performance: [/^packages\/sessions\//, /^packages\/host\/src\/(conversations|harnesses|threads)\//, /^src\/(state|lib)\//, /^scripts\/perf[\w-]*\./, /^scripts\/test-perf[\w-]*\./, /^scripts\/test-performance-budgets\.ts$/],
   // The host's loop under many Fins.
@@ -72,7 +81,24 @@ export async function reachedPackages() {
   return [...reached].sort()
 }
 
-if (process.argv[2] === "--check-ui-scope") {
+/** The host's files that import the sign-in's stop answer (`harnesses/account-login.ts`), by their sources. */
+export async function accountLoginImporters() {
+  const { default: ts } = await import("typescript")
+  const root = join("packages", "host", "src")
+  const files = readdirSync(root, { recursive: true }).map(String).filter((name) => /\.(ts|mts)$/.test(name) && !name.endsWith(".d.ts"))
+  return files.filter((name) => ts.preProcessFile(readFileSync(join(root, name), "utf8"), true, true).importedFiles
+    .some(({ fileName }) => /(^|\/)account-login(\.js)?$/.test(fileName))).map((name) => `${root}/${name}`).sort()
+}
+
+if (process.argv[2] === "--check-update-scope") {
+  const importers = await accountLoginImporters()
+  const missing = importers.filter((path) => !JOBS.updates.some((rule) => rule.test(path)))
+  if (missing.length) {
+    console.error(`${missing.join(", ")} import${missing.length === 1 ? "s" : ""} harnesses/account-login.ts, which the \`updates\` rule in scripts/ci-changes.mjs leaves out: a change there wouldn't run update-checks on a pull request. Add ${missing.length === 1 ? "it" : "them"}.`)
+    process.exit(1)
+  }
+  console.log(`Update scope: ${importers.length} files import account-login, all in the updates rule`)
+} else if (process.argv[2] === "--check-ui-scope") {
   const reached = await reachedPackages()
   const missing = reached.filter((name) => !UI_PACKAGES.includes(name))
   if (missing.length) {

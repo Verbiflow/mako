@@ -1,9 +1,10 @@
 import type { Reclaimed } from "./journal-reclaim.js"
 import { join } from "node:path"
+import type { UnopenedConversation } from "../contracts/unopened-conversations.js"
 import { disconnectedContext } from "../base/execution-context.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
-import { RESTART_RETIRED_MOVE, carryingWords, quietSwitch, retiredMove } from "../contracts/conversation-control.js"
+import { compactionPending, RESTART_RETIRED_MOVE, carryingWords, quietSwitch, retiredMove } from "../contracts/conversation-control.js"
 import type { Interruption, LiveRequest, LiveSnapshot, LiveSummary } from "../contracts/live-conversations.js"
 import { holdDue, holdOf, sooner, transferDue } from "../contracts/request-hold.js"
 import type { NativeActivity } from "../contracts/native-activity.js"
@@ -15,11 +16,11 @@ import { personPromptedAt } from "../contracts/worked-at.js"
 import type { JournalFacts } from "../threads/index.js"
 import { isTurnStart, reduceLiveUpdates } from "@mako/sessions/live-content"
 import type { Entry } from "@mako/sessions/entries"
-import { StepsStopped } from "@mako/sessions/slices"
+import { inSlices, StepsStopped } from "@mako/sessions/slices"
 import { closeCutOffCalls, recordCutOffCalls } from "./interrupted-turn.js"
 import { clearAutoContinue } from "./live-auto-continue.js"
 import { JournalReaders } from "./journal-readers.js"
-import { LiveJournal, journalIds, storedRequest } from "./live-journal.js"
+import { ColdJournal, LiveJournal, journalIds, storedRequest } from "./live-journal.js"
 import { backfillMemory } from "./live-ledger.js"
 import { conversationControl, residentOf, type Dependencies, type Resident } from "./live-runtime.js"
 import { interruptRequests, requestTurnEnd } from "./live-settlement.js"
@@ -41,6 +42,9 @@ export const CONVERSATION_MEMORY = { bytes: 128 * 1024 * 1024, recent: 2, sweepM
  * second, and the host ran out of heap 90 seconds after each start.
  */
 export const BULK_LOADS = 8
+
+/** The residency plan's name for what windows' cold views hold, counted as pinned. */
+const COLD_VIEWS = "cold history views"
 
 /**
  * What a conversation keeps in memory of its newest finished entries, by
@@ -72,6 +76,8 @@ export interface RecordHooks {
   storageFailed(resident: Resident, boundary: FailureBoundary): void
   /** A journal was read in; what it names but doesn't keep is read now (`LiveSources.readBase`). */
   loaded(resident: Resident): void
+  /** Preserve recovery intent before healing a crash's journal; queued inputs still have their original provenance here. */
+  recovered?(previous: LiveSnapshot, snapshot: LiveSnapshot): void
   /** Entries of the conversation were paged: whatever still holds them warm (a window's view) may hold the paged ones instead. */
   paged?(id: string): void
   /** The conversation was let go: what still holds its entries (a window's view) lets them go too. */
@@ -85,6 +91,23 @@ export interface RecordHooks {
  * journal is read in when something needs it, and let go once the memory
  * budget has no room for it and nothing is using it.
  */
+/** What the fork index keeps of each fork (`LiveRecords.forks`). */
+export interface ForkFacts {
+  parentId: string
+  /** `ForkInput.point`, as its journal keeps it. */
+  point: string
+  createdAt: number
+  /** Its first request, once one is admitted (`ancestry.firstRequest`). */
+  firstRequest?: string
+}
+
+/**
+ * Why a journal isn't read cold (`LiveRecords.cold`): `busy`, something under way (read in, being let go of, a turn
+ * running) that passes; `structural`, what the journal is, which doesn't, with its session's own record where that
+ * holds its history.
+ */
+export type ColdRefusal = { kind: "busy" } | { kind: "structural"; why: string; record?: { path: string; harness: string } }
+
 export class LiveRecords {
   private readonly dependencies: Dependencies
   private readonly hooks: RecordHooks
@@ -129,6 +152,15 @@ export class LiveRecords {
     this.hooks = hooks
   }
 
+  /**
+   * Each fork's parent, the point it was made at (`ForkInput.point`, as its journal keeps it) and when: what an edited
+   * prompt's versions are read from (`LiveConversations.promptVersions`), without reading any journal in.
+   */
+  readonly forks = new Map<string, ForkFacts>()
+
+  /** Saved conversations `open` couldn't read: kept for recovery, and said in the rail and Diagnostics. */
+  readonly unopened: UnopenedConversation[] = []
+
   /** Lists every saved journal, as the host before this one left it, for the Thread store to register. */
   open(): JournalFacts[] {
     const { dependencies } = this
@@ -141,6 +173,7 @@ export class LiveRecords {
           if (found) {
             const { ancestry, threadSession, unsettled, ...summary } = found
             if (unsettled) this.unsettled.add(id)
+            if (ancestry) this.forks.set(id, { parentId: ancestry.parentId, point: ancestry.point, createdAt: summary.createdAt, ...ancestry.firstRequest && { firstRequest: ancestry.firstRequest } })
             dependencies.memory?.rememberBindings(id, summary.nativeBindings, summary.createdAt)
             backfillMemory(dependencies.memory, dependencies.root, id, summary.session)
             journals.push({
@@ -172,11 +205,9 @@ export class LiveRecords {
           journal.close()
         }
       } catch (error) {
-        dependencies.emit({
-          type: "notice",
-          level: "error",
-          message: `Saved conversation ${id} could not be opened. Its journal has been preserved for recovery. ${errorMessage({ error })}`,
-        })
+        // Kept for recovery, and said where the person looks (`unopened`) rather than as a toast at every start.
+        hostWarn("live", "a saved conversation couldn't be opened; its journal is kept", { conversation: id, error: errorMessage({ error }) })
+        this.unopened.push({ conversation: id, journal: join(dependencies.root, `${id}.sqlite`), error: errorMessage({ error }) })
       }
     }
     return journals
@@ -203,6 +234,9 @@ export class LiveRecords {
   add(resident: Resident): void {
     resident.journal.checkpointWith(this.primer)
     this.residents.set(resident.snapshot.session.id, resident)
+    // A fork made now joins the index as a saved one does at `open`.
+    const ancestry = resident.snapshot.control?.ancestry
+    if (ancestry) this.forks.set(resident.snapshot.session.id, { parentId: ancestry.parentId, point: ancestry.point, createdAt: resident.snapshot.createdAt, ...ancestry.firstRequest && { firstRequest: ancestry.firstRequest } })
   }
 
   /** The session as the listing has it, without reading an unloaded conversation's transcript back. */
@@ -218,6 +252,10 @@ export class LiveRecords {
   /** Whether the host before this one left a message of `id` waiting, paused or running (`open`). */
   leftUnsettled(id: string): boolean {
     return this.unsettled.has(id)
+  }
+
+  unsettledIds(): readonly string[] {
+    return [...this.unsettled]
   }
 
   /** Whether `unload` let this resident go; a write through it is dropped. */
@@ -323,6 +361,7 @@ export class LiveRecords {
       return this.reload(journal, previous, unloaded, by)
     }
     const snapshot = afterRestart(previous, this.dependencies.root, (provider) => this.dependencies.driver(provider)?.backgroundStop.kind === "ends-with-turn")
+    this.hooks.recovered?.(previous, snapshot)
     journal.commit(snapshot, previous)
     const resident = residentOf(snapshot, journal, { usedAt: this.dependencies.now?.() ?? Date.now(), loadedBy: by })
     this.add(resident)
@@ -362,6 +401,62 @@ export class LiveRecords {
     const resident = this.residents.get(id)
     if (!resident) return this.recovered.get(id)?.nativeIds ?? []
     return (resident.snapshot.control?.bindings ?? []).flatMap((binding) => (binding.nativeId ? [{ provider: binding.provider, nativeId: binding.nativeId }] : []))
+  }
+
+  /**
+   * Conversation `id` read where it lies (`ColdJournal`), for a window's read of one no host holds in memory: none when
+   * it's in memory, being read in or let go, or when its last host wrote it running or sending; then the window's read
+   * makes it resident as before. One the last host left is shown as reading it in would leave it (`afterRestart`); one
+   * this host let go, exactly as it went (`reload`).
+   */
+  /**
+   * `releasing`: read one whose closed journal is still being let go of, as a search does. Its file is kept for the
+   * read (a cold journal's opening is `journalOpened`, which keeps a releasing journal from tidying it); a window's
+   * view waits for the release instead.
+   */
+  async cold(id: string, releasing = false, refused?: (why: ColdRefusal) => void): Promise<{ journal: ColdJournal; snapshot: LiveSnapshot; still: () => boolean } | undefined> {
+    const readable = () => !this.stopping() && !this.residents.has(id) && !this.reading.has(id) && (releasing || !this.releasing.has(id)) && this.recovered.has(id)
+    // Why it isn't read cold, for a search: what's under way passes, what the journal is doesn't.
+    const busy = () => (refused?.({ kind: "busy" }), undefined)
+    if (!readable()) return busy()
+    let journal: ColdJournal | undefined
+    try {
+      journal = await inSlices(ColdJournal.opening(this.dependencies.root, id), undefined, () => this.stopping())
+    } catch (error) {
+      // Cut by the host's stop: the opening closed what it opened, and nothing's wrong with the journal.
+      if (error instanceof StepsStopped) return busy()
+      throw error
+    }
+    // None, or one that keeps its own copy of its history: read only as a resident's is.
+    if (!journal) return (refused?.({ kind: "structural", why: "its journal keeps its own copy of its history" }), undefined)
+    // Read in, or let go, while it opened: read as that left it.
+    if (!readable()) {
+      journal.close()
+      return busy()
+    }
+    const saved = journal.snapshot
+    // One a window's read might refresh from its harness's own record (`LiveSources.refreshedSnapshot`: a single binding
+    // that holds the history, or none written yet, as a session continued outside Mako) is read in, where that runs.
+    const bindings = saved.control?.bindings ?? []
+    const binding = bindings.length === 1 ? bindings[0] : undefined
+    // One whose history is its session's record reads that record's newest page as it opens, as such a refresh would.
+    const refreshable = !saved.baseSource && Boolean(binding?.path && binding.nativeId) &&
+      (journal.length === 0 || (binding!.includesBase && onlyOpening(journal, binding!.coveredBlocks ?? 0)))
+    if (refreshable || saved.session.status === "running" || saved.requests.some((request) => request.status === "dispatching")) {
+      journal.close()
+      // Its history is its harness's own record: a search reads that instead.
+      if (refreshable) refused?.({ kind: "structural", why: "its history is its session's own record", ...(binding?.path && { record: { path: binding.path, harness: binding.provider } }) })
+      else refused?.({ kind: "busy" })
+      return undefined
+    }
+    const unloaded = this.unloaded.get(id)
+    if (!unloaded) return { journal, still: readable, snapshot: afterRestart(saved, this.dependencies.root, (provider) => this.dependencies.driver(provider)?.backgroundStop.kind === "ends-with-turn") }
+    const session = unloaded.commands ? { ...saved.session, commands: unloaded.commands } : saved.session
+    return { journal, still: readable, snapshot: {
+      ...saved, session,
+      ...unloaded.activityAt !== undefined && { activityAt: unloaded.activityAt },
+      ...unloaded.nativeActivity && { nativeActivity: unloaded.nativeActivity },
+    } }
   }
 
   /** Lets go of a conversation now when nothing is using it, as the memory budget would. */
@@ -430,13 +525,15 @@ export class LiveRecords {
   }
 
   private memoryPlan(): ResidencyPlan {
+    // What windows' cold views hold (`ColdJournal`) is memory too: it leaves the conversations in memory that much less.
+    const cold = this.dependencies.historyHeld?.() ?? 0
     return residencyPlan(
-      [...this.residents.values()].map((resident) => ({
+      [...[...this.residents.values()].map((resident) => ({
         id: resident.snapshot.session.id,
         usedAt: resident.usedAt ?? 0,
         weight: residentWeight(this.weights, resident),
         pinned: this.pinned(resident),
-      })),
+      })), ...cold ? [{ id: COLD_VIEWS, usedAt: 0, weight: cold, pinned: true }] : []],
       this.memoryBudget()
     )
   }
@@ -646,6 +743,15 @@ export function endedTurnsOnRead(previous: Pick<LiveSnapshot, "session" | "reque
   })
 }
 
+/** Whether a cold journal's blocks past `covered` are only the notices a session gives as it opens, as `refreshedSnapshot` asks. */
+function onlyOpening(journal: ColdJournal, covered: number): boolean {
+  for (let index = covered; index < journal.length; index++) {
+    const block = journal.at(index)
+    if (block?.type !== "event" || block.setup !== true) return false
+  }
+  return true
+}
+
 /**
  * A journal no host is writing, as this host takes it on: whatever was in
  * flight when the last one ended is settled, and nothing it was doing goes
@@ -707,6 +813,7 @@ function afterRestart(previous: LiveSnapshot, root: string, endsWithTurn: (provi
           // message; a stranded one's retry carries the words its message has now.
           transfers: previous.control.transfers.map((transfer) => {
             // A move has no message to wait with, and what it was decided on went with the last host.
+            if (transfer.compaction && (transfer.state.kind === "queued" || transfer.state.kind === "preparing")) return { ...transfer, state: { kind: "queued" as const } }
             if (quietSwitch(transfer) && (transfer.state.kind === "queued" || transfer.state.kind === "preparing")) return retiredMove(transfer, RESTART_RETIRED_MOVE)
             const own = previous.requests.find((request) => request.id === transfer.input.id && (request.status === "queued" || request.status === "held"))
             if (own && (transfer.state.kind === "queued" || transfer.state.kind === "preparing"))
@@ -761,7 +868,7 @@ function afterRestart(previous: LiveSnapshot, root: string, endsWithTurn: (provi
             }
           // Messages still waiting are paused, as a quit pauses them (`closeForExit`): the queue says so and offers
           // Resume. Left queued behind a turn the restart cut short, nothing would ever send them and nothing said why.
-          : request.status === "queued"
+          : request.status === "queued" && !compactionPending(previous.control?.compactionRecovery)
             ? { ...request, status: "held" as const }
             : request
       )
@@ -827,6 +934,8 @@ function residentSummary(snapshot: LiveSnapshot): LiveSummary {
   const wakes = sooner(wakeAt(snapshot.requests), transferDue(snapshot.control))
   const promptedAt = personPromptedAt(snapshot.requests, snapshot.control?.actions)
   return {
+    ...compactionPending(snapshot.control?.compactionRecovery) && { hasCompactionRecovery: true },
+    hasSignInHold: snapshot.requests.some(request => request.signIn && request.status !== "canceled"),
     hasSessionQuestions: Boolean(snapshot.control?.questions?.length),
     nativePaths: snapshot.control?.bindings.flatMap((binding) =>
       binding.path ? [binding.path] : []

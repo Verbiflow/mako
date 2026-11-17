@@ -212,7 +212,7 @@ export function newestSessionRow(rows: Iterable<ThreadRef>, session: { harness: 
 
 /** Where each Thread's environment keeps the files its conversations link to; Workspaces has them. */
 export interface ThreadFileHomes {
-  fileDataDir(owner: { cwd?: string; thread?: ThreadId }): Promise<string | undefined>
+  fileDataDir(owner: { cwd?: string; thread?: ThreadId }): Promise<string | string[] | undefined>
 }
 
 export interface ThreadCatalogDeps {
@@ -246,7 +246,7 @@ export interface ThreadCatalogDeps {
   lineage: Pick<Lineage, "load" | "annotate">
   harnesses: ThreadHarnesses
   /** A file in a workspace, as the conversation that linked it sees it; Workspaces reads it. */
-  readFile(cwd: string, path: string, dataDir?: () => Promise<string | undefined>, purpose?: FileReadPurpose): Promise<FileContents>
+  readFile(cwd: string, path: string, dataDir?: () => Promise<string | string[] | undefined>, purpose?: FileReadPurpose): Promise<FileContents>
   /** Which catalog readers this host can share: the reader code it loaded as it opened, and the archive they write. */
   catalogIdentity(): Promise<string>
   jobs: HostJobs
@@ -789,13 +789,10 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     })
     void catalogStartup.catch((error) => {
       if (signal.aborted) return
-      // A catalog that failed to build must say so — an empty rail with no
-      // explanation reads as "the feature is broken", which it would be.
-      emit({
-        type: "notice",
-        level: "error",
-        message: `The thread catalog failed to start: ${error instanceof Error ? error.message : String(error)}`,
-      })
+      // A catalog that failed to build must say so: an empty rail with no explanation reads as "the feature is
+      // broken", which it would be. Its words are the log's; the person gets what fixes it.
+      hostWarn("threads", "the thread catalog failed to start", { error: error instanceof Error ? error.message : String(error) })
+      emit({ type: "notice", level: "error", message: "Your Threads couldn't be read.", action: { label: "Restart Mako", does: "restart" } })
     })
   }
 
@@ -836,11 +833,8 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       if (!stats || daemon !== client) return
       highMemorySamples = daemonMemoryUnsafe(stats.rss ?? 0) ? highMemorySamples + 1 : 0
       if (highMemorySamples < 3) return
-      emit({
-        type: "notice",
-        level: "error",
-        message: `Session sync exceeded ${MAX_DAEMON_RSS / 1024 / 1024} MB and was restarted safely.`,
-      })
+      // Restarted by Mako: the log's, not the person's.
+      hostWarn("threads", "session sync was restarted for its memory", { limitMb: MAX_DAEMON_RSS / 1024 / 1024, rssMb: Math.round((stats.rss ?? 0) / 1024 / 1024) })
       stopDaemonMonitor()
       closingFor.set(client, `memory over ${MAX_DAEMON_RSS / 1024 / 1024} MB (${Math.round((stats.rss ?? 0) / 1024 / 1024)} MB)`)
       void client.retire().catch(() => {})
@@ -1155,21 +1149,13 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
         await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)))
         if (stopping) return
         if (await connectViaDaemon(signal)) {
-          emit({
-            type: "notice",
-            level: "success",
-            message: "Session sync recovered without interrupting your work.",
-          })
+          hostLog("threads", "session sync recovered", { attempt: attempt + 1 })
           return
         }
       }
       await runLocalCatalog(signal)
-      emit({
-        type: "notice",
-        level: "error",
-        message:
-          "Session sync could not restart. Mako is watching locally until the next launch.",
-      })
+      // Mako watches locally instead; nothing the person sees changes.
+      hostWarn("threads", "session sync could not restart; watching locally until the next launch")
     })
   }
 
@@ -1269,11 +1255,8 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
         source.startWatching()
       }).catch((error) => {
         if (signal.aborted || catalog !== source) return
-        emit({
-          type: "notice",
-          level: "error",
-          message: `Session discovery failed: ${error instanceof Error ? error.message : String(error)}`,
-        })
+        hostWarn("threads", "session discovery failed", { error: error instanceof Error ? error.message : String(error) })
+        emit({ type: "notice", level: "error", message: "Your Threads couldn't be read.", action: { label: "Restart Mako", does: "restart" } })
       })
     } catch (error) {
       if (catalog === source) catalog = null

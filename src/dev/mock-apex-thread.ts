@@ -4,7 +4,7 @@ import { childEntry, type ChildJournal, type ChildState, type ChildThread, type 
 import { movedLine, type FallbackStep } from "@mako/host/contracts/fin-fallback"
 import { harnessLabel } from "@/lib/harness-label"
 import type { FinTuningWords } from "@mako/host/contracts/fin-tuning"
-import { BRIEF_CLOSE, briefIntro, fromAgent, FROM_AGENTS, PASSED_ON_NOTE, passedOn, rollup, rosterChildren, YOUR_APEX } from "@mako/host/contracts/children"
+import { BRIEF_CLOSE, briefIntro, fromAgent, FROM_AGENTS, membershipLine, PASSED_ON_NOTE, passedOn, rollup, rosterChildren, YOUR_APEX } from "@mako/host/contracts/children"
 import { appendFinReports } from "@mako/host/contracts/fin-reports"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
@@ -64,7 +64,23 @@ const DECIDED = new Map<string, ChildState>([
   ["swipe", { kind: "ended", outcome: "done", decision: { question: "Merge #371 into main?", on: "person", ask: { kind: "report", id: "report:swipe:merge", options: [{ label: "Merge", detail: "Squash it into main; every check is green." }, { label: "Leave open", detail: "Keep it for a review first." }], recommended: 0, action: "Decide whether the swipe fix lands now." } } }],
   ["pull-refresh", { kind: "ended", outcome: "done", decision: { question: "Ship the cached list or the fresh read on pull?", on: "lead", ask: { kind: "report", id: "report:pull-refresh:read", options: [{ label: "Fresh read" }, { label: "Cached list" }], recommended: 0 } } }],
 ])
-const DECISIONS_SCENE = new URLSearchParams(globalThis.location?.search).get("fins") === "decisions"
+/**
+ * `&fins=escalated`: the same, but its Apex left Pull to refresh's decision past `APEX_ANSWER_MS`, so it went to the
+ * person (`escalateDecision`): the roster says `on: "person"` while its report in the wake still says `decides: "lead"`.
+ */
+const ESCALATED_SCENE = new URLSearchParams(globalThis.location?.search).get("fins") === "escalated"
+const DECISIONS_SCENE = ESCALATED_SCENE || new URLSearchParams(globalThis.location?.search).get("fins") === "decisions"
+if (ESCALATED_SCENE) {
+  const pull = DECIDED.get("pull-refresh")
+  if (pull?.kind === "ended" && pull.decision) DECIDED.set("pull-refresh", { ...pull, decision: { ...pull.decision, on: "person" } })
+}
+
+/**
+ * `&fins=quiet`: "Offline outbox retry" reads as working and nothing has come of it for 18 minutes, its last step a
+ * command still running (`ChildState`'s `quiet`, from `QuietWatch`).
+ */
+const QUIET_SCENE = new URLSearchParams(globalThis.location?.search).get("fins") === "quiet"
+const QUIET_STATE: ChildState = { kind: "working", step: "Shell npm run test:outbox", quiet: { since: Date.now() - 18 * 60_000, step: "Shell npm run test:outbox", running: true } }
 
 /** The twelve, as the prototype has them: 2 need you, 5 working (one asking its Apex), 2 queued, 3 done. */
 /**
@@ -92,7 +108,7 @@ const CHILDREN: ChildFixture[] = ([
   { name: "swipe", title: "Thread list swipe", harness: "codex", model: "gpt-5.6-sol", state: { kind: "ended", outcome: "done", reason: "Swipe to archive now springs back below the threshold; PR on your branch." }, minutes: 31, toolUses: 52, objective: "Make the list's swipe to archive spring back below its threshold." },
   { name: "deep-links", title: "Settings deep links", harness: "claude", model: "claude-opus-5-5", state: { kind: "idle" }, minutes: 27, toolUses: 19, objective: "Open each settings page from a link." },
   { name: "pull-refresh", title: "Pull to refresh", harness: "grok", model: "grok-4.7", state: { kind: "ended", outcome: "done", reason: "Pull to refresh reads the account list again and keeps its place." }, minutes: 40, toolUses: 33, objective: "Pull to refresh reads the account list again." },
-] satisfies ChildFixture[]).map((fixture): ChildFixture => (DECISIONS_SCENE && DECIDED.has(fixture.name) ? { ...fixture, state: DECIDED.get(fixture.name)! } : fixture)).concat(PLACED_SCENE ? [PLACED_FIXTURE] : [])
+] satisfies ChildFixture[]).map((fixture): ChildFixture => (DECISIONS_SCENE && DECIDED.has(fixture.name) ? { ...fixture, state: DECIDED.get(fixture.name)! } : QUIET_SCENE && fixture.name === "outbox" ? { ...fixture, state: QUIET_STATE } : fixture)).concat(PLACED_SCENE ? [PLACED_FIXTURE] : [])
 
 /**
  * `&fins=limit`: the tree on 2026-11-05, as the host says it. Cursor ran out: three of its Fins moved to Claude Code,
@@ -104,6 +120,8 @@ const CHILDREN: ChildFixture[] = ([
  */
 const ASK_SCENE = new URLSearchParams(globalThis.location?.search).get("ask")
 const LIMIT_SCENE = new URLSearchParams(globalThis.location?.search).get("fins") === "limit"
+/** `&crew=moves`: the crew changed outside the Apex's turns, said as lines in its transcript (`membershipLine`). */
+const MOVES_SCENE = new URLSearchParams(globalThis.location?.search).get("crew") === "moves"
 const LIMIT_UNTIL = "Sun 12:00 AM PST"
 const LIMIT_MOVED = `Moved to Claude Code: Cursor is at its limit until ${LIMIT_UNTIL}`
 const LIMIT_OUT = `Out of accounts until ${LIMIT_UNTIL}: Cursor and Claude Code (work)`
@@ -146,7 +164,7 @@ function shown(state: ChildState, child: string, at: number, placed = false): Ch
       return { thread: { starting: state.step }, journal: {} }
     case "working":
       return {
-        thread: { working: true, ...(state.step && { step: state.step }) },
+        thread: { working: true, ...(state.step && { step: state.step }), ...(state.quiet && { quiet: state.quiet }) },
         journal: state.phase ? { latest: { id: `report:${child}:phase`, child: ThreadIdSchema.parse(child), status: "progress", summary: state.phase, ownerGeneration: 1, at } } : {},
       }
     case "blocked":
@@ -335,6 +353,17 @@ const DIRECT_AT = Date.now() - 2 * 60_000
 const DICTATION = 3
 const WAKE_AT = Date.now() - 90_000
 /** A wake as the host writes one (`digest`): the Apex's words, then the same reports as data, which the person reads as each Fin's message. */
+/**
+ * `&wake=crew`: the wake carries four more reports, finished or left to the Apex, so the person reads one crew update:
+ * what needs them open, the rest folded into a line (`FinReports`).
+ */
+const CREW_WAKE = new URLSearchParams(globalThis.location?.search).get("wake") === "crew"
+const CREW_WAKE_REPORTS = [
+  { report: "report:haptics:done", fin: childThread(7), name: "Haptics audit", harness: "claude", status: "done" as const, line: "Listed 31 haptics; two fire twice on long-press." },
+  { report: "report:share-sheet:done", fin: childThread(8), name: "Share sheet copy", harness: "cursor", status: "done" as const, line: "Worded the share sheet's actions in the app's voice.", artifacts: [{ kind: "pull-request" as const, ref: "https://github.com/acme/phone/pull/215" }] },
+  { report: "report:deep-links:done", fin: childThread(10), name: "Settings deep links", harness: "claude", status: "done" as const, line: "Every settings page opens from a link now." },
+  { report: "report:pull-refresh:read", fin: childThread(11), name: "Pull to refresh", harness: "grok", status: "done" as const, line: "Ship the cached list or the fresh read on pull?", decides: "lead" as const, options: [{ label: "Fresh read" }, { label: "Cached" }], recommended: 0 },
+]
 const WAKE_TEXT = appendFinReports(
   [
     FROM_AGENTS,
@@ -349,6 +378,7 @@ const WAKE_TEXT = appendFinReports(
   [
     { report: "report:push-wording:tone", fin: childThread(0), name: "Quiet-hours push wording", harness: "codex", status: "needs-input", line: "Which tone for the quiet-hours notice? Plain or friendly?", options: [{ label: "Plain", detail: "Pushes are held until 7:00." }, { label: "Friendly", detail: "Quiet hours: we'll tell you at 7:00." }], recommended: 0, forPerson: true },
     { report: "report:swipe:done", fin: childThread(9), name: "Thread list swipe", harness: "codex", status: "done", line: "Swipe to archive now springs back below the threshold; PR on your branch.", artifacts: [{ kind: "pull-request", ref: "https://github.com/acme/phone/pull/214" }] },
+    ...(CREW_WAKE ? CREW_WAKE_REPORTS : []),
   ]
 )
 
@@ -458,6 +488,12 @@ export function apexSnapshot(): LiveSnapshot {
       { type: "user", text: wake.text, requestId: wake.id },
       { type: "text", text: "Push wording's tone is yours to pick; Thread list swipe finished with its PR." },
       ...(LIMIT_SCENE ? [{ type: "event" as const, label: LIMIT_RAN, detail: LIMIT_DID }] : []),
+      ...(MOVES_SCENE
+        ? [
+            { type: "event" as const, ...membershipLine({ kind: "moved", fin: "Composer chips on iPad", to: "Moved to Claude Code (work)", why: "personal is at its limit until 12:31 AM" }) },
+            { type: "event" as const, ...membershipLine({ kind: "stopped", fin: "Haptics audit" }) },
+          ]
+        : []),
       { type: "user", text: request.text, requestId: request.id },
       { type: "text", text: "Reading the digest." },
     ],
@@ -470,6 +506,16 @@ export function apexSnapshot(): LiveSnapshot {
       ...((ASK_SCENE === "move" || ASK_SCENE === "back") && { asks: [{ id: "1ead1ead-7000-4000-8000-0000000000a5", at: STARTED, want: ASK_SCENE === "back" ? { kind: "back" as const } : { kind: "move" as const, move: "1ead1ead-7000-4000-8000-0000000000a6", handsOff: true } }] }),
     },
     nativeAgents: { agents: apexFins(), limited: false },
+    // `wait=1`: its agent waits for CI on a pull request and a Fin, one met already (`TurnWaitLine`).
+    ...search.get("wait") === "1" && {
+      turnWait: {
+        wait: "1ead1ead-9000-4000-8000-00000000a1a1",
+        description: "Waiting for CI on #412",
+        items: [{ words: "acme/app#412 checks", met: true }, { words: "fin:sheet-motion", met: false }],
+        returnWhen: "all" as const,
+        endsBy: Date.now() + 20 * 60 * 60_000,
+      },
+    },
   }
 }
 

@@ -62,7 +62,7 @@ function readTurn(conversation: string, requestId: string, key: string): Promise
  * checkpoints or, without them, from the journal the record was counted
  * from; Undo takes the turn's own lines back out and keeps everyone else's.
  */
-export function TurnChanges({ requestId }: { requestId: string | undefined }) {
+export function TurnChanges({ requestId, streaming = false }: { requestId: string | undefined; streaming?: boolean }) {
   const { liveId } = useTranscriptSource()
   const request = useAcp((state) => {
     const live = liveId ? state.conversations[liveId] : undefined
@@ -72,6 +72,7 @@ export function TurnChanges({ requestId }: { requestId: string | undefined }) {
   const before = request?.snapshots?.before
   const saved = before?.kind === "ready" && request?.snapshots?.after?.kind === "ready" ? before.snapshot.scope : null
   if (!liveId || !requestId || !request) return null
+  if (streaming) return null
   const recorded = recordedTurnChanges(request.changes)
   if (recorded) return <TurnChangesRow summary={recorded} conversation={liveId} requestId={requestId} workspace={saved ?? recordRoots(request.changes)[0] ?? null} undoable undone={request.undone} />
   const workspace = saved

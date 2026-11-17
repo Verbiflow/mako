@@ -1,4 +1,6 @@
 import assert from "node:assert/strict"
+import { GATEWAY_ALLOWED } from "@mako/host/contracts/gateway-allowed"
+import { GATEWAY_REFUSED } from "@mako/host/contracts/host-operations"
 import { randomUUID } from "node:crypto"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -24,7 +26,7 @@ import { invokeWithRecovery, type RecoveryLink } from "@mako/host/contracts/host
 import { startWebHost, type HostInvoke } from "@mako/host/transport/server"
 
 /** Strings tried in order for a string slot, until the slot's schema takes one. */
-const STRING_SAMPLES = ["text", "/text", "/tmp/text", "0".repeat(64)]
+const STRING_SAMPLES = ["text", "/text", "/tmp/text", "0".repeat(64), "3f6c2a1e-8b4d-4c7a-9e21-5d0b7f9a6c13"]
 /** Numbers tried in order for a number slot. */
 const NUMBER_SAMPLES = [7, 1, 0]
 
@@ -160,6 +162,7 @@ try {
     }
     let methods = 0
     let screen = 0
+    let kept = 0
     for (const [name, method] of Object.entries(viaSocket)) {
       const twin = Object.entries(viaGateway).find(([other]) => other === name)?.[1]
       if (!(method instanceof Function) || !(twin instanceof Function)) continue
@@ -172,16 +175,23 @@ try {
       if (!socketChannels.length || socketChannels.some(isClientCall)) continue
       if (socketChannels.some(isHostScreenCall)) {
         assert.doesNotMatch(socketOutcome.error ?? "", /no such call|Unknown Mako host method/, `${name} reaches the host on its own socket`)
-        assert.match(gatewayOutcome.error ?? "", /no such call/, `${name} acts on the host's screen, so the gateway refuses it`)
+        assert.match(gatewayOutcome.error ?? "", new RegExp(GATEWAY_REFUSED), `${name} acts on the host's screen, so the gateway refuses it`)
         screen++
+        continue
+      }
+      // A call only this host's own windows make: another device is refused it by name, and nothing runs.
+      if (socketChannels.some((channel) => !GATEWAY_ALLOWED.has(channel))) {
+        assert.match(gatewayOutcome.error ?? "", new RegExp(GATEWAY_REFUSED), `${name} is this host's windows' alone, so the gateway refuses it`)
+        kept++
         continue
       }
       assert.deepEqual(gatewayOutcome, socketOutcome, `${name} answers the same`)
       methods++
     }
     assert.equal(screen, HOST_SCREEN_CALLS.length, "every host-screen call has a bridge method")
-    assert.ok(methods > 150, `${methods} bridge methods reach the host`)
-    console.log(`Desktop bridge: all ${methods} createMakoBridge methods that reach the host give the same answer or the same error over the gateway as over the socket`)
+    assert.ok(methods > 80, `${methods} bridge methods reach the host through the gateway`)
+    assert.ok(kept > 100, `${kept} bridge methods are this host's windows' alone`)
+    console.log(`Desktop bridge: the ${methods} createMakoBridge methods another device may make give the same answer or the same error over the gateway as over the socket; the other ${kept} are refused to it by name`)
   }
 
   // 5. Failures keep their meaning: the same error, and the same delivery state for retries.
@@ -199,8 +209,9 @@ try {
       assert.deepEqual(describe(byGateway), describe(bySocket), what)
     }
     behaviours.delete("mako:git-commit")
-    const invalid = [{ cwd: 42 }]
-    assert.deepEqual(describe(await rejection(overGateway("mako:open-tab", invalid))), describe(await rejection(overSocket("mako:open-tab", invalid))), "a schema refusal")
+    // A call another device may make, with arguments its schema refuses.
+    const invalid = [42]
+    assert.deepEqual(describe(await rejection(overGateway("mako:live-state", invalid))), describe(await rejection(overSocket("mako:live-state", invalid))), "a schema refusal")
     await assert.rejects(overGateway("mako:git-commit", [1n]), TypeError, "a BigInt can't be sent")
     console.log("Host failures: a handler's error, refused and lost owners, a fixture refusal and a schema refusal read the same over both transports")
   }
@@ -368,6 +379,8 @@ function sample(schema: z.core.$ZodType, mode: "full" | "minimal", slot = false)
     }
     return value
   }
+  // Any JSON (`z.json()`, a preference's value): the first sample it takes.
+  if (schema instanceof z.ZodLazy) return [mode === "full" ? "text" : null, 7, true].find((value) => schema.safeParse(value).success) ?? null
   throw new Error(`No sample for ${schema._zod.def.type}`)
 }
 

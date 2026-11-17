@@ -92,6 +92,8 @@ export interface WorktreeBranchPull {
   checks: "passed" | "failed" | "running" | null
 }
 
+export type WorktreeBranchProof = Pick<WorktreeBranchPull, "branch" | "head" | "state">
+
 /** How a worktree's branch stands, for the rail's mark and its tip. */
 export interface WorktreeSummary {
   path: string
@@ -234,4 +236,41 @@ export interface WorktreeStartPoint {
   standing: WorktreeStanding
   /** The last fetch of the upstream since Mako started, or null when none was tried. */
   fetched: { at: number; failed: string | null } | null
+}
+
+/** Preview is the default: the person must opt in before any automatic removal. */
+export interface WorktreeRetentionSettings {
+  mode: "preview" | "packages" | "checkout"
+  /** Quiet days for checkout removal only; finished Threads' packages need no age or Git proof. */
+  days: number
+  /** Explicitly kept checkouts are never retired automatically. */
+  kept: string[]
+}
+
+export interface WorktreeRetirement {
+  path: string
+  thread: ThreadId
+  branch: string
+  /** All repository tips, so a changed branch cannot reuse a previous decision. */
+  heads: string[]
+  packages: string[]
+  /** Identity of each owned install, so a replacement cannot reuse its cleanup decision. */
+  packageIdentities: Array<{ path: string; device: number; inode: number }>
+  /** Independent of Git, source age and checkout eligibility. */
+  packageSkip: string | null
+  /** Private ignored files keep the checkout even when its install can be reclaimed. */
+  checkoutSkip: string | null
+  /** The registry ownership captured with this decision, rechecked before removal. */
+  owners: Array<{ path: string; thread: ThreadId; createdAt: number }>
+  /** Null means it is eligible now; an unreadable guard always gives a reason. */
+  skip: string | null
+}
+
+export interface WorktreeRetentionReport {
+  settings: WorktreeRetentionSettings
+  everyMs: number
+  minimumPassMs: number
+  repositoryFetches: number
+  at: number
+  checkouts: WorktreeRetirement[]
 }

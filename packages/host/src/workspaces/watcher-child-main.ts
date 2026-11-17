@@ -1,9 +1,10 @@
 import parcel, { type AsyncSubscription } from "@parcel/watcher"
 import { execFile, type ChildProcess } from "node:child_process"
 import { z } from "zod"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { watch, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
-import { basename, dirname, join } from "node:path"
+import { basename, dirname, join, resolve } from "node:path"
+import { watchGitMarkersHere } from "./git-marker-native.js"
 import { OTHER_APPS_DATA } from "../base/other-apps-data.js"
 import { membersOnly, parseTable, PS_ARGS, type RunLeader } from "./process-table.js"
 import { CanaryTestSchema, HISTORY_SCRATCH, HistoryMarkSchema, MAX_EXCLUDED, WatcherRequestSchema, type CanaryTest, type DropReason, type HistoryMark, type WatcherReply, type WatcherRequest } from "../contracts/watcher-child.js"
@@ -14,6 +15,22 @@ import { CanaryTestSchema, HISTORY_SCRATCH, HistoryMarkSchema, MAX_EXCLUDED, Wat
  * corrupts the heap of whatever process hosts it. It runs here so that a
  * crash costs a restart of this child, not the app.
  */
+
+/*
+ * Every parcel subscribe and unsubscribe starts once the one before it has settled. On Linux they share parcel's
+ * inotify backend, and two at once lost a live watch's events with no error: its subscribe resolved, it said ready,
+ * and its writes were never heard. A root that couldn't be subscribed beside it (one removed while this child
+ * restarted) did so in 5 of 200 rounds; an unsubscribe beside it, in about half. One after another, none.
+ */
+let parcelTurn: Promise<unknown> = Promise.resolve()
+function inTurn<Value>(work: () => Promise<Value>): Promise<Value> {
+  const turn = parcelTurn.then(work)
+  parcelTurn = turn.catch(() => {})
+  return turn
+}
+function subscribeInTurn(...args: Parameters<typeof parcel.subscribe>): Promise<AsyncSubscription> {
+  return inTurn(() => parcel.subscribe(...args)).then((subscription) => ({ unsubscribe: () => inTurn(() => subscription.unsubscribe()) }))
+}
 
 const subscriptions = new Map<number, Promise<AsyncSubscription | undefined>>()
 /** Subscriptions still settling: a first inotify crawl holds parcel's lock, so the canary waits. */
@@ -56,16 +73,52 @@ process.on("message", (raw) => {
     return
   }
   settling.add(id)
-  const subscription = parcel
-    .subscribe(request.data.root, (error, events) => {
+  const asked = request.data
+  const native = asked.native
+  const opening = native ? Promise.resolve().then(async () => {
+    if (!subscriptions.has(id)) return undefined
+    const notify = (_event?: string, filename?: string | Buffer | null) => {
+      if (!subscriptions.has(id)) return
+      if (native.kind !== "app-output") { reply({ t: "events", id, events: [{ path: asked.root, type: "update" }] }); return }
+      if (!existsSync(asked.root)) { fail(new Error("App output folder is gone")); return }
+      if (!filename) { reply({ t: "dropped", id }); return }
+      const path = resolve(asked.root, filename.toString())
+      if (!path.startsWith(asked.root + "/") || asked.ignore.some(ignore => path === ignore || path.startsWith(ignore + "/"))) return
+      // A new step directory may already contain its first log before a recursive backend arms that subdirectory.
+      if (path.endsWith(".steps")) { reply({ t: "dropped", id }); return }
+      if (!/\.log(?:\.1)?$/.test(path)) return
+      reply({ t: "events", id, events: [{ path, type: "update" }] })
+    }
+    if (native.kind === "git-markers") {
+      const markers = watchGitMarkersHere(asked.root, notify, native.markers)
+      await markers.ready
+      return { unsubscribe: async () => { markers.close() } }
+    }
+    const directory = watch(asked.root, { recursive: native.kind === "app-output" }, notify)
+    let closed = false
+    const close = () => { if (!closed) { closed = true; directory.close() } }
+    // Keep the handler after failure too: repeated errors from this handle must not crash every other watch.
+    const fail = (error: Error) => {
+      if (closed || subscriptions.get(id) !== subscription) return
+      subscriptions.delete(id)
+      settling.delete(id)
+      let message = error.message
+      try { close() }
+      catch (failure) { message += `; closing it failed: ${failure instanceof Error ? failure.message : String(failure)}` }
+      reply({ t: "failed", id, message })
+      if (!subscriptions.size) stopCanary()
+    }
+    directory.on("error", fail)
+    return { unsubscribe: async () => { close() } }
+  }) : subscribeInTurn(asked.root, (error, events) => {
       if (!subscriptions.has(id)) return
       if (error) {
         const reason = dropReason(error)
         reply({ t: "dropped", id, ...(reason && { reason }) })
       }
       else if (events.length) reply({ t: "events", id, events: events.map(({ path, type }) => ({ path, type })) })
-    }, { ignore: request.data.ignore })
-    .then((current) => {
+    }, { ignore: asked.ignore })
+  const subscription = opening.then((current) => {
       settling.delete(id)
       if (subscriptions.has(id)) {
         reply({ t: "ready", id })
@@ -254,7 +307,7 @@ async function probe(id: number, beats: number): Promise<void> {
   const lagsMs: number[] = []
   let subscription: AsyncSubscription | undefined
   try {
-    subscription = await parcel.subscribe(folder, (error, events) => {
+    subscription = await subscribeInTurn(folder, (error, events) => {
       if (error) return
       for (const event of events) {
         const hear = heard.get(event.path)
@@ -341,8 +394,7 @@ function startCanary(): void {
   }
   const current: Canary = { folder, heard: 0, misses: 0, waited: 0, lags: [], subscription: Promise.resolve(undefined) }
   canary = current
-  current.subscription = parcel
-    .subscribe(folder, (error, events) => {
+  current.subscription = subscribeInTurn(folder, (error, events) => {
       if (error || !events.length || (test?.deafWhile && existsSync(test.deafWhile))) return
       if (test?.lagMs) setTimeout(() => heard(current), test.lagMs)
       else heard(current)

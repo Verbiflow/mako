@@ -4,7 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { testScratch } from "./lib/test-scratch.mjs"
-import { atSize, withMotion } from "./lib/test-window.mjs"
+import { atSize, navigate, withMotion } from "./lib/test-window.mjs"
 import { crewEvidencePlugin, CREW_EVIDENCE_PRELOAD, withCrewFailureEvidence, saveCrewInteraction } from "./lib/crew-card-evidence.mjs"
 
 // The crew card (`crew-card.tsx`) that replaces "Waiting on N agents" at the end of an Apex's own transcript once
@@ -214,7 +214,7 @@ async function checkPage({ window, page, shots, base }) {
     return [...seen.values()]
   }
 
-  await window.loadURL(`${base}?mock&app=apex`)
+  await navigate(window, `${base}?mock&app=apex`)
   await until(
     "[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))",
     "the Apex's row"
@@ -510,7 +510,7 @@ async function checkPage({ window, page, shots, base }) {
 
   // Forty Fins and the re-render bench below: a fresh load first, so the Agents panel opened above (its own
   // subscription to the same roster) isn't still mounted beside the card, which would count its renders too.
-  await window.loadURL(`${base}?mock&app=apex`)
+  await navigate(window, `${base}?mock&app=apex`)
   await until(
     "[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))",
     "the Apex's row again"
@@ -631,7 +631,7 @@ async function checkPage({ window, page, shots, base }) {
   // A long Apex, its transcript windowed (past 40 turns): the line brings the card back there too, with the transcript
   // changing in the same frame. Windowed, the transcript can't tell a scroll it didn't make from its own virtualizer's,
   // so the line announces its scroll as the reader's (`scrollReaderTo`); unannounced, the hold put the top back.
-  await window.loadURL(`${base}?mock&app=apex&turns=60`)
+  await navigate(window, `${base}?mock&app=apex&turns=60`)
   await until(
     "[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))",
     "the long Apex's row"
@@ -662,7 +662,7 @@ async function checkPage({ window, page, shots, base }) {
 
   // The phone: the same card, compact, answers in reach of a thumb.
   window.setContentSize(390, 844)
-  await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
+  await navigate(window, `${base}scripts/phone-apex.html?app=apex`)
   await until(
     "Boolean(document.querySelector('[data-thread] [data-fin-pips]'))",
     "the Apex's row on the phone"
@@ -680,17 +680,15 @@ async function checkPage({ window, page, shots, base }) {
   await settle()
   assert.doesNotMatch(await evaluate("document.querySelector('[data-crew]').innerText"), /\b\d+h\b/, "no row on the phone says the Fin's age")
   // A laptop's browser draws the same rows from the same roster.
-  await window.loadURL(`${base}scripts/web-desk.html?thread=apex&theme=dark`)
+  await navigate(window, `${base}scripts/web-desk.html?thread=apex&theme=dark`)
   await until("document.querySelectorAll('[data-crew] [data-crew-row]').length > 0", "the crew card in a laptop's browser")
   const laptop = await evaluate("document.querySelector('[data-crew]').innerText")
   assert.match(laptop, /Composer chips on iPad[\s\S]*?18m/, `its working row counts its turn: ${laptop}`)
   assert.doesNotMatch(laptop, /\b\d+h\b/, "no row in the browser says the Fin's age")
   window.setContentSize(390, 844)
-  // Through a blank page: straight from the browser's page to the phone's, a quarter second after it loaded, the
-  // renderer crashed (SIGTRAP) in 18 runs of 500 on the Mac runner and the load failed ERR_FAILED (-2); through
-  // about:blank at the same moment, in none of 100.
-  await window.loadURL("about:blank")
-  await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
+  // Through a blank page, as every load here goes (`navigate`): straight from the browser's page to the phone's the
+  // renderer crashed in 18 runs of 500.
+  await navigate(window, `${base}scripts/phone-apex.html?app=apex`)
   await until("Boolean(document.querySelector('[data-thread] [data-fin-pips]'))", "the phone again")
   await click("[data-thread]")
   await until("Boolean(document.querySelector('[data-crew]'))", "the crew card on the phone again")
@@ -760,6 +758,189 @@ async function checkPage({ window, page, shots, base }) {
     "!document.querySelector('[data-crew-away]')",
     "the phone's line leaves once the card is back"
   )
+
+  // A quiet Fin (`&fins=quiet`): still working, nothing from it for 18 minutes. Its row says so, with what to do about it.
+  window.setContentSize(1440, 900)
+  await navigate(window, `${base}?mock&app=apex&fins=quiet`)
+  await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, quiet scene")
+  await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
+  await until("Boolean(document.querySelector('[data-composer]'))", "the Apex's composer, quiet scene")
+  await evaluate("window.apexScene.setRunning(false); true")
+  await until("Boolean(document.querySelector('[data-quiet-row]'))", "the quiet Fin's row")
+  const quietRow = await evaluate(`(() => { const row = document.querySelector('[data-quiet-row]'); return { text: row.innerText.replace(/\\s+/g, ' '), mark: row.querySelector('[data-live-mark]')?.dataset.liveMark, actions: [...row.querySelectorAll('[data-fin-action]')].map((node) => node.dataset.finAction), shimmer: Boolean(row.querySelector('.shimmer, [data-shimmer]')) } })()`)
+  console.log("QUIET", JSON.stringify(quietRow))
+  assert.match(quietRow.text, /Offline outbox retry/)
+  assert.match(quietRow.text, /Quiet 18m · last step: .+, still running/, "the row says how long, and its last step")
+  assert.equal(quietRow.mark, "quiet", "its mark is still, not working")
+  assert.deepEqual(quietRow.actions, ["message", "stop"], "and offers Message and Stop beside opening it")
+  await capture("quiet-row")
+  await evaluate("document.querySelector('[data-quiet-row] [data-fin-action=message]').click(); true")
+  await until("document.querySelector('[data-child-note=direct]')?.innerText.includes('Offline outbox retry')", "Message addresses the Apex's composer to the quiet Fin")
+  console.log("PASS: a quiet Fin reads quiet, says for how long, and offers Message and Stop")
+
+  // Every Fin row, in the crew card and the side rail, can be written to or stopped: on hover, always for a quiet one.
+  const rowActions = await evaluate(`(() => {
+    const crew = [...document.querySelectorAll('[data-crew] [data-fin-actions]')].map((node) => ({ fin: node.dataset.finActions, actions: [...node.querySelectorAll('[data-fin-action]')].map((each) => each.dataset.finAction), shown: getComputedStyle(node).opacity }))
+    const side = [...document.querySelectorAll('[data-child-row]')].map((row) => Boolean(row.parentElement.querySelector('[data-fin-actions]')))
+    return { crew, side }
+  })()`)
+  console.log("ROW ACTIONS", JSON.stringify(rowActions))
+  const stoppable = rowActions.crew.filter((row) => row.actions.includes("stop"))
+  assert.ok(stoppable.length >= 4, `working Fins offer Stop beside Message: ${JSON.stringify(rowActions.crew)}`)
+  assert.ok(rowActions.crew.every((row) => row.actions.includes("message") || row.actions.includes("resume") || row.actions.includes("retry") || row.actions.includes("stop")), "every row offers an action")
+  assert.equal(rowActions.crew.filter((row) => row.shown === "1").length, 1, "only the quiet Fin's actions show without hover")
+  assert.ok(rowActions.side.length > 0 && rowActions.side.every(Boolean), "the side rail's Fin rows offer them too")
+  console.log("PASS: every Fin row offers Message and Stop, shown on hover and always for a quiet Fin")
+
+  // The phone: the same quiet Fin in its Apex's compact crew card, still and saying so.
+  window.setContentSize(390, 844)
+  await navigate(window, `${base}scripts/phone-apex.html?app=apex&fins=quiet&open=1ead1ead-0000-4000-8000-000000001ead`)
+  await until("Boolean(document.querySelector('[data-crew-row][data-quiet]'))", "the phone's quiet Fin row")
+  await evaluate("document.querySelector('[data-crew-row][data-quiet]').scrollIntoView({ block: 'center' }); true")
+  const phoneQuiet = await evaluate("document.querySelector('[data-crew-row][data-quiet]').innerText.replace(/\\s+/g, ' ')")
+  assert.match(phoneQuiet, /Quiet 18m · last step: .+, still running/, `the phone says it the same way: ${phoneQuiet}`)
+  await both("quiet-phone")
+  console.log("PASS: the phone's crew card shows the quiet Fin the same way")
+
+  // A wake of six reports is one crew update: what needs the person open, the rest one line, opened on Show.
+  window.setContentSize(1440, 900)
+  await navigate(window, `${base}?mock&app=apex&wake=crew`)
+  await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, crew wake")
+  await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
+  await evaluate("window.apexScene.setRunning(false); true")
+  await until("Boolean(document.querySelector('[data-crew-update]'))", "the crew update")
+  await evaluate("document.querySelector('[data-crew-update]').scrollIntoView({ block: 'center' }); true")
+  const update = await evaluate(`(() => {
+    const block = document.querySelector('[data-crew-update]')
+    return {
+      head: block.querySelector('[data-crew-update-head]').innerText.replace(/\\s+/g, ' '),
+      open: [...block.querySelectorAll('[data-fin-report]')].map((node) => node.dataset.fin),
+      options: block.querySelectorAll('[data-fin-report-option]').length,
+      fold: block.querySelector('[data-crew-update-fold]')?.innerText.replace(/\\s+/g, ' '),
+    }
+  })()`)
+  console.log("CREW UPDATE", JSON.stringify(update))
+  assert.match(update.head, /^5 reported · Quiet-hours push wording needs you/, "the head says what the wake carried, needs-you named")
+  assert.equal(update.open.length, 1, "only what needs the person stays open")
+  assert.ok(update.options >= 2, "with its answers live")
+  assert.match(update.fold ?? "", /^Thread list swipe, Haptics audit and 3 more reported 2 PRs Show$/, `the rest fold into one line: ${update.fold}`)
+  // Only the person's own scroll lets the transcript stop following its end: a wheel up first, then to the update.
+  await page.sendInputEvent({ type: "mouseWheel", x: 800, y: 400, deltaX: 0, deltaY: 1200 })
+  await new Promise((done) => setTimeout(done, 200))
+  await evaluate("document.querySelector('[data-crew-update]').scrollIntoView({ block: 'center' }); true")
+  await new Promise((done) => setTimeout(done, 400))
+  await capture("crew-update")
+  await evaluate("document.querySelector('[data-crew-update-fold]').click(); true")
+  await until("document.querySelectorAll('[data-crew-update] [data-fin-report]').length === 6", "Show opens every report")
+  // A decision left to the Apex isn't the person's to pick: its options aren't drawn as buttons that do nothing.
+  const settled = await evaluate("[...document.querySelectorAll('[data-crew-update] [data-fin-report]')].filter((node) => node.innerText.includes('asks its Apex')).map((node) => node.querySelectorAll('[data-fin-report-option]').length)")
+  assert.deepEqual(settled, [0], `an Apex's decision shows no inert options: ${JSON.stringify(settled)}`)
+  await capture("crew-update-shown")
+  window.setContentSize(390, 844)
+  await navigate(window, `${base}scripts/phone-apex.html?app=apex&wake=crew&open=1ead1ead-0000-4000-8000-000000001ead`)
+  await until("Boolean(document.querySelector('[data-crew-update]'))", "the phone's crew update")
+  await evaluate("document.querySelector('[data-crew-update]').scrollIntoView({ block: 'start' }); true")
+  await both("crew-update-phone")
+  console.log("PASS: a wake of six reports is one crew update, open where it needs the person, the rest on Show")
+
+  // A done Fin's decision its Apex still has to make stays open in the update, among three finished ones: it isn't folded away.
+  window.setContentSize(1440, 900)
+  await navigate(window, `${base}?mock&app=apex&wake=crew&fins=decisions`)
+  await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, decisions wake")
+  await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
+  await evaluate("window.apexScene.setRunning(false); true")
+  await until("Boolean(document.querySelector('[data-crew-update]'))", "the crew update, decisions")
+  const leadUpdate = await evaluate(`(() => {
+    const block = document.querySelector('[data-crew-update]')
+    return {
+      open: [...block.querySelectorAll('[data-fin-report]')].map((node) => node.innerText.replace(/\\s+/g, ' ')),
+      fold: block.querySelector('[data-crew-update-fold]')?.innerText.replace(/\\s+/g, ' '),
+    }
+  })()`)
+  console.log("LEAD UPDATE", JSON.stringify(leadUpdate))
+  assert.equal(leadUpdate.open.length, 2, `the person's ask and the Apex's open decision stay open: ${JSON.stringify(leadUpdate.open)}`)
+  assert.ok(leadUpdate.open.some((text) => text.includes("Pull to refresh") && text.includes("asks its Apex")), "the Apex's decision is one of them")
+  assert.match(leadUpdate.fold ?? "", /^Thread list swipe, Haptics audit and 2 more finished 2 PRs Show$/, `the finished ones fold without it: ${leadUpdate.fold}`)
+  await page.sendInputEvent({ type: "mouseWheel", x: 800, y: 400, deltaX: 0, deltaY: 1200 })
+  await new Promise((done) => setTimeout(done, 200))
+  await evaluate("document.querySelector('[data-crew-update]').scrollIntoView({ block: 'center' }); true")
+  await new Promise((done) => setTimeout(done, 400))
+  await capture("crew-update-lead")
+  console.log("PASS: a done Fin's open decision for its Apex stays open in the crew update")
+
+  // Left past its time, the Apex's decision went to the person: its report still says the Apex decides, the roster says
+  // the person does. It stays open then too, the moment it needs them, never folded.
+  await navigate(window, `${base}?mock&app=apex&wake=crew&fins=escalated`)
+  await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, escalated wake")
+  await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
+  await evaluate("window.apexScene.setRunning(false); true")
+  await until("Boolean(document.querySelector('[data-crew-update]'))", "the crew update, escalated")
+  const escalated = await evaluate(`(() => {
+    const block = document.querySelector('[data-crew-update]')
+    return {
+      head: block.querySelector('[data-crew-update-head]').innerText.replace(/\\s+/g, ' '),
+      open: [...block.querySelectorAll('[data-fin-report]')].map((node) => node.innerText.replace(/\\s+/g, ' ')),
+      fold: block.querySelector('[data-crew-update-fold]')?.innerText.replace(/\\s+/g, ' '),
+    }
+  })()`)
+  console.log("ESCALATED UPDATE", JSON.stringify(escalated))
+  assert.ok(escalated.open.some((text) => text.includes("Pull to refresh") && text.includes("finished · needs you")), `an escalated decision stays open, as the person's: ${JSON.stringify(escalated.open)}`)
+  assert.match(escalated.head, /· 2 need you$/, `the head counts it as needing the person: ${escalated.head}`)
+  assert.match(escalated.fold ?? "", /^Thread list swipe, Haptics audit and 2 more finished 2 PRs Show$/, `the finished ones fold without it: ${escalated.fold}`)
+  console.log("PASS: a done Fin's decision escalated to the person stays open in the crew update")
+
+  // One crew list: the side rail folds finished and idle Fins as the card does, and the phone has Stop all too.
+  window.setContentSize(1440, 900)
+  await navigate(window, `${base}?mock&app=apex`)
+  await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, one list")
+  await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
+  await evaluate("window.apexScene.setRunning(false); true")
+  await until("document.querySelectorAll('[data-crew-settled]').length === 2", "the card and the side rail each fold their settled Fins")
+  const folds = await evaluate("[...document.querySelectorAll('[data-crew-settled]')].map((node) => node.innerText.trim())")
+  assert.equal(folds[0], folds[1], `the two surfaces fold alike: ${JSON.stringify(folds)}`)
+  const deskWords = await evaluate("document.querySelector('.thread-jump-scope [data-fin-pips]')?.innerText.trim()")
+  window.setContentSize(390, 844)
+  await navigate(window, `${base}scripts/phone-apex.html?app=apex`)
+  await until("Boolean(document.querySelector('[data-fin-pips]'))", "the phone's Apex row")
+  const phoneWords = await evaluate("document.querySelector('[data-fin-pips]').innerText.trim()")
+  assert.equal(phoneWords, deskWords, "the phone's list says the desk rail's words")
+  await navigate(window, `${base}scripts/phone-apex.html?app=apex&open=1ead1ead-0000-4000-8000-000000001ead`)
+  await until("Boolean(document.querySelector('[data-crew] [data-stop-all]'))", "Stop all on the phone's crew card")
+  // On the phone, Stop all asks first: one tap opens the question and stops nothing; Cancel closes it; Stop stops them.
+  const stopTitle = await evaluate("document.querySelector('[data-crew] [data-stop-all]').title")
+  await evaluate("document.querySelector('[data-crew] [data-stop-all]').click(); true")
+  await until("Boolean(document.querySelector('[data-stop-all-confirm]'))", "the phone's Stop all question")
+  const question = await evaluate("document.querySelector('[data-stop-all-confirm]').innerText.replace(/\\s+/g, ' ').trim()")
+  assert.match(question, /^Stop \d+ Fins\? The Apex keeps running\. Cancel Stop$/, `the question names how many: ${question}`)
+  assert.equal(await evaluate("document.querySelector('[data-crew] [data-stop-all]').title"), stopTitle, "a tap alone stops nothing")
+  await both("stop-all-confirm-phone")
+  await evaluate("[...document.querySelectorAll('[data-stop-all-confirm] button')].find((button) => button.innerText.trim() === 'Cancel').click(); true")
+  await until("!document.querySelector('[data-stop-all-confirm]') && Boolean(document.querySelector('[data-crew] [data-stop-all]'))", "Cancel leaves the Fins running")
+  await evaluate("document.querySelector('[data-crew] [data-stop-all]').click(); true")
+  await until("Boolean(document.querySelector('[data-stop-all-yes]'))", "the question again")
+  await evaluate("document.querySelector('[data-stop-all-yes]').click(); true")
+  await until("!document.querySelector('[data-stop-all-confirm]') && !document.querySelector('[data-crew] [data-stop-all]')", "Stop stops every Fin it can")
+  console.log(`PASS: the phone's Stop all asks first ("${question.replace(/ Cancel Stop$/, "")}"), Cancel keeps them, Stop stops them`)
+  console.log(`PASS: one crew list: the side rail folds as the card does (${folds[0]}), the phone says "${phoneWords}" and has Stop all`)
+
+  // What changed in the crew outside the Apex's turns reads as lines of its own in its transcript, desk and phone.
+  window.setContentSize(1440, 900)
+  await navigate(window, `${base}?mock&app=apex&crew=moves`)
+  await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, moves")
+  await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
+  await evaluate("window.apexScene.setRunning(false); true")
+  const membership = "[...document.querySelectorAll('[data-event-line]')].filter((node) => /moved to Claude Code|stopped by you/.test(node.innerText))"
+  await until(`${membership}.length === 2`, "the crew's membership lines")
+  const lines = await evaluate(`${membership}.map((node) => node.innerText.replace(/\\s+/g, ' ').trim())`)
+  assert.match(lines[0], /^Composer chips on iPad moved to Claude Code \(work\)/, `a move names the Fin and where: ${lines[0]}`)
+  assert.match(lines[1], /^Haptics audit stopped by you/, `the person's stop names the Fin: ${lines[1]}`)
+  await capture("membership-lines")
+  window.setContentSize(390, 844)
+  await navigate(window, `${base}scripts/phone-apex.html?app=apex&crew=moves&open=1ead1ead-0000-4000-8000-000000001ead`)
+  await until(`${membership}.length === 2`, "the phone's membership lines")
+  await evaluate(`${membership}[0].scrollIntoView({ block: 'center' }); true`)
+  await both("membership-lines-phone")
+  console.log(`PASS: the crew's changes outside the Apex's turns read as lines: ${JSON.stringify(lines)}`)
 
   assert.deepEqual(
     errors.filter(

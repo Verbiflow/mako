@@ -1,26 +1,31 @@
 import { Worker } from "node:worker_threads"
 import { z } from "zod"
+import { TurnChangesSchema, type TurnChanges } from "../contracts/turn-changes.js"
 import type { CollectPlan, Row } from "./journal-store.js"
 import type { Partition } from "./queries.js"
 
-/** How long a read may take before the caller reads on its own thread instead. */
+/** How long a read may take before its generation is retired and the request rejects. */
 const READ_TIMEOUT_MS = 30_000
 
 /** What the journal's reader is asked (`journal-reader-worker.ts`). */
 export const JournalReadSchema = z.discriminatedUnion("kind", [
   z.object({ id: z.number(), kind: z.literal("activity-overlapping"), from: z.number(), to: z.number() }),
   z.object({ id: z.number(), kind: z.literal("blobs"), refs: z.array(z.string()).max(100_000) }),
+  z.object({ id: z.number(), kind: z.literal("checkpoint-fingerprint"), checkout: z.string(), thread: z.string() }),
   z.object({ id: z.number(), kind: z.literal("partition"), checkout: z.string(), thread: z.string() }),
+  z.object({ id: z.number(), kind: z.literal("count-turn"), thread: z.string(), turn: z.string(), state: z.enum(["settling", "settled"]) }),
 ])
 type JournalRead = z.infer<typeof JournalReadSchema>
 
 /** A value as SQLite gives it. */
 const SqlValueSchema = z.union([z.string(), z.number(), z.bigint(), z.null(), z.instanceof(Uint8Array)])
 const ReplySchema = z.union([
+  z.object({ id: z.number(), ok: z.literal(true), fingerprint: z.string().regex(/^[a-f0-9]{64}$/) }),
   z.object({ id: z.number(), ok: z.literal(true), rows: z.array(z.record(z.string(), SqlValueSchema)) }),
   z.object({ id: z.number(), ok: z.literal(true), blobs: z.array(z.object({ ref: z.string(), bytes: z.instanceof(Uint8Array) })) }),
   // A partition, as `partition()` made it in the worker from the same journal: its shape checked, its files passed through.
   z.object({ id: z.number(), ok: z.literal(true), partition: z.object({ checkout: z.string(), thread: z.string(), files: z.array(z.unknown()) }).loose() }),
+  z.object({ id: z.number(), ok: z.literal(true), count: TurnChangesSchema.nullable() }),
   z.object({ id: z.number(), ok: z.literal(false), error: z.string() }),
 ])
 type Reply = z.infer<typeof ReplySchema>
@@ -35,7 +40,7 @@ interface Pending {
  * Big reads of the record of changes, on a worker of their own. SQLite reads on the host's thread wait on the disk
  * there: on a journal of 1.7 GB, finding a few minutes of activity read the whole table (152 MB) and held the loop
  * 1.8 s cold, 2.7 s on the person's host. The worker starts at the first read and stays while reads come; it never
- * keeps the process alive. A read that fails or takes too long rejects, and the caller reads on its own thread.
+ * keeps the process alive. A failed read rejects; turn counts never fall back to the host's thread.
  */
 export class JournalReader {
   private worker: Worker | undefined
@@ -43,6 +48,9 @@ export class JournalReader {
   private readonly pending = new Map<number, Pending>()
   private closed = false
   private readonly path: string
+  private closing: Promise<void> | undefined
+  private readonly retiring = new Set<Promise<void>>()
+  private releaseFailure: Error | undefined
 
   constructor(path: string) {
     this.path = path
@@ -85,16 +93,58 @@ export class JournalReader {
     })
   }
 
-  close(): void {
+  /** Checkpoint identity without transporting or hashing the partition's bodies on the caller. */
+  checkpointFingerprint(checkout: string, thread: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      this.ask((id) => ({ id, kind: "checkpoint-fingerprint", checkout, thread }), (reply) => {
+        if (!reply.ok) reject(new Error(reply.error))
+        else if ("fingerprint" in reply) resolve(reply.fingerprint)
+        else reject(new Error("The journal's reader answered another question."))
+      }, reject)
+    })
+  }
+
+  /** A turn's complete count, including its SQLite content reads and decompression, on the reader. No main-thread fallback. */
+  countTurn(thread: string, turn: string, state: TurnChanges["state"]): Promise<TurnChanges | undefined> {
+    return new Promise((resolve, reject) => {
+      this.ask((id) => ({ id, kind: "count-turn", thread, turn, state }), (reply) => {
+        if (!reply.ok) reject(new Error(reply.error))
+        else if ("count" in reply) resolve(reply.count ?? undefined)
+        else reject(new Error("The journal's reader answered another question."))
+      }, reject)
+    })
+  }
+
+  /** Refuse new reads immediately; completion joins every retired worker before its folder can be reused. */
+  close(): Promise<void> {
+    return this.closing ??= this.closeReader()
+  }
+
+  private async closeReader(): Promise<void> {
     this.closed = true
     this.stop(new Error("The record of changes closed."))
+    await Promise.all(this.retiring)
+    if (this.releaseFailure) throw this.releaseFailure
   }
 
   private ask(request: (id: number) => JournalRead, settle: (reply: Reply) => void, fail: (error: Error) => void): void {
     if (this.closed) return fail(new Error("The record of changes closed."))
+    if (this.retiring.size) {
+      void Promise.all(this.retiring).then(() => this.begin(request, settle, fail)).catch(fail)
+      return
+    }
+    try { this.begin(request, settle, fail) }
+    catch (error) { fail(error instanceof Error ? error : new Error("The journal's reader could not start.", { cause: error })) }
+  }
+
+  private begin(request: (id: number) => JournalRead, settle: (reply: Reply) => void, fail: (error: Error) => void): void {
+    if (this.closed) return fail(new Error("The record of changes closed."))
+    if (this.releaseFailure) return fail(this.releaseFailure)
     const worker = this.worker ?? this.start()
     const id = ++this.nextId
-    const timer = setTimeout(() => this.stop(new Error("The record of changes took too long to read.")), READ_TIMEOUT_MS)
+    const timer = setTimeout(() => {
+      if (this.pending.has(id)) this.stop(new Error("The record of changes took too long to read."))
+    }, READ_TIMEOUT_MS)
     timer.unref?.()
     this.pending.set(id, { settle, fail, timer })
     worker.ref()
@@ -104,11 +154,12 @@ export class JournalReader {
   private start(): Worker {
     const worker = new Worker(new URL("./journal-reader-worker.js", import.meta.url), {
       workerData: { path: this.path },
-      resourceLimits: { maxOldGenerationSizeMb: 256 },
+      resourceLimits: { maxOldGenerationSizeMb: 256, maxYoungGenerationSizeMb: 16 },
     })
     this.worker = worker
     worker.unref()
     worker.on("message", (message) => {
+      if (this.worker !== worker) return
       const reply = ReplySchema.safeParse(message)
       if (!reply.success) return
       const pending = this.pending.get(reply.data.id)
@@ -118,7 +169,7 @@ export class JournalReader {
       if (!this.pending.size) worker.unref()
       pending.settle(reply.data)
     })
-    worker.once("error", (error) => this.stop(error))
+    worker.once("error", (error) => { if (this.worker === worker) this.stop(error) })
     worker.once("exit", (code) => {
       if (this.worker === worker) this.stop(new Error(`The journal's reader exited with ${code}.`))
     })
@@ -133,7 +184,14 @@ export class JournalReader {
       pending.fail(error)
     }
     this.pending.clear()
-    if (worker) void worker.terminate()
+    if (worker) {
+      const released = (async () => {
+        try { await worker.terminate() }
+        catch (error) { this.releaseFailure ??= new Error("The journal's reader could not be released.", { cause: error }) }
+      })()
+      this.retiring.add(released)
+      void released.then(() => this.retiring.delete(released))
+    }
   }
 }
 

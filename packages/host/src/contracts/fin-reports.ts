@@ -16,6 +16,8 @@ export const FinReportCardSchema = z.object({
   /** Another Apex's reply to a message this one sent it, not a Fin's report. */
   apex: z.literal(true).optional(),
   status: ReportStatusSchema,
+  /** Its turn ended without a result (`Report.unfinished`); its status is `failed`. A build before this reads the words. */
+  unfinished: z.literal(true).optional(),
   /** What it said, as one paragraph: the question for an ask, the first paragraph of its summary for the rest. */
   line: z.string().max(4_000),
   options: z.array(AskOptionSchema).max(ASK_OPTIONS).optional(),

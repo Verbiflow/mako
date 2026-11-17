@@ -6,7 +6,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { nativeRecord } from "../harnesses/index.js"
 import type { ThreadPage } from "@mako/sessions"
 import { currentRecordPath } from "@mako/sessions/record-files"
-import type { BaseSource, BaseSpan, LiveSnapshot } from "../contracts/live-conversations.js"
+import type { BaseSource, BaseSpan, LiveSnapshot, LiveRequest } from "../contracts/live-conversations.js"
 import type { LiveSessionState } from "../contracts/providers-acp.js"
 import { capturedThread } from "./live-context.js"
 import { copiedBaseBytesSteps, journalIds, LiveJournal } from "./live-journal.js"
@@ -16,7 +16,7 @@ import { baseKeptBecause, baseKeptOnceHeld, baseUnread, samePlace, sourceOfPage,
 import { cutOffRequests, firstLiveStartSteps, mergedBaseSteps } from "./stream-merging.js"
 import { sameEntries, samePage, sharedEntries } from "./shared-entries.js"
 import { forkHistory } from "./live-forks.js"
-import { ForkPointSchema } from "../contracts/conversation-control.js"
+import { type CompactionRecovery, ForkPointSchema } from "../contracts/conversation-control.js"
 import type { Entry } from "@mako/sessions/entries"
 import { retainMismatches } from "../base/stream-mismatches.js"
 import { pagedOf, readBack } from "./paged-entries.js"
@@ -380,6 +380,22 @@ export class LiveSources {
   }
 
   /** Where `source`'s session is now, by its identity; its harness may have moved it, as Codex compresses an idle rollout in place. */
+  /**
+   * The newest page of a conversation's history as its session's record holds it, for a window's cold view: as
+   * `readBaseNow` reads it (an earlier build's view of the unchanged record first), but one page, not every one. Null
+   * when the record can't be read, or holds another session now; the window then reads the conversation in.
+   */
+  async newestBase(source: BaseSource): Promise<ThreadPage | null> {
+    const { dependencies } = this.access
+    const path = this.located(source)
+    try {
+      const page = (dependencies.staleHistory && await dependencies.staleHistory(path)) || await dependencies.history(path)
+      return page && page.ref.harness === source.harness && page.ref.nativeId === source.nativeId ? page : null
+    } catch {
+      return null
+    }
+  }
+
   private located(source: BaseSource): string {
     return bindingPath(this.access.dependencies, { harness: source.harness, nativeId: source.nativeId }, source.path) ?? source.path
   }
@@ -517,7 +533,19 @@ export class LiveSources {
 
   /** Observe native history independently of whether another client owns execution.
    * A single binding records which retained live blocks its native store covers. */
-  async refreshedSnapshot(id: string): Promise<LiveSnapshot | null> {
+  async refreshCompletedCut(id: string, request: LiveRequest): Promise<boolean> {
+    let applied = false
+    await this.refreshedSnapshot(id, { request, applied: () => { applied = true } })
+    return applied
+  }
+
+  async refreshCompaction(resident: Resident, recovery: CompactionRecovery): Promise<boolean> {
+    let applied = false
+    await this.refreshedSnapshot(resident.snapshot.session.id, undefined, { id: recovery.id, bindingId: recovery.bindingId, applied: () => { applied = true } })
+    return applied
+  }
+
+  async refreshedSnapshot(id: string, completion?: { request: LiveRequest; applied(): void }, recovery?: { id: string; bindingId: string; applied(): void }): Promise<LiveSnapshot | null> {
     // A window opening a conversation only on disk reads it in a slice at a time; one in memory is read on now.
     const resident = this.access.resident(id) ? this.access.load(id) : await this.access.loadSliced(id)
     if (!resident) return null
@@ -534,21 +562,27 @@ export class LiveSources {
     this.access.flush(resident)
     const base = resident.snapshot.base
     const bindings = resident.snapshot.control?.bindings ?? []
-    const binding = bindings.length === 1 ? bindings[0] : undefined
+    const recovering = Boolean(recovery && resident.snapshot.control?.compactionRecovery?.id === recovery.id &&
+      resident.snapshot.control.activeBindingId === recovery.bindingId && resident.snapshot.control.compactionRecovery.state.kind === "reconcile")
+    const binding = recovering ? activeBinding(resident) : bindings.length === 1 ? bindings[0] : undefined
+    // Verified completion or compaction reconciliation reads this before opening a provider. All live blocks belong to the cut;
+    // merge them with its native result using the existing cut-off/history rules, under the same snapshot fence.
+    const completing = recovering || Boolean(completion && binding && resident.snapshot.requests.includes(completion.request) &&
+      completion.request.interruption?.reason === "host-crashed" && completion.request.nativeRun?.bindingId === binding.id)
     const recorded = binding?.path ?? base?.ref.path
     const nativeId = binding?.nativeId ?? base?.ref.nativeId
     const provider = binding?.provider ?? base?.ref.harness
     const path = recorded && nativeId && provider ? this.located({ harness: provider, nativeId, path: recorded }) : recorded
-    const covered = binding?.coveredBlocks ?? 0
+    const covered = completing ? resident.snapshot.blocks.length : binding?.coveredBlocks ?? 0
     // Past what the record covers, only the notices a session gives as it opens (Codex's sandbox warning on every
     // Linux start) can stand while it's read: no turn wrote them, so the record hasn't moved past them.
     const uncovered = resident.snapshot.blocks.slice(covered)
     const onlyOpening = uncovered.every((block) => block.type === "event" && block.setup === true)
     // A fork that hasn't opened a session of its own has only the copy it began from: its parent's record goes on past the fork.
-    if (!path || !nativeId || resident.opening || resident.transferring || (isFork(resident.snapshot) && !binding) ||
+    if (!path || !nativeId || ((!completing) && (resident.opening || resident.transferring)) || (isFork(resident.snapshot) && !binding) ||
         resident.snapshot.session.status === "running" ||
         resident.snapshot.requests.some((request) => request.status === "dispatching") ||
-        (resident.snapshot.blocks.length > 0 && (!binding?.includesBase || !onlyOpening)))
+        (!completing && resident.snapshot.blocks.length > 0 && (!binding?.includesBase || !onlyOpening)))
       return this.access.snapshot(id)
     const pending = this.refreshes.get(id)
     if (pending) return pending
@@ -562,15 +596,25 @@ export class LiveSources {
         else this.missing.delete(resident)
         if (!latest || latest.ref.nativeId !== nativeId || latest.ref.harness !== provider)
           return this.access.stamp(resident.snapshot)
+        if (completing && latest.ref.copyOnly) return this.access.stamp(resident.snapshot)
+        if (recovering && (latest.preview || latest.unread?.length)) return this.access.stamp(resident.snapshot)
         const sameRevision = base && (resident.snapshot.baseCoveredBlocks ?? 0) === covered && latest.checkpoint !== undefined && latest.checkpoint === base.checkpoint &&
           latest.translator === base.translator &&
           latest.ref.bytes === base.ref.bytes && latest.ref.revision === base.ref.revision &&
           latest.ref.updatedAt === base.ref.updatedAt && latest.total === base.total &&
           // A fork an earlier build merged left its inherited turns as its record has them; they read once more, with its parent's history.
           !(isFork(resident.snapshot) && resident.snapshot.baseSupplied === undefined && (recordLiveStart(resident.snapshot) ?? 0) > 0)
-        if (sameRevision) return this.access.stamp(resident.snapshot)
-        const read = await captureNativeHistory(path, (path, before) =>
-          before === undefined ? Promise.resolve(latest) : dependencies.history(path, before))
+        if (sameRevision && !recovering) {
+          if (completing) completion?.applied()
+          return this.access.stamp(resident.snapshot)
+        }
+        const read = await captureNativeHistory(path, async (path, before) => {
+          const page = before === undefined ? latest : await dependencies.history(path, before)
+          if (recovering && (!page || page.ref.copyOnly || page.preview || page.unread?.length || page.ref.path !== path ||
+            page.ref.nativeId !== nativeId || page.ref.harness !== provider)) throw new Error("The native recovery source could not be verified")
+          return page
+        })
+        if (recovering && (!read || read.start !== 0 || read.entries.length !== read.total)) return this.access.stamp(resident.snapshot)
         const seeded = read && binding?.seeded
           ? withSeed(read, capturedThread(before, 0, true).entries, binding.seeded) ?? read
           : read
@@ -597,7 +641,7 @@ export class LiveSources {
         const refreshed = merged && (base ? { ...merged.base, entries: await sharedEntries(base.entries, merged.base.entries) } : merged.base)
         if (refreshed && this.access.resident(id) === resident &&
             resident.snapshot === before && resident.generation === generation &&
-            !resident.opening && !resident.transferring && !this.access.admission.closed &&
+            (completing || (!resident.opening && !resident.transferring)) && !this.access.admission.closed &&
             ((before.baseCoveredBlocks ?? 0) !== covered || before.baseSupplied !== baseSupplied || !base || !samePage(base, refreshed))) {
           // The journal keeps a new reading until the record store holds what
           // it adds (`holdBase`); the same history, moved or decoded by
@@ -605,6 +649,7 @@ export class LiveSources {
           const sameHistory = base !== null && (before.baseCoveredBlocks ?? 0) === covered && sameEntries(base.entries, refreshed.entries)
           resident.snapshot = { ...before, base: refreshed, baseCoveredBlocks: covered, baseLiveStart, baseSupplied, baseSource: sameHistory ? before.baseSource : undefined }
           this.access.flush(resident)
+          if (completing) { completion?.applied(); if (recovering) recovery?.applied() }
           // A block the record held before was compared then; the record standing alone is one finding.
           const known = before.baseCoveredBlocks ?? 0
           if (merged.merge && covered > known) {
@@ -616,6 +661,9 @@ export class LiveSources {
             })
           }
         }
+        if (recovering && resident.snapshot === before && this.access.resident(id) === resident && resident.generation === generation &&
+          resident.snapshot.control?.compactionRecovery?.id === recovery?.id && resident.snapshot.control?.activeBindingId === recovery?.bindingId &&
+          resident.snapshot.control?.compactionRecovery?.state.kind === "reconcile" && !this.access.admission.closed) recovery?.applied()
         void this.holdBase(resident)
       } catch (error) {
         hostLog("live", "native history refresh deferred", { conversation: id, error: errorMessage({ error }) })

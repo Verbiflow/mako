@@ -7,7 +7,7 @@ import { join } from "node:path"
 import { z } from "zod"
 import type { AgentCaller, ChildState } from "@mako/host/contracts/agents"
 import type { AgentsSendResult } from "@mako/host/contracts/agent-tools"
-import { rollup } from "@mako/host/contracts/children"
+import { childLine, rollup } from "@mako/host/contracts/children"
 import { NativeAgentSchema } from "@mako/host/contracts/native-agents"
 import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
 import { FROM_AGENTS, WAKE_COALESCE_MS } from "@mako/host/conversations/agent-wakes"
@@ -73,6 +73,49 @@ async function startFin(world: AgentsWorld, caller: AgentCaller, name: string, h
 }
 
 try {
+  // A queued message is waiting for ownership, not running the Fin's stale last step.
+  {
+    let fin = "", checking = false
+    const world = new AgentsWorld({
+      root: join(root, "owner-check"),
+      script: turn => turn.conversation === fin && turn.text.includes("check the next labels") ? turn.world.hold(fin).then(() => "done") : "done",
+      ownerCheck: conversation => checking && conversation === fin ? Date.now() : undefined,
+    })
+    try {
+      const apex = await world.apex("cursor", "full")
+      const started = await world.agents.start(apex.caller, { brief: { objective: "Check labels" }, harness: "claude", name: "labels", clientKey: "owner-check", cwd: world.root })
+      assert.ok(!("refused" in started) && started.conversation)
+      fin = started.conversation
+      await until("the first turn to finish", () => world.live.snapshot(fin)?.requests[0]?.status === "completed")
+      await world.agents.report(world.caller(fin), { status: "progress", summary: "Checking the old labels", clientKey: "old-step" })
+      checking = true
+      sent(await world.agents.send(apex.caller, { to: "labels", text: "check the next labels", deliver: "queue", clientKey: "owner-message" }))
+      await until("the owner hold", () => Boolean(requestOf(world, fin, "check the next labels")?.ownerCheck))
+      const waiting = stateOf(world, apex.conversation, "labels")
+      assert.equal(waiting?.kind, "working")
+      assert.equal(waiting?.kind === "working" && waiting.step, "Waiting to hear from your account")
+      assert.equal(waiting && childLine(waiting), "Waiting to hear from your account", "the current ownership wait replaces the old progress phase in the displayed row")
+      assert.equal(world.live.atWork(fin), false, "waiting on ownership holds no execution place")
+      const before = promptsOf(world, fin).length
+      world.agents.frontDoor(apex.conversation, {}, false)
+      const listing = world.agents.list(apex.caller, { scope: "all" })
+      // Ownership settles while the list awaits its placed-Fin portion: the returned row and its mark must agree.
+      checking = false
+      world.live.moves.ownerChecked()
+      const listed = await listing
+      assert.ok("mark" in listed)
+      await until("the held message to run", () => promptsOf(world, fin).length === before + 1)
+      world.live.moves.ownerChecked()
+      await pause(30)
+      assert.equal(promptsOf(world, fin).length, before + 1, "repeated owner callbacks never duplicate the message")
+      assert.equal(requestOf(world, fin, "check the next labels")?.ownerCheck, undefined)
+      await until("the resumed turn to be running", () => world.live.session(fin)?.status === "running")
+      const changed = await world.agents.list(apex.caller, { scope: "all", since: listed.mark })
+      assert.ok("children" in changed)
+      assert.ok(changed.children.some(child => child.name === "labels"), "an ownership wait settling is a real change even when both states read working")
+      assert.ok(world.agents.frontDoor(apex.conversation, {}, false).some(line => line.startsWith("- fin:labels")), "the front door also describes the changed wait instead of folding it as unchanged")
+    } finally { world.release(fin); await world.close() }
+  }
   for (const harness of HARNESSES) {
     // A message after a stop goes; what the stop paused waits for its Resume without holding anything else back.
     {
@@ -163,8 +206,9 @@ try {
       assert.match(afterRestart.hears, /paused for editing/)
       assert.equal(afterRestart.deduped, true)
       world.live.editQueued(fin, { requestId: readme.id, expectedText: readme.text, change: { kind: "resume" } })
-      await until("all four to go, in order", () => promptsOf(world, fin).length === 5)
-      assert.deepEqual(promptsOf(world, fin).slice(1).map((text) => /Then the README\.|Then the CHANGELOG\.|And the LICENSE\.|And the NOTICE\./.exec(text)?.[0]), ["Then the README.", "Then the CHANGELOG.", "And the LICENSE.", "And the NOTICE."])
+      // Its Apex's four messages, all waiting once the edit is done, go as one turn, in order (`foldQueued`).
+      await until("all four to go, in order", () => promptsOf(world, fin).length === 2)
+      assert.deepEqual([...promptsOf(world, fin)[1]!.matchAll(/Then the README\.|Then the CHANGELOG\.|And the LICENSE\.|And the NOTICE\./g)].map((found) => found[0]), ["Then the README.", "Then the CHANGELOG.", "And the LICENSE.", "And the NOTICE."])
       await world.close()
     }
 
@@ -195,9 +239,9 @@ try {
       assert.equal(requestOf(world, fin, "Then the README.")?.editing, true)
       assert.equal(promptsOf(world, fin).length, 1, `${harness}: nor does a restart send anything past it`)
       world.live.editQueued(fin, { requestId: readme.id, expectedText: readme.text, change: { kind: "resume" } })
-      await until("all three to go", () => promptsOf(world, fin).length === 4)
-      // The journal keeps the order the resume made (`request_order`), across the restart.
-      assert.deepEqual(promptsOf(world, fin).slice(1).map((text) => /Then the README\.|Carry on\.|Then the CHANGELOG\./.exec(text)?.[0]), ["Then the README.", "Carry on.", "Then the CHANGELOG."],
+      // All three are its Apex's, so they go as one turn (`foldQueued`), in the order the resume made (`request_order`), across the restart.
+      await until("all three to go", () => promptsOf(world, fin).length === 2)
+      assert.deepEqual([...promptsOf(world, fin)[1]!.matchAll(/Then the README\.|Carry on\.|Then the CHANGELOG\./g)].map((found) => found[0]), ["Then the README.", "Carry on.", "Then the CHANGELOG."],
         "the person's message, then the one that resumed the Fin, then what the stop paused")
       await world.close()
     }
@@ -233,10 +277,13 @@ try {
       assert.equal(promptsOf(world, lead).length, 1, `${harness}: nor after a restart`)
       assert.deepEqual(stateOf(world, apex.conversation, "lead"), { kind: "ended", outcome: "stopped", reason: "pausing" })
       sent(await world.agents.send(world.caller(apex.conversation), { to: "lead", text: "Carry on.", clientKey: "go" }))
-      await until(`${harness}: the lead to hear its Fin after the message`, () => promptsOf(world, lead).some((text) => text.startsWith(FROM_AGENTS)))
+      // Its Fins' news goes with that message's turn, as its own section after it (`foldQueued`), or as a turn after it.
+      await until(`${harness}: the lead to hear its Fin after the message`, () => promptsOf(world, lead).some((text) => text.includes(FROM_AGENTS)))
       const after = promptsOf(world, lead).slice(1)
       assert.ok(after[0]!.includes("Carry on."), `the message that resumed it goes first: ${after[0]}`)
-      assert.match(after.find((text) => text.startsWith(FROM_AGENTS))!, /"sub" \(\w+\) done: Sub finished\./)
+      const news = after.find((text) => text.includes(FROM_AGENTS))!
+      assert.ok(news !== after[0] || news.indexOf("Carry on.") < news.indexOf(FROM_AGENTS), `the news after the message: ${news}`)
+      assert.match(news, /"sub" \(\w+\) done: Sub finished\./)
       await world.close()
     }
 

@@ -1,5 +1,5 @@
 import "./lib/scratch-git.mjs"
-import { Git } from "@mako/git"
+import { Git, type RunOptions } from "@mako/git"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -14,8 +14,10 @@ import {
 import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
 import { mock } from "node:test"
+import { DatabaseSync } from "node:sqlite"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
+import { followHostLog } from "@mako/host/base/host-log"
 import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
@@ -123,9 +125,22 @@ try {
     first = randomUUID(),
     second = randomUUID()
   await owner.start("test", cwd, { conversationId: id })
+  // A fast turn can finish while its baseline is still packing. Its closing files must be read now,
+  // while the next prompt dispatches before baseline publication, and neither side of the record is lost.
+  const baselinePacking = Promise.withResolvers<void>(), releaseBaseline = Promise.withResolvers<void>()
+  const run = gitRunner.run.bind(gitRunner)
+  let paused = false
+  const packing = mock.method(gitRunner, "run", async (input: RunOptions) => {
+    if (!paused && input.args.includes("pack-objects")) {
+      paused = true
+      baselinePacking.resolve()
+      await releaseBaseline.promise
+    }
+    return run(input)
+  })
   owner.submit(id, first, "first question")
   await until(() => sent.length === 1)
-  assert.equal(owner.snapshot(id)?.requests[0].snapshots?.before.kind, "ready")
+  await baselinePacking.promise
   writeFileSync(file, "first answer files")
   owner.submit(id, second, "second question")
   finish(id, "first answer")
@@ -134,8 +149,19 @@ try {
     1,
     "queued provider cannot start ahead of final checkpoint"
   )
-  await until(() => sent.length === 2)
+  const catalog = new DatabaseSync(join(root, "snapshots", "snapshots.sqlite"), { readOnly: true })
+  try {
+    await until(() => Boolean(catalog.prepare("SELECT 1 FROM snapshots LIMIT 1").get()))
+    await until(() => sent.length === 2)
+    assert.equal(owner.snapshot(id)?.requests[0].snapshots, undefined, "the next prompt dispatches while the previous baseline is still packing")
+  } finally {
+    releaseBaseline.resolve()
+    catalog.close()
+    packing.mock.restore()
+  }
+  await until(() => owner.snapshot(id)?.requests[0].snapshots?.after?.kind === "ready")
   const firstRequest = owner.snapshot(id)?.requests[0]
+  assert.equal(firstRequest?.snapshots?.before.kind, "ready")
   assert.equal(firstRequest?.snapshots?.after?.kind, "ready")
   writeFileSync(file, "second answer files")
   finish(id, "second answer")
@@ -273,38 +299,75 @@ try {
     "PASS: cancellation during baseline capture never dispatches the prompt"
   )
 
-  // A checkpoint held past the deadline: the turn goes without it, says so, and takes it when it lands.
-  {
+  // Expire the requested checkpoint timer explicitly: elapsed wall time is a diagnostic, not a timer guarantee.
+  for (const failure of [false, true]) {
     await owner.stop()
-    owner = new LiveConversations({ ...dependencies, checkpointWaitMs: 200 })
+    const timeouts: number[] = []
+    owner = new LiveConversations({ ...dependencies, checkpointWaitMs: 200, checkpointTimedOut: (waitedMs) => {
+      timeouts.push(waitedMs)
+      if (failure) throw new Error("telemetry unavailable")
+    } })
     const lateId = randomUUID(), lateRequest = randomUUID()
     await owner.start("test", cwd, { conversationId: lateId })
     await until(() => owner.snapshot(lateId)?.session.status === "ready")
     let release = () => {}
     const holding = new Promise<void>((resolve) => (release = resolve))
+    const warned: unknown[] = []
+    const unlog = followHostLog((line) => {
+      if (line.scope === "checkpoints" && line.message === "a turn went before its checkpoint held the workspace" && line.fields?.conversation === lateId) warned.push(line.fields.waitedMs)
+    })
+    let expire: (() => void) | undefined, capturing = false
+    const delays: number[] = []
+    const schedule = globalThis.setTimeout
+    const timer = mock.method(globalThis, "setTimeout", (callback: (...args: unknown[]) => void, ms: number, ...args: unknown[]) => {
+      if (ms !== 200) return schedule(callback, ms, ...args)
+      delays.push(ms)
+      expire = () => callback(...args)
+      return schedule(() => {}, 60_000).unref()
+    })
     const original = snapshots.beginRun.bind(snapshots)
     const beginRun = mock.method(snapshots, "beginRun", async (id: string, folder: string, frozen?: () => void) => {
+      capturing = true
       await holding
+      if (failure) throw new Error("late checkpoint failed")
       return original(id, folder, frozen)
     })
     try {
-      const before = sent.length
+      const sentBefore: number = sent.length
       owner.submit(lateId, lateRequest, "late checkpoint")
-      await until(() => sent.length === before + 1)
+      await until(() => capturing && expire !== undefined)
+      assert.deepEqual(delays, [200], "the checkpoint requests its configured wait exactly once")
+      assert.equal(sent.length, sentBefore, "a held checkpoint does not dispatch before its deadline fires")
+      assert.deepEqual(timeouts, [], "no timeout diagnostic before the deadline fires")
+      assert.ok(expire)
+      expire()
+      await until(() => sent.length === sentBefore + 1)
       assert.equal(owner.snapshot(lateId)?.requests[0].snapshots?.before.kind, "unavailable", "the turn went without its checkpoint, and says so")
+      const missed = owner.snapshot(lateId)?.requests[0].snapshots?.before
+      assert.ok(missed?.kind === "unavailable")
+      assert.equal(missed.timedOut, true, "the turn can say its checkpoint missed the dispatch deadline")
+      assert.equal(timeouts.length, 1, "one timeout diagnostic per turn, even when telemetry throws")
+      assert.ok(Number.isFinite(timeouts[0]) && timeouts[0]! >= 0, "the diagnostic measures elapsed time")
+      assert.deepEqual(timeouts, warned, "telemetry receives the same measured elapsed time as the host warning")
+      writeFileSync(file, "the agent wrote before the delayed capture held the workspace")
       release()
       // Held after the turn went, it may hold the turn's own edits: it never becomes the turn's `before`.
       const reasonOf = () => { const before = owner.snapshot(lateId)?.requests[0].snapshots?.before; return before?.kind === "unavailable" ? before.reason : "" }
-      await until(() => /after the turn went/.test(reasonOf()))
+      await until(() => failure ? reasonOf() === "late checkpoint failed" : /after the turn went/.test(reasonOf()))
       assert.equal(owner.snapshot(lateId)?.requests[0].snapshots?.before.kind, "unavailable", "a late checkpoint is never the turn's before")
+      const late = owner.snapshot(lateId)?.requests[0].snapshots?.before
+      assert.ok(late?.kind === "unavailable")
+      assert.equal(late.timedOut, failure ? undefined : true, "a real capture failure keeps its own reason, while an unsafe late point retains the timeout notice")
       finish(lateId, "late answer")
-      await until(() => owner.snapshot(lateId)?.requests[0].snapshots?.after?.kind === "ready")
-      await assert.rejects(owner.previewRewind(lateId, lateRequest, "before"), /no workspace checkpoint at that point: The checkpoint held the workspace .* after the turn went/, "a rewind to before it refuses, and says why")
+      await until(() => owner.snapshot(lateId)?.requests[0].snapshots?.after?.kind === (failure ? "unavailable" : "ready"))
+      await assert.rejects(owner.previewRewind(lateId, lateRequest, "before"), failure ? /late checkpoint failed/ : /no workspace checkpoint at that point: The checkpoint held the workspace .* after the turn went/, "a rewind to before it refuses, and says why")
     } finally {
+      timer.mock.restore()
+      unlog()
       beginRun.mock.restore()
       release()
     }
-    console.log("PASS: a checkpoint held past the deadline lets the turn go; held late, it is never the turn's before, and a rewind to it refuses")
+    console.log(failure ? "PASS: a failed late checkpoint replaces the timeout notice with its actual stored failure reason" : "PASS: a checkpoint held past the deadline lets the turn go; held late, it is never the turn's before, and a rewind to it refuses")
   }
 } finally {
   await owner.stop()

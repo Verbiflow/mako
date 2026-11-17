@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
-import { mkdtempSync, rmSync } from "node:fs"
+import { spawn } from "node:child_process"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { monitorEventLoopDelay, performance } from "node:perf_hooks"
@@ -15,7 +16,12 @@ import { AgentsWorld } from "./lib/agents-world.ts"
  * The host's own profiles that day named that walk (`personAsk < look < stateOf < childReading`) in holds of 0.3-0.6 s a
  * batch. Here each Apex streams BATCHES batches, each asking once as the publisher does, while some of its Fins work,
  * some wait on a decision of the person's and some have finished; the loop's delay is measured across it. Fails when a
- * batch's ask costs more than `BUDGET.askP99Ms` at the 99th percentile or the loop holds past `BUDGET.loopMaxMs`.
+ * batch's ask costs more than `BUDGET.askP99Ms` at the 99th percentile, or the loop holds past `BUDGET.loopMaxMs` more
+ * than a yardstick beside it waited in the same window: a process of its own running none of Mako's code
+ * (`lib/host-load-yardstick.mjs`, as `bench:host-load` calibrates), so a shared runner's stall, which stops both, isn't
+ * read as the bench's. A fixed 100 ms failed on main's gate (a hold of 104 ms beside test-watch-backend on its shard,
+ * with the ask itself at 0.57 ms at the 99th percentile). `PERSON_ASK_INJECT_HOLD_MS` holds the loop that long mid-run,
+ * to see a real hold still fail.
  */
 const APEXES = 3
 const EACH = 19
@@ -68,6 +74,12 @@ try {
   const asking = apexes.map((apex) => world.agents.personAsk(apex.conversation))
   assert.ok(asking.every((found) => found !== undefined), "each Apex's row waits on a decision of its Fins'")
 
+  const yardstickOut = join(root, "yardstick.json")
+  const yardstick = spawn(process.execPath, [join(import.meta.dirname, "lib/host-load-yardstick.mjs"), yardstickOut, "50"], { stdio: ["ignore", "inherit", "inherit"] })
+  const yardstickDone = new Promise((done) => yardstick.once("exit", done))
+  // Its heap made and its first ticks timed before the window opens.
+  await new Promise((resolve) => setTimeout(resolve, 500))
+  const inject = Number(process.env.PERSON_ASK_INJECT_HOLD_MS ?? 0)
   const asks: number[] = []
   const delay = monitorEventLoopDelay({ resolution: 5 })
   delay.enable()
@@ -80,19 +92,25 @@ try {
       world.agents.personAsk(apex.conversation)
       asks.push(performance.now() - at)
       if (batch % 10 === 0) await new Promise((resolve) => setImmediate(resolve))
+      if (inject && batch === BATCHES / 2 && apex === apexes[0]) for (const until = performance.now() + inject; performance.now() < until; );
     }
   const tookMs = performance.now() - began
   delay.disable()
+  yardstick.kill("SIGTERM")
+  await yardstickDone
+  const yardstickLate = Number(JSON.parse(readFileSync(yardstickOut, "utf8")).late.max)
   const result = {
     fins,
     batches: asks.length,
     ask: { meanMs: round(asks.reduce((sum, ms) => sum + ms, 0) / asks.length), p50Ms: round(percentile(asks, 0.5)), p99Ms: round(percentile(asks, 0.99)), maxMs: round(Math.max(...asks)) },
     totalMs: Math.round(tookMs),
     loop: { p99Ms: Math.round(delay.percentile(99) / 1e5) / 10, maxMs: Math.round(delay.max / 1e5) / 10 },
+    yardstick: { lateMaxMs: yardstickLate },
   }
+  const loopLimit = BUDGET.loopMaxMs + yardstickLate
   console.log(JSON.stringify(result))
   assert.ok(result.ask.p99Ms <= BUDGET.askP99Ms, `an Apex's batch spent ${result.ask.p99Ms} ms at the 99th percentile on its Fins; the budget is ${BUDGET.askP99Ms}`)
-  assert.ok(result.loop.maxMs <= BUDGET.loopMaxMs, `the loop held ${result.loop.maxMs} ms; the budget is ${BUDGET.loopMaxMs}`)
+  assert.ok(result.loop.maxMs <= loopLimit, `the loop held ${result.loop.maxMs} ms; the budget is ${BUDGET.loopMaxMs} ms past the yardstick's worst wait in the same window, ${yardstickLate} ms`)
   console.log("bench person-ask: ok")
 } finally {
   release()

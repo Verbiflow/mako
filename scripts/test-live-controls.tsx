@@ -748,9 +748,11 @@ assert.match(failedMarkup, /class="[^"]*text-negative">Turn failed/, "a failure 
 assert.doesNotMatch(failedMarkup, /aria-expanded/, "a marker without a body is not a control")
 const setupMarkup = markerExchange(mcpServerFailedEvent("linear", "could not connect"), mcpServerFailedEvent("drive", "sign-in required"),
   {label:"Model changed",detail:"gpt-5 → gpt-5-mini"})
-assert.match(setupMarkup, /2 MCP servers didn&#x27;t start<\/span><span class="[^"]*">linear, drive</, "setup notices that arrive together read as one line naming the servers")
-assert.equal(setupMarkup.match(/aria-expanded/g)?.length, 1, "the setup line opens onto each server; the turn marker beside it stays its own line")
-assert.doesNotMatch(setupMarkup, /could not connect/, "each server's reason stays unmounted until the line is opened")
+// An MCP server that didn't start is said once, with its way in, in the rail and Settings › MCP (`McpSignIns`), never in
+// the conversation; the turn's own marker beside them still reads.
+assert.doesNotMatch(setupMarkup, /MCP server|>linear|>drive|could not connect/, "no MCP line in the conversation")
+assert.match(setupMarkup, /Model changed<\/span><span class="[^"]*">gpt-5 → gpt-5-mini/, "the turn marker beside them keeps its line")
+assert.doesNotMatch(setupMarkup, /aria-expanded/, "and nothing opens onto the servers")
 const activeFolder: ThreadFolder = {key:"flage",name:"flage",cwd:"/flage",refs:[],current:false,pinned:false,pinRank:-1,latest:"",order:"",priority:1,running:0,active:1,needsInput:0,failed:0,unread:0}
 const folderMarkup = renderToStaticMarkup(<FolderActivity folder={activeFolder} />)
 assert.match(folderMarkup, /1 running/)

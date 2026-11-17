@@ -5,6 +5,7 @@ import type { NotificationPermission } from "@/lib/types"
 import { excerpt, notificationHeadline, type NotificationKind } from "@/lib/notification-text"
 import { ATTENTION_SUMMARY_FROM, asks, attentionLine, attentionSummary } from "@mako/host/contracts/notifications"
 import { workspaceName } from "@/lib/format"
+import { finsWord } from "@mako/host/contracts/agents"
 import { playFeedback } from "@/state/feedback"
 import { prefsStore, type Prefs } from "@/state/prefs"
 import { createHook, createStore } from "@/state/store"
@@ -57,6 +58,8 @@ export interface AttentionOutcome {
   detail?: string
   /** Record without announcing: a replay of state the user already lived through. */
   quiet?: boolean
+  /** A Fin's ask, said on its Apex: the Fin's name. Asks of one Apex's Fins close together are announced as one. */
+  fin?: string
 }
 
 export interface NotificationItem {
@@ -99,6 +102,8 @@ export const BURST_SETTLE_MS = 600
 /** From this many banners in a burst they collapse into a summary, as the account's notices do. */
 export const BURST_SUMMARY_FROM = ATTENTION_SUMMARY_FROM
 export const SUMMARY_SUBJECT = "mako:summary"
+/** Fins' asks on one Apex within this long of the last are one announcement: "Mobile polish · 3 Fins need you". */
+export const FIN_ASKS_COALESCE_MS = 10_000
 
 export function subjectId(target: NotificationTarget): string {
   switch (target.kind) {
@@ -223,6 +228,35 @@ interface PendingBanner {
 }
 let burst: PendingBanner[] = []
 let cancelBurst: (() => void) | null = null
+/** Each Apex's run of Fins' asks announced, by subject: when the last came and the Fins it named. */
+const finAskRuns = new Map<string, { at: number; fins: string[] }>()
+
+/** How many Apexes' runs of Fins' asks are held: only those still open, for tests. */
+export function openFinAskRuns(): number {
+  return finAskRuns.size
+}
+
+/** "3 Fins need you: Sheet motion, Push wording and Thread list swipe": what one announcement of a run says. */
+export function finAsksLine(fins: readonly string[]): string {
+  const names = fins.length > 1 ? `${fins.slice(0, -1).join(", ")} and ${fins.at(-1)}` : (fins[0] ?? "")
+  return `${finsWord(fins.length)} need you: ${names}`
+}
+
+/**
+ * What a Fin's ask announces: alone, itself; within `FIN_ASKS_COALESCE_MS` of an earlier one of its Apex's that's
+ * still unseen, the run so far, under the Apex's name, in the place of the one before (a toast and a banner are the
+ * Apex's, by its subject). The asks stay items of their own, each retired when it's answered.
+ */
+function finAskAnnouncement(item: NotificationItem, fin: string, now: number, state: NotificationsState): NotificationItem {
+  const run = finAskRuns.get(item.subject.id)
+  const open = run && now - run.at < FIN_ASKS_COALESCE_MS && state.items.some((each) => !each.seen && each.subject.id === item.subject.id && asks(each.kind))
+  const fins = open ? [...run.fins.filter((name) => name !== fin), fin] : [fin]
+  // A run past its window can't be joined again, so each write lets the ended ones go: the map holds only runs open now.
+  for (const [subject, each] of finAskRuns) if (now - each.at >= FIN_ASKS_COALESCE_MS) finAskRuns.delete(subject)
+  finAskRuns.set(item.subject.id, { at: now, fins })
+  if (fins.length < 2) return item
+  return { ...item, kind: "needs-you", body: finAsksLine(fins), alongside: undefined }
+}
 
 /** The id of the notice an outcome makes: by it an ask's notice is taken back (`retireNotice`). */
 export function noticeId(subject: Pick<NotificationSubject, "id">, kind: NotificationKind, marker: string): string {
@@ -263,10 +297,15 @@ export function noteOutcome(outcome: AttentionOutcome): NotificationItem | null 
   )
   notificationsStore.set({ items: [item, ...kept].slice(0, NOTIFICATION_LIMIT) })
   if (!env) return item
+  const announces = decision.channels.some((channel) => channel !== "cue")
+  const said = outcome.fin && announces ? finAskAnnouncement(item, outcome.fin, item.at, state) : item
   for (const channel of decision.channels) {
     if (channel === "cue") env.cue()
-    else if (channel === "toast") env.toast(item, () => openItem(item))
-    else queueBanner(item)
+    else if (channel === "toast") env.toast(said, () => openItem(item))
+    else {
+      if (said !== item) env.dismissDesktop(item.subject.id)
+      queueBanner(said)
+    }
   }
   return item
 }
@@ -358,6 +397,18 @@ export function retireNotice(id: string): void {
   env?.dismissDesktop(retired.subject.id)
 }
 
+/** The same outstanding notice, now opened on a member that still waits. No new announcement or disposition. */
+export function retargetNotice(id: string, subject: NotificationSubject): void {
+  const siblings = environment?.siblings?.(subject.target)
+  notificationsStore.set({ items: notificationsStore.get().items.map(item => {
+    if (item.id !== id) return item
+    const kept = { ...item }
+    delete kept.thread
+    delete kept.alongside
+    return { ...kept, subject, ...(siblings && { thread: siblings.thread, alongside: siblings.working }) }
+  }) })
+}
+
 /* ------------------------------------------------------------------ */
 /* Seen                                                                 */
 /* ------------------------------------------------------------------ */
@@ -393,8 +444,9 @@ export function reconcileVisible(): void {
 }
 
 export function openItem(item: NotificationItem): void {
-  markSeen([item.subject.id])
-  environment?.open(item.subject)
+  const current = notificationsStore.get().items.find(entry => entry.id === item.id) ?? item
+  markSeen([current.subject.id])
+  environment?.open(current.subject)
 }
 
 export function openSubjectId(id: string): void {

@@ -4,7 +4,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { resumes } from "../harnesses/index.js"
 import type { ProviderBinding } from "../contracts/conversation-control.js"
 import { BRIEF_AGAIN, DIGEST_AGAIN } from "../contracts/children.js"
-import { transientCause, unheardDigest, waitsAgain, carriedDigest } from "../contracts/delivery-retry.js"
+import { transientCause, unheardDigest, waitsAgain, carriedDigest, type RequestRetry } from "../contracts/delivery-retry.js"
 import type { Interruption, InterruptionReason, LiveRequest, TurnContinuation } from "../contracts/live-conversations.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import { AUTO_CONTINUE_DELAY_MS, autoContinueCandidate, continueTurnPrompt } from "../contracts/turn-continuation.js"
@@ -17,7 +17,7 @@ import { activeBinding, type LiveAccess, type Resident } from "./live-runtime.js
 import { turnReply } from "./live-goals.js"
 import { waitsForProvider } from "../contracts/request-hold.js"
 
-type AutoContinueAccess = Pick<LiveAccess, "dependencies" | "admission" | "resident" | "flush" | "pending" | "admit" | "transfer" | "reopens" | "wake">
+type AutoContinueAccess = Pick<LiveAccess, "dependencies" | "admission" | "resident" | "flush" | "pending" | "admit" | "transfer" | "reopens" | "wake" | "restartAllowed" | "restartContinued">
 
 /**
  * A turn that just ended on the provider's dropped connection or exited
@@ -84,6 +84,7 @@ export class LiveAutoContinue {
       // The exit that cut a restarted turn closed its conversation as it went; any other close declines the turn.
       (resident.snapshot.session.status === "closed" && !pending.restarted) ||
       resident.snapshot.permissions.length > 0
+      || (pending.restarted && !this.access.restartAllowed(id, requestId))
     ) {
       this.access.flush(resident)
       return
@@ -107,7 +108,10 @@ export class LiveAutoContinue {
       this.access.admission.assert()
       if (reconnect)
         this.access.transfer(id, { id: request.id, provider: reconnect.provider, text: request.text, attachments: [], tuning: source.tuning, notification: request.notification }, actor, continues)
-      else this.access.admit(resident, request)
+      else {
+        this.access.admit(resident, request)
+        if (pending.restarted) this.access.restartContinued(id, requestId)
+      }
       hostLog("live", pending.restarted ? "continued a turn Mako's exit cut short" : "continued a dropped turn", {
         conversation: id,
         harness: resident.snapshot.session.harness,
@@ -141,9 +145,13 @@ export class LiveAutoContinue {
     if (resident.snapshot.requests.some((request) => request.id === input.requestId)) return
     this.decline(resident)
     const tuning = runningTuning(resident, this.access.dependencies.heldModels)
-    const continues: TurnContinuation = { requestId: input.continues, reason: input.reason, auto: true, ...input.brief && { brief: input.brief }, ...input.since !== undefined && { since: input.since } }
+    // Keep the reconciliation identity: dispatch still reads its native receipt under the Stop/ownership fence.
+    // Task briefs continue from retained context; a digest retains its stable report delivery contract.
+    const briefId = input.brief
+    const continues: TurnContinuation = { requestId: input.continues, reason: input.reason, auto: true, ...briefId && { brief: briefId }, ...input.since !== undefined && { since: input.since } }
     // A brief carried again goes as itself, framed; as it's sent, a transcript that shows it has a Continue go instead.
-    const brief = input.brief && resident.snapshot.requests.find((request) => request.id === input.brief)
+    const sourceBrief = briefId && resident.snapshot.requests.find((request) => request.id === briefId)
+    const brief = input.reason === "host-crashed" && sourceBrief && !sourceBrief.digest ? undefined : sourceBrief
     const request = LiveRequestSchema.parse({
       actor: input.actor,
       id: input.requestId,
@@ -169,7 +177,7 @@ export class LiveAutoContinue {
   }
 
   /**
-   * A turn its harness failed partway for a cause that clears by itself (its
+   * A turn its harness failed or cut partway for a cause that clears by itself (its
    * service at capacity or rate-limited, failing on its side, a dropped or
    * stalled connection): what it did stands in its session, so Mako continues
    * it when its next attempt is due (`nextRetry`), held first in line so what
@@ -179,10 +187,14 @@ export class LiveAutoContinue {
    */
   continueFailed(resident: Resident, settled: string): void {
     const failed = resident.snapshot.requests.find((request) => request.id === settled)
-    if (failed?.status !== "failed" || this.access.admission.closed) return
+    if (!failed || this.access.admission.closed) return
+    const dropped = failed.status === "interrupted" && (failed.interruption?.reason === "connection-lost" || failed.interruption?.reason === "provider-exited")
+    if (failed.status !== "failed" && !dropped) return
     // A turn a Stop latched isn't picked up again by itself (`LiveRequest.pause`).
     if (failed.pause === "stop") return
     const cause = transientCause(failed.error ?? "", failed.failure ?? "unknown", false, failed.failureEvidence)
+    // Fins' news the turn carried waits with it: until the time its retry says (a limit's reset), not into the same limit.
+    this.carryFoldedNews(resident, failed, cause ? waitsAgain(failed, cause, failed.error ?? "", Date.now(), turnReply(resident, failed.id).limit?.resetsAt)?.retry : undefined)
     // Only a turn its harness ran is continued: one it never took has nothing to pick up. A digest no model answered is
     // the exception, whatever ended it: it stays until one does.
     const ran = failed.nativeRun !== undefined || failed.nativeDelivery?.evidence.kind === "accepted"
@@ -191,11 +203,19 @@ export class LiveAutoContinue {
     if (resident.snapshot.requests.some((request) => request.continues?.requestId === failed.id)) return
     const now = Date.now()
     const waits = cause || unheard ? waitsAgain(failed, cause, failed.error ?? "", now, turnReply(resident, failed.id).limit?.resetsAt) : undefined
-    if (!waits) return
+    if (!waits) {
+      // The retry budget is over, so neither the old deadline nor the one-shot drop timer promises another go.
+      if (failed.retry) {
+        resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map(request => request === failed
+          ? { ...request, retry: undefined, status: "failed" as const } : request) }
+        this.access.flush(resident)
+      }
+      return
+    }
     const retry = waits.retry
-    const continues: TurnContinuation = { requestId: failed.id, reason: "connection-lost", auto: true }
-    // Its reports read as heard, so it goes again as itself, for later news to join, as often as it fails, where "carry
-    // on" would tell nothing of them; past the retries it rests (`resting`).
+    const continues: TurnContinuation = { requestId: failed.id, reason: failed.interruption?.reason ?? "connection-lost", auto: true, ...(failed.continues?.brief && { brief: failed.continues.brief }) }
+    // Retain the digest and its original receipt identity. Dispatch decides whether proof permits its payload or
+    // only a discovery continuation; past the retries it rests (`resting`).
     const request = LiveRequestSchema.parse({
       actor: { kind: "service", name: "auto-continue" },
       id: randomUUID(),
@@ -222,6 +242,35 @@ export class LiveAutoContinue {
     }
     this.access.flush(resident)
     hostLog("live", "a turn its harness failed for now continues by itself", { conversation: resident.snapshot.session.id, request: request.id, continues: failed.id, ...(cause && { cause }), ...(retry && { attempt: retry.attempt, at: new Date(retry.at).toISOString() }) })
+  }
+
+  /**
+   * Fins' news that went folded into a turn (`joinedInto`) that failed before its model answered goes again by itself, as
+   * its own digest would (`unheardDigest`): right behind the failed turn, under the news's own receipt identity, once,
+   * held with the turn's `retry` when it waits for one (a limit's reset) and queued at once when it doesn't. The turn
+   * itself fails or goes on as it would have.
+   */
+  private carryFoldedNews(resident: Resident, failed: LiveRequest, retry?: RequestRetry): void {
+    const news = resident.snapshot.requests.find((request) => request.joinedInto === failed.id && request.digest !== undefined && !request.digest.heard)
+    if (!news?.digest || resident.snapshot.requests.some((request) => request.continues?.requestId === news.id)) return
+    const request = LiveRequestSchema.parse({
+      actor: news.actor,
+      id: randomUUID(),
+      createdAt: Date.now(),
+      text: news.text,
+      displayText: "",
+      digest: carriedDigest(news.digest),
+      attachments: [],
+      tuning: failed.tuning,
+      status: retry ? "held" : "queued",
+      ...(retry && { retry }),
+      continues: { requestId: news.id, reason: "connection-lost", auto: true },
+    })
+    request.inputDigest = promptFingerprint(request.text, request.attachments, request.tuning)
+    const at = resident.snapshot.requests.findIndex((candidate) => candidate.id === failed.id) + 1
+    resident.snapshot = { ...resident.snapshot, requests: [...resident.snapshot.requests.slice(0, at), request, ...resident.snapshot.requests.slice(at)] }
+    this.access.flush(resident)
+    hostLog("live", "Fins' news a failed turn carried goes again", { conversation: resident.snapshot.session.id, request: request.id, news: news.id, failed: failed.id })
   }
 
   /** Drop a pending continuation; new input/host exit preserves a provider wait, while an explicit Close cancels it. */

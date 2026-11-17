@@ -349,6 +349,20 @@ export function readDaemonFrameId(record: JsonRecord): number | undefined {
   return readNumber(record, "id")
 }
 
+const SentRecordsList = z.array(SentRecordsSchema)
+const ReceivedRecordsList = z.array(ReceivedRecordsSchema)
+const StagedRecordsList = z.array(StagedRecordsSchema)
+const UnreadRecordList = z.array(UnreadRecordSchema)
+/** The record operations' arguments, each schema made once: one built per request compiles anew each time. */
+const SendRecordsSchema = z.object({ link: RecordsLinkSchema, paths: z.array(z.string().min(1)) })
+const ReceiveRecordsSchema = z.object({
+  link: RecordsLinkSchema,
+  sessions: z.array(ReceivingSessionSchema),
+  installed: z.record(z.string(), InstalledReadingSchema.nullable()),
+})
+const StageRecordsSchema = z.object({ link: RecordsLinkSchema, sessions: z.array(ReceivingSessionSchema) })
+const CopyPageRequest = z.object({ link: RecordsLinkSchema, harness: z.string().min(1), nativeId: z.string().min(1), before: z.number().int().nonnegative().optional(), limit: z.number().int().positive().max(1_000) })
+
 export function parseDaemonRequest(raw: string): DaemonRequestFrame | null {
   const record = parseJsonRecord(raw)
   if (!record) return null
@@ -429,23 +443,19 @@ export function parseDaemonRequest(raw: string): DaemonRequestFrame | null {
     case "sync-status":
       return { id, op }
     case "send-records": {
-      const parsed = z.object({ link: RecordsLinkSchema, paths: z.array(z.string().min(1)) }).safeParse(record)
+      const parsed = SendRecordsSchema.safeParse(record)
       return parsed.success ? { id, op, ...parsed.data } : null
     }
     case "receive-records": {
-      const parsed = z.object({
-        link: RecordsLinkSchema,
-        sessions: z.array(ReceivingSessionSchema),
-        installed: z.record(z.string(), InstalledReadingSchema.nullable()),
-      }).safeParse(record)
+      const parsed = ReceiveRecordsSchema.safeParse(record)
       return parsed.success ? { id, op, ...parsed.data } : null
     }
     case "stage-records": {
-      const parsed = z.object({ link: RecordsLinkSchema, sessions: z.array(ReceivingSessionSchema) }).safeParse(record)
+      const parsed = StageRecordsSchema.safeParse(record)
       return parsed.success ? { id, op, ...parsed.data } : null
     }
     case "copy-page": {
-      const parsed = z.object({ link: RecordsLinkSchema, harness: z.string().min(1), nativeId: z.string().min(1), before: z.number().int().nonnegative().optional(), limit: z.number().int().positive().max(1_000) }).safeParse(record)
+      const parsed = CopyPageRequest.safeParse(record)
       if (!parsed.success) return null
       const { before, ...rest } = parsed.data
       return before === undefined ? { id, op, ...rest } : { id, op, ...rest, before }
@@ -511,15 +521,15 @@ export function parseDaemonResponse(
       return result.success ? { kind: "restore", pending, result: result.data } : null
     }
     case "send-records": {
-      const result = z.array(SentRecordsSchema).safeParse(record.result)
+      const result = SentRecordsList.safeParse(record.result)
       return result.success ? { kind: "send-records", pending, result: result.data } : null
     }
     case "receive-records": {
-      const result = z.array(ReceivedRecordsSchema).safeParse(record.result)
+      const result = ReceivedRecordsList.safeParse(record.result)
       return result.success ? { kind: "receive-records", pending, result: result.data } : null
     }
     case "stage-records": {
-      const result = z.array(StagedRecordsSchema).safeParse(record.result)
+      const result = StagedRecordsList.safeParse(record.result)
       return result.success ? { kind: "stage-records", pending, result: result.data } : null
     }
     case "copy-page": {
@@ -615,7 +625,7 @@ function parseThread(value: JsonValue | undefined): Thread | null {
 }
 
 function parseUnread(value: JsonValue | undefined): UnreadRecord[] | undefined {
-  const parsed = z.array(UnreadRecordSchema).safeParse(value)
+  const parsed = UnreadRecordList.safeParse(value)
   return parsed.success && parsed.data.length ? parsed.data : undefined
 }
 

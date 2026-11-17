@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { HarnessUpdates } from "@mako/host/contracts/harness-updates"
+import { updateFailureWords, type HarnessUpdates } from "@mako/host/contracts/harness-updates"
 import { compareVersions, parseVersion, versionBehind } from "@mako/host/contracts/runtime-version"
 import { scriptInstall, type ProviderUpdateSource } from "@mako/host/harnesses/update-source"
 import { RuntimeUpdates, resolveRuntimeChannel } from "@mako/host/harnesses/runtime-updates"
@@ -426,7 +426,7 @@ try {
   next.changed.length = 0
   const failed = await second.update("codex")
   assert.equal(failed.result?.outcome, "failed")
-  assert.match(failed.result?.message ?? "", /EACCES: permission denied/)
+  assert.equal(failed.result?.message, "It needs permission to change the folder it's installed in.", "npm's output is worded; its own words are the log's")
   assert.equal(failed.installed, "0.155.0", "the reading stands")
   assert.equal(failed.phase, undefined)
   assert.equal(next.changed.length, 0, "nothing changed")
@@ -450,7 +450,7 @@ try {
   next.runResult = { code: 1, output: "curl: (6) Could not resolve host: cli.devin.ai" }
   const failedInstall = await second.install("devin")
   assert.equal(failedInstall.result?.outcome, "failed")
-  assert.match(failedInstall.result?.message ?? "", /Could not resolve host/)
+  assert.equal(failedInstall.result?.message, "The download didn't get through. Check the connection.")
   assert.deepEqual(failedInstall.install, devinInstall)
   assert.equal(failedInstall.phase, undefined)
 
@@ -555,7 +555,7 @@ try {
   gone.stop()
   const offline = withdrawn("curl: (6) Could not resolve host: static.devin.ai\n")
   await offline.refresh()
-  assert.match((await offline.install("devin")).result?.message ?? "", /Could not resolve host/, "a network failure is said as it is")
+  assert.equal((await offline.install("devin")).result?.message, "The download didn't get through. Check the connection.", "a network failure is said as one, never as a withdrawn build")
   offline.stop()
 
   // Two updates on one channel run one after the other; a second update of one runtime is refused.
@@ -873,4 +873,8 @@ try {
   await rm(versionsDir, { recursive: true, force: true })
 }
 
+// What an updater printed is said in a sentence, never as its own output; what no rule names "didn't finish".
+assert.equal(updateFailureWords("npm ERR! code ENOSPC\nnpm ERR! nospc ENOSPC: no space left on device"), "The disk is full.")
+assert.equal(updateFailureWords("Error: EBUSY: resource busy or locked, rename '/usr/local/bin/codex'"), "It's in use. Quit what's running it.")
+assert.equal(updateFailureWords("npm ERR! code E404 npm ERR! 404 Not Found"), "The updater didn't finish.")
 console.log("runtime updates: channel ladder, signature cache, registry TTL, persistence, update receipts, row words, and the launch floor before and after start hold")

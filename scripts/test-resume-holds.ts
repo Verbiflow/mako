@@ -23,8 +23,9 @@ import { longestHold, type LoopHold } from "./lib/loop-hold.ts"
  *
  * Eight Fins work under an Apex, half cut mid-turn by Mako's exit and half finished, their journals grown to a long
  * day's. Three interleaved pairs of fresh hosts take up copies of that same left state, at once and in slices.
- * The median of the paired longest-hold ratios must stay under a quarter (`TIMES`), so one preemption cannot set
- * the limit or alone fail the check. Every pair must resume exactly the same: the same messages sent on, the same
+ * The median of the paired ratios of the CPU each spent in its busiest gap must stay under a quarter (`TIMES`): a
+ * runner that preempts the process stretches a gap's wall time with no work in it, and a synchronous stretch of the
+ * resume's own shows as CPU. The sliced resume's longest gap by the clock is held to a loose bound (`SLICED_WALL_MS`). Every pair must resume exactly the same: the same messages sent on, the same
  * turns continued, every Fin's requests in the same states. Every raw timing and the paired median are printed.
  *
  * And nothing the resume reads is read whole: every conversation it reads in from its journal (`LiveRecords.load` of
@@ -41,6 +42,11 @@ const BLOCK_CHARS = 1_500
 /** How many times shorter than the hold at once the longest hold in slices must be. */
 const TIMES = 4
 const SAMPLES = 3
+/**
+ * The sliced resume's longest gap by the clock, its median over the samples: a sanity bound loose enough for a
+ * preempted runner (gaps of about a second seen there), well under what reading every journal at once would hold.
+ */
+const SLICED_WALL_MS = 3_000
 
 function median(samples: readonly number[]): number {
   assert.equal(samples.length, SAMPLES)
@@ -99,7 +105,10 @@ async function leftByTheLastHost(at: string): Promise<{ fins: Map<string, string
 }
 
 interface Taken {
+  /** The longest gap's wall time: a sanity bound only, since a preempted runner stretches it with no work in it. */
   holdMs: number
+  /** The CPU the loop's thread used in its busiest gap: what a synchronous stretch of the resume's own work shows as. */
+  holdCpuMs: number
   gap: LoopHold
   constructedMs: number
   /** From the host's opening to its resume settling. */
@@ -151,7 +160,7 @@ async function readWhole(run: () => Promise<void>): Promise<string[]> {
 async function takeUp(at: string, fins: ReadonlyMap<string, string>, inSlices: boolean): Promise<Taken> {
   const script: Script = () => "Done after the restart."
   let world: AgentsWorld | undefined
-  let gap: LoopHold = { ms: 0, fromMs: 0, toMs: 0, cpuMs: 0 }
+  let gap: LoopHold = { ms: 0, fromMs: 0, toMs: 0, cpuMs: 0, busiest: { ms: 0, fromMs: 0, toMs: 0, cpuMs: 0 } }
   let constructedMs = 0
   let resumeMs = 0
   const whole = await readWhole(async () => {
@@ -174,7 +183,7 @@ async function takeUp(at: string, fins: ReadonlyMap<string, string>, inSlices: b
     requests[name] = (world.live.snapshot(conversation)?.requests ?? []).map((request) => [request.status, request.actor?.kind ?? "person", String(request.continues?.auto ?? false), withoutTimes(request.text)])
   }
   await world.close()
-  return { holdMs: gap.ms, gap, constructedMs, resumeMs, sent, requests }
+  return { holdMs: gap.ms, holdCpuMs: gap.busiest.cpuMs, gap, constructedMs, resumeMs, sent, requests }
 }
 
 /**
@@ -258,9 +267,13 @@ try {
     // takeUp joined both owners' shutdown before their private copies are removed.
     rmSync(pair, { recursive: true, force: true })
   }
-  const ratio = median(readings.map(({ atOnce, inSlices }) => inSlices.holdMs / atOnce.holdMs))
-  console.log(`resumed ${FINS} Fins: longest-hold medians ${Math.round(median(readings.map(each => each.atOnce.holdMs)))} / ${Math.round(median(readings.map(each => each.inSlices.holdMs)))} ms; paired median ${(ratio * 100).toFixed(1)}% (under ${100 / TIMES}%)`)
-  assert.ok(ratio < 1 / TIMES, `resuming in slices held the loop a paired median ${(ratio * 100).toFixed(1)}% of at once, not under ${100 / TIMES}%`)
+  // Judged by the CPU of each resume's busiest gap: on 2026-11-16 a preempted runner's sliced resume had gaps of 978 and
+  // 667 ms wall with 39 and 12 ms CPU in them, and failed main by wall time though it held the loop for no work.
+  const ratio = median(readings.map(({ atOnce, inSlices }) => inSlices.holdCpuMs / atOnce.holdCpuMs))
+  const wall = median(readings.map(each => each.inSlices.holdMs))
+  console.log(`resumed ${FINS} Fins: busiest-hold CPU medians ${Math.round(median(readings.map(each => each.atOnce.holdCpuMs)))} / ${Math.round(median(readings.map(each => each.inSlices.holdCpuMs)))} ms; paired median ${(ratio * 100).toFixed(1)}% (under ${100 / TIMES}%); longest-hold wall medians ${Math.round(median(readings.map(each => each.atOnce.holdMs)))} / ${Math.round(wall)} ms (under ${SLICED_WALL_MS})`)
+  assert.ok(ratio < 1 / TIMES, `resuming in slices held the loop's CPU a paired median ${(ratio * 100).toFixed(1)}% of at once, not under ${100 / TIMES}%`)
+  assert.ok(wall < SLICED_WALL_MS, `resuming in slices held the loop a median ${Math.round(wall)} ms by the clock, not under ${SLICED_WALL_MS} ms`)
   await stopMidRead(join(root, "stopped"), fins, readings[0]!.atOnce, median(readings.map(each => each.inSlices.resumeMs)))
   console.log("resume holds: ok")
 } catch (error) {

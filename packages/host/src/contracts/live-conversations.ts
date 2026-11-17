@@ -98,6 +98,8 @@ export const INTERRUPTION_REASONS = [
    * process rather than being sent again.
    */
   "provider-exited",
+  /** The native summary failed; recovery continues from retained context, never by repeating the original. */
+  "compaction-failed",
   /**
    * The provider's account signed out after it had accepted the prompt. The
    * turn so far stands in its session; it continues only when the user
@@ -160,7 +162,7 @@ export type SavedReason = (typeof SAVED_REASONS)[number]
  * the nearest a build before it knows: Mako carried the turn to another machine;
  * `steered` reads as the person's Stop, which it was, for their message.
  */
-export const OLDER_READING = { "not-saved": "stopped", "goal-budget": "stopped", "machine-lost": "handed-off", steered: "stopped" } as const satisfies Record<Exclude<InterruptionReason, SavedReason>, SavedReason>
+export const OLDER_READING = { "not-saved": "stopped", "goal-budget": "stopped", "machine-lost": "handed-off", steered: "stopped", "compaction-failed": "connection-lost" } as const satisfies Record<Exclude<InterruptionReason, SavedReason>, SavedReason>
 
 function isSavedReason(reason: InterruptionReason): reason is SavedReason {
   return SAVED_REASONS.some((saved) => saved === reason)
@@ -251,10 +253,17 @@ export interface TurnContinuation {
 /**
  * The sign-out a session's work is paused on. It belongs to the session, so
  * every request it holds carries the same marker, and it persists with them.
- * `credential` is a one-way digest of the account's credentials when the
- * sign-out was seen; a different digest later means someone signed in.
+ * `credential` is the legacy source-equality hint for deliberate Resume.
+ * Automatic recovery requires a later provider-verified login sequence,
+ * independently of the execution principal a normal token renewal retains.
  */
 export interface SignInHold {
+  /** This sign-out generation; an older asynchronous recovery cannot release a newer one. */
+  id?: string
+  /** The provider's verified login sequence when it failed, including before a first launch named its account. Absent is legacy/unmanaged. */
+  verification?: number
+  /** A verified login already admitted recovery; the queue still waits for execution room. Never an admission credential. */
+  ready?: string
   harness: string
   account: string
   credential: string
@@ -264,7 +273,7 @@ export interface SignInHold {
 /** Whether a paused session can resume: the account was signed in again, or another one chosen. */
 export type SignInReadiness = "signed-out" | "ready"
 
-/** What Resume did: `resumed` also answers a pause that had already ended. */
+/** What Resume did: `resumed` includes verified automatic recovery waiting for execution room, and an already-ended pause. */
 export type SignInResume = "resumed" | "signed-out"
 
 /** What keeps a session on its old account while a message waits to switch it. */
@@ -275,6 +284,45 @@ export type AccountSwitchWait = (typeof ACCOUNT_SWITCH_WAITS)[number]
 export interface RequestWake {
   at: number
   after: string
+}
+
+/** At most this many messages go with one (`LiveRequest.joined`); the rest go in a turn of their own. */
+export const JOINED_MAX = 32
+/** Nor past this many characters of words in all. */
+export const JOINED_CHARS = 64_000
+
+/** Who wrote a part of a folded message, as its separator says it. */
+export type FoldedBy = "mako" | "same" | "agent" | "fins"
+const FOLDED_SAID = { mako: "Mako's note", same: "the next message from the same sender", agent: "a message", fins: "your Fins' news" } satisfies Record<FoldedBy, string>
+
+/** Who a separator's words name. */
+function foldedBy(said: string | undefined): FoldedBy {
+  return said === FOLDED_SAID.mako ? "mako" : said === FOLDED_SAID.same ? "same" : said === FOLDED_SAID.fins ? "fins" : "agent"
+}
+const FOLDED_SEPARATOR = /\n\n\[mako · (Mako's note|the next message from the same sender|a message|your Fins' news), sent (\d{4}-\d\d-\d\dT[\d:.]+Z)\]\n/g
+
+/** The line a folded message's part goes under (`foldQueued`): who wrote it and when. */
+export function foldedSeparator(by: FoldedBy, at: number): string {
+  return `\n\n[mako · ${FOLDED_SAID[by]}, sent ${new Date(at).toISOString()}]\n`
+}
+
+/**
+ * A message several went as (`LiveRequest.joined`), split back into its parts at their separators, each with who wrote
+ * it and when: the first is the carrier's own. Undefined for words with no separator, a message that went alone. Read
+ * from the words alone, so a saved transcript splits as a live one does.
+ */
+export function foldedParts(text: string): { by?: FoldedBy; at?: string; text: string }[] | undefined {
+  const parts: { by?: FoldedBy; at?: string; text: string }[] = []
+  let from = 0
+  let pending: { by: FoldedBy; at: string } | undefined
+  for (const found of text.matchAll(FOLDED_SEPARATOR)) {
+    parts.push({ ...pending, text: text.slice(from, found.index) })
+    pending = { by: foldedBy(found[1]), at: found[2] ?? "" }
+    from = found.index + found[0].length
+  }
+  if (!pending) return undefined
+  parts.push({ ...pending, text: text.slice(from) })
+  return parts
 }
 
 export interface LiveRequest {
@@ -326,6 +374,16 @@ export interface LiveRequest {
   admissionOrder?: number
   /** An agent's informational message, whose successful turn needs no synthetic completion report. */
   notification?: true
+  /** A question its Apex asked that the Fin owes an answer, not only a result (`Agents.owedOf`, delivery rule 17). */
+  expects?: "answer"
+  /**
+   * The messages from the same sender queued right behind this one that went with it as its one turn (`foldQueued`), in
+   * order, each by its request ID and when it was admitted: their words follow its own. A repeat or a handoff naming
+   * one finds this message.
+   */
+  joined?: { id: string; at: number }[]
+  /** This message went as part of that one's turn (`joined`), so it's canceled here without being dropped. */
+  joinedInto?: string
   /** When it was sent to its harness, which is when its turn began: a message can wait long after it's admitted. */
   dispatchedAt?: number
   text: string
@@ -440,6 +498,10 @@ export interface LiveRequest {
 }
 
 export interface LiveSummary {
+  /** A journaled compaction incident must recover even when no window opens its conversation. */
+  hasCompactionRecovery?: boolean
+  /** A sign-out holds work here, including an accepted cut with no queued messages. No transcript read needed. */
+  hasSignInHold?: boolean
   /** Saved session questions keep their conversation controls available after process exit. */
   hasSessionQuestions?: boolean
   /** Every native session file the conversation's bindings read, loaded or not. */
@@ -651,6 +713,8 @@ export interface LiveSnapshot extends LiveSummary {
   nativeActivity?: NativeActivity
   /** Held by this host only, like `activityAt`; see `SideConversation`. */
   side?: import("./live-side-questions.js").SideConversation
+  /** The wait its agent armed for when its turn ends, as the person's waiting line reads it; absent once it isn't armed. Read from the Thread store, never kept in the journal. */
+  turnWait?: import("./turn-waits.js").TurnWaitLine
   /**
    * Why the history `baseSource` names could not be read, which neither its
    * harness nor the record store had. Held by this host only: the next load
@@ -680,6 +744,8 @@ export interface LiveBatch {
   goal?: import("./live-goals.js").ConversationGoal | null
   /** `null` when the side conversation closed; absent when it did not change. */
   side?: import("./live-side-questions.js").SideConversation | null
+  /** `null` when the wait ended (fired, cancelled); absent when it did not change. */
+  turnWait?: import("./turn-waits.js").TurnWaitLine | null
   /** `null` when the history was read after all; absent when it did not change. */
   historyFailure?: string | null
   /** Every turn Mako didn't send, when one was added; absent when none was. */
@@ -823,7 +889,7 @@ export function sharedSession(previous: LiveSessionState, next: LiveSessionState
 }
 
 /** The fields a batch carries whole whenever they are a new value; see `sharedFields`. */
-const WHOLE_FIELDS = ["control", "nativeAgents", "goal", "side", "harnessTurns", "spentThrough", "permissions", "nativeActivity"] as const
+const WHOLE_FIELDS = ["control", "nativeAgents", "goal", "side", "turnWait", "harnessTurns", "spentThrough", "permissions", "nativeActivity"] as const
 type Shared = Pick<LiveSnapshot, (typeof WHOLE_FIELDS)[number] | "requests">
 
 function keepField<Key extends keyof Shared>(target: Shared, source: Shared, key: Key): void {
@@ -1152,3 +1218,16 @@ export function traceOf(batch: Pick<LiveBatch, "revision" | "sessionChanges" | "
   const moment = batch.sessionChanges?.status !== undefined || batch.permissions !== undefined || batch.requests !== undefined || batch.requestChanges !== undefined
   return moment || batch.revision % TRACE_EVERY === 0 ? `${TRACE_PREFIX}${random()}` : undefined
 }
+
+/**
+ * The versions of one sent prompt: the conversation it was first sent in, then each fork made from just before it
+ * (a rewind to before it, the words written again), oldest first. `at` is the one asked about. A prompt never edited
+ * has one version.
+ */
+export interface PromptVersions {
+  conversations: string[]
+  at: number
+}
+
+/** A conversation's edited prompts' versions, by the request each is in it (`mako:live-prompt-versions`). */
+export type PromptVersionsByRequest = Record<string, PromptVersions>

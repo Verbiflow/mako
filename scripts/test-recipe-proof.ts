@@ -10,6 +10,7 @@ import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { AppKeySchema, type ThreadEnvironment } from "@mako/host/contracts/thread-environments"
 import { environmentTools, reachLine } from "@mako/host/workspaces/environment-tools"
 import { portListening } from "@mako/host/workspaces/thread-environment"
+import { freeThreadBlock } from "./lib/thread-ports.ts"
 import { ThreadProcesses } from "@mako/host/workspaces/thread-processes"
 import { TraceRefresh } from "@mako/host/workspaces/app-probe"
 import { readRecipe, readVersion, recipePath, RecipeSchema, recipeVersions, versionHistory, type Recipe } from "@mako/host/workspaces/thread-recipe"
@@ -24,14 +25,6 @@ const gitRunner = new Git()
  * started with; targets choosing processes; going back to an earlier
  * version through the same proof; and a worktree's cleanup.
  */
-
-async function freeBlock(from: number): Promise<number> {
-  for (let base = from; base < from + 2_000; base += 10) {
-    const busy = await Promise.all(Array.from({ length: 10 }, (_, index) => portListening(base + index)))
-    if (!busy.some(Boolean)) return base
-  }
-  throw new Error("no free ports for the test")
-}
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-recipe-proof-")))
 const project = join(root, "app")
@@ -48,14 +41,14 @@ process.on("SIGTERM", () => process.exit(0))
 const processes = new ThreadProcesses({ root: join(root, "records"), listening: portListening })
 const traces = new TraceRefresh()
 const recipesRoot = join(root, "recipes")
-const thread = async (name: string, from: number): Promise<ThreadEnvironment> => {
+const thread = async (name: string, taken: number[] = []): Promise<ThreadEnvironment> => {
   const id = ThreadIdSchema.parse(randomUUID())
   const dataDir = join(root, "data", name)
   mkdirSync(dataDir, { recursive: true })
-  return { thread: id, app: AppKeySchema.parse(id), host: `${name}.thread.localhost`, port: await freeBlock(from), ports: 10, dataDir }
+  return { thread: id, app: AppKeySchema.parse(id), host: `${name}.thread.localhost`, port: await freeThreadBlock(taken), ports: 10, dataDir }
 }
-const mine = await thread("mine", 43_000)
-const theirs = await thread("theirs", mine.port + 10)
+const mine = await thread("mine")
+const theirs = await thread("theirs", [mine.port])
 const toolsFor = (environment: ThreadEnvironment, settleMs = 10_000) => environmentTools({ git: gitRunner,
   cwd: () => project,
   environment: async () => environment,

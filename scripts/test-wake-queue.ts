@@ -47,6 +47,7 @@ interface Entry { id: string; text: string; notices: Notice[]; lines?: readonly 
 
 /** One Apex conversation as the queue would hold it, and every call the producer made. */
 function fakes(ready: () => ParentReady, now: () => number, steer: (text: string) => Promise<boolean> | false = () => false, current: (notice: Notice) => boolean = () => true) {
+  const counted = { line: "1 working" }
   const entries: Entry[] = []
   const delivered: string[] = []
   const unsent = () => entries.filter((entry) => entry.sent === undefined && !entry.canceled)
@@ -67,11 +68,11 @@ function fakes(ready: () => ParentReady, now: () => number, steer: (text: string
     steer: (_conversation, _id, text) => steer(text),
     assign: () => {},
     delivered: (reports) => delivered.push(...reports),
-    counts: () => "1 working",
+    counts: () => counted.line,
     current,
     now,
   }
-  return { entries, delivered, deps, open: () => unsent().at(-1) }
+  return { entries, delivered, deps, counted, open: () => unsent().at(-1) }
 }
 
 let reports = 0
@@ -172,22 +173,83 @@ try {
     assert.equal(f.entries[0]!.canceled, true, "a stale end leaves the older digest too")
   }
   {
-    // A running turn that takes a step's message hears a notice now; one it refuses joins the digest.
+    // A running turn that takes a step's message hears a question it can answer now; one it refuses joins the digest.
+    // A result waits for the turn's end, so a working Apex isn't steered by each report (`FOCUS_MS`).
     let answer = true
     const steered: string[] = []
     const f = fakes(() => "steer", () => 5_000_000, (text) => { steered.push(text); return Promise.resolve(answer) })
-    const wakes = new AgentWakes(f.deps)
-    wakes.notice("apex", "", notice())
+    const wakes = new AgentWakes({ ...f.deps, focusMs: 60_000 })
+    wakes.notice("apex", "", notice("blocked"))
     await pause(0)
     assert.equal(steered.length, 1)
     assert.equal(f.entries.length, 0, "taken by the running turn, nothing queued")
     answer = false
-    wakes.notice("apex", "", notice())
+    wakes.notice("apex", "", notice("blocked"))
     await pause(0)
     assert.equal(f.entries.length, 1, "a refused steer goes as a digest of its own")
+    wakes.notice("apex", "", notice())
+    assert.equal(steered.length, 2, "a finished Fin's result isn't steered into the turn")
     wakes.notice("apex", "", notice("done", { settledOnly: true }))
-    assert.equal(steered.length, 2, "a result is never steered")
-    assert.equal(f.open()!.notices.length, 2)
+    assert.equal(steered.length, 2, "nor is a waited-for result")
+    assert.equal(f.open()!.notices.length, 3)
+    wakes.dispose()
+  }
+  {
+    // A turn that runs past `FOCUS_MS` after the first result it left waiting hears what waits, once: the queued digest
+    // itself is steered in (`steer-queued`), so it leaves the queue in the journal's write. A notice that comes while the
+    // steer is out starts a digest of its own rather than joining one on its way, and one the harness refuses stays queued.
+    const steered: { request: string; text: string }[] = []
+    let settle: (answered: boolean) => void = () => {}
+    const f = fakes(() => "steer", () => 5_000_000, () => Promise.resolve(true))
+    const wakes = new AgentWakes({
+      ...f.deps,
+      focusMs: 50,
+      steerQueued: (_conversation, _id, request, text) => {
+        steered.push({ request, text })
+        return new Promise<boolean>((resolve) => { settle = resolve })
+      },
+    })
+    const first = notice()
+    wakes.notice("apex", "", first)
+    wakes.notice("apex", "", notice())
+    assert.equal(steered.length, 0, "nothing steered as the results come")
+    const digest = f.open()!
+    assert.equal(digest.notices.length, 2, "they wait as one digest")
+    await pause(120)
+    assert.equal(steered.length, 1, "past the focus window, the digest is steered in")
+    assert.equal(steered[0]!.request, digest.id, "the queued digest itself, not a copy of its words")
+    assert.match(steered[0]!.text, /2 finished:/)
+    const late = notice()
+    wakes.notice("apex", "", late)
+    assert.equal(digest.notices.length, 2, "a notice arriving while the steer is out doesn't join the digest on its way")
+    assert.ok(f.entries.some((entry) => entry.id !== digest.id && entry.notices.some((each) => each.id === late.id)), "it starts a digest of its own")
+    settle(true)
+    await pause(0)
+    assert.equal(digest.canceled, undefined, "the steered digest isn't rewritten: the journal's steer took it")
+    wakes.dispose()
+  }
+  {
+    // The tree moved since the last notice (a Fin's state, so the counts line), with no notice of its own: the focus steer
+    // still goes, with the digest's words said as the tree stands now and stored first, since the journal's steer takes
+    // only a queued message's exact words (`steer-queued` refuses one that changed).
+    const steered: { request: string; text: string }[] = []
+    const f = fakes(() => "steer", () => 5_000_000, () => Promise.resolve(true))
+    const wakes = new AgentWakes({
+      ...f.deps,
+      focusMs: 50,
+      steerQueued: (_conversation, _id, request, text) => {
+        const queued = f.entries.find((entry) => entry.id === request)!
+        if (queued.text !== text) return Promise.resolve(false)
+        steered.push({ request, text })
+        return Promise.resolve(true)
+      },
+    })
+    wakes.notice("apex", "", notice())
+    f.counted.line = "0 working, 1 ended."
+    await pause(120)
+    assert.equal(steered.length, 1, "the digest is steered, not refused for words the tree's change made stale")
+    assert.match(steered[0]!.text, /0 working, 1 ended\./, "said as the tree stands now")
+    wakes.dispose()
   }
   {
     // What rides a digest stays with it whatever happens to its reports, and is said once. Nothing takes it away but its going.
@@ -265,6 +327,78 @@ try {
       await world.close()
     }
     console.log(`${harness}: SIGKILL at every write gap of a digest recovered to each report delivered once`)
+  }
+
+  // Fins' news folded into the person's turn (`foldQueued`) that fails before its model answers goes again by itself, as
+  // a digest of its own would: never lost with the turn that carried it.
+  {
+    let failed = false
+    const script: Script = (turn) => {
+      if (turn.text.includes("Hold.")) return turn.world.hold(turn.conversation).then(() => "Held.")
+      if (turn.text.startsWith("Ship it.") && !failed) {
+        failed = true
+        turn.world.endWith(turn.conversation, { fail: "503 Service unavailable" })
+        return ""
+      }
+      return "ok"
+    }
+    const world = new AgentsWorld({ root: join(root, "folded-news"), script })
+    const { conversation } = await world.apex("claude", "full")
+    world.say(conversation, "Hold.")
+    await until("the turn", () => world.live.session(conversation)?.status === "running")
+    world.say(conversation, "Ship it.")
+    const actor = { kind: "agent" as const, session: world.store.journalPlacement(conversation)!.session }
+    const news = randomUUID()
+    world.live.submit(conversation, news, `${FROM_AGENTS}\nDigest folded.`, [], undefined, undefined, undefined, actor, { digest: { notices: [notice()] }, wake: { at: Date.now() + 60_000, after: DIGEST_WAITS } })
+    world.release(conversation)
+    const heard = () => world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.includes("Digest folded."))
+    await until("the news to go again after the turn carrying it failed", () => heard().length === 2, 15_000)
+    assert.ok(heard()[0]!.text.startsWith("Ship it."), "first inside the person's turn")
+    assert.ok(heard()[1]!.text.startsWith(FROM_AGENTS), "then as a digest of its own")
+    const requests = world.live.snapshot(conversation)!.requests
+    const carrier = requests.find((request) => request.text.startsWith("Ship it."))!
+    assert.equal(requests.find((request) => request.id === news)?.joinedInto, carrier.id, "it went inside the person's turn")
+    assert.equal(requests.filter((request) => request.continues?.requestId === news && request.digest).length, 1, "and goes again once")
+    await world.settle(300, 10_000, "ignore")
+    assert.equal(heard().length, 2, "no more than that")
+    await world.close()
+    console.log("wakes: Fins' news a failed turn carried goes again as its own digest, once")
+  }
+
+  // Fins' news folded into a turn that ran into a usage limit waits with that turn for the limit's reset: it isn't sent
+  // alone into the same limit, to rest under a lone digest's rules.
+  {
+    let failed = false
+    const script: Script = (turn) => {
+      if (turn.text.includes("Hold.")) return turn.world.hold(turn.conversation).then(() => "Held.")
+      if (turn.text.startsWith("Ship it.") && !failed) {
+        failed = true
+        turn.world.endWith(turn.conversation, { fail: "You have reached your usage limit. Try again later." })
+        return ""
+      }
+      return "ok"
+    }
+    const world = new AgentsWorld({ root: join(root, "folded-news-limit"), script })
+    const { conversation } = await world.apex("claude", "full")
+    world.say(conversation, "Hold.")
+    await until("the turn", () => world.live.session(conversation)?.status === "running")
+    world.say(conversation, "Ship it.")
+    const actor = { kind: "agent" as const, session: world.store.journalPlacement(conversation)!.session }
+    const news = randomUUID()
+    world.live.submit(conversation, news, `${FROM_AGENTS}\nDigest at the limit.`, [], undefined, undefined, undefined, actor, { digest: { notices: [notice()] }, wake: { at: Date.now() + 60_000, after: DIGEST_WAITS } })
+    world.release(conversation)
+    const again = () => world.live.snapshot(conversation)?.requests.find((request) => request.continues?.requestId === news && request.digest)
+    await until("the news to wait for the limit", () => again() !== undefined, 15_000)
+    await pause(500)
+    const heard = () => world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.includes("Digest at the limit."))
+    assert.equal(again()!.status, "held", "it waits")
+    assert.ok(again()!.retry, "for the turn's retry")
+    assert.equal(heard().length, 1, "not sent alone into the limit: only inside the turn that ran into it")
+    world.live.wakeDue(again()!.retry!.at + 1)
+    await until("the news to go once the limit's time comes", () => heard().length === 2, 15_000)
+    assert.ok(heard()[1]!.text.startsWith(FROM_AGENTS), "as a digest of its own")
+    await world.close()
+    console.log("wakes: Fins' news a turn carried into a usage limit waits for the limit's reset with it")
   }
 
   for (const harness of TESTED_HARNESSES) {

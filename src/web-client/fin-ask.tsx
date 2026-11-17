@@ -3,7 +3,7 @@ import { CheckIcon, XIcon } from "lucide-react"
 import { FIN_WORD } from "@mako/host/contracts/agents"
 import { approvalWords, askWords } from "@mako/host/contracts/children"
 import { answerFin, type FinAnswer, type PersonAsk } from "@/state/fin-asks"
-import { useLimitContinue } from "@/state/limit-continue"
+export { LimitContinueCard } from "./limit-wait"
 import { WebHarnessIcon } from "./harness-icon"
 import { LiveMark } from "@/components/ui/live-mark"
 import { noteAnswered } from "./install"
@@ -14,8 +14,17 @@ import { noteAnswered } from "./install"
  * The answer is the person's own, and reaches the Fin as its next step. In the Inbox (`from`, its Apex's name) the same
  * card sits in the page, the Apex named before the Fin.
  */
-export function FinAskCard({ apex, ask, more, answerTyped, from }: { apex: string; ask: PersonAsk; more: number; answerTyped: (answer: ((text: string) => boolean) | null) => void; from?: string }) {
+export function FinAskCard(props: Parameters<typeof AnswerableFinAskCard>[0]) {
+  if (props.ask.limit?.waiting) return props.from ? <div className="web-ask" data-limit-inbox={props.ask.ask.id}>
+    <p>{props.ask.question}</p><p>Continues automatically. Open the Thread to use another account or harness now.</p>
+    {props.onOpen ? <button type="button" className="web-ask-option" onClick={props.onOpen}>Open</button> : null}
+  </div> : null
+  return <AnswerableFinAskCard {...props} />
+}
+
+function AnswerableFinAskCard({ apex, ask, more, answerTyped, from, onOpen }: { apex: string; ask: PersonAsk; more: number; answerTyped: (answer: ((text: string) => boolean) | null) => void; from?: string; onOpen?: () => void }) {
   const [sent, setSent] = useState<FinAnswer | undefined>(undefined)
+  const [words, setWords] = useState("")
   const send = (answer: FinAnswer) => {
     if (sent) return
     setSent(answer)
@@ -86,25 +95,30 @@ export function FinAskCard({ apex, ask, more, answerTyped, from }: { apex: strin
             ))
           )}
         </div>
-      </div>
-    </div>
-  )
-}
-
-/** In a Thread's dock, where an ask would be: the one offer of a Thread a limit holds (`useLimitContinue`). */
-export function LimitContinueCard() {
-  const offer = useLimitContinue()
-  if (!offer) return null
-  return (
-    <div className="web-ask" data-ask="limit" data-limit-continue={offer.to}>
-      <div className="web-ask-body" aria-busy={offer.busy || undefined} data-busy={offer.busy || undefined}>
-        <p className="web-ask-title">
-          <span className="min-w-0 break-words">{offer.to} can take this</span>
-        </p>
-        <div className="web-ask-options" data-row role="group" aria-label="Answers">
-          <button type="button" className="web-ask-option" data-primary disabled={offer.busy} onClick={offer.go}>Continue on {offer.to}</button>
-          <button type="button" className="web-ask-option" onClick={offer.notNow}>Not now</button>
-        </div>
+        {/* In the Inbox there's no dock composer under the card: its own field, and the Thread to open. */}
+        {from && !approval ? (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault()
+              if (words.trim()) send({ answer: words.trim() })
+            }}
+          >
+            <input
+              data-fin-typed
+              value={words}
+              onChange={(event) => setWords(event.target.value)}
+              disabled={Boolean(sent)}
+              aria-label={`Answer ${ask.title} in your own words`}
+              placeholder={options.length ? "Or your own words" : "Your answer"}
+              className="web-ask-input"
+            />
+          </form>
+        ) : null}
+        {from && onOpen ? (
+          <div className="web-ask-options" data-row role="group" aria-label="More">
+            <button type="button" data-fin-open className="web-ask-option" onClick={onOpen}>Open {from}</button>
+          </div>
+        ) : null}
       </div>
     </div>
   )
