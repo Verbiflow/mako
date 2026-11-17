@@ -614,6 +614,14 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     late.awayNotes?.back("wake")
     late.conversations?.agents?.woke()
   }, { needs: [shell.subscribed, atWork] })
+  // Before any harness launches: whether the machine slept while nothing watched (a Fin placed here from another device
+  // while the app was closed), so the wake's work, the shared sign-ins' refresh first, runs before the harness starts;
+  // then the sign-ins' own wait, once there are shared sign-ins to wait for.
+  let signInsInStep: (() => Promise<void>) | undefined
+  providerHost.accounts.gateLaunches(async () => {
+    wake.check()
+    await signInsInStep?.()
+  })
   const telemetry = await declareTelemetryMethods(methods, {
     environment,
     crashes,
@@ -1057,7 +1065,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
               accounts: providerHost.accounts,
               capabilities: providerHost.accountCapabilities,
             })
-            providerHost.accounts.gateLaunches(() => sync.inStep())
+            signInsInStep = () => sync.inStep()
             return sync
           },
   })

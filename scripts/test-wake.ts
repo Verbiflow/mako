@@ -76,9 +76,18 @@ try {
     watching.set(true)
     assert.deepEqual(idleWakes, ["clock"], "an hour asleep while nothing watched is a wake once something does")
     assert.equal(jobs.list().find((job) => job.name === "watch for the machine waking")?.paused, false, "and the watch ticks while it does")
+    // A launch looks first, whether or not anything ticks: a sleep with nothing watching is a wake before it starts.
+    watching.set(false)
+    idle.check()
+    assert.equal(idleWakes.length, 1, "a look with no time away is no wake")
+    wall += 7_200_000
+    mono += 500
+    // Past the last wake's quiet window, so this one counts as its own.
+    idle.check()
+    assert.deepEqual(idleWakes, ["clock", "clock"], "two hours asleep with nothing watching is a wake at the launch's look")
   } finally {
     idle.stop()
     jobs.stop()
   }
 }
-console.log("Wake: clock gaps, the desktop's resume and unlock, one wake for several notices, stopping, a long start being no wake, and a sleep while nothing needed the watch passed")
+console.log("Wake: clock gaps, the desktop's resume and unlock, one wake for several notices, stopping, a long start being no wake, and a sleep while nothing needed the watch, and a launch's own look passed")

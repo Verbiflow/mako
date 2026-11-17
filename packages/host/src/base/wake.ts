@@ -11,6 +11,11 @@ export type WakeSource = "clock" | "resume" | "unlock-screen"
 export interface WakeWatch {
   /** For the desktop app, which hears the Mac resume and the screen unlock before the clock shows a gap. */
   notify(source: Exclude<WakeSource, "clock">): void
+  /**
+   * Looks now whether the machine slept since the last look, and wakes if it did: before work that must not run on
+   * what a sleep left stale (a harness's launch, before the sign-ins' wake refreshed them), whether or not it ticks.
+   */
+  check(): void
   stop(): void
 }
 
@@ -74,7 +79,9 @@ export function watchWake(
     if (!on) return
     if (look() > gapMs) wake("clock")
   }))
-  return { notify: wake, stop: () => {
+  return { notify: wake, check: () => {
+    if (look() > gapMs) wake("clock")
+  }, stop: () => {
     stop()
     for (const each of stops) each()
   } }
