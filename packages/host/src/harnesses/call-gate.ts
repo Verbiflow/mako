@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { hostLog } from "../base/host-log.js"
 import type { WriteHolds } from "./write-holds.js"
+import { readOnlyCommand } from "../attribution/index.js"
 import type { JsonObject } from "../contracts/json.js"
 import { mcpToolName, routeNativeTool, routeShellCall, scriptFlag, type CallRoute, type CallThread } from "../contracts/native-calls.js"
 
@@ -35,9 +36,14 @@ export const CALL_GATE_HOLD_MS = 6_000
 /** The tools hooks post that only read, across the harnesses whose hooks post here; any other may write. */
 const READ_ONLY_TOOLS = new Set(["Read", "Glob", "Grep", "LS", "read", "glob", "grep", "list", "webfetch", "websearch", "codesearch", "todoread", "todowrite"])
 
-/** Whether a hooked call may change the workspace, so a turn's checkpoint holds it. */
+/**
+ * Whether a hooked call may change the workspace, so a turn's checkpoint holds it: any tool but one that only reads,
+ * and a shell command but one the attribution journal reads as only reading (`ls`, `git status`), which goes at once.
+ */
 export function hookMayWrite(call: HookCall | undefined): boolean {
-  return !READ_ONLY_TOOLS.has(call?.tool_name ?? "")
+  if (READ_ONLY_TOOLS.has(call?.tool_name ?? "")) return false
+  const command = call?.tool_input?.command
+  return !(command && readOnlyCommand(command))
 }
 
 /** Whether a gate's answer refuses the call, which then never runs. */

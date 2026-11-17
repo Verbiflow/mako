@@ -43,6 +43,7 @@ import { TRAIL_MS } from "./evidence.js"
 
 export { threadFingerprint } from "./checkpoint-fingerprints.js"
 export { JournalStore } from "./journal-store.js"
+export { readOnlyCommand } from "./read-only.js"
 export { LaptopTracker, type TrackerOptions, type TrackerRepository } from "./tracker.js"
 export { changes, classOf, hunks, partition, restorable, shares, side, storedView, turnChanges, unattributed, writerOf, type ChangeClass, type CheckoutHunk, type CheckoutShares, type FileVersion, type JournalView, type Partition, type PartitionFile, type PartitionOptions, type Restorable, type Share, type ThreadChanges, type UncertainChange, type WholeHunk } from "./queries.js"
 export { threadTrees, type ThreadTree } from "./thread-tree.js"

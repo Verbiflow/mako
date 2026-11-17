@@ -157,6 +157,8 @@ export type RpcParams = {
   "thread/goal/set": ThreadGoalSetParams
   "thread/goal/clear": ThreadGoalClearParams
   "config/read": ConfigReadParams
+  "hooks/list": { cwds: string[] }
+  "plugin/installed": { cwds: string[] }
   "thread/inject_items": ThreadInjectItemsParams
   "thread/unsubscribe": ThreadUnsubscribeParams
 }
@@ -180,6 +182,8 @@ export type RpcResults = {
   "thread/goal/set": { goal: CodexThreadGoal }
   "thread/goal/clear": { cleared: boolean }
   "config/read": JsonObject
+  "hooks/list": JsonObject
+  "plugin/installed": JsonObject
   "thread/inject_items": JsonObject
   "thread/unsubscribe": ThreadUnsubscribeResponse
 }

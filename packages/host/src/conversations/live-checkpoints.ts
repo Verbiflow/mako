@@ -1,4 +1,5 @@
 import type { ForkInput } from "../contracts/conversation-control.js"
+import { isActiveNativeAgent } from "../contracts/native-agents.js"
 import {
   RewindInputSchema,
   type RewindInput,
@@ -99,7 +100,10 @@ export class LiveCheckpoints {
   private writeHolding(resident: Resident): { holds: NonNullable<LiveAccess["dependencies"]["writeHolds"]>; binding: string } | undefined {
     const holds = this.host.dependencies.writeHolds
     const binding = activeBinding(resident)
-    if (!holds || !binding || !this.host.dependencies.driver(binding.provider)?.firstWrite || !holds.attends(binding.id)) return undefined
+    const firstWrite = binding && this.host.dependencies.driver(binding.provider)?.firstWrite
+    if (!holds || !binding || !firstWrite || !holds.attends(binding.id)) return undefined
+    // A command still running takes the agent's input with no hook between: nothing could hold that write.
+    if (firstWrite.openCommands && resident.snapshot.nativeAgents?.agents.some((agent) => agent.work === "command" && isActiveNativeAgent(agent))) return undefined
     return { holds, binding: binding.id }
   }
 

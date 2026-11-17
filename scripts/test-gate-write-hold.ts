@@ -6,11 +6,12 @@
  * - a Codex launch holds writes only where none of the person's own Codex hooks or plugins run beside Mako's.
  */
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { CALL_GATE_HOLD_MS, gateDenies, heldAnswer, hookMayWrite, HookCall } from "@mako/host/harnesses/call-gate"
-import { codexPersonCodeRuns } from "@mako/host/harnesses/codex/person-hooks"
+import { codexPersonCodeRuns } from "@mako/host/harnesses/codex/person-code"
+import type { JsonObject } from "@mako/host/contracts/json"
 import { WriteHolds } from "@mako/host/harnesses/write-holds"
 import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
 
@@ -26,6 +27,8 @@ try {
       assert.equal(hookMayWrite(HookCall.parse({ ...tool && { tool_name: tool } })), true, `${tool ?? "an unnamed tool"} may write`)
     for (const tool of ["Read", "Grep", "read", "glob", "grep", "list", "webfetch", "todowrite"])
       assert.equal(hookMayWrite(HookCall.parse({ tool_name: tool })), false, `${tool} only reads`)
+    for (const command of ["ls -la", "git status", "rg TODO src | head"]) assert.equal(hookMayWrite(HookCall.parse({ tool_name: "Bash", tool_input: { command } })), false, `${command} only reads, so it goes at once`)
+    for (const command of ["echo x > f", "npm install", "git commit -m x"]) assert.equal(hookMayWrite(HookCall.parse({ tool_name: "Bash", tool_input: { command } })), true, `${command} may write`)
     assert.equal(gateDenies({ decision: "block", reason: "no" }), true)
     assert.equal(gateDenies({}), false)
     assert.ok(CALL_GATE_HOLD_MS < 8_000, "Mako answers before the hooks give up (curl -m 8, OpenCode's 8 s abort)")
@@ -101,27 +104,26 @@ try {
     console.log("PASS: the conversation server answers a hook's call once its gate does, for the grant's binding")
   }
 
-  // Whether the person's own Codex setup runs code beside Mako's hook.
+  // Whether the person's own Codex setup runs code beside Mako's hook, as Codex's app-server answers for the folder.
   {
-    const home = join(root, "home", ".codex"), project = join(root, "project")
-    mkdirSync(home, { recursive: true })
-    mkdirSync(join(project, ".codex"), { recursive: true })
-    const env = { CODEX_HOME: home, HOME: join(root, "home") }
-    assert.equal(await codexPersonCodeRuns(env, project), false, "nothing set up")
-    writeFileSync(join(home, "config.toml"), `model = "gpt"\n[features]\nplugins = false\n`)
-    assert.equal(await codexPersonCodeRuns(env, project), false, "config without hooks")
-    writeFileSync(join(project, ".codex", "config.toml"), `[[hooks.PreToolUse]]\nmatcher = "Bash"\n`)
-    assert.equal(await codexPersonCodeRuns(env, project), true, "hooks in the folder's config")
-    rmSync(join(project, ".codex", "config.toml"))
-    writeFileSync(join(home, "hooks.json"), "{}")
-    assert.equal(await codexPersonCodeRuns(env, project), true, "a hooks.json in Codex's home")
-    rmSync(join(home, "hooks.json"))
-    writeFileSync(join(home, "config.toml"), `model = "gpt"\n`)
-    mkdirSync(join(home, "plugins", "formatter"), { recursive: true })
-    assert.equal(await codexPersonCodeRuns(env, project), true, "installed plugins, not turned off")
-    writeFileSync(join(home, "config.toml"), `[features]\nplugins = false\n`)
-    assert.equal(await codexPersonCodeRuns(env, project), false, "installed plugins turned off")
-    console.log("PASS: a Codex launch holds writes only where none of the person's own hooks or plugins run")
+    const answers = (hooks: JsonObject, config: JsonObject, plugins: JsonObject = { marketplaces: [] }) => ({
+      hooks: async () => hooks, config: async () => config, plugins: async () => plugins,
+    })
+    const none = { data: [{ cwd: "/p", hooks: [], warnings: [], errors: [] }] }
+    const plain = { config: { model: "gpt" }, origins: {}, layers: [{ name: "user", version: "1", config: { model: "gpt" } }] }
+    const pluginsOff = { config: { features: { plugins: false } }, origins: {}, layers: [] }
+    assert.equal(await codexPersonCodeRuns(answers(none, plain), "/p"), false, "nothing of the person's")
+    assert.equal(await codexPersonCodeRuns(answers({ data: [{ cwd: "/p", hooks: [{ key: "k" }], warnings: [], errors: [] }] }, plain), "/p"), true, "a hook Codex would run")
+    assert.equal(await codexPersonCodeRuns(answers({ data: [{ cwd: "/p", hooks: [], warnings: [], errors: [{ message: "bad" }] }] }, plain), "/p"), true, "a hook that failed to load may be anything")
+    assert.equal(await codexPersonCodeRuns(answers(none, { ...plain, layers: [{ name: "project", version: "1", config: { mcp_servers: { theirs: { command: "node" } } } }] }), "/p"), true, "a process MCP server in a layer")
+    assert.equal(await codexPersonCodeRuns(answers(none, { ...plain, layers: [{ name: "user", version: "1", config: { profiles: { work: { mcp_servers: { theirs: { command: "uvx" } } } } } }] }), "/p"), true, "one in a profile")
+    assert.equal(await codexPersonCodeRuns(answers(none, { ...plain, layers: [{ name: "user", version: "1", config: { mcp_servers: { remote: { url: "https://x" } } } }] }), "/p"), false, "a remote MCP server starts no process here")
+    assert.equal(await codexPersonCodeRuns(answers(none, plain, { marketplaces: [{ plugins: [{ installed: true, enabled: true }] }] }), "/p"), true, "an installed, enabled plugin")
+    assert.equal(await codexPersonCodeRuns(answers(none, pluginsOff, { marketplaces: [{ plugins: [{ installed: true, enabled: true }] }] }), "/p"), false, "plugins turned off")
+    assert.equal(await codexPersonCodeRuns(answers(none, plain, { marketplaces: [], marketplaceLoadErrors: [{ message: "x" }] }), "/p"), true, "a marketplace that didn't load")
+    assert.equal(await codexPersonCodeRuns({ hooks: async () => { throw new Error("method not found") }, config: async () => plain, plugins: async () => ({ marketplaces: [] }) }, "/p"), true, "a Codex that can't say fails closed")
+    assert.equal(await codexPersonCodeRuns(answers({ unexpected: true }, plain), "/p"), true, "an answer Mako can't read fails closed")
+    console.log("PASS: a Codex launch holds writes only where Codex says none of the person's own code runs, and fails closed")
   }
 } finally {
   rmSync(root, { recursive: true, force: true })
