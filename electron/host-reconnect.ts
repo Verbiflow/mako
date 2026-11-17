@@ -1,5 +1,5 @@
 import type { HostLogFields } from "@mako/host/base/host-log"
-import { HostLaunchFailedError } from "@mako/host/transport/service"
+import { HOST_START_WINDOW_MS, HostLaunchFailedError } from "@mako/host/transport/service"
 
 /** What a window's way back to its host needs: attach (start one if none), say there's no host, a timer, whether it still wants one. */
 export interface ReconnectDeps {
@@ -99,6 +99,11 @@ export interface HungHostDeps {
    * lock file's text can't either (on macOS it names the last pid that wrote it, which may since be another process).
    */
   holds(pid: number): Promise<boolean>
+  /**
+   * How long `pid` has run, in milliseconds (`ps -o etime= -p <pid>`), or undefined when it can't be read. A host takes
+   * its lock before it binds its socket, so one younger than `HOST_START_WINDOW_MS` with no socket is starting, not hung.
+   */
+  ranFor(pid: number): Promise<number | undefined>
   signal(pid: number, signal: "SIGTERM" | "SIGKILL"): void
   alive(pid: number): boolean
   wait(ms: number): Promise<void>
@@ -115,6 +120,9 @@ export async function holdsAny(pid: number, paths: readonly string[], open: (pid
   return held.some(Boolean)
 }
 
+/** With no socket and a holder whose age can't be read, how long before the socket is asked again. */
+export const ABSENT_RECHECK_MS = 3_000
+
 /** How long a host asked to quit has to leave before it's ended: its own stop runs in this, saving what it holds. */
 export const HUNG_HOST_GRACE_MS = 10_000
 
@@ -124,18 +132,25 @@ export const HUNG_HOST_GRACE_MS = 10_000
  * client opened again starts a fresh one. Ending the wrong process is the one thing it must never do, so before each
  * signal the pid must be shown to be this profile's host: its command line names the host's entry, and it holds this
  * profile's lock or socket open (`holds`). A stale pid in the lock file, another profile's host, or a pid the kernel
- * gave another process during the grace is left alone. A host that answers, or none, is left as it is.
+ * gave another process during the grace is left alone. A host that answers, or none, is left as it is, and so is one
+ * with no socket yet that is still starting (`starting`): the client opened again attaches to it once it binds.
  */
-export async function endHungHost(deps: HungHostDeps): Promise<"answering" | "none" | "not-mako" | "ended" | "stuck"> {
+export async function endHungHost(deps: HungHostDeps): Promise<"answering" | "starting" | "none" | "not-mako" | "ended" | "stuck"> {
   // Only a host that answers is left as it is: one whose socket is gone (`absent`) may still hold the lock, hung after it
   // closed its socket, and the client opened again would meet it there. The lock's holder decides, proved below.
-  if (await deps.answers() === "ready") return "answering"
+  const answer = await deps.answers()
+  if (answer === "ready") return "answering"
   const pid = await deps.holder()
   if (pid === null) return "none"
   const ours = async () => Boolean(deps.entry) && (await deps.commandOf(pid)).includes(deps.entry) && await deps.holds(pid)
   if (!await ours()) {
     deps.log("restart leaves a lock holder that isn't this profile's Mako host", { pid })
     return "not-mako"
+  }
+  // A host takes its lock before it binds its socket: with no socket it may be starting, and ending it wastes the start.
+  if (answer === "absent" && await starting(deps, pid)) {
+    deps.log("restart leaves a host that's still starting", { pid })
+    return "starting"
   }
   deps.log("restart asks a host that answers nothing to quit", { pid })
   deps.signal(pid, "SIGTERM")
@@ -150,4 +165,24 @@ export async function endHungHost(deps: HungHostDeps): Promise<"answering" | "no
   deps.signal(pid, "SIGKILL")
   for (const end = Date.now() + 5_000; deps.alive(pid) && Date.now() < end; ) await deps.wait(100)
   return deps.alive(pid) ? "stuck" : "ended"
+}
+
+/**
+ * Whether a host with no socket is still starting rather than hung: it has run less than `HOST_START_WINDOW_MS`, the
+ * time a start has to answer. When its age can't be read, its socket is asked again after `ABSENT_RECHECK_MS`, and one
+ * that answers or binds by then is starting.
+ */
+async function starting(deps: HungHostDeps, pid: number): Promise<boolean> {
+  const ran = await deps.ranFor(pid)
+  if (ran !== undefined) return ran < HOST_START_WINDOW_MS
+  await deps.wait(ABSENT_RECHECK_MS)
+  return await deps.answers() !== "absent"
+}
+
+/** `ps -o etime=`'s elapsed time, `[[dd-]hh:]mm:ss`, in milliseconds; undefined for anything else. */
+export function elapsedMs(etime: string): number | undefined {
+  const match = /^(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)$/.exec(etime.trim())
+  if (!match) return undefined
+  const [, days = "0", hours = "0", minutes = "0", seconds = "0"] = match
+  return (((Number(days) * 24 + Number(hours)) * 60 + Number(minutes)) * 60 + Number(seconds)) * 1000
 }

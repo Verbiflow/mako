@@ -28,6 +28,7 @@ import { newerBuild, QUIET_AFTER_MS, quietMoment } from "../src/web-client/updat
 import { newDraftKey, noteSending, openingText, readDraft, settleSending, threadDraftKey, writeDraft } from "../src/web-client/drafts"
 import { answeredWords, dockStatus, linkAction, linkWords, statusWords, workingWords, type DockStatusInput } from "../src/web-client/dock-status"
 import { RECONNECT_QUIET_MS, RESTART_AFTER_MS, reconnectStageAt } from "../src/lib/reconnect-stages"
+import { anyUnconfirmed, nextLoss } from "../src/web-client/link-loss"
 import { DELIVERY_WORDS, deliveryOf, type Sending } from "../src/web-client/delivery"
 import { SAY_WAKING_MS, wakeThread, wakingNow, wakingStore } from "../src/web-client/wake"
 import { sendChoiceDetail, sendPresentation, type SendSituation } from "../src/web-client/send-action"
@@ -598,6 +599,20 @@ test("a lost link follows the desk's stages: quiet, then Try now, then Reload, a
   assert.equal(linkWords(offline, "quiet", false), "Offline")
   assert.equal(linkWords(offline, "restart", false), "Offline · Try now")
   for (const stage of ["long", "restart"] as const) for (const status of [reconnecting, offline]) assert.ok(linkAction(status, stage), `past the quiet stage a lost link always offers a way back (${status.kind}, ${stage})`)
+})
+
+test("the page keeps one link loss from its first moment, whichever Thread is open, as the desk keeps one for its window", () => {
+  const none = { since: undefined, stage: undefined } as const
+  const begun = nextLoss(none, true, 1_000)
+  assert.deepEqual(begun, { since: 1_000, stage: "quiet" })
+  const later = { since: 1_000, stage: "long" } as const
+  assert.equal(nextLoss(later, true, 40_000), later, "a reading while it's still lost (another Thread opened, another message unconfirmed) keeps the loss and its stage")
+  assert.deepEqual(nextLoss(later, false, 41_000), none, "back: the loss ends")
+  assert.equal(nextLoss(none, false, 42_000), none, "fine and still fine: the same object, so a streamed batch writes nothing to the store")
+  assert.deepEqual(nextLoss(none, true, 90_000), { since: 90_000, stage: "quiet" }, "lost again: a new loss from quiet")
+  const live = (unconfirmed: boolean) => ({ kind: "live", pendingPrompts: [{ id: "p", unconfirmed }] })
+  assert.equal(anyUnconfirmed({ conversations: { a: live(false), b: live(true) } }), true, "a message lost on its way in any Thread is the page's loss")
+  assert.equal(anyUnconfirmed({ conversations: { a: live(false) } }), false)
 })
 
 test("a sent message says how its delivery stands, and never Delivered on a guess", () => {
