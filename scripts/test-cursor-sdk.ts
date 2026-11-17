@@ -23,6 +23,12 @@ import { admitted } from "./fixtures/admitted-start.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { adoptedEnvironment } from "@mako/host/harnesses/cursor/sdk/adopt"
 import { CursorSdkLogEntry, cursorRunLogLine } from "@mako/host/harnesses/cursor/sdk/run-log"
+import { cursorLocalSteerOutcome } from "@mako/host/harnesses/cursor/sdk/errors"
+
+assert.equal(cursorLocalSteerOutcome("complete_delivered"), "complete_delivered")
+assert.equal(cursorLocalSteerOutcome("revert_to_followup"), "revert_to_followup")
+assert.throws(() => cursorLocalSteerOutcome({ outcome: "queued" }), /delivery is uncertain/,
+  "a cloud-owned follow-up cannot become a local refusal and be sent twice")
 
 const nativeStores = new NativeStores(false)
 

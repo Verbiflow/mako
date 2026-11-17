@@ -17,7 +17,7 @@ const collect = globalThis.gc
 assert.ok(collect, "run with node --expose-gc")
 
 const MESSAGES = 64
-const CLASS_START = "class f{constructor(t,r,e,n,s={}){this.mapper=t,this.bidiClient=r"
+const CLASS_START = "class p{constructor(t,r,e,n,s={}){this.mapper=t,this.bidiClient=r"
 
 class Aborted extends Error {}
 
@@ -30,8 +30,8 @@ function transportClass(source) {
     c: { MethodKind: { BiDiStreaming: "bidi" }, isMessage: () => true },
     u: { $r: class { constructor(fields) { Object.assign(this, fields) } } },
     m: { T$: (inputs) => inputs },
-    p: Aborted,
-    d: (cause) => cause,
+    d: Aborted,
+    f: (cause) => cause,
     l: { ConnectError: class extends Error {}, Code: { DeadlineExceeded: 4 } },
     i: {},
   })

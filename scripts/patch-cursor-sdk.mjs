@@ -66,8 +66,8 @@ import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
-const VERSION = "1.3.1"
-const MARKER = "/*mako:patched:11*/"
+const VERSION = "1.4.0"
+const MARKER = "/*mako:patched:12*/"
 const ANY_MARKER = "/*mako:patched"
 
 /**
@@ -87,59 +87,59 @@ const appendTranscript = writer => [
 
 const STORE_LOCK_WAIT = [["PRAGMA busy_timeout = 5000;", "PRAGMA busy_timeout = 60000;"]]
 
-/** The same in the esm and cjs builds: the module's names don't differ between them in 1.2.0 or 1.3.1. */
+/** The blob store has the same names in 1.4.0's ESM and CJS builds. */
 const BLOB_STORE = [
   [
-    "class I{constructor(t){this.persistBlob=t,this.blobs=new Map}",
-    `${MARKER}class I{constructor(t,r){this.persistBlob=t,this.loadBlob=r,this.blobs=new Map}`,
+    "class R{constructor(t){this.persistBlob=t,this.blobs=new Map}",
+    `${MARKER}class R{constructor(t,r){this.persistBlob=t,this.loadBlob=r,this.blobs=new Map}`,
   ],
   [
-    "async getBlob(t,r){return this.blobs.get((0,n.nj)(r))}",
-    "async getBlob(t,r){const e=(0,n.nj)(r),s=this.blobs.get(e);return void 0===s&&this.loadBlob?await this.loadBlob(e):s}",
+    "async getBlob(t,r){return this.blobs.get((0,i.nj)(r))}",
+    "async getBlob(t,r){const e=(0,i.nj)(r),s=this.blobs.get(e);return void 0===s&&this.loadBlob?await this.loadBlob(e):s}",
   ],
   [
-    "this.blobs.set(s,i),await(this.persistBlob?.(s,i))}",
-    "this.blobs.set(s,i),await(this.persistBlob?.(s,i)),this.loadBlob&&this.blobs.get(s)===i&&this.blobs.delete(s)}",
+    "this.blobs.set(n,s),await(this.persistBlob?.(n,s))}",
+    "this.blobs.set(n,s),await(this.persistBlob?.(n,s)),this.loadBlob&&this.blobs.get(n)===s&&this.blobs.delete(n)}",
   ],
   [
-    "const e=await this.getScopedAgentDocument(t);return e?.latestCheckpoint?this.setBlobStore(t,await f(this.localStore,t,e.latestCheckpoint)):this.createPersistingBlobStore(t)}",
+    "const e=await this.getScopedAgentDocument(t);return e?.latestCheckpoint?this.setBlobStore(t,await g(this.localStore,t,e.latestCheckpoint)):this.createPersistingBlobStore(t)}",
     "return await this.getScopedAgentDocument(t),this.createPersistingBlobStore(t)}",
   ],
   [
-    "createPersistingBlobStore(t){const r=new I(this.createPersistBlob(t));return this.blobStores.set(t,r),r}",
-    "createPersistingBlobStore(t){const r=new I(this.createPersistBlob(t),this.createLoadBlob(t));return this.blobStores.set(t,r),r}createLoadBlob(t){return async r=>{const e=await this.localStore.checkpoints.get({agentId:t,blobId:r});return e??void 0}}",
+    "createPersistingBlobStore(t){const r=new R(this.createPersistBlob(t));return this.blobStores.set(t,r),r}",
+    "createPersistingBlobStore(t){const r=new R(this.createPersistBlob(t),this.createLoadBlob(t));return this.blobStores.set(t,r),r}createLoadBlob(t){return async r=>{const e=await this.localStore.checkpoints.get({agentId:t,blobId:r});return e??void 0}}",
   ],
   [
-    "const e=await f(this.localStore,t,r.latestCheckpoint),n=this.setBlobStore(t,e),o=await n.getBlob((0,s.q6)(),k(e.rootBlobId));",
-    "const n=this.createPersistingBlobStore(t),o=await n.getBlob((0,s.q6)(),k(r.latestCheckpoint.rootBlobId));",
+    "const e=await g(this.localStore,t,r.latestCheckpoint),n=this.setBlobStore(t,e),s=await n.getBlob((0,o.q6)(),T(e.rootBlobId));",
+    "const n=this.createPersistingBlobStore(t),s=await n.getBlob((0,o.q6)(),T(r.latestCheckpoint.rootBlobId));",
   ],
   [
-    "const e=await f(this.localStore,t,r.latestCheckpoint),o=new n.We;",
-    "const e=r.latestCheckpoint,o=new n.We;",
+    "const e=await g(this.localStore,t,r.latestCheckpoint),i=new s.We;",
+    "const e=r.latestCheckpoint,i=new s.We;",
   ],
   [
-    "const a=new n.pH(this.setBlobStore(t,e),o);",
-    "const a=new n.pH(this.createPersistingBlobStore(t),o);",
+    "const u=new n.pH(this.setBlobStore(t,e),i);",
+    "const u=new n.pH(this.createPersistingBlobStore(t),i);",
   ],
 ]
 
 /**
- * The same in the esm and cjs builds. `J` rejects when an append fails, `w`
- * when the stream is aborted. One subscription on `J` rejects every read
+ * The same in the esm and cjs builds. `y` rejects when an append fails, `J`
+ * when the stream is aborted. One subscription on `y` rejects every read
  * still waiting, not only the latest: two outstanding `next()` calls both
  * reject in the unpatched SDK. A read after the failure rejects at once.
  */
 export const BIDI_READS = [
   [
-    "b={[Symbol.asyncIterator](){const t=B[Symbol.asyncIterator]();return{next:()=>Promise.race([t.next(),J]),",
-    "b={[Symbol.asyncIterator](){const t=B[Symbol.asyncIterator]();let f;const o=[];J.catch((t=>{f=[t];for(const r of o)r(t);o.length=0}));return{next:()=>f?Promise.reject(f[0]):new Promise(((r,e)=>{o.push(e),t.next().then((t=>{const n=o.indexOf(e);n<0||o.splice(n,1),r(t)}),(t=>{const n=o.indexOf(e);n<0||o.splice(n,1),e(t)}))})),",
+    "I={[Symbol.asyncIterator](){const t=B[Symbol.asyncIterator]();return{next:()=>Promise.race([t.next(),y]),",
+    "I={[Symbol.asyncIterator](){const t=B[Symbol.asyncIterator]();let f;const o=[];y.catch((t=>{f=[t];for(const r of o)r(t);o.length=0}));return{next:()=>f?Promise.reject(f[0]):new Promise(((r,e)=>{o.push(e),t.next().then((t=>{const n=o.indexOf(e);n<0||o.splice(n,1),r(t)}),(t=>{const n=o.indexOf(e);n<0||o.splice(n,1),e(t)}))})),",
   ],
   [
-    "let g,_;const w=new Promise(((t,r)=>{_=()=>r(new p)}));",
-    "let g,_,z;const w=new Promise(((t,r)=>{_=()=>{const t=new p;r(t),z?.(t)}}));",
+    "let g,_;const J=new Promise(((t,r)=>{_=()=>r(new d)}));",
+    "let g,_,z;const J=new Promise(((t,r)=>{_=()=>{const t=new d;r(t),z?.(t)}}));",
   ],
   [
-    "const r=await Promise.race([m.next(),w]);",
+    "const r=await Promise.race([m.next(),J]);",
     "const r=await new Promise(((t,r)=>{z=r,m.next().then(t,r)}));",
   ],
 ]
@@ -152,7 +152,7 @@ export const BIDI_READS = [
  * `fs.appendFile` stores `undefined`, and every transcript write then hydrates the whole conversation at once.
  * `writeFile` with flag `a` is the same call.
  */
-function transcripts({ writer, store, write, fs, child, chunks }) {
+function transcripts({ writer, store, write, fs, child, chunks, flush }) {
   const lock = "makoLock"
   const options = `writeText:!1,writeJsonl:!0,appendFile:(p,d)=>${lock}(p,(()=>${fs}.writeFile(p,d,{flag:"a"}))),streamFullJsonlWrites:!0,`
   const staged = `+".mako-"+process.pid+".tmp"`
@@ -177,8 +177,8 @@ function transcripts({ writer, store, write, fs, child, chunks }) {
       `await(0,${fs}.writeFile)(r,e,{flag:0===${chunks}?"w":"a"}),${chunks}++`,
     ],
     [
-      `await l(),e.span.setAttribute("streamed",!0),e.span.setAttribute("chunkCount",${chunks}),`,
-      `await l(),${chunks}>0&&await(async()=>{const t=await(0,${fs}.open)(r,"r+");try{await t.sync()}finally{await t.close()}await(0,${fs}.rename)(r,f),await makoSyncDir(f)})(),e.span.setAttribute("streamed",!0),e.span.setAttribute("chunkCount",${chunks}),`,
+      `await ${flush}(),e.span.setAttribute("streamed",!0),e.span.setAttribute("chunkCount",${chunks}),`,
+      `await ${flush}(),${chunks}>0&&await(async()=>{const t=await(0,${fs}.open)(r,"r+");try{await t.sync()}finally{await t.close()}await(0,${fs}.rename)(r,f),await makoSyncDir(f)})(),e.span.setAttribute("streamed",!0),e.span.setAttribute("chunkCount",${chunks}),`,
     ],
     [
       `class ${writer}{constructor(e){this.writeChain=Promise.resolve(),`,
@@ -222,25 +222,25 @@ const runLog = logger => [`${logger}={log(){}}`, `${logger}={log(e,t){process.em
  * run's request id (`Run.requestId`), and answers `{ text, plan }` or
  * nothing; a hook that throws changes nothing.
  */
-const resumeAccount = proto => [
-  "try{return await s.runAttempt({state:m,action:g,",
-  "try{return await s.runAttempt({state:m,action:w>0?await(async()=>{let t;try{t=await globalThis[Symbol.for(\"mako:cursor-sdk-resume\")]?.({attempt:w,action:g.action.case,requestId:a})}catch{}" +
-    `if("string"!=typeof t?.text||!t.text)return g;const u=e=>new ${proto}.QFf({action:{case:"userMessageAction",value:new ${proto}.Vtf(e)}});` +
-    `if("resumeAction"===g.action.case)return u({userMessage:new ${proto}.RGk({text:t.text,mode:t.plan?${proto}.xyI.PLAN:${proto}.xyI.AGENT})});` +
-    `if("userMessageAction"===g.action.case){const e=g.action.value;return u({...e,userMessage:new ${proto}.RGk({...e.userMessage,text:(e.userMessage?.text??"")+"\\n\\n"+t.text})})}return g})():g,`,
+const resumeAccount = (proto, requestId) => [
+  "try{return await s.runAttempt({state:g,action:w,",
+  `try{return await s.runAttempt({state:g,action:y>0?await(async()=>{let t;try{t=await globalThis[Symbol.for("mako:cursor-sdk-resume")]?.({attempt:y,action:w.action.case,requestId:${requestId}})}catch{}` +
+    `if("string"!=typeof t?.text||!t.text)return w;const u=e=>new ${proto}.QFf({action:{case:"userMessageAction",value:new ${proto}.Vtf(e)}});` +
+    `if("resumeAction"===w.action.case)return u({userMessage:new ${proto}.RGk({text:t.text,mode:t.plan?${proto}.xyI.PLAN:${proto}.xyI.AGENT})});` +
+    `if("userMessageAction"===w.action.case){const e=w.action.value;return u({...e,userMessage:new ${proto}.RGk({...e.userMessage,text:(e.userMessage?.text??"")+"\\n\\n"+t.text})})}return w})():w,`,
 ]
 
-/** The names `transcripts` takes, in each build of 1.3.1's local executor (1.2.0's `336.js` is `305.js` here, its code the same but for the minifier's names). */
+/** The minified names in each build of 1.4.0's local executor. */
 export const TRANSCRIPT_BUILDS = {
-  esm: { target: "dist/esm/305.js", writer: "ZO", store: "yM", write: "JO", fs: "Ys", child: "n", chunks: "a" },
-  cjs: { target: "dist/cjs/305.js", writer: "YO", store: "SM", write: "QO", fs: "ti", child: "n", chunks: "i" },
+  esm: { target: "dist/esm/993.js", writer: "Ij", store: "rO", write: "Pj", fs: "fo", child: "n", chunks: "i", flush: "c" },
+  cjs: { target: "dist/cjs/993.js", writer: "Aj", store: "sO", write: "Tj", fs: "go", child: "n", chunks: "i", flush: "c" },
 }
 
 export const CURSOR_SDK_PATCHES = [
   { target: "dist/esm/index.js", replacements: [...BLOB_STORE, ...BIDI_READS], change: "read-through checkpoint blobs and bidi reads" },
   { target: "dist/cjs/index.js", replacements: [...BLOB_STORE, ...BIDI_READS], change: "read-through checkpoint blobs and bidi reads" },
-  { target: "dist/esm/305.js", replacements: [...transcripts(TRANSCRIPT_BUILDS.esm), runLog("EN"), resumeAccount("qr")], change: "incremental transcripts, the run log and the resume account" },
-  { target: "dist/cjs/305.js", replacements: [...transcripts(TRANSCRIPT_BUILDS.cjs), runLog("IN"), resumeAccount("Gr")], change: "incremental transcripts, the run log and the resume account" },
+  { target: "dist/esm/993.js", replacements: [...transcripts(TRANSCRIPT_BUILDS.esm), runLog("oB"), resumeAccount("i", "c")], change: "incremental transcripts, the run log and the resume account" },
+  { target: "dist/cjs/993.js", replacements: [...transcripts(TRANSCRIPT_BUILDS.cjs), runLog("aB"), resumeAccount("c", "a")], change: "incremental transcripts, the run log and the resume account" },
   { target: "dist/esm/18.js", replacements: STORE_LOCK_WAIT, change: "a minute's wait for the agent store's lock" },
   { target: "dist/cjs/18.js", replacements: STORE_LOCK_WAIT, change: "a minute's wait for the agent store's lock" },
 ]

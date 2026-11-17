@@ -1,9 +1,17 @@
 import {
   AgentBusyError, AgentNotFoundError, AuthenticationError, ConfigurationError,
-  CursorSdkError, NetworkError, RateLimitError,
+  CursorSdkError, NetworkError, RateLimitError, type SteerAckOutcome,
 } from "@cursor/sdk"
 import { z } from "zod"
 import { CursorNetworkCauseSchema, type SdkWireError } from "./wire.js"
+
+/** Local runs return the two terminal acknowledgements. SDK 1.4 also types
+ * cloud follow-ups here; those already belong to the server and must never
+ * be mistaken for a refusal that lets Mako send the words again. */
+export function cursorLocalSteerOutcome(outcome: SteerAckOutcome): "complete_delivered" | "revert_to_followup" {
+  if (outcome === "complete_delivered" || outcome === "revert_to_followup") return outcome
+  throw new ConfigurationError("Cursor returned a cloud follow-up receipt for a local run; delivery is uncertain")
+}
 
 const CauseSchema = z.object({
   code: CursorNetworkCauseSchema.optional().catch(undefined),

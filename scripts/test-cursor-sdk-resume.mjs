@@ -24,14 +24,18 @@ const proto = { QFf: class extends Message {}, Vtf: class extends Message {}, RG
 for (const target of [TRANSCRIPT_BUILDS.esm.target, TRANSCRIPT_BUILDS.cjs.target]) {
   const { replacements } = CURSOR_SDK_PATCHES.find((patch) => patch.target === target)
   const [original, patched] = replacements.find(([from]) => from.startsWith("try{return await s.runAttempt("))
-  const name = target.includes("esm") ? "qr" : "Gr"
-  assert.ok(patched.startsWith(original.slice(0, -"action:g,".length)), `${target}: the patch keeps the attempt's call`)
-  // The loop's names: `w` the attempt, `g` the action the SDK would send, `m` the checkpoint state, `a` the run's request id.
-  const attempt = new Function("w", "g", "m", "a", "s", name, `return (async()=>{${patched}x:0})}catch(e){throw e}})()`)
+  const name = target.includes("esm") ? "i" : "c"
+  const request = target.includes("esm") ? "c" : "a"
+  assert.ok(patched.startsWith(original.slice(0, -"action:w,".length)), `${target}: the patch keeps the attempt's call`)
+  // 1.4.0's loop: `y` the attempt, `w` the action, `g` the checkpoint; the run's request id differs by build.
+  const attempt = new Function("y", "w", "g", request, "s", name, `return (async()=>{${patched}x:0})}catch(e){throw e}})()`)
   const sent = async (w, g, hook) => {
     globalThis[HOOK] = hook
     try {
-      return (await attempt(w, g, "state", "request-1", { runAttempt: async ({ action }) => action }, proto))
+      return (await attempt(w, g, "state", "request-1", { runAttempt: async ({ state, action }) => {
+        assert.equal(state, "state", `${target}: recovery keeps the SDK's checkpoint`)
+        return action
+      } }, proto))
     } finally {
       delete globalThis[HOOK]
     }

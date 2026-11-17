@@ -1,13 +1,13 @@
 {
   "harness": "cursor",
   "native": {
-    "version": "1.3.1"
+    "version": "1.4.0"
   },
   "about": "Run `sleep 3` in the shell, then tell me how it went. A message steered in while a shell command runs, which the harness reads at its next step, then the answer it asked for.",
   "stores": [
     {
       "reader": "cursor",
-      "path": ".mako/cursor-sdk/agents/agent-3aa6c8edd2bd87ce21e009dd4f5dce32c5500e4fbe4ca4cafc36663f7d77d393/store.db",
+      "path": ".mako/cursor-sdk/agents/agent-48fbd01b56b8e227f4abd0592b49d27cf3a565cd97343ef4a4084ce011f76070/store.db",
       "known": []
     }
   ]

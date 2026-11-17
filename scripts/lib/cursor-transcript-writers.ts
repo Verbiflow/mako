@@ -14,8 +14,8 @@ export const BUILDS: readonly Build[] = ["esm", "cjs"]
 
 /** The bundle's own names for what the streamed writer calls, which differ between the two builds. */
 const HELPERS = {
-  esm: { ctx: "i", archive: "nM", visit: "iM", line: "wM", merge: "rM", keep: "tM" },
-  cjs: { ctx: "c", archive: "iM", visit: "lM", line: "bM", merge: "sM", keep: "oM" },
+  esm: { ctx: "$", archive: "BD", visit: "qD", line: "tO", merge: "UD", keep: "jD" },
+  cjs: { ctx: "D", archive: "qD", visit: "VD", line: "oO", merge: "HD", keep: "WD" },
 } as const
 
 export interface Row { role: string; id: string; text: string }

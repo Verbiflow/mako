@@ -1,13 +1,13 @@
 {
   "harness": "cursor",
   "native": {
-    "version": "1.3.1"
+    "version": "1.4.0"
   },
   "about": "What do the notes in notes.md say? Reasoning, text, a file read, then the answer.",
   "stores": [
     {
       "reader": "cursor",
-      "path": ".mako/cursor-sdk/agents/agent-a2e49a1ad863780686cd8e7dc92a33dfae5927757eaa0c891483990d62de39f2/store.db",
+      "path": ".mako/cursor-sdk/agents/agent-6ef3295b69e8b58a384f9341de07205ad4d390657323f613cf15702a7e511a24/store.db",
       "known": []
     }
   ]
