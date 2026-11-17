@@ -108,6 +108,8 @@ const TEMPORARY_ROOTS = [
 const WORKSPACE_PRESENCE_TTL_MS = 60_000
 /** How soon catalog events' activity is reconciled, all of them at once (`reconcileSoon`). */
 const RECONCILE_MS = 250
+/** How long after the sync daemon's last event its memory is still watched. */
+const DAEMON_QUIET_MS = 60_000
 const CATALOG_ACTOR: Actor = { kind: "service", name: "catalog" }
 
 /** Refs other host callers look through; the rail's own list is `threadList`. */
@@ -551,6 +553,9 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   const closingFor = new WeakMap<DaemonClient, string>()
   let catalogWorker: Worker | null = null
   let stopMonitoring: (() => void) | null = null
+  /** On within `DAEMON_QUIET_MS` of the sync daemon's last event: its memory is watched only then. */
+  const daemonBusy = jobs.demand("the sync daemon works")
+  let daemonWorkedAt = 0
   let activityEngine: ProviderActivityEngine | null = null
   let stopNudges: (() => void) | undefined
   const providerActivity = new Map<string, ProviderActivitySession[]>()
@@ -803,6 +808,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   }
 
   function applyDaemonEvent(event: DaemonEvent, announce: boolean): void {
+    daemonWorked()
     if (event.event === "added" || event.event === "updated") {
       invalidateActivityRef(event.ref)
       if (nativeFolders) noteNativeFolder(nativeFolders, event.ref)
@@ -830,10 +836,21 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     }
   }
 
+  /**
+   * The sync daemon's memory grows only while it works, which it says in events: its memory is watched for a minute
+   * after its last one, so a daemon with nothing to do isn't asked every five seconds.
+   */
+  function daemonWorked(): void {
+    daemonWorkedAt = Date.now()
+    daemonBusy.set(true)
+  }
+
   function monitorDaemon(client: DaemonClient): void {
     stopDaemonMonitor()
     let highMemorySamples = 0
+    daemonWorked()
     stopMonitoring = jobs.every("watch the sync daemon's memory", 5_000, async () => {
+      if (Date.now() - daemonWorkedAt > DAEMON_QUIET_MS && highMemorySamples === 0) return daemonBusy.set(false)
       if (daemon !== client || stopping) return
       const stats = await client.refresh().catch(() => undefined)
       if (!stats || daemon !== client) return
@@ -845,7 +862,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       closingFor.set(client, `memory over ${MAX_DAEMON_RSS / 1024 / 1024} MB (${Math.round((stats.rss ?? 0) / 1024 / 1024)} MB)`)
       void client.retire().catch(() => {})
       client.close()
-    })
+    }, { needs: [daemonBusy] })
   }
 
   async function connectViaDaemon(signal: AbortSignal): Promise<boolean> {
