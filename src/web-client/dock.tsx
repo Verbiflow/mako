@@ -34,7 +34,8 @@ import { HeldSendContext } from "./held-send"
 import { WebHarnessIcon } from "./harness-icon"
 import { ThreadChips } from "./thread-chips"
 import { useSwitching } from "./switching"
-import { answeredWords, dockStatus, statusWords, workingWords, type DockStatus } from "./dock-status"
+import { answeredWords, dockStatus, linkAction, linkWords, statusWords, workingWords, type DockStatus } from "./dock-status"
+import { RECONNECT_QUIET_MS, RESTART_AFTER_MS, type ReconnectStage } from "@/lib/reconnect-stages"
 import { noteAnswered } from "./install"
 import { dropUnsent, keepUnsent, retryUnconfirmed, retryUnsent, sendMessage, useOutbox, type SendTarget } from "./outbox"
 import { useWaking, wakeThread } from "./wake"
@@ -599,9 +600,27 @@ function useOnline(): boolean {
 }
 
 /**
+ * How long the link has been lost, as a stage (`reconnectStageAt`): undefined while it isn't, and moved on at each
+ * stage's bound. Lost again after it came back starts again from quiet.
+ */
+function useLinkStage(lost: boolean): ReconnectStage | undefined {
+  const [stage, setStage] = useState<ReconnectStage>("quiet")
+  useEffect(() => {
+    if (!lost) return
+    const timers = [setTimeout(() => setStage("long"), RECONNECT_QUIET_MS), setTimeout(() => setStage("restart"), RESTART_AFTER_MS)]
+    return () => {
+      for (const timer of timers) clearTimeout(timer)
+      setStage("quiet")
+    }
+  }, [lost])
+  return lost ? stage : undefined
+}
+
+/**
  * The capsule above the composer: one status (`dockStatus`), and the way back to the newest turn sliding out beside it.
  * What's queued behind the turn is the queue's own to say, in the dock just under it. It arrives in 180 ms and leaves in 120; its words come in 80 ms after it. What it
- * last said stays while it leaves, so it never empties before it goes.
+ * last said stays while it leaves, so it never empties before it goes. A lost link follows the desk's stages
+ * (`linkAction`): "Reconnecting…" alone, then Try now, then Reload, so the phone and the desk never offer different things.
  */
 function StatusCapsule({ conversation, cloudThread, asking, away, jump, reconnect }: { conversation: string; cloudThread: string | undefined; asking: boolean; away: boolean; jump: () => void; reconnect: () => void }) {
   const online = useOnline()
@@ -628,22 +647,31 @@ function StatusCapsule({ conversation, cloudThread, asking, away, jump, reconnec
   const key = `${status?.kind}:${status?.kind === "working" ? status.since : status?.kind === "waking" ? status.message : ""}:${app}`
   const [kept, keep] = useState<{ key: string; status: DockStatus | undefined; app?: "running" | "starting" }>({ key, status, app })
   if (shown && kept.key !== key) keep({ key, status, app })
-  const retry = () => {
+  const lost = status?.kind === "offline" || status?.kind === "reconnecting"
+  const stage = useLinkStage(lost) ?? "quiet"
+  // Try now waits on the asks it made: pressing again meanwhile would do nothing, so it says so.
+  const [trying, setTrying] = useState(false)
+  const link = kept.status?.kind === "offline" || kept.status?.kind === "reconnecting" ? kept.status : undefined
+  const action = link ? linkAction(link, stage) : undefined
+  const press = () => {
+    if (action === "reload") return location.reload()
+    setTrying(true)
     reconnect()
-    void retryUnconfirmed(conversation)
+    void retryUnconfirmed(conversation).finally(() => setTrying(false))
   }
   let words: ReactNode = null
   if (kept.status?.kind === "working") {
     const since = kept.status.since
     words = <Ticking words={(now) => workingWords(now - since)} />
-  } else if (kept.status) words = statusWords(kept.status)
-  const tappable = kept.status?.kind === "offline" || kept.status?.kind === "reconnecting"
+  } else if (link) words = linkWords(link, stage, trying)
+  else if (kept.status) words = statusWords(kept.status)
+  const tappable = action !== undefined
   return (
     <div className="web-float" data-away={away || undefined}>
-      <div className="web-capsule" data-shown={shown || undefined} data-status={kept.status?.kind} role="status" aria-live="polite">
+      <div className="web-capsule" data-shown={shown || undefined} data-status={kept.status?.kind} data-stage={link ? stage : undefined} role="status" aria-live="polite">
         {kept.status ? (
           tappable ? (
-            <button type="button" className="web-capsule-segment" onClick={retry}>
+            <button type="button" className="web-capsule-segment" data-link-action={action} onClick={press} disabled={trying}>
               <RotateCwIcon aria-hidden className="size-3.5 shrink-0" />
               <span className="web-capsule-words">{words}</span>
             </button>

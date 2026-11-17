@@ -1,3 +1,5 @@
+import type { ReconnectStage } from "@/lib/reconnect-stages"
+
 /**
  * The one thing the phone's status capsule says above the composer, by priority: the link first (nothing else is true
  * while it's down), then a Stop on its way, then a machine waking, then the turn at work with its clock. Nothing while
@@ -52,14 +54,39 @@ export function workingWords(ms: number): string {
 export function statusWords(status: Exclude<DockStatus, { kind: "working" }>): string {
   switch (status.kind) {
     case "offline":
-      return "Offline · Retry"
+      return "Offline"
     case "reconnecting":
-      return "Reconnecting… · Retry"
+      return "Reconnecting…"
     case "stopping":
       return "Stopping…"
     case "waking":
       return status.message ? "Waking the agent… your message sends when it's ready." : "Waking…"
   }
+}
+
+/** A lost link's status: what the capsule says of it follows the desk's stages (`@/lib/reconnect-stages`). */
+export type LinkStatus = Extract<DockStatus, { kind: "offline" | "reconnecting" }>
+
+/**
+ * What the capsule offers for a lost link at each stage, as the desk's window does: nothing at first (Mako asks again by
+ * itself), Try now past ten seconds (the gateway reconnects at once and every unconfirmed message is asked again under
+ * its ID), and past a minute a reload, the phone's Restart Mako: the outbox is kept in the browser and asked again under
+ * the same IDs once the page is back (`resumeOutbox`), and drafts are saved. With no network a reload can't load the
+ * page, so offline stays on Try now.
+ */
+export function linkAction(status: LinkStatus, stage: ReconnectStage): "try" | "reload" | undefined {
+  if (stage === "quiet") return undefined
+  if (stage === "restart" && status.kind === "reconnecting") return "reload"
+  return "try"
+}
+
+/** The capsule's words for a lost link at its stage: "Reconnecting…", "Reconnecting… · Try now", "Mako isn't answering · Reload". */
+export function linkWords(status: LinkStatus, stage: ReconnectStage, trying: boolean): string {
+  const action = linkAction(status, stage)
+  if (action === "reload") return "Mako isn't answering · Reload"
+  const said = status.kind === "offline" ? "Offline" : "Reconnecting…"
+  if (!action) return said
+  return `${said} · ${trying ? "Trying…" : "Try now"}`
 }
 
 /** The verbs an answer's name starts with, and what was done. */

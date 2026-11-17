@@ -18,7 +18,7 @@ import { AnsweredLine, WebDock, type SendElsewhere } from "./dock"
 import { readDraft, threadDraftKey, writeDraft } from "./drafts"
 import { webHarnessLabel } from "./labels"
 import { DELIVERY_WORDS, deliveryOf } from "./delivery"
-import { resumeOutbox, retryUnconfirmed, useOutbox } from "./outbox"
+import { resumeOutbox, useOutbox } from "./outbox"
 import { newerThan, type WebSession, type WebThread } from "./threads"
 import { useNow } from "./trouble-state"
 import type { OpenedBy } from "@mako/host/contracts/session-choice"
@@ -228,7 +228,11 @@ function useSendElsewhere(session: WebSession, thread: WebThread | undefined, op
   }, [client, newest, onSession, session.facts, now])
 }
 
-/** Under each message the person sent, how its delivery stands, in a word; "Not confirmed" with Retry. */
+/**
+ * Under each message the person sent, how its delivery stands, in a word. "Not confirmed" offers nothing of its own: the
+ * outbox asks again by itself, and the capsule above the composer offers Try now and then Reload for all of them at the
+ * desk's stages, so one way back is offered, in one place.
+ */
 function useDeliveryNote(conversation: string) {
   const delivery = useAcp((state) => {
     const live = state.conversations[conversation]
@@ -241,21 +245,11 @@ function useDeliveryNote(conversation: string) {
       if (!requestId) return null
       const state = deliveryOf(requestId, delivery, sending)
       if (!state) return null
-      if (state === "unconfirmed")
-        return (
-          <span data-delivery={state} className="flex items-center gap-1 text-caution">
-            {DELIVERY_WORDS[state]}
-            <span aria-hidden>·</span>
-            <button type="button" className="pressable -mx-1 px-1 font-medium text-foreground" onClick={() => void retryUnconfirmed(conversation)}>
-              Retry
-            </button>
-          </span>
-        )
       return (
-        <span data-delivery={state} className={state === "delivered" ? "text-faint" : undefined}>
+        <span data-delivery={state} className={state === "delivered" ? "text-faint" : state === "unconfirmed" ? "text-caution" : undefined}>
           {DELIVERY_WORDS[state]}
         </span>
       )
     }
-  }, [delivery, sending, conversation])
+  }, [delivery, sending])
 }

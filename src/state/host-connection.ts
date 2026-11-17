@@ -1,5 +1,8 @@
 import { getMako, hasBridge } from "@/lib/bridge"
+import { RECONNECT_QUIET_MS, RESTART_AFTER_MS, reconnectStageRank as rank, type ReconnectStage } from "@/lib/reconnect-stages"
 import { createHook, createStore } from "@/state/store"
+
+export { RECONNECT_QUIET_MS, RESTART_AFTER_MS, type ReconnectStage }
 
 /**
  * The host's link: there, or lost since `since`, with the transport's own words kept for diagnosis, not shown.
@@ -9,20 +12,12 @@ import { createHook, createStore } from "@/state/store"
 type HostConnection =
   | { kind: "connected" }
   | { kind: "disconnected"; message: string; since: number; stage: ReconnectStage; gone?: true }
-export type ReconnectStage = "quiet" | "long" | "restart"
 export const hostConnectionStore = createStore<HostConnection>({
   kind: "connected",
 })
 export const useHostConnection = createHook(hostConnectionStore)
 
-/**
- * How long the window says only "Reconnecting…" in its title bar before it says more: Mako reconnects and replays
- * what the window missed on its own, so a short drop is no news. Past it, one notice says it's still trying, with
- * Try now (as T3 Code's connection notice offers Retry now).
- */
-export const RECONNECT_QUIET_MS = 10_000
-/** Lost this long, trying again hasn't brought it back: the notice offers Restart Mako instead. */
-export const RESTART_AFTER_MS = 60_000
+// The stages and their bounds are the phone's too (`@/lib/reconnect-stages`): Try now past ten seconds, a restart past a minute.
 
 /**
  * The link lost (`message`): kept from the first loss, so a second word while it's still lost doesn't restart the
@@ -45,8 +40,6 @@ export function hostDisconnected(message: string, gone?: true): void {
   later(RECONNECT_QUIET_MS, "long")
   later(RESTART_AFTER_MS, "restart")
 }
-
-const rank = (stage: ReconnectStage) => (stage === "quiet" ? 0 : stage === "long" ? 1 : 2)
 
 /** How the window speaks of the link: connected, or a loss's stage. */
 export function useReconnectStage(): ReconnectStage | undefined {
