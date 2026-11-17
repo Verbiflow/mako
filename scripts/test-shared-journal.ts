@@ -282,6 +282,29 @@ if (process.argv[2] === "owner-child") {
     return { heard, owned }
   }
 
+  test("a follower carries only its requested roots through the shared reconciliation barrier", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "mako-scoped-journal-"))
+    const first = recorder(), second = recorder()
+    const scopes: unknown[] = []
+    const blocked = Promise.withResolvers<void>()
+    first.owned.writes.settled = async (options) => {
+      scopes.push(options)
+      if (options?.checkouts?.includes("/bad")) await blocked.promise
+    }
+    const owner = await SharedJournal.open({ folder, host: { pid: process.pid, dataRoot: "/a", label: "a" }, own: async () => first.owned, follow: quiet, alone: async () => first.owned, log: quiet })
+    const follower = await SharedJournal.open({ folder, host: { pid: process.pid, dataRoot: "/b", label: "b" }, own: async () => second.owned, follow: quiet, alone: async () => second.owned, log: quiet })
+    try {
+      const bad = follower.writes.settled({ rescans: false, checkouts: ["/bad"] })
+      await follower.writes.settled({ rescans: false, checkouts: ["/good"] })
+      assert.deepEqual(scopes, [{ rescans: false, checkouts: ["/bad"] }, { rescans: false, checkouts: ["/good"] }])
+      blocked.resolve(); await bad
+    } finally {
+      blocked.resolve()
+      await follower.close(); await owner.close()
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
   test("a follower carries a Thread's history past a message's size to the owner through the journal's folder, and nothing else is read", async () => {
     const folder = mkdtempSync(join(tmpdir(), "mako-shared-journal-folder-"))
     const first = recorder()

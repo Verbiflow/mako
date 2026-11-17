@@ -410,3 +410,29 @@ test("an incomplete journal keeps the checkout and the existing stayed notice", 
     assert.deepEqual(await new CheckoutLeave(folder, runner, () => {}).stayed("T1"), taken.versions.map((version) => version.path).sort())
   } finally { await f.tracker.close(); rmSync(f.base, { recursive: true, force: true }) }
 })
+
+test("silent-watch inventory reuses tracked paths but still finds staged additions and unborn indexes", async () => {
+  const f = await fixture("inventory-cache")
+  const seen: string[][] = []
+  const git = new Git({ trace: (run) => seen.push([...run.args]) })
+  try {
+    const repository = gitRepository(git, f.repo)
+    const first = await repository.inventory()
+    seen.length = 0
+    writeFileSync(f.abs("staged.ts"), "staged\n"); f.git("add", "staged.ts")
+    writeFileSync(f.abs("untracked.ts"), "untracked\n")
+    const next = await repository.inventory(new Set(first.tracked))
+    assert(next.changed.includes("staged.ts"))
+    assert(next.untracked.includes("untracked.ts"))
+    assert.deepEqual(next.tracked, [], "the caller already owns the tracked listing")
+    assert(!seen.some((args) => args.length === 2 && args[0] === "ls-files" && args[1] === "-z"))
+    const unborn = join(f.base, "unborn"); mkdirSync(unborn)
+    f.sh(unborn, "init", "-q")
+    writeFileSync(join(unborn, "first.ts"), "first\n"); f.sh(unborn, "add", "first.ts")
+    const fresh = await gitRepository(git, unborn).inventory(new Set())
+    assert(fresh.untracked.includes("first.ts"), "an unborn repository still needs the real index's staged paths")
+  } finally {
+    await git.close(); await f.tracker.close()
+    rmSync(f.base, { recursive: true, force: true })
+  }
+})

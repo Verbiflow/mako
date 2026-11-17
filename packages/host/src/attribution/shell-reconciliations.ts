@@ -1,7 +1,8 @@
-/** Coalesce live Git inventories, with a final pass after each command's measured delivery allowance. */
-const COALESCE_MS = 50
+/** Silent-watch recovery runs once at turn end, after the measured delivery allowance. */
 const MAX_LAG_MS = 30_000
 const MIN_INTERVAL_MS = 2_000
+const HOST_INTERVAL_MS = 250
+const HOST_CONCURRENCY = 2
 
 interface Request {
   due: number
@@ -11,18 +12,18 @@ interface Request {
 interface Root {
   id: string
   requests: Request[]
-  immediate?: number
-  timer?: ReturnType<typeof setTimeout>
   running?: Promise<void>
   startedAt?: number
-  error?: Error
 }
 
-/** Inventory requests carry no writer claim: the tracker still classifies every version from its existing evidence. */
+/** One owner in the journal writer: root spacing plus a host-wide start rate and concurrency bound. */
 export class ShellReconciliations {
   private readonly roots = new Map<string, Root>()
   private readonly refresh: (root: string) => Promise<void>
   private readonly failed: (root: string, error: Error) => void
+  private timer?: ReturnType<typeof setTimeout>
+  private active = 0
+  private startedAt = -Infinity
   private closed = false
 
   constructor(refresh: (root: string) => Promise<void>, failed: (root: string, error: Error) => void) {
@@ -34,81 +35,66 @@ export class ShellReconciliations {
     if (this.closed) return
     let root = this.roots.get(id)
     if (!root) { root = { id, requests: [] }; this.roots.set(id, root) }
-    const now = Date.now()
-    const due = Math.ceil((now + Math.max(COALESCE_MS, Math.min(MAX_LAG_MS, lagMs))) / COALESCE_MS) * COALESCE_MS
-    // A burst shares one barrier per short delivery bucket, not one promise per tool update.
+    const due = Date.now() + Math.max(0, Math.min(MAX_LAG_MS, lagMs))
     if (!root.requests.some((request) => request.due === due)) {
       let done!: () => void
       const reached = new Promise<void>((resolve) => { done = resolve })
       root.requests.push({ due, reached, done })
     }
-    root.immediate ??= now + COALESCE_MS
-    this.arm(root)
+    this.arm()
   }
 
-  private arm(root: Root): void {
-    clearTimeout(root.timer)
-    root.timer = undefined
-    if (this.closed || root.running || !root.requests.length) return
-    const due = Math.max((root.startedAt ?? -Infinity) + MIN_INTERVAL_MS, Math.min(root.immediate ?? Infinity, ...root.requests.map((request) => request.due)))
-    root.timer = setTimeout(() => { root.timer = undefined; void this.perform(root) }, Math.max(0, due - Date.now()))
-    root.timer.unref?.()
+  private due(root: Root): number {
+    return Math.max((root.startedAt ?? -Infinity) + MIN_INTERVAL_MS, root.requests[0]!.due, this.startedAt + HOST_INTERVAL_MS)
   }
 
-  private perform(root: Root, final = false): Promise<void> {
-    if (root.running) return root.running
-    if (!final && Date.now() < (root.startedAt ?? -Infinity) + MIN_INTERVAL_MS) { this.arm(root); return Promise.resolve() }
-    clearTimeout(root.timer)
-    root.timer = undefined
-    root.immediate = undefined
-    root.startedAt = Date.now()
-    // A request ends only after a scan that began after its allowance. New commands cannot postpone older waits.
-    const reached = new Set(root.requests.filter((request) => final || request.due <= Date.now()))
-    const pending = Promise.resolve().then(() => this.refresh(root.id)).then(() => {
-      root.error = undefined
-    }, (cause) => {
-      root.error = cause instanceof Error ? cause : new Error("A shell's Git inventory could not be read", { cause })
-      this.failed(root.id, root.error)
-    }).then(() => {
+  private arm(): void {
+    clearTimeout(this.timer)
+    this.timer = undefined
+    if (this.active >= HOST_CONCURRENCY) return
+    const next = [...this.roots.values()].filter((root) => !root.running && root.requests.length).sort((a, b) => this.due(a) - this.due(b))[0]
+    if (!next) return
+    this.timer = setTimeout(() => { this.timer = undefined; this.perform(next) }, Math.max(0, this.due(next) - Date.now()))
+    this.timer.unref?.()
+  }
+
+  private perform(root: Root): void {
+    const reached = new Set(root.requests.filter((request) => request.due <= Date.now()))
+    root.startedAt = this.startedAt = Date.now()
+    this.active++
+    root.running = Promise.resolve().then(() => this.refresh(root.id)).catch((cause: unknown) => {
+      this.failed(root.id, cause instanceof Error ? cause : new Error("A shell's Git inventory could not be read", { cause }))
+    }).finally(() => {
       root.requests = root.requests.filter((request) => !reached.has(request))
       for (const request of reached) request.done()
       root.running = undefined
-      // Keep the last start until untrack/close, so a newly arriving command still respects this root's spacing.
-      this.arm(root)
+      this.active--
+      this.arm()
     })
-    root.running = pending
-    return pending
+    this.arm()
   }
 
-  /** Read what exists now, without making ordinary journal readers wait for future delivery. */
-  async flush(): Promise<void> {
-    await Promise.all([...this.roots.values()].filter((root) => root.immediate !== undefined || root.requests.some((request) => request.due <= Date.now())).map((root) => this.perform(root)))
-  }
-
-  /** A watermark: later commands may coalesce with these scans, but cannot extend this caller's wait indefinitely. */
-  async heard(): Promise<void> {
-    const roots = [...this.roots.values()]
-    const requests = roots.flatMap((root) => root.requests.map((request) => request.reached))
-    await Promise.all(roots.filter((root) => root.error && !root.requests.length).map((root) => this.perform(root)))
-    await Promise.all(requests)
-    const errors = roots.flatMap((root) => root.error ? [root.error] : [])
-    if (errors.length) throw new AggregateError(errors, "Shell reconciliation is incomplete")
+  /** A scoped watermark. Failure is logged by the owner; callers continue on the journal's existing evidence. */
+  async heard(ids: readonly string[]): Promise<void> {
+    await Promise.all(ids.flatMap((id) => this.roots.get(id)?.requests.map((request) => request.reached) ?? []))
   }
 
   forget(id: string): void {
     const root = this.roots.get(id)
     if (!root) return
-    clearTimeout(root.timer)
     root.requests.forEach((request) => request.done())
     root.requests = []
     this.roots.delete(id)
+    this.arm()
   }
 
   async close(): Promise<void> {
     this.closed = true
-    const roots = [...this.roots.values()].filter((root) => root.running || root.requests.length || root.error)
-    roots.forEach((root) => clearTimeout(root.timer))
-    await Promise.all(roots.map(async (root) => { await root.running; await this.perform(root, true) }))
+    for (const root of this.roots.values()) for (const request of root.requests) request.due = Math.min(request.due, Date.now())
+    this.arm()
+    await this.heard([...this.roots.keys()])
+    await Promise.all([...this.roots.values()].map((root) => root.running))
+    clearTimeout(this.timer)
     this.roots.clear()
   }
 }

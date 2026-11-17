@@ -9,7 +9,7 @@ export interface TurnLedger {
   /** The Thread and Session a conversation's turns are journaled under. */
   placement(conversationId: string): { thread: string; session: string } | undefined
   /** Every change heard so far journaled. */
-  flushed(): Promise<void>
+  flushed(checkout?: string): Promise<void>
   /** Count a turn off the host's thread; undefined while its journal is closed or has been replaced. */
   countTurn(thread: string, turn: string, state: TurnChanges["state"]): Promise<TurnChanges | undefined>
   /** Whether every change by `at` has its author for good. */
@@ -86,7 +86,7 @@ export class LiveTurnChanges {
       void (async () => {
         // A shell reconciliation (or its lag window) can have completed since the initial settling count.
         let flushed = true
-        try { await ledger.flushed(); flushFailed = false } catch (error) {
+        try { await ledger.flushed(resident.snapshot.session.cwd); flushFailed = false } catch (error) {
           flushed = false
           if (!flushFailed) failed(error instanceof Error ? error : new Error("The journal could not be flushed", { cause: error }))
           flushFailed = true
@@ -107,7 +107,7 @@ export class LiveTurnChanges {
         failed(error)
       })
     }
-    void ledger.flushed().then(
+    void ledger.flushed(resident.snapshot.session.cwd).then(
       async () => {
         if (await this.count(resident, ledger, placed.thread, requestId, "settling")) this.host.flush(resident)
       },

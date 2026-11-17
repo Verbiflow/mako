@@ -50,8 +50,8 @@ import { writtenLines } from "./written.js"
 export interface TrackerRepository {
   /** The commit checked out; null before the first commit. */
   head(): Promise<string | null>
-  /** Files Git tracks, untracked files it doesn't ignore, and tracked files that differ from HEAD, relative to the root. */
-  inventory(): Promise<{ tracked: string[]; untracked: string[]; changed: string[] }>
+  /** Dirty/untracked files relative to the root; the full tracked listing only when the caller hasn't already cached it. */
+  inventory(knownTracked?: ReadonlySet<string>): Promise<{ tracked: string[]; untracked: string[]; changed: string[] }>
   /** Of `paths`, those Git ignores. */
   ignored(paths: readonly string[]): Promise<Set<string>>
   /** What Git ignores under the root: a folder it ignores whole once, ending in `/`, without what's in it; else single files. A repository without it is walked whole. */
@@ -204,6 +204,8 @@ interface RootState {
   /** Last dirty inventory plus newer observed dirty paths; a clean return is checked once, not on every shell. */
   shellPaths: Set<string>
   firstHeard: number
+  /** Last real non-Git watch notification, never an inventory or synthetic flush. */
+  watchedAt?: number
   timer?: ReturnType<typeof setTimeout>
   /** Every flush and HEAD check for the root, one after another. */
   chain: Promise<void>
@@ -340,6 +342,8 @@ export class LaptopTracker implements AttributionTracker {
   private holds = 0
   /** Reads under way of what reported commands ran (`readScripts`). */
   private readonly scriptReads = new Set<Promise<void>>()
+  private readonly shellTurns = new Map<string, Map<string, number>>()
+  private readonly silentRoots = new Map<string, { start: number; due: number }[]>()
   private readonly shells: ShellReconciliations
   /** Each turn's footprint outside the tracked roots, and the machine's learned churn. */
   readonly footprints?: FootprintReader
@@ -483,6 +487,8 @@ export class LaptopTracker implements AttributionTracker {
     const state = this.states.get(id)
     if (!state) return
     this.shells.forget(id)
+    this.silentRoots.delete(id)
+    for (const roots of this.shellTurns.values()) roots.delete(id)
     this.states.delete(id)
     this.unlisten(state)
     await state.chain
@@ -547,7 +553,10 @@ export class LaptopTracker implements AttributionTracker {
 
   private async listen(state: RootState): Promise<void> {
     state.watch = await this.ports.events.watch(state.root.path, {
-      changed: (paths) => this.heard(state, paths),
+      changed: (paths) => {
+        if (paths.some((path) => !isGitPath(path.startsWith("/") ? relative(state.root.path, path) : path))) state.watchedAt = this.now()
+        this.heard(state, paths)
+      },
       lost: (reason) => this.lost(state, reason),
       heard: () => {
         if (!state.muted) return
@@ -1552,6 +1561,21 @@ export class LaptopTracker implements AttributionTracker {
     const interval = this.evidence.mark(mark)
     this.store.saveActivity({ ...storedActivity(interval), ...(mark.run && { run: mark.run }) })
     this.footprints?.activity(mark)
+    if (mark.kind === "turn") {
+      const key = `${mark.session}:${mark.id}`
+      if (mark.edge === "start") this.shellTurns.set(key, new Map())
+      else {
+        const roots = this.shellTurns.get(key)
+        this.shellTurns.delete(key)
+        for (const [root, start] of roots ?? []) {
+          const lag = Math.min(30_000, Math.max(TRAIL_MS, this.lateMs()))
+          const checks = this.silentRoots.get(root) ?? []
+          checks.push({ start, due: Date.now() + lag })
+          this.silentRoots.set(root, checks)
+          this.shells.schedule(root, lag)
+        }
+      }
+    }
     this.reattribute()
   }
 
@@ -1592,18 +1616,29 @@ export class LaptopTracker implements AttributionTracker {
     if (this.now() - call.endedAt > Math.max(SETTLE_MS, this.lateMs() + TRAIL_MS)) return
     const commands = call.effects.filter((effect) => effect.kind === "command" && !readOnlyCommand(effect.command))
     if (!commands.length) return
+    if (!call.turn) return
+    const turn = this.shellTurns.get(`${call.session}:${call.turn}`)
+    if (!turn) return
+    const start = this.evidence.callSpan(call)?.start ?? call.startedAt
+    if (start === undefined) return
     const folders = call.checkout ? [call.checkout] : commands.flatMap((command) => command.kind === "command" && command.cwd ? [command.cwd] : [])
     for (const state of this.states.values()) {
       if (!state.root.repository || state.asleep || call.endedAt < state.root.trackedAt) continue
+      if ((state.watchedAt ?? -Infinity) >= start) continue
       if (folders.some((folder) => within(state.root.path, folder) || within(folder, state.root.path)))
-        this.shells.schedule(state.root.id, Math.max(TRAIL_MS, this.lateMs()))
+        turn.set(state.root.id, Math.max(turn.get(state.root.id) ?? -Infinity, start))
     }
   }
 
   /** Git's dirty/untracked inventory plus paths that left it catches silent writes and clean returns to HEAD. */
   private async refreshShell(id: string): Promise<void> {
+    const checks = this.silentRoots.get(id) ?? []
+    const due = checks.filter((check) => this.closing || check.due <= Date.now())
+    const later = checks.filter((check) => !this.closing && check.due > Date.now())
+    if (later.length) this.silentRoots.set(id, later)
+    else this.silentRoots.delete(id)
     const found = this.states.get(id)
-    if (!found) return
+    if (!found || !due.some((check) => (found.watchedAt ?? -Infinity) < check.start)) return
     await this.tracking.get(found.root.path)
     const state = this.states.get(id)
     if (!state) return
@@ -1615,10 +1650,10 @@ export class LaptopTracker implements AttributionTracker {
       if (checking) state.moved = await this.checkHead(state)
       try {
         await this.settleCommitted(state)
-        const inventory = await repo.inventory()
+        const inventory = await repo.inventory(state.tracked)
         if (this.states.get(id) !== state) return
         if (await repo.head() !== state.root.head) throw new Error("HEAD moved during shell reconciliation; its inventory must be read again")
-        for (const path of inventory.tracked) state.tracked.add(path)
+        for (const path of [...inventory.tracked, ...inventory.changed]) state.tracked.add(path)
         const previous = state.shellPaths
         const current = new Set([...inventory.changed, ...inventory.untracked])
         const paths = new Set([...current, ...previous])
@@ -2040,10 +2075,9 @@ export class LaptopTracker implements AttributionTracker {
    * shared journal's caller gave up at 15 s, and the walks and the stat
    * cache's writes held the host's loop.
    */
-  async settled(options: { rescans?: boolean } = {}): Promise<void> {
-    if (options.rescans === false) return this.whatWasHeard()
+  async settled(options: { rescans?: boolean; checkouts?: readonly string[] } = {}): Promise<void> {
+    if (options.rescans === false) return this.whatWasHeard(options.checkouts)
     await this.resuming
-    await this.shells.flush()
     this.settling++
     try {
       for (;;) {
@@ -2072,12 +2106,13 @@ export class LaptopTracker implements AttributionTracker {
   }
 
   /** What was heard journaled, rescans left to their own pace: a root rescanning now is passed over, its changes found by the rescan. */
-  private async whatWasHeard(): Promise<void> {
-    await this.resuming
-    await this.shells.heard()
+  private async whatWasHeard(checkouts?: readonly string[]): Promise<void> {
+    const states = [...this.states.values()].filter((state) => checkouts === undefined || checkouts.some((path) => within(path, state.root.path) || within(state.root.path, path)))
+    await Promise.all(states.map((state) => this.tracking.get(state.root.path)))
+    await this.shells.heard(states.map((state) => state.root.id))
     for (let pass = 0; pass < HEARD_PASSES; pass++) {
       const runs: Promise<void>[] = []
-      for (const state of this.states.values()) {
+      for (const state of states) {
         if (state.rescanning) continue
         if (state.headTimer || state.gitSince !== undefined) {
           clearTimeout(state.timer)

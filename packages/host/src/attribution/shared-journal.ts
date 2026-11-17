@@ -73,6 +73,7 @@ export type PlacedSession = z.infer<typeof PlacedSessionSchema>
 
 export interface SettledOptions {
   rescans?: boolean
+  checkouts?: readonly string[]
 }
 
 export type LostTarget = { thread: string } | { path: string }
@@ -136,7 +137,7 @@ const LostTargetSchema = z.union([z.object({ thread: ThreadIdSchema }).strict(),
 const RequestSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("track"), root: AbsolutePathSchema }),
   // `rescans` is new: an owner from before it reads every `settled` as a full one, and this one reads a follower's without it so.
-  z.object({ kind: z.literal("settled"), rescans: z.boolean().optional() }),
+  z.object({ kind: z.literal("settled"), rescans: z.boolean().optional(), checkouts: z.array(AbsolutePathSchema).max(100).optional() }),
   z.object({ kind: z.literal("read-back"), checkout: AbsolutePathSchema.optional(), budgetMs: z.number().int().positive().optional() }),
   z.object({ kind: z.literal("lost"), target: LostTargetSchema }),
   z.object({ kind: z.literal("restore"), root: z.string().min(1).max(200), entry: z.number().int().positive() }),
@@ -408,7 +409,7 @@ export class SharedJournal {
         answer(await this.request({ kind: "track", root }), "track")
       },
       settled: async (options) => {
-        answer(await this.request({ kind: "settled", ...(options?.rescans === false && { rescans: false }) }), "settled")
+        answer(await this.request({ kind: "settled", ...(options?.rescans === false && { rescans: false }), ...(options?.checkouts && { checkouts: [...options.checkouts] }) }), "settled")
       },
       readBack: async (checkout, budgetMs) => answer(await this.request({ kind: "read-back", checkout, budgetMs }), "read-back").result ?? undefined,
       lost: async (target) => answer(await this.request({ kind: "lost", target }), "lost").versions,
@@ -746,7 +747,7 @@ export class SharedJournal {
         await writes.track(request.root)
         return { kind: "track" }
       case "settled":
-        await writes.settled(request.rescans === false ? { rescans: false } : undefined)
+        await writes.settled({ rescans: request.rescans, checkouts: request.checkouts })
         return { kind: "settled" }
       case "read-back": return { kind: "read-back", result: (await writes.readBack(request.checkout, request.budgetMs)) ?? null }
       case "lost": return { kind: "lost", versions: await writes.lost(request.target) }

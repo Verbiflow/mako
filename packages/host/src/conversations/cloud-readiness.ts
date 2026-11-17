@@ -133,7 +133,7 @@ export type ReadyPlan = {
  */
 export type ReadinessLedger = ThreadCheckpointInput["ledger"] & {
   /** Every change heard so far journaled. */
-  heard(): Promise<void>
+  heard(checkouts: readonly string[]): Promise<void>
   /** Small token from the journal reader; no partition bodies or hashing on the host. */
   fingerprint(checkout: string, thread: string): Promise<string>
 }
@@ -539,7 +539,7 @@ export class CloudReadiness {
     if (cause === "refresh" && last && Date.now() - last.at < STILL_KEPT_MS) return undefined
     // A turn's end: its last writes may not be journaled yet, and a fingerprint reads only what is. Waited for, briefly,
     // and then captured whatever the fingerprint says: the capture reads the files themselves.
-    if (cause === "end") await waitAtMost(ledger.heard(), END_HEARD_MS)
+    if (cause === "end") await waitAtMost(ledger.heard(plan.repositories.map((each) => each.root)), END_HEARD_MS)
     const fingerprints = new Map<string, string>()
     let sent: string | undefined
     const acknowledged = [...entry.acknowledged ?? []]
