@@ -2,7 +2,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { existsSync } from "node:fs"
 import { mkdir, mkdtemp, readdir, realpath } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
-import { join } from "node:path"
+import { isAbsolute, join, relative, resolve, sep } from "node:path"
 import { createInterface } from "node:readline"
 import { z } from "zod"
 import type { JsonObject } from "@mako/host/contracts/json"
@@ -18,7 +18,7 @@ import { removeScratch } from "./lib/scratch-processes.mjs"
 export const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi
 
 /** Credentials, endpoints and homes a harness would otherwise take from this shell. */
-const INHERITED = /^(ANTHROPIC_|CLAUDE_|CODEX_|OPENAI_|XAI_|GROK_|OPENCODE_|DEVIN_|WINDSURF_|CURSOR_|MAKO_)/
+const INHERITED = /^(ANTHROPIC_|CLAUDE|CODEX_|OPENAI_|XAI_|GROK_|OPENCODE_|DEVIN_|WINDSURF_|CURSOR_|MAKO_)/
 
 export interface Sandbox {
   root: string
@@ -44,6 +44,7 @@ export async function sandboxed<T>(prefix: string, harness: string, work: (sandb
     XDG_CONFIG_HOME: join(home, ".config"), XDG_DATA_HOME: join(home, ".local", "share"),
     XDG_STATE_HOME: join(home, ".local", "state"), XDG_CACHE_HOME: join(home, ".cache"),
   })
+  assertSealed(env, root, `${prefix} ${harness}`)
   const unprivate = root.replace(/^\/private/, "")
   try {
     const paths = [root, unprivate].flatMap((path) => [path, encodeURIComponent(path)])
@@ -56,6 +57,26 @@ export async function sandboxed<T>(prefix: string, harness: string, work: (sandb
     // A harness can still be writing there, as Codex clones its plugins in the background.
     await removeScratch(root)
   }
+}
+
+/**
+ * Refuses an environment a harness could reach the person's own Mako or
+ * homes from: a variable naming their Mako session, Thread or host (a
+ * harness run with `MAKO_SESSION_ID` from a Thread's shell is linked to that
+ * Thread as a Fin of it), or a home or harness folder outside the sandbox.
+ */
+export function assertSealed(env: NodeJS.ProcessEnv, root: string, what: string): void {
+  const inherited = Object.keys(env).filter((name) => INHERITED.test(name))
+  if (inherited.length) throw new Error(`${what}: refused, its environment still holds ${inherited.sort().join(", ")} from this shell`)
+  for (const name of ["HOME", "TMPDIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"]) {
+    const value = env[name]
+    if (!value || !inside(value, root)) throw new Error(`${what}: refused, its ${name} (${value ?? "unset"}) is outside its sandbox (${root})`)
+  }
+}
+
+function inside(path: string, folder: string): boolean {
+  const from = relative(resolve(folder), resolve(path))
+  return !isAbsolute(from) && from !== ".." && !from.startsWith(`..${sep}`)
 }
 
 /** Sessions named after a sandbox in the person's own stores, which a harness that ignored the sandbox would leave. */
