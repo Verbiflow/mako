@@ -216,10 +216,13 @@ try {
     const found = await probeApp(await inputFor())
     lastSeen = JSON.stringify({ changedBy: found.changedBy, folders: found.changed.entries.map((entry) => [entry.folder, entry.paths.slice(0, 6)]), notes: found.notes.filter((note) => note.includes("/private/tmp")) }).slice(0, 2_500)
     const entry = folder(found, join(support, "probe-app"))
-    return entry?.paths.includes(join("deep", "a", "b", "state.json")) && folder(found, cache)?.paths.includes("blob") &&
+    // A probe whose read of the history outlasts its wait answers by times, and says to probe again, while the deep
+    // writes an earlier probe's read went on to record still show: a loaded CI Mac's took that answer (main 96144f6de).
+    return found.changedBy === "history" && entry?.paths.includes(join("deep", "a", "b", "state.json")) && folder(found, cache)?.paths.includes("blob") &&
       folder(found, join(support, "other-app"))?.paths.includes(join("x", "y", "z.txt")) &&
       folder(found, join("/private", socket)) ? found : undefined
-  })
+    // A probe takes its 2.5 s wait for the history and more: on a loaded Mac several may miss their window before one reads it.
+  }, 45_000)
   console.log(`probe with history: ${Math.round(performance.now() - began)} ms until the deep writes showed`)
   assert.equal(view.changedBy, "history")
   assert.ok(view.running)
