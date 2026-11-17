@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import type { ProviderAuthoringCapability, ProviderEditingCapability, ProviderMcpEditing, ProviderMcpSource, ProviderSkillSource } from "../tools/index.js"
 import type { ProviderArtifactPreview } from "../workspaces/index.js"
+import type { WriteHolds } from "./write-holds.js"
 import type { ProviderAccountCapability } from "./account-capability.js"
 import type { ProviderAcpSource } from "./acp-source.js"
 import type { ProviderConnectionCapability } from "./connection-capability.js"
@@ -80,6 +81,8 @@ export interface HarnessContext {
   readonly work: HostWork
   /** Where each launch keeps the frames its harness sent (`native-stream.ts`), in the record store's `streams` folder; a host without one keeps none. */
   readonly streams?: string
+  /** Where a harness that holds its agent's tools asks whether they may write yet (`ProviderLiveDriver.firstWrite`). */
+  readonly writeHolds?: WriteHolds
 }
 
 /** Where a launch keeps the native approvals it observed. */

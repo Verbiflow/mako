@@ -47,6 +47,7 @@ import { ClaudeApprovalObserver, claudeApprovalAnswerDigest, readClaudeApprovalD
 import type { ClaudePermissionObserver, prepareClaudePermissionObserver } from "./permission-observer.js"
 import { ClaudeTranscript } from "./sdk-transcript.js"
 import { CallBounds } from "../call-bounds.js"
+import type { WriteHolds } from "../write-holds.js"
 import { claudeCallHooks } from "./call-hooks.js"
 import { claudeSubagentStart } from "./routing.js"
 import { ClaudeRequests, ClaudeTranscriptTail, openedTurnLines, takenIn, TASK_PROMPT_WAIT_MS, transcriptNotification, type TranscriptNotification, type TranscriptTailStats } from "./transcript-tail.js"
@@ -182,6 +183,8 @@ export interface ClaudeSdkDependencies {
   streams?: string
   /** Kept copies of what background commands printed, for when Claude Code's output files are gone. */
   outputs?: KeptOutputs
+  /** Where each tool that may write asks whether its turn's checkpoint holds the workspace yet (`HarnessContext.writeHolds`). */
+  writeHolds?: WriteHolds
 }
 
 type Engine = LiveEngineApi<Live>
@@ -609,6 +612,7 @@ export function createClaudeSdkDriver(
     provider: "claude",
     launchEnvironment: { kind: "prepared", via: "SDK configuration consumes AdmittedStartOptions.accountLaunch." },
     makoInstructions: { via: "`systemPrompt.append` on the claude_code preset, which Claude Code keeps out of its transcript." },
+    ...dependencies.writeHolds && { firstWrite: { via: "The PreToolUse callback Mako registers, which every tool call passes, a subagent's included, and which Claude Code awaits before the tool runs." } },
     nativeIdentity: CLAUDE_NATIVE_IDENTITY,
     nativeExclusion: NO_NATIVE_EXCLUSION,
     nativePromptIdentity: { kind: "supplied-message-id", evidence: "SDKUserMessage.uuid is dispatch.attemptId; the native history reader preserves it as the user entry ID." },
@@ -762,7 +766,7 @@ export function createClaudeSdkDriver(
         teams,
         conversation: conversationId,
       }
-      const callHooks = claudeCallHooks(new CallBounds(conversationId), routing)
+      const callHooks = claudeCallHooks(new CallBounds(conversationId), routing, dependencies.writeHolds && (() => dependencies.writeHolds!.beforeWrite(conversationId)))
       let query: ClaudeQuery
       try { query = await dependencies.query({
         prompt: input,
@@ -778,8 +782,10 @@ export function createClaudeSdkDriver(
             UserPromptSubmit: [...(config.hooks?.UserPromptSubmit ?? []), { hooks: [transcript.hook] }],
             Stop: [...(config.hooks?.Stop ?? []), { hooks: [transcript.hook] }],
             PostCompact: [...(config.hooks?.PostCompact ?? []), { hooks: [decoder.hook] }],
-            // Each call's exact bounds and the files it wrote, for attribution (`CallBounds`).
-            PreToolUse: [...(config.hooks?.PreToolUse ?? []), { hooks: [callHooks.pre] }],
+            // Each call's exact bounds and the files it wrote, for attribution (`CallBounds`). A call that may write waits
+            // here for its turn's checkpoint, at most `BEFORE_CHECKPOINT_WAIT_MS`; the timeout, in seconds, stays well past
+            // that, so Claude Code never lets the call go on its own while it waits.
+            PreToolUse: [...(config.hooks?.PreToolUse ?? []), { hooks: [callHooks.pre], timeout: 30 }],
             PostToolUse: [...(config.hooks?.PostToolUse ?? []), { hooks: [callHooks.post] }],
             PostToolUseFailure: [...(config.hooks?.PostToolUseFailure ?? []), { hooks: [callHooks.post] }],
             ...routing?.thread && { SubagentStart: [...(config.hooks?.SubagentStart ?? []), { hooks: [claudeSubagentStart] }] },

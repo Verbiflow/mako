@@ -51,7 +51,7 @@ import { LentHere } from "./base/lent.js"
 import { operationWords } from "@mako/protocol/borrow-words"
 import { setupStep } from "./contracts/simulator-setup.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, type MachineGatewayLink, MachineWorkspace, declareUsageMethods, declareStorageMethods, declareFootprintMethods, readProcessTable, HelperRuns, helperRunsRoot, LeftoverFiles, MakoStorage, RecordRepacks, spendWatch, describeThisDevice, Lending, LEND_BEAT_MS } from "./usage/index.js"
-import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, CliReadings, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, mcpSetupFailures, liveCallBounds, installCloudSignIns, CloudSignInSync, AccessChoiceStore, declareAccessChoiceMethods, PreferenceStore, declarePreferenceMethods, FinDefaultsStore, declareFinDefaultMethods, callGateAnswer, HookCall, harnessLabel, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
+import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, CliReadings, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, mcpSetupFailures, liveCallBounds, installCloudSignIns, CloudSignInSync, AccessChoiceStore, declareAccessChoiceMethods, PreferenceStore, declarePreferenceMethods, FinDefaultsStore, declareFinDefaultMethods, callGateAnswer, HookCall, WriteHolds, harnessLabel, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
 import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins.js"
 import type { CarriedFile } from "./contracts/machine-agent.js"
 import type { GitHubPerson } from "./contracts/github-person.js"
@@ -258,6 +258,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const records = makoRecords(environment.userRoot)
   const views = makoViews(environment.userRoot)
   const streams = streamsRoot(records)
+  // A turn's checkpoint holds its agent's writes, where the harness waits for Mako before each tool; one for the host.
+  const writeHolds = new WriteHolds()
   const providerHost = createHarnessHost({
     dataRoot: environment.dataRoot,
     userRoot: environment.userRoot,
@@ -267,6 +269,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     openUrl: (url) => presentMachine(machine).openUrl(url),
     work: shell.work,
     streams,
+    writeHolds,
   })
   const unknown = new NativeUnknown(logsRoot(environment.dataRoot))
   const mismatches = new StreamMismatches(logsRoot(environment.dataRoot), streams)
@@ -1180,6 +1183,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     ...(owner.start && { start: owner.start }),
     stopping: () => shell.closing(),
     streams,
+    writeHolds,
     // A person's own device reaches their others through the account; a fixture desk reaches none.
     ...(!fixtureDesk && { account: () => late.cloud }),
     finDefaults,
