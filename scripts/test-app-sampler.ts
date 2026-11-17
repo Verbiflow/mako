@@ -35,7 +35,10 @@ const sampler = new ThreadAppSampler({
     looks += 1
     return { ...state, signature: JSON.stringify(state) }
   },
-  trace: async () => { traces += 1 },
+  trace: async () => {
+    traces += 1
+    return 1
+  },
   memory: async () => { measures += 1 },
   publish: (marks) => { pushed.push(marks) },
   now: () => now,
@@ -242,5 +245,66 @@ try {
   web?.close()
   await waitFor(() => !existsSync(socket))
   rmSync(root, { recursive: true })
+}
+// With nobody reading and no app running, the sampler's job isn't needed: an idle host holds no timer for it. This host
+// starting a run, or a reader asking, needs it again.
+{
+  let clock = 0
+  let running = 0
+  const needed: boolean[] = []
+  const watching: boolean[] = []
+  const idle = new ThreadAppSampler({
+    look: async (): Promise<AppsLook> => ({ marks: [], settling: false, alive: running > 0, signature: String(running) }),
+    trace: async () => running,
+    memory: async () => {},
+    publish: () => {},
+    now: () => clock,
+    needed: ({ watched, running }) => {
+      needed.push(watched || running)
+      watching.push(watched)
+    },
+  })
+  await idle.tick()
+  assert.equal(needed.at(-1), false, "no reader and no app running: the job isn't needed")
+  running = 1
+  idle.changed()
+  assert.equal(needed.at(-1), true, "this host started a run: needed at once")
+  clock += 20_000
+  await idle.tick()
+  assert.equal(needed.at(-1), true, "a run going: still needed")
+  assert.equal(watching.at(-1), false, "but nobody reads, so only at the trace's times")
+  running = 0
+  clock += 20_000
+  await idle.tick()
+  assert.equal(needed.at(-1), false, "the run gone, and nobody reading: not needed")
+  idle.wanted()
+  assert.equal(needed.at(-1), true, "a reader asking needs it")
+  clock += 1_000
+  await idle.tick()
+  assert.equal(needed.at(-1), true, "while it reads")
+  assert.equal(watching.at(-1), true, "a second at a time while a reader watches")
+  clock += 100_000
+  await idle.tick()
+  assert.equal(needed.at(-1), false, "its lease over, with nothing running: not needed")
+  // An app another host started, seen by a trace while a window watches: it's measured from then, with no change here.
+  let measured = 0
+  let others = 0
+  const watchedOthers = new ThreadAppSampler({
+    look: async (): Promise<AppsLook> => ({ marks: [], settling: false, alive: others > 0, signature: String(others) }),
+    trace: async () => others,
+    memory: async () => void measured++,
+    publish: () => {},
+    now: () => clock,
+  })
+  await watchedOthers.tick()
+  watchedOthers.wanted()
+  others = 1
+  for (let second = 0; second < 70; second += 1) {
+    clock += 1_000
+    watchedOthers.wanted()
+    await watchedOthers.tick()
+  }
+  assert.ok(measured > 0, "another host's app a window watches has its memory measured")
+  console.log("app sampler: its job is needed only while a reader watches or an app may run")
 }
 console.log("app sampling demand: visible connection lifetime, hidden tombstones, ordered replay, bounded legacy fallback and real socket membership/validation passed")
