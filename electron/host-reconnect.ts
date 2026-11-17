@@ -93,6 +93,12 @@ export interface HungHostDeps {
   commandOf(pid: number): Promise<string>
   /** The host's entry script, which a Mako host's command line names (`hostCommand`). */
   entry: string
+  /**
+   * Whether `pid` has this profile's host lock or its socket open now (`lsof -a -p <pid> -- <lock> <socket>`): the
+   * proof it's this profile's host, which a command line can't give (every profile's host runs the same entry) and the
+   * lock file's text can't either (on macOS it names the last pid that wrote it, which may since be another process).
+   */
+  holds(pid: number): Promise<boolean>
   signal(pid: number, signal: "SIGTERM" | "SIGKILL"): void
   alive(pid: number): boolean
   wait(ms: number): Promise<void>
@@ -105,14 +111,17 @@ export const HUNG_HOST_GRACE_MS = 10_000
 /**
  * Restart Mako with a host that answers nothing (alive, holding the profile's lock): the client alone would meet the
  * same host again. It's asked to quit (SIGTERM, its own stop), and ended past `HUNG_HOST_GRACE_MS` (SIGKILL), so the
- * client opened again starts a fresh one. Only ever the Mako host holding this profile's lock, by its command line: a
- * pid the kernel gave another process since is left alone. A host that answers, or none, is left as it is.
+ * client opened again starts a fresh one. Ending the wrong process is the one thing it must never do, so before each
+ * signal the pid must be shown to be this profile's host: its command line names the host's entry, and it holds this
+ * profile's lock or socket open (`holds`). A stale pid in the lock file, another profile's host, or a pid the kernel
+ * gave another process during the grace is left alone. A host that answers, or none, is left as it is.
  */
 export async function endHungHost(deps: HungHostDeps): Promise<"answering" | "none" | "not-mako" | "ended" | "stuck"> {
   if (await deps.answers() !== "silent") return "answering"
   const pid = await deps.holder()
   if (pid === null) return "none"
-  if (!deps.entry || !(await deps.commandOf(pid)).includes(deps.entry)) {
+  const ours = async () => Boolean(deps.entry) && (await deps.commandOf(pid)).includes(deps.entry) && await deps.holds(pid)
+  if (!await ours()) {
     deps.log("restart leaves a lock holder that isn't this profile's Mako host", { pid })
     return "not-mako"
   }
@@ -120,6 +129,11 @@ export async function endHungHost(deps: HungHostDeps): Promise<"answering" | "no
   deps.signal(pid, "SIGTERM")
   for (const end = Date.now() + HUNG_HOST_GRACE_MS; deps.alive(pid) && Date.now() < end; ) await deps.wait(200)
   if (!deps.alive(pid)) return "ended"
+  // Ten seconds is time for the host to have left and the kernel to give its pid to another process: proved again.
+  if (!await ours()) {
+    deps.log("restart's host left; its pid is another process's now, left alone", { pid })
+    return "ended"
+  }
   deps.log("restart ends a host that didn't quit", { pid, graceMs: HUNG_HOST_GRACE_MS })
   deps.signal(pid, "SIGKILL")
   for (const end = Date.now() + 5_000; deps.alive(pid) && Date.now() < end; ) await deps.wait(100)

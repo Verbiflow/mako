@@ -103,6 +103,7 @@ console.log("host reconnect stages: quiet at first, Try now past 10 s, Restart M
       holder: async () => 4242,
       commandOf: async () => "/Applications/Mako.app/Contents/MacOS/Mako /Applications/Mako.app/Contents/Resources/app.asar/dist-electron/host/entry.js",
       entry: "/Applications/Mako.app/Contents/Resources/app.asar/dist-electron/host/entry.js",
+      holds: async () => true,
       signal: (_pid, signal) => { signals.push(signal); if ((over.quits ?? "kill") === "term" || (signal === "SIGKILL" && over.quits !== "never")) alive = false },
       alive: () => alive,
       wait: async () => { mock.timers.tick(200) },
@@ -124,9 +125,23 @@ console.log("host reconnect stages: quiet at first, Try now past 10 s, Restart M
   const stranger = world({ commandOf: async () => "/usr/bin/some-other-program" })
   assert.equal(await endHungHost(stranger.deps), "not-mako")
   assert.deepEqual(stranger.signals, [], "a pid that isn't this profile's Mako host is never signalled")
+  // The lock file names a pid the kernel gave another process since: it neither runs the host nor holds the lock.
+  const stale = world({ commandOf: async () => "/usr/sbin/cfprefsd agent", holds: async () => false })
+  assert.equal(await endHungHost(stale.deps), "not-mako")
+  assert.deepEqual(stale.signals, [], "a stale lock-file pid is never signalled")
+  // Another profile's host runs the same entry, but holds its own lock, not this profile's.
+  const otherProfile = world({ holds: async () => false })
+  assert.equal(await endHungHost(otherProfile.deps), "not-mako")
+  assert.deepEqual(otherProfile.signals, [], "another profile's host is never signalled, however its command line reads")
+  // The host left during the grace and the kernel gave its pid to another process: proved again before SIGKILL.
+  let reused = false
+  const reuseSignals: string[] = []
+  const reuse = world({ quits: "never", holds: async () => !reused, signal: (_pid, signal) => { reuseSignals.push(signal); if (signal === "SIGTERM") reused = true } })
+  assert.equal(await endHungHost(reuse.deps), "ended")
+  assert.deepEqual(reuseSignals, ["SIGTERM"], "the process now on that pid is never killed")
   const nobody = world({ holder: async () => null })
   assert.equal(await endHungHost(nobody.deps), "none")
   assert.deepEqual(nobody.signals, [])
   mock.timers.reset()
-  console.log("host reconnect: quiet while the host leaves, gone only when one couldn't be started, Try now waits on its try, Restart ends only a hung Mako host")
+  console.log("host reconnect: quiet while the host leaves, gone only when one couldn't be started, Try now waits on its try, Restart ends only this profile's hung host, proved before each signal")
 }
