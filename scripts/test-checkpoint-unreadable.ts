@@ -97,13 +97,26 @@ try {
   file("racing.txt", "the turn's racing\n")
   file("steady.txt", "the turn's steady\n")
   failing.delete("racing.txt")
-  await store.endRun(twice)
+  const after = await store.endRun(twice)
   console.log("PASS: a file still rewritten the second time is left out of the checkpoint, which names it")
+
+  // The turn's own comparison of its checkpoints takes the file as the other side holds it: no change is claimed
+  // for a file the checkpoint before it never read.
+  const turn = store.compare(store.trees(before.id, after.id))
+  try {
+    assert.deepEqual((await turn.files()).map((change) => change.path), ["steady.txt"], "the turn's comparison doesn't claim a change it couldn't see")
+    assert.match((await turn.preview("steady.txt")).kind, /./, "and still previews what it did read")
+  } finally {
+    turn.close()
+  }
+  console.log("PASS: the turn's comparison doesn't claim the file it couldn't read changed")
 
   // A rewind to it restores what it holds and leaves the file it doesn't as it is.
   const preview = await store.preview(before.id)
   assert.deepEqual(preview.changedFiles, ["steady.txt"], "the rewind would change only what the checkpoint read")
-  await store.restore(plan(before.id, preview.current.id), () => {})
+  assert.deepEqual(preview.keptAsIs, ["racing.txt"], "and its preview names the file it leaves as it is")
+  const result = await store.restore(plan(before.id, preview.current.id), () => {})
+  assert.deepEqual(result.keptAsIs, ["racing.txt"], "so does the rewind's result")
   assert.equal(read("steady.txt"), "before turn two\n", "what the checkpoint held is restored")
   assert.equal(read("racing.txt"), "the turn's racing\n", "the file it couldn't read is left as it was, not set to what the index held")
   console.log("PASS: a rewind to it restores the rest and leaves that file as it finds it")

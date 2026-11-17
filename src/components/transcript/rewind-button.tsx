@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { toast } from "sonner"
 import { Undo2Icon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { RewindWriter } from "@mako/host/contracts/workspace-snapshots"
@@ -68,6 +69,8 @@ export function RewindButton({
         expectedId: state.preview.current.id,
       })
       setOpen(false)
+      const kept = state.preview.keptAsIs
+      if (kept?.length) toast(keptAsIsWords(kept, true))
     } catch (error) {
       setState({
         kind: "error",
@@ -182,6 +185,7 @@ export function RewindButton({
                 {state.preview.target.scope}
               </p>
               <OthersWarning preview={state.preview} thread={thread} />
+              <KeptAsIs files={state.preview.keptAsIs} />
               {!!state.preview.changedFiles.length && (
                 <ul className="text-code max-h-48 overflow-auto border border-border p-3 font-mono">
                   {state.preview.changedFiles.map((path) => (
@@ -237,6 +241,27 @@ export function RewindButton({
         </DialogContent>
       </Dialog>
     </>
+  )
+}
+
+/**
+ * The files a rewind leaves alone: being rewritten as its checkpoint was taken, so the checkpoint couldn't read them.
+ * "2 files were being rewritten when this checkpoint was taken, so they were left as they are: a, b"
+ */
+function keptAsIsWords(files: readonly string[], done: boolean): string {
+  const shown = files.slice(0, 5).join(", ")
+  const more = files.length > 5 ? ` and ${files.length - 5} more` : ""
+  const one = files.length === 1
+  const left = done ? (one ? "it was left as it is" : "they were left as they are") : (one ? "the rewind leaves it as it is" : "the rewind leaves them as they are")
+  return `${one ? "1 file was" : `${files.length} files were`} being rewritten when this checkpoint was taken, so ${left}: ${shown}${more}`
+}
+
+function KeptAsIs({ files }: { files: readonly string[] | undefined }) {
+  if (!files?.length) return null
+  return (
+    <p data-rewind-kept className="text-muted-foreground break-words">
+      {keptAsIsWords(files, false)}
+    </p>
   )
 }
 

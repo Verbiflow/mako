@@ -56,4 +56,14 @@ export interface RewindPreview {
   stagingChanged: boolean
   /** Of `changedFiles`, who changed each since the checkpoint; absent while the journal can't say. */
   writers?: FileWriters
+  /**
+   * Files a writer was rewriting as the checkpoint was taken, so it couldn't read them: the rewind leaves each as it
+   * finds it, and none is in `changedFiles`. Absent when there are none.
+   */
+  keptAsIs?: string[]
+}
+
+/** What a rewind did besides restoring the checkpoint: the files it left as they were (`RewindPreview.keptAsIs`). */
+export interface RewindResult {
+  keptAsIs: string[]
 }

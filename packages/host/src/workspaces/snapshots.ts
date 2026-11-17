@@ -28,6 +28,7 @@ import {
   WorkspaceSnapshotSchema,
   type RewindPlan,
   type RewindPreview,
+  type RewindResult,
   type WorkspaceSnapshot,
 } from "../contracts/workspace-snapshots.js"
 
@@ -114,7 +115,8 @@ interface ActiveRun extends SnapshotLease {
  * folder in the workspace (`.` for the workspace's own).
  */
 export type CheckpointTrees =
-  | { scope: string; from: string; to: string; stores: string[] }
+  /** `unreadable`: what each side couldn't read (`SnapshotRecord.unreadable`), compared as the other side holds it. */
+  | { scope: string; from: string; to: string; stores: string[]; unreadable?: { from: string[]; to: string[] } }
   | { scope: string; parts: { path: string; trees: CheckpointTrees }[] }
 
 /** What changed between two checkpoints, file by file, as `TreeComparison` reads one repository's. */
@@ -728,6 +730,7 @@ export class WorkspaceSnapshots {
           changedFiles: paths.slice(0, 100),
           changedFileCount: paths.length,
           stagingChanged: target.indexDigest !== current.indexDigest,
+          ...target.unreadable?.length && { keptAsIs: [...target.unreadable] },
         }
       } finally {
         this.unpin(pins)
@@ -752,13 +755,23 @@ export class WorkspaceSnapshots {
     if (from.scope !== to.scope) throw new Error("These checkpoints belong to different workspaces")
     this.retain(from)
     this.retain(to)
-    return { scope: from.scope, from: from.tree, to: to.tree, stores: this.objects(from, to).read }
+    return {
+      scope: from.scope, from: from.tree, to: to.tree, stores: this.objects(from, to).read,
+      ...(from.unreadable?.length || to.unreadable?.length) && { unreadable: { from: from.unreadable ?? [], to: to.unreadable ?? [] } },
+    }
   }
 
   /** The two trees `trees` gave, compared through one object reader that sees their stores; each repository's, for several. */
   compare(trees: CheckpointTrees): CheckpointComparison {
     if ("parts" in trees) return new GroupComparison(trees.scope, trees.parts.map((part) => ({ path: part.path, comparison: this.compare(part.trees) })))
-    return new TreeComparison(this.git, { root: trees.scope, from: trees.from, to: trees.to, stores: trees.stores })
+    if (!trees.unreadable) return new TreeComparison(this.git, { root: trees.scope, from: trees.from, to: trees.to, stores: trees.stores })
+    const { unreadable } = trees
+    // A file one side couldn't read is compared as the other holds it: neither a change nor its absence is claimed.
+    return new SubstitutedComparison(trees.scope, async (scratch) => {
+      const from = unreadable.from.length ? await this.substituted(trees.scope, trees.from, trees.to, unreadable.from, trees.stores, scratch) : { tree: trees.from, stores: [] }
+      const to = unreadable.to.length ? await this.substituted(trees.scope, trees.to, from.tree, unreadable.to, [...trees.stores, ...from.stores], scratch) : { tree: trees.to, stores: [] }
+      return new TreeComparison(this.git, { root: trees.scope, from: from.tree, to: to.tree, stores: [...trees.stores, ...from.stores, ...to.stores] })
+    }, () => mkdtemp(join(this.root, "compare-")))
   }
 
   /** A Git command for a checkpoint: its own index and object stores, and Mako as author. */
@@ -766,9 +779,29 @@ export class WorkspaceSnapshots {
     return snapshotGit(this.git, cwd, args, index, input, objects)
   }
 
-  async restore(input: RewindPlan, complete: () => void): Promise<void> {
-    await this.budget.settings()
+  /** A rewind to a checkpoint; its result names the files it left as they were (`keptAsIs`). */
+  async restore(input: RewindPlan, complete: () => void): Promise<RewindResult> {
     const plan = RewindPlanSchema.parse(input)
+    await this.restoreRun(plan, complete)
+    return { keptAsIs: this.keptAsIs(plan.targetId) }
+  }
+
+  /**
+   * The files a rewind to `id` leaves as it finds them: those its checkpoint couldn't read whole (`unreadable`), by
+   * their path in the workspace (a repository's, under its folder, for several).
+   */
+  private keptAsIs(id: string): string[] {
+    const group = this.group(id)
+    if (group) return group.parts.flatMap((part) => this.keptAsIs(part.id).map((file) => (part.path === "." ? file : `${part.path}/${file}`)))
+    try {
+      return [...(this.get(id).unreadable ?? [])]
+    } catch {
+      return []
+    }
+  }
+
+  private async restoreRun(plan: RewindPlan, complete: () => void): Promise<void> {
+    await this.budget.settings()
     const group = this.group(plan.targetId)
     if (group) return this.restoreGroup(plan, group, complete)
     if (this.operation(plan)?.state === "completed") {
@@ -899,6 +932,7 @@ export class WorkspaceSnapshots {
       changedFiles: group.parts.flatMap((part, index) => previews[index]!.changedFiles.map((file) => prefix(part.path, file))).slice(0, 100),
       changedFileCount: previews.reduce((sum, preview) => sum + preview.changedFileCount, 0),
       stagingChanged: previews.some((preview) => preview.stagingChanged),
+      ...previews.some((preview) => preview.keptAsIs?.length) && { keptAsIs: group.parts.flatMap((part, index) => (previews[index]!.keptAsIs ?? []).map((file) => prefix(part.path, file))) },
     }
   }
 
@@ -1634,27 +1668,34 @@ export class WorkspaceSnapshots {
   }
 
   /**
-   * What a rewind to `target` writes: its tree, but each file it couldn't read whole (`unreadable`) as `current` holds
-   * it, or not there when `current` hasn't it, so the rewind leaves that file as it finds it rather than writing what
-   * the index held. Its tree goes into `scratch`, which every command reading it is given (`stores`).
+   * `tree` with each of `paths` as `other` holds it, or not there when `other` hasn't it: what a checkpoint that
+   * couldn't read those files (`unreadable`) is taken as beside another. The new tree goes into `scratch`'s store.
    */
-  private async restorable(current: SnapshotRecord, target: SnapshotRecord, scratch: string): Promise<{ record: SnapshotRecord; stores: string[] }> {
-    if (!target.unreadable?.length) return { record: target, stores: [] }
-    const repository = (await this.snapshotGit(target.scope, ["rev-parse", "--path-format=absolute", "--git-path", "objects"])).trim()
+  private async substituted(scope: string, tree: string, other: string, paths: readonly string[], stores: readonly string[], scratch: string): Promise<{ tree: string; stores: string[] }> {
+    const repository = (await this.snapshotGit(scope, ["rev-parse", "--path-format=absolute", "--git-path", "objects"])).trim()
     const written = join(scratch, "objects")
     mkdirSync(written, { recursive: true, mode: 0o700 })
-    const objects = { write: written, read: [repository, ...this.objects(current, target).read] }
-    const index = join(scratch, "restorable-index")
-    await this.snapshotGit(target.scope, ["read-tree", target.tree], index, undefined, objects)
+    const objects = { write: written, read: [repository, ...stores] }
+    const index = join(scratch, `substituted-${randomUUID()}`)
+    await this.snapshotGit(scope, ["read-tree", tree], index, undefined, objects)
     const held = new Map<string, string>()
-    for (const line of (await this.snapshotGit(target.scope, ["--literal-pathspecs", "ls-tree", "-z", "--full-tree", current.tree, "--", ...target.unreadable], undefined, undefined, objects)).split("\0")) {
+    for (const line of (await this.snapshotGit(scope, ["--literal-pathspecs", "ls-tree", "-z", "--full-tree", other, "--", ...paths], undefined, undefined, objects)).split("\0")) {
       const tab = line.indexOf("\t")
       if (tab > 0) held.set(line.slice(tab + 1), line.slice(0, tab).split(" ").filter((_, index) => index !== 1).join(" "))
     }
-    const none = `0 ${"0".repeat(target.tree.length)}`
-    await this.snapshotGit(target.scope, ["update-index", "-z", "--index-info"], index, target.unreadable.map((path) => `${held.get(path) ?? none}\t${path}\0`).join(""), objects)
-    const tree = (await this.snapshotGit(target.scope, ["write-tree"], index, undefined, objects)).trim()
-    return { record: { ...target, tree }, stores: [written] }
+    const none = `0 ${"0".repeat(tree.length)}`
+    await this.snapshotGit(scope, ["update-index", "-z", "--index-info"], index, paths.map((path) => `${held.get(path) ?? none}\t${path}\0`).join(""), objects)
+    return { tree: (await this.snapshotGit(scope, ["write-tree"], index, undefined, objects)).trim(), stores: [written] }
+  }
+
+  /**
+   * What a rewind to `target` writes: its tree, but each file it couldn't read whole (`unreadable`) as `current` holds
+   * it, so the rewind leaves that file as it finds it rather than writing what the index held (`keptAsIs`).
+   */
+  private async restorable(current: SnapshotRecord, target: SnapshotRecord, scratch: string): Promise<{ record: SnapshotRecord; stores: string[] }> {
+    if (!target.unreadable?.length) return { record: target, stores: [] }
+    const { tree, stores } = await this.substituted(target.scope, target.tree, current.tree, target.unreadable, this.objects(current, target).read, scratch)
+    return { record: { ...target, tree }, stores }
   }
 
   private async restoreFiles(
@@ -1730,6 +1771,48 @@ export class WorkspaceSnapshots {
 }
 
 /** A workspace of several repositories compared repository by repository, their files under each one's folder. */
+/** A comparison of trees made on first read (`CheckpointTrees.unreadable`); its scratch store goes when it closes. */
+class SubstitutedComparison implements CheckpointComparison {
+  readonly root: string
+  private readonly made: () => Promise<{ scratch: string; comparison: TreeComparison }>
+  private pending: Promise<{ scratch: string; comparison: TreeComparison }> | undefined
+
+  constructor(root: string, make: (scratch: string) => Promise<TreeComparison>, scratch: () => Promise<string>) {
+    this.root = root
+    this.made = async () => {
+      const folder = await scratch()
+      try {
+        return { scratch: folder, comparison: await make(folder) }
+      } catch (error) {
+        await rm(folder, { recursive: true, force: true })
+        throw error
+      }
+    }
+  }
+
+  private comparison() {
+    this.pending ??= this.made()
+    return this.pending
+  }
+
+  async files(): ReturnType<TreeComparison["files"]> {
+    return (await this.comparison()).comparison.files()
+  }
+
+  async preview(path: string): ReturnType<TreeComparison["preview"]> {
+    return (await this.comparison()).comparison.preview(path)
+  }
+
+  close(): void {
+    const pending = this.pending
+    this.pending = undefined
+    void pending?.then(({ scratch, comparison }) => {
+      comparison.close()
+      return rm(scratch, { recursive: true, force: true })
+    }, () => undefined)
+  }
+}
+
 class GroupComparison implements CheckpointComparison {
   readonly root: string
   private readonly parts: { path: string; comparison: CheckpointComparison }[]
