@@ -1616,7 +1616,7 @@ export class LaptopTracker implements AttributionTracker {
     if (this.closing || this.closed || call.status === "running" || call.status === "refused" || call.endedAt === undefined) return
     // Read-back imports can name old commands. Live completion reports are stamped as they arrive.
     if (this.now() - call.endedAt > Math.max(SETTLE_MS, this.lateMs() + TRAIL_MS)) return
-    const commands = call.effects.filter((effect) => effect.kind === "command" && !readOnlyCommand(effect.command))
+    const commands = call.effects.flatMap((effect) => effect.kind === "command" && !readOnlyCommand(effect.command) ? [effect] : [])
     if (!commands.length) return
     if (!call.turn) return
     const turn = this.shellTurns.get(`${call.session}:${call.turn}`)
