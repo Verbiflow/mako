@@ -361,7 +361,6 @@ export class LiveDispatch {
     // Nor while this Mac checks with its account after it was away: its Session may have continued in the cloud.
     if (this.access.moves.ownerCheck(resident, true) !== undefined) return this.holdForOwner(resident)
     if (
-      resident.checkpointing ||
       resident.rewinding ||
       resident.closing ||
       resident.hibernating ||

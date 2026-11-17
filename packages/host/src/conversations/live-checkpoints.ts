@@ -23,6 +23,7 @@ export const BEFORE_CHECKPOINT_WAIT_MS = 10_000
 
 /** Turns kept open for reading their files; each holds one object reader. */
 const OPEN_TURNS = 4
+type ClosingCapture = { state: "reading" | "fixed" | "overlapped" }
 
 /** Captures run boundaries before dispatch/queue drain; rewind creates an idle
  * historical fork so no irreversible provider rollback participates in recovery. */
@@ -32,6 +33,10 @@ export class LiveCheckpoints {
   private readonly saving = new Map<string, Promise<void>>()
   /** Checkpoints of each conversation under way, a turn's start and its end alike: `checkpointing` while any is. */
   private readonly capturing = new WeakMap<Resident, number>()
+  /** Captures of each conversation still reading its live files, before their read is fixed: `checkpointReading` while any is. */
+  private readonly reads = new WeakMap<Resident, number>()
+  /** A closing payload may finish later; only its live-file read must precede the next agent's writes. */
+  private readonly endings = new WeakMap<Resident, Set<ClosingCapture>>()
   /** The turns last read, newest last, by their two checkpoints. */
   private readonly turns = new Map<string, CheckpointComparison>()
   private readonly host: LiveAccess
@@ -66,6 +71,8 @@ export class LiveCheckpoints {
         this.host.residencyChanged(resident)
         return
       }
+      for (const ending of this.endings.get(resident) ?? [])
+        if (ending.state === "reading") ending.state = "overlapped"
       return run()
     }).catch((error) => {
       this.host.residencyChanged(resident)
@@ -89,6 +96,24 @@ export class LiveCheckpoints {
   }
 
   /**
+   * A capture's read of the workspace's live files begins: until what it returns is called (its read is fixed, or the
+   * capture ended), what the person sends into a running turn waits (`LiveActions.submit`). Its publication after
+   * that holds only moves, rewinds and residency (`hold`).
+   */
+  private reading(resident: Resident): () => void {
+    this.reads.set(resident, (this.reads.get(resident) ?? 0) + 1)
+    resident.checkpointReading = true
+    let open = true
+    return () => {
+      if (!open) return
+      open = false
+      const left = (this.reads.get(resident) ?? 1) - 1
+      this.reads.set(resident, left)
+      resident.checkpointReading = left > 0
+    }
+  }
+
+  /**
    * The turn's checkpoint: resolves once it holds the workspace as the turn starts, when its agent may be told, which
    * for a turn from the last checkpoint is before it's saved (`WorkspaceSnapshots.beginRun`'s `frozen`). The request
    * says it once it's saved; the agent never waits on that.
@@ -100,6 +125,7 @@ export class LiveCheckpoints {
     const snapshots = this.host.dependencies.workspaceSnapshots
     if (!snapshots) return
     const release = this.hold(resident)
+    const read = this.reading(resident)
     this.preparing.add(request.id)
     const generation = resident.generation
     const conversation = resident.snapshot.session.id
@@ -109,6 +135,7 @@ export class LiveCheckpoints {
     let frozen = () => {}
     const held = new Promise<void>((resolve) => (frozen = () => {
       heldAt ??= Date.now()
+      read()
       resolve()
     }))
     const saved = (async () => {
@@ -142,6 +169,7 @@ export class LiveCheckpoints {
         }
         this.host.flush(resident)
       } finally {
+        read()
         release()
       }
     })()
@@ -213,10 +241,21 @@ export class LiveCheckpoints {
     const snapshots = this.host.dependencies.workspaceSnapshots
     if (!snapshots) return
     const release = this.hold(resident)
+    const read = this.reading(resident)
+    const endings = this.endings.get(resident) ?? new Set<ClosingCapture>()
+    this.endings.set(resident, endings)
+    const ending: ClosingCapture = { state: "reading" }
+    endings.add(ending)
     void snapshots
-      .endRun(requestId)
+      .endRun(requestId, () => {
+        read()
+        if (ending.state === "reading") ending.state = "fixed"
+      })
       .then(
-        (snapshot): NonNullable<RunSnapshots["after"]> => ({
+        (snapshot): NonNullable<RunSnapshots["after"]> => ending.state === "overlapped" ? {
+          kind: "unavailable",
+          reason: "The next turn started before this closing checkpoint held the workspace, so it may hold the next turn's edits",
+        } : ({
           kind: "ready",
           snapshot,
         }),
@@ -246,6 +285,9 @@ export class LiveCheckpoints {
       })
       .catch((error) => this.host.storageFailed(resident, { error }))
       .finally(() => {
+        endings.delete(ending)
+        if (!endings.size) this.endings.delete(resident)
+        read()
         release()
         // Whatever moved the generation meanwhile (a wake, a relaunch) drained while this held the queue: what waits goes now.
         // On 2026-11-11 a steer's message sat 15 minutes after Claude's stop woke its session during a slow snapshot.

@@ -259,7 +259,9 @@ export class LiveActions {
       resident.closing ||
       resident.transferring ||
       resident.rewinding ||
-      resident.checkpointing ||
+      // Only a capture still reading the live files: a closing checkpoint's publication runs beside the next turn,
+      // which the person steers as any.
+      resident.checkpointReading ||
       resident.storageFault
     )
       throw new Error(

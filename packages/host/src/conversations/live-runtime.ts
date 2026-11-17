@@ -85,6 +85,11 @@ export interface Resident {
   closing?: boolean
   closeOperation?: Promise<void>
   checkpointing?: boolean
+  /**
+   * A checkpoint is reading the workspace's live files, before its read is fixed (`LiveCheckpoints.reading`): the part of
+   * `checkpointing` that what the person sends into a running turn waits for.
+   */
+  checkpointReading?: boolean
   /** Turns whose changes the attribution journal is still settling: the conversation stays in memory to keep their count. */
   counting?: number
   rewinding?: boolean
