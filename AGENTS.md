@@ -1674,7 +1674,11 @@ located (`ResumeVerdict` `unavailable` with `lost`) goes on in a new session
 of that harness with the whole conversation, as a record kept closed does,
 and `agents_send` answers only once the session opened: a reopening that
 fails is refused with why, one waiting to go again says so, never "takes it
-now" (`Agents.reopening`). A session Mako started that never ran a turn
+now" (`Agents.reopening`). A hibernated session whose record is closed or
+lost goes on the same way when a message wakes it: its own reconnect transfer
+(`reconnectQueued`, `ContextTransfer.reconnects`), which weighs the record again
+as a resend's does, with the queue as it stands and every row's ID kept, never
+"Send the message again" (`test-unresumable-wake.ts`). A session Mako started that never ran a turn
 (`neverRan`: not resumed or seeded, never located or checkpointed, no request
 run on it) has no record to find, since Claude writes a session's file with
 its first turn: it starts in its own binding with the whole conversation, not

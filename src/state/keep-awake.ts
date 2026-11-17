@@ -20,7 +20,8 @@ export function agentsWorking(agents: number): string {
  */
 export function keepAwakeWarning(hold: KeepAwakeHold | undefined): string | undefined {
   if (hold?.kind === "low-battery") return `Battery at ${hold.percent}%, below ${hold.floor}%: this Mac may sleep with ${agentsWorking(hold.agents)}.`
-  if (hold?.kind === "failed") return `Mako couldn't keep this Mac awake, so it may sleep with ${agentsWorking(hold.agents)}. Mako tries again within a minute.`
+  // A first failure Mako tries again within the minute is no news yet: only one the retry didn't fix is said (`again`).
+  if (hold?.kind === "failed") return !hold.again ? undefined : `Mako couldn't keep this Mac awake, so it may sleep with ${agentsWorking(hold.agents)}. Mako tries again within a minute.`
   return undefined
 }
 

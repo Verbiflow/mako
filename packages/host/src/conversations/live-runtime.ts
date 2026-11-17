@@ -515,6 +515,8 @@ export interface LiveAccess {
   /** Record a new request in the journal and start it when the session is free. */
   admit(resident: Resident, request: LiveRequest): LiveRequest
   transfer(id: string, input: TransferInput, actor?: Actor, continues?: TurnContinuation): LiveSnapshot
+  /** A hibernated session's queue goes on through its own reconnect, as a resend would (`LiveConversations.reconnectQueued`). */
+  reconnectQueued(id: string, first: string, stillDecided: () => boolean): LiveSnapshot | undefined
   /** Send the next queued prompt once nothing holds it back. */
   drain(resident: Resident): void
   close(id: string): Promise<void>

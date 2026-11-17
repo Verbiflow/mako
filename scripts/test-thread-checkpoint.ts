@@ -328,7 +328,7 @@ async function plainEdits(f: Fixture) {
   f.tracker.sweep()
 }
 
-const leaveLedger = (f: Fixture) => ({ ...f.ledger, heard: () => f.tracker.settled(), partition: (checkout: string, thread: string) => f.ledger.partition(checkout, thread), mako: (write: Parameters<typeof f.tracker.mako>[0]) => f.tracker.mako(write) })
+const leaveLedger = (f: Fixture) => ({ ...f.ledger, heard: () => f.tracker.settled().then(() => true), partition: (checkout: string, thread: string) => f.ledger.partition(checkout, thread), mako: (write: Parameters<typeof f.tracker.mako>[0]) => f.tracker.mako(write) })
 
 test("back from going away, a Thread the cloud took leaves the project folder: only its own changes, all at once", async () => {
   const f = await fixture("leave")
@@ -392,4 +392,48 @@ test("a Thread's changes leave the project folder only where the cloud has them 
   assert.match(cloudHasAll(two, undefined, [a, b]) ?? "", /no going-away note/, "no note recorded here")
   assert.match(cloudHasAll([...one, { root: "/p/web", sha256: b2, changes: 1 }], [a, b], [a, b]) ?? "", /\/p\/web/, "the second acknowledged anew after the note went: that one isn't on the machine")
   assert.match(cloudHasAll([], [a], [a]) ?? "", /nothing/)
+})
+
+
+for (const [name, heard] of [["reports incomplete", async () => false], ["throws", async (): Promise<boolean> => { throw new AggregateError([], "Shell reconciliation is incomplete") }]] as const)
+test(`an incomplete journal (${name}) keeps the checkout and the existing stayed notice`, async () => {
+  const f = await fixture(`journal-not-ready-${name.replace(" ", "-")}`)
+  try {
+    await plainEdits(f)
+    const taken = await f.capture()
+    const before = files(f.repo)
+    const folder = join(f.base, "leaving")
+    const leave = new CheckoutLeave(folder, runner, () => {})
+    const ledger = { ...leaveLedger(f), heard }
+    const outcome = await leave.leave("T1", f.repo, [{ root: f.repo, versions: taken.versions }], ledger)
+    assert.deepEqual(outcome, { kind: "stayed", paths: taken.versions.map((version) => version.path).sort() })
+    assert.deepEqual(files(f.repo), before)
+    assert.deepEqual(await new CheckoutLeave(folder, runner, () => {}).stayed("T1"), taken.versions.map((version) => version.path).sort())
+  } finally { await f.tracker.close(); rmSync(f.base, { recursive: true, force: true }) }
+})
+
+test("silent-watch inventory reuses tracked paths but still finds staged additions and unborn indexes", async () => {
+  const f = await fixture("inventory-cache")
+  const seen: string[][] = []
+  const git = new Git({ trace: (run) => seen.push([...run.args]) })
+  try {
+    const repository = gitRepository(git, f.repo)
+    await repository.inventory()
+    seen.length = 0
+    writeFileSync(f.abs("staged.ts"), "staged\n"); f.git("add", "staged.ts")
+    writeFileSync(f.abs("untracked.ts"), "untracked\n")
+    const next = await repository.inventory(false)
+    assert(next.changed.includes("staged.ts"))
+    assert(next.untracked.includes("untracked.ts"))
+    assert.deepEqual(next.tracked, [], "the caller already owns the tracked listing")
+    assert(!seen.some((args) => args.length === 2 && args[0] === "ls-files" && args[1] === "-z"))
+    const unborn = join(f.base, "unborn"); mkdirSync(unborn)
+    f.sh(unborn, "init", "-q")
+    writeFileSync(join(unborn, "first.ts"), "first\n"); f.sh(unborn, "add", "first.ts")
+    const fresh = await gitRepository(git, unborn).inventory(false)
+    assert(fresh.untracked.includes("first.ts"), "an unborn repository still needs the real index's staged paths")
+  } finally {
+    await git.close(); await f.tracker.close()
+    rmSync(f.base, { recursive: true, force: true })
+  }
 })

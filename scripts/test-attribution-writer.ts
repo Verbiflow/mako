@@ -10,7 +10,9 @@ import { execFileSync } from "node:child_process"
 import { once } from "node:events"
 import { postToWriter } from "@mako/host/attribution/writer-messages"
 import { ToWriterSchema } from "@mako/host/attribution/writer-protocol"
-import { Git } from "@mako/git"
+import { Git, type GitTrace } from "@mako/git"
+import { GitHelper } from "@mako/host/git/git-helper"
+import { closeHostChild, hostSpawn } from "@mako/host/base/host-command"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import { followHostLog } from "@mako/host/base/host-log"
 import { HostStopping, HostStoppingError } from "@mako/host/base/host-stopping"
@@ -647,6 +649,56 @@ test("ten seconds of journal traffic cannot bypass a broken writer's backoff", {
     clearInterval(stream)
     await client.close()
     await writer.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+
+test("a completed shell recovers silent writes through the writer and Git helper while the host stays runnable", { timeout: 20_000 }, async () => {
+  const root = scratch(), repo = join(root, "repo")
+  execFileSync("git", ["init", "-q", repo])
+  writeFileSync(join(repo, "a.ts"), "original\n")
+  execFileSync("git", ["-C", repo, "add", "."])
+  execFileSync("git", ["-C", repo, "-c", "user.email=test@test", "-c", "user.name=Test", "commit", "-qm", "base"])
+  const traces: GitTrace[] = []
+  const helper = new GitHelper({ spawn: hostSpawn, close: closeHostChild })
+  const helped = new Git({ processes: helper.runner(), trace: (run) => traces.push(run) })
+  const deps = { ...dependencies(root), git: helped } // The watcher deliberately never emits.
+  const writer = new AttributionWriter(deps, settings(deps))
+  let client: SharedJournal | undefined
+  let pulses = 0
+  const pulse = setInterval(() => { pulses++ }, 20)
+  try {
+    client = await follower(writer, deps)
+    await client.writes.track(repo)
+    traces.length = 0
+    const startedAt = Date.now()
+    client.writes.activity({ kind: "turn", edge: "start", id: "turn", session: "session", thread: "thread", checkout: repo, at: startedAt })
+    client.writes.activity({ kind: "call", edge: "start", id: "shell", session: "session", thread: "thread", turn: "turn", checkout: repo, at: startedAt })
+    writeFileSync(join(repo, "a.ts"), "modified by shell\n")
+    writeFileSync(join(repo, "generated.ts"), "new by shell\n")
+    const endedAt = Date.now()
+    client.writes.reported({ call: "shell", session: "session", thread: "thread", turn: "turn", checkout: repo, status: "completed", startedAt, endedAt, effects: [{ kind: "command", command: "python3 generate.py", cwd: repo }] })
+    client.writes.activity({ kind: "call", edge: "end", id: "shell", session: "session", thread: "thread", turn: "turn", at: endedAt })
+    client.writes.activity({ kind: "turn", edge: "end", id: "turn", session: "session", thread: "thread", at: endedAt })
+    const before = pulses
+    await client.writes.settled({ rescans: false })
+    assert(pulses - before >= 5, "waiting for the shell allowance cannot hold the host's loop")
+    const opened = writer.snapshot()
+    assert(opened)
+    const store = JournalStore.open(opened.path, { device: "reader", readOnly: true })
+    try {
+      const entries = store.entries(0)
+      assert.deepEqual(entries.map((entry) => [entry.path, entry.author.certainty]).sort(), [["a.ts", "window"], ["generated.ts", "window"]])
+    } finally { store.close() }
+    assert(traces.some((trace) => trace.args.includes("--exclude-standard")), "the real Git inventory went through the injected helper runner")
+    assert(!traces.some((trace) => trace.args.length === 2 && trace.args[0] === "ls-files" && trace.args[1] === "-z"), "the cached tracked-path hint must cross both sides of the writer boundary")
+  } finally {
+    clearInterval(pulse)
+    await client?.close()
+    await writer.close()
+    await helped.close()
+    await helper.stop()
     rmSync(root, { recursive: true, force: true })
   }
 })

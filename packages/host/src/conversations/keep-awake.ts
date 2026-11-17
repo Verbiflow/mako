@@ -112,6 +112,9 @@ export class KeepAwake {
   #linger: ReturnType<typeof setTimeout> | undefined
   /** There's no helper (`sleepWatchHelper`); it isn't looked for again until Mako restarts. */
   #noHelper = false
+  /** Each recount is an attempt; the first that failed, while nothing has held since. */
+  #attempt = 0
+  #firstFailed: number | undefined
   #stopped = false
 
   constructor(options: KeepAwakeOptions) {
@@ -160,6 +163,7 @@ export class KeepAwake {
 
   async #refresh(): Promise<void> {
     if (this.#stopped) return
+    this.#attempt += 1
     const settings = await this.#readSettings()
     if (this.#stopped) return
     const agents = settings.on ? this.#options.working() + (this.#options.serving?.() ?? 0) : 0
@@ -198,7 +202,14 @@ export class KeepAwake {
     this.#told = line
   }
 
-  #publish(hold: KeepAwakeHold): void {
+  #publish(said: KeepAwakeHold): void {
+    // A failure is said as news only once a later recount failed too (`again`): the next recount, within the minute,
+    // usually holds, and a window says nothing of a failure it put right by itself.
+    let hold = said
+    if (said.kind === "failed") {
+      this.#firstFailed ??= this.#attempt
+      hold = { ...said, ...(this.#attempt > this.#firstFailed && { again: true }) }
+    } else this.#firstFailed = undefined
     const before = this.#hold
     this.#hold = hold
     if (JSON.stringify(before) === JSON.stringify(hold)) return

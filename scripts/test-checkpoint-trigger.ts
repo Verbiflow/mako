@@ -74,7 +74,7 @@ function world(options: { roots?: string[]; captureMs?: number; deaf?: boolean; 
     unheard.clear()
   }
   const ledger: ReadinessLedger = {
-    heard: hear,
+    heard: (checkouts) => { assert.deepEqual(checkouts, roots, "readiness waits only for this plan’s repositories"); return hear() },
     settled: hear,
     track: async () => {},
     head: () => "a".repeat(40),

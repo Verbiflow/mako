@@ -238,7 +238,7 @@ export class AttributionWriter {
         return { ignoredEntries: Boolean(repository.ignoredEntries), watchHead: Boolean(repository.watchHead) }
       }
       case "head": return this.repository(generation, request.root).head()
-      case "inventory": return this.repository(generation, request.root).inventory()
+      case "inventory": return this.repository(generation, request.root).inventory(request.includeTracked)
       case "ignored": return this.repository(generation, request.root).ignored(request.paths)
       case "ignored-entries": return this.repository(generation, request.root).ignoredEntries?.()
       case "read": return this.repository(generation, request.root).read(request.commit, request.path)

@@ -347,6 +347,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     readDaemon: readFseventsd,
     privileged: administratorPrompt,
     probe: () => probeDelivery(),
+    pollingLags: () => watchReadings.pollingLags(),
     recover: () => {
       watchBackend.recover()
       late.fileHistory?.recover?.()
@@ -1260,7 +1261,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       return attribution && {
         placement: (conversation) => threads.store?.journalPlacement(conversation),
         // A turn's count waits only for what was heard: never for checkouts rescanned whole after lost events.
-        flushed: () => attribution.heard(),
+        flushed: (checkout) => attribution.heard(checkout ? [checkout] : []),
         countTurn: (thread, turn, state) => attribution.countTurn(thread, turn, state),
         settledThrough: (at) => attribution.settledThrough(at),
         counted: (summary, session) => attribution.counted(summary, session),
@@ -1378,7 +1379,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     const fromOurs = why === undefined
     const left = fromOurs
       ? await checkoutLeave.leave(thread, repositories[0]!.root, repositories, {
-        heard: () => attribution.heard(),
+        heard: () => attribution.heard(repositories.map((each) => each.root)),
         partition: (checkout, of) => attribution.partitionOffLoop(checkout, of),
         mako: (write) => attribution.mako(write),
       })
@@ -1676,8 +1677,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       ledger: () => {
         const attribution = late.attribution
         return attribution && {
-          heard: () => attribution.heard(),
-          settled: () => attribution.heard(),
+          heard: (checkouts) => attribution.heard(checkouts),
+          settled: (checkouts) => attribution.heard(checkouts ?? []).then(() => undefined),
           track: (checkout) => attribution.track(checkout),
           head: (repository) => attribution.head(repository),
           partition: (checkout, thread) => attribution.partitionOffLoop(checkout, thread),

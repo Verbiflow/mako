@@ -43,7 +43,7 @@ async function main(): Promise<void> {
       if (!found) return null
       return {
         head: () => ask({ kind: "head", root }, WriterStringSchema),
-        inventory: () => ask({ kind: "inventory", root }, WriterInventorySchema),
+        inventory: (includeTracked) => ask({ kind: "inventory", root, includeTracked }, WriterInventorySchema),
         ignored: paths => ask({ kind: "ignored", root, paths: [...paths] }, WriterSetSchema),
         ...(found.ignoredEntries && { ignoredEntries: () => ask({ kind: "ignored-entries", root }, WriterPathsSchema) }),
         read: (commit, path) => ask({ kind: "read", root, commit, path }, WriterBytesSchema),

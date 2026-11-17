@@ -43,7 +43,8 @@ export function cloudHasAll(repositories: ReadonlyArray<{ root: string; sha256: 
 }
 
 export type LeaveLedger = Pick<MoveLedger, "mako"> & {
-  heard(): Promise<void>
+  /** False when the journal's read was incomplete or failed: nothing is taken out on partial evidence. */
+  heard(): Promise<boolean>
   partition(checkout: string, thread: string): Partition | Promise<Partition>
 }
 
@@ -76,7 +77,14 @@ export class CheckoutLeave {
   /** Takes the Thread's changes out of the main checkout, if every file is as the cloud has it; see the top of this file. */
   async leave(thread: string, project: string, repositories: readonly LeftRepository[], ledger: LeaveLedger): Promise<LeaveOutcome> {
     if (!repositories.some((repository) => repository.versions.length)) return { kind: "nothing" }
-    await ledger.heard()
+    let heard: string | undefined
+    try { heard = await ledger.heard() ? undefined : "incomplete" } catch (error) { heard = error instanceof Error ? error.message : String(error) }
+    if (heard !== undefined) {
+      const paths = [...new Set(repositories.flatMap((repository) => repository.versions.map((version) => version.path)))].sort()
+      await this.#keepStayed(thread, paths)
+      this.#log("a Thread the cloud took kept its changes: the journal has not caught up", { thread, stayed: paths.length, error: heard })
+      return { kind: "stayed", paths }
+    }
     const stayed: string[] = []
     const rewrites: { repoRoot: string; head: string; files: InPlaceFile[] }[] = []
     for (const { root, versions } of repositories) {

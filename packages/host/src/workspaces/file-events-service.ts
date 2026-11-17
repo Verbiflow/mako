@@ -150,6 +150,11 @@ export interface FileEventsServiceDeps {
   evidenceTemporary?: string
   /** Whether other work keeps this Mac busy now: a late canary then says nothing about fseventsd. */
   machineBusy?(): Promise<boolean>
+  /**
+   * Whether polling, which stands in for late file events, falls behind too: while it keeps up, late delivery alone says
+   * no notice, since the polls find every change in time. Left out, late delivery alone says it.
+   */
+  pollingLags?(): boolean
   /** Where "Not now" and the episode it was pressed in are kept, so neither is said again after a restart of the host. */
   noticeFile?: string
   now?(): number
@@ -374,6 +379,8 @@ export class FileEventsServiceWatch implements DeliveryListener, DaemonRestarts 
   /** Whether the desk says it: degraded, once an episode, and not while "Not now" holds unless it got worse. */
   private noticeDue(): boolean {
     if (this.state !== "degraded" || this.restarting) return false
+    // Late or unheard events while every poll keeps up cost nothing: say so only when polling lags too. Memory is its own reason.
+    if (!this.degraded?.memory && this.deps.pollingLags && !this.deps.pollingLags()) return false
     const { episode, snooze } = this.notices
     if (episode?.acknowledged && !this.worse(episode.baseline)) return false
     if (snooze && snooze.until > this.now() && !this.worse(snooze.baseline)) return false
