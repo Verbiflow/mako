@@ -731,13 +731,13 @@ const BACKGROUND_STARTED = /^Background subagent started with agent_id=/
  * (devin 3000.10.23): a read was "N lines", and "N lines (truncated)" when
  * Devin cut it short of both the file's end and the lines asked for (about
  * 30 KB of a file read whole); the file itself stays the model's. A
- * subagent's was its report under `Subagent completed:`, and a background
- * one's start only `Background subagent started.` (3000.11.205). Any other
- * such result showed no words.
+ * subagent's was its report, under `Subagent completed:` until 3000.13.4
+ * dropped that header, and a background one's start only `Background
+ * subagent started.` (3000.11.205). Any other such result showed no words.
  */
 function devinClientResult(name: string, output: string, input: string | undefined): string {
   const report = name === "run_subagent" ? SUBAGENT_REPORT.exec(output) : null
-  if (report) return `Subagent completed:\n${output.slice(report[0].length)}`
+  if (report) return output.slice(report[0].length)
   if (name === "run_subagent" && BACKGROUND_STARTED.test(output)) return "Background subagent started."
   const view = FILE_VIEW.exec(output)
   if (!view) return ""

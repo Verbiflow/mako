@@ -13,9 +13,9 @@ const SETTINGS_ONLY = "3000.10.23 doesn't define it for the capture's account, w
 export const DEVIN_VOCABULARY = defineVocabulary({
   harness: "devin",
   checked: {
-    version: "3000.12.57",
+    version: "3000.13.4",
     on: "2026-11-17",
-    against: "Devin's CLI store and IDE journal through audit:tools as of 2026-10-08, and its 3000.12.57 tool definitions through harness:native-tools (no tool added or removed since 3000.10.23; grep reworded in 3000.12.17, read's image_size added in 3000.12.28, none changed in 3000.12.43 or 3000.12.57; Ask mode offers the MCP tools; Smart mode, recorded since 3000.12.17, offers Bypass's)",
+    against: "Devin's CLI store and IDE journal through audit:tools as of 2026-10-08, and its 3000.13.4 tool definitions through harness:native-tools (no tool removed since 3000.10.23; grep reworded in 3000.12.17, read's image_size added in 3000.12.28, none changed in 3000.12.43 or 3000.12.57, read_page_content added in 3000.13.4; Ask mode offers the MCP tools; Smart mode, recorded since 3000.12.17, offers Bypass's)",
   },
   mcp: ["s.t"],
   tools: {
@@ -38,6 +38,8 @@ export const DEVIN_VOCABULARY = defineVocabulary({
     find_file_by_name: { kind: "find" },
     web_search: { kind: "web-search", unlisted: SETTINGS_ONLY },
     webfetch: { kind: "web-fetch" },
+    // 3000.13.4: a web page the person attached to their message, read by the id of its `<page_content_ref>` tag.
+    read_page_content: { kind: "web-fetch", label: "Page content" },
     run_subagent: { kind: "agent" },
     subagent: { kind: "agent-wait", label: "Agent status", unlisted: SETTINGS_ONLY },
     read_subagent: { kind: "agent-wait" },
@@ -54,7 +56,7 @@ export const DEVIN_VOCABULARY = defineVocabulary({
   },
   concepts: {
     checked: {
-      version: "3000.12.57",
+      version: "3000.13.4",
       on: "2026-11-17",
       against: "the binary through harness:self-report (every declared name, and every skill and MCP place listed), and the docs devin 3000.10.23 ships (extensibility, subagents, permissions, mcp) and devin skills paths as read on 2026-10-06",
     },
