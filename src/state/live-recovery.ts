@@ -648,6 +648,9 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
       harnessTurns: batch.harnessTurns ?? current.harnessTurns,
       spentThrough: batch.spentThrough === undefined ? current.spentThrough : (batch.spentThrough ?? undefined),
       requests: requests ?? current.requests,
+      // What waits behind the turn moves with the requests, as on a held Session: kept as it was let go with, a turn's
+      // end never counted as the last, and its "finished" was never said (`noteLiveOutcome`).
+      queued: requests ? requests.filter((request) => request.status === "queued" || request.status === "held") : current.queued,
       promptedAt: promptedAfter(current.promptedAt, batch),
       permission: batch.permissions
         ? (batch.permissions[0] ?? null)
