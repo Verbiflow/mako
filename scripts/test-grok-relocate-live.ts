@@ -145,6 +145,8 @@ else {
     assert.equal(turn.stopReason, "end_turn")
     assert.ok(contexts.slice(before).some((context) => /first/.test(context.join("\n")) && /third/.test(context.join("\n"))), "its next turn carries the turns from the first folder")
     assert.ok(!systems.at(-1)!.includes(main), "nothing the model gets after the move names the first folder")
+    const movedSummary = JSON.parse(readFileSync(join(sessions, encodeURIComponent(worktree), sessionId, "summary.json"), "utf8"))
+    assert.equal(movedSummary.info.cwd, worktree, "its summary, which the catalog lists it by, names the new folder after Grok's own turn there")
 
     assert.deepEqual(readdirSync(sessions).filter((name) => existsSync(join(sessions, name, sessionId))), [encodeURIComponent(worktree)], "the session is saved under the new folder alone")
     assert.equal(grokSessionSource(sessionId, worktree, sessions), join(sessions, encodeURIComponent(worktree), sessionId, "updates.jsonl"))
