@@ -1,3 +1,4 @@
+import type { Json } from "@mako/protocol"
 import { HOST_FAILURE_KINDS, PROVIDER_FAILURE_KINDS, type ProviderFailureKind } from "./provider-failure.js"
 import { z } from "zod"
 
@@ -44,4 +45,38 @@ export function readStoredFailure<Fields extends { failure?: ProviderFailureKind
   const exact = PROVIDER_FAILURE_KINDS.find((kind) => kind === exactFailure)
   // SAFETY: `rest` is `fields` less the optional `exactFailure`, and `failure` stays a ProviderFailureKind or undefined, so it is still a `Fields`.
   return { ...rest, failure: exact ?? fields.failure } as Fields
+}
+
+/** A JSON object as revived, its fields kept. */
+const JsonObjectSchema = z.record(z.string(), z.custom<Json>(() => true))
+/** The kinds older builds don't know, as they're written in JSON: text without one needs no walk. */
+const NEWER_KIND_TEXT = Object.keys(OLDER_FAILURE_READING).map((kind) => JSON.stringify(kind))
+/** An object (a request, a failed transfer's state) whose `failure` is a kind older builds don't know. */
+const NewerFailureSchema = z.looseObject({ failure: z.literal("model-refusal"), exactFailure: z.string().optional() })
+/** An object (a request, a session) whose evidence names a kind older builds don't know, not yet saved beside one they do. */
+const NewerEvidenceSchema = z.looseObject({ failureEvidence: z.object({ kind: z.literal("model-refusal"), source: z.string() }).loose() })
+
+/** One JSON value, as `JSON.parse` revives it from the leaves up: a newer kind or evidence saved as older builds read it. */
+function olderReadableValue(_key: string, value: Json): Json {
+  const failed = NewerFailureSchema.safeParse(value)
+  const revived: Json = failed.success && failed.data.exactFailure === undefined ? { ...JsonObjectSchema.parse(value), ...savedFailure(failed.data.failure) } : value
+  const evidenced = NewerEvidenceSchema.safeParse(revived)
+  if (!evidenced.success) return revived
+  const evidence = ProviderFailureEvidenceSchema.safeParse(evidenced.data.failureEvidence)
+  return evidence.success ? { ...JsonObjectSchema.parse(revived), failureEvidence: storedFailureEvidence(evidence.data) } : revived
+}
+
+/**
+ * A value's JSON as it leaves this host for another device (through the gateway: a phone, a browser, another Mac),
+ * whose build may predate a failure kind: an older build's window failed on a kind it didn't know (`acp-live.ts`'s
+ * `failureDetail` reads `.title` off `describeProviderFailure`), so such a kind goes as `unknown` with the exact one
+ * beside it, as a journal keeps it (`savedFailure`, `storedFailureEvidence`), and a reader that knows it reads it back
+ * (`requestsAfter`, `sessionAfter`). Nothing yet tells this host which readers know it, so every one of them gets it
+ * so; this host's own windows, its own build, read the exact kind. Text with no such kind is returned as it is.
+ */
+export function olderReadable(text: string): string
+export function olderReadable(text: string | undefined): string | undefined
+export function olderReadable(text: string | undefined): string | undefined {
+  if (text === undefined || !NEWER_KIND_TEXT.some((kind) => text.includes(kind))) return text
+  return JSON.stringify(JSON.parse(text, olderReadableValue))
 }
