@@ -95,8 +95,11 @@ const historyTemp = join(stateDir, "sessions.tmp")
 const sessions = new Map<string, LiveSession>()
 const clients = new Set<ClientConnection>()
 const ENDPOINT_CHECK_MS = 5_000
+/** How soon after a change its save goes. */
+const PERSIST_MS = 2_000
 let server: Server | null = null
 let dirty = false
+let persistTimer: NodeJS.Timeout | undefined
 let saving: Promise<void> | null = null
 let stopping = false
 
@@ -226,8 +229,19 @@ function publishStatus(session: LiveSession) {
   })
 }
 
+/**
+ * Something to save: a save goes within `PERSIST_MS`, once for everything changed meanwhile. A terminal's output
+ * changes many times a second, so the save is a beat behind it, as the every-two-seconds save was; a daemon whose
+ * terminals say nothing saves nothing and wakes for nothing.
+ */
 function markDirty() {
   dirty = true
+  if (persistTimer) return
+  persistTimer = setTimeout(() => {
+    persistTimer = undefined
+    void persist()
+  }, PERSIST_MS)
+  persistTimer.unref()
 }
 
 function listSessions() {
@@ -541,7 +555,8 @@ async function persist(force = false) {
   saving = writeFile(historyTemp, JSON.stringify(state), { mode: 0o600 })
     .then(() => rename(historyTemp, historyFile))
     .catch(() => {
-      dirty = true
+      // A save that failed goes again on the next beat.
+      markDirty()
     })
     .finally(() => {
       saving = null
@@ -634,7 +649,6 @@ async function startServer() {
     }
     watchEndpoint(ino)
   }
-  setInterval(() => void persist(), 2_000)
 }
 
 /** Whether `path` answers a hello with this process's pid: a probe that ends at once, whatever it meets. */
