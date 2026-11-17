@@ -17,6 +17,7 @@ import { ContainerEngine, containersBy, type Container, type ContainerLook } fro
 import { onLinux, onMac } from "../base/platform.js"
 import { childInput } from "@mako/sessions/child-input"
 import { parseTable, PS_ARGS, TableIndex, type Row, type RunLeader } from "./process-table.js"
+import { mapLimit } from "@mako/protocol/map-limit"
 
 
 /** Stop asks nicely this long before it kills. */
@@ -1441,7 +1442,6 @@ function groupAlive(pid: number): boolean {
 async function physicalFootprints(pids: number[]): Promise<Map<number, { bytes: number; peakBytes: number }>> {
   const found = new Map<number, { bytes: number; peakBytes: number }>()
   if (!onMac()) return found
-  const queue = [...pids]
   const readOne = async (pid: number) => {
     const [command, args] = belowAgents("/usr/bin/footprint", ["--noCategories", "-f", "bytes", "-p", String(pid)])
     const stdout = await hostProbe(command, args, { timeout: FOOTPRINT_MS }).then((result) => result.stdout, () => "")
@@ -1449,9 +1449,7 @@ async function physicalFootprints(pids: number[]): Promise<Map<number, { bytes: 
     const peak = Number(/phys_footprint_peak: (\d+) B/.exec(stdout)?.[1] ?? Number.NaN)
     if (Number.isFinite(bytes)) found.set(pid, { bytes, peakBytes: Number.isFinite(peak) ? Math.max(peak, bytes) : bytes })
   }
-  await Promise.all(Array.from({ length: Math.min(FOOTPRINT_PARALLEL, queue.length) }, async () => {
-    for (let pid = queue.shift(); pid !== undefined; pid = queue.shift()) await readOne(pid)
-  }))
+  await mapLimit(pids, FOOTPRINT_PARALLEL, readOne)
   return found
 }
 

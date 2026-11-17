@@ -99,6 +99,7 @@ import { recordFile } from "../record-files.js"
 import type { Entry } from "../entries.js"
 import { cursorFork } from "./cursor-fork.js"
 import { cursorCompactionReadings, windowSummary, type CursorCompactionPlace } from "./cursor-compactions.js"
+import { mapLimit } from "@mako/protocol/map-limit"
 
 /** Where a user turn begins: its index in the root's hash list and in the entries. */
 interface ExchangeStart {
@@ -360,38 +361,32 @@ function spokenText(content: CursorTextContent): string | null {
 
 async function nativeFiles(paths: string[]): Promise<NativeFile[]> {
   const files: NativeFile[] = []
-  const iterator = paths.values()
-  const worker = async () => {
-    while (true) {
-      const item = iterator.next()
-      if (item.done) return
-      // A session directory without a store yet.
-      const info = await stat(item.value).catch(() => null)
-      if (info) {
-        const sidecars = await Promise.all([
-          stat(`${item.value}-wal`).catch(() => null),
-          stat(join(dirname(item.value), "meta.json")).catch(() => null),
-        ])
-        const revision = [info, ...sidecars]
-          .map((value) =>
-            value
-              ? `${value.dev}:${value.ino}:${value.size}:${value.mtimeMs}:${value.ctimeMs}`
-              : "missing"
-          )
-          .join("|")
-        files.push({
-          path: item.value,
-          bytes: info.size,
-          mtimeMs: Math.max(
-            info.mtimeMs,
-            ...sidecars.map((value) => value?.mtimeMs ?? 0)
-          ),
-          revision,
-        })
-      }
+  await mapLimit(paths, 16, async (path) => {
+    // A session directory without a store yet.
+    const info = await stat(path).catch(() => null)
+    if (info) {
+      const sidecars = await Promise.all([
+        stat(`${path}-wal`).catch(() => null),
+        stat(join(dirname(path), "meta.json")).catch(() => null),
+      ])
+      const revision = [info, ...sidecars]
+        .map((value) =>
+          value
+            ? `${value.dev}:${value.ino}:${value.size}:${value.mtimeMs}:${value.ctimeMs}`
+            : "missing"
+        )
+        .join("|")
+      files.push({
+        path,
+        bytes: info.size,
+        mtimeMs: Math.max(
+          info.mtimeMs,
+          ...sidecars.map((value) => value?.mtimeMs ?? 0)
+        ),
+        revision,
+      })
     }
-  }
-  await Promise.all(Array.from({ length: Math.min(16, paths.length) }, worker))
+  })
   return files
 }
 

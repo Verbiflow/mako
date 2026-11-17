@@ -25,6 +25,7 @@ import type { RecordRef } from "./entries.js"
 import { namesBuild } from "./runtime-version.js"
 import { SqliteBusy } from "./providers/sqlite-busy.js"
 import { atOnce, type Steps } from "./slices.js"
+import { mapLimit } from "@mako/protocol/map-limit"
 
 export { decodeRow, encodeRow, taggedRow } from "./record-rows.js"
 
@@ -2751,10 +2752,8 @@ export class RecordStore {
       }),
       ...plan.deferred.flatMap(({ unit, target }) => (existsSync(target) ? [] : [() => this.writeHead(unit, target)])),
     ]
-    let next = 0
-    await Promise.all(Array.from({ length: Math.min(FILES_AT_ONCE, files.length) }, async () => {
-      for (let write = files[next++]; write; write = files[next++]) await write()
-    }))
+    // A file that fails still lets every write already under way land before the restore says so.
+    await mapLimit(files, FILES_AT_ONCE, (write) => write())
     for (const linePlan of plan.linePlans) await this.applyLines(linePlan)
     for (const [name, rowPlan] of plan.rowPlans) await this.applyDatabase(places, name, rowPlan)
     if (forkPlan && report.fork) await this.applyFork(owners!, places, forkPlan, report.fork)
@@ -3486,18 +3485,16 @@ export class RecordStore {
       }
       // Asked as the plan is made, so a dry run sees it too, and a restore it refuses writes nothing (`RestoreReport.outdated`).
       // What's read is kept for the write, up to a bound, so a restore reads each row once.
-      let next = 0
+      // A read that fails lets the others finish before the database below is closed.
       let kept = 0
-      await Promise.all(Array.from({ length: Math.min(ROWS_READ_AT_ONCE, unread.length) }, async () => {
-        for (let each = unread[next++]; each; each = unread[next++]) {
-          const bytes = await this.versionBytes(each.row.id, each.row.head)
-          fits(each.table, decodeRow(bytes))
-          if (kept + bytes.length <= ROW_BYTES_KEPT) {
-            kept += bytes.length
-            each.row.bytes = bytes
-          }
+      await mapLimit(unread, ROWS_READ_AT_ONCE, async (each) => {
+        const bytes = await this.versionBytes(each.row.id, each.row.head)
+        fits(each.table, decodeRow(bytes))
+        if (kept + bytes.length <= ROW_BYTES_KEPT) {
+          kept += bytes.length
+          each.row.bytes = bytes
         }
-      }))
+      })
     } finally {
       db?.close()
       closeIdentities()

@@ -20,6 +20,7 @@ import { withdrawGone } from "@mako/host/conversations/live-transfers"
 import { threadHistoryTools } from "@mako/host/conversations/thread-history"
 import { heldReferences } from "@mako/host/conversations/thread-tree"
 import { HARNESSES, TESTED_HARNESSES, AgentsWorld, type Script, type WorldOptions } from "./lib/agents-world.ts"
+import { mapLimit } from "@mako/protocol/map-limit"
 
 /**
  * `agents_move` and the one operation under it (`npm run test:fin-move`). A Thread goes on on another harness through
@@ -188,14 +189,11 @@ async function outOfUsage(from: string, to: string): Promise<void> {
 
 async function everyPair(): Promise<void> {
   // `PAIRS=0` leaves them out, to run the rest quickly.
-  const waiting = process.env.PAIRS === "0" ? [] : [...TARGETS]
-  await Promise.all(Array.from({ length: AT_ONCE }, async () => {
-    for (let pair = waiting.shift(); pair; pair = waiting.shift()) {
-      await idle(pair.from, pair.to)
-      await stopped(pair.from, pair.to)
-      await outOfUsage(pair.from, pair.to)
-    }
-  }))
+  await mapLimit(process.env.PAIRS === "0" ? [] : [...TARGETS], AT_ONCE, async (pair) => {
+    await idle(pair.from, pair.to)
+    await stopped(pair.from, pair.to)
+    await outOfUsage(pair.from, pair.to)
+  })
 }
 
 /** Cases that only one pair needs: what's refused, a repeat, `all`, a Stop landing as it moves. */

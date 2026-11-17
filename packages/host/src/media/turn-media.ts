@@ -11,6 +11,7 @@ import { mediaKind, type MediaKind } from "@mako/sessions/turn-media"
 import { otherAppsData } from "../base/other-apps-data.js"
 import type { KeptMedia, MediaCheck, MediaConfirmation } from "../contracts/turn-media.js"
 import { keepPage, keptPage } from "./page-copy.js"
+import { mapLimit } from "@mako/protocol/map-limit"
 
 /** A file changed this long before its call started still counts as the call's: clocks and file systems round. */
 const BEFORE_MS = 2_000
@@ -77,16 +78,7 @@ export class TurnMedia {
 
   /** Each check's answer, in order. */
   async confirm(checks: readonly MediaCheck[]): Promise<MediaConfirmation[]> {
-    const answers: MediaConfirmation[] = Array.from({ length: checks.length }, () => ({ kind: "pending" }))
-    let next = 0
-    const work = async () => {
-      while (next < checks.length) {
-        const index = next++
-        answers[index] = await this.check(checks[index]!).catch((error: Error): MediaConfirmation => ({ kind: "dropped", reason: error.message }))
-      }
-    }
-    await Promise.all(Array.from({ length: Math.min(PARALLEL, checks.length) }, work))
-    return answers
+    return mapLimit(checks, PARALLEL, (check) => this.check(check).catch((error: Error): MediaConfirmation => ({ kind: "dropped", reason: error.message })))
   }
 
   /**

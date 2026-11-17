@@ -38,6 +38,7 @@
     "./source-project": "./dist/source-project.js",
     "./attribution": "./dist/attribution.js",
     "./ids": "./dist/ids.js",
+    "./map-limit": "./dist/map-limit.js",
     "./cloud-fins": "./dist/cloud-fins.js"
   },
   "files": [

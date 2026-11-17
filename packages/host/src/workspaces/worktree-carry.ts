@@ -14,6 +14,7 @@ import { onLinux, onMac } from "../base/platform.js"
 import type { CheckoutBorrowing } from "./checkout-borrowing.js"
 import { errorMessage } from "../base/error-message.js"
 import { hostWarn } from "../base/host-log.js"
+import { mapLimit } from "@mako/protocol/map-limit"
 
 const execute = hostCommand
 
@@ -187,10 +188,7 @@ const CLONE_LISTED = `function run(argv) {
 /** Clones single files, each to a place that doesn't exist yet. One that can't be cloned is left out, for Git to write. */
 async function cloneFiles(pairs: readonly (readonly [string, string])[], list: string, background: boolean): Promise<void> {
   if (!onMac()) {
-    const left = pairs.values()
-    await Promise.all(Array.from({ length: 16 }, async () => {
-      for (const [from, to] of left) await copyFile(from, to, constants.COPYFILE_FICLONE_FORCE).catch(() => {})
-    }))
+    await mapLimit(pairs, 16, ([from, to]) => copyFile(from, to, constants.COPYFILE_FICLONE_FORCE).catch(() => {}))
     return
   }
   await writeFile(list, pairs.flat().join("\n"), { mode: 0o600 })

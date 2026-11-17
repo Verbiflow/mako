@@ -12,6 +12,7 @@ import { CloudRepositorySchema, type CloudRepository } from "../contracts/cloud-
 import type { CloudAccount } from "../usage/index.js"
 import { captureMoveCheckpoint, captureThreadCheckpoint, type ThreadCheckpointInput } from "../workspaces/index.js"
 import type { WorkingThread } from "./cloud-handoffs.js"
+import { mapLimit } from "@mako/protocol/map-limit"
 
 /** How often a Thread at work is brought up to date in its cloud Thread standing by. */
 export const READY_EVERY_MS = 30_000
@@ -227,10 +228,8 @@ export class CloudReadiness {
     const resting = (thread: string) => this.#options.leaving(thread) || Date.now() - (this.#taken.get(thread) ?? Number.NEGATIVE_INFINITY) < TAKEN_REST_MS
     // Each round captures its checkout through Git (an `add --all` of the whole worktree) and sends its records
     // through the sync daemon: with every Thread at work at once, a Mac of many Fins ran hundreds of them together.
-    const due = this.#options.working().filter((working) => !resting(working.thread) && this.#moved(working)).values()
-    await Promise.all(Array.from({ length: ROUNDS_AT_ONCE }, async () => {
-      for (const working of due) await this.#round(working, "refresh")
-    }))
+    const due = this.#options.working().filter((working) => !resting(working.thread) && this.#moved(working))
+    await mapLimit(due, ROUNDS_AT_ONCE, (working) => this.#round(working, "refresh"))
     await this.#prune()
   }
 
