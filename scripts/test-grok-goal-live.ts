@@ -16,7 +16,7 @@ import "./lib/scratch-git.mjs"
 //   tsx scripts/test-grok-goal-live.ts [--apex]   (in npm run test:acp-registry)
 import assert from "node:assert/strict"
 import { execFileSync, spawn } from "node:child_process"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs"
 import { createServer, type IncomingMessage } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -29,6 +29,7 @@ import type { DriverGoalCommand } from "@mako/host/harnesses/live-driver"
 import { acpClientCapabilities } from "@mako/host/harnesses/acp-source"
 import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
 import { grokNotification } from "@mako/host/harnesses/grok/notifications"
+import { removeScratch } from "./lib/scratch-processes.mjs"
 
 const source = createGrokAcpSource()
 const goals = source.goals
@@ -284,7 +285,8 @@ else {
       console.log(`Grok goal${apex ? " as an Apex" : ""}: ${said}, each read through Mako's decoder`)
     } finally {
       for (const done of after.reverse()) await done()
-      rmSync(root, { recursive: true, force: true })
+      // Grok writes its session as it exits: wait for nothing to hold the folder, then remove it.
+      await removeScratch(root)
     }
   }
 }

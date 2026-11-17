@@ -234,6 +234,7 @@ try {
     "test-native-agents.ts": "a fixture driver; no harness runs",
     "test-native-failures.mjs": "stand-in native processes for every harness",
     "test-fixture-desk.mjs": "the fixture desk refuses every live start",
+    "test-first-write-hold.ts": "an injected fixture driver behind LiveConversations; no harness runs",
     "test-session-memory.ts": "injected fixture drivers",
   } satisfies Record<string, string>
   const unsealed: string[] = []
