@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { HEAP_PRESSURE, HEAP_SAID_EVERY_MS, HeapWatch, heapLevel, readHeap, type HeapChange, type HeapLevel, type HeapReading } from "@mako/host/base/heap-watch"
+import { HEAP_PRESSURE, HEAP_SAID_EVERY_MS, HeapWatch, afterCollections, heapLevel, readHeap, type HeapChange, type HeapLevel, type HeapReading } from "@mako/host/base/heap-watch"
 
 /**
  * The host's heap watch: it says once when the heap crosses a pressure line,
@@ -53,4 +53,24 @@ test("this process's heap reads as a share under one", () => {
   const read = readHeap()
   assert.ok(read.used > 0 && read.limit > read.used, `used ${read.used} of ${read.limit}`)
   assert.ok((read.rss ?? 0) > 0)
+})
+
+test("the heap is read after collections, at most once a window, never on a timer", async () => {
+  const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+  let reads = 0
+  const stop = afterCollections(60_000, () => reads++)
+  try {
+    let kept: unknown[] = []
+    for (let round = 0; round < 200 && reads === 0; round += 1) {
+      kept = Array.from({ length: 20_000 }, (_, index) => ({ index, text: `garbage ${index}` }))
+      await pause(1)
+    }
+    assert.ok(kept.length > 0)
+    assert.equal(reads, 1, "allocating enough to collect reads the heap")
+    for (let round = 0; round < 50; round += 1) kept = Array.from({ length: 20_000 }, (_, index) => ({ index }))
+    await pause(20)
+    assert.equal(reads, 1, "and again only once the window has passed")
+  } finally {
+    stop()
+  }
 })
