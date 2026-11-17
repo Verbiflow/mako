@@ -447,6 +447,13 @@ export interface ProviderLiveDriver extends ProviderCapability {
    * of history strips that note.
    */
   makoInstructions?: { via: string }
+  /**
+   * Where the harness runs Mako's code before each of its agent's tools, every
+   * tool that may write included, and waits for its answer: a turn's message
+   * goes at once, and its first write waits for the turn's checkpoint to hold
+   * the workspace (`WriteHolds`). Absent, the message waits for it instead.
+   */
+  firstWrite?: { via: string }
   /** Native principal evidence, separately from configured account selection. */
   nativeIdentity: NativeIdentityCapability
   nativeExclusion: NativeExclusionCapability

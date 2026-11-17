@@ -34,6 +34,7 @@ import type {
 import type {
   AdmittedLiveDriver,
   ConversationTools,
+  WriteHolds,
 } from "../harnesses/index.js"
 import type { ControlInstructions, ControlSaid } from "./control-cadence.js"
 import type { RoleRuleLines } from "../contracts/fin-tuning.js"
@@ -287,6 +288,11 @@ export interface Dependencies {
   checkpointWaitMs?: number
   /** A checkpoint missed dispatch: bounded diagnostic telemetry, never part of sending. */
   checkpointTimedOut?(waitedMs: number): void
+  /**
+   * Where a turn's checkpoint holds its agent's writes, on a harness that holds them (`ProviderLiveDriver.firstWrite`):
+   * the message then goes at once instead of waiting for the checkpoint.
+   */
+  writeHolds?: WriteHolds
   /** Who changed each of these files (absolute) since `since`, as the attribution journal knows; undefined while it isn't open. */
   rewindWriters?(paths: readonly string[], since: number): FileWriters | undefined
   appPath: string

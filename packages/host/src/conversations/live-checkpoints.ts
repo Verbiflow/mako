@@ -8,7 +8,7 @@ import {
 } from "../contracts/workspace-snapshots.js"
 import type { CheckpointComparison } from "../workspaces/index.js"
 import type { LiveRequest, LiveSnapshot } from "../contracts/live-conversations.js"
-import type { LiveAccess, Resident } from "./live-runtime.js"
+import { activeBinding, type LiveAccess, type Resident } from "./live-runtime.js"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { join } from "node:path"
@@ -24,6 +24,11 @@ export const BEFORE_CHECKPOINT_WAIT_MS = 10_000
 /** Turns kept open for reading their files; each holds one object reader. */
 const OPEN_TURNS = 4
 type ClosingCapture = { state: "reading" | "fixed" | "overlapped" }
+/**
+ * How a turn's agent may go once its checkpoint is under way: `waited`, the checkpoint held the workspace (or its wait
+ * ran out) before the message went; `held`, the message goes at once and `binding`'s writes wait on `gate`.
+ */
+type Prepared = { kind: "waited" } | { kind: "held"; binding: string; gate: Promise<void> }
 
 /** Captures run boundaries before dispatch/queue drain; rewind creates an idle
  * historical fork so no irreversible provider rollback participates in recovery. */
@@ -60,7 +65,9 @@ export class LiveCheckpoints {
     const snapshots = this.host.dependencies.workspaceSnapshots
     if (!snapshots) return run()
     const generation = resident.generation
-    return this.prepare(resident, request).then(() => {
+    return this.prepare(resident, request).then(async (prepared) => {
+      // Held for a binding no longer the one that runs (a switch between): its writes wouldn't wait, so the turn does.
+      if (prepared.kind === "held" && activeBinding(resident)?.id !== prepared.binding) await prepared.gate
       if (
         generation !== resident.generation ||
         resident.snapshot.requests.find((item) => item.id === request.id)
@@ -71,13 +78,27 @@ export class LiveCheckpoints {
         this.host.residencyChanged(resident)
         return
       }
-      for (const ending of this.endings.get(resident) ?? [])
-        if (ending.state === "reading") ending.state = "overlapped"
+      // A closing capture still reading as the next agent may write could hold its edits. Where writes are held, that
+      // moment is when the hold lets go, not now.
+      if (prepared.kind === "waited" || activeBinding(resident)?.id !== prepared.binding) this.overlapEndings(resident)
       return run()
     }).catch((error) => {
       this.host.residencyChanged(resident)
       throw error
     })
+  }
+
+  private overlapEndings(resident: Resident): void {
+    for (const ending of this.endings.get(resident) ?? [])
+      if (ending.state === "reading") ending.state = "overlapped"
+  }
+
+  /** The binding whose writes this turn's checkpoint can hold, when its harness waits for Mako before each tool. */
+  private writeHolding(resident: Resident): { holds: NonNullable<LiveAccess["dependencies"]["writeHolds"]>; binding: string } | undefined {
+    const holds = this.host.dependencies.writeHolds
+    const binding = activeBinding(resident)
+    if (!holds || !binding || !this.host.dependencies.driver(binding.provider)?.firstWrite) return undefined
+    return { holds, binding: binding.id }
   }
 
   /** A checkpoint of the conversation's workspace begins; what it returns ends it. */
@@ -114,16 +135,17 @@ export class LiveCheckpoints {
   }
 
   /**
-   * The turn's checkpoint: resolves once it holds the workspace as the turn starts, when its agent may be told, which
-   * for a turn from the last checkpoint is before it's saved (`WorkspaceSnapshots.beginRun`'s `frozen`). The request
-   * says it once it's saved; the agent never waits on that.
+   * The turn's checkpoint. Where the harness holds its agent's writes (`writeHolding`), resolves at once and the
+   * writes wait instead; otherwise once it holds the workspace as the turn starts, when its agent may be told, which
+   * for a turn from the last checkpoint is before it's saved (`WorkspaceSnapshots.beginRun`'s `frozen`). Either way it
+   * waits at most `BEFORE_CHECKPOINT_WAIT_MS`. The request says it once it's saved; the agent never waits on that.
    */
   private async prepare(
     resident: Resident,
     request: LiveRequest
-  ): Promise<void> {
+  ): Promise<Prepared> {
     const snapshots = this.host.dependencies.workspaceSnapshots
-    if (!snapshots) return
+    if (!snapshots) return { kind: "waited" }
     const release = this.hold(resident)
     const read = this.reading(resident)
     this.preparing.add(request.id)
@@ -138,9 +160,17 @@ export class LiveCheckpoints {
       read()
       resolve()
     }))
+    // A workspace that can't be checkpointed fails the start, before the agent is told anything.
+    try {
+      await snapshots.assertAvailable(resident.snapshot.session.cwd)
+    } catch (error) {
+      this.preparing.delete(request.id)
+      read()
+      release()
+      throw error
+    }
     const saved = (async () => {
       try {
-        await snapshots.assertAvailable(resident.snapshot.session.cwd)
         let before: RunSnapshots["before"]
         try {
           const snapshot = await snapshots.beginRun(request.id, resident.snapshot.session.cwd, frozen)
@@ -182,35 +212,61 @@ export class LiveCheckpoints {
     const waited = new Promise<"late">((resolve) => {
       timer = setTimeout(() => resolve("late"), this.host.dependencies.checkpointWaitMs ?? BEFORE_CHECKPOINT_WAIT_MS)
     })
-    try {
-      const outcome = await Promise.race([held, saved, waited])
-      if (outcome === "late" && heldAt === undefined) {
-        // Never a send waiting minutes on its checkpoint: the turn goes, said so, and the capture lands on it if it ends.
-        wentAt = Date.now()
-        hostWarn("checkpoints", "a turn went before its checkpoint held the workspace", { conversation, request: request.id, waitedMs: wentAt - began })
-        try {
-          this.host.dependencies.checkpointTimedOut?.(wentAt - began)
-        } catch {
-          // Diagnostics must never prevent or delay provider dispatch.
-        }
-        if (generation === resident.generation) {
-          const reason = "The checkpoint was still waiting when the turn went"
-          resident.snapshot = {
-            ...resident.snapshot,
-            requests: resident.snapshot.requests.map((item) =>
-              item.id === request.id && !item.snapshots?.before ? { ...item, snapshots: { ...item.snapshots, before: { kind: "unavailable", reason, timedOut: true } } } : item
-            ),
-          }
-          this.host.flush(resident)
-        }
+    const gate = Promise.race([held, saved, waited])
+    const wentWithout = (outcome: "late" | void) => {
+      if (outcome !== "late" || heldAt !== undefined) return
+      // Never a send, nor a write, waiting minutes on its checkpoint: the turn goes, said so, and the capture lands
+      // on it if it ends.
+      wentAt = Date.now()
+      hostWarn("checkpoints", "a turn went before its checkpoint held the workspace", { conversation, request: request.id, waitedMs: wentAt - began })
+      try {
+        this.host.dependencies.checkpointTimedOut?.(wentAt - began)
+      } catch {
+        // Diagnostics must never prevent or delay provider dispatch.
       }
-    } finally {
+      if (generation === resident.generation) {
+        const reason = "The checkpoint was still waiting when the turn went"
+        resident.snapshot = {
+          ...resident.snapshot,
+          requests: resident.snapshot.requests.map((item) =>
+            item.id === request.id && !item.snapshots?.before ? { ...item, snapshots: { ...item.snapshots, before: { kind: "unavailable", reason, timedOut: true } } } : item
+          ),
+        }
+        this.host.flush(resident)
+      }
+    }
+    const settle = () => {
       clearTimeout(timer)
       this.preparing.delete(request.id)
       // The turn goes on, steered and stopped as any: what the checkpoint still saves holds only the workspace's own
       // lock, which the turn's end and the next turn's checkpoint wait behind.
       release()
     }
+    const holding = this.writeHolding(resident)
+    if (holding) {
+      // The agent is told now; what it may write waits on the same race the message would have. Once that's over, a
+      // checkpoint that didn't hold the workspace first is late (`wentAt`), as a turn that went without it is.
+      this.preparing.delete(request.id)
+      // The agent can't write before the hold lets go, so what the person sends into its turn needn't wait for the read.
+      read()
+      let open = () => {}
+      const writes = new Promise<void>((resolve) => (open = resolve))
+      const unhold = holding.holds.hold(holding.binding, writes)
+      void gate.then(wentWithout, () => undefined).finally(() => {
+        if (heldAt === undefined) this.overlapEndings(resident)
+        settle()
+        unhold()
+        open()
+      })
+      return { kind: "held", binding: holding.binding, gate: writes }
+    }
+    try {
+      // A failure after the turn went is the request's `before`, said above; one before it fails the start as ever.
+      wentWithout(await gate)
+    } finally {
+      settle()
+    }
+    return { kind: "waited" }
   }
 
   cancelBeforeDispatch(resident: Resident, requestId?: string): boolean {

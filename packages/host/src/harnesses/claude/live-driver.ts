@@ -18,7 +18,7 @@ const CLAUDE_SDK_ARGS = ["--output-format", "stream-json", "--verbose", "--input
 const CLAUDE_INITIALIZE = JSON.stringify({ type: "control_request", request_id: "prefetch", request: { subtype: "initialize" } })
 const ControlResponse = z.object({ type: z.literal("control_response") }).loose()
 
-export function createClaudeLiveDriver(context: Pick<HarnessContext, "dataRoot" | "userRoot" | "stores" | "streams">, accounts: AccountRoot): ProviderLiveDriver {
+export function createClaudeLiveDriver(context: Pick<HarnessContext, "dataRoot" | "userRoot" | "stores" | "streams" | "writeHolds">, accounts: AccountRoot): ProviderLiveDriver {
   const settings = new ClaudeSettingsReader()
   const driver = createClaudeSdkDriver({
     available: () => claudeRuntime() !== null,
@@ -31,6 +31,7 @@ export function createClaudeLiveDriver(context: Pick<HarnessContext, "dataRoot" 
     streams: context.streams,
     // Per user beside the session archive, as the history reader keeps them.
     outputs: new KeptOutputs(keptOutputsIn(context.userRoot), context.stores),
+    ...context.writeHolds && { writeHolds: context.writeHolds },
   })
   return {
     ...driver,

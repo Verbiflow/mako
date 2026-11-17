@@ -29,7 +29,7 @@ import { LiveHistoryReader } from "./live-history-reader.js"
 import { LiveHistoryReadSchema, type LiveHistoryRead } from "../contracts/live-history.js"
 import { createContinuationPlanner, type ContinuationPlanner } from "./continuation.js"
 import { WorkspaceSnapshots, type ConversationFiles, type Workspaces, type WorkspaceMovers } from "../workspaces/index.js"
-import { harnessLabel, nativeRoutingReadings, resumes, type FinDefaultsStore, type HarnessProfiles, type Harnesses } from "../harnesses/index.js"
+import { harnessLabel, nativeRoutingReadings, resumes, type FinDefaultsStore, type HarnessProfiles, type Harnesses, type WriteHolds } from "../harnesses/index.js"
 import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { decodeRuntimeValue, EncodedAnswer } from "../contracts/runtime-value.js"
 import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject, type Threads, type ThreadLifecycle } from "../threads/index.js"
@@ -206,6 +206,8 @@ export interface ConversationsDeps {
   work: HostWork
   /** Mako's streams of the live transports (`native-stream.ts`), which an entry's original reads; none on a host that keeps none. */
   streams?: string
+  /** The host's write holds, which its harnesses share (`HarnessContext.writeHolds`). */
+  writeHolds?: WriteHolds
   /** A cloud machine's host: nobody is at it to sign a harness in. */
   unattended?: boolean
   jobs: HostJobs
@@ -262,6 +264,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     work: deps.work,
     turns: deps.telemetry.turns,
     checkpointTimedOut: (waitedMs) => deps.telemetry.checkpointTimedOut(waitedMs),
+    ...(deps.writeHolds && { writeHolds: deps.writeHolds }),
     opened: deps.opened,
     ownerCheck: deps.ownerCheck,
     memory: memory ?? undefined,
