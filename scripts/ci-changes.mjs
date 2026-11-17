@@ -42,7 +42,7 @@ export const JOBS = {
   // A steer landing mid-turn on the real Claude Code and Codex.
   steer: [/^packages\/host\/src\/(harnesses|conversations)\//, /^scripts\/probe-steer/],
   // Codex's own sandbox at the tested build.
-  codexSandbox: [/^packages\/host\/src\/harnesses\/codex\//, /^scripts\/check-codex-sandbox/, /^\.github\/actions\/codex-sandbox\//],
+  codexSandbox: [/^packages\/host\/src\/harnesses\/codex\//, /^scripts\/check-codex-sandbox/, /^\.github\/actions\/(?:codex-sandbox|tested-codex)\//],
   // The Files view's index and its benchmark.
   fileSearch: [/^packages\/host\/src\/workspaces\//, /^scripts\/[\w-]*file-(index|kinds|search)/],
 }
