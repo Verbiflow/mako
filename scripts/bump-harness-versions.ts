@@ -36,6 +36,8 @@ import { unpublished } from "./lib/pinned-builds.ts"
  *   npx tsx scripts/bump-harness-versions.ts codex --verify  install tested through Mako's plan and
  *                                                            run the sealed flows (the macOS leg)
  *   npx tsx scripts/bump-harness-versions.ts codex --install install tested through Mako's plan only
+ *   npx tsx scripts/bump-harness-versions.ts devin --keep    pin tested's archives (`HarnessVersions.kept`) while
+ *                                                            the vendor's feed still names it
  *
  * `--summary <file>` writes what each step did, for the pull request's body.
  * Pushing, committing and opening the pull request are the workflow's
@@ -51,6 +53,7 @@ const { values: options, positionals } = parseArgs({
     write: { type: "boolean", default: false },
     verify: { type: "boolean", default: false },
     install: { type: "boolean", default: false },
+    keep: { type: "boolean", default: false },
     summary: { type: "string" },
   },
 })
@@ -102,6 +105,42 @@ async function newestRelease(feed: HarnessVersions["feed"]): Promise<string> {
 }
 
 const NpmTimes = z.object({ time: z.record(z.string(), z.string()) })
+
+const KeptManifest = z.object({ version: z.string(), platforms: z.record(z.string(), z.object({ url: z.string(), sha256: z.string() })) })
+const KeptBuild = z.object({ harness: z.string() }).loose()
+const KeptBuilds = z.object({ builds: z.array(KeptBuild) })
+const KEPT_FILE = join(REPO, "vendor/harness-builds/sources.json")
+
+/**
+ * Pins the archives of `version` a harness keeps (`HarnessVersions.kept`)
+ * by the sha256 its feed's manifest gives them, while that version is the
+ * vendor's current one: CI keeps those bytes, so its image never needs the
+ * vendor to still serve them (`scripts/lib/harness-builds.mjs`).
+ */
+async function keepBuilds(provider: string, versions: HarnessVersions, version: string, steps: Step[]): Promise<void> {
+  const kept = versions.kept
+  if (!kept) return
+  if (!("manifest" in versions.feed)) throw new Error(`${provider} keeps builds but its feed is no manifest`)
+  const feed = versions.feed.manifest
+  const response = await fetch(feed, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(FEED_TIMEOUT_MS) })
+  if (!response.ok) throw new Error(`${feed} answered ${response.status}`)
+  const manifest = KeptManifest.parse(await response.json())
+  if (manifest.version !== version) throw new Error(`${feed} names ${manifest.version}, not ${version}: its archives can't be pinned`)
+  const named = (text: string) => text.replaceAll("{version}", version)
+  const builds = kept.targets.map((target) => {
+    const platform = manifest.platforms[target]
+    if (!platform) throw new Error(`${feed} has no ${target} build`)
+    return {
+      harness: provider, version, target, archive: platform.url.slice(platform.url.lastIndexOf("/") + 1), url: platform.url, sha256: platform.sha256,
+      unpack: named(kept.unpack),
+      links: Object.fromEntries(Object.entries(kept.links).map(([path, to]) => [named(path), named(to)])),
+      ...kept.files && { files: Object.fromEntries(Object.entries(kept.files).map(([path, content]) => [named(path), content])) },
+    }
+  })
+  const others = existsSync(KEPT_FILE) ? KeptBuilds.parse(JSON.parse(readFileSync(KEPT_FILE, "utf8"))).builds.filter((build) => build.harness !== provider) : []
+  writeFileSync(KEPT_FILE, `${JSON.stringify({ builds: [...others, ...builds] }, null, 2)}\n`)
+  steps.push({ name: `${provider} ${version}'s archives pinned`, ok: true, detail: kept.targets.join(", ") })
+}
 
 /** When npm published `version` of the feed's package. */
 async function published(feed: HarnessVersions["feed"], version: string): Promise<string> {
@@ -329,7 +368,14 @@ function summary(reading: Reading, steps: Step[]): string {
 const only = positionals
 const today = new Date().toISOString().slice(0, 10)
 
-if (options.write || options.verify || options.install) {
+if (options.keep) {
+  if (only.length !== 1) throw new Error("--keep takes one harness: name it")
+  const [declared] = declarations().filter((entry) => entry.provider === only[0])
+  if (!declared) throw new Error(`${only[0]} declares no versions`)
+  const steps: Step[] = []
+  await keepBuilds(declared.provider, declared.versions, declared.versions.tested, steps)
+  for (const step of steps) console.log(`ok     ${step.name} · ${step.detail ?? ""}`)
+} else if (options.write || options.verify || options.install) {
   if (only.length !== 1) throw new Error("--write, --verify and --install take one harness: name it")
   const provider = only[0]!
   const steps: Step[] = []
@@ -350,6 +396,7 @@ if (options.write || options.verify || options.install) {
     }
     moveDeclaration(reading, tested, today)
     steps.push({ name: `declaration moved to ${tested}`, ok: true })
+    await keepBuilds(provider, reading.versions, tested, steps)
     // The package Mako speaks it with is published with each release, and moves with it.
     if (reading.versions.client) moveBundled(reading.versions.client.package, tested, steps)
     // The declaration this process loaded is the old one: install through a fresh process that reads the new one.

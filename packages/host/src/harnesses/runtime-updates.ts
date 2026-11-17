@@ -218,6 +218,7 @@ export class RuntimeUpdates {
         // Another installation of the same harness runs the same sessions.
         versions: installation.versions ?? source.versions,
         belowOldest: installation.belowOldest ?? source.belowOldest,
+        newest: installation.newest ?? source.newest,
         install: installation === source ? source.install : [],
         provider: source.provider,
         key: installation.id
@@ -961,20 +962,31 @@ export class RuntimeUpdates {
         env,
         this.options.updateTimeoutMs
       )
-      if (outcome.code !== 0) {
-        // A pinned build its vendor withdrew: say which, never the installer's bare HTTP error.
-        const versions = this.sources().find((entry) => entry.key === provider)?.versions
+      let ended = outcome
+      if (ended.code !== 0) {
+        // A pinned build its vendor withdrew: its newest build where the source names that installer, else say which,
+        // never the installer's bare HTTP error.
+        const source = this.sources().find((entry) => entry.key === provider)
+        const versions = source?.versions
         const pinned = versions && !versions.bundled ? versions.tested : undefined
-        if (pinned && [plan.command, ...plan.args].join(" ").includes(pinned) && unpublishedBuild(outcome.output))
-          throw new Error(unpublishedWords(current.label ?? provider, pinned))
-        const tail = outcome.output
+        if (pinned && [plan.command, ...plan.args].join(" ").includes(pinned) && unpublishedBuild(ended.output)) {
+          const newest = source?.newest
+          if (!newest) throw new Error(unpublishedWords(current.label ?? provider, pinned))
+          const fallback = resolveExecutable(newest.command, env)
+          if (!fallback) throw new Error(unpublishedWords(current.label ?? provider, pinned))
+          hostWarn("runtime", `${action} of a withdrawn build: running the vendor's newest`, { provider, pinned, command: [newest.command, ...newest.args].join(" ") })
+          ended = await (this.options.run ?? spawnUpdate)(fallback, newest.args, env, this.options.updateTimeoutMs)
+        }
+      }
+      if (ended.code !== 0) {
+        const tail = ended.output
           .trim()
           .split("\n")
           .filter(Boolean)
           .slice(-3)
           .join(" ")
           .slice(-600)
-        throw new UpdaterOutput(tail || `${plan.command} exited with ${outcome.code ?? "a signal"}`)
+        throw new UpdaterOutput(tail || `${plan.command} exited with ${ended.code ?? "a signal"}`)
       }
       return null
     } catch (error) {

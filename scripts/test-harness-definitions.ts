@@ -289,6 +289,8 @@ const VersionField = z.object({ version: z.string().optional() })
 const ShippedPackage = z.object({ version: z.string(), claudeCodeVersion: z.string().optional() })
 const Lockfile = z.object({ packages: z.record(z.string(), z.object({ version: z.string().optional() })) })
 const plain = (version: string) => version.replace(/^SDK /, "")
+const keptBuilds = z.object({ builds: z.array(z.object({ harness: z.string(), version: z.string(), target: z.string() }).loose()) })
+  .parse(JSON.parse(readFileSync(join(import.meta.dirname, "..", "vendor", "harness-builds", "sources.json"), "utf8"))).builds
 const lockfile = Lockfile.parse(JSON.parse(readFileSync(join(import.meta.dirname, "..", "package-lock.json"), "utf8")))
 for (const { provider } of harnesses) {
   const source = providerHost.updateSources.get(provider)
@@ -324,6 +326,12 @@ for (const { provider } of harnesses) {
   record("decode pairs", pairs.length ? pairs.join(" and ") : undefined)
   const concepts = join(import.meta.dirname, "fixtures", "native-vocabulary", `${provider}-concepts.json`)
   record("concepts fixture", existsSync(concepts) ? VersionField.parse(JSON.parse(readFileSync(concepts, "utf8"))).version : undefined)
+  // A harness whose builds Mako keeps pins each target's archive of exactly `tested` (scripts/lib/harness-builds.mjs).
+  if (versions.kept) {
+    const pinned = keptBuilds.filter((build) => build.harness === provider)
+    assert.deepEqual(pinned.map((build) => build.target).sort(), [...versions.kept.targets].sort(), `${provider} pins an archive for each target it keeps; run npx tsx scripts/bump-harness-versions.ts ${provider} --keep`)
+    for (const build of pinned) assert.equal(build.version, tested, `${provider}'s kept ${build.target} archive is of ${build.version}, not the tested ${tested}; move it with the bump`)
+  } else assert.ok(!keptBuilds.some((build) => build.harness === provider), `${provider} keeps no builds, so it pins no archive`)
   if (versions.bundled) {
     const locked = lockfile.packages[`node_modules/${versions.bundled.package}`]
     assert.equal(locked?.version, versions.bundled.version, `${provider}'s bundled ${versions.bundled.package} is the one in Mako's lockfile`)

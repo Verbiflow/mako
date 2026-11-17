@@ -553,6 +553,39 @@ try {
   assert.equal(refused.result?.outcome, "failed")
   assert.equal(refused.result?.message, "Devin 3000.12.17, which this Mako is tested with, is no longer published. Update Mako, or move the pin.")
   gone.stop()
+  // A source naming its vendor's newest installer takes that when the pin is withdrawn: Mako runs a newer build,
+  // and the withdrawn one can't be had (Devin served 3000.12.57 for a day). The pinned installer runs first.
+  const ran: string[] = []
+  let landed: string | undefined
+  const newest = new RuntimeUpdates({
+    processes,
+    sources: () => [{
+      ...devin, label: "Devin", binary: () => landed ?? null,
+      versions: { tested: "3000.12.57", feed: { manifest: "https://static.devin.ai/cli/current/manifest.json" }, checked: { on: "2026-11-17", how: "a stub" } },
+      install: [scriptInstall("https://static.devin.ai/cli/3000.12.57/setup.sh")],
+      newest: scriptInstall("https://static.devin.ai/cli/setup.sh"),
+    }],
+    path: join(dir, `newest-${randomUUID()}.json`),
+    env: () => ({ PATH: "/usr/bin:/bin" }),
+    emit: () => undefined,
+    version: async (binary) => binary === landed ? "devin 3000.13.4" : Promise.reject(new Error("missing")),
+    run: async (_command, args) => {
+      const script = args.join(" ")
+      ran.push(script)
+      if (script.includes("3000.12.57")) return { code: 22, output: "curl: (22) The requested URL returned error: 403\n" }
+      landed = devinBinary
+      return { code: 0, output: "installed" }
+    },
+    stat: async (path) => path === landed ? { mtimeMs: 4, size: 4 } : Promise.reject(new Error("ENOENT")),
+    realpath: async (path) => path,
+  })
+  await newest.refresh()
+  const took = await newest.install("devin")
+  assert.equal(took.result?.outcome, "installed", took.result?.message)
+  assert.equal(took.installed, "3000.13.4")
+  assert.equal(took.versions?.standing, "newer", "the vendor's newest is newer than the withdrawn pin, which Mako runs")
+  assert.deepEqual(ran.map((script) => /cli\/(?:[\d.]+\/)?setup\.sh/.exec(script)?.[0]), ["cli/3000.12.57/setup.sh", "cli/setup.sh"])
+  newest.stop()
   const offline = withdrawn("curl: (6) Could not resolve host: static.devin.ai\n")
   await offline.refresh()
   assert.equal((await offline.install("devin")).result?.message, "The download didn't get through. Check the connection.", "a network failure is said as one, never as a withdrawn build")

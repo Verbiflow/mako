@@ -13,7 +13,7 @@ import { createDevinProcessProbe } from "./process-probe.js"
 import { devinProfileLoader } from "./profile.js"
 import { devinSkillSource } from "./skills.js"
 import { devinExecutable } from "./executable.js"
-import { DEVIN_VERSIONS, devinSetup } from "./versions.js"
+import { DEVIN_VERSIONS, devinNewest, devinSetup } from "./versions.js"
 import { devinPresentation } from "./presentation.js"
 import { devinUsageHistory } from "./usage-history.js"
 
@@ -86,6 +86,8 @@ export const installDevin: ProviderModule = (host, context) => {
         installVersion: devinSetup,
       },
       install: [devinSetup(DEVIN_VERSIONS.tested)],
+      // Devin serves a version's installer only until it ships the next; then Install and Update take its newest.
+      newest: devinNewest(),
     },
     usageHistory: devinUsageHistory(context.stores),
     artifactPreview: lacks("It writes no artifact files of its own; the file viewer previews what it writes by file type."),

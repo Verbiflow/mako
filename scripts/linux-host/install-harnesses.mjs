@@ -35,7 +35,9 @@ try {
   for (const provider of providers) {
     const reading = before[provider]
     if (reading.binary) {
-      installed[provider] = { binary: reading.binary, version: reading.installed, how: "already present" }
+      // A build seed-harnesses.mjs laid out from Mako's kept archives is held to the version tested, as an install is.
+      if (reading.versions) assert.equal(reading.versions.standing, "tested", `${provider} ${reading.installed} is present, not the tested ${reading.versions.tested}`)
+      installed[provider] = { binary: reading.binary, version: reading.installed, tested: reading.versions?.tested, how: "already present" }
       continue
     }
     assert.ok(reading.install, `${provider} isn't installed and has no install plan Mako can run here${reading.error ? `: ${reading.error}` : ""}`)

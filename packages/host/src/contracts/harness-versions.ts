@@ -70,6 +70,17 @@ export interface HarnessVersions {
    * harness supports, that answers instead of a version.
    */
   features?: Partial<Record<HarnessFeatureKey, { version: string; evidence: string }>>
+  /**
+   * Builds of `tested` Mako keeps itself, for a vendor that withdraws each
+   * one as it ships the next (Devin served 3000.12.57 for a day). The bump
+   * pins each target's archive by the sha256 the `feed` manifest gives
+   * (`vendor/harness-builds/sources.json`); CI keeps those archives in its
+   * cache, and the Linux host image lays them out as the vendor's installer
+   * does instead of downloading them (`scripts/linux-host/seed-harnesses.mjs`).
+   * Paths are under the home, `{version}` standing for the version; a link
+   * whose target starts with `~/` points into the home.
+   */
+  kept?: { targets: string[]; unpack: string; links: Record<string, string>; files?: Record<string, string> }
 }
 
 /** Where an installed version stands against its harness's declaration. */

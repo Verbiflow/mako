@@ -69,7 +69,12 @@ ENTRYPOINT ["mako-host"]
 # stays out of the image. Only the two scripts the install runs are copied
 # first, so a change to the proof doesn't install the harnesses again.
 FROM host AS harnesses
-COPY proof/host-process.mjs proof/install-harnesses.mjs /opt/mako/install/
+COPY proof/host-process.mjs proof/install-harnesses.mjs proof/seed-harnesses.mjs /opt/mako/install/
+# The builds Mako keeps of a harness whose vendor withdraws each one as it
+# ships the next (Devin): laid out from the archives in the context, checked
+# by their sha256, so the host finds the tested build instead of fetching it.
+# Mounted, so the archives themselves stay out of the image.
+RUN --mount=type=bind,source=harnesses,target=/opt/mako/harnesses node /opt/mako/install/seed-harnesses.mjs /opt/mako/harnesses
 RUN --mount=type=cache,target=/home/node/.npm,uid=1000,gid=1000 node /opt/mako/install/install-harnesses.mjs /home/node/harnesses.json
 # Devin's CLI reads its updater's switch from its config, not its environment:
 # without `auto_update: false`, a machine's first `devin acp` replaced the
@@ -86,7 +91,8 @@ RUN node -e 'const fs = require("node:fs"); const file = "/home/node/.config/dev
 # is the same device; arguments go to `mako-host join` (`--name <name>`).
 FROM host AS device
 ARG HARNESSES=opencode
-COPY proof/host-process.mjs proof/install-harnesses.mjs /opt/mako/install/
+COPY proof/host-process.mjs proof/install-harnesses.mjs proof/seed-harnesses.mjs /opt/mako/install/
+RUN --mount=type=bind,source=harnesses,target=/opt/mako/harnesses node /opt/mako/install/seed-harnesses.mjs /opt/mako/harnesses ${HARNESSES}
 RUN --mount=type=cache,target=/home/node/.npm,uid=1000,gid=1000 node /opt/mako/install/install-harnesses.mjs /home/node/harnesses.json ${HARNESSES}
 USER root
 RUN install -d -o node -g node -m 700 /data

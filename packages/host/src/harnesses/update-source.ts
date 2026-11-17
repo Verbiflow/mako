@@ -80,6 +80,14 @@ export interface RuntimeUpdateSource {
   }
   /** Path fragments meaning another app owns this install, e.g. Zed's registry. */
   managedBy?: [needle: string, owner: string][]
+  /**
+   * The vendor's installer of its newest build, for a vendor that withdraws
+   * each build as it ships the next (Devin served 3000.12.57 for a day). An
+   * install or update whose pinned `tested` is no longer published runs this
+   * instead: Mako runs a newer build (`newer`), and a withdrawn one can't be
+   * had. Without it, such an install fails naming the pin.
+   */
+  newest?: HarnessUpdateCommand
 }
 
 export type RuntimeRelease = Omit<
