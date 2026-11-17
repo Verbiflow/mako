@@ -11,7 +11,7 @@ import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { mock } from "node:test"
@@ -21,7 +21,9 @@ import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
 import { CallBounds } from "@mako/host/harnesses/call-bounds"
 import { claudeCallHooks } from "@mako/host/harnesses/claude/call-hooks"
 import { WriteHolds } from "@mako/host/harnesses/write-holds"
-import { personCodeRuns } from "@mako/host/harnesses/claude/person-hooks"
+import { launchRunsServers, settingsRunCode } from "@mako/host/harnesses/claude/person-code"
+import { ClaudeSettingsReader } from "@mako/host/harnesses/claude/approval-settings"
+import type { ResolvedSettings } from "@anthropic-ai/claude-agent-sdk"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
@@ -337,24 +339,33 @@ try {
     console.log("PASS: a launch whose writes aren't held sends only once its checkpoint holds the workspace")
   }
 
-  // Whether the person's own Claude Code setup runs code beside Mako's hook: any hook, a plugin, or settings unread.
+  // Whether the person's own code runs beside Mako's hook, from Claude Code's own resolution of its settings.
   {
-    const home = join(root, "person-home"), project = join(root, "person-project")
-    mkdirSync(join(home, ".claude"), { recursive: true })
-    mkdirSync(join(project, ".claude"), { recursive: true })
-    const env = { HOME: home, CLAUDE_CONFIG_DIR: join(home, ".claude") }
-    const managed = existsSync(process.platform === "darwin" ? "/Library/Application Support/ClaudeCode/managed-settings.json" : "/etc/claude-code/managed-settings.json")
-    if (!managed) assert.equal(await personCodeRuns(env, project), false, "no settings: nothing of the person's runs")
-    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ model: "opus", hooks: {} }))
-    if (!managed) assert.equal(await personCodeRuns(env, project), false, "settings with no hooks or plugins")
-    writeFileSync(join(project, ".claude", "settings.local.json"), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "touch x" }] }] } }))
-    assert.equal(await personCodeRuns(env, project), true, "a hook on any event, a Stop's included")
-    rmSync(join(project, ".claude", "settings.local.json"))
-    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ enabledPlugins: { "formatter@market": true } }))
-    assert.equal(await personCodeRuns(env, project), true, "an enabled plugin, which may bring hooks")
-    writeFileSync(join(home, ".claude", "settings.json"), "{ not json")
-    assert.equal(await personCodeRuns(env, project), true, "settings Mako can't read")
-    console.log(`PASS: a launch holds writes only where none of the person's own Claude Code setup runs beside the hook${managed ? " (managed settings present here: their absence wasn't checked)" : ""}`)
+    const resolved = (settings: ResolvedSettings["sources"][number]["settings"], didNotLoad: false | ("profile" | "registry" | "file")[] = false): ResolvedSettings => ({
+      effective: settings, provenance: {}, sources: [{ source: "user", settings }], machinePolicy: { didNotLoad },
+    })
+    assert.equal(settingsRunCode(resolved({ model: "opus" })), false, "settings that run nothing of the person's")
+    assert.equal(settingsRunCode(resolved({ enabledPlugins: { "formatter@market": false } })), false, "a plugin turned off")
+    const cases: [string, ResolvedSettings["sources"][number]["settings"]][] = [
+      ["a hook on any event, a Stop's included", { hooks: { Stop: [{ hooks: [{ type: "command", command: "touch x" }] }] } }],
+      ["an enabled plugin, which may bring hooks", { enabledPlugins: { "formatter@market": true } }],
+      ["a credential helper it runs", { apiKeyHelper: "get-key" }],
+      ["an admin policy helper it doesn't run here", { policyHelper: { path: "/opt/policy" } }],
+      ["a status line command", { statusLine: { type: "command", command: "status" } }],
+      ["telemetry headers it runs a helper for", { otelHeadersHelper: "headers" }],
+    ]
+    for (const [why, settings] of cases) assert.equal(settingsRunCode(resolved(settings)), true, why)
+    assert.equal(settingsRunCode(resolved({ model: "opus" }, ["profile"])), true, "a machine policy source that didn't load may hold anything")
+    assert.equal(launchRunsServers({ mcpServers: { mako: { type: "http", url: "http://127.0.0.1:1/mako" } } }), false, "Mako's own servers start no process")
+    assert.equal(launchRunsServers({ mcpServers: { theirs: { command: "node", args: ["server.js"] } } }), true, "a stdio server of the person's does")
+    // A check that can't be answered (here, a worker that can't load) says the person's code runs: the launch holds nothing.
+    const broken = new ClaudeSettingsReader(new URL("file:///nonexistent/mako-settings-worker.js"))
+    try {
+      assert.equal(await broken.personCodeRuns({ cwd: root, env: {}, settingSources: ["user"] }), true, "a check that fails counts the person's code as running")
+    } finally {
+      broken.close()
+    }
+    console.log("PASS: a Claude launch holds writes only where Claude Code's own settings run none of the person's code, and fails closed")
   }
 
   // Claude's hook: a tool that may write waits on the hold; one that only reads, or an unheld binding, goes at once.

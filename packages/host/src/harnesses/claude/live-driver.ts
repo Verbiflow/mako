@@ -31,7 +31,7 @@ export function createClaudeLiveDriver(context: Pick<HarnessContext, "dataRoot" 
     streams: context.streams,
     // Per user beside the session archive, as the history reader keeps them.
     outputs: new KeptOutputs(keptOutputsIn(context.userRoot), context.stores),
-    ...context.writeHolds && { writeHolds: context.writeHolds },
+    ...context.writeHolds && { writeHolds: context.writeHolds, personCodeRuns: (config) => settings.personCodeRuns(config) },
   })
   return {
     ...driver,

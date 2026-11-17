@@ -2,9 +2,12 @@ import { parentPort } from "node:worker_threads"
 import { resolveSettings } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod"
 import { hasClaudeTelemetrySettings } from "./approval-telemetry-settings.js"
+import { settingsRunCode } from "./person-code.js"
 
 const Check = z.object({
   id: z.number(),
+  /** What's asked: whether Claude's telemetry is Mako's to use (`compatible`), or whether the person's code runs (`personCode`). */
+  ask: z.enum(["compatible", "personCode"]).default("compatible"),
   env: z.record(z.string(), z.string()),
   cwd: z.string(),
   settingSources: z.array(z.enum(["user", "project", "local"])).optional(),
@@ -24,6 +27,15 @@ parentPort?.postMessage({ ready: true })
 async function answer(check: z.infer<typeof Check>): Promise<void> {
   for (const name of Object.keys(process.env)) delete process.env[name]
   Object.assign(process.env, check.env)
+  if (check.ask === "personCode") {
+    // Settings that can't be resolved may hold anything: the person's code counts as running.
+    let personCode = true
+    try {
+      personCode = settingsRunCode(await resolveSettings({ cwd: check.cwd, settingSources: check.settingSources }))
+    } catch { /* Fails closed, above. */ }
+    parentPort?.postMessage({ id: check.id, personCode })
+    return
+  }
   let compatible = false
   try {
     const resolved = await resolveSettings({ cwd: check.cwd, settingSources: check.settingSources })
