@@ -11,6 +11,7 @@ import {
 import { childProcessEnv } from "../base/child-environment.js"
 import { TerminalHistoryFilter } from "./history-filter.js"
 import { killTerminalProcessGroups } from "./process-groups.js"
+import { TerminalSaves } from "./saves.js"
 import type { TerminalSession } from "../contracts/terminal.js"
 import {
   BoundedTerminalHistory,
@@ -98,9 +99,6 @@ const ENDPOINT_CHECK_MS = 5_000
 /** How soon after a change its save goes. */
 const PERSIST_MS = 2_000
 let server: Server | null = null
-let dirty = false
-let persistTimer: NodeJS.Timeout | undefined
-let saving: Promise<void> | null = null
 let stopping = false
 
 function optionalArgument(name: string): string | undefined {
@@ -229,19 +227,9 @@ function publishStatus(session: LiveSession) {
   })
 }
 
-/**
- * Something to save: a save goes within `PERSIST_MS`, once for everything changed meanwhile. A terminal's output
- * changes many times a second, so the save is a beat behind it, as the every-two-seconds save was; a daemon whose
- * terminals say nothing saves nothing and wakes for nothing.
- */
+/** Something to save: it goes within `PERSIST_MS` (`TerminalSaves`). */
 function markDirty() {
-  dirty = true
-  if (persistTimer) return
-  persistTimer = setTimeout(() => {
-    persistTimer = undefined
-    void persist()
-  }, PERSIST_MS)
-  persistTimer.unref()
+  saves.changed()
 }
 
 function listSessions() {
@@ -537,13 +525,8 @@ function accept(socket: Socket) {
   socket.on("error", drop)
 }
 
-async function persist(force = false) {
-  if (saving) {
-    await saving
-    if (!force || !dirty) return
-  }
-  if (!dirty && !force) return
-  dirty = false
+/** Writes every session as it stands now, through a temporary file. */
+async function writeState(): Promise<void> {
   const state: PersistedState = {
     version: TERMINAL_PROTOCOL_VERSION,
     savedAt: Date.now(),
@@ -552,16 +535,15 @@ async function persist(force = false) {
       history: session.history.base64(),
     })),
   }
-  saving = writeFile(historyTemp, JSON.stringify(state), { mode: 0o600 })
-    .then(() => rename(historyTemp, historyFile))
-    .catch(() => {
-      // A save that failed goes again on the next beat.
-      markDirty()
-    })
-    .finally(() => {
-      saving = null
-    })
-  return saving
+  await writeFile(historyTemp, JSON.stringify(state), { mode: 0o600 })
+  await rename(historyTemp, historyFile)
+}
+
+/** A terminal change's saves, a beat behind it; a stop or a request forces one (`persist(true)`). */
+const saves = new TerminalSaves(writeState, PERSIST_MS)
+
+function persist(force = false): Promise<void> {
+  return saves.save(force)
 }
 
 async function restore() {
