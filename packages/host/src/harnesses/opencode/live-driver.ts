@@ -933,6 +933,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         if (dependencies.writeHolds && gated && pluginFiles) dependencies.writeHolds.attend(options.conversationId, !await trace.step("settings", () => openCodePersonCodeRuns({
           plugins: () => api.client.plugin.list({ location }),
           servers: () => api.client.mcp.list({ location }),
+          config: () => api.client.config.get({ location }),
         }, { pluginFiles, servers: servers.map((server) => ({ name: server.name, process: server.config.type === "local" })) })))
         const modes = openCodeSessionModes(catalog.agents)
         const requested = options.modeId && modes.some(mode => mode.id === options.modeId) ? options.modeId : OPENCODE_DEFAULT_MODE

@@ -133,7 +133,10 @@ try {
     const makoFile = "/private/tmp/mako-opencode-calls-abc/server.js"
     const builtin = plugin({ type: "builtin" }), mako = plugin({ type: "local", path: makoFile })
     const launch = { pluginFiles: ["/tmp/mako-opencode-calls-abc/server.js", makoFile], servers: [{ name: "mako", process: false }] }
-    const ask = (plugins: JsonObject[], servers: string[] = ["mako"]) => ({ plugins: async () => ({ data: plugins }), servers: async () => ({ data: servers.map((name) => ({ name, status: { status: "connected" } })) }) })
+    const documents = (...infos: JsonObject[]) => [{ type: "directory", path: "/Users/p/.config/opencode" }, ...infos.map((info) => ({ type: "document", info }))]
+    const ask = (plugins: JsonObject[], servers: string[] = ["mako"], config: JsonObject[] = documents({ model: "x" })) => ({
+      plugins: async () => ({ data: plugins }), servers: async () => ({ data: servers.map((name) => ({ name, status: { status: "connected" } })) }), config: async () => config,
+    })
     assert.equal(await openCodePersonCodeRuns(ask([builtin, mako]), launch), false, "built-ins and Mako's own plugin")
     assert.equal(await openCodePersonCodeRuns(ask([builtin, mako, plugin({ type: "package", target: "opencode-formatter" })]), launch), true, "a package plugin of the person's")
     assert.equal(await openCodePersonCodeRuns(ask([builtin, mako, plugin({ type: "local", path: "/Users/p/.config/opencode/plugin/guard" })]), launch), true, "a local plugin of the person's")
@@ -141,7 +144,9 @@ try {
     assert.equal(await openCodePersonCodeRuns(ask([builtin, plugin({ type: "builtin" }, "failed")]), launch), true, "a plugin that failed to load")
     assert.equal(await openCodePersonCodeRuns(ask([builtin, mako], ["theirs"]), { ...launch, servers: [{ name: "theirs", process: true }] }), true, "a process MCP server of the launch's")
     assert.equal(await openCodePersonCodeRuns(ask([builtin, mako], ["mako", "from-their-config"]), launch), true, "an MCP server Mako didn't add")
-    assert.equal(await openCodePersonCodeRuns({ plugins: async () => { throw new Error("gone") }, servers: async () => ({ data: [] }) }, launch), true, "an OpenCode that can't say fails closed")
+    assert.equal(await openCodePersonCodeRuns(ask([builtin, mako], ["mako"], documents({ experimental: { hook: { file_edited: { "*.ts": [{ command: ["prettier", "--write"] }] } } } })), launch), true, "a config command hook")
+    assert.equal(await openCodePersonCodeRuns(ask([builtin, mako], ["mako"], documents({ experimental: { hook: {} } })), launch), false, "an empty hook table runs nothing")
+    assert.equal(await openCodePersonCodeRuns({ plugins: async () => { throw new Error("gone") }, servers: async () => ({ data: [] }), config: async () => [] }, launch), true, "an OpenCode that can't say fails closed")
     assert.equal(await openCodePersonCodeRuns(ask([{ unexpected: true }]), launch), true, "an answer Mako can't read fails closed")
     console.log("PASS: an OpenCode launch holds writes only where OpenCode says none of the person's own code runs, and fails closed")
   }
