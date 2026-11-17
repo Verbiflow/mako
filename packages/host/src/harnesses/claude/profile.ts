@@ -11,7 +11,7 @@ import {
   availableProviderProfile,
   type ProviderProfileLoader,
 } from "../profile-loader.js"
-import { withDiscoveryStream } from "../profile-transport.js"
+import { DiscoveryEndedError, withDiscoveryStream } from "../profile-transport.js"
 import type { DiscoveryProcesses } from "../discovery-process.js"
 import { hostWarn } from "../../base/host-log.js"
 import { claudeRuntime } from "./runtime.js"
@@ -83,9 +83,13 @@ function discover(
         // Claude Code lists models its version doesn't describe and refuses
         // to switch to them; its check with the API also fails now and then,
         // which a second try usually passes.
+        // A process that ended mid-check refused nothing: this discovery fails and the next one reads every model again.
         const switchTo = () => control({ subtype: "set_model", model: model.id }).then(
           () => undefined,
-          (error: Error) => error.message
+          (error: Error) => {
+            if (error instanceof DiscoveryEndedError) throw error
+            return error.message
+          }
         )
         let refused = await switchTo()
         if (refused !== undefined && claudeModelRefusal(refused) === undefined) refused = await switchTo()

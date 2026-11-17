@@ -38,6 +38,7 @@ createInterface({input:process.stdin}).on('line', line => {
     {value:'other-model',supportsEffort:true,supportedEffortLevels:['low','high'],supportsFastMode:true}
   ]});
   else if (request === 'set_model') {
+    if (process.env.KILLED_AT === message.request.model) process.exit(143);
     if (process.env.UNCONFIRMED_MODEL === message.request.model) {
       process.stdout.write(JSON.stringify({type:'control_response',response:{subtype:'error',request_id:message.request_id,error:'Couldn\\'t confirm model "' + message.request.model + '" with the API. Try again, or run /model to see available models.'}})+'\\n'); return;
     }
@@ -195,6 +196,10 @@ try {
   assert.equal(unconfirmed.models[1].unavailable, undefined, "a failed check with the API says nothing about the model")
   assert.equal(unconfirmed.configurationError, undefined)
   assert.equal(unconfirmed.models[1].options.find((option) => option.id === "effort")?.current, undefined, "its defaults stay unread")
+  // A probe stopped mid-check (exit 143) refused nothing: the discovery fails, nothing is marked, and the next one reads it again.
+  await assert.rejects(claudeProfileLoader.load({ ...env, KILLED_AT: "other-model" }, root), /exited with 143 before discovery completed/)
+  const again = await claudeProfileLoader.load(env, root)
+  assert.equal(again.models.find((model) => model.id === "other-model")?.unavailable, undefined, "a killed probe never marks a model it was checking")
   const unread = await claudeProfileLoader.load({ ...env, FAIL_SETTINGS: "other-model" }, root)
   assert.ok(unread.configurationError, "a model whose defaults can't be read leaves the catalog incomplete")
   assert.equal(unread.models[1].unavailable, undefined)
