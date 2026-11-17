@@ -286,7 +286,9 @@ within its Apex's own (`fitAccess`, `modeWithin`), the start's note saying
 which; only a mode wider than the Apex's is refused. It starts
 here, or on another of the person's devices (`place: device:<name>`,
 below); `cloud` is refused for now. Its host side is built behind
-`AgentsDeps.cloudFins`, which no shipping wiring sets: opened, a start keeps
+`AgentsDeps.cloudFins`, which no shipping wiring sets; only a proof's host
+opens it (`MAKO_CLOUD_FIN_PROOF=open`, `HostConfig.cloudFinProof`), and a host
+that isn't isolated or is packaged refuses to start with it: opened, a start keeps
 its row (with its launch digest, `cloudFinInputSha256`, and its folder's
 committed source) before the account reserves it and makes it into its own
 cloud Thread (`cloudFinThread(op)`), then is placed there through
