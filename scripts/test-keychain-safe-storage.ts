@@ -6,6 +6,7 @@ import { join } from "node:path"
 import { openHostSecrets } from "@mako/host/base/host-secrets"
 import type { Keychain, KeychainItem, KeychainRead } from "@mako/host/base/keychain"
 import { passwordRead, securityValue } from "@mako/host/base/keychain"
+import { followHostLog, type HostLogLine } from "@mako/host/base/host-log"
 import { chromiumSafeStorage, KeychainUnavailable, safeStorageItem } from "@mako/host/base/secure-storage"
 
 /**
@@ -69,14 +70,20 @@ try {
   empty.state.items.set(itemKey, password)
   assert.equal(await before.decrypt(chromium("now")), "now", "read once it exists")
 
-  // A refusal holds for the process: nothing asks again.
+  // A refusal holds for the process: nothing asks again, and the log says why, once.
+  const warned: HostLogLine[] = []
+  const stopHearing = followHostLog((line) => { if (line.level === "warn" && line.scope === "secrets") warned.push(line) })
   const refusing = keychain({ [itemKey]: password })
   refusing.state.refuse = true
   const refused = chromiumSafeStorage({ appName: "mako", keychain: refusing.keychain, platform: "darwin", home })
   await assert.rejects(refused.decrypt(chromium("x")), KeychainUnavailable)
   assert.equal(await refused.available(), false)
   await assert.rejects(refused.decrypt(chromium("x")), KeychainUnavailable)
+  stopHearing()
   assert.equal(refusing.state.reads, 1, "one prompt, not one per secret")
+  assert.deepEqual(warned.map(({ message, fields }) => [message, fields]), [
+    ["the keychain refused the safe-storage item; nothing is kept securely this run", { service: "mako Safe Storage", reason: "User canceled the operation." }],
+  ], "the refusal is logged once, with the keychain's reason")
 
   assert.equal(await chromiumSafeStorage({ appName: "mako", keychain: login, platform: "linux", home }).available(), false, "Linux keeps its password elsewhere")
   assert.equal(await chromiumSafeStorage({ appName: "mako", keychain: login, platform: "darwin", home: join(root, "no-home") }).available(), false, "no login keychain, no ask")
