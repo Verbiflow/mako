@@ -414,10 +414,11 @@ jobs:
       - uses: ./.github/actions/codex-sandbox
       # How two runs are judged: a count fails in either, and only a time gets a second try.
       - run: npx tsx scripts/test-sync-bench-judge.ts
+      - uses: ./.github/actions/tested-codex
+        with:
+          prefix: ${{ runner.temp }}/codex
       - name: The sync bench at the tested Codex
         run: |
-          version=$(node -e 'import("./packages/host/src/harnesses/codex/versions.ts").then((m) => console.log(m.CODEX_VERSIONS.tested))')
-          npm install --prefix "$RUNNER_TEMP/codex" --no-audit --no-fund "@openai/codex@$version"
           PATH="$RUNNER_TEMP/codex/node_modules/.bin:$PATH" npm run bench:sync-latency
 
   # A message the person sends into a running turn reaches the model while the turn's 15 s command still runs, not
@@ -441,10 +442,11 @@ jobs:
           electron: "false"
       - uses: ./.github/actions/build-control-runtime
       - uses: ./.github/actions/codex-sandbox
+      - uses: ./.github/actions/tested-codex
+        with:
+          prefix: ${{ runner.temp }}/codex
       - name: Steer latency on Claude Code and Codex
         run: |
-          version=$(node -e 'import("./packages/host/src/harnesses/codex/versions.ts").then((m) => console.log(m.CODEX_VERSIONS.tested))')
-          npm install --prefix "$RUNNER_TEMP/codex" --no-audit --no-fund "@openai/codex@$version"
           PATH="$RUNNER_TEMP/codex/node_modules/.bin:$PATH" npm run probe:steer-lands -- claude codex
 
   # Whether the host keeps answering while many Fins work (`bench:host-load`): a real host on 52 Threads' worktrees,
@@ -488,10 +490,11 @@ jobs:
           node-version: 24
           package-manager-cache: false
       - uses: ./.github/actions/codex-sandbox
+      - uses: ./.github/actions/tested-codex
+        with:
+          prefix: ${{ runner.temp }}/codex
       - name: Codex's sandbox at the tested build
         run: |
-          version=$(node -e 'import("./packages/host/src/harnesses/codex/versions.ts").then((m) => console.log(m.CODEX_VERSIONS.tested))')
-          npm install --prefix "$RUNNER_TEMP/codex" --no-audit --no-fund "@openai/codex@$version"
           PATH="$RUNNER_TEMP/codex/node_modules/.bin:$PATH" scripts/check-codex-sandbox.sh
 
   # The Mac app as a person builds it, from this commit: packaged unsigned under the runner's own TMPDIR, a Mac's long
@@ -532,6 +535,9 @@ jobs:
           path: vendor/control-media/darwin-arm64
           key: ${{ steps.media.outputs.cache-primary-key }}
       - name: Package the app and check it
+        # Under the job's own 45: a hang here fails this step, never reaching `ci` as a cancel it takes for a newer
+        # commit's (the build, packaging and its checks take about 4 minutes).
+        timeout-minutes: 35
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: |

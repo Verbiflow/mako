@@ -601,7 +601,8 @@ export class RuntimeUpdates {
       const update = packageUpdate(
         info.channel,
         `${source.npmPackage}@${info.latest}`,
-        npmRoot
+        npmRoot,
+        source.npmCompanions?.(info.latest) ?? []
       )
       if (update) info.update = update
       else delete info.update
@@ -1221,13 +1222,14 @@ function withoutPhase(info: HarnessUpdateInfo): HarnessUpdateInfo {
 function packageUpdate(
   channel: "npm" | "bun" | "pnpm",
   pkg: string,
-  npmRoot?: NpmRoot
+  npmRoot?: NpmRoot,
+  companions: readonly string[] = []
 ): HarnessUpdateCommand | undefined {
-  if (channel === "npm") return npmRoot ? npmUpdate(pkg, npmRoot.prefix) : undefined
+  if (channel === "npm") return npmRoot ? npmUpdate(pkg, npmRoot.prefix, companions) : undefined
   return {
     label: `Update with ${channel}`,
     command: channel,
-    args: ["add", "-g", pkg],
+    args: ["add", "-g", pkg, ...companions],
   }
 }
 

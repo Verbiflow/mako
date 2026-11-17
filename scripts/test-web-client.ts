@@ -26,7 +26,8 @@ import { delayedStatusDeadline, stepDelayedStatus, type DelayedStatus } from "..
 import { returnKind } from "../src/web-client/resume"
 import { newerBuild, QUIET_AFTER_MS, quietMoment } from "../src/web-client/update"
 import { newDraftKey, noteSending, openingText, readDraft, settleSending, threadDraftKey, writeDraft } from "../src/web-client/drafts"
-import { answeredWords, dockStatus, statusWords, workingWords, type DockStatusInput } from "../src/web-client/dock-status"
+import { answeredWords, dockStatus, linkAction, linkWords, statusWords, workingWords, type DockStatusInput } from "../src/web-client/dock-status"
+import { RECONNECT_QUIET_MS, RESTART_AFTER_MS, reconnectStageAt } from "../src/lib/reconnect-stages"
 import { DELIVERY_WORDS, deliveryOf, type Sending } from "../src/web-client/delivery"
 import { SAY_WAKING_MS, wakeThread, wakingNow, wakingStore } from "../src/web-client/wake"
 import { sendChoiceDetail, sendPresentation, type SendSituation } from "../src/web-client/send-action"
@@ -584,6 +585,21 @@ test("the capsule says one thing, by priority, and Working only once the host st
   assert.deepEqual(["Allow once", "Deny and stop", "Allow matching commands", "Blue"].map(answeredWords), ["Allowed once", "Denied and stopped", "Allowed matching commands", "Blue"])
 })
 
+test("a lost link follows the desk's stages: quiet, then Try now, then Reload, and offline never reloads", () => {
+  assert.deepEqual([0, RECONNECT_QUIET_MS - 1, RECONNECT_QUIET_MS, RESTART_AFTER_MS - 1, RESTART_AFTER_MS].map(reconnectStageAt), ["quiet", "quiet", "long", "long", "restart"])
+  const reconnecting = { kind: "reconnecting" } as const
+  const offline = { kind: "offline" } as const
+  assert.deepEqual((["quiet", "long", "restart"] as const).map((stage) => linkAction(reconnecting, stage)), [undefined, "try", "reload"])
+  assert.deepEqual((["quiet", "long", "restart"] as const).map((stage) => linkAction(offline, stage)), [undefined, "try", "try"], "with no network a reload can't load the page")
+  assert.equal(linkWords(reconnecting, "quiet", false), "Reconnecting…", "nothing to press while Mako asks again by itself")
+  assert.equal(linkWords(reconnecting, "long", false), "Reconnecting… · Try now")
+  assert.equal(linkWords(reconnecting, "long", true), "Reconnecting… · Trying…")
+  assert.equal(linkWords(reconnecting, "restart", false), "Mako isn't answering · Reload")
+  assert.equal(linkWords(offline, "quiet", false), "Offline")
+  assert.equal(linkWords(offline, "restart", false), "Offline · Try now")
+  for (const stage of ["long", "restart"] as const) for (const status of [reconnecting, offline]) assert.ok(linkAction(status, stage), `past the quiet stage a lost link always offers a way back (${status.kind}, ${stage})`)
+})
+
 test("a sent message says how its delivery stands, and never Delivered on a guess", () => {
   const sending = new Map<string, Sending>([["waking", "waking"]])
   const conversation = {
@@ -976,10 +992,16 @@ test("what can't be reached is said at the first hop that failed, every hop befo
   assert.equal(closed?.headline, "Mako Cloud answers, but Studio's Mako isn't connected")
   assert.ok(closed && diagnosisText(closed).includes("Correlation ID: c-9"), "its correlation ID goes with the diagnostics")
   assert.equal(diagnose(reach({ online: false, cloud: "failed", mac: { ...studio, quietSince: "2026-10-30T11:00:00Z" } }))?.headline, "This phone is offline", "the nearest hop that failed is the one said")
-  assert.equal(diagnose(reach({ cloud: "failed", mac: studio }))?.headline, "Mako Cloud isn't answering")
+  const cloudDown = diagnose(reach({ cloud: "failed", mac: studio, failure: { message: "fetch failed", at: reach().now } }))
+  assert.equal(cloudDown?.headline, "Reconnecting to Mako Cloud…", "a cloud that doesn't answer is said as Mako trying again")
+  assert.equal(cloudDown?.retrying, true)
+  assert.equal(cloudDown?.detail, "Mako keeps trying by itself. You're seeing the last known state.", "never the raw error on the card")
+  assert.equal(cloudDown?.reason, "fetch failed", "the raw error goes with Copy diagnostics")
+  assert.ok(diagnosisText(cloudDown!).includes("Reason: fetch failed") && diagnosisText(cloudDown!).includes("Mako Cloud: FAILED"), "and so does the chain")
   const harness = diagnose(reach({ mac: { ...studio, link: "ok" }, harness: { name: "Codex", state: "failed", reason: "Codex is not installed" } }))
   assert.equal(harness?.headline, "Codex on Studio didn't start")
-  assert.equal(harness?.detail, "Codex is not installed")
+  assert.equal(harness?.detail, undefined, "the harness's own words aren't the card's")
+  assert.equal(harness?.reason, "Codex is not installed")
   assert.deepEqual(harness?.hops.map((hop) => hop.state), ["ok", "ok", "ok", "failed"])
   assert.equal(diagnose(reach({ machine: { state: "unknown" }, harness: { name: "Claude", state: "failed" } }))?.headline, "Claude in the cloud didn't start")
 })

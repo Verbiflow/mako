@@ -41,7 +41,7 @@ console.log("host reconnect stages: quiet at first, Try now past 10 s, Restart M
 
 // The client's way back (`HostReconnect`): a host still leaving keeps it quiet; only a host that couldn't be had says so.
 {
-  const { HostReconnect, endHungHost, HUNG_HOST_GRACE_MS } = await import("../electron/host-reconnect.ts")
+  const { HostReconnect, endHungHost, holdsAny, HUNG_HOST_GRACE_MS } = await import("../electron/host-reconnect.ts")
   const { HostLaunchFailedError, HostLeavingError } = await import("@mako/host/transport/service")
   const timers: { run: () => void; ms: number; cancelled: boolean }[] = []
   const runNext = async () => {
@@ -142,6 +142,22 @@ console.log("host reconnect stages: quiet at first, Try now past 10 s, Restart M
   const nobody = world({ holder: async () => null })
   assert.equal(await endHungHost(nobody.deps), "none")
   assert.deepEqual(nobody.signals, [])
+  // Hung after it closed its socket, still holding its lock: nothing answers there (`absent`), and it's ended all the same.
+  const socketless = world({ answers: async () => "absent" })
+  assert.equal(await endHungHost(socketless.deps), "ended")
+  assert.deepEqual(socketless.signals, ["SIGTERM", "SIGKILL"], "a host holding only its lock is ended")
+  // With no socket, a stale pid and another profile's host are still left alone.
+  for (const [what, over] of [["a stale lock-file pid", { commandOf: async () => "/usr/sbin/cfprefsd agent", holds: async () => false }], ["another profile's host", { holds: async () => false }]] as const) {
+    const left = world({ answers: async () => "absent", ...over })
+    assert.equal(await endHungHost(left.deps), "not-mako")
+    assert.deepEqual(left.signals, [], `${what} is never signalled, its socket gone or not`)
+  }
+  const nobodyAbsent = world({ answers: async () => "absent", holder: async () => null })
+  assert.equal(await endHungHost(nobodyAbsent.deps), "none", "no socket and no lock holder: nothing to end")
+  // The hold is asked path by path: lsof exits 1 when any path named isn't open, which read a held lock as not held.
+  const lockOnly = async (_pid: number, path: string) => { if (path.endsWith(".sock")) throw new Error("lsof exited 1"); return path.endsWith("host.lock") }
+  assert.equal(await holdsAny(7, ["/data/host.lock", "/run/mako.sock"], lockOnly), true, "its lock open, its socket closed: it holds")
+  assert.equal(await holdsAny(7, ["/data/host.lock", "/run/mako.sock"], async () => false), false, "neither open: it doesn't")
   mock.timers.reset()
   console.log("host reconnect: quiet while the host leaves, gone only when one couldn't be started, Try now waits on its try, Restart ends only this profile's hung host, proved before each signal")
 }

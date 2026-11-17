@@ -1,0 +1,45 @@
+name: The tested Codex
+description: >-
+  `@openai/codex` at the version Mako tests, with its Linux binary package installed beside it by the same command:
+  the binary ships in an optional dependency (`@openai/codex-linux-x64`, an alias of `@openai/codex@<version>-linux-x64`),
+  and npm skips an optional dependency whose download fails and still exits 0, which left `codex` failing with
+  "Missing optional dependency @openai/codex-linux-x64" (codex-sandbox, 2026-11-17). Named, a failed download fails
+  the install. The installed prefix is kept in the cache by version, and `codex --version` must name the tested build.
+inputs:
+  prefix:
+    description: Where it's installed; its node_modules/.bin holds `codex`.
+    required: true
+runs:
+  using: composite
+  steps:
+    - id: version
+      shell: bash
+      run: |
+        # versions.ts imports nothing at run time, so plain Node reads it.
+        tested=$(node -e 'import("./packages/host/src/harnesses/codex/versions.ts").then((m) => console.log(m.CODEX_VERSIONS.tested))')
+        test -n "$tested" || { echo "couldn't read Codex's tested version" >&2; exit 1; }
+        echo "tested=$tested" >> "$GITHUB_OUTPUT"
+        echo "platform=$(node -p '`${process.platform}-${process.arch}`')" >> "$GITHUB_OUTPUT"
+    - id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ inputs.prefix }}
+        key: tested-codex-${{ steps.version.outputs.tested }}-${{ steps.version.outputs.platform }}
+    - shell: bash
+      env:
+        PREFIX: ${{ inputs.prefix }}
+        TESTED: ${{ steps.version.outputs.tested }}
+        PLATFORM: ${{ steps.version.outputs.platform }}
+      run: |
+        if ! "$PREFIX/node_modules/.bin/codex" --version 2>/dev/null | grep -qx "codex-cli $TESTED"; then
+          rm -rf "$PREFIX"
+          npm install --prefix "$PREFIX" --no-audit --no-fund \
+            "@openai/codex@$TESTED" "@openai/codex-$PLATFORM@npm:@openai/codex@$TESTED-$PLATFORM"
+        fi
+        reported=$("$PREFIX/node_modules/.bin/codex" --version)
+        test "$reported" = "codex-cli $TESTED" || { echo "codex reports '$reported', not the tested $TESTED" >&2; exit 1; }
+    - if: steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ inputs.prefix }}
+        key: ${{ steps.restore.outputs.cache-primary-key }}

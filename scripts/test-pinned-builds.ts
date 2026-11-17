@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { npmInstall, scriptInstall } from "@mako/host/harnesses/update-source"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { codexPlatformPackages } from "@mako/host/harnesses/codex/platform-packages"
 import { buildSources, unpublished } from "./lib/pinned-builds.ts"
 
 // A pinned tested build its vendor withdrew is found where Mako installs it from, against a stub that answers as the
@@ -15,6 +16,15 @@ const codexPlans = [npmInstall("@openai/codex", "0.167.0"), { label: "Install wi
 assert.deepEqual(buildSources(devinPlans, "3000.12.17"), [{ kind: "url", url: "https://static.devin.ai/cli/3000.12.17/setup.sh" }])
 assert.deepEqual(buildSources(grokPlans, "1.0.77"), [{ kind: "npm", name: "@xai-official/grok" }], "an installer that takes the version as an argument answers for every version")
 assert.deepEqual(buildSources(codexPlans, "0.167.0"), [{ kind: "npm", name: "@openai/codex" }])
+
+// Codex's binary ships in an optional dependency npm skips when its download fails, so its plans install this machine's
+// platform package beside the CLI, by the same command; it names no other place the pinned build is fetched from.
+assert.deepEqual(codexPlatformPackages("0.169.0", "darwin", "arm64"), ["@openai/codex-darwin-arm64@npm:@openai/codex@0.169.0-darwin-arm64"])
+assert.deepEqual(codexPlatformPackages("0.169.0", "linux", "x64"), ["@openai/codex-linux-x64@npm:@openai/codex@0.169.0-linux-x64"])
+assert.deepEqual(codexPlatformPackages("0.169.0", "freebsd", "x64"), [], "a platform Codex ships no binary for adds nothing")
+const withBinary = npmInstall("@openai/codex", "0.169.0", codexPlatformPackages("0.169.0", "linux", "x64"))
+assert.deepEqual(withBinary.args, ["install", "-g", "--allow-scripts=@openai/codex", "@openai/codex@0.169.0", "@openai/codex-linux-x64@npm:@openai/codex@0.169.0-linux-x64"])
+assert.deepEqual(buildSources([withBinary], "0.169.0"), [{ kind: "npm", name: "@openai/codex" }])
 
 /** A stub of the vendors: each URL's status, and npm's versions of each package. */
 const vendor = (statuses: Record<string, number>, npm: Record<string, string[]> = {}): typeof fetch => async (input) => {
@@ -36,6 +46,10 @@ assert.equal(await unpublished(grokPlans, "1.0.77", vendor({}, { "@xai-official/
 
 // Every pinned harness's own plans name at least one place its tested build is asked at.
 const host = createHarnessHost(detachedHarnessContext(new NativeStores(false)))
+const codexSource = host.updateSources.list().find((source) => source.provider === "codex")
+assert.ok(codexSource?.versions)
+assert.deepEqual(codexSource.install[0]?.args.slice(-2), [`@openai/codex@${codexSource.versions.tested}`, ...codexPlatformPackages(codexSource.versions.tested)], "Codex installs through Mako with this machine's binary package named")
+assert.deepEqual(codexSource.npmCompanions?.("0.170.0"), codexPlatformPackages("0.170.0"), "and so does its Update, at the version it goes to")
 for (const source of host.updateSources.list()) {
   if (!source.versions || source.versions.bundled) continue
   assert.ok(buildSources(source.install, source.versions.tested).length, `${source.provider}'s install plans name where ${source.versions.tested} is fetched`)
