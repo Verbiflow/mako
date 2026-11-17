@@ -55,6 +55,14 @@ export interface SubagentTools {
   wait?: Call
   /** The model whose turns offer these tools, for a harness that offers them to some models only. */
   model?: string
+  /**
+   * Every subagent runs apart from the turn that starts it, and its report
+   * wakes the harness for a turn of its own (OpenCode 2.3.0, whose
+   * `subagent` takes no `background`). A task meant to be waited for is
+   * started so: the turn says it started, and the answer that followed the
+   * report is the woken turn's.
+   */
+  always?: "background"
 }
 
 /** A type, not an interface, so it is JSON a call's arguments can carry. */
@@ -787,11 +795,20 @@ export function script(scenario: Scenario, tools: ToolVocabulary, project: strin
     return [started, ...wait && !task.background ? [{ call: () => wait }] : []]
   }
   const steps = (label: string, ids: string, list: Step[]): Steps => ({ label, ids, list, next: 0 })
-  const parent = steps("", "call_", scenario.turns.flatMap((turn) => turn.steps.flatMap(expand).map((step) => ({ ...step, turn }))))
-  const prompts = scenario.turns.map((turn) => quoted(turn.prompt))
+  let woken = scenario.woken
+  const turns = "absent" in tools.subagent || tools.subagent.always !== "background" ? scenario.turns : scenario.turns.map((turn) => {
+    const at = turn.steps.findIndex((step) => step.subagent && !step.subagent.background)
+    const waited = turn.steps[at]?.subagent
+    if (!waited) return turn
+    const answer = turn.steps.slice(at + 1)
+    if (answer.length !== 1 || woken) throw new Error(`${scenario.name}: a subagent waited for, on a harness that runs every one in the background, needs one step after it, the answer from its report, and no woken step of its own`)
+    woken = answer[0]
+    return { ...turn, steps: [...turn.steps.slice(0, at), { ...turn.steps[at], subagent: { ...waited, background: true as const } }, { text: "Started one subagent; its report comes back when it finishes." }] }
+  })
+  const parent = steps("", "call_", turns.flatMap((turn) => turn.steps.flatMap(expand).map((step) => ({ ...step, turn }))))
+  const prompts = turns.map((turn) => quoted(turn.prompt))
   /** The subagent whose request `heard` is: one that carries its task's prompt and none of the turns'. */
   const childOf = (heard: string) => prompts.some((prompt) => heard.includes(prompt)) ? undefined : children.find((candidate) => heard.includes(candidate.prompt))
-  let woken = scenario.woken
   const retried = (heard: string) => {
     const failed = parent.list[parent.next - 1]
     if (!failed?.fail) return false

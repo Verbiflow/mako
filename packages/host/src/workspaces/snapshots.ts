@@ -331,13 +331,13 @@ export class WorkspaceSnapshots {
   }
 
   /** The checkpoint after a turn, naming every run that shared the workspace with it. */
-  async endRun(id: string): Promise<WorkspaceSnapshot> {
+  async endRun(id: string, frozen?: () => void): Promise<WorkspaceSnapshot> {
     const run = this.runs.get(id)
     if (!run)
       throw new Error("No workspace checkpoint was captured before this turn")
     run.ending = true
     try {
-      return await this.captureWorkspace(run.scope, run.shared, false, undefined, run)
+      return await this.captureWorkspace(run.scope, run.shared, false, frozen, run)
     } finally {
       this.abandonRun(id)
     }

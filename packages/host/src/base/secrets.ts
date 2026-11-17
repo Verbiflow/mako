@@ -82,6 +82,8 @@ export interface SecretRecord extends SecretListing {
 export interface SecretWrite {
   /** When the provider said the value lapses. */
   expiresAt?: string | null
+  /** Optional work may stop waiting for a borrowing lock; a write already holding it finishes atomically. */
+  signal?: AbortSignal
 }
 
 export interface Secrets {

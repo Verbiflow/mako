@@ -69,10 +69,11 @@ export class GrantedSecrets implements Secrets {
   }
 
   async write(kind: SecretKind, name: string, value: string, options?: SecretWrite): Promise<SecretRecord> {
-    await this.seed()
+    await this.seed(options?.signal)
+    options?.signal?.throwIfAborted()
     const record = await this.#inner.write(kind, name, value, options)
-    await this.#end(kind, name, record.version)
-    await this.broker.grant(secretGrant(record, Date.now()))
+    await this.#end(kind, name, record.version, options?.signal)
+    await this.broker.grant(secretGrant(record, Date.now()), options?.signal)
     return record
   }
 
@@ -83,12 +84,12 @@ export class GrantedSecrets implements Secrets {
   }
 
   /** A grant for every record saved before grants were kept, once; one the person ended stays ended. */
-  seed(): Promise<void> {
+  seed(signal?: AbortSignal): Promise<void> {
     this.#seeded ??= (async () => {
       for (const kind of SECRET_KINDS)
         for (const record of await this.#inner.list(kind).catch((): SecretListing[] => []))
-          if (record.version !== "legacy") await this.broker.grant(secretGrant(record, Date.now()))
-    })()
+          if (record.version !== "legacy") await this.broker.grant(secretGrant(record, Date.now()), signal)
+    })().catch((error) => { this.#seeded = undefined; throw error })
     return this.#seeded
   }
 
@@ -117,11 +118,11 @@ export class GrantedSecrets implements Secrets {
   }
 
   /** Every grant of a record's earlier versions ends, revoked by the person who replaced or deleted it. */
-  async #end(kind: SecretKind, name: string, keep?: string): Promise<void> {
+  async #end(kind: SecretKind, name: string, keep?: string, signal?: AbortSignal): Promise<void> {
     const ref = secretRef(kind, name)
-    for (const grant of await this.broker.grants())
+    for (const grant of await this.broker.grants(signal))
       if (grant.resource.kind === "credential" && grant.resource.ref === ref && grant.id !== (keep ? secretGrantId({ kind, name, version: keep }) : undefined))
-        await this.broker.revoke(grant.id, { kind: "person", account: DEVICE_ACCOUNT })
+        await this.broker.revoke(grant.id, { kind: "person", account: DEVICE_ACCOUNT }, signal)
   }
 
   /**

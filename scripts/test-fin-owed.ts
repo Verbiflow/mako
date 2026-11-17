@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { FROM_AGENTS } from "@mako/host/contracts/children"
+import type { LiveRequest } from "@mako/host/contracts/live-conversations"
+import { answeredTurns } from "@mako/host/conversations/agents"
 import { AgentsWorld, type Script } from "./lib/agents-world.ts"
 
 /**
@@ -148,6 +150,16 @@ const waiting = { kind: "pull-request" as const, ref: "acme/app#12", until: "che
     await world.close()
     rmSync(root, { recursive: true, force: true })
   }
+}
+
+// Only turns its model answered count: one a limit, a failure or a stop cut, after its harness took the message, doesn't.
+{
+  const turn = (id: string, status: LiveRequest["status"], dispatchedAt: number): LiveRequest => ({ id, text: id, attachments: [], status, dispatchedAt })
+  const taken = { at: 10, into: "asked" }
+  assert.equal(answeredTurns([turn("asked", "failed", 10), turn("continued", "completed", 20)], taken), 1, "a turn a limit cut after taking it, then its continuation: one answered turn")
+  assert.equal(answeredTurns([turn("asked", "interrupted", 10)], taken), 0, "a stopped one: none")
+  assert.equal(answeredTurns([turn("before", "completed", 5), turn("asked", "completed", 10), turn("next", "completed", 30)], taken), 2, "answered turns from the one that took it on")
+  console.log("owed: only turns the model answered count toward the reminder and the Apex's line")
 }
 
 console.log("reply owed: opened when the harness takes it, settled by an answer, reminded once, then said to the Apex once")

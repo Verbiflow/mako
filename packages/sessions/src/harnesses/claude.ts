@@ -20,7 +20,11 @@ export const CLAUDE_HOOK_EVENTS = [
  * `system` and `attachment` records and reads the titles; the rest is
  * Claude Code's bookkeeping, such as 2.1.314's `tools-used`, the tools the
  * session has called so far, and 2.1.319's `session-owner` and
- * `resume-head-vouch`, which its loader keeps and drops as it reads. `scripts/test-harness-records.ts` holds these
+ * `resume-head-vouch`, which its loader keeps and drops as it reads. 2.1.326's are
+ * provenance: `data-flow-records`, a ledger of where each response's
+ * content came from that accumulates through the file, `data-flow-incomplete`,
+ * which marks that ledger as partial, and `derived-from`, the session this one
+ * was made from (the last one wins). `scripts/test-harness-records.ts` holds these
  * lists to the Claude Code the SDK bundles, naming what an upgrade adds.
  */
 export const CLAUDE_RECORD_TYPES: readonly string[] = [
@@ -31,7 +35,7 @@ export const CLAUDE_RECORD_TYPES: readonly string[] = [
   "pr-link", "artifact-comment-monitor", "artifact-autoreact-ledger", "bridge-session", "history-suppression", "attribution-snapshot",
   "mode", "permission-mode", "isolation-latch", "dev-mods", "memory-mode", "atis-latch",
   "worktree-state", "cost-state", "queue-operation", "observer-ref", "tools-used",
-  "resume-head-vouch", "session-owner",
+  "resume-head-vouch", "session-owner", "data-flow-records", "data-flow-incomplete", "derived-from",
 ]
 
 /**
@@ -51,6 +55,12 @@ export const CLAUDE_RECORD_TYPES: readonly string[] = [
  * live session shows as a warning. 2.1.322's are a plugin's notification for a
  * headless session's host and its cancel (`ui_notify`, `ui_notify_cancel`),
  * which Claude Code drops before its own stream, so no session keeps them.
+ * 2.1.326's `voice_call_talk` is what was said aloud on a voice call beside
+ * the session, which the host running it handed over as background: history
+ * draws it as a marker, never as the person's prompt. Its
+ * `late_allow_not_run` tells the program running it that an Allow answered
+ * after its card closed ran nothing; it goes only to that program's stream,
+ * and the transcript keeps the call's own result.
  */
 export const CLAUDE_SYSTEM_SUBTYPES: readonly string[] = [
   "agents_killed", "api_error", "api_retry", "away_summary", "background_tasks_changed",
@@ -68,7 +78,7 @@ export const CLAUDE_SYSTEM_SUBTYPES: readonly string[] = [
   "turn_preempted", "turn_starting", "ui_focus", "ui_invalidate", "ui_log",
   "ui_panes", "ui_placed", "ui_scroll", "ui_status", "ui_toast",
   "vcs_state_changed", "worker_shutting_down", "session_writes_lost", "start_folder",
-  "ui_notify", "ui_notify_cancel",
+  "ui_notify", "ui_notify_cancel", "voice_call_talk", "late_allow_not_run",
 ]
 
 /**
@@ -79,7 +89,16 @@ export const CLAUDE_SYSTEM_SUBTYPES: readonly string[] = [
  * across a compaction (`projects_thread_ask`). 2.1.319's are context too: which
  * Claude app the person wrote from (`claude_app_notice`), PDF pages read for
  * a message (`message_pdf_reads`), and the views a widget shows
- * (`widget_context_hint`).
+ * (`widget_context_hint`). 2.1.326's are context too: the project
+ * instruction files a session didn't load (`instruction_files_not_loaded`),
+ * a note that a linked computer runs its own copy of a plugin server
+ * (`linked_plugin_tools_note`), and which tool results the model's next
+ * requests replace with a stand-in (`tool_results_cut`), which changes only
+ * what is sent, never the results the transcript keeps; a plugin's note to the
+ * model (`plugin_note`); a long prompt also saved as a file for the model to
+ * read (`prompt_as_file`), whose prompt the transcript keeps whole; and the
+ * mark that a request left out files the person attached whole because they
+ * no longer fit (`whole_texts_withdrawn`).
  */
 export const CLAUDE_ATTACHMENT_TYPES: readonly string[] = [
   "account_memory_recall", "advisor_stripped", "advisor_tool", "agent_listing_delta", "agent_mention",
@@ -107,6 +126,8 @@ export const CLAUDE_ATTACHMENT_TYPES: readonly string[] = [
   "tool_hosts_correction", "tool_hosts_notice", "tool_search_usage_reminder", "total_tokens_reminder", "ultra_effort_enter",
   "ultra_effort_exit", "ultrathink_effort", "unknown_command_fallback", "withheld_memory", "workflow_keyword_request",
   "workflow_size_guideline_change", "claude_app_notice", "message_pdf_reads", "widget_context_hint",
+  "instruction_files_not_loaded", "linked_plugin_tools_note", "tool_results_cut",
+  "plugin_note", "prompt_as_file", "whole_texts_withdrawn",
 ]
 
 const MCP_RESOURCES = "Defined only beside an MCP server that offers resources; the capture runs with none."
@@ -130,9 +151,9 @@ const CLAUDE_REFUSALS = [
 export const CLAUDE_VOCABULARY = defineVocabulary({
   harness: "claude",
   checked: {
-    version: "2.1.322",
-    on: "2026-11-11",
-    against: "the model request of the SDK's Claude Code 2.1.322, which Mako runs, in every Mako mode (scripts/fixtures/native-tools; the same tools since 2.1.283, AskUserQuestion's, Bash's and DesignSync's descriptions reworded in 2.1.314, DesignSync's again and PushNotification's status optional in 2.1.319, none changed in 2.1.322), its print-run tools (scripts/fixtures/native-vocabulary/claude-init.json), and ~/.claude/projects through audit:tools as of 2026-10-06",
+    version: "2.1.326",
+    on: "2026-11-17",
+    against: "the model request of the SDK's Claude Code 2.1.326, which Mako runs, in every Mako mode (scripts/fixtures/native-tools; the same tools since 2.1.283, AskUserQuestion's, Bash's and DesignSync's descriptions reworded in 2.1.314, DesignSync's again and PushNotification's status optional in 2.1.319, none changed in 2.1.322, and Agent's, AskUserQuestion's, ExitWorktree's, Monitor's, Skill's, ToolSearch's and Workflow's descriptions reworded in 2.1.326 with the same parameters), its print-run tools (scripts/fixtures/native-vocabulary/claude-init.json), and ~/.claude/projects through audit:tools as of 2026-10-06",
   },
   mcp: [],
   refusals: CLAUDE_REFUSALS,
@@ -184,9 +205,9 @@ export const CLAUDE_VOCABULARY = defineVocabulary({
   },
   concepts: {
     checked: {
-      version: "2.1.322",
-      on: "2026-11-11",
-      against: "SDK 0.3.322 types (HOOK_EVENTS, unchanged since 0.3.283; AgentDefinition unchanged since 0.3.314; Settings unchanged since 0.3.319), code.claude.com docs (memory, hooks, skills, sub-agents, mcp, settings) as read on 2026-10-06, and the build the SDK bundles through harness:self-report",
+      version: "2.1.326",
+      on: "2026-11-17",
+      against: "SDK 0.3.326 types (HOOK_EVENTS, unchanged since 0.3.283; AgentDefinition's observer may name up to four agents in 0.3.326; Settings adds a plugin's `engines` and a sandbox auto-approval in 0.3.326, none of them where Mako reads), code.claude.com docs (memory, hooks, skills, sub-agents, mcp, settings) as read on 2026-10-06, and the build the SDK bundles through harness:self-report",
     },
     instructions: {
       files: ["CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".claude/AGENTS.md"],

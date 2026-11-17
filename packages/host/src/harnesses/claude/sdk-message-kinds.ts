@@ -71,6 +71,12 @@ const NEWER = untyped({
    * SDK 0.3.293.
    */
   command_lifecycle: "state",
+  /**
+   * Claude Code 2.1.326: an Allow that came after its card closed ran
+   * nothing, and why. The call's own result already says how it ended.
+   * Untyped in SDK 0.3.326.
+   */
+  "system/late_allow_not_run": "ignored",
 })
 
 function untyped<const Kinds extends Record<string, "shown" | "state" | "ignored">>(

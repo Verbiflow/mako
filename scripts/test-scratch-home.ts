@@ -8,6 +8,7 @@ import { dirname, join, relative } from "node:path"
 import { createInterface } from "node:readline"
 import { PackagedApp } from "./lib/packaged-app.mjs"
 import { run as runHarness } from "./native-harnesses.ts"
+import { assertSealed, sandboxed } from "./harness-sandbox.ts"
 import { SECRET_FILES, assertScratchEnvironment, readPersonSignIns, scratchHostHome, scratchInstall, seedScratchHome, sweepScratchHomes } from "./scratch-harness-home.ts"
 
 /**
@@ -50,6 +51,18 @@ try {
     ["an npm prefix in the person's home", { ...scratch, npm_config_prefix: join(real, ".npm-global") }, /npm_config_prefix .* is outside its scratch home/],
   ]
   for (const [name, env, says] of refusals) assert.throws(() => assertScratchEnvironment(env, "npm install @xai-official/grok", real), says, name)
+
+  // A sealed run takes nothing that names this Mac's Mako: a harness started with a Thread's MAKO_SESSION_ID
+  // is linked to that Thread as its Fin (the 0.3.326 bump's self-report once was).
+  const box = join(root, "box")
+  const sealedEnv = { PATH: scratch.PATH, HOME: join(box, "home"), TMPDIR: join(box, "tmp"), XDG_CONFIG_HOME: join(box, "home", ".config"), XDG_DATA_HOME: join(box, "home", ".local", "share"), XDG_STATE_HOME: join(box, "home", ".local", "state"), XDG_CACHE_HOME: join(box, "home", ".cache") }
+  assertSealed(sealedEnv, box, "a sealed run")
+  assert.throws(() => assertSealed({ ...sealedEnv, MAKO_SESSION_ID: "a-thread" }, box, "a sealed run"), /still holds MAKO_SESSION_ID/)
+  assert.throws(() => assertSealed({ ...sealedEnv, CLAUDECODE: "1" }, box, "a sealed run"), /still holds CLAUDECODE/)
+  assert.throws(() => assertSealed({ ...sealedEnv, HOME: real }, box, "a sealed run"), /HOME .* is outside its sandbox/)
+  assert.throws(() => assertSealed({ ...sealedEnv, TMPDIR: undefined }, box, "a sealed run"), /TMPDIR \(unset\) is outside its sandbox/)
+  const ranSealed = await sandboxed("mako-scratch-home-sealed", "claude", async ({ env }) => Object.keys(env).filter((name) => /^(MAKO_|CLAUDE|ANTHROPIC_)/.test(name)))
+  assert.deepEqual(ranSealed, [], "sandboxed hands a harness none of this shell's Mako or Claude variables")
   assertScratchEnvironment(scratch, "npm install @xai-official/grok", real)
   // npm's cache may stay the person's: it's npm's, content-addressed, and no harness reads it.
   assertScratchEnvironment({ ...scratch, npm_config_cache: join(real, ".npm") }, "npm install", real)
@@ -206,12 +219,13 @@ try {
     .filter((name) => /\.(ts|mjs)$/.test(name) && name !== "test-scratch-home.ts")
   const startsSession = /liveStart|mako:live-start|\bdriver\.start\(|\bowner\.start\(|\bquery\(\{/
   const runsHost = /node_modules\/\.bin\/electron|\(\s*["']electron["']\s*\)|electronExecutable|spawnHost\(|hostCommand\(|startHost\(|from\s+["']@anthropic-ai\/claude-agent-sdk["']/
-  const runsCli = /(?:spawn|execFile|run|execute|execa)(?:Sync)?\(\s*["'`](?:claude|codex|grok|opencode|opencode2|devin|cursor-agent)["'`]/
+  const runsCli = /(?:spawn|execFile|run|execute|execa)(?:Sync)?\(\s*(?:["'`](?:claude|codex|grok|opencode|opencode2|devin|cursor-agent)["'`]|claudeSdkBinary\(\)|codexBinary\(\))/
   const personsMako = /runtimeDataRoot\(appDataFolder\(\)|localRuntime\(\)/
   const isolated = /scratchHostHome\(|scratchHarnessHome\(|enterScratchHome\(|seedScratchHome\(|sandboxed\(|assertScratchEnvironment\(|proofDataRoot\(|new PackagedApp\(|authoringWorld\(|\bHOME:\s*(?!homedir\(\)|process\.env)[\w(]/
   /** Scripts the rules above match where no real harness runs, or none in the person's stores; each says why. */
   const exempt = {
     "audit-native-claude-initialization.ts": "audits each account's Claude start; its one turn keeps no session (persistSession: false)",
+    "lib/claude-recovery-controls.ts": "drives test-claude-sdk.ts's injected Agent SDK queries; no Claude runs",
     "linux-host/prove.mjs": "runs only inside the Linux host's container, whose home is the container's",
     "test-background-work.ts": "recorded Agent SDK messages; no Claude runs",
     "test-claude-runtime.ts": "intercepts the SDK's spawn; no Claude runs",
