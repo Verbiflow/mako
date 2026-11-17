@@ -3,6 +3,7 @@ import { z } from "zod"
 import type { Evidence } from "./evidence.js"
 import type { ModelSession } from "./model.js"
 import { finalInstructions, inspectionInstructions, SUMMARY_INSTRUCTIONS } from "./prompts.js"
+import { mapLimit } from "@mako/protocol/map-limit"
 
 /** A piece of one or more patches, read once however often it repeats. */
 interface Unit {
@@ -147,25 +148,9 @@ async function summarize(session: ModelSession, chunkBytes: number, input: strin
 }
 
 /** Runs `work` on each item, `CONCURRENCY` at a time, keeping their order. After a failure no item starts. */
-async function pooled<T, R>(items: readonly T[], work: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = []
-  let next = 0
-  // The first failure stops new work, and is thrown once every lane's work under way has settled, so nothing it started
-  // still runs when its caller hears of it (as @mako/host's mapLimit).
-  let failure: { error: unknown } | undefined
-  const lane = async () => {
-    while (!failure && next < items.length) {
-      const index = next++
-      try {
-        results[index] = await work(items[index]!)
-      } catch (error) {
-        failure ??= { error }
-      }
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, lane))
-  if (failure) throw failure.error
-  return results
+/** `work` over `items`, `CONCURRENCY` at once: a failure starts nothing new and is thrown once what started has settled. */
+function pooled<T, R>(items: readonly T[], work: (item: T) => Promise<R>): Promise<R[]> {
+  return mapLimit(items, CONCURRENCY, work)
 }
 
 function summaryText(nodes: readonly Node[]): string {

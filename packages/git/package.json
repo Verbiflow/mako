@@ -18,6 +18,7 @@
     "build": "tsgo -b"
   },
   "dependencies": {
+    "@mako/protocol": "0.1.0",
     "zod": "4.4.3"
   }
 }

@@ -4,6 +4,7 @@ import { z } from "zod"
 import { environmentForExecutable } from "../base/executable.js"
 import { spawnProviderProcess } from "./provider-process.js"
 import { writeChildInput } from "@mako/sessions/child-input"
+import { mapLimit } from "@mako/protocol/map-limit"
 
 /**
  * What a start runs first, run ahead: a cloud machine does it as it boots, for the harness its Thread was made for,
@@ -110,23 +111,24 @@ export async function readAlongside(paths: readonly string[]): Promise<{ bytes: 
     for (let from = 0; from < size; from += SLICE_BYTES) slices.push({ file, from, to: Math.min(size, from + SLICE_BYTES) })
   }
   let bytes = 0
-  await Promise.all(Array.from({ length: READERS }, async () => {
-    const buffer = Buffer.allocUnsafe(1 << 20)
-    for (let slice = slices.shift(); slice; slice = slices.shift()) {
-      const handle = await open(slice.file, "r").catch(() => undefined)
-      if (!handle) continue
-      try {
-        for (let at = slice.from; at < slice.to;) {
-          const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, slice.to - at), at)
-          if (bytesRead === 0) break
-          at += bytesRead
-          bytes += bytesRead
-        }
-      } finally {
-        await handle.close()
+  // One buffer per reader: at most `READERS` slices are read at once, so one is always free.
+  const buffers = Array.from({ length: READERS }, () => Buffer.allocUnsafe(1 << 20))
+  await mapLimit(slices, READERS, async (slice) => {
+    const handle = await open(slice.file, "r").catch(() => undefined)
+    if (!handle) return
+    const buffer = buffers.pop()!
+    try {
+      for (let at = slice.from; at < slice.to;) {
+        const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, slice.to - at), at)
+        if (bytesRead === 0) break
+        at += bytesRead
+        bytes += bytesRead
       }
+    } finally {
+      buffers.push(buffer)
+      await handle.close()
     }
-  }))
+  })
   return { bytes, ms: Math.round(performance.now() - began) }
 }
 

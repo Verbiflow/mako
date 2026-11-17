@@ -7,7 +7,7 @@ import { z } from "zod"
 import { contentRef, diffLines, splitLines, type Attribution, type CheckoutShares, type ChangeClass, type Partition, type PartitionFile, type Share } from "../attribution/index.js"
 import type { MoveOutcome, MoveShare, MoveShares } from "../contracts/workspace-moves.js"
 import { copyGitIndex } from "./index-copy.js"
-import { mapLimit } from "../base/map-limit.js"
+import { mapLimit } from "@mako/protocol/map-limit"
 
 /*
  * Moving a Thread's uncommitted changes from the main checkout into its new

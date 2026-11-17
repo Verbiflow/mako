@@ -71,6 +71,7 @@ import type { WorkUnderWay } from "./loop-watch.js"
 import { UploadBudget } from "./upload-budget.js"
 import { RecordPushes, RecordSync, RecordsLinkRefusedError, type LinkForm, type PushStatus, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords, type StagedRecords, type SyncReport } from "./record-sync.js"
 import { LinkCredential } from "./link-credential.js"
+import { mapLimit } from "@mako/protocol/map-limit"
 import { recordsOverHttp } from "@mako/protocol/records-http"
 import { GatewayHttpError } from "@mako/protocol/gateway-http"
 import type { RecordRemote } from "@mako/protocol/records"
@@ -147,31 +148,6 @@ const DISCOVERY_RECONCILE_MS = 30_000
  */
 const ACTIVE_RECONCILE_MS = 15_000
 const ACTIVE_WINDOW_MS = 2 * 3600_000
-
-async function forEachConcurrent<T>(
-  values: T[],
-  limit: number,
-  visit: (value: T) => Promise<void>
-): Promise<void> {
-  // A failure starts nothing new and waits for what already started, then rejects with the first error, so nothing
-  // still runs once the caller hears of it (as @mako/host's mapLimit).
-  let next = 0
-  let failure: { error: unknown } | undefined
-  const worker = async () => {
-    while (!failure && next < values.length) {
-      const value = values[next++]!
-      try {
-        await visit(value)
-      } catch (error) {
-        failure ??= { error }
-      }
-    }
-  }
-  await Promise.all(
-    Array.from({ length: Math.min(limit, values.length) }, worker)
-  )
-  if (failure) throw failure.error
-}
 
 /** The repository each folder is in, found once per catalog; a folder outside one is its own. */
 class WorkspaceRoots {
@@ -833,7 +809,7 @@ export class SessionCatalog {
       this.providers.map(async (provider) => {
         const files = await provider.discover().catch(() => null)
         if (!files) { unavailable.add(provider); return }
-        await forEachConcurrent(files, 4, async (file) => {
+        await mapLimit(files, 4, async (file) => {
           seen.add(file.path)
           const cached = this.cachedEntry(file.path, provider)
           if (
@@ -1494,7 +1470,7 @@ export class SessionCatalog {
       if (this.follows.has(path) || (entry.ref?.updatedAt ?? "") >= since)
         candidates.push(path)
     }
-    await forEachConcurrent(candidates, 4, async (path) => {
+    await mapLimit(candidates, 4, async (path) => {
       const provider = this.ownerOf(path)
       if (!provider || rescansFor(provider, path)) return
       const cached = this.byPath.get(path)

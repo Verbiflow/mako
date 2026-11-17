@@ -8,7 +8,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
 import { Git } from "@mako/git"
-import { mapLimit } from "@mako/host/base/map-limit"
+import { mapLimit } from "@mako/protocol/map-limit"
 import { rewriteInPlace, type InPlaceFile } from "@mako/host/workspaces/worktree-move"
 
 const tick = (ms: number) => new Promise((done) => setTimeout(done, ms))

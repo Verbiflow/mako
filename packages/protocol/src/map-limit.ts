@@ -1,5 +1,7 @@
 /**
- * `map` over `values` with at most `limit` running at once, results in order.
+ * `map` over `values` with at most `limit` running at once, results in order: every worker pool of Mako's (the host's,
+ * `@mako/sessions`', `@mako/git`'s) goes through this one, and `anti-slop/no-bare-promise-lanes` refuses a pool of lanes
+ * written by hand.
  *
  * A failure stops new work from starting, waits for every call already started to settle, and only then rejects with
  * the first error. A caller that cleans up after a failure (a move's rollback, a checkpoint's scratch folder) must see

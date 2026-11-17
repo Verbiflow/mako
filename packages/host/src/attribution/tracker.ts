@@ -27,7 +27,7 @@ import {
 import { join } from "node:path"
 import { inSlices, StepsStopped } from "@mako/sessions/slices"
 import { HourCounts } from "../base/hour-counts.js"
-import { mapLimit } from "../base/map-limit.js"
+import { mapLimit } from "@mako/protocol/map-limit"
 import type { RescanFootprint } from "../contracts/mako-footprint.js"
 import { contentRef, decodeText, hasher, isText, READ_LIMIT, secretPath, STORE_LIMIT } from "./content.js"
 import { attribute, authorOf, claim, Evidence, LEAD_MS, reaches as reachesChange, TRAIL_MS, type Interval, type ObservedChange, type Reach } from "./evidence.js"

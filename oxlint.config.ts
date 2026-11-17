@@ -56,6 +56,11 @@ export default defineConfig({
     "anti-slop/no-widen-then-assert": "error",
     "anti-slop/require-safety-comment-for-type-assertion": "error",
     "mako/heavy-packages": "error",
+    "mako/no-bare-promise-lanes": "error",
     "mako/no-harness-names": "error",
   },
+  overrides: [
+    // Plain Node scripts can't import the TypeScript helper (`@mako/protocol/map-limit`) without a build first.
+    { files: ["scripts/**/*.mjs"], rules: { "mako/no-bare-promise-lanes": "off" } },
+  ],
 })
