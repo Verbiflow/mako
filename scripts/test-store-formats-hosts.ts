@@ -163,7 +163,7 @@ async function sessionStoresRaisedWhileRunning(): Promise<void> {
   const subscribed = jobs.demand("a window is open")
   subscribed.set(true)
   const told: string[] = []
-  const stop = followOtherHosts(followed, () => {}, { jobs, subscribed, everyMs: 20, formats: { key: () => formatsKey(storeFormats(sources)), changed: () => told.push(formatsKey(storeFormats(sources))) } })
+  const stop = followOtherHosts(followed, () => {}, { jobs, subscribed, everyMs: 20, formats: { read: () => storeFormats(sources), key: formatsKey, changed: (formats) => told.push(formatsKey(formats)) } })
 
   assert.equal(await newerHost("migrate-records", join(records, "records.sqlite"), join(views, UNREAD_INDEX_FILE), join(archive, "outputs.sqlite")), JSON.stringify({ migrated: true }))
   const raised = { records: dump(join(records, "records.sqlite")), unread: dump(join(views, UNREAD_INDEX_FILE)), outputs: dump(join(archive, "outputs.sqlite")) }
@@ -225,7 +225,7 @@ try {
   const standings = () => JSON.stringify([threads.standing().access, memory.standing().access])
   const stopFollowing = followOtherHosts(threads, dependencies.emit, {
     jobs, subscribed, everyMs: 20,
-    formats: { key: standings, changed: () => told.push(standings()) },
+    formats: { read: standings, key: (standing) => standing, changed: (standing) => told.push(standing) },
   })
 
   // A newer Mako starts beside it and migrates both stores.
