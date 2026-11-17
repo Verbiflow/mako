@@ -286,6 +286,25 @@ try {
   clock += 100_000
   await idle.tick()
   assert.equal(needed.at(-1), false, "its lease over, with nothing running: not needed")
+  // An app another host started, seen by a trace while a window watches: it's measured from then, with no change here.
+  let measured = 0
+  let others = 0
+  const watchedOthers = new ThreadAppSampler({
+    look: async (): Promise<AppsLook> => ({ marks: [], settling: false, alive: others > 0, signature: String(others) }),
+    trace: async () => others,
+    memory: async () => void measured++,
+    publish: () => {},
+    now: () => clock,
+  })
+  await watchedOthers.tick()
+  watchedOthers.wanted()
+  others = 1
+  for (let second = 0; second < 70; second += 1) {
+    clock += 1_000
+    watchedOthers.wanted()
+    await watchedOthers.tick()
+  }
+  assert.ok(measured > 0, "another host's app a window watches has its memory measured")
   console.log("app sampler: its job is needed only while a reader watches or an app may run")
 }
 console.log("app sampling demand: visible connection lifetime, hidden tombstones, ordered replay, bounded legacy fallback and real socket membership/validation passed")

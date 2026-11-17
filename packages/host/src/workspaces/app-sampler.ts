@@ -213,7 +213,9 @@ export class ThreadAppSampler {
       this.tracedAt = now
       this.tracedAlive = watched ? alive : true
       const running = await this.deps.trace()
-      if (!watched && running === 0) this.mayRun = false
+      // A trace says what runs, whoever started it: one running (another host's too) is measured, none unwatched lets go.
+      if (running > 0) this.mayRun = true
+      else if (!watched) this.mayRun = false
     }
     if (this.deps.memory && alive && this.mayRun && now - this.measuredAt >= MEMORY_MS) {
       this.measuredAt = now
