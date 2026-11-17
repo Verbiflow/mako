@@ -243,6 +243,12 @@ export const ContextTransferSchema = z.object({
   behind: z.string().optional(),
   /** A move's row to go first at its commit, ahead of what waited longer (`arriving`). */
   first: z.string().optional(),
+  /**
+   * A quiet switch that is the session's own reconnect (`LiveConversations.reconnectQueued`): its record is weighed as
+   * a resend's is, so a record its harness keeps closed or can't find goes on with the whole conversation, and a
+   * session that never ran a turn starts in its own binding. Host-owned.
+   */
+  reconnects: z.literal(true).optional(),
 })
 export type ContextTransfer = z.infer<typeof ContextTransferSchema>
 /** A switch with no message of its own: the Thread moves, and what next goes there carries its history. */

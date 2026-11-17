@@ -30,6 +30,7 @@ async function check(provider: string, verdict: ResumeVerdict, scenario?: "stop"
   const sessions = new Map<string, LiveSessionState>()
   const emits = new Map<string, NonNullable<Parameters<ProviderLiveDriver["start"]>[1]["emit"]>>()
   let inspected = false
+  let inspections = 0
   let release!: () => void
   const wait = new Promise<void>((resolve) => { release = resolve })
   const driver: ProviderLiveDriver = {
@@ -68,7 +69,7 @@ async function check(provider: string, verdict: ResumeVerdict, scenario?: "stop"
   const dependencies: ConstructorParameters<typeof LiveConversations>[0] = {
     root: join(root, "journals"), appPath: root, driver: () => driver, emit: () => {},
     history: async (path) => ({ ref: { harness: provider, nativeId: "old-native", path, cwd: root, title: "Saved conversation", settings: { model: "fixture-model" } }, entries: [{ type: "user", id: "old-user", text: "Remember KESTREL" }, { type: "text", id: "old-answer", text: "Keep the parser recursive" }], start: 0, total: 2, hasEarlier: false }),
-    resumeVerdict: async (binding) => { inspected = true; await wait; return binding.nativeId === "old-native" ? verdict : { kind: "resumable", record: "same" } },
+    resumeVerdict: async (binding) => { inspected = true; inspections += 1; await wait; return binding.nativeId === "old-native" ? verdict : { kind: "resumable", record: "same" } },
   }
   let owner = new LiveConversations(dependencies)
   try {
@@ -115,6 +116,10 @@ async function check(provider: string, verdict: ResumeVerdict, scenario?: "stop"
       assert.match(prompts[1], /Then explain its grammar/)
       assert.doesNotMatch(prompts[1], /Remember KESTREL/)
       assert.equal(snapshot.control?.bindings.length, 2, "the original native binding remains in history")
+      // It went on as a resend would: the session's own reconnect, which weighs the record again (closed, lost, or a
+      // session that never ran a turn), never a quiet move around that rule.
+      assert.equal(transfer.reconnects, true, "the wake hands its queue to the session's own reconnect")
+      assert.ok(inspections >= 2, `the reconnect weighed the record again (${inspections} inspections)`)
       assert.equal(snapshot.control?.transfers.filter((move) => move.state.kind === "accepted").length, 1)
       if (scenario === "restart") {
         const nativeId = snapshot.session.nativeId

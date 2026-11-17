@@ -56,7 +56,6 @@ import type { ResidencyBudget } from "../contracts/residency.js"
 import type { GoalObservation } from "../contracts/live-goals.js"
 import type { TurnLedger } from "./live-turn-changes.js"
 import type { TurnReviewLedger } from "./live-turn-review.js"
-import type { ThreadMove } from "./continue-on.js"
 
 export interface ProviderConnection {
   driver: AdmittedLiveDriver
@@ -505,7 +504,8 @@ export interface LiveAccess {
   /** Record a new request in the journal and start it when the session is free. */
   admit(resident: Resident, request: LiveRequest): LiveRequest
   transfer(id: string, input: TransferInput, actor?: Actor, continues?: TurnContinuation): LiveSnapshot
-  moveOn(id: string, move: ThreadMove, stays: boolean, actor?: Actor, stillDecided?: () => boolean): LiveSnapshot | undefined
+  /** A hibernated session's queue goes on through its own reconnect, as a resend would (`LiveConversations.reconnectQueued`). */
+  reconnectQueued(id: string, first: string, stillDecided: () => boolean): LiveSnapshot | undefined
   /** Send the next queued prompt once nothing holds it back. */
   drain(resident: Resident): void
   close(id: string): Promise<void>

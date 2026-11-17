@@ -319,7 +319,7 @@ export class LiveConversations {
       pending: (resident) => this.transfers.pending(resident),
       admit: (resident, request) => this.admit(resident, request),
       transfer: (id, input, actor, continues) => this.transfer(id, input, actor, continues),
-      moveOn: (id, move, stays, actor, stillDecided) => this.moveOn(id, move, stays, actor, stillDecided),
+      reconnectQueued: (id, first, stillDecided) => this.reconnectQueued(id, first, stillDecided),
       drain: (resident) => this.dispatch.drain(resident),
       close: (id) => this.closing.close(id),
       launch: (...launch) => this.launches.launch(...launch),
@@ -1434,6 +1434,36 @@ export class LiveConversations {
       )
     this.moves.assertStarts(resident)
     return this.transfers.accept(id, input, this.threads.actor(actor), continues)
+  }
+
+  /**
+   * A hibernated session whose record its harness keeps closed, or has no record of, goes on where a resend to it would:
+   * its own reconnect transfer, on its harness and account, with its record weighed again there (`reconnects`): closed or
+   * lost goes on as a new session with the whole conversation, and one that never ran a turn starts in its own binding.
+   * Its queue goes as it stands, `first` carrying the transcript, every row keeping its ID. Undefined when it's no longer
+   * decided (a Stop since, another binding, the row gone). Before, the wake failed the message ("Send the message
+   * again"), and the resend went this way anyway.
+   */
+  reconnectQueued(id: string, first: string, stillDecided: () => boolean): LiveSnapshot | undefined {
+    this.admission.assert()
+    const resident = this.records.require(id)
+    if (resident.rewinding) return undefined
+    this.moves.assertStarts(resident)
+    const wanted = () => !resident.snapshot.requests.some((request) => request.status === "held" && request.pause === "stop") && stillDecided()
+    if (!wanted()) return undefined
+    const binding = activeBinding(resident)
+    // A new session runs on what the conversation ran on: the first message's model, else the session's, and its mode.
+    const tuning = resident.snapshot.requests.find((request) => request.id === first)?.tuning ?? resident.snapshot.session.settings ?? binding?.tuning
+    const modeId = resident.snapshot.session.currentMode ?? binding?.modeId
+    return this.transfers.accept(id, {
+      id: randomUUID(),
+      provider: binding?.provider ?? resident.snapshot.session.harness,
+      text: "",
+      attachments: [],
+      ...(binding?.account && { account: binding.account }),
+      ...(tuning && { tuning }),
+      ...(modeId && { modeId }),
+    }, this.threads.actor(), undefined, { wanted, first, reconnects: true })
   }
 
   /**

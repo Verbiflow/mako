@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto"
 import { failureEvidenceOf, HostFailureError } from "../contracts/provider-failure.js"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -23,7 +22,7 @@ export const PROVIDER_WARM_LIMIT = 2
 
 type HibernationAccess = Pick<LiveAccess,
   "dependencies" | "residents" | "resident" | "load" | "flush" | "noteWork" | "drain" | "moves" | "retireFromAccount" | "locateNativePath" |
-  "failedStart" | "returnFromRemovedWorktree" | "driverEvents" | "reconcileCut" | "restartContinued" | "moveOn" | "stopMark">
+  "failedStart" | "returnFromRemovedWorktree" | "driverEvents" | "reconcileCut" | "restartContinued" | "reconnectQueued" | "stopMark">
 
 /**
  * Which conversations keep a provider process: a ready one stays warm for
@@ -477,8 +476,8 @@ export class LiveHibernation {
       if (!this.access.moves.executes(resident) || this.access.moves.ownerCheck(resident) !== undefined)
         throw new Error("Execution ownership changed while preparing native recovery.")
       if (verdict?.kind === "closed" || (verdict?.kind === "unavailable" && verdict.lost === true)) {
-        // No process was opened. A confirmed closed/lost record goes on through the ordinary transcript transfer,
-        // on the same harness and account. Merely unreadable records and unverified owners still refuse below.
+        // No process was opened. A confirmed closed/lost record goes on through the session's own reconnect transfer, on
+        // the same harness and account. Merely unreadable records and unverified owners still refuse below.
         resident.driver = null
         resident.opening = false
         resident.snapshot = { ...resident.snapshot, session: { ...resident.snapshot.session, connection: "hibernated", status: "ready" } }
@@ -486,17 +485,8 @@ export class LiveHibernation {
         const first = resident.snapshot.requests.find((request) => request.status === "queued")
         // A prewarm without a message starts no replacement. The next actual send can make this decision again.
         if (!first || this.access.stopMark(resident.snapshot.session.id) !== stop) return
-        this.access.moveOn(resident.snapshot.session.id, {
-          id: randomUUID(),
-          first: first.id,
-          unlessStopped: true,
-          to: {
-            harness: binding.provider,
-            account: binding.account,
-            tuning: first.tuning ?? resident.snapshot.session.settings ?? binding.tuning,
-            modeId: resident.snapshot.session.currentMode ?? binding.modeId,
-          },
-        }, false, undefined, () => resident.generation === generation &&
+        // It goes on as a resend would: the session's own reconnect, its record weighed again there (`reconnectQueued`).
+        this.access.reconnectQueued(resident.snapshot.session.id, first.id, () => resident.generation === generation &&
           this.access.stopMark(resident.snapshot.session.id) === stop &&
           activeBinding(resident)?.id === binding.id &&
           resident.snapshot.requests.some((request) => request.id === first.id && request.status === "queued"))
