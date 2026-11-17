@@ -41,7 +41,7 @@ console.log("host reconnect stages: quiet at first, Try now past 10 s, Restart M
 
 // The client's way back (`HostReconnect`): a host still leaving keeps it quiet; only a host that couldn't be had says so.
 {
-  const { HostReconnect, endHungHost, holdsAny, HUNG_HOST_GRACE_MS } = await import("../electron/host-reconnect.ts")
+  const { HostReconnect, endHungHost, holdsAny, elapsedMs, HUNG_HOST_GRACE_MS, ABSENT_RECHECK_MS } = await import("../electron/host-reconnect.ts")
   const { HostLaunchFailedError, HostLeavingError } = await import("@mako/host/transport/service")
   const timers: { run: () => void; ms: number; cancelled: boolean }[] = []
   const runNext = async () => {
@@ -104,6 +104,7 @@ console.log("host reconnect stages: quiet at first, Try now past 10 s, Restart M
       commandOf: async () => "/Applications/Mako.app/Contents/MacOS/Mako /Applications/Mako.app/Contents/Resources/app.asar/dist-electron/host/entry.js",
       entry: "/Applications/Mako.app/Contents/Resources/app.asar/dist-electron/host/entry.js",
       holds: async () => true,
+      ranFor: async () => 5 * 60_000,
       signal: (_pid, signal) => { signals.push(signal); if ((over.quits ?? "kill") === "term" || (signal === "SIGKILL" && over.quits !== "never")) alive = false },
       alive: () => alive,
       wait: async () => { mock.timers.tick(200) },
@@ -154,6 +155,24 @@ console.log("host reconnect stages: quiet at first, Try now past 10 s, Restart M
   }
   const nobodyAbsent = world({ answers: async () => "absent", holder: async () => null })
   assert.equal(await endHungHost(nobodyAbsent.deps), "none", "no socket and no lock holder: nothing to end")
+  // A host takes its lock before it binds its socket: one still starting has no socket either, and is left to start.
+  const young = world({ answers: async () => "absent", ranFor: async () => 4_000 })
+  assert.equal(await endHungHost(young.deps), "starting")
+  assert.deepEqual(young.signals, [], "a host 4 s into its start, no socket yet, is never signalled")
+  const pastWindow = world({ answers: async () => "absent", ranFor: async () => 31_000 })
+  assert.equal(await endHungHost(pastWindow.deps), "ended", "past the 30 s a start has, no socket is hung")
+  // Its age unreadable: the socket is asked again a few seconds later; one that binds meanwhile was starting.
+  let asked = 0
+  const waits: number[] = []
+  const binds = world({ answers: async () => (asked++ === 0 ? "absent" : "ready"), ranFor: async () => undefined, wait: async (ms) => { waits.push(ms); mock.timers.tick(ms) } })
+  assert.equal(await endHungHost(binds.deps), "starting")
+  assert.deepEqual([binds.signals, waits], [[], [ABSENT_RECHECK_MS]], "it binds within the recheck: left alone")
+  const staysAbsent = world({ answers: async () => "absent", ranFor: async () => undefined })
+  assert.equal(await endHungHost(staysAbsent.deps), "ended", "still no socket at the second check: hung")
+  // A silent host answers on a socket it bound, so it's past its start whatever its age.
+  const silentYoung = world({ ranFor: async () => 2_000 })
+  assert.equal(await endHungHost(silentYoung.deps), "ended", "a socket that holds a connection and answers nothing is hung at any age")
+  assert.deepEqual(["00:04", "01:02", "1:00:00", "2-03:04:05", "", "abc"].map(elapsedMs), [4_000, 62_000, 3_600_000, ((2 * 24 + 3) * 60 + 4) * 60_000 + 5_000, undefined, undefined])
   // The hold is asked path by path: lsof exits 1 when any path named isn't open, which read a held lock as not held.
   const lockOnly = async (_pid: number, path: string) => { if (path.endsWith(".sock")) throw new Error("lsof exited 1"); return path.endsWith("host.lock") }
   assert.equal(await holdsAny(7, ["/data/host.lock", "/run/mako.sock"], lockOnly), true, "its lock open, its socket closed: it holds")

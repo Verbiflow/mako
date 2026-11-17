@@ -52,6 +52,9 @@ export function clientRoot(dataRoot: string, client: string): string {
 /** The agent views app's client identity, so its storage and log stay apart from the person's desktop. */
 export const AGENT_VIEWS_CLIENT = "agent-views"
 
+/** How long a host started has to answer on its socket before its start is a failure (`HostLaunchFailedError`). */
+export const HOST_START_WINDOW_MS = 30_000
+
 export function runtimeLocation(dataRoot: string) {
   const identity = createHash("sha256").update(resolve(dataRoot)).digest("hex").slice(0, 16)
   const directory = join(tmpdir(), `mako-host-${identity}`)
@@ -153,7 +156,7 @@ export async function ensureRuntime(input: RuntimeLaunch) {
   child.once("error", (error) => { launchError = error })
   child.once("exit", (code, signal) => { exitedAt = Date.now(); exit = signal ?? `exit ${code}` })
   child.unref()
-  const deadline = Date.now() + 30_000
+  const deadline = Date.now() + HOST_START_WINDOW_MS
   while (Date.now() < deadline && (exitedAt === undefined || Date.now() < exitedAt + EXITED_GRACE_MS)) {
     // A socket that resets while the new host binds is "not ready yet", not a launch failure.
     const probe = await probeRuntime(location.socket)
