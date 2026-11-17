@@ -8,6 +8,7 @@ import type { AccountEvent } from "@mako/protocol/account-events"
  * served to the cloud as its runtime.
  */
 import assert from "node:assert/strict"
+import { spawn } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
 import { once } from "node:events"
 import { existsSync } from "node:fs"
@@ -47,7 +48,7 @@ import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import { QuietNoteSchema, type QuietNote } from "@mako/protocol/handoff"
 import { MOVE_REASON_MAX, MoveHandOverRequestSchema, MoveRefuseRequestSchema } from "@mako/protocol/moves"
 import { HandoffSchema, type Handoff } from "@mako/host/contracts/thread-execution"
-import { FileAccountEventCursors, memoryAccountEventCursors } from "@mako/host/usage/account-event-cursor"
+import { accountEventClock, FileAccountEventCursors, memoryAccountEventCursors } from "@mako/host/usage/account-event-cursor"
 import { GrantedSecrets } from "@mako/host/base/secret-grants"
 import { memorySecrets } from "@mako/host/base/secrets"
 import { CloudAccounts, type CloudAccountOptions, type CloudRuntime } from "@mako/host/usage/cloud-account"
@@ -1001,6 +1002,66 @@ test("ordinary event checkpoints preserve grants; first checkpoint and clean shu
   assert.equal((await granted.broker.lease(nextLease.lease.id))?.ended, "revoked")
   await again.accounts.close()
   assert.equal(writes, baseline + 2, "a current inline cursor needs no extra quit save")
+})
+
+test("quit bounds the rollback checkpoint and drains its broker while another process holds the lock", { timeout: 40_000 }, async (t) => {
+  for (const mode of ["seeded", "cold", "hourly"]) await t.test(mode, async (t) => {
+    const cloud = await fakeCloud(), inner = memorySecrets()
+    const folder = join(scratch, randomUUID()), secretName = `cloud/quit-${mode}`
+    let granted = new GrantedSecrets(inner, folder)
+    const cursors = memoryAccountEventCursors()
+    const logs: string[] = [], log = (message: string) => { logs.push(message) }
+    let offset = 0
+    const clock = accountEventClock(), eventClock = { ...clock, now: () => clock.now() + offset }
+    let mac = await signedIn(cloud, { secretName, secrets: granted, eventCursors: cursors, eventClock, log })
+    const joined = () => ({ type: "device-joined", device: { id: randomUUID(), kind: "cli", name: "build-box", platform: "Linux", enrolledBy: "device-code", from: { city: "Frankfurt", region: null, country: "DE" } } })
+    await waitFor(() => cloud.subscribes.length > 0, "following")
+    cloud.announce(joined())
+    await waitFor(async () => (await inlineCursor(inner, secretName)).seen === 1, "first inline checkpoint")
+    if (mode === "cold") {
+      await mac.accounts.close()
+      await granted.broker.close()
+      granted = new GrantedSecrets(inner, folder)
+      mac = desktop({ url: cloud.url, secretName, secrets: granted, eventCursors: cursors, eventClock, log })
+      await mac.accounts.ready()
+      await mac.until(connected, "reopened without seeding grants")
+      await waitFor(() => cloud.subscribes.includes(`account:${cloud.account.id} after 1`), "following again")
+    }
+    const device = [...cloud.devices.values()][0]!
+    const scope = { cloud: cloud.url, account: cloud.account.id, device: device.id, createdAt: device.createdAt }
+    const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+      import { acquireHostLock } from "@mako/host/base/host-lock"
+      const lock = await acquireHostLock(process.argv[1], { purpose: "borrowing", waitMs: 0 })
+      if (lock.kind !== "held") throw new Error("The fixture couldn't hold the borrowing lock")
+      process.send("held")
+      process.on("message", async () => { await lock.release(); process.exit(0) })
+    `, folder], { stdio: ["ignore", "ignore", "inherit", "ipc"] })
+    const exited = once(child, "exit")
+    let deadline: ReturnType<typeof setTimeout> | undefined
+    try {
+      const [message] = await Promise.race([once(child, "message"), exited.then(() => { throw new Error("The lock holder exited before readiness") })])
+      assert.equal(message, "held")
+      const listing = t.mock.method(granted.broker, "grants")
+      if (mode === "hourly") offset = 60 * 60_000
+      cloud.announce(joined())
+      await waitFor(async () => await cursors.read(scope) === 2, "latest sidecar checkpoint")
+      if (mode === "hourly") await waitFor(() => listing.mock.callCount() > 0, "hourly checkpoint already waiting for the lock")
+      const started = performance.now()
+      await Promise.race([
+        (async () => { await mac.accounts.close(); await granted.broker.close() })(),
+        new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error("Quit did not drain within its checkpoint bound")), 4_000) }),
+      ])
+      assert.ok(logs.some(message => message.includes("quit cursor checkpoint skipped")), "the skipped checkpoint is logged")
+      assert.equal(child.exitCode, null, "quit did not require the other host to release its lock")
+      t.diagnostic(`quit and broker drain with held lock: ${Math.round(performance.now() - started)} ms`)
+    } finally {
+      clearTimeout(deadline)
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
+      await exited
+      await mac.accounts.close()
+      await granted.broker.close()
+    }
+  })
 })
 
 test("300 checkpoints create at most one compatibility grant per hour and the deadline needs no new event", { timeout: 30_000 }, async (t) => {

@@ -251,6 +251,8 @@ const SIGN_OUT_RETRY_MS = 60_000
 const SEEN_SAVE_MS = 2_000
 /** Old binaries read the inline cursor: one compatibility save per hour, plus clean shutdown. */
 const INLINE_SEEN_MS = 60 * 60_000
+/** A rollback checkpoint must not turn a contended borrowing lock into a slow quit. */
+const QUIT_INLINE_MS = 2_000
 
 /** The record a host's sign-in is kept under; each data root signs in as its own device. */
 export function cloudSignInName(dataRoot: string): string {
@@ -400,6 +402,7 @@ export class CloudAccounts {
   #inlineSave: (() => void) | undefined
   readonly #eventClock: AccountEventClock
   #inlineAt: number | undefined
+  readonly #inlineStop = new AbortController()
   #persisted: Stored | undefined
   /** Latest normal credential save accepted in memory or on disk, never an older checkpoint snapshot. */
   #checkpointSource: Stored | undefined
@@ -1365,12 +1368,25 @@ export class CloudAccounts {
       this.#seenSave = undefined
       this.#saveSeen()
     }
+    const requiredWrites = this.#writes
+    const checkpoint = this.#inlineStop
     this.#saveInline(true)
     if (this.#finishing) clearTimeout(this.#finishing)
     if (this.#signIn) this.#endSignIn()
     this.#disconnect()
     void this.#pool.close().catch(() => undefined)
-    return this.#closing = this.#writes.then(() => undefined)
+    const checkpointWrite = this.#writes
+    let timer: ReturnType<typeof setTimeout>
+    const deadline = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        // Also release an hourly checkpoint already waiting for the broker when quit began.
+        checkpoint.abort(new Error("The quit checkpoint's deadline passed"))
+        this.#options.log?.("cloud account quit cursor checkpoint skipped; older builds may replay more events", { waitMs: QUIT_INLINE_MS })
+        resolve()
+      }, QUIT_INLINE_MS)
+    })
+    // Real credential saves and the sidecar still drain; only optional rollback checkpoints are cancelled.
+    return this.#closing = requiredWrites.then(() => Promise.race([checkpointWrite, deadline])).then(() => undefined).finally(() => clearTimeout(timer))
   }
 
   // Signing in.
@@ -1473,12 +1489,13 @@ export class CloudAccounts {
   }
 
   /** Called only in the write queue, including by rare legacy-cursor checkpoints. */
-  async #writeCredential(stored: Stored): Promise<boolean> {
+  async #writeCredential(stored: Stored, signal?: AbortSignal): Promise<boolean> {
     const { secrets, secretName } = this.#options
     if (!(await secrets.durable())) return false
+    signal?.throwIfAborted()
     const seen = this.#seen
     const kept = seen === undefined ? stored : { ...stored, seen }
-    await secrets.write("mako-sign-in", secretName, JSON.stringify(kept))
+    await secrets.write("mako-sign-in", secretName, JSON.stringify(kept), signal ? { signal } : undefined)
     this.#persisted = kept
     if (seen !== undefined) this.#inlineAt = this.#eventClock.now()
     this.#scheduleInline()
@@ -1499,7 +1516,9 @@ export class CloudAccounts {
     if (this.#options.links === false) return // Status inspection never owns or changes the credential.
     const scope = this.#stored && eventScope(this.#stored)
     if (!scope) return
+    const signal = this.#inlineStop.signal
     const write = this.#writes.then(async () => {
+      signal?.throwIfAborted()
       const current = this.#stored, persisted = this.#persisted, source = this.#checkpointSource, seen = this.#seen
       if ((!shutdown && this.#closed) || !current || !persisted || !source || seen === undefined || seen <= (persisted.seen ?? 0)) return
       // The queued request must not cross a sign-out/re-enrollment or restore a credential superseded in this queue.
@@ -1507,11 +1526,11 @@ export class CloudAccounts {
       if (!shutdown && this.#inlineAt !== undefined && this.#eventClock.now() - this.#inlineAt < INLINE_SEEN_MS) return this.#scheduleInline()
       // Bound attempts too: a failed or ambiguous save must not turn the two-second checkpoint into a retry loop.
       this.#inlineAt = this.#eventClock.now()
-      try { await this.#writeCredential({ ...current, credential: source.credential }) }
+      try { await this.#writeCredential({ ...current, credential: source.credential }, signal) }
       finally { this.#scheduleInline() }
     })
     this.#writes = write.catch(() => undefined)
-    void write.catch((error: Error) => this.#options.log?.("cloud account inline cursor not saved for older builds", { error: error.message }))
+    void write.catch((error: Error) => { if (!signal?.aborted) this.#options.log?.("cloud account inline cursor not saved for older builds", { error: error.message }) })
   }
 
   /** Keeps the last account event heard soon, with every other heard meanwhile (`SEEN_SAVE_MS`). */
