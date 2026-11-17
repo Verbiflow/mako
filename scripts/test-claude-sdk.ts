@@ -314,6 +314,8 @@ await assert.rejects(
   let hooks: Options["hooks"]
   const hookDriver = createClaudeSdkDriver({ ...dependencies, query: async (options) => {
     hooks = options.options.hooks
+    assert.deepEqual(options.options.supportedDialogKinds, ["refusal_fallback_prompt"], "the refusal dialog is declared, so Claude Code asks it")
+    assert.ok(options.options.onUserDialog, "and answered")
     return { ...(await dependencies.query(options)), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close() }
   } })
   await hookDriver.start("/tmp/work", admitted("claude", { conversationId: "hook-fixture", emit: (event) => events.push(event) }))
@@ -446,6 +448,34 @@ const lesser = full.tool("Bash", { command: "rm -rf $D/x" }, askedFor({ decision
 assert.equal(permissionEvents.at(-1)?.type, "live-permission", "a lesser mode asks the person, as before")
 full.respond(options.requestId, { kind: "choice", optionId: "reject_once" })
 await lesser
+
+// A model's refusal: Claude Code asks whether to try the turn on its fallback model. Mako asks the person (or a Fin's
+// Apex) through the same card, Full access or not, and answers only what it declared.
+{
+  mode = "bypassPermissions"
+  const dialogOptions = { signal: new AbortController().signal, requestId: "refusal-dialog" }
+  const payload = { originalModel: "claude-fable-5-1", fallbackModel: "claude-opus-4-8", apiRefusalCategory: "cyber", retractedMessageUuids: ["u1"] }
+  const asked = full.dialog({ dialogKind: "refusal_fallback_prompt", payload }, dialogOptions)
+  const card = permissionEvents.at(-1)
+  assert.ok(card?.type === "live-permission", "a refusal's choice is asked even in Full access")
+  assert.equal(card.request.title, "claude-fable-5-1 declined this request (cyber)")
+  assert.deepEqual(card.request.options.map((option) => [option.optionId, option.name]), [["retry_fallback", "Try claude-opus-4-8"], ["cancelled", "Not now"]])
+  full.respond("refusal-dialog", { kind: "choice", optionId: "retry_fallback" })
+  assert.deepEqual(await asked, { behavior: "completed", result: "retry_fallback" }, "trying answers Claude Code's own retry")
+  const declined = full.dialog({ dialogKind: "refusal_fallback_prompt", payload }, dialogOptions)
+  full.respond("refusal-dialog", { kind: "choice", optionId: "cancelled" })
+  assert.deepEqual(await declined, { behavior: "cancelled" }, "not now lets the turn end declined")
+  const stopped = new AbortController()
+  const dropped = full.dialog({ dialogKind: "refusal_fallback_prompt", payload }, { signal: stopped.signal, requestId: "refusal-dropped" })
+  stopped.abort()
+  assert.deepEqual(await dropped, { behavior: "cancelled" }, "a dialog Claude withdraws, or a stop, is no answer")
+  const count = permissionEvents.length
+  assert.deepEqual(await full.dialog({ dialogKind: "some_future_dialog", payload: {} }, dialogOptions), { behavior: "cancelled" })
+  assert.deepEqual(await full.dialog({ dialogKind: "refusal_fallback_prompt", payload: { originalModel: 1 } }, dialogOptions), { behavior: "cancelled" })
+  assert.equal(permissionEvents.length, count, "an unknown kind or a payload Mako can't read asks nobody")
+  mode = "default"
+  console.log("PASS: a model's refusal asks whether to try Claude Code's fallback model, through the approval card, never by itself")
+}
 const queue = new ClaudeInput()
 queue.close()
 assert.throws(() => queue.send(steered.value), /closed/)

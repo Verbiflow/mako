@@ -3,7 +3,7 @@ import { stripVTControlCharacters } from "node:util"
 import type { ApprovalSubmission, ApprovalEndSource } from "../../contracts/approval-response.js"
 import { claudeProposedPlan } from "@mako/sessions/claude-projection"
 import { planFeedbackMessage } from "@mako/sessions/harnesses"
-import type { CanUseTool, OnElicitation, PermissionMode, PermissionUpdate } from "@anthropic-ai/claude-agent-sdk"
+import type { CanUseTool, OnElicitation, OnUserDialog, PermissionMode, PermissionUpdate } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod"
 import type { ClaudeApprovalObserver } from "./approval-observer.js"
 import type { ClaudePermissionObserver } from "./permission-observer.js"
@@ -28,6 +28,20 @@ const QuestionsSchema = z.object({
     .min(1)
     .max(10),
 })
+/**
+ * The dialog kinds Mako answers (`supportedDialogKinds`): Claude Code sends no other, and without one declared its flow
+ * goes on as if nobody could be asked.
+ */
+export const CLAUDE_DIALOG_KINDS = ["refusal_fallback_prompt"] as const
+/** The payload of a `refusal_fallback_prompt` as Claude Code's CLI declares it (its result: retry_fallback, edit_prompt or cancelled). */
+const RefusalFallbackPromptSchema = z.object({
+  originalModel: z.string(),
+  fallbackModel: z.string(),
+  apiRefusalCategory: z.string().nullable().optional(),
+  guidanceText: z.string().optional(),
+}).loose()
+const RETRY_FALLBACK = "retry_fallback"
+
 /** The settings files Claude saves a "don't ask again" rule to, as its suggestions name them. */
 const SAVED_DESTINATIONS = new Set<PermissionUpdate["destination"]>(["localSettings", "projectSettings", "userSettings"])
 const WHERE = { localSettings: "in this project", projectSettings: "for everyone in this project", userSettings: "in every project", session: "for this session", cliArg: "for this session" } as const
@@ -249,6 +263,38 @@ export class ClaudePermissions {
       updatedInput: input,
       updatedPermissions: leavePlan ?? (response.optionId === "allow_session" ? session : response.optionId === "allow_always" ? saved : undefined),
     }
+  }
+
+  /**
+   * Claude Code asks whether to try the turn again on another model when its model declines it
+   * (`refusal_fallback_prompt`). Its answer is the person's, or a Fin's Apex's, through the same ask as any approval:
+   * never answered by itself, Full access or not. Trying runs the same turn on the fallback model, which drops what the
+   * declined one had streamed; not trying ends the turn declined (`model-refusal`). A kind Mako doesn't declare is
+   * cancelled, as the SDK asks of a host that can't show it.
+   */
+  readonly dialog: OnUserDialog = async (request, options) => {
+    const prompt = request.dialogKind === "refusal_fallback_prompt" ? RefusalFallbackPromptSchema.safeParse(request.payload) : undefined
+    if (!prompt?.success) return { behavior: "cancelled" }
+    const { originalModel, fallbackModel, apiRefusalCategory, guidanceText } = prompt.data
+    const why = apiRefusalCategory ? ` (${apiRefusalCategory})` : ""
+    const response = await this.ask(
+      {
+        id: options.requestId,
+        title: `${originalModel} declined this request${why}`,
+        detail: [
+          guidanceText?.trim(),
+          `Try ${fallbackModel} runs this same turn again on it, in place of what ${originalModel} had started. Not now ends the turn as declined.`,
+        ].filter(Boolean).join("\n\n"),
+        options: [
+          { optionId: RETRY_FALLBACK, name: `Try ${fallbackModel}`, kind: "allow_once" },
+          { optionId: "cancelled", name: "Not now", kind: "reject_once" },
+        ],
+      },
+      options.signal
+    )
+    return response.kind === "choice" && response.optionId === RETRY_FALLBACK
+      ? { behavior: "completed", result: RETRY_FALLBACK }
+      : { behavior: "cancelled" }
   }
 
   readonly elicitation: OnElicitation = async (request, options) => {
