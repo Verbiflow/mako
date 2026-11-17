@@ -21,6 +21,8 @@ export interface JobDemand {
   readonly name: string
   readonly on: boolean
   set(on: boolean): void
+  /** Hears it turn on and off, for work that keeps timers of its own rather than a job's; returns the unsubscribe. */
+  onChange(listener: (on: boolean) => void): () => void
 }
 
 interface Job {
@@ -82,6 +84,7 @@ export class HostJobs {
   /** A demand jobs can need, off until set on. */
   demand(name: string): JobDemand {
     let on = false
+    const listeners = new Set<(on: boolean) => void>()
     const demand: JobDemand = {
       name,
       get on() {
@@ -91,6 +94,11 @@ export class HostJobs {
         if (next === on) return
         on = next
         for (const job of this.jobs.values()) if (job.needs.includes(demand)) this.resume(job)
+        for (const listener of listeners) listener(on)
+      },
+      onChange: (listener) => {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
       },
     }
     return demand

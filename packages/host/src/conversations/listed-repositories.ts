@@ -1,4 +1,5 @@
 import type { ContinueRepository } from "@mako/protocol/continues"
+import type { JobDemand } from "../base/host-jobs.js"
 import { hostLog } from "../base/host-log.js"
 
 export type ListedRepositoriesOptions = {
@@ -7,6 +8,11 @@ export type ListedRepositoriesOptions = {
   /** The rows are made again: a reading moved. */
   changed(): void
   againMs: number
+  /**
+   * On while a branch can move under Mako's eye (a window, agents at work): read again every `againMs` only then, and
+   * all at once as it comes back on, so an idle host runs no Git on a timer. Absent, always.
+   */
+  needed?: JobDemand
 }
 
 /**
@@ -21,14 +27,36 @@ export class ListedRepositories {
   readonly #reading = new Set<string>()
   #asked = new Set<string>()
   #asking: Set<string> | undefined
-  readonly #timer: NodeJS.Timeout
+  #timer: NodeJS.Timeout | undefined
+  readonly #stopNeeded: (() => void) | undefined
 
   constructor(options: ListedRepositoriesOptions) {
     this.#options = options
-    this.#timer = setInterval(() => {
-      for (const folder of this.#asked) void this.#read(folder)
-    }, options.againMs)
+    const needed = options.needed
+    if (!needed) this.#start()
+    else {
+      this.#stopNeeded = needed.onChange((on) => {
+        if (!on) return this.#pause()
+        this.#readAll()
+        this.#start()
+      })
+      if (needed.on) this.#start()
+    }
+  }
+
+  #start(): void {
+    if (this.#timer) return
+    this.#timer = setInterval(() => this.#readAll(), this.#options.againMs)
     this.#timer.unref()
+  }
+
+  #pause(): void {
+    clearInterval(this.#timer)
+    this.#timer = undefined
+  }
+
+  #readAll(): void {
+    for (const folder of this.#asked) void this.#read(folder)
   }
 
   /** The rows' making, `undefined` while they can't be made: the folders `of` is asked for in it are the ones read again. */
@@ -52,7 +80,8 @@ export class ListedRepositories {
   }
 
   stop(): void {
-    clearInterval(this.#timer)
+    this.#stopNeeded?.()
+    this.#pause()
   }
 
   async #read(folder: string): Promise<void> {
