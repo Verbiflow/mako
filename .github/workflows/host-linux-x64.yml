@@ -2,12 +2,6 @@ name: Host on Linux x64
 
 on:
   workflow_dispatch:
-  # A pin of a kept harness build changed on main: this run saves its archives where every pull request's run finds
-  # them (main's cache scope), while the vendor still serves them.
-  push:
-    branches: [main]
-    paths:
-      - vendor/harness-builds/sources.json
   pull_request:
     paths:
       - .github/actions/install-dependencies/**
@@ -74,8 +68,11 @@ jobs:
       - uses: ./.github/actions/control-media-sources
       - name: The harness builds Mako keeps, checked by their sha256 and laid out as their installers do
         run: npm run test:harness-builds
-      # The image lays out the harness builds Mako keeps, never the vendor's withdrawn ones.
+      # The image lays out the harness builds Mako keeps, never the vendor's withdrawn ones: from the cache, the vendor
+      # or their kept release (harness-builds.yml), which the token reads.
       - uses: ./.github/actions/harness-builds
+        with:
+          token: ${{ github.token }}
       - name: The record store's locks, kills and orphans on Linux
         # record-locks.mjs, record-orphans.mjs, record-backfill.mjs and record-repack.mjs in node:24 containers:
         # as is, with no /proc, with no AF_UNIX, and two containers sharing one store.

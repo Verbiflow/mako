@@ -557,7 +557,8 @@ try {
   // and the withdrawn one can't be had (Devin served 3000.12.57 for a day). The pinned installer runs first.
   const ran: string[] = []
   let landed: string | undefined
-  const newest = new RuntimeUpdates({
+  let lands = "devin 3000.13.4"
+  const fallingBack = (served: () => Promise<string>, installed?: string) => new RuntimeUpdates({
     processes,
     sources: () => [{
       ...devin, label: "Devin", binary: () => landed ?? null,
@@ -568,7 +569,8 @@ try {
     path: join(dir, `newest-${randomUUID()}.json`),
     env: () => ({ PATH: "/usr/bin:/bin" }),
     emit: () => undefined,
-    version: async (binary) => binary === landed ? "devin 3000.13.4" : Promise.reject(new Error("missing")),
+    served: () => served(),
+    version: async (binary) => binary === landed ? lands : installed && binary === devinBinary ? installed : Promise.reject(new Error("missing")),
     run: async (_command, args) => {
       const script = args.join(" ")
       ran.push(script)
@@ -579,6 +581,7 @@ try {
     stat: async (path) => path === landed ? { mtimeMs: 4, size: 4 } : Promise.reject(new Error("ENOENT")),
     realpath: async (path) => path,
   })
+  const newest = fallingBack(async () => "3000.13.4")
   await newest.refresh()
   const took = await newest.install("devin")
   assert.equal(took.result?.outcome, "installed", took.result?.message)
@@ -586,6 +589,33 @@ try {
   assert.equal(took.versions?.standing, "newer", "the vendor's newest is newer than the withdrawn pin, which Mako runs")
   assert.deepEqual(ran.map((script) => /cli\/(?:[\d.]+\/)?setup\.sh/.exec(script)?.[0]), ["cli/3000.12.57/setup.sh", "cli/setup.sh"])
   newest.stop()
+  // Never down: a vendor serving an older build than the pin (Devin has pulled a same-day build and served the one
+  // before it) installs nothing, and says why; so does a feed that can't be read. The pinned installer still ran.
+  for (const [served, says] of [
+    [async () => "3000.12.43", /the newest its vendor serves, 3000\.12\.43, is older than that\. Mako installs no older build/],
+    [async () => { throw new Error("The vendor's manifest answered 503") }, /couldn't read which Devin its vendor serves now \(The vendor's manifest answered 503\)/],
+  ] as const) {
+    ran.length = 0
+    landed = undefined
+    const refusing = fallingBack(served)
+    await refusing.refresh()
+    const refused = await refusing.install("devin")
+    assert.equal(refused.result?.outcome, "failed")
+    assert.match(refused.result?.message ?? "", says)
+    assert.deepEqual(ran.map((script) => /cli\/(?:[\d.]+\/)?setup\.sh/.exec(script)?.[0]), ["cli/3000.12.57/setup.sh"], "the vendor's newest installer never ran")
+    refusing.stop()
+  }
+  // An installer that put an older build in place than the pin says so, never reports a plain install.
+  ran.length = 0
+  landed = undefined
+  lands = "devin 3000.12.43"
+  const older = fallingBack(async () => "3000.13.4")
+  await older.refresh()
+  const below = await older.install("devin")
+  assert.equal(below.result?.outcome, "failed")
+  assert.match(below.result?.message ?? "", /Devin's installer put 3000\.12\.43 in place, older than the 3000\.12\.57 this Mako is tested with/)
+  older.stop()
+  lands = "devin 3000.13.4"
   const offline = withdrawn("curl: (6) Could not resolve host: static.devin.ai\n")
   await offline.refresh()
   assert.equal((await offline.install("devin")).result?.message, "The download didn't get through. Check the connection.", "a network failure is said as one, never as a withdrawn build")

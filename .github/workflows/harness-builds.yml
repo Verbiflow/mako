@@ -1,0 +1,42 @@
+name: Harness builds Mako keeps
+
+# A pin in vendor/harness-builds/sources.json landed on main: its archives, checked by their sha256, are published as
+# a prerelease of this repository while the vendor still serves them (scripts/publish-harness-builds.mjs). Devin
+# withdraws each build a day or so after shipping the next; CI's cache expires a week after its last read; the
+# release keeps the bytes Mako tested for as long as the pin stands. Run it by hand to publish a pin again.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - vendor/harness-builds/sources.json
+      # Its own landing publishes the pins already there.
+      - .github/workflows/harness-builds.yml
+      - scripts/publish-harness-builds.mjs
+
+permissions:
+  contents: write
+
+concurrency:
+  group: harness-builds
+  cancel-in-progress: false
+
+jobs:
+  keep:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
+      - name: Publish each kept build as its prerelease's asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/publish-harness-builds.mjs
