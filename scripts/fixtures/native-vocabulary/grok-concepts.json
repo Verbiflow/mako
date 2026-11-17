@@ -1,8 +1,8 @@
 {
   "harness": "grok",
-  "version": "1.0.77",
-  "on": "2026-11-06",
-  "searched": "grok-linux-x86_64",
+  "version": "1.0.88",
+  "on": "2026-11-17",
+  "searched": "grok-native",
   "probed": 21,
   "missing": [],
   "skills": {

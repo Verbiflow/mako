@@ -10,7 +10,7 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 | Codex | 2026-11-16 | 0.169.0 | its own listing (skills) |
 | Cursor | 2026-11-17 | SDK 1.4.0 | its own listing (skills, MCP) |
 | OpenCode | 2026-11-17 | 2.3.0 | its own listing (skills, MCP) |
-| Grok | 2026-11-07 | 1.0.77 | its own listing (skills, MCP) |
+| Grok | 2026-11-17 | 1.0.88 | its own listing (skills, MCP) |
 | Devin | 2026-11-17 | 3000.13.4 | its own listing (skills, MCP) |
 
 ## Instructions
@@ -139,7 +139,7 @@ Each harness's tools as it defines them, recorded per version by `npm run harnes
 | Codex | 0.169.0 | 2026-11-16 | 25 (12 called from a script) | 27 | 16 | the tools in the model request of Codex's app-server with Mako's thread config (codexInteractiveConfig, codexCollaborationMode), per listed model, with and without plan, and as a lead (codexRoutingConfig) |
 | Cursor | 1.4.0 | 2026-11-17 | 17 | 1 | 8 | the tool-call schema in @cursor/sdk (ConversationStepSchema's toolCall message): the arguments Cursor reports each tool with, not its model's definitions |
 | OpenCode | 2.3.0 | 2026-11-17 | 14 | 8 | 3 | the tools in the model request of OpenCode's native API as Mako starts it (startOpenCodeApi), per agent Mako's modes use, on an Anthropic and an OpenAI model, and as a lead (configureOpenCodeRouting) |
-| Grok | 1.0.77 | 2026-11-06 | 27 | 8 | 2 | the tools in the model request of grok agent stdio as Mako's ACP source launches it, once per Mako mode, and as a lead (nativeSpawnsOff) |
+| Grok | 1.0.88 | 2026-11-17 | 27 | 8 | 2 | the tools in the model request of grok agent stdio as Mako's ACP source launches it, once per Mako mode, and as a lead (nativeSpawnsOff) |
 | Devin | 3000.13.4 | 2026-11-17 | 25 | 10 | 3 | the tools in Devin's GetChatMessage request to a stand-in Windsurf API, devin acp launched as Mako's ACP source launches it, once per Mako mode and as a lead (nativeSpawnsOff) |
 
 ## Plan, questions and subagents
