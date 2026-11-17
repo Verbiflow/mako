@@ -1568,6 +1568,8 @@ export class LaptopTracker implements AttributionTracker {
         const roots = this.shellTurns.get(key)
         this.shellTurns.delete(key)
         for (const [root, command] of roots ?? []) {
+          const state = this.states.get(root)
+          if (!state || state.asleep || (state.watchedAt ?? -Infinity) >= command.start) continue
           const lag = Math.min(30_000, Math.max(TRAIL_MS, this.lateMs()))
           const checks = this.silentRoots.get(root) ?? []
           checks.push({ start: command.start, due: Date.now() + lag })
@@ -1621,7 +1623,10 @@ export class LaptopTracker implements AttributionTracker {
     if (!turn) return
     const start = this.evidence.callSpan(call)?.start ?? call.startedAt
     if (start === undefined) return
-    const folders = call.checkout ? [call.checkout] : commands.flatMap((command) => command.kind === "command" && command.cwd ? [command.cwd] : [])
+    const folders = commands.flatMap((command) => [
+      ...command.cwd ? [command.cwd] : call.checkout ? [call.checkout] : [],
+      ...command.named ?? [],
+    ])
     for (const state of this.states.values()) {
       if (!state.root.repository || state.asleep || call.endedAt < state.root.trackedAt) continue
       if ((state.watchedAt ?? -Infinity) >= start) continue

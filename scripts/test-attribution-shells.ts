@@ -203,7 +203,7 @@ test("a pending or failed root never delays or rejects another checkout's count"
   try {
     w.fs.write("/other/a.ts", "other\n")
     await w.tracker.track({ id: "other", path: "/other", kind: "workspace" })
-    const mark = { kind: "turn" as const, id: "bad-turn", session: "bad-session", thread: "bad", turn: "bad-turn", checkout: "/other", at: w.clock.now() }
+    const mark = { kind: "turn" as const, id: "bad-turn", session: "bad-session", thread: "bad", turn: "bad-turn", checkout: "/", at: w.clock.now() }
     w.tracker.activity({ ...mark, edge: "start" })
     await w.advance(1)
     w.tracker.reported({ session: mark.session, thread: mark.thread, turn: mark.turn, checkout: mark.checkout, call: "bad-call", startedAt: mark.at, endedAt: w.clock.now(), status: "completed", effects: [{ kind: "command", command: "python3 generate.py", cwd: "/other" }] })
@@ -214,4 +214,18 @@ test("a pending or failed root never delays or rejects another checkout's count"
     await w.tracker.settled({ rescans: false, checkouts: ["/other"] })
     await w.tracker.settled({ rescans: false, checkouts: ["/repo"] })
   } finally { w.fail(false); await w.close() }
+})
+
+
+test("a healthy notification delivered after the command report avoids even the turn-end wait", async () => {
+  const w = await world(8000)
+  try {
+    w.start(); await w.advance(1); w.write("a.ts", "watched\n"); w.finish()
+    await w.advance(50); w.deliver(); w.activity("one", "turn", "end")
+    let done = false
+    const read = w.tracker.settled({ rescans: false, checkouts: ["/repo"] }).then(() => { done = true })
+    await flush()
+    assert.equal(done, true, "a report arriving before its watch event must not charge a healthy root the lag window")
+    await read
+  } finally { await w.close() }
 })
