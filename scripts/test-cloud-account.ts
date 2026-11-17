@@ -1029,17 +1029,30 @@ test("quit bounds the rollback checkpoint and drains its broker while another pr
     }
     const device = [...cloud.devices.values()][0]!
     const scope = { cloud: cloud.url, account: cloud.account.id, device: device.id, createdAt: device.createdAt }
+    // The other host. Its lock is the one this host's broker takes for each change, and the write the checkpoint above
+    // waited for still revokes and grants through it a moment later (`GrantedSecrets.write`), so it takes the lock as a
+    // second host does, trying again while this one holds it for a change, and says why if it never holds it.
     const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
       import { acquireHostLock } from "@mako/host/base/host-lock"
-      const lock = await acquireHostLock(process.argv[1], { purpose: "borrowing", waitMs: 0 })
-      if (lock.kind !== "held") throw new Error("The fixture couldn't hold the borrowing lock")
+      const until = Date.now() + 10_000
+      let lock = await acquireHostLock(process.argv[1], { purpose: "borrowing", waitMs: 0 })
+      while (lock.kind !== "held" && Date.now() < until) {
+        await new Promise((done) => setTimeout(done, 5))
+        lock = await acquireHostLock(process.argv[1], { purpose: "borrowing", waitMs: 0 })
+      }
+      if (lock.kind !== "held") throw new Error("The fixture couldn't hold the borrowing lock in 10 s: " + JSON.stringify(lock))
       process.send("held")
       process.on("message", async () => { await lock.release(); process.exit(0) })
-    `, folder], { stdio: ["ignore", "ignore", "inherit", "ipc"] })
+    `, folder], { stdio: ["ignore", "ignore", "pipe", "ipc"] })
+    let stderr = ""
+    child.stderr?.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk })
     const exited = once(child, "exit")
     let deadline: ReturnType<typeof setTimeout> | undefined
     try {
-      const [message] = await Promise.race([once(child, "message"), exited.then(() => { throw new Error("The lock holder exited before readiness") })])
+      await Promise.race([once(child, "spawn"), once(child, "error").then(([error]) => { throw new Error(`The lock holder didn't start: ${String(error)}`) })])
+      const [message] = await Promise.race([once(child, "message"), exited.then(([code, signal]) => {
+        throw new Error(`The lock holder exited before readiness (exit ${code ?? signal}): ${stderr.trim() || "no stderr"}`)
+      })])
       assert.equal(message, "held")
       const listing = t.mock.method(granted.broker, "grants")
       if (mode === "hourly") offset = 60 * 60_000
