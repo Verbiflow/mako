@@ -42,6 +42,7 @@ import {
 
 import {
   snapshotGit,
+  STREAMED_BLOBS,
   privateSnapshotObjects,
   sealSnapshotObjects,
   snapshotPayloadBytes,
@@ -551,7 +552,7 @@ export class WorkspaceSnapshots {
     const ignored = new Set((await this.snapshotGit(scope, ["check-ignore", "-z", "--stdin"], index, `${there.join("\0")}\0`, objects).catch(() => "")).split("\0").filter(Boolean))
     const taken = there.filter((path) => !ignored.has(path))
     if (taken.length)
-      await this.snapshotGit(scope, ["--literal-pathspecs", "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], index, `${taken.join("\0")}\0`, objects)
+      await this.snapshotGit(scope, [...STREAMED_BLOBS, "--literal-pathspecs", "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], index, `${taken.join("\0")}\0`, objects)
   }
 
   /**
@@ -1366,7 +1367,7 @@ export class WorkspaceSnapshots {
         : "absent"
       if (!since)
         await captureGit(
-          ["add", "-A", ...(sparse ? ["--sparse"] : []), "--", ".", ...embedded.map((path) => `:(exclude,literal)${path.slice(0, -1)}`)],
+          [...STREAMED_BLOBS, "add", "-A", ...(sparse ? ["--sparse"] : []), "--", ".", ...embedded.map((path) => `:(exclude,literal)${path.slice(0, -1)}`)],
           workingIndex
         )
       const tree = (await captureGit(["write-tree"], workingIndex)).trim()

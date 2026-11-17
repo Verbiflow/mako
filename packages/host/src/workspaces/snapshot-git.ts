@@ -82,6 +82,13 @@ function environment(
       : undefined,
   }
 }
+/**
+ * For a checkpoint's `git add`: every blob it writes streams into one pack (Git's bulk check-in, for any file past
+ * `core.bigFileThreshold`) instead of a loose file each. Loose writes were most of a capture: 1,300 changed files took
+ * 630 to 1,580 ms to add loose and 150 to 300 ms into a pack, on the same loaded Mac. A file Git converts on its way in
+ * (line endings, a clean filter) still goes the ordinary way; `sealSnapshotObjects` repacks either into one pack.
+ */
+export const STREAMED_BLOBS = ["-c", "core.bigFileThreshold=1"] as const
 /** What one Git command of a checkpoint may print: a listing of every file of a large repository fits. */
 export const SNAPSHOT_OUTPUT_BYTES = 64 * 1024 * 1024
 
@@ -171,7 +178,7 @@ export async function sealSnapshotObjects(
         "The checkpoint exceeds its object storage limit. No workspace files were changed."
       )
   }
-  await snapshotGit(git,
+  const sealed = (await snapshotGit(git,
     cwd,
     [
       "pack-objects",
@@ -183,7 +190,14 @@ export async function sealSnapshotObjects(
     undefined,
     base ? `${commit}\n^${base}^{tree}\n` : `${commit}\n`,
     objects
-  )
+  )).trim()
+  // The checkpoint keeps one pack: the one just written. Any other here is what `STREAMED_BLOBS` streamed as it was
+  // taken, every object of which the sealed pack holds now if the commit reaches it.
+  if (!/^[a-f0-9]{40,64}$/.test(sealed)) throw new Error("A checkpoint's pack wasn't written")
+  for (const entry of await readdir(join(directory, "git/objects/pack"))) {
+    if (entry.startsWith(`pack-${sealed}.`)) continue
+    await rm(join(directory, "git/objects/pack", entry), { force: true })
+  }
   for (const entry of await readdir(join(directory, "git/objects"))) {
     if (/^[a-f0-9]{2}$/.test(entry))
       await rm(join(directory, "git/objects", entry), {
