@@ -123,90 +123,95 @@ async function stopHost(): Promise<void> {
 }
 const client = randomUUID()
 const call = (channel: string, args: unknown[]) => invokeRuntime(socket, client, channel, args)
+// A signal ends the run as quit does: the host is stopped, never left running on its own.
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, () => void stopHost().finally(() => process.exit(1)))
 await startHost()
-await assertOwnHarnessStores(call, dataRoot)
+try {
+  await assertOwnHarnessStores(call, dataRoot)
 
-const AccountSchema = z.object({ state: z.object({ status: z.string(), url: z.string().optional(), account: z.object({ entitlements: z.array(z.string()) }).loose().optional() }).loose() }).loose()
-async function signedIn(ms: number): Promise<void> {
-  let account = AccountSchema.parse(await call("mako:cloud-account", []))
-  for (const deadline = Date.now() + ms; !(account.state.status === "signed-in" && account.state.account?.entitlements.includes("cloud")); ) {
-    if (Date.now() > deadline) throw new Error(`the host isn't signed in with the cloud: ${account.state.status}`)
-    await new Promise((resolve) => setTimeout(resolve, 500))
-    account = AccountSchema.parse(await call("mako:cloud-account", []))
+  const AccountSchema = z.object({ state: z.object({ status: z.string(), url: z.string().optional(), account: z.object({ entitlements: z.array(z.string()) }).loose().optional() }).loose() }).loose()
+  async function signedIn(ms: number): Promise<void> {
+    let account = AccountSchema.parse(await call("mako:cloud-account", []))
+    for (const deadline = Date.now() + ms; !(account.state.status === "signed-in" && account.state.account?.entitlements.includes("cloud")); ) {
+      if (Date.now() > deadline) throw new Error(`the host isn't signed in with the cloud: ${account.state.status}`)
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      account = AccountSchema.parse(await call("mako:cloud-account", []))
+    }
   }
-}
-const signing = AccountSchema.parse(await call("mako:cloud-sign-in", []))
-if (signing.state.status === "signing-in") console.log(`SIGN IN ${signing.state.url ?? ""}`)
-await signedIn(5 * 60_000)
+  const signing = AccountSchema.parse(await call("mako:cloud-sign-in", []))
+  if (signing.state.status === "signing-in") console.log(`SIGN IN ${signing.state.url ?? ""}`)
+  await signedIn(5 * 60_000)
 
-const SnapshotSchema = z.object({
-  sessionId: z.string().optional(),
-  threadId: z.string().optional(),
-  requests: z.array(z.object({ id: z.string(), status: z.string(), text: z.string().optional(), digest: z.object({ notices: z.array(z.object({ id: z.string() }).loose()) }).loose().optional() }).loose()).default([]),
-}).loose()
-const snapshot = async (id: string) => SnapshotSchema.parse(await call("mako:live-snapshot", [id]))
+  const SnapshotSchema = z.object({
+    sessionId: z.string().optional(),
+    threadId: z.string().optional(),
+    requests: z.array(z.object({ id: z.string(), status: z.string(), text: z.string().optional(), digest: z.object({ notices: z.array(z.object({ id: z.string() }).loose()) }).loose().optional() }).loose()).default([]),
+  }).loose()
+  const snapshot = async (id: string) => SnapshotSchema.parse(await call("mako:live-snapshot", [id]))
 
-// The Apex: a Thread on OpenCode in the project, its first turn answered by the scripted model.
-const conversation = randomUUID()
-const first = randomUUID()
-await call("mako:live-start", ["opencode", project, { conversationId: conversation, title: "Cloud Fins proof", initialRequest: { id: first, text: `Reply with the single word ${APEX_WORD}.`, attachments: [] } }])
-for (const deadline = Date.now() + 5 * 60_000; ; await new Promise((resolve) => setTimeout(resolve, 500))) {
-  const status = (await snapshot(conversation)).requests.find((request) => request.id === first)?.status
-  if (status === "completed") break
-  if (status === "failed" || Date.now() > deadline) throw new Error(`the Apex's first turn didn't complete: ${status ?? "never started"}`)
-}
-const apex = await snapshot(conversation)
-if (!apex.sessionId || !apex.threadId) throw new Error("the Apex's conversation has no Thread")
-const caller = { kind: "agent", session: apex.sessionId }
-say("READY", { dataRoot, project, repository: values.repository, commit, apex: { conversation, session: apex.sessionId, thread: apex.threadId } })
-
-/** The Apex's device's store, read only: its placings and its Fins' edges as they stand. */
-function readStore<Row>(sql: string): Row[] {
-  const store = new DatabaseSync(join(dataRoot, "threads.sqlite"), { readOnly: true })
-  try {
-    // SAFETY: each query names the columns its caller reads.
-    return store.prepare(sql).all() as Row[]
-  } finally {
-    store.close()
+  // The Apex: a Thread on OpenCode in the project, its first turn answered by the scripted model.
+  const conversation = randomUUID()
+  const first = randomUUID()
+  await call("mako:live-start", ["opencode", project, { conversationId: conversation, title: "Cloud Fins proof", initialRequest: { id: first, text: `Reply with the single word ${APEX_WORD}.`, attachments: [] } }])
+  for (const deadline = Date.now() + 5 * 60_000; ; await new Promise((resolve) => setTimeout(resolve, 500))) {
+    const status = (await snapshot(conversation)).requests.find((request) => request.id === first)?.status
+    if (status === "completed") break
+    if (status === "failed" || Date.now() > deadline) throw new Error(`the Apex's first turn didn't complete: ${status ?? "never started"}`)
   }
-}
+  const apex = await snapshot(conversation)
+  if (!apex.sessionId || !apex.threadId) throw new Error("the Apex's conversation has no Thread")
+  const caller = { kind: "agent", session: apex.sessionId }
+  say("READY", { dataRoot, project, repository: values.repository, commit, apex: { conversation, session: apex.sessionId, thread: apex.threadId } })
 
-const lines = createInterface({ input: process.stdin })
-for await (const line of lines) {
-  const [word, ...rest] = line.trim().split(" ")
-  const argument = rest.join(" ")
-  try {
-    if (word === "quit") break
-    else if (word === "start") say("STARTED", await call("mako:agents-start", [caller, JSON.parse(argument)]))
-    else if (word === "list") say("LISTED", await call("mako:agents-list", [caller, {}]))
-    else if (word === "read") say("READ", await call("mako:agents-read", [caller, { child: argument }]))
-    else if (word === "stop") say("STOPPED", await call("mako:agents-stop", [caller, { child: argument, reason: "the proof stops it" }]))
-    else if (word === "placings") say("PLACINGS", readStore<{ op: string; record: string; at: number }>("SELECT op, record, at FROM agent_placings"))
-    else if (word === "edges") say("EDGES", readStore<{ child_thread: string; name: string; op: string; record: string; created_at: number; closed_at: number | null }>("SELECT child_thread, name, op, record, created_at, closed_at FROM thread_parents"))
-    else if (word === "digests") say("DIGESTS", (await snapshot(conversation)).requests.filter((request) => request.digest).map(({ id, status, text, digest }) => ({ id, status, text: text?.slice(0, 2_000) ?? "", notices: digest?.notices.map((notice) => notice.id) ?? [] })))
-    else if (word === "log") {
-      const pattern = new RegExp(argument)
-      say("LOG", (await readFile(join(dataRoot, "logs", "host.log"), "utf8")).split("\n").filter((each) => pattern.test(each)).slice(-200))
-    } else if (word === "restart") {
-      const began = Date.now()
-      await stopHost()
-      await startHost()
-      await signedIn(60_000)
-      say("RESTARTED", { ms: Date.now() - began })
-    } else if (word === "dirty") {
-      await writeFile(join(project, DIRTY_FILE), "not committed\n")
-      say("DIRTY", { file: DIRTY_FILE })
-    } else if (word === "clean") {
-      await rm(join(project, DIRTY_FILE), { force: true })
-      say("CLEAN")
-    } else say("UNKNOWN", { line })
-  } catch (error) {
-    say("FAILED", { line, error: error instanceof Error ? error.message : String(error) })
+  /** The Apex's device's store, read only: its placings and its Fins' edges as they stand. */
+  function readStore<Row>(sql: string): Row[] {
+    const store = new DatabaseSync(join(dataRoot, "threads.sqlite"), { readOnly: true })
+    try {
+      // SAFETY: each query names the columns its caller reads.
+      return store.prepare(sql).all() as Row[]
+    } finally {
+      store.close()
+    }
   }
-}
 
-await call("mako:cloud-sign-out", []).catch(() => undefined)
-await stopHost()
-await model.close()
-scratch.dispose()
+  const lines = createInterface({ input: process.stdin })
+  for await (const line of lines) {
+    const [word, ...rest] = line.trim().split(" ")
+    const argument = rest.join(" ")
+    try {
+      if (word === "quit") break
+      else if (word === "start") say("STARTED", await call("mako:agents-start", [caller, JSON.parse(argument)]))
+      else if (word === "list") say("LISTED", await call("mako:agents-list", [caller, {}]))
+      else if (word === "read") say("READ", await call("mako:agents-read", [caller, { child: argument }]))
+      else if (word === "stop") say("STOPPED", await call("mako:agents-stop", [caller, { child: argument, reason: "the proof stops it" }]))
+      else if (word === "placings") say("PLACINGS", readStore<{ op: string; record: string; at: number }>("SELECT op, record, at FROM agent_placings"))
+      else if (word === "edges") say("EDGES", readStore<{ child_thread: string; name: string; op: string; record: string; created_at: number; closed_at: number | null }>("SELECT child_thread, name, op, record, created_at, closed_at FROM thread_parents"))
+      else if (word === "digests") say("DIGESTS", (await snapshot(conversation)).requests.filter((request) => request.digest).map(({ id, status, text, digest }) => ({ id, status, text: text?.slice(0, 2_000) ?? "", notices: digest?.notices.map((notice) => notice.id) ?? [] })))
+      else if (word === "log") {
+        const pattern = new RegExp(argument)
+        say("LOG", (await readFile(join(dataRoot, "logs", "host.log"), "utf8")).split("\n").filter((each) => pattern.test(each)).slice(-200))
+      } else if (word === "restart") {
+        const began = Date.now()
+        await stopHost()
+        await startHost()
+        await signedIn(60_000)
+        say("RESTARTED", { ms: Date.now() - began })
+      } else if (word === "dirty") {
+        await writeFile(join(project, DIRTY_FILE), "not committed\n")
+        say("DIRTY", { file: DIRTY_FILE })
+      } else if (word === "clean") {
+        await rm(join(project, DIRTY_FILE), { force: true })
+        say("CLEAN")
+      } else say("UNKNOWN", { line })
+    } catch (error) {
+      say("FAILED", { line, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+  await call("mako:cloud-sign-out", []).catch(() => undefined)
+} finally {
+  // However the run ends, a failure included: the host stopped, the model closed, the scratch home gone unless kept.
+  await stopHost()
+  await model.close()
+  scratch.dispose()
+}
 say("ENDED")
