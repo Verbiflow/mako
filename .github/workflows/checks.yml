@@ -532,6 +532,9 @@ jobs:
           path: vendor/control-media/darwin-arm64
           key: ${{ steps.media.outputs.cache-primary-key }}
       - name: Package the app and check it
+        # Under the job's own 45: a hang here fails this step, never reaching `ci` as a cancel it takes for a newer
+        # commit's (the build, packaging and its checks take about 4 minutes).
+        timeout-minutes: 35
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: |
