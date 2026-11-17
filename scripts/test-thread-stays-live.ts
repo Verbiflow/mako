@@ -217,20 +217,21 @@ try {
   // The stop ended the process; the session is woken again while the stopped turn's after-snapshot still runs.
   await until("the stopped turn's after-snapshot to begin", () => snapshots.held.includes(first))
   await until("the session to be woken again", () => starts.length === 2 && owner.snapshot(id)?.session.connection === "connected")
-  assert.equal(prompts.length, 1, "nothing goes while the after-snapshot runs")
-  snapshots.release()
-
   // Nothing else happens: no click, no other message.
   await until("the person's message to reach the agent with nothing else happening", () => prompts.length === 2)
+  assert.equal(snapshots.held.length, 1, "the stopped turn's capture is still held when the next prompt goes")
+  snapshots.release()
   assert.ok(prompts[1]!.endsWith(words), "the agent hears the person's message")
   assert.notEqual(owner.snapshot(id)?.requests.find((request) => request.id === first)?.snapshots?.before?.kind, "ready", "the next prompt never waits for the stopped turn's before publication")
   snapshots.releaseBefore()
   const requests = owner.snapshot(id)!.requests
   assert.equal(requests.find((request) => request.id === first)?.interruption?.reason, "steered")
   assert.equal(requests.find((request) => request.id === queued)?.status, "dispatching")
-  await until("the stopped turn's after-snapshot to be kept", () => owner.snapshot(id)?.requests.find((request) => request.id === first)?.snapshots?.after?.kind === "ready")
-  assert.equal(owner.snapshot(id)?.requests.find((request) => request.id === first)?.snapshots?.before?.kind, "ready", "the stopped turn keeps both boundaries after its session generation changes")
-  console.log("thread stays live: a steer that stopped Claude's turn reaches the agent once its after-snapshot ends, with no click")
+  await until("the overlapping closing checkpoint to be refused", () => owner.snapshot(id)?.requests.find((request) => request.id === first)?.snapshots?.after?.kind === "unavailable")
+  const after = owner.snapshot(id)?.requests.find((request) => request.id === first)?.snapshots?.after
+  assert.ok(after?.kind === "unavailable" && /next turn/.test(after.reason))
+  assert.equal(owner.snapshot(id)?.requests.find((request) => request.id === first)?.snapshots?.before?.kind, "ready", "the stopped turn keeps its valid before-point after its session generation changes")
+  console.log("thread stays live: a steer reaches the agent before the old closing save ends; an overlapping after-point is unavailable")
 } finally {
   snapshots.releaseBefore()
   snapshots.release()

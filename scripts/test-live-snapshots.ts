@@ -14,7 +14,6 @@ import {
 import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
 import { mock } from "node:test"
-import { DatabaseSync } from "node:sqlite"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { followHostLog } from "@mako/host/base/host-log"
@@ -41,10 +40,26 @@ writeFileSync(file, "initial")
 git("add", ".")
 git("commit", "-qm", "initial")
 const snapshots = new WorkspaceSnapshots(gitRunner, join(root, "snapshots"))
+// A failed assertion can release a held pack while its capture is still publishing: join it before removing files.
+const captures = new Set<Promise<unknown>>()
+function tracked<T>(pending: Promise<T>): Promise<T> {
+  captures.add(pending)
+  void pending.then(() => captures.delete(pending), () => captures.delete(pending))
+  return pending
+}
+const begin = snapshots.beginRun.bind(snapshots), end = snapshots.endRun.bind(snapshots)
+mock.method(snapshots, "beginRun", (...args: Parameters<WorkspaceSnapshots["beginRun"]>) => tracked(begin(...args)))
+mock.method(snapshots, "endRun", (...args: Parameters<WorkspaceSnapshots["endRun"]>) => tracked(end(...args)))
 const states = new Map<string, LiveSessionState>()
 const sent: string[] = []
+const steered: string[] = []
 const driver: ProviderLiveDriver = {
   ...noCapabilities,
+  // Heard at once, into the turn it runs: what the person sends while a turn runs goes as a steer.
+  steering: { kind: "supported", lands: "interrupt", landing: "native", via: "Injected driver fixture", steer: async (_id, input) => {
+    steered.push(input.text)
+    return { kind: "accepted" }
+  } },
   resume: fixtureResume(),
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
   nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
@@ -77,7 +92,8 @@ const driver: ProviderLiveDriver = {
     const state = states.get(id)
     assert.ok(state)
     sent.push(text)
-    const running: LiveSessionState = { ...state, status: "running" }
+    // As a real driver says its turn's run, which a steer names.
+    const running: LiveSessionState = { ...state, status: "running", nativeRunId: randomUUID() }
     states.set(id, running)
     owner.observe({ type: "live-session", session: running })
   },
@@ -128,13 +144,14 @@ try {
   // A fast turn can finish while its baseline is still packing. Its closing files must be read now,
   // while the next prompt dispatches before baseline publication, and neither side of the record is lost.
   const baselinePacking = Promise.withResolvers<void>(), releaseBaseline = Promise.withResolvers<void>()
+  const closingPacking = Promise.withResolvers<void>(), releaseClosing = Promise.withResolvers<void>()
   const run = gitRunner.run.bind(gitRunner)
-  let paused = false
+  let packs = 0
   const packing = mock.method(gitRunner, "run", async (input: RunOptions) => {
-    if (!paused && input.args.includes("pack-objects")) {
-      paused = true
-      baselinePacking.resolve()
-      await releaseBaseline.promise
+    if (input.args.includes("pack-objects")) {
+      packs++
+      if (packs === 1) { baselinePacking.resolve(); await releaseBaseline.promise }
+      if (packs === 2) { closingPacking.resolve(); await releaseClosing.promise }
     }
     return run(input)
   })
@@ -147,16 +164,15 @@ try {
   assert.equal(
     sent.length,
     1,
-    "queued provider cannot start ahead of final checkpoint"
+    "the queued provider still waits for its own before-point's read"
   )
-  const catalog = new DatabaseSync(join(root, "snapshots", "snapshots.sqlite"), { readOnly: true })
   try {
-    await until(() => Boolean(catalog.prepare("SELECT 1 FROM snapshots LIMIT 1").get()))
+    await closingPacking.promise
     await until(() => sent.length === 2)
-    assert.equal(owner.snapshot(id)?.requests[0].snapshots, undefined, "the next prompt dispatches while the previous baseline is still packing")
+    assert.equal(owner.snapshot(id)?.requests[0].snapshots, undefined, "the next prompt dispatches while both the baseline and a later pack are still held")
   } finally {
+    releaseClosing.resolve()
     releaseBaseline.resolve()
-    catalog.close()
     packing.mock.restore()
   }
   await until(() => owner.snapshot(id)?.requests[0].snapshots?.after?.kind === "ready")
@@ -195,7 +211,7 @@ try {
   )
   assert.equal(sent.length, 2)
   console.log(
-    "PASS: automatic before/after checkpoints, queue ordering, coordinated idle fork, original history retained"
+    "PASS: automatic before/after checkpoints, sends do not wait for closing packs, coordinated idle fork, original history retained"
   )
 
   writeFileSync(file, "user edit after successful rewind")
@@ -299,6 +315,104 @@ try {
     "PASS: cancellation during baseline capture never dispatches the prompt"
   )
 
+  // The follow-up turn runs while the previous turn's closing checkpoint still publishes: it reads as running, the
+  // person can stop it, and what they send into it goes as a steer, as the composer sends it (queued, then steered).
+  {
+    await owner.stop()
+    owner = new LiveConversations(dependencies)
+    const conversation = randomUUID(), previous = randomUUID(), next = randomUUID()
+    await owner.start("test", cwd, { conversationId: conversation })
+    const sentBefore = sent.length
+    owner.submit(conversation, previous, "previous turn")
+    await until(() => sent.length === sentBefore + 1 && owner.snapshot(conversation)?.requests[0].snapshots?.before.kind === "ready")
+    writeFileSync(file, "the previous turn's edit")
+    const packing = Promise.withResolvers<void>(), releasePack = Promise.withResolvers<void>()
+    const original = gitRunner.run.bind(gitRunner)
+    let held = false
+    const pack = mock.method(gitRunner, "run", async (input: RunOptions) => {
+      if (!held && input.args.includes("pack-objects")) {
+        held = true
+        packing.resolve()
+        await releasePack.promise
+      }
+      return original(input)
+    })
+    try {
+      owner.submit(conversation, next, "follow up")
+      finish(conversation, "previous answer")
+      await packing.promise
+      await until(() => sent.length === sentBefore + 2 && owner.snapshot(conversation)?.requests[1].nativeRun !== undefined)
+      assert.equal(owner.snapshot(conversation)?.requests[0].snapshots?.after, undefined, "the previous turn's closing checkpoint is still publishing")
+      const work = owner.lifecycleWork().find((item) => item.id === conversation)
+      assert.equal(work?.status, "running", "a turn beside a closing publication is running, not finishing")
+      assert.equal(work?.stoppable, true, "and the person can stop it")
+      const steer = randomUUID(), words = "keep the old parser too"
+      owner.submit(conversation, steer, words)
+      const receipt = await owner.act(conversation, { kind: "steer-queued", id: randomUUID(), requestId: next, queuedRequestId: steer, text: words, attachments: [] })
+      assert.equal(receipt.state.kind, "accepted", "a steer into the follow-up turn is accepted while the previous closing checkpoint publishes")
+      assert.equal(steered.at(-1), words, "the agent hears it as a steer")
+      assert.equal(owner.snapshot(conversation)?.requests[0].snapshots?.after, undefined, "the closing publication was still held when the steer went")
+    } finally {
+      releasePack.resolve()
+      pack.mock.restore()
+    }
+    await until(() => owner.snapshot(conversation)?.requests[0].snapshots?.after?.kind === "ready")
+    finish(conversation, "next answer")
+    await until(() => owner.snapshot(conversation)?.requests[1].snapshots?.after !== undefined)
+    console.log("PASS: a turn beside a closing publication reads as running and takes the person's steer")
+  }
+
+  // A closing read may be wedged too: if the next turn's own deadline lets it go, the old after-point is unsafe.
+  {
+    await owner.stop()
+    owner = new LiveConversations({ ...dependencies, checkpointWaitMs: 200 })
+    const conversation = randomUUID(), previous = randomUUID(), next = randomUUID()
+    await owner.start("test", cwd, { conversationId: conversation })
+    const sentBefore = sent.length
+    owner.submit(conversation, previous, "previous turn")
+    await until(() => sent.length === sentBefore + 1 && owner.snapshot(conversation)?.requests[0].snapshots?.before.kind === "ready")
+    writeFileSync(file, "the previous turn's last edit")
+    const reading = Promise.withResolvers<void>(), releaseRead = Promise.withResolvers<void>()
+    const original = gitRunner.run.bind(gitRunner)
+    let paused = false, expire: (() => void) | undefined
+    const capture = mock.method(gitRunner, "run", async (input: RunOptions) => {
+      if (!paused && input.args.includes("add") && input.args.includes("-A")) {
+        paused = true
+        reading.resolve()
+        await releaseRead.promise
+      }
+      return original(input)
+    })
+    const schedule = globalThis.setTimeout
+    const timer = mock.method(globalThis, "setTimeout", (callback: (...args: unknown[]) => void, ms: number, ...args: unknown[]) => {
+      if (ms !== 200) return schedule(callback, ms, ...args)
+      expire = () => callback(...args)
+      return schedule(() => {}, 60_000).unref()
+    })
+    try {
+      finish(conversation, "previous answer")
+      await reading.promise
+      await assert.rejects(owner.previewRewind(conversation, previous, "before"), /pending work/, "rewind still waits for the closing capture")
+      owner.submit(conversation, next, "follow up")
+      await until(() => expire !== undefined)
+      assert.equal(sent.length, sentBefore + 1, "the next turn still waits for its own before-point")
+      expire!()
+      await until(() => sent.length === sentBefore + 2)
+      writeFileSync(file, "the next agent wrote while the previous closing read was held")
+      releaseRead.resolve()
+      await until(() => owner.snapshot(conversation)?.requests[0].snapshots?.after !== undefined)
+      const after = owner.snapshot(conversation)?.requests[0].snapshots?.after
+      assert.ok(after?.kind === "unavailable" && /next turn/.test(after.reason), "a late closing read cannot publish the next agent's edits as the previous turn's after-point")
+      finish(conversation, "next answer")
+      await until(() => owner.snapshot(conversation)?.requests[1].snapshots?.after !== undefined)
+    } finally {
+      releaseRead.resolve()
+      timer.mock.restore()
+      capture.mock.restore()
+    }
+    console.log("PASS: the next before-point deadline still applies; an overlapping closing read is unavailable, while rewind stays blocked")
+  }
+
   // Expire the requested checkpoint timer explicitly: elapsed wall time is a diagnostic, not a timer guarantee.
   for (const failure of [false, true]) {
     await owner.stop()
@@ -371,6 +485,8 @@ try {
   }
 } finally {
   await owner.stop()
+  while (captures.size) await Promise.allSettled([...captures])
   snapshots.close()
+  await gitRunner.close()
   rmSync(root, { recursive: true, force: true })
 }
