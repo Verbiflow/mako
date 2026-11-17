@@ -11,7 +11,7 @@ import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { mock } from "node:test"
@@ -21,6 +21,7 @@ import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
 import { CallBounds } from "@mako/host/harnesses/call-bounds"
 import { claudeCallHooks } from "@mako/host/harnesses/claude/call-hooks"
 import { WriteHolds } from "@mako/host/harnesses/write-holds"
+import { personCodeRuns } from "@mako/host/harnesses/claude/person-hooks"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
@@ -50,6 +51,8 @@ const end = snapshots.endRun.bind(snapshots)
 mock.method(snapshots, "endRun", (...args: Parameters<WorkspaceSnapshots["endRun"]>) => tracked(end(...args)))
 
 const holds = new WriteHolds()
+/** Whether the fixture's next launch says its writes are held (`WriteHolds.attend`). */
+let attended = true
 const states = new Map<string, LiveSessionState>()
 const sent: string[] = []
 const steered: string[] = []
@@ -84,6 +87,8 @@ const driver: ProviderLiveDriver = {
       configOptions: [],
     }
     states.set(state.id, state)
+    // As Claude's driver does when nothing the person set up runs beside its hook (`personCodeRuns`).
+    holds.attend(options.conversationId, attended)
     return state
   },
   async prompt(id, text, _attachments, _settings, dispatch) {
@@ -177,7 +182,7 @@ try {
       await until(() => capture.reading() && deadline.armed() && sent.length === sentBefore + 1)
       assert.equal(owner.snapshot(id)?.requests[0].snapshots?.before, undefined, "the provider has the message before the checkpoint holds the workspace")
       const write = holds.beforeWrite(bindingOf(id))
-      assert.ok(write, "a holding harness's turn holds its writes while its checkpoint reads")
+      assert.ok(holds.attends(bindingOf(id)), "a holding harness's launch holds its writes")
       assert.equal(await settlesWithin(write, 50), false, "the agent's first write waits for the checkpoint")
       // Its writes wait, so the person steers the running turn as any: the read doesn't hold the steer.
       await until(() => owner.snapshot(id)?.requests[0].nativeRun !== undefined)
@@ -191,7 +196,7 @@ try {
       writeFileSync(file, "the agent's edit")
       await until(() => owner.snapshot(id)?.requests[0].snapshots?.before !== undefined)
       assert.equal(owner.snapshot(id)?.requests[0].snapshots?.before.kind, "ready", "a checkpoint that held the workspace before any write is the turn's before")
-      assert.equal(holds.beforeWrite(bindingOf(id)), undefined, "the hold ends with its wait")
+      assert.equal(await settlesWithin(holds.beforeWrite(bindingOf(id)), 50), true, "once the checkpoint holds the workspace, a write goes at once")
       finish(id, "edited")
       await until(() => owner.snapshot(id)?.requests[0].snapshots?.after?.kind === "ready")
       const preview = await owner.previewRewind(id, request, "before")
@@ -225,7 +230,7 @@ try {
       writeFileSync(file, "written before the checkpoint held the workspace")
       capture.release()
       const reasonOf = () => { const before = owner.snapshot(id)?.requests[0].snapshots?.before; return before?.kind === "unavailable" ? before.reason : "" }
-      await until(() => owner.snapshot(id)?.requests[0].snapshots?.before?.kind === "ready" || /after the turn went/.test(reasonOf()))
+      await until(() => owner.snapshot(id)?.requests[0].snapshots?.before?.kind === "ready" || /after the agent first wrote/.test(reasonOf()))
       const before = owner.snapshot(id)?.requests[0].snapshots?.before
       assert.ok(before?.kind === "unavailable" && before.timedOut === true, "a capture held after writes could run is never the turn's before")
       finish(id, "late")
@@ -239,22 +244,140 @@ try {
     console.log("PASS: when the wait runs out the write goes, and the late capture is never the turn's before")
   }
 
+  // The wait runs out and the agent writes nothing: the late capture still holds the workspace as the turn started.
+  {
+    await owner.stop()
+    owner = new LiveConversations(dependencies)
+    writeFileSync(file, "initial")
+    const id = randomUUID(), request = randomUUID()
+    await owner.start("test", cwd, { conversationId: id })
+    await until(() => owner.snapshot(id)?.session.status === "ready")
+    const capture = holdCapture(), deadline = holdDeadline()
+    try {
+      const sentBefore = sent.length
+      owner.submit(id, request, "answer without writing")
+      await until(() => capture.reading() && deadline.armed() && sent.length === sentBefore + 1)
+      deadline.expire()
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      assert.equal(owner.snapshot(id)?.requests[0].snapshots?.before, undefined, "the deadline alone marks nothing")
+      capture.release()
+      await until(() => owner.snapshot(id)?.requests[0].snapshots?.before !== undefined)
+      assert.equal(owner.snapshot(id)?.requests[0].snapshots?.before.kind, "ready", "a turn that wrote nothing keeps its checkpoint, however long the capture took")
+      // A write asked for now, the capture done, goes at once and changes nothing.
+      assert.equal(await settlesWithin(holds.beforeWrite(bindingOf(id)), 50), true, "a write after the capture goes at once")
+      assert.equal(owner.snapshot(id)?.requests[0].snapshots?.before.kind, "ready")
+      finish(id, "answered")
+      await until(() => owner.snapshot(id)?.requests[0].snapshots?.after !== undefined)
+    } finally {
+      deadline.restore()
+      capture.release()
+      capture.restore()
+    }
+    console.log("PASS: a turn that writes nothing keeps its checkpoint when the capture outlasts the deadline")
+  }
+
+  // A tool cancelled while it waits goes at once and wrote nothing: the late capture is still the turn's before.
+  {
+    await owner.stop()
+    owner = new LiveConversations(dependencies)
+    const id = randomUUID(), request = randomUUID()
+    await owner.start("test", cwd, { conversationId: id })
+    await until(() => owner.snapshot(id)?.session.status === "ready")
+    const capture = holdCapture(), deadline = holdDeadline()
+    try {
+      const sentBefore = sent.length
+      owner.submit(id, request, "start then stop")
+      await until(() => capture.reading() && deadline.armed() && sent.length === sentBefore + 1)
+      const stop = new AbortController()
+      const write = holds.beforeWrite(bindingOf(id), stop.signal)
+      assert.equal(await settlesWithin(write, 50), false)
+      stop.abort()
+      assert.equal(await settlesWithin(write, 50), true, "a cancelled tool lets go at once")
+      deadline.expire()
+      capture.release()
+      await until(() => owner.snapshot(id)?.requests[0].snapshots?.before !== undefined)
+      assert.equal(owner.snapshot(id)?.requests[0].snapshots?.before.kind, "ready", "a cancelled tool wrote nothing")
+      finish(id, "stopped")
+      await until(() => owner.snapshot(id)?.requests[0].snapshots?.after !== undefined)
+    } finally {
+      deadline.restore()
+      capture.release()
+      capture.restore()
+    }
+    console.log("PASS: a tool cancelled while it waits lets go at once and leaves the checkpoint ready")
+  }
+
+  // A launch whose writes aren't held (the person's own hooks run beside the harness's): the message waits as ever.
+  {
+    await owner.stop()
+    owner = new LiveConversations(dependencies)
+    attended = false
+    const id = randomUUID(), request = randomUUID()
+    await owner.start("test", cwd, { conversationId: id })
+    await until(() => owner.snapshot(id)?.session.status === "ready")
+    const capture = holdCapture(), deadline = holdDeadline()
+    try {
+      const sentBefore = sent.length
+      owner.submit(id, request, "not held")
+      await until(() => capture.reading() && deadline.armed())
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      assert.equal(sent.length, sentBefore, "an unheld launch's message waits for its checkpoint")
+      assert.equal(holds.attends(bindingOf(id)), false, "and holds no write")
+      capture.release()
+      await until(() => sent.length === sentBefore + 1 && owner.snapshot(id)?.requests[0].snapshots?.before !== undefined)
+      assert.equal(owner.snapshot(id)?.requests[0].snapshots?.before.kind, "ready")
+      finish(id, "waited")
+      await until(() => owner.snapshot(id)?.requests[0].snapshots?.after !== undefined)
+    } finally {
+      attended = true
+      deadline.restore()
+      capture.release()
+      capture.restore()
+    }
+    console.log("PASS: a launch whose writes aren't held sends only once its checkpoint holds the workspace")
+  }
+
+  // Whether the person's own Claude Code setup runs code beside Mako's hook: any hook, a plugin, or settings unread.
+  {
+    const home = join(root, "person-home"), project = join(root, "person-project")
+    mkdirSync(join(home, ".claude"), { recursive: true })
+    mkdirSync(join(project, ".claude"), { recursive: true })
+    const env = { HOME: home, CLAUDE_CONFIG_DIR: join(home, ".claude") }
+    const managed = existsSync(process.platform === "darwin" ? "/Library/Application Support/ClaudeCode/managed-settings.json" : "/etc/claude-code/managed-settings.json")
+    if (!managed) assert.equal(await personCodeRuns(env, project), false, "no settings: nothing of the person's runs")
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ model: "opus", hooks: {} }))
+    if (!managed) assert.equal(await personCodeRuns(env, project), false, "settings with no hooks or plugins")
+    writeFileSync(join(project, ".claude", "settings.local.json"), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "touch x" }] }] } }))
+    assert.equal(await personCodeRuns(env, project), true, "a hook on any event, a Stop's included")
+    rmSync(join(project, ".claude", "settings.local.json"))
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ enabledPlugins: { "formatter@market": true } }))
+    assert.equal(await personCodeRuns(env, project), true, "an enabled plugin, which may bring hooks")
+    writeFileSync(join(home, ".claude", "settings.json"), "{ not json")
+    assert.equal(await personCodeRuns(env, project), true, "settings Mako can't read")
+    console.log(`PASS: a launch holds writes only where none of the person's own Claude Code setup runs beside the hook${managed ? " (managed settings present here: their absence wasn't checked)" : ""}`)
+  }
+
   // Claude's hook: a tool that may write waits on the hold; one that only reads, or an unheld binding, goes at once.
   {
     const gate = Promise.withResolvers<void>()
-    const hooks = claudeCallHooks(new CallBounds("claude-binding"), undefined, () => gate.promise)
+    // As the driver hands it: the hold, or the tool's cancellation, whichever comes first.
+    const hooks = claudeCallHooks(new CallBounds("claude-binding"), undefined, (signal) => Promise.race([gate.promise, new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }))]))
     /** The inputs these calls carry, as Claude's tools name them. */
     type ToolInput = { file_path?: string; old_string?: string; new_string?: string; command?: string; pattern?: string }
     const preToolUse = (tool_name: string, tool_input: ToolInput): PreToolUseHookInput => ({
       hook_event_name: "PreToolUse", tool_name, tool_input, tool_use_id: randomUUID(), session_id: "s", transcript_path: "t", cwd,
     })
-    const call = (tool_name: string, tool_input: ToolInput) => hooks.pre(preToolUse(tool_name, tool_input), undefined, { signal: new AbortController().signal })
+    const call = (tool_name: string, tool_input: ToolInput, signal = new AbortController().signal) => hooks.pre(preToolUse(tool_name, tool_input), undefined, { signal })
     assert.equal(await settlesWithin(call("Read", { file_path: file }), 50), true, "a read goes at once")
     assert.equal(await settlesWithin(call("Grep", { pattern: "x" }), 50), true, "a search goes at once")
     const edit = call("Edit", { file_path: file, old_string: "a", new_string: "b" })
     const bash = call("Bash", { command: "echo hi > answer" })
     const mcp = call("mcp__other__write", {})
     assert.equal(await settlesWithin(Promise.race([edit, bash, mcp]), 50), false, "an edit, a command and an MCP tool wait")
+    const stopped = new AbortController()
+    const cancelled = call("Write", { file_path: file }, stopped.signal)
+    stopped.abort()
+    assert.equal(await settlesWithin(cancelled, 50), true, "a cancelled tool lets go at once")
     gate.resolve()
     assert.equal(await settlesWithin(Promise.all([edit, bash, mcp]), 1_000), true, "they go once the checkpoint holds the workspace")
     const unheld = claudeCallHooks(new CallBounds("claude-binding"), undefined, () => new WriteHolds().beforeWrite("claude-binding"))

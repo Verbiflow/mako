@@ -48,6 +48,7 @@ import type { ClaudePermissionObserver, prepareClaudePermissionObserver } from "
 import { ClaudeTranscript } from "./sdk-transcript.js"
 import { CallBounds } from "../call-bounds.js"
 import type { WriteHolds } from "../write-holds.js"
+import { personCodeRuns } from "./person-hooks.js"
 import { claudeCallHooks } from "./call-hooks.js"
 import { claudeSubagentStart } from "./routing.js"
 import { ClaudeRequests, ClaudeTranscriptTail, openedTurnLines, takenIn, TASK_PROMPT_WAIT_MS, transcriptNotification, type TranscriptNotification, type TranscriptTailStats } from "./transcript-tail.js"
@@ -697,6 +698,8 @@ export function createClaudeSdkDriver(
         const configured = await trace.step("configuration", () => dependencies.configure(cwd, options, trace))
         config = configured.options
         account = configured.account
+        // This launch's writes are held only where nothing the person set up runs code beside Mako's own hook.
+        if (dependencies.writeHolds) dependencies.writeHolds.attend(conversationId, !await personCodeRuns(config.env, cwd))
         toolApprovals = await trace.step("observation", async () => {
           try {
             return await dependencies.prepareApprovals?.({ config, sessionId: nativeId,
@@ -766,7 +769,7 @@ export function createClaudeSdkDriver(
         teams,
         conversation: conversationId,
       }
-      const callHooks = claudeCallHooks(new CallBounds(conversationId), routing, dependencies.writeHolds && (() => dependencies.writeHolds!.beforeWrite(conversationId)))
+      const callHooks = claudeCallHooks(new CallBounds(conversationId), routing, dependencies.writeHolds && ((signal) => dependencies.writeHolds!.beforeWrite(conversationId, signal)))
       let query: ClaudeQuery
       try { query = await dependencies.query({
         prompt: input,
@@ -1135,6 +1138,7 @@ export function createClaudeSdkDriver(
     },
     async close(id) {
       starting.delete(id)
+      dependencies.writeHolds?.forget(id)
       const live = sessions.get(id)
       if (!live) return
       stop(live)

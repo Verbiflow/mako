@@ -37,15 +37,17 @@ export interface ClaudeCallHooks {
  * through too (`agent_id`), which the stream never shows.
  *
  * `beforeWrite`, when given, is what a tool that may write waits on first: its
- * turn's checkpoint holding the workspace (`WriteHolds`).
+ * turn's checkpoint holding the workspace (`WriteHolds`), or the tool being
+ * cancelled.
  */
-export function claudeCallHooks(bounds: CallBounds, routing?: ClaudeRouting, beforeWrite?: () => Promise<void> | undefined): ClaudeCallHooks {
+export function claudeCallHooks(bounds: CallBounds, routing?: ClaudeRouting, beforeWrite?: (signal: AbortSignal) => Promise<void> | undefined): ClaudeCallHooks {
   return {
-    pre: async (input) => {
+    pre: async (input, _toolUseId, { signal }) => {
       if (input.hook_event_name !== "PreToolUse") return {}
       const routed = routing && claudeRoutedCall(routing, input)
       if (routed) return routed
-      if (!NEVER_WRITE.has(input.tool_name)) await beforeWrite?.()
+      // A tool Claude Code cancels meanwhile (the turn stopped) lets go at once.
+      if (!NEVER_WRITE.has(input.tool_name)) await beforeWrite?.(signal)
       const tool = ToolInputSchema.safeParse(input.tool_input).data
       const path = FILE_TOOLS.has(input.tool_name) ? (tool?.file_path ?? tool?.notebook_path) : undefined
       bounds.before(input.tool_use_id, path && isAbsolute(path) ? [path] : [])

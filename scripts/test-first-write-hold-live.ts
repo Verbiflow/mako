@@ -59,7 +59,9 @@ await sandboxed("mako-first-write", "claude", async (sandbox) => {
   const emit = (event: LiveDriverEvent) => events.push(event)
   const status = () => events.findLast((event) => event.type === "live-session")?.session.status
   const gate = Promise.withResolvers<void>()
-  const unhold = holds.hold(id, gate.promise)
+  // As a turn's checkpoint holds it (`LiveCheckpoints`): released before any freeze, so the write counts as early.
+  let early = 0
+  const unhold = holds.hold(id, { until: gate.promise, frozen: () => false, wrote: () => { early += 1 } })
   const timeline: Record<string, number> = {}
   try {
     await driver.start(sandbox.project, admitted("claude", {
@@ -84,6 +86,8 @@ await sandboxed("mako-first-write", "claude", async (sandbox) => {
     while (!existsSync(target) && Date.now() < deadline + 30_000) await delay(20)
     timeline.written = Date.now()
     assert.equal(readFileSync(target, "utf8"), "written by the agent", "once the hold lets go, the write runs")
+    assert.equal(early, 1, "the write let go before a freeze is said once; the read never was")
+    assert.ok(holds.attends(id), "the sealed launch, with none of the person's hooks or plugins, holds its writes")
     while (Date.now() < deadline + 60_000 && !(heard.length >= 3 && status() !== "running" && status() !== "starting")) await delay(100)
     assert.ok(heard.length >= 3, "the model heard the write's result after the hold let go")
   } finally {
