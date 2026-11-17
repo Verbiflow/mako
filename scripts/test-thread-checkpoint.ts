@@ -328,7 +328,7 @@ async function plainEdits(f: Fixture) {
   f.tracker.sweep()
 }
 
-const leaveLedger = (f: Fixture) => ({ ...f.ledger, heard: () => f.tracker.settled(), partition: (checkout: string, thread: string) => f.ledger.partition(checkout, thread), mako: (write: Parameters<typeof f.tracker.mako>[0]) => f.tracker.mako(write) })
+const leaveLedger = (f: Fixture) => ({ ...f.ledger, heard: () => f.tracker.settled().then(() => true), partition: (checkout: string, thread: string) => f.ledger.partition(checkout, thread), mako: (write: Parameters<typeof f.tracker.mako>[0]) => f.tracker.mako(write) })
 
 test("back from going away, a Thread the cloud took leaves the project folder: only its own changes, all at once", async () => {
   const f = await fixture("leave")
@@ -395,15 +395,16 @@ test("a Thread's changes leave the project folder only where the cloud has them 
 })
 
 
-test("an incomplete journal keeps the checkout and the existing stayed notice", async () => {
-  const f = await fixture("journal-not-ready")
+for (const [name, heard] of [["reports incomplete", async () => false], ["throws", async (): Promise<boolean> => { throw new AggregateError([], "Shell reconciliation is incomplete") }]] as const)
+test(`an incomplete journal (${name}) keeps the checkout and the existing stayed notice`, async () => {
+  const f = await fixture(`journal-not-ready-${name.replace(" ", "-")}`)
   try {
     await plainEdits(f)
     const taken = await f.capture()
     const before = files(f.repo)
     const folder = join(f.base, "leaving")
     const leave = new CheckoutLeave(folder, runner, () => {})
-    const ledger = { ...leaveLedger(f), heard: async () => { throw new AggregateError([], "Shell reconciliation is incomplete") } }
+    const ledger = { ...leaveLedger(f), heard }
     const outcome = await leave.leave("T1", f.repo, [{ root: f.repo, versions: taken.versions }], ledger)
     assert.deepEqual(outcome, { kind: "stayed", paths: taken.versions.map((version) => version.path).sort() })
     assert.deepEqual(files(f.repo), before)
