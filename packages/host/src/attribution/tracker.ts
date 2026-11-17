@@ -342,7 +342,7 @@ export class LaptopTracker implements AttributionTracker {
   private holds = 0
   /** Reads under way of what reported commands ran (`readScripts`). */
   private readonly scriptReads = new Set<Promise<void>>()
-  private readonly shellTurns = new Map<string, Map<string, number>>()
+  private readonly shellTurns = new Map<string, Map<string, { since: number; start: number }>>()
   private readonly silentRoots = new Map<string, { start: number; due: number }[]>()
   private readonly shells: ShellReconciliations
   /** Each turn's footprint outside the tracked roots, and the machine's learned churn. */
@@ -1567,12 +1567,12 @@ export class LaptopTracker implements AttributionTracker {
       else {
         const roots = this.shellTurns.get(key)
         this.shellTurns.delete(key)
-        for (const [root, start] of roots ?? []) {
+        for (const [root, command] of roots ?? []) {
           const lag = Math.min(30_000, Math.max(TRAIL_MS, this.lateMs()))
           const checks = this.silentRoots.get(root) ?? []
-          checks.push({ start, due: Date.now() + lag })
+          checks.push({ start: command.start, due: Date.now() + lag })
           this.silentRoots.set(root, checks)
-          this.shells.schedule(root, lag)
+          this.shells.schedule(root, lag, command.since)
         }
       }
     }
@@ -1626,7 +1626,7 @@ export class LaptopTracker implements AttributionTracker {
       if (!state.root.repository || state.asleep || call.endedAt < state.root.trackedAt) continue
       if ((state.watchedAt ?? -Infinity) >= start) continue
       if (folders.some((folder) => within(state.root.path, folder) || within(folder, state.root.path)))
-        turn.set(state.root.id, Math.max(turn.get(state.root.id) ?? -Infinity, start))
+        turn.set(state.root.id, { since: Math.min(turn.get(state.root.id)?.since ?? Infinity, start), start: Math.max(turn.get(state.root.id)?.start ?? -Infinity, start) })
     }
   }
 
@@ -2062,7 +2062,7 @@ export class LaptopTracker implements AttributionTracker {
       })
     } else slice.done()
     if (stale) this.reattribute()
-    if (!more && !this.pending.size) this.evidence.prune(now - SETTLE_MS - this.lateMs())
+    if (!more && !this.pending.size) this.evidence.prune(Math.min(now - SETTLE_MS - this.lateMs(), this.shells.since()))
   }
 
   /**
@@ -2075,7 +2075,9 @@ export class LaptopTracker implements AttributionTracker {
    * shared journal's caller gave up at 15 s, and the walks and the stat
    * cache's writes held the host's loop.
    */
-  async settled(options: { rescans?: boolean; checkouts?: readonly string[] } = {}): Promise<void> {
+  settled(): Promise<void>
+  settled(options?: { rescans?: boolean; checkouts?: readonly string[] }): Promise<void | boolean>
+  async settled(options: { rescans?: boolean; checkouts?: readonly string[] } = {}): Promise<void | boolean> {
     if (options.rescans === false) return this.whatWasHeard(options.checkouts)
     await this.resuming
     this.settling++
@@ -2106,10 +2108,10 @@ export class LaptopTracker implements AttributionTracker {
   }
 
   /** What was heard journaled, rescans left to their own pace: a root rescanning now is passed over, its changes found by the rescan. */
-  private async whatWasHeard(checkouts?: readonly string[]): Promise<void> {
+  private async whatWasHeard(checkouts?: readonly string[]): Promise<boolean> {
     const states = [...this.states.values()].filter((state) => checkouts === undefined || checkouts.some((path) => within(path, state.root.path) || within(state.root.path, path)))
     await Promise.all(states.map((state) => this.tracking.get(state.root.path)))
-    await this.shells.heard(states.map((state) => state.root.id))
+    const complete = await this.shells.heard(states.map((state) => state.root.id))
     for (let pass = 0; pass < HEARD_PASSES; pass++) {
       const runs: Promise<void>[] = []
       for (const state of states) {
@@ -2130,6 +2132,7 @@ export class LaptopTracker implements AttributionTracker {
     await Promise.all(this.scriptReads)
     await this.footprints?.settled()
     while (this.reattribution) await this.reattribution
+    return complete
   }
 
   /** How often roots were rescanned for lost events in the last hour, and which are rescanned less often because their losses keep coming. */

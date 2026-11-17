@@ -243,8 +243,8 @@ export interface Attribution {
   shares(checkout: string, thread: string): CheckoutShares
   /** Every change heard so far journaled. */
   settled(checkouts?: readonly string[]): Promise<void>
-  /** Every change heard so far journaled, without waiting on rescans for lost events: what a turn's count waits for. */
-  heard(checkouts: readonly string[]): Promise<void>
+  /** Only these checkouts, without lost-event rescans; false while incomplete, never a rejected readiness or move. */
+  heard(checkouts: readonly string[]): Promise<boolean>
   /**
    * Track each repository of `checkout` if nothing has yet, so a move can
    * divide it; what it holds uncommitted then is journaled as before tracking.
@@ -413,9 +413,13 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
    * rename right as a turn ended, missing from a move's notice). A host with no writer of its own sends none.
    */
   const heardAll = (): Promise<void> => writer.command({ kind: "heard" }).then(() => undefined, () => undefined)
-  const heard = (checkouts: readonly string[]): Promise<void> => heardAll()
+  const heard = (checkouts: readonly string[]): Promise<boolean> => heardAll()
     .then(() => journal.writes.settled({ rescans: false, checkouts }))
-    .catch((error: Error) => hostWarn("attribution", "a scoped journal read is not settled; continuing on existing evidence", { checkouts: checkouts.join(", "), error: error.message }))
+    .then((complete) => complete !== false)
+    .catch((error: Error) => {
+      hostWarn("attribution", "a scoped journal read is not settled; continuing on existing evidence", { checkouts: checkouts.join(", "), error: error.message })
+      return false
+    })
 
   const view = (): JournalView => {
     if (!reader) throw new Error("Mako's record of changes isn't open yet. Try again in a moment.")
@@ -600,7 +604,7 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       wakeFor(checkout)
       return shares(view(), checkout, thread)
     },
-    settled: (checkouts) => checkouts ? heard(checkouts) : heardAll().then(() => journal.writes.settled()),
+    settled: (checkouts) => (checkouts ? heard(checkouts) : heardAll().then(() => journal.writes.settled())).then(() => undefined),
     heard,
     async track(checkout) {
       const found = await locate(deps.git, checkout).catch(() => null)

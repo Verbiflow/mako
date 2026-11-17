@@ -125,7 +125,7 @@ test("helper failure never rejects a count; a later turn recovers a return to HE
     w.fail(true)
     w.activity("one", "turn", "end")
     const counted = w.tracker.settled({ rescans: false, checkouts: ["/repo"] })
-    await flush(); await w.advance(3100); await counted
+    await flush(); await w.advance(3100); assert.equal(await counted, false)
     w.fail(false); w.start(); w.finish("one", "git restore a.ts"); await w.drain()
     const entries = w.tracker.changes(0).filter((entry) => entry.path === "a.ts")
     assert.equal(entries.length, 2, "a clean Git status still rechecks versions the journal already holds")

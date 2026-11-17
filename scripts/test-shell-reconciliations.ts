@@ -27,7 +27,7 @@ test("unrelated roots cannot delay a scoped watermark, even while one scan hangs
   queue.schedule("good", 0); await tick(250)
   await queue.heard(["good"])
   queue.schedule("bad", 0); await tick(250)
-  await queue.heard(["bad"])
+  assert.equal(await queue.heard(["bad"]), false)
   assert.equal(errors, 1)
   await queue.heard(["good"])
   blocked.resolve(); await queue.close()
@@ -75,4 +75,18 @@ test("forget releases only that root and closing drains pending work within the 
   const closed = queue.close(); await tick(1000); await closed
   queue.schedule("closed", 0); await tick(5000)
   assert.equal(scans, 1)
+})
+
+
+test("queued and running captures retain their command evidence until the watermark completes", async () => {
+  const gate = Promise.withResolvers<void>()
+  const queue = new ShellReconciliations(async () => gate.promise, () => {})
+  queue.schedule("repo", 1000, Date.now() - 20_000)
+  queue.schedule("repo", 1000, Date.now() - 40_000)
+  assert.equal(queue.since(), 960_000)
+  await tick(1000)
+  assert.equal(queue.since(), 960_000)
+  gate.resolve(); await flush()
+  assert.equal(queue.since(), Infinity)
+  await queue.close()
 })

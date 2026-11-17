@@ -133,7 +133,7 @@ export type ReadyPlan = {
  */
 export type ReadinessLedger = ThreadCheckpointInput["ledger"] & {
   /** Every change heard so far journaled. */
-  heard(checkouts: readonly string[]): Promise<void>
+  heard(checkouts: readonly string[]): Promise<void | boolean>
   /** Small token from the journal reader; no partition bodies or hashing on the host. */
   fingerprint(checkout: string, thread: string): Promise<string>
 }

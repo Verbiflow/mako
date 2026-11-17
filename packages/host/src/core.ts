@@ -1374,7 +1374,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     const fromOurs = why === undefined
     const left = fromOurs
       ? await checkoutLeave.leave(thread, repositories[0]!.root, repositories, {
-        heard: () => attribution.heard(repositories.map((each) => each.root)),
+        heard: () => attribution.heard(repositories.map((each) => each.root)).then(() => undefined),
         partition: (checkout, of) => attribution.partitionOffLoop(checkout, of),
         mako: (write) => attribution.mako(write),
       })
@@ -1673,7 +1673,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         const attribution = late.attribution
         return attribution && {
           heard: (checkouts) => attribution.heard(checkouts),
-          settled: (checkouts) => attribution.heard(checkouts ?? []),
+          settled: (checkouts) => attribution.heard(checkouts ?? []).then(() => undefined),
           track: (checkout) => attribution.track(checkout),
           head: (repository) => attribution.head(repository),
           partition: (checkout, thread) => attribution.partitionOffLoop(checkout, thread),

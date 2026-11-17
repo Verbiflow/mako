@@ -8,8 +8,8 @@ import type { Resident } from "./live-runtime.js"
 export interface TurnLedger {
   /** The Thread and Session a conversation's turns are journaled under. */
   placement(conversationId: string): { thread: string; session: string } | undefined
-  /** Every change heard so far journaled. */
-  flushed(checkout?: string): Promise<void>
+  /** The checkout's heard changes journaled; false keeps the final count pending until its existing give-up deadline. */
+  flushed(checkout?: string): Promise<void | boolean>
   /** Count a turn off the host's thread; undefined while its journal is closed or has been replaced. */
   countTurn(thread: string, turn: string, state: TurnChanges["state"]): Promise<TurnChanges | undefined>
   /** Whether every change by `at` has its author for good. */
@@ -85,8 +85,8 @@ export class LiveTurnChanges {
     const settle = () => {
       void (async () => {
         // A shell reconciliation (or its lag window) can have completed since the initial settling count.
-        let flushed = true
-        try { await ledger.flushed(resident.snapshot.session.cwd); flushFailed = false } catch (error) {
+        let flushed: boolean
+        try { flushed = (await ledger.flushed(resident.snapshot.session.cwd)) !== false; flushFailed = false } catch (error) {
           flushed = false
           if (!flushFailed) failed(error instanceof Error ? error : new Error("The journal could not be flushed", { cause: error }))
           flushFailed = true

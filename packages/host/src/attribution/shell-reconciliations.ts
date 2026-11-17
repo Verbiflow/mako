@@ -6,6 +6,7 @@ const HOST_CONCURRENCY = 2
 
 interface Request {
   due: number
+  since: number
   reached: Promise<void>
   done(): void
 }
@@ -14,6 +15,7 @@ interface Root {
   requests: Request[]
   running?: Promise<void>
   startedAt?: number
+  failed?: boolean
 }
 
 /** One owner in the journal writer: root spacing plus a host-wide start rate and concurrency bound. */
@@ -31,15 +33,17 @@ export class ShellReconciliations {
     this.failed = failed
   }
 
-  schedule(id: string, lagMs: number): void {
+  schedule(id: string, lagMs: number, since = Date.now()): void {
     if (this.closed) return
     let root = this.roots.get(id)
     if (!root) { root = { id, requests: [] }; this.roots.set(id, root) }
     const due = Date.now() + Math.max(0, Math.min(MAX_LAG_MS, lagMs))
-    if (!root.requests.some((request) => request.due === due)) {
+    const shared = root.requests.find((request) => request.due === due)
+    if (shared) shared.since = Math.min(shared.since, since)
+    else {
       let done!: () => void
       const reached = new Promise<void>((resolve) => { done = resolve })
-      root.requests.push({ due, reached, done })
+      root.requests.push({ due, since, reached, done })
     }
     this.arm()
   }
@@ -62,7 +66,8 @@ export class ShellReconciliations {
     const reached = new Set(root.requests.filter((request) => request.due <= Date.now()))
     root.startedAt = this.startedAt = Date.now()
     this.active++
-    root.running = Promise.resolve().then(() => this.refresh(root.id)).catch((cause: unknown) => {
+    root.running = Promise.resolve().then(() => this.refresh(root.id)).then(() => { root.failed = false }).catch((cause: unknown) => {
+      root.failed = true
       this.failed(root.id, cause instanceof Error ? cause : new Error("A shell's Git inventory could not be read", { cause }))
     }).finally(() => {
       root.requests = root.requests.filter((request) => !reached.has(request))
@@ -75,8 +80,16 @@ export class ShellReconciliations {
   }
 
   /** A scoped watermark. Failure is logged by the owner; callers continue on the journal's existing evidence. */
-  async heard(ids: readonly string[]): Promise<void> {
+  async heard(ids: readonly string[]): Promise<boolean> {
     await Promise.all(ids.flatMap((id) => this.roots.get(id)?.requests.map((request) => request.reached) ?? []))
+    return ids.every((id) => !this.roots.get(id)?.failed)
+  }
+
+  /** Pending reads can still find versions from these calls; don't prune their evidence while queued. */
+  since(): number {
+    let since = Infinity
+    for (const root of this.roots.values()) for (const request of root.requests) since = Math.min(since, request.since)
+    return since
   }
 
   forget(id: string): void {
