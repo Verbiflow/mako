@@ -3,6 +3,7 @@ import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
+import { hostWarn } from "./host-log.js"
 import type { Keychain, KeychainItem } from "./keychain.js"
 import { nodePlatform, onMac } from "./platform.js"
 
@@ -73,6 +74,9 @@ export function chromiumSafeStorage({ appName, keychain, platform = nodePlatform
     const answer = await keychain.read(item)
     if (answer.kind === "failed") {
       refused = true
+      // Secure storage is off for the rest of the run, and the secrets read as locked: said once, with the keychain's
+      // own reason (its error's words, never a secret), so the log says why.
+      hostWarn("secrets", "the keychain refused the safe-storage item; nothing is kept securely this run", { service: item.service, reason: answer.reason })
       throw new KeychainUnavailable(`The keychain didn't give "${item.service}": ${answer.reason}`)
     }
     if (answer.kind === "missing") throw new KeychainUnavailable(`The keychain has no "${item.service}" yet`)
