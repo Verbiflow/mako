@@ -102,6 +102,7 @@
     "bench:sync-latency": "npm run -s build:electron 1>&2 && tsx --tsconfig tsconfig.scripts.json scripts/bench-sync-latency.ts",
     "bench:session-uploads": "tsx scripts/bench-session-uploads.ts",
     "bench:agents-follow": "node --expose-gc --import tsx scripts/bench-agents-follow.ts && node scripts/test-background-work-ui.mjs",
+    "bench:claude-send": "tsx scripts/bench-claude-send.ts",
     "bench:orch-wake": "tsx scripts/bench-orch-wake.ts",
     "bench:orch-wake-latency": "tsx scripts/bench-orch-wake-latency.ts",
     "bench:orch-spawn": "tsx scripts/bench-orch-spawn.ts",
