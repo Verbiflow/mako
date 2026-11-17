@@ -204,8 +204,14 @@ try {
   assert.ok("children" in fullFacts)
   const originalPulls = fullFacts.children.find(child => child.child === first.child)!.openPRs
   assert.equal(originalPulls?.length, 4)
-  // Each list's `mark` is its own clock reading.
-  const unmarked = (list: AgentAnswer) => Object.fromEntries(Object.entries(list).filter(([key]) => key !== "mark"))
+  // Each list's `mark` is its own clock reading, and each strip's `idleFor` whole seconds since its Fin's last activity,
+  // read as each call answers: two calls either side of a second differ there and nowhere else, which says nothing of
+  // the PR facts compared (#811's gate 1, idleFor 3 vs 4).
+  const ClockedListSchema = z.looseObject({ children: z.array(z.looseObject({})) })
+  const unmarked = (list: AgentAnswer) => {
+    const { mark: _mark, ...listed } = ClockedListSchema.parse(list)
+    return { ...listed, children: listed.children.map(({ idleFor: _idle, ...strip }) => strip) }
+  }
   assert.deepEqual(unmarked(await call(thread, "agents_list", {})), unmarked(await call(thread, "agents_list", { presentation: "full" })), "the model door defaults to complete PR facts")
   const summarized = z.object({ children: z.array(z.looseObject({ child: z.string(), pulls: z.object({ reported: z.number(), read: z.object({ child: z.string(), view: z.literal("pulls"), snapshot: z.string() }) }) })) }).parse(await call(thread, "agents_list", { presentation: "summary" }))
   const reference = summarized.children.find(child => child.child === first.child)!.pulls.read
