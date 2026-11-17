@@ -1,6 +1,8 @@
 import type { ProviderFailureEvidence } from "../../contracts/provider-failure-evidence.js"
 import { providerCall, failureEvidenceOf, providerExitEvidence } from "../../contracts/provider-failure.js"
-import { configureOpenCodeCalls } from "./call-plugin.js"
+import { configureOpenCodeCalls, MAKO_OPENCODE_PLUGIN } from "./call-plugin.js"
+import { openCodePersonCodeRuns } from "./person-code.js"
+import type { WriteHolds } from "../write-holds.js"
 import { realpath } from "node:fs/promises"
 import { openCodeModelRoutes } from "./connections.js"
 import { OpenCodeCallBounds } from "./call-bounds.js"
@@ -170,6 +172,8 @@ export interface OpenCodeDriverDependencies {
   streams?: string
   /** The host's OpenCode versions, shared with its other OpenCode runs; without it the driver keeps its own. */
   versions?: OpenCodeVersions
+  /** Where Mako's plugin's calls that may write wait for their turn's checkpoint (`HarnessContext.writeHolds`). */
+  writeHolds?: WriteHolds
 }
 
 const ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
@@ -753,6 +757,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     provider: "opencode",
     launchEnvironment: { kind: "prepared", via: "Native API launch consumes AdmittedStartOptions.accountLaunch." },
     makoInstructions: { via: "An instructions file named in `OPENCODE_CONFIG_CONTENT`, which OpenCode appends. Never an agent's `prompt`, which replaces the provider's own." },
+    ...dependencies.writeHolds && { firstWrite: { via: "Mako's plugin's `execute.before`, which OpenCode awaits before every tool (code mode's nested calls included) and which posts to the conversation server, answered once the turn's checkpoint holds the workspace; only on a launch serving Mako's tools, with none of the person's own OpenCode plugins or hooks." } },
     nativeIdentity: OPENCODE_NATIVE_IDENTITY,
     nativeExclusion: NO_NATIVE_EXCLUSION,
     nativePromptIdentity: { kind: "accepted-message-id", evidence: "OpenCode v2 session.prompt returns the accepted inbox ID; the native user message stores that same ID. Commands without that receipt remain uncorrelated." },
@@ -859,7 +864,8 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       configureOpenCodeRouting(env, options.conversationId, options.nativeRouting)
       await configureOpenCodePrimer(env, instructionText(layerOf(options)) ?? SHOW_MEDIA_LINE)
       const tools = options.conversationTools
-      await configureOpenCodeCalls(env, options.conversationId, options.nativeCalls && tools?.makoUrl ? { url: tools.makoUrl.replace(/\/mako$/, "/calls"), token: tools.token } : undefined)
+      const gated = Boolean(options.nativeCalls && tools?.makoUrl)
+      await configureOpenCodeCalls(env, options.conversationId, gated && tools?.makoUrl ? { url: tools.makoUrl.replace(/\/mako$/, "/calls"), token: tools.token } : undefined)
       applyControlEnvironment(env, options.conversationTools?.control)
       applyThreadEnvironment(env, options.threadEnvironment)
       const installation = await trace.step("runtime-discovery", () => resolveOpenCodeInstallation(env, versions))
@@ -883,6 +889,8 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         },
       }
       sessions.set(live.state.id, live)
+      // Held only once OpenCode itself says none of the person's code runs beside Mako's plugin (below).
+      dependencies.writeHolds?.attend(options.conversationId, false)
       // Its reader loads while the server starts; it reads once the session exists (`bind`).
       const agents = live.agents = new OpenCodeAgents({ env, stores, observedAgents: options.observedAgents,
         publish: observation => { if (!live.closed) engine.emitAgent(live, observation) } })
@@ -919,6 +927,12 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
               refused.push({ name: server.name, error: errorText({ error }) })
             })))),
         ]))
+        // This launch's writes are held only where Mako's plugin gates them and OpenCode says, its plugins active and
+        // the launch's MCP servers added, that none of the person's code runs beside it.
+        if (dependencies.writeHolds && gated) dependencies.writeHolds.attend(options.conversationId, !await trace.step("settings", () => openCodePersonCodeRuns({
+          plugins: () => api.client.plugin.list({ location }),
+          servers: () => api.client.mcp.list({ location }),
+        }, { pluginFolder: MAKO_OPENCODE_PLUGIN, servers: servers.map((server) => ({ name: server.name, process: server.config.type === "local" })) })))
         const modes = openCodeSessionModes(catalog.agents)
         const requested = options.modeId && modes.some(mode => mode.id === options.modeId) ? options.modeId : OPENCODE_DEFAULT_MODE
         const agent = openCodeAgentForMode(requested, launchAccess)
@@ -1115,6 +1129,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       }
     },
     async close(id) {
+      dependencies.writeHolds?.forget(id)
       starting.get(id)?.abort(new Error("OpenCode was closed during startup"))
       const server = unclosed.get(id)
       if (server) { await server(); unclosed.delete(id) }

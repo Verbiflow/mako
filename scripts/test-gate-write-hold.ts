@@ -11,6 +11,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { CALL_GATE_HOLD_MS, gateDenies, heldAnswer, hookMayWrite, HookCall } from "@mako/host/harnesses/call-gate"
 import { codexPersonCodeRuns } from "@mako/host/harnesses/codex/person-code"
+import { openCodePersonCodeRuns } from "@mako/host/harnesses/opencode/person-code"
+import { MAKO_OPENCODE_PLUGIN } from "@mako/host/harnesses/opencode/call-plugin"
 import type { JsonObject } from "@mako/host/contracts/json"
 import { WriteHolds } from "@mako/host/harnesses/write-holds"
 import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
@@ -124,6 +126,23 @@ try {
     assert.equal(await codexPersonCodeRuns({ hooks: async () => { throw new Error("method not found") }, config: async () => plain, plugins: async () => ({ marketplaces: [] }) }, "/p"), true, "a Codex that can't say fails closed")
     assert.equal(await codexPersonCodeRuns(answers({ unexpected: true }, plain), "/p"), true, "an answer Mako can't read fails closed")
     console.log("PASS: a Codex launch holds writes only where Codex says none of the person's own code runs, and fails closed")
+  }
+
+  // Whether the person's own OpenCode setup runs code beside Mako's plugin, as OpenCode's server answers once its plugins are active.
+  {
+    const plugin = (source: JsonObject, status = "active") => ({ source, features: {}, state: { status } })
+    const builtin = plugin({ type: "builtin" }), mako = plugin({ type: "local", path: `/tmp/${MAKO_OPENCODE_PLUGIN}abc` })
+    const launch = { pluginFolder: MAKO_OPENCODE_PLUGIN, servers: [{ name: "mako", process: false }] }
+    const ask = (plugins: JsonObject[], servers: string[] = ["mako"]) => ({ plugins: async () => ({ data: plugins }), servers: async () => ({ data: servers.map((name) => ({ name, status: { status: "connected" } })) }) })
+    assert.equal(await openCodePersonCodeRuns(ask([builtin, mako]), launch), false, "built-ins and Mako's own plugin")
+    assert.equal(await openCodePersonCodeRuns(ask([builtin, mako, plugin({ type: "package", target: "opencode-formatter" })]), launch), true, "a package plugin of the person's")
+    assert.equal(await openCodePersonCodeRuns(ask([builtin, mako, plugin({ type: "local", path: "/Users/p/.config/opencode/plugin/guard" })]), launch), true, "a local plugin of the person's")
+    assert.equal(await openCodePersonCodeRuns(ask([builtin, plugin({ type: "builtin" }, "failed")]), launch), true, "a plugin that failed to load")
+    assert.equal(await openCodePersonCodeRuns(ask([builtin, mako], ["theirs"]), { ...launch, servers: [{ name: "theirs", process: true }] }), true, "a process MCP server of the launch's")
+    assert.equal(await openCodePersonCodeRuns(ask([builtin, mako], ["mako", "from-their-config"]), launch), true, "an MCP server Mako didn't add")
+    assert.equal(await openCodePersonCodeRuns({ plugins: async () => { throw new Error("gone") }, servers: async () => ({ data: [] }) }, launch), true, "an OpenCode that can't say fails closed")
+    assert.equal(await openCodePersonCodeRuns(ask([{ unexpected: true }]), launch), true, "an answer Mako can't read fails closed")
+    console.log("PASS: an OpenCode launch holds writes only where OpenCode says none of the person's own code runs, and fails closed")
   }
 } finally {
   rmSync(root, { recursive: true, force: true })

@@ -47,9 +47,12 @@ export default {
 }
 `
 
+/** How Mako's plugin folder's name begins, which tells its entry in a launch's config from the person's. */
+export const MAKO_OPENCODE_PLUGIN = "mako-opencode-calls-"
+
 /** The plugin's folder, the same for every launch of this build: OpenCode loads a folder holding `server.js`, never a bare file. */
 async function pluginFolder(): Promise<string> {
-  const folder = join(tmpdir(), `mako-opencode-calls-${createHash("sha256").update(PLUGIN_SOURCE).digest("hex").slice(0, 16)}`)
+  const folder = join(tmpdir(), `${MAKO_OPENCODE_PLUGIN}${createHash("sha256").update(PLUGIN_SOURCE).digest("hex").slice(0, 16)}`)
   await publishFile(join(folder, "server.js"), PLUGIN_SOURCE, { mode: 0o600, dirMode: 0o700 })
   return folder
 }
