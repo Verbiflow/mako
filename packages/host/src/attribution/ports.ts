@@ -144,9 +144,9 @@ export function gitRepository(git: Git, root: string, watchGitDir?: (folder: str
   }
   return {
     head,
-    async inventory(knownTracked) {
+    async inventory(includeTracked = true) {
       const commit = await head()
-      const [tracked, untracked] = await Promise.all([knownTracked && commit ? Promise.resolve([]) : list(["ls-files", "-z"]), list(["ls-files", "-z", "--others", "--exclude-standard"])])
+      const [tracked, untracked] = await Promise.all([!includeTracked && commit ? Promise.resolve([]) : list(["ls-files", "-z"]), list(["ls-files", "-z", "--others", "--exclude-standard"])])
       // Before the first commit there's no base: everything there is new.
       if (!commit) return { tracked: [], untracked: [...tracked, ...untracked], changed: [] }
       const changed = await list(["diff", "--name-only", "-z", "--no-renames", "HEAD", "--"])

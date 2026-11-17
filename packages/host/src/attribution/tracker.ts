@@ -51,7 +51,7 @@ export interface TrackerRepository {
   /** The commit checked out; null before the first commit. */
   head(): Promise<string | null>
   /** Dirty/untracked files relative to the root; the full tracked listing only when the caller hasn't already cached it. */
-  inventory(knownTracked?: ReadonlySet<string>): Promise<{ tracked: string[]; untracked: string[]; changed: string[] }>
+  inventory(includeTracked?: boolean): Promise<{ tracked: string[]; untracked: string[]; changed: string[] }>
   /** Of `paths`, those Git ignores. */
   ignored(paths: readonly string[]): Promise<Set<string>>
   /** What Git ignores under the root: a folder it ignores whole once, ending in `/`, without what's in it; else single files. A repository without it is walked whole. */
@@ -1650,7 +1650,7 @@ export class LaptopTracker implements AttributionTracker {
       if (checking) state.moved = await this.checkHead(state)
       try {
         await this.settleCommitted(state)
-        const inventory = await repo.inventory(state.tracked)
+        const inventory = await repo.inventory(false)
         if (this.states.get(id) !== state) return
         if (await repo.head() !== state.root.head) throw new Error("HEAD moved during shell reconciliation; its inventory must be read again")
         for (const path of [...inventory.tracked, ...inventory.changed]) state.tracked.add(path)

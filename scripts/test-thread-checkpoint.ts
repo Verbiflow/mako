@@ -417,11 +417,11 @@ test("silent-watch inventory reuses tracked paths but still finds staged additio
   const git = new Git({ trace: (run) => seen.push([...run.args]) })
   try {
     const repository = gitRepository(git, f.repo)
-    const first = await repository.inventory()
+    await repository.inventory()
     seen.length = 0
     writeFileSync(f.abs("staged.ts"), "staged\n"); f.git("add", "staged.ts")
     writeFileSync(f.abs("untracked.ts"), "untracked\n")
-    const next = await repository.inventory(new Set(first.tracked))
+    const next = await repository.inventory(false)
     assert(next.changed.includes("staged.ts"))
     assert(next.untracked.includes("untracked.ts"))
     assert.deepEqual(next.tracked, [], "the caller already owns the tracked listing")
@@ -429,7 +429,7 @@ test("silent-watch inventory reuses tracked paths but still finds staged additio
     const unborn = join(f.base, "unborn"); mkdirSync(unborn)
     f.sh(unborn, "init", "-q")
     writeFileSync(join(unborn, "first.ts"), "first\n"); f.sh(unborn, "add", "first.ts")
-    const fresh = await gitRepository(git, unborn).inventory(new Set())
+    const fresh = await gitRepository(git, unborn).inventory(false)
     assert(fresh.untracked.includes("first.ts"), "an unborn repository still needs the real index's staged paths")
   } finally {
     await git.close(); await f.tracker.close()

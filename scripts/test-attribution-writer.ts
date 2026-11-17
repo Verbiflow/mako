@@ -671,6 +671,7 @@ test("a completed shell recovers silent writes through the writer and Git helper
   try {
     client = await follower(writer, deps)
     await client.writes.track(repo)
+    traces.length = 0
     const startedAt = Date.now()
     client.writes.activity({ kind: "turn", edge: "start", id: "turn", session: "session", thread: "thread", checkout: repo, at: startedAt })
     client.writes.activity({ kind: "call", edge: "start", id: "shell", session: "session", thread: "thread", turn: "turn", checkout: repo, at: startedAt })
@@ -691,6 +692,7 @@ test("a completed shell recovers silent writes through the writer and Git helper
       assert.deepEqual(entries.map((entry) => [entry.path, entry.author.certainty]).sort(), [["a.ts", "window"], ["generated.ts", "window"]])
     } finally { store.close() }
     assert(traces.some((trace) => trace.args.includes("--exclude-standard")), "the real Git inventory went through the injected helper runner")
+    assert(!traces.some((trace) => trace.args.length === 2 && trace.args[0] === "ls-files" && trace.args[1] === "-z"), "the cached tracked-path hint must cross both sides of the writer boundary")
   } finally {
     clearInterval(pulse)
     await client?.close()
