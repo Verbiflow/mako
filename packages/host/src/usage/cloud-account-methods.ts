@@ -23,7 +23,7 @@ import type { BaseStanding } from "../contracts/cloud-turn-on.js"
 import type { CloudKeptSignIn, CloudShareOutcome, CloudSharedChain, CloudSignIn, CloudSignInChain, CloudSignInHarness, CloudSignInListing, CloudSignInsState } from "../contracts/cloud-sign-ins.js"
 import type { DiagnosticEvents } from "../contracts/telemetry.js"
 import type { HostEnvironment } from "../base/host-environment.js"
-import type { HostJobs } from "../base/host-jobs.js"
+import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import { hostLog } from "../base/host-log.js"
 import type { DomainSecrets } from "../base/host-secrets.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
@@ -249,6 +249,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   preferences,
   lending,
   waitingForAccount,
+  watched,
 }: {
   environment: Pick<HostEnvironment, "dataRoot" | "version" | "build">
   secrets: DomainSecrets
@@ -267,6 +268,8 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   signedFiles?: (request: Request) => Promise<Response>
   /** The host's recurring work: the account's word on whether the person is at this Mac runs there. */
   jobs: Pick<HostJobs, "every">
+  /** On while a client watches: the account's cloud Fin limits are read for what windows show only then. */
+  watched?: JobDemand
   /**
    * The person's access choices: what the account's stream says of them (`access-chosen`), and when they should be read
    * again, as this Mac signs in or to another account, or the stream may have missed an event.
@@ -394,8 +397,8 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   const attention = attendable(machine, onMac())
     ? new CloudAttention({ idle: macIdleSeconds, say: (attending) => cloud.attend(attending), signedIn: () => status === "signed-in", log: (message, fields) => hostLog("cloud", message, fields) })
     : undefined
-  jobs.every("read the account's cloud Fin limits", CLOUD_FIN_LIMITS_MS, () => cloud.cloudFinLimits(CLOUD_FIN_LIMITS_MS).then(() => {}, () => {}), { firstAfterMs: 0 })
-  attention?.start(jobs)
+  jobs.every("read the account's cloud Fin limits", CLOUD_FIN_LIMITS_MS, () => cloud.cloudFinLimits(CLOUD_FIN_LIMITS_MS).then(() => {}, () => {}), { firstAfterMs: 0, ...(watched && { needs: [watched] }) })
+  attention?.start(jobs, watched)
 
   methods.handle("mako:cloud-account", () => cloud.ready())
   methods.handle("mako:cloud-sign-in", () => cloud.signIn())

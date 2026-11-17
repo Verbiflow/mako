@@ -39,7 +39,7 @@ import { closeSync, constants, openSync } from "node:fs"
 import { chmod, mkdir, unlink } from "node:fs/promises"
 import { homedir } from "node:os"
 import { createHash } from "node:crypto"
-import { monitorEventLoopDelay } from "node:perf_hooks"
+import { PerformanceObserver, monitorEventLoopDelay, performance } from "node:perf_hooks"
 import { z } from "zod"
 import { dirname, join } from "node:path"
 import type { SessionCatalog } from "./catalog.js"
@@ -98,6 +98,8 @@ export const MAX_DAEMON_RSS = 1024 * 1024 * 1024
 export function daemonMemoryUnsafe(rss: number): boolean {
   return rss > MAX_DAEMON_RSS
 }
+/** The most often the daemon weighs its memory. */
+const MEMORY_SAMPLE_MS = 5_000
 const MAX_CLIENTS = 64
 const HOLD_TIMEOUT_MS = 15 * 60_000
 const MAX_REQUEST_FRAME_BYTES = 1024 * 1024
@@ -334,11 +336,28 @@ function catalogService(
   }
   watchIdle()
   const guard = new MemoryGuard(catalog.uploadBudget, (level, message, fields) => options.log?.(level, message, fields))
-  const memoryTimer = setInterval(() => {
+  // Memory grows only with what's allocated, which collects: sampled after collections, every 5 s at most, so a
+  // catalog with nothing to do is never woken to weigh itself. While uploads wait on the limit a sample goes every 5 s
+  // whatever collects, so they go on as soon as memory falls.
+  let memoryTimer: ReturnType<typeof setInterval> | undefined
+  let sampledAt = Number.NEGATIVE_INFINITY
+  const sampleMemory = () => {
     if (options.memoryGuard === false || retiring) return
+    sampledAt = performance.now()
     const over = guard.sample()
-    if (over) retire("memory", over)
-  }, 5_000)
+    if (over) return retire("memory", over)
+    if (guard.shedding && !memoryTimer) {
+      memoryTimer = setInterval(sampleMemory, MEMORY_SAMPLE_MS)
+      memoryTimer.unref?.()
+    } else if (!guard.shedding && memoryTimer) {
+      clearInterval(memoryTimer)
+      memoryTimer = undefined
+    }
+  }
+  const collections = new PerformanceObserver(() => {
+    if (performance.now() - sampledAt >= MEMORY_SAMPLE_MS) sampleMemory()
+  })
+  collections.observe({ entryTypes: ["gc"] })
 
   const attach = (link: DaemonLink): boolean => {
     if (clients.size >= MAX_CLIENTS) {
@@ -533,6 +552,7 @@ function catalogService(
     dispose() {
       if (idleTimer) clearTimeout(idleTimer)
       clearInterval(memoryTimer)
+      collections.disconnect()
       eventLoopDelay.disable()
       stopWatch()
       stopEvents()

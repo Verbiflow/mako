@@ -67,13 +67,17 @@ export class ProviderActivityEngine {
   readonly #listeners = new Set<(snapshot: ProviderActivitySnapshot) => void>()
   #running = false
 
-  constructor(probes: readonly ProviderProcessProbe[]) {
+  /**
+   * `known`: what the probes last said, by provider, when an engine before this one stopped (a pause while nothing
+   * watched). Each probe's first look is told against it, so a session that ended meanwhile is said ended.
+   */
+  constructor(probes: readonly ProviderProcessProbe[], known?: ReadonlyMap<string, readonly ProviderActivitySession[]>) {
     for (const probe of probes) {
       this.#slots.set(probe.provider, {
         probe,
         timer: null,
         controller: null,
-        sessions: [],
+        sessions: [...(known?.get(probe.provider) ?? [])],
         lastAvailableAt: 0,
         failures: 0,
       })

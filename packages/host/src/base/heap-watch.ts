@@ -1,3 +1,4 @@
+import { PerformanceObserver, performance } from "node:perf_hooks"
 import { getHeapStatistics } from "node:v8"
 
 /**
@@ -95,4 +96,21 @@ export class HeapWatch {
     }
     return this.#level
   }
+}
+
+/**
+ * Runs `run` after a garbage collection, at most every `everyMs`: the heap grows only with what's allocated, which
+ * collects, so a host that allocates nothing is never woken to read it, and one that does is read as often as a timer
+ * did. Returns the stop.
+ */
+export function afterCollections(everyMs: number, run: () => void, now: () => number = () => performance.now()): () => void {
+  let last = Number.NEGATIVE_INFINITY
+  const observer = new PerformanceObserver(() => {
+    const at = now()
+    if (at - last < everyMs) return
+    last = at
+    run()
+  })
+  observer.observe({ entryTypes: ["gc"] })
+  return () => observer.disconnect()
 }

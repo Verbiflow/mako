@@ -18,7 +18,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import type { ThreadStore, ThreadLifecycle } from "../threads/index.js"
 import { portListening, ThreadEnvironments } from "./thread-environment.js"
 import { ThreadProcesses } from "./thread-processes.js"
-import { SAMPLER_TICK_MS, ThreadAppSampler } from "./app-sampler.js"
+import { SAMPLER_TICK_MS, SAMPLER_UNWATCHED_MS, ThreadAppSampler } from "./app-sampler.js"
 import type { MoveLedger } from "./worktree-move.js"
 export type { PlannedCheckout } from "./thread-worktrees.js"
 import { ThreadWorktreeService, type CheckoutConversations } from "./thread-worktrees.js"
@@ -490,7 +490,16 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
   }) : undefined
   // One look at every app for every window, pushed when it changes, with the trace and each running copy's memory peak
   // (toward its project's "about N at once") on the same looks.
+  // The sampler ticks a second while a reader watches the apps, and only at the trace's times while one may run
+  // with nobody reading (`ThreadAppSampler.needed`); with neither, not at all.
+  const appsWatched = deps.jobs.demand("Thread apps watched")
+  const appsRunning = deps.jobs.demand("Thread apps may run")
+  appsRunning.set(true)
   const sampler = appTools && processes ? new ThreadAppSampler({
+    needed: ({ watched, running }) => {
+      appsWatched.set(watched)
+      appsRunning.set(running && !watched)
+    },
     invalidated: deps.appChanged,
     demandChanged: () => outputHints?.reconcile(true),
     connection: deps.windowStream,
@@ -511,7 +520,9 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
   if (sampler) sampling.sampler = sampler
   if (sampler && processes) {
     processes.onChange(() => sampler.changed())
-    deps.jobs.every("sample thread apps", SAMPLER_TICK_MS, async () => { outputHints?.reconcile(); await sampler.tick() })
+    const tick = async () => { outputHints?.reconcile(); await sampler.tick() }
+    deps.jobs.every("sample thread apps", SAMPLER_TICK_MS, tick, { needs: [appsWatched] })
+    deps.jobs.every("trace and measure running thread apps", SAMPLER_UNWATCHED_MS, tick, { needs: [appsRunning] })
   }
   return { worktreeMoves, moves, leaves, appTools, sampler, outputHints, agentTools: agentTools(deps, moves, leaves, appTools) }
 }

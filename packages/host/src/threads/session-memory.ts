@@ -25,7 +25,7 @@ import {
 } from "@mako/sessions/settings"
 import { heldReason } from "../contracts/session-hold.js"
 import { hostWarn } from "../base/host-log.js"
-import type { HostJobs } from "../base/host-jobs.js"
+import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import { enableSharedWal } from "../base/sqlite-wal.js"
 
 /**
@@ -230,6 +230,8 @@ export class SessionMemory {
   private holdCheckOffset = 0
   private holdRead: { db: DatabaseSync; statement: StatementSync } | undefined
   private stopHeartbeat: (() => void) | null = null
+  /** On while this host holds a session: the heartbeat runs only then (`startHeartbeat`). */
+  private holding: JobDemand | undefined
   private readonly annotations = new Map<string, { at: number; entry: SessionMemoryEntry | null; hold: SessionHold | null; elsewhere: boolean }>()
   /**
    * The ledger's own numbers. In a newer Mako's format this host reads what
@@ -398,13 +400,33 @@ export class SessionMemory {
     return standing
   }
 
-  /** Keep this host's holds fresh for as long as it runs. */
+  /**
+   * Keep this host's holds fresh while it has any: a host holding no session has nothing for another host to see
+   * going stale, so an idle one beats nothing. Clearing other hosts' stale holds rides on the same beat; a hold is
+   * weighed as live or not wherever it's read, so a stale one left meanwhile refuses nothing.
+   */
   startHeartbeat(jobs: HostJobs, intervalMs = HOLD_HEARTBEAT_MS): void {
     if (this.stopHeartbeat || !this.writable) return
+    this.holding = jobs.demand("this host holds sessions")
+    this.recountHolds()
     this.stopHeartbeat = jobs.every("keep this host's session holds fresh", intervalMs, () => {
       this.heartbeat()
+      // Its holds can go another way too (another host taking a session over): the beat counts them again.
+      this.recountHolds()
       return this.reconcileHolds()
-    })
+    }, { needs: [this.holding] })
+  }
+
+  /** Whether this host holds any session now, for the heartbeat's demand. */
+  private recountHolds(): void {
+    if (!this.holding) return
+    try {
+      const held = this.db.prepare("SELECT 1 FROM holds WHERE host_pid = ? AND host_started_at = ? LIMIT 1").get(this.host.pid, this.host.startedAt)
+      this.holding.set(held !== undefined)
+    } catch {
+      // A ledger that can't be read holds on: a beat too many costs nothing, a hold gone stale lets another host in.
+      this.holding.set(true)
+    }
   }
 
   /** Check stale process generations off the send path; probe failure keeps ownership. */
@@ -555,6 +577,7 @@ export class SessionMemory {
       throw error
     }
     this.annotations.delete(`${provider}\n${nativeId}`)
+    this.holding?.set(true)
   }
 
   /**
@@ -598,6 +621,7 @@ export class SessionMemory {
       this.writer
         .prepare("DELETE FROM holds WHERE provider = ? AND native_id = ? AND host_pid = ? AND host_started_at = ? AND conversation_id = ?")
         .run(provider, nativeId, this.host.pid, this.host.startedAt, conversationId)
+    this.recountHolds()
   }
 
   runtimeLaunch(socket: string): RuntimeLaunch | null {

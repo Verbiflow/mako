@@ -29,7 +29,7 @@ import type { ArchivedThread, ReportedSession } from "@mako/protocol/thread-list
 import type { LiveSummary } from "./contracts/live-conversations.js"
 import type { Domain } from "./base/host-domains.js"
 import { hostLog, hostWarn, logsRoot } from "./base/host-log.js"
-import { HeapWatch, readHeap } from "./base/heap-watch.js"
+import { HeapWatch, afterCollections, readHeap } from "./base/heap-watch.js"
 import { cloudUrl } from "./base/build-identity.js"
 import { NativeUnknown } from "./base/native-unknown.js"
 import { StreamMismatches } from "./base/stream-mismatches.js"
@@ -222,6 +222,8 @@ interface LateParts {
   cloudFollow?: CloudFollow
   /** Keeps Threads at work ready to move, and takes their checkpoints as they write (`CloudReadiness`). */
   readiness?: CloudReadiness
+  /** Counts again, once a burst, whether agents work here (`atWork`). */
+  recountWork?: () => void
   /** The Sessions a going-away's note the account took, waiting for its word once this Mac is back (`AwayNotes`). */
   awayNotes?: AwayNotes
   /** This host's Sessions on the account's list: told again when one is archived here. */
@@ -332,8 +334,14 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     // archived here or a Thread renamed here changes what every device lists.
     late.sessions?.own(event)
     // The account and the agents' sign-ins say each change here; turning the cloud on reads them again then.
-    if (event.type === "cloud-account" || event.type === "cloud-sign-ins") void late.turnOn?.changed()
-    if (recountsWork(event)) late.keepAwake?.changed()
+    if (event.type === "cloud-account" || event.type === "cloud-sign-ins") {
+      void late.turnOn?.changed()
+      late.uploadsLook?.()
+    }
+    if (recountsWork(event)) {
+      late.keepAwake?.changed()
+      late.recountWork?.()
+    }
     web()?.event(event, client)
   }
   const viewHints = new ViewHints(emit)
@@ -342,6 +350,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const watchReadings = new WatchReadings((message, fields) => hostLog("watch", message, fields))
   const watchBackend = childBackend(undefined, watchReadings)
   const conversationFiles = new ConversationFiles(git, previews, (root, changed, gone, dropped) => watchTree(git, watchBackend, root, changed, gone, dropped))
+  // On while an agent works here (a turn, an approval or question waiting, background work) or this Mac serves another
+  // place's: what keeps the Mac awake, readies Threads to move and hands them off on sleep looks only then.
+  const atWork = shell.jobs.demand("agents work here")
   const fileEvents = new FileEventsServiceWatch({
     mac: onMac(),
     readDaemon: readFseventsd,
@@ -363,7 +374,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     noticeFile: join(environment.dataRoot, "file-events", "notice.json"),
   })
   watchReadings.follow(fileEvents)
-  if (onMac()) shell.jobs.every("read fseventsd's health", 60_000, () => fileEvents.tick(), { firstAfterMs: 5_000 })
+  // Its health matters while file changes are being followed for someone: a window, the CLI, or agents at work.
+  if (onMac()) shell.jobs.every("read fseventsd's health", 60_000, () => fileEvents.tick(), { firstAfterMs: 5_000, needs: [shell.subscribed, atWork] })
   declareFileEventsMethods(methods, fileEvents)
   const workspaceClients = new WorkspaceClients(emit, { git, previews, watch: watchBackend, attachments: join(environment.userRoot, "attachments") })
   /** Start the first tab once, however many callers race for it. */
@@ -601,7 +613,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     late.cloudConversations?.wake()
     late.awayNotes?.back("wake")
     late.conversations?.agents?.woke()
-  })
+  }, { needs: [shell.subscribed, atWork] })
   const telemetry = await declareTelemetryMethods(methods, {
     environment,
     crashes,
@@ -633,7 +645,12 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // What each project on the list has checked out, as the rail shows it beside the project: read once a project is
   // listed, then followed (a branch switched anywhere arrives as a `checkout-heads` event, which reports again).
   const headsAsked = new Map<string, number>()
-  const repositories = new ListedRepositories({ read: (folder) => folderRepository(git, folder), changed: () => late.sessions?.changed(), againMs: HEAD_ASK_AGAIN_MS })
+  const watchedOrAtWork = shell.jobs.demand("a client is subscribed or agents work here")
+  const followNeeded = () => watchedOrAtWork.set(shell.subscribed.on || atWork.on)
+  shell.subscribed.onChange(followNeeded)
+  atWork.onChange(followNeeded)
+  followNeeded()
+  const repositories = new ListedRepositories({ read: (folder) => folderRepository(git, folder), changed: () => late.sessions?.changed(), againMs: HEAD_ASK_AGAIN_MS, needed: watchedOrAtWork })
   const listedHead = (project: string) => {
     const known = workspaces.checkoutHeads.known(project)
     if (known !== undefined) return known
@@ -792,7 +809,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     const memory = late.conversations?.live.residency().memory
     hostLog("memory", "the heap", { usedMB: mb(reading.used), limitMB: mb(reading.limit), rssMB: mb(reading.rss), conversations: memory?.loaded ?? 0, conversationMB: mb(memory?.bytes) })
   })
-  shell.jobs.every("watch the heap", 10_000, () => void heap.tick(), { runsWhileHeld: true })
+  // Read after collections rather than on a timer: an idle host allocates nothing, so nothing wakes it for this.
+  const stopHeapWatch = afterCollections(10_000, () => void heap.tick())
+  shell.stopping.signal.addEventListener("abort", stopHeapWatch, { once: true })
   // This Mac's Sessions in the sync window, kept in step in the account, the ones at work first: as Mako draws each, so
   // another device reads one with this Mac off, and as its harness wrote it, so it continues anywhere. A cloud machine
   // keeps its Thread's records instead; a fixture desk sends nothing.
@@ -865,7 +884,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       return looking
     }
     late.uploadsLook = () => void look()
-    shell.jobs.every(UPLOADS_WORK, UPLOADS_RECONCILE_MS, look)
+    // The reconcile runs while someone watches or agents work, when something can change unannounced; a host with
+    // neither changes nothing to send, and one coming back looks at once. A sign-in looks then too (`emit`).
+    shell.jobs.every(UPLOADS_WORK, UPLOADS_RECONCILE_MS, look, { needs: [shell.subscribed, atWork] })
     catalog.onLinkDue((form) => {
       if (form === "copies" || form === "originals")
         void ticking.renew().catch((error: Error) => hostWarn("sync", "this device's links couldn't be renewed", { error: error.message }))
@@ -949,6 +970,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     late.advertiser?.roomChanged()
     // A lease served or ended starts or ends work this Mac stays awake for.
     void late.keepAwake?.refresh()
+    late.recountWork?.()
   })
   // The sessions this Mac lends as their source: asks it can answer itself, each lease the broker issues it, beats
   // for them on its runtime link, and every way one ends. A cloud machine and a fixture desk lend nothing.
@@ -976,7 +998,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       })
     : undefined
   late.lending = lending
-  if (lending) shell.jobs.every("beat for what this Mac lends", LEND_BEAT_MS, () => lending.beat())
+  // Beats only while it serves a lease: with nothing lent there's nothing to keep alive.
+  const lendsNow = shell.jobs.demand("this Mac lends something")
+  lent.subscribe(() => lendsNow.set(lent.count() > 0))
+  if (lending) shell.jobs.every("beat for what this Mac lends", LEND_BEAT_MS, () => lending.beat(), { needs: [lendsNow] })
   declareFinDefaultMethods(methods, finDefaults, () => {
     const reading = finCapacity.reading()
     return lent.count() ? { ...reading, lent: lent.words() } : reading
@@ -987,6 +1012,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const buildSlots = new BuildSlots(() => finCapacity.builds())
   finCapacity.subscribe(() => buildSlots.changed())
   late.cloud = declareCloudAccountMethods(methods, {
+    watched: shell.subscribed,
     waitingForAccount: () => cloudConversations?.waitingForAccount() === true || late.awayNotes?.any() === true,
     finLimitsChanged: () => {
       const reading = finCapacity.reading()
@@ -1334,7 +1360,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     })
     late.advertiser = advertiser
     jobs.every("advertise what this Mac can serve", ADVERTISE_EVERY_MS / 12, () => advertiser.probe(), { firstAfterMs: 10_000 })
-    jobs.every("advertise this Mac's room", 15_000, () => advertiser.roomChanged())
+    // Its room moves only while agents work here (its Fins' places, and the capacity the room watch reads then): looked
+    // at every 15 s then, and once as work starts or ends. An idle Mac's room stands still and says nothing.
+    jobs.every("advertise this Mac's room", 15_000, () => advertiser.roomChanged(), { needs: [atWork] })
+    atWork.onChange(() => advertiser.roomChanged())
     jobs.every("advertise what this Mac can serve, hourly", ADVERTISE_EVERY_MS / 4, () => advertiser.due())
   }
   // A message held until a time (a usage limit's reset) sends itself within a tick of it, across restarts.
@@ -1450,6 +1479,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   late.cloudMoves = cloudMoves || undefined
   if (cloudMoves) {
     const unpark = () => void cloudMoves.unpark().catch((error: Error) => hostWarn("moves", "turns paused as this Mac went off couldn't go on yet", { error: error.message }))
+    // Asking the account goes on only while Sessions are held from a going-away; on at the start until a look says.
+    const awayHeld = shell.jobs.demand("Sessions held as this Mac went away")
+    awayHeld.set(true)
     late.awayNotes = new AwayNotes({
       file: join(environment.dataRoot, "cloud", "away.json"),
       owner: () => {
@@ -1460,6 +1492,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       join: (session, listed) => cloudMoves.joinContinue(session, listed),
       released: unpark,
       changed: (sessions) => {
+        awayHeld.set(sessions.length > 0)
         emit({ type: "away-held", conversations: heldConversations(sessions) })
         late.cloud?.checkAccountWaiting?.()
       },
@@ -1470,7 +1503,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       // A going-away that didn't happen (this Mac still runs long after) is over: asking goes on.
       late.awayNotes?.lapse()
       if (late.awayNotes?.any() && !cloudConversations?.ownerCheck(false)) await late.awayNotes.ask()
-    })
+      awayHeld.set(late.awayNotes?.any() === true)
+    }, { needs: [awayHeld] })
   }
   void cloudMoves?.settle().catch((error: Error) => hostWarn("moves", "moves a stopped host left couldn't be settled", { error: error.message }))
   // The one owner of each cloud Thread's worktree here: the way back and the follow both write it through this.
@@ -1688,7 +1722,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     })
     readinessOnce = readiness
     late.readiness = readiness
-    shell.jobs.every("keep Threads at work ready to move", READY_EVERY_MS, () => readiness.refresh())
+    shell.jobs.every("keep Threads at work ready to move", READY_EVERY_MS, () => readiness.refresh(), { needs: [atWork] })
   }
   // This Mac kept awake while its agents work: a turn, background work or a subagent, never a wait on the person, and never a Fin that sits open.
   const keepAwake = cloudConversations && onMac() ? new KeepAwake({
@@ -1699,15 +1733,35 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     changed: (state) => emit({ type: "keep-awake", state }),
   }) : undefined
   late.keepAwake = keepAwake
+  // Who works, counted once a burst: as a batch says it may have changed, a lease starts or ends, and at the minute's
+  // recount while any works, which catches what no batch says (a conversation closed, or gone to the cloud).
+  let recountQueued = false
+  const recountWork = () => atWork.set(workingThreads({ live, threads: threads.store ?? undefined, cloud: (id) => cloudConversations?.has(id) ?? false }).length + lent.count() > 0)
+  late.recountWork = () => {
+    if (recountQueued) return
+    recountQueued = true
+    setImmediate(() => {
+      recountQueued = false
+      recountWork()
+    })
+  }
+  recountWork()
   if (keepAwake) {
     void keepAwake.refresh()
-    // What no batch says (a conversation closed, or gone to the cloud), and a helper to try again, within a minute.
-    shell.jobs.every("keep this Mac awake while agents work", 60_000, () => keepAwake.refresh())
+    // While agents work, a helper that failed is tried again within a minute; with none, nothing is held to keep.
+    shell.jobs.every("keep this Mac awake while agents work", 60_000, () => {
+      recountWork()
+      return keepAwake.refresh()
+    }, { needs: [atWork] })
   }
-  // The person's choice and their sign-in can change it; a minute is soon enough to start or stop listening.
+  // The person's choice and their sign-in can change it; a minute is soon enough to start or stop listening, and only
+  // while agents work is there anything to hand off. Work starting looks at once.
   if (sleepHandOff) {
     void sleepHandOff.refresh()
-    shell.jobs.every("watch whether to hand off on sleep", 60_000, () => sleepHandOff.refresh())
+    shell.jobs.every("watch whether to hand off on sleep", 60_000, () => sleepHandOff.refresh(), { needs: [atWork] })
+    atWork.onChange((on) => {
+      if (on) void sleepHandOff.refresh()
+    })
   }
   const workspaceAutomations = new Automations({
     launches: new AutomationLaunches(join(environment.dataRoot, "automation-launches")),

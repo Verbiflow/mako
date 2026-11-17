@@ -324,18 +324,27 @@ if (model) {
 
   // `--idle`: the host on this world with nothing at work and no window, settled 30 s, then its own CPU over 60 s, as
   // the perf proof of 2026-11-12 measured it; `--idle-only` stops there.
-  let idle: { hostPercent: number; from: number; to: number } | undefined
+  let idle: { hostPercent: number; from: number; to: number; jobRuns: number; loopChecks: number; jobs: Record<string, number> } | undefined
   if (values.idle || values["idle-only"]) {
+    // What woke the idle host: each recurring job's runs, and the event loop watch's checks, from `/health`.
+    const wakeups = async () => {
+      const probe = await probeRuntime(socket)
+      const info = probe.state === "ready" ? probe.info : undefined
+      return { jobs: new Map((info?.jobs ?? []).map((job) => [job.name, job.runs])), checks: info?.eventLoop?.delayMs.checks ?? 0 }
+    }
     const cpuSeconds = () => {
       const time = spawnSync("ps", ["-o", "time=", "-p", hostPid], { encoding: "utf8" }).stdout.trim()
       return time.split(":").reduce((sum, part) => sum * 60 + Number(part), 0)
     }
     await delay(30_000)
-    const [fromCpu, from] = [cpuSeconds(), Date.now()]
+    const [fromCpu, from, before] = [cpuSeconds(), Date.now(), await wakeups()]
     await delay(60_000)
-    const [toCpu, to] = [cpuSeconds(), Date.now()]
-    idle = { hostPercent: Math.round(((toCpu - fromCpu) / ((to - from) / 1000)) * 1000) / 10, from, to }
-    say(`idle: the host used ${idle.hostPercent}% of a core`)
+    const [toCpu, to, after] = [cpuSeconds(), Date.now(), await wakeups()]
+    const jobs = Object.fromEntries([...after.jobs].map(([name, runs]) => [name, runs - (before.jobs.get(name) ?? 0)] as const).filter(([, runs]) => runs > 0).sort((a, b) => b[1] - a[1]))
+    const jobRuns = Object.values(jobs).reduce((sum, runs) => sum + runs, 0)
+    idle = { hostPercent: Math.round(((toCpu - fromCpu) / ((to - from) / 1000)) * 1000) / 10, from, to, jobRuns, loopChecks: after.checks - before.checks, jobs }
+    say(`idle: the host used ${idle.hostPercent}% of a core; ${jobRuns} job runs and ${idle.loopChecks} event loop checks in 60 s`)
+    for (const [name, runs] of Object.entries(jobs)) say(`  ${String(runs).padStart(4)} ${name}`)
   }
   if (values["idle-only"]) {
     clearInterval(footprint)

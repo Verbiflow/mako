@@ -4,7 +4,7 @@ import type { AppMark, AppSamplingDemand } from "../contracts/thread-app.js"
 import { SAMPLE_EVERY_MS } from "./app-probe.js"
 import type { AppsLook } from "./environment-tools.js"
 
-/** How often the sampler's job wakes; each wake looks only when a look is due. */
+/** How often the sampler's job wakes while a reader watches; each wake looks only when a look is due. */
 export const SAMPLER_TICK_MS = 1_000
 /** While an app starts, installs or checks, a look a second, as the windows' own looks were. */
 const SETTLING_MS = 1_000
@@ -14,6 +14,11 @@ const ALIVE_MS = 4_000
 const IDLE_MS = 30_000
 /** What the trace and the memory look ran on before, as jobs of their own. */
 const TRACE_MS = SAMPLE_EVERY_MS
+/**
+ * How often it wakes with nobody reading while an app may run: for the trace and the memory look, at half the trace's
+ * interval, since a job's timer varies by a tenth either way and a tick just short of it would wait a whole one more.
+ */
+export const SAMPLER_UNWATCHED_MS = TRACE_MS / 2
 const MEMORY_MS = 30_000
 /**
  * How long an unopted reader's ask keeps the sampler looking. Windows ask for the marks and each followed folder's app every
@@ -28,8 +33,8 @@ type Reader = { kind: "legacy"; until: number } | ({ kind: "window" } & AppSampl
 
 interface SamplerDeps {
   look(): Promise<AppsLook>
-  /** Brings running apps' traces up to date (`EnvironmentTools.traceApps`). */
-  trace?: () => Promise<void>
+  /** Brings running apps' traces up to date (`EnvironmentTools.traceApps`), saying how many run. */
+  trace?: () => Promise<number>
   /** Measures running apps' memory (`ThreadProcesses.memory`). */
   memory?: () => Promise<void>
   /** Every window hears the marks when they change. */
@@ -39,6 +44,13 @@ interface SamplerDeps {
   connection?: (client: string) => string | undefined
   invalidated?: () => void
   demandChanged?: () => void
+  /**
+   * What the sampler's ticks are needed for: `watched`, a reader is following, so a look a second while apps settle;
+   * `running`, an app may run with nobody reading, so only the trace and the memory look, every `TRACE_MS`. With
+   * neither, an idle host's sampler holds no timer; this host starting or signalling a run (`changed`) or a reader
+   * asking turns them back on.
+   */
+  needed?: (need: { watched: boolean; running: boolean }) => void
 }
 
 /**
@@ -64,6 +76,8 @@ export class ThreadAppSampler {
   private dirty = true
   /** Whether a run was alive at the last trace: a trace closes an app's as it stops, so one more runs after the last goes. */
   private tracedAlive = true
+  /** Whether an app may run: until a trace finds none, and again once this host starts or signals one (`changed`). */
+  private mayRun = true
   private readonly remote = new Map<string, { conversation: string; generation: number; visible: boolean; until: number }>()
   /** A remote view's passive lease cannot change any legacy reader or another page's demand. */
   followRemote(client: string, conversation: string, demand: RemoteAppDemand): boolean {
@@ -75,6 +89,7 @@ export class ThreadAppSampler {
     if (!before && this.remote.size >= MAX_READERS) return false
     const wasWatched = this.watched()
     this.remote.set(key, { conversation, generation: demand.generation, visible: demand.visible, until: this.now() + REMOTE_APP_LEASE_MS })
+    this.#need()
     if (demand.visible && !wasWatched) this.dirty = true
     return true
   }
@@ -101,6 +116,8 @@ export class ThreadAppSampler {
   /** Something this host did may have changed the marks: the next tick looks. */
   changed(): void {
     this.dirty = true
+    this.mayRun = true
+    this.#need()
     this.deps.invalidated?.()
   }
 
@@ -114,6 +131,7 @@ export class ThreadAppSampler {
       return
     }
     this.readers.set(client, { kind: "legacy", until })
+    this.#need()
   }
 
   /**
@@ -129,6 +147,7 @@ export class ThreadAppSampler {
       return demand.generation === previous.generation && demand.visible === previous.visible && (demand.apps ?? true) === (previous.apps ?? true) && (demand.outputs ?? []).join() === (previous.outputs ?? []).join()
     if (!previous && this.readers.size >= MAX_READERS) return false
     this.readers.set(client, { kind: "window", ...demand })
+    this.#need()
     this.deps.demandChanged?.()
     if (demand.visible && !wasWatched) this.dirty = true
     return true
@@ -193,12 +212,18 @@ export class ThreadAppSampler {
     if (this.deps.trace && now - this.tracedAt >= TRACE_MS && (alive || this.tracedAlive)) {
       this.tracedAt = now
       this.tracedAlive = watched ? alive : true
-      await this.deps.trace()
+      const running = await this.deps.trace()
+      if (!watched && running === 0) this.mayRun = false
     }
-    if (this.deps.memory && alive && now - this.measuredAt >= MEMORY_MS) {
+    if (this.deps.memory && alive && this.mayRun && now - this.measuredAt >= MEMORY_MS) {
       this.measuredAt = now
       await this.deps.memory()
     }
+    this.#need()
+  }
+
+  #need(): void {
+    this.deps.needed?.({ watched: this.watched(), running: this.mayRun })
   }
 
   private async sample(): Promise<void> {

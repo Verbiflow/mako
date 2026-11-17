@@ -83,7 +83,7 @@ export const PROCESS_READS: ProcessReads = {
 
 export interface AgentRunsDeps {
   store(): ThreadStore | undefined
-  catalog: Pick<ThreadCatalog, "nativePath" | "ref" | "page" | "activity" | "subscribe" | "announce"> & Partial<Pick<ThreadCatalog, "readRef">>
+  catalog: Pick<ThreadCatalog, "nativePath" | "ref" | "page" | "activity" | "subscribe" | "announce"> & Partial<Pick<ThreadCatalog, "readRef" | "watchWhile">>
   jobs: HostJobs
   /** Whether `harness` has a CLI a conversation's shell can run, so a Session of it can be one started there. */
   runs(harness: string): boolean
@@ -156,6 +156,7 @@ export class AgentRuns {
   private readonly abort = new AbortController()
   private readonly cancelJob: () => void
   private readonly unsubscribe: () => void
+  private readonly unwatch: () => void
   private readonly discovering = new Set<string>()
   private discoveries: Promise<void> = Promise.resolve()
   private seen: unknown
@@ -168,6 +169,8 @@ export class AgentRuns {
     this.demand = deps.jobs.demand("followed agent runs on this device")
     this.cancelJob = deps.jobs.every("follow agent runs", LIVENESS_MS, () => this.check(), { firstAfterMs: 0, needs: [this.demand] })
     this.unsubscribe = deps.catalog.subscribe((event) => this.catalogEvent(event))
+    // A run followed here is heard through its Session's activity, which the harnesses' probes read: they run while one is.
+    this.unwatch = deps.catalog.watchWhile?.(this.demand) ?? (() => {})
     this.sync()
     this.originRecovery = this.recoverOrigins()
   }
@@ -516,6 +519,7 @@ export class AgentRuns {
     this.abort.abort()
     this.cancelJob()
     this.unsubscribe()
+    this.unwatch()
     for (const followed of this.followed.values()) clearTimeout(followed.timer)
   }
 
