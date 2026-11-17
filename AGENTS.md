@@ -285,14 +285,7 @@ harness that offers it, and otherwise runs it on the harness's nearest mode
 within its Apex's own (`fitAccess`, `modeWithin`), the start's note saying
 which; only a mode wider than the Apex's is refused. It starts
 here, or on another of the person's devices (`place: device:<name>`,
-below); `cloud` is refused for now. Its host side is built behind
-`AgentsDeps.cloudFins`, which no shipping wiring sets: opened, a start keeps
-its row (with its launch digest, `cloudFinInputSha256`, and its folder's
-committed source) before the account reserves it and makes it into its own
-cloud Thread (`cloudFinThread(op)`), then is placed there through
-`mako:agents-place`, each step repeated under its op after a lost answer, and a
-stop asks the account first (`scripts/test-fins-cloud.ts`, in
-`test:fins-placed`). It never waits unasked:
+below); `cloud` is refused for now. It never waits unasked:
 past its place's bound or a tree's running budget, a start is refused with
 the count unless it passes `queue: true`, when it waits behind every spawn
 that waits for that place ("Queued: 3 ahead, your limit of Fins at once is

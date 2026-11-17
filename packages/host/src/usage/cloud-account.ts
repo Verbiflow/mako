@@ -1,4 +1,4 @@
-import { CLOUD_FIN_START_PATH, CLOUD_FINS_PATH, CloudFinAnswerSchema, type CloudFinPlace, CloudFinPlacedSchema, CloudFinStatusSchema, type CloudFinStart, type CloudFinStatus } from "@mako/protocol/cloud-fins"
+import { CLOUD_FINS_PATH, CloudFinAnswerSchema, CloudFinStatusSchema, type CloudFinStart, type CloudFinStatus } from "@mako/protocol/cloud-fins"
 import { SOURCE_PROJECT_PATH, SourceProjectReceiptSchema, type SourceProjectCommand } from "@mako/protocol/source-project"
 import { stoppingSignal } from "../base/host-stopping.js"
 import { createHash, randomBytes, randomUUID } from "node:crypto"
@@ -810,16 +810,6 @@ export class CloudAccounts {
     this.#finLimitsAttempt = undefined
     this.#options.onFinLimitsChanged?.()
     return CloudFinAnswerSchema.parse(await response.json())
-  }
-
-  /** A reserved start made into its cloud Thread on its own machine; repeated, the same Thread and machine. */
-  async startCloudFin(input: CloudFinPlace) {
-    const response = await this.#call("cloud.fins.start", "POST", CLOUD_FIN_START_PATH, input)
-    this.#finLimitsEpoch += 1
-    if (this.#finLimits) this.#finLimits.refreshAt = 0
-    this.#finLimitsAttempt = undefined
-    this.#options.onFinLimitsChanged?.()
-    return CloudFinPlacedSchema.parse(await response.json())
   }
 
   async cancelCloudFin(input: CloudFinStart) {

@@ -172,11 +172,9 @@ import { QuietWatch } from "./fin-quiet.js"
 import { TurnWaits } from "./turn-waits.js"
 import { CREW_STEPS_MAX, CREW_WAIT, crewWaitNote, crewWaitSeconds, turnWaitItemKey, turnWaitItemWords, turnWaitLine, turnWaitMovedNote, type CrewFin, type TurnWait, type TurnWaitItem, type TurnWaitLine } from "../contracts/turn-waits.js"
 import { AFTER_WAIT, type TurnWaitInput, type TurnWaitResult } from "../contracts/thread-tools.js"
-import { AgentPlaces, placeName, type AwayRefused, type OutboxNotice, type PlacedAsk, type PlaceLink, type ResolvedPlace } from "./agent-places.js"
+import { AgentPlaces, placeName, type AwayRefused, type OutboxNotice, type PlacedAsk, type PlaceLink } from "./agent-places.js"
 import { checkedFinSource } from "./fin-source.js"
 import { CommittedFinSourceSchema, type CommittedFinSource } from "../contracts/fin-source.js"
-import { CloudFinStartSchema, cloudFinInputSha256, cloudFinThread, type CloudFinAnswer, type CloudFinPlace, type CloudFinPlaced, type CloudFinStart } from "@mako/protocol/cloud-fins"
-import { ContinueRepositorySchema } from "@mako/protocol/continues"
 import type { PullOutcome, PullReading, PullWaitUntil } from "../contracts/pull-waits.js"
 import type { PullTarget as ReadTarget } from "../git/index.js"
 
@@ -333,20 +331,6 @@ type Live = Pick<
   "session" | "held" | "nativeIds" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "rewordWaiting" | "adoptPin" | "wakeDue" | "snapshot" | "editQueued" | "switchSettled" | "stopMark" | "pinnedAccount" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "workOf" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "switching" | "readIn"
 > & Partial<Pick<LiveConversations, "waitChanged">>
 
-/** What starting a Fin in the cloud asks of the account and this device (`AgentsDeps.cloudFins`). */
-export interface CloudFins {
-  /** The harnesses the cloud's machines run. */
-  harnesses(): string[]
-  /** The Fin's folder as a committed, pushed source (`captureFinSource`); throws, saying why, when it isn't one. */
-  capture(folder: string): Promise<CommittedFinSource>
-  reserve(start: CloudFinStart): Promise<CloudFinAnswer>
-  start(place: CloudFinPlace): Promise<CloudFinPlaced>
-  cancel(start: CloudFinStart): Promise<CloudFinAnswer>
-}
-
-/** A cloud start's own record, kept on its row before anything leaves: the start, what its machine clones, its source. */
-export type CloudAway = { start: CloudFinStart; repository: { url: string; branch?: string }; source: CommittedFinSource; folder?: string }
-
 export interface AgentsDeps {
   /** `thread_history`'s tools, for `agents_read`'s `search` of one Fin; absent until the host builds them. */
   history?: () => ThreadHistoryTools | undefined
@@ -415,12 +399,6 @@ export interface AgentsDeps {
   placedCeiling?(): AccessTier
   /** What bounds the cloud's Fins (the person's plan and spend ceiling), once Fins start there; nothing without it. */
   cloudLimits?(): CloudFinLimits
-  /**
-   * Starting Fins in the cloud, once that's open: no shipping wiring gives it yet, so `place: cloud` is refused as it
-   * always was. With it, a start is reserved by the account, made into its cloud Thread on a machine of its own, and
-   * placed there with its committed source, all under its one op (`CloudFins`).
-   */
-  cloudFins?: CloudFins
   /** This Mac's cores, memory and load (`MacCapacity`): a start's answer says when it's busy, and it starts anyway. */
   capacity?: { read(): Promise<MacReading> }
   processes?: ProcessReads
@@ -565,7 +543,7 @@ interface QueuedStart {
    * start left for that place, written before the call: from then, whether a Fin runs there is that place's to say.
    * `stop` once its Apex stopped it with that unsaid, kept until that place answers (`cancelAway`).
    */
-  away?: { target: PlaceTarget; remote: string; sent?: number; stop?: { at: number; why: string }; cloud?: CloudAway }
+  away?: { target: PlaceTarget; remote: string; sent?: number; stop?: { at: number; why: string } }
 }
 
 interface AfterRef {
@@ -605,29 +583,8 @@ const QueuedStartSchema = z.object({
   after: z.array(z.object({ name: z.string(), child: z.string().optional(), op: z.string().optional() })).optional(),
   refused: z.string().optional(),
   wake: z.string().optional(),
-  away: z.object({ target: PlaceTargetSchema, remote: z.string(), sent: z.number().optional(), stop: z.object({ at: z.number(), why: z.string() }).optional(), cloud: z.object({ start: CloudFinStartSchema, repository: ContinueRepositorySchema, source: CommittedFinSourceSchema, folder: z.string().optional() }).optional() }).optional(),
+  away: z.object({ target: PlaceTargetSchema, remote: z.string(), sent: z.number().optional(), stop: z.object({ at: z.number(), why: z.string() }).optional() }).optional(),
 }) satisfies z.ZodType<QueuedStart>
-/** How the account's refusal of a cloud start reads to its Apex: full for now, not open to it, or not this start. */
-function cloudRefusal(reason: string): AgentRefused["refused"] {
-  return reason === "slots" || reason === "spend" ? "budget" : reason === "conflict" || reason === "cancelled" || reason === "missing" || reason === "generation" || reason === "thread" ? "conflict" : "place-unavailable"
-}
-
-function cloudWords(reason: string): string {
-  const words = {
-    slots: "The person's plan runs as many cloud machines at once as it allows; one frees when a cloud Fin ends.",
-    spend: "Today's cloud spend and reservations reached the person's ceiling.",
-    policy: "The account has no cloud plan this start can run under.",
-    usage: "The account's cloud usage couldn't be confirmed, so nothing is started on it.",
-    price: "The cloud's price couldn't be confirmed, so nothing is started on it.",
-    unresolved: "The account has a cloud start it couldn't settle yet, so nothing more is started on it.",
-    "no-cloud": "The person's plan doesn't include the cloud.",
-    conflict: "The account holds this start's key for other work: start it again under another clientKey.",
-    cancelled: "This start was cancelled.",
-  }
-  // SAFETY: `reason in words` was just checked, so it names one of the table's keys.
-  return reason in words ? words[reason as keyof typeof words] : `The account refused the cloud start (${reason}).`
-}
-
 /** What a queued start's record still says when it no longer parses whole (an older Mako's): whose it is, and its name. */
 const QueuedLeadSchema = z.object({
   lead: QueuedByApexSchema,
@@ -1707,14 +1664,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     const places = this.places
     if (!places || apex.away)
       return this.refuse(op, "place-unavailable", `This device reaches no other place of the person's now (it isn't signed in to Mako), so a ${FIN_WORD} starts here only. Leave place out.`)
-    // The cloud is a place only once its starts are open (`AgentsDeps.cloudFins`); until then it's refused as it always was.
-    const cloud = place === "cloud" ? this.deps.cloudFins : undefined
-    if (place === "cloud" && !cloud)
+    if (place === "cloud")
       return this.refuse(op, "place-unavailable", `A ${FIN_WORD} can't be placed in the cloud yet: name one of the person's devices with device:<name>, or leave place out to start it here.`)
     if (input.context?.length)
       return this.refuse(op, "conflict", `A Thread can't be attached to a ${FIN_WORD} on another device yet: its transcript is on this one. Put what it needs in the brief, or leave place out.`)
-    // A cloud Fin's Thread is fixed by its op, so every repeat of the start reaches the one Thread.
-    const resolved: ResolvedPlace = cloud ? { kind: "away", target: { kind: "cloud", thread: await cloudFinThread(op) }, where: "cloud" } : await places.resolve(place)
+    const resolved = await places.resolve(place)
     if ("refused" in resolved) return this.refuse(op, resolved.refused, resolved.why)
     if (resolved.kind === "here") {
       const here = { ...input }
@@ -1723,7 +1677,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     const { target, where } = resolved
     const name = placeName(target)
-    const offers = cloud ? { harnesses: cloud.harnesses() } : await places.capabilities(target, where)
+    const offers = await places.capabilities(target, where)
     if ("refused" in offers) return this.refuse(op, offers.refused, offers.why)
     const policy = this.deps.finPolicy?.()
     const followed = input.rule === undefined ? undefined : policy?.rules[input.rule - 1]
@@ -1762,17 +1716,7 @@ export class Agents implements AgentOperations, ConversationChildren {
         : `${upper(full ?? `${name} has ${FIN_WORD}s waiting for room`)}${waiting ? ` and ${waiting} wait for one to end` : ""}.${this.elsewhere(where)} Pass queue: true to start it when ${name} has room, or leave place out to start it here.`)
     // Its place by the device's own name, so every start there is counted under one key.
     const asked: AgentsStartInput = { ...input, place: where, harness, ...(input.model === undefined && ruled?.settings?.model && harness === ruled.harness && { model: ruled.settings.model }) }
-    // A cloud start launches its folder's committed, pushed source, under one launch digest its every repeat sends.
-    let cloudAway: CloudAway | undefined
-    if (cloud && target.kind === "cloud") {
-      // Its source is its folder's: an Apex with none has nothing to start from, and is told so rather than of an "undefined".
-      if (!cwd) return this.refuse(op, "place-unavailable", `A ${FIN_WORD} in the cloud starts from its project's committed, pushed source, and this Thread has no folder to take it from. Pass cwd, or leave place out to start it here.`)
-      const folder = cwd
-      const made = await this.cloudAway(op, apex, asked, tier, harness, target.thread, folder).catch((error) => ({ refused: errorMessage({ error }) }))
-      if ("refused" in made) return this.refuse(op, "place-unavailable", `A ${FIN_WORD} in the cloud starts from this project's committed, pushed source, and ${folder} isn't one: ${made.refused}. Commit and push it, or leave place out to start it here.`)
-      cloudAway = made
-    }
-    const record: QueuedStart = { lead: apex, input: asked, tier, harness, away: { target, remote, ...(cloudAway && { cloud: cloudAway }) }, ...(why && { why }), ...(after.length && { after }) }
+    const record: QueuedStart = { lead: apex, input: asked, tier, harness, away: { target, remote }, ...(why && { why }), ...(after.length && { after }) }
     // Recorded before anything goes to the other device: a host that dies with the call on its way finds the start
     // here and asks again under the same op, so a Fin started there is never left without its Apex's record of it.
     this.changeQueue((held) => held.queueSpawn({ op, tree, record: JSON.stringify(record), at: this.now(), away: true }))
@@ -1815,17 +1759,6 @@ export class Agents implements AgentOperations, ConversationChildren {
     const name = uniqueName(input.name ?? input.title ?? input.brief.objective, new Set([...store.edges().children(apex.thread).map((edge) => edge.name), ...others]))
     start.name = name
     if (start.cancelled) return this.refuse(op, "conflict", `Its ${APEX_WORD} stopped it before it started.`)
-    // A cloud start is reserved, then made into its cloud Thread on its own machine, before it's placed there.
-    const cloudAway = queued.away!.cloud
-    let folder: string | undefined
-    if (cloudAway) {
-      // Sent from its first call to the account: from here a reservation may exist, so a stop must ask the account.
-      this.keepAway(op, (away) => ({ ...away, sent: away.sent ?? this.now() }))
-      const made = await this.makeCloud(op, cloudAway, harness)
-      if (!("folder" in made)) return made
-      folder = made.folder
-      if (start.cancelled) return this.refuse(op, "conflict", `Its ${APEX_WORD} stopped it before it started.`)
-    }
     // Written before the call leaves: from here whether a Fin runs there is that device's to say, so a stop asks it.
     this.keepAway(op, (away) => ({ ...away, sent: away.sent ?? this.now() }))
     this.forget(apex.thread)
@@ -1843,8 +1776,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(input.reasoning && { reasoning: input.reasoning }),
       ...(input.fast !== undefined && { fast: input.fast }),
       access: tier,
-      // A cloud Fin works in its machine's clone, at its committed source, verified there before its brief.
-      workspace: cloudAway && folder ? { folder, source: cloudAway.source } : { remote, ...(input.workspace?.branch && { branch: input.workspace.branch }), ...(input.workspace?.base && { base: input.workspace.base }) },
+      workspace: { remote, ...(input.workspace?.branch && { branch: input.workspace.branch }), ...(input.workspace?.base && { base: input.workspace.base }) },
       ...(input.mode && { mode: input.mode }),
       ...(input.wake && { wake: input.wake }),
     })
@@ -1870,37 +1802,6 @@ export class Agents implements AgentOperations, ConversationChildren {
     hostLog("agents", "start placed", { op, child: edge.child, place: input.place ?? "", harness: placed.harness, access: placed.access, ms: Math.round(performance.now() - began), ...(placed.deduped && { deduped: true }) })
     this.childMoved(edge, false)
     return this.started(store.edges().of(edge.child) ?? edge, apex, false)
-  }
-
-  /**
-   * A cloud start's account steps, each settled there by the start's op, so a repeat after a lost answer is the same
-   * step, never a second reservation, Thread or machine: reserved, then made into its cloud Thread on its own machine,
-   * whose folder its committed source is prepared in. A lost answer keeps the start's row, asked again under its op.
-   */
-  private async makeCloud(op: string, away: CloudAway, harness: string): Promise<AgentsStartResult | { folder: string }> {
-    const cloud = this.deps.cloudFins
-    if (!cloud) return this.refuse(op, "place-unavailable", `${upper(FIN_WORD)}s don't start in the cloud from this device now. Leave place out to start it here.`)
-    const lost = (step: string, why: string) => {
-      this.lostPlacings.add(op)
-      return this.refuse(op, "unavailable", `The account didn't answer the cloud start's ${step}: ${why}`)
-    }
-    let reserved: CloudFinAnswer
-    try {
-      reserved = await cloud.reserve(away.start)
-    } catch (error) {
-      return lost("reservation", errorMessage({ error }))
-    }
-    if (!reserved.ok) return this.refuse(op, cloudRefusal(reserved.reason), cloudWords(reserved.reason))
-    let made: CloudFinPlaced
-    try {
-      made = await cloud.start({ ...away.start, repository: away.repository, harness })
-    } catch (error) {
-      return lost("start", errorMessage({ error }))
-    }
-    if (!made.ok) return this.refuse(op, cloudRefusal(made.reason), made.detail)
-    const folder = made.folder
-    this.keepAway(op, (kept) => (kept.cloud ? { ...kept, cloud: { ...kept.cloud, folder } } : kept))
-    return { folder }
   }
 
   /**
@@ -1937,32 +1838,6 @@ export class Agents implements AgentOperations, ConversationChildren {
       placed: { target: queued.away!.target, ...(placed.session && { session: placed.session }), ...(placed.conversation && { conversation: placed.conversation }), working: !closed && placed.state !== "ended", epoch: 1 },
       ...(closed && { closedAt: closed.at, closedReason: closed.why.slice(0, 2_000) }),
     })
-  }
-
-  /**
-   * A cloud start's own record: its folder's committed source (`CloudFins.capture`), the repository its machine clones,
-   * and the start the account knows it by, its launch digest covering everything it launches.
-   */
-  private async cloudAway(op: string, apex: Apex, input: AgentsStartInput, tier: AccessTier, harness: string, thread: string, folder: string): Promise<CloudAway> {
-    const source = await this.deps.cloudFins!.capture(folder)
-    const inputSha256 = await cloudFinInputSha256({
-      version: ORCHESTRATION_VERSION,
-      op,
-      parentThread: apex.thread,
-      brief: input.brief,
-      ...(input.name && { name: input.name }),
-      ...(input.title && { title: input.title }),
-      ...(input.role && { role: input.role }),
-      harness,
-      ...(input.model && { model: input.model }),
-      ...(input.reasoning && { reasoning: input.reasoning }),
-      ...(input.fast !== undefined && { fast: input.fast }),
-      access: tier,
-      ...(input.mode && { mode: input.mode }),
-      ...(input.wake && { wake: input.wake }),
-      source: source.sha256,
-    })
-    return { start: CloudFinStartSchema.parse({ op, inputSha256, thread }), repository: source.repository, source }
   }
 
   /** A start queued for another place, by its op, as its row stands now. */
@@ -2034,20 +1909,6 @@ export class Agents implements AgentOperations, ConversationChildren {
     const name = placeName(away.target)
     const fin = queued.input.name ?? queued.input.title ?? "it"
     const kept = (why: string) => ({ pending: `${name} can't be reached now, so whether ${fin} started there isn't known and it isn't stopped yet. The stop is kept: it goes once ${name} answers, and a start that arrives after it won't run. ${why}` })
-    // A cloud start is the account's first: a reservation it closes before any machine was made ran nothing, and its
-    // stop is settled; one made into a machine is stopped there too, as a device's is.
-    if (away.cloud) {
-      const cancelled = await this.deps.cloudFins?.cancel(away.cloud.start).catch((error) => ({ error: errorMessage({ error }) }))
-      if (!cancelled || "error" in cancelled) return kept(`The account didn't answer the stop${cancelled && "error" in cancelled ? `: ${cancelled.error}` : ""}.`)
-      if (cancelled.ok && cancelled.reservation.phase === "cancelled") {
-        this.changeQueue((held) => held.unqueueSpawn(op))
-        this.lostPlacings.delete(op)
-        hostLog("agents", "end", { op, outcome: "stopped", place: name, started: false })
-        this.forget(apex.thread)
-        void this.drain()
-        return { stopped: true }
-      }
-    }
     const self = await this.places?.self()
     if (!this.places || !self) return kept("This device isn't signed in to Mako now.")
     const answer = await this.places.cancel(away.target, {
@@ -4143,7 +4004,7 @@ export class Agents implements AgentOperations, ConversationChildren {
         const started = filled.get(where) ?? 0
         if (!working.has(where)) working.set(where, this.working(where))
         // Another device's room is its own word: one not asked since this host started waits until it is (`askRooms`).
-        if (queued.away && queued.away.target.kind !== "cloud" && !this.places?.room(where)) continue
+        if (queued.away && !this.places?.room(where)) continue
         if (this.overCeiling(everywhere + totalStarted) ?? this.awayFull(where, started) ?? (queued.away ? undefined : placeFull(this.placeLimit(where), working.get(where)! + started))) continue
         totalStarted += 1
         filled.set(where, started + 1)
@@ -6438,9 +6299,6 @@ export class Agents implements AgentOperations, ConversationChildren {
       // What waits for room there, and what was on its way there when its device, or this host, stopped answering.
       if (queued?.away && !queued.away.stop && !queued.refused && !this.starts.has(spawn.op)) waiting.set(placeOf(queued.input.place), queued.away.target)
     }
-    const cloudWaits = [...waiting.values()].some((target) => target.kind === "cloud")
-    for (const [where, target] of waiting) if (target.kind === "cloud") waiting.delete(where)
-    if (cloudWaits) void this.drain()
     if (!waiting.size) return
     const had = new Set([...waiting.keys()].filter((where) => places.room(where) && this.awayFull(where) === undefined))
     await Promise.all([...waiting].map(([where, target]) => places.capabilities(target, where)))
