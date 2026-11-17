@@ -80,3 +80,34 @@ export function olderReadable(text: string | undefined): string | undefined {
   if (text === undefined || !NEWER_KIND_TEXT.some((kind) => text.includes(kind))) return text
   return JSON.stringify(JSON.parse(text, olderReadableValue))
 }
+
+/** An object sent with an exact kind beside the reading every build knows (`olderReadable`). */
+const SentExactSchema = z.looseObject({ exactFailure: z.string() })
+/** An object whose evidence was sent beside the reading every build knows (`storedFailureEvidence`). */
+const SentEvidenceSchema = z.looseObject({ failureEvidence: z.looseObject({ exact: z.custom<Json>(() => true) }) })
+
+/** One JSON value as `JSON.parse` revives it: a kind and evidence sent for older readers, taken back exactly. */
+function exactValue(_key: string, value: Json): Json {
+  const sent = SentExactSchema.safeParse(value)
+  let revived: Json = value
+  if (sent.success) {
+    const { exactFailure, ...rest } = JsonObjectSchema.parse(value)
+    const exact = PROVIDER_FAILURE_KINDS.find((kind) => kind === exactFailure)
+    revived = exact ? { ...rest, failure: exact } : value
+  }
+  const evidenced = SentEvidenceSchema.safeParse(revived)
+  if (!evidenced.success) return revived
+  const evidence = ProviderFailureEvidenceSchema.safeParse(evidenced.data.failureEvidence)
+  return evidence.success ? { ...JsonObjectSchema.parse(revived), failureEvidence: evidence.data } : revived
+}
+
+/**
+ * Another device's answer as this build reads it: what its host sent for readers that may predate a kind
+ * (`olderReadable`) carries the exact kind beside the reading every build knows, which this build takes back, so a
+ * conversation read whole (a snapshot, a page of history) says what a batch of it does (`exactFailures`). Text with
+ * nothing sent so is returned as it is.
+ */
+export function exactReadable(text: string | undefined): string | undefined {
+  if (text === undefined || (!text.includes('"exactFailure":') && !text.includes('"exact":{"kind"'))) return text
+  return JSON.stringify(JSON.parse(text, exactValue))
+}

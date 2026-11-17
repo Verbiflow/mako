@@ -4,6 +4,7 @@ import { olderReadable } from "@mako/host/contracts/provider-failure-evidence"
 import { z } from "zod"
 import { exactFailures, requestsAfter, sessionAfter } from "@mako/host/contracts/live-conversations"
 import type { RuntimeEvent } from "@mako/host/contracts/runtime-value"
+import { hostReplyValue, hostSuccess } from "@mako/host/contracts/host-operations"
 import { gatewayCompactLine, gatewayEventLine } from "@mako/host/transport/gateway"
 
 /**
@@ -55,6 +56,16 @@ assert.equal(requestsAfter([], { requestChanges: changed.requestChanges })![0]!.
 assert.deepEqual(sessionAfter(sent.session, { sessionChanges: changed.sessionChanges }).failureEvidence, refusal)
 assert.deepEqual(sessionAfter(sent.session, { session: sent.session }).failureEvidence, refusal)
 
+// A conversation read whole (a snapshot, a page of history) over the gateway: a reader of this build decodes the answer
+// with the exact kind back, as a batch says it, so its row is the "declined" one and offers no resend.
+const snapshot = Sent.parse(JSON.parse(hostReplyValue(hostSuccess("op-1", answer))!))
+assert.equal(snapshot.requests[0]!.failure, "model-refusal", "a snapshot read over the gateway keeps the refusal")
+assert.equal("exactFailure" in snapshot.requests[0]!, false)
+assert.deepEqual(snapshot.requests[0]!.failureEvidence, refusal)
+assert.deepEqual(snapshot.session.failureEvidence, refusal)
+const unchanged = JSON.stringify({ requests: [{ id: "r2", failure: "network" }], exact: 1 })
+assert.equal(hostReplyValue(hostSuccess("op-2", unchanged)), unchanged, "an answer sent as it was is read as it was")
+
 // Nothing else changes: text without the kind is the same string, and a request without it the same object.
 const plain = JSON.stringify({ requests: [{ ...request, failure: "network", failureEvidence: { kind: "network", source: "host" } }] })
 assert.equal(olderReadable(plain), plain)
@@ -64,4 +75,4 @@ assert.equal(exactFailures(ordinary), ordinary)
 const prose = JSON.stringify({ text: 'the "model-refusal" kind' })
 assert.equal(olderReadable(prose), prose)
 
-console.log("older peers: a refused turn leaves through the gateway as unknown with the exact kind beside it, which this build reads back; windows and other values unchanged")
+console.log("older peers: a refused turn leaves through the gateway as unknown with the exact kind beside it, which this build reads back from a batch, a snapshot or a page; windows and other values unchanged")
