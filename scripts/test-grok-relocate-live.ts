@@ -5,7 +5,7 @@ import "./lib/scratch-git.mjs"
 // with its turns, and its next turn carries them.
 import assert from "node:assert/strict"
 import { execFileSync, spawn } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { createServer, type IncomingMessage } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -19,6 +19,7 @@ import { emitGrokSession } from "../packages/sessions/src/emit.ts"
 import { GrokProvider } from "../packages/sessions/src/providers/grok.ts"
 import { assertSeedHolds, seeded, seedThread } from "./lib/seed-readback.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { removeScratch } from "./lib/scratch-processes.mjs"
 
 const nativeStores = new NativeStores(false)
 
@@ -168,6 +169,7 @@ else {
     console.log("Grok relocate: a session saved under one folder refuses to load from another; moved under the new folder's name, the same session loads there with its turns and goes on; a seeded session resumed still begins with its seed")
   } finally {
     for (const done of after.reverse()) done()
-    rmSync(root, { recursive: true, force: true })
+    // Grok writes its session as it exits: wait for nothing to hold the folder, then remove it.
+    await removeScratch(root)
   }
 }

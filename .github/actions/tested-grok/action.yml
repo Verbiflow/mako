@@ -1,0 +1,44 @@
+name: The tested Grok
+description: >-
+  `@xai-official/grok` at the version Mako tests, with this runner's binary package named beside it in the same command:
+  the binary ships in an optional dependency (`@xai-official/grok-linux-x64`), which npm skips without failing when its
+  download doesn't land. The installed prefix is kept in the cache by version, and `grok --version` must name the tested
+  build. What the Grok live tests (grok-live) run.
+inputs:
+  prefix:
+    description: Where it's installed; its node_modules/.bin holds `grok`.
+    required: true
+runs:
+  using: composite
+  steps:
+    - id: version
+      shell: bash
+      run: |
+        # versions.ts imports nothing at run time, so plain Node reads it.
+        tested=$(node -e 'import("./packages/host/src/harnesses/grok/versions.ts").then((m) => console.log(m.GROK_VERSIONS.tested))')
+        test -n "$tested" || { echo "couldn't read Grok's tested version" >&2; exit 1; }
+        echo "tested=$tested" >> "$GITHUB_OUTPUT"
+        echo "platform=$(node -p '`${process.platform}-${process.arch}`')" >> "$GITHUB_OUTPUT"
+    - id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ inputs.prefix }}
+        key: tested-grok-${{ steps.version.outputs.tested }}-${{ steps.version.outputs.platform }}
+    - shell: bash
+      env:
+        PREFIX: ${{ inputs.prefix }}
+        TESTED: ${{ steps.version.outputs.tested }}
+        PLATFORM: ${{ steps.version.outputs.platform }}
+      run: |
+        if ! "$PREFIX/node_modules/.bin/grok" --version 2>/dev/null | grep -q "^grok $TESTED "; then
+          rm -rf "$PREFIX"
+          npm install --prefix "$PREFIX" --no-audit --no-fund \
+            "@xai-official/grok@$TESTED" "@xai-official/grok-$PLATFORM@$TESTED"
+        fi
+        reported=$("$PREFIX/node_modules/.bin/grok" --version)
+        case "$reported" in "grok $TESTED "*) ;; *) echo "grok reports '$reported', not the tested $TESTED" >&2; exit 1 ;; esac
+    - if: steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ inputs.prefix }}
+        key: ${{ steps.restore.outputs.cache-primary-key }}

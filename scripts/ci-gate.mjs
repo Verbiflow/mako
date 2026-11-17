@@ -243,8 +243,7 @@ export const STEPS = [
   // test:native-agents, test:shared-continuation, test:live and others no workflow runs) or nothing did: each passed
   // on main on a Mac before it came in, as its npm script runs it. Not yet here: test-thread-processes.ts (160 s, past
   // a shard's floor, to be split), the manual proofs (live harnesses, packaged builds, arguments), the *-ui suites of
-  // those npm scripts, and the ones red on main (test:conversation-control's test-scratch-home.ts,
-  // test-control-recording-failures.ts, test-update-performance.ts, test-local-update-startup.ts,
+  // those npm scripts, and the ones red on main (test-control-recording-failures.ts, test-update-performance.ts, test-local-update-startup.ts,
   // test-repository-discovery.ts, test-transcript-residency.ts).
   [2, "tsx scripts/test-acp-background.ts"],
   [2, "tsx scripts/test-acp-notifications.ts"],
@@ -370,6 +369,8 @@ export const STEPS = [
   [4, "tsx scripts/test-roster-turn-ends.ts"],
   [1, "tsx scripts/test-run-output.ts"],
   [2, "tsx scripts/test-runtime-updates.ts"],
+  // Every script that runs a harness gives it a scratch or sealed home; red on main until 2026-11-17.
+  [6, "tsx scripts/test-scratch-home.ts"],
   [1, "tsx scripts/test-session-usage.ts"],
   [1, "tsx scripts/test-shared-continuation-upgrade.ts"],
   [7, "tsx scripts/test-shared-conversations.ts"],

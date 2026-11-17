@@ -43,6 +43,8 @@ export const JOBS = {
   steer: [/^packages\/host\/src\/(harnesses|conversations)\//, /^scripts\/probe-steer/],
   // Codex's own sandbox at the tested build.
   codexSandbox: [/^packages\/host\/src\/harnesses\/codex\//, /^scripts\/check-codex-sandbox/, /^\.github\/actions\/(?:codex-sandbox|tested-codex)\//],
+  // Grok's live tests at the tested build: its harness, the ACP client they speak through, and the tests.
+  grokLive: [/^packages\/host\/src\/harnesses\/(?:grok\/|acp[\w-]*\.ts$)/, /^scripts\/test-grok-[\w-]+-live\.ts$/, /^scripts\/lib\/scratch-processes\.mjs$/, /^\.github\/actions\/tested-grok\//],
   // The Files view's index and its benchmark.
   fileSearch: [/^packages\/host\/src\/workspaces\//, /^scripts\/[\w-]*file-(index|kinds|search)/],
 }
