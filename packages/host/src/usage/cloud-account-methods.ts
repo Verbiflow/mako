@@ -1,5 +1,5 @@
 import { join } from "node:path"
-import type { CloudFinAnswer, CloudFinStart, CloudFinStatus } from "@mako/protocol/cloud-fins"
+import type { CloudFinAnswer, CloudFinPlace, CloudFinPlaced, CloudFinStart, CloudFinStatus } from "@mako/protocol/cloud-fins"
 import type { SourceProjectCommand, SourceProjectReceipt } from "@mako/protocol/source-project"
 import type { Advertisement, ClientSessionOverSockets } from "@mako/protocol"
 import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
@@ -155,6 +155,7 @@ export interface CloudAccount {
   heldCloudFinLimits?(): CloudFinStatus | undefined
   reserveCloudFin?(input: CloudFinStart): Promise<CloudFinAnswer>
   cancelCloudFin?(input: CloudFinStart): Promise<CloudFinAnswer>
+  startCloudFin?(input: CloudFinPlace): Promise<CloudFinPlaced>
   /** The person's access choices as the account keeps them, or null from a cloud that doesn't keep them yet. */
   accessChoices?(): Promise<AccessChoicesAnswer | null>
   /** Makes `choices` the account's (with `fill`, only where it has none); all of them after, or null as above. */
@@ -469,6 +470,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     heldCloudFinLimits: () => cloud.heldCloudFinLimits(),
     reserveCloudFin: (input) => cloud.reserveCloudFin(input),
     cancelCloudFin: (input) => cloud.cancelCloudFin(input),
+    startCloudFin: (input) => cloud.startCloudFin(input),
     accessChoices: () => cloud.accessChoices(),
     chooseAccess: (choices, fill) => cloud.chooseAccess(choices, fill),
     preferences: () => cloud.preferences(),
