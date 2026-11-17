@@ -111,16 +111,6 @@ try {
   assert.equal(slowSaid.notice, true, "said on the desk")
   assert.ok((slowSaid.lagMs ?? 0) >= 2_600)
   assert.ok(slow.lines.some((line) => line.message === "fseventsd is degraded"), "and logged")
-  // Late delivery while every poll keeps up is nothing the person feels: degraded, logged, and no notice until polling lags.
-  let lags = false
-  const keptUp = world({ pollingLags: () => lags })
-  await keptUp.service.tick()
-  beats(keptUp, late(18, 2_600))
-  assert.equal(keptUp.service.snapshot().state, "degraded", "still read as degraded")
-  assert.equal(keptUp.emitted.some((service) => service.notice), false, "but nothing is said while polling keeps up")
-  lags = true
-  beats(keptUp, late(1, 2_600))
-  assert.equal(keptUp.service.snapshot().notice, true, "said once polling lags too")
   // A minute of slow beats among healthy ones is a busy stretch: the median of five minutes holds.
   const stretch = world()
   await stretch.service.tick()

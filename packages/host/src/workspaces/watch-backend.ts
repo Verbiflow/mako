@@ -31,11 +31,8 @@ export interface WatchSubscription {
 /** Settles once the root is watched; rejects when it can't be. */
 export type WatchBackend = (root: string, ignore: readonly string[], listener: WatchListener, native?: NativeWatch) => Promise<WatchSubscription>
 
-/**
- * The host's backend: every watch in one child, which `recover` starts again once fseventsd has, so every watch hears
- * `dropped` and rescans; and told how far behind each poll that stands in for it runs (`paced`, `WatchReadings`).
- */
-export type ChildWatchBackend = WatchBackend & { recover(): void; paced(poll: symbol, spacingMs: number | undefined): void }
+/** The host's backend: every watch in one child, which `recover` starts again once fseventsd has, so every watch hears `dropped` and rescans. */
+export type ChildWatchBackend = WatchBackend & { recover(): void }
 
 type ParcelCallback = (error: Error | null, events: WatchEvent[]) => void
 type ParcelSubscribe = (root: string, callback: ParcelCallback, options: { ignore: string[] }) => Promise<WatchSubscription>
@@ -306,7 +303,7 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
     stale.kill()
     try { start("recovery") } catch { giveUp() }
   }
-  return Object.assign(backend, { recover, paced: (poll: symbol, spacingMs: number | undefined) => readings.paced(poll, spacingMs) })
+  return Object.assign(backend, { recover })
 }
 
 /** What changed on disk in a stretch of time, from the file system's own history. */

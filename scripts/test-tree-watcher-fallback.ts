@@ -4,7 +4,6 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { CALM_POLL_MS } from "@mako/host/contracts/watcher-child"
-import { POLL_LAGS_MS } from "@mako/host/workspaces/tree-poll"
 import { watchTree } from "@mako/host/workspaces/tree-watcher"
 import type { WatchBackend, WatchListener } from "@mako/host/workspaces/watch-backend"
 
@@ -16,15 +15,11 @@ const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-watch-fallback-")))
 /** A backend that delivers nothing on its own: the test says when it's muted, lost or refused. */
 let listener: WatchListener | undefined
 let refuse = false
-/** Each poll's pace as the backend is told it: the spacing its last pass called for, gone once it stops. */
-const paces = new Map<symbol, number>()
-const backend = Object.assign((async (_root, _ignore, next) => {
+const backend: WatchBackend = async (_root, _ignore, next) => {
   if (refuse) throw new Error("ENOSPC: no inotify watches left")
   listener = next
   return { unsubscribe: async () => {} }
-}) satisfies WatchBackend, {
-  paced: (poll: symbol, spacingMs: number | undefined) => void (spacingMs === undefined ? paces.delete(poll) : paces.set(poll, spacingMs)),
-})
+}
 
 function watched(folder: string) {
   const heard: string[] = []
@@ -54,8 +49,6 @@ try {
   await wait(400)
   writeFileSync(join(muted, "while-muted.ts"), "")
   await a.hears("while-muted.ts", "a change made while nothing is delivered is found by polling")
-  assert.equal(paces.size, 1, "the poll tells the backend its pace")
-  assert.ok([...paces.values()].every((spacing) => spacing < POLL_LAGS_MS), "and a small folder's poll keeps up")
   events.muted(true)
   assert.equal(a.counts.dropped, 1, "a second report changes nothing")
   events.muted(false)
@@ -63,7 +56,6 @@ try {
   writeFileSync(join(muted, "after.ts"), "")
   await wait(2500)
   assert.equal(a.heard.includes("after.ts"), false, "and polling has stopped")
-  assert.equal(paces.size, 0, "a stopped poll's pace is forgotten")
   assert.equal(a.counts.errors, 0)
   a.watch.close()
 
@@ -121,7 +113,7 @@ try {
   assert.equal(d.counts.errors, 1, "a folder that went away is an error")
   d.watch.close()
 
-  console.log("tree watcher fallback: muted polls and recovers with one re-read, a late watch polls calmly beside its stream until it's on time, each poll tells the backend its pace until it stops, a refused watch polls, a lost watch keeps polling, a deleted folder is an error")
+  console.log("tree watcher fallback: muted polls and recovers with one re-read, a late watch polls calmly beside its stream until it's on time, a refused watch polls, a lost watch keeps polling, a deleted folder is an error")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

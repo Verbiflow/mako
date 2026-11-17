@@ -84,7 +84,7 @@ export function quietFoldersOf(root: string): string[] {
  * `onDropped("dropped")`. `onError` means the folder went away.
  */
 export function watchTree(
-  git: Git, backend: WatchBackend & { paced?(poll: symbol, spacingMs: number | undefined): void }, root: string, onChange: (paths: string[]) => void, onError: () => void,
+  git: Git, backend: WatchBackend, root: string, onChange: (paths: string[]) => void, onError: () => void,
   onDropped?: (why: "dropped" | "polling" | "listening") => void,
 ): TreeWatch | undefined {
   const target = resolve(root)
@@ -118,14 +118,9 @@ export function watchTree(
     const heard = paths.filter((path) => !QUIET.test(path))
     if (!closed && heard.length) onChange(heard)
   }
-  /** Each poll's pace, told to the backend under a key of its own, so the host can say whether polling keeps up. */
-  const pacing = () => {
-    const key = Symbol(real)
-    return (spacingMs: number | undefined) => backend.paced?.(key, spacingMs)
-  }
   const calmly = () => {
     const wanted = late && !poll && !closed
-    if (wanted && !calm) calm = pollTree(git, real, QUIET, polled, CALM_POLL_MS, pacing())
+    if (wanted && !calm) calm = pollTree(git, real, QUIET, polled, CALM_POLL_MS)
     else if (!wanted && calm) {
       calm.close()
       calm = undefined
@@ -134,7 +129,7 @@ export function watchTree(
 
   const fallBack = (why: "dropped" | "polling") => {
     if (closed || poll) return
-    poll = pollTree(git, real, QUIET, polled, undefined, pacing())
+    poll = pollTree(git, real, QUIET, polled)
     calmly()
     onDropped?.(why)
   }

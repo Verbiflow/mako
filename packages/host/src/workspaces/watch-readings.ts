@@ -1,6 +1,5 @@
 import { HourCounts } from "../base/hour-counts.js"
 import { CALM_POLL_MS, SLOW_DELIVERY_MS, type DropReason } from "../contracts/watcher-child.js"
-import { POLL_LAGS_MS } from "./tree-poll.js"
 import type { WatchFootprint } from "../contracts/mako-footprint.js"
 
 const HOUR_MS = 3_600_000
@@ -30,8 +29,6 @@ export class WatchReadings {
   private historyChild?: { pid?: number; since: number }
   private starts: WatchFootprint["starts"] = { first: 0, crash: 0, silence: 0, recovery: 0 }
   private readonly listeners = new Set<DeliveryListener>()
-  /** Each poll standing in for file events, by its key, and the spacing its last pass called for. */
-  private readonly polls = new Map<symbol, number>()
   private readsEver = 0
   private delivery: WatchFootprint["delivery"] = { ok: true, since: Date.now() }
   private readonly events = new HourCounts()
@@ -75,21 +72,6 @@ export class WatchReadings {
   follow(listener: DeliveryListener): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
-  }
-
-  /** A poll's last pass called for `spacingMs` before the next; undefined once the poll stops. */
-  paced(poll: symbol, spacingMs: number | undefined): void {
-    if (spacingMs === undefined) this.polls.delete(poll)
-    else this.polls.set(poll, spacingMs)
-  }
-
-  /**
-   * Whether a poll falls behind: one whose passes hold it at `POLL_LAGS_MS`. While every poll keeps up, late file
-   * events cost the person nothing, so nothing is said of them.
-   */
-  pollingLags(): boolean {
-    for (const spacing of this.polls.values()) if (spacing >= POLL_LAGS_MS) return true
-    return false
   }
 
   /** One beat of the canary, heard `lagMs` after it was written. */

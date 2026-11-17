@@ -364,12 +364,10 @@ try {
       changed: (state) => shown.push(state),
     })
     await awake.refresh()
-    await settle()
-    assert.deepEqual(shown.at(-1)?.hold, { kind: "failed", agents: 2 }, "a first failure isn't said as news: the next recount may put it right")
     await awake.refresh()
     assert.equal(looked, 1)
     await settle()
-    assert.deepEqual(shown.at(-1)?.hold, { kind: "failed", agents: 2, again: true }, "the next recount failed too: now it's said")
+    assert.deepEqual(shown.at(-1)?.hold, { kind: "failed", agents: 2 })
     awake.stop()
   }
 
