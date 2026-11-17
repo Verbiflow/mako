@@ -42,7 +42,7 @@ import type { SelectedAccount } from "../../contracts/accounts.js"
 import { nativeStream, streamRuntime, withFrame, type NativeStream } from "../native-stream.js"
 import { spawnClaudeProcess } from "./sdk-process.js"
 import { closeProviderProcess } from "../provider-process.js"
-import { ClaudePermissions } from "./sdk-permissions.js"
+import { CLAUDE_DIALOG_KINDS, ClaudePermissions } from "./sdk-permissions.js"
 import { ClaudeApprovalObserver, claudeApprovalAnswerDigest, readClaudeApprovalDecisions } from "./approval-observer.js"
 import type { ClaudePermissionObserver, prepareClaudePermissionObserver } from "./permission-observer.js"
 import { ClaudeTranscript } from "./sdk-transcript.js"
@@ -814,6 +814,8 @@ export function createClaudeSdkDriver(
           },
           canUseTool: permissions.tool,
           onElicitation: permissions.elicitation,
+          onUserDialog: permissions.dialog,
+          supportedDialogKinds: [...CLAUDE_DIALOG_KINDS],
         },
       }) } catch (error) {
         await disposeApprovals()
