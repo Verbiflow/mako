@@ -1318,6 +1318,31 @@ async function roomWatchFollowsWork(): Promise<void> {
   }
 }
 
+/**
+ * A host that comes back to a start queued for a full place reads the room again at once: the demand starts off with
+ * every host, and a queue the last host left would otherwise wait on a watch that never turns on.
+ */
+async function roomWatchAfterRestart(): Promise<void> {
+  // No room at all: the start waits however the restart goes.
+  const w = new AgentsWorld({
+    root: join(root, "room-watch-restart"),
+    script: () => "ok",
+    observeCapacity: async () => {},
+    finLimit: () => 0,
+  })
+  const paused = () => w.jobs.list().find((job) => job.name === ROOM_WATCH_JOB)?.paused
+  try {
+    const apex = await w.apex("claude")
+    const queued = await w.agents.start(apex.caller, { brief: { objective: "Hold" }, harness: "codex", name: "waits", queue: true, clientKey: "waits", cwd: w.root })
+    assert.ok(!("refused" in queued) && queued.state === "queued", JSON.stringify(queued))
+    await w.restart()
+    assert.ok(w.store.queuedSpawns().length > 0, "the start still waits after the restart")
+    assert.equal(paused(), false, "a host that comes back to a queued start reads the room again")
+  } finally {
+    await w.close()
+  }
+}
+
 /** A stopped Fin's own queued Fins wait for it, whatever room there is, and start once it resumes. */
 /** A Fin's activity time moves with every token: alone it tells no one, or one Fin resends its Apex's whole roster to each conversation of its Thread. */
 async function activityTellsNoOne(): Promise<void> {
@@ -2312,6 +2337,7 @@ try {
     startedFinsOldQueueRow,
     finsAtWorkByBinding,
     roomWatchFollowsWork,
+    roomWatchAfterRestart,
     stoppedApexHolds,
     listsReadNoJournal,
     activityTellsNoOne,

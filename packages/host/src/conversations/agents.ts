@@ -1010,6 +1010,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!store) return
     this.sync()
     const edges = store.edges()
+    // The room watch's demand starts off: a host that comes back to Fins at work, or to starts queued for a full place
+    // (here or away), reads the room again from now, as the last host did.
+    this.roomDemand.set(this.roomNeeded(edges.all.some((edge) => this.occupies(edge))))
     // A crash can leave a reclassified review's old notice in its Apex's queue. Narrow that digest before it resumes;
     // genuine sibling reports stay in it. Already handed-over input cannot be recalled.
     for (const edge of edges.internalRuns)
