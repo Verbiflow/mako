@@ -669,7 +669,7 @@ export function journalSummary(metadata: string) {
     threadPath,
     createdAt,
     ancestry: control?.ancestry
-      ? { parentId: control.ancestry.parentId, placement: control.ancestry.placement, point: control.ancestry.point, firstRequest: control.ancestry.firstRequest }
+      ? { parentId: control.ancestry.parentId, placement: control.ancestry.placement, point: control.ancestry.point, firstRequest: control.ancestry.firstRequest, ...control.ancestry.move && { move: true as const } }
       : undefined,
     threadSession: control?.session,
     hasSessionQuestions: Boolean(control?.questions?.length),

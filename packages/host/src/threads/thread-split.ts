@@ -126,7 +126,8 @@ export function splitThreads(db: DatabaseSync, options: SplitOptions): SplitCoun
   const record = db.prepare(`INSERT INTO thread_splits (thread_id, from_thread, session_id, position, from_title, split_at) VALUES (?, ?, ?, ?, ?, ?)
     ON CONFLICT (thread_id) DO UPDATE SET from_thread = excluded.from_thread, session_id = excluded.session_id, position = excluded.position,
       from_title = excluded.from_title, split_at = excluded.split_at`)
-  const place = db.prepare("INSERT OR REPLACE INTO thread_places (thread_id, place_thread, why, created_at) VALUES (?, ?, 'split', ?)")
+  const place = db.prepare(`INSERT INTO thread_places (thread_id, place_thread, why, created_at) VALUES (?, ?, 'split', ?)
+    ON CONFLICT (thread_id) DO UPDATE SET place_thread = excluded.place_thread, why = excluded.why, created_at = excluded.created_at`)
   const bump = db.prepare("UPDATE threads SET revision = revision + 1 WHERE id = ?")
   const parentEdges = db.prepare("SELECT child_thread, record, run_harness, run_native_id FROM thread_parents WHERE parent_thread = ?")
   const childEdge = db.prepare("SELECT child_thread, record, run_harness, run_native_id FROM thread_parents WHERE child_thread = ?")
