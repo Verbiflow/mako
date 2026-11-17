@@ -314,6 +314,8 @@ export const ConversationControlSchema = z.object({
       firstRequest: z.string().optional(),
       /** A fork made with this set joins its parent's Thread as a tab. Older forks have their own Thread. */
       placement: z.literal("parent-thread").optional(),
+      /** The conversation goes on here rather than branching off (`ForkInput.move`): its Thread moves, it isn't a new one. */
+      move: z.literal(true).optional(),
       /** The Session it was asked to go into (`ForkInput.session`). */
       session: z.string().uuid().optional(),
     })

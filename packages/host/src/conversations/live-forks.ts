@@ -199,6 +199,7 @@ export class LiveForks {
           sourceRevision: source.revision,
           point,
           placement,
+          ...command.move && { move: true as const },
           ...named && { session: named },
         },
         activeBindingId: command.id,
