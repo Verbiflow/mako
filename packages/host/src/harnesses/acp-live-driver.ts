@@ -23,7 +23,7 @@ export const ACP_NATIVE_IDENTITY = {
 export function createAcpLiveDriver(
   source: ProviderAcpSource,
   host: Pick<ProviderHost, "discovery" | "mcpSources">,
-  context: Pick<HarnessContext, "dataRoot" | "appRoot" | "streams">
+  context: Pick<HarnessContext, "dataRoot" | "appRoot" | "streams" | "writeHolds">
 ): ProviderLiveDriver {
   let loading: Promise<AcpEngine> | undefined
   const engine = () => (loading ??= import("./acp.js").then(({ createAcpEngine }) => createAcpEngine(source, {
@@ -32,6 +32,7 @@ export function createAcpLiveDriver(
     appRoot: context.appRoot,
     approvalRoot: approvalRoot(context),
     streams: context.streams,
+    ...context.writeHolds && { writeHolds: context.writeHolds },
   })))
   // Observers are pure until a session feeds them, so one made here only reads what it can do.
   const stopsOneBackground = source.observeBackground?.().stopOne !== undefined
@@ -58,6 +59,7 @@ export function createAcpLiveDriver(
   }
   return {
     provider: source.provider,
+    ...context.writeHolds && source.callHooks?.writes && { firstWrite: { via: source.callHooks.writes.via } },
     launchEnvironment: { kind: "prepared", via: "Shared ACP launch applies the admitted account environment before native process creation." },
     nativeIdentity: ACP_NATIVE_IDENTITY,
     nativeExclusion: NO_NATIVE_EXCLUSION,
