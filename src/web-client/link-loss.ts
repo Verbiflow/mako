@@ -24,7 +24,8 @@ export function anyUnconfirmed(state: { conversations: Readonly<Record<string, {
  * doesn't restart the wait; gone once it's back.
  */
 export function nextLoss(held: LinkLoss, lost: boolean, now: number): LinkLoss {
-  if (!lost) return { since: undefined, stage: undefined }
+  // The link fine and still fine is the same loss of none: no new object, so a streamed batch writes nothing.
+  if (!lost) return held.since === undefined ? held : { since: undefined, stage: undefined }
   return held.since === undefined ? { since: now, stage: "quiet" } : held
 }
 

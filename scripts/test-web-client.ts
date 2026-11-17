@@ -608,6 +608,7 @@ test("the page keeps one link loss from its first moment, whichever Thread is op
   const later = { since: 1_000, stage: "long" } as const
   assert.equal(nextLoss(later, true, 40_000), later, "a reading while it's still lost (another Thread opened, another message unconfirmed) keeps the loss and its stage")
   assert.deepEqual(nextLoss(later, false, 41_000), none, "back: the loss ends")
+  assert.equal(nextLoss(none, false, 42_000), none, "fine and still fine: the same object, so a streamed batch writes nothing to the store")
   assert.deepEqual(nextLoss(none, true, 90_000), { since: 90_000, stage: "quiet" }, "lost again: a new loss from quiet")
   const live = (unconfirmed: boolean) => ({ kind: "live", pendingPrompts: [{ id: "p", unconfirmed }] })
   assert.equal(anyUnconfirmed({ conversations: { a: live(false), b: live(true) } }), true, "a message lost on its way in any Thread is the page's loss")
