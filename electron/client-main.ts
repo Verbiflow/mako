@@ -15,7 +15,7 @@ import { FixtureDeskRefusedError, fixtureDeskRefusal } from "@mako/host/contract
 import { AGENT_VIEWS_CLIENT, clientRoot, ensureRuntime, hostCommand, runtimeDataRoot, runtimeLocation } from "@mako/host/transport/service"
 import { hostLockHolder, hostLockName } from "@mako/host/base/host-lock"
 import { hostProbe } from "@mako/host/base/host-command"
-import { endHungHost, HostReconnect } from "./host-reconnect.js"
+import { endHungHost, holdsAny, HostReconnect } from "./host-reconnect.js"
 import { invokeRuntime, invokeRuntimeEncoded, invokeRuntimePreview, invokeRuntimeVideo, probeRuntime, runtimeFile, settleRuntime, subscribeRuntime } from "@mako/host/transport/connection"
 import { decodeRuntimeValue, encodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 import { runtimeEventRouting } from "@mako/host/contracts/runtime"
@@ -247,7 +247,8 @@ const clientAnswers: ClientAnswers<IpcMainInvokeEvent> = {
       commandOf: (pid) => hostProbe("ps", ["-o", "command=", "-p", String(pid)], { timeout: 5_000 }).then(({ stdout }) => stdout, () => ""),
       entry: hostCommand(launch).args.at(-1) ?? "",
       // Its lock file (macOS: held open with O_EXLOCK) or its socket, open in that very process now.
-      holds: (pid) => hostProbe("lsof", ["-a", "-p", String(pid), "--", ...(process.platform === "darwin" ? [hostLockName(launch.dataRoot)] : []), runtimeLocation(launch.dataRoot).socket], { timeout: 5_000 }).then(({ stdout }) => stdout.trim().length > 0, () => false),
+      holds: (pid) => holdsAny(pid, [...(process.platform === "darwin" ? [hostLockName(launch.dataRoot)] : []), runtimeLocation(launch.dataRoot).socket],
+        (holder, path) => hostProbe("lsof", ["-a", "-p", String(holder), "--", path], { timeout: 5_000 }).then(({ stdout }) => stdout.trim().length > 0, () => false)),
       signal: (pid, signal) => { try { process.kill(pid, signal) } catch { /* it left */ } },
       alive: (pid) => { try { process.kill(pid, 0); return true } catch { return false } },
       wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),

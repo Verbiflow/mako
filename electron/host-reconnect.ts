@@ -105,6 +105,16 @@ export interface HungHostDeps {
   log(message: string, fields: HostLogFields): void
 }
 
+/**
+ * Whether `pid` has any of `paths` open, each asked on its own: `lsof -a -p <pid> -- <a> <b>` exits 1 when any path
+ * named isn't open, so one host holding its lock with its socket closed read as holding neither. `open` answers whether
+ * that process has that one path open.
+ */
+export async function holdsAny(pid: number, paths: readonly string[], open: (pid: number, path: string) => Promise<boolean>): Promise<boolean> {
+  const held = await Promise.all(paths.map((path) => open(pid, path).catch(() => false)))
+  return held.some(Boolean)
+}
+
 /** How long a host asked to quit has to leave before it's ended: its own stop runs in this, saving what it holds. */
 export const HUNG_HOST_GRACE_MS = 10_000
 
@@ -117,7 +127,9 @@ export const HUNG_HOST_GRACE_MS = 10_000
  * gave another process during the grace is left alone. A host that answers, or none, is left as it is.
  */
 export async function endHungHost(deps: HungHostDeps): Promise<"answering" | "none" | "not-mako" | "ended" | "stuck"> {
-  if (await deps.answers() !== "silent") return "answering"
+  // Only a host that answers is left as it is: one whose socket is gone (`absent`) may still hold the lock, hung after it
+  // closed its socket, and the client opened again would meet it there. The lock's holder decides, proved below.
+  if (await deps.answers() === "ready") return "answering"
   const pid = await deps.holder()
   if (pid === null) return "none"
   const ours = async () => Boolean(deps.entry) && (await deps.commandOf(pid)).includes(deps.entry) && await deps.holds(pid)
