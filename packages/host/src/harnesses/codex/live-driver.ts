@@ -17,7 +17,7 @@ import { codexLayer } from "./layer.js"
 export const CODEX_NATIVE_IDENTITY = { kind: "reported", via: "app-server account/read" } as const
 
 /** The app-server engine loads with the first session; a host that never opens one never loads it. */
-export function createCodexLiveDriver(probe: ProviderProcessProbe, context: Pick<HarnessContext, "dataRoot" | "streams">): ProviderLiveDriver {
+export function createCodexLiveDriver(probe: ProviderProcessProbe, context: Pick<HarnessContext, "dataRoot" | "streams" | "writeHolds">): ProviderLiveDriver {
   const questions = new CodexQuestionReader()
   let loading: Promise<CodexEngine> | undefined
   const engine = () => (loading ??= import("../codex-app.js").then(({ createCodexEngine }) => createCodexEngine(context)))
@@ -25,6 +25,7 @@ export function createCodexLiveDriver(probe: ProviderProcessProbe, context: Pick
     provider: "codex",
     launchEnvironment: { kind: "prepared", via: "app-server spawn consumes AdmittedStartOptions.accountLaunch." },
     makoInstructions: { via: "`turn/start` additionalContext as an application entry, which Codex gives the model as developer context and records as plumbing, never a user message." },
+    ...context.writeHolds && { firstWrite: { via: "The PreToolUse command hook Mako's session config installs for `Bash|apply_patch` (shell and file edits, in code mode too) and its browser and computer servers, posting to the conversation server, which answers once the turn's checkpoint holds the workspace; only on a launch serving Mako's tools, with none of the person's own Codex hooks or plugins." } },
     nativeIdentity: CODEX_NATIVE_IDENTITY,
     nativeExclusion: NO_NATIVE_EXCLUSION,
     nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,

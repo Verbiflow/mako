@@ -75,10 +75,12 @@ type Route = "computer" | "mako"
 
 /**
  * A harness's command hook posting one tool call (`/calls/<pre|post|before>`):
- * what it prints back, decided for the grant's conversation. A hook that gets
- * no answer goes on, so a failure here never stops a call.
+ * what it prints back, decided for the grant's conversation and its provider
+ * binding. A hook that gets no answer goes on, so a failure here never stops a
+ * call. The answer may wait: the harness holds the tool until it comes, as a
+ * turn's checkpoint holds its first write (`WriteHolds`).
  */
-export type CallGate = (conversationId: string, event: CallGateEvent, body: JsonValue) => JsonValue
+export type CallGate = (conversationId: string, event: CallGateEvent, body: JsonValue, binding: string) => JsonValue | Promise<JsonValue>
 
 /** `pre` and `post` hook a call before and after it runs; `before` is a harness that reads a note before the call as well as a deny. */
 export type CallGateEvent = "pre" | "post" | "before"
@@ -151,7 +153,8 @@ export async function startConversationMcp(
         }
         const body = z.json().parse(JSON.parse(await readBody(request, 1024 * 1024)))
         authorized()
-        response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(gate(scope.conversationId, gated, body)))
+        const answer = await gate(scope.conversationId, gated, body, scope.bindingId)
+        response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(answer))
         return
       }
       const route = routeOf(request.url)

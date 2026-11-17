@@ -1,4 +1,5 @@
 import type { ProviderFailureEvidence } from "../contracts/provider-failure-evidence.js"
+import { codexPersonCodeRuns } from "./codex/person-hooks.js"
 import { failureEvidenceOf, providerExitEvidence } from "../contracts/provider-failure.js"
 import { answersId, type PrefetchLaunch } from "./start-prefetch.js"
 import { applyControlEnvironment } from "../control/index.js"
@@ -196,7 +197,7 @@ export async function codexStartPrefetch(base: NodeJS.ProcessEnv, cwd: string): 
 }
 
 /** Codex's sessions, each an app-server this engine started and closes. */
-export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "streams">) {
+export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "streams" | "writeHolds">) {
   const engine = createLiveEngine<Live>()
   const sessions = engine.sessions
   const closingSessions = new Map<string, Promise<void>>()
@@ -211,6 +212,8 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
       env.MAKO_CONVERSATIONS_TOKEN = options.conversationTools.token
     applyControlEnvironment(env, options.conversationTools?.control)
     applyThreadEnvironment(env, options.threadEnvironment)
+    // This launch's writes are held only where Mako's hook gates them and nothing the person set up runs beside it.
+    const holdsWrites = Boolean(context.writeHolds && options.nativeCalls && options.conversationTools?.makoUrl) && !await codexPersonCodeRuns(env, workingDir)
     const executable = await trace.step("runtime-discovery", () => resolveCodexExecutable(env))
     if (!executable) throw new Error("Codex is not installed")
     const launch = await trace.step("runtime-discovery", () => codexChildLaunch(env, executable))
@@ -322,6 +325,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
       exited: false,
     }
     sessions.set(id, live)
+    context.writeHolds?.attend(id, holdsWrites)
     bindProcess(live)
 
     const watch = new ProviderStartupWatch(child, {
@@ -658,6 +662,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
   async function codexAppClose(id: string): Promise<void> {
     const closing = closingSessions.get(id)
     if (closing) return closing
+    context.writeHolds?.forget(id)
     const live = sessions.get(id)
     if (!live) return
     // Install the closing fence before the first native call. Keep decoding until

@@ -24,6 +24,26 @@ export const HookCall = z.object({
 }).loose()
 export type HookCall = z.infer<typeof HookCall>
 
+/**
+ * How long a command hook's call may wait on Mako for a turn's checkpoint: under the 8 s each hook gives up after
+ * (Codex's and Devin's `curl -m 8`, OpenCode's plugin's `AbortSignal.timeout(8000)`), so Mako lets it go first and
+ * knows it went (`WriteHolds.beforeWrite`'s `withinMs`).
+ */
+export const CALL_GATE_HOLD_MS = 6_000
+
+/** The tools hooks post that only read, across the harnesses whose hooks post here; any other may write. */
+const READ_ONLY_TOOLS = new Set(["Read", "Glob", "Grep", "LS", "read", "glob", "grep", "list", "webfetch", "websearch", "codesearch", "todoread", "todowrite"])
+
+/** Whether a hooked call may change the workspace, so a turn's checkpoint holds it. */
+export function hookMayWrite(call: HookCall | undefined): boolean {
+  return !READ_ONLY_TOOLS.has(call?.tool_name ?? "")
+}
+
+/** Whether a gate's answer refuses the call, which then never runs. */
+export function gateDenies(answer: JsonObject): boolean {
+  return answer.decision === "block"
+}
+
 /** A hooked call's route: a shell tool by its command, an MCP tool (`mcp__<server>__<tool>`) by its server. */
 function hookRoute(call: HookCall, thread: CallThread): CallRoute {
   const command = call.tool_input?.command

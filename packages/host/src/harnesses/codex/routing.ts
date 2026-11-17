@@ -16,8 +16,12 @@ export interface CodexCallGate {
   token: string
 }
 
-/** The calls Mako's hook is registered for: Codex's shell (`Bash` covers `exec_command`, direct and in code mode) and its bundled browser and computer servers. */
-const CODEX_GATED = ["Bash", "^mcp__(node_repl|cua_repl)__js(_reset)?$"] as const
+/**
+ * The calls Mako's hook is registered for: Codex's shell (`Bash` covers `exec_command`, direct and in code mode), its
+ * file edits (`apply_patch`, which a turn's checkpoint holds as it does a command), and its bundled browser and
+ * computer servers. A name list of letters, digits, `_` and `|` matches exactly in Codex's matcher.
+ */
+const CODEX_GATED = ["Bash|apply_patch", "^mcp__(node_repl|cua_repl)__js(_reset)?$"] as const
 
 /** Where Codex files the trust of a hook in the session's own config layer, as 0.166.0 resolves its synthetic path on macOS and Linux. */
 const SESSION_FLAGS = "/<session-flags>/config.toml"
