@@ -198,6 +198,28 @@ function taskNotification(text: string, outputs: KeptOutputs | undefined): (Prov
   return read && turn.body ? { ...turn, from: read.from } : turn
 }
 
+/** The label of what was said aloud on a voice call beside the session. */
+const VOICE_CALL = "Voice call"
+/** The line Claude Code puts above a voice call's words for the model, which isn't the call's own. */
+const VOICE_CALL_HEADER = "[TALK FROM A VOICE CALL - NOT USER INPUT]"
+
+/**
+ * What was said on a voice call alongside the session, which the host that
+ * ran it handed Claude Code as background: it starts no turn and is never the
+ * person's prompt. Claude Code 2.1.326 keeps it as a `voice_call_talk` system
+ * row (with `fold` when it came in while a turn ran) and unfolds that row
+ * into a user line or a queued command with the same origin, the forms a
+ * build may also have written. Undefined when `holder`'s origin isn't a
+ * voice call, or it says nothing.
+ */
+function voiceCallNote(holder: ClaudeJsonObject, text: string | undefined): string | undefined {
+  const origin = holder["origin"]
+  if (!isJsonObject(origin) || origin["kind"] !== "voice-call") return undefined
+  const lines = (text ?? "").split("\n")
+  const words = (lines[0]?.trim() === VOICE_CALL_HEADER ? lines.slice(1) : lines).join("\n").trim()
+  return words || undefined
+}
+
 function isString(value: ClaudeJsonValue | undefined): value is string {
   return Object.prototype.toString.call(value) === "[object String]"
 }
@@ -836,6 +858,12 @@ function translator(outputs: KeptOutputs | undefined, sidechain = false, after?:
           line.uuid
         )
         return
+      case "voice_call_talk": {
+        const note = voiceCallNote(record, stringValue(record["content"]))
+        if (note === undefined) sink.unread(`system ${line.subtype}`, "unreadable", record)
+        else mark(messageEvent(VOICE_CALL, note), line.timestamp, line.uuid)
+        return
+      }
       case "local_command": {
         const local = claudeLocalCommand(stringValue(record["content"]) ?? "")
         if (local.kind === "command") {
@@ -876,6 +904,11 @@ function translator(outputs: KeptOutputs | undefined, sidechain = false, after?:
       return
     }
     const prompt = parseContent(attachment["prompt"])
+    const spoken = voiceCallNote(attachment, plainText(prompt))
+    if (spoken !== undefined) {
+      mark(messageEvent(VOICE_CALL, spoken), line.timestamp, line.uuid)
+      return
+    }
     const projected = userContent(prompt)
     const text = claudeCommandPrompt(projected.text)
     const notification = taskNotification(text, outputs)
@@ -1001,6 +1034,11 @@ function translator(outputs: KeptOutputs | undefined, sidechain = false, after?:
           sink.edited(compaction.entry)
         } else mark(compactionEvent({ summary }), line.timestamp, line.uuid)
         compaction = null
+        return
+      }
+      const spoken = voiceCallNote(line.record, plainText(content))
+      if (spoken !== undefined) {
+        mark(messageEvent(VOICE_CALL, spoken), line.timestamp, line.uuid)
         return
       }
       if (line.isMeta) return
