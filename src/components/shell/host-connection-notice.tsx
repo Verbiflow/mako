@@ -1,3 +1,4 @@
+import { useState } from "react"
 import { Notice, NoticeAction } from "@/components/ui/notice"
 import { reconnectHostNow, restartMako, useReconnectStage } from "@/state/host-connection"
 
@@ -10,6 +11,12 @@ import { reconnectHostNow, restartMako, useReconnectStage } from "@/state/host-c
  */
 export function HostConnectionNotice() {
   const stage = useReconnectStage()
+  // Try now waits on the try it ran, or the one under way: pressing again then would do nothing, so it says so.
+  const [trying, setTrying] = useState(false)
+  const tryNow = () => {
+    setTrying(true)
+    void reconnectHostNow().finally(() => setTrying(false))
+  }
   if (stage === "long")
     return (
       <Notice
@@ -17,7 +24,7 @@ export function HostConnectionNotice() {
         tone="progress"
         title="Reconnecting to Mako…"
         description="Mako keeps trying by itself and catches this window up once it's back. You're seeing the last known state; your drafts are saved."
-        actions={<NoticeAction onClick={reconnectHostNow}>Try now</NoticeAction>}
+        actions={<NoticeAction onClick={tryNow} disabled={trying}>{trying ? "Trying…" : "Try now"}</NoticeAction>}
         className="mx-3 my-2"
       />
     )

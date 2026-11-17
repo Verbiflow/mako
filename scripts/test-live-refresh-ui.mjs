@@ -63,8 +63,13 @@ async function check() {
     // Exactly one action on the notice: Try now, which asks the client to reconnect, never a reload.
     const noticeButtons=`[...document.querySelectorAll('[data-notice]')].filter(e=>e.textContent.includes('Mako')).flatMap(e=>[...e.querySelectorAll('button')].map(b=>b.textContent.trim()))`
     assert.deepEqual(await evaluate(noticeButtons),['Try now'],"one action while it keeps trying")
-    await evaluate(`(async()=>{window.reconnects=0;window.mako.reconnectHost=async()=>{window.reconnects++};document.querySelector('[data-notice] button').click()})()`)
+    await evaluate(`(async()=>{window.reconnects=0;window.mako.reconnectHost=()=>{window.reconnects++;return new Promise(resolve=>{window.settleTry=resolve})};document.querySelector('[data-notice] button').click()})()`)
     await until("window.reconnects===1")
+    // While that try runs, pressing again would do nothing: the button says so, and can't be pressed.
+    await until(`${noticeButtons}.join()==='Trying…'`)
+    assert.equal(await evaluate("[...document.querySelectorAll('[data-notice] button')].find(b=>b.textContent.includes('Trying'))?.disabled"),true,"Trying… is not a button that does nothing")
+    await evaluate("window.settleTry()")
+    await until(`${noticeButtons}.join()==='Try now'`)
     // Past the second bound, or no host to reach: one action, Restart Mako.
     await evaluate(`(async()=>{const {hostConnectionStore}=await import('/src/state/host-connection.ts');hostConnectionStore.set({...hostConnectionStore.get(),stage:'restart'})})()`)
     await until(`${noticeButtons}.join()==='Restart Mako'`)

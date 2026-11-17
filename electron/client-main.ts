@@ -12,7 +12,10 @@ import { answerClientCall, isClientCall, openableLink, UNOPENABLE_LINK, type Cli
 import { MachineOfferSchema, UNSTATED_MACHINE_OFFER, type MachineOffer } from "@mako/host/contracts/machine-offer"
 import { AGENT_VIEWS_ENV, type DesktopRole } from "@mako/host/contracts/desktop-channel"
 import { FixtureDeskRefusedError, fixtureDeskRefusal } from "@mako/host/contracts/fixture-desk-policy"
-import { AGENT_VIEWS_CLIENT, clientRoot, ensureRuntime, runtimeDataRoot, runtimeLocation } from "@mako/host/transport/service"
+import { AGENT_VIEWS_CLIENT, clientRoot, ensureRuntime, hostCommand, runtimeDataRoot, runtimeLocation } from "@mako/host/transport/service"
+import { hostLockHolder } from "@mako/host/base/host-lock"
+import { hostProbe } from "@mako/host/base/host-command"
+import { endHungHost, HostReconnect } from "./host-reconnect.js"
 import { invokeRuntime, invokeRuntimeEncoded, invokeRuntimePreview, invokeRuntimeVideo, probeRuntime, runtimeFile, settleRuntime, subscribeRuntime } from "@mako/host/transport/connection"
 import { decodeRuntimeValue, encodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 import { runtimeEventRouting } from "@mako/host/contracts/runtime"
@@ -68,7 +71,7 @@ protocol.registerSchemesAsPrivileged(privilegedSchemes())
 const rendererBundle = join(directory, "../dist")
 
 const launch = { dataRoot, executable: process.execPath, args: app.isPackaged ? [] : [app.getAppPath()], cwd: process.cwd(), env: process.env }
-const clients = new Map<number, { id: string; link: HostLiveness; sent: () => number; reconnectNow(): void; dispose(): void }>()
+const clients = new Map<number, { id: string; link: HostLiveness; sent: () => number; reconnectNow(): Promise<void>; dispose(): void }>()
 const DISCONNECTED_MESSAGE = HOST_OUTAGE_MESSAGE
 let runtime: Awaited<ReturnType<typeof ensureRuntime>>
 /**
@@ -160,12 +163,13 @@ function requestCommand(command: "app.quit" | "app.updates"): void {
 }
 
 /** Closes this client once every window has saved its draft; the shared host and its agents keep running. */
-function closeClient(relaunch = false): Promise<void> {
+function closeClient(relaunch = false, beforeRelaunch?: () => Promise<void>): Promise<void> {
   closingLocally = true
   return draftShutdown.request([...clients.keys()].filter((id) => !agentViews.has(id)).map(String), (requestId) => {
     for (const window of personWindows()) sendEvent(window.webContents, { type: "app-shutdown", requestId, action: "quit" })
-  }).then(() => {
+  }).then(async () => {
     shuttingDown = true
+    if (relaunch) await beforeRelaunch?.()
     if (relaunch) app.relaunch()
     app.quit()
   })
@@ -231,12 +235,22 @@ const clientAnswers: ClientAnswers<IpcMainInvokeEvent> = {
   },
   "mako:appshot-shortcut": (_event, shortcut) => appshotShortcut.set(role === "desktop" ? shortcut : null),
   "mako:appshot-feedback": (_event, feedback) => { appshotFeedback.show(feedback) },
-  // The person pressed Try now on a lost link: no reload, the client's own reconnect, now.
-  "mako:reconnect-host": (event) => { clients.get(event.sender.id)?.reconnectNow() },
-  // Restart Mako, when the host stays lost: drafts saved as a quit saves them, then this client opens again.
+  // The person pressed Try now on a lost link: no reload, the client's own reconnect, now; it settles with that try.
+  "mako:reconnect-host": (event) => clients.get(event.sender.id)?.reconnectNow(),
+  // Restart Mako, when the host stays lost: drafts saved as a quit saves them, a host that answers nothing ended
+  // (`endHungHost`), then this client opens again and attaches to its host or starts a fresh one.
   "mako:restart-client": () => {
     if (closingLocally || shutdownAction) return
-    void closeClient(true).catch((error) => {
+    void closeClient(true, () => endHungHost({
+      answers: () => probeRuntime(runtimeLocation(launch.dataRoot).socket, { timeoutMs: 2_000 }).then((probe) => (probe.state === "closing" ? "silent" : probe.state), () => "silent" as const),
+      holder: () => hostLockHolder(launch.dataRoot),
+      commandOf: (pid) => hostProbe("ps", ["-o", "command=", "-p", String(pid)], { timeout: 5_000 }).then(({ stdout }) => stdout, () => ""),
+      entry: hostCommand(launch).args.at(-1) ?? "",
+      signal: (pid, signal) => { try { process.kill(pid, signal) } catch { /* it left */ } },
+      alive: (pid) => { try { process.kill(pid, 0); return true } catch { return false } },
+      wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      log: (message, fields) => hostWarn("desktop", message, fields),
+    }).then((outcome) => hostLog("desktop", "restart found its host", { outcome }))).catch((error) => {
       closingLocally = false
       for (const window of BrowserWindow.getAllWindows()) sendEvent(window.webContents, { type: "notice", level: "error", message: error instanceof Error ? error.message : "A draft could not be saved. Mako stayed open." })
     })
@@ -328,13 +342,8 @@ async function openWindow(options: { preview?: boolean; agentView?: string; id?:
   }
   window.once("ready-to-show", reveal)
   let subscription: (() => void) | undefined
-  let timer: ReturnType<typeof setTimeout> | undefined
   let closed = false
   let sent = 0
-  /** The reconnect waiting on its backoff, while the link is lost; Try now runs it at once. */
-  let pending: (() => void) | undefined
-  /** Whether this outage was said to be one with no host to reach (`gone`), once per outage. */
-  let goneSaid = false
   // The window's connection follows its event stream, the proof the host is there; a dropped call only asks (`host-liveness.ts`).
   const link = new HostLiveness({
     message: DISCONNECTED_MESSAGE,
@@ -342,14 +351,14 @@ async function openWindow(options: { preview?: boolean; agentView?: string; id?:
     probe: (timeoutMs) => askHost(timeoutMs),
     log: (message, fields) => hostWarn("stream", message, { window: id, ...fields }),
   })
-  const reconnectNow = () => {
-    const run = pending
-    if (!run) return
-    pending = undefined
-    clearTimeout(timer)
-    run()
-  }
-  const client = { id, link, sent: () => sent, reconnectNow, dispose() { closed = true; clearTimeout(timer); subscription?.(); link.dispose(); earlyBoots.delete(id) } }
+  // Its way back once the stream ends: quiet, and `gone` only when no host could be had (`host-reconnect.ts`).
+  const reconnect = new HostReconnect({
+    attach: () => ensureRuntime(launch).then(async (next) => { runtime = next; await secretKeys?.attached(); connect() }),
+    gone: () => { if (!window.isDestroyed()) sendEvent(window.webContents, { type: "host-disconnected", message: DISCONNECTED_MESSAGE, gone: true }) },
+    later: (run, ms) => { const timer = setTimeout(run, ms); return () => clearTimeout(timer) },
+    wanted: () => !closed && !shuttingDown && !shutdownAction && !window.isDestroyed(),
+  })
+  const client = { id, link, sent: () => sent, reconnectNow: () => reconnect.now(), dispose() { closed = true; reconnect.dispose(); subscription?.(); link.dispose(); earlyBoots.delete(id) } }
   const rendererId = window.webContents.id
   clients.set(rendererId, client)
   const connect = () => {
@@ -361,7 +370,7 @@ async function openWindow(options: { preview?: boolean; agentView?: string; id?:
       if (packet.channel === "ready") {
         if (packet.runtime) runtime = { ...runtime, info: packet.runtime }
         stream.ready()
-        goneSaid = false
+        reconnect.reconnected()
       } else {
         // Routed by its header; only the two events this process acts on are read.
         const { type } = runtimeEventRouting(packet)
@@ -376,22 +385,7 @@ async function openWindow(options: { preview?: boolean; agentView?: string; id?:
       stream.ended(end)
       // The agent views app never starts a host; its link ends with this one and it leaves.
       if (closed || window.isDestroyed() || role === "agent-views") return
-      const retry = () => {
-        pending = undefined
-        if (closed || shuttingDown || shutdownAction) return
-        void ensureRuntime(launch).then(async (next) => { runtime = next; await secretKeys?.attached(); connect() }).catch(() => {
-          if (closed) return
-          // No host to attach to and none could be started: the window's notice offers a restart instead of waiting on.
-          if (!goneSaid && !window.isDestroyed()) {
-            goneSaid = true
-            sendEvent(window.webContents, { type: "host-disconnected", message: DISCONNECTED_MESSAGE, gone: true })
-          }
-          pending = retry
-          timer = setTimeout(retry, 2_000)
-        })
-      }
-      pending = retry
-      timer = setTimeout(retry, 500)
+      reconnect.lost()
     }, { history: true, observer: Boolean(agentView), heard: stream.heard, live: WINDOW_LIVE_FORM })
   }
   // The window loads while the host starts; its stream opens once the host answers.

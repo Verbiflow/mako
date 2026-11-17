@@ -53,9 +53,9 @@ export function useReconnectStage(): ReconnectStage | undefined {
   return useHostConnection((state) => (state.kind === "disconnected" ? state.stage : undefined))
 }
 
-/** Try now: the client reconnects at once rather than at its next backoff. No reload. */
-export function reconnectHostNow(): void {
-  if (hasBridge()) void getMako().reconnectHost()
+/** Try now: the client reconnects at once rather than at its next backoff, or waits on the try under way. No reload. Settles with that try. */
+export async function reconnectHostNow(): Promise<void> {
+  if (hasBridge()) await getMako().reconnectHost().catch(() => undefined)
 }
 
 /** Restart Mako: drafts saved, the client quits and opens again, attaching to its host or starting one. */
