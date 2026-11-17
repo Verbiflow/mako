@@ -39,7 +39,9 @@ export default defineConfig({
       inject: false,
       autoPresets: false,
       copyAssets: { baseDir: "file-viewer" },
-      chunkStrategy: "renderer",
+      // Each viewer stays in its own lazy chunks. "renderer" groups pulled Vite's preload helper into the PowerPoint
+      // viewer's chunk, and the desk's startup imported it from there.
+      chunkStrategy: "none",
     }),
   ],
   resolve: {
