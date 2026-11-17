@@ -159,12 +159,17 @@ try {
     const writes = GROK_CALL_HOOKS.writes
     assert.ok(writes)
     const run = (toolName: string, hookEventName = "pre_tool_use") => ({ hookEventName, toolName, toolInput: {} })
-    for (const tool of ["run_terminal_command", "search_replace", "hashline_edit", "write"]) assert.equal(writes.holds(run(tool), {}), true, `${tool} waits`)
-    assert.equal(writes.holds(run("read_file"), {}), false, "a read doesn't")
+    // Every tool but those that only read waits: Grok's MCP tools (`<server>__<tool>`, or through `use_tool`), Mako's
+    // own over ACP among them, its background `monitor`, its image tools, and a subagent or workflow it starts.
+    for (const tool of ["run_terminal_command", "search_replace", "hashline_edit", "write", "monitor", "mako__worktree_update", "github__create_issue", "use_tool", "spawn_subagent", "workflow", "image_edit", "kill_command_or_subagent", "a_tool_grok_adds"])
+      assert.equal(writes.holds(run(tool), {}), true, `${tool} waits`)
+    for (const tool of ["read_file", "list_dir", "grep", "web_search", "todo_write", "ask_user_question", "get_command_or_subagent_output"])
+      assert.equal(writes.holds(run(tool), {}), false, `${tool} only reads, and doesn't wait`)
+    assert.equal(writes.holds({ hookEventName: "pre_tool_use", toolName: "run_terminal_command", toolInput: { command: "git status" } }, {}), false, "a shell command that only reads doesn't wait")
+    assert.equal(writes.holds({ hookEventName: "pre_tool_use", toolName: "run_terminal_command", toolInput: { command: "rm -rf build" } }, {}), true, "one that writes does")
     assert.equal(writes.holds(run("write", "post_tool_use"), {}), false, "after the tool ran, nothing waits")
     assert.equal(writes.holds(run("run_terminal_command"), { decision: "deny", reason: "no" }), false, "a denied call never runs")
-    const meta = JSON.stringify(GROK_CALL_HOOKS.meta)
-    for (const tool of ["search_replace", "hashline_edit", "write"]) assert.ok(meta.includes(tool), `Grok's pre-tool hook is registered for ${tool}`)
+    assert.match(JSON.stringify(GROK_CALL_HOOKS.meta), /"pre_tool_use":\[\{"matcher":"\.\*"/, "Grok's pre-tool hook is registered for every tool, so `holds` decides")
     const said = (fields: JsonObject) => async () => JSON.stringify({ grokVersion: "1.0.70", projectTrusted: true, hooks: [], plugins: [], mcpServers: [], lspServers: [], agents: [{ name: "plan", source: { type: "builtin" } }], ...fields })
     const launch = { servers: [{ name: "mako", process: false }] }
     assert.equal(await grokPersonCodeRuns(said({}), launch), false, "a trusted folder with nothing of the person's")

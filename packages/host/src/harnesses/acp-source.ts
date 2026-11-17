@@ -404,7 +404,7 @@ export interface AcpCallHooks {
      * itself, as the launch runs it, with the MCP servers Mako passes it (`process`: run as a process and not Mako's
      * own). True when it can't say.
      */
-    personCodeRuns(launch: { executable: string; env: NodeJS.ProcessEnv; cwd: string; servers: readonly { name: string; process: boolean }[] }): Promise<boolean>
+    personCodeRuns(launch: { executable: string; env: NodeJS.ProcessEnv; cwd: string; servers: readonly { name: string; process: boolean }[] }, answers: Map<string, boolean>): Promise<boolean>
   }
 }
 

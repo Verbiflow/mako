@@ -277,6 +277,8 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
   const engine = createLiveEngine<Live>()
   const sessions = engine.sessions
   const closingSessions = new Map<string, Promise<void>>()
+  // What the harness last said loads in a folder, for this engine's life (`AcpCallHooks.writes.personCodeRuns`).
+  const personCodeAnswers = new Map<string, boolean>()
 
   async function requestElicitation(
     live: Live,
@@ -402,7 +404,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     const holdsWrites = writes ? !await writes.personCodeRuns({
       executable, env, cwd: workingDir,
       servers: preparedServers.map((server) => ({ name: server.name, process: "command" in server && !makoServers.has(server.name) })),
-    }) : false
+    }, personCodeAnswers) : false
     const child = trace.sync("spawn", () => spawnProviderProcess(executable, spec.args, {
       cwd: workingDir,
       env: environmentForExecutable(executable, env),
