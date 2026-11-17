@@ -14,7 +14,7 @@ import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import { installCodex } from "@mako/host/harnesses/codex/index"
-import { CALL_GATE_HOLD_MS, HookCall, hookMayWrite } from "@mako/host/harnesses/call-gate"
+import { CALL_GATE_HOLD_MS, heldAnswer, HookCall } from "@mako/host/harnesses/call-gate"
 import { WriteHolds } from "@mako/host/harnesses/write-holds"
 import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
 import { admitted } from "./fixtures/admitted-start.ts"
@@ -36,13 +36,12 @@ const driver = sealedDrivers([installCodex], { writeHolds: holds }).get("codex")
 assert.ok(driver, "Codex's live driver registered")
 assert.ok(driver.firstWrite, "Codex declares that it holds its agent's writes when the host gives it write holds")
 
-// Mako's conversation server, its gate answering as the host's does: a call that may write waits on the turn's hold.
+// Mako's conversation server, its gate holding as the host's does (`heldAnswer`): a call that may write waits on the turn.
 const gated: string[] = []
 const tools = await startConversationMcp({ authorizeAgent: () => {} }, async () => null, [() => {}], async (_conversation, event, body, binding) => {
   const call = HookCall.safeParse(body).data
   gated.push(`${event}:${call?.tool_name ?? "?"}`)
-  if (event !== "post" && hookMayWrite(call)) await holds.beforeWrite(binding, undefined, CALL_GATE_HOLD_MS)
-  return {}
+  return heldAnswer(holds, event, call, {}, binding)
 })
 
 try {

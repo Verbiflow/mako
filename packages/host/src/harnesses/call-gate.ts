@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { hostLog } from "../base/host-log.js"
+import type { WriteHolds } from "./write-holds.js"
 import type { JsonObject } from "../contracts/json.js"
 import { mcpToolName, routeNativeTool, routeShellCall, scriptFlag, type CallRoute, type CallThread } from "../contracts/native-calls.js"
 
@@ -42,6 +43,16 @@ export function hookMayWrite(call: HookCall | undefined): boolean {
 /** Whether a gate's answer refuses the call, which then never runs. */
 export function gateDenies(answer: JsonObject): boolean {
   return answer.decision === "block"
+}
+
+/**
+ * A hooked call's answer, given once its turn lets it go: a call that runs and may write waits for the turn's
+ * checkpoint to hold the workspace (`WriteHolds`), at most `CALL_GATE_HOLD_MS`; a refused call, one after the tool
+ * ran (`post`) and one that only reads are answered at once.
+ */
+export async function heldAnswer(holds: Pick<WriteHolds, "beforeWrite">, event: "pre" | "post" | "before", call: HookCall | undefined, answer: JsonObject, binding: string): Promise<JsonObject> {
+  if (event !== "post" && !gateDenies(answer) && hookMayWrite(call)) await holds.beforeWrite(binding, undefined, CALL_GATE_HOLD_MS)
+  return answer
 }
 
 /** A hooked call's route: a shell tool by its command, an MCP tool (`mcp__<server>__<tool>`) by its server. */

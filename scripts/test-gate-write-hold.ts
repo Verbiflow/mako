@@ -9,7 +9,7 @@ import assert from "node:assert/strict"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { CALL_GATE_HOLD_MS, gateDenies, hookMayWrite, HookCall } from "@mako/host/harnesses/call-gate"
+import { CALL_GATE_HOLD_MS, gateDenies, heldAnswer, hookMayWrite, HookCall } from "@mako/host/harnesses/call-gate"
 import { codexPersonCodeRuns } from "@mako/host/harnesses/codex/person-hooks"
 import { WriteHolds } from "@mako/host/harnesses/write-holds"
 import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
@@ -30,6 +30,25 @@ try {
     assert.equal(gateDenies({}), false)
     assert.ok(CALL_GATE_HOLD_MS < 8_000, "Mako answers before the hooks give up (curl -m 8, OpenCode's 8 s abort)")
     console.log("PASS: calls that may write wait, reads and denied calls don't")
+  }
+
+  // The host's gate (`heldAnswer`): a call that runs and may write waits for its turn; a denied one, a `post`, a read don't.
+  {
+    const holds = new WriteHolds()
+    const gate = Promise.withResolvers<void>()
+    let early = 0
+    holds.hold("b", { until: gate.promise, frozen: () => false, wrote: () => { early += 1 } })
+    const answer = (event: "pre" | "post" | "before", tool: string, given = {}) => heldAnswer(holds, event, HookCall.parse({ tool_name: tool }), given, "b")
+    const deny = { decision: "block", reason: "routed" }
+    assert.deepEqual(await answer("before", "Bash", deny), deny, "a denied call is answered at once: it never runs")
+    assert.equal(await settlesWithin(answer("post", "apply_patch"), 50), true, "after the tool ran, nothing waits")
+    assert.equal(await settlesWithin(answer("before", "Read"), 50), true, "a read goes at once")
+    const patch = answer("before", "apply_patch")
+    assert.equal(await settlesWithin(patch, 100), false, "a patch waits for its turn's checkpoint")
+    gate.resolve()
+    assert.equal(await settlesWithin(patch, 1_000), true)
+    assert.equal(early, 1, "let go before the checkpoint held, it's an early write")
+    console.log("PASS: the host's gate holds a call that runs and may write, nothing else")
   }
 
   // A hold past the deadline lets the call go and says it wrote early; one released in time doesn't.
