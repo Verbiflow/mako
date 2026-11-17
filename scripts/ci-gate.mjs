@@ -489,6 +489,9 @@ const ALONE = [
   // Beside another lane's Electron, the host took 73 s to start the agent views app, and createTarget passed 90 s.
   /scripts\/test-fixture-desk\.mjs\b/,
   /scripts\/test-comms-storm\.ts\b/,
+  // It reads the whole machine's busy cores to see its spinners' fall away; beside other parts, theirs counted as
+  // other work (3.3 of 4 cores after the spinners died, #931's first run).
+  /scripts\/test-machine-load\.ts\b/,
 ]
 
 /** Evidence a failed step leaves, by its npm script, run after it: its own exit stays the result. */
