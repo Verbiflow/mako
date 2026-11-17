@@ -161,6 +161,40 @@ try {
   assert.deepEqual(plannedThread.entries.filter((entry) => entry.id?.startsWith("toolu_plan")).map((entry) => [entry.type, entry.id]),
     [["tool", "toolu_plan"], ["proposed-plan", "toolu_plan#2"]], "the call and its card are two entries, each with its own id")
   console.log("PASS: Claude's saved ExitPlanMode reads as the live plan card")
+
+  // Claude Code 2.1.326 keeps what was said on a voice call beside the
+  // session as a `voice_call_talk` system row: a note the host handed over as
+  // background, which starts no turn and is never the person's prompt. A row
+  // folded into a running turn carries `fold`; the unfolded forms a build may
+  // have written (a user line, a queued command, each with the voice-call
+  // origin) read the same.
+  const voice = join(home, "voice.jsonl")
+  const origin = { kind: "voice-call", requestUuid: "call-1" }
+  const header = "[TALK FROM A VOICE CALL - NOT USER INPUT]"
+  await writeFile(voice, `${[
+    user("v-u1", "Fix the parser"),
+    system("v-n1", "voice_call_talk", { isMeta: true, msgV: 1, content: `${header}\nShip it before the demo`, origin }),
+    assistant("v-a1", [text("On it.")]),
+    system("v-n2", "voice_call_talk", { isMeta: true, msgV: 1, content: "The second part", blocks: [text("The second part")], origin,
+      fold: { command: { commandMode: "prompt" }, renderedInHumanTurn: true } }),
+    record({ type: "user", uuid: "v-u2", origin, message: { role: "user", content: [text("Spoken, unfolded")] } }),
+    record({ type: "attachment", uuid: "v-q1", attachment: { type: "queued_command", prompt: "Spoken, queued", commandMode: "prompt", origin } }),
+    system("v-bad", "voice_call_talk", { isMeta: true, msgV: 1, content: "No origin" }),
+    assistant("v-a2", [text("Done.")]),
+  ].join("\n")}\n`)
+  const voiced = await new ClaudeProvider(home).read(voice)
+  assert.deepEqual(voiced.entries.filter((entry) => entry.type !== "unread").map((entry) => entry.type === "event" ? [entry.type, entry.label, entry.detail, entry.opensTurn]
+    : entry.type === "user" ? [entry.type, entry.text, entry.steeringFor] : [entry.type, entry.text]), [
+    ["user", "Fix the parser", undefined],
+    ["event", "Voice call", "Ship it before the demo", undefined],
+    ["text", "On it."],
+    ["event", "Voice call", "The second part", undefined],
+    ["event", "Voice call", "Spoken, unfolded", undefined],
+    ["event", "Voice call", "Spoken, queued", undefined],
+    ["text", "Done."],
+  ], "a voice call's note is a marker in the turn it came in, never a prompt")
+  assert.deepEqual(voiced.unread?.map((entry) => [entry.kind, entry.reason]), [["system voice_call_talk", "unreadable"]])
+  console.log("PASS: Claude's voice-call notes read as markers, folded or not, never as the person's prompts")
 } finally {
   await rm(home, { recursive: true, force: true })
 }
