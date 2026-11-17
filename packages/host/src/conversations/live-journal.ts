@@ -1,6 +1,7 @@
 import { HostFailureError } from "../contracts/provider-failure.js"
 import type { WalPrimer, WalCheckpoint } from "./wal-primer.js"
-import { ProviderFailureEvidenceSchema, storedFailureEvidence } from "../contracts/provider-failure-evidence.js"
+import { ProviderFailureEvidenceSchema, StoredFailureFields, readStoredFailure, savedFailure, storedFailureEvidence, type ProviderFailureEvidence } from "../contracts/provider-failure-evidence.js"
+import type { ProviderFailureKind } from "../contracts/provider-failure.js"
 import type { SnapshotSettlement } from "../contracts/snapshot-budget.js"
 import { LiveInputQuestionSchema } from "../contracts/live-questions.js"
 import { ApprovalOriginSchema, NativeApprovalIdentitySchema } from "../contracts/approval-response.js"
@@ -35,7 +36,6 @@ import { RunSnapshotsSchema } from "../contracts/workspace-snapshots.js"
 import { RequestChangesSchema } from "../contracts/turn-changes.js"
 import { TurnUndoneSchema } from "../contracts/turn-review.js"
 import { ACCOUNT_SWITCH_WAITS, JOINED_MAX, MAX_INTERRUPTED_CALLS, savedReason, type LiveRequest, type LiveSnapshot } from "../contracts/live-conversations.js"
-import { PROVIDER_FAILURE_KINDS } from "../contracts/provider-failure.js"
 import { ActorSchema } from "../contracts/thread-identity.js"
 import { laterPrompt, personPromptedAt, type PromptedRequest } from "../contracts/worked-at.js"
 import { ACCESS_TIER_NAMES } from "../contracts/access.js"
@@ -101,16 +101,26 @@ export const HarnessTurnSchema = z.object({ id: z.string(), kind: z.enum(["turn"
  * one they read it as, with the exact one beside it (`OLDER_READING`), so a
  * journal this build writes still opens in a build before it.
  */
-/** Only owned evidence slots are encoded; native permission/tool payloads remain opaque. */
-const RequestEvidenceFieldsSchema = z.looseObject({ failureEvidence: ProviderFailureEvidenceSchema.optional() })
+/** Only owned slots (failure evidence and kind) are encoded; native permission/tool payloads remain opaque. */
+const RequestEvidenceFieldsSchema = z.looseObject({ ...StoredFailureFields, failureEvidence: ProviderFailureEvidenceSchema.optional() }).overwrite(readStoredFailure)
 const RequestEvidencePatchSchema = z.looseObject({ set: RequestEvidenceFieldsSchema.optional() })
+const TransferFailureFieldsSchema = z.looseObject({ state: z.looseObject(StoredFailureFields).overwrite(readStoredFailure).optional() })
+const TransferFailurePatchSchema = z.looseObject({ set: TransferFailureFieldsSchema.optional() })
+function storedRequestFields<Fields extends { failure?: ProviderFailureKind | undefined; failureEvidence?: ProviderFailureEvidence | undefined }>(fields: Fields): Fields {
+  return { ...fields, ...savedFailure(fields.failure), failureEvidence: fields.failureEvidence && storedFailureEvidence(fields.failureEvidence) }
+}
+function storedTransferFields(fields: z.infer<typeof TransferFailureFieldsSchema>) {
+  return fields.state ? { ...fields, state: { ...fields.state, ...savedFailure(fields.state.failure) } } : fields
+}
 function logRow(event: MakoLogEvent): string {
-  if (event.kind === "request") {
-    const fields = RequestEvidenceFieldsSchema.parse(event.value)
-    if (fields.failureEvidence) return JSON.stringify({ ...fields, failureEvidence: storedFailureEvidence(fields.failureEvidence) })
-  } else if (event.kind.startsWith("request.")) {
+  if (event.kind === "request") return JSON.stringify(storedRequestFields(RequestEvidenceFieldsSchema.parse(event.value)))
+  if (event.kind.startsWith("request.")) {
     const fields = RequestEvidencePatchSchema.parse(event.value)
-    if (fields.set?.failureEvidence) return JSON.stringify({ ...fields, set: { ...fields.set, failureEvidence: storedFailureEvidence(fields.set.failureEvidence) } })
+    if (fields.set) return JSON.stringify({ ...fields, set: storedRequestFields(fields.set) })
+  } else if (event.kind === "transfer") return JSON.stringify(storedTransferFields(TransferFailureFieldsSchema.parse(event.value)))
+  else if (event.kind.startsWith("transfer.")) {
+    const fields = TransferFailurePatchSchema.parse(event.value)
+    if (fields.set) return JSON.stringify({ ...fields, set: storedTransferFields(fields.set) })
   }
   return JSON.stringify(event.value)
 }
@@ -119,12 +129,14 @@ function logRow(event: MakoLogEvent): string {
 function readLogValue(kind: string, value: MakoLogEvent["value"]): MakoLogEvent["value"] {
   if (kind === "request") return LogValueSchema.parse(RequestEvidenceFieldsSchema.parse(value))
   if (kind.startsWith("request.")) return LogValueSchema.parse(RequestEvidencePatchSchema.parse(value))
+  if (kind === "transfer") return LogValueSchema.parse(TransferFailureFieldsSchema.parse(value))
+  if (kind.startsWith("transfer.")) return LogValueSchema.parse(TransferFailurePatchSchema.parse(value))
   return value
 }
 
 function requestRow(request: LiveRequest): string {
-  const { interruption, continues, failureEvidence } = request
-  const stored = { ...request, failureEvidence: failureEvidence && storedFailureEvidence(failureEvidence) }
+  const { interruption, continues } = request
+  const stored = storedRequestFields(request)
   if (!interruption && !continues) return JSON.stringify(stored)
   return JSON.stringify({
     ...stored,
@@ -136,16 +148,16 @@ function requestRow(request: LiveRequest): string {
 /** The conversation's control as the metadata row keeps it: a transfer's continuation saved as a request's is (`requestRow`). */
 function controlRow(control: LiveSnapshot["control"]): z.input<typeof ConversationControlSchema> | undefined {
   if (!control) return control
+  const transfers = control.transfers.map((transfer) => ({
+    ...transfer,
+    ...transfer.continues && { continues: { ...transfer.continues, ...savedReason(transfer.continues.reason) } },
+    ...transfer.state.kind === "failed" && { state: { ...transfer.state, ...savedFailure(transfer.state.failure) } },
+  }))
   if (control.compactionRecovery?.origin === "native" || control.compactionRecovery?.state.kind === "reconcile") {
     const { compactionRecovery, ...rest } = control
-    return { ...rest, pendingCompactionRecovery: compactionRecovery, transfers: control.transfers.map(transfer => transfer.continues
-      ? { ...transfer, continues: { ...transfer.continues, ...savedReason(transfer.continues.reason) } } : transfer) }
+    return { ...rest, pendingCompactionRecovery: compactionRecovery, transfers }
   }
-  if (!control.transfers.some((transfer) => transfer.continues)) return control
-  return {
-    ...control,
-    transfers: control.transfers.map((transfer) => transfer.continues ? { ...transfer, continues: { ...transfer.continues, ...savedReason(transfer.continues.reason) } } : transfer),
-  }
+  return { ...control, transfers }
 }
 
 export const LiveRequestSchema = z.object({
@@ -226,7 +238,7 @@ export const LiveRequestSchema = z.object({
     })
     .transform(readStoredReason)
     .optional(),
-  failure: z.enum(PROVIDER_FAILURE_KINDS).optional(),
+  ...StoredFailureFields,
   failureEvidence: ProviderFailureEvidenceSchema.optional(),
   /** The session's usage reading when this request was dispatched; `spend` is measured from it. */
   usageFrom: z.object({
@@ -250,6 +262,8 @@ export const LiveRequestSchema = z.object({
   review: ReviewTargetSchema.optional(),
   verbatim: z.literal(true).optional(),
 })
+/** A request as its row keeps it, its exact failure kind restored (`savedFailure`). */
+const StoredRequestSchema = LiveRequestSchema.transform(readStoredFailure)
 const MetadataSchema = z.object({
   baseSource: z.object({
     harness: z.string(), nativeId: z.string(), path: z.string(),
@@ -498,7 +512,7 @@ export function* journalRowSteps(db: DatabaseSync, withLog: boolean): Steps<Jour
     const rows = requestRows.all(last, ROWS_PER_STEP)
     for (const row of rows) {
       const request = RowAtSchema.parse(row)
-      requests.push(LiveRequestSchema.parse(JSON.parse(request.value)))
+      requests.push(StoredRequestSchema.parse(JSON.parse(request.value)))
       last = request.at
     }
     if (rows.length < ROWS_PER_STEP) break
@@ -889,7 +903,7 @@ export class LiveJournal {
   private unsettled(): true | undefined {
     const rows = this.db.prepare(`SELECT value FROM requests WHERE value LIKE '%"status":"queued"%' OR value LIKE '%"status":"held"%' OR value LIKE '%"status":"dispatching"%'`).all()
     for (const row of rows) {
-      const status = LiveRequestSchema.safeParse(JSON.parse(RowSchema.parse(row).value)).data?.status
+      const status = StoredRequestSchema.safeParse(JSON.parse(RowSchema.parse(row).value)).data?.status
       if (status === "queued" || status === "held" || status === "dispatching") return true
     }
     return undefined
@@ -927,7 +941,7 @@ export class LiveJournal {
   private wakeAt(): number | undefined {
     let soonest: number | undefined
     for (const row of this.db.prepare("SELECT value FROM requests WHERE value LIKE '%\"wake\"%' OR value LIKE '%\"retry\"%'").all()) {
-      const request = LiveRequestSchema.safeParse(JSON.parse(RowSchema.parse(row).value)).data
+      const request = StoredRequestSchema.safeParse(JSON.parse(RowSchema.parse(row).value)).data
       const hold = request && holdOf(request)
       const at = hold && holdDue(hold)
       if (at !== undefined && (soonest === undefined || at < soonest)) soonest = at
@@ -1579,7 +1593,7 @@ export function storedRequest(root: string, id: string, requestId: string): Live
   const db = new DatabaseSync(path, { readOnly: true })
   try {
     const row = db.prepare("SELECT value FROM requests WHERE id=?").get(requestId)
-    return row ? LiveRequestSchema.parse(JSON.parse(RowSchema.parse(row).value)) : undefined
+    return row ? StoredRequestSchema.parse(JSON.parse(RowSchema.parse(row).value)) : undefined
   } finally {
     db.close()
   }
@@ -1596,7 +1610,7 @@ export function storedRetirementState(root: string, id: string): { finished: boo
     const summary = journalSummary(metadata)
     let pending = false
     for (const row of db.prepare(`SELECT value FROM requests WHERE value LIKE '%"status":"queued"%' OR value LIKE '%"status":"held"%' OR value LIKE '%"status":"dispatching"%'`).all()) {
-      const request = LiveRequestSchema.parse(JSON.parse(RowSchema.parse(row).value))
+      const request = StoredRequestSchema.parse(JSON.parse(RowSchema.parse(row).value))
       if (request.status === "queued" || request.status === "held" || request.status === "dispatching") pending = true
     }
     return {
@@ -1799,7 +1813,7 @@ export class ColdJournal {
         const rows = requestRows.all(last, ROWS_PER_STEP)
         for (const row of rows) {
           const request = RowAtSchema.parse(row)
-          requests.push(LiveRequestSchema.parse(JSON.parse(request.value)))
+          requests.push(StoredRequestSchema.parse(JSON.parse(request.value)))
           last = request.at
         }
         if (rows.length < ROWS_PER_STEP) break

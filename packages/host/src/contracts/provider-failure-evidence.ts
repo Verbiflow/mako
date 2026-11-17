@@ -1,4 +1,4 @@
-import { HOST_FAILURE_KINDS, PROVIDER_FAILURE_KINDS } from "./provider-failure.js"
+import { HOST_FAILURE_KINDS, PROVIDER_FAILURE_KINDS, type ProviderFailureKind } from "./provider-failure.js"
 import { z } from "zod"
 
 /** A verdict with its origin: typed host facts, native protocol facts, or text admitted by a native transport. */
@@ -28,4 +28,20 @@ export function storedFailureEvidence(evidence: ProviderFailureEvidence) {
   return evidence.source === "host" || evidence.source === "provider-text" || evidence.source === "native-limit" || evidence.source === "native-error"
     ? { kind: "unknown" as const, source: "provider-error" as const, exact: evidence }
     : evidence
+}
+
+/** Failure kinds older builds don't know, each saved as the one they read, with the exact one beside it (as `OLDER_READING` does for reasons). */
+const OLDER_FAILURE_READING = { "model-refusal": "unknown" } as const satisfies Partial<Record<ProviderFailureKind, ProviderFailureKind>>
+/** A request's or failed transfer's `failure` as its row keeps it (`savedFailure`, `readStoredFailure`). */
+export const StoredFailureFields = { failure: z.enum(PROVIDER_FAILURE_KINDS).optional(), exactFailure: z.string().optional() }
+export function savedFailure(failure: ProviderFailureKind | undefined): { failure?: ProviderFailureKind; exactFailure?: ProviderFailureKind } {
+  return failure === "model-refusal" ? { failure: OLDER_FAILURE_READING[failure], exactFailure: failure } : { failure }
+}
+/** The kind a journal kept: its exact one when this build knows it, else the one every build reads. */
+export function readStoredFailure<Fields extends { failure?: ProviderFailureKind | undefined; exactFailure?: string | undefined }>(fields: Fields): Fields {
+  if (fields.exactFailure === undefined) return fields
+  const { exactFailure, ...rest } = fields
+  const exact = PROVIDER_FAILURE_KINDS.find((kind) => kind === exactFailure)
+  // SAFETY: `rest` is `fields` less the optional `exactFailure`, and `failure` stays a ProviderFailureKind or undefined, so it is still a `Fields`.
+  return { ...rest, failure: exact ?? fields.failure } as Fields
 }

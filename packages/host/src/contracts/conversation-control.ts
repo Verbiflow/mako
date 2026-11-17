@@ -6,7 +6,7 @@ import { z } from "zod"
 import { ExecutionContextSchema } from "./execution-context.js"
 import { LiveActionSchema } from "./live-actions.js"
 import { PromptAttachmentSchema } from "./prompt-attachments.js"
-import { PROVIDER_FAILURE_KINDS } from "./provider-failure.js"
+import { StoredFailureFields, readStoredFailure } from "./provider-failure-evidence.js"
 import { MessageAnchorSchema } from "./message-anchor.js"
 import { ActorSchema } from "./thread-identity.js"
 import { INTERRUPTION_REASONS, readReason, type InterruptionReason } from "./live-conversations.js"
@@ -154,10 +154,10 @@ export const TransferStateSchema = z.discriminatedUnion("kind", [
     kind: z.literal("failed"),
     error: z.string(),
     /** What `error` means; see `provider-failure.ts`. */
-    failure: z.enum(PROVIDER_FAILURE_KINDS).optional(),
+    ...StoredFailureFields,
     /** Its message left the queue before it went (`withdrawGone`): nothing went wrong with the switch, and nothing is left to retry. */
     removed: z.literal(true).optional(),
-  }),
+  }).overwrite(readStoredFailure),
   z.object({ kind: z.literal("uncertain"), error: z.string() }),
 ])
 /**

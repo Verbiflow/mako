@@ -1,4 +1,4 @@
-import type { HookCallback, ModelUsage, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
+import type { HookCallback, ModelUsage, SDKMessage, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk"
 import { isDeclaredTool } from "@mako/sessions/tool-identity"
 import { claudeTaskMarker, claudeTaskTurn, claudeTokens, parseClaudeTaskNotification } from "@mako/sessions/harnesses"
 import { UNNAMED_TURN } from "@mako/sessions/provider-turn"
@@ -53,6 +53,10 @@ export class ClaudeDecoder {
   /** The PostCompact hook, whose summary names the compaction boundary that follows. */
   get hook(): HookCallback {
     return this.notices.hook
+  }
+
+  declined(message: SDKResultMessage): boolean {
+    return this.notices.declined(message)
   }
 
   /** A turn opens: what earlier turns streamed can no longer be withdrawn. */

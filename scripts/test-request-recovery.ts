@@ -161,3 +161,11 @@ assert.deepEqual(orderNotices([
 ]).map((entry) => entry.notice.id), ["pinned", "failure", "late-caution", "moving", "info"])
 
 console.log("PASS: failure recovery by kind and delivery evidence, usage-limit resets and timed sends, the composer's resume, where each failure is drawn, a turn Mako stopped unsaved, and the notice stack's order")
+
+// A model's refusal: the same words to the same model would be refused again, so nothing sends them; the person restores or copies them.
+const refusal = requestRecovery(failed("model-refusal", "accepted"), context)
+assert.deepEqual(refusal.primary, { kind: "restore" })
+assert.deepEqual(refusal.more, [{ kind: "copy" }])
+assert.ok(![refusal.primary, ...refusal.more].some((action) => action?.kind === "resend" || action?.kind === "fresh" || action?.kind === "continue"), "no resend of what was refused")
+assert.match(refusal.guidance ?? "", /declined this request/)
+console.log("PASS: a model's refusal offers its words back, never a resend")
