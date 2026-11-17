@@ -52,8 +52,14 @@ mock.method(snapshots, "beginRun", (...args: Parameters<WorkspaceSnapshots["begi
 mock.method(snapshots, "endRun", (...args: Parameters<WorkspaceSnapshots["endRun"]>) => tracked(end(...args)))
 const states = new Map<string, LiveSessionState>()
 const sent: string[] = []
+const steered: string[] = []
 const driver: ProviderLiveDriver = {
   ...noCapabilities,
+  // Heard at once, into the turn it runs: what the person sends while a turn runs goes as a steer.
+  steering: { kind: "supported", lands: "interrupt", landing: "native", via: "Injected driver fixture", steer: async (_id, input) => {
+    steered.push(input.text)
+    return { kind: "accepted" }
+  } },
   resume: fixtureResume(),
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
   nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
@@ -86,7 +92,8 @@ const driver: ProviderLiveDriver = {
     const state = states.get(id)
     assert.ok(state)
     sent.push(text)
-    const running: LiveSessionState = { ...state, status: "running" }
+    // As a real driver says its turn's run, which a steer names.
+    const running: LiveSessionState = { ...state, status: "running", nativeRunId: randomUUID() }
     states.set(id, running)
     owner.observe({ type: "live-session", session: running })
   },
@@ -307,6 +314,53 @@ try {
   console.log(
     "PASS: cancellation during baseline capture never dispatches the prompt"
   )
+
+  // The follow-up turn runs while the previous turn's closing checkpoint still publishes: it reads as running, the
+  // person can stop it, and what they send into it goes as a steer, as the composer sends it (queued, then steered).
+  {
+    await owner.stop()
+    owner = new LiveConversations(dependencies)
+    const conversation = randomUUID(), previous = randomUUID(), next = randomUUID()
+    await owner.start("test", cwd, { conversationId: conversation })
+    const sentBefore = sent.length
+    owner.submit(conversation, previous, "previous turn")
+    await until(() => sent.length === sentBefore + 1 && owner.snapshot(conversation)?.requests[0].snapshots?.before.kind === "ready")
+    writeFileSync(file, "the previous turn's edit")
+    const packing = Promise.withResolvers<void>(), releasePack = Promise.withResolvers<void>()
+    const original = gitRunner.run.bind(gitRunner)
+    let held = false
+    const pack = mock.method(gitRunner, "run", async (input: RunOptions) => {
+      if (!held && input.args.includes("pack-objects")) {
+        held = true
+        packing.resolve()
+        await releasePack.promise
+      }
+      return original(input)
+    })
+    try {
+      owner.submit(conversation, next, "follow up")
+      finish(conversation, "previous answer")
+      await packing.promise
+      await until(() => sent.length === sentBefore + 2 && owner.snapshot(conversation)?.requests[1].nativeRun !== undefined)
+      assert.equal(owner.snapshot(conversation)?.requests[0].snapshots?.after, undefined, "the previous turn's closing checkpoint is still publishing")
+      const work = owner.lifecycleWork().find((item) => item.id === conversation)
+      assert.equal(work?.status, "running", "a turn beside a closing publication is running, not finishing")
+      assert.equal(work?.stoppable, true, "and the person can stop it")
+      const steer = randomUUID(), words = "keep the old parser too"
+      owner.submit(conversation, steer, words)
+      const receipt = await owner.act(conversation, { kind: "steer-queued", id: randomUUID(), requestId: next, queuedRequestId: steer, text: words, attachments: [] })
+      assert.equal(receipt.state.kind, "accepted", "a steer into the follow-up turn is accepted while the previous closing checkpoint publishes")
+      assert.equal(steered.at(-1), words, "the agent hears it as a steer")
+      assert.equal(owner.snapshot(conversation)?.requests[0].snapshots?.after, undefined, "the closing publication was still held when the steer went")
+    } finally {
+      releasePack.resolve()
+      pack.mock.restore()
+    }
+    await until(() => owner.snapshot(conversation)?.requests[0].snapshots?.after?.kind === "ready")
+    finish(conversation, "next answer")
+    await until(() => owner.snapshot(conversation)?.requests[1].snapshots?.after !== undefined)
+    console.log("PASS: a turn beside a closing publication reads as running and takes the person's steer")
+  }
 
   // A closing read may be wedged too: if the next turn's own deadline lets it go, the old after-point is unsafe.
   {

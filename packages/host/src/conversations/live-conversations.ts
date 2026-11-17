@@ -116,7 +116,9 @@ const MAX_TIMER_MS = 2_147_483_647
  * after every flush of every working conversation (`noteWork`).
  */
 function residentWorkStatus(resident: Resident): LifecycleWork["status"] | undefined {
-  if (resident.transferring || resident.opening || resident.checkpointing || resident.rewinding || resident.closing) return "finishing"
+  if (resident.transferring || resident.opening || resident.rewinding || resident.closing) return "finishing"
+  // A turn running beside a closing checkpoint's publication is running, and the person can stop it.
+  if (resident.checkpointing && resident.snapshot.session.status !== "running") return "finishing"
   if (!resident.driver) return undefined
   const { snapshot } = resident
   if (snapshot.permissions.length) return "waiting"
