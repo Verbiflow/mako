@@ -30,7 +30,7 @@ import type { NativeActivity, NativeActivityObservation } from "./native-activit
 import type { RunSnapshots } from "./workspace-snapshots.js"
 import type { RequestChanges } from "./turn-changes.js"
 import type { TurnUndone } from "./turn-review.js"
-import type { ProviderFailureKind } from "./provider-failure.js"
+import { PROVIDER_FAILURE_KINDS, type ProviderFailureKind } from "./provider-failure.js"
 import type { LiveSessionUsage } from "./providers-acp.js"
 import type { Actor } from "./thread-identity.js"
 import type { NativePromptReference } from "./native-prompt-identity.js"
@@ -862,13 +862,29 @@ function withCurrents(options: readonly ModelOption[], currents: Record<string, 
 
 /** The session after `batch`, from the one the receiver held. */
 export function sessionAfter(current: LiveSessionState, batch: Pick<LiveBatch, "session" | "sessionChanges" | "sessionCleared" | "configCurrents">): LiveSessionState {
-  if (batch.session) return batch.session
+  if (batch.session) return exactFailures(batch.session)
   if (!batch.sessionChanges && !batch.sessionCleared && !batch.configCurrents) return current
-  const next = { ...current, ...batch.sessionChanges }
+  const next = { ...current, ...batch.sessionChanges && exactFailures(batch.sessionChanges) }
   if (batch.configCurrents) next.configOptions = withCurrents(next.configOptions, batch.configCurrents)
   for (const key of batch.sessionCleared ?? []) delete next[key]
   return next
 }
+
+/**
+ * A request's or session's failure as this build reads it: one sent by another device's host for readers that may
+ * predate its kind (`olderReadable`) carries the kind every build reads, with the exact one beside it (`exactFailure`,
+ * and evidence's `exact`), which this build takes back where it knows it. Anything else is returned as it is.
+ */
+export function exactFailures<Value extends { failure?: ProviderFailureKind; failureEvidence?: ProviderFailureEvidence }>(value: Value): Value {
+  const exactKind = "exactFailure" in value ? PROVIDER_FAILURE_KINDS.find((kind) => kind === value.exactFailure) : undefined
+  const evidence = value.failureEvidence
+  const exactEvidence = evidence && "exact" in evidence && JSON.stringify(evidence) === SENT_REFUSAL_EVIDENCE ? { kind: "model-refusal" as const, source: "native-error" as const } : undefined
+  if (!exactKind && !exactEvidence) return value
+  return { ...value, ...exactKind && { failure: exactKind }, ...exactEvidence && { failureEvidence: exactEvidence } }
+}
+
+/** A native refusal's evidence as it's sent beside the reading every build knows (`storedFailureEvidence`). */
+const SENT_REFUSAL_EVIDENCE = JSON.stringify({ kind: "unknown", source: "provider-error", exact: { kind: "model-refusal", source: "native-error" } })
 
 /** Whether `batch` changed the session at all. */
 export function changesSession(batch: Pick<LiveBatch, "session" | "sessionChanges" | "sessionCleared" | "configCurrents">): boolean {
@@ -931,11 +947,11 @@ function canonicalJson<Value>(value: Value): string | undefined {
 
 /** The requests after `batch`, from those the receiver held; `undefined` when the batch changed none. */
 export function requestsAfter(current: readonly LiveRequest[] | undefined, batch: Pick<LiveBatch, "requests" | "requestChanges">): LiveRequest[] | undefined {
-  if (batch.requests) return batch.requests
+  if (batch.requests) return batch.requests.map(exactFailures)
   if (!batch.requestChanges) return undefined
   const next = [...(current ?? [])]
   const index = new Map(next.map((request, at) => [request.id, at]))
-  for (const request of batch.requestChanges) {
+  for (const request of batch.requestChanges.map(exactFailures)) {
     const at = index.get(request.id)
     if (at === undefined) next.push(request)
     else next[at] = request

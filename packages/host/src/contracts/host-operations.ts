@@ -18,6 +18,7 @@ import { hostCallReplay, type HostCallReplay } from "./host-call-policy.js"
 import { HOST_CLOSED_CODE, HOST_RESTARTING_CODE } from "./host-connection.js"
 import { RuntimeArgsSchema, decodeRuntimeArgs, runtimeArgs, runtimeFailureError, type RuntimeFailure } from "./runtime.js"
 import type { EncodedValue } from "./runtime-value.js"
+import { exactReadable } from "./provider-failure-evidence.js"
 
 /**
  * Every host call is a `runtime` operation named `host.<channel>`: the gateway forwards it to the
@@ -141,7 +142,8 @@ export function hostFailure(id: string, correlationId: string, reply: RuntimeFai
  * delivery state.
  */
 export function hostReplyValue(reply: Reply): EncodedValue {
-  if (reply.ok) return reply.value?.text
+  // A kind the answering host sent for older readers is taken back here, where every reader of this build decodes it.
+  if (reply.ok) return exactReadable(reply.value?.text)
   throw runtimeFailureError(toRuntimeFailure(reply))
 }
 
