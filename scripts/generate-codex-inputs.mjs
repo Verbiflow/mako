@@ -7,7 +7,7 @@ import { format } from "prettier"
 const repository = resolve(import.meta.dirname, "..")
 const output = join(repository, "packages/host/src/harnesses/codex/generated")
 const temporary = await mkdtemp(join(tmpdir(), "mako-codex-inputs-"))
-const executable = process.env.MAKO_CODEX_EXECUTABLE ?? "codex"
+const executable = process.env.MAKO_CODEX_EXECUTABLE ?? process.env.CODEX_EXECUTABLE ?? "codex"
 try {
   execFileSync(
     executable,
