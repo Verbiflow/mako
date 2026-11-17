@@ -53,10 +53,22 @@ async function check() {
       window.refreshFixture.forEach(s=>applyLiveSnapshot(s));
       acpStore.set({activeKey:window.refreshFixture[0].session.id});
       window.mako.liveSnapshot=async()=>{throw new RuntimeDisconnectedError(true)};
-      hostConnectionStore.set({kind:'disconnected',message:HOST_OUTAGE_MESSAGE});
+      hostConnectionStore.set({kind:'disconnected',message:HOST_OUTAGE_MESSAGE,since:Date.now()-20000,stage:'long'});
       for(let round=0;round<5;round++)await Promise.all(window.refreshFixture.map(s=>hydrateLive(s.session.id)));
     })()`)
-    await until("document.querySelector('[role=alert]')?.textContent.includes('Reconnecting')")
+    // Lost past the quiet time: one notice under the title bar, the pill gone, nothing to press.
+    await until("[...document.querySelectorAll('[role=status]')].some(e=>e.textContent.includes('Reconnecting to Mako'))")
+    assert.equal(await evaluate("document.querySelectorAll('[data-reconnecting]').length"),0,"never the pill beside the notice")
+    assert.equal(await evaluate("[...document.querySelectorAll('button')].some(b=>/reconnect|reload/i.test(b.textContent))"),false,"no reload button")
+    // Exactly one action on the notice: Try now, which asks the client to reconnect, never a reload.
+    const noticeButtons=`[...document.querySelectorAll('[data-notice]')].filter(e=>e.textContent.includes('Mako')).flatMap(e=>[...e.querySelectorAll('button')].map(b=>b.textContent.trim()))`
+    assert.deepEqual(await evaluate(noticeButtons),['Try now'],"one action while it keeps trying")
+    await evaluate(`(async()=>{window.reconnects=0;window.mako.reconnectHost=async()=>{window.reconnects++};document.querySelector('[data-notice] button').click()})()`)
+    await until("window.reconnects===1")
+    // Past the second bound, or no host to reach: one action, Restart Mako.
+    await evaluate(`(async()=>{const {hostConnectionStore}=await import('/src/state/host-connection.ts');hostConnectionStore.set({...hostConnectionStore.get(),stage:'restart'})})()`)
+    await until(`${noticeButtons}.join()==='Restart Mako'`)
+    await capture('restart-notice.png')
     assert.equal(await evaluate("document.querySelectorAll('[data-sonner-toast]').length"),0)
     await capture('one-connection-notice.png')
     await evaluate(`(async()=>{
@@ -66,7 +78,7 @@ async function check() {
       await Promise.all(window.refreshFixture.map(s=>hydrateLive(s.session.id)));
       hostConnectionStore.set({kind:'connected'});
     })()`)
-    await until("!document.querySelector('[role=alert]')")
+    await until("![...document.querySelectorAll('[role=status]')].some(e=>e.textContent.includes('Reconnecting to Mako'))")
     assert.equal(await evaluate("document.querySelectorAll('[data-sonner-toast]').length"),0)
     await capture('recovered-conversation.png')
     await evaluate(`(async()=>{

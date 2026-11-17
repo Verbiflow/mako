@@ -23,7 +23,7 @@
     "test:codex-archived-resume": "npm run build:electron && node scripts/test-codex-archived-resume.mjs",
     "test:desktop-crashes": "npm run build:electron && node scripts/test-desktop-crashes.mjs",
     "test:desktop-answers": "npm run build:electron && node scripts/test-desktop-answers.mjs",
-    "test:window-boot": "tsx --tsconfig tsconfig.app.json scripts/test-window-boot.ts",
+    "test:window-boot": "tsx --tsconfig tsconfig.app.json scripts/test-window-boot.ts && tsx --tsconfig tsconfig.app.json scripts/test-host-reconnect-stages.ts",
     "test:live-refresh": "tsx --tsconfig tsconfig.app.json scripts/test-live-refresh.ts && tsx scripts/test-runtime-read-failure.ts && node scripts/test-live-refresh-ui.mjs",
     "test:live-form": "tsx --tsconfig tsconfig.app.json scripts/test-live-form.ts",
     "test:live-history": "tsx --tsconfig tsconfig.app.json scripts/test-live-history-paging.ts && tsx scripts/test-cold-history.ts && tsx --tsconfig tsconfig.app.json scripts/test-live-view-recovery.ts && tsx --tsconfig tsconfig.app.json scripts/test-merged-history.ts && tsx scripts/test-thread-history.ts && tsx scripts/test-live-history-transport.ts --ui && node scripts/test-stream-originals-ui.mjs && node scripts/test-fork-opening-ui.mjs && node scripts/test-carried-history-ui.mjs",

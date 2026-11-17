@@ -76,6 +76,8 @@ const answers: ClientAnswers<string> = {
   "mako:request-notification-permission": () => "granted",
   "mako:open-preview-window": (page) => { seen.push(`${page} preview`) },
   "mako:quit-client": (page) => { seen.push(`${page} quit`) },
+  "mako:reconnect-host": (page) => { seen.push(`${page} reconnect`) },
+  "mako:restart-client": (page) => { seen.push(`${page} restart`) },
   "mako:surface-window": (page) => { seen.push(`${page} surface`) },
   "mako:appshot-shortcut": (page, shortcut) => {
     seen.push(`${page} shortcut ${shortcut ? shortcut.kind : "off"}`)
