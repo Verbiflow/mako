@@ -20,9 +20,9 @@ const PluginList = z.object({
 }).loose()
 const ServerList = z.object({ data: z.array(z.object({ name: z.string() }).loose()) }).loose()
 
-/** What Mako itself gave this launch: its plugin's folder, and the MCP servers it added, by name, each a process or not. */
+/** What Mako itself gave this launch: its plugin, by the file OpenCode names it by, and the MCP servers it added, by name, each a process or not. */
 export interface OpenCodeLaunch {
-  pluginFolder: string
+  pluginFiles: readonly string[]
   servers: readonly { name: string; process: boolean }[]
 }
 
@@ -40,7 +40,7 @@ export async function openCodePersonCodeRuns(ask: OpenCodeAsk, launch: OpenCodeL
     for (const plugin of plugins.data) {
       if (plugin.state.status !== "active") return true
       if (plugin.source.type === "builtin") continue
-      if (plugin.source.type === "local" && plugin.source.path.includes(launch.pluginFolder)) continue
+      if (plugin.source.type === "local" && launch.pluginFiles.includes(plugin.source.path)) continue
       return true
     }
     if (launch.servers.some((server) => server.process)) return true

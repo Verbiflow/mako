@@ -1,6 +1,6 @@
 import type { ProviderFailureEvidence } from "../../contracts/provider-failure-evidence.js"
 import { providerCall, failureEvidenceOf, providerExitEvidence } from "../../contracts/provider-failure.js"
-import { configureOpenCodeCalls, MAKO_OPENCODE_PLUGIN } from "./call-plugin.js"
+import { configureOpenCodeCalls, openCodePluginFiles } from "./call-plugin.js"
 import { openCodePersonCodeRuns } from "./person-code.js"
 import type { WriteHolds } from "../write-holds.js"
 import { realpath } from "node:fs/promises"
@@ -865,7 +865,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       await configureOpenCodePrimer(env, instructionText(layerOf(options)) ?? SHOW_MEDIA_LINE)
       const tools = options.conversationTools
       const gated = Boolean(options.nativeCalls && tools?.makoUrl)
-      await configureOpenCodeCalls(env, options.conversationId, gated && tools?.makoUrl ? { url: tools.makoUrl.replace(/\/mako$/, "/calls"), token: tools.token } : undefined)
+      const pluginFolder = await configureOpenCodeCalls(env, options.conversationId, gated && tools?.makoUrl ? { url: tools.makoUrl.replace(/\/mako$/, "/calls"), token: tools.token } : undefined)
       applyControlEnvironment(env, options.conversationTools?.control)
       applyThreadEnvironment(env, options.threadEnvironment)
       const installation = await trace.step("runtime-discovery", () => resolveOpenCodeInstallation(env, versions))
@@ -929,10 +929,11 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         ]))
         // This launch's writes are held only where Mako's plugin gates them and OpenCode says, its plugins active and
         // the launch's MCP servers added, that none of the person's code runs beside it.
-        if (dependencies.writeHolds && gated) dependencies.writeHolds.attend(options.conversationId, !await trace.step("settings", () => openCodePersonCodeRuns({
+        const pluginFiles = pluginFolder ? await openCodePluginFiles(pluginFolder) : undefined
+        if (dependencies.writeHolds && gated && pluginFiles) dependencies.writeHolds.attend(options.conversationId, !await trace.step("settings", () => openCodePersonCodeRuns({
           plugins: () => api.client.plugin.list({ location }),
           servers: () => api.client.mcp.list({ location }),
-        }, { pluginFolder: MAKO_OPENCODE_PLUGIN, servers: servers.map((server) => ({ name: server.name, process: server.config.type === "local" })) })))
+        }, { pluginFiles, servers: servers.map((server) => ({ name: server.name, process: server.config.type === "local" })) })))
         const modes = openCodeSessionModes(catalog.agents)
         const requested = options.modeId && modes.some(mode => mode.id === options.modeId) ? options.modeId : OPENCODE_DEFAULT_MODE
         const agent = openCodeAgentForMode(requested, launchAccess)
