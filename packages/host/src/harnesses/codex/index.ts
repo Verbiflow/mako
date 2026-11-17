@@ -14,6 +14,7 @@ import { codexSkillSource } from "./skills.js"
 import { resolveCodexExecutable } from "./executable.js"
 import { npmInstall } from "../update-source.js"
 import { CODEX_VERSIONS } from "./versions.js"
+import { codexPlatformPackages } from "./platform-packages.js"
 import { codexUsageHistory } from "./usage-history.js"
 import { codexPresentation } from "./presentation.js"
 
@@ -76,10 +77,11 @@ export const installCodex: ProviderModule = (host, context) => {
       provider: "codex",
       binary: (env) => resolveCodexExecutable(env),
       npmPackage: "@openai/codex",
+      npmCompanions: (version) => codexPlatformPackages(version),
       homebrew: { name: "codex" },
       versions: CODEX_VERSIONS,
       install: [
-        npmInstall("@openai/codex", CODEX_VERSIONS.tested),
+        npmInstall("@openai/codex", CODEX_VERSIONS.tested, codexPlatformPackages(CODEX_VERSIONS.tested)),
         { label: "Install with Homebrew", command: "brew", args: ["install", "codex"] },
       ],
     },

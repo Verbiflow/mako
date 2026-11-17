@@ -55,6 +55,15 @@ export interface RuntimeUpdateSource {
   npmPackage?: string
   /** The dist-tag, or the exact version, the registry answers as current. Default `latest`. */
   npmTag?: string
+  /**
+   * Packages installed beside `npmPackage` at `version`, by the same command,
+   * for a CLI whose binary ships in an optional dependency: npm skips an
+   * optional dependency whose download fails and still exits 0, which left
+   * Codex's `codex` saying "Missing optional dependency
+   * @openai/codex-linux-x64" (CI, 2026-11-17). Named here, a failed download
+   * fails the install. Empty where the machine has no such package.
+   */
+  npmCompanions?(version: string): string[]
   githubRelease?: string
   acceptsLatest?(installed: string, latest: string): boolean
   /** The Homebrew formula or cask, when the CLI ships one. Without it a brew install is shown, never upgraded. */
@@ -157,8 +166,8 @@ export function unpublishedWords(label: string, tested: string): string {
   return `${label} ${tested}, which this Mako is tested with, is no longer published. Update Mako, or move the pin.`
 }
 
-export function npmInstall(name: string, version = "latest"): HarnessUpdateCommand {
-  return { ...npmUpdate(`${name}@${version}`), label: "Install with npm" }
+export function npmInstall(name: string, version = "latest", companions: readonly string[] = []): HarnessUpdateCommand {
+  return { ...npmUpdate(`${name}@${version}`, undefined, companions), label: "Install with npm" }
 }
 
 /**
@@ -173,7 +182,7 @@ export function npmInstall(name: string, version = "latest"): HarnessUpdateComma
  * `prefix=/opt/homebrew` under nvm's node), and the update would then add a
  * second copy there and leave the one Mako runs as it was.
  */
-export function npmUpdate(name: string, prefix?: string): HarnessUpdateCommand {
+export function npmUpdate(name: string, prefix?: string, companions: readonly string[] = []): HarnessUpdateCommand {
   return {
     label: "Update with npm",
     command: "npm",
@@ -183,6 +192,7 @@ export function npmUpdate(name: string, prefix?: string): HarnessUpdateCommand {
       ...prefix === undefined ? [] : ["--prefix", prefix],
       `--allow-scripts=${name.slice(0, name.lastIndexOf("@"))}`,
       name,
+      ...companions,
     ],
   }
 }
