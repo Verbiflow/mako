@@ -21,6 +21,8 @@ export const SnapshotRecordSchema = WorkspaceSnapshotSchema.extend({
     z.literal("absent"),
     z.string().regex(/^[a-f0-9]{64}$/),
   ]),
+  /** Files a writer rewrote as this checkpoint read them, which it doesn't hold: a rewind leaves each as it is. */
+  unreadable: z.array(z.string()).max(32).optional(),
   retainUntil: z.number().finite().optional(),
   retiring: z.boolean().optional(),
 })

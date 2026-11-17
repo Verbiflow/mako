@@ -481,9 +481,11 @@ export class LiveCheckpoints {
     }
     resident.rewinding = true
     try {
-      await snapshots.restore(plan, () => {
+      const { keptAsIs } = await snapshots.restore(plan, () => {
         this.fork(id, plan.fork)
       })
+      // The window said which before the person chose (`RewindPreview.keptAsIs`); the log keeps it with the rewind.
+      if (keptAsIs.length) hostLog("rewind", "a rewind left files as they were", { files: keptAsIs.length })
       return this.host.require(command.id).snapshot
     } finally {
       resident.rewinding = false
