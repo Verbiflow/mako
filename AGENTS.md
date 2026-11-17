@@ -317,7 +317,9 @@ record (`<key>.stopping`), so the next host counts it and goes on with the stop.
 those same two rules, and finding it ends nothing. It's counted before any
 slot goes out, and a read of it that fails holds them all (`recoverSlots`). The person
 can fix a number per device instead of Auto (Settings › Fins), and
-`FinCapacity` reads the machine on the engine's 10 s tick. The cloud, a
+`FinCapacity` reads the machine on the engine's 10 s tick, which runs only
+while a Fin here holds a place or a start waits (`roomNeeded`, a `HostJobs`
+demand): an idle host reads no load and no process table. The cloud, a
 machine per Fin, is bounded by the plan and the daily spend ceiling only
 (`cloudCapacity`, `AgentsDeps.cloudLimits`), for when placement lands. Over
 every place the person's ceiling (`FIN_CEILING`, 64) is a safety net, and a
@@ -1899,6 +1901,10 @@ Exact external activity is also provider-owned. A process probe returns a typed
 store path; an error is never interpreted as zero active sessions. The activity
 engine polls each provider independently, prevents overlap, bounds stale data,
 and emits narrow activity events instead of resending or re-sorting the catalog.
+A harness with nothing open is looked at every 30 s (`idlePollMs`), not at its
+3–5 s cadence; a provider process Mako starts or sees end looks at once
+(`onProviderChildChange`, `nudge`), and one started in a terminal shows within
+the half minute.
 
 A probe sees a process, not a turn: Cursor's `cursor-agent` and another Mako
 host hold their stores open whether or not anything is running, so a reopened

@@ -4,7 +4,7 @@ import type { Entry } from "@mako/sessions/entries"
 import { SessionSettingsSchema, type SessionModel, type SessionSettings } from "@mako/sessions/settings"
 import { writeMessage } from "@mako/sessions/context-wire"
 import { findThreadReference, parseThreadToken, referenceItems, threadReferenceId, threadToken } from "@mako/sessions/thread-references"
-import type { HostJobs } from "../base/host-jobs.js"
+import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { branchSince, checkoutSince } from "../base/checkout-since.js"
 import { cutAccount } from "./cut-account.js"
@@ -751,6 +751,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly occupying = new Set<string>()
   private stopped = false
   private readonly stopRoomWatch: () => void
+  /** On while the room watch has something to read the room for (`roomNeeded`). */
+  private readonly roomDemand: JobDemand
   /** The pull requests Fins' latest reports say they wait on, read until each outcome wakes its Fin. */
   readonly pulls: PullWatch
   private readonly stopPullWatch: () => void
@@ -866,7 +868,10 @@ export class Agents implements AgentOperations, ConversationChildren {
       heard: (child) => this.quietChanged(child),
       ...(deps.quietMs !== undefined && { quietMs: deps.quietMs }),
     })
-    this.stopRoomWatch = deps.jobs.every(ROOM_WATCH_JOB, ROOM_EVERY_MS, () => this.observe(true))
+    // Only while there's something to read the room for: a Fin here holding a place, or a start waiting for one
+    // (`roomNeeded`). With neither, the job holds no timer, and an idle host reads no load and no process table.
+    this.roomDemand = deps.jobs.demand("Fins at work or starts waiting here")
+    this.stopRoomWatch = deps.jobs.every(ROOM_WATCH_JOB, ROOM_EVERY_MS, () => this.observe(true), { needs: [this.roomDemand] })
     const read = deps.readPull
     const watching = deps.jobs.demand("pull requests Fins wait on")
     this.pulls = new PullWatch({
@@ -5403,6 +5408,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     // lets go only when its harness or its process has actually stopped (`occupies`).
     const holds = this.occupies(edge)
     const held = this.occupying.has(edge.child)
+    // A Fin taking a place, here or elsewhere, is a reason to read the room: its next look turns it off once none is.
+    if (holds) this.roomDemand.set(true)
     if (holds) this.occupying.add(edge.child)
     else this.occupying.delete(edge.child)
     const released = held && !holds
@@ -6319,6 +6326,14 @@ export class Agents implements AgentOperations, ConversationChildren {
     return ceiling !== undefined && working >= ceiling ? `${working} of the person's ${ceiling} ${FIN_WORD}s at once across every place are at work` : undefined
   }
 
+  /**
+   * Whether the room watch has anything to read the room for: a Fin here at work (`atWork`), a start launching
+   * without its edge yet, or one queued for a place. A Fin taking a place turns it on (`childMoved`), as does a start.
+   */
+  private roomNeeded(atWork: boolean): boolean {
+    return atWork || this.unwritten(() => true) > 0 || (this.store()?.queuedSpawns().length ?? 0) > 0
+  }
+
   private workingEverywhere(): number {
     return (this.store()?.edges().all ?? []).filter((edge) => this.occupies(edge)).length + this.unwritten(() => true)
   }
@@ -6329,7 +6344,6 @@ export class Agents implements AgentOperations, ConversationChildren {
    */
   private async observe(sample = false): Promise<void> {
     if (sample) void this.askRooms()
-    if (!this.deps.observeCapacity) return
     const mix: Record<string, number> = {}
     const fins: FinAtWork[] = []
     for (const edge of this.store()?.edges().all ?? []) {
@@ -6340,7 +6354,12 @@ export class Agents implements AgentOperations, ConversationChildren {
       mix[harness] = (mix[harness] ?? 0) + 1
       if (at) fins.push(at)
     }
-    await this.deps.observeCapacity(Object.values(mix).reduce((sum, count) => sum + count, 0), mix, sample ? fins : undefined).catch((error: Error) =>
+    const working = Object.values(mix).reduce((sum, count) => sum + count, 0)
+    // The look that finds nothing at work and nothing waiting is the last until something is: its reading of none
+    // still goes to the capacity below, so the mix isn't left at the last Fin's.
+    this.roomDemand.set(this.roomNeeded(working > 0))
+    if (!this.deps.observeCapacity) return
+    await this.deps.observeCapacity(working, mix, sample ? fins : undefined).catch((error: Error) =>
       hostWarn("agents", "this device's capacity couldn't be read; it keeps its last", { error: errorMessage({ error }) }))
   }
 

@@ -61,6 +61,7 @@ import type {
 import { daemonIsForeign } from "./daemon-vintage.js"
 import { headlessNodeExecutable } from "../base/headless-node.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import { onProviderChildChange } from "../base/provider-children.js"
 import type { HostJobs } from "../base/host-jobs.js"
 import { threadFileWorkspace } from "../contracts/thread-file-workspace.js"
 import type { WorktreeOrigins } from "./worktree-origins.js"
@@ -551,6 +552,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   let catalogWorker: Worker | null = null
   let stopMonitoring: (() => void) | null = null
   let activityEngine: ProviderActivityEngine | null = null
+  let stopNudges: (() => void) | undefined
   const providerActivity = new Map<string, ProviderActivitySession[]>()
   let emittedActivity = new Map<string, ExternalThreadActivity>()
   /** Daemon mode's synchronous view: filled once, patched by events. */
@@ -741,9 +743,13 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       reconcileSoon()
     })
     activityEngine.start()
+    // A harness Mako starts or sees end: looked at now, not at its idle half minute.
+    stopNudges = onProviderChildChange(() => activityEngine?.nudge())
   }
 
   function stopProcessMonitor(): void {
+    stopNudges?.()
+    stopNudges = undefined
     activityEngine?.stop()
     activityEngine = null
     providerActivity.clear()
