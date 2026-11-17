@@ -473,8 +473,23 @@ export class LiveHibernation {
       const verdict = await dependencies.resumeVerdict?.(binding)
       // Inspection is awaited: Stop, close, or a different binding may have won while it read the record.
       if (resident.generation !== generation || resident.closing || activeBinding(resident)?.id !== binding.id) return
-      if (!this.access.moves.executes(resident) || this.access.moves.ownerCheck(resident) !== undefined)
+      if (!this.access.moves.executes(resident))
         throw new Error("Execution ownership changed while preparing native recovery.")
+      // This Mac began asking its account who runs the Session while the record was read (back after being away): nothing
+      // runs until it's heard, as dispatch waits (`holdForOwner`). The session goes back to sleep with its queue, each
+      // message saying it waits for that, and `ownerChecked` wakes it again once it's heard.
+      if (this.access.moves.ownerCheck(resident) !== undefined) {
+        resident.driver = null
+        resident.opening = false
+        const since = Date.now()
+        resident.snapshot = {
+          ...resident.snapshot,
+          session: { ...resident.snapshot.session, connection: "hibernated", status: "ready" },
+          requests: resident.snapshot.requests.map((request) => (request.status === "queued" && !request.ownerCheck ? { ...request, ownerCheck: { since } } : request)),
+        }
+        this.access.flush(resident)
+        return
+      }
       if (verdict?.kind === "closed" || (verdict?.kind === "unavailable" && verdict.lost === true)) {
         // No process was opened. A confirmed closed/lost record goes on through the session's own reconnect transfer, on
         // the same harness and account. Merely unreadable records and unverified owners still refuse below.

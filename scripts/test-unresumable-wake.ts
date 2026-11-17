@@ -20,7 +20,7 @@ async function until(test: () => boolean, reason: string) {
   }
 }
 
-async function check(provider: string, verdict: ResumeVerdict, scenario?: "stop" | "prewarm" | "failed-start" | "close" | "restart") {
+async function check(provider: string, verdict: ResumeVerdict, scenario?: "stop" | "prewarm" | "failed-start" | "close" | "restart" | "owner-check") {
   const root = mkdtempSync(join(tmpdir(), "mako-unresumable-wake-"))
   const id = randomUUID()
   const first = randomUUID()
@@ -30,6 +30,8 @@ async function check(provider: string, verdict: ResumeVerdict, scenario?: "stop"
   const sessions = new Map<string, LiveSessionState>()
   const emits = new Map<string, NonNullable<Parameters<ProviderLiveDriver["start"]>[1]["emit"]>>()
   let inspected = false
+  /** Since when this Mac asks its account who runs the Session (`ownerCheck`), or undefined when it isn't asking. */
+  let checking: number | undefined
   let inspections = 0
   let release!: () => void
   const wait = new Promise<void>((resolve) => { release = resolve })
@@ -69,6 +71,7 @@ async function check(provider: string, verdict: ResumeVerdict, scenario?: "stop"
   const dependencies: ConstructorParameters<typeof LiveConversations>[0] = {
     root: join(root, "journals"), appPath: root, driver: () => driver, emit: () => {},
     history: async (path) => ({ ref: { harness: provider, nativeId: "old-native", path, cwd: root, title: "Saved conversation", settings: { model: "fixture-model" } }, entries: [{ type: "user", id: "old-user", text: "Remember KESTREL" }, { type: "text", id: "old-answer", text: "Keep the parser recursive" }], start: 0, total: 2, hasEarlier: false }),
+    ownerCheck: () => checking,
     resumeVerdict: async (binding) => { inspected = true; inspections += 1; await wait; return binding.nativeId === "old-native" ? verdict : { kind: "resumable", record: "same" } },
   }
   let owner = new LiveConversations(dependencies)
@@ -88,9 +91,20 @@ async function check(provider: string, verdict: ResumeVerdict, scenario?: "stop"
     await until(() => inspected, "the queued reply did not inspect its saved session")
     owner.submit(id, second, "Then explain its grammar")
     if (scenario === "stop") await owner.cancel(id)
+    // This Mac begins asking its account who runs the Session while the record is read: the wake waits, as dispatch does.
+    if (scenario === "owner-check") checking = Date.now()
     const closing = scenario === "close" ? owner.close(id) : undefined
     release()
     await closing
+    if (scenario === "owner-check") {
+      await until(() => owner.snapshot(id)?.requests.every((row) => row.status === "queued" && row.ownerCheck !== undefined) === true && owner.snapshot(id)?.session.status === "ready", "the wake held its queue for the account's word")
+      assert.deepEqual(starts, [], "nothing runs while the account is asked")
+      assert.equal(owner.snapshot(id)?.session.connection, "hibernated", "the session goes back to sleep with its queue")
+      assert.ok(owner.snapshot(id)?.requests.every((row) => !row.error), "and nothing failed")
+      // The account's word: the session wakes again, and the queued replies go on as for any closed or lost record.
+      checking = undefined
+      owner.moves.ownerChecked()
+    }
     const safe = verdict.kind === "closed" || (verdict.kind === "unavailable" && verdict.lost === true)
     if (scenario === "failed-start") {
       await until(() => owner.snapshot(id)?.control?.transfers.some((move) => move.state.kind === "failed") === true, "a failed replacement did not settle")
@@ -151,6 +165,7 @@ for (const harness of registeredHarnessIds()) {
 }
 await check("codex", { kind: "unavailable", reason: "Whether another process has this session open could not be checked." })
 await check("codex", { kind: "held", by: "another process" })
-for (const scenario of ["stop", "prewarm", "failed-start", "close", "restart"] as const)
+for (const scenario of ["stop", "prewarm", "failed-start", "close", "restart", "owner-check"] as const)
   await check("codex", { kind: "closed", reason: "This native record cannot reopen." }, scenario)
-console.log("PASS: closed/lost wakes carry the full transcript and original queue once; unknown ownership, known holders and Stop start nothing")
+await check("codex", { kind: "unavailable", lost: true, reason: "This native record no longer exists." }, "owner-check")
+console.log("PASS: closed/lost wakes carry the full transcript and original queue once; unknown ownership, known holders and Stop start nothing; an owner check begun mid-inspection holds the queue, then it delivers")
