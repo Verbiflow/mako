@@ -54,7 +54,8 @@ import { followHostLoadOutputs } from "./lib/host-load-output.ts"
  * `--home-from <home>` runs on APFS clones of a real home's harness stores (macOS, read-only to the original).
  * `--send` times each message from the call until its harness asks the model, reporting p50, p95, p99 and every
  * sample (`sendSamples`, and per send `sendDetails`: its request, when the host accepted it and when the model heard
- * it); `--harness claude` sends through a sealed Claude Code instead of Codex, while the Fins stay on Codex.
+ * it); `--harness claude` or `--harness opencode` sends through a sealed Claude Code or OpenCode instead of Codex,
+ * while the Fins stay on Codex.
  *
  *   npm run bench:host-load [-- --scale today|ci] [--seconds 60] [--warmup 20] [--host <mako-host.js>] [--cpu-prof <dir>] [--out <file>] [--keep]
  */
@@ -94,7 +95,7 @@ const { values } = parseArgs({
   },
 })
 /** The harness the timed sends go through (`--harness`). */
-const harness = z.enum(["codex", "claude"]).parse(values.harness)
+const harness = z.enum(["codex", "claude", "opencode"]).parse(values.harness)
 const say = (line: string) => process.stderr.write(`${line}\n`)
 const delay = (ms: number) => new Promise((done) => setTimeout(done, ms))
 const SCALES = {
@@ -260,7 +261,12 @@ if (model) {
   host = spawn("nice", ["-n", "5", process.execPath, ...nodeArgs, ...(profileDir ? ["--cpu-prof", "--cpu-prof-dir", profileDir, "--cpu-prof-interval", "1000"] : []), hostScript], {
     // Claude Code's config folder named outright: its login, and so its keychain item, are the world's own
     // (`Claude Code-credentials-<hash of the folder>`), never the person's.
-    env: { ...env, HOME: world.home, TMPDIR: world.temporary, MAKO_DATA_ROOT: world.dataRoot, ...harness === "claude" && { CLAUDE_CONFIG_DIR: join(world.home, ".claude") }, MAKO_WEB_SOCKET: socket, MAKO_PROD: "1", MAKO_TELEMETRY: "off", ...finCount > 0 && { MAKO_FIN_SLOTS: "8" }, ...cloud && { MAKO_CLOUD_URL: cloud.url } },
+    env: { ...env, HOME: world.home, TMPDIR: world.temporary, MAKO_DATA_ROOT: world.dataRoot, ...harness === "claude" && { CLAUDE_CONFIG_DIR: join(world.home, ".claude") },
+      // A sealed OpenCode (`--harness opencode`): Anthropic's models only, through the stand-in, as `pointAt` points it.
+      ...harness === "opencode" && model && {
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({ enabled_providers: ["anthropic"], provider: { anthropic: { options: { baseURL: `${model.url}/v1`, apiKey: "mako-host-load" } } } }),
+        OPENCODE_DISABLE_MODELS_FETCH: "1", OPENCODE_DISABLE_AUTOUPDATE: "1",
+      }, MAKO_WEB_SOCKET: socket, MAKO_PROD: "1", MAKO_TELEMETRY: "off", ...finCount > 0 && { MAKO_FIN_SLOTS: "8" }, ...cloud && { MAKO_CLOUD_URL: cloud.url } },
     stdio: ["ignore", values.gc ? "pipe" : "ignore", "inherit"],
     ...profileDir && values["node-arg"]?.some((arg) => arg.startsWith("--heap-prof")) && { cwd: profileDir },
     ...snapshots && { cwd: snapshots },
