@@ -397,10 +397,22 @@ try {
       await until(() => expire !== undefined)
       assert.equal(sent.length, sentBefore + 1, "the next turn still waits for its own before-point")
       expire!()
-      await until(() => sent.length === sentBefore + 2)
+      await until(() => sent.length === sentBefore + 2 && owner.snapshot(conversation)?.requests[1].nativeRun !== undefined)
+      // The next turn runs while the previous closing capture still reads the live files: what the person sends into
+      // it waits for that read (the composer queues it), and goes as a steer once the read is fixed.
+      const steer = randomUUID(), words = "and keep the old parser"
+      owner.submit(conversation, steer, words)
+      const steerInto = () => owner.act(conversation, { kind: "steer-queued", id: randomUUID(), requestId: next, queuedRequestId: steer, text: words, attachments: [] })
+      const steeredBefore = steered.length
+      await assert.rejects(steerInto(), /finish its pending operation/, "a steer waits while a capture still reads the live files")
+      assert.equal(steered.length, steeredBefore, "the agent hears nothing while the read runs")
       writeFileSync(file, "the next agent wrote while the previous closing read was held")
       releaseRead.resolve()
-      await until(() => owner.snapshot(conversation)?.requests[0].snapshots?.after !== undefined)
+      // Both reads are fixed: the closing one, and the next turn's own late before-capture queued behind it.
+      await until(() => owner.snapshot(conversation)?.requests[0].snapshots?.after !== undefined && owner.snapshot(conversation)?.requests[1].snapshots?.before !== undefined && /after the turn went/.test(JSON.stringify(owner.snapshot(conversation)?.requests[1].snapshots?.before)))
+      const receipt = await steerInto()
+      assert.equal(receipt.state.kind, "accepted", "once the read is fixed, the steer goes into the running turn")
+      assert.equal(steered.at(-1), words)
       const after = owner.snapshot(conversation)?.requests[0].snapshots?.after
       assert.ok(after?.kind === "unavailable" && /next turn/.test(after.reason), "a late closing read cannot publish the next agent's edits as the previous turn's after-point")
       finish(conversation, "next answer")
