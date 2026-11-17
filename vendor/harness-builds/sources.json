@@ -1,0 +1,36 @@
+{
+  "builds": [
+    {
+      "harness": "devin",
+      "version": "3000.13.4",
+      "target": "x86_64-unknown-linux",
+      "archive": "devin-3000.13.4-x86_64-unknown-linux.tar.gz",
+      "url": "https://static.devin.ai/cli/3000.13.4/devin-3000.13.4-x86_64-unknown-linux.tar.gz",
+      "sha256": "e1bd618ec61f4d21069335162cf6d854d8cd2e662f2395efb06edb5796ed16e9",
+      "unpack": ".local/share/devin/cli/_versions/3000.13.4",
+      "links": {
+        ".local/share/devin/cli/_versions/current": "3000.13.4",
+        ".local/bin/devin": "~/.local/share/devin/cli/_versions/current/bin/devin"
+      },
+      "files": {
+        ".local/share/devin/cli/_versions/3000.13.4/distribution": "curl-bash\n"
+      }
+    },
+    {
+      "harness": "devin",
+      "version": "3000.13.4",
+      "target": "aarch64-unknown-linux",
+      "archive": "devin-3000.13.4-aarch64-unknown-linux.tar.gz",
+      "url": "https://static.devin.ai/cli/3000.13.4/devin-3000.13.4-aarch64-unknown-linux.tar.gz",
+      "sha256": "725a7b1eb6d2a57dd99d6ab6e632330dc639f2382776241cf75a6c0b3e04d337",
+      "unpack": ".local/share/devin/cli/_versions/3000.13.4",
+      "links": {
+        ".local/share/devin/cli/_versions/current": "3000.13.4",
+        ".local/bin/devin": "~/.local/share/devin/cli/_versions/current/bin/devin"
+      },
+      "files": {
+        ".local/share/devin/cli/_versions/3000.13.4/distribution": "curl-bash\n"
+      }
+    }
+  ]
+}

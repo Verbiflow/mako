@@ -67,6 +67,7 @@ __pycache__/
 vendor/control-media/*-*/
 vendor/control-media/.build-*/
 vendor/control-media/downloads/
+vendor/harness-builds/downloads/
 
 # Synthetic Local Control acceptance output, collected locally or by CI.
 /evidence/

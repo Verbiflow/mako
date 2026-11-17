@@ -22,9 +22,25 @@ export const DEVIN_VERSIONS: HarnessVersions = {
     on: "2026-11-17",
     how: "the version every record names: the vocabulary, native-tools/devin-3000.13.4.json, the decode pairs and devin-concepts.json",
   },
+  // Its setup script's layout: the build under `_versions`, `current` and `~/.local/bin/devin` linked to it, and the
+  // marker its updater reads for where it came from.
+  kept: {
+    targets: ["x86_64-unknown-linux", "aarch64-unknown-linux"],
+    unpack: ".local/share/devin/cli/_versions/{version}",
+    links: {
+      ".local/share/devin/cli/_versions/current": "{version}",
+      ".local/bin/devin": "~/.local/share/devin/cli/_versions/current/bin/devin",
+    },
+    files: { ".local/share/devin/cli/_versions/{version}/distribution": "curl-bash\n" },
+  },
 }
 
 /** Devin's setup script for one version; the build system pins `PINNED_VERSION` in each. */
 export function devinSetup(version: string): HarnessUpdateCommand {
   return scriptInstall(`https://static.devin.ai/cli/${version}/setup.sh`)
+}
+
+/** Devin's unversioned setup script, which installs its newest build (`PINNED_VERSION` empty). */
+export function devinNewest(): HarnessUpdateCommand {
+  return scriptInstall("https://static.devin.ai/cli/setup.sh")
 }
