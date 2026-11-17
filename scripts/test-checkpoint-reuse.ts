@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { performance } from "node:perf_hooks"
-import { Git } from "@mako/git"
+import { Git, type RunOptions } from "@mako/git"
 import type { HistoryMark } from "@mako/host/contracts/watcher-child"
 import type { FileHistory, HistoryOptions } from "@mako/host/workspaces/watch-backend"
 import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
@@ -49,7 +49,15 @@ const edit = (path: string, content: string, told = true) => {
   if (told) heard.push({ at: ++count, path: join(cwd, path) })
 }
 
-const store = new WorkspaceSnapshots(new Git(), join(root, "store"))
+// Every Git command the store runs, to tell a capture from the last checkpoint (it lists nothing whole) from a whole one.
+const commands: (readonly string[])[] = []
+const runner = new Git()
+const run = runner.run.bind(runner)
+runner.run = (options: RunOptions) => {
+  commands.push(options.args)
+  return run(options)
+}
+const store = new WorkspaceSnapshots(runner, join(root, "store"))
 store.followHistory(history)
 const turn = async () => {
   const id = randomUUID()
@@ -176,7 +184,27 @@ try {
   const savedAt = performance.now() - began
   assert.equal(savedWhenTold, savedBefore, "the turn was told before its checkpoint was saved")
   assert.equal(treeOf(join(root, "store"), startedOn.id), expected, "the checkpoint is the workspace as the turn started, the agent's writes left out")
-  await store.endRun(racing)
+  // Its end follows on from its start too: only what the watcher heard change during the turn is read, and the
+  // checkpoint is tree for tree a whole capture of the workspace as the turn ended.
+  commands.length = 0
+  // As the host ends a turn: told once the closing files are read (`LiveCheckpoints.settle`).
+  const ended = await store.endRun(racing, () => {})
+  const listedWhole = commands.some((args) => args.includes("--others"))
+  const added = commands.filter((args) => args.includes("add"))
+  const atEnd = new WorkspaceSnapshots(new Git(), join(root, "whole-end"))
+  const expectedEnd = treeOf(join(root, "whole-end"), (await atEnd.capture(cwd)).id)
+  atEnd.close()
+  assert.equal(listedWhole, false, "a turn's end alone in its workspace reads only what changed since its start")
+  assert.ok(added.length === 1 && added[0]!.includes("--pathspec-from-file=-"), "its add takes the paths the watcher heard, not the whole working tree")
+  assert.equal(treeOf(join(root, "store"), ended.id), expectedEnd, "the end checkpoint is the workspace as the turn ended")
+  // A turn that changed nothing still has its own end, read from its start with nothing to add.
+  const still = randomUUID()
+  const stillStart = await store.beginRun(still, cwd)
+  commands.length = 0
+  const stillEnd = await store.endRun(still, () => {})
+  assert.notEqual(stillEnd.id, stillStart.id, "a quiet turn's end is its own checkpoint")
+  assert.equal(commands.some((args) => args.includes("add") || args.includes("--others")), false, "and costs no read of the working tree")
+  assert.equal(treeOf(join(root, "store"), stillEnd.id), treeOf(join(root, "store"), stillStart.id), "holding what its start held")
   console.log(JSON.stringify({ toldMs: Math.round(toldAt), savedMs: Math.round(savedAt) }))
 
   // Reused, the wait is the history's read and two Git reads, not a capture.

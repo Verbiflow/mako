@@ -389,7 +389,9 @@ export class WorkspaceSnapshots {
       const workspace = await this.workspace(cwd)
       // Only a workspace no other run shares: a checkpoint names the runs that shared it, and reusing one would name others.
       const unshared = reuse && !shared?.size
-      if (workspace.repositories.length === 1 && workspace.repositories[0] === workspace.scope) return await this.captureRepository(workspace.scope, shared, unshared, frozen, lease)
+      // A turn's own checkpoint, before or after it, alone in the workspace: it may follow on from the last one.
+      const follows = Boolean(owned) && !shared?.size
+      if (workspace.repositories.length === 1 && workspace.repositories[0] === workspace.scope) return await this.captureRepository(workspace.scope, shared, unshared, frozen, lease, follows)
       // Each repository is its own lock: they're taken side by side, and the workspace is held once all of them are.
       let held = 0
       const each = workspace.repositories.map((repository) => {
@@ -398,7 +400,7 @@ export class WorkspaceSnapshots {
           if (once) return
           once = true
           if (++held === workspace.repositories.length) frozen?.()
-        }, lease)
+        }, lease, follows)
       })
       const captured = await Promise.all(each)
       const parts: GroupRecord["parts"] = []
@@ -421,7 +423,11 @@ export class WorkspaceSnapshots {
    * `frozen`, when given, is called once the checkpoint holds the workspace as the turn starts, which may be before it's
    * saved (`Increment`), and always by its end: the turn may go to its agent then.
    */
-  private async captureRepository(cwd: string, shared?: ReadonlySet<string>, reuse = false, frozen?: () => void, owned?: SnapshotLease): Promise<WorkspaceSnapshot> {
+  /**
+   * `follows`: a turn's own checkpoint may be read from the last one, taking only what the watcher says changed since
+   * (`sinceLast`); one at a turn's end is its own checkpoint even when nothing changed, so it isn't reused.
+   */
+  private async captureRepository(cwd: string, shared?: ReadonlySet<string>, reuse = false, frozen?: () => void, owned?: SnapshotLease, follows = reuse): Promise<WorkspaceSnapshot> {
     const scope = await this.scope(cwd)
     const pins = new Set<string>()
     const history = this.history
@@ -439,13 +445,13 @@ export class WorkspaceSnapshots {
         // Marked before anything is read: a change while it's taken is after the mark, so the next turn reads it again.
         // One shared with other runs names them, which a later turn alone there shouldn't say: it's never reused.
         const mark = await marking
-        const last = reuse ? await this.sinceLast(scope, pins) : undefined
-        if (last?.kind === "same") {
+        const last = reuse || follows ? await this.sinceLast(scope, pins) : undefined
+        if (last?.kind === "same" && reuse) {
           if (owned && !owned.released) this.pin(owned.checkpoints, last.record.id)
           return this.summary(last.record)
         }
         const [staged, excludes] = mark ? await Promise.all([this.stagedDigest(scope), this.excludesStamp(scope)]) : []
-        const increment = last?.kind === "changed" && frozen ? { prev: last.record, paths: last.paths } : undefined
+        const increment = last && frozen ? { prev: last.record, paths: last.kind === "changed" ? last.paths : [] } : undefined
         const record = await this.captureLocked(scope, gitDir, pins, "retained", shared, increment, {
           copied,
           fixed,
