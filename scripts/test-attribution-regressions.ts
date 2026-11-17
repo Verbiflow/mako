@@ -1450,8 +1450,8 @@ test("a script whose text holds the lines it wrote names the change by its conte
 })
 
 test("command lines that only read, and ones that may write", () => {
-  const reads = ["git status --short", "git log --oneline -5 && git diff HEAD~1 --stat", "rg -n foo src | head -20", "ls -la; pwd", "cat package.json | jq .scripts", "sed -n 1,40p src/a.ts", "find . -name '*.ts' -newer x", "LC_ALL=C sort file.txt | uniq -c", "git branch --show-current", "cd packages/host && rg -l attribute 2>/dev/null", "git stash list", "git stash show -p stash@{0}"]
-  const writes = ["git stash", "git checkout -- src/a.ts", "sed -i '' 's/a/b/' x.ts", "echo hi > notes.md", "cat a >> b", "find . -name '*.orig' -delete", "npm test", "python3 - <<'EOF'\nprint(1)\nEOF", "rg foo | xargs sed -i 's/a/b/'", "cat $(git ls-files)", "prettier --write .", "git branch -D old", "awk '{print > \"out\"}' in", "sort -o out in"]
+  const reads = ["git status --short", "git log --oneline -5 && git diff HEAD~1 --stat", "rg -n foo src | head -20", "ls -la; pwd", "cat package.json | jq .scripts", "sed -n 1,40p src/a.ts", "find . -name '*.ts' -newer x", "LC_ALL=C sort file.txt | uniq -c", "git branch --show-current", "cd packages/host && rg -l attribute 2>/dev/null", "git stash list", "git stash show -p stash@{0}", "uniq -c counts.txt", "xxd image.png", "tree -L 2", "sed -n '/where/p' notes.md", "git diff --stat"]
+  const writes = ["git stash", "git checkout -- src/a.ts", "sed -i '' 's/a/b/' x.ts", "echo hi > notes.md", "cat a >> b", "find . -name '*.orig' -delete", "npm test", "python3 - <<'EOF'\nprint(1)\nEOF", "rg foo | xargs sed -i 's/a/b/'", "cat $(git ls-files)", "prettier --write .", "git branch -D old", "awk '{print > \"out\"}' in", "sort -o out in", "uniq a b", "xxd a b", "tree -o out", "git diff --output=patch.diff", "git log --output=log.txt", "sed 'w out' in", "sed -n '/x/w out' in", "sed 's/a/b/w out' in"]
   for (const command of reads) assert.ok(readOnlyCommand(command), `reads: ${command}`)
   for (const command of writes) assert.ok(!readOnlyCommand(command), `may write: ${command}`)
 })

@@ -24,7 +24,15 @@ const WRITES_WITH = new Map<string, RegExp>([
   ["awk", /system\s*\(|print\s*>|\|\s*getline/],
   ["sort", /(^|\s)(-o|--output)\b/],
   ["jq", /(^|\s)(-i|--in-place)\b/],
+  ["tree", /(^|\s)-o\b/],
 ])
+/**
+ * sed's own writes from its script: the `w` command (`w out`, `/x/w out`) and the `w` flag of `s` (`s/a/b/w out`),
+ * which name a file to write after a space (so `/where/` is only a pattern); `W` writes too.
+ */
+const SED_WRITES = /(^|[\s;{'"/0-9$])[wW]\s+[^\s;'"}]/
+/** Readers whose second operand is a file they write (`uniq in out`, `xxd in out`). */
+const WRITES_SECOND_OPERAND = new Set(["uniq", "xxd"])
 /** Git subcommands that only read. */
 const GIT_READERS = new Set(["status", "log", "diff", "show", "rev-parse", "ls-files", "ls-tree", "blame", "grep", "describe", "cat-file", "shortlog", "rev-list", "merge-base", "name-rev", "for-each-ref", "show-ref", "whatchanged"])
 /** Redirection into anything but the void. */
@@ -52,6 +60,8 @@ function readOnlyPart(part: string): boolean {
   if (!program) return true
   const name = program.split("/").at(-1)!
   if (name === "git") {
+    // `--output=<file>` (`git diff`, `git log`, `git format-patch`) writes the file, whatever the subcommand.
+    if (rest.some((word) => word.startsWith("--output"))) return false
     const sub = rest.find((word) => !word.startsWith("-") && !/^(-C|-c)$/.test(word))
     // A bare `git stash` pushes; only its `list` and `show` read.
     if (sub === "stash") return rest.some((word) => word === "list" || word === "show") && rest.every((word) => word === sub || word === "list" || word === "show" || word.startsWith("-") || /^stash@\{\d+\}$/.test(word))
@@ -59,6 +69,9 @@ function readOnlyPart(part: string): boolean {
     return sub !== undefined && GIT_READERS.has(sub)
   }
   if (!READERS.has(name)) return false
+  if (name === "sed" && SED_WRITES.test(rest.join(" "))) return false
+  // A second operand may be the file it writes; an option's value counts too, which only errs toward writing.
+  if (WRITES_SECOND_OPERAND.has(name) && rest.filter((word) => !word.startsWith("-")).length >= 2) return false
   const writes = WRITES_WITH.get(name)
   return !writes || !writes.test(rest.join(" "))
 }
