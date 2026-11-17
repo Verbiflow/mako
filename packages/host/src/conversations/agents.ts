@@ -1765,8 +1765,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     // A cloud start launches its folder's committed, pushed source, under one launch digest its every repeat sends.
     let cloudAway: CloudAway | undefined
     if (cloud && target.kind === "cloud") {
-      const made = await this.cloudAway(op, apex, asked, tier, harness, target.thread, cwd!).catch((error) => ({ refused: errorMessage({ error }) }))
-      if ("refused" in made) return this.refuse(op, "place-unavailable", `A ${FIN_WORD} in the cloud starts from this project's committed, pushed source, and ${cwd} isn't one: ${made.refused}. Commit and push it, or leave place out to start it here.`)
+      // Its source is its folder's: an Apex with none has nothing to start from, and is told so rather than of an "undefined".
+      if (!cwd) return this.refuse(op, "place-unavailable", `A ${FIN_WORD} in the cloud starts from its project's committed, pushed source, and this Thread has no folder to take it from. Pass cwd, or leave place out to start it here.`)
+      const folder = cwd
+      const made = await this.cloudAway(op, apex, asked, tier, harness, target.thread, folder).catch((error) => ({ refused: errorMessage({ error }) }))
+      if ("refused" in made) return this.refuse(op, "place-unavailable", `A ${FIN_WORD} in the cloud starts from this project's committed, pushed source, and ${folder} isn't one: ${made.refused}. Commit and push it, or leave place out to start it here.`)
       cloudAway = made
     }
     const record: QueuedStart = { lead: apex, input: asked, tier, harness, away: { target, remote, ...(cloudAway && { cloud: cloudAway }) }, ...(why && { why }), ...(after.length && { after }) }
