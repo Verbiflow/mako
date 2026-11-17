@@ -175,7 +175,8 @@ assert.equal(routeNativeTool(inMain, { tool: "mcp__linear__save_issue", server: 
   assert.deepEqual(codexCallsConfig("c", undefined), {}, "no gate, no hooks")
   const Config = z.object({ hooks: z.object({ PreToolUse: z.array(z.object({ matcher: z.string(), hooks: z.array(z.record(z.string(), z.json())) })), state: z.record(z.string(), z.object({ trusted_hash: z.string() })) }) })
   const config = Config.parse(codexCallsConfig("c", { url: "http://127.0.0.1:4100/calls/before", token: "t0k" }))
-  assert.deepEqual(config.hooks.PreToolUse.map((group) => group.matcher), ["Bash", "^mcp__(node_repl|cua_repl)__js(_reset)?$"])
+  // Shell and file edits in one exact name list, so a turn's checkpoint holds an edit as it does a command.
+  assert.deepEqual(config.hooks.PreToolUse.map((group) => group.matcher), ["Bash|apply_patch", "^mcp__.*$"])
   assert.deepEqual(Object.keys(config.hooks.state), ["/<session-flags>/config.toml:pre_tool_use:0:0", "/<session-flags>/config.toml:pre_tool_use:1:0"])
   config.hooks.PreToolUse.forEach((group, index) => {
     const handler = group.hooks[0]!

@@ -453,7 +453,15 @@ export interface ProviderLiveDriver extends ProviderCapability {
    * goes at once, and its first write waits for the turn's checkpoint to hold
    * the workspace (`WriteHolds`). Absent, the message waits for it instead.
    */
-  firstWrite?: { via: string }
+  firstWrite?: {
+    via: string
+    /**
+     * Where the agent can write into a command left running from an earlier turn with no hook between (Codex's
+     * `write_stdin`), why: a turn holds no writes while one of the conversation's commands runs, and its message
+     * waits for the checkpoint instead.
+     */
+    openCommands?: string
+  }
   /** Native principal evidence, separately from configured account selection. */
   nativeIdentity: NativeIdentityCapability
   nativeExclusion: NativeExclusionCapability

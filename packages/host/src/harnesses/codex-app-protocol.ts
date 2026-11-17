@@ -502,6 +502,8 @@ export function rpcRequest(
           : { valid: false, message: "Invalid goal clear response" }
       })
     case "config/read":
+    case "hooks/list":
+    case "plugin/installed":
     case "thread/inject_items":
       return beginRpcRequest(context, method, params, parseObjectResult)
     case "thread/unsubscribe":

@@ -16,8 +16,15 @@ export interface CodexCallGate {
   token: string
 }
 
-/** The calls Mako's hook is registered for: Codex's shell (`Bash` covers `exec_command`, direct and in code mode) and its bundled browser and computer servers. */
-const CODEX_GATED = ["Bash", "^mcp__(node_repl|cua_repl)__js(_reset)?$"] as const
+/**
+ * The calls Mako's hook is registered for: Codex's shell (`Bash` covers `exec_command`, direct and in code mode), its
+ * file edits (`apply_patch`), and every MCP tool (`mcp__<server>__<tool>`: its bundled browser and computer servers,
+ * Mako's own and the person's, any of which may write), so a turn's checkpoint can hold each; which wait is the
+ * gate's (`hookMayWrite`). A name list of letters, digits, `_` and `|` matches exactly in Codex's matcher; the other is
+ * a pattern. `write_stdin` into a running command runs no hook at all (Codex: it continues a command that already
+ * ran its hook as `Bash`), so a turn holds no writes while one runs (`firstWrite.openCommands`).
+ */
+const CODEX_GATED = ["Bash|apply_patch", "^mcp__.*$"] as const
 
 /** Where Codex files the trust of a hook in the session's own config layer, as 0.166.0 resolves its synthetic path on macOS and Linux. */
 const SESSION_FLAGS = "/<session-flags>/config.toml"

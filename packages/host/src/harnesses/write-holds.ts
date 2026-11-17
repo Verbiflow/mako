@@ -53,22 +53,28 @@ export class WriteHolds {
    * Before a tool that may write runs: waits while the binding's turn holds its writes, and says the write went
    * early if the checkpoint still didn't hold the workspace when it's let go. A tool cancelled meanwhile (`signal`)
    * goes at once and wrote nothing. A binding with no hold goes at once.
+   *
+   * `withinMs`: where the harness lets the tool go on its own past a time (a command hook's timeout), Mako lets it go
+   * first, so the write it then makes is counted as early rather than missed.
    */
-  async beforeWrite(binding: string, signal?: AbortSignal): Promise<void> {
+  async beforeWrite(binding: string, signal?: AbortSignal, withinMs?: number): Promise<void> {
     const hold = this.holds.get(binding)
     if (!hold || hold.frozen()) return
     if (signal?.aborted) return
     let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let cancel = () => {}
     await new Promise<void>((resolve) => {
-      const cancel = () => {
+      cancel = () => {
         cancelled = true
         resolve()
       }
       signal?.addEventListener("abort", cancel, { once: true })
-      void hold.until.then(() => {
-        signal?.removeEventListener("abort", cancel)
-        resolve()
-      })
+      if (withinMs !== undefined) timer = setTimeout(resolve, withinMs)
+      void hold.until.then(resolve)
+    }).finally(() => {
+      clearTimeout(timer)
+      signal?.removeEventListener("abort", cancel)
     })
     if (!cancelled && !hold.frozen()) hold.wrote()
   }

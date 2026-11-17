@@ -309,6 +309,39 @@ try {
     console.log("PASS: a tool cancelled while it waits lets go at once and leaves the checkpoint ready")
   }
 
+  // A harness whose agent writes into a running command with no hook between (Codex's `write_stdin`): while one of the
+  // conversation's commands runs, the turn holds nothing and its message waits for the checkpoint.
+  {
+    await owner.stop()
+    owner = new LiveConversations(dependencies)
+    const was = driver.firstWrite
+    driver.firstWrite = { via: "Injected driver fixture", openCommands: "Injected driver fixture: its commands take input with no hook" }
+    const id = randomUUID(), request = randomUUID()
+    await owner.start("test", cwd, { conversationId: id })
+    await until(() => owner.snapshot(id)?.session.status === "ready")
+    owner.observe({ type: "live-agent", id, agent: { nativeId: "terminal-1", title: "npm run dev", work: "command", background: true, state: { kind: "working" } } })
+    await until(() => owner.snapshot(id)?.nativeAgents?.agents.some((agent) => agent.nativeId === "terminal-1") === true)
+    const capture = holdCapture(), deadline = holdDeadline()
+    try {
+      const sentBefore = sent.length
+      owner.submit(id, request, "with a command running")
+      await until(() => capture.reading() && deadline.armed())
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      assert.equal(sent.length, sentBefore, "with a command running, the message waits for its checkpoint")
+      capture.release()
+      await until(() => sent.length === sentBefore + 1 && owner.snapshot(id)?.requests[0].snapshots?.before !== undefined)
+      assert.equal(owner.snapshot(id)?.requests[0].snapshots?.before.kind, "ready")
+      finish(id, "waited")
+      await until(() => owner.snapshot(id)?.requests[0].snapshots?.after !== undefined)
+    } finally {
+      driver.firstWrite = was
+      deadline.restore()
+      capture.release()
+      capture.restore()
+    }
+    console.log("PASS: while a command that takes input with no hook runs, a turn holds nothing and its message waits")
+  }
+
   // A launch whose writes aren't held (the person's own hooks run beside the harness's): the message waits as ever.
   {
     await owner.stop()

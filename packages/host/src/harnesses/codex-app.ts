@@ -1,4 +1,5 @@
 import type { ProviderFailureEvidence } from "../contracts/provider-failure-evidence.js"
+import { codexPersonCodeRuns } from "./codex/person-code.js"
 import { failureEvidenceOf, providerExitEvidence } from "../contracts/provider-failure.js"
 import { answersId, type PrefetchLaunch } from "./start-prefetch.js"
 import { applyControlEnvironment } from "../control/index.js"
@@ -196,7 +197,7 @@ export async function codexStartPrefetch(base: NodeJS.ProcessEnv, cwd: string): 
 }
 
 /** Codex's sessions, each an app-server this engine started and closes. */
-export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "streams">) {
+export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "streams" | "writeHolds">) {
   const engine = createLiveEngine<Live>()
   const sessions = engine.sessions
   const closingSessions = new Map<string, Promise<void>>()
@@ -322,6 +323,8 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
       exited: false,
     }
     sessions.set(id, live)
+    // Held only once Codex itself says none of the person's code runs beside Mako's hook (`openThread`).
+    context.writeHolds?.attend(id, false)
     bindProcess(live)
 
     const watch = new ProviderStartupWatch(child, {
@@ -658,6 +661,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
   async function codexAppClose(id: string): Promise<void> {
     const closing = closingSessions.get(id)
     if (closing) return closing
+    context.writeHolds?.forget(id)
     const live = sessions.get(id)
     if (!live) return
     // Install the closing fence before the first native call. Keep decoding until
@@ -714,6 +718,13 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
     const runtime = reportedRuntime(codexRuntimeVersion(initialized.userAgent), "app-server initialize.userAgent")
     streamRuntime(live.stream, runtime)
     if (live.state.executionContext) updateState(live, { executionContext: { ...live.state.executionContext, runtime } })
+    // This launch's writes are held only where Mako's hook gates them and Codex says none of the person's code runs beside
+    // it; a launch that never asks (one taken from a start run ahead) holds none.
+    if (context.writeHolds && live.callGate) context.writeHolds.attend(live.id, !await trace.step("settings", () => codexPersonCodeRuns({
+      hooks: (cwd) => rpcRequest(live, "hooks/list", { cwds: [cwd] }),
+      config: (cwd) => rpcRequest(live, "config/read", { includeLayers: true, cwd }),
+      plugins: (cwd) => rpcRequest(live, "plugin/installed", { cwds: [cwd] }),
+    }, live.cwd)))
     const identityObservation = trace.step("identity", () => observeNativeIdentity(async () => {
       const { account } = await rpcRequest(live, "account/read", { refreshToken: false })
       return reportedIdentity(account?.type === "chatgpt" ? account.email : undefined, account?.type ?? "signed-out", CODEX_NATIVE_IDENTITY.via)
