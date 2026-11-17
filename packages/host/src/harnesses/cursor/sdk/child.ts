@@ -10,7 +10,7 @@
  * drains without logging because it can carry provider input.
  */
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
-import { crashSummary, cursorBusyRefusal, cursorSdkWireError } from "./errors.js"
+import { crashSummary, cursorBusyRefusal, cursorLocalSteerOutcome, cursorSdkWireError } from "./errors.js"
 import { guardShellFolder } from "./shell-folder.js"
 import { routeShellCall, type CallThread } from "../../../contracts/native-calls.js"
 import { CURSOR_SDK_LOG_EVENT, CursorSdkLogEntry, cursorRunLogLine } from "./run-log.js"
@@ -983,7 +983,7 @@ async function resumeHook(question: ResumeQuestion): Promise<ResumeAnswer | unde
 async function steer(text: string): Promise<SdkResult<"steer">> {
   if (!active) throw new ConfigurationError("No turn is running to steer")
   if (!active.run.steer) throw new ConfigurationError("This run cannot be steered")
-  return { outcome: await active.run.steer(text) }
+  return { outcome: cursorLocalSteerOutcome(await active.run.steer(text)) }
 }
 
 async function cancel(): Promise<SdkResult<"cancel">> {
