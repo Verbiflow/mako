@@ -494,6 +494,54 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/codex" --no-audit --no-fund "@openai/codex@$version"
           PATH="$RUNNER_TEMP/codex/node_modules/.bin:$PATH" scripts/check-codex-sandbox.sh
 
+  # The Mac app as a person builds it, from this commit: packaged unsigned under the runner's own TMPDIR, a Mac's long
+  # per-user temporary folder, then package-mac.mjs's own checks of the app (its control CLI, its startup directly and
+  # through Launch Services). #786: a control root under that TMPDIR ran out of a socket's 103 bytes and packaging failed on
+  # every Mac for five days, while CI's short Linux /tmp passed. After the merge only: it builds the whole app.
+  mac-package:
+    if: github.event_name != 'pull_request'
+    # About a hundred main pushes a day would each queue a macOS job for five or six minutes; only the newest main commit
+    # packages, and `ci` takes this job's cancel as the newer one's to judge.
+    concurrency:
+      group: mac-package-${{ github.ref }}
+      cancel-in-progress: true
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: ./.github/actions/install-dependencies
+      # The recording encoder the app ships, built from its pinned sources once per recipe.
+      - id: media
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: vendor/control-media/darwin-arm64
+          key: control-media-darwin-arm64-${{ hashFiles('vendor/control-media/sources.json', 'scripts/build-control-media.mjs') }}
+      - if: steps.media.outputs.cache-hit != 'true'
+        uses: ./.github/actions/control-media-sources
+      - if: steps.media.outputs.cache-hit != 'true'
+        run: npm run prepare:control-media
+      - if: steps.media.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: vendor/control-media/darwin-arm64
+          key: ${{ steps.media.outputs.cache-primary-key }}
+      - name: Package the app and check it
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          # A Mac's own TMPDIR is about 49 characters, what #786's socket paths ran out of room in; a short one checks nothing.
+          if [ "${#TMPDIR}" -lt 40 ]; then echo "::error::TMPDIR has ${#TMPDIR} characters, short of a Mac's own: this job would check nothing #786 broke"; exit 1; fi
+          echo "TMPDIR has ${#TMPDIR} characters"
+          npm run build
+          npm run test:renderer-assets
+          node scripts/package-mac.mjs --dir --output="$RUNNER_TEMP/mako-package"
+
   # The one result to wait on: it passes when every job passed, or was skipped because the change can't reach it.
   # The pull request gate: what a change must pass to merge, in a few minutes. Lint, the typecheck, the Linux gate's
   # shards and, when the host is touched, its Mac-only parts. The heavy jobs (the UI suites, the updater, performance,
@@ -517,14 +565,19 @@ jobs:
   # Every job's verdict: on main, the whole of CI after a merge.
   ci:
     if: always()
-    needs: [changes, checks, install-cold, gate, mac-host, file-search, performance, update-checks, transcript-ui, suites, sync-bench, steer-latency, host-load, codex-sandbox]
+    needs: [changes, checks, install-cold, gate, mac-host, mac-package, file-search, performance, update-checks, transcript-ui, suites, sync-bench, steer-latency, host-load, codex-sandbox]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
       - env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
+          PACKAGED: ${{ needs.mac-package.result }}
         run: |
           echo "$RESULTS"
+          # A newer main commit cancels this one's mac-package (its concurrency group), which packages the newer: that
+          # cancel passes, and only it. Any other job cancelled still fails.
+          cancelled=0
           for result in $RESULTS; do
-            case "$result" in success|skipped) ;; *) exit 1 ;; esac
+            case "$result" in success|skipped) ;; cancelled) cancelled=$((cancelled + 1)) ;; *) exit 1 ;; esac
           done
+          if [ "$cancelled" -gt 1 ] || { [ "$cancelled" -eq 1 ] && [ "$PACKAGED" != cancelled ]; }; then exit 1; fi

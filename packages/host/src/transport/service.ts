@@ -113,6 +113,19 @@ export function hostCommand(input: Pick<RuntimeLaunch, "executable" | "args" | "
   }
 }
 
+/**
+ * The host that owns the profile is still on its way out (`closing` past `settleRuntime`'s wait): a caller waits and
+ * asks again, never starting another host into its lock, and never says it can't be reached. A slow quit, an update
+ * or a restart's old host looks like this for a while.
+ */
+export class HostLeavingError extends Error {}
+
+/**
+ * No host could be had: the one this call launched quit during startup, or wasn't ready within its 30 seconds. The
+ * one failure that says there's no host to reach (a window's `gone`).
+ */
+export class HostLaunchFailedError extends Error {}
+
 export async function ensureRuntime(input: RuntimeLaunch) {
   const location = runtimeLocation(input.dataRoot)
   await ensurePrivateDirectory(location.directory, "Mako host")
@@ -121,7 +134,7 @@ export async function ensureRuntime(input: RuntimeLaunch) {
   const existing = await settleRuntime(location.socket)
   if (existing.state === "ready") return { ...location, info: existing.info }
   if (existing.state === "closing")
-    throw new Error("The shared Mako host is still shutting down and owns this profile. Try again once it has left. No isolated replacement was started.")
+    throw new HostLeavingError("The shared Mako host is still shutting down and owns this profile. Try again once it has left. No isolated replacement was started.")
   const outputPath = runtimeOutputPath(input.dataRoot)
   const output = await openRuntimeOutput(outputPath)
   let child: ReturnType<typeof spawn>
@@ -150,6 +163,6 @@ export async function ensureRuntime(input: RuntimeLaunch) {
   }
   const logs = `See ${join(dirname(outputPath), "host.log")} and ${outputPath}.`
   if (exitedAt !== undefined)
-    throw new Error(`The shared Mako host (pid ${child.pid}) quit during startup (${exit}). ${logs} No isolated replacement was started.`)
-  throw new Error(`The shared Mako host (pid ${child.pid}) did not become ready within 30 seconds. ${logs} No isolated replacement was started.`)
+    throw new HostLaunchFailedError(`The shared Mako host (pid ${child.pid}) quit during startup (${exit}). ${logs} No isolated replacement was started.`)
+  throw new HostLaunchFailedError(`The shared Mako host (pid ${child.pid}) did not become ready within 30 seconds. ${logs} No isolated replacement was started.`)
 }

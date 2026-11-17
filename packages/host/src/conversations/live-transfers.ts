@@ -68,6 +68,8 @@ export interface SwitchMove {
   wanted: () => boolean
   first?: string
   compaction?: NonNullable<ContextTransfer["compaction"]>
+  /** The session's own reconnect, its queue kept: its record is weighed as a resend's is (`ContextTransfer.reconnects`). */
+  reconnects?: true
 }
 
 const CLOSE_RETIRED_MOVE = "Its harness wouldn't let go of it. Nothing changed; ask again to move it."
@@ -171,6 +173,7 @@ export class LiveTransfers {
             ...inFlight && { behind: inFlight },
             ...move?.first !== undefined && { first: move.first },
             ...move?.compaction && { compaction: move.compaction },
+            ...move?.reconnects && { reconnects: true as const },
           },
         ],
       },
@@ -341,7 +344,7 @@ export class LiveTransfers {
         throw new Error("The selected native session is unavailable")
       const currentBinding = control.bindings.find((binding) => binding.id === control.activeBindingId)
       // Another account of its harness, where the session can't go on: a session of its own, handed the conversation.
-      const anew = Boolean(transfer.compaction) || (quietSwitch(transfer) && currentBinding?.provider === transfer.input.provider)
+      const anew = Boolean(transfer.compaction) || (quietSwitch(transfer) && currentBinding?.provider === transfer.input.provider && !transfer.reconnects)
       // The same, going back: a session another account made goes on under this one only where its harness can.
       const goesOn = (binding: { account?: string | undefined }) => !transfer.input.account || binding.account === transfer.input.account || this.host.dependencies.driver(transfer.input.provider)?.accountContinuation?.kind === "resumes"
       reconnect = (!target || target === control.activeBindingId) && !resident.driver && !anew && currentBinding?.provider === transfer.input.provider && Boolean(currentBinding?.nativeId)

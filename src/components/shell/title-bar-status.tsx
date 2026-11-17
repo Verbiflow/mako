@@ -1,10 +1,11 @@
-import { useHostConnection } from "@/state/host-connection"
+import { useHostConnection, useReconnectStage } from "@/state/host-connection"
 import { Slot } from "@/extend/slot"
 import { useSession } from "@/state/session"
 import { HotIndicator } from "@/components/shell/hot-indicator"
 import { updates, useUpdates } from "@/state/updates"
 import { agentsWorking, keepAwake, keepAwakeWarning, useKeepAwake } from "@/state/keep-awake"
 import { cn } from "@/lib/utils"
+import { Spinner } from "@/components/ui/spinner"
 import { useEffect } from "react"
 import { ArrowUpCircleIcon, BatteryLowIcon, CoffeeIcon, PlugZapIcon, TriangleAlertIcon } from "lucide-react"
 
@@ -34,10 +35,20 @@ export function TitleBarStatus() {
 function ConnectionPill() {
   const phase = useSession((state) => state.phase)
   const connected = useHostConnection((state) => state.kind === "connected")
+  const stage = useReconnectStage()
   if (phase === "ready" && connected) return null
   // A window that's starting opens before its host answers (a cold host takes a second or two): that's
   // not something wrong, so it says so quietly, not as the lost host below.
   if (phase === "booting" && connected) return <span className="px-1.5">Connecting…</span>
+  // The host's link lost: Mako reconnects and replays by itself, so the title bar says so quietly, with nothing to
+  // press. Past `RECONNECT_QUIET_MS` the notice under the title bar says it instead, never both.
+  if (!connected)
+    return stage !== "quiet" ? null : (
+      <span role="status" data-reconnecting="" className="flex items-center gap-1 px-1.5">
+        <Spinner aria-hidden className="size-3" />
+        Reconnecting…
+      </span>
+    )
   return (
     <button
       type="button"
@@ -46,11 +57,7 @@ function ConnectionPill() {
       className="no-drag flex items-center gap-1 px-1.5 text-negative transition-colors duration-100 hover:bg-negative/10"
     >
       <PlugZapIcon className="size-3" />
-      {!connected
-        ? "Host disconnected"
-        : phase === "booting"
-          ? "Connecting"
-          : "Agent disconnected"}
+      {phase === "booting" ? "Connecting" : "Agent disconnected"}
     </button>
   )
 }
@@ -89,7 +96,8 @@ function KeepAwakePill() {
   useEffect(() => {
     void keepAwake.load()
   }, [])
-  if (!hold || hold.kind === "rest") return null
+  // A first failure Mako tries again within the minute is no news yet: only one the retry didn't fix is said.
+  if (!hold || hold.kind === "rest" || (hold.kind === "failed" && !hold.again)) return null
   const held = hold.kind === "idle" || hold.kind === "lid"
   const title = keepAwakeWarning(hold) ?? `Keeping this Mac awake: ${agentsWorking(hold.agents)}. ${hold.kind === "lid" ? "Mako asked macOS to stay awake with the lid closed, on power." : "Closing the lid still puts it to sleep."}`
   const Icon = hold.kind === "low-battery" ? BatteryLowIcon : held ? CoffeeIcon : TriangleAlertIcon

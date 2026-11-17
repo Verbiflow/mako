@@ -38,6 +38,8 @@ import { JournalStore, wholeChange, type FileState, type Recency, type StatRow, 
 import { diffLines, splitLines } from "./line-diff.js"
 import { applyHunks, BASE, baseMap, onlyBase, presentLines, presentRuns, rebase, UNKNOWN, withKnownWriters, withWriter, writers, type Run } from "./line-map.js"
 import { FootprintReader, type FootprintOptions } from "./footprint-reader.js"
+import { ShellReconciliations } from "./shell-reconciliations.js"
+import { readOnlyCommand } from "./read-only.js"
 import type { FootprintTurn } from "./footprint.js"
 import { untrackable, within } from "./paths.js"
 import { ranTexts, SCRIPT_LIMIT } from "./scripts.js"
@@ -48,8 +50,8 @@ import { writtenLines } from "./written.js"
 export interface TrackerRepository {
   /** The commit checked out; null before the first commit. */
   head(): Promise<string | null>
-  /** Files Git tracks, untracked files it doesn't ignore, and tracked files that differ from HEAD, relative to the root. */
-  inventory(): Promise<{ tracked: string[]; untracked: string[]; changed: string[] }>
+  /** Dirty/untracked files relative to the root; the full tracked listing only when the caller hasn't already cached it. */
+  inventory(includeTracked?: boolean): Promise<{ tracked: string[]; untracked: string[]; changed: string[] }>
   /** Of `paths`, those Git ignores. */
   ignored(paths: readonly string[]): Promise<Set<string>>
   /** What Git ignores under the root: a folder it ignores whole once, ending in `/`, without what's in it; else single files. A repository without it is walked whole. */
@@ -184,6 +186,9 @@ interface Flush {
   slowest?: string
 }
 
+/** A Git inventory is a live completeness observation, persisted as a rescan without changing author evidence. */
+type ObservationSource = ObservedBy | "inventory"
+
 interface RootState {
   root: StoredRoot
   repo: TrackerRepository | null
@@ -193,10 +198,14 @@ interface RootState {
   tracked: Set<string>
   watch?: { close(): void }
   headWatch?: { close(): void }
-  pending: Map<string, ObservedBy>
+  pending: Map<string, ObservationSource>
   /** Paths Git ignores that a Thread's own write named, not yet journaled: those are kept like any file. */
   adopted: Set<string>
+  /** Last dirty inventory plus newer observed dirty paths; a clean return is checked once, not on every shell. */
+  shellPaths: Set<string>
   firstHeard: number
+  /** Last real non-Git watch notification, never an inventory or synthetic flush. */
+  watchedAt?: number
   timer?: ReturnType<typeof setTimeout>
   /** Every flush and HEAD check for the root, one after another. */
   chain: Promise<void>
@@ -333,6 +342,9 @@ export class LaptopTracker implements AttributionTracker {
   private holds = 0
   /** Reads under way of what reported commands ran (`readScripts`). */
   private readonly scriptReads = new Set<Promise<void>>()
+  private readonly shellTurns = new Map<string, Map<string, { since: number; start: number }>>()
+  private readonly silentRoots = new Map<string, { start: number; due: number }[]>()
+  private readonly shells: ShellReconciliations
   /** Each turn's footprint outside the tracked roots, and the machine's learned churn. */
   readonly footprints?: FootprintReader
   private readonly flushes: Flush[] = []
@@ -351,6 +363,10 @@ export class LaptopTracker implements AttributionTracker {
     this.ports = ports
     this.options = options
     this.store = store
+    this.shells = new ShellReconciliations(
+      (root) => this.refreshShell(root),
+      (root, error) => this.log("a shell's Git inventory could not be reconciled", { root, error: error.message }),
+    )
     this.reader = new JournalReader(store.path)
     this.evidence = new Evidence(new WorkingSets((thread) => store.activityOfThread(thread)))
     this.seq = store.lastSeq()
@@ -470,6 +486,9 @@ export class LaptopTracker implements AttributionTracker {
   async untrack(id: string): Promise<void> {
     const state = this.states.get(id)
     if (!state) return
+    this.shells.forget(id)
+    this.silentRoots.delete(id)
+    for (const roots of this.shellTurns.values()) roots.delete(id)
     this.states.delete(id)
     this.unlisten(state)
     await state.chain
@@ -480,7 +499,7 @@ export class LaptopTracker implements AttributionTracker {
 
   private state(root: StoredRoot, repo: TrackerRepository | null, stats: StatCache, files: Map<string, FileState>): RootState {
     const state: RootState = {
-      root, repo, stats, files, tracked: new Set(), pending: new Map(), adopted: new Set(), firstHeard: 0, chain: Promise.resolve(), muted: false, recent: [], headSeq: this.seq,
+      root, repo, stats, files, shellPaths: new Set([...files.values()].filter((file) => file.current !== file.base).map((file) => file.path)), tracked: new Set(), pending: new Map(), adopted: new Set(), firstHeard: 0, chain: Promise.resolve(), muted: false, recent: [], headSeq: this.seq,
       ignoreMoves: 0, rescanQueued: false, rescanning: false, rescanAgain: false, rescannedAt: -Infinity, rescanEvery: 0, losses: new HourCounts(), tracks: 0,
     }
     const replaced = this.states.get(root.id)
@@ -534,7 +553,10 @@ export class LaptopTracker implements AttributionTracker {
 
   private async listen(state: RootState): Promise<void> {
     state.watch = await this.ports.events.watch(state.root.path, {
-      changed: (paths) => this.heard(state, paths),
+      changed: (paths) => {
+        if (paths.some((path) => !isGitPath(path.startsWith("/") ? relative(state.root.path, path) : path))) state.watchedAt = this.now()
+        this.heard(state, paths)
+      },
       lost: (reason) => this.lost(state, reason),
       heard: () => {
         if (!state.muted) return
@@ -715,11 +737,17 @@ export class LaptopTracker implements AttributionTracker {
   }
 
   private queue(state: RootState, run: () => Promise<void>): Promise<void> {
-    const next = state.chain.then(run, run).catch((error: Error) => {
+    this.checkedQueue(state, run)
+    return state.chain
+  }
+
+  /** Reconciliation must report a failed inventory to its finalization barrier, rather than silently count it. */
+  private checkedQueue(state: RootState, run: () => Promise<void>): Promise<void> {
+    const pending = state.chain.then(run, run)
+    state.chain = pending.catch((error: Error) => {
       this.options.log?.("a change could not be journaled", { root: state.root.path, error: error.message })
     })
-    state.chain = next
-    return next
+    return pending
   }
 
   /** `checkHead`, its failure logged: the files are read regardless, against the base as it stood. */
@@ -950,7 +978,7 @@ export class LaptopTracker implements AttributionTracker {
     const timing: Flush = { at: this.now(), files: batch.length, entries: 0, lagMs: 0, statMs: 0, hashMs: 0, diffMs: 0, writeMs: 0 }
     let started = performance.now()
     // A folder that went or came stands for every file under it.
-    const expanded = new Map<string, ObservedBy>()
+    const expanded = new Map<string, ObservationSource>()
     const stats = new Map<string, TrackerFileStat | null>()
     const ignored = batch.some(([path]) => !state.stats.has(path)) ? await this.gitIgnored(state) : undefined
     const unread = ignored ? this.unreadIn(state, ignored) : () => false
@@ -1029,7 +1057,7 @@ export class LaptopTracker implements AttributionTracker {
       }
     const consumed = new Set(renamed.values())
     started = performance.now()
-    const prepared: { item: Observed; how: ObservedBy; before: { ref: ContentRef | null; bytes?: Uint8Array } }[] = []
+    const prepared: { item: Observed; how: ObservationSource; before: { ref: ContentRef | null; bytes?: Uint8Array } }[] = []
     for (const item of observed) {
       if (consumed.has(item.path)) continue
       const from = renamed.get(item.path)
@@ -1044,7 +1072,7 @@ export class LaptopTracker implements AttributionTracker {
     const lostFrom = state.gap ? this.lostFrom(state, prepared, renamed, at) : undefined
     const gapEvidence = lostFrom !== undefined ? evidenceOf(await this.activityOverlapping(lostFrom - TRAIL_MS, at), this.evidence.worked) : undefined
     // A remote owner asks its host for current session context before taking the SQLite write transaction.
-    const outsiders = this.options.outsider ? new Map(await Promise.all(prepared.filter(({ how }) => how === "event").map(async ({ item }) =>
+    const outsiders = this.options.outsider ? new Map(await Promise.all(prepared.filter(({ how }) => how === "event" || how === "inventory").map(async ({ item }) =>
       [item.path, await this.options.outsider!(join(state.root.path, item.path), state.root.path)] as const))) : new Map<string, string | undefined>()
     // A burst (a build's output, a copied folder) is journaled a slice at a time: each change is attributed as it's recorded.
     const slice = new Slice(this.slicing)
@@ -1092,7 +1120,7 @@ export class LaptopTracker implements AttributionTracker {
    * reading the whole gap's activity, days of it after a long one, read nothing more: on the person's journal
    * (175,857 calls and turns) it held the host's loop for 2.7 s. Undefined when none needs it.
    */
-  private lostFrom(state: RootState, prepared: readonly { item: Observed; how: ObservedBy; before: { ref: ContentRef | null } }[], renamed: ReadonlyMap<string, string>, at: number): number | undefined {
+  private lostFrom(state: RootState, prepared: readonly { item: Observed; how: ObservationSource; before: { ref: ContentRef | null } }[], renamed: ReadonlyMap<string, string>, at: number): number | undefined {
     const gap = state.gap
     if (!gap) return undefined
     let earliest: number | undefined
@@ -1214,7 +1242,7 @@ export class LaptopTracker implements AttributionTracker {
   private record(
     state: RootState,
     item: Observed,
-    how: ObservedBy,
+    how: ObservationSource,
     given: Attribution | undefined,
     at: number,
     known?: { ref: ContentRef | null; bytes?: Uint8Array },
@@ -1310,7 +1338,7 @@ export class LaptopTracker implements AttributionTracker {
       lines = { added: hunks.reduce((sum, hunk) => sum + hunk.added, 0), removed: hunks.reduce((sum, hunk) => sum + hunk.removed, 0) }
       map = restored ? restored.map : applyHunks(state0.map, hunks, seq)
     }
-    const settled = how !== "event" || author.certainty === "mako"
+    const settled = (how !== "event" && how !== "inventory") || author.certainty === "mako"
     const inserted = this.store.insertEntry({
       at,
       changedAt,
@@ -1325,7 +1353,7 @@ export class LaptopTracker implements AttributionTracker {
       added: lines?.added,
       removed: lines?.removed,
       stored,
-      observed: how,
+      observed: how === "inventory" ? "rescan" : how,
       gap: state.gap && how !== "event" ? state.gap.id : undefined,
       restores: restored?.seq,
       author,
@@ -1357,6 +1385,8 @@ export class LaptopTracker implements AttributionTracker {
       state.files.set(path, next)
       this.store.saveFile(next)
     }
+    if (next.current !== next.base) state.shellPaths.add(path)
+    if (from) state.shellPaths.add(from)
     if (!settled) this.pending.set(seq, { seq, change, author })
     if (!settled && reconcilable(author) && this.options.uncertain) {
       const sessions = evidence.sessionsAt(change.changedAt, change.path)
@@ -1531,6 +1561,23 @@ export class LaptopTracker implements AttributionTracker {
     const interval = this.evidence.mark(mark)
     this.store.saveActivity({ ...storedActivity(interval), ...(mark.run && { run: mark.run }) })
     this.footprints?.activity(mark)
+    if (mark.kind === "turn") {
+      const key = `${mark.session}:${mark.id}`
+      if (mark.edge === "start") this.shellTurns.set(key, new Map())
+      else {
+        const roots = this.shellTurns.get(key)
+        this.shellTurns.delete(key)
+        for (const [root, command] of roots ?? []) {
+          const state = this.states.get(root)
+          if (!state || state.asleep || (state.watchedAt ?? -Infinity) >= command.start) continue
+          const lag = Math.min(30_000, Math.max(TRAIL_MS, this.lateMs()))
+          const checks = this.silentRoots.get(root) ?? []
+          checks.push({ start: command.start, due: Date.now() + lag })
+          this.silentRoots.set(root, checks)
+          this.shells.schedule(root, lag, command.since)
+        }
+      }
+    }
     this.reattribute()
   }
 
@@ -1558,9 +1605,75 @@ export class LaptopTracker implements AttributionTracker {
           : effect.kind === "command" ? { kind: "command", command: effect.command.slice(0, 500), cwd: effect.cwd, exitCode: effect.exitCode, ...effect.named?.length && { named: effect.named.slice(0, STORED_NAMED) } }
             : { kind: effect.kind, path: effect.path }),
     })
+    this.shellCompleted(call)
     this.adopt(parsed)
     this.readScripts(call)
     this.reattribute()
+  }
+
+  /** Existing normalized command effects reach this owner from every harness; no new hook or wire field. */
+  private shellCompleted(call: ReportedCall): void {
+    if (this.closing || this.closed || call.status === "running" || call.status === "refused" || call.endedAt === undefined) return
+    // Read-back imports can name old commands. Live completion reports are stamped as they arrive.
+    if (this.now() - call.endedAt > Math.max(SETTLE_MS, this.lateMs() + TRAIL_MS)) return
+    const commands = call.effects.flatMap((effect) => effect.kind === "command" && !readOnlyCommand(effect.command) ? [effect] : [])
+    if (!commands.length) return
+    if (!call.turn) return
+    const turn = this.shellTurns.get(`${call.session}:${call.turn}`)
+    if (!turn) return
+    const start = this.evidence.callSpan(call)?.start ?? call.startedAt
+    if (start === undefined) return
+    const folders = commands.flatMap((command) => [
+      ...command.cwd ? [command.cwd] : call.checkout ? [call.checkout] : [],
+      ...command.named ?? [],
+    ])
+    for (const state of this.states.values()) {
+      if (!state.root.repository || state.asleep || call.endedAt < state.root.trackedAt) continue
+      if ((state.watchedAt ?? -Infinity) >= start) continue
+      if (folders.some((folder) => within(state.root.path, folder) || within(folder, state.root.path)))
+        turn.set(state.root.id, { since: Math.min(turn.get(state.root.id)?.since ?? Infinity, start), start: Math.max(turn.get(state.root.id)?.start ?? -Infinity, start) })
+    }
+  }
+
+  /** Git's dirty/untracked inventory plus paths that left it catches silent writes and clean returns to HEAD. */
+  private async refreshShell(id: string): Promise<void> {
+    const checks = this.silentRoots.get(id) ?? []
+    const due = checks.filter((check) => this.closing || check.due <= Date.now())
+    const later = checks.filter((check) => !this.closing && check.due > Date.now())
+    if (later.length) this.silentRoots.set(id, later)
+    else this.silentRoots.delete(id)
+    const found = this.states.get(id)
+    if (!found || !due.some((check) => (found.watchedAt ?? -Infinity) < check.start)) return
+    await this.tracking.get(found.root.path)
+    const state = this.states.get(id)
+    if (!state) return
+    if (!state.repo || state.asleep) return
+    const repo = state.repo
+    await this.checkedQueue(state, async () => {
+      if (this.states.get(id) !== state || state.asleep) return
+      const checking = !state.moved
+      if (checking) state.moved = await this.checkHead(state)
+      try {
+        await this.settleCommitted(state)
+        const inventory = await repo.inventory(false)
+        if (this.states.get(id) !== state) return
+        if (await repo.head() !== state.root.head) throw new Error("HEAD moved during shell reconciliation; its inventory must be read again")
+        for (const path of [...inventory.tracked, ...inventory.changed]) state.tracked.add(path)
+        const previous = state.shellPaths
+        const current = new Set([...inventory.changed, ...inventory.untracked])
+        const paths = new Set([...current, ...previous])
+        // Observations arriving during this flush add their dirty paths to the new set.
+        state.shellPaths = current
+        try {
+          for (const path of paths) if (!state.pending.has(path)) state.pending.set(path, "inventory")
+          await this.flush(state)
+        } catch (error) {
+          for (const path of previous) state.shellPaths.add(path)
+          throw error
+        }
+        this.log("shell Git inventory reconciled", { root: state.root.path, files: paths.size })
+      } finally { if (checking) state.moved = undefined }
+    })
   }
 
   /**
@@ -1954,7 +2067,7 @@ export class LaptopTracker implements AttributionTracker {
       })
     } else slice.done()
     if (stale) this.reattribute()
-    if (!more && !this.pending.size) this.evidence.prune(now - SETTLE_MS - this.lateMs())
+    if (!more && !this.pending.size) this.evidence.prune(Math.min(now - SETTLE_MS - this.lateMs(), this.shells.since()))
   }
 
   /**
@@ -1967,8 +2080,10 @@ export class LaptopTracker implements AttributionTracker {
    * shared journal's caller gave up at 15 s, and the walks and the stat
    * cache's writes held the host's loop.
    */
-  async settled(options: { rescans?: boolean } = {}): Promise<void> {
-    if (options.rescans === false) return this.whatWasHeard()
+  settled(): Promise<void>
+  settled(options?: { rescans?: boolean; checkouts?: readonly string[] }): Promise<void | boolean>
+  async settled(options: { rescans?: boolean; checkouts?: readonly string[] } = {}): Promise<void | boolean> {
+    if (options.rescans === false) return this.whatWasHeard(options.checkouts)
     await this.resuming
     this.settling++
     try {
@@ -1998,11 +2113,13 @@ export class LaptopTracker implements AttributionTracker {
   }
 
   /** What was heard journaled, rescans left to their own pace: a root rescanning now is passed over, its changes found by the rescan. */
-  private async whatWasHeard(): Promise<void> {
-    await this.resuming
+  private async whatWasHeard(checkouts?: readonly string[]): Promise<boolean> {
+    const states = [...this.states.values()].filter((state) => checkouts === undefined || checkouts.some((path) => within(path, state.root.path) || within(state.root.path, path)))
+    await Promise.all(states.map((state) => this.tracking.get(state.root.path)))
+    const complete = await this.shells.heard(states.map((state) => state.root.id))
     for (let pass = 0; pass < HEARD_PASSES; pass++) {
       const runs: Promise<void>[] = []
-      for (const state of this.states.values()) {
+      for (const state of states) {
         if (state.rescanning) continue
         if (state.headTimer || state.gitSince !== undefined) {
           clearTimeout(state.timer)
@@ -2020,6 +2137,7 @@ export class LaptopTracker implements AttributionTracker {
     await Promise.all(this.scriptReads)
     await this.footprints?.settled()
     while (this.reattribution) await this.reattribution
+    return complete
   }
 
   /** How often roots were rescanned for lost events in the last hour, and which are rescanned less often because their losses keep coming. */
@@ -2292,6 +2410,7 @@ export class LaptopTracker implements AttributionTracker {
     if (this.closed) return
     // The root resuming now finishes; the rest resume when the journal next opens.
     this.closing = true
+    await this.shells.close()
     await this.settled()
     this.closed = true
     this.footprints?.close()

@@ -148,10 +148,10 @@ export interface MoveInput {
 }
 
 /** The journal's settle, waited for until `by` at most when there is one: a handoff moves with what's settled then. */
-async function settledBy(ledger: Pick<MoveLedger, "settled">, by: number | undefined): Promise<void> {
-  if (by === undefined) return ledger.settled()
+async function settledBy(ledger: Pick<MoveLedger, "settled">, by: number | undefined, roots: readonly string[]): Promise<void> {
+  if (by === undefined) return ledger.settled(roots)
   let timer: ReturnType<typeof setTimeout> | undefined
-  await Promise.race([ledger.settled(), new Promise((resolve) => { timer = setTimeout(resolve, Math.max(0, by - Date.now())) })])
+  await Promise.race([ledger.settled(roots), new Promise((resolve) => { timer = setTimeout(resolve, Math.max(0, by - Date.now())) })])
   clearTimeout(timer)
 }
 
@@ -626,7 +626,7 @@ export async function moveByAuthor(input: MoveInput): Promise<MovePlan> {
   if (ledger) {
     for (const { repoRoot } of members) await ledger.track(repoRoot)
     const settling = performance.now()
-    await settledBy(ledger, input.by)
+    await settledBy(ledger, input.by, members.map((member) => member.repoRoot))
     settleMs = performance.now() - settling
     // Lines nobody is sure of stay in the main checkout either way; reading sessions' records back to name them is
     // left to a move with time for it.
@@ -640,7 +640,7 @@ export async function moveByAuthor(input: MoveInput): Promise<MovePlan> {
   for (let attempt = 0; attempt < 4 && !planned; attempt++) {
     if (attempt) {
       await new Promise((resolve) => setTimeout(resolve, 150 * attempt))
-      if (ledger) await settledBy(ledger, input.by)
+      if (ledger) await settledBy(ledger, input.by, members.map((member) => member.repoRoot))
     }
     const found: Planned[] = []
     for (const member of members) {

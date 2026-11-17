@@ -74,7 +74,7 @@ export type HostEventBody =
   | { type: "installation"; installation: UpdateInstallation }
   | { type: "app-command"; command: "app.quit" | "app.updates" }
   | { type: "app-shutdown"; requestId: string; action: LifecycleAction }
-  | { type: "host-disconnected"; message: string }
+  | { type: "host-disconnected"; message: string; gone?: true }
   | { type: "host-reconnected" }
   | { type: "thread-archives"; snapshot: ThreadArchiveSnapshot }
   | { type: "cloud-archive-step"; step: CloudArchiveStep }

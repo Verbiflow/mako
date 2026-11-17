@@ -206,6 +206,9 @@ export async function installWebBridge(): Promise<void> {
     // A tab cannot close itself, and the host's quit-client hides the desktop
     // windows. After a host restart this page reconnects on its own.
     "mako:quit-client": () => {},
+    // A page's stream reconnects on its own backoff; the nearest it has to restarting is loading again.
+    "mako:reconnect-host": () => {},
+    "mako:restart-client": () => { location.reload() },
     // A page can only ask; the browser decides whether its tab comes forward.
     "mako:surface-window": () => { window.focus() },
     // A browser tab can't hold a key for the whole Mac or draw outside itself.

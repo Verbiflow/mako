@@ -6,6 +6,11 @@ import type { Git } from "@mako/git"
 const DUTY = 20
 const MIN_MS = 1_500
 const MAX_MS = 30_000
+/**
+ * A poll whose passes hold it at the longest spacing (`MAX_MS`, a pass of 1.5 s or more) isn't keeping up: a change
+ * may wait that long to be found. Below it, polling keeps up, and a slow file-change service is no news.
+ */
+export const POLL_LAGS_MS = MAX_MS
 /** Dirty files whose size and time are read each poll; past this only their status counts. */
 const STAT_LIMIT = 5_000
 /** Entries a folder outside Git is walked for; past this, the rest goes unheard. */
@@ -29,7 +34,7 @@ type Snapshot = Map<string, string>
  * never walked. The next poll waits twenty times as long as this one took,
  * between 1.5 and 30 seconds, or at least `minMs`.
  */
-export function pollTree(git: Git, root: string, quiet: RegExp, onChange: (paths: string[]) => void, minMs = MIN_MS): TreePoll {
+export function pollTree(git: Git, root: string, quiet: RegExp, onChange: (paths: string[]) => void, minMs = MIN_MS, paced?: (spacingMs: number | undefined) => void): TreePoll {
   let closed = false
   let timer: NodeJS.Timeout | undefined
   let previous: Snapshot | undefined
@@ -46,6 +51,8 @@ export function pollTree(git: Git, root: string, quiet: RegExp, onChange: (paths
       if (changed.length) onChange(changed)
     }
     previous = next ?? previous
+    // The spacing a pass this long calls for, before the calm poll's own floor: how far behind polling runs.
+    paced?.(Math.min(MAX_MS, (performance.now() - began) * DUTY))
     timer = setTimeout(run, Math.min(Math.max(MAX_MS, minMs), Math.max(minMs, (performance.now() - began) * DUTY)))
     timer.unref()
   }
@@ -54,6 +61,7 @@ export function pollTree(git: Git, root: string, quiet: RegExp, onChange: (paths
     close() {
       closed = true
       clearTimeout(timer)
+      paced?.(undefined)
     },
   }
 }

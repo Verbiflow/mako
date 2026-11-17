@@ -282,6 +282,47 @@ if (process.argv[2] === "owner-child") {
     return { heard, owned }
   }
 
+  test("a bounded journal wait reports incomplete instead of pretending the inventory finished", async (t) => {
+    const folder = mkdtempSync(join(tmpdir(), "mako-incomplete-journal-"))
+    const first = recorder(), blocked = Promise.withResolvers<void>()
+    first.owned.writes.settled = () => blocked.promise
+    const owner = await SharedJournal.open({ folder, host: { pid: process.pid, dataRoot: "/a", label: "a" }, own: async () => first.owned, follow: quiet, alone: async () => first.owned, log: quiet })
+    try {
+      t.mock.timers.enable({ apis: ["setTimeout"] })
+      const read = owner.writes.settled({ rescans: false, checkouts: ["/repo"] })
+      t.mock.timers.tick(15_000)
+      assert.equal(await read, false)
+    } finally {
+      blocked.resolve(); t.mock.timers.reset()
+      await owner.close(); rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  test("a follower carries only its requested roots through the shared reconciliation barrier", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "mako-scoped-journal-"))
+    const first = recorder(), second = recorder()
+    const scopes: unknown[] = []
+    const blocked = Promise.withResolvers<void>()
+    first.owned.writes.settled = async (options) => {
+      scopes.push(options)
+      if (options?.checkouts?.includes("/incomplete")) return false
+      if (options?.checkouts?.includes("/bad")) await blocked.promise
+    }
+    const owner = await SharedJournal.open({ folder, host: { pid: process.pid, dataRoot: "/a", label: "a" }, own: async () => first.owned, follow: quiet, alone: async () => first.owned, log: quiet })
+    const follower = await SharedJournal.open({ folder, host: { pid: process.pid, dataRoot: "/b", label: "b" }, own: async () => second.owned, follow: quiet, alone: async () => second.owned, log: quiet })
+    try {
+      const bad = follower.writes.settled({ rescans: false, checkouts: ["/bad"] })
+      await follower.writes.settled({ rescans: false, checkouts: ["/good"] })
+      assert.deepEqual(scopes, [{ rescans: false, checkouts: ["/bad"] }, { rescans: false, checkouts: ["/good"] }])
+      blocked.resolve(); await bad
+      assert.equal(await follower.writes.settled({ rescans: false, checkouts: ["/incomplete"] }), false)
+    } finally {
+      blocked.resolve()
+      await follower.close(); await owner.close()
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
   test("a follower carries a Thread's history past a message's size to the owner through the journal's folder, and nothing else is read", async () => {
     const folder = mkdtempSync(join(tmpdir(), "mako-shared-journal-folder-"))
     const first = recorder()

@@ -52,6 +52,10 @@ import { followHostLoadOutputs } from "./lib/host-load-output.ts"
  * `--peak-limit-mb` fails on the host's peak resident memory, sampled each second, and on readings too few to say. Memory barely varies between
  * machines: 629 MB on a Mac and 669 MB on a CI runner at this scale, so `checks.yml` sets 1,500;
  * `--home-from <home>` runs on APFS clones of a real home's harness stores (macOS, read-only to the original).
+ * `--send` times each message from the call until its harness asks the model, reporting p50, p95, p99 and every
+ * sample (`sendSamples`, and per send `sendDetails`: its request, when the host accepted it and when the model heard
+ * it); `--harness claude` or `--harness opencode` sends through a sealed Claude Code or OpenCode instead of Codex,
+ * while the Fins stay on Codex.
  *
  *   npm run bench:host-load [-- --scale today|ci] [--seconds 60] [--warmup 20] [--host <mako-host.js>] [--cpu-prof <dir>] [--out <file>] [--keep]
  */
@@ -72,6 +76,7 @@ const { values } = parseArgs({
     out: { type: "string" },
     keep: { type: "boolean", default: false },
     send: { type: "boolean", default: false },
+    harness: { type: "string", default: "codex" },
     "tool-heavy": { type: "boolean", default: false },
     "model-port": { type: "string" },
     "send-quiet": { type: "boolean", default: false },
@@ -89,6 +94,8 @@ const { values } = parseArgs({
     "legacy-output": { type: "boolean", default: false },
   },
 })
+/** The harness the timed sends go through (`--harness`). */
+const harness = z.enum(["codex", "claude", "opencode"]).parse(values.harness)
 const say = (line: string) => process.stderr.write(`${line}\n`)
 const delay = (ms: number) => new Promise((done) => setTimeout(done, ms))
 const SCALES = {
@@ -233,6 +240,10 @@ if (model) {
   mkdirSync(join(world.home, ".codex"), { recursive: true })
   writeFileSync(join(world.home, ".codex", "config.toml"), `openai_base_url = "${model.url}/v1"\nchatgpt_base_url = "${model.url}/backend-api"\n\n[features]\nplugins = false\n`)
   writeFileSync(join(world.home, ".codex", "auth.json"), JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "mako-host-load" }), { mode: 0o600 })
+  // And a sealed Claude Code, through the settings its own login reads (`--harness claude`), as `pointAt` points it.
+  mkdirSync(join(world.home, ".claude"), { recursive: true })
+  writeFileSync(join(world.home, ".claude", "settings.json"), JSON.stringify({ env: { ANTHROPIC_BASE_URL: model.url, ANTHROPIC_API_KEY: "mako-host-load", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" } }), { mode: 0o600 })
+  writeFileSync(join(world.home, ".claude.json"), "{}")
 }
 
   const { directory, socket } = runtimeLocation(world.dataRoot)
@@ -248,7 +259,14 @@ if (model) {
   if (snapshots) mkdirSync(snapshots, { recursive: true })
   const nodeArgs = [...HOST_NODE_OPTIONS, ...(values["node-arg"] ?? []), ...(values.gc ? ["--trace-gc"] : []), ...(snapshots ? ["--heapsnapshot-signal=SIGUSR2"] : [])]
   host = spawn("nice", ["-n", "5", process.execPath, ...nodeArgs, ...(profileDir ? ["--cpu-prof", "--cpu-prof-dir", profileDir, "--cpu-prof-interval", "1000"] : []), hostScript], {
-    env: { ...env, HOME: world.home, TMPDIR: world.temporary, MAKO_DATA_ROOT: world.dataRoot, MAKO_WEB_SOCKET: socket, MAKO_PROD: "1", MAKO_TELEMETRY: "off", ...finCount > 0 && { MAKO_FIN_SLOTS: "8" }, ...cloud && { MAKO_CLOUD_URL: cloud.url } },
+    // Claude Code's config folder named outright: its login, and so its keychain item, are the world's own
+    // (`Claude Code-credentials-<hash of the folder>`), never the person's.
+    env: { ...env, HOME: world.home, TMPDIR: world.temporary, MAKO_DATA_ROOT: world.dataRoot, ...harness === "claude" && { CLAUDE_CONFIG_DIR: join(world.home, ".claude") },
+      // A sealed OpenCode (`--harness opencode`): Anthropic's models only, through the stand-in, as `pointAt` points it.
+      ...harness === "opencode" && model && {
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({ enabled_providers: ["anthropic"], provider: { anthropic: { options: { baseURL: `${model.url}/v1`, apiKey: "mako-host-load" } } } }),
+        OPENCODE_DISABLE_MODELS_FETCH: "1", OPENCODE_DISABLE_AUTOUPDATE: "1",
+      }, MAKO_WEB_SOCKET: socket, MAKO_PROD: "1", MAKO_TELEMETRY: "off", ...finCount > 0 && { MAKO_FIN_SLOTS: "8" }, ...cloud && { MAKO_CLOUD_URL: cloud.url } },
     stdio: ["ignore", values.gc ? "pipe" : "ignore", "inherit"],
     ...profileDir && values["node-arg"]?.some((arg) => arg.startsWith("--heap-prof")) && { cwd: profileDir },
     ...snapshots && { cwd: snapshots },
@@ -409,8 +427,10 @@ if (model) {
   timers.push(setInterval(() => ask("mako:worktree-summaries"), 10_000))
 
   // A message the person sends, timed from the call until its harness asks the model: what waits behind the load
-  // (its checkpoint's Git reads, the loop) is in it, the harness's own start isn't (it's running already).
+  // (its checkpoint's Git reads, the loop) is in it, the harness's own start isn't (it's running already). Codex's,
+  // unless `--harness claude`: harnesses wait on their turn's checkpoint in different places, so each is timed.
   const sends: [number, number | null][] = []
+  const sendDetails: { tag: string; request: string; acceptedMs: number | null; modelMs: number | null }[] = []
   let conversation: string | undefined
   if (values.send || finCount > 0) {
     conversation = randomUUID()
@@ -418,9 +438,9 @@ if (model) {
     const churned = (index: number) => world.checkouts[index]!.fin || index < scale.fins.length
     const quietAt = world.checkouts.findLastIndex((_, index) => !churned(index))
     const cwd = world.checkouts[values["send-quiet"] && quietAt >= 0 ? quietAt : 0]!.path
-    await call("mako:live-start", "codex", cwd, { conversationId: conversation, modeId: values["tool-heavy"] ? "access:full" : "access:ask", title: "Host load send", initialRequest: { id: randomUUID(), text: "BENCH-S0 start", attachments: [] } })
+    await call("mako:live-start", harness, cwd, { conversationId: conversation, modeId: values["tool-heavy"] ? "access:full" : "access:ask", title: "Host load send", initialRequest: { id: randomUUID(), text: "BENCH-S0 start", attachments: [] } })
     for (const deadline = Date.now() + 180_000; !(values["tool-heavy"] ? completedTools : heardAt).has("S0"); await delay(100))
-      if (Date.now() > deadline) throw new Error("the bench's Codex never asked the stand-in model")
+      if (Date.now() > deadline) throw new Error(`the bench's ${harness} never asked the stand-in model`)
     if (finCount > 0) {
       // The person's tree of 2026-11-12: an Apex of many Fins, each of which every batch of the Apex's row reads.
       const session = z.object({ sessionId: z.string() }).loose().parse(await call("mako:live-snapshot", conversation)).sessionId
@@ -483,7 +503,9 @@ if (model) {
       await delay(3_000)
       const tag = `S${n}`
       const began = performance.now()
-      await call("mako:live-prompt", conversation, randomUUID(), `BENCH-${tag} next`, []).catch(() => undefined)
+      const request = randomUUID()
+      let acceptedMs: number | null = null
+      await call("mako:live-prompt", conversation, request, `BENCH-${tag} next`, []).then(() => { acceptedMs = Math.round((performance.now() - began) * 10) / 10 }, () => undefined)
       for (const deadline = Date.now() + 60_000; !heardAt.has(tag) && Date.now() < deadline; ) await delay(10)
       if (values["tool-heavy"]) {
         for (const deadline = Date.now() + 90_000; !completedTools.has(tag) && Date.now() < deadline; ) await delay(10)
@@ -495,7 +517,9 @@ if (model) {
         }
       }
       const heard = heardAt.get(tag)
-      sends.push([Date.now(), heard === undefined ? null : Math.round((heard - began) * 10) / 10])
+      const modelMs = heard === undefined ? null : Math.round((heard - began) * 10) / 10
+      sends.push([Date.now(), modelMs])
+      sendDetails.push({ tag, request, acceptedMs, modelMs })
       if (snapshots && snapshotAt.has(n)) await heapSnapshot(snapshots, `after send ${n}`)
     }
   })()
@@ -539,7 +563,7 @@ if (model) {
     const answered = times.map(([, ms]) => ms).filter((ms): ms is number => ms !== null).sort((a, b) => a - b)
     const at = (share: number) => answered[Math.min(answered.length - 1, Math.floor(share * answered.length))] ?? null
     const over = times.filter(([, ms]) => ms === null || ms > budget).length
-    return { n: times.length, failed: times.length - answered.length, p50: at(0.5), p99: at(0.99), p999: at(0.999), max: answered.at(-1) ?? null, overBudget: over, overShare: times.length ? over / times.length : 1 }
+    return { n: times.length, failed: times.length - answered.length, p50: at(0.5), p95: at(0.95), p99: at(0.99), p999: at(0.999), max: answered.at(-1) ?? null, overBudget: over, overShare: times.length ? over / times.length : 1 }
   }
   // One profile per thread: the main thread's is numbered 0 (`CPU.<date>.<time>.<pid>.0.<n>.cpuprofile`).
   const profile = profileDir && readdirSync(profileDir).filter((name) => /\.\d+\.0\.\d+\.cpuprofile$/.test(name)).map((name) => join(profileDir, name)).sort().at(-1)
@@ -560,7 +584,7 @@ if (model) {
     scale: values.scale, host: hostScript, seconds: Number(values.seconds), fins: fins.length, windows, windowCalls, windowFailures,
     measuredWindow: { from: probedFrom, to: probedTo }, outputs,
     ...values["tool-heavy"] && { toolWorkload: { callsPerTurn: TOOL_CALLS, requestedTurns: TOOL_TURNS, steps: Object.fromEntries(toolSteps), completed: [...completedTools] } },
-    ...answers, eventLoop: health.eventLoop, peakMb: unread ? null : peakMb, memoryReadings: memory.readings, memoryMisses: memory.misses,
+    ...answers, ...model && { sendSamples: sends, sendDetails }, eventLoop: health.eventLoop, peakMb: unread ? null : peakMb, memoryReadings: memory.readings, memoryMisses: memory.misses,
     nodeArgs, ...idle && { idle }, ...reportsFrom && reportsTo && { account: accountRate(reportsFrom, reportsTo, (probedTo - probedFrom) / 60_000) }, ...snapshotsTaken.length && { snapshots: snapshotsTaken }, ...rss && { rss }, ...gc && { gc },
     ...profile && {
       profile,
