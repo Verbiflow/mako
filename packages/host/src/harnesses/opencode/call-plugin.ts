@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { realpath } from "node:fs/promises"
 import { parse, type ParseError } from "jsonc-parser"
 import { z } from "zod"
 import { hostLog } from "../../base/host-log.js"
@@ -48,12 +47,9 @@ export default {
 }
 `
 
-/** How Mako's plugin folder's name begins. */
-const MAKO_OPENCODE_PLUGIN = "mako-opencode-calls-"
-
 /** The plugin's folder, the same for every launch of this build: OpenCode loads a folder holding `server.js`, never a bare file. */
 async function pluginFolder(): Promise<string> {
-  const folder = join(tmpdir(), `${MAKO_OPENCODE_PLUGIN}${createHash("sha256").update(PLUGIN_SOURCE).digest("hex").slice(0, 16)}`)
+  const folder = join(tmpdir(), `mako-opencode-calls-${createHash("sha256").update(PLUGIN_SOURCE).digest("hex").slice(0, 16)}`)
   await publishFile(join(folder, "server.js"), PLUGIN_SOURCE, { mode: 0o600, dirMode: 0o700 })
   return folder
 }
@@ -65,22 +61,12 @@ const Config = z.looseObject({ plugins: z.array(z.json()).optional() })
  * (`plugins`, v2's key; their `plugin/` folders load as before), where the
  * launch routes calls and has Mako's server to post to.
  */
-export async function configureOpenCodeCalls(env: NodeJS.ProcessEnv, conversation: string, gate: { url: string; token: string } | undefined): Promise<string | undefined> {
-  if (!gate) return undefined
+export async function configureOpenCodeCalls(env: NodeJS.ProcessEnv, conversation: string, gate: { url: string; token: string } | undefined): Promise<void> {
+  if (!gate) return
   const errors: ParseError[] = []
   const config = Config.parse(parse(env.OPENCODE_CONFIG_CONTENT || "{}", errors, { allowTrailingComma: true }))
   if (errors.length) throw new Error("OpenCode inline configuration contains invalid JSON.")
-  const folder = await pluginFolder()
-  const plugin = { package: folder, options: gate }
+  const plugin = { package: await pluginFolder(), options: gate }
   env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ ...config, plugins: [...config.plugins ?? [], plugin] })
   hostLog("routing", "native calls gated", { harness: "opencode", via: "plugin execute.before", conversation })
-  return folder
-}
-
-/**
- * The file OpenCode names Mako's plugin by (`plugin.list`'s local `path`): its folder's `server.js`, under the folder
- * as given and as resolved (macOS's `/var` is `/private/var`), so the person's own plugins are told apart exactly.
- */
-export async function openCodePluginFiles(folder: string): Promise<string[]> {
-  return [...new Set([join(folder, "server.js"), join(await realpath(folder), "server.js")])]
 }

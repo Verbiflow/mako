@@ -73,7 +73,6 @@ export const installOpenCode: ProviderModule = (host, context) => {
       streams: context.streams,
       servers,
       versions,
-      ...context.writeHolds && { writeHolds: context.writeHolds },
     }),
     decoder: openCodeDecoderSource,
     profile: openCodeProfileLoader(servers, versions),
