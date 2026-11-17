@@ -214,7 +214,8 @@ export interface EnvironmentTools {
    * often, so a probe reads only what changed since. Run every
    * `SAMPLE_EVERY_MS`.
    */
-  traceApps(): Promise<void>
+  /** Says how many apps run, so the sampler knows when nothing is left to follow. */
+  traceApps(): Promise<number>
   /**
    * One look at every app on this Mac for the sampler that pushes the marks (`ThreadAppSampler`): the marks, and
    * whether anything is under way, which it follows closely, or alive, which it follows at all.
@@ -861,7 +862,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   let historyReadAt = 0
   /** Apps seen running at the last look; one gone since gets its trace closed, with the history read up to then. */
   let wereActive = new Set<string>()
-  const traceApps = async (): Promise<void> => {
+  const traceApps = async (): Promise<number> => {
     const apps = await deps.processes.active()
     const active = new Set(apps.map((app) => app.folder))
     const ended = [...wereActive].filter((folder) => !active.has(folder))
@@ -870,6 +871,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (due) historyReadAt = (deps.now ?? Date.now)()
     const traced = [...apps.map(({ folder, pids }) => ({ folder, pids })), ...ended.map((folder) => ({ folder, pids: [], ended: true }))]
     if (traced.length) await deps.traces.refresh(traced, due ? { history: deps.history } : {})
+    return apps.length
   }
   /**
    * Check runs a conversation hasn't had the result of yet, by app, tier and
