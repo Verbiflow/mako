@@ -1,13 +1,13 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.12.57"
+    "version": "3000.13.4"
   },
   "about": "Say hello. The model fails with a server error, the harness retries once and the turn fails.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#tasteful-germanium",
+      "path": ".local/share/devin/cli/sessions.db#wooded-gazelle",
       "known": [
         {
           "side": "-",
@@ -23,7 +23,7 @@
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/7aa1e0e3-9abc-4132-9604-accc8ac43bd6.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/a3b7d069-7976-464c-a447-299f018e8527.db",
       "known": [
         {
           "side": "-",

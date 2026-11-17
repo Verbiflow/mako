@@ -1,22 +1,22 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.12.57"
+    "version": "3000.13.4"
   },
   "about": "Start one subagent to read notes.md and docs/plan.md and report which day the release ships and when the branch freezes. Don't read the files yourself; answer with what it reports. A subagent that reads two files and reports back, whose own calls are its progress while it runs, then the answer from its report.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#hail-adasaurus",
+      "path": ".local/share/devin/cli/sessions.db#ubiquitous-cacao",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/9468da9a-a02e-4716-aa67-0b3f6d145be5.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/a0c2b84d-3bd1-4f59-95ff-033f70d65c7e.db",
       "known": [
         {
           "side": "-",
-          "line": "tool #1 agent run_subagent {\"profile\":\"subagent_explore\",\"task\":\"Read notes.md and docs/plan.md, then report which day the release ships and when the branch freezes.\",\"title\":\"Read the release notes\"} -> Subagent completed:\\nThe release ships on Friday, and the branch freezes on Friday.",
+          "line": "tool #1 agent run_subagent {\"profile\":\"subagent_explore\",\"task\":\"Read notes.md and docs/plan.md, then report which day the release ships and when the branch freezes.\",\"title\":\"Read the release notes\"} -> The release ships on Friday, and the branch freezes on Friday.",
           "reason": "Devin 3000.11.205 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
         },
         {
@@ -38,7 +38,7 @@
     "known": [
       {
         "side": "-",
-        "line": "tool #1 agent run_subagent {\"profile\":\"subagent_explore\",\"task\":\"Read notes.md and docs/plan.md, then report which day the release ships and when the branch freezes.\",\"title\":\"Read the release notes\"} -> Subagent completed:\\nThe release ships on Friday, and the branch freezes on Friday.",
+        "line": "tool #1 agent run_subagent {\"profile\":\"subagent_explore\",\"task\":\"Read notes.md and docs/plan.md, then report which day the release ships and when the branch freezes.\",\"title\":\"Read the release notes\"} -> The release ships on Friday, and the branch freezes on Friday.",
         "reason": "Devin 3000.11.205 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
       },
       {
