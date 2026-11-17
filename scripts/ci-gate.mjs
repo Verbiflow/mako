@@ -298,6 +298,7 @@ export const STEPS = [
   [4, "tsx scripts/test-process-group-held.ts"],
   [4, "tsx scripts/test-grok-agents.ts"],
   [2, "tsx scripts/test-grok-connection.ts"],
+  [2, "tsx scripts/test-grok-inspect-cache.ts"],
   [2, "tsx --tsconfig tsconfig.app.json scripts/test-grok-store.ts"],
   [11, "tsx scripts/test-harness-update-paths.ts"],
   [2, "tsx scripts/test-heap-watch.ts"],

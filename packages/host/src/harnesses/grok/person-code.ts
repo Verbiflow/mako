@@ -34,9 +34,10 @@ export function grokInspect(executable: string, env: NodeJS.ProcessEnv, cwd: str
 
 /**
  * What Grok reads to say what loads, so what can change its answer, by place (its hooks guide, 1.0.70): its home's
- * config, hooks, plugins, trust and policy files, the Claude and Cursor files it also reads, `/etc/grok`, and in the
- * folder and every folder up to its repository's root, those same project files. A hooks folder counts by each file
- * in it, since editing one moves only its own time.
+ * config, hooks, plugins, trust and policy files, the Claude and Cursor files it also reads, `/etc/grok`, and the
+ * project files of the folder and of every folder above it, up to the home folder or the filesystem's root, whichever
+ * comes first (a repository's root among them, which Grok takes the project's from). A hooks folder counts by each
+ * file in it, since editing one moves only its own time.
  */
 function readPlaces(env: NodeJS.ProcessEnv, cwd: string): string[] {
   const home = env.HOME || homedir()
