@@ -605,7 +605,7 @@ jobs:
   # Every job's verdict: on main, the whole of CI after a merge.
   ci:
     if: always()
-    needs: [changes, checks, install-cold, gate, mac-host, mac-package, file-search, performance, update-checks, transcript-ui, suites, sync-bench, steer-latency, host-load, codex-sandbox]
+    needs: [changes, checks, install-cold, gate, mac-host, mac-package, file-search, performance, update-checks, transcript-ui, suites, sync-bench, steer-latency, host-load, codex-sandbox, grok-live]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
