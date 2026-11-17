@@ -73,6 +73,8 @@ export type PlacedSession = z.infer<typeof PlacedSessionSchema>
 
 export interface SettledOptions {
   rescans?: boolean
+  /** With rescans off, wait only for roots intersecting these folders. */
+  checkouts?: readonly string[]
 }
 
 export type LostTarget = { thread: string } | { path: string }
@@ -92,8 +94,8 @@ export interface JournalWrites {
   /** A follower's Threads' sessions; the owner's own are in its catalog. */
   sessions(sessions: readonly PlacedSession[]): void
   track(root: string): Promise<void>
-  /** Every change heard journaled; `rescans: false` (a turn's count) leaves rescans for lost events to their own pace. */
-  settled(options?: SettledOptions): Promise<void>
+  /** What was heard journaled; false means incomplete. Older owners may omit that reading. `rescans: false` leaves lost-event rescans alone. */
+  settled(options?: SettledOptions): Promise<void | boolean>
   readBack(checkout?: string, budgetMs?: number): Promise<BackfillResult | undefined>
   lost(target: LostTarget): Promise<LostVersion[]>
   restore(root: string, entry: number): Promise<{ path: string }>
@@ -136,7 +138,7 @@ const LostTargetSchema = z.union([z.object({ thread: ThreadIdSchema }).strict(),
 const RequestSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("track"), root: AbsolutePathSchema }),
   // `rescans` is new: an owner from before it reads every `settled` as a full one, and this one reads a follower's without it so.
-  z.object({ kind: z.literal("settled"), rescans: z.boolean().optional() }),
+  z.object({ kind: z.literal("settled"), rescans: z.boolean().optional(), checkouts: z.array(AbsolutePathSchema).max(100).optional() }),
   z.object({ kind: z.literal("read-back"), checkout: AbsolutePathSchema.optional(), budgetMs: z.number().int().positive().optional() }),
   z.object({ kind: z.literal("lost"), target: LostTargetSchema }),
   z.object({ kind: z.literal("restore"), root: z.string().min(1).max(200), entry: z.number().int().positive() }),
@@ -161,7 +163,7 @@ const LostVersionSchema = z.object({
 /** A request's answer, by the request's kind. */
 const ReplySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("track") }),
-  z.object({ kind: z.literal("settled") }),
+  z.object({ kind: z.literal("settled"), complete: z.boolean().optional() }),
   z.object({ kind: z.literal("read-back"), result: BackfillResultSchema.nullable() }),
   z.object({ kind: z.literal("lost"), versions: z.array(LostVersionSchema) }),
   z.object({ kind: z.literal("restore"), path: z.string() }),
@@ -408,7 +410,7 @@ export class SharedJournal {
         answer(await this.request({ kind: "track", root }), "track")
       },
       settled: async (options) => {
-        answer(await this.request({ kind: "settled", ...(options?.rescans === false && { rescans: false }) }), "settled")
+        return answer(await this.request({ kind: "settled", ...(options?.rescans === false && { rescans: false }), ...(options?.checkouts && { checkouts: [...options.checkouts] }) }), "settled").complete
       },
       readBack: async (checkout, budgetMs) => answer(await this.request({ kind: "read-back", checkout, budgetMs }), "read-back").result ?? undefined,
       lost: async (target) => answer(await this.request({ kind: "lost", target }), "lost").versions,
@@ -746,8 +748,7 @@ export class SharedJournal {
         await writes.track(request.root)
         return { kind: "track" }
       case "settled":
-        await writes.settled(request.rescans === false ? { rescans: false } : undefined)
-        return { kind: "settled" }
+        return { kind: "settled", complete: (await writes.settled({ rescans: request.rescans, checkouts: request.checkouts })) !== false }
       case "read-back": return { kind: "read-back", result: (await writes.readBack(request.checkout, request.budgetMs)) ?? null }
       case "lost": return { kind: "lost", versions: await writes.lost(request.target) }
       case "restore": return { kind: "restore", path: (await writes.restore(request.root, request.entry)).path }
@@ -866,7 +867,7 @@ export class SharedJournal {
         this.calls.delete(id)
         if (request.kind === "settled") {
           this.options.log("the record of changes didn't answer in time; going on with what it holds", { waitedMs: patience.ms })
-          resolveCall({ kind: "settled" })
+          resolveCall({ kind: "settled", complete: false })
         } else rejectCall(new Error("Mako's record of changes didn't answer in time. Try again in a moment."))
       }, patience.ms)
       timer.unref?.()

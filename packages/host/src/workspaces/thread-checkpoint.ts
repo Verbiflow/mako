@@ -191,10 +191,10 @@ async function changesOf(input: ThreadCheckpointInput, head: string, files: read
 }
 
 /** The journal's settle, waited for until `by` at most: a capture with a deadline goes with what's settled then. */
-async function settledBy(ledger: Pick<MoveLedger, "settled">, by: number | undefined): Promise<void> {
-  if (by === undefined) return ledger.settled()
+async function settledBy(ledger: Pick<MoveLedger, "settled">, by: number | undefined, root: string): Promise<void> {
+  if (by === undefined) return ledger.settled([root])
   let timer: ReturnType<typeof setTimeout> | undefined
-  await Promise.race([ledger.settled(), new Promise((resolve) => (timer = setTimeout(resolve, Math.max(0, by - Date.now()))))])
+  await Promise.race([ledger.settled([root]), new Promise((resolve) => (timer = setTimeout(resolve, Math.max(0, by - Date.now()))))])
   clearTimeout(timer)
 }
 
@@ -225,13 +225,13 @@ export async function captureThreadCheckpoint(input: ThreadCheckpointInput): Pro
   if ((await text(git, { cwd: repoRoot, args: ["ls-files", "-u"], read: true })).length)
     throw new ThreadCheckpointRefused("conflicts", "This checkout has conflicts to resolve first.")
   await ledger.track(repoRoot)
-  await settledBy(ledger, input.by)
+  await settledBy(ledger, input.by, repoRoot)
   // The watcher hears a write some milliseconds after it lands: a file the journal hasn't caught up with is asked again.
   let found: Awaited<ReturnType<typeof changesOf>> = "stale"
   for (let attempt = 0; attempt < ATTEMPTS && found === "stale"; attempt++) {
     if (attempt) {
       await new Promise((resolve) => setTimeout(resolve, 150 * attempt))
-      await settledBy(ledger, input.by)
+      await settledBy(ledger, input.by, repoRoot)
     }
     if (ledger.head(repoRoot) !== head) continue
     const read = attempt === 0 && input.partition ? input.partition : await ledger.partition(repoRoot, input.thread)

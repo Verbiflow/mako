@@ -156,9 +156,10 @@ try {
 {
   const counted: TurnChanges[] = []
   let settledYet = false
+  let barrier = Promise.resolve()
   const ledger: TurnLedger = {
     placement: () => ({ thread: "T1", session: "S1" }),
-    flushed: async () => undefined,
+    flushed: () => barrier,
     countTurn: async (thread, turn, state) => ({ ...summary, thread, turn, state }),
     settledThrough: () => settledYet,
     counted: (record) => counted.push(record),
@@ -202,6 +203,18 @@ try {
   open = ledger
   early.loaded(before)
   await until(() => before.snapshot.requests[0]!.changes?.state === "settled")
+  // New shell work heard after the first count must finish before the final count is committed.
+  settledYet = false
+  const late = residentOf(snapshotOf([{ ...request }]), journal)
+  counts.ended(late, request.id)
+  await until(() => late.snapshot.requests[0]!.changes?.state === "settling")
+  const release = Promise.withResolvers<void>()
+  barrier = release.promise
+  settledYet = true
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  assert.equal(late.snapshot.requests[0]!.changes?.state, "settling", "the final count must recheck the shell delivery barrier")
+  release.resolve()
+  await until(() => late.snapshot.requests[0]!.changes?.state === "settled")
   await journal.close()
   rmSync(scratch, { recursive: true, force: true })
 }

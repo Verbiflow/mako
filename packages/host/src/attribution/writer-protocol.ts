@@ -91,7 +91,7 @@ export const WriterHostRequestSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("context") }),
   Root.extend({ kind: z.literal("repository") }),
   Root.extend({ kind: z.literal("head") }),
-  Root.extend({ kind: z.literal("inventory") }),
+  Root.extend({ kind: z.literal("inventory"), includeTracked: z.boolean().optional() }),
   Root.extend({ kind: z.literal("ignored"), paths: z.array(z.string()) }),
   Root.extend({ kind: z.literal("ignored-entries") }),
   Root.extend({ kind: z.literal("read"), commit: z.string(), path: z.string() }),

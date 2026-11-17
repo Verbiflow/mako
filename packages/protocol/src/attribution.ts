@@ -163,7 +163,7 @@ export type ChangeKind = z.infer<typeof ChangeKindSchema>
 /**
  * How the tracker came to see a change:
  * - `event`: the watcher reported it live;
- * - `rescan`: events were lost, and a walk compared against the stat cache found it;
+ * - `rescan`: a filesystem walk or live Git inventory compared against the stat cache found it;
  * - `history`: after a restart, the system's own history (FSEvents ids) named it;
  * - `baseline`: it was there when tracking began;
  * - `reconciled`: no change on disk; lines an earlier entry left uncertain
