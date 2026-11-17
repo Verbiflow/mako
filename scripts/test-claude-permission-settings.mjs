@@ -54,4 +54,25 @@ try {
   assert.ok(each < 50, `a check on the kept worker takes ${each.toFixed(1)} ms`)
   console.log(`Kept settings worker: ${each.toFixed(1)} ms a check`)
   console.log('PASS actual native settings reader: account-scoped configuration, destination, opt-out and helper preservation; one kept worker across accounts and edits')
+  // Whether the person's own code runs beside Mako's hook, as Claude Code resolves the launch's settings (fails closed).
+  const runs = (dir) => settings.personCodeRuns({ cwd: root, env: { ...env, CLAUDE_CONFIG_DIR: dir }, settingSources: ['user', 'project', 'local'] })
+  await writeFile(join(configRoot, 'settings.json'), JSON.stringify({ model: 'fixture' }))
+  const managed = await runs(other)
+  if (!managed) {
+    assert.equal(await runs(configRoot), false, 'settings that run nothing of the person\'s')
+    for (const [why, stored] of [
+      ['a hook', { hooks: { Stop: [{ hooks: [{ type: 'command', command: 'touch x' }] }] } }],
+      ['an enabled plugin', { enabledPlugins: { 'formatter@market': true } }],
+      ['a status line', { statusLine: { type: 'command', command: 'status' } }],
+      ['an API key helper', { apiKeyHelper: 'get-key' }],
+    ]) {
+      await writeFile(join(configRoot, 'settings.json'), JSON.stringify(stored))
+      assert.equal(await runs(configRoot), true, why)
+    }
+    await mkdir(join(root, '.claude'), { recursive: true })
+    await writeFile(join(configRoot, 'settings.json'), JSON.stringify({ model: 'fixture' }))
+    await writeFile(join(root, '.claude', 'settings.local.json'), JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'x' }] }] } }))
+    assert.equal(await runs(configRoot), true, 'a hook in the folder\'s local settings')
+    console.log('PASS person code: Claude Code\'s own resolution of the launch\'s settings finds hooks, plugins and helpers')
+  } else console.log('SKIP person code negatives: this machine\'s managed settings already run code, so every launch holds no writes')
 } finally { settings.close(); await observer?.dispose(); await rm(root, { recursive: true, force: true }) }

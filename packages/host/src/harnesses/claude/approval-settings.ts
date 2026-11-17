@@ -8,7 +8,11 @@ const CHECK_MS = 2_000
 /** A worker no check has asked of for this long is stopped; the next check starts another. */
 const IDLE_MS = 10 * 60_000
 
-const Answer = z.union([z.object({ ready: z.literal(true) }), z.object({ id: z.number(), compatible: z.boolean() })])
+const Answer = z.union([
+  z.object({ ready: z.literal(true) }),
+  z.object({ id: z.number(), compatible: z.boolean() }),
+  z.object({ id: z.number(), personCode: z.boolean() }),
+])
 
 interface Loaded {
   thread: Worker
@@ -25,7 +29,8 @@ interface Loaded {
 export class ClaudeSettingsReader {
   private loaded: Loaded | undefined
   private nextId = 0
-  private readonly waiting = new Map<number, (compatible: boolean) => void>()
+  /** Each check under way: what finishes it, and its answer should the worker fail it. */
+  private readonly waiting = new Map<number, { finish: (answer: boolean) => void; failed: boolean }>()
   private idle: NodeJS.Timeout | undefined
   private readonly entry: URL
 
@@ -40,22 +45,34 @@ export class ClaudeSettingsReader {
 
   async compatible(config: Options): Promise<boolean> {
     if (!claudeTelemetryOptionsCompatible(config)) return false
+    return this.ask(config, "compatible", false)
+  }
+
+  /**
+   * Whether the person's own code runs in a session started with `config`, as Claude Code resolves its settings
+   * (`settingsRunCode`). A check that fails or takes too long says it does: the launch then holds no writes.
+   */
+  personCodeRuns(config: Options): Promise<boolean> {
+    return this.ask(config, "personCode", true)
+  }
+
+  private ask(config: Options, ask: "compatible" | "personCode", failed: boolean): Promise<boolean> {
     const loaded = this.load()
     const id = this.nextId++
     const env = Object.fromEntries(Object.entries(config.env ?? process.env).filter((entry): entry is [string, string] => entry[1] !== undefined))
     return new Promise<boolean>((resolve) => {
       const timer = setTimeout(() => {
-        // A check stuck past its time leaves the worker unknown: it's replaced, and this start goes on without.
+        // A check stuck past its time leaves the worker unknown: it's replaced, and this start takes the failed answer.
         this.stop(loaded)
-        finish(false)
+        finish(failed)
       }, CHECK_MS)
-      const finish = (compatible: boolean) => {
+      const finish = (answer: boolean) => {
         clearTimeout(timer)
         this.waiting.delete(id)
-        resolve(compatible)
+        resolve(answer)
       }
-      this.waiting.set(id, finish)
-      loaded.thread.postMessage({ id, env, cwd: config.cwd ?? process.cwd(), settingSources: config.settingSources })
+      this.waiting.set(id, { finish, failed })
+      loaded.thread.postMessage({ id, ask, env, cwd: config.cwd ?? process.cwd(), settingSources: config.settingSources })
     })
   }
 
@@ -77,7 +94,7 @@ export class ClaudeSettingsReader {
       const answer = Answer.safeParse(message)
       if (!answer.success) return
       if ("ready" in answer.data) return loadedSdk(true)
-      this.waiting.get(answer.data.id)?.(answer.data.compatible)
+      this.waiting.get(answer.data.id)?.finish("compatible" in answer.data ? answer.data.compatible : answer.data.personCode)
     })
     const gone = () => {
       loadedSdk(false)
@@ -94,6 +111,6 @@ export class ClaudeSettingsReader {
     this.loaded = undefined
     clearTimeout(this.idle)
     void loaded.thread.terminate()
-    for (const finish of this.waiting.values()) finish(false)
+    for (const { finish, failed } of this.waiting.values()) finish(failed)
   }
 }

@@ -376,25 +376,28 @@ try {
       expire = () => callback(...args)
       return schedule(() => {}, 60_000).unref()
     })
-    await owner.start("test", cwd, { conversationId: conversation })
-    const sentBefore = sent.length
-    owner.submit(conversation, previous, "previous turn")
-    await until(() => sent.length === sentBefore + 1 && owner.snapshot(conversation)?.requests[0].snapshots?.before.kind === "ready")
-    // The deadline the follow-up's checkpoint asks for is the one the test expires below.
-    expire = undefined
-    writeFileSync(file, "the previous turn's last edit")
+    // Opened before anything that can throw, so the timer and the capture are always restored for the blocks after.
     const reading = Promise.withResolvers<void>(), releaseRead = Promise.withResolvers<void>()
-    const original = gitRunner.run.bind(gitRunner)
-    let paused = false
-    const capture = mock.method(gitRunner, "run", async (input: RunOptions) => {
-      if (!paused && input.args.includes("add") && input.args.includes("-A")) {
-        paused = true
-        reading.resolve()
-        await releaseRead.promise
-      }
-      return original(input)
-    })
+    let restoreCapture = () => {}
     try {
+      await owner.start("test", cwd, { conversationId: conversation })
+      const sentBefore = sent.length
+      owner.submit(conversation, previous, "previous turn")
+      await until(() => sent.length === sentBefore + 1 && owner.snapshot(conversation)?.requests[0].snapshots?.before.kind === "ready")
+      // The deadline the follow-up's checkpoint asks for is the one the test expires below.
+      expire = undefined
+      writeFileSync(file, "the previous turn's last edit")
+      const original = gitRunner.run.bind(gitRunner)
+      let paused = false
+      const capture = mock.method(gitRunner, "run", async (input: RunOptions) => {
+        if (!paused && input.args.includes("add") && input.args.includes("-A")) {
+          paused = true
+          reading.resolve()
+          await releaseRead.promise
+        }
+        return original(input)
+      })
+      restoreCapture = () => capture.mock.restore()
       finish(conversation, "previous answer")
       await reading.promise
       await assert.rejects(owner.previewRewind(conversation, previous, "before"), /pending work/, "rewind still waits for the closing capture")
@@ -425,7 +428,7 @@ try {
     } finally {
       releaseRead.resolve()
       timer.mock.restore()
-      capture.mock.restore()
+      restoreCapture()
     }
     console.log("PASS: the next before-point deadline still applies; an overlapping closing read is unavailable, while rewind stays blocked")
   }

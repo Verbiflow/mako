@@ -29,6 +29,8 @@ type ClosingCapture = { state: "reading" | "fixed" | "overlapped" }
  * ran out) before the message went; `held`, the message goes at once and `binding`'s writes wait on `gate`.
  */
 type Prepared = { kind: "waited" } | { kind: "held"; binding: string; gate: Promise<void> }
+/** What went before a turn's checkpoint held the workspace, when it's known (`wentAt`): where writes are held, its first write. */
+interface WentFirst { by?: "write" }
 
 /** Captures run boundaries before dispatch/queue drain; rewind creates an idle
  * historical fork so no irreversible provider rollback participates in recovery. */
@@ -97,7 +99,7 @@ export class LiveCheckpoints {
   private writeHolding(resident: Resident): { holds: NonNullable<LiveAccess["dependencies"]["writeHolds"]>; binding: string } | undefined {
     const holds = this.host.dependencies.writeHolds
     const binding = activeBinding(resident)
-    if (!holds || !binding || !this.host.dependencies.driver(binding.provider)?.firstWrite) return undefined
+    if (!holds || !binding || !this.host.dependencies.driver(binding.provider)?.firstWrite || !holds.attends(binding.id)) return undefined
     return { holds, binding: binding.id }
   }
 
@@ -154,6 +156,8 @@ export class LiveCheckpoints {
     const began = Date.now()
     let heldAt: number | undefined
     let wentAt: number | undefined
+    /** What went before the checkpoint held the workspace: the turn's message, or (writes held) its first write. */
+    const went: WentFirst = {}
     let frozen = () => {}
     const held = new Promise<void>((resolve) => (frozen = () => {
       heldAt ??= Date.now()
@@ -178,7 +182,7 @@ export class LiveCheckpoints {
           // Held after the turn went, it may already hold the turn's own edits: a rewind to it would keep them and the
           // turn's diff would leave them out, so it's never the turn's `before`. The capture still ran for `endRun`.
           before = late > 0
-            ? { kind: "unavailable", timedOut: true, reason: `The checkpoint held the workspace ${Math.round(late / 1000)} s after the turn went, so it may hold the turn's own edits` }
+            ? { kind: "unavailable", timedOut: true, reason: `The checkpoint held the workspace ${Math.round(late / 1000)} s after ${went.by === "write" ? "the agent first wrote" : "the turn went"}, so it may hold the turn's own edits` }
             : { kind: "ready", snapshot }
         } catch (error) {
           before = { kind: "unavailable", reason: errorMessage({ error }) }
@@ -213,19 +217,22 @@ export class LiveCheckpoints {
       timer = setTimeout(() => resolve("late"), this.host.dependencies.checkpointWaitMs ?? BEFORE_CHECKPOINT_WAIT_MS)
     })
     const gate = Promise.race([held, saved, waited])
-    const wentWithout = (outcome: "late" | void) => {
-      if (outcome !== "late" || heldAt !== undefined) return
+    // `late`: the turn's message went before the checkpoint held the workspace; `wrote`, where writes are held, its
+    // first write did.
+    const wentWithout = (outcome: "late" | "wrote" | void) => {
+      if (!outcome || heldAt !== undefined || wentAt !== undefined) return
       // Never a send, nor a write, waiting minutes on its checkpoint: the turn goes, said so, and the capture lands
       // on it if it ends.
       wentAt = Date.now()
-      hostWarn("checkpoints", "a turn went before its checkpoint held the workspace", { conversation, request: request.id, waitedMs: wentAt - began })
+      if (outcome === "wrote") went.by = "write"
+      hostWarn("checkpoints", outcome === "wrote" ? "a turn's first write went before its checkpoint held the workspace" : "a turn went before its checkpoint held the workspace", { conversation, request: request.id, waitedMs: wentAt - began })
       try {
         this.host.dependencies.checkpointTimedOut?.(wentAt - began)
       } catch {
         // Diagnostics must never prevent or delay provider dispatch.
       }
       if (generation === resident.generation) {
-        const reason = "The checkpoint was still waiting when the turn went"
+        const reason = outcome === "wrote" ? "The checkpoint was still waiting when the agent first wrote" : "The checkpoint was still waiting when the turn went"
         resident.snapshot = {
           ...resident.snapshot,
           requests: resident.snapshot.requests.map((item) =>
@@ -244,20 +251,29 @@ export class LiveCheckpoints {
     }
     const holding = this.writeHolding(resident)
     if (holding) {
-      // The agent is told now; what it may write waits on the same race the message would have. Once that's over, a
-      // checkpoint that didn't hold the workspace first is late (`wentAt`), as a turn that went without it is.
+      // The agent is told now; what it may write waits on the same race the message would have. A checkpoint is late
+      // (`wentAt`) only if a write was let go before it held the workspace: a turn that writes nothing keeps it, however
+      // long the capture takes.
       this.preparing.delete(request.id)
       // The agent can't write before the hold lets go, so what the person sends into its turn needn't wait for the read.
       read()
       let open = () => {}
       const writes = new Promise<void>((resolve) => (open = resolve))
-      const unhold = holding.holds.hold(holding.binding, writes)
-      void gate.then(wentWithout, () => undefined).finally(() => {
-        if (heldAt === undefined) this.overlapEndings(resident)
+      const unhold = holding.holds.hold(holding.binding, {
+        until: writes,
+        frozen: () => heldAt !== undefined,
+        wrote: () => {
+          // A closing capture still reading as the agent writes could hold its edits, as a send's could.
+          this.overlapEndings(resident)
+          wentWithout("wrote")
+        },
+      })
+      void gate.catch(() => undefined).finally(() => {
         settle()
-        unhold()
         open()
       })
+      // Held until its capture ends: once the checkpoint holds the workspace, a write goes at once (`TurnHold.frozen`).
+      void saved.catch(() => undefined).finally(unhold)
       return { kind: "held", binding: holding.binding, gate: writes }
     }
     try {
