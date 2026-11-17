@@ -18,9 +18,20 @@ import { FACES_PATH, GENERATED_PATH, renderHarnessDescriptors, renderHarnessFace
 import { GENERATED_PATH as CHECKLIST_PATH, missingSteps, renderHarnessChecklist } from "./harness-checklist.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { VOCABULARIES } from "@mako/sessions/harnesses"
+import { VOCABULARIES as SOURCE_VOCABULARIES } from "../packages/sessions/src/harnesses/index.ts"
 import { compareVersions } from "@mako/host/contracts/runtime-version"
 import { z } from "zod"
 import { currentPairVersions } from "./native-decoding.ts"
+
+// What this reads of @mako/sessions comes from its build (`dist`), the host's from source: a build older than its
+// source names the vocabularies' versions from before, which read as records out of step with `tested` (a worktree's
+// sessions build from before Cursor 1.4.0 said "cursor's tools name 1.3.1"). Say that first, in its own words.
+const stale = VOCABULARIES.filter((built) => {
+  const source = SOURCE_VOCABULARIES.find((entry) => entry.harness === built.harness)
+  return source?.checked.version !== built.checked.version || source.concepts?.checked.version !== built.concepts?.checked.version
+}).map((built) => built.harness)
+assert.deepEqual(stale, [], `@mako/sessions' build is older than its source for ${stale.join(", ")}: run npm run -s build --workspace @mako/sessions, then this again`)
+
 
 const nativeStores = new NativeStores(false)
 

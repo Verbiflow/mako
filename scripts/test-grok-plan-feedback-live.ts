@@ -6,7 +6,7 @@ import "./lib/scratch-git.mjs"
 // call's live update and the saved session say the same.
 import assert from "node:assert/strict"
 import { execFileSync, spawn } from "node:child_process"
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { createServer, type IncomingMessage } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -18,6 +18,7 @@ import { acpReadable, acpWritable } from "@mako/host/harnesses/acp-stream"
 import type { JsonObject } from "@mako/host/contracts/json"
 import { acpClientCapabilities } from "@mako/host/harnesses/acp-source"
 import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
+import { removeScratch } from "./lib/scratch-processes.mjs"
 
 const grokAcpSource = createGrokAcpSource()
 
@@ -161,6 +162,7 @@ else {
     console.log("Grok plan feedback: the person's words reached the model inside exit_plan_mode's result, live and saved")
   } finally {
     for (const done of after.reverse()) done()
-    rmSync(root, { recursive: true, force: true })
+    // Grok writes its session as it exits: wait for nothing to hold the folder, then remove it.
+    await removeScratch(root)
   }
 }
