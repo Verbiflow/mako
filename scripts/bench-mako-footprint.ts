@@ -18,7 +18,9 @@ import { watchTree } from "@mako/host/workspaces/tree-watcher"
  * the tracker over `--repos` scratch checkouts of `--files` files, and a
  * folder of Mako's own that churns all along as its stores do. Each turn
  * edits files in one checkout, commits every third, and reads the history
- * since it started, as a turn's footprint does. Turns run for `--minutes`.
+ * of the folder holding the checkouts since it started, with the checkouts
+ * left out, as the footprint of a turn run in that folder does. Turns run
+ * for `--minutes`.
  *
  *   --drops <s>        every checkout hears events dropped this often, as from a degraded fseventsd
  *   --slow-delivery    the watcher's canary is heard 12 s late, as from a degraded fseventsd delivering in batches

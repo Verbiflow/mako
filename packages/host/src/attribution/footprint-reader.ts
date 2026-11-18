@@ -1,12 +1,11 @@
-import type { ActivityMark, FootprintBasis, FootprintEntry, ReportedCall, TrackerPorts } from "@mako/protocol"
+import type { ActivityMark, FootprintBasis, FootprintEntry, ReportedCall, TrackerFileStat, TrackerPorts } from "@mako/protocol"
 import { contentRef, READ_LIMIT, secretPath } from "./content.js"
 import {
   classify,
   container,
   Exclusions,
   FolderRules,
-  noiseFolders,
-  readIgnore,
+  parent,
   staticNoise,
   strength,
   type ExclusionRule,
@@ -16,35 +15,31 @@ import {
   type TurnEvidence,
 } from "./footprint.js"
 import type { JournalStore } from "./journal-store.js"
-import { NoiseBaseline } from "./noise-baseline.js"
 import { within } from "./paths.js"
 import { otherAppsData } from "../base/other-apps-data.js"
 import { rootLinks } from "./ports.js"
 
 /*
- * Reads each turn's footprint when it ends, and learns the machine's own
- * churn while nothing runs. Everything is read from the system's history
- * after the fact, so nothing runs per event: while turns run, in short
- * segments each read once for every turn open across it (`SEGMENT_MS`), and
- * while the machine is idle, a minute-long sample after each of a few gaps
- * (`IDLE_GAPS_MS`). Reads happen in the reader (the host's history child),
- * with every folder a rule takes whole for all the turns a segment serves
- * left out there and only counted.
+ * Reads each turn's footprint when it ends. Every path the rules can keep
+ * lies at or under one of the turn's own claims: a path its calls named, a
+ * path its commands' output mentioned, or a folder it ran in outside every
+ * checkout. So the system's history is read only under the claims that are
+ * folders, and a claim that is a file is asked for its times; the home
+ * folder's churn is never read (40 turns on one Mac once read 751,000 of its
+ * paths, serially across every Thread, to keep no row). A turn with no claim
+ * folder reads no history at all. Each turn reads on its own: in short
+ * segments while it runs (`SEGMENT_MS`), each claim folder from where its
+ * last read stood, and once more when it ends, before the rules decide.
  */
 
 export interface FootprintOptions {
   home: string
-  /** Where footprints are read from: the home folder and the temporary folders. */
-  roots: readonly string[]
   /**
-   * Roots watched live instead of read from the history: the temporary
-   * folders. Their history is the costliest per change to read (the user's
-   * `$TMPDIR` churns thousands of times in a few minutes, 70 ms a read), a
-   * live watch of it costs a fiftieth of a percent of a core, and Linux keeps
-   * no history at all. A root whose watch broke within a read's window is
-   * read from the history instead.
+   * The folders too broad to stand for a turn: the home folder and the
+   * temporary folders. A claim at or above one is no claim, and nothing is
+   * read from one as a whole.
    */
-  live?: readonly string[]
+  roots: readonly string[]
   /** The harnesses' stores and Mako's data: never a footprint, named or not. */
   stores(): readonly string[] | Promise<readonly string[]>
   /** Folders of other sessions on this machine that were active since `since`, not `thread`'s own, with whose they are. */
@@ -55,10 +50,12 @@ export interface FootprintOptions {
   links?: readonly (readonly [string, string])[]
   /**
    * Each path's verdict as a turn's read decides it, for a replay or a test;
-   * the host passes none. Paths the history read left out under a rule
-   * folder never reach the reader, so only their counts are known.
+   * the host passes none. Only paths under the turn's claims are read, and
+   * those a read left out under a checkout or a store are only counted.
    */
   explain?(turn: { thread: string; turn: string }, path: string, verdict: PathVerdict): void
+  /** How often a running turn's claim folders are read, for a test that can't wait `SEGMENT_MS`. */
+  segmentMs?: number
 }
 
 /** What became of one changed path: kept with a basis, or left out by a rule. */
@@ -75,8 +72,7 @@ export interface FootprintReaderDeps {
 
 /**
  * What a turn's calls said, gathered as they report, so pruned evidence
- * never loses a name, and what the history reported in the segments it
- * was open across.
+ * never loses a name, and what the history reported under its claims.
  */
 interface Trail {
   thread: string
@@ -89,29 +85,30 @@ interface Trail {
   cwds: Set<string>
   paths: Set<string>
   writers: Map<string, readonly number[]>
+  /** Where the history stood when the turn started: a folder first claimed later is read from here. */
+  mark: Promise<string | null>
   /**
-   * Paths each segment's read left out under a rule folder, by rule. A read
-   * runs to the history's present, not to its segment's end, and the next
-   * segment starts at the cut, so a trail open across a cut can count the
-   * changes made between the cut and that read twice: a read's wait, never
-   * a turn's own write lost.
+   * Each claim folder with the mark its next read starts at; null when that
+   * mark couldn't be taken. A read runs to the history's present, not to
+   * the next mark, so a change between the two can be read twice: a path
+   * seen again, never a write lost.
    */
+  folders: Map<string, Promise<string | null>>
+  /** Claims already looked at, so a read while the turn runs stats only the new ones. */
+  seen: Set<string>
+  /** The stores, asked for once a turn: each asking crosses to the host process. */
+  stores?: Promise<readonly string[]>
+  /** The turn's reads, one after another, so its last is in before it is decided. */
+  reads: Promise<void>
+  /** The next read while the turn runs. */
+  timer?: ReturnType<typeof setTimeout>
+  /** Paths the reads left out under a checkout or a store inside a claim folder, and what the rules left out. */
   exclusions: Exclusions
   ignored: number
   complete: boolean
   readMs: number
 }
 
-/** The history since `mark`, read once for every turn open across it. */
-interface Segment {
-  mark: Promise<string | null>
-  at: number
-  trails: Trail[]
-  timer: ReturnType<typeof setTimeout>
-}
-
-/** Paths kept per turn that only its window links to it, at most. */
-export const MAX_WEAK = 200
 /** Paths a trail holds at most of each kind. */
 const MAX_NAMED = 4096
 /** Changed paths a trail holds at most; past them its footprint is marked incomplete. */
@@ -119,104 +116,31 @@ const MAX_PATHS = 50_000
 /** A finished turn's names still explain other Threads' paths this long. */
 const KEEP_ENDED_MS = 120_000
 /**
- * While any turn runs the history is read at least this often, as well as
- * at every turn's start and end. FSEvents replays every event on the volume
- * since a mark: on a busy Mac a minute is a few hundred milliseconds of
- * fseventsd, an hour five seconds, and past about two hours the home
- * folder's read fails. Short segments, each read once for every turn open
- * across it, keep every read small and never repeat one.
+ * While a turn runs its claim folders are read at least this often, as well
+ * as at its end. FSEvents replays every event on the volume since a mark:
+ * on a busy Mac a minute is a few hundred milliseconds of fseventsd, an hour
+ * five seconds, and past about two hours a read fails. Short segments, each
+ * folder read from where its last read stood, keep every read small.
  */
 export const SEGMENT_MS = 120_000
-/**
- * The wait before each idle sample, the last repeating: a night with
- * nothing running costs a sample every two hours, and a short pause between
- * turns one. Each sample reads `IDLE_SAMPLE_MS` of history, never the whole
- * stretch: the baseline needs what churns, not every change.
- */
-export const IDLE_GAPS_MS = [30_000, 5 * 60_000, 30 * 60_000, 2 * 3_600_000] as const
-export const IDLE_SAMPLE_MS = 60_000
-/** How long a live root's changes are kept for the reads that need them; a read reaching further back reads the history. */
-const LIVE_KEEP_MS = 10 * 60_000
-/** Live changes kept at most; past them the oldest go, and reads reaching them read the history. */
-const LIVE_MAX = 100_000
-/** The watcher's batching: a turn's last writes are heard within it. */
-export const LIVE_SETTLE_MS = 600
 /** Excluded groups kept per turn. */
 const GROUPS_KEPT = 40
 const LOG_EVERY_MS = 10_000
 
-/** A live root's watch: since when its changes are all heard (Infinity while it isn't watching), and what it heard, oldest first. */
-interface LiveWatch {
-  since: number
-  heard: { path: string; at: number }[]
-  close?: () => void
-}
-
 const trailKey = (session: string, turn: string) => `${session}\u0000${turn}`
 
 export class FootprintReader {
-  readonly baseline: NoiseBaseline
   private readonly deps: FootprintReaderDeps
   private readonly trails = new Map<string, Trail>()
-  /** Turns and background work running now, of any Thread: none means the machine's churn is its own. */
-  private readonly running = new Set<string>()
-  /** Where the idle stretch's history read starts, and the timer of its next step. */
-  private idle?: { mark: Promise<string | null>; at: number; timer: ReturnType<typeof setTimeout> }
-  private segment?: Segment
-  /** Segment reads, one after another, so a turn's last is in before it is decided. */
-  private segments: Promise<void> = Promise.resolve()
   private readonly reads = new Map<Promise<void>, Trail | undefined>()
   private unlogged: FootprintTurn[] = []
   private logged = 0
   private closed = false
   private readonly links: readonly (readonly [string, string])[]
-  private readonly live = new Map<string, LiveWatch>()
 
   constructor(deps: FootprintReaderDeps) {
     this.deps = deps
     this.links = deps.options.links ?? rootLinks()
-    this.baseline = new NoiseBaseline(deps.store, { roots: deps.options.roots, now: () => deps.ports.clock.now() })
-    for (const root of deps.options.live ?? []) this.watchLive(root)
-    this.idleBegan()
-  }
-
-  private watchLive(root: string): void {
-    const live: LiveWatch = { since: Infinity, heard: [] }
-    this.live.set(root, live)
-    this.deps.ports.events.watch(root, {
-      changed: (paths) => {
-        const at = this.now()
-        for (const path of paths) live.heard.push({ path: path.startsWith("/") ? path : `${root}/${path}`, at })
-        let drop = 0
-        while (drop < live.heard.length && (live.heard[drop]!.at < at - LIVE_KEEP_MS || live.heard.length - drop > LIVE_MAX)) drop++
-        if (!drop) return
-        live.since = Math.max(live.since, live.heard[drop]?.at ?? at)
-        live.heard.splice(0, drop)
-      },
-      // A dropped batch leaves a hole before now; a muted or gone watch hears nothing until it's back.
-      lost: (reason) => {
-        live.heard.length = 0
-        live.since = reason === "dropped" ? this.now() : Infinity
-      },
-      heard: () => {
-        if (live.since === Infinity && live.close) live.since = this.now()
-      },
-    }).then((watching) => {
-      if (this.closed) return watching.close()
-      live.close = () => watching.close()
-      live.since = this.now()
-    }, (error: Error) => {
-      this.deps.log("a temporary folder can't be watched; its history is read instead", { root, error: error.message })
-    })
-  }
-
-  /** What a live root heard from `from` on, or undefined when its watch can't vouch for all of it. */
-  private heardSince(root: string, from: number): string[] | undefined {
-    const live = this.live.get(root)
-    if (!live || live.since > from || from < this.now() - LIVE_KEEP_MS) return undefined
-    const paths: string[] = []
-    for (let at = live.heard.length - 1; at >= 0 && live.heard[at]!.at >= from; at--) paths.push(live.heard[at]!.path)
-    return paths
   }
 
   /** A path a call gave, as the history reports it: `/tmp/out.txt` is `/private/tmp/out.txt` on macOS. */
@@ -231,20 +155,17 @@ export class FootprintReader {
 
   activity(mark: ActivityMark): void {
     if (this.closed) return
-    const running = `${mark.session}\u0000${mark.kind}\u0000${mark.id}`
-    if (mark.kind !== "call") {
-      if (mark.edge === "start") this.running.add(running)
-      else this.running.delete(running)
-    }
     if (mark.kind === "turn" && mark.edge === "start") {
-      this.idleEnded()
+      const key = trailKey(mark.session, mark.id)
+      clearTimeout(this.trails.get(key)?.timer)
       const trail: Trail = {
         thread: mark.thread, session: mark.session, turn: mark.id, start: mark.at, named: new Map(), mentioned: new Set(), cwds: new Set(),
-        paths: new Set(), writers: new Map(), exclusions: new Exclusions(), ignored: 0, complete: true, readMs: 0,
+        paths: new Set(), writers: new Map(), mark: this.deps.ports.events.mark().catch(() => null), folders: new Map(), seen: new Set(),
+        reads: Promise.resolve(), exclusions: new Exclusions(), ignored: 0, complete: true, readMs: 0,
       }
       if (mark.cwd) trail.cwds.add(this.canonical(mark.cwd))
-      this.trails.set(trailKey(mark.session, mark.id), trail)
-      this.track(this.cut(trail))
+      this.trails.set(key, trail)
+      this.arm(trail)
       return
     }
     const trail = this.trailOf(mark.session, mark.kind === "turn" ? mark.id : mark.turn)
@@ -255,9 +176,8 @@ export class FootprintReader {
     }
     if (mark.kind === "turn" && mark.edge === "end" && trail && trail.end === undefined) {
       trail.end = mark.at
-      this.track(this.cut().then(() => this.decide(trail)), trail)
+      this.track(this.cut(trail).then(() => this.decide(trail)), trail)
     }
-    if (!this.running.size) this.idleBegan()
   }
 
   /**
@@ -271,60 +191,116 @@ export class FootprintReader {
     this.reads.set(done, deciding)
   }
 
-  /**
-   * End the open segment, read it for every turn open across it, and start
-   * the next for those still open and `joining`. Resolves once the ended
-   * segment is read.
-   */
-  private cut(joining?: Trail): Promise<void> {
-    const ended = this.segment
-    if (ended) clearTimeout(ended.timer)
-    const open = [...(ended?.trails ?? []), ...(joining ? [joining] : [])].filter((trail) => trail.end === undefined)
-    this.segment = undefined
-    if (open.length && !this.closed) {
-      const timer = setTimeout(() => this.track(this.cut()), SEGMENT_MS)
-      timer.unref?.()
-      this.segment = { mark: this.deps.ports.events.mark().catch(() => null), at: this.now(), trails: open, timer }
-    }
-    if (ended)
-      this.segments = this.segments.then(() => this.readSegment(ended)).catch((error: Error) => {
-        for (const trail of ended.trails) trail.complete = false
-        this.deps.log("a footprint segment could not be read", { error: error.message })
-      })
-    return this.segments
+  /** The turn's next read while it runs, a segment from now. */
+  private arm(trail: Trail): void {
+    if (this.closed) return
+    trail.timer = setTimeout(() => {
+      if (trail.end === undefined && !this.closed) this.track(this.cut(trail))
+    }, this.deps.options.segmentMs ?? SEGMENT_MS)
+    trail.timer.unref?.()
   }
 
-  /** One segment's history for its turns, leaving out in the reader only the folders every one of them would. */
-  private async readSegment(segment: Segment): Promise<void> {
-    const mark = await segment.mark
-    if (!mark) {
-      for (const trail of segment.trails) trail.complete = false
-      return
+  /**
+   * End the turn's segment: read its claim folders after the reads it
+   * already has under way, and start the next segment while it still runs.
+   * Resolves once this read is in. Turns never wait on each other's reads.
+   */
+  private cut(trail: Trail): Promise<void> {
+    clearTimeout(trail.timer)
+    trail.timer = undefined
+    const last = trail.end !== undefined
+    if (!last) this.arm(trail)
+    trail.reads = trail.reads.then(() => this.read(trail, last)).catch((error: Error) => {
+      trail.complete = false
+      this.deps.log("a footprint segment could not be read", { error: error.message })
+    })
+    return trail.reads
+  }
+
+  /** Everything the turn said that a path of its footprint can lie at or under. */
+  private claims(trail: Trail): string[] {
+    return [...trail.named.keys(), ...trail.mentioned, ...this.ownFolders(trail)]
+  }
+
+  private stores(trail: Trail): Promise<readonly string[]> {
+    return (trail.stores ??= Promise.resolve().then(() => this.deps.options.stores()))
+  }
+
+  /** The checkouts and stores: what they hold is never a footprint, so it is never a claim and never read. */
+  private async held(trail: Trail): Promise<RuleFolder[]> {
+    const tracked = this.deps.tracked().map((folder): RuleFolder => ({ folder, rule: "tracked", why: "a tracked checkout" }))
+    const stores = (await this.stores(trail)).map((folder): RuleFolder => ({ folder, rule: "store", why: "a harness's store or Mako's data" }))
+    return [...tracked, ...stores]
+  }
+
+  /**
+   * Look at the turn's claims: a folder becomes a claim folder, read from
+   * the turn's start, and at the turn's end a file whose times say it
+   * changed since the start joins the changed paths. Left alone, without a
+   * stat: a container, anything a checkout or a store holds, another app's
+   * data (macOS would ask the person), and what a claim folder already
+   * holds, which that folder's history reports. While the turn runs only
+   * claims not yet looked at are; at its end every one that is no folder is
+   * looked at again, for a file's times and for a folder made since.
+   */
+  private async look(trail: Trail, last: boolean, held: FolderRules): Promise<void> {
+    const { home, roots } = this.deps.options
+    const fresh = new Set(this.claims(trail).filter((path) => !trail.folders.has(path) && (last || !trail.seen.has(path))))
+    const since = BigInt(trail.start) * 1_000_000n
+    const changed = (stat: TrackerFileStat) => stat.mtimeNs >= since || stat.ctimeNs >= since
+    // Shortest first, so a folder is known before the claims inside it.
+    for (const path of [...fresh].sort((a, b) => a.length - b.length)) {
+      trail.seen.add(path)
+      if (container(path, roots) || otherAppsData(path, home) || held.find(path) || holds(trail.folders, path)) continue
+      const stat = await this.deps.ports.fs.stat(path)
+      if (stat?.kind === "directory") trail.folders.set(path, trail.mark)
+      else if (last && stat?.kind === "file" && changed(stat)) this.changed(trail, path)
     }
-    const writersKnown = Boolean(this.deps.ports.processes)
-    const each = await Promise.all(segment.trails.map(async (trail) => new Map(readIgnore(await this.folders(trail.thread, trail.start, [...trail.cwds]), this.evidence(trail), writersKnown).map((item) => [item.folder, item]))))
-    const [first, ...rest] = each
-    const shared = first ? [...first.keys()].filter((folder) => rest.every((folders) => folders.has(folder))) : []
-    // A turn that just ended may have written in the last moment of a live root's batching.
-    if (this.live.size && segment.trails.some((trail) => trail.end !== undefined)) await new Promise((resolve) => setTimeout(resolve, LIVE_SETTLE_MS))
+  }
+
+  private changed(trail: Trail, path: string): void {
+    if (trail.paths.size < MAX_PATHS) trail.paths.add(path)
+    else if (!trail.paths.has(path)) trail.complete = false
+  }
+
+  /**
+   * One read for a turn: each of its claim folders' history since that
+   * folder's last read, with the checkouts and stores inside it left out in
+   * the reader and counted. A turn with no claim folder reads nothing, and
+   * takes no mark. A read that fails, or a mark that couldn't be taken,
+   * leaves the footprint incomplete, and the folder goes on from the next mark.
+   */
+  private async read(trail: Trail, last: boolean): Promise<void> {
+    if (!trail.folders.size && !this.claims(trail).length) return
+    const held = await this.held(trail)
+    await this.look(trail, last, new FolderRules(held))
+    // A claim folder inside another is covered by the outer one's read.
+    const folders = [...trail.folders.keys()].filter((folder) => !holds(trail.folders, parent(folder)))
+    if (!folders.length) return
     const started = performance.now()
-    const found = await this.history(mark, segment.at, shared)
-    const ms = performance.now() - started
-    segment.trails.forEach((trail, index) => {
-      trail.complete &&= found.complete
-      trail.readMs += ms
-      for (const path of found.paths) {
-        if (trail.paths.size < MAX_PATHS) trail.paths.add(path)
-        else if (!trail.paths.has(path)) trail.complete = false
+    const events = this.deps.ports.events
+    // The next segment's mark is taken before this one is read, so nothing falls between the two.
+    const next = last ? undefined : await events.mark().catch(() => null)
+    for (const folder of folders) {
+      const from = await trail.folders.get(folder)
+      if (next !== undefined) trail.folders.set(folder, Promise.resolve(next))
+      const inside = [...new Map(held.filter((item) => within(folder, item.folder)).map((item) => [item.folder, item])).values()]
+      const found = from ? await events.since(from, folder, { ignore: inside.map((item) => item.folder) }).catch(() => null) : null
+      if (!found) {
+        trail.complete = false
+        continue
       }
-      for (const [path, pids] of found.writers) trail.writers.set(path, pids)
-      found.ignored.forEach((count, at) => {
-        const item = each[index]?.get(shared[at] ?? "")
+      trail.complete &&= found.complete
+      for (const path of found.paths) this.changed(trail, path)
+      for (const [path, pids] of found.writers ?? []) trail.writers.set(path, pids)
+      found.ignored?.forEach((count, at) => {
+        const item = inside[at]
         if (!item || !count) return
         trail.ignored += count
         trail.exclusions.add(item.rule, item.folder, count, item.why)
       })
-    })
+    }
+    trail.readMs += performance.now() - started
   }
 
   private evidence(trail: Trail): TurnEvidence {
@@ -362,8 +338,8 @@ export class FootprintReader {
 
   /**
    * Every history read under way. With `folders`, only the footprints being written for turns that ran in or around
-   * them: a count or a checkpoint of one checkout never waits on another Thread's read of the home folder's history,
-   * which with many Threads at work is always under way (27 scoped waits gave up after 15 s in 16 minutes, 2026-11-17).
+   * them: a count or a checkpoint of one checkout never waits on another Thread's read, which with many Threads at
+   * work is always under way (27 scoped waits gave up after 15 s in 16 minutes, 2026-11-17).
    */
   async settled(folders?: readonly string[]): Promise<void> {
     const around = folders?.map((folder) => this.canonical(folder))
@@ -374,96 +350,49 @@ export class FootprintReader {
 
   close(): void {
     this.closed = true
-    for (const live of this.live.values()) live.close?.()
-    if (this.idle) clearTimeout(this.idle.timer)
-    this.idle = undefined
-    if (this.segment) clearTimeout(this.segment.timer)
-    this.segment = undefined
-  }
-
-  /** The folders rules take whole for a turn of `thread`, in the rules' order. */
-  private async folders(thread: string, since: number, own: readonly string[]): Promise<RuleFolder[]> {
-    const { home, roots } = this.deps.options
-    const tracked = this.deps.tracked().map((folder): RuleFolder => ({ folder, rule: "tracked", why: "a tracked checkout" }))
-    const stores = (await this.deps.options.stores()).map((folder): RuleFolder => ({ folder, rule: "store", why: "a harness's store or Mako's data" }))
-    // Another session's folder never takes the Thread's own: a session in `~/work` says nothing about `~/work/api` the Thread runs in.
-    const others = (await this.deps.options.others?.(thread, since) ?? [])
-      .filter((item) => !container(item.folder, roots) && !own.some((folder) => within(item.folder, folder)))
-      .map((item): RuleFolder => ({ folder: item.folder, rule: "other-session", why: item.why }))
-    const learned = this.baseline.folders().map((folder): RuleFolder => ({ folder, rule: "baseline", why: "learned: it changes while no Thread runs" }))
-    return [...tracked, ...stores, ...others, ...noiseFolders(home), ...learned]
+    for (const trail of this.trails.values()) clearTimeout(trail.timer)
   }
 
   /**
-   * What changed under each root since `mark` (taken at `from`), with
-   * `ignore` folders left out in the reader and counted, in their order. A
-   * live root gives what its watch heard instead, left out here the same way.
+   * A turn's footprint from what its reads gathered: every path through the
+   * rules, the kept ones saved. The stores, the other sessions' folders and
+   * their ids each cross to the host process, so each is asked for once.
    */
-  private async history(mark: string, from: number, ignore: readonly string[]): Promise<{ paths: Set<string>; writers: Map<string, readonly number[]>; complete: boolean; ignored: number[] }> {
-    const paths = new Set<string>()
-    const writers = new Map<string, readonly number[]>()
-    let complete = true
-    const ignored = ignore.map(() => 0)
-    const folders = new Map(ignore.map((folder, index) => [folder, index]))
-    for (const root of this.deps.options.roots) {
-      const heard = this.heardSince(root, from)
-      if (heard) {
-        for (const path of heard) {
-          const at = innermost(folders, path)
-          if (at < 0) paths.add(path)
-          else ignored[at]! += 1
-        }
-        continue
-      }
-      const found = await this.deps.ports.events.since(mark, root, { ignore }).catch(() => null)
-      if (!found) {
-        complete = false
-        continue
-      }
-      complete &&= found.complete
-      for (const path of found.paths) paths.add(path)
-      for (const [path, pids] of found.writers ?? []) writers.set(path, pids)
-      found.ignored?.forEach((count, index) => {
-        if (index < ignored.length) ignored[index]! += count
-      })
-    }
-    return { paths, writers, complete, ignored }
-  }
-
-  /** A turn's footprint from what its segments gathered: every path through the rules, the kept ones saved. */
   private async decide(trail: Trail): Promise<void> {
     const end = trail.end ?? this.now()
     const evidence = this.evidence(trail)
-    const folders = await this.folders(trail.thread, trail.start, [...trail.cwds])
+    const { home, roots } = this.deps.options
+    const own = [...trail.cwds]
+    // Another session's folder never takes the Thread's own: a session in `~/work` says nothing about `~/work/api` the Thread runs in.
+    const others = (await this.deps.options.others?.(trail.thread, trail.start) ?? [])
+      .filter((item) => !container(item.folder, roots) && !own.some((folder) => within(item.folder, folder)))
+      .map((item): RuleFolder => ({ folder: item.folder, rule: "other-session", why: item.why }))
+    const folders = [...await this.held(trail), ...others]
     const exclusions = trail.exclusions
     const started = performance.now()
     const processes = this.deps.ports.processes
     const input: FootprintInput = {
-      home: this.deps.options.home,
-      roots: this.deps.options.roots,
+      home,
+      roots,
       folders,
       turn: evidence,
       others: this.othersNamed(trail),
       sessions: await this.deps.options.sessions?.(trail.thread),
       writers: trail.writers,
       ours: processes ? (pid) => processes.session(pid) === trail.session : undefined,
-      baseline: (path) => this.baseline.verdict(path),
     }
     const rules = new FolderRules(folders)
     const at = this.now()
     const entries: FootprintEntry[] = []
     const bases = new Map<FootprintBasis, number>()
-    const weakPaths: string[] = []
-    const entry = async (path: string, access: "read" | "write", basis: FootprintBasis): Promise<"kept" | "gone" | "folder"> => {
+    const entry = async (path: string, access: "read" | "write", basis: FootprintBasis): Promise<"kept" | "folder"> => {
       const stat = await this.deps.ports.fs.stat(path)
       if (stat && stat.kind !== "file") return "folder"
-      if (!stat && basis === "window") return "gone"
       const secret = secretPath(path)
       const kept: FootprintEntry = { thread: trail.thread, session: trail.session, turn: trail.turn, path, access, evidence: strength(basis), basis, at, secret }
       if (access === "write" && stat) {
         kept.size = stat.size
-        // Only what evidence links to the turn is carried, so only that is hashed.
-        if (basis !== "window" && !secret && stat.size <= READ_LIMIT) {
+        if (!secret && stat.size <= READ_LIMIT) {
           const bytes = await this.deps.ports.fs.read(path)
           if (bytes) kept.ref = contentRef(bytes)
         }
@@ -477,7 +406,6 @@ export class FootprintReader {
     const turn = new Turn()
     // Another app's container is never stat-ed or read here, even when the turn's calls named it: macOS would ask the
     // person whether Mako may access that app's data, on every turn that touched it. The Fin's own call already read it.
-    const home = this.deps.options.home
     for (const path of [...trail.paths].sort()) {
       await turn.share()
       const sealed = otherAppsData(path, home)
@@ -492,36 +420,29 @@ export class FootprintReader {
         decided(path, { rule: verdict.rule, group: verdict.group, why: verdict.why })
         continue
       }
-      if (verdict.basis === "window" && weakPaths.length >= MAX_WEAK) {
-        exclusions.add("capped", parentOf(path))
-        decided(path, { rule: "capped", group: parentOf(path) })
+      // Only the turn's window links it: no row, no stat, no read, only a count.
+      if (verdict.basis === "window") {
+        exclusions.add("unclaimed", parent(path))
+        decided(path, { rule: "unclaimed", group: parent(path) })
         continue
       }
-      const outcome = await entry(path, verdict.access, verdict.basis)
-      if (outcome === "gone") {
-        exclusions.add("gone", parentOf(path))
-        decided(path, { rule: "gone", group: parentOf(path) })
-      } else if (outcome === "kept") {
-        if (verdict.basis === "window") weakPaths.push(path)
-        decided(path, { kept: verdict.basis })
-      }
+      if (await entry(path, verdict.access, verdict.basis) === "kept") decided(path, { kept: verdict.basis })
     }
     // Paths its calls named that didn't change: read, or written to what they already held.
     for (const [path, access] of trail.named) {
       if (trail.paths.has(path) || otherAppsData(path, home)) continue
       const folder = rules.find(path)
-      if (folder?.rule === "tracked" || folder?.rule === "store" || staticNoise(path, this.deps.options.home, this.deps.options.roots)) continue
+      if (folder?.rule === "tracked" || folder?.rule === "store" || staticNoise(path, home, roots)) continue
       if ((await this.deps.ports.fs.stat(path))?.kind !== "file") continue
       await entry(path, access, "named")
     }
     this.deps.store.transaction(() => {
       for (const kept of entries) this.deps.store.addFootprint(kept)
     })
-    if (weakPaths.length) this.baseline.weak(trail.thread, weakPaths)
     const summary: FootprintTurn = {
       thread: trail.thread, session: trail.session, turn: trail.turn, start: trail.start, end,
       read: trail.paths.size, ignored: trail.ignored, complete: trail.complete,
-      kept: { strong: entries.length - weakPaths.length, weak: weakPaths.length },
+      kept: { strong: entries.length, weak: 0 },
       bases: Object.fromEntries(bases),
       excluded: Object.fromEntries(exclusions.byRule),
       groups: exclusions.top(GROUPS_KEPT),
@@ -564,73 +485,6 @@ export class FootprintReader {
     for (const [key, trail] of this.trails) if (trail.end !== undefined && trail.end < before) this.trails.delete(key)
   }
 
-  /* --------------------------------------------------------- the idle baseline */
-
-  /**
-   * Nothing runs: mark where the history stands and, after each gap, sample
-   * one stretch of it while nothing still runs. A turn starting mid-sample
-   * drops it.
-   */
-  private idleBegan(sample = 0): void {
-    if (this.idle || this.closed) return
-    const idle: NonNullable<FootprintReader["idle"]> = {
-      mark: this.deps.ports.events.mark().catch(() => null),
-      at: this.now(),
-      timer: setTimeout(() => {
-        if (this.idle !== idle) return
-        idle.mark = this.deps.ports.events.mark().catch(() => null)
-        idle.at = this.now()
-        idle.timer = setTimeout(() => {
-          if (this.idle !== idle) return
-          this.idle = undefined
-          this.track(this.sampleIdle(idle.mark, idle.at))
-          if (!this.running.size) this.idleBegan(sample + 1)
-        }, IDLE_SAMPLE_MS)
-        idle.timer.unref?.()
-      }, IDLE_GAPS_MS[Math.min(sample, IDLE_GAPS_MS.length - 1)]),
-    }
-    idle.timer.unref?.()
-    this.idle = idle
-  }
-
-  private idleEnded(): void {
-    if (!this.idle) return
-    clearTimeout(this.idle.timer)
-    this.idle = undefined
-  }
-
-  /** Sample now, for a simulation that moves its clock instead of waiting. */
-  async sampleIdleNow(): Promise<number> {
-    const idle = this.idle
-    if (!idle) return 0
-    this.idleEnded()
-    if (!this.running.size) this.idleBegan()
-    return this.sampleIdle(idle.mark, idle.at)
-  }
-
-  /** Learn what changed in an idle stretch that no other rule explains. */
-  private async sampleIdle(started: Promise<string | null>, since: number): Promise<number> {
-    const mark = await started
-    if (!mark || this.closed) return 0
-    const readStarted = performance.now()
-    const folders = await this.folders("", since, [])
-    const ignore = readIgnore(folders, { named: new Map(), mentioned: new Set(), cwds: new Set() }, false)
-    const history = await this.history(mark, since, ignore.map((item) => item.folder))
-    const rules = new FolderRules(folders)
-    const input: FootprintInput = {
-      home: this.deps.options.home, roots: this.deps.options.roots, folders, turn: { named: new Map(), mentioned: new Set(), cwds: new Set() }, others: new Set(), sessions: await this.deps.options.sessions?.(""),
-    }
-    const unexplained: string[] = []
-    const turn = new Turn()
-    for (const path of history.paths) {
-      await turn.share()
-      if (classify(path, input, rules).kept) unexplained.push(path)
-    }
-    const learned = this.baseline.idle(unexplained)
-    this.deps.log("noise learned", { read: history.paths.size, ignored: history.ignored.reduce((total, count) => total + count, 0), unexplained: unexplained.length, keys: learned, rows: this.baseline.size, ms: round(performance.now() - readStarted) })
-    return learned
-  }
-
   /* --------------------------------------------------------- logs */
 
   /** One line at most every ten seconds, summing the turns read since. */
@@ -647,8 +501,7 @@ export class FootprintReader {
       read: sum((item) => item.read),
       ignored: sum((item) => item.ignored),
       strong: sum((item) => item.kept.strong),
-      weak: sum((item) => item.kept.weak),
-      capped: sum((item) => item.excluded.capped ?? 0),
+      unclaimed: sum((item) => item.excluded.unclaimed ?? 0),
       maxReadMs: Math.max(...batch.map((item) => item.ms.read)),
       maxClassifyMs: Math.max(...batch.map((item) => item.ms.classify)),
     })
@@ -673,14 +526,9 @@ class Turn {
     this.started = performance.now()
   }
 }
-const parentOf = (path: string) => path.slice(0, Math.max(1, path.lastIndexOf("/")))
-
-/** The innermost of `folders` holding `path`, by its index, or -1: one lookup per folder on the way up. */
-function innermost(folders: ReadonlyMap<string, number>, path: string): number {
-  if (!folders.size) return -1
-  for (let end = path.length; end > 0; end = path.lastIndexOf("/", end - 1)) {
-    const at = folders.get(end === path.length ? path : path.slice(0, end))
-    if (at !== undefined) return at
-  }
-  return -1
+/** Whether `path` is one of `folders` or inside one: one lookup per folder on the way up. */
+function holds(folders: ReadonlyMap<string, unknown>, path: string): boolean {
+  if (!folders.size) return false
+  for (let end = path.length; end > 0; end = path.lastIndexOf("/", end - 1)) if (folders.has(end === path.length ? path : path.slice(0, end))) return true
+  return false
 }
