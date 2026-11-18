@@ -3386,7 +3386,7 @@ else branches on it. `scripts/test-context-wire.ts` and
 A file in a draft is a reference from the composer to the harness, never
 its bytes. `stageAttachment` (`src/lib/attachment-staging.ts`) stages one
 with a path on this Mac by that path (a clone, `workspaces/staging.ts`) and
-one without (a paste, a capture) 512 KiB at a time (`stageFilePart`), so
+one without (a paste, a capture) 510 KiB at a time (`stageFilePart`), so
 the window never reads or encodes a whole file and no call carries more
 than a piece; the draft holds the staged path and an object URL for its
 chip. The message carries the path (`promptAttachment`). The host keeps the

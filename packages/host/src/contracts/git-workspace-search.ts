@@ -255,8 +255,11 @@ export interface FileContents {
   truncated: boolean
 }
 
-/** How much of a file with no path the window stages per call (`stageFilePart`), before base64. */
-export const STAGED_PART_BYTES = 512 * 1024
+/**
+ * How much of a file with no path the window stages per call (`stageFilePart`), before base64. A multiple of three
+ * bytes, so each piece's base64 ends without padding and the pieces' base64 joined is the file's.
+ */
+export const STAGED_PART_BYTES = 510 * 1024
 
 /**
  * A file the agent cannot receive inline — a PDF, a video, an archive.

@@ -778,7 +778,8 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     const binding = snapshot?.control?.bindings.find((item) => item.id === bindingId)
     if (!snapshot || !binding) throw new Error("The selected native session is unavailable")
     // Which binding is active is read as it's admitted: a move may land while the selection resolves.
-    await live.holdAttachments(requestId, attachments)
+    // A reply with no files reaches `continueOn` in this same turn, as it always did; one with files keeps them first.
+    if (attachments?.length) await live.holdAttachments(requestId, attachments)
     try {
       const continued = await conversations.continueOn(id, { kind: "reply", reply: { bindingId, provider: binding.provider, requestId, text, ...(attachments && { attachments }), tuning: tuning ?? binding.tuning } })
       if (!continued) throw new Error("The selected native session is unavailable")

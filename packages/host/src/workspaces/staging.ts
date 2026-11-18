@@ -3,7 +3,7 @@ import { copyFile, mkdir, open, stat, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import type { StagedFile } from "../contracts/git-workspace-search.js"
 
-/** The most base64 one staged piece carries: the window sends 512 KiB of the file at a time (`STAGED_PART_BYTES`), with room to spare. */
+/** The most base64 one staged piece carries: the window sends 510 KiB of the file at a time (`STAGED_PART_BYTES`), with room to spare. */
 const STAGED_PART_CHARS = 1024 * 1024
 
 const safeName = (name: string) => name.replace(/[/\\]/g, "_").slice(0, 120) || "attachment"
