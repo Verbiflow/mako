@@ -9,7 +9,7 @@ import { useTranscriptSource } from "@/components/transcript/source-context"
 import { formatTime } from "@/lib/format"
 import { harnessLabel, useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
-import { useAcp } from "@/state/acp"
+import { useAcpConversation } from "@/state/acp-state"
 import { openFinInApex, useApexTitle, useThreadAsks, useThreadChildren } from "@/state/apex-fins"
 import { answerFin, type FinAnswer } from "@/state/fin-asks"
 import { said } from "@/components/transcript/fin-report-words"
@@ -28,7 +28,7 @@ function artifactName(artifact: NonNullable<FinReportCard["artifacts"]>[number])
 export const FinReports = memo(function FinReports({ reports: sent, timestamp }: { reports: readonly FinReportCard[]; timestamp?: number }) {
   const [shown, setShown] = useState(false)
   const source = useTranscriptSource()
-  const thread = useAcp((state) => (source.liveId ? state.conversations[source.liveId]?.threadId : undefined))
+  const thread = useAcpConversation(source.liveId, (conversation) => conversation?.threadId)
   const children = useThreadChildren(thread)
   const asks = useThreadAsks(thread)
   // A decision its Apex left went to the person (`escalateDecision`): the report still says its Apex decides, the
@@ -138,7 +138,7 @@ function foldedWords(folded: readonly FinReportCard[]): string {
 const FinReport = memo(function FinReport({ card, timestamp }: { card: FinReportCard; timestamp?: number }) {
   useHarnessIdentity()
   const source = useTranscriptSource()
-  const thread = useAcp((state) => (source.liveId ? state.conversations[source.liveId]?.threadId : undefined))
+  const thread = useAcpConversation(source.liveId, (conversation) => conversation?.threadId)
   const apexTitle = useApexTitle(source.liveId, source.threadPath)
   const children = useThreadChildren(card.apex ? undefined : thread)
   const asks = useThreadAsks(card.apex ? undefined : thread)

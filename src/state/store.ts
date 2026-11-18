@@ -123,3 +123,94 @@ export function createHook<T extends object>(store: Store<T>): StoreHook<T> {
     return useSyncExternalStore(store.subscribe, getSnapshot, getSnapshot)
   }
 }
+
+/** A store's keyed entries, each with its own listeners: `subscribe(key, listener)` hears only that entry change. */
+export interface KeyedSubscriptions<Entry> {
+  get: (key: string) => Entry | undefined
+  subscribe: (key: string, listener: () => void) => () => void
+}
+
+/**
+ * Listeners by the entry they read. The store is heard once, however many listen: each change, the entries that have
+ * listeners are compared by identity, and only a changed entry's listeners are told. A selector on the whole store
+ * runs for every listener on every change of any entry; a conversation's rows, hundreds of them, then ran theirs for
+ * each batch of every other conversation.
+ */
+export function keyedSubscriptions<T extends object, Entry>(
+  store: Store<T>,
+  entries: (state: T) => Readonly<Record<string, Entry>>
+): KeyedSubscriptions<Entry> {
+  const listeners = new Map<string, Set<() => void>>()
+  let said = entries(store.get())
+  let stop: (() => void) | undefined
+  const hear = () => {
+    const now = entries(store.get())
+    if (now === said) return
+    const before = said
+    said = now
+    for (const [key, heard] of listeners) if (before[key] !== now[key]) for (const listener of heard) listener()
+  }
+  return {
+    get: (key) => entries(store.get())[key],
+    subscribe: (key, listener) => {
+      // Heard only while someone listens, and from what the entries are then: nothing said meanwhile is replayed.
+      if (!listeners.size) {
+        said = entries(store.get())
+        stop = store.subscribe(hear)
+      }
+      const heard = listeners.get(key) ?? new Set()
+      heard.add(listener)
+      listeners.set(key, heard)
+      return () => {
+        heard.delete(listener)
+        if (!heard.size && listeners.get(key) === heard) listeners.delete(key)
+        if (!listeners.size) {
+          stop?.()
+          stop = undefined
+        }
+      }
+    },
+  }
+}
+
+export interface EntryHook<Entry> {
+  <S>(key: string | undefined, selector: (entry: Entry | undefined) => S, isEqual?: (a: S, b: S) => boolean): S
+}
+
+interface EntryCache<Entry, S> {
+  value: S
+  source: Entry | undefined
+  selector: (entry: Entry | undefined) => S
+}
+
+const NOT_HEARD = () => () => {}
+
+/** Bind one entry of a store to React: `selector` runs when that entry changes, and for no other's change. */
+export function createEntryHook<Entry>(keyed: KeyedSubscriptions<Entry>): EntryHook<Entry> {
+  return function useEntry<S>(
+    key: string | undefined,
+    selector: (entry: Entry | undefined) => S,
+    isEqual: (a: S, b: S) => boolean = Object.is
+  ): S {
+    const cache = useRef<EntryCache<Entry, S> | null>(null)
+    const subscribe = useCallback(
+      (notify: () => void) => (key === undefined ? NOT_HEARD() : keyed.subscribe(key, notify)),
+      [key]
+    )
+    const getSnapshot = useCallback(() => {
+      const source = key === undefined ? undefined : keyed.get(key)
+      const previous = cache.current
+      // Keyed on the selector as well as the entry, as `createHook` is: an inline selector closes over what it reads.
+      if (previous && previous.source === source && previous.selector === selector) return previous.value
+      const value = selector(source)
+      if (previous && isEqual(previous.value, value)) {
+        cache.current = { value: previous.value, source, selector }
+        return previous.value
+      }
+      cache.current = { value, source, selector }
+      return value
+    }, [key, selector, isEqual])
+
+    return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  }
+}
