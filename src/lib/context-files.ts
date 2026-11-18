@@ -1,4 +1,4 @@
-import type { Block, ChatMessage } from "@/lib/types"
+import type { ChatMessage } from "@/lib/types"
 import { primaryArgument } from "@/lib/tools"
 
 /**
@@ -26,43 +26,27 @@ const CREATE_TOOLS = new Set(["write"])
 /** Edited beats created beats read: show the strongest interaction. */
 const RANK = { read: 0, created: 1, edited: 2 } satisfies Record<FileAction, number>
 
-/**
- * What a call touched, by its block: reading it parses the call's arguments, and the list is made again from every
- * call of the conversation whenever one of the running turn's changes. A block that says the same is the same object
- * (`reconcileMessages`), so a settled call is read once.
- */
-const touches = new WeakMap<Block, { path: string; action: FileAction } | null>()
-
-function touchOf(block: Extract<Block, { type: "toolCall" }>): { path: string; action: FileAction } | null {
-  const held = touches.get(block)
-  if (held !== undefined) return held
-  const name = (block.name ?? "").toLowerCase()
-  const action: FileAction | null = EDIT_TOOLS.has(name)
-    ? "edited"
-    : CREATE_TOOLS.has(name)
-      ? "created"
-      : READ_TOOLS.has(name)
-        ? "read"
-        : null
-  const path = action
-    ? primaryArgument(block.arguments) || String(block.arguments ?? "")
-    : ""
-  // `grep`/`find` carry a pattern in the primary slot; only keep things
-  // that look like a path so the list stays about files.
-  const touch = action && path && looksLikePath(path) ? { path, action } : null
-  touches.set(block, touch)
-  return touch
-}
-
 export function touchedFiles(messages: ChatMessage[]): TouchedFile[] {
   const byPath = new Map<string, TouchedFile>()
 
   messages.forEach((message, index) => {
     for (const block of message.blocks) {
       if (block.type !== "toolCall" || !block.name) continue
-      const touch = touchOf(block)
-      if (!touch) continue
-      const { path, action } = touch
+      const name = block.name.toLowerCase()
+      const action: FileAction | null = EDIT_TOOLS.has(name)
+        ? "edited"
+        : CREATE_TOOLS.has(name)
+          ? "created"
+          : READ_TOOLS.has(name)
+            ? "read"
+            : null
+      if (!action) continue
+
+      const path =
+        primaryArgument(block.arguments) || String(block.arguments ?? "")
+      // `grep`/`find` carry a pattern in the primary slot; only keep things
+      // that look like a path so the list stays about files.
+      if (!path || !looksLikePath(path)) continue
 
       const existing = byPath.get(path)
       if (existing) {

@@ -6,7 +6,7 @@ import { useToolView, type ToolCall } from "@/extend/slots"
 import { WorkingIcon } from "@/components/ui/activity-mark"
 import { groupAgentCalls } from "@/lib/agent-groups"
 import { formatDuration } from "@/lib/format"
-import { useAcpConversation } from "@/state/acp-state"
+import { useAcp } from "@/state/acp"
 import { agentActivity, QUIET_AFTER_MS, quietDuration, type AgentActivity, type AgentActivityKind } from "@/state/agent-activity"
 import { promptDelivery } from "@/state/prompt-delivery"
 import { shallowEqual } from "@/state/store"
@@ -65,7 +65,8 @@ const IDLE: LiveTurnStatus = { kind: "idle", label: "" }
  */
 function useLiveTurnStatus(): LiveTurnStatus {
   const { liveId } = useTranscriptSource()
-  return useAcpConversation(liveId, (live) => {
+  return useAcp((state) => {
+    const live = liveId ? state.conversations[liveId] : undefined
     if (live?.kind !== "live") return IDLE
     const receipt = live.control?.approvalResponses?.find((each) => each.id === live.permission?.id)
     // The approval notice, or the plan bar for a plan's approval, owns that wait.

@@ -1,6 +1,4 @@
-import { createElement, useState, type ComponentType } from "react"
-import { editLines, fileLines, type DiffLine } from "@/lib/tool-diff"
-import { useVisible } from "@/components/transcript/use-visible"
+import { createElement, type ComponentType } from "react"
 import { Prose } from "@/components/transcript/markdown"
 import { type ToolViewProps } from "@/extend/slots"
 import { Ending, Output } from "@/components/transcript/tool-row"
@@ -126,65 +124,81 @@ export function ToolGlyph({
 /* diff rendering                                                      */
 /* ------------------------------------------------------------------ */
 
-/**
- * How many lines an opened Edit or Write draws at first, and how many each part of the rest holds once it's all asked
- * for. Every line is four elements, drawn in the commit that opens the row: a 5,000-line Write was 25,000 nodes in one
- * click. The first lines are what a reader opens the row to see; "Show all" brings the rest, a part at a time as each
- * nears the viewport (`RestOfLines`), so however long the file, a click draws a few hundred lines.
- */
-const FIRST_LINES = 400
-const PART_LINES = 200
-
-function DiffLines({ lines }: { lines: readonly DiffLine[] }) {
-  return lines.map((line, index) => (
-    <div
-      key={index}
-      className={cn(
-        "flex gap-2 px-2",
-        line.kind === "add" && "bg-added/10 text-added",
-        line.kind === "remove" && "bg-removed/10 text-removed",
-        line.kind === "context" && "text-faint"
-      )}
-    >
-      <span className="w-8 shrink-0 text-right text-label opacity-60 select-none">{line.oldLine ?? ""}</span>
-      <span className="w-8 shrink-0 text-right text-label opacity-60 select-none">{line.newLine ?? ""}</span>
-      <span className="w-2 shrink-0 opacity-60 select-none">
-        {line.kind === "add" ? "+" : line.kind === "remove" ? "−" : " "}
-      </span>
-      <span className="whitespace-pre">{line.text || " "}</span>
-    </div>
-  ))
+interface DiffLine {
+  kind: "context" | "add" | "remove"
+  text: string
+  oldLine?: number
+  newLine?: number
 }
 
-/** A part of the lines past the first: room for them, at the height the first lines measured (a line never wraps), until it nears the viewport. */
-function RestOfLines({ lines, lineHeight }: { lines: readonly DiffLine[]; lineHeight: number }) {
-  const { ref, visible } = useVisible()
-  return (
-    <div ref={ref} style={visible ? undefined : { height: lines.length * lineHeight }}>
-      {visible ? <DiffLines lines={lines} /> : null}
-    </div>
+/**
+ * Line diff by common prefix/suffix trimming. It is O(n) instead of an LCS,
+ * which is exactly right here: an edit's old and new text already share their
+ * head and tail, and the transcript only needs to show what moved.
+ */
+function diffLines(before: string, after: string): DiffLine[] {
+  const left = before.split("\n")
+  const right = after.split("\n")
+
+  let head = 0
+  while (
+    head < left.length &&
+    head < right.length &&
+    left[head] === right[head]
   )
+    head += 1
+
+  let tail = 0
+  while (
+    tail < left.length - head &&
+    tail < right.length - head &&
+    left[left.length - 1 - tail] === right[right.length - 1 - tail]
+  ) {
+    tail += 1
+  }
+
+  const lines: DiffLine[] = []
+  const context = 2
+  for (let i = Math.max(0, head - context); i < head; i += 1) {
+    lines.push({ kind: "context", text: left[i], oldLine: i + 1, newLine: i + 1 })
+  }
+  for (let i = head; i < left.length - tail; i += 1) {
+    lines.push({ kind: "remove", text: left[i], oldLine: i + 1 })
+  }
+  for (let i = head; i < right.length - tail; i += 1) {
+    lines.push({ kind: "add", text: right[i], newLine: i + 1 })
+  }
+  for (
+    let i = left.length - tail;
+    i < Math.min(left.length, left.length - tail + context);
+    i += 1
+  ) {
+    lines.push({ kind: "context", text: left[i], oldLine: i + 1, newLine: right.length - left.length + i + 1 })
+  }
+  return lines
 }
 
 function DiffBlock({ lines }: { lines: DiffLine[] }) {
-  /** Once all are asked for: how tall a drawn line is, which the parts not yet drawn stand at. */
-  const [lineHeight, showAll] = useState<number | null>(null)
-  const rest = lines.length - FIRST_LINES
-  const parts: DiffLine[][] = []
-  if (lineHeight !== null) for (let from = FIRST_LINES; from < lines.length; from += PART_LINES) parts.push(lines.slice(from, from + PART_LINES))
   return (
     <div className="overflow-x-auto font-mono text-label leading-[1.6]">
-      <DiffLines lines={rest > 0 ? lines.slice(0, FIRST_LINES) : lines} />
-      {lineHeight !== null ? parts.map((part, index) => <RestOfLines key={index} lines={part} lineHeight={lineHeight} />) : null}
-      {rest > 0 && lineHeight === null ? (
-        <button
-          type="button"
-          onClick={(event) => showAll(event.currentTarget.previousElementSibling?.getBoundingClientRect().height ?? 18)}
-          className="pressable sticky left-0 mt-1 flex items-center gap-1 px-2 py-0.5 font-sans text-label text-faint hover:text-foreground"
+      {lines.map((line, index) => (
+        <div
+          key={index}
+          className={cn(
+            "flex gap-2 px-2",
+            line.kind === "add" && "bg-added/10 text-added",
+            line.kind === "remove" && "bg-removed/10 text-removed",
+            line.kind === "context" && "text-faint"
+          )}
         >
-          Show all {lines.length.toLocaleString()} lines
-        </button>
-      ) : null}
+          <span className="w-8 shrink-0 text-right text-label opacity-60 select-none">{line.oldLine ?? ""}</span>
+          <span className="w-8 shrink-0 text-right text-label opacity-60 select-none">{line.newLine ?? ""}</span>
+          <span className="w-2 shrink-0 opacity-60 select-none">
+            {line.kind === "add" ? "+" : line.kind === "remove" ? "−" : " "}
+          </span>
+          <span className="whitespace-pre">{line.text || " "}</span>
+        </div>
+      ))}
     </div>
   )
 }
@@ -200,7 +214,7 @@ export function EditBody({ call }: ToolViewProps) {
     <div className="space-y-2">
       {edits.map((edit, index) => (
         <div key={index}>
-          <DiffBlock lines={editLines(edit.oldText, edit.newText)} />
+          <DiffBlock lines={diffLines(edit.oldText, edit.newText)} />
         </div>
       ))}
     </div>
@@ -209,7 +223,13 @@ export function EditBody({ call }: ToolViewProps) {
 
 export function WriteBody({ call }: ToolViewProps) {
   const content = writtenText(call) ?? ""
-  return <DiffBlock lines={fileLines("", content)} />
+  return (
+    <DiffBlock
+      lines={content
+        .split("\n")
+        .map((text, index) => ({ kind: "add" as const, text, newLine: index + 1 }))}
+    />
+  )
 }
 
 /** A subagent's standing in the words its row and its group say. */
@@ -358,7 +378,7 @@ export function BashBody({ call }: ToolViewProps) {
 }
 
 export function EditPreview({before, after}: {before: string; after: string}) {
-  return <DiffBlock lines={editLines(before, after)} />
+  return <DiffBlock lines={diffLines(before, after)} />
 }
 
 /**

@@ -7,8 +7,6 @@ import { useMediaAnswers } from "@/state/turn-media"
 import type { AttachmentContent } from "@mako/sessions"
 import { Paragraph } from "./paragraph"
 import { useParsedProse } from "./use-parsed-prose"
-import { forgetWarmedProse, warmedProse } from "@/lib/prose-parser-client"
-import { rememberSettledProse, settledProse } from "./settled-prose"
 import {
   skipMarkdownParse,
   reuseParsedProse,
@@ -107,6 +105,31 @@ export interface AnswerMedia {
   at: number
 }
 
+/**
+ * Settled prose, rendered once per text. `Markdown` is a pure function of
+ * its input, and the elements it returns read references and the transcript
+ * source from context when they render, so a thread switched back to or a
+ * turn scrolled back into view reuses them instead of parsing again.
+ */
+const SETTLED_PROSE_ENTRIES = 600
+const SETTLED_PROSE_CHARS = 6_000_000
+const settledProse = new Map<string, ReactElement>()
+let settledProseChars = 0
+
+function rememberSettledProse(text: string, element: ReactElement) {
+  settledProse.set(text, element)
+  settledProseChars += text.length
+  while (
+    settledProse.size > SETTLED_PROSE_ENTRIES ||
+    settledProseChars > SETTLED_PROSE_CHARS
+  ) {
+    const oldest = settledProse.keys().next().value
+    if (oldest === undefined) break
+    settledProse.delete(oldest)
+    settledProseChars -= oldest.length
+  }
+}
+
 export const Prose = memo(function Prose({
   text,
   streaming,
@@ -149,13 +172,7 @@ export const Prose = memo(function Prose({
   const keptChars = kept.reduce((total, piece) => total + piece.length, 0)
   const parsed = useParsedProse(growing, Boolean(streaming) && !sent)
   const source = parsed?.text ?? growing
-  // A settled answer's tree, where it was parsed before this turn mounted (`warmSettledProse`): read once per text,
-  // so prose drawn without one isn't drawn again when its tree arrives late.
-  const ahead = useMemo(
-    () => (streaming || sent || urlTransform || settledProse.has(growing) ? undefined : warmedProse(growing)),
-    [growing, streaming, sent, urlTransform]
-  )
-  const tree = parsed?.tree ?? ahead
+  const tree = parsed?.tree
   const hasTree = Boolean(tree)
   const referenceInput = useMemo(
     () => (sent ? { sent, references: new Map<string, PromptReference>(), text: source } : null),
@@ -180,7 +197,7 @@ export const Prose = memo(function Prose({
     [tree, assets]
   )
 
-  const settled = !streaming && !referenceInput && !urlTransform && !parsed && !previewedFiles?.length
+  const settled = !streaming && !referenceInput && !urlTransform && !hasTree && !previewedFiles?.length
   const rendered = useMemo(() => {
     const cached = settled ? settledProse.get(source) : undefined
     if (cached) {
@@ -198,10 +215,7 @@ export const Prose = memo(function Prose({
           : (urlTransform?.(url) ?? defaultUrlTransform(url)),
       children: source,
     })
-    if (settled) {
-      rememberSettledProse(source, element)
-      forgetWarmedProse(source)
-    }
+    if (settled) rememberSettledProse(source, element)
     return element
   }, [source, plugins, referenceMap, urlTransform, rehypePlugins, settled])
 
@@ -210,7 +224,7 @@ export const Prose = memo(function Prose({
       className={cn("mako-prose", className)}
       data-answer={answerId}
       data-rendered-chars={keptChars + source.length}
-      data-prose-worker={Boolean(parsed) || undefined}
+      data-prose-worker={hasTree || undefined}
     >
       <ProseStreamingContext value={Boolean(streaming)}>
         <AnswerMediaContext value={keeps}>

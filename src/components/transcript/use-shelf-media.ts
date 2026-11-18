@@ -2,7 +2,7 @@ import { useMemo } from "react"
 import type { MediaCandidate } from "@mako/sessions/turn-media"
 import type { Exchange } from "@/lib/exchanges"
 import { shelfMedia } from "@/lib/media-shelf"
-import { requestOf, useAcpConversation } from "@/state/acp-state"
+import { useAcp } from "@/state/acp"
 import { useTranscriptSource } from "./source-context"
 
 /**
@@ -17,6 +17,9 @@ export function useShelfMedia(exchange: Exchange): MediaCandidate[] {
   const { liveId } = useTranscriptSource()
   const requestId = exchange.prompt?.requestId
   // The turn's record of changes: every file it left, however it wrote it, the same live and reopened.
-  const changes = useAcpConversation(liveId, (live) => (live?.kind === "live" ? requestOf(live, requestId)?.changes : undefined))
+  const changes = useAcp((state) => {
+    const live = liveId ? state.conversations[liveId] : undefined
+    return live?.kind === "live" && requestId ? live.requests?.find((each) => each.id === requestId)?.changes : undefined
+  })
   return useMemo(() => shelfMedia(exchange, changes), [exchange, changes])
 }

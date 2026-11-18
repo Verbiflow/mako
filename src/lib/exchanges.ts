@@ -342,13 +342,6 @@ function openingNotes(exchange: Exchange): ExchangeNote[] {
   return exchange.system.splice(start)
 }
 
-/** A reply's prose as its row draws it (`Response`): its text blocks, one after another. */
-export function replyProse(blocks: ChatMessage["blocks"]): string {
-  let text = ""
-  for (const block of blocks) if (block.type === "text" && block.text) text += block.text
-  return text
-}
-
 export function toExchanges(
   messages: ChatMessage[],
   previous: Exchange[] = []

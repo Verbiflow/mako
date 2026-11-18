@@ -21,7 +21,6 @@ import { TurnWaitLineView } from "./turn-wait-line"
 import { CrewCard } from "./crew-card"
 import { useEffect, useMemo, useState } from "react"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
-import { useKeptEntries } from "@/components/transcript/use-kept-entries"
 import { usePacedProjection } from "./paced-projection"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import { scopedAcp, scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
@@ -199,9 +198,7 @@ function Blocks({ starting = false, continued = false, compact = false }: { star
     preparing ||
     session?.status === "starting" ||
     session?.status === "running"
-  // Each of these is made again whenever the requests change (a turn starting, ending, settling its changes), and
-  // kept as the objects they were for the turns they say the same of: a new object drew that turn again.
-  const interruptedRequests = useKeptEntries(useMemo(() => turnStops(requests, running), [requests, running]))
+  const interruptedRequests = useMemo(() => turnStops(requests, running), [requests, running])
   const earlierRequests = useAcp((state) => scopedLiveAcp(state, scope)?.history?.earlierRequests)
   // Only a conversation with a message to recover reads its turns for where each was said, and only it follows them:
   // the blocks change with every batch the host sends.
@@ -211,9 +208,9 @@ function Blocks({ starting = false, continued = false, compact = false }: { star
     () => recovering ? recoveriesByPlace({ blocks, history: earlierRequests ? { earlierRequests } : undefined, requests, copy }) : NO_RECOVERIES,
     [recovering, blocks, earlierRequests, requests, copy]
   )
-  const madeByMako = useKeptEntries(useMemo(() => makoPrompts(requests), [requests]))
-  const carried = useKeptEntries(useMemo(() => carriedHistories(requests), [requests]))
-  const askedAt = useKeptEntries(useMemo(() => new Map(requests.flatMap((request) => (request.createdAt === undefined ? [] : [[request.id, request.createdAt] as const]))), [requests]), Object.is)
+  const madeByMako = useMemo(() => makoPrompts(requests), [requests])
+  const carried = useMemo(() => carriedHistories(requests), [requests])
+  const askedAt = useMemo(() => new Map(requests.flatMap((request) => (request.createdAt === undefined ? [] : [[request.id, request.createdAt] as const]))), [requests])
   const waitingLimits = useMemo(() => copy ? new Set<string>() : usageLimitSources(requests), [requests, copy])
   const exchanges = useMemo(() => withoutWaitingLimitNotes(projection?.exchanges ?? EMPTY_QUEUE, waitingLimits), [projection?.exchanges, waitingLimits])
   const unread = useAcp((state) => scopedLiveAcp(state, scope)?.hydrated === false)

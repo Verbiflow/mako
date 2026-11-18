@@ -8,7 +8,7 @@ import { FinMark } from "@/components/stage/child-tabs"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { useTranscriptSource } from "@/components/transcript/source-context"
 import { RoutedOpenContext } from "@/components/transcript/routed-open"
-import { useAcpConversation } from "@/state/acp-state"
+import { useAcp } from "@/state/acp"
 import { address, addresseeOf, openFinInApex, redirectRouted, useThreadChildren } from "@/state/apex-fins"
 import { FIN_WORD } from "@mako/host/contracts/agents"
 
@@ -30,8 +30,8 @@ const DELIVERY = {
  */
 export const RoutedLine = memo(function RoutedLine({ routed, landed }: { routed: Routed; landed?: RoutedAnswer }) {
   const source = useTranscriptSource()
-  const apexThread = useAcpConversation(source.liveId, (conversation) => conversation?.threadId)
-  const apexTitle = useAcpConversation(source.liveId, (conversation) => conversation?.title)
+  const apexThread = useAcp((state) => (source.liveId ? state.conversations[source.liveId]?.threadId : undefined))
+  const apexTitle = useAcp((state) => (source.liveId ? state.conversations[source.liveId]?.title : undefined))
   const children = useThreadChildren(apexThread)
   const open = use(RoutedOpenContext)
   const [moved, setMoved] = useState<string>()

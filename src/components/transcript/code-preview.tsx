@@ -1,30 +1,22 @@
 import { useEffect, useState } from "react"
-import { codeHighlights, type CodeLines } from "@/lib/highlight-client"
+import type { ThemedToken } from "shiki"
 import { useVisible } from "./use-visible"
 import { MediaContent } from "./media-preview"
 
-/**
- * A code block's source, coloured once its lines are tokenized. The tokens come from the window's cache
- * (`codeHighlights`): there already, they're drawn in this render, so a block mounting again shows no plain frame;
- * not there, they're asked of the highlight worker once the block is near the viewport, and arrive a frame apart from
- * any other block's.
- */
 export function HighlightedCode({source, language, streaming}: {source: string; language: string; streaming: boolean}) {
   const {ref, visible} = useVisible()
-  const [result, setResult] = useState<{source: string; language: string; lines: CodeLines}>()
-  const kept = streaming ? undefined : codeHighlights.get(source, language)
+  const [result, setResult] = useState<{source: string; language: string; tokens: ThemedToken[][]}>()
   useEffect(() => {
-    if (!visible || streaming || source.length > 100_000 || kept) return
+    if (!visible || streaming || source.length > 100_000) return
     let canceled = false
-    void codeHighlights.want(source, language).then(
-      (lines) => { if (!canceled && lines) setResult({source, language, lines}) },
+    void import("@/lib/highlight-code").then((module) => module.highlightCode(source, language)).then(
+      (tokens) => { if (!canceled) setResult({source, language, tokens}) },
       () => { /* Plain source remains readable when a grammar cannot load. */ }
     )
     return () => { canceled = true }
-  }, [visible, streaming, source, language, kept])
-  const lines = kept ?? (result?.source === source && result.language === language ? result.lines : undefined)
-  return <div ref={ref}><pre><code>{lines
-    ? lines.map((line, index) => <span key={index} className="code-line">{line.map((token, part) => <span key={part} style={{color: token.color}}>{token.content}</span>)}{index < lines.length - 1 ? "\n" : null}</span>)
+  }, [visible, streaming, source, language])
+  return <div ref={ref}><pre><code>{result?.source === source && result.language === language
+    ? result.tokens.map((line, index) => <span key={index} className="code-line">{line.map((token, part) => <span key={part} style={{color: token.color}}>{token.content}</span>)}{index < result.tokens.length - 1 ? "\n" : null}</span>)
     : source}</code></pre></div>
 }
 

@@ -18,7 +18,7 @@ import { makoToolGroup } from "@mako/sessions/tool-identity"
 import { harnessLabel } from "@/lib/harness-label"
 import { callEntryId } from "@/lib/entry-messages"
 import { cn } from "@/lib/utils"
-import { useAcpConversation } from "@/state/acp-state"
+import { useAcp } from "@/state/acp"
 import { usePrefs } from "@/state/prefs"
 import { liveVerb, QUIET_AFTER_MS, quietDuration } from "@/state/agent-activity"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
@@ -238,7 +238,10 @@ export function RunningFor({ since }: { since: number }) {
 /** The folder the conversation runs in: a live conversation's own, else the one the workspace shows. */
 function useTranscriptCwd(): string | undefined {
   const { liveId } = useTranscriptSource()
-  const live = useAcpConversation(liveId, (conversation) => (conversation?.kind === "live" ? conversation.session.cwd : undefined))
+  const live = useAcp((state) => {
+    const conversation = liveId ? state.conversations[liveId] : undefined
+    return conversation?.kind === "live" ? conversation.session.cwd : undefined
+  })
   const focus = useWorkspaceFocus()
   return live ?? focus.cwd
 }
@@ -282,10 +285,10 @@ export function CallGlyph({ call, icon }: { call: ToolCall; icon?: ComponentType
 export function AgentMark({ callId, harness, className }: { callId?: string; harness?: string; className?: string }) {
   const { liveId } = useTranscriptSource()
   const answering = useContext(HarnessContext)
-  const listed = useAcpConversation(liveId, (conversation) => {
-    if (harness || !callId) return undefined
+  const listed = useAcp((state) => {
+    if (harness || !callId || !liveId) return undefined
     const native = callEntryId(callId)
-    return conversation?.nativeAgents?.agents.find((agent) => agent.toolId === native)?.provider
+    return state.conversations[liveId]?.nativeAgents?.agents.find((agent) => agent.toolId === native)?.provider
   })
   const runs = harness ?? listed ?? answering
   return runs ? <HarnessIcon harness={runs} className={className} /> : <ToolGlyph kind="agent" className={className} />

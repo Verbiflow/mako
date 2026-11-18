@@ -5,7 +5,7 @@ import { makoReviewReport, type ReviewFinding, type ReviewReport } from "@mako/s
 import { Prose } from "@/components/transcript/markdown"
 import { Shimmer } from "@/components/ui/shimmer"
 import { useCopy } from "@/components/ui/use-copy"
-import { useAcpConversation } from "@/state/acp-state"
+import { useAcp } from "@/state/acp"
 import { reviewer } from "@/state/reviews"
 import { viewer } from "@/state/viewer"
 import { formatTime } from "@/lib/format"
@@ -20,7 +20,7 @@ const PRIORITY_NAMES = ["Breaks it", "Fix before merging", "Fix soon", "Minor"] 
 /** The review the person asked for, where their message would be. */
 export function ReviewRequest({ target, timestamp }: { target: ReviewTarget; timestamp?: number }) {
   const { liveId } = useTranscriptSource()
-  const harness = useAcpConversation(liveId, (conversation) => conversation?.harness)
+  const harness = useAcp((state) => (liveId ? state.conversations[liveId]?.harness : undefined))
   return (
     <div data-review-request={target.kind} className="flex flex-col items-end">
       <div className="review-request flex max-w-[min(82%,64ch)] items-center gap-2 px-3 py-2 text-ui">
@@ -122,7 +122,7 @@ function Priority({ finding }: { finding: ReviewFinding }) {
 
 function Location({ finding }: { finding: ReviewFinding }) {
   const source = useTranscriptSource()
-  const cwd = useAcpConversation(source.liveId, (conversation) => conversation?.cwd)
+  const cwd = useAcp((state) => (source.liveId ? state.conversations[source.liveId]?.cwd : undefined))
   if (!finding.path) return null
   const path = finding.path
   const shown = cwd && path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : path

@@ -6,7 +6,7 @@ import { formatDuration } from "@/lib/format"
 import { agentGroupWords, rosterStanding } from "@/lib/agent-groups"
 import { subagentStanding } from "@/lib/tools"
 import { cn } from "@/lib/utils"
-import { useAcpConversation } from "@/state/acp-state"
+import { useAcp } from "@/state/acp"
 import { Collapse } from "@/components/ui/collapse"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { Shimmer } from "@/components/ui/shimmer"
@@ -33,7 +33,10 @@ export function AgentGroup({ calls, provider }: { calls: readonly ToolCall[]; pr
   const turnRunning = useContext(TurnRunningContext)
   const answering = useContext(HarnessContext)
   // The roster arrives reconciled (`reconcileRoster`): its array changes only when an entry does.
-  const roster = useAcpConversation(liveId, (conversation) => conversation?.nativeAgents?.agents ?? EMPTY_AGENTS)
+  const roster = useAcp((state) => {
+    const conversation = liveId ? state.conversations[liveId] : undefined
+    return conversation?.nativeAgents?.agents ?? EMPTY_AGENTS
+  })
   const members = useMemo(
     () =>
       calls.map((call) => {

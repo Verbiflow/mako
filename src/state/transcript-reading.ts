@@ -49,16 +49,11 @@ export class TranscriptReaders {
 
   bookmark(source: string, pane: string | symbol): Bookmark | undefined { return this.bookmarks.get(pane)?.get(source) }
 
-  /**
-   * The furthest back any pane was last reading `source`, for the panes that weren't following its end. `held` says
-   * which turns a reader of it already has: a pane whose place is among them asks for nothing earlier.
-   */
-  rememberedWindow(source: string, held?: (turn: string) => boolean): TranscriptReading["window"] {
+  rememberedWindow(source: string): TranscriptReading["window"] {
     let from: TranscriptReading["window"]
     for (const panes of this.bookmarks.values()) {
       const reading = panes.get(source)
       if (reading?.following || !reading?.window) continue
-      if (held && reading.anchor && held(reading.anchor.turn)) continue
       from = from ? { blocks: Math.min(from.blocks, reading.window.blocks), base: Math.min(from.base, reading.window.base) } : reading.window
     }
     return from

@@ -10,7 +10,7 @@ import type { MakoBridge } from "@mako/host/contracts/renderer-bridge"
  */
 export const WINDOW_OWN = new Set<string>([
   "draftKey", "sending", "canceling", "failureSeen", "pendingPrompts", "queued", "hiddenUserPrompt", "replyBindingId",
-  "threadPath", "title", "updatedAt", "hydrated", "projection", "behind", "blocks", "history", "base", "baseCoveredBlocks",
+  "threadPath", "title", "updatedAt", "hydrated", "projection", "blocks", "history", "base", "baseCoveredBlocks",
   "releasedTurns",
 ])
 
