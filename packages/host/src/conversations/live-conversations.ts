@@ -21,6 +21,7 @@ import { GoalCommandSchema, type GoalCommand } from "../contracts/live-goals.js"
 import type { SideQuestionCommand } from "../contracts/live-side-questions.js"
 import { makoReviewPrompt, reviewDisplayText, ReviewTargetSchema, type ReviewTarget } from "../contracts/live-reviews.js"
 import {
+  LIVE_AHEAD_MS,
   LIVE_FRAME_MS,
   requestsDelta,
   compactLiveBatch,
@@ -53,7 +54,7 @@ import { admittedInPlace, type ConversationSettings } from "../contracts/turn-co
 import type { StartPurpose } from "../contracts/thread-purposes.js"
 import type { RewindInput } from "../contracts/workspace-snapshots.js"
 import type { Relocation } from "../workspaces/index.js"
-import { changedEntryStart, deliverLiveUpdates, queueLiveUpdate, reduceLiveUpdates } from "@mako/sessions/live-content"
+import { changedEntryStart, compactLiveUpdates, deliverLiveUpdates, queueLiveUpdate, reduceLiveUpdates } from "@mako/sessions/live-content"
 import type { DirectRoute } from "@mako/sessions/events"
 import { bareCommand } from "@mako/sessions/tool-identity"
 import { needsYouWaiting, questionWaiting, requestWaiting, type Waiting } from "@mako/protocol/attention"
@@ -2337,7 +2338,13 @@ export class LiveConversations {
     const now = performance.now()
     // A long answer going on waits for a reader's pace; anything else comes back to the frame (`flushFrameMs`).
     const frame = flushFrameMs(BATCH_MS, resident.snapshot.blocks, resident.updates, resident.snapshot !== resident.journalSnapshot)
-    const due = resident.flushedAt === undefined ? now : resident.flushedAt + frame
+    // A turn's first words go at once: its own status flushes (running, the prompt's row, its delivery) have just
+    // started a frame, which its first token once waited out, 46 to 51 ms in every turn measured. Only the first:
+    // what follows keeps the frame, however many status changes land beside it.
+    const first = !resident.saidWords && resident.updates.some(carriesWords)
+    const due = resident.flushedAt === undefined || first ? now : resident.flushedAt + frame
+    // Until the batch goes, this machine's windows hear what waits for it, unless it goes within their own frame.
+    if (Math.min(due, resident.timer ? resident.timerDue ?? now : due) - now >= LIVE_AHEAD_MS) this.ahead(resident)
     if (resident.timer) {
       if (due >= (resident.timerDue ?? now)) return
       clearTimeout(resident.timer)
@@ -2350,6 +2357,38 @@ export class LiveConversations {
         this.storageFailed(resident, { error })
       }
     }, Math.max(0, due - now))
+  }
+
+  /**
+   * Says the text that waits for the conversation's next batch to this machine's windows, at most once a paint frame
+   * (`LIVE_AHEAD_MS`), the first of a burst at once. The batch stream is untouched by it: the journal, the gateway's
+   * link and every watching device get the batches they always did, on the frame and the long answer's pace, and a
+   * window gets them too, each carrying what was said ahead of it.
+   */
+  private ahead(resident: Resident): void {
+    if (resident.aheadTimer) return
+    const wait = resident.aheadAt === undefined ? 0 : resident.aheadAt + LIVE_AHEAD_MS - performance.now()
+    if (wait <= 0) return this.sayAhead(resident)
+    resident.aheadTimer = setTimeout(() => {
+      resident.aheadTimer = undefined
+      this.sayAhead(resident)
+    }, wait)
+    resident.aheadTimer.unref?.()
+  }
+
+  private sayAhead(resident: Resident): void {
+    resident.aheadAt = performance.now()
+    if (!resident.updates.length || this.records.isReleased(resident)) return
+    // Only what goes on with the last block, as the compact form reads it (`more`): text a window can add to the
+    // block it holds and take back for the batch, with nothing else of the conversation to keep in step.
+    let more = ""
+    for (const update of compactLiveUpdates(resident.snapshot.blocks, resident.updates)) {
+      if (update.kind !== "more") return
+      more += update.text
+    }
+    if (!more || more.length === resident.aheadSaid) return
+    resident.aheadSaid = more.length
+    this.dependencies.emit({ type: "live-ahead", ahead: { id: resident.snapshot.session.id, revision: resident.snapshot.revision, epoch: this.epoch, more } })
   }
 
   /** See `LiveAccess.keep`. */
@@ -2424,7 +2463,13 @@ export class LiveConversations {
     resident.flushedAt = performance.now()
     resident.storageFault = false
     if (recoveringStorage) queueMicrotask(() => { this.recoverSignedIn(); this.compactions.resume(resident) })
+    // Whether the turn has said any of its words yet, as of this flush: a turn's start forgets the last turn's.
+    for (const update of resident.updates) {
+      if (update.kind === "user" || update.kind === "provider-turn") resident.saidWords = false
+      else if (carriesWords(update)) resident.saidWords = true
+    }
     resident.updates = []
+    resident.aheadSaid = undefined
     resident.pendingCharacters = 0
     resident.snapshot = snapshot
     resident.journalSnapshot = snapshot
@@ -2561,6 +2606,11 @@ export class LiveConversations {
  * every device, and written to the journal.
  */
 const BATCH_MS = LIVE_FRAME_MS
+
+/** Whether an update is the agent's own words, an answer's text or its thinking. */
+function carriesWords(update: LiveBatch["updates"][number]): boolean {
+  return update.kind === "text" || update.kind === "thinking"
+}
 
 /**
  * Whether a batch says when the conversation last showed work: when it moved into another second. It moves with every

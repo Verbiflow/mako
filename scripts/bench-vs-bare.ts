@@ -20,7 +20,9 @@ import "./lib/scratch-git.mjs"
  *    The host's side of each boundary is stamped by a module loaded into it (`lib/bench-vs-bare-probe.mjs`), which
  *    hears the host's diagnostics channels: `mako:host-call`, `mako:live-stage`, `mako:native-frame`,
  *    `mako:live-driver-event`, `mako:live-batch-emitted`, `mako:stream-write` and `mako:host-log` (provider launch
- *    phases, checkpoints, residency). The model's side is stamped here, where the scripted model runs.
+ *    phases, checkpoints, residency). The model's side is stamped here, where the scripted model runs. A second
+ *    reader attaches in the compact form, as the gateway's link reads: it hears the batches and none of the text a
+ *    window is told ahead of them (`LiveAhead`), so its row is the pace a phone and the journal get.
  * C. Under load. B again while `--others` conversations work on the same host, each streaming text at the same pace
  *    and writing a file every few seconds for as long as the measurement runs. The bare runs of that pass run beside
  *    the same load, so the machine is as busy for both.
@@ -56,13 +58,13 @@ import { setTimeout as delay } from "node:timers/promises"
 import { parseArgs } from "node:util"
 import { z } from "zod"
 import { HOST_NODE_OPTIONS } from "@mako/host/base/process-warnings"
-import { LIVE_FRAME_MS } from "@mako/host/contracts/live-conversations"
+import { LIVE_AHEAD_MS, LIVE_FRAME_MS } from "@mako/host/contracts/live-conversations"
 import { LONG_ANSWER_CHARS, LONG_ANSWER_FLUSH_MS } from "@mako/host/conversations/answer-pace"
 import { claudeRuntime } from "@mako/host/harnesses/claude/runtime"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { invokeRuntime, probeRuntime, subscribeRuntime } from "@mako/host/transport/connection"
 import { runtimeLocation } from "@mako/host/transport/service"
-import { WINDOW_LIVE_FORM } from "@mako/protocol/live-form"
+import { COMPACT_LIVE_FORM, WINDOW_LIVE_FORM } from "@mako/protocol/live-form"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { processesUsingSync, removeScratchSync } from "./lib/scratch-processes.mjs"
 import { assertScratchEnvironment, scratchKeychain, seedScratchHome, type ScratchHome } from "./scratch-harness-home.ts"
@@ -197,6 +199,9 @@ interface Sample {
   model: number[]
   harness: number[]
   reader: number[]
+  /** The same for a reader of the batches alone, as a phone's link and the journal get them; empty bare. */
+  device: number[]
+  deviceArrivals: number[]
   /** When each batch (or bare, each output chunk) carrying answer text reached the reader. */
   arrivals: number[]
   /** Model's last token before the write to the request carrying its result. */
@@ -215,6 +220,7 @@ const ProbeLine = z.object({
 }).loose()
 const Update = z.object({ kind: z.string(), id: z.string().optional(), text: z.string().optional(), replace: z.boolean().optional() }).loose()
 const BatchBody = z.object({ id: z.string(), revision: z.number(), updates: z.array(Update).optional() }).loose()
+const AheadLine = z.object({ type: z.literal("live-ahead"), ahead: z.object({ revision: z.number(), more: z.string() }) })
 const BatchLine = z.union([z.object({ type: z.literal("live-batch"), batch: BatchBody }).loose().transform((line) => line.batch), BatchBody])
 const Words = z.string()
 const Amount = z.number()
@@ -446,7 +452,7 @@ async function main(): Promise<number> {
       mark("textFrame", harnessTimes[0])
       mark("received", harnessTimes[0])
       samples.push({
-        side: "bare", scenario, others, run, sent, marks, model: turn.tokens.map((at) => at - sent), harness: harnessTimes.map((at) => at - sent), reader: harnessTimes.map((at) => at - sent),
+        side: "bare", scenario, others, run, sent, marks, model: turn.tokens.map((at) => at - sent), harness: harnessTimes.map((at) => at - sent), reader: harnessTimes.map((at) => at - sent), device: [], deviceArrivals: [],
         arrivals: heard.filter((line) => line.text !== undefined && line.first).map((line) => line.at - sent),
         toolMs: turn.heard[1] === undefined || turn.tokens[FIRST_TOKENS - 1] === undefined ? undefined : turn.heard[1] - turn.tokens[FIRST_TOKENS - 1]!,
         notes: { characters: held.characters, expected: ENDS.at(-1) ?? 0, wrote: existsSync(turn.file) ? "yes" : "no" }, raw: [], batches: [],
@@ -493,14 +499,23 @@ async function main(): Promise<number> {
       const client = randomUUID()
       const call = (channel: string, ...args: unknown[]) => invokeRuntime(socket, client, channel, args, 1, { timeoutMs: 300_000 })
       await until("the host to read its catalog", async () => Catalog.parse(await call("mako:threads")).ready, 180_000, 250)
-      const received: { at: number; conversation: string; payload: string }[] = []
+      const received: Heard[] = []
+      const batchesOnly: Heard[] = []
       let streaming = false
       const unsubscribe = subscribeRuntime(socket, client, (packet) => {
         const at = now()
         if (packet.channel === "ready") streaming = true
-        else if (packet.channel === "event" && packet.type === "live-batch" && packet.conversation?.startsWith(MARK)) received.push({ at, conversation: packet.conversation, payload: packet.payload })
+        else if (packet.channel === "event" && (packet.type === "live-batch" || packet.type === "live-ahead") && packet.conversation?.startsWith(MARK)) received.push({ at, conversation: packet.conversation, payload: packet.payload })
       }, (end) => { if (!stopping) note(`the bench's event stream ended: ${end.why}`) }, { history: true, live: WINDOW_LIVE_FORM })
-      await until("the bench's event stream", () => streaming, 30_000)
+      // A second reader that says the compact form, as the gateway's link does: it hears the batches and nothing ahead
+      // of them, so its pace is the one a phone and the journal get.
+      let reading = false
+      const unsubscribeDevice = subscribeRuntime(socket, randomUUID(), (packet) => {
+        const at = now()
+        if (packet.channel === "ready") reading = true
+        else if (packet.channel === "event" && packet.type === "live-batch" && packet.conversation?.startsWith(MARK)) batchesOnly.push({ at, conversation: packet.conversation, payload: packet.payload })
+      }, () => undefined, { history: true, live: COMPACT_LIVE_FORM })
+      await until("the bench's event streams", () => streaming && reading, 30_000)
       const state = async (id: string) => LiveState.parse(await call("mako:live-state", id))
       const idle = async (id: string) => (await state(id)).status !== "running" && (await state(id)).status !== "starting"
 
@@ -542,6 +557,7 @@ async function main(): Promise<number> {
           const request = randomUUID()
           const probeFrom = probe.length
           const receivedFrom = received.length
+          const batchesFrom = batchesOnly.length
           const sent = now()
           if (scenario === "cold") await call("mako:live-start", harness, project, { conversationId: id, modeId: cli.mode, title: "Bench vs bare", initialRequest: { id: request, text: prompt(turn), attachments: [] } })
           else await call("mako:live-prompt", id, request, prompt(turn), [])
@@ -561,12 +577,13 @@ async function main(): Promise<number> {
           // The turn's last batches and its checkpoint's line are a moment behind its status.
           await until("the turn's checkpoint to be saved", () => probe.slice(probeFrom).some((line) => line.s === "log" && line.scope === "checkpoints" && line.fields?.request === request), 15_000, 50).catch(() => undefined)
           await delay(150)
-          samples.push(makoSample({ scenario, others, run, sent, answered, turn, request, id, client, notes, lines: probe.slice(probeFrom), heard: received.slice(receivedFrom) }))
+          samples.push(makoSample({ scenario, others, run, sent, answered, turn, request, id, client, notes, lines: probe.slice(probeFrom), heard: received.slice(receivedFrom), batchesOnly: batchesOnly.slice(batchesFrom) }))
         }
         if (started) await call("mako:live-close", id).catch(() => undefined)
       }
       loadStopped = true
       unsubscribe()
+      unsubscribeDevice()
       return samples
     } catch (error) {
       // What the host itself said last, for a pass that couldn't be measured.
@@ -599,10 +616,49 @@ async function main(): Promise<number> {
 
 interface MakoTurn {
   scenario: Scenario; others: number; run: number; sent: number; answered: number; turn: ModelTurn; request: string; id: string; client: string
-  notes: Sample["notes"]; lines: z.infer<typeof ProbeLine>[]; heard: { at: number; conversation: string; payload: string }[]
+  notes: Sample["notes"]; lines: z.infer<typeof ProbeLine>[]
+  /** What the window's stream carried, and what a stream that reads the batches alone did. */
+  heard: Heard[]; batchesOnly: Heard[]
+}
+interface Heard { at: number; conversation: string; payload: string }
+
+/**
+ * What a reader of a conversation's stream held as each line arrived: its batches reduced, and, for a window, the text
+ * said ahead of the next batch drawn over the batch it was said of (`LiveAhead`), as the window draws it.
+ */
+function readerOf(heard: readonly Heard[], sent: number) {
+  const held = new Held()
+  const batches: Sample["batches"] = []
+  const arrivals: number[] = []
+  const reader: { at: number; characters: number }[] = []
+  let firstText: number | undefined
+  let revision: number | undefined
+  let shown = 0
+  let ahead = 0
+  for (const { at, payload } of heard) {
+    const json: z.infer<ReturnType<typeof z.json>> = JSON.parse(payload)
+    const said = AheadLine.safeParse(json).data?.ahead
+    const line = said ? undefined : BatchLine.safeParse(json).data
+    if (said) {
+      // Read only against the batch it was said of, as a window reads it.
+      if (said.revision !== revision || held.characters + said.more.length <= shown) continue
+      ahead += 1
+      shown = held.characters + said.more.length
+    } else if (line) {
+      for (const update of line.updates ?? []) held.take(update.kind, update.id, update.text?.length ?? 0, update.replace === true)
+      revision = line.revision
+      batches.push({ at: at - sent, revision: line.revision, bytes: Buffer.byteLength(payload), characters: held.characters })
+      if (held.characters > 0) firstText ??= line.revision
+      if (held.characters <= shown) continue
+      shown = held.characters
+    } else continue
+    arrivals.push(at - sent)
+    reader.push({ at, characters: shown })
+  }
+  return { batches, arrivals, reader, firstText, ahead }
 }
 
-function makoSample({ scenario, others, run, sent, answered, turn, request, id, client, notes, lines, heard }: MakoTurn): Sample {
+function makoSample({ scenario, others, run, sent, answered, turn, request, id, client, notes, lines, heard, batchesOnly }: MakoTurn): Sample {
   const marks: Mark[] = []
   const mark = (key: string, at: number | undefined) => { if (at !== undefined) marks.push({ key, at: at - sent }) }
   const stage = (name: string, evidence?: string) => lines.find((line) => line.s === name && line.q === request && (evidence === undefined || line.evidence === evidence))
@@ -643,39 +699,31 @@ function makoSample({ scenario, others, run, sent, answered, turn, request, id, 
   const harnessTimes = tokenTimes(framed)
   mark("textFrame", harnessTimes[0])
   mark("decoded", tokenTimes(decoded)[0])
-  // What the window was sent: each batch as it arrived, and how much of the answer the window then held.
-  const windowHeld = new Held()
-  const batches: Sample["batches"] = []
-  const arrivals: number[] = []
-  const reader: { at: number; characters: number }[] = []
-  let firstText: number | undefined
-  for (const { at, payload } of heard) {
-    const batch = BatchLine.safeParse(JSON.parse(payload)).data
-    if (!batch) continue
-    const before = windowHeld.characters
-    for (const update of batch.updates ?? []) windowHeld.take(update.kind, update.id, update.text?.length ?? 0, update.replace === true)
-    batches.push({ at: at - sent, revision: batch.revision, bytes: Buffer.byteLength(payload), characters: windowHeld.characters })
-    if (windowHeld.characters === before) continue
-    firstText ??= batch.revision
-    arrivals.push(at - sent)
-    reader.push({ at, characters: windowHeld.characters })
-  }
+  // What the window was sent, and what a reader of the batches alone was (a phone's link, the journal).
+  const window = readerOf(heard, sent)
+  const device = readerOf(batchesOnly, sent)
+  const { batches, arrivals, firstText } = window
   mark("batch", lines.find((line) => line.s === "batch" && line.r === firstText)?.t)
   mark("wrote", lines.find((line) => line.s === "wrote" && line.r === firstText && line.client?.endsWith(client))?.t)
-  const readerTimes = tokenTimes(reader)
+  const readerTimes = tokenTimes(window.reader)
+  const deviceTimes = tokenTimes(device.reader)
   mark("received", readerTimes[0])
+  notes.aheadFrames = window.ahead
   const checkpoint = lines.map((line) => line.s === "log" && line.scope === "checkpoints" ? { message: line.message, fields: CheckpointFields.safeParse(line.fields).data } : undefined).filter((line) => line?.fields?.request === request)
   const saved = checkpoint.find((line) => line?.message === "a turn's checkpoint was saved")?.fields
   notes.checkpoint = saved?.kind ?? null
   notes.checkpointHeldMs = saved?.heldMs ?? null
   notes.checkpointSavedMs = saved?.savedMs ?? null
   notes.wentBeforeCheckpoint = checkpoint.find((line) => line?.message?.includes("before its checkpoint"))?.message ?? null
-  notes.characters = windowHeld.characters
+  notes.characters = batches.at(-1)?.characters ?? 0
+  notes.deviceCharacters = device.batches.at(-1)?.characters ?? 0
+  notes.deviceBatches = device.arrivals.length
   notes.expected = ENDS.at(-1) ?? 0
   notes.wrote = existsSync(turn.file) ? "yes" : "no"
   notes.loopHeld = lines.filter((line) => line.s === "log" && line.scope === "loop").length
   return {
     side: "mako", scenario, others, run, sent, marks: marks.sort((a, b) => a.at - b.at), model: turn.tokens.map((at) => at - sent), harness: harnessTimes.map((at) => at - sent), reader: readerTimes.map((at) => at - sent),
+    device: deviceTimes.map((at) => at - sent), deviceArrivals: device.arrivals,
     arrivals, toolMs: turn.heard[1] === undefined || turn.tokens[FIRST_TOKENS - 1] === undefined ? undefined : turn.heard[1] - turn.tokens[FIRST_TOKENS - 1]!,
     notes, raw: lines.filter((line) => line.s !== "frame" && line.s !== "decoded"), batches,
   }
@@ -703,7 +751,7 @@ const ROWS = {
   modelFirst: { label: "  model wrote its first text token", why: "the scripted model's pace", own: true },
   textFrame: { label: "  first text token out of the harness", why: "the harness's own relay of the model's token to its output", own: true },
   decoded: { label: "7 first text token decoded", why: "the driver's loop runs its observers on the frame, then the decoder and the engine hand the update to the conversation" },
-  batch: { label: "8 first batch with text emitted", why: `\`schedule\` flushes the first change after a quiet frame at once and later ones each ${LIVE_FRAME_MS} ms; the flush commits to the journal and builds the batch` },
+  batch: { label: "8 first batch with text emitted", why: `\`schedule\` flushes a turn's first words at once and later ones each ${LIVE_FRAME_MS} ms; the flush commits to the journal and builds the batch` },
   wrote: { label: "9 batch written to the window's stream", why: "the event is encoded once per live form (`encodeRuntimeEvent`) and written to each subscriber (`send`)" },
   received: { label: "10 received by the window", why: "the line crosses the socket and is assembled (`subscribeRuntime`)" },
 } satisfies Record<string, Row>
@@ -776,13 +824,16 @@ function report(harness: string, others: number, samples: Sample[]): void {
     const first = (set: Sample[]) => median(at(set, "received"))
     say(`  first token visible: bare ${ms(first(bare), 0)} ms, Mako ${ms(first(mako), 0)} ms, Mako adds ${ms((first(mako) ?? NaN) - (first(bare) ?? NaN), 0)} ms`)
     const each = (set: Sample[], read: (sample: Sample) => number[]) => set.flatMap(read)
-    const lag = (set: Sample[], from: "model" | "harness", to: "harness" | "reader") => each(set, (sample) => defined(sample[to].map((at, index) => sample[from][index] === undefined || at === undefined ? undefined : at - sample[from][index]!)))
+    const lag = (set: Sample[], from: "model" | "harness", to: "harness" | "reader" | "device") => each(set, (sample) => defined(sample[to].map((at, index) => sample[from][index] === undefined || at === undefined ? undefined : at - sample[from][index]!)))
     const line = (name: string, numbers: number[]) => `  ${name.padEnd(54)}p50 ${ms(quantile(numbers, 0.5), 6)}  p95 ${ms(quantile(numbers, 0.95), 6)}  max ${ms(worst(numbers), 6)}  (${numbers.length} tokens)`
     say("  the stream, per token:")
     say(line("bare: model wrote it -> out of the harness", lag(bare, "model", "harness")))
     say(line("Mako: model wrote it -> host received it", lag(mako, "model", "harness")))
     say(line("Mako: host received it -> window received it", lag(mako, "harness", "reader")))
     say(line("Mako: model wrote it -> window received it", lag(mako, "model", "reader")))
+    say(line("Mako: host received it -> reader of batches alone", lag(mako, "harness", "device")))
+    const said = (key: string) => [...new Set(mako.map((sample) => String(sample.notes[key] ?? "none")))].join(", ")
+    const number = (key: string) => median(defined(mako.map((sample) => Amount.safeParse(sample.notes[key]).data)))
     /** The longest wait for more of the answer while text was streaming: the write's own pause, between the two parts, is left out. */
     const longest = (set: Sample[], read: (sample: Sample) => number[], tokens: boolean) => worst(each(set, (sample) => {
       const times = read(sample)
@@ -790,11 +841,9 @@ function report(harness: string, others: number, samples: Sample[]): void {
       const pause = sample.model[FIRST_TOKENS - 1], resumed = sample.model[FIRST_TOKENS]
       return pause === undefined || resumed === undefined ? gaps(times) : [...gaps(times.filter((at) => at < resumed)), ...gaps(times.filter((at) => at >= resumed))]
     }))
-    say(`  longest gap while text streamed: between tokens bare ${ms(longest(bare, (sample) => sample.harness, true), 0)} ms; between tokens as the model wrote them ${ms(longest(mako, (sample) => sample.model, true), 0)} ms; between batches the window received ${ms(longest(mako, (sample) => sample.arrivals, false), 0)} ms (${ms(median(mako.map((sample) => sample.arrivals.length)), 0)} text batches a turn for ${TOKENS.length} tokens; a long answer flushes each ${LONG_ANSWER_FLUSH_MS} ms past ${LONG_ANSWER_CHARS} characters)`)
+    say(`  longest gap while text streamed: between tokens bare ${ms(longest(bare, (sample) => sample.harness, true), 0)} ms; between tokens as the model wrote them ${ms(longest(mako, (sample) => sample.model, true), 0)} ms; between batches the window received ${ms(longest(mako, (sample) => sample.arrivals, false), 0)} ms (${ms(median(mako.map((sample) => sample.arrivals.length)), 0)} arrivals with new text a turn for ${TOKENS.length} tokens, ${ms(number("aheadFrames"), 0)} of them said ahead of a batch every ${LIVE_AHEAD_MS} ms); between batches a reader of the batches alone received ${ms(longest(mako, (sample) => sample.deviceArrivals, false), 0)} ms (${ms(number("deviceBatches"), 0)} text batches a turn; a long answer flushes each ${LONG_ANSWER_FLUSH_MS} ms past ${LONG_ANSWER_CHARS} characters)`)
     const tool = (set: Sample[]) => median(defined(set.map((sample) => sample.toolMs)))
     say(`  the write, from the model's last token before it to the request carrying its result: bare ${ms(tool(bare), 0)} ms, Mako ${ms(tool(mako), 0)} ms`)
-    const said = (key: string) => [...new Set(mako.map((sample) => String(sample.notes[key] ?? "none")))].join(", ")
-    const number = (key: string) => median(defined(mako.map((sample) => Amount.safeParse(sample.notes[key]).data)))
     say(`  checkpoint: gate ${said("gate")} (${said("gate") === "held" ? "the message went at once and the agent's first write waited on the checkpoint" : "the message waited for its checkpoint"}); before-point ${said("checkpoint")}; held the workspace ${ms(number("checkpointHeldMs"), 0)} ms and was saved ${ms(number("checkpointSavedMs"), 0)} ms after it began; went ahead of it: ${said("wentBeforeCheckpoint")}`)
     if (scenario === "wake") say(`  hibernated because: ${said("hibernatedBecause")}, ${ms(number("hibernatedAfterMs"), 0)} ms after two other conversations were sent a short turn`)
     const whole = [...mako, ...bare].filter((sample) => sample.notes.characters !== sample.notes.expected || sample.notes.wrote !== "yes")

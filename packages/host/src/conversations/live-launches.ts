@@ -280,7 +280,7 @@ export class LiveLaunches {
           tuning,
           emit: this.access.driverEvents(resident, id),
           mcpSnapshot: dependencies.mcpSnapshot
-            ? () => dependencies.mcpSnapshot!(cwd)
+            ? () => dependencies.mcpSnapshot!(cwd, driver.provider)
             : undefined,
           conversationTools,
           threadEnvironment,

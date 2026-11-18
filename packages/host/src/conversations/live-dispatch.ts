@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { controlNote } from "../control/index.js"
-import { ExecutionAccountChanged, ExecutionIdentityMismatch, HandoffRefused, TurnInProgressError, type PromptDispatch } from "../harnesses/index.js"
+import { ExecutionAccountChanged, ExecutionIdentityMismatch, HandoffRefused, heldSubmission, TurnInProgressError, type PromptDispatch } from "../harnesses/index.js"
 import { digestAsks } from "../contracts/agents.js"
 import { FRONT_DOOR_GUIDANCE } from "../contracts/agent-tools.js"
 import { foldedSeparator, JOINED_CHARS, JOINED_MAX, type FoldedBy, type LiveRequest, type LiveSnapshot } from "../contracts/live-conversations.js"
@@ -585,6 +585,11 @@ export class LiveDispatch {
     const drewIt = !shown && Boolean(text || request.attachments.length)
     const dispatch: PromptDispatch = { operationId: request.id, attemptId, report, ...text && { shown: text }, ...drewIt && { shownAt: toldAt } }
     const cwd = resident.snapshot.session.cwd
+    // The checkpoint may hold the message up to ten seconds, and its admission reads nothing of the checkpoint: begun
+    // now, those reads are over, or shared, when the message is admitted as it goes. What the message says is put
+    // together only then: its notices are marked as told and its note's cadence written as they are read, and what
+    // moved in the checkout is read as of the send.
+    if (bindingId) driver.admitAhead?.(bindingId)
     void checkpoints
       .prompt(resident, current, async () => {
         const active = this.access.control(resident).activeBindingId
@@ -646,6 +651,10 @@ export class LiveDispatch {
           current.context.reduce((text, manifest) => contextPrompt(manifest, text, dependencies.harnessLabel), moved ? `${words}\n\n${moved}` : words),
         ].filter(Boolean).join("\n\n")
         if (liveStages.heard) liveStages.publish({ stage: "assembled", conversation: resident.snapshot.session.id, request: request.id, chars: text.length })
+        // Where writes are held the message went ahead of its checkpoint; one whose submission runs the person's
+        // code by itself waits for it here, as it is worded and before it is admitted.
+        const held = heldSubmission(dependencies.writeHolds, driver.firstWrite?.submitRuns, active, text)
+        if (held) await held
         return driver.prompt(active, text, request.attachments, request.tuning, dispatch)
       })
       .catch(async (error) => {

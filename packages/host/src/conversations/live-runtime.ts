@@ -134,6 +134,13 @@ export interface Resident {
   timerDue?: number
   /** When it last flushed (`performance.now()`): the next change waits until a batch's frame has passed since. */
   flushedAt?: number
+  /** Whether the turn under way has flushed any of its words: its first text or thinking goes at once (`schedule`). */
+  saidWords?: boolean
+  /** The timer that says what waits ahead of its batch to this machine's windows (`LiveAhead`), and when it last did. */
+  aheadTimer?: ReturnType<typeof setTimeout>
+  aheadAt?: number
+  /** How much waiting text was last said ahead, so the same text isn't said twice. */
+  aheadSaid?: number
   displayPrompt?: string
   /** When anything last loaded or changed it; the memory budget lets the oldest go first. */
   usedAt?: number
@@ -282,7 +289,8 @@ export interface Dependencies {
   foreground?: Pick<Foreground, "hold" | "started">
   /** What the host is doing, named: who reads a conversation in from disk is counted to it (`LiveRecords`). */
   work?: Pick<HostWork, "current">
-  mcpSnapshot?(cwd: string): Promise<McpRegistrySnapshot>
+  /** `starting`: the harness whose start waits on it, which waits for that harness's own listing alone (`McpRegistry.discover`). */
+  mcpSnapshot?(cwd: string, starting?: string): Promise<McpRegistrySnapshot>
   workspaceSnapshots?: WorkspaceSnapshots
   /** How long a turn waits for its checkpoint to hold the workspace before it goes without (`BEFORE_CHECKPOINT_WAIT_MS`). */
   checkpointWaitMs?: number

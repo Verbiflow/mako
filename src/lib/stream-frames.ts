@@ -5,7 +5,9 @@ import { LIVE_FRAME_MS } from "@mako/host/contracts/live-conversations"
  * cost about 1.2 ms per 1,000 characters (1.2 ms at 500, 9 ms at 8,000, 19 ms at 16,000, where the parse moves to a
  * worker). So a paint comes at most every `STREAM_FRAME_MS`, and a long piece waits longer, up to
  * `STREAM_FRAME_MAX_MS`, so its parse never takes more than about a fifth of the renderer's time. It is the frame the
- * host sends a stream's batches on, so each batch paints as it lands.
+ * host sends a stream's batches on, so each batch paints as it lands. A window on the host's own machine hears the
+ * text ahead of its batch every `LIVE_AHEAD_MS`, a third of this frame: the paint still comes at most once a frame,
+ * so this throttle, not the host's pace, is what bounds the parse, and each paint shows text at most that much old.
  */
 export const STREAM_FRAME_MS = LIVE_FRAME_MS
 export const STREAM_FRAME_MAX_MS = 90

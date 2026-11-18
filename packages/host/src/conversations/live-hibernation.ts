@@ -552,7 +552,7 @@ export class LiveHibernation {
         emit: this.access.driverEvents(resident, binding.id),
         mcpSnapshot: dependencies.mcpSnapshot
           ? () =>
-              dependencies.mcpSnapshot!(resident.snapshot.session.cwd)
+              dependencies.mcpSnapshot!(resident.snapshot.session.cwd, driver.provider)
           : undefined,
         conversationTools,
         threadEnvironment,

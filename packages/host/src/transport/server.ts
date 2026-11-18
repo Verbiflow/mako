@@ -8,7 +8,7 @@ import { once } from "node:events"
 import { chmod } from "node:fs/promises"
 import { packageLoads } from "@mako/lazy"
 import { z } from "zod"
-import { saidWindowForm, type WindowLiveForm } from "@mako/protocol/live-form"
+import { ROSTER_LIVE_FORM, saidWindowForm, type WindowLiveForm } from "@mako/protocol/live-form"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { TerminalEvent } from "../contracts/terminal.js"
 import { CORRELATION_HEADER, CorrelationIdSchema, LIVE_FORM_HEADER, RuntimeCallSchema, decodeRuntimeArgs, runtimeEventRouting, runtimeFailure, type RuntimeInfo } from "../contracts/runtime.js"
@@ -43,6 +43,12 @@ const STREAM_BEHIND_BYTES = 8 * 1024 * 1024
  * batches add only a notice, so only a reader that has stopped reading gets here.
  */
 const STREAM_LOST_BYTES = 64 * 1024 * 1024
+/**
+ * What a window's stream may hold unsent and still be told what waits ahead of a batch (`windowEvent`). A window that
+ * reads as it's written holds nothing; one that doesn't hears the batches alone, at their own pace, until it has caught
+ * up, so what's said ahead never adds to what a slow reader makes the host hold.
+ */
+const AHEAD_HOLD_BYTES = 64 * 1024
 const WorkspaceClientSchema = z.string().uuid().optional()
 
 /** One client's subscription to `/events`. */
@@ -441,7 +447,22 @@ export async function startWebHost(
       }
     }
   }
+  /**
+   * An event only this host's own windows hear (a stream that says the window's live form, `ROSTER_LIVE_FORM`, which
+   * nothing else says), and only while they keep up: each one stands alone and is said again, so it's never queued
+   * behind what a window hasn't read.
+   */
+  const sendWindows = (event: Extract<HostEvent, { type: "live-ahead" }>) => {
+    let line: string | undefined
+    for (const [stream, owner] of streams) {
+      if (owner.live < ROSTER_LIVE_FORM || stream.destroyed || owner.missed || stream.writableLength > AHEAD_HOLD_BYTES) continue
+      line ??= runtimeEventLine("event", { type: event.type, conversation: event.ahead.id, payload: JSON.stringify(event) })
+      stream.write(line)
+      if (streamWrites.heard) streamWrites.publish({ client: owner.client, type: event.type, conversation: event.ahead.id, line })
+    }
+  }
   return {
+    windowEvent: sendWindows,
     clients: () => [...new Set([...streams.values()].filter((entry) => !entry.observer).map((entry) => entry.client))],
     /** The newest real window stream for this client, replaced even when a reload reuses its client ID. */
     windowStream: (client: string): string | undefined => {

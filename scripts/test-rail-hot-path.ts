@@ -6,7 +6,7 @@ import { rosterChildren } from "@mako/host/contracts/children"
 import type { LiveBatch, LiveSummary } from "@mako/host/contracts/live-conversations"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { selectAcpPresence, selectSessionOwners } from "../src/state/acp-presence"
-import { acpForThread, acpStore, conversationRoster, finSources, listedCounts, railAcpStore, threadChildren, type AcpState } from "../src/state/acp-state"
+import { acpForThread, acpStore, conversationRoster, finSources, listedCounts, railAcpStore, replaceAcpConversation, threadChildren, type AcpState } from "../src/state/acp-state"
 import { apexPips } from "../src/state/fin-pips"
 import { applyLiveBatch, hydrateLiveSummaries, listLive } from "../src/state/live-recovery"
 import { threadLiveKey } from "../src/state/thread-status"
@@ -206,4 +206,18 @@ test("of two conversations that stand for one row, the one that moves last is th
     Date.now = later
     watched.stop()
   }
+})
+
+test("text said ahead of its batch, sixty times a second on an open conversation, wakes no rail reader", () => {
+  boot()
+  const watched = watch()
+  const before = railAcpStore.get().conversations
+  for (let frame = 1; frame <= 60; frame++) {
+    const current = live("c-3")
+    replaceAcpConversation("c-3", { ...current, ahead: { revision: current.revision ?? 0, more: "word ".repeat(frame) } })
+  }
+  watched.stop()
+  assert.equal(watched.seen.live, 60, "the transcript's readers hear each")
+  assert.equal(watched.seen.rail, 0, "the rail's hear none")
+  assert.equal(railAcpStore.get().conversations, before)
 })

@@ -23,7 +23,7 @@ import type { NativeRequest } from "./native-requests.js"
 import type { AccountRemovalEvent, AccountUsage } from "./accounts.js"
 import type { ProcessPlatform } from "./platform.js"
 import type { AppshotShortcutWatch } from "./appshot-shortcut.js"
-import type { CompactLiveBatch, LiveBatch, LiveSummary } from "./live-conversations.js"
+import type { CompactLiveBatch, LiveAhead, LiveBatch, LiveSummary } from "./live-conversations.js"
 import type {
   ThreadRef as CatalogThreadRef,
 } from "@mako/sessions"
@@ -152,6 +152,8 @@ export type HostEventBody =
    * same again for a host's own windows, its roster as what changed, where it has one (`rosteredLiveBatch`).
    */
   | { type: "live-batch"; batch: LiveBatch; compact?: CompactLiveBatch; rostered?: CompactLiveBatch }
+  /** What a conversation's next batch will add to its last block, for this host's own windows alone (`LiveAhead`). */
+  | { type: "live-ahead"; ahead: LiveAhead }
   /**
    * Conversations the account lists that this host doesn't run (another device's in the cloud): each listed as one is
    * at boot, unopened, or listed again as it changed. Opening one reads it where it runs.
