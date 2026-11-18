@@ -8,7 +8,7 @@ const PIP = new Map([["n", "needs"], ["w", "working"], ["l", "lead"], ["q", "que
 const MAX_PIPS = 16
 
 /**
- * An Apex's crew in one line: a 6 px pip per Fin that needs the person or is live (needs you, working, asking its
+ * An Apex's shiver in one line: a 6 px pip per Fin that needs the person or is live (needs you, working, asking its
  * Apex, queued, failed), in the order every surface lists them, past sixteen "+N"; done and idle ones are only in the
  * count beside them. The
  * working stretch is one box under one veil in the row's own colour, which sweeps across it on the shared clock: a
@@ -41,7 +41,7 @@ export function FinPips({ pips }: { pips: Pips }) {
 }
 
 /** The second line of an Apex's rail row: its pips and how many Fins. Repaints when a pip changes, never its row. */
-export const ApexCrewLine = memo(function ApexCrewLine({ thread }: { thread: string | undefined }) {
+export const ApexShiverLine = memo(function ApexShiverLine({ thread }: { thread: string | undefined }) {
   const pips = useAcp((state) => apexPips(state, thread))
   if (!pips) return null
   const label = rollupLabel(pipsCounts(pips))

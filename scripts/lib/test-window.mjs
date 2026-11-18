@@ -3,7 +3,7 @@
  *
  * A CI Mac's screen is 1024×768, and a window asked for larger is cut to it as it's made (1024×653 inside). At that
  * width a side surface covers the conversation, as the stage means it to, so what a test looks for there is hidden:
- * the crew card's rows never draw, its marks never move. A window's size set once it exists isn't cut, so
+ * the shiver card's rows never draw, its marks never move. A window's size set once it exists isn't cut, so
  * `atSize` sets it again.
  *
  * The same Mac asks for reduced motion, which pauses every animation the app gates on it (`visible-animation.ts`):
@@ -25,7 +25,7 @@ export function atSize(window, width, height) {
  * it loads, which it says.
  *
  * Chromium keeps a same-site page's renderer for the next page, and on the Mac runner that renderer died (SIGTRAP) as
- * a fixture page left one for another a moment after it loaded: crew-card-ui's browser-to-phone step in 18 runs of 500
+ * a fixture page left one for another a moment after it loaded: shiver-card-ui's browser-to-phone step in 18 runs of 500
  * (#702), and its phone-to-quiet-scene step on main on 2026-11-16. The load then fails ERR_FAILED (-2), and whatever
  * the test asks of the page waits on a frame that's gone ("Render frame was disposed before WebFrameMain could be
  * accessed"). Through about:blank it died in none of 100, and a load whose renderer died anyway goes again on a

@@ -5,7 +5,7 @@ import { acp } from "@/state/acp"
 import { address, addresseeOf } from "@/state/apex-fins"
 
 /**
- * What the person can do with one Fin, from any row that lists it (the crew card, the side rail): write to it, which
+ * What the person can do with one Fin, from any row that lists it (the shiver card, the side rail): write to it, which
  * also resumes one stopped or failed, or stop it. Opening it is the row itself. Shown while the row is hovered or
  * focused, and always (`always`) when the row is itself a question for the person, such as a quiet Fin.
  */

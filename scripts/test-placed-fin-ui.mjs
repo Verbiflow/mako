@@ -7,7 +7,7 @@ import { KEPT, testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * A Fin placed on another device, as every form draws it (decision D6), through production components on the mock
- * bridge's Apex with `&placed=` (`src/dev/mock-apex-thread.ts`): on the desk, under its Apex in the rail and the crew
+ * bridge's Apex with `&placed=` (`src/dev/mock-apex-thread.ts`): on the desk, under its Apex in the rail and the shiver
  * card, never as a row of its own, opening its own conversation on its device (Loft) when Loft lists it, and drawn as
  * not openable, opening nothing, when it doesn't; on the phone and in a laptop's browser, under its Apex and, waiting
  * on an approval, a row of its own under Needs you that opens on Loft; with Loft quiet; and with the Apex's own device
@@ -15,7 +15,7 @@ import { KEPT, testScratch } from "./lib/test-scratch.mjs"
  * (`MAKO_PLACED_UI_SHOTS`; without it they go with the run's scratch folder once it passes). Pass a dev server's URL
  * to use it; with none it serves its own.
  *
- * The desk's rail shots keep the right sidebar open; before the crew card and the opened Fin, the sidebar is closed
+ * The desk's rail shots keep the right sidebar open; before the shiver card and the opened Fin, the sidebar is closed
  * by the person's own command (Toggle the right sidebar), since a display narrower than the window asked for (a
  * runner's) clamps the window, and the stage then covers the workbench with the sidebar, as it's designed to in a
  * narrow window. The window's real size and the screen's are printed for every desk scene; `MAKO_PLACED_UI_WIDTH`
@@ -57,10 +57,10 @@ const APEX_CONVERSATION = "1ead1ead-2000-4000-8000-000000001ead"
 const FIN_THREAD = "1ead1ead-3000-4000-8000-000000000013"
 const FIN_CONVERSATION = "1ead1ead-5000-4000-8000-000000000013"
 const FIN_TITLE = "Docs sweep"
-/** What the desk shows when a wait runs out: the open conversation and the rail's rows; and the crew card's rows. */
+/** What the desk shows when a wait runs out: the open conversation and the rail's rows; and the shiver card's rows. */
 const ACTIVE = "import('/src/state/acp.ts').then(({ acpStore }) => ({ active: acpStore.get().activeKey, rows: [...document.querySelectorAll('.thread-jump-scope [data-thread-row]')].map((node) => [node.dataset.conversationId, node.dataset.apexRow ?? '', node.innerText.split('\\n')[0]]) }))"
-/** The transcript's state and every crew card on the page, each with its box and the ancestors that could hide it. */
-const TRANSCRIPT = `${ACTIVE}.then((shown) => { const rect = (node) => node ? { top: Math.round(node.getBoundingClientRect().top), height: Math.round(node.getBoundingClientRect().height) } : null; const viewport = document.querySelector('[data-transcript-viewport]'); const cards = [...document.querySelectorAll('[data-crew]')].map((card) => { const ancestors = []; for (let node = card; node; node = node.parentElement) { const style = getComputedStyle(node); const why = [node.hidden && 'hidden', style.display === 'none' && 'display:none', style.visibility !== 'visible' && style.visibility, style.contentVisibility && style.contentVisibility !== 'visible' && style.contentVisibility].filter(Boolean); if (why.length || node === card || node.hasAttribute('data-transcript-viewport')) ancestors.push([node.tagName.toLowerCase(), [...node.attributes].filter((a) => a.name.startsWith('data-')).map((a) => a.name + (a.value ? '=' + a.value.slice(0, 24) : '')).join(' '), why.join(','), why.length ? (node.className || '').toString().slice(0, 80) : '']) } return { inTranscript: viewport?.contains(card) ?? false, card: rect(card), scroller: rect(card.querySelector('[data-crew-scroller]')), rows: card.querySelectorAll('[data-crew-row]').length, ancestors } }); return import('/src/state/viewer.ts').then(({ viewerStore }) => ({ ...shown, transcript: { viewport: rect(viewport), virtualized: viewport?.hasAttribute('data-virtualized') ?? null, skeleton: document.querySelector('.skeleton-transcript') !== null, composer: document.querySelector('[data-composer-input], textarea') !== null, blocks: viewport?.querySelectorAll('[data-flip-key], [data-request], [data-transcript-tool]').length ?? null }, panes: viewerStore.get().panes.map((pane) => ({ id: pane.id, activeId: pane.activeId, tabIds: pane.tabIds, session: pane.session?.key ?? pane.session ?? null })), documents: Object.values(viewerStore.get().documents ?? {}).map((doc) => ({ id: doc.id, kind: doc.kind, title: doc.title, path: doc.path ?? doc.transcript?.path ?? null })), cards })) })`
+/** The transcript's state and every shiver card on the page, each with its box and the ancestors that could hide it. */
+const TRANSCRIPT = `${ACTIVE}.then((shown) => { const rect = (node) => node ? { top: Math.round(node.getBoundingClientRect().top), height: Math.round(node.getBoundingClientRect().height) } : null; const viewport = document.querySelector('[data-transcript-viewport]'); const cards = [...document.querySelectorAll('[data-shiver]')].map((card) => { const ancestors = []; for (let node = card; node; node = node.parentElement) { const style = getComputedStyle(node); const why = [node.hidden && 'hidden', style.display === 'none' && 'display:none', style.visibility !== 'visible' && style.visibility, style.contentVisibility && style.contentVisibility !== 'visible' && style.contentVisibility].filter(Boolean); if (why.length || node === card || node.hasAttribute('data-transcript-viewport')) ancestors.push([node.tagName.toLowerCase(), [...node.attributes].filter((a) => a.name.startsWith('data-')).map((a) => a.name + (a.value ? '=' + a.value.slice(0, 24) : '')).join(' '), why.join(','), why.length ? (node.className || '').toString().slice(0, 80) : '']) } return { inTranscript: viewport?.contains(card) ?? false, card: rect(card), scroller: rect(card.querySelector('[data-shiver-scroller]')), rows: card.querySelectorAll('[data-shiver-row]').length, ancestors } }); return import('/src/state/viewer.ts').then(({ viewerStore }) => ({ ...shown, transcript: { viewport: rect(viewport), virtualized: viewport?.hasAttribute('data-virtualized') ?? null, skeleton: document.querySelector('.skeleton-transcript') !== null, composer: document.querySelector('[data-composer-input], textarea') !== null, blocks: viewport?.querySelectorAll('[data-flip-key], [data-request], [data-transcript-tool]').length ?? null }, panes: viewerStore.get().panes.map((pane) => ({ id: pane.id, activeId: pane.activeId, tabIds: pane.tabIds, session: pane.session?.key ?? pane.session ?? null })), documents: Object.values(viewerStore.get().documents ?? {}).map((doc) => ({ id: doc.id, kind: doc.kind, title: doc.title, path: doc.path ?? doc.transcript?.path ?? null })), cards })) })`
 
 async function check() {
   const { app, BrowserWindow } = await import("electron")
@@ -127,7 +127,7 @@ async function check() {
       const openable = await desk.evaluate(`document.querySelector('.thread-jump-scope [data-asking-fin="${FIN_THREAD}"]').dataset.openable`)
       assert.equal(openable, scene === "unlisted" ? "false" : "true", `the row says whether it opens (${scene})`)
       await desk.both(`desk-rail-${scene}`)
-      // The crew card, in the Apex's Thread: the same row, the same word on whether it opens. The Apex's row is found
+      // The shiver card, in the Apex's Thread: the same row, the same word on whether it opens. The Apex's row is found
       // by its conversation, never by its place in the rail, and the card is waited for only once its conversation is
       // the open one. A cold runner's first transcript takes a while to come up.
       assert.ok(await desk.click(`.thread-jump-scope [data-conversation-id="${APEX_CONVERSATION}"]`), `the Apex's row in the rail (${scene})`)
@@ -142,26 +142,26 @@ async function check() {
       // transcript takes a while; one that never comes up is this check's failure to say, never something to pass around.
       await desk.until("Boolean(document.querySelector('[data-transcript-viewport]')) && !document.querySelector('.skeleton-transcript')", "the Apex's transcript", 90_000, TRANSCRIPT)
       await desk.until("document.querySelector('[data-transcript-viewport]').getBoundingClientRect().height > 0", "the Apex's transcript with a box", 20_000, TRANSCRIPT)
-      // Then the crew card in that transcript (a compact card can stand elsewhere on the page, under a hidden surface).
+      // Then the shiver card in that transcript (a compact card can stand elsewhere on the page, under a hidden surface).
       // The card draws its rows through a virtualizer, which draws none while the card's scroller measures no
       // height: below the fold on a runner it did, and the wait ran out with the card mounted and empty. On screen,
       // as a reader scrolls to it, it measures and draws; here it's brought on screen first, which the screenshots
       // need too. On a timeout, every card on the page is printed with its box and the ancestors that could hide it.
-      const CARD = "[data-transcript-viewport] [data-crew]"
-      await desk.until(`Boolean(document.querySelector('${CARD}'))`, "the crew card in the Apex's transcript", 60_000, TRANSCRIPT)
+      const CARD = "[data-transcript-viewport] [data-shiver]"
+      await desk.until(`Boolean(document.querySelector('${CARD}'))`, "the shiver card in the Apex's transcript", 60_000, TRANSCRIPT)
       await desk.evaluate(`document.querySelector('${CARD}').scrollIntoView({ block: 'start' }); true`)
-      await desk.until(`Boolean(document.querySelector('${CARD} [data-crew-row="${FIN_THREAD}"]'))`, "the Fin in the Apex's crew card", 30_000, TRANSCRIPT)
+      await desk.until(`Boolean(document.querySelector('${CARD} [data-shiver-row="${FIN_THREAD}"]'))`, "the Fin in the Apex's shiver card", 30_000, TRANSCRIPT)
       // Drawn, not only mounted: the card and its row have a box.
       const drawn = await desk.evaluate(TRANSCRIPT)
       const card = drawn.cards.find((each) => each.inTranscript)
-      assert.ok(card && card.card.height > 0 && card.rows > 0, `the crew card is drawn in the transcript (${scene}): ${JSON.stringify(drawn)}`)
-      assert.ok(await desk.evaluate(`document.querySelector('${CARD} [data-crew-row="${FIN_THREAD}"]').getBoundingClientRect().height > 0`), `the Fin's row has a box (${scene})`)
+      assert.ok(card && card.card.height > 0 && card.rows > 0, `the shiver card is drawn in the transcript (${scene}): ${JSON.stringify(drawn)}`)
+      assert.ok(await desk.evaluate(`document.querySelector('${CARD} [data-shiver-row="${FIN_THREAD}"]').getBoundingClientRect().height > 0`), `the Fin's row has a box (${scene})`)
       // The card fades in; its screenshot is taken once that's done. Only the card's own animation: rows hold marks
       // that pulse for as long as a Fin works.
       await desk.evaluate(`Promise.all(document.querySelector('${CARD}').getAnimations().filter((animation) => animation.effect.getTiming().iterations !== Infinity).map((animation) => animation.finished)).then(() => true)`)
-      // The crew card's row for a Fin that needs the person opens from its title; every other row is the button itself.
-      assert.equal(await desk.evaluate(`document.querySelector('${CARD} [data-crew-row="${FIN_THREAD}"][data-openable], ${CARD} [data-crew-row="${FIN_THREAD}"] [data-openable]').dataset.openable`), scene === "unlisted" ? "false" : "true")
-      await desk.both(`desk-crew-${scene}`)
+      // The shiver card's row for a Fin that needs the person opens from its title; every other row is the button itself.
+      assert.equal(await desk.evaluate(`document.querySelector('${CARD} [data-shiver-row="${FIN_THREAD}"][data-openable], ${CARD} [data-shiver-row="${FIN_THREAD}"] [data-openable]').dataset.openable`), scene === "unlisted" ? "false" : "true")
+      await desk.both(`desk-shiver-${scene}`)
       const before = await desk.activeKey()
       await desk.click(`.thread-jump-scope [data-asking-fin="${FIN_THREAD}"]`)
       if (scene === "unlisted") {
@@ -175,7 +175,7 @@ async function check() {
       }
       assert.deepEqual(desk.errors, [], `the page threw nothing (${scene})`)
       desk.close()
-      console.log(`desk, ${scene}: the Fin under its Apex in the rail and the crew card, ${scene === "unlisted" ? "drawn as not openable and opening nothing" : "opening Loft's conversation of it"}`)
+      console.log(`desk, ${scene}: the Fin under its Apex in the rail and the shiver card, ${scene === "unlisted" ? "drawn as not openable and opening nothing" : "opening Loft's conversation of it"}`)
     }
 
     // A laptop's browser: the desk's rail from the account's list, the Fin under its Apex, a row of its own under Needs you.

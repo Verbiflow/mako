@@ -52,9 +52,9 @@ export const FinReports = memo(function FinReports({ reports: sent, timestamp }:
     )
   const prs = folded.flatMap((card) => card.artifacts ?? []).filter((artifact) => artifact.kind === "pull-request").length
   return (
-    <div data-fin-reports={reports.length} data-crew-update className="flex flex-col gap-3">
-      <p data-crew-update-head className="flex items-baseline justify-end gap-1.5 text-label text-faint">
-        {crewUpdateWords(reports).map((part) => (
+    <div data-fin-reports={reports.length} data-shiver-update className="flex flex-col gap-3">
+      <p data-shiver-update-head className="flex items-baseline justify-end gap-1.5 text-label text-faint">
+        {shiverUpdateWords(reports).map((part) => (
           <span key={part.text} className={part.tone}>{part.text}</span>
         ))}
         {timestamp ? (
@@ -71,7 +71,7 @@ export const FinReports = memo(function FinReports({ reports: sent, timestamp }:
       ) : (
         <button
           type="button"
-          data-crew-update-fold={folded.length}
+          data-shiver-update-fold={folded.length}
           onClick={() => setShown(true)}
           className="pressable ml-auto flex max-w-[min(82%,64ch)] items-center gap-2 bg-raised/60 px-3.5 py-2 text-left text-ui text-muted-foreground hover:bg-fill-hover hover:text-foreground"
         >
@@ -90,7 +90,7 @@ export const FinReports = memo(function FinReports({ reports: sent, timestamp }:
 })
 
 /**
- * What stays open in a crew update: what waits on the person, a failure, and a done Fin's decision while it's still open,
+ * What stays open in a shiver update: what waits on the person, a failure, and a done Fin's decision while it's still open,
  * whoever's it is now: its Apex's, or the person's once the Apex left it (`escalateDecision`), when the roster says
  * `on: "person"` while the report still says `decides: "lead"`. Everything else folds into one line.
  */
@@ -114,7 +114,7 @@ function openDecisions(children: readonly NativeAgent[]): ReadonlySet<string> {
 }
 
 /** The update's head, one part a kind: "4 finished · Sheet motion needs you · 1 failed". */
-function crewUpdateWords(reports: readonly FinReportCard[]): { text: string; tone: string }[] {
+function shiverUpdateWords(reports: readonly FinReportCard[]): { text: string; tone: string }[] {
   const needs = reports.filter((card) => said(card).tone === "text-attention")
   const failed = reports.filter((card) => card.status === "failed").length
   const others = reports.filter((card) => said(card).tone !== "text-attention" && card.status !== "failed")
@@ -143,7 +143,7 @@ const FinReport = memo(function FinReport({ card, timestamp }: { card: FinReport
   const children = useThreadChildren(card.apex ? undefined : thread)
   const asks = useThreadAsks(card.apex ? undefined : thread)
   const fin = children.find((agent) => agent.child?.thread === card.fin)
-  // Its options answer the Fin while its ask is the person's and still open, through the crew card's own path.
+  // Its options answer the Fin while its ask is the person's and still open, through the shiver card's own path.
   const open = asks.find((ask) => ask.fin === card.fin && ask.ask.kind === "report" && ask.ask.id === card.report)
   const [sent, setSent] = useState<number>()
   const { word, tone } = said(card)

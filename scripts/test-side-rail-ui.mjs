@@ -99,7 +99,7 @@ async function check() {
   await load("/?mock&app=apex")
   await until("document.querySelectorAll('.thread-jump-scope [data-asking-fin]').length === 2", "the Apex in the rail")
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.querySelector('[data-fin-pips]')).click(); true")
-  await until("Boolean(document.querySelector('[data-crew]'))", "the crew card")
+  await until("Boolean(document.querySelector('[data-shiver]'))", "the shiver card")
   await until("Boolean(document.querySelector('[data-side-rail]'))", "the right rail")
 
   // The composer on screen marks words written into it as taken, so Setup's "Add to setup" counts only a real draft.
@@ -183,7 +183,7 @@ async function check() {
   assert.equal(await fins(), 0, "a Fin spawning opens no tab")
   await evaluate(`window.apexScene.setChildren(${JSON.stringify(roster)}); true`)
   const needing = roster.find((agent) => agent.title === "Sheet motion on iPad").child.thread
-  await click(`[data-crew-row="${needing}"] button`)
+  await click(`[data-shiver-row="${needing}"] button`)
   await until(`Boolean(document.querySelector('[data-child-tab="${needing}"][aria-selected="true"]'))`, "the opened Fin's tab")
   assert.equal(await fins(), 1, "the Fin opened has the one tab")
   await until("/need you|needs you/.test(document.querySelector('[data-surface-id=agents]')?.innerText ?? '')", "Agents keeping the Apex's Fins while one is open")
@@ -196,7 +196,7 @@ async function check() {
   await load("/?mock&app=apex")
   await until("document.querySelectorAll('.thread-jump-scope [data-asking-fin]').length === 2", "the Apex at 1100")
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.querySelector('[data-fin-pips]')).click(); true")
-  await until("Boolean(document.querySelector('[data-crew]')) && Boolean(document.querySelector('[data-side-rail]'))", "the crew card and the rail at 1100")
+  await until("Boolean(document.querySelector('[data-shiver]')) && Boolean(document.querySelector('[data-side-rail]'))", "the shiver card and the rail at 1100")
   const narrow = await evaluate(`(() => {
     const rail = document.querySelector('.companion-panel').getBoundingClientRect()
     const composer = document.querySelector('[data-composer]').getBoundingClientRect()
@@ -206,8 +206,8 @@ async function check() {
   assert.equal(narrow.beside, true, `the chat stands left of the rail: ${JSON.stringify(narrow)}`)
   assert.equal(narrow.covered, false, "nothing to get back from")
   assert.ok(narrow.rail >= 340, `the rail keeps its least: ${narrow.rail}`)
-  const overrun = await evaluate(`[...document.querySelectorAll('button[data-crew-row]')].filter((row) => [...row.querySelectorAll('[data-fin-moved], .truncate')].some((each) => each.getBoundingClientRect().right > row.children[1].getBoundingClientRect().right + 1)).map((row) => row.innerText)`)
-  assert.deepEqual(overrun, [], "a crew line stops short of its time in the narrower chat")
+  const overrun = await evaluate(`[...document.querySelectorAll('button[data-shiver-row]')].filter((row) => [...row.querySelectorAll('[data-fin-moved], .truncate')].some((each) => each.getBoundingClientRect().right > row.children[1].getBoundingClientRect().right + 1)).map((row) => row.innerText)`)
+  assert.deepEqual(overrun, [], "a shiver line stops short of its time in the narrower chat")
   await capture("desk-1100.png")
   await viewport(1440, 900)
   await load("/?mock&app=apex")
@@ -215,7 +215,7 @@ async function check() {
 
   // A Thread with no Fins and nothing alongside has no Agents row.
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Refactor the composer')).click(); true")
-  await until("!document.querySelector('[data-crew]')", "the plain Thread")
+  await until("!document.querySelector('[data-shiver]')", "the plain Thread")
   await until("Boolean(document.querySelector('button[aria-label=\"Show the right sidebar\"], [data-side-rail]'))", "the title bar")
   if (!(await evaluate("Boolean(document.querySelector('[data-side-rail]'))"))) await click("button[aria-label='Show the right sidebar']")
   await until("Boolean(document.querySelector('[data-side-rail]'))", "the rail on the plain Thread")
@@ -265,19 +265,19 @@ async function check() {
   await capture("web-files.png")
   await click("button[aria-label='Hide the right sidebar']")
   await until("!document.querySelector('[data-side-rail]')", "the rail away")
-  // A crew row opens its Fin there too, with its one tab; closing it is the Apex again.
-  await click(`[data-crew-row="${needing}"] button`)
+  // A shiver row opens its Fin there too, with its one tab; closing it is the Apex again.
+  await click(`[data-shiver-row="${needing}"] button`)
   await until(`Boolean(document.querySelector('[data-child-of] [data-child-tab="${needing}"][aria-selected="true"]'))`, "the Fin's tab in the browser")
   await click("button[aria-label='Close Sheet motion on iPad']")
-  await until("!document.querySelector('[data-child-tab]') && Boolean(document.querySelector('[data-crew]'))", "the Apex in the browser again")
+  await until("!document.querySelector('[data-child-tab]') && Boolean(document.querySelector('[data-shiver]'))", "the Apex in the browser again")
   // So does selecting the Apex's own Session, the one it was already on, as the desktop's tab does.
   const apexSelected = "!document.querySelector('[data-child-of]') && !document.querySelector('[data-child-tab]') && [...document.querySelectorAll('[data-session-tab]')].some((tab) => tab.getAttribute('aria-selected') === 'true')"
-  await click(`[data-crew-row="${needing}"] button`)
+  await click(`[data-shiver-row="${needing}"] button`)
   await until("Boolean(document.querySelector('[data-child-of] [data-child-tab]'))", "the Fin's tab again")
   await press("[data-session-tab]")
   await until(apexSelected, "the Apex's Session tab leaving the Fin")
   // And its row in the left rail, which opens the same Thread.
-  await click(`[data-crew-row="${needing}"] button`)
+  await click(`[data-shiver-row="${needing}"] button`)
   await until("Boolean(document.querySelector('[data-child-of] [data-child-tab]'))", "the Fin's tab once more")
   await evaluate("[...document.querySelectorAll('[data-thread-row]')].find((row) => row.textContent.includes('Mobile polish')).click(); true")
   await until(apexSelected, "the Apex's rail row leaving the Fin")
@@ -330,18 +330,18 @@ async function check() {
   })
   await click("button[aria-label='Hide the right sidebar']")
 
-  // The phone: the crew card holds the Fins, the bar counts them, and no chip repeats one.
+  // The phone: the shiver card holds the Fins, the bar counts them, and no chip repeats one.
   await viewport(390, 844)
   await load("/scripts/phone-apex.html?app=apex")
   await until("Boolean(document.querySelector('[data-thread] [data-fin-pips]'))", "the phone's list")
   await click("[data-thread]")
-  await until("Boolean(document.querySelector('[data-crew]'))", "the crew card on the phone")
+  await until("Boolean(document.querySelector('[data-shiver]'))", "the shiver card on the phone")
   assert.equal(await evaluate("document.querySelector('[data-apex-count]')?.dataset.apexCount"), "12")
   assert.equal(await evaluate("document.querySelectorAll('[data-child-chip], [data-child-chips]').length"), 0, "no chip a Fin")
   await capture("phone.png")
   // With the chips gone the card is the way in: a tap on a row opens that Fin, its back naming the Apex.
-  await click(`[data-crew-row="${needing}"] button`)
-  await until("Boolean(document.querySelector('[data-child-of]'))", "the Fin from the crew card")
+  await click(`[data-shiver-row="${needing}"] button`)
+  await until("Boolean(document.querySelector('[data-child-of]'))", "the Fin from the shiver card")
 
   console.log("Right rail UI: the twin's rows and tone, readings, list-first Changes, arrows, a Fin's one tab, the web's rail, Changes and Files out of reach, and the phone passed")
   guard.done()

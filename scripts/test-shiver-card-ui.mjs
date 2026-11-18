@@ -5,15 +5,15 @@ import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { testScratch } from "./lib/test-scratch.mjs"
 import { atSize, navigate, withMotion } from "./lib/test-window.mjs"
-import { crewEvidencePlugin, CREW_EVIDENCE_PRELOAD, withCrewFailureEvidence, saveCrewInteraction } from "./lib/crew-card-evidence.mjs"
+import { shiverEvidencePlugin, SHIVER_EVIDENCE_PRELOAD, withShiverFailureEvidence, saveShiverInteraction } from "./lib/shiver-card-evidence.mjs"
 
-// The crew card (`crew-card.tsx`) that replaces "Waiting on N agents" at the end of an Apex's own transcript once
+// The shiver card (`shiver-card.tsx`) that replaces "Waiting on N agents" at the end of an Apex's own transcript once
 // its own turn settles and its Fins still work, on the mock bridge's Apex scene (`?mock&app=apex`): every Fin
 // shown, needs-you first, an ask answered in place through the same action the Agents panel and the dock use,
 // moving the Fin everywhere at once (the card, its tab, the rail's badge); forty Fins, bounded and scrolled; the
 // phone's compact card; and that a Fin's own step re-renders its row alone, not the card's heavier rows. Screenshots
-// land in the evidence folder (or `MAKO_CREW_UI_SHOTS`). Pass a dev server's URL to use it
-// (`node scripts/test-crew-card-ui.mjs http://127.0.0.1:20026/`); with none it serves its own.
+// land in the evidence folder (or `MAKO_SHIVER_UI_SHOTS`). Pass a dev server's URL to use it
+// (`node scripts/test-shiver-card-ui.mjs http://127.0.0.1:20026/`); with none it serves its own.
 if (process.versions.electron) {
   void check().catch(async (error) => {
     console.error(error)
@@ -21,11 +21,11 @@ if (process.versions.electron) {
     app.exit(1)
   })
 } else {
-  const root = testScratch("mako-crew-card-ui-")
+  const root = testScratch("mako-shiver-card-ui-")
   await writeFile(
     join(root, "package.json"),
     JSON.stringify({
-      name: "mako-crew-card-ui",
+      name: "mako-shiver-card-ui",
       main: fileURLToPath(import.meta.url),
     })
   )
@@ -35,7 +35,7 @@ if (process.versions.electron) {
     const { createServer } = await import("vite")
     server = await createServer({
       cacheDir: join(root, "cache"),
-      plugins: [crewEvidencePlugin()],
+      plugins: [shiverEvidencePlugin()],
       server: {
         host: "127.0.0.1",
         port: 0,
@@ -47,8 +47,8 @@ if (process.versions.electron) {
   }
   const env = {
     ...process.env,
-    MAKO_CREW_UI_ROOT: root,
-    MAKO_CREW_UI_URL: given ?? server.resolvedUrls.local[0],
+    MAKO_SHIVER_UI_ROOT: root,
+    MAKO_SHIVER_UI_URL: given ?? server.resolvedUrls.local[0],
   }
   delete env.ELECTRON_RUN_AS_NODE
   try {
@@ -69,7 +69,7 @@ if (process.versions.electron) {
  * Counts each commit's renders by component, as React DevTools does: a fiber rendered in a commit if it did work
  * (`PerformedWork`) and began anew (`actualStartTime`, which a subtree React skipped keeps). Installed before React
  * loads, in the counting window only: the walk costs frames. Adapted from `test-orch-ui.mjs`'s own, without its
- * areas (the crew card has none of its own, only components).
+ * areas (the shiver card has none of its own, only components).
  */
 const COMMIT_COUNTER = `
 const PERFORMED = 1
@@ -104,16 +104,16 @@ window.__benchReset = () => (tally = { commits: 0, components: {} })
 
 async function check() {
   const { app, BrowserWindow } = await import("electron")
-  const root = process.env.MAKO_CREW_UI_ROOT
-  const shots = process.env.MAKO_CREW_UI_SHOTS ?? (process.env.MAKO_TEST_EVIDENCE ? join(process.env.MAKO_TEST_EVIDENCE, "crew-card") : join(root, "shots"))
+  const root = process.env.MAKO_SHIVER_UI_ROOT
+  const shots = process.env.MAKO_SHIVER_UI_SHOTS ?? (process.env.MAKO_TEST_EVIDENCE ? join(process.env.MAKO_TEST_EVIDENCE, "shiver-card") : join(root, "shots"))
   await mkdir(shots, { recursive: true })
   app.setPath("userData", join(root, "profile"))
   app.dock?.hide()
   withMotion(app)
   await app.whenReady()
-  const base = process.env.MAKO_CREW_UI_URL
+  const base = process.env.MAKO_SHIVER_UI_URL
   const preload = join(root, "commit-counter.cjs")
-  await writeFile(preload, COMMIT_COUNTER + CREW_EVIDENCE_PRELOAD)
+  await writeFile(preload, COMMIT_COUNTER + SHIVER_EVIDENCE_PRELOAD)
 
   const window = new BrowserWindow({
     width: 1440,
@@ -128,7 +128,7 @@ async function check() {
   })
   atSize(window, 1440, 900)
   const page = window.webContents
-  await withCrewFailureEvidence({ page, shots }, () => checkPage({ window, page, shots, base }))
+  await withShiverFailureEvidence({ page, shots }, () => checkPage({ window, page, shots, base }))
   app.exit(0)
 }
 
@@ -139,7 +139,7 @@ async function checkPage({ window, page, shots, base }) {
   })
   const evaluate = (code) => page.executeJavaScript(code)
   // Each look asks for a frame first. The window is hidden, and what the page learns only when it draws, such as the
-  // crew card's IntersectionObserver saying the card is back in view, waits for a frame it may not get. Screenshots
+  // shiver card's IntersectionObserver saying the card is back in view, waits for a frame it may not get. Screenshots
   // drew it before a step; after a scroll that nothing else draws, a step waited out its 20 s on the runner.
   const until = async (code, what = code) => {
     const deadline = Date.now() + 20_000
@@ -158,7 +158,7 @@ async function checkPage({ window, page, shots, base }) {
   const capture = async (name) => {
     await settle()
     await writeFile(
-      join(shots, `crew-card-ui-${name}.png`),
+      join(shots, `shiver-card-ui-${name}.png`),
       (await page.capturePage()).toPNG()
     )
   }
@@ -175,7 +175,7 @@ async function checkPage({ window, page, shots, base }) {
   }
   const click = (selector, evidence = false) =>
     evaluate(
-      `(() => { const probe = ${evidence} ? window.__crewEvidence : undefined; probe?.begin(); try { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) return false; node.click(); return true } finally { probe?.post() } })()`
+      `(() => { const probe = ${evidence} ? window.__shiverEvidence : undefined; probe?.begin(); try { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) return false; node.click(); return true } finally { probe?.post() } })()`
     )
   // The line brings the card back with a scroll whose event comes a frame later. A transcript still streaming changes in
   // that frame, and the timeline holding its reader's place then put the old place back over the scroll, the card out
@@ -183,33 +183,33 @@ async function checkPage({ window, page, shots, base }) {
   // same task, so every run meets that frame.
   const clickAway = (evidence = false) =>
     evaluate(
-      `(() => { const probe = ${evidence} ? window.__crewEvidence : undefined; probe?.begin(); try { const node = document.querySelector('[data-crew-away]'); if (!node) return false; node.click(); const turn = document.querySelector('[data-transcript-viewport] [data-exchange]'); turn?.append(document.createElement('span')); return Boolean(turn) } finally { probe?.post() } })()`
+      `(() => { const probe = ${evidence} ? window.__shiverEvidence : undefined; probe?.begin(); try { const node = document.querySelector('[data-shiver-away]'); if (!node) return false; node.click(); const turn = document.querySelector('[data-transcript-viewport] [data-exchange]'); turn?.append(document.createElement('span')); return Boolean(turn) } finally { probe?.post() } })()`
     )
   // The card virtualizes past its own height, so a row off screen isn't in the DOM yet: scroll its own scroller
   // top to bottom, a screenful at a time, collecting every row once, in the order it comes into view (the order
   // it's drawn in, since the virtualizer never renders two rows out of their list's order).
-  const collectRows = async (selector = "[data-crew-row]") => {
+  const collectRows = async (selector = "[data-shiver-row]") => {
     await evaluate(
-      "(() => { const el = document.querySelector('[data-crew-scroller]'); if (el) el.scrollTop = 0; return true })()"
+      "(() => { const el = document.querySelector('[data-shiver-scroller]'); if (el) el.scrollTop = 0; return true })()"
     )
     await settle()
     const seen = new Map()
     for (let step = 0; step < 50; step++) {
       const rows = await evaluate(
-        `[...document.querySelectorAll(${JSON.stringify(selector)})].map((row) => ({ key: row.dataset.crewRow, group: row.dataset.childGroup, state: row.dataset.childState, text: row.innerText.replace(/\\s+/g, ' '), html: row.outerHTML }))`
+        `[...document.querySelectorAll(${JSON.stringify(selector)})].map((row) => ({ key: row.dataset.shiverRow, group: row.dataset.childGroup, state: row.dataset.childState, text: row.innerText.replace(/\\s+/g, ' '), html: row.outerHTML }))`
       )
       for (const row of rows) if (!seen.has(row.key)) seen.set(row.key, row)
       const { top, client, total } = await evaluate(
-        "(() => { const el = document.querySelector('[data-crew-scroller]'); return el ? { top: el.scrollTop, client: el.clientHeight, total: el.scrollHeight } : { top: 0, client: 0, total: 0 } })()"
+        "(() => { const el = document.querySelector('[data-shiver-scroller]'); return el ? { top: el.scrollTop, client: el.clientHeight, total: el.scrollHeight } : { top: 0, client: 0, total: 0 } })()"
       )
       if (top + client >= total - 1) break
       await evaluate(
-        `(() => { const el = document.querySelector('[data-crew-scroller]'); el.scrollTop = Math.min(el.scrollTop + el.clientHeight * 0.85, el.scrollHeight); return true })()`
+        `(() => { const el = document.querySelector('[data-shiver-scroller]'); el.scrollTop = Math.min(el.scrollTop + el.clientHeight * 0.85, el.scrollHeight); return true })()`
       )
       await settle()
     }
     await evaluate(
-      "(() => { const el = document.querySelector('[data-crew-scroller]'); if (el) el.scrollTop = 0; return true })()"
+      "(() => { const el = document.querySelector('[data-shiver-scroller]'); if (el) el.scrollTop = 0; return true })()"
     )
     return [...seen.values()]
   }
@@ -228,15 +228,15 @@ async function checkPage({ window, page, shots, base }) {
   )
 
   // The Apex's own turn settles (its last request read, the digest); its twelve Fins keep running in the roster.
-  // The crew card draws in the footer the old line used, replacing "Waiting on 12 agents".
+  // The shiver card draws in the footer the old line used, replacing "Waiting on 12 agents".
   await evaluate("window.apexScene.setRunning(false); true")
-  await until("Boolean(document.querySelector('[data-crew]'))", "the crew card")
+  await until("Boolean(document.querySelector('[data-shiver]'))", "the shiver card")
   await settle()
 
   const header = await evaluate(`(() => {
-    const card = document.querySelector('[data-crew]')
+    const card = document.querySelector('[data-shiver]')
     return {
-      total: card.dataset.crew,
+      total: card.dataset.shiver,
       text: card.innerText.replace(/\\s+/g, ' '),
       groups: [...card.querySelectorAll('[data-group]')].map((bar) => bar.dataset.group),
       mark: getComputedStyle(card.querySelector('.live-mark')).width,
@@ -271,11 +271,11 @@ async function checkPage({ window, page, shots, base }) {
   const live = await collectRows()
   assert.equal(live.length, 9, "the needs-you, working and queued Fins are listed")
   assert.ok(live.every((row) => row.group !== "done" && row.group !== "idle"), "no settled Fin among them")
-  assert.equal(await evaluate("document.querySelector('[data-crew-settled]')?.innerText.trim()"), "2 done · 1 idle", "the settled ones are one line")
-  await evaluate("(() => { const el = document.querySelector('[data-crew-scroller]'); el.scrollTop = el.scrollHeight; return true })()")
+  assert.equal(await evaluate("document.querySelector('[data-shiver-settled]')?.innerText.trim()"), "2 done · 1 idle", "the settled ones are one line")
+  await evaluate("(() => { const el = document.querySelector('[data-shiver-scroller]'); el.scrollTop = el.scrollHeight; return true })()")
   await settle()
-  await evaluate("document.querySelector('[data-crew-settled]').click(); true")
-  await until("document.querySelector('[data-crew-settled]')?.dataset.crewSettled === 'open'", "the settled line opening")
+  await evaluate("document.querySelector('[data-shiver-settled]').click(); true")
+  await until("document.querySelector('[data-shiver-settled]')?.dataset.shiverSettled === 'open'", "the settled line opening")
 
   // Every Fin, once it's open, scrolled into view: the rows rank by group, needs-you never behind a later one.
   const rows12 = await collectRows()
@@ -336,8 +336,8 @@ async function checkPage({ window, page, shots, base }) {
   )
   // The transcript follows its end until the reader wheels upward. The card sits at that end, so leaving it
   // puts the card below the fold and the dock's line takes the asks' place.
-  const hideCrew = `(() => {
-    const card = document.querySelector('[data-crew]')
+  const hideShiver = `(() => {
+    const card = document.querySelector('[data-shiver]')
     let scroller = card && card.parentElement
     while (scroller && scroller.scrollHeight <= scroller.clientHeight + 1) scroller = scroller.parentElement
     if (!scroller) return false
@@ -345,13 +345,13 @@ async function checkPage({ window, page, shots, base }) {
     scroller.scrollTop = 0
     return true
   })()`
-  await evaluate(hideCrew)
+  await evaluate(hideShiver)
   await until(
-    "Boolean(document.querySelector('[data-crew-away]'))",
+    "Boolean(document.querySelector('[data-shiver-away]'))",
     "the dock's line while the card is scrolled away"
   )
   const away = await evaluate(
-    "document.querySelector('[data-crew-away]').innerText.replace(/\\s+/g, ' ')"
+    "document.querySelector('[data-shiver-away]').innerText.replace(/\\s+/g, ' ')"
   )
   console.log("AWAY", away)
   assert.match(away, /2 Fins need you/)
@@ -366,12 +366,12 @@ async function checkPage({ window, page, shots, base }) {
     "[...document.querySelectorAll('[data-sonner-toast]')].forEach((toast) => toast.remove()); true"
   )
   await both("away")
-  assert.equal(await clickAway(true), true, "the crew-away click target exists at dispatch, beside a turn that changes")
+  assert.equal(await clickAway(true), true, "the shiver-away click target exists at dispatch, beside a turn that changes")
   await until(
-    "!document.querySelector('[data-crew-away]')",
+    "!document.querySelector('[data-shiver-away]')",
     "the line leaves once Needs you is back in view"
   )
-  await saveCrewInteraction({ page, shots })
+  await saveShiverInteraction({ page, shots })
 
   // Working: the current step, time run; the Fin asking its own Apex says so with a turned-back arrow.
   const working = rows12.filter((row) => row.group === "working")
@@ -386,7 +386,7 @@ async function checkPage({ window, page, shots, base }) {
   assert.match(onTurn.text, /\b18m$/, `a working row counts its turn: ${onTurn.text}`)
   for (const row of rows12) assert.doesNotMatch(row.text, /\b\d+h\b/, `no row says the Fin's age: ${row.text}`)
   // Every time says what it means: in a sentence on the row, and a finished row's number never reads as how long it ran.
-  const times = await evaluate("[...document.querySelectorAll('[data-crew-row]')].map((row) => [...row.querySelectorAll('.tabular[title]')].map((time) => ({ time: time.textContent, title: time.title, group: row.dataset.childGroup }))).flat()")
+  const times = await evaluate("[...document.querySelectorAll('[data-shiver-row]')].map((row) => [...row.querySelectorAll('.tabular[title]')].map((time) => ({ time: time.textContent, title: time.title, group: row.dataset.childGroup }))).flat()")
   assert.ok(times.length >= 7, `the rows' times carry their sentence: ${JSON.stringify(times)}`)
   assert.ok(times.some((each) => /^On this turn for \d+m$/.test(each.title)), `a working row says so: ${JSON.stringify(times)}`)
   const asking = working.find((row) => row.text.includes("Push token refresh"))
@@ -412,30 +412,30 @@ async function checkPage({ window, page, shots, base }) {
   // A failed Fin's own reason does survive `childState()`; a PR glyph draws on one that names it.
   await evaluate(`(() => {
     const agents = window.apexScene.children()
-    const failed = { ...agents[0], nativeId: "mako-child:crew-card-ui-failed", title: "Ship the release notes", child: { ...agents[0].child, thread: "00000000-0000-4000-8000-00000000fa17", state: { kind: "ended", outcome: "failed", reason: "Opened PR #42, then the check failed." } } }
+    const failed = { ...agents[0], nativeId: "mako-child:shiver-card-ui-failed", title: "Ship the release notes", child: { ...agents[0].child, thread: "00000000-0000-4000-8000-00000000fa17", state: { kind: "ended", outcome: "failed", reason: "Opened PR #42, then the check failed." } } }
     window.apexScene.setChildren([...agents, failed])
     return true
   })()`)
   // The card is virtualized: its failed group may sit below the rows it draws, so scroll it into reach.
   await until(
-    "(() => { const el = document.querySelector('[data-crew-scroller]'); if (el) el.scrollTop = el.scrollHeight; return Boolean(document.querySelector('[data-crew-row=\"00000000-0000-4000-8000-00000000fa17\"]')) })()",
+    "(() => { const el = document.querySelector('[data-shiver-scroller]'); if (el) el.scrollTop = el.scrollHeight; return Boolean(document.querySelector('[data-shiver-row=\"00000000-0000-4000-8000-00000000fa17\"]')) })()",
     "the failed Fin's row"
   )
   const failedRow = await evaluate(
-    "document.querySelector('[data-crew-row=\"00000000-0000-4000-8000-00000000fa17\"]').outerHTML"
+    "document.querySelector('[data-shiver-row=\"00000000-0000-4000-8000-00000000fa17\"]').outerHTML"
   )
   assert.ok(
     failedRow.includes("lucide-git-pull-request"),
     "a failed Fin whose reason names a PR draws the glyph"
   )
   await evaluate(
-    "window.apexScene.setChildren(window.apexScene.children().filter((agent) => agent.nativeId !== 'mako-child:crew-card-ui-failed')); true"
+    "window.apexScene.setChildren(window.apexScene.children().filter((agent) => agent.nativeId !== 'mako-child:shiver-card-ui-failed')); true"
   )
 
   // The transcript itself may have scrolled past the card's own top while clicking through it; bring its header
   // (and the Stop-all/bar row) back into view before a screenshot means to show the whole card.
   await evaluate(
-    "document.querySelector('[data-crew]')?.scrollIntoView({ block: 'start' }); true"
+    "document.querySelector('[data-shiver]')?.scrollIntoView({ block: 'start' }); true"
   )
   await evaluate(
     "[...document.querySelectorAll('[data-sonner-toast]')].forEach((toast) => toast.remove()); true"
@@ -445,7 +445,7 @@ async function checkPage({ window, page, shots, base }) {
 
   // Stop all: it asks about the Fins it reaches, never the Apex, which already settled.
   const stopAllTitle = await evaluate(
-    "[...document.querySelectorAll('[data-crew] header button')].find((button) => button.innerText.includes('Stop all'))?.title"
+    "[...document.querySelectorAll('[data-shiver] header button')].find((button) => button.innerText.includes('Stop all'))?.title"
   )
   console.log("STOP ALL", stopAllTitle)
   assert.match(stopAllTitle ?? "", /Stop \d+ Fins under Mobile polish/)
@@ -466,9 +466,9 @@ async function checkPage({ window, page, shots, base }) {
   // The Agents panel reads the same time as the card.
   await until("Boolean(document.querySelector('[data-apex-fins] [data-child-row]'))", "the panel's rows")
   assert.doesNotMatch(await evaluate("document.querySelector('[data-apex-fins]').innerText"), /\b\d+h\b/, "no row of the panel says the Fin's age")
-  await click(`[data-crew-row="${sheetMotion}"] button[data-fin-answer=allow]`)
+  await click(`[data-shiver-row="${sheetMotion}"] button[data-fin-answer=allow]`)
   await until(
-    `document.querySelector('[data-crew-row="${sheetMotion}"]')?.dataset.childGroup === 'working'`,
+    `document.querySelector('[data-shiver-row="${sheetMotion}"]')?.dataset.childGroup === 'working'`,
     "sheet-motion moving to working in the card"
   )
   const responded = await evaluate("window.apexScene.responds().at(-1)")
@@ -494,14 +494,14 @@ async function checkPage({ window, page, shots, base }) {
   const pushWording = await evaluate(
     "window.apexScene.children().find((agent) => agent.title === 'Quiet-hours push wording').child.thread"
   )
-  await click(`[data-crew-row="${pushWording}"] button[data-fin-answer="0"]`)
+  await click(`[data-shiver-row="${pushWording}"] button[data-fin-answer="0"]`)
   await until(
-    `document.querySelector('[data-crew-row="${pushWording}"]')?.dataset.childGroup === 'working'`,
+    `document.querySelector('[data-shiver-row="${pushWording}"]')?.dataset.childGroup === 'working'`,
     "push-wording moving to working"
   )
   assert.equal(
     await evaluate(
-      "document.querySelector('[data-crew-row]')?.dataset.childGroup"
+      "document.querySelector('[data-shiver-row]')?.dataset.childGroup"
     ),
     "working",
     "no need left: the first row is now a working one"
@@ -524,23 +524,23 @@ async function checkPage({ window, page, shots, base }) {
   )
   await evaluate("window.apexScene.setRunning(false); true")
   await until(
-    "Boolean(document.querySelector('[data-crew]'))",
-    "the crew card again"
+    "Boolean(document.querySelector('[data-shiver]'))",
+    "the shiver card again"
   )
   await settle()
 
   // Forty Fins: every one counted, none painted at once (bounded height, virtualized), every one reachable by scroll.
   await evaluate("window.apexScene.churn(40, 10 * 60_000); true")
   await until(
-    "document.querySelector('[data-crew]')?.dataset.crew === '40'",
+    "document.querySelector('[data-shiver]')?.dataset.shiver === '40'",
     "forty Fins counted"
   )
   await settle()
   const forty = await evaluate(`(() => ({
-    header: document.querySelector('[data-crew]').innerText.slice(0, 40),
-    mounted: document.querySelectorAll('[data-crew-row]').length,
-    scrollable: document.querySelector('[data-crew-scroller]').scrollHeight > document.querySelector('[data-crew-scroller]').clientHeight,
-    more: /and \\d+ more/.test(document.querySelector('[data-crew]').innerText),
+    header: document.querySelector('[data-shiver]').innerText.slice(0, 40),
+    mounted: document.querySelectorAll('[data-shiver-row]').length,
+    scrollable: document.querySelector('[data-shiver-scroller]').scrollHeight > document.querySelector('[data-shiver-scroller]').clientHeight,
+    more: /and \\d+ more/.test(document.querySelector('[data-shiver]').innerText),
   }))()`)
   console.log("FORTY", JSON.stringify(forty))
   assert.match(forty.header, /^40 Fins/)
@@ -558,13 +558,13 @@ async function checkPage({ window, page, shots, base }) {
     return queued.at(-1).title
   })()`)
   await evaluate(
-    "(() => { const scroller = document.querySelector('[data-crew-scroller]'); scroller.scrollTop = scroller.scrollHeight; return true })()"
+    "(() => { const scroller = document.querySelector('[data-shiver-scroller]'); scroller.scrollTop = scroller.scrollHeight; return true })()"
   )
   await evaluate("new Promise(done => requestAnimationFrame(() => requestAnimationFrame(() => done(true))))")
   await until(
     `(() => {
-      const scroller = document.querySelector('[data-crew-scroller]')
-      const row = [...scroller.querySelectorAll('[data-crew-row]')].find(row => row.innerText.includes(${JSON.stringify(lastTitle)}))
+      const scroller = document.querySelector('[data-shiver-scroller]')
+      const row = [...scroller.querySelectorAll('[data-shiver-row]')].find(row => row.innerText.includes(${JSON.stringify(lastTitle)}))
       const bounds = row?.getBoundingClientRect(), viewport = scroller.getBoundingClientRect()
       if (bounds && bounds.top >= viewport.top && bounds.bottom <= viewport.bottom) return true
       // Measuring newly mounted rows can extend the scroll range. Continue to the end of that measured range.
@@ -575,7 +575,7 @@ async function checkPage({ window, page, shots, base }) {
   )
   console.log("SCROLLED LAST", lastTitle)
   await evaluate(
-    "document.querySelector('[data-crew]')?.scrollIntoView({ block: 'start' }); true"
+    "document.querySelector('[data-shiver]')?.scrollIntoView({ block: 'start' }); true"
   )
   await evaluate(
     "[...document.querySelectorAll('[data-sonner-toast]')].forEach((toast) => toast.remove()); true"
@@ -583,7 +583,7 @@ async function checkPage({ window, page, shots, base }) {
   await settle()
   await both("forty")
   await evaluate(
-    "(() => { const scroller = document.querySelector('[data-crew-scroller]'); scroller.scrollTop = 0; return true })()"
+    "(() => { const scroller = document.querySelector('[data-shiver-scroller]'); scroller.scrollTop = 0; return true })()"
   )
 
   // Re-render discipline: one Fin's step changes; its own row repaints, the card's other rows do not. The card
@@ -591,11 +591,11 @@ async function checkPage({ window, page, shots, base }) {
   // scroll down past them first, to a "working" row the virtualizer has actually mounted, and mutate that one by
   // its own thread id (not a raw array index, which isn't the sorted row order the card itself draws).
   await evaluate(
-    "(() => { const el = document.querySelector('[data-crew-scroller]'); if (el) el.scrollTop = 900; return true })()"
+    "(() => { const el = document.querySelector('[data-shiver-scroller]'); if (el) el.scrollTop = 900; return true })()"
   )
   await settle()
   const target = await evaluate(
-    "document.querySelector('[data-crew-row][data-child-group=working]')?.dataset.crewRow"
+    "document.querySelector('[data-shiver-row][data-child-group=working]')?.dataset.shiverRow"
   )
   assert.ok(target, "a working row is mounted to mutate")
   await evaluate("window.__benchReset(); true")
@@ -607,7 +607,7 @@ async function checkPage({ window, page, shots, base }) {
   })()`)
   await settle()
   const targetText = await evaluate(
-    `document.querySelector('[data-crew-row="${target}"]')?.innerText.replace(/\\s+/g, ' ')`
+    `document.querySelector('[data-shiver-row="${target}"]')?.innerText.replace(/\\s+/g, ' ')`
   )
   console.log("TARGET ROW AFTER", targetText)
   assert.match(
@@ -618,9 +618,9 @@ async function checkPage({ window, page, shots, base }) {
   const tally = await evaluate("window.__benchTally()")
   console.log("RENDER BENCH", JSON.stringify(tally))
   const rowRenders =
-    (tally.components.CrewLineRow ?? 0) + (tally.components.NeedsRow ?? 0)
+    (tally.components.ShiverLineRow ?? 0) + (tally.components.NeedsRow ?? 0)
   console.log(
-    `BENCH ${JSON.stringify({ commits: tally.commits, cardReexecuted: tally.components.CrewCard ?? 0, rowsRerendered: rowRenders, components: tally.components })}`
+    `BENCH ${JSON.stringify({ commits: tally.commits, cardReexecuted: tally.components.ShiverCard ?? 0, rowsRerendered: rowRenders, components: tally.components })}`
   )
   assert.equal(
     rowRenders,
@@ -641,7 +641,7 @@ async function checkPage({ window, page, shots, base }) {
   )
   await until("Boolean(document.querySelector('[data-composer]'))", "the long Apex's composer")
   await evaluate("window.apexScene.setRunning(false); true")
-  await until("Boolean(document.querySelector('[data-crew]'))", "the long Apex's crew card")
+  await until("Boolean(document.querySelector('[data-shiver]'))", "the long Apex's shiver card")
   await settle()
   assert.equal(
     await evaluate("document.querySelector('[data-transcript-viewport]').hasAttribute('data-virtualized')"),
@@ -651,11 +651,11 @@ async function checkPage({ window, page, shots, base }) {
   // A screen or so up, as a reader leaving the card is: the turns they're on stay mounted in the window, and those are
   // what holding their place reads.
   await evaluate("(() => { const node = document.querySelector('[data-transcript-viewport]'); node.dispatchEvent(new WheelEvent('wheel', { deltaY: -200, bubbles: true })); node.scrollTop -= 900; return true })()")
-  await until("Boolean(document.querySelector('[data-crew-away]'))", "the long Apex's line while its card is scrolled away")
+  await until("Boolean(document.querySelector('[data-shiver-away]'))", "the long Apex's line while its card is scrolled away")
   assert.equal(await clickAway(), true, "the long Apex's line, beside a turn that changes")
-  await until("!document.querySelector('[data-crew-away]')", "the long Apex's line leaves once Needs you is back in view")
+  await until("!document.querySelector('[data-shiver-away]')", "the long Apex's line leaves once Needs you is back in view")
   const longCard = await evaluate(
-    "(() => { const card = document.querySelector('[data-crew]').getBoundingClientRect(); const view = document.querySelector('[data-transcript-viewport]').getBoundingClientRect(); return { top: Math.round(card.top), bottom: Math.round(card.bottom), viewTop: Math.round(view.top), viewBottom: Math.round(view.bottom) } })()"
+    "(() => { const card = document.querySelector('[data-shiver]').getBoundingClientRect(); const view = document.querySelector('[data-transcript-viewport]').getBoundingClientRect(); return { top: Math.round(card.top), bottom: Math.round(card.bottom), viewTop: Math.round(view.top), viewBottom: Math.round(view.bottom) } })()"
   )
   console.log("LONG", JSON.stringify(longCard))
   assert.ok(longCard.top < longCard.viewBottom && longCard.bottom > longCard.viewTop, `the long Apex's card is back in view: ${JSON.stringify(longCard)}`)
@@ -674,15 +674,15 @@ async function checkPage({ window, page, shots, base }) {
   )
   await evaluate("window.apexScene.setRunning(false); true")
   await until(
-    "Boolean(document.querySelector('[data-crew]'))",
-    "the crew card on the phone"
+    "Boolean(document.querySelector('[data-shiver]'))",
+    "the shiver card on the phone"
   )
   await settle()
-  assert.doesNotMatch(await evaluate("document.querySelector('[data-crew]').innerText"), /\b\d+h\b/, "no row on the phone says the Fin's age")
+  assert.doesNotMatch(await evaluate("document.querySelector('[data-shiver]').innerText"), /\b\d+h\b/, "no row on the phone says the Fin's age")
   // A laptop's browser draws the same rows from the same roster.
   await navigate(window, `${base}scripts/web-desk.html?thread=apex&theme=dark`)
-  await until("document.querySelectorAll('[data-crew] [data-crew-row]').length > 0", "the crew card in a laptop's browser")
-  const laptop = await evaluate("document.querySelector('[data-crew]').innerText")
+  await until("document.querySelectorAll('[data-shiver] [data-shiver-row]').length > 0", "the shiver card in a laptop's browser")
+  const laptop = await evaluate("document.querySelector('[data-shiver]').innerText")
   assert.match(laptop, /Composer chips on iPad[\s\S]*?18m/, `its working row counts its turn: ${laptop}`)
   assert.doesNotMatch(laptop, /\b\d+h\b/, "no row in the browser says the Fin's age")
   window.setContentSize(390, 844)
@@ -691,14 +691,14 @@ async function checkPage({ window, page, shots, base }) {
   await navigate(window, `${base}scripts/phone-apex.html?app=apex`)
   await until("Boolean(document.querySelector('[data-thread] [data-fin-pips]'))", "the phone again")
   await click("[data-thread]")
-  await until("Boolean(document.querySelector('[data-crew]'))", "the crew card on the phone again")
+  await until("Boolean(document.querySelector('[data-shiver]'))", "the shiver card on the phone again")
   await evaluate("window.apexScene.setRunning(false); true")
   await settle()
   const phone = await evaluate(`(() => {
-    const card = document.querySelector('[data-crew]')
-    const buttons = [...card.querySelectorAll('[data-crew-row] button[data-fin-answer]')]
+    const card = document.querySelector('[data-shiver]')
+    const buttons = [...card.querySelectorAll('[data-shiver-row] button[data-fin-answer]')]
     return {
-      total: card.dataset.crew,
+      total: card.dataset.shiver,
       text: card.innerText.replace(/\\s+/g, ' '),
       buttonHeights: buttons.map((button) => Math.round(button.getBoundingClientRect().height)),
       mark: getComputedStyle(card.querySelector('.live-mark')).width,
@@ -732,13 +732,13 @@ async function checkPage({ window, page, shots, base }) {
       `an answer button is a thumb's reach tall (${height}px)`
     )
   await both("phone")
-  await evaluate(hideCrew)
+  await evaluate(hideShiver)
   await until(
-    "Boolean(document.querySelector('[data-crew-away]'))",
+    "Boolean(document.querySelector('[data-shiver-away]'))",
     "the phone's line while the card is scrolled away"
   )
   const phoneAway = await evaluate(`(() => {
-    const line = document.querySelector('[data-crew-away]')
+    const line = document.querySelector('[data-shiver-away]')
     return { text: line.innerText.replace(/\\s+/g, ' '), height: Math.round(line.getBoundingClientRect().height) }
   })()`)
   console.log("PHONE AWAY", JSON.stringify(phoneAway))
@@ -755,7 +755,7 @@ async function checkPage({ window, page, shots, base }) {
   await both("phone-away")
   await clickAway()
   await until(
-    "!document.querySelector('[data-crew-away]')",
+    "!document.querySelector('[data-shiver-away]')",
     "the phone's line leaves once the card is back"
   )
 
@@ -778,48 +778,48 @@ async function checkPage({ window, page, shots, base }) {
   await until("document.querySelector('[data-child-note=direct]')?.innerText.includes('Offline outbox retry')", "Message addresses the Apex's composer to the quiet Fin")
   console.log("PASS: a quiet Fin reads quiet, says for how long, and offers Message and Stop")
 
-  // Every Fin row, in the crew card and the side rail, can be written to or stopped: on hover, always for a quiet one.
+  // Every Fin row, in the shiver card and the side rail, can be written to or stopped: on hover, always for a quiet one.
   const rowActions = await evaluate(`(() => {
-    const crew = [...document.querySelectorAll('[data-crew] [data-fin-actions]')].map((node) => ({ fin: node.dataset.finActions, actions: [...node.querySelectorAll('[data-fin-action]')].map((each) => each.dataset.finAction), shown: getComputedStyle(node).opacity }))
+    const shiver = [...document.querySelectorAll('[data-shiver] [data-fin-actions]')].map((node) => ({ fin: node.dataset.finActions, actions: [...node.querySelectorAll('[data-fin-action]')].map((each) => each.dataset.finAction), shown: getComputedStyle(node).opacity }))
     const side = [...document.querySelectorAll('[data-child-row]')].map((row) => Boolean(row.parentElement.querySelector('[data-fin-actions]')))
-    return { crew, side }
+    return { shiver, side }
   })()`)
   console.log("ROW ACTIONS", JSON.stringify(rowActions))
-  const stoppable = rowActions.crew.filter((row) => row.actions.includes("stop"))
-  assert.ok(stoppable.length >= 4, `working Fins offer Stop beside Message: ${JSON.stringify(rowActions.crew)}`)
-  assert.ok(rowActions.crew.every((row) => row.actions.includes("message") || row.actions.includes("resume") || row.actions.includes("retry") || row.actions.includes("stop")), "every row offers an action")
-  assert.equal(rowActions.crew.filter((row) => row.shown === "1").length, 1, "only the quiet Fin's actions show without hover")
+  const stoppable = rowActions.shiver.filter((row) => row.actions.includes("stop"))
+  assert.ok(stoppable.length >= 4, `working Fins offer Stop beside Message: ${JSON.stringify(rowActions.shiver)}`)
+  assert.ok(rowActions.shiver.every((row) => row.actions.includes("message") || row.actions.includes("resume") || row.actions.includes("retry") || row.actions.includes("stop")), "every row offers an action")
+  assert.equal(rowActions.shiver.filter((row) => row.shown === "1").length, 1, "only the quiet Fin's actions show without hover")
   assert.ok(rowActions.side.length > 0 && rowActions.side.every(Boolean), "the side rail's Fin rows offer them too")
   console.log("PASS: every Fin row offers Message and Stop, shown on hover and always for a quiet Fin")
 
-  // The phone: the same quiet Fin in its Apex's compact crew card, still and saying so.
+  // The phone: the same quiet Fin in its Apex's compact shiver card, still and saying so.
   window.setContentSize(390, 844)
   await navigate(window, `${base}scripts/phone-apex.html?app=apex&fins=quiet&open=1ead1ead-0000-4000-8000-000000001ead`)
-  await until("Boolean(document.querySelector('[data-crew-row][data-quiet]'))", "the phone's quiet Fin row")
-  await evaluate("document.querySelector('[data-crew-row][data-quiet]').scrollIntoView({ block: 'center' }); true")
-  const phoneQuiet = await evaluate("document.querySelector('[data-crew-row][data-quiet]').innerText.replace(/\\s+/g, ' ')")
+  await until("Boolean(document.querySelector('[data-shiver-row][data-quiet]'))", "the phone's quiet Fin row")
+  await evaluate("document.querySelector('[data-shiver-row][data-quiet]').scrollIntoView({ block: 'center' }); true")
+  const phoneQuiet = await evaluate("document.querySelector('[data-shiver-row][data-quiet]').innerText.replace(/\\s+/g, ' ')")
   assert.match(phoneQuiet, /Quiet 18m · last step: .+, still running/, `the phone says it the same way: ${phoneQuiet}`)
   await both("quiet-phone")
-  console.log("PASS: the phone's crew card shows the quiet Fin the same way")
+  console.log("PASS: the phone's shiver card shows the quiet Fin the same way")
 
-  // A wake of six reports is one crew update: what needs the person open, the rest one line, opened on Show.
+  // A wake of six reports is one shiver update: what needs the person open, the rest one line, opened on Show.
   window.setContentSize(1440, 900)
-  await navigate(window, `${base}?mock&app=apex&wake=crew`)
-  await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, crew wake")
+  await navigate(window, `${base}?mock&app=apex&wake=shiver`)
+  await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, shiver wake")
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
   await evaluate("window.apexScene.setRunning(false); true")
-  await until("Boolean(document.querySelector('[data-crew-update]'))", "the crew update")
-  await evaluate("document.querySelector('[data-crew-update]').scrollIntoView({ block: 'center' }); true")
+  await until("Boolean(document.querySelector('[data-shiver-update]'))", "the shiver update")
+  await evaluate("document.querySelector('[data-shiver-update]').scrollIntoView({ block: 'center' }); true")
   const update = await evaluate(`(() => {
-    const block = document.querySelector('[data-crew-update]')
+    const block = document.querySelector('[data-shiver-update]')
     return {
-      head: block.querySelector('[data-crew-update-head]').innerText.replace(/\\s+/g, ' '),
+      head: block.querySelector('[data-shiver-update-head]').innerText.replace(/\\s+/g, ' '),
       open: [...block.querySelectorAll('[data-fin-report]')].map((node) => node.dataset.fin),
       options: block.querySelectorAll('[data-fin-report-option]').length,
-      fold: block.querySelector('[data-crew-update-fold]')?.innerText.replace(/\\s+/g, ' '),
+      fold: block.querySelector('[data-shiver-update-fold]')?.innerText.replace(/\\s+/g, ' '),
     }
   })()`)
-  console.log("CREW UPDATE", JSON.stringify(update))
+  console.log("SHIVER UPDATE", JSON.stringify(update))
   assert.match(update.head, /^5 reported · Quiet-hours push wording needs you/, "the head says what the wake carried, needs-you named")
   assert.equal(update.open.length, 1, "only what needs the person stays open")
   assert.ok(update.options >= 2, "with its answers live")
@@ -827,34 +827,34 @@ async function checkPage({ window, page, shots, base }) {
   // Only the person's own scroll lets the transcript stop following its end: a wheel up first, then to the update.
   await page.sendInputEvent({ type: "mouseWheel", x: 800, y: 400, deltaX: 0, deltaY: 1200 })
   await new Promise((done) => setTimeout(done, 200))
-  await evaluate("document.querySelector('[data-crew-update]').scrollIntoView({ block: 'center' }); true")
+  await evaluate("document.querySelector('[data-shiver-update]').scrollIntoView({ block: 'center' }); true")
   await new Promise((done) => setTimeout(done, 400))
-  await capture("crew-update")
-  await evaluate("document.querySelector('[data-crew-update-fold]').click(); true")
-  await until("document.querySelectorAll('[data-crew-update] [data-fin-report]').length === 6", "Show opens every report")
+  await capture("shiver-update")
+  await evaluate("document.querySelector('[data-shiver-update-fold]').click(); true")
+  await until("document.querySelectorAll('[data-shiver-update] [data-fin-report]').length === 6", "Show opens every report")
   // A decision left to the Apex isn't the person's to pick: its options aren't drawn as buttons that do nothing.
-  const settled = await evaluate("[...document.querySelectorAll('[data-crew-update] [data-fin-report]')].filter((node) => node.innerText.includes('asks its Apex')).map((node) => node.querySelectorAll('[data-fin-report-option]').length)")
+  const settled = await evaluate("[...document.querySelectorAll('[data-shiver-update] [data-fin-report]')].filter((node) => node.innerText.includes('asks its Apex')).map((node) => node.querySelectorAll('[data-fin-report-option]').length)")
   assert.deepEqual(settled, [0], `an Apex's decision shows no inert options: ${JSON.stringify(settled)}`)
-  await capture("crew-update-shown")
+  await capture("shiver-update-shown")
   window.setContentSize(390, 844)
-  await navigate(window, `${base}scripts/phone-apex.html?app=apex&wake=crew&open=1ead1ead-0000-4000-8000-000000001ead`)
-  await until("Boolean(document.querySelector('[data-crew-update]'))", "the phone's crew update")
-  await evaluate("document.querySelector('[data-crew-update]').scrollIntoView({ block: 'start' }); true")
-  await both("crew-update-phone")
-  console.log("PASS: a wake of six reports is one crew update, open where it needs the person, the rest on Show")
+  await navigate(window, `${base}scripts/phone-apex.html?app=apex&wake=shiver&open=1ead1ead-0000-4000-8000-000000001ead`)
+  await until("Boolean(document.querySelector('[data-shiver-update]'))", "the phone's shiver update")
+  await evaluate("document.querySelector('[data-shiver-update]').scrollIntoView({ block: 'start' }); true")
+  await both("shiver-update-phone")
+  console.log("PASS: a wake of six reports is one shiver update, open where it needs the person, the rest on Show")
 
   // A done Fin's decision its Apex still has to make stays open in the update, among three finished ones: it isn't folded away.
   window.setContentSize(1440, 900)
-  await navigate(window, `${base}?mock&app=apex&wake=crew&fins=decisions`)
+  await navigate(window, `${base}?mock&app=apex&wake=shiver&fins=decisions`)
   await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, decisions wake")
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
   await evaluate("window.apexScene.setRunning(false); true")
-  await until("Boolean(document.querySelector('[data-crew-update]'))", "the crew update, decisions")
+  await until("Boolean(document.querySelector('[data-shiver-update]'))", "the shiver update, decisions")
   const leadUpdate = await evaluate(`(() => {
-    const block = document.querySelector('[data-crew-update]')
+    const block = document.querySelector('[data-shiver-update]')
     return {
       open: [...block.querySelectorAll('[data-fin-report]')].map((node) => node.innerText.replace(/\\s+/g, ' ')),
-      fold: block.querySelector('[data-crew-update-fold]')?.innerText.replace(/\\s+/g, ' '),
+      fold: block.querySelector('[data-shiver-update-fold]')?.innerText.replace(/\\s+/g, ' '),
     }
   })()`)
   console.log("LEAD UPDATE", JSON.stringify(leadUpdate))
@@ -863,40 +863,40 @@ async function checkPage({ window, page, shots, base }) {
   assert.match(leadUpdate.fold ?? "", /^Thread list swipe, Haptics audit and 2 more finished 2 PRs Show$/, `the finished ones fold without it: ${leadUpdate.fold}`)
   await page.sendInputEvent({ type: "mouseWheel", x: 800, y: 400, deltaX: 0, deltaY: 1200 })
   await new Promise((done) => setTimeout(done, 200))
-  await evaluate("document.querySelector('[data-crew-update]').scrollIntoView({ block: 'center' }); true")
+  await evaluate("document.querySelector('[data-shiver-update]').scrollIntoView({ block: 'center' }); true")
   await new Promise((done) => setTimeout(done, 400))
-  await capture("crew-update-lead")
-  console.log("PASS: a done Fin's open decision for its Apex stays open in the crew update")
+  await capture("shiver-update-lead")
+  console.log("PASS: a done Fin's open decision for its Apex stays open in the shiver update")
 
   // Left past its time, the Apex's decision went to the person: its report still says the Apex decides, the roster says
   // the person does. It stays open then too, the moment it needs them, never folded.
-  await navigate(window, `${base}?mock&app=apex&wake=crew&fins=escalated`)
+  await navigate(window, `${base}?mock&app=apex&wake=shiver&fins=escalated`)
   await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, escalated wake")
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
   await evaluate("window.apexScene.setRunning(false); true")
-  await until("Boolean(document.querySelector('[data-crew-update]'))", "the crew update, escalated")
+  await until("Boolean(document.querySelector('[data-shiver-update]'))", "the shiver update, escalated")
   const escalated = await evaluate(`(() => {
-    const block = document.querySelector('[data-crew-update]')
+    const block = document.querySelector('[data-shiver-update]')
     return {
-      head: block.querySelector('[data-crew-update-head]').innerText.replace(/\\s+/g, ' '),
+      head: block.querySelector('[data-shiver-update-head]').innerText.replace(/\\s+/g, ' '),
       open: [...block.querySelectorAll('[data-fin-report]')].map((node) => node.innerText.replace(/\\s+/g, ' ')),
-      fold: block.querySelector('[data-crew-update-fold]')?.innerText.replace(/\\s+/g, ' '),
+      fold: block.querySelector('[data-shiver-update-fold]')?.innerText.replace(/\\s+/g, ' '),
     }
   })()`)
   console.log("ESCALATED UPDATE", JSON.stringify(escalated))
   assert.ok(escalated.open.some((text) => text.includes("Pull to refresh") && text.includes("finished · needs you")), `an escalated decision stays open, as the person's: ${JSON.stringify(escalated.open)}`)
   assert.match(escalated.head, /· 2 need you$/, `the head counts it as needing the person: ${escalated.head}`)
   assert.match(escalated.fold ?? "", /^Thread list swipe, Haptics audit and 2 more finished 2 PRs Show$/, `the finished ones fold without it: ${escalated.fold}`)
-  console.log("PASS: a done Fin's decision escalated to the person stays open in the crew update")
+  console.log("PASS: a done Fin's decision escalated to the person stays open in the shiver update")
 
-  // One crew list: the side rail folds finished and idle Fins as the card does, and the phone has Stop all too.
+  // One shiver list: the side rail folds finished and idle Fins as the card does, and the phone has Stop all too.
   window.setContentSize(1440, 900)
   await navigate(window, `${base}?mock&app=apex`)
   await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, one list")
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
   await evaluate("window.apexScene.setRunning(false); true")
-  await until("document.querySelectorAll('[data-crew-settled]').length === 2", "the card and the side rail each fold their settled Fins")
-  const folds = await evaluate("[...document.querySelectorAll('[data-crew-settled]')].map((node) => node.innerText.trim())")
+  await until("document.querySelectorAll('[data-shiver-settled]').length === 2", "the card and the side rail each fold their settled Fins")
+  const folds = await evaluate("[...document.querySelectorAll('[data-shiver-settled]')].map((node) => node.innerText.trim())")
   assert.equal(folds[0], folds[1], `the two surfaces fold alike: ${JSON.stringify(folds)}`)
   const deskWords = await evaluate("document.querySelector('.thread-jump-scope [data-fin-pips]')?.innerText.trim()")
   window.setContentSize(390, 844)
@@ -905,42 +905,42 @@ async function checkPage({ window, page, shots, base }) {
   const phoneWords = await evaluate("document.querySelector('[data-fin-pips]').innerText.trim()")
   assert.equal(phoneWords, deskWords, "the phone's list says the desk rail's words")
   await navigate(window, `${base}scripts/phone-apex.html?app=apex&open=1ead1ead-0000-4000-8000-000000001ead`)
-  await until("Boolean(document.querySelector('[data-crew] [data-stop-all]'))", "Stop all on the phone's crew card")
+  await until("Boolean(document.querySelector('[data-shiver] [data-stop-all]'))", "Stop all on the phone's shiver card")
   // On the phone, Stop all asks first: one tap opens the question and stops nothing; Cancel closes it; Stop stops them.
-  const stopTitle = await evaluate("document.querySelector('[data-crew] [data-stop-all]').title")
-  await evaluate("document.querySelector('[data-crew] [data-stop-all]').click(); true")
+  const stopTitle = await evaluate("document.querySelector('[data-shiver] [data-stop-all]').title")
+  await evaluate("document.querySelector('[data-shiver] [data-stop-all]').click(); true")
   await until("Boolean(document.querySelector('[data-stop-all-confirm]'))", "the phone's Stop all question")
   const question = await evaluate("document.querySelector('[data-stop-all-confirm]').innerText.replace(/\\s+/g, ' ').trim()")
   assert.match(question, /^Stop \d+ Fins\? The Apex keeps running\. Cancel Stop$/, `the question names how many: ${question}`)
-  assert.equal(await evaluate("document.querySelector('[data-crew] [data-stop-all]').title"), stopTitle, "a tap alone stops nothing")
+  assert.equal(await evaluate("document.querySelector('[data-shiver] [data-stop-all]').title"), stopTitle, "a tap alone stops nothing")
   await both("stop-all-confirm-phone")
   await evaluate("[...document.querySelectorAll('[data-stop-all-confirm] button')].find((button) => button.innerText.trim() === 'Cancel').click(); true")
-  await until("!document.querySelector('[data-stop-all-confirm]') && Boolean(document.querySelector('[data-crew] [data-stop-all]'))", "Cancel leaves the Fins running")
-  await evaluate("document.querySelector('[data-crew] [data-stop-all]').click(); true")
+  await until("!document.querySelector('[data-stop-all-confirm]') && Boolean(document.querySelector('[data-shiver] [data-stop-all]'))", "Cancel leaves the Fins running")
+  await evaluate("document.querySelector('[data-shiver] [data-stop-all]').click(); true")
   await until("Boolean(document.querySelector('[data-stop-all-yes]'))", "the question again")
   await evaluate("document.querySelector('[data-stop-all-yes]').click(); true")
-  await until("!document.querySelector('[data-stop-all-confirm]') && !document.querySelector('[data-crew] [data-stop-all]')", "Stop stops every Fin it can")
+  await until("!document.querySelector('[data-stop-all-confirm]') && !document.querySelector('[data-shiver] [data-stop-all]')", "Stop stops every Fin it can")
   console.log(`PASS: the phone's Stop all asks first ("${question.replace(/ Cancel Stop$/, "")}"), Cancel keeps them, Stop stops them`)
-  console.log(`PASS: one crew list: the side rail folds as the card does (${folds[0]}), the phone says "${phoneWords}" and has Stop all`)
+  console.log(`PASS: one shiver list: the side rail folds as the card does (${folds[0]}), the phone says "${phoneWords}" and has Stop all`)
 
-  // What changed in the crew outside the Apex's turns reads as lines of its own in its transcript, desk and phone.
+  // What changed in the shiver outside the Apex's turns reads as lines of its own in its transcript, desk and phone.
   window.setContentSize(1440, 900)
-  await navigate(window, `${base}?mock&app=apex&crew=moves`)
+  await navigate(window, `${base}?mock&app=apex&shiver=moves`)
   await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, moves")
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
   await evaluate("window.apexScene.setRunning(false); true")
   const membership = "[...document.querySelectorAll('[data-event-line]')].filter((node) => /moved to Claude Code|stopped by you/.test(node.innerText))"
-  await until(`${membership}.length === 2`, "the crew's membership lines")
+  await until(`${membership}.length === 2`, "the shiver's membership lines")
   const lines = await evaluate(`${membership}.map((node) => node.innerText.replace(/\\s+/g, ' ').trim())`)
   assert.match(lines[0], /^Composer chips on iPad moved to Claude Code \(work\)/, `a move names the Fin and where: ${lines[0]}`)
   assert.match(lines[1], /^Haptics audit stopped by you/, `the person's stop names the Fin: ${lines[1]}`)
   await capture("membership-lines")
   window.setContentSize(390, 844)
-  await navigate(window, `${base}scripts/phone-apex.html?app=apex&crew=moves&open=1ead1ead-0000-4000-8000-000000001ead`)
+  await navigate(window, `${base}scripts/phone-apex.html?app=apex&shiver=moves&open=1ead1ead-0000-4000-8000-000000001ead`)
   await until(`${membership}.length === 2`, "the phone's membership lines")
   await evaluate(`${membership}[0].scrollIntoView({ block: 'center' }); true`)
   await both("membership-lines-phone")
-  console.log(`PASS: the crew's changes outside the Apex's turns read as lines: ${JSON.stringify(lines)}`)
+  console.log(`PASS: the shiver's changes outside the Apex's turns read as lines: ${JSON.stringify(lines)}`)
 
   assert.deepEqual(
     errors.filter(
@@ -952,6 +952,6 @@ async function checkPage({ window, page, shots, base }) {
     []
   )
   console.log(
-    "Crew card UI: header, order, needs/working/done rows, answers moving everywhere, forty Fins, re-render discipline, and the phone passed"
+    "Shiver card UI: header, order, needs/working/done rows, answers moving everywhere, forty Fins, re-render discipline, and the phone passed"
   )
 }

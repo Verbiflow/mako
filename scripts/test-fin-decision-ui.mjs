@@ -9,9 +9,9 @@ import { atSize, withMotion } from "./lib/test-window.mjs"
 // Done · needs you, on the production components and the mock bridge's Apex scene with two Fins that finished with a
 // decision (`?mock&app=apex&fins=decisions`): Thread list swipe leaves the person "Merge #371 into main?", Pull to
 // refresh leaves its Apex a pick. The person's reads "Done · needs you: …" with its options as buttons, the
-// recommended one first and labelled, in the crew card, the Inbox, the rail's pips and the phone, and counts under
+// recommended one first and labelled, in the shiver card, the Inbox, the rail's pips and the phone, and counts under
 // needs you; the Apex's counts as done and says it asks its Apex. An answer in the Inbox reaches the Apex's host and
-// the Fin's row says "You answered: Merge". Screenshots of the crew card and the Inbox row, dark and light, land in
+// the Fin's row says "You answered: Merge". Screenshots of the shiver card and the Inbox row, dark and light, land in
 // the printed folder (or `MAKO_DECISION_UI_SHOTS`).
 if (process.versions.electron) {
   void check().catch(async (error) => {
@@ -91,34 +91,34 @@ async function check() {
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
   await until("Boolean(document.querySelector('[data-composer]'))", "the Apex's composer")
   await evaluate("window.apexScene.setRunning(false); true")
-  await until("Boolean(document.querySelector('[data-crew]'))", "the crew card")
+  await until("Boolean(document.querySelector('[data-shiver]'))", "the shiver card")
   await settle()
 
-  // 1. The crew card: counted under needs you, its words, its options as buttons, the recommended one first and labelled.
-  const header = await evaluate("document.querySelector('[data-crew] header').innerText.replace(/\\s+/g, ' ')")
+  // 1. The shiver card: counted under needs you, its words, its options as buttons, the recommended one first and labelled.
+  const header = await evaluate("document.querySelector('[data-shiver] header').innerText.replace(/\\s+/g, ' ')")
   assert.match(header, /12 Fins 3 need you · 5 working · 2 queued · 1 idle · 1 done/, "the person's decision counts as needs you, the Apex's as done")
-  await until("Boolean(document.querySelector('[data-crew] [data-fin-decision]'))", "the decision's row")
-  const row = await evaluate(`(() => { const node = document.querySelector('[data-crew] [data-fin-decision]'); return { group: node.dataset.childGroup, text: node.innerText.replace(/\\s+/g, ' '), buttons: [...node.querySelectorAll('[data-fin-answer]')].map((button) => ({ answer: button.dataset.finAnswer, text: button.innerText.replace(/\\s+/g, ' ').trim(), recommended: button.dataset.recommended === 'true' })) } })()`)
-  console.log("CREW ROW", JSON.stringify(row))
+  await until("Boolean(document.querySelector('[data-shiver] [data-fin-decision]'))", "the decision's row")
+  const row = await evaluate(`(() => { const node = document.querySelector('[data-shiver] [data-fin-decision]'); return { group: node.dataset.childGroup, text: node.innerText.replace(/\\s+/g, ' '), buttons: [...node.querySelectorAll('[data-fin-answer]')].map((button) => ({ answer: button.dataset.finAnswer, text: button.innerText.replace(/\\s+/g, ' ').trim(), recommended: button.dataset.recommended === 'true' })) } })()`)
+  console.log("SHIVER ROW", JSON.stringify(row))
   assert.equal(row.group, "needs")
   assert.ok(row.text.includes("Thread list swipe") && row.text.includes(WORDS), "its words: Done · needs you: and its question")
   assert.deepEqual(row.buttons, [{ answer: "0", text: "Merge Recommended", recommended: true }, { answer: "1", text: "Leave open", recommended: false }])
-  await shoot("crew-card", "[data-crew]")
+  await shoot("shiver-card", "[data-shiver]")
   // The card draws rows as they scroll into view: Pull to refresh is at its end, under done, and the fold of the
   // settled Fins never hides a done one whose decision is still open.
-  await evaluate("(() => { const el = document.querySelector('[data-crew-scroller]'); el.scrollTop = el.scrollHeight; return true })()")
+  await evaluate("(() => { const el = document.querySelector('[data-shiver-scroller]'); el.scrollTop = el.scrollHeight; return true })()")
   await settle()
-  await until("[...document.querySelectorAll('[data-crew] [data-crew-row]')].some((node) => node.innerText.includes('Pull to refresh'))", "the Apex's decision's row")
-  const lead = await evaluate("(() => { const node = [...document.querySelectorAll('[data-crew] [data-crew-row]')].find((each) => each.innerText.includes('Pull to refresh')); return { group: node.dataset.childGroup, text: node.innerText.replace(/\\s+/g, ' ') } })()")
+  await until("[...document.querySelectorAll('[data-shiver] [data-shiver-row]')].some((node) => node.innerText.includes('Pull to refresh'))", "the Apex's decision's row")
+  const lead = await evaluate("(() => { const node = [...document.querySelectorAll('[data-shiver] [data-shiver-row]')].find((each) => each.innerText.includes('Pull to refresh')); return { group: node.dataset.childGroup, text: node.innerText.replace(/\\s+/g, ' ') } })()")
   assert.ok(lead.text.includes("Asking its Apex: Ship the cached list or the fresh read on pull?"), `the Apex's decision reads as asking it: ${lead.text}`)
   assert.equal(lead.group, "done", "and stands under done")
-  const fold = await evaluate("(() => { const node = document.querySelector('[data-crew-settled]'); return node ? { state: node.dataset.crewSettled, text: node.innerText.replace(/\\s+/g, ' ').trim() } : null })()")
+  const fold = await evaluate("(() => { const node = document.querySelector('[data-shiver-settled]'); return node ? { state: node.dataset.shiverSettled, text: node.innerText.replace(/\\s+/g, ' ').trim() } : null })()")
   console.log("FOLD", JSON.stringify(fold))
   assert.equal(fold?.state, "folded", "the settled Fins are folded")
   assert.doesNotMatch(fold.text, /done/, "and the fold doesn't count the Fin whose decision is open")
-  await shoot("crew-card-end", "[data-crew]")
-  await evaluate("(() => { const el = document.querySelector('[data-crew-scroller]'); el.scrollTop = 0; return true })()")
-  console.log("PASS: the crew card says Done · needs you with its options, recommended first")
+  await shoot("shiver-card-end", "[data-shiver]")
+  await evaluate("(() => { const el = document.querySelector('[data-shiver-scroller]'); el.scrollTop = 0; return true })()")
+  console.log("PASS: the shiver card says Done · needs you with its options, recommended first")
 
   // 2. The rail's pips count it, and the Inbox lists it with its buttons.
   const pips = await evaluate("document.querySelector('.thread-jump-scope [data-apex-row] [data-fin-pips]')?.getAttribute('aria-label') ?? ''")
@@ -141,7 +141,7 @@ async function check() {
   await until(`![...document.querySelectorAll('[data-inbox-item]')].some((each) => each.innerText.includes('Merge #371 into main?'))`, "the answered decision leaves the Inbox")
   await evaluate("document.querySelector('[data-rail-top-row=\"inbox\"]').click(); true")
   await until("!document.querySelector('[data-inbox]')", "back to the Apex")
-  await until("[...document.querySelectorAll('[data-crew] [data-crew-row]')].some((node) => node.innerText.includes('Thread list swipe') && node.innerText.includes('You answered: Merge'))", "the row saying who answered")
+  await until("[...document.querySelectorAll('[data-shiver] [data-shiver-row]')].some((node) => node.innerText.includes('Thread list swipe') && node.innerText.includes('You answered: Merge'))", "the row saying who answered")
   console.log("PASS: answered in the Inbox, the row says You answered: Merge")
 
   // 4. The phone: a row of its own under Needs you, in the same words.

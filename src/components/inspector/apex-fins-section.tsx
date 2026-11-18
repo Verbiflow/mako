@@ -1,6 +1,6 @@
 import { memo, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react"
-import { SettledLine } from "@/components/viewer/crew-card"
-import { buildRows } from "@/lib/crew-rows"
+import { SettledLine } from "@/components/viewer/shiver-card"
+import { buildRows } from "@/lib/shiver-rows"
 import { FinRowActions } from "@/components/viewer/fin-row-actions"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useRowRef } from "@/lib/virtual-row-ref"
@@ -52,7 +52,7 @@ export function ApexFinsSection({
 }) {
   const section = useRef<HTMLDivElement>(null)
   const [margin, setMargin] = useState(0)
-  // The crew card's own groups and fold: finished and idle Fins fold into one line here too.
+  // The shiver card's own groups and fold: finished and idle Fins fold into one line here too.
   const [settledOpen, setSettledOpen] = useState(false)
   const rows = useMemo(() => buildRows(children, settledOpen), [children, settledOpen])
   useLayoutEffect(() => {

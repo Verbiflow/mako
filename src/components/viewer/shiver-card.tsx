@@ -27,7 +27,7 @@ import { approvalWords, CHILD_GROUPS, askWords, childGroup, childLine, childStat
 import { APEX_WORD, FIN_WORD, finsWord } from "@mako/host/contracts/agents"
 import { isLimitAsk } from "@mako/host/contracts/fin-fallback"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
-import { buildRows, waitsOutside, type CrewRow } from "@/lib/crew-rows"
+import { buildRows, waitsOutside, type ShiverRow } from "@/lib/shiver-rows"
 import { FinMark } from "@/components/stage/child-tabs"
 import { NOT_OPENABLE } from "@/components/rail/apex-asks"
 import { RoutedOpenContext } from "@/components/transcript/routed-open"
@@ -49,7 +49,7 @@ import {
   useThreadChildren,
 } from "@/state/apex-fins"
 import { answerFin, type FinAnswer } from "@/state/fin-asks"
-import { mountCrewCard, unmountCrewCard } from "@/state/crew-card-view"
+import { mountShiverCard, unmountShiverCard } from "@/state/shiver-card-view"
 
 const HEADINGS = {
   needs: "Needs you",
@@ -84,7 +84,7 @@ function useApexCardTitle(thread: string | undefined): string {
 }
 
 /** The header's thin bar, split by group; the working stretch sweeps while it runs, on the compositor alone. */
-function CrewBar({
+function ShiverBar({
   counts,
   className,
 }: {
@@ -95,7 +95,7 @@ function CrewBar({
     <span
       aria-hidden
       className={cn(
-        "crew-bar flex h-1 gap-0.5 overflow-hidden",
+        "shiver-bar flex h-1 gap-0.5 overflow-hidden",
         className
       )}
     >
@@ -105,7 +105,7 @@ function CrewBar({
             key={group}
             ref={observeVisibleAnimation}
             data-group={group}
-            className={cn(BAR_TONE[group], "crew-bar-working")}
+            className={cn(BAR_TONE[group], "shiver-bar-working")}
             style={{ flexGrow: counts[group] }}
           />
         ) : (
@@ -169,7 +169,7 @@ const NeedsRow = memo(function NeedsRow({
   }
   return (
     <div
-      data-crew-row={agent.child.thread}
+      data-shiver-row={agent.child.thread}
       data-child-group="needs"
       data-fin-ask={ask?.kind}
       data-fin-decision={open.done || undefined}
@@ -198,7 +198,7 @@ const NeedsRow = memo(function NeedsRow({
           </span>
         ) : null}
         <span className="flex-1" />
-        <CrewElapsed agent={agent} className="text-label text-faint" />
+        <ShiverElapsed agent={agent} className="text-label text-faint" />
       </div>
       <p className="mt-1.5 pl-7 text-ui text-foreground/90">{askWords(open)}</p>
       {ask ? (
@@ -293,7 +293,7 @@ const NeedsRow = memo(function NeedsRow({
  * minute or an hour is the same string for that whole stretch, so the row's
  * label doesn't repaint on the seconds in between.
  */
-const CrewElapsed = memo(function CrewElapsed({
+const ShiverElapsed = memo(function ShiverElapsed({
   agent,
   className,
 }: {
@@ -310,7 +310,7 @@ const CrewElapsed = memo(function CrewElapsed({
 })
 
 /** Working, queued, failed or done: one line, its mark, title, current line and time. */
-const CrewLineRow = memo(function CrewLineRow({
+const ShiverLineRow = memo(function ShiverLineRow({
   agent,
   onOpen,
   conversation,
@@ -342,7 +342,7 @@ const CrewLineRow = memo(function CrewLineRow({
   const row = (
     <button
       type="button"
-      data-crew-row={agent.child?.thread}
+      data-shiver-row={agent.child?.thread}
       data-child-group={group}
       data-child-state={state.kind}
       data-quiet={quiet || undefined}
@@ -398,7 +398,7 @@ const CrewLineRow = memo(function CrewLineRow({
         </span>
       </span>
       {ticking ? null : (
-        <CrewElapsed
+        <ShiverElapsed
           agent={agent}
           className="min-w-8 shrink-0 text-right text-label text-faint"
         />
@@ -417,12 +417,12 @@ const CrewLineRow = memo(function CrewLineRow({
 
 
 /** The settled Fins, folded: "24 done · 1 idle", which opens their list and closes it again. */
-export function SettledLine({ row, onToggle }: { row: Extract<CrewRow, { kind: "settled" }>; onToggle: () => void }) {
+export function SettledLine({ row, onToggle }: { row: Extract<ShiverRow, { kind: "settled" }>; onToggle: () => void }) {
   const words = [row.done ? `${row.done} done` : "", row.idle ? `${row.idle} idle` : ""].filter(Boolean).join(" · ")
   return (
     <button
       type="button"
-      data-crew-settled={row.open ? "open" : "folded"}
+      data-shiver-settled={row.open ? "open" : "folded"}
       aria-expanded={row.open}
       onClick={onToggle}
       className="pressable flex h-7 w-full items-center gap-1.5 px-1.5 text-left text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
@@ -434,21 +434,21 @@ export function SettledLine({ row, onToggle }: { row: Extract<CrewRow, { kind: "
 }
 
 /**
- * An Apex's crew, at the end of its transcript: what needs the person and what's live, needs-you first, the settled
+ * An Apex's shiver, at the end of its transcript: what needs the person and what's live, needs-you first, the settled
  * ones folded into one line, its asks answered in place through the
  * same action the Agents panel and the dock use. Replaces `BackgroundWorkLine` while the Thread has Fins; `fallback`
  * (the background-work line) draws instead for a Thread with none. It stays through whatever its Apex's session does
  * (a turn, starting, waking, reconnecting): the Fins are theirs, not the session's. Past about twenty rows it scrolls inside itself;
- * rows are drawn as they scroll into view, so a crew of forty costs what a screenful does. Each row reads its own
+ * rows are drawn as they scroll into view, so a shiver of forty costs what a screenful does. Each row reads its own
  * Fin's entry alone, so a step changing repaints that row, not this card.
  *
  * Memoized by hand: `useVirtualizer` keeps the React Compiler off this file, so without it the card drew again with
  * every batch its transcript streamed, its virtualizer's options set anew each time, as long a stretch of a phone's
  * frame as the streamed words were.
  */
-export const CrewCard = memo(CrewCardBody)
+export const ShiverCard = memo(ShiverCardBody)
 
-function CrewCardBody({
+function ShiverCardBody({
   compact = false,
   fallback = null,
   thread: shownThread,
@@ -473,15 +473,15 @@ function CrewCardBody({
   useLayoutEffect(() => {
     const element = card.current
     if (!thread || !element) return
-    mountCrewCard(thread, true)
+    mountShiverCard(thread, true)
     const observer = new IntersectionObserver((entries) => {
       const entry = entries[entries.length - 1]
-      if (entry) mountCrewCard(thread, entry.isIntersecting)
+      if (entry) mountShiverCard(thread, entry.isIntersecting)
     })
     observer.observe(element)
     return () => {
       observer.disconnect()
-      unmountCrewCard(thread)
+      unmountShiverCard(thread)
     }
   }, [thread, children.length])
   const [settledOpen, setSettledOpen] = useState(false)
@@ -531,7 +531,7 @@ function CrewCardBody({
   return (
     <section
       ref={card}
-      data-crew={counts.total}
+      data-shiver={counts.total}
       data-compact={compact || undefined}
       aria-label={`${apexTitle}'s ${FIN_WORD}s`}
       className="mt-2 flex animate-in flex-col duration-200 ease-[var(--ease-out)] fade-in-0"
@@ -549,7 +549,7 @@ function CrewCardBody({
         <span className="min-w-0 flex-1 truncate text-label text-muted-foreground">
           {rollupLine(counts)}
         </span>
-        <CrewBar counts={counts} className={compact ? "w-14" : "w-24"} />
+        <ShiverBar counts={counts} className={compact ? "w-14" : "w-24"} />
         {stoppable ? (
           <button
             type="button"
@@ -580,7 +580,7 @@ function CrewCardBody({
       {notice && conversation ? <LimitNoticeRow key={notice.ask.id} apex={conversation} ask={notice} compact={compact} /> : null}
       <div
         ref={scroller}
-        data-crew-scroller
+        data-shiver-scroller
         className="max-h-[420px] overflow-y-auto py-1"
       >
         <div
@@ -601,7 +601,7 @@ function CrewCardBody({
                   <SettledLine row={row} onToggle={() => setSettledOpen((open) => !open)} />
                 ) : row.kind === "heading" ? (
                   <h4
-                    data-crew-needs={row.group === "needs" || undefined}
+                    data-shiver-needs={row.group === "needs" || undefined}
                     className="flex items-center gap-1.5 px-1.5 pb-1 text-label text-faint"
                   >
                     <span
@@ -624,7 +624,7 @@ function CrewCardBody({
                     compact={compact}
                   />
                 ) : (
-                  <CrewLineRow
+                  <ShiverLineRow
                     agent={row.agent}
                     onOpen={onOpen}
                     conversation={routed ? undefined : conversation}

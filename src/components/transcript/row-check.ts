@@ -54,7 +54,7 @@ export interface RowChecker {
 /**
  * The transcript's last word on a windowed row's size and place. The virtualizer's resize observer keeps them, and it
  * only hears a size change, so a row the virtualizer misplaces without changing size stays misplaced: a long Apex was
- * seen with each report drawn over the answer above it and the crew card over the last line. Whatever does that, nobody
+ * seen with each report drawn over the answer above it and the shiver card over the last line. Whatever does that, nobody
  * reads it: each mounted row is held against what the virtualizer has for it, before the frame paints. A correction
  * also runs with a working observer, a step ahead of it; only one that observer never reported is logged, with what
  * was found, so the next time names its cause (the window's warnings reach the host's log, `renderer-health`).

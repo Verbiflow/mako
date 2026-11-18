@@ -158,7 +158,7 @@
   "scripts/harness-self-report.ts": 2,
   "scripts/lib/control-cli-probe.mjs": 1,
   "scripts/lib/control-session-probe.ts": 1,
-  "scripts/lib/crew-card-evidence.mjs": 1,
+  "scripts/lib/shiver-card-evidence.mjs": 1,
   "scripts/lib/records-stand-in.ts": 2,
   "scripts/lib/sync-bench-cloud.ts": 2,
   "scripts/mac-local-signing.mjs": 1,

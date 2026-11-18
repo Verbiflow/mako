@@ -10,7 +10,7 @@ import { testScratch } from "./lib/test-scratch.mjs"
  * A long Apex's rows stand apart in every frame it paints, whether or not the virtualizer's resize observer hears
  * them: on the desk, in a laptop's browser and on a phone, Fin reports start turns that grow by a tool and an answer,
  * first with the observer working (nothing is corrected, nothing is logged), then with the rows taken from it, as a
- * person's Apex was seen: every row left at its size when it mounted, a report over the answer above it and the crew
+ * person's Apex was seen: every row left at its size when it mounted, a report over the answer above it and the shiver
  * card over the last line. A row that grows with no change to the document comes right within the check's second, and
  * a reader who wheeled up keeps their rows apart too. Every correction is logged with what it found.
  *
@@ -445,7 +445,7 @@ async function check() {
       if (!/ERR_ABORTED|ERR_FAILED/.test(String(error))) throw error
     })
     if (open) await until(open, `${form}: its list`)
-    await until(`document.querySelectorAll(${JSON.stringify(ROW)}).length > 2 && Boolean(document.querySelector('[data-crew]'))`, `${form}: the Apex's rows`)
+    await until(`document.querySelectorAll(${JSON.stringify(ROW)}).length > 2 && Boolean(document.querySelector('[data-shiver]'))`, `${form}: the Apex's rows`)
     await evaluate(TURNS)
     await wait(600)
     await evaluate(WATCH)

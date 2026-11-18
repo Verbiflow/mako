@@ -940,7 +940,7 @@ export function ConversationTimeline({
       // A resize can arrive before the scroll event for this frame. Preserve the movement not yet reported as well as
       // the reader's place in the media. Not the reader's input alone: while an anchor holds, the scroller anchors
       // nothing itself (`overflow-anchor: none`) and this file reports its own writes as it makes them (`owned`), so a
-      // change it hasn't heard of is a scroll, the reader's or one made for them, such as the crew card's "Fins need you"
+      // change it hasn't heard of is a scroll, the reader's or one made for them, such as the shiver card's "Fins need you"
       // line bringing the card back. Counted as layout, the hold put the old point back over it, a frame before that
       // scroll's event. Left out are what it can't tell apart: the virtualizer's own writes while windowed, and the
       // browser's clamp at a newly shorter end.
@@ -1210,7 +1210,7 @@ export function ConversationTimeline({
 
   const onWheel = useCallback(
     (event: ReactWheelEvent<HTMLDivElement>) => {
-      // The crew card's list or a code block taking the wheel: it scrolls that, and the transcript is left as it was.
+      // The shiver card's list or a code block taking the wheel: it scrolls that, and the transcript is left as it was.
       if (viewport.current && wheelTakenInside(event.target, viewport.current, event.deltaY)) innerWheel.current = true
       if (innerWheel.current) return settleInput()
       if (viewport.current) endSeek(viewport.current)
