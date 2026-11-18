@@ -107,6 +107,23 @@ try {
   lifecycle.archive({id:randomUUID(),target,archived:true})
   const secondReader=new ThreadArchives(join(root,"archives.sqlite"))
   assert.deepEqual(secondReader.snapshot(),archives.snapshot())
+  // The keys are held between asks, never read again for each: the same set until the archive changes, by this store
+  // or by another connection to its file, and a snapshot's keys are the caller's own to change.
+  const heldKeys = archives.hidden()
+  assert.equal(archives.hidden(), heldKeys, "an unchanged archive is not read again")
+  assert.equal(lifecycle.archived(target), true)
+  archives.snapshot().keys.length = 0
+  assert.equal(archives.hidden(), heldKeys, "a snapshot's keys are a copy")
+  const elsewhere = { kind: "live", id: randomUUID() } as const
+  secondReader.set({ id: randomUUID(), target: elsewhere, archived: true }, [threadArchiveKey(elsewhere)])
+  assert.notEqual(archives.hidden(), heldKeys, "another connection's commit is read")
+  assert.equal(lifecycle.archived(elsewhere), true, "what another connection archived is archived here")
+  assert.deepEqual(archives.snapshot(), secondReader.snapshot())
+  const before = archives.hidden()
+  lifecycle.archive({ id: randomUUID(), target: elsewhere, archived: false })
+  assert.notEqual(archives.hidden(), before, "this store's own write is read")
+  assert.equal(lifecycle.archived(elsewhere), false)
+  assert.equal(secondReader.hidden().has(threadArchiveKey(elsewhere)), false)
   secondReader.close()
 
   // A Session its harness archived sits with the archived ones until it's

@@ -91,11 +91,11 @@ export class ThreadLifecycle {
 
   /** Whether the target sits with the archived ones, by every key it's known by. */
   archived(target: ThreadTarget): boolean {
-    return archivedByKeys(this.keys(target), new Set(this.dependencies.archives.snapshot().keys), this.ref(target))
+    return archivedByKeys(this.keys(target), this.dependencies.archives.hidden(), this.ref(target))
   }
 
   controls(target: ThreadTarget): ThreadControls {
-    const hidden = new Set(this.dependencies.archives.snapshot().keys)
+    const hidden = this.dependencies.archives.hidden()
     const archived = archivedByKeys(this.keys(target), hidden, this.ref(target))
     const owner = this.owner(target)
     const requestId = owner && this.dependencies.live.activeRequest(owner.session.id)
