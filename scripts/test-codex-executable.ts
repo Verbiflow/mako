@@ -1,8 +1,6 @@
 import assert from "node:assert/strict"
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises"
-import { syncBuiltinESMExports } from "node:module"
-import os, { tmpdir } from "node:os"
-import { mock } from "node:test"
+import { tmpdir } from "node:os"
 import { z } from "zod"
 import { dirname, join } from "node:path"
 import { codexChildLaunch, codexStartPrefetch } from "@mako/host/harnesses/codex-app"
@@ -209,32 +207,33 @@ try {
     }
     await mkdir(dirname(config), { recursive: true })
     await writeFile(config, "model = 'one'\n")
-    const homedir = mock.method(os, "homedir", () => home)
-    syncBuiltinESMExports()
-    try {
+    {
+      // The two are named to the memory itself: which installations a machine has is the platform's (only a Mac
+      // looks in its application folders), and none of the machine's own is touched.
+      const installed = () => [cli, app]
       const twoEnv = { HOME: home, PATH: join(home, "bin"), CODEX_HOME: dirname(config) }
       const asked: string[] = []
       // The CLI on PATH refuses the configuration, so every installation after it is asked too.
       let answer = (command: string): boolean | undefined => command !== cli
       const stand = async (command: string) => { asked.push(command); return answer(command) }
       const timesAsked = (command: string) => asked.filter((one) => one === command).length
-      const executables = new CodexExecutables(stand)
+      const executables = new CodexExecutables(stand, installed)
       let kept: Parameters<CodexExecutables["restore"]>[0] | undefined
       executables.follow((next) => { kept = next })
       const first = await executables.resolve(twoEnv)
-      assert.ok(first && first !== cli, "the installation that reads the configuration is the one started")
-      assert.equal(timesAsked(cli), 1)
+      assert.equal(first, app, "the installation that reads the configuration is the one started")
+      assert.deepEqual([timesAsked(cli), timesAsked(app)], [1, 1])
       const asks = asked.length
       // A start resolves twice, a discovery once, and several starts at once: none asks again.
       await Promise.all([executables.resolve(twoEnv), resolveCodexExecutable(twoEnv, executables), codexStartPrefetch(twoEnv, root, executables), executables.resolve(twoEnv)])
       assert.equal(asked.length, asks, "an installation is asked once per binary identity")
       // Asked together before any answer: one ask between them.
-      const fresh = new CodexExecutables(stand)
+      const fresh = new CodexExecutables(stand, installed)
       await Promise.all([fresh.resolve(twoEnv), fresh.resolve(twoEnv), fresh.resolve(twoEnv)])
       assert.equal(asked.length, asks * 2, "concurrent asks share one run")
       // The next host is given what this one kept, and asks nothing.
       assert.ok(kept, "an answer is handed on to be kept")
-      const next = new CodexExecutables(stand)
+      const next = new CodexExecutables(stand, installed)
       next.restore(kept)
       assert.equal(await next.resolve(twoEnv), first)
       assert.equal(asked.length, asks * 2, "a restarted host answers from what was kept")
@@ -249,7 +248,7 @@ try {
       assert.notEqual(await executables.resolve(twoEnv), cli, "a changed configuration is asked about again")
       assert.ok(asked.length > after)
       // An installation that couldn't be asked (it timed out) isn't remembered as refusing.
-      const unsure = new CodexExecutables(stand)
+      const unsure = new CodexExecutables(stand, installed)
       answer = () => undefined
       assert.equal(await unsure.resolve(twoEnv), cli, "with none answering, the first is started for its own diagnostic")
       answer = () => true
@@ -264,7 +263,7 @@ try {
         processes: new DiscoveryProcesses(), path: readings, emit: () => undefined,
         sources: () => [{ provider: "codex", binary: (env) => source.resolve(env), remembered: source, install: [] }],
       })
-      const before = new CodexExecutables(stand)
+      const before = new CodexExecutables(stand, installed)
       await updates(before).load()
       const cold = asked.length
       const chosen = await before.resolve(twoEnv)
@@ -276,14 +275,11 @@ try {
       }
       assert.ok(Object.keys(written.remembered.codex?.probes ?? {}).length >= 1, "the answers are kept with the readings")
       assert.deepEqual([written.version, written.future, written.remembered.another], [2, "a newer build's", { kept: 1 }], "beside what the file held, which is written back")
-      const restarted = new CodexExecutables(stand)
+      const restarted = new CodexExecutables(stand, installed)
       await updates(restarted).load()
       const warm = asked.length
       assert.equal(await restarted.resolve(twoEnv), chosen)
       assert.equal(asked.length, warm, "the next host starts Codex without asking any installation")
-    } finally {
-      homedir.mock.restore()
-      syncBuiltinESMExports()
     }
   }
 

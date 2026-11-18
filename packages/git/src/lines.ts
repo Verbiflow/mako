@@ -11,6 +11,14 @@ const COUNT_BYTES = 1024 * 1024
 const BINARY_PROBE = 8000
 const READS_AT_ONCE = 16
 
+/**
+ * For a `git diff` of the working tree that only counts lines. Without it `git diff` takes `index.lock` and rewrites
+ * the index to keep the stat cache it refreshed, whatever `--no-optional-locks` says (that governs `status`, not this):
+ * a read that an agent's own `git add` can meet, and a change to the index that a watcher hears. `--numstat` prints the
+ * same either way, since a file whose stat alone changed has no lines to count; `--name-only` and `--raw` would list it.
+ */
+export const NO_INDEX_REFRESH = ["-c", "diff.autoRefreshIndex=false"] as const
+
 /** One file of `--numstat` output; `from` is the old path of a rename. */
 export interface NumstatEntry {
   path: string
@@ -50,7 +58,7 @@ export function parseNumstat(output: Buffer): Map<string, LineCount> {
 /** Lines each tracked file in the working tree adds and removes against `base`; every changed one when `paths` is omitted. */
 export async function worktreeLines(git: Git, root: string, base: string, paths?: readonly string[]): Promise<Map<string, LineCount>> {
   const scope = paths ? paths.map((path) => `:(literal)${path}`) : []
-  const result = await git.run({ cwd: root, args: ["diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", base, "--", ...scope], read: true })
+  const result = await git.run({ cwd: root, args: [...NO_INDEX_REFRESH, "diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", base, "--", ...scope], read: true })
   return parseNumstat(result.stdout)
 }
 

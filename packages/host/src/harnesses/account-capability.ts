@@ -8,6 +8,7 @@ import type {
 } from "../contracts/accounts.js"
 import type { CloudSignInCapability } from "./cloud-sign-in.js"
 import type { ProviderCapability } from "./registry.js"
+import type { CredentialHold } from "./credential-revisions.js"
 
 interface AccountCapabilityBase
   extends
@@ -25,12 +26,11 @@ interface AccountCapabilityBase
     env: NodeJS.ProcessEnv
   ): SelectedAccount
   /** Read the effective credential source on demand. Opaque host-only equality, never IPC. */
-  credentialRevision(name: string, env?: NodeJS.ProcessEnv): Promise<string>
   /**
-   * The files `credentialRevision` reads for `name`. Named, the host holds a revision a few seconds while they stay
-   * as they were (`CredentialRevisions`); an adapter whose read is cheap leaves this out and is read every time.
+   * `hold`: what an adapter may read its costly store through (a Keychain item a process reads), so the host can
+   * keep that one read a few seconds (`CredentialRevisions`). Files are read as they are on every ask.
    */
-  credentialSources?(name: string, env?: NodeJS.ProcessEnv): string[]
+  credentialRevision(name: string, env?: NodeJS.ProcessEnv, hold?: CredentialHold): Promise<string>
   /** Reads the account's usage from its provider. Starting the harness to do it refreshes a sign-in that lapsed, as running it would. */
   accountUsage(name: string): Promise<AccountUsage>
   /** The sign-in a cloud machine runs this harness under: read here, written there. */

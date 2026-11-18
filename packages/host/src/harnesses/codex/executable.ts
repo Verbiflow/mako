@@ -225,14 +225,17 @@ export class CodexExecutables {
   private readonly asking = new Map<string, Promise<boolean | undefined>>()
   private readonly listeners = new Set<(kept: JsonObject) => void>()
   private readonly probe: typeof codexReadsConfiguration
+  private readonly candidates: typeof codexExecutableCandidates
 
-  constructor(probe = codexReadsConfiguration) {
+  /** `candidates`: the installations there are to choose among; a platform with one place to look has one. */
+  constructor(probe = codexReadsConfiguration, candidates = codexExecutableCandidates) {
     this.probe = probe
+    this.candidates = candidates
   }
 
-  /** The installation a start runs under `env`, as `resolveCodexExecutable` picks it. */
+  /** The installation a start runs under `env`: the first that reads the configuration, an explicit one as it is. */
   resolve(env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
-    return resolveCodexExecutable(env, this)
+    return firstReading(this.candidates(env), env, (command) => this.reads(command, env))
   }
 
   /** What the last host kept. An answer this host has taken since stands. */
@@ -288,6 +291,18 @@ async function codexProbeIdentity(command: string, env: NodeJS.ProcessEnv): Prom
   return [real, binary, configuration ?? "none"].join("|")
 }
 
+/** The first of `candidates` that `reads` the configuration; with one, or an explicit choice, that one unasked. */
+async function firstReading(candidates: readonly string[], env: NodeJS.ProcessEnv, reads: (command: string) => Promise<boolean>): Promise<string | null> {
+  if (env.CODEX_EXECUTABLE || candidates.length < 2)
+    return candidates[0] ?? null
+  for (const command of candidates) {
+    // The next installed CLI may understand a newer configuration format.
+    if (await reads(command)) return command
+  }
+  // Preserve the selected CLI's actual startup diagnostic when no compatible installation exists.
+  return candidates[0] ?? null
+}
+
 /**
  * Check configuration compatibility before creating any native thread. Explicit selection is respected. With
  * `remembered`, an installation already asked as it is now isn't run again.
@@ -296,13 +311,6 @@ export async function resolveCodexExecutable(
   env = process.env,
   remembered?: CodexExecutables
 ): Promise<string | null> {
-  const candidates = codexExecutableCandidates(env)
-  if (env.CODEX_EXECUTABLE || candidates.length < 2)
-    return candidates[0] ?? null
-  for (const command of candidates) {
-    // The next installed CLI may understand a newer configuration format.
-    if (remembered ? await remembered.reads(command, env) : (await codexReadsConfiguration(command, env)) === true) return command
-  }
-  // Preserve the selected CLI's actual startup diagnostic when no compatible installation exists.
-  return candidates[0] ?? null
+  if (remembered) return remembered.resolve(env)
+  return firstReading(codexExecutableCandidates(env), env, async (command) => (await codexReadsConfiguration(command, env)) === true)
 }

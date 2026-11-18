@@ -1,7 +1,7 @@
 import { useCallback, useRef, useSyncExternalStore } from "react"
 
 /**
- * A ~40-line observable store.
+ * A small observable store.
  *
  * The point is the read path: components subscribe through a selector and
  * re-render only when *their* slice changes identity. A token arriving on the
@@ -17,6 +17,12 @@ export interface Store<T> {
   set(patch: StorePatch<T>): void
   set(update: StoreUpdater<T>): void
   subscribe: (listener: () => void) => () => void
+  /**
+   * Runs `run` with each `set` inside it applied as it's made and said to the
+   * listeners once, when `run` ends: a list taken in as one change costs one
+   * pass over the selectors, not one per entry.
+   */
+  batch: (run: () => void) => void
 }
 
 interface SelectorCache<T, S> {
@@ -32,6 +38,8 @@ export interface StoreHook<T> {
 export function createStore<T extends object>(initial: T): Store<T> {
   let state = initial
   const listeners = new Set<() => void>()
+  let batching = 0
+  let unsaid = false
 
   function set(patch: StorePatch<T>): void
   function set(update: StoreUpdater<T>): void
@@ -40,12 +48,27 @@ export function createStore<T extends object>(initial: T): Store<T> {
     const next = { ...state, ...patch }
     if (shallowEqual(state, next)) return
     state = next
-    for (const listener of listeners) listener()
+    if (batching) unsaid = true
+    else for (const listener of listeners) listener()
+  }
+
+  function batch(run: () => void): void {
+    batching += 1
+    try {
+      run()
+    } finally {
+      batching -= 1
+      if (!batching && unsaid) {
+        unsaid = false
+        for (const listener of listeners) listener()
+      }
+    }
   }
 
   return {
     get: () => state,
     set,
+    batch,
     subscribe: (listener) => {
       listeners.add(listener)
       return () => listeners.delete(listener)

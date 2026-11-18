@@ -179,6 +179,39 @@ try {
     assert.equal(own.pid(), pid, "and the helper is the same one")
   }
 
+  // Held just past the watch, so its timer is barely late: the helper said the git started long before, and the word
+  // sits unread behind the held loop. The watch reads it before it decides. Taken for late by under a second, this
+  // watch once killed the healthy helper under the git it had started.
+  {
+    const { own, git } = fresh()
+    await git.text({ cwd: repo, args: ["rev-parse", "HEAD"] })
+    const pid = own.pid()
+    for (const heldMs of [5_300, 5_900]) {
+      const run = outcome(git, () => ({ cwd: repo, args: ["rev-parse", "HEAD"] }))
+      const held = Date.now()
+      while (Date.now() - held < heldMs) { /* the loop held to just past the 5 s watch on the start */ }
+      const answered = await run
+      const head = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"]).toString()
+      assert.deepEqual(answered, { code: 0, stdout: head, stderr: "", truncated: false }, `a git whose start was said while the loop was held ${heldMs} ms answers: ${JSON.stringify(answered)}`)
+      assert.equal(own.pid(), pid, "and the healthy helper was not killed")
+    }
+    // The loop held again and again with a turn between, as a busy host is, while the helper is slow to answer (stopped
+    // here, for 8 s): each hold counts one look of the watch, not the seconds it lasted, so the watch hasn't run out
+    // when the helper answers. A helper silent while the host was awake to hear it is still found out (below).
+    process.kill(pid!, "SIGSTOP")
+    const run = outcome(git, () => ({ cwd: repo, args: ["rev-parse", "HEAD"] }))
+    for (let holds = 0; holds < 4; holds += 1) {
+      const held = Date.now()
+      while (Date.now() - held < 2_000) { /* held */ }
+      await new Promise((resolve) => setImmediate(resolve))
+    }
+    assert.equal(own.pid(), pid, "8 s of a held host is not the helper's silence")
+    process.kill(pid!, "SIGCONT")
+    const answered = await run
+    assert.equal("code" in answered && answered.code, 0, `the git answers once the helper does: ${JSON.stringify(answered)}`)
+    assert.equal(own.pid(), pid, "through the same helper")
+  }
+
   // A git sent to a helper stopped before it started anything: it fails, nothing having run, within the watch.
   {
     const { own, git } = fresh()
