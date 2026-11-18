@@ -13,6 +13,7 @@ import { gitActionPrompt, gitCommands, gitRepositoryName, PULL_REQUEST_WRITING, 
 import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
 import { pullRequestTools, registerPullRequestTools, type ReachableRepository, type RepositoryPlace } from "@mako/host/git/pull-request-tools"
 import { mergePullRequest, openPullRequest, pullRequestReport, pullTemplate, rerunFailedChecks } from "@mako/host/git/pull-requests"
+import checksFixture from "./fixtures/pull-request-checks.json" with { type: "json" }
 
 const gitRunner = new Git()
 
@@ -89,7 +90,7 @@ interface FakePull {
   state: "OPEN" | "MERGED" | "CLOSED"
   reviewDecision: string
   latestReviews: { state: string; author: { login: string } }[]
-  statusCheckRollup: { name: string; conclusion: string; detailsUrl?: string; workflowName?: string; startedAt?: string }[]
+  statusCheckRollup: { name: string; conclusion: string; status?: string; detailsUrl?: string; workflowName?: string; startedAt?: string; completedAt?: string }[]
 }
 interface GitHubState {
   calls: string[]
@@ -234,7 +235,7 @@ try {
       { isResolved: false, isOutdated: true, path: "c.txt", line: 1, comments: { nodes: [{ author: { login: "ann" }, body: "Old." }] } },
     ]
   })
-  const status = await pullRequestReport(gitRunner, project, { logs: true })
+  const status = await pullRequestReport(gitRunner, project, { logs: true, checks: "all" })
   assert.deepEqual(status.pullRequest?.checks, [{ name: "test", state: "failed", url: "https://ci/test" }, { name: "lint", state: "passed" }])
   assert.equal(status.pullRequest?.merge, "Fix failing checks first")
   assert.deepEqual(status.pullRequest?.reviews, ["ann: changes"])
@@ -267,7 +268,7 @@ try {
     ]
     db.logs = { "10": "build\tBuild\t2026-11-13T10:00:01.000Z The operation was canceled.\n", "11": "test\tRun\t2026-11-13T10:00:01.000Z The operation was canceled.\n" }
   })
-  const pushedTwice = await pullRequestReport(gitRunner, project, { logs: true })
+  const pushedTwice = await pullRequestReport(gitRunner, project, { logs: true, checks: "all" })
   assert.deepEqual(pushedTwice.pullRequest?.checks, [{ name: "test", state: "passed" }, { name: "build", state: "cancelled" }], "the run a newer run replaced isn't read; the lone cancelled one says cancelled")
   assert.equal(pushedTwice.pullRequest?.merge, "Run the cancelled checks again first")
   assert.deepEqual(pushedTwice.pullRequest?.failedLogs, [{ workflow: "Docs", url: "https://ci/10", log: "build\tBuild\tThe operation was canceled." }], "no log of the replaced run")
@@ -320,6 +321,58 @@ try {
   assert.equal(changed, 1, "windows read GitHub again after opening")
   rmSync(join(project, "draft.txt"))
   assert.equal(text(await agent.callTool({ name: "pull_request_open", arguments: {} })), "#101 was already open; nothing new to push: https://github.com/o/r/pull/101.")
+
+  // Checks as an agent waiting on CI reads them: counts, then only what didn't pass. The fixture is Verbiflow/mako#974's
+  // 71 checks as gh listed them, 59 passed and 12 skipped, `gate (1)` to `gate (45)` among them.
+  type Rollup = FakePull["statusCheckRollup"]
+  const fixtureRows = z.array(z.object({ name: z.string(), conclusion: z.string(), status: z.string().optional(), detailsUrl: z.string().optional(), workflowName: z.string().optional(), startedAt: z.string().optional(), completedAt: z.string().optional() }))
+  const rollup = (change: (checks: Rollup) => void = () => {}) => {
+    const checks: Rollup = fixtureRows.parse(structuredClone(checksFixture))
+    change(checks)
+    setGithub((db) => { db.pulls.find((pull) => pull.number === 101)!.statusCheckRollup = checks })
+  }
+  const statusOf = async (args: { checks?: "all" } = {}) => parseYaml(text(await agent.callTool({ name: "pull_request_status", arguments: args }))).pullRequest
+  const urlOf = (name: string) => checksFixture.find((check) => check.name === name)!.detailsUrl
+  rollup()
+  const allPassed = await statusOf()
+  assert.deepEqual(allPassed.checks, { totals: "59 passed, 12 skipped" }, "all passed: one line of counts, no check listed")
+  assert.equal(allPassed.number, 101, "the rest of the report stays")
+  assert.ok(allPassed.merge && allPassed.mergeable, "the merge line and mergeable stay")
+  const failing = ["checks (types)", "gate (7)"]
+  const running = ["gate (10)", "gate (11)", "gate (12)", "gate (13)", "gate (14)"]
+  rollup((checks) => {
+    for (const check of checks) {
+      if (failing.includes(check.name)) check.conclusion = "FAILURE"
+      if (running.includes(check.name)) Object.assign(check, { status: "IN_PROGRESS", conclusion: "" })
+    }
+  })
+  const someFailed = await statusOf()
+  assert.deepEqual(someFailed.checks, {
+    totals: "52 passed, 12 skipped, 2 failed, 5 running",
+    notPassed: [
+      `checks (types): failed ${urlOf("checks (types)")}`,
+      `gate (7): failed ${urlOf("gate (7)")}`,
+      `gate (10, 11, 12, 13, 14): running ${urlOf("gate (10)")}`,
+    ],
+  }, "failed and running checks each with a link; one matrix family sharing a state is one line")
+  assert.match(someFailed.merge, /Fix failing checks first/)
+  rollup((checks) => { for (const check of checks) if (running.includes(check.name)) Object.assign(check, { status: check.name === "gate (10)" ? "QUEUED" : "IN_PROGRESS", conclusion: "" }) })
+  assert.deepEqual((await statusOf()).checks, {
+    totals: "54 passed, 12 skipped, 5 running",
+    notPassed: [`gate (10, 11, 12, 13, 14): running ${urlOf("gate (10)")}`],
+  }, "running only, queued ones with them: the family once")
+  rollup((checks) => { checks.find((check) => check.name === "mac-host")!.conclusion = "CANCELLED" })
+  assert.deepEqual((await statusOf()).checks, {
+    totals: "59 passed, 11 skipped, 1 cancelled",
+    notPassed: [`mac-host: cancelled ${urlOf("mac-host")}`],
+  }, "a cancelled check is listed")
+  rollup()
+  const every = z.array(z.object({ name: z.string(), state: z.string(), url: z.string().optional() }).strict()).parse((await statusOf({ checks: "all" })).checks)
+  assert.equal(every.length, 71, "checks: all lists every check")
+  assert.deepEqual(every[0], { name: "Analyze (actions)", state: "passed", url: urlOf("Analyze (actions)") })
+  assert.equal(every.filter((check) => check.state === "skipped").length, 12, "and says which were skipped")
+  const schema = z.object({ properties: z.object({ checks: z.object({ const: z.literal("all") }) }) }).safeParse(describe("pull_request_status").inputSchema)
+  assert.ok(schema.success, "pull_request_status takes checks: all")
   // Re-run, as the sidebar's: the failed jobs of each failed run on the pushed commit.
   const rerunsBefore = github().reruns.length
   const rerun = text(await agent.callTool({ name: "pull_request_rerun", arguments: {} }))

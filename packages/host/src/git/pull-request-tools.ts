@@ -53,7 +53,7 @@ export async function machinePullRequestsAs(dir = MACHINE_IDENTITY_DIR): Promise
 }
 
 export interface PullRequestTools {
-  status(conversationId: string, options?: { logs?: boolean; repository?: string }): Promise<string>
+  status(conversationId: string, options?: { logs?: boolean; repository?: string; checks?: "all" }): Promise<string>
   open(conversationId: string, draft: PullRequestDraft & { repository?: string }): Promise<string>
   merge(conversationId: string, options?: { method?: MergeMethod; repository?: string; as?: "app" }): Promise<string>
   rerun(conversationId: string, options?: { repository?: string }): Promise<string>
@@ -99,7 +99,7 @@ function standing(report: PullRequestReport): string {
 const GITHUB_POLLING = "Use this and waitingOn, so Mako wakes you, instead of gh --watch. If you must poll gh yourself, no faster than once per 60 seconds per repository, reusing the answer, with no polling loop of your own; a state-changing operation may have one readback. On a secondary 403 or 429, stop GitHub requests across your work until Retry-After or the rate-limit reset allows them (at least 60 seconds without a header, longer after repeated limits). Fetch a terminal failure's log once."
 
 export function pullRequestTools(deps: Deps): PullRequestTools {
-  const report = (repository: ReachableRepository, logs = false) => pullRequestReport(deps.git, repository.root, { startedFrom: repository.startedFrom, logs })
+  const report = (repository: ReachableRepository, logs = false, checks?: "all") => pullRequestReport(deps.git, repository.root, { startedFrom: repository.startedFrom, logs, checks })
   const toldFallback = new Set<string>()
   /** The fallback sentence for a Thread's first pull request that went as the App only for want of a token; empty after. */
   const fallbackNote = async (conversationId: string): Promise<string> => {
@@ -132,15 +132,15 @@ export function pullRequestTools(deps: Deps): PullRequestTools {
       : `None of this project's repositories has an open pull request:\n${lines}`)
   }
   return {
-    async status(conversationId, { logs = false, repository } = {}) {
+    async status(conversationId, { logs = false, repository, checks } = {}) {
       const place = await deps.place(conversationId)
       const one = meant(place, repository)
-      if (one && place.repositories.length === 1) return toolText(await report(one, logs))
+      if (one && place.repositories.length === 1) return toolText(await report(one, logs, checks))
       if (one) {
         const others = place.repositories.filter((other) => other !== one).map((other) => other.name)
-        return toolText({ repository: one.name, ...await report(one, logs), otherRepositories: others })
+        return toolText({ repository: one.name, ...await report(one, logs, checks), otherRepositories: others })
       }
-      const reports = await Promise.all(place.repositories.map(async (each) => ({ repository: each.name, ...await report(each, logs) })))
+      const reports = await Promise.all(place.repositories.map(async (each) => ({ repository: each.name, ...await report(each, logs, checks) })))
       return toolText({ projectFolder: place.folder, repositories: reports })
     },
     async open(conversationId, { repository, ...draft }) {
@@ -222,14 +222,15 @@ export function registerPullRequestTools(server: McpServer, tools: PullRequestTo
     "pull_request_status",
     {
       description:
-        `Call before opening, updating or merging this branch's pull request, and when the user asks about its checks or reviews. Reads the pull request of the branch this Session edits on: each check with its state and link, reviews, unresolved review comments by file and line, whether GitHub would merge it, and with logs: true the end of each failed GitHub Actions job's output. With none open, says what opening one would do: the base it targets, the commits it carries, the repository's pull request template, and what's in the way. ${ONE_PER_REPOSITORY} in the project folder itself it reports every repository, each under its name. Changes nothing. ${GITHUB_POLLING}`,
+        `Call before opening, updating or merging this branch's pull request, and when the user asks about its checks or reviews. Reads the pull request of the branch this Session edits on: check counts by state, each check not passed or skipped with its link, reviews, unresolved review comments by file and line, whether GitHub would merge it, and with logs: true the end of each failed GitHub Actions job's output. With none open, what opening one would do: its base and commits, the repository's PR template, and what's in the way. ${ONE_PER_REPOSITORY} in the project folder itself it reports every repository, each under its name. Changes nothing. ${GITHUB_POLLING}`,
       inputSchema: z.object({
         logs: z.boolean().optional().describe("Include the end of each failed GitHub Actions job's log."),
+        checks: z.literal("all").optional().describe("List every check, passed ones too."),
         repository: REPOSITORY,
       }).strict(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    ({ logs, repository }) => reply(() => tools.status(conversationId(), { logs, repository }))
+    ({ logs, checks, repository }) => reply(() => tools.status(conversationId(), { logs, checks, repository }))
   )
   server.registerTool(
     "pull_request_open",

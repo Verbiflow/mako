@@ -447,7 +447,8 @@ function toCheck(raw: RawCheck): CheckSummary {
   ) {
     return { name, state: "running", url }
   }
-  if (verdict === "SUCCESS" || verdict === "NEUTRAL" || verdict === "SKIPPED") {
+  if (verdict === "SKIPPED") return { name, state: "passed", skipped: true, url }
+  if (verdict === "SUCCESS" || verdict === "NEUTRAL") {
     return { name, state: "passed", url }
   }
   if (verdict === "FAILURE" || verdict === "ERROR" || verdict === "TIMED_OUT") {

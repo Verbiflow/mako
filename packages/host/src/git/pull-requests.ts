@@ -1,7 +1,7 @@
 import { readdir, readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { clipTemplate, MERGE_METHODS, pullBaseFor, pullMergeReason, pullSetupReason, type MergeMethod } from "../contracts/git-actions.js"
-import type { PullRequest } from "../contracts/git-workspace-search.js"
+import type { CheckSummary, PullRequest } from "../contracts/git-workspace-search.js"
 import {
   createPull,
   editPull,
@@ -274,7 +274,8 @@ export interface PullRequestReport {
     state: "open" | "draft"
     base: string
     unpushedCommits?: number
-    checks: { name: string; state: string; url?: string }[] | "none reported"
+    /** Totals and the checks that didn't pass (`compactChecks`); with `checks: "all"`, every check. */
+    checks: CompactChecks | { name: string; state: string; url?: string }[] | "none reported"
     review: PullRequest["reviewDecision"]
     reviews?: string[]
     mergeable: PullRequest["mergeable"]
@@ -293,6 +294,40 @@ export interface PullRequestReport {
   lastPullRequest?: { number: number; state: "merged" | "closed"; url: string }
 }
 
+/** The checks as an agent waiting on CI reads them: a count per state, then each check that didn't pass, one line each. */
+export interface CompactChecks {
+  /** `59 passed, 12 skipped, 2 failed`: only the states some check is in. */
+  totals: string
+  /** `name: state link`, a matrix family sharing a state as one line: `gate (4, 9, 17): running link-of-the-first`. */
+  notPassed?: string[]
+}
+
+const CHECK_STATES = ["passed", "skipped", "failed", "running", "cancelled", "unknown"] as const
+/** A matrix job's name, `gate (12)` or `checks (eslint)`: its family and its value. */
+const MATRIX = /^(.+) \(([^()]+)\)$/
+
+export function compactChecks(checks: readonly CheckSummary[]): CompactChecks {
+  const counts = new Map<string, number>()
+  const families = new Map<string, { family: string | null; state: string; checks: CheckSummary[] }>()
+  for (const check of checks) {
+    const state = check.skipped ? "skipped" : check.state
+    counts.set(state, (counts.get(state) ?? 0) + 1)
+    if (state === "passed" || state === "skipped") continue
+    const family = MATRIX.exec(check.name)?.[1] ?? null
+    const key = family === null ? `\0${check.name}\0${state}` : `${family}\0${state}`
+    const group = families.get(key) ?? { family, state, checks: [] }
+    group.checks.push(check)
+    families.set(key, group)
+  }
+  const totals = CHECK_STATES.filter((state) => counts.get(state)).map((state) => `${counts.get(state)} ${state}`).join(", ")
+  const notPassed = [...families.values()].map(({ family, state, checks: group }) => {
+    const name = family !== null && group.length > 1 ? `${family} (${group.map((check) => MATRIX.exec(check.name)![2]).join(", ")})` : group[0]!.name
+    const url = group.find((check) => check.url)?.url
+    return `${name}: ${state}${url ? ` ${url}` : ""}`
+  })
+  return notPassed.length ? { totals, notPassed } : { totals }
+}
+
 function threadLines(threads: ReviewThread[]) {
   return threads.slice(0, 20).map((thread) => ({
     at: thread.line === null ? thread.path : `${thread.path}:${thread.line}`,
@@ -301,7 +336,7 @@ function threadLines(threads: ReviewThread[]) {
 }
 
 /** The branch's pull request with its checks, reviews and unresolved comments; with none open, what opening one would carry. */
-export async function pullRequestReport(git: Git, cwd: string, options: { startedFrom?: string | null; logs?: boolean } = {}): Promise<PullRequestReport> {
+export async function pullRequestReport(git: Git, cwd: string, options: { startedFrom?: string | null; logs?: boolean; checks?: "all" } = {}): Promise<PullRequestReport> {
   const [status, branch, left] = await Promise.all([githubStatus(cwd), branchOf(git, cwd), uncommitted(git, cwd)])
   const report: PullRequestReport = { branch: branch || null, uncommittedFiles: left }
   const reason = pullSetupReason(status)
@@ -317,7 +352,11 @@ export async function pullRequestReport(git: Git, cwd: string, options: { starte
       url: pull.url,
       state: pull.draft ? "draft" : "open",
       base: pull.base,
-      checks: pull.checks.length ? pull.checks.map(({ name, state, url }) => (url ? { name, state, url } : { name, state })) : "none reported",
+      checks: !pull.checks.length
+        ? "none reported"
+        : options.checks === "all"
+          ? pull.checks.map(({ name, state, skipped, url }) => ({ name, state: skipped ? "skipped" : state, ...url && { url } }))
+          : compactChecks(pull.checks),
       review: pull.reviewDecision,
       mergeable: pull.mergeable,
       merge: pullMergeReason(pull) ?? "GitHub would merge it now. Merge only when the user asks.",
