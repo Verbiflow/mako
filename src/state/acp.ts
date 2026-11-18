@@ -44,6 +44,7 @@ import type {
   RewindPreview,
 } from "@/lib/types"
 import { activeIs, updateLive } from "@/state/acp-live"
+import { modeSettled, refusedNarrowing, switchLiveMode } from "@/state/live-mode"
 import { sendTo, steerTo } from "@/state/acp-queue"
 import {
   beginStart,
@@ -564,6 +565,8 @@ export const acp = {
     if (live?.kind !== "live") return false
     try {
       const tuning = command.kind === "set" ? await settingsForSend(liveSettingsTarget(live)) : undefined
+      const refusal = refusedNarrowing(live.key, await modeSettled(live.key))
+      if (refusal) throw new Error(refusal)
       await readLive(live.key, () => getMako().liveGoal(live.key, command, tuning))
       return true
     } catch (error) {
@@ -581,6 +584,8 @@ export const acp = {
     if (live?.kind !== "live") return false
     try {
       const tuning = await settingsForSend(liveSettingsTarget(live))
+      const refusal = refusedNarrowing(live.key, await modeSettled(live.key))
+      if (refusal) throw new Error(refusal)
       await readLive(live.key, () => getMako().liveReview(live.key, target, tuning))
       return true
     } catch (error) {
@@ -868,12 +873,10 @@ export const acp = {
   async setMode(modeId: string): Promise<void> {
     const current = activeLiveAcp(acpStore.get())
     if (!current || !hasBridge()) return
-    try {
-      await getMako().liveSetMode(current.key, modeId)
-      chooseProviderMode(current.harness, modeId)
-    } catch (error) {
-      toast.error(String(error))
-    }
+    // Shown from now; the host's answer keeps it or puts it back (`live-mode.ts`).
+    const change = await switchLiveMode(current.key, modeId)
+    if (change.kind === "taken") chooseProviderMode(current.harness, modeId)
+    else toast.error("The access wasn't changed", { description: change.reason })
   },
 
   async unqueue(): Promise<void> {

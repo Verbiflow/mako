@@ -1,4 +1,4 @@
-// Loaded into the host `npm run bench:vs-bare` starts (`node --import`), never by the app: it hears the host's own
+// Loaded into the host `npm run bench:vs-bare` and `npm run bench:actions` start (`node --import`, `lib/bench-host.ts`), never by the app: it hears the host's own
 // diagnostics channels by name and writes one JSON line for each to descriptor 3, the pipe the bench reads, stamped
 // with the machine's monotonic clock, which the bench's own process shares. It changes nothing the host does.
 import { subscribe } from "node:diagnostics_channel"
@@ -13,11 +13,22 @@ const say = (record) => out.write(`${JSON.stringify(record)}\n`)
 /** Conversations whose id starts with this are the bench's measured ones; the others' frames and tokens aren't written. */
 const MARK = process.env.BENCH_VS_BARE_MARK ?? ""
 const measured = (id) => String(id ?? "").startsWith(MARK)
+const text = (value) => Object.prototype.toString.call(value) === "[object String]"
 
 subscribe("mako:host-call", ({ channel, args }) => {
   const t = now()
   if (channel === "mako:live-prompt") say({ t, s: "call", channel, c: args[0], q: args[1] })
   else if (channel === "mako:live-start") say({ t, s: "call", channel, c: args[2]?.conversationId, q: args[2]?.initialRequest?.id })
+  // Every other call about a conversation (a steer, a Stop, an access change, an approval's answer), for `bench:actions`.
+  else if (channel.startsWith("mako:live-") && text(args[0])) say({ t, s: "host-call", channel, c: args[0] })
+})
+subscribe("mako:host-answer", ({ channel, args, refused }) => {
+  const t = now()
+  if (channel.startsWith("mako:live-") && text(args[0])) say({ t, s: "host-answer", channel, c: args[0], refused: refused === true })
+})
+subscribe("mako:live-step", (step) => {
+  const t = now()
+  if (measured(step.conversation)) say({ t, s: "step", c: step.conversation, step: step.step, phase: step.phase, detail: step.detail })
 })
 subscribe("mako:live-stage", (stage) => {
   const t = now()
@@ -30,7 +41,11 @@ subscribe("mako:native-frame", ({ conversation }) => {
 subscribe("mako:live-driver-event", (event) => {
   const t = now()
   if (event.type === "live-session") {
-    if (measured(event.session.id)) say({ t, s: "session", c: event.session.id, status: event.session.status, connection: event.session.connection })
+    if (measured(event.session.id)) say({ t, s: "session", c: event.session.id, status: event.session.status, connection: event.session.connection, mode: event.session.currentMode ?? null })
+    return
+  }
+  if (event.type === "live-permission") {
+    if (measured(event.request.sessionId)) say({ t, s: "permission", c: event.request.sessionId })
     return
   }
   if (event.type !== "live-update" && event.type !== "live-updates") return

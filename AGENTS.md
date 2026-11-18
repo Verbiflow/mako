@@ -4535,6 +4535,34 @@ and starts that same native session once; concurrent prompts share the wake.
 Running or queued work, permissions, child delivery, transfers, checkpoints,
 rewinds and automatic continuation prevent hibernation. A retired driver's late
 events are fenced by the resident generation and cannot close its replacement.
+Writing in the composer wakes a session whose process has gone (`noteComposing`
+in `src/state/prewarm.ts`, `mako:live-prewarm`), so the start overlaps the
+typing: once a half minute for one that's awake, and again at the next key for
+one that's hibernated or disconnected, since the signal before it woke nothing.
+
+What a person does to a conversation is timed by `npm run bench:actions`
+(`scripts/bench-actions.ts`): a message, a steer, a Stop, a message after a
+Stop or to a hibernated session, an access change, a model, reasoning or fast
+change and an approval's answer, on a real host with each real harness against
+the scripted model, with Claude Code also driven bare over its stream-json
+input. It reads the host through the probe `bench:vs-bare` uses
+(`scripts/lib/bench-host.ts`, `bench-vs-bare-probe.mjs`), and what has no
+request to be a stage of (`conversations/live-stages.ts`) is a step
+(`liveSteps`, `mako:live-step`, in `base/live-steps.ts`, where a harness's
+driver may say its own round trips too): name a new wait there (`stagedWait`,
+`stagedCall`) rather than timing it where it happens.
+Three rules came of it. A selection reaches the running process when it changes,
+never with each message: the window sends its model, reasoning and fast lane
+with every message, and Claude's `tune` sets only what differs from what the
+process has (`Live.tuned`; `test-claude-tune.ts` counts the round trips). A
+running session's access shows from the person's pick (`src/state/live-mode.ts`,
+on the desk and the phone alike) and is believed only from its host's answer:
+refused, the picker goes back and says why. And nothing starts a turn under a
+level wider than the person chose while a change is on its way: the window's
+sends, steers, goals and reviews wait for the answer (`modeSettled`), a message
+that waited on a refused narrowing isn't sent, and the host dispatches nothing
+while a `setMode` is unanswered (`Resident.modeChanging`), whichever client
+asked. `test-live-mode.ts` and `test-live-mode-gate.ts` hold both sides.
 
 A saved binding's fate is a `ResumeVerdict`
 (`packages/host/src/contracts/conversation-control.ts`), not a boolean: `resumable`
@@ -4795,7 +4823,17 @@ each real harness against the scripted model (Cursor on its own): a 15 s
 command steered 4 s in. Claude, OpenCode and Grok hear it once the command
 returns; Codex's command yields to the model at once and carries on; Devin
 hears it when its command hands back, which it does by itself after about 10 s;
-Cursor cuts the command short. A Stop ends the turn within 0.2 s on all six. Enter steers a steerable running turn and
+Cursor cuts the command short. A Stop ends the turn within 0.2 s on all six. Claude
+Code's Stop keeps its process (`keepStopped`): an `interrupt` that also drops
+what the CLI had queued (`cancel_queued`, where its `init` says
+`interrupt_cancel_queued_v1`) and a `stop_task` for each background task, so
+the next message, and the person's steer, which lands by stopping the turn,
+cost a message and not a relaunch (`bench:actions`: 16 ms where it was 300 or
+more). It closes the process, as it always did, where the CLI can't, doesn't
+answer within two seconds, or had a message queued behind the running command,
+which the CLI would otherwise let finish; `test-claude-stop.ts` holds each
+with fakes, `test-claude-stop-live.ts` on the real CLI against the scripted
+model, and `scripts/probe-claude-stop.ts` reads it on the real model. Enter steers a steerable running turn and
 Cmd/Ctrl+Enter queues; the `steerOnEnter` preference swaps them. Re-verify a
 provider's kind with a real multi-step tool task before changing it: a single
 long generation cannot distinguish step delivery from turn-end delivery.

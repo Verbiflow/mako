@@ -112,6 +112,7 @@ export type { MoveArrivalDeps } from "./move-arrival.js"
 export { declareCloudControlPreviewMethods } from "./cloud-control-previews.js"
 export { threadHistoryTools, registerThreadHistoryTools, type ThreadHistoryTools } from "./thread-history.js"
 import type { ThreadHistoryTools } from "./thread-history.js"
+import { stagedWait } from "../base/live-steps.js"
 export { Agents } from "./agents.js"
 export { AgentAnswerSchema, declareAgentMethods, registerAgentTools } from "./agent-tools.js"
 export { AgentAskGate, declareAgentAskMethods } from "./agent-ask-gate.js"
@@ -820,7 +821,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     deps.used?.(session.harness, tuning)
     // The settings and the attachments' files are readied together; the message is admitted in one turn after both.
     const held = live.holdAttachments(requestId, attachments)
-    const ready = Promise.all([profiles.resolveLaunch(session.harness, session.cwd, tuning), held]).then(([selected]) => selected)
+    const ready = Promise.all([stagedWait(id, "launch settings", () => profiles.resolveLaunch(session.harness, session.cwd, tuning)), held]).then(([selected]) => selected)
     return live.admitInOrder(id, ready,
       (selected) => live.submit(id, requestId, text, attachments, selected, undefined, undefined, options?.actor))
       .finally(() => live.releaseAttachments(requestId))

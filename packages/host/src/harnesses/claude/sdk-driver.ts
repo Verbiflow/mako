@@ -16,6 +16,7 @@ import type {
   SDKTaskNotificationMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk"
+import { liveStep, stagedCall } from "../../base/live-steps.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { causeBody, claudeTaskOutput, outputBody, UNNAMED_TURN, type KeptOutputs, type ProviderTurnCause } from "@mako/sessions"
 import { claudeTaskCause, claudeTaskMarker, parseClaudeTaskNotification } from "@mako/sessions/harnesses"
@@ -85,9 +86,23 @@ type ClaudeQuery = Pick<
   | "setModel"
   | "applyFlagSettings"
   | "setPermissionMode"
-  | "interrupt"
   | "close"
-> & Partial<Pick<Query, "getContextUsage" | "stopTask">>
+> & Partial<Pick<Query, "getContextUsage" | "stopTask">> & {
+  /**
+   * The SDK's `Query.interrupt`, with the option its implementation takes and its types leave out (0.3.326):
+   * `cancelQueued` sends the control request's `cancel_queued`, which a CLI that says `interrupt_cancel_queued_v1`
+   * honours by dropping every message it still had queued.
+   */
+  interrupt(options?: { cancelQueued?: boolean }): ReturnType<Query["interrupt"]>
+}
+
+/** The capability a CLI says at each turn's `init` when an interrupt can also drop what it had queued. */
+const CANCELS_QUEUED = "interrupt_cancel_queued_v1"
+/**
+ * How long a Stop that keeps the process waits for the CLI: for the interrupt's answer, the stopped turn's result and
+ * each background task's stop, together. Past it Stop closes the process, as it always did, so Stop never hangs.
+ */
+const STOP_KEPT_MS = 2_000
 
 const CLAUDE_NATIVE_IDENTITY = { kind: "reported", via: "SDK initialization.account" } as const
 /** Past Mako's own pipe release, so the SDK's stream can still report the exit first. */
@@ -102,6 +117,8 @@ interface Receipt {
   timer: ReturnType<typeof setTimeout>
 }
 interface Live {
+  /** The reasoning level and fast lane the process is known to have (`tune`); undefined when a message may have changed them. */
+  tuned: ClaudeFlags | undefined
   /** Amends the launch account's usage: a turn reporting its limits moves the meter without a request. */
   observeUsage: AdmittedStartOptions["observeUsage"]
   compaction?: { actionId: string; runId: string; confirmed: boolean }
@@ -124,6 +141,10 @@ interface Live {
    * doesn't name it ends that turn, not this one (`claudeOwnTurnEnded`).
    */
   awaitingTurn?: string
+  /** What the CLI said it can do at its last `init` (`capabilities`); empty before the first turn. */
+  capabilities: ReadonlySet<string>
+  /** A Stop that keeps the process is under way (`keepStopped`): the next result is the stopped turn's, and ends it. */
+  interrupt?: { ended(): void }
   receipts: Map<string, Receipt>
   closed: boolean
   steered: boolean
@@ -175,6 +196,8 @@ export interface ClaudeSdkDependencies {
     options: Options
   }): Promise<ClaudeQuery>
   interruptTimeoutMs?: number
+  /** How long a Stop that keeps the process waits for the CLI before it closes it instead (`STOP_KEPT_MS`). */
+  stopKeptMs?: number
   receiptTimeoutMs?: number
   prepareApprovals?: (input: Omit<Parameters<typeof prepareClaudePermissionObserver>[0], "root" | "settings">) => Promise<ClaudePermissionObserver | undefined>
   inspectCredentials?: (env: NodeJS.ProcessEnv) => Promise<ClaudeCredentialState>
@@ -231,6 +254,80 @@ function stop(live: Live): void {
   live.receipts.clear()
   live.promptReceipt = undefined
   live.awaitingTurn = undefined
+}
+
+/** The turn a Stop interrupted is over, its process kept: ready for the next message, with nothing of it left waiting. */
+function endStopped(engine: Engine, live: Live, nativePath: string | undefined): void {
+  if (live.closed) return
+  const ended = live.interrupt
+  live.interrupt = undefined
+  live.awaitingTurn = undefined
+  live.steered = false
+  live.finishing = false
+  live.promptReceipt = undefined
+  live.compaction = undefined
+  live.permissions.close()
+  for (const receipt of live.receipts.values()) {
+    clearTimeout(receipt.timer)
+    receipt.reject(new Error("Claude was stopped before confirming steering delivery. Do not resend automatically."))
+  }
+  live.receipts.clear()
+  engine.patch(live, { nativePath, status: "ready", lastStop: "interrupted", error: undefined, failureEvidence: undefined, backgroundTasks: 0 })
+  ended?.ended()
+}
+
+/**
+ * Stop without ending the process, where the CLI can do all of what Stop means: the turn ends (`interrupt`), what the
+ * process had queued is gone (`cancel_queued`, which a CLI saying `CANCELS_QUEUED` honours), and each background task
+ * ends (`stop_task`). `kept` once all of it is done and the session is ready, connected, for the next message, which
+ * then costs what it costs in a terminal rather than a relaunch. `unasked` when the CLI can't (an older one, or no
+ * turn of this process has said what it can do yet), and `unanswered` when it didn't do it all within `withinMs`,
+ * something it had queued survived, or a message was queued behind the running command: the caller closes the
+ * process then, as Stop always did.
+ */
+async function keepStopped(engine: Engine, live: Live, withinMs: number): Promise<"kept" | "unasked" | "unanswered"> {
+  const stopTask = live.query.stopTask?.bind(live.query)
+  if (!live.capabilities.has(CANCELS_QUEUED) || !stopTask || live.closed) return "unasked"
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<"late">((resolve) => { timer = setTimeout(() => resolve("late"), withinMs) })
+  const running = live.state.status === "running"
+  const done = (async () => {
+    if (running) {
+      const run = live.state.nativeRunId
+      const ended = new Promise<void>((resolve) => { live.interrupt = { ended: resolve } })
+      const receipt = await live.query.interrupt({ cancelQueued: true })
+      if (receipt?.still_queued.length) throw new Error("the interrupt left messages queued")
+      // Its own message never started (it was still queued, and went with the rest): no turn is left to report an end.
+      if (live.interrupt && run && receipt?.cancelled?.includes(run)) endStopped(engine, live, await live.transcript.locate(live.state.nativeId))
+      // With a message queued behind it (a steer it held for the command's end), the CLI lets the running command
+      // finish before it ends the turn (2.1.x, seen against the scripted model: six seconds for a six-second command,
+      // and a second interrupt changes nothing). Stop doesn't wait for that: closing the process ends the command now.
+      else if (receipt?.cancelled?.length) return "queued" as const
+      await ended
+    }
+    for (const task of live.agents.running()) await stopTask(task)
+    return "done" as const
+  })()
+  try {
+    const outcome = await Promise.race([done, late])
+    if (outcome === "late") {
+      // Whatever it answers later finds the process closed.
+      done.catch(() => {})
+      return "unanswered"
+    }
+    if (outcome === "queued") return "unanswered"
+    if (live.closed) return "unanswered"
+    // With no turn to stop, Stop still says what it did: the session's background work is over.
+    if (!running)
+      engine.patch(live, { status: "ready", lastStop: "interrupted", error: undefined, failureEvidence: undefined, backgroundTasks: 0 })
+    return "kept"
+  } catch (error) {
+    hostWarn("claude-sdk", "a stop couldn't keep the process", { conversation: live.state.id, error: error instanceof Error ? error.message : String(error) })
+    return "unanswered"
+  } finally {
+    clearTimeout(timer)
+    live.interrupt = undefined
+  }
 }
 
 function acknowledge(live: Live, message: SDKMessage): void {
@@ -430,6 +527,7 @@ async function pump(engine: Engine, live: Live): Promise<void> {
     for await (const message of nativeMessages(live.query)) {
       if (live.closed) return
       if (message.type === "system" && message.subtype === "init" && live.state.executionContext) {
+        live.capabilities = new Set(message.capabilities ?? [])
         const runtime = reportedRuntime(message.claude_code_version, "system/init.claude_code_version")
         streamRuntime(live.stream, runtime)
         engine.patch(live, { executionContext: { ...live.state.executionContext, runtime } })
@@ -479,6 +577,13 @@ async function pump(engine: Engine, live: Live): Promise<void> {
         engine.patch(live, { nativePath: live.transcript.path, nativeForkId: undefined })
       }
       if (message.type !== "result" || live.state.status !== "running") continue
+      // A Stop that keeps the process: this result is the turn it stopped, whatever it says of itself (an aborted
+      // turn reports `error_during_execution`), and Stop ends it interrupted.
+      if (live.interrupt) {
+        endStopped(engine, live, await live.transcript.locate(live.state.nativeId))
+        if (live.closed) return
+        continue
+      }
       if (live.compaction && message.user_message_uuid &&
         message.user_message_uuid !== live.compaction.runId &&
         !message.user_message_uuids?.includes(live.compaction.runId)) continue
@@ -574,6 +679,20 @@ async function disconnect(engine: Engine, live: Live, detail: string, failure: D
   })
 }
 
+/** The reasoning level and fast lane a selection names, as the launch or `applyFlagSettings` set them. */
+type ClaudeFlags = Pick<ReturnType<(typeof ClaudeTuningSchema)["parse"]>, "effort" | "fast">
+function launchTuning(settings: SessionSettings | undefined): ClaudeFlags {
+  const tuning = ClaudeTuningSchema.safeParse(settings?.options ?? {}).data
+  return { ...tuning?.effort !== undefined && { effort: tuning.effort }, ...tuning?.fast !== undefined && { fast: tuning.fast } }
+}
+
+/**
+ * The model, reasoning and fast lane a message asks for, set on the running process only where they differ from what
+ * it has: its launch took the selection it started with, and each change is a round trip the message waits for
+ * (`applyFlagSettings` alone held every message about 20 ms when it went with each one, `npm run bench:actions`).
+ * `live.tuned` is what the process is known to have; undefined once a message may have changed it there (a slash
+ * command such as `/effort`), so the next selection is set whole. A new model takes the reasoning and fast lane again.
+ */
 async function tune(live: Live, settings?: SessionSettings): Promise<void> {
   if (!settings) return
   const tuning = ClaudeTuningSchema.parse(settings.options ?? {})
@@ -582,13 +701,19 @@ async function tune(live: Live, settings?: SessionSettings): Promise<void> {
     tuning.agentTeams !== live.state.settings?.options?.agentTeams
   )
     throw new Error("Change agent teams by starting a new Claude session")
-  if (settings.model && settings.model !== live.state.settings?.model)
-    await providerCall(live.query.setModel(settings.model))
-  if (tuning.effort !== undefined || tuning.fast !== undefined)
-    await providerCall(live.query.applyFlagSettings({
-      effortLevel: tuning.effort,
-      fastMode: tuning.fast,
-    }))
+  const remodeled = Boolean(settings.model && settings.model !== live.state.settings?.model)
+  const model = settings.model
+  if (model && remodeled) await stagedCall(live.state.id, "claude setModel", () => providerCall(live.query.setModel(model)))
+  const has = remodeled ? undefined : live.tuned
+  const effort = tuning.effort !== undefined && tuning.effort !== has?.effort ? tuning.effort : undefined
+  const fast = tuning.fast !== undefined && tuning.fast !== has?.fast ? tuning.fast : undefined
+  if (effort !== undefined || fast !== undefined) {
+    await stagedCall(live.state.id, "claude applyFlagSettings", () => providerCall(live.query.applyFlagSettings({
+      ...effort !== undefined && { effortLevel: effort },
+      ...fast !== undefined && { fastMode: fast },
+    })))
+    live.tuned = { ...live.tuned, ...effort !== undefined && { effort }, ...fast !== undefined && { fast } }
+  }
   live.state = {
     ...live.state,
     settings: {
@@ -647,7 +772,7 @@ export function createClaudeSdkDriver(
     modelRoutes: { kind: "planned", wires: ["anthropic"], via: "`ANTHROPIC_BASE_URL` and a key in one launch's environment, the account profile's own sign-in left as it is; no adapter uses it yet." },
     accountContinuation: { kind: "resumes", via: "Every account's profile links the CLI's own `projects` store, so `resume` under another account opens the same session file, and its next turn sends the transcript to the API on that account's credentials; nothing of the session is kept on Anthropic's side." },
     modeSwitching: { kind: "native", via: "Claude Code's permission modes, set on the running query with `setPermissionMode`." },
-    backgroundStop: { kind: "ends-on-stop", how: "Stop interrupts and closes the Claude process, with or without a running turn, which ends its background tasks; the next prompt resumes the session. One task stops alone through the SDK's `stopTask`, from its row in the Agents panel." },
+    backgroundStop: { kind: "ends-on-stop", how: "Stop interrupts the turn, drops what the process had queued and stops each background task (`interrupt` with `cancel_queued`, `stop_task`), with or without a running turn, and keeps the process; a CLI that can't, or doesn't within two seconds, has its process closed instead, which ends them, and the next prompt resumes the session. One task stops alone through the SDK's `stopTask`, from its row in the Agents panel." },
     stopNativeAgent: async (id, nativeId) => {
       const { query } = requireLive(id)
       if (!query.stopTask) throw new Error("This Claude session cannot stop one task")
@@ -865,11 +990,13 @@ export function createClaudeSdkDriver(
         waited: { queued: 0 },
         prompts: [],
         requests: new ClaudeRequests(),
+        capabilities: new Set(),
         receipts: new Map(),
         closed: false,
         steered: false,
         finishing: false,
         goals: false,
+        tuned: launchTuning(options.tuning),
         state: {
           executionContext: context,
           id: options.conversationId,
@@ -953,6 +1080,7 @@ export function createClaudeSdkDriver(
         if (live.state.status === "running")
           throw new TurnInProgressError("Claude")
         const content = await claudeInputContent(text, attachments)
+        liveStep(live.state.id, "claude prompt prepared")
         try { await tune(live, settings) } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           const evidence = await live.authDiagnostics.failureEvidence(message)
@@ -989,6 +1117,8 @@ export function createClaudeSdkDriver(
         throw error
       }
       live.stream?.prompted({ text, shown: dispatch.shown, shownAt: dispatch.shownAt, attachments })
+      // A command may set the reasoning level or the fast lane in the process itself: the next selection is set whole.
+      if (text.trimStart().startsWith("/")) live.tuned = undefined
       if (GOAL_COMMAND.test(text)) {
         live.goals = true
         const condition = claudeGoalLine(text)
@@ -1101,14 +1231,17 @@ export function createClaudeSdkDriver(
     },
     async cancel(id) {
       const live = requireLive(id)
-      // Stop interrupts and then closes the process, which exits non-zero; this
-      // line is what tells that exit from a crash in the log.
+      // Where Stop closes the process (`keepStopped` couldn't keep it) it exits non-zero; this line is what tells that
+      // exit from a crash in the log.
       hostLog("claude-sdk", "stop requested", { conversation: id, approvalsOpen: live.permissions.open })
       // Stopped, Mako's message waiting behind a turn of Claude's own won't run: the stop's result ends it.
       live.awaitingTurn = undefined
+      const kept = await keepStopped(engine, live, dependencies.stopKeptMs ?? STOP_KEPT_MS)
+      if (kept === "kept") return
       let timer: ReturnType<typeof setTimeout> | undefined
       try {
-        await Promise.race([
+        // An interrupt the CLI already took isn't asked again: only the close is left.
+        if (kept === "unasked") await Promise.race([
           live.query.interrupt(),
           new Promise<never>((_, reject) => {
             timer = setTimeout(
@@ -1124,8 +1257,9 @@ export function createClaudeSdkDriver(
         ])
       } finally {
         clearTimeout(timer)
-        // Query.interrupt can leave SDK-queued input behind. Closing its process
-        // makes Stop definitive; the next prompt resumes the same native session.
+        // A CLI that can't drop what it had queued on an interrupt, or didn't answer one in time, leaves SDK-queued
+        // input behind. Closing its process makes Stop definitive; the next prompt resumes the same native session.
+        hostLog("claude-sdk", "stop closes the process", { conversation: id, why: kept })
         stop(live)
         await live.end()
         // A first turn stopped early has no hook-reported transcript; the next prompt resumes from this one.

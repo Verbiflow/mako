@@ -27,6 +27,9 @@ import { CONTROL_VIDEO_BATCH_TYPE, PREVIEW_MEDIA_TYPE, encodePreviewMedia, type 
 /** Each call as it arrives, its arguments decoded and before its method runs: when the host heard a send. */
 export const hostCalls = topic<{ channel: string; args: readonly unknown[] }>("mako:host-call")
 
+/** Each call as its answer, or its refusal, is written back: when the host was done with it (`npm run bench:actions`). */
+export const hostAnswers = topic<{ channel: string; args: readonly unknown[]; refused?: true }>("mako:host-answer")
+
 /** Each event line as it is written to a subscriber's stream: when a batch left the host for a window. */
 export const streamWrites = topic<{ client: string; type: string | undefined; conversation: string | undefined; line: string }>("mako:stream-write")
 
@@ -294,11 +297,13 @@ export async function startWebHost(
     // Whether the call reached its method, which says its own failure (`FailedCalls`); one refused before it is said here.
     let reached = false
     let called = "unread"
+    let taken: readonly unknown[] = []
     void readRequest(request)
       .then(async (call) => {
         const { channel, attempt } = call
         called = channel
         const args = decodeRuntimeArgs(call.args)
+        taken = args
         if (hostCalls.heard) hostCalls.publish({ channel, args })
         if (channel === "mako:control-preview" && request.headers.accept === PREVIEW_MEDIA_TYPE) {
           if (!preview) throw new Error("Preview delivery requires a newer Mako host. Existing agents have not been restarted.")
@@ -350,8 +355,10 @@ export async function startWebHost(
         // close() may already have answered this call with the farewell.
         if (response.destroyed || response.headersSent) return
         response.writeHead(200, { "content-type": "application/json" }).end(runtimeSuccessBody(value))
+        if (hostAnswers.heard) hostAnswers.publish({ channel, args })
       })
       .catch((error) => {
+        if (reached && hostAnswers.heard) hostAnswers.publish({ channel: called, args: taken, refused: true })
         if (!reached) hostWarn("rpc", "a call was refused before its method", { channel: called, client: clientId, correlationId, ...failedCallWords({ error }) })
         if (!response.destroyed && !response.headersSent)
           response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(runtimeFailure(error)))
