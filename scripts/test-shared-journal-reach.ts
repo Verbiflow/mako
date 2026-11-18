@@ -54,7 +54,7 @@ test("the owner's address fits a socket wherever the journal and the temporary f
   assert.equal(ownerAddress("/short/attribution/format"), "/short/attribution/format/owner.sock", "beside the lock where that fits")
   const long = `/${"long-folder/".repeat(12)}attribution/format`
   const inTemporary = ownerAddress(long, "darwin", "/scratch/xx/short/T")
-  assert.match(inTemporary, /^\/var\/folders\/xx\/short\/T\/mako-attribution-[0-9a-f]{24}\.sock$/, "in the temporary folder where the journal's own path is too long, as before")
+  assert.match(inTemporary, /^\/scratch\/xx\/short\/T\/mako-attribution-[0-9a-f]{24}\.sock$/, "in the temporary folder where the journal's own path is too long, as before")
   const both = ownerAddress(long, "darwin", `/scratch/${"nested-scratch/".repeat(6)}tmp`)
   assert.ok(Buffer.byteLength(both) <= 103, `a path a socket can have (${Buffer.byteLength(both)} bytes)`)
   assert.notEqual(both, ownerAddress(`${long}-other`, "darwin", `/scratch/${"nested-scratch/".repeat(6)}tmp`), "one a journal")
