@@ -12,6 +12,11 @@ import type { NativeAgent, NativeAgentRoster } from "@mako/host/contracts/native
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { WorkingSet, workingThreads, type WorkingSnapshot } from "@mako/host/conversations/cloud-handoffs"
 import { ThreadStore } from "@mako/host/threads/store"
+import { DatabaseSync } from "node:sqlite"
+import { atOnce } from "@mako/sessions/slices"
+import { JournalReaders } from "@mako/host/conversations/journal-readers"
+import { ColdJournal } from "@mako/host/conversations/live-journal"
+import { writeLongJournal } from "./lib/host-load-trees.ts"
 import { AgentsWorld } from "./lib/agents-world.ts"
 
 /**
@@ -123,6 +128,25 @@ try {
     host.close()
     other.close()
     each.close()
+
+    // A whole catalog placed with the loop turning between its batches: the same placements as in one go, and a row
+    // served meanwhile is placed as it's served.
+    const sliced = new ThreadStore(join(root, "sliced.sqlite")), whole = new ThreadStore(join(root, "whole.sqlite"))
+    const refs = Array.from({ length: 900 }, (_, index) => ({ harness: "claude", nativeId: `native-${index}`, path: join(root, "sessions", `${index}.jsonl`) }))
+    const catalog = { kind: "service" as const, name: "catalog" as const }
+    let turns = 0
+    const counting = setInterval(() => { turns += 1 }, 0)
+    const placing = sliced.placeAll(refs, catalog)
+    const served = sliced.placeMany([refs[899]!], catalog).get(refs[899]!.path)
+    assert.ok(served, "a row served while the catalog is placed is placed at once")
+    assert.equal(await placing, 899, "what was placed meanwhile is not placed again")
+    clearInterval(counting)
+    assert.ok(turns >= 3, `the loop turned ${turns} times while 900 rows were placed`)
+    const once = whole.placeMany(refs, catalog)
+    assert.equal(sliced.placeMany(refs, catalog).size, once.size)
+    assert.equal(sliced.placeMany([refs[899]!], catalog).get(refs[899]!.path)?.thread, served.thread)
+    sliced.close()
+    whole.close()
   }
 
   // A roster of many entries, one of them new: told changed without writing the others out, and told the same when
@@ -220,6 +244,41 @@ try {
       assert.equal(afterStop?.more, 0)
     } finally {
       await world.close()
+    }
+  }
+  // A long conversation opened where it lies: what its opening reads of every block comes from a reader's thread, and
+  // nothing on this thread walks the blocks; a journal written since the scan is read here as before.
+  {
+    const data = join(root, "cold"), id = randomUUID()
+    await writeLongJournal(data, { conversation: id, session: randomUUID(), path: join(data, "session.jsonl"), cwd: data, megabytes: 3 })
+    const journals = join(data, "conversations")
+    const readers = new JournalReaders()
+    const prepare = DatabaseSync.prototype.prepare
+    const walks: string[] = []
+    try {
+      const scan = await readers.scan(join(journals, `${id}.sqlite`))
+      DatabaseSync.prototype.prepare = function (sql, ...rest) {
+        if (/FROM blocks(?! WHERE id=)|FROM block_appends GROUP BY/.test(sql)) walks.push(sql)
+        return prepare.call(this, sql, ...rest)
+      }
+      const scanned = atOnce(ColdJournal.opening(journals, id, scan))
+      assert.ok(scanned && scanned.length === scan.count && scan.count > 100)
+      const counts = scanned.before(scanned.length, 0)
+      assert.deepEqual(walks, [], "with a reader's scan, the opening and its page counts walk no table here")
+      scanned.close()
+      const unscanned = atOnce(ColdJournal.opening(journals, id))
+      assert.ok(unscanned)
+      assert.deepEqual(unscanned.before(unscanned.length, 0), counts, "the same counts either way")
+      assert.equal(unscanned.length, scanned.length)
+      unscanned.close()
+      walks.length = 0
+      const stale = atOnce(ColdJournal.opening(journals, id, { ...scan, revision: scan.revision + 1, count: 1 }))
+      assert.equal(stale?.length, scan.count, "a scan of another revision is not used")
+      assert.ok(walks.length > 0)
+      stale?.close()
+    } finally {
+      DatabaseSync.prototype.prepare = prepare
+      await readers.stop()
     }
   }
   console.log("flush costs ok")

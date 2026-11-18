@@ -180,7 +180,14 @@ conversations?.live`) rather than a domain importing another's files.
   and a roster takes the one entry that moved. `npm run test:flush-costs`
   holds each to what must change it at once and what must not;
   `bench:host-load --scale person --record` says where the thread's time
-  went by source (`host-load-sources.ts`).
+  went by source (`host-load-sources.ts`), and `npm run bench:host-person`
+  (local, with `MAKO_BENCH_OUT` naming a folder) fails when the steady busy
+  share or a hold outside start and stop passes its budget. What walks a
+  whole journal or every journal isn't on the thread either: a cold open's
+  count and turn index come from a reader (`JournalReaders.scan`), the
+  start's listing and the stop's closes go a slice at a time (`listJournals`,
+  `LiveClosing.stop`), and a whole catalog is placed a batch a turn
+  (`ThreadStore.placeAll`).
 - **Follow, don't poll.** What only says where something stands (a line a
   window shows) reads what each owner already holds, and is woken by the
   owner's own change (its event or callback). That read never sets off the

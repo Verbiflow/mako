@@ -107,6 +107,8 @@ export const THREAD_STORE_MIGRATION = 7
 const OPEN_WAIT_MS = 5000
 const WRITE_WAIT_MS = 1000
 const PLACE_BATCH = 500
+/** Rows `placeAll` places between two turns of the loop: under 20 ms of it. */
+const PLACE_ALL_BATCH = 200
 
 /** What an operation acts on; its digest tells a replay from a conflict. */
 interface OperationContent {
@@ -2418,6 +2420,23 @@ export class ThreadStore {
         hostWarn("threads", "some rows were served without their Thread", { unplaced: ordered.length - start, error: error instanceof Error ? error.message : String(error) })
         break
       }
+    }
+    return placed
+  }
+
+  /**
+   * `placeMany` for a whole catalog at once, whose placements nobody waits on: the same batches, parents before their
+   * forks, with the loop turning between them. Placed in one go, a catalog of 5,336 rows held the loop 460 ms as the
+   * host started. A row served meanwhile is placed as it's served; one already placed by then is skipped here.
+   */
+  async placeAll(refs: readonly SourceRef[], actor: Actor): Promise<number> {
+    this.syncVersion()
+    const ordered = parentsFirst(refs.filter((ref) => !this.placements.has(placementKey(ref))).map((ref) => ({ ref }))).map(({ ref }) => ref)
+    let placed = 0
+    for (let start = 0; start < ordered.length; start += PLACE_ALL_BATCH) {
+      const batch = ordered.slice(start, start + PLACE_ALL_BATCH).filter((ref) => !this.placements.has(placementKey(ref)))
+      if (batch.length) placed += this.resolveRefs(batch, actor).size
+      await new Promise<void>((resolve) => setImmediate(resolve))
     }
     return placed
   }

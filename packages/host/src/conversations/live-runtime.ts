@@ -323,6 +323,11 @@ export interface Dependencies {
   /** The provider hibernates: its grants end, and what its agent built in Local Control waits for it to wake. Without this, `revokeTools`. */
   suspendTools?(bindingId: string, conversationId: string): void | Promise<void>
   root: string
+  /**
+   * What each saved journal says of its conversation, read before the conversations are made (`listJournals`): `open`
+   * lists from it and opens only a journal it doesn't have. Without it, `open` reads every journal as it runs.
+   */
+  listed?: ReadonlyMap<string, import("./live-records.js").ListedJournal>
   checkpoint?(path: string, provider?: string): Promise<string | undefined>
   /** Where the catalog lists the session with this identity now; `nativePath` is kept when it still lists it there. */
   nativePath?(identity: NativeSourceIdentity): string | undefined
