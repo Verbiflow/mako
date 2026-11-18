@@ -32,6 +32,12 @@ export interface OpenDigest {
 export interface AgentWakesDeps {
   /** What the Apex's conversation is doing: busy at a step a message joins, busy until its turn's end, idle, stopped, or not here. */
   ready(conversation: string): ParentReady
+  /** When the Apex's last digest went to its harness (`LiveRequest.digest.sentAt`), if one has: the next waits out its window from then. */
+  lastSent?(conversation: string): number | undefined
+  /** Whether a `wait` start is still waiting on this notice's Fin: its answer will carry the result (`withdraw`). */
+  awaited?(notice: Notice): boolean
+  /** Whether the Apex's conversation is moving to another harness or account for now (a usage limit's move). */
+  moving?(conversation: string): boolean
   /** The digests waiting unsent in the Apex's queue, oldest first: the newest is the one a new notice joins. */
   unsent(conversation: string): OpenDigest[]
   /** Whether a digest in the Apex's queue, sent or not, carries this notice: its receipt, read again after a crash. */
@@ -81,10 +87,15 @@ function asksApex(notice: Notice): boolean {
  * The Apex's side of a report (6.6): a producer into the Apex's own queue,
  * which keeps every digest durably, sends it once and in order, and retries
  * what its harness can't take for now (`delivery-queue.md`, step 2). A notice
- * joins the digest still unsent in the Apex's queue, or starts one: held
- * `WAKE_COALESCE_MS` for an idle Apex so a burst is one wake, `RESULT_COALESCE_MS`
- * for a result the Apex waited for (`settledOnly`), which also goes first and
- * in full; queued for a busy Apex's turn end; steered into the running turn
+ * joins the digest still unsent in the Apex's queue, or starts one. An idle
+ * Apex hears the first at once: held two seconds for a burst that never came,
+ * a lone report was two seconds its Apex stood idle (`npm run
+ * bench:orch-wake-latency`). What follows joins one digest: while the Apex's
+ * turn on the first runs, queued for that turn's end; once that turn is over,
+ * held until `WAKE_COALESCE_MS` after the last digest went (`RESULT_COALESCE_MS`
+ * for a result the Apex waited for, `settledOnly`, which also goes first and in
+ * full). So a burst is two wakes, the first report's and everything else's,
+ * never one a report. Queued for a busy Apex's turn end; steered into the running turn
  * at its next step where the harness takes that, and admitted when it
  * doesn't; paused for a stopped Fin until it's resumed. Past
  * `WAKES_PER_MINUTE` a digest waits for the minute's budget, which the queue
@@ -104,6 +115,8 @@ export class AgentWakes {
   private readonly focus = new Map<string, ReturnType<typeof setTimeout>>()
   /** Digests being steered into their Apex's turn: none joins or narrows one while it's out (`armFocus`). */
   private readonly focusing = new Set<string>()
+  /** Notices of reports a previous host left unheard, until this host first queues them (`leftOver`). */
+  private readonly leftOvers = new Set<string>()
   private stopped = false
 
   constructor(deps: AgentWakesDeps) {
@@ -157,6 +170,16 @@ export class AgentWakes {
       this.narrow(conversation, open, rest)
       hostLog("agents", "stale end not reported", { conversation, reports: open.notices.filter((notice) => !rest.includes(notice)).map((notice) => notice.report.id).join(" ") })
     }
+  }
+
+  /**
+   * Reports a previous host left unheard, about to be noticed again as this host starts (`Agents.resume`). Their digest
+   * waits `WAKE_COALESCE_MS` even when it is an idle Apex's first: one may have reached its Apex already by a way whose
+   * receipt this host reads back only as it takes the Apex up (a steer its harness had when that host died), and that
+   * receipt takes it back from the digest while it waits, rather than the Apex hearing it twice.
+   */
+  leftOver(ids: Iterable<string>): void {
+    for (const id of ids) this.leftOvers.add(id)
   }
 
   /** The Apex's turn ended: its queue sends what waits next, said as its Fins stand now (`refresh`). */
@@ -226,6 +249,7 @@ export class AgentWakes {
     this.stopped = true
     for (const timer of this.focus.values()) clearTimeout(timer)
     this.focus.clear()
+    this.leftOvers.clear()
   }
 
   private now(): number {
@@ -266,7 +290,20 @@ export class AgentWakes {
     const now = this.now()
     const request = notices[0]!.wake ?? namedUuid(`wake:${conversation}:${notices.map((notice) => notice.report.id).join("\n")}`)
     const window = notices.some((notice) => notice.settledOnly) ? RESULT_COALESCE_MS : WAKE_COALESCE_MS
-    const hold = ready === "paused" ? "paused" : ready === "idle" ? { at: now + window } : undefined
+    // An idle Apex hears the first at once; the next waits out its window from when the last digest went, so what
+    // comes after it while its turn on it runs (queued for that turn's end, `ready`) or soon after is one digest more,
+    // not one a report. One that waits unsent and held already (it was full, so this notice starts the next) has the
+    // same time, and goes ahead of this one in its queue.
+    const last = this.deps.lastSent?.(conversation)
+    const leftOver = notices.filter((notice) => this.leftOvers.delete(notice.id)).length > 0
+    // A result a `wait` start still waits on is that call's to answer, a moment from now, which takes it back from the
+    // digest (`withdraw`): held `RESULT_COALESCE_MS` so it doesn't also wake a Session of the Apex that is idle.
+    const awaited = notices.some((notice) => notice.settledOnly && this.deps.awaited?.(notice))
+    // An Apex on its way to another harness, its own run out, hears it there: sent at once, it meets the limit it is
+    // leaving, and that knock stops the move.
+    const moving = ready === "idle" && this.deps.moving?.(conversation) === true
+    const due = Math.max(last === undefined ? now : last + window, leftOver || moving ? now + WAKE_COALESCE_MS : 0, awaited ? now + RESULT_COALESCE_MS : 0)
+    const hold = ready === "paused" ? "paused" : ready === "idle" && due > now ? { at: due } : undefined
     const lines = this.deps.takeLines?.(conversation) ?? []
     try {
       if (!notices[0]!.wake) this.deps.assign(notices.map((notice) => notice.report.id), request)
@@ -352,7 +389,10 @@ export class AgentWakes {
 
   private heardNow(notices: readonly Notice[]): void {
     this.deps.delivered(notices.map((notice) => notice.report.id), this.now())
-    for (const notice of notices) this.heard.add(notice.id)
+    for (const notice of notices) {
+      this.heard.add(notice.id)
+      this.leftOvers.delete(notice.id)
+    }
   }
 }
 

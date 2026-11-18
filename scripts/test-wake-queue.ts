@@ -18,9 +18,11 @@ import { AgentsWorld, TESTED_HARNESSES, type Script } from "./lib/agents-world.t
  * An Apex's Fins' news is a producer into the Apex's own queue (`npm run
  * test:wake-queue`), step two of the one delivery queue: the queue keeps each
  * digest durably and sends it once, so nothing about it lives only in memory.
- * Covered, against the producer's rules with fake conversations: a burst is
- * one digest, held for its window; a notice joins the newest digest still
- * unsent; a result the Apex waited for is held only briefly; a busy Apex's
+ * Covered, against the producer's rules with fake conversations: an idle
+ * Apex's first report goes at once, and what follows is one digest, at its
+ * turn's end or held until its window after the last digest went; a notice
+ * joins the newest digest still unsent; a result the Apex waited for is held
+ * only its own short window; a busy Apex's
  * digest waits for its turn's end; a stopped Fin's is paused for its resume;
  * a running turn that takes a step's message hears a notice now, and one it
  * refuses joins the digest; a notice a digest carries already is heard, never
@@ -53,6 +55,7 @@ function fakes(ready: () => ParentReady, now: () => number, steer: (text: string
   const unsent = () => entries.filter((entry) => entry.sent === undefined && !entry.canceled)
   const deps: AgentWakesDeps = {
     ready,
+    lastSent: () => entries.reduce<number | undefined>((last, entry) => (entry.sent !== undefined && (last === undefined || entry.sent > last) ? entry.sent : last), undefined),
     unsent: () => unsent().map((entry) => ({ id: entry.id, notices: entry.notices, ...(entry.lines && { lines: entry.lines }) })),
     carried: (_conversation, id) => entries.some((entry) => !entry.canceled && entry.notices.some((each) => each.id === id)),
     admit: (_conversation, id, text, notices, _actor, hold, lines) => { if (!entries.some((entry) => entry.id === id)) entries.push({ id, text, notices: [...notices], hold, ...(lines && { lines }) }) },
@@ -86,28 +89,32 @@ function notice(status: "done" | "blocked" = "done", marks: Partial<Notice> = {}
 const GAPS = ["digest start assigned", "digest admitted", "digest joined", "digest join assigned", "wake"] as const
 
 /**
- * A child host: an idle Apex with two Fins that report one after the other, the second joining the first's digest;
- * killed by SIGKILL at `gap`, the `nth` time its log says it.
+ * A child host: an idle Apex with three Fins that report one after the other. The first's digest goes at once, the
+ * second's is held for the window after it, and the third joins the second's; killed by SIGKILL at `gap`, the `nth`
+ * time its log says it.
  */
 async function childHost(dir: string, harness: string, gap: string, nth: number): Promise<void> {
   let seen = 0
   followHostLog((line) => {
     if (line.message === gap && ++seen === nth) process.kill(process.pid, "SIGKILL")
   })
-  const script: Script = (turn) => (turn.text.includes("You're fin:") ? turn.world.hold(turn.conversation).then(() => `${turn.text.includes("fin:first") ? "First" : "Second"} finished.`) : "ok")
+  const script: Script = (turn) => (turn.text.includes("You're fin:") ? turn.world.hold(turn.conversation).then(() => `${turn.text.includes("fin:first") ? "First" : turn.text.includes("fin:second") ? "Second" : "Third"} finished.`) : "ok")
   const world = new AgentsWorld({ root: dir, script })
   const apex = await world.apex(harness, "full")
   writeFileSync(join(dir, "apex"), apex.conversation)
   const fins: string[] = []
-  for (const name of ["first", "second"]) {
+  for (const name of ["first", "second", "third"]) {
     const started = await world.agents.start(apex.caller, { brief: { objective: `Label ${name}` }, harness, name, clientKey: name, cwd: world.root })
     if ("refused" in started) throw new Error(started.why)
     fins.push(started.conversation!)
   }
-  await until("both Fins", () => fins.every((fin) => world.live.session(fin)?.status === "running"))
+  await until("the Fins", () => fins.every((fin) => world.live.session(fin)?.status === "running"))
+  const digests = () => world.live.snapshot(apex.conversation)?.requests.filter((request) => request.digest).length ?? 0
   world.release(fins[0]!)
-  await until("the first's digest", () => Boolean(world.live.snapshot(apex.conversation)?.requests.some((request) => request.digest)))
+  await until("the first's digest", () => digests() === 1)
   world.release(fins[1]!)
+  await until("the second's digest", () => digests() === 2)
+  world.release(fins[2]!)
   await new Promise(() => {})
 }
 
@@ -116,22 +123,47 @@ if (process.argv[2] === "--host") await childHost(process.argv[3]!, process.argv
 try {
   // The producer's rules, against fake conversations.
   {
-    const clock = 1_000_000
+    let clock = 1_000_000
     let ready: ParentReady = "idle"
     const f = fakes(() => ready, () => clock)
     const wakes = new AgentWakes(f.deps)
+    // The first report to an idle Apex goes at once, not after the two seconds of a burst that may never come.
+    const alone = notice()
+    wakes.notice("apex", "", alone)
+    assert.equal(f.entries.length, 1)
+    assert.equal(f.entries[0]!.hold, undefined, "an idle Apex's first digest goes at once")
+    assert.deepEqual(f.delivered, [alone.report.id], "heard once it's in the queue")
+    f.entries[0]!.sent = clock
+    // What follows while the Apex's turn on it runs waits for that turn's end, as one digest.
+    ready = "queue"
+    clock += 100
+    const during = [notice(), notice()]
+    for (const each of during) wakes.notice("apex", "", each)
+    assert.equal(f.entries.length, 2, "the rest of a burst is one digest, not one a report")
+    assert.equal(f.entries[1]!.hold, undefined, "a busy Apex's digest waits for its turn's end, unheld")
+    assert.deepEqual(f.entries[1]!.notices.map((each) => each.id), during.map((each) => each.id))
+    // Its turn ends: that digest goes then.
+    clock += 400
+    f.entries[1]!.sent = clock
+    // That turn already over too, a moment after the last digest went: the next is held until its window after it.
+    ready = "idle"
+    const went = clock
+    clock += 300
     const first = notice()
     wakes.notice("apex", "", first)
-    assert.equal(f.entries.length, 1)
-    assert.deepEqual(f.entries[0]!.hold, { at: clock + WAKE_COALESCE_MS }, "an idle Apex's digest is held for its burst's window")
-    assert.deepEqual(f.delivered, [first.report.id], "heard once it's in the queue")
+    assert.equal(f.entries.length, 3)
+    assert.deepEqual(f.entries[2]!.hold, { at: went + WAKE_COALESCE_MS }, "right after a digest went, the next is held until the window after it")
     const second = notice("blocked")
     wakes.notice("apex", "", second)
-    assert.equal(f.entries.length, 1, "a burst is one digest")
-    assert.deepEqual(f.entries[0]!.notices.map((each) => each.id), [first.id, second.id])
-    assert.match(f.entries[0]!.text, /1 needs a decision:[\s\S]*1 finished:/, "decisions first")
+    assert.equal(f.entries.length, 3, "a burst is one digest")
+    assert.deepEqual(f.entries[2]!.notices.map((each) => each.id), [first.id, second.id])
+    assert.match(f.entries[2]!.text, /1 needs a decision:[\s\S]*1 finished:/, "decisions first")
     wakes.notice("apex", "", second)
-    assert.equal(f.entries[0]!.notices.length, 2, "a notice heard twice is one")
+    assert.equal(f.entries[2]!.notices.length, 2, "a notice heard twice is one")
+    // Every report is in exactly one digest: none lost, none twice.
+    assert.deepEqual(f.entries.flatMap((entry) => entry.notices.map((each) => each.id)).sort(), [alone, ...during, first, second].map((each) => each.id).sort())
+    assert.deepEqual([...f.delivered].sort(), [alone, ...during, first, second].map((each) => each.report.id).sort(), "each heard once")
+    f.entries.splice(0, 2)
     // A notice a digest carries already, sent or not, is its own receipt: a new host's re-notice of it queues nothing.
     f.entries[0]!.sent = clock
     const again = new AgentWakes(f.deps)
@@ -142,10 +174,29 @@ try {
     assert.equal(f.entries[0]!.notices.length, 1, "a withdrawn notice leaves the digest")
     assert.equal(wakes.withdraw("apex", first.id), true)
     assert.equal(f.entries[0]!.canceled, true, "the last one takes it back")
-    // A result the Apex waited for is held only briefly.
+    // A result the Apex waited for waits only its own short window after the last digest went.
+    f.entries[0]!.sent = clock
     wakes.notice("apex", "", notice("done", { settledOnly: true }))
-    assert.deepEqual(f.open()!.hold, { at: clock + RESULT_COALESCE_MS })
+    assert.deepEqual(f.open()!.hold, { at: clock + RESULT_COALESCE_MS }, "a result waits only its own short window")
+    f.open()!.sent = clock + RESULT_COALESCE_MS
+    clock += 2 * RESULT_COALESCE_MS + 100
+    // Past the window after the last digest, an idle Apex hears the next at once again, a result or not.
+    wakes.notice("apex", "", notice("done", { settledOnly: true }))
+    assert.equal(f.open()!.hold, undefined, "a result past its window after the last digest goes at once")
     f.open()!.sent = clock
+    clock += WAKE_COALESCE_MS
+    wakes.notice("apex", "", notice())
+    assert.equal(f.open()!.hold, undefined, "past the window, the next report is a first again")
+    f.open()!.sent = clock
+    // A report a previous host left unheard waits the window even as an idle Apex's first: a receipt this host reads
+    // back as it takes the Apex up (a steer its harness had) may take it back.
+    clock += WAKE_COALESCE_MS
+    const left = notice()
+    wakes.leftOver([left.id])
+    wakes.notice("apex", "", left)
+    assert.deepEqual(f.open()!.hold, { at: clock + WAKE_COALESCE_MS }, "a left-over report waits the window")
+    f.open()!.sent = clock + WAKE_COALESCE_MS
+    clock += 2 * WAKE_COALESCE_MS
     // A busy Apex's digest waits for its turn's end, unheld; a stopped Fin's is paused for its resume.
     ready = "queue"
     wakes.notice("apex", "", notice())
@@ -300,7 +351,7 @@ try {
   }
   // A digest goes on with all it carries; what's left behind is how that attempt went, named once.
   assert.deepEqual(carriedDigest({ notices: [], lines: ["moved"], sentAt: 1, heard: true, resting: true, nextTry: 2 }), { notices: [], lines: ["moved"] })
-  console.log("wakes: a burst is one digest held for its window; joins, results, busy, stopped, steered, carried receipts, and withdrawals and stale ends across every unsent digest")
+  console.log("wakes: an idle Apex's first report goes at once and what follows is one digest; joins, results, busy, stopped, steered, carried receipts, and withdrawals and stale ends across every unsent digest")
 
   // A host killed by SIGKILL at each write between a digest, its claim and its receipt: each report delivered once.
   for (const harness of ["claude", "cursor"] as const) {
@@ -312,14 +363,17 @@ try {
       assert.equal(exit, "SIGKILL", `${harness} ${gap}: the host was killed there`)
       const apex = readFileSync(join(dir, "apex"), "utf8")
       // The second Fin's turn the kill cut goes on here (a crash's continuation), and ends as the second's report.
-      const world = new AgentsWorld({ root: dir, script: (turn) => (turn.conversation === apex ? "ok" : turn.text.includes("fin:first") ? "First finished." : "Second finished.") })
-      await until(`${harness} ${gap}: both reports heard`, () => {
-        const words = world.prompts.filter((prompt) => prompt.conversation === apex && prompt.text.startsWith(FROM_AGENTS)).map((prompt) => readFinReports(prompt.text).text).join("\n")
-        return words.includes("First finished.") && words.includes("Second finished.")
+      const world = new AgentsWorld({ root: dir, script: (turn) => (turn.conversation === apex ? "ok" : turn.text.includes("fin:first") ? "First finished." : turn.text.includes("fin:second") ? "Second finished." : "Third finished.") })
+      // The first report's digest went before the kill, in the host that died: what the Apex heard is read from its
+      // journal, which both hosts wrote, each digest that was sent by the reports its cards name.
+      const heard = () => (world.live.snapshot(apex)?.requests ?? []).filter((request) => request.digest && request.status !== "canceled")
+      await until(`${harness} ${gap}: the three reports heard`, () => {
+        const digests = heard()
+        return digests.every((request) => request.status === "completed") && digests.flatMap((request) => readFinReports(request.text).reports).length >= 3
       }, 15_000)
       await world.settle(800, 20_000, "ignore")
       // Each report by its ID, as the digests' cards name them: every one the Fins wrote, each in one digest.
-      const carried = world.prompts.filter((prompt) => prompt.conversation === apex && prompt.text.startsWith(FROM_AGENTS)).flatMap((prompt) => readFinReports(prompt.text).reports.map((card) => card.report))
+      const carried = heard().flatMap((request) => readFinReports(request.text).reports.map((card) => card.report))
       assert.equal(new Set(carried).size, carried.length, `${harness} ${gap}: no report delivered twice (${carried.join(", ")})`)
       const written = world.store.edges().children(world.store.journalPlacement(apex)!.thread).flatMap((edge) => world.store.reportsOf(edge.child, 0).map((report) => report.id))
       assert.deepEqual([...carried].sort(), [...written].sort(), `${harness} ${gap}: every report delivered`)

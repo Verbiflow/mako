@@ -837,9 +837,18 @@ reads "Ended without a result" in the list, its row, the phone and the digest
 once with its last words (`unfinishedSummary`), and asks nobody, so nothing
 reaches the person's Inbox; its Apex sends it on (the row's Continue) or takes
 the reply as its result. What was to start `after` it waits on (the digest
-says so) and starts once it reports done; a stop drops it. An idle Apex waits
-`WAKE_COALESCE_MS` and takes ONE turn with the digest, its provider waking
-through that wait when it sleeps; a busy one is left to
+says so) and starts once it reports done; a stop drops it. An idle Apex hears the
+first report at once, not after the burst's two seconds, which a lone report
+paid for nothing (`bench:orch-wake-latency`: 2,006 ms to 37). What follows is
+ONE digest: at the end of the Apex's turn on the first, or `WAKE_COALESCE_MS`
+after the last digest went (`RESULT_COALESCE_MS` for a result it waited on)
+when that turn is already over, its provider waking through that wait when it
+sleeps (`AgentWakes.start`). Some wait the window even so: reports a previous
+host left unheard (a receipt read back as the Apex is taken up, a steer its
+harness had, takes them back rather than the Apex hearing them twice), and a
+digest for an Apex moving off a harness that ran out (sent at once, it knocks
+on that limit). A result a `wait` start still waits on waits
+`RESULT_COALESCE_MS`, for that call's answer to take it back. A busy one is left to
 think: only a question or decision it can answer is steered into its running
 turn, at its next step where its harness steers there, and what else its
 Fins report waits for the turn's end as one digest, unless the turn is still
