@@ -1,5 +1,5 @@
 import { finDefaultsStore } from "./fin-defaults"
-import { followWindowShown } from "@/state/window-hidden"
+import { followWindowShown, type WindowShownFollower } from "@/state/window-hidden"
 import { accounts } from "@/state/accounts"
 import { toolStepped } from "@/state/tool-steps"
 import { quietly } from "@/lib/quiet-retry"
@@ -190,6 +190,8 @@ export function currentTurnRunning(): boolean {
  * not a render.
  */
 let connectionEpoch = 0
+/** What tells the host whether this window shows, for the boot that's attached; a new stream is told again through it. */
+let shownFollower: WindowShownFollower | undefined
 /** A built-in tab's notification identity. */
 function tabSubject(id: string, cache: TabCache) {
   const tab = tabsStore.get().tabs.find((entry) => entry.id === id)
@@ -385,6 +387,7 @@ function apply(event: HostEvent) {
     // The stream attached, so the host is there. The boot brings the window up to date; on a busy host that took 18 s,
     // and it isn't an outage. One that fails says so itself.
     hostConnectionStore.set({ kind: "connected" })
+    shownFollower?.renewed()
     void actions.reconnect()
     return
   }
@@ -924,10 +927,12 @@ export const actions = {
       return () => {}
     }
     const unsubscribeEvents = bridge.onEvent(apply)
-    const unfollowShown = followWindowShown(bridge)
+    shownFollower?.stop()
+    const following = shownFollower = followWindowShown(bridge)
     const unsubscribe = () => {
       unsubscribeEvents()
-      unfollowShown()
+      following.stop()
+      if (shownFollower === following) shownFollower = undefined
     }
     const epoch = ++connectionEpoch
     void providers.loadAll()

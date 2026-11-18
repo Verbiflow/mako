@@ -1,6 +1,5 @@
 import assert from "node:assert/strict"
 import { mock, test } from "node:test"
-import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { LiveBatch } from "@mako/host/contracts/live-conversations"
 import { auditId, auditSnapshot } from "./performance-audit-fixtures"
 
@@ -97,9 +96,9 @@ test("a hidden window takes every batch in and draws none; shown, it holds what 
   stops.forEach((stop) => stop())
 
   const tell = mock.fn(async (_shown: boolean) => true)
-  const stop = followWindowShown({ onEvent: () => () => {}, windowShown: tell })
+  const following = followWindowShown({ windowShown: tell })
   setWindowShown(true)
-  stop()
+  following.stop()
   assert.equal(unseen.count(), 1, "shown again, it's drawn once")
   unseen.stop()
   assert.deepEqual(settled(), visible, "and holds exactly what the window that was visible throughout holds")
@@ -111,9 +110,9 @@ test("a conversation that left the screen while hidden keeps what it drew for wh
   applyLiveBatch(text(from + 1))
   const stale = held().projection
   acpStore.set({ activeKey: "elsewhere" })
-  const stop = followWindowShown({ onEvent: () => () => {} })
+  const following = followWindowShown({})
   setWindowShown(true)
-  stop()
+  following.stop()
   assert.equal(held().projection, undefined, "it isn't shown, so it isn't drawn")
   assert.equal(held().behind, stale, "and opens from what it last drew")
 })
@@ -146,12 +145,7 @@ test("no clock ticks in a hidden window, and each reads once as it comes back", 
 test("the window tells its host when it hides and shows, again on a new stream, and an older host changes nothing", async () => {
   setWindowShown(true)
   const told: boolean[] = []
-  let hear: ((event: HostEvent) => void) | undefined
-  const stop = followWindowShown({
-    onEvent: (listener) => {
-      hear = listener
-      return () => {}
-    },
+  const following = followWindowShown({
     windowShown: async (shown) => {
       told.push(shown)
       return true
@@ -160,27 +154,25 @@ test("the window tells its host when it hides and shows, again on a new stream, 
   assert.deepEqual(told, [], "a stream starts out shown: nothing to say")
   setWindowShown(false)
   assert.deepEqual(told, [false])
-  // SAFETY: the follower reads only the event's type, and this is one of the union's own.
-  const reconnected = { type: "host-reconnected" } as HostEvent
-  hear?.(reconnected)
+  following.renewed()
   assert.deepEqual(told, [false, false], "a new stream is told again, since it starts out shown")
   setWindowShown(true)
   assert.deepEqual(told, [false, false, true])
-  hear?.(reconnected)
+  following.renewed()
   assert.deepEqual(told, [false, false, true], "a shown window says nothing to a new stream")
-  stop()
+  following.stop()
 
   // A host from before the call refuses it; a bridge from before it has no such call at all.
-  const refusing = followWindowShown({ onEvent: () => () => {}, windowShown: async () => { throw new Error("Unknown host call mako:window-shown") } })
+  const refusing = followWindowShown({ windowShown: async () => { throw new Error("Unknown host call mako:window-shown") } })
   setWindowShown(false)
   setWindowShown(true)
   await new Promise((done) => setImmediate(done))
-  refusing()
-  const without = followWindowShown({ onEvent: () => () => {} })
+  refusing.stop()
+  const without = followWindowShown({})
   setWindowShown(false)
   assert.equal(windowShown(), false)
   setWindowShown(true)
-  without()
+  without.stop()
 })
 
 test("text said ahead of a conversation that isn't on screen sets nothing", () => {
