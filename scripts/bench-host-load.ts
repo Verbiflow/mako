@@ -408,6 +408,16 @@ if (model) {
   const startedAt = Date.now()
   phases.push({ name: "start", from: spawnedAt, to: startedAt })
   const start = { healthMs: healthAt - spawnedAt, catalogMs: catalogAt - spawnedAt, railMs: railAt - spawnedAt, summariesMs: startedAt - spawnedAt, rail }
+  // The same reads the burst asks, with nothing else going on: what each costs by itself, apart from what it waits behind.
+  const alone = async (channel: string, ...args: unknown[]) => {
+    const at = performance.now()
+    await call(channel, ...args).catch(() => undefined)
+    return Math.round((performance.now() - at) * 10) / 10
+  }
+  const listsAlone: number[] = []
+  const quiet = record ? { railMs: await alone("mako:threads"), listMs: listsAlone } : undefined
+  if (quiet) for (const tree of world.trees) for (let again = 0; again < 2; again += 1) listsAlone.push(await alone("mako:agents-list", { kind: "agent", session: tree.session }, { scope: "all" }))
+  if (quiet) say(`alone: the rail ${quiet.railMs} ms; each Apex's list, twice, ${quiet.listMs.join(", ")} ms`)
   say(`host ready in ${Math.round(performance.now() - began)} ms: /health ${start.healthMs} ms after its spawn, its catalog ${start.catalogMs} ms, a rail of ${rail} ${start.railMs} ms`)
   if (cloud) {
     const Account = z.object({ state: z.object({ status: z.string(), url: z.string().optional() }).loose() }).loose()
@@ -766,7 +776,7 @@ if (model) {
   }
   const report = {
     scale: values.scale, host: hostScript, seconds: Number(values.seconds), fins: fins.length, windows, windowCalls, windowFailures,
-    ...record && { world: worldSaid, start, phases, working: { fins: workingCount, steps: [...workSteps.values()].reduce((sum, steps) => sum + steps, 0) }, ...burst && { burst }, ...recorded && { recorded }, ...sources && { sources }, ...threads && { threads } },
+    ...record && { world: worldSaid, start, ...quiet && { quiet }, phases, working: { fins: workingCount, steps: [...workSteps.values()].reduce((sum, steps) => sum + steps, 0) }, ...burst && { burst }, ...recorded && { recorded }, ...sources && { sources }, ...threads && { threads } },
     measuredWindow: { from: probedFrom, to: probedTo }, outputs,
     ...values["tool-heavy"] && { toolWorkload: { callsPerTurn: TOOL_CALLS, requestedTurns: TOOL_TURNS, steps: Object.fromEntries(toolSteps), completed: [...completedTools] } },
     ...answers, ...model && { sendSamples: sends, sendDetails }, eventLoop: health.eventLoop, peakMb: unread ? null : peakMb, memoryReadings: memory.readings, memoryMisses: memory.misses,

@@ -3026,8 +3026,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /** What `edge`'s Fin asks now, as `walkAsks` reads it of its state and its conversation: the same words, the same walk. */
-  private askKey(edge: ThreadParent): string {
-    const open = openAsk(this.stateOf(edge))
+  private askKey(edge: ThreadParent, state = this.stateOf(edge)): string {
+    const open = openAsk(state)
     if (!open) return ""
     const conversation = open.ask && open.ask.kind !== "report" ? this.askingConversation(edge.child) : undefined
     return JSON.stringify([open, conversation && this.personWaiting(conversation)?.line])
@@ -4704,10 +4704,12 @@ export class Agents implements AgentOperations, ConversationChildren {
    */
   private limitMove(edge: ThreadParent, conversation: string, ended?: LiveRequest, reply?: TurnReply): boolean {
     const moves = this.moves
-    if (!moves?.on() || !edge.asked.access || edge.closedAt !== undefined || (edge.run && !edge.run.ended)) return false
+    if (!moves || !edge.asked.access || edge.closedAt !== undefined || (edge.run && !edge.run.ended)) return false
     const requests = this.deps.live.held(conversation)?.requests ?? []
     const wait = requests.find((request) => waitsOnLimit(request) && (ended ? request.continues?.requestId === ended.id : request.continues === undefined))
-    if (!wait || this.moving.has(wait.id)) return false
+    // Whether Fins move on is the person's setting, read from its file: asked only of a Fin that waits on a limit, not
+    // at every batch of every Fin.
+    if (!wait || this.moving.has(wait.id) || !moves.on()) return false
     const origin = wait.continues ? requests.find((request) => request.id === wait.continues!.requestId) : wait
     if (!origin || origin.actor?.kind === "person") return false
     const harness = this.deps.live.session(conversation)?.harness
@@ -5904,14 +5906,14 @@ export class Agents implements AgentOperations, ConversationChildren {
     return { ...(latest && { latest }), ...(kept && { answered: { by: kept.by, answer: kept.answer, ask: kept.ask, request: kept.request, at: kept.at, ...(kept.op === kept.request && { routine: true as const }), ...(kept.delivered && { delivered: true as const }) } }) }
   }
 
-  private entryOf(edge: ThreadParent): NativeAgent {
+  private entryOf(edge: ThreadParent, read?: { reading: ChildThread; journal: ChildJournal }): NativeAgent {
     this.sync()
     const held = this.entries.get(edge.child)
     // A notice past its reset leaves what's held whatever's next to say so: the Inbox and a phone read it from here.
     if (held && (!held.child?.limitNotice || sameLimitNotice(held.child.limitNotice, this.noticeOn(edge)))) return held
-    const read = childEntry(edge, this.childReading(edge), this.journalOf(edge.child))
+    const made = childEntry(edge, read?.reading ?? this.childReading(edge), read?.journal ?? this.journalOf(edge.child))
     const notice = this.noticeOn(edge)
-    const entry = notice && read.child ? { ...read, child: { ...read.child, limitNotice: notice } } : read
+    const entry = notice && made.child ? { ...made, child: { ...made.child, limitNotice: notice } } : made
     this.entries.set(edge.child, entry)
     return entry
   }
@@ -5920,8 +5922,10 @@ export class Agents implements AgentOperations, ConversationChildren {
   private childMoved(edge: ThreadParent, progressOnly: boolean): void {
     if (this.stopped) return
     this.sync()
-    // Every batch of a working Fin comes here: only one that changes what it asks drops its Apexes' kept walks.
-    const asks = this.askKey(edge)
+    // Every batch of a working Fin comes here, so the Fin is read once for what it asks and for its entry. Only a batch
+    // that changes what it asks drops its Apexes' kept walks.
+    const moved = { reading: this.childReading(edge), journal: this.journalOf(edge.child) }
+    const asks = this.askKey(edge, childState(edge, moved.reading, moved.journal))
     if (this.askKeys.get(edge.child) !== asks) {
       this.askKeys.set(edge.child, asks)
       this.asksMoved(edge)
@@ -5949,7 +5953,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (edge.remote && holds !== held && this.standingSaid.get(edge.child) !== holds) this.restate(edge)
     const before = this.entries.get(edge.child)
     this.entries.delete(edge.child)
-    const entry = this.entryOf(edge)
+    const entry = this.entryOf(edge, moved)
     if (before && sameChildEntry(before, entry)) {
       this.entries.set(edge.child, before)
       if (released) void this.drain()

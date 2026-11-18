@@ -5,7 +5,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AgentsReportResult, AgentsStarted } from "@mako/host/contracts/agent-tools"
 import type { AgentRefused } from "@mako/host/contracts/agents"
-import { sharedFields } from "@mako/host/contracts/live-conversations"
+import { applyRosterPatch, rosteredLiveBatch, sharedFields, type CompactLiveBatch } from "@mako/host/contracts/live-conversations"
+import { encodeRuntimeEvent, payloadFor } from "@mako/host/contracts/runtime-value"
+import { COMPACT_LIVE_FORM, WINDOW_LIVE_FORM } from "@mako/protocol/live-form"
 import type { NativeAgent, NativeAgentRoster } from "@mako/host/contracts/native-agents"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { WorkingSet, workingThreads, type WorkingSnapshot } from "@mako/host/conversations/cloud-handoffs"
@@ -140,6 +142,22 @@ try {
     for (let round = 0; round < 200; round += 1) sharedFields({ ...base, nativeAgents: held }, { ...base, nativeAgents: moved })
     const each = (performance.now() - at) / 200
     assert.ok(each < 4, `comparing a roster of 226 with one entry moved took ${each.toFixed(2)} ms; written whole it took 8`)
+
+    // Its batch for the windows says the one entry, and makes the roster the host holds.
+    const batch: CompactLiveBatch = { id: randomUUID(), revision: 2, form: COMPACT_LIVE_FORM, updates: [], nativeAgents: moved }
+    const patch = rosteredLiveBatch(batch, held)?.rosterPatch
+    assert.deepEqual(patch?.agents?.map((agent) => agent.title), ["Fin 7, renamed"])
+    assert.deepEqual(patch && applyRosterPatch(held, patch), moved)
+    assert.equal(rosteredLiveBatch({ ...batch, nativeAgents: { agents: [...agents.slice(1), agents[0]!], limited: false } }, held)?.rosterPatch, undefined, "entries that changed places are no patch of changed entries")
+
+    // A batch's forms are written as a reader asks for each: a window on the newest form has the others unwritten.
+    const event = encodeRuntimeEvent({ type: "live-batch", batch: { id: batch.id, revision: 2, updates: [] }, compact: batch, rostered: { ...batch, nativeAgents: undefined, rosterPatch: patch } })
+    const unwritten = (form: "payload" | "compact" | "rostered") => Object.getOwnPropertyDescriptor(event, form)?.get !== undefined
+    assert.ok(payloadFor(event, WINDOW_LIVE_FORM)?.includes("rosterPatch"))
+    assert.deepEqual([unwritten("payload"), unwritten("compact"), unwritten("rostered")], [true, true, false], "only the form read was written")
+    assert.equal(payloadFor(event, COMPACT_LIVE_FORM), JSON.stringify({ type: "live-batch", batch }))
+    assert.equal(event.payload, JSON.stringify({ type: "live-batch", batch: { id: batch.id, revision: 2, updates: [] } }))
+    assert.deepEqual(Object.keys({ ...event }).sort(), ["compact", "conversation", "payload", "rostered", "type"], "a copy of the event holds every form")
   }
 
   // The person's asks of a tree (`Agents.personAsk`): kept through what changes none of them, made again at once by

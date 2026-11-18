@@ -405,7 +405,8 @@ export async function startWebHost(
     const lineOf = (payload: string) => {
       let held = lines.get(payload)
       if (!held) {
-        const line = runtimeEventLine(channel, { ...event, payload })
+        // Named field by field: a copy of the event would write out every form it has (`encodeRuntimeEvent`).
+        const line = runtimeEventLine(channel, { type: event.type, conversation: event.conversation, payload })
         lines.set(payload, (held = { line, bytes: Buffer.byteLength(line) }))
       }
       return held
