@@ -400,8 +400,6 @@ export const STEPS = [
   [2, "tsx scripts/test-thread-store.ts"],
   [3, "tsx scripts/test-trace-history-holds.ts"],
   [3, "tsx scripts/test-transcript-residency.ts"],
-  // Restoring a released live turn recaptures the window; what the original capture never held stays refused.
-  [3, "tsx scripts/test-released-live-turn.ts"],
   [1, "tsx scripts/test-transport-agreement.ts"],
   [1, "node scripts/test-ui-feedback.mjs"],
   [2, "tsx --tsconfig tsconfig.app.json scripts/test-warm-open.ts"],

@@ -46,7 +46,6 @@ import { onDemandCatalogPaths } from "./catalog-identity.js"
 import { makoRecords } from "./record-streams.js"
 import { makoViews } from "./view-cache.js"
 import { WorkUnderWay } from "./loop-watch.js"
-import { backfillPasses } from "./backfill-passes.js"
 import {
   claimDaemon,
   DaemonAlreadyServing,
@@ -157,19 +156,51 @@ async function backfillOnce(dir: string): Promise<void> {
   }
 }
 
-/** A backfill pass's process, run as this script with `--backfill`, at the lowest CPU priority. */
-function spawnBackfillPass(work: WorkUnderWay, script: string): ReturnType<typeof spawn> {
-  const pass = work.run("start a backfill pass", () => spawn(process.execPath, [`--max-old-space-size=${BACKFILL_HEAP_MB}`, script, "--backfill"], { stdio: "ignore", env: process.env }))
-  say("info", "backfill pass started", { pid: pass.pid, heapMb: BACKFILL_HEAP_MB })
-  // Below the agents and the person: Mako's own `belowAgents` priority.
-  if (pass.pid) {
-    try {
-      setPriority(pass.pid, constants.priority.PRIORITY_LOW)
-    } catch {
-      // It exited already, or this platform won't lower it; the pass is the same either way.
+/**
+ * Starts a backfill pass's process now and every ten minutes after the last ended, never two at once; the returned
+ * function stops starting them and ends the one running.
+ */
+function scheduleBackfill(work: WorkUnderWay): () => void {
+  let child: ReturnType<typeof spawn> | undefined
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let stopped = false
+  const run = () => {
+    if (stopped) return
+    const script = process.argv[1]
+    if (!script) return
+    const pass = work.run("start a backfill pass", () => spawn(process.execPath, [`--max-old-space-size=${BACKFILL_HEAP_MB}`, script, "--backfill"], { stdio: "ignore", env: process.env }))
+    child = pass
+    const started = Date.now()
+    say("info", "backfill pass started", { pid: pass.pid, heapMb: BACKFILL_HEAP_MB })
+    // Below the agents and the person: Mako's own `belowAgents` priority.
+    if (child.pid) {
+      try {
+        setPriority(child.pid, constants.priority.PRIORITY_LOW)
+      } catch {
+        // It exited already, or this platform won't lower it; the pass is the same either way.
+      }
     }
+    const ended = () => {
+      child = undefined
+      if (stopped) return
+      timer = setTimeout(run, BACKFILL_EVERY_MS)
+      timer.unref?.()
+    }
+    pass.once("exit", (code, signal) => {
+      say(code === 0 ? "info" : "warn", "backfill pass ended", { pid: pass.pid, code, signal, ms: Date.now() - started })
+      ended()
+    })
+    pass.once("error", (error) => {
+      console.log(`mako-syncd: the backfill couldn't start: ${error.message}`)
+      ended()
+    })
   }
-  return pass
+  run()
+  return () => {
+    stopped = true
+    if (timer) clearTimeout(timer)
+    child?.kill("SIGTERM")
+  }
 }
 
 async function main(): Promise<void> {
@@ -228,21 +259,18 @@ async function main(): Promise<void> {
     runtimeReadings: makoRuntimeReadings(),
     // The build that launched it, so a store format it sets names that build (`storeWriter`).
     ...process.env.MAKO_STORE_WRITER && { writer: process.env.MAKO_STORE_WRITER },
-    // No backfill in this process: a pass's own process runs it (`backfillPasses`).
+    // No backfill in this process: a pass's own process runs it (`scheduleBackfill`).
   })
 
   const started = performance.now()
-  // Made before discovery, so a stop while the scan is still out holds when the scan, awaited by the stopping
-  // catalog, resolves after it: no pass starts then.
-  const script = process.argv[1]
-  const passes = script ? backfillPasses({ spawnPass: () => spawnBackfillPass(work, script), everyMs: BACKFILL_EVERY_MS, say }) : undefined
+  let stopBackfill: (() => void) | undefined
   let server: Server
   try {
     await catalog.prepare()
     const discovery = catalog.scan().then((refs) => {
       catalog.startWatching()
       console.log(`mako-syncd: discovered ${refs.length} sessions in ${Math.round(performance.now() - started)}ms`)
-      passes?.start()
+      stopBackfill = scheduleBackfill(work)
       return refs
     })
     // Observe failures while socket ownership and identity are being resolved.
@@ -258,7 +286,7 @@ async function main(): Promise<void> {
       },
     })
     // A daemon that retires, or whose discovery failed, ends the pass it started.
-    server.once("close", () => passes?.stop())
+    server.once("close", () => stopBackfill?.())
     void discovery.catch((error) => {
       exitReason = "discovery failed"
       console.error("mako-syncd: discovery failed", error)
@@ -272,8 +300,6 @@ async function main(): Promise<void> {
     exitReason = error instanceof DaemonAlreadyServing ? "another reader is serving" : "it could not serve"
     console.log(String(error instanceof Error ? error.message : error))
     if (onDemand && !(error instanceof DaemonAlreadyServing)) process.exitCode = 1
-    // The scan still out resolves after this: it starts no pass in a process that isn't serving.
-    passes?.stop()
     catalog.stop()
     await claim.release()
     return
@@ -299,7 +325,7 @@ async function main(): Promise<void> {
     if (collectionTimer) clearTimeout(collectionTimer)
     clearInterval(collectionFallback)
     stopCollectionEvents()
-    passes?.stop()
+    stopBackfill?.()
     server.close()
     await catalog.stop()
     process.exit(0)
