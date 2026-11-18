@@ -2087,6 +2087,16 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
   content-visibility: visible;
 }
 
+/*
+ * A windowed row is laid out for real, since its measured size is what places every row after it. One kept mounted
+ * out of view that has been measured (`data-sized`, conversation-timeline.tsx) is skipped until it's read, standing at
+ * that size: the rows around the pane then cost no layout or paint.
+ */
+[data-virtual-transcript] > [data-sized] > .contain-turn {
+  content-visibility: auto;
+  contain-intrinsic-size: auto var(--row-size);
+}
+
 .scroll-fade-top {
   position: absolute;
   inset: 0 0 auto 0;

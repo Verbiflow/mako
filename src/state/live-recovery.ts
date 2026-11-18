@@ -351,7 +351,7 @@ function takeSnapshot(snapshot: LiveSnapshot, replyBindingId?: string | null, co
     history: snapshot.history,
     copy: snapshot.copy,
     hydrated: true,
-    projection: projectLive(snapshot, existing?.projection, pendingPrompts),
+    projection: projectLive(snapshot, existing?.projection ?? existing?.behind, pendingPrompts),
     permission: snapshot.permissions[0] ?? null,
     queued: snapshot.requests.filter(
       (request) => request.status === "queued" || request.status === "held"
@@ -544,6 +544,7 @@ export function unloadLive(id: string): boolean {
   pending.delete(id)
   mergedSince.delete(id)
   stuck.delete(id)
+  placesRead.delete(id)
   replaceAcpConversation(id, {
     ...current,
     hydrated: false,
@@ -552,6 +553,7 @@ export function unloadLive(id: string): boolean {
     baseCoveredBlocks: undefined,
     history: undefined,
     projection: undefined,
+    behind: undefined,
     releasedTurns: undefined,
   })
   return true
@@ -713,6 +715,28 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
           !(batch.control ?? current.control)?.transfers.some((transfer) => transfer.input.id === prompt.id)
       )
     : current.pendingPrompts
+  // Nothing a projection reads moved: it stands as it is, shown or not.
+  const unchanged =
+    requests === current.requests &&
+    pendingPrompts === current.pendingPrompts &&
+    blocks === current.blocks &&
+    base === current.base &&
+    baseCoveredBlocks === current.baseCoveredBlocks &&
+    session.status === current.session.status &&
+    session.harness === current.session.harness
+  // One that isn't shown isn't drawn at every batch: what it last drew waits (`behind`) for when it's opened.
+  const drawn: Pick<LiveAcpConversation, "projection" | "behind"> = unchanged
+    ? { projection: current.projection, behind: current.behind }
+    : acpStore.get().activeKey === batch.id
+      ? {
+          projection: projectLive(
+            { blocks, base, baseCoveredBlocks, history, session, requests, releasedTurns: current.releasedTurns },
+            current.projection ?? current.behind,
+            pendingPrompts
+          ),
+          behind: undefined,
+        }
+      : { projection: undefined, behind: current.projection ?? current.behind }
   replaceAcpConversation(batch.id, {
     ...current,
     control: batch.control ?? current.control,
@@ -756,22 +780,7 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
           (request) => request.status === "queued" || request.status === "held"
         )
       : current.queued,
-    projection:
-      requests === current.requests &&
-      pendingPrompts === current.pendingPrompts &&
-      blocks === current.blocks &&
-      base === current.base &&
-      baseCoveredBlocks === current.baseCoveredBlocks &&
-      session.status === current.session.status &&
-      session.harness === current.session.harness
-        ? current.projection
-        : acpStore.get().activeKey === batch.id
-          ? projectLive(
-              { blocks, base, baseCoveredBlocks, history, session, requests, releasedTurns: current.releasedTurns },
-              current.projection,
-              pendingPrompts
-            )
-          : undefined,
+    ...drawn,
     updatedAt: Date.now(),
     failureSeen: carriedFailureSeen(current, session),
   })
@@ -1025,18 +1034,44 @@ export async function withLiveView<T>(id: string, attempt: () => Promise<T>): Pr
   }
 }
 
+/**
+ * The place a pane was last reading `id`, where it lies before the window held and isn't among its turns: read back to
+ * in one read, once per window, so a place the host can't reach back to pages on as any earlier history does.
+ */
+const placesRead = new Map<string, string>()
+
+function placeToRead(id: string, held: LiveAcpConversation): LiveHistoryCursor | undefined {
+  const start = windowStart(held)
+  if (!start) return undefined
+  const turns = new Set(held.projection?.exchanges.map((exchange) => exchange.id))
+  const place = transcriptReaders.rememberedWindow(liveReadingSource(id), (turn) => turns.has(turn))
+  if (!place || !reachesEarlier(place, start)) return undefined
+  const asked = JSON.stringify([place, start])
+  if (placesRead.get(id) === asked) return undefined
+  placesRead.set(id, asked)
+  return place
+}
+
 async function readEarlierLive(id: string): Promise<void> {
   const held = acpStore.get().conversations[id]
   if (held?.kind === "live" && held.history) {
     const before = held.history.before
     if (!before) return
+    // Opened at its newest page with a pane's place further back (`readLiveSnapshot`): one read reaches it, where a
+    // page at a time would draw the whole transcript again for each.
+    const place = placeToRead(id, held)
+    if (place) {
+      await readLive(id, () => readLiveSnapshot(id, false, place), (snapshot) => applyLiveSnapshot(snapshot, undefined, place))
+      return
+    }
     const page = await readLiveValue<LiveHistoryPage>(id, { kind: "earlier", token: held.history.token, before })
     const current = acpStore.get().conversations[id]
     if (current?.kind !== "live" || current.history?.token !== held.history.token ||
         current.history.before?.blocks !== before.blocks || current.history.before?.base !== before.base) return
     const next = prependLiveHistory({ ...current, base: current.base ?? null }, page)
+    // Against what it drew: the turns below the page are the objects they were, and only the page's are drawn.
     receiveLive(id, { from: "answer" }, () =>
-      replaceAcpConversation(id, { ...next, projection: projectLive({ ...next, base: next.base ?? null }, undefined, next.pendingPrompts) }))
+      replaceAcpConversation(id, { ...next, projection: projectLive({ ...next, base: next.base ?? null }, current.projection, next.pendingPrompts) }))
     return
   }
   await readLive(id, () => getMako().liveEarlier(id))
