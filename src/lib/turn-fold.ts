@@ -1,6 +1,8 @@
 import type { ChatMessage } from "@/lib/types"
 import type { PlacedSection } from "@/lib/exchanges"
-import { eventWords, isBoundary } from "@/lib/transcript-events"
+import { stillDrawn, turnRows } from "@/lib/turn-rows"
+
+export { stillDrawn }
 
 /**
  * What a settled turn folds away: everything it did on the way to its
@@ -23,10 +25,8 @@ export interface TurnFold {
   continued: boolean
   /** When the stretch began: the prompt, or the steer that continued it. */
   from?: number
-  /** When its last message landed, the answer's included. */
-  to?: number
   /**
-   * How long it worked: `from` to `to`, less the time a cut-short turn
+   * How long it worked: from `from` to its last message, less the time a cut-short turn
    * waited before it went on (a continuation inside the stretch).
    */
   worked?: number
@@ -35,91 +35,14 @@ export interface TurnFold {
 }
 
 /**
- * A note a fold never hides: one that wants attention (a failure, a
- * warning), marks a boundary in the conversation (a compaction, a model
- * change, a stop), or says what the turn was answering (background work
- * that settled). Folding those would hide why the answer reads as it does.
- */
-export function stillDrawn(section: PlacedSection): boolean {
-  // What the agent showed the person, made for them, or where it sent their message is part of the answer wherever it stands.
-  // What the person is told of a turn that went on past a dropped connection stays said, so its next steps read right.
-  if (section.kind === "shown" || section.kind === "made" || section.kind === "routed" || section.kind === "resumed") return true
-  // A step the loss of a machine undid changes the person's files; where the turn picked it up again stays said.
-  if (section.kind === "continued") return section.continued.reason === "machine-lost"
-  if (section.kind !== "note") return false
-  const note = section.message.note
-  if (!note) return false
-  if (note.cause) return true
-  const words = eventWords(note)
-  return Boolean(words.tone) || isBoundary(words)
-}
-
-function messagesOf(section: PlacedSection): ChatMessage[] {
-  return section.kind === "work" ? section.messages : section.kind === "shown" || section.kind === "made" || section.kind === "routed" || section.kind === "continued" || section.kind === "resumed" ? [] : [section.message]
-}
-
-/** The time `sections` worked from `from`: each part's start to its last message, a continuation starting the next part. */
-function workedFor(sections: readonly PlacedSection[], from: number | undefined): number | undefined {
-  let worked: number | undefined
-  let start = from
-  let last: number | undefined
-  const settle = () => {
-    if (start !== undefined && last !== undefined && last >= start) worked = (worked ?? 0) + last - start
-  }
-  for (const section of sections) {
-    if (section.kind === "continued") {
-      settle()
-      start = section.message.timestamp
-      last = undefined
-      continue
-    }
-    for (const message of messagesOf(section)) if (message.timestamp !== undefined) last = message.timestamp
-  }
-  settle()
-  return worked
-}
-
-/** A section that answers: the agent's words, what it showed the person or made for them, or where it sent their message. */
-const answers = (section: PlacedSection) => section.kind === "prose" || section.kind === "shown" || section.kind === "made" || section.kind === "routed"
-
-/**
- * The folds of a settled turn's sections, in order. `began` is when the
- * turn began (its prompt). A stretch folds when it worked on the way to its
- * answer: a stretch of words alone has nothing to fold. Its answer is the
- * prose it ends on; a stretch that ends on work has no answer and folds
- * whole.
+ * The folds of a settled turn's sections, in order, by where each stands among them: `turnRows`' folds for a turn
+ * nothing but a prompt opened. `began` is when the turn began.
  */
 export function turnFolds(sections: readonly PlacedSection[], began?: number): TurnFold[] {
-  const folds: TurnFold[] = []
-  let start = 0
-  let from = began
-  let continued = false
-  let part = 0
-  const close = (end: number) => {
-    let answer = end
-    while (answer > start && sections[answer - 1]!.kind === "note") answer--
-    if (answer > start && answers(sections[answer - 1]!)) {
-      while (answer > start && answers(sections[answer - 1]!)) answer--
-    } else {
-      answer = end
-    }
-    const hidden = sections.slice(start, answer)
-    if (hidden.some((section) => section.kind === "work")) {
-      const kept: number[] = []
-      for (let index = start; index < answer; index++) if (stillDrawn(sections[index]!)) kept.push(index)
-      const last = sections.slice(start, end).flatMap(messagesOf).findLast((message) => message.timestamp !== undefined)
-      const worked = workedFor(sections.slice(start, end), from)
-      folds.push({ part, start, end: answer, kept, continued, from, to: last?.timestamp, ...worked !== undefined && { worked }, messages: hidden.flatMap(messagesOf) })
-    }
-  }
-  for (const [index, section] of sections.entries()) {
-    if (section.kind !== "steer") continue
-    close(index)
-    part += 1
-    start = index + 1
-    from = section.message.timestamp
-    continued = true
-  }
-  close(sections.length)
-  return folds
+  return turnRows({ sections, began }).flatMap((row) => {
+    if (row.kind !== "fold") return []
+    const at = row.members.flatMap((entry) => (entry.kind === "section" ? [entry.index] : []))
+    const kept = row.kept.flatMap((entry) => (entry.kind === "section" ? [entry.index] : []))
+    return [{ part: row.part, start: at[0]!, end: at.at(-1)! + 1, kept, continued: row.continued, from: row.from, ...(row.worked !== undefined && { worked: row.worked }), messages: row.messages }]
+  })
 }

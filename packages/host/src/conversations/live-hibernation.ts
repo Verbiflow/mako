@@ -124,7 +124,7 @@ export class LiveHibernation {
   /**
    * The user started writing to this conversation. A hibernated one wakes now,
    * so its two-second restart overlaps the typing instead of following Send;
-   * a warm one restarts its idle window so it cannot hibernate under the draft.
+   * a warm one restarts its idle window so it cannot hibernate under the draft, and has its account check begun.
    * `ahead`: Mako woke it for a message of its own on its way (`LiveConversations.expect`), which nobody watches, so a
    * failure of that wake with nothing yet queued leaves it asleep for the message's own wake to meet.
    */
@@ -140,6 +140,11 @@ export class LiveHibernation {
     if (!this.canHibernate(resident)) return "unchanged"
     this.clearHibernationTimer(resident)
     this.scheduleHibernation(resident, false)
+    // A message is coming to a warm provider: what its admission reads of the account (on Claude a Keychain read, a
+    // process each time) is begun now, so a send inside the time such a read stands finds it done. It decides
+    // nothing: the message's own admission reads again as it goes, and refuses there.
+    const binding = activeBinding(resident)
+    if (binding) resident.driver?.admitAhead?.(binding.id)
     return "kept-warm"
   }
 

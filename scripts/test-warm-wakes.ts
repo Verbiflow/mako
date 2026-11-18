@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { HostJobs, JobDemand } from "@mako/host/base/host-jobs"
-import { DIGEST_WAITS, WAKE_COALESCE_MS } from "@mako/host/contracts/children"
+import { DIGEST_WAITS, WAKE_COALESCE_MS, WAKES_PER_MINUTE } from "@mako/host/contracts/children"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import type { ThreadEnvironment } from "@mako/host/contracts/thread-environments"
@@ -17,7 +17,7 @@ import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { swapFreeOf, type MacReading } from "@mako/host/conversations/mac-capacity"
 import { WARM_CEILING, WARM_FLOOR, WARM_MOST_BYTES, WARM_RELIEF_MS, warmLimit, type WarmReading } from "@mako/host/conversations/warm-limit"
 import { WARM_FIRST_LOOK_MS, WARM_LOOK_MS, WARM_WATCH_JOB, watchWarmProviders } from "@mako/host/conversations/warm-watch"
-import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import type { AdmittedLiveDriver, ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 import { AgentsWorld, type Script } from "./lib/agents-world.ts"
 
@@ -438,6 +438,38 @@ async function wakeReusesLaunchValues(): Promise<void> {
   }
 }
 
+// ── A draft begun in a warm conversation has its account check begun, so a send soon after finds the read done.
+async function prewarmBeginsTheAccountCheck(): Promise<void> {
+  const folder = mkdtempSync(join(root, "ahead-"))
+  const ahead: string[] = []
+  let owner: LiveConversations
+  const driver: AdmittedLiveDriver = { ...restingDriver(() => owner, folder, [], []), admitAhead: (id) => { ahead.push(id) } }
+  owner = new LiveConversations({
+    appPath: folder, root: join(folder, "journals"), driver: () => driver, history: async () => null, emit: () => {},
+    providerIdleMs: 60 * 60_000, providerWarmLimit: 8,
+    resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
+  })
+  const id = randomUUID()
+  try {
+    await seeded(owner, folder, id)
+    const sends = ahead.length
+    assert.equal(owner.prewarm(id), "kept-warm")
+    assert.deepEqual(ahead.slice(sends), [id], "typing into a warm conversation begins its account check, once a signal")
+    assert.equal(owner.expect(id), "kept-warm")
+    assert.equal(ahead.length, sends + 2, "as does an agent's message on its way to one")
+    assert.equal(owner.snapshot(id)?.requests.length, 1, "and neither sends anything")
+    assert.equal(owner.hibernateIfIdle(id), true)
+    await until("it to hibernate", () => owner.snapshot(id)?.session.connection === "hibernated")
+    const asleep = ahead.length
+    assert.equal(owner.prewarm(id), "waking")
+    await until("it to wake", () => owner.snapshot(id)?.session.connection === "connected")
+    assert.equal(ahead.length, asleep, "a sleeping one is woken instead: its launch reads the account itself")
+    console.log("ahead: a prewarm of a warm conversation begins its account check; a wake leaves that to the launch")
+  } finally {
+    await owner.stop()
+  }
+}
+
 // ── What `expect` leaves alone: a digest that's paused or held past its window, and one it knows nothing of.
 async function expectRefusesWhatWontGo(): Promise<void> {
   const folder = mkdtempSync(join(root, "expect-"))
@@ -489,20 +521,44 @@ async function expectRefusesWhatWontGo(): Promise<void> {
     await until("it to wake", () => owner.snapshot(windowed)?.session.connection === "connected")
     assert.equal(owner.snapshot(windowed)?.requests.find((asked) => asked.id === fourth)?.status, "held", "and sends nothing before its time")
     assert.equal(owner.expect(windowed, fourth), "kept-warm", "once warm, the same word only restarts its idle window")
-    console.log("expect: wakes for a digest in its window; none for one paused, held for later, scheduled, archived or unknown")
+
+    // The minute's budget: an Apex that took six digests in the last minute holds the seventh past its window, so
+    // nothing wakes for it early. One that took five still wakes.
+    const took = async (count: number) => {
+      const id = randomUUID()
+      await seeded(owner, folder, id)
+      for (let sent = 0; sent < count; sent++) {
+        const request = randomUUID()
+        owner.submit(id, request, `news ${sent}`, [], undefined, undefined, undefined, undefined, { digest })
+        await until("a digest's turn", () => owner.snapshot(id)?.requests.some((asked) => asked.id === request && asked.status === "completed") === true)
+      }
+      assert.equal(owner.snapshot(id)!.requests.filter((asked) => asked.digest?.sentAt !== undefined).length, count, "each digest is stamped as it's sent")
+      await until("it to come to rest", () => owner.hibernateIfIdle(id) || owner.snapshot(id)?.session.connection === "hibernated")
+      await until("it to hibernate", () => owner.snapshot(id)?.session.connection === "hibernated")
+      const next = randomUUID()
+      owner.submit(id, next, "more news", [], undefined, undefined, undefined, undefined, { digest, wake: { at: Date.now() + WAKE_COALESCE_MS, after: DIGEST_WAITS } })
+      return owner.expect(id, next)
+    }
+    const resumed = () => starts.filter((start) => start.resume).length
+    const beforeBudget = resumed()
+    assert.equal(await took(WAKES_PER_MINUTE), "unchanged", "over the minute's budget, a digest wakes nothing early")
+    await pause(50)
+    assert.equal(resumed(), beforeBudget, "and no process started for it")
+    assert.equal(await took(WAKES_PER_MINUTE - 1), "waking", "one under the budget wakes its conversation")
+    console.log("expect: wakes for a digest in its window; none for one paused, held for later, scheduled, archived, unknown or over the minute's budget")
   } finally {
     await owner.stop()
   }
 }
 
 /** A world whose Apex has one Fin at rest, and a record of each `expect` and `submit` the engine makes, in order. */
-async function family() {
+async function family(options: { providerIdleMs?: number } = {}) {
   const gate = { open: () => {} }
   const script: Script = async (turn) => {
     if (turn.text.includes("Take your time")) await new Promise<void>((resolve) => { gate.open = resolve })
     return turn.text.includes("You're fin:") ? "Labels finished." : "ok"
   }
-  const w = new AgentsWorld({ root: mkdtempSync(join(root, "world-")), script })
+  const w = new AgentsWorld({ root: mkdtempSync(join(root, "world-")), script, ...(options.providerIdleMs !== undefined && { providerIdleMs: options.providerIdleMs }) })
   const apex = await w.apex("claude", "full")
   const started = await w.agents.start(apex.caller, { brief: { objective: "Label everything" }, name: "labels", harness: "claude", cwd: w.root, clientKey: "labels" })
   assert.ok(!("refused" in started), JSON.stringify(started))
@@ -540,8 +596,14 @@ async function sendWakesASleepingFin(): Promise<void> {
   const mine = f.calls.filter((call) => call.conversation === f.fin)
   assert.deepEqual(mine.map((call) => call.what), ["expect", "submit"], "the wake starts before the message is admitted")
   assert.equal(mine[0]!.said, "waking")
+  // The wake is the message's own way in, never work ahead of it: the send answers as a turn starting, as it did
+  // before any early wake, and the message is the first thing the woken Fin hears.
+  assert.equal(sent.delivery, "turn", `a message to a Fin at rest starts its turn: ${sent.hears}`)
+  assert.doesNotMatch(sent.hears, /current turn ends|hasn't started/)
   await until("the Fin to take it", () => w.prompts.some((prompt) => prompt.conversation === f.fin && prompt.text.includes("One more label")))
-  assert.equal(f.resumes(f.fin), 1, "the early wake and the message share one resume")
+  assert.equal(f.resumes(f.fin), 1, "the early wake and the message share one launch")
+  const since = w.prompts.filter((prompt) => prompt.conversation === f.fin).slice(1)
+  assert.ok(since[0]!.text.includes("One more label"), "and the message goes first to the woken Fin")
   await w.settle()
 
   // Archived, the Fin's message is refused: nothing wakes for it.
@@ -568,6 +630,37 @@ async function sendWakesASleepingFin(): Promise<void> {
   await until("the Fin to take what waited", () => w.prompts.some((prompt) => prompt.conversation === f.fin && prompt.text.includes("Then this")))
   await w.settle()
   console.log("send: a sleeping Fin wakes before its message is admitted, on one resume; an archived or working one isn't woken")
+  await w.close()
+}
+
+// ── A Stop that crosses an `agents_send` after its early wake began: the message is held as the Stop decides, the wake
+// sends nothing, and the provider it started retires on its idle window.
+async function stopCrossesAnEarlyWake(): Promise<void> {
+  const idleMs = 400
+  const f = await family({ providerIdleMs: idleMs })
+  const { w } = f
+  await f.sleep(f.fin)
+  f.calls.length = 0
+  const before = w.prompts.length
+  // The send runs to its first wait, which is past the early wake; the Stop then reaches it before it is admitted.
+  const sending = w.agents.send(f.apex.caller, { to: "labels", text: "One last label", clientKey: randomUUID(), reply: "none" })
+  const woke = f.calls.filter((call) => call.conversation === f.fin)
+  assert.deepEqual(woke.map((call) => [call.what, call.said]), [["expect", "waking"]], "the early wake began before the Stop arrived")
+  const stopping = w.agents.stop(f.apex.caller, { child: "labels", reason: "pausing" })
+  const [sent, stopped] = await Promise.all([sending, stopping])
+  assert.ok(!("refused" in stopped), JSON.stringify(stopped))
+  assert.ok(!("refused" in sent), JSON.stringify(sent))
+  assert.equal(sent.delivery, "queued")
+  assert.match(sent.hears, /was stopped as this reached it: it waits, held/)
+  const held = w.live.snapshot(f.fin)!.requests.find((request) => request.text.includes("One last label"))!
+  assert.deepEqual([held.status, held.pause], ["held", "stop"], "the message waits under the Stop, as any message does")
+  await until("the early wake to end", () => f.connection(f.fin) === "connected" || f.resumes(f.fin) === 1 && f.connection(f.fin) === "hibernated")
+  assert.equal(f.resumes(f.fin), 1, "the wake that had begun ran once")
+  await until("the woken provider to retire on its idle window", () => f.connection(f.fin) === "hibernated", idleMs * 20)
+  assert.equal(w.prompts.slice(before).filter((prompt) => prompt.conversation === f.fin).length, 0, "nothing was sent to the stopped Fin: the wake sends nothing and the Stop holds the message")
+  assert.equal(w.live.snapshot(f.fin)!.requests.find((request) => request.id === held.id)?.status, "held")
+  assert.equal(f.resumes(f.fin), 1, "and nothing woke it again")
+  console.log("stop: a Stop crossing a send after its early wake holds the message; the woken provider sent nothing and retired on its idle window")
   await w.close()
 }
 
@@ -607,8 +700,10 @@ try {
   await watchReadsWhilePastFloor()
   await pressureShrinksThePool()
   await wakeReusesLaunchValues()
+  await prewarmBeginsTheAccountCheck()
   await expectRefusesWhatWontGo()
   await sendWakesASleepingFin()
+  await stopCrossesAnEarlyWake()
   await digestWakesASleepingApex()
   console.log("warm wakes: ok")
 } finally {

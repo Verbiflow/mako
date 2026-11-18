@@ -7329,8 +7329,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     // sleeps wakes while its words are gathered (the checkout's account, attached Threads). A run that must be taken
     // over first, a Stop that crossed, a Fin at work, a hold ahead of the message and a folder that's gone (its
     // worktree is made again below, and the message says how that went) wake nothing.
-    if (before && !crossing.stopped && !(stopped.run && !stopped.run.ended) && !this.deps.live.atWork(before) && !this.messageHold(before))
-      this.deps.live.expect?.(before)
+    const wokeAhead = before !== undefined && !crossing.stopped && !(stopped.run && !stopped.run.ended) && !this.deps.live.atWork(before) && !this.messageHold(before) &&
+      this.deps.live.expect?.(before) === "waking"
     const resumed = automatic ? undefined : await this.resumeAccount(stopped)
     const edge = automatic && !closedFinished(stopped) ? stopped : this.reopen(stopped, "a message")
     const taken = !automatic && edge.run && (!edge.run.ended || !this.conversationOf(edge.child)) ? await this.takeOver(edge) : undefined
@@ -7349,7 +7349,12 @@ export class Agents implements AgentOperations, ConversationChildren {
     // A Fin reopening its session, as the next host relaunches one an exit cut, takes a message once that settles.
     if (conversation && !(await this.switchSettled(conversation)))
       return { refused: "unavailable", why: `${edge.name} is still reopening its session; send it again in a moment.` }
-    const ready = conversation ? this.ready(conversation) : "gone"
+    const stands = conversation ? this.ready(conversation) : "gone"
+    // The wake begun above reads as a session starting, which is work to every other reader. It is this message's own
+    // way in, not a turn ahead of it: with nothing sent or queued there meanwhile, the Fin is at rest as it was.
+    const ready = wokeAhead && conversation === before && (stands === "steer" || stands === "queue") &&
+      !(this.deps.live.held(conversation)?.requests ?? []).some((asked) => asked.status === "dispatching" || asked.status === "queued")
+      ? "idle" : stands
     if (!conversation || ready === "gone") return { refused: "unavailable", why: `${edge.name}'s conversation isn't on this device.` }
     const name = edge.name
     const held = sentAs(this.deps.live.held(conversation)?.requests ?? [], request)

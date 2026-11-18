@@ -11,7 +11,7 @@ import { IfCanReveal } from "@/components/ui/machine-gate"
 import { togglePref, usePrefs } from "@/state/prefs"
 import { projectName, useWorkspaceMoves, workspaceMoves } from "@/state/workspace-moves"
 import { removable, worktreeCheckouts, type CheckoutDetail } from "@/lib/worktree-removal"
-import { readWorktreeRetention, saveWorktreeRetention, leavingWorktrees, readWorktreeInventory, removeCheckout, removeLandedWorktrees, useLeavingWorktrees } from "@/state/worktrees"
+import { readWorktreeRetention, saveWorktreeRetention, leavingWorktrees, readWorktreeInventory, removeCheckout, removeLandedWorktrees, useLeavingWorktrees, useWorktreeSizesMeasured } from "@/state/worktrees"
 
 const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`
 const folderName = (path: string) => path.split("/").filter(Boolean).at(-1) ?? path
@@ -57,6 +57,8 @@ function WorktreeRow({ checkout, onRemove }: { checkout: CheckoutDetail; onRemov
           {checkout.changes ? <Chip tone="caution">{checkout.changes} uncommitted</Chip> : null}
           {checkout.held && !checkout.changes ? <Chip tone="caution">Work under way</Chip> : null}
           {checkout.users.length ? <Chip tone="caution">In use</Chip> : null}
+          {/* Listed from what the host held; it's reading this one again and the list follows. */}
+          {checkout.worktrees.some((worktree) => worktree.refreshing) ? <Chip>Checking</Chip> : null}
           {checkout.thread ? null : <Chip>No Thread</Chip>}
         </div>
         <div className="mt-0.5 truncate text-label text-faint">
@@ -92,7 +94,9 @@ export function WorktreesSection() {
     (next) => { setInventory(next); setError(null) },
     (reason) => setError(reason instanceof Error ? reason.message : String(reason)),
   ), [])
-  useEffect(() => { void read() }, [read])
+  // Sizes are measured behind the list's answer: read again once the host says they're in.
+  const sizesRound = useWorktreeSizesMeasured((state) => state.rounds)
+  useEffect(() => { void read() }, [read, sizesRound])
   // A removal waits out its Undo: read again as one starts, is undone, or runs.
   useEffect(() => leavingWorktrees.subscribe(() => void read()), [read])
   const leaving = useLeavingWorktrees((state) => state.byPath)

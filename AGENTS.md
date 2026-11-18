@@ -1982,6 +1982,56 @@ failure only while no later call of the same kind with the same normalized
 arguments (a command's in the same folder) succeeded, by the exit facts its
 row shows (`unfixedFailures`); the failed row still says failed.
 
+A row opens only onto what its one line can't say (`toolOpens` in
+`src/lib/tools.ts`): a command's output, a diff, what a search or a page gave
+back, words handed to someone, a program's steps, an unknown tool's arguments
+and answer, a picture. A search, a listing, a fetched page and a web search
+say what was asked in the row, so their body is the result alone, with no
+arguments above it (`bodyIsResult`). A read (its file opens from the row's
+end), a tool search, a mode change and a stopped shell say all they have in
+the row, so they draw no chevron and mount no body; one that failed, or that
+carries a detail or an attachment, opens. Every row keeps its glyph: a command's row
+is its command alone, so the glyph is what says it is one, and the column the
+glyphs share is where a fold's chevron and an event's mark stand. A stretch's
+summary is generated from its counts (`workHeadline`): what failed and stayed
+failed first, in the failure's hue ("2 commands failed (exit 1)"), then one
+phrase a kind of work, three phrases at most ("made 3 edits · 9 more steps").
+
+A turn is drawn from rows made in the data (`turnRows` in
+`src/lib/turn-rows.ts`, the desk and the phone alike): between two messages,
+everything that isn't one stands behind ONE line worded from its parts
+("Docs pass finished · worked for 48s", "4 Fins finished · Context
+compacted · worked for 2m 10s"): a wake's reports, Mako's and the provider's
+lines where a prompt would stand, notices, a compaction, an Apex's own
+messages to its Fins, the work and the words on the way to the answer.
+Opened, each member draws as it does on its own, and the open state is kept
+per turn (`turn-folds.ts`). Never folded: a report that asks or waits on the
+person, failed, ended without a result or whose decision the roster still
+holds open (`reportStays`), drawn as a block in the answer's column held to
+four lines (`ReportBlock`); and what `stillDrawn` names (a failure, a
+warning, a usage limit, a stop, what the agent showed or made, where the
+person's own message went), drawn under the closed line. The line stands out
+only while a call behind it failed and it hasn't been opened. A running turn
+folds only what opened it (`mode: "head"`), under the id its settled fold
+keeps, so settling adds the work to a row that is already there. Reports that
+arrive inside another message (a steer, a joined prompt) take the same two
+forms (`FinReports`), their open state kept in the same store. A stretch of
+Mako's own tools alone is worded from what they did (`FoldRow.did`:
+"Messaged Sheet motion on iPad"), never counted as other tools. `scripts/test-turn-rows.ts` holds the rules,
+`npm run test:turn-fold-ui` that a settled fold renders nothing again while a
+later turn streams.
+
+An Apex's transcript ends, once its turn has, on what it waits on by name
+(`WaitingLine`: "Waiting on Docs pass, Token sweep, and 4 other Fins", the
+first two past three, each opening its Fin; "Queued since 3:42 PM" for a
+message a minute unsent), above the crew card; a Thread with no Fins says its
+background work on `BackgroundWorkLine` and a turn's own wait on
+`TurnWaitLineView`. Beside "Jump to latest", which counts what arrived below
+a reader who left the end ("· 3 new"), a pill counts what is at work and
+opens onto a row each (`ActivityPill`). Both read `src/state/waiting.ts`
+through the rail's store, kept by the roster they were read from, so no
+streamed batch builds them again (`scripts/test-waiting.ts`).
+
 What a call did to the machine is read once too, in
 `@mako/sessions/tool-effect-reading`: its `ToolEffect`s
 (`@mako/sessions/tool-effects`: files created, modified with a patch or an
@@ -3206,11 +3256,11 @@ The agent's Git tools work in a project folder of several repositories, whose Th
 
 `git.openRepository(cwd)` returns one `Repository` per working tree (an LRU of 64 that never evicts a watched one). It keeps status in memory. `packages/host/src/git/workspace-git.ts` calls `watch()` when the repository is at or under the watched workspace and passes changed paths to `changed()`. The next `status()` then reads only those paths (`status -- :(literal)<path>`) and merges them in. Git's object store, locks, `FETCH_HEAD` and the package's own index copies are noise. Any other `.git` path, `.gitignore`, `.gitattributes`, `.gitmodules` or more than 500 paths means a full read, and so does a failed partial read. An unwatched repository (a linked worktree, or one above the workspace) is read in full every time. Entries come in Git's order: changes, then untracked files, each in byte order. Status runs with `--no-renames`: a rename reads as a deletion and an addition. Writes run one at a time per repository; `settled()` waits for them. Each repository keeps one `cat-file --batch-command` reader, closed after 30 idle seconds. Previews are cached per repository within one 64 MB budget per `Git`, least recently used first; worktree previews are cached only while watched. Commit drafting reuses piece summaries only from the `DraftSummaries` a caller passes; the host keeps one in `GitDrafting`.
 
-A spare belongs to a project, whatever a start comes from: a Fin started from its Apex's worktree takes one of the real project's (`homeOf`), at the commit it asked for, and its start asks for more there. Keyed by the folder asked from, 27 of 30 starts with no spare on 2026-11-06 were these, looking for spares of a worktree, which has none.
+A spare belongs to a project, whatever a start comes from: a Fin started from its Apex's worktree takes one of the real project's (`homeOf`), at the commit it asked for, and its start asks for more there. Keyed by the folder asked from, 27 of 30 starts with no spare on 2026-11-06 were these, looking for spares of a worktree, which has none. One taken is made again at once, behind the rest of that start (`fromSpare`), and a spare whose cloned install outputs were made for a lockfile the main checkout has since changed is made again when its project is next filled (`outdated`: a start there, a composer set to Worktree, or the hourly `tidy`), where it used to be handed over and its packages thrown away on the send. A start with a spare ready runs six Git processes and one without, five once its repository's start point is known (`test-worktree-start-cost.ts`): the main checkout's ignored files are listed once a start rather than once a carried entry, the hook's path is asked once per repository, and a name is reserved by making its branch, with no listing first.
 
 A spare's tracked files are cloned from the main checkout wherever it holds the same file (`cloneTracked`), so a worktree shares their blocks rather than writing them: 59 MB of its own for `mako-backend` where a checkout wrote 694 MB, with a stale main checkout too, since only what differs is written. It's a hint for Git: the index is refreshed, which hashes every clone, and `reset --hard` writes what's missing or came out different. That costs time, 7.3 s against 3.3 s for `mako-backend` on a busy Mac, so only a spare's fill does it, in the background: a start with no spare ready writes its checkout as Git does. Node's `COPYFILE_FICLONE` copies on macOS, reporting success, and `FICLONE_FORCE` is `ENOSYS` there, so this calls `clonefile` itself.
 
-Every spawn holds the host's thread for a moment, so what windows poll reads what a repository shares once, not once per worktree. `summaries` (every window's rail, every half minute and on focus) runs one pass at a time, shared by everyone who asked while the last ran; each pass reads a repository's branch tips with one `for-each-ref`, its start point once, and each worktree's `status` at most every 15 s, a wait that doubles to 5 minutes while nothing changes there unless a conversation is at work in it or its index changed (a spawn on Linux forks the whole host and held its thread for 300-450 ms, and 180 worktrees read every pass took 5 cores on this Mac), and keeps landing, ahead and behind by the commits they were read at. Before, each worktree spawned about seventeen processes outside the read slots: 1,800 a pass at 104 worktrees.
+Every spawn holds the host's thread for a moment, so a worktree's summary is asked of Git only where what it was read at moved. A window asking (`mako:worktree-summaries`) is answered at once with what's held (`heldNow`), marked with what is still being read, and never waits for a pass; each summary follows as it's read, in an event that carries only those that changed (`worktree-summary-changes`), and the whole list (`worktree-summaries`) is said only while a window that knows no other form may listen. One pass runs at a time (`readListed`): the main checkout's branch and each branch's commit are read from Git's files (`storedFacts`), the start point once per change of what it depends on (`WorktreeStarts.pointKey`: HEAD, the branch's and upstream's commits, the configuration files), and a summary stands while those commits and its index's time are as they were. A worktree's `status` is read on what says its files may have changed: its index or HEAD moving, a turn in it ending, a tool call reporting a write there (`mako:tool-effects`, `wrote`), and a file changing in it while a window shows its row or has it open (`filesHeard`). File events come from the tree watches the host already keeps, through the one backend they all use (`WatchedTrees`): the folder a tab has open, each checkout attribution follows while a Thread works in it, a conversation's files, an automation's folder. The summaries start no watch of their own and walk no tree. Writes are waited out (`FILES_SETTLE_MS`, 3 s after the last, the wait between reads doubling to 30 s while they keep coming), so a turn editing two hundred files is a handful of reads; a file event in a worktree nobody shows only marks it (`unseen`), read once a window shows it. A window coming to focus says so, and the worktrees it shows that no tree watch covers are read then, each at most once a minute. A worktree a delivering tree watch covers, with nothing heard, is never read on a timer; one nothing covers is read again past an hour (`STATUS_BACKSTOP_MS`), since nothing would say an editor changed a file there. A shared ref moving reads no status. `ahead` and `behind` for every worktree of a repository are one `for-each-ref` (`ahead-behind`, `countBranches`), and a landing only a merge in memory can tell is an idle read, made first for the worktrees a window shows or a conversation works in and one at a time for the rest (`laterLandings`), whose `behind` and `ahead` are current meanwhile and whose landing follows. Landings, counts, each worktree's summary with its index time, each repository's pull requests and start point are kept in `<worktrees>/summaries.json` (`WorktreeSummaryCache`, the store-format rule), so the first pass after a start with nothing moved starts no Git process; cold, 107 worktrees were about 700 processes four at a time, and one ask stayed open 12 to 31 minutes. A caller says how it wants a checkout's `status` (`checkoutStatuses`, `StatusAsk`): one that decides on it (a review, a merge, what a removal would meet, an agent's `worktree_status`, opening a pull request) asks for `fresh` and gets a read made after it asked, shared with others asking the same then; one that only shows it takes the status held since the checkout's last signal, and where a tab has the checkout open, the one its watcher keeps (`Repository.status`) when that lists the same files. A removal reads its own. Settings › Worktrees is drawn from what's held and asks Git nothing: a worktree with no count that still stands is listed with its last one and `refreshing`, read behind the answer as sizes are measured behind it (kept until the checkout's HEAD or index moves), and `worktree-sizes` says when either is in. What the list shows never decides a removal. `test-worktree-summary-passes.ts` counts the processes of each of these.
 
 Debug Git through host.log: with `MAKO_GIT_TRACE=1` (`HostConfig.gitTrace`) every Git process is logged under `git` with its arguments, folder, queued and running time, exit code and bytes. Without it, only processes slower than two seconds or stopped for time are logged. A failed probe alone isn't logged, since probes such as `rev-parse --verify` fail by design.
 
@@ -3428,8 +3478,9 @@ deliberate action and never rides along with a commit.
 - **Every message wears who wrote it, as a square** (`message-avatar.tsx`):
   the person's own face beside their prompt, at its last line; an agent's
   fin, still, with its harness as the badge, on its reply's byline; and a
-  Fin's own fin beside each report it sent its Apex (`FinReports`), where the
-  person's face stands. Every avatar is square, the rail footer's too. Real shadows exist only on
+  Fin's own fin beside each report it sent its Apex (`FinReport`), where the
+  person's face stands, or at the block's start for one that needs someone
+  (`ReportBlock`). Every avatar is square, the rail footer's too. Real shadows exist only on
   floating surfaces (`.overlay-panel`: menus, palette, dialogs).
 - **The ramp is warm neutrals — red-shifted near-blacks, warm off-white
   text — and stays that quiet.** The one accent is the brand's sea
