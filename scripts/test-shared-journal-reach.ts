@@ -53,12 +53,12 @@ function longFolder(prefix: string): string {
 test("the owner's address fits a socket wherever the journal and the temporary folder are", { skip: process.platform !== "darwin" }, () => {
   assert.equal(ownerAddress("/short/attribution/format"), "/short/attribution/format/owner.sock", "beside the lock where that fits")
   const long = `/${"long-folder/".repeat(12)}attribution/format`
-  const inTemporary = ownerAddress(long, "darwin", "/var/folders/xx/short/T")
+  const inTemporary = ownerAddress(long, "darwin", "/scratch/xx/short/T")
   assert.match(inTemporary, /^\/var\/folders\/xx\/short\/T\/mako-attribution-[0-9a-f]{24}\.sock$/, "in the temporary folder where the journal's own path is too long, as before")
-  const both = ownerAddress(long, "darwin", `/var/folders/${"nested-scratch/".repeat(6)}tmp`)
+  const both = ownerAddress(long, "darwin", `/scratch/${"nested-scratch/".repeat(6)}tmp`)
   assert.ok(Buffer.byteLength(both) <= 103, `a path a socket can have (${Buffer.byteLength(both)} bytes)`)
-  assert.notEqual(both, ownerAddress(`${long}-other`, "darwin", `/var/folders/${"nested-scratch/".repeat(6)}tmp`), "one a journal")
-  assert.equal(both, ownerAddress(long, "darwin", `/var/folders/${"another-scratch/".repeat(6)}tmp`), "the same for every host of the journal, whatever its temporary folder")
+  assert.notEqual(both, ownerAddress(`${long}-other`, "darwin", `/scratch/${"nested-scratch/".repeat(6)}tmp`), "one a journal")
+  assert.equal(both, ownerAddress(long, "darwin", `/scratch/${"another-scratch/".repeat(6)}tmp`), "the same for every host of the journal, whatever its temporary folder")
 })
 
 test("an owner whose journal and temporary folder are both deep is listened to and followed", { skip: process.platform !== "darwin" }, async () => {
