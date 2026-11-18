@@ -211,7 +211,11 @@ export async function openPullRequest(git: Git, cwd: string, draft: PullRequestD
     forgetGitHubReads()
     const edit = { title: draft.title?.trim() || undefined, body: draft.body === undefined ? undefined : draft.body.trim() }
     const edited = edit.title !== undefined || edit.body !== undefined
-    if (edited) await writing(editPull(cwd, existing.number, edit, acting?.env))
+    // The push already happened: a refused edit says so, so nobody pushes again thinking nothing went.
+    if (edited) await writing(editPull(cwd, existing.number, edit, acting?.env)).catch((error: Error) => {
+      const done = pushed ? `Pushed ${plural(pushed, "commit")} to #${existing.number}` : `#${existing.number} had nothing new to push`
+      throw new Error(`${done}, but GitHub didn't change its title or body: ${error.message}`, { cause: error })
+    })
     return { pull: (await pullForBranch(cwd)) ?? existing, opened: false, pushed, edited, uncommitted: left, ...author }
   }
   const title = draft.title?.trim()
