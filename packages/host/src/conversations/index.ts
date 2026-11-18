@@ -288,7 +288,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       const summary = live.listed().find(summary => summary.session.id === id)
       const placed = threads.store?.journalPlacement(id)
       const edge = placed && threads.store?.edges().of(placed.thread)
-      return edge?.closedAt === undefined && summary !== undefined && !archivedByKeys(liveArchiveKeys(summary), new Set(threads.archives.snapshot().keys), catalog.ref(summary.session.nativePath ?? ""))
+      return edge?.closedAt === undefined && summary !== undefined && !archivedByKeys(liveArchiveKeys(summary), threads.archives.hidden(), catalog.ref(summary.session.nativePath ?? ""))
     },
     children: catalog.childSource,
     harnessLabel: (harness) => harnessLabel(host, harness),

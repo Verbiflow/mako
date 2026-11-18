@@ -698,7 +698,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       activity: (path) => activity[path],
       work: () => application.lifecycle.snapshot().work,
       waitingOn: (id) => live.waitingOn(id),
-      hidden: () => new Set(threads.archives.snapshot().keys),
+      hidden: () => threads.archives.hidden(),
       lastMoved: (id, revision) => live.lastMoved(id, revision),
       placement: (id) => store.journalPlacement(id),
       sessionOrder: (placed) => sessionOrderIn(store.thread(placed.thread)?.sessions, placed.session),
