@@ -760,7 +760,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   methods.handle("mako:live-snapshot", (id: string) => live.refreshedSnapshot(id))
   methods.handle("mako:live-context-breakdown", (id: string) => live.contextBreakdown(id))
   methods.handle("mako:live-read", (id: string, input: LiveHistoryRead) =>
-    history.read(id, LiveHistoryReadSchema.parse(input), () => live.refreshedSnapshot(id), () => live.coldView(id))
+    history.read(id, LiveHistoryReadSchema.parse(input), () => live.windowSnapshot(id), () => live.coldView(id, false, undefined, true))
   )
   methods.handle("mako:live-state", (id: string) => live.session(id) ?? null)
   methods.handle("mako:live-continue", async (id: string, bindingId: string,

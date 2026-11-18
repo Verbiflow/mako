@@ -765,6 +765,11 @@ export class LiveConversations {
     return this.sources.refreshedSnapshot(id)
   }
 
+  /** What a window's read answers: never waiting on the conversation's session's record (`LiveSources.windowSnapshot`). */
+  windowSnapshot(id: string): Promise<LiveSnapshot | null> {
+    return this.sources.windowSnapshot(id)
+  }
+
   /**
    * The last cold view of conversation `id`'s journal (file `key`) was let go: a compaction it put off goes now, unless
    * the conversation is in memory again, whose journal's close decides it.
@@ -776,13 +781,19 @@ export class LiveConversations {
 
   /**
    * Conversation `id` read where its journal lies, for a window or a search, when nothing holds it in memory
-   * (`LiveRecords.cold`); `releasing` reads one still being let go of, as a search does.
+   * (`LiveRecords.cold`); `releasing` reads one still being let go of, as a search does. `window`: a window's read, which
+   * never waits on the sync daemon: one whose history is its session's record is read in instead (`windowSnapshot`),
+   * shown at once as its journal holds it and again once its record is read.
    */
-  async coldView(id: string, releasing = false, refused?: (why: ColdRefusal) => void): Promise<{ journal: ColdJournal; snapshot: LiveSnapshot; still: () => boolean } | undefined> {
+  async coldView(id: string, releasing = false, refused?: (why: ColdRefusal) => void, window = false): Promise<{ journal: ColdJournal; snapshot: LiveSnapshot; still: () => boolean } | undefined> {
     const cold = await this.records.cold(id, releasing, refused)
     if (!cold) return undefined
     // Its history is its session's record: the newest page of it, the rest read as a window pages back.
     const source = cold.snapshot.baseSource
+    if (source && window) {
+      cold.journal.close()
+      return undefined
+    }
     const base = source ? await this.sources.newestBase(source) : null
     if (source && (!base || !cold.still())) {
       cold.journal.close()

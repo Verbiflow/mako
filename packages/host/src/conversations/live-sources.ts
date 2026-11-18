@@ -545,21 +545,11 @@ export class LiveSources {
     return applied
   }
 
-  async refreshedSnapshot(id: string, completion?: { request: LiveRequest; applied(): void }, recovery?: { id: string; bindingId: string; applied(): void }): Promise<LiveSnapshot | null> {
-    // A window opening a conversation only on disk reads it in a slice at a time; one in memory is read on now.
-    const resident = this.access.resident(id) ? this.access.load(id) : await this.access.loadSliced(id)
-    if (!resident) return null
-    if (baseUnread(resident.snapshot)) {
-      await this.readBase(resident)
-      if (this.access.resident(id) !== resident) return this.access.snapshot(id)
-    }
-    try {
-      const catchup = this.access.reconcileQuestions(resident)
-      if (catchup) await catchup
-    } catch (error) {
-      hostLog("live", "native question refresh deferred", { conversation: id, error: errorMessage({ error }) })
-    }
-    this.access.flush(resident)
+  /**
+   * Whether `refreshedSnapshot` reads `resident`'s record again from its harness's session (through the sync daemon,
+   * where it serves this host's reads), and what it reads: undefined when nothing calls for it.
+   */
+  private recordRefresh(resident: Resident, completion?: { request: LiveRequest; applied(): void }, recovery?: { id: string; bindingId: string; applied(): void }) {
     const base = resident.snapshot.base
     const bindings = resident.snapshot.control?.bindings ?? []
     const recovering = Boolean(recovery && resident.snapshot.control?.compactionRecovery?.id === recovery.id &&
@@ -583,7 +573,46 @@ export class LiveSources {
         resident.snapshot.session.status === "running" ||
         resident.snapshot.requests.some((request) => request.status === "dispatching") ||
         (!completing && resident.snapshot.blocks.length > 0 && (!binding?.includesBase || !onlyOpening)))
-      return this.access.snapshot(id)
+      return undefined
+    return { base, binding, recovering, completing, path, nativeId, provider, covered }
+  }
+
+  /**
+   * What a window's read of a conversation answers (`mako:live-read`): the conversation as memory and its journal hold
+   * it, never waiting on its session's record. A history named by its session (`baseSource`) and a record read again are
+   * the sync daemon's to serve, behind its uploads: on the person's Mac a window's first page waited 10.5 s, and 80 to
+   * 163 s on retries, for a daemon request that timed out. Those reads go on behind this answer (`refreshedSnapshot`), and
+   * what they bring moves the conversation, which the window reads again. Until its record is read, a history its
+   * session holds is shown as the journal kept it as it streamed: every block, its own words.
+   */
+  async windowSnapshot(id: string): Promise<LiveSnapshot | null> {
+    const resident = this.access.resident(id) ? this.access.load(id) : await this.access.loadSliced(id)
+    if (!resident) return null
+    if (!baseUnread(resident.snapshot) && !this.recordRefresh(resident)) return this.refreshedSnapshot(id)
+    void this.refreshedSnapshot(id).catch((error) => hostLog("live", "a window's conversation couldn't be read again from its session", { conversation: id, error: errorMessage({ error }) }))
+    const now = this.access.snapshot(id)
+    // Its history as it streamed: the blocks the record would cover, shown as they are, until the record is read.
+    return now && baseUnread(now) ? { ...now, baseCoveredBlocks: 0, baseLiveStart: undefined } : now
+  }
+
+  async refreshedSnapshot(id: string, completion?: { request: LiveRequest; applied(): void }, recovery?: { id: string; bindingId: string; applied(): void }): Promise<LiveSnapshot | null> {
+    // A window opening a conversation only on disk reads it in a slice at a time; one in memory is read on now.
+    const resident = this.access.resident(id) ? this.access.load(id) : await this.access.loadSliced(id)
+    if (!resident) return null
+    if (baseUnread(resident.snapshot)) {
+      await this.readBase(resident)
+      if (this.access.resident(id) !== resident) return this.access.snapshot(id)
+    }
+    try {
+      const catchup = this.access.reconcileQuestions(resident)
+      if (catchup) await catchup
+    } catch (error) {
+      hostLog("live", "native question refresh deferred", { conversation: id, error: errorMessage({ error }) })
+    }
+    this.access.flush(resident)
+    const refresh = this.recordRefresh(resident, completion, recovery)
+    if (!refresh) return this.access.snapshot(id)
+    const { base, binding, recovering, completing, path, nativeId, provider, covered } = refresh
     const pending = this.refreshes.get(id)
     if (pending) return pending
     const { dependencies } = this.access
