@@ -108,6 +108,23 @@ export function receiveLive<T>(id: string, received: Received, take: () => T): T
 }
 
 /**
+ * Takes in what one word says of several conversations (a host's list) as one change: `take` receives each of them
+ * (`receiveLive`), and the door stays open for them all until it ends, which is when the store says the change.
+ */
+export function receiveLiveList<T>(ids: readonly string[], take: () => T): T {
+  for (const id of ids) taking.set(id, (taking.get(id) ?? 0) + 1)
+  try {
+    return take()
+  } finally {
+    for (const id of ids) {
+      const left = (taking.get(id) ?? 1) - 1
+      if (left) taking.set(id, left)
+      else taking.delete(id)
+    }
+  }
+}
+
+/**
  * The window lets a conversation go on its own (the person closed it): no word of its host's, so it goes on no read's
  * record, but it changes the conversation's state, and only here or through the door (`receiveLive`) does anything.
  */
