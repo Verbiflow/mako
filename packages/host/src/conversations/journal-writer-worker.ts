@@ -13,12 +13,12 @@ import { errorMessage } from "../base/error-message.js"
  * without waiting for a message, and waits on it when it must have everything written before it goes on.
  */
 const OpSchema = z.union([
-  z.tuple([z.literal("block"), z.number().int().nonnegative(), z.string()]),
+  z.tuple([z.literal("block"), z.number().int().nonnegative(), z.string(), z.tuple([z.string(), z.number(), z.string().nullable(), z.string().nullable()]).nullable()]),
   z.tuple([z.literal("append"), z.number().int().nonnegative(), z.number().int().nonnegative(), z.string()]),
 ])
 const AskSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("open"), key: z.number(), path: z.string(), cell: z.instanceof(SharedArrayBuffer), keptBytes: z.number() }),
-  z.object({ kind: z.literal("write"), key: z.number(), seq: z.number(), revision: z.number(), ops: z.array(OpSchema) }),
+  z.object({ kind: z.literal("write"), key: z.number(), seq: z.number(), revision: z.number(), ops: z.array(OpSchema), indexed: z.boolean() }),
   z.object({ kind: z.literal("close"), key: z.number(), seq: z.number() }),
 ])
 
@@ -28,6 +28,10 @@ interface Connection {
   block: StatementSync
   clear: StatementSync
   append: StatementSync
+  /** The turn index's line of a block, written or dropped with the block, and the revision the index is whole through. */
+  turn: StatementSync
+  noTurn: StatementSync
+  through: StatementSync
 }
 
 interface Journal {
@@ -55,6 +59,9 @@ parentPort?.on("message", (message) => {
           block: db.prepare("INSERT OR REPLACE INTO blocks VALUES (?, ?)"),
           clear: db.prepare("DELETE FROM block_appends WHERE block_id=?"),
           append: db.prepare("INSERT INTO block_appends VALUES (?, ?, ?)"),
+          turn: db.prepare("INSERT OR REPLACE INTO turn_index VALUES (?, ?, ?, ?, ?)"),
+          noTurn: db.prepare("DELETE FROM turn_index WHERE id=?"),
+          through: db.prepare("INSERT OR REPLACE INTO progress VALUES (2, ?)"),
         },
       })
     } catch (error) {
@@ -80,10 +87,13 @@ parentPort?.on("message", (message) => {
     try {
       db.exec("BEGIN IMMEDIATE")
       connection.progress.run(ask.revision)
+      if (ask.indexed) connection.through.run(ask.revision)
       for (const op of ask.ops) {
         if (op[0] === "block") {
           connection.block.run(op[1], op[2])
           connection.clear.run(op[1])
+          if (op[3]) connection.turn.run(op[1], ...op[3])
+          else connection.noTurn.run(op[1])
         } else connection.append.run(op[1], op[2], op[3])
       }
       db.exec("COMMIT")

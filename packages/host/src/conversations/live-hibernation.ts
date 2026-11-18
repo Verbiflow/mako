@@ -238,6 +238,7 @@ export class LiveHibernation {
       void this.hibernate(resident, "idle-timeout")
     }, Math.max(0, idleMs - (now - resident.idleSince)))
     resident.idleTimer.unref?.()
+    dependencies.cameToRest?.()
     if (enforceWarmLimit) this.enforceWarmLimit()
   }
 
@@ -245,6 +246,13 @@ export class LiveHibernation {
   private warmLimit(): number {
     const { dependencies } = this.access
     return dependencies.providerWarmLimit ?? dependencies.warmLimit?.() ?? PROVIDER_WARM_LIMIT
+  }
+
+  /** The harnesses with a provider idle and warm now. */
+  warmHarnesses(): Set<string> {
+    const harnesses = new Set<string>()
+    for (const resident of this.access.residents()) if (this.canHibernate(resident)) harnesses.add(resident.snapshot.session.harness)
+    return harnesses
   }
 
   /** How many providers are idle and warm now: those `canHibernate` would let go. */

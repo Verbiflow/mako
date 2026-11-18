@@ -187,10 +187,28 @@ conversations?.live`) rather than a domain importing another's files.
   (local, with `MAKO_BENCH_OUT` naming a folder) fails when the steady busy
   share or a hold outside start and stop passes its budget. What walks a
   whole journal or every journal isn't on the thread either: a cold open's
-  count and turn index come from a reader (`JournalReaders.scan`), the
-  start's listing and the stop's closes go a slice at a time (`listJournals`,
-  `LiveClosing.stop`), and a whole catalog is placed a batch a turn
-  (`ThreadStore.placeAll`).
+  count and turn lines come from a reader (`JournalReaders.scan`), the
+  start's listing, the stop's closes, the sweep that measures each journal's
+  copy and the one that lets conversations go over the memory budget go a
+  slice at a time (`listJournals`, `LiveClosing.stop`, `settleNow`,
+  `unloadOverBudget`), and a whole catalog is placed a batch a turn
+  (`ThreadStore.placeAll`). Awaiting a step that finishes within its slice
+  doesn't leave the thread: a loop over many such steps keeps one slice's
+  time for all of them.
+- **A journal keeps a turn index** (`turn_index`, `turnRowOf`): a line for
+  each block that begins a turn or names a request, written in the
+  transaction that writes the block, on the journal's connection and on the
+  writer's, and removed with it at a rewind. A cold open reads the index and
+  the newest blocks (`readTurnIndex`) and never walks `blocks`, on the host's thread and with
+  no reader (`turnIndexWhole`): 35 to 50 ms in slices for a 150 MB
+  conversation of 5,330 requests that took 2.3 s to walk, 8 to 10 s with its
+  pages out of the disk's cache. The index is whole only once built from a walk
+  (`buildTurnIndex`, on the reader's thread at a journal's first cold open);
+  each commit then says so again by writing its revision in `progress` row
+  2, so a commit by a build that knows no index leaves the two rows apart
+  and the journal is walked and indexed again. `test:journal-writer` holds
+  the index equal to the walk through appends, a block changing kind, a
+  rewind, an older build's commit and a host killed mid-stream.
 - **The Thread store keeps what a commit didn't change.** The parent edges,
   each Thread's record and its conversations stand through a commit that
   wrote none of the tables they're read from, and are read again after one
@@ -228,9 +246,24 @@ conversations?.live`) rather than a domain importing another's files.
   `--max-hold-ms` any hold. File calls a flush or a recurring job makes go
   off the thread where they can: the process log appends what is pending as
   one awaited write, the Git index lock's steps are awaited, `docker context
-  inspect` runs in the probe child, and whether this host holds a session
+  inspect` runs in the probe child, whether this host holds a session
   (`SessionMemory.owns`) is answered from what was read until a hold is
-  written.
+  written, and a launch, a discovery query and the advertised tools find
+  their executable awaited and kept (`Executables`, held by
+  `DiscoveryProcesses`), `gh` and an MCP server's command awaited each time
+  (`findExecutable`); `resolveExecutable` waits on the thread and is for
+  code that runs once or at the person's own action. Codex processes' output is handled a turn's worth at
+  a time (`StdoutPace`): what one turn of the loop has no time for waits,
+  its pipe paused, for the next.
+- **A journal at rest gives back its pages** (`LiveJournal.rest`): SQLite
+  keeps up to 2 MB of pages for each connection, and every conversation in
+  memory has one. Read in, or quiet after its turn, a journal frees them.
+  A worker that parses much (a journal reader, the catalog's) has its young
+  generation held to 32 MB (`maxYoungGenerationSizeMb`): V8 grew each to 76
+  to 122 MB while it read and kept it at rest with a few MB in use.
+  `bench:host-load --memory` writes what the host's memory is made of
+  (`regions-*.txt`, each thread's heap, a sample of the live heap by the
+  function that allocated it).
 - **Follow, don't poll.** What only says where something stands (a line a
   window shows) reads what each owner already holds, and is woken by the
   owner's own change (its event or callback). That read never sets off the
@@ -4783,6 +4816,19 @@ in starts with the Thread's values its launch read (`Resident.startedWith`);
 past the window, in another folder or title, or after its worktree was made
 again, it reads them again. The resume verdict and the tools' grant are asked
 at every wake.
+While a provider rests warm, a job has its harness's held credential reads
+checked every 2.5 s (`keepAccountsFresh`, `CredentialRevisions.refresh`): on
+Claude, the Keychain item's last-written stamp, read from its attributes by
+`security` without its secret, so nothing is asked of the person. A read its
+store vouches for stands from that check, and a message's admission finds it
+instead of waiting on a read of its own. A store that changed, or a check that
+failed or couldn't say, ends the checking until the next message reads for
+itself. An admission still takes only a read that stood inside the 3 s hold,
+nothing is checked two minutes after the last ask, and with no provider warm
+the job holds no timer.
+Running or queued work, permissions, child delivery, transfers, checkpoints,
+rewinds and automatic continuation prevent hibernation. A retired driver's late
+events are fenced by the resident generation and cannot close its replacement.
 Running or queued work, permissions, child delivery, transfers, checkpoints,
 rewinds and automatic continuation prevent hibernation. A retired driver's late
 events are fenced by the resident generation and cannot close its replacement.

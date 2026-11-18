@@ -1,3 +1,4 @@
+import { StdoutPace } from "./stdout-pace.js"
 import type { ProviderFailureEvidence } from "../contracts/provider-failure-evidence.js"
 import { codexPersonCodeRuns } from "./codex/person-code.js"
 import { failureEvidenceOf, providerExitEvidence } from "../contracts/provider-failure.js"
@@ -138,6 +139,8 @@ type Live = {
 }
 
 const MAX_STDERR_BUFFER = 16 * 1024
+/** How much of one turn of the loop goes to the processes' output before the rest of it waits for the next turn (`StdoutPace`). */
+const STDOUT_TURN_MS = 30
 const MAX_PROMPT_CHARS = 1_000_000
 
 const permissionCallbacks: PermissionCallbacks<Live> = {
@@ -774,9 +777,16 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
     return result
   }
 
+  const stdout = new StdoutPace<Live>({
+    turnMs: STDOUT_TURN_MS,
+    take: (live, chunk) => consumeStdout(live, chunk),
+    pause: (live) => live.child.stdout.pause(),
+    resume: (live) => live.child.stdout.resume(),
+  })
+
   function bindProcess(live: Live): void {
     live.child.stdin.on("error", (error) => handleProcessEnd(live, error.message))
-    live.child.stdout.on("data", (chunk: Buffer) => consumeStdout(live, chunk))
+    live.child.stdout.on("data", (chunk: Buffer) => stdout.read(live, chunk))
     live.child.stderr.on("data", (chunk: Buffer) => {
       live.stderrBuffer = tail(
         live.stderrBuffer + live.approvals.stderr(chunk),
@@ -785,11 +795,13 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
     })
     live.child.on("error", (error) => handleProcessEnd(live, error.message))
     live.child.once("close", () => {
+      stdout.flush(live)
       void live.approvals.close()
       // Its output is all read once its pipes close: the launch's stream is finished.
       live.stream?.ended()
     })
     live.child.on("exit", (code, signal) => {
+      stdout.flush(live)
       const detail = lastLine(live.stderrBuffer)
       const suffix = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`
       handleProcessEnd(live, detail || `codex app-server exited with ${suffix}`, providerExitEvidence(detail))

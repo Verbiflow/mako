@@ -6,7 +6,8 @@ import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import { JournalWriter } from "@mako/host/conversations/journal-writer"
-import { JournalWriteError, LiveJournal } from "@mako/host/conversations/live-journal"
+import { JournalReaders } from "@mako/host/conversations/journal-readers"
+import { buildTurnIndex, coldScan, JournalWriteError, LiveJournal, readTurnIndex } from "@mako/host/conversations/live-journal"
 import { auditSnapshot } from "./performance-audit-fixtures.ts"
 
 /**
@@ -37,6 +38,8 @@ function streaming(root: string, writer: JournalWriter | undefined) {
       assert.ok(answer?.type === "text")
       const blocks: LiveSnapshot["blocks"] = [{ ...answer, text: answer.text + WORD(words) }, ...rest]
       if (words % 3 === 2) blocks.push({ type: "tool", id: `call-${words}`, name: "Bash", status: "completed", input: "ls", output: `listing ${words}` })
+      // And now and then a block the turn index has a line for: a message the person steered in.
+      if (words % 7 === 6) blocks.push({ type: "user", id: `steer-${words}`, text: "and this", requestId: `request-${words}`, steeringFor: "request-0" })
       words += 1
       snapshot = { ...previous, blocks, revision: previous.revision + 1 }
       journal.commit(snapshot, previous)
@@ -47,6 +50,16 @@ function streaming(root: string, writer: JournalWriter | undefined) {
       snapshot = { ...previous, session: { ...previous.session, status: "ready" }, revision: previous.revision + 1 }
       journal.commit(snapshot, previous)
     },
+  }
+}
+
+/** What a walk of the journal's blocks says, and what its turn index says (undefined while it doesn't hold every block). */
+function scans(root: string, id: string) {
+  const db = new DatabaseSync(join(root, `${id}.sqlite`))
+  try {
+    return { walked: coldScan(db), indexed: readTurnIndex(db) }
+  } finally {
+    db.close()
   }
 }
 
@@ -64,6 +77,9 @@ if (process.argv[2] === "stream") {
   // The host that is killed: it streams without end, and says each count it knows written.
   const writer = new JournalWriter()
   const turn = streaming(process.argv[3]!, writer)
+  // Its turn index is whole from the start, so every block it streams writes its line with it.
+  assert.ok(buildTurnIndex(turn.journal["connection"], coldScan(turn.journal["connection"])))
+  turn.journal["indexed"] = true
   for (;;) {
     for (let burst = 0; burst < 5; burst += 1) turn.flush()
     if (turn.words() % 25 === 0) {
@@ -178,7 +194,69 @@ try {
     assert.ok(words.length >= known, `${words.length} flushes were kept of the ${known} the host knew written`)
     assert.deepEqual(words, Array.from({ length: words.length }, (_, at) => WORD(at).trim()), "the flushes kept are every one from the first, in order")
     // A call's block came with its flush: none is there without the words before it.
-    for (const block of blocks.slice(1)) assert.ok(block.type === "tool" && Number(block.id?.slice(5)) < words.length)
+    for (const block of blocks.slice(1)) assert.ok((block.type === "tool" || block.type === "user") && Number(block.id?.split("-")[1]) < words.length)
+    // Each block and its line of the turn index went in one transaction: whatever the kill cut, the index says what a walk says.
+    const kept = scans(folder, auditSnapshot(0).session.id)
+    assert.ok(kept.indexed && kept.indexed.turns.length > 10, "the killed host's index is whole")
+    assert.deepEqual(kept.indexed, kept.walked, "a host killed mid-stream leaves an index that equals a walk")
+  }
+
+  // The turn index: built once from a walk on a reader's thread, then kept by every commit, the writer's included,
+  // through appends, a rewind, a block that stops being a turn's, and a base written; a commit by a build that knows
+  // no index leaves it unused until it is built again.
+  {
+    const folder = join(root, "indexed")
+    const writer = new JournalWriter(), readers = new JournalReaders()
+    const first = streaming(folder, writer)
+    for (let flush = 0; flush < 60; flush += 1) first.flush()
+    first.end()
+    await first.journal.close()
+    assert.equal(scans(folder, first.id).indexed, undefined, "a journal no walk has indexed has no index to read")
+    const walked = await readers.scan(join(folder, `${first.id}.sqlite`))
+    assert.deepEqual(scans(folder, first.id).indexed, walked, "its first cold open walks it and leaves the index")
+    assert.deepEqual(await readers.scan(join(folder, `${first.id}.sqlite`)), walked, "the next reads the index, and the same")
+    const same = (after: string) => {
+      const found = scans(folder, first.id)
+      assert.ok(found.indexed, `the index is whole ${after}`)
+      assert.deepEqual(found.indexed, found.walked, `the index says what a walk says ${after}`)
+    }
+    // A host takes the conversation up again: commits of its own, and a running turn's through the writer.
+    const journal = new LiveJournal(folder, first.id)
+    journal.writeWith(writer)
+    let snapshot = journal.read()!
+    const commit = (next: typeof snapshot) => { journal.commit(next, snapshot); snapshot = next }
+    commit({ ...snapshot, revision: snapshot.revision + 1, session: { ...snapshot.session, status: "running" }, blocks: [...snapshot.blocks, { type: "user", id: "ask-2", text: "next", requestId: "request-next" }, { type: "text", id: "answer-2", text: "" }] })
+    journal["settleWrites"]()
+    same("after a turn's start")
+    for (let word = 0; word < 40; word += 1) {
+      const blocks = snapshot.blocks.map((block) => block.type === "text" && block.id === "answer-2" ? { ...block, text: block.text + WORD(word) } : block)
+      if (word % 9 === 8) blocks.push({ type: "provider-turn", id: `own-${word}`, reason: "woke" })
+      commit({ ...snapshot, revision: snapshot.revision + 1, blocks })
+    }
+    journal["settleWrites"]()
+    same("after a stream through the writer")
+    // A block that began a turn becomes one that doesn't, in place.
+    commit({ ...snapshot, revision: snapshot.revision + 1, blocks: snapshot.blocks.map((block) => block.id === "own-8" ? { type: "text", id: "own-8", text: "not a turn" } : block) })
+    journal["settleWrites"]()
+    same("after a block changed kind")
+    commit({ ...snapshot, revision: snapshot.revision + 1, session: { ...snapshot.session, status: "ready" } })
+    same("after the turn's end")
+    // A rewind: the blocks from the turn's prompt on are gone.
+    commit({ ...snapshot, revision: snapshot.revision + 1, blocks: snapshot.blocks.slice(0, snapshot.blocks.findIndex((block) => block.id === "ask-2")) })
+    same("after a rewind")
+    await journal.close()
+    same("after its close")
+    // A build that knows no index commits: the revision moves in row 1 alone, and the index isn't read.
+    const older = new DatabaseSync(join(folder, `${first.id}.sqlite`))
+    older.prepare("INSERT OR REPLACE INTO blocks VALUES (?, ?)").run(snapshot.blocks.length, JSON.stringify({ type: "user", id: "older", text: "from an older build", requestId: "request-older" }))
+    older.prepare("INSERT OR REPLACE INTO progress VALUES (1, ?)").run(snapshot.revision + 1)
+    older.close()
+    assert.equal(scans(folder, first.id).indexed, undefined, "a commit that kept no index leaves it unread")
+    const again = await readers.scan(join(folder, `${first.id}.sqlite`))
+    assert.equal(again.turns.at(-1)?.request, "request-older")
+    same("after it was built again")
+    await readers.stop()
+    await writer.stop()
   }
   console.log("journal writer ok")
 } finally {

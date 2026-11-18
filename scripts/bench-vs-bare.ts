@@ -37,8 +37,11 @@ import "./lib/scratch-git.mjs"
  *    measurable here and higher counts aren't run.
  * F. The host's first launch (`--scenarios first`): a new host process each run on one scratch home, nothing launched
  *    on it before, its first conversation sent the moment the host is ready; then a second new conversation on that
- *    host. A table sets each launch phase's own duration (`ProviderLaunchTrace`) for the first beside the later one:
- *    the difference is paid once a host, the rest every launch.
+ *    host. One unmeasured conversation runs on a host before these, sent with its model as the composer sends it, so
+ *    the device is one the harness was used on (`--first-unused` leaves that out). A table sets each launch phase's own duration (`ProviderLaunchTrace`) for the first beside the later one:
+ *    the difference is paid once a host, the rest every launch. `--first-settle <ms>` leaves each new host alone that
+ *    long before the first send, as a person writing a message does, so what the host loads by itself once ready
+ *    (`host-warmup.ts`) has run; the host's own resident memory at that moment is printed with it.
  *
  * `--tuning` sends what the composer sends on a normal send with nothing changed (`settingsForSend` in
  * `src/state/composer-settings.ts`): the settings `resolveSessionSettings` gives from the harness's profile
@@ -63,7 +66,7 @@ import "./lib/scratch-git.mjs"
  * (`settingsForSend`, `saveMessage` in `src/state/acp-queue.ts`) is renderer time too and is measured by neither.
  *
  *   npm run bench:vs-bare -- [--harness claude,codex,grok,opencode,devin | all] [--runs 5] [--first-runs <runs>]
- *                            [--others 0,5,15,30] [--pace 20] [--words 340] [--files 300] [--gap 1500]
+ *                            [--first-settle 0] [--first-unused] [--others 0,5,15,30] [--pace 20] [--words 340] [--files 300] [--gap 1500]
  *                            [--scenarios first,cold,warm,wake] [--tuning] [--json <file>] [--record <file>]
  *                            [--answer prose|markdown]
  */
@@ -103,6 +106,8 @@ const { values } = parseArgs({
     harness: { type: "string", default: "claude" },
     runs: { type: "string", default: "5" },
     "first-runs": { type: "string" },
+    "first-settle": { type: "string", default: "0" },
+    "first-unused": { type: "boolean", default: false },
     others: { type: "string", default: "0,5,15" },
     pace: { type: "string", default: "20" },
     words: { type: "string", default: "340" },
@@ -119,6 +124,8 @@ const Scenario = z.enum(["first", "cold", "warm", "wake"])
 type Scenario = z.infer<typeof Scenario>
 const RUNS = z.coerce.number().int().min(1).parse(values.runs)
 const FIRST_RUNS = z.coerce.number().int().min(1).parse(values["first-runs"] ?? values.runs)
+/** How long a new host is left alone once ready before its first send: a person takes seconds to write one, and what the host does by itself after it starts runs then. */
+const FIRST_SETTLE_MS = z.coerce.number().int().min(0).parse(values["first-settle"])
 const Others = z.coerce.number().int().min(0)
 const OTHERS = values.others.split(",").map((count) => Others.parse(count))
 const PACE = z.coerce.number().int().min(1).parse(values.pace)
@@ -588,6 +595,8 @@ interface Host {
   idle(id: string): Promise<boolean>
   /** From its process's start until it answered ready with its catalog read and both streams attached. */
   readyMs: number
+  /** What the host's own process holds in memory now, in MB. */
+  residentMB(): number | undefined
   /** What its own log ends with, for a pass that couldn't be measured. */
   logTail(): string | undefined
   stop(): Promise<void>
@@ -651,7 +660,10 @@ async function startHost(folder: string, home: ScratchHome): Promise<Host> {
     await until("the bench's event streams", () => streaming && reading, 30_000)
     const state = async (id: string) => LiveState.parse(await call("mako:live-state", id))
     const idle = async (id: string) => (await state(id)).status !== "running" && (await state(id)).status !== "starting"
-    return { dataRoot, client, call, probe, received, batchesOnly, state, idle, readyMs: now() - began, logTail, stop }
+    const residentMB = () => {
+      try { return Math.round((Rss.safeParse(execFileSync("ps", ["-o", "rss=", "-p", String(host.pid)], { encoding: "utf8" }).trim() || undefined).data ?? 0) / 1024) || undefined } catch { return undefined }
+    }
+    return { dataRoot, client, call, probe, received, batchesOnly, state, idle, readyMs: now() - began, residentMB, logTail, stop }
   } catch (error) {
     await stop()
     throw error
@@ -945,6 +957,21 @@ async function measure(harness: string, bare: BareHarness): Promise<{ samples: S
     scratchKeychain(home.home)
     const project = makeProject(join(folder, "project"))
     const samples: Sample[] = []
+    // A device this harness was used on before, as a person's is: one unmeasured conversation sent as the composer
+    // sends it, with its model, which is what the host keeps of a harness being used here (`FinDefaultsStore.use`) and
+    // what it loads ahead for once it's ready (`host-warmup.ts`). The data root's very first launch is this one too.
+    // `--first-unused` leaves it out: a device the harness was never used on, for which the host loads nothing ahead.
+    if (!values["first-unused"]) {
+      note(`  ${harness} first launch: one unmeasured conversation first, so the device has used the harness`)
+      const priming = await startHost(folder, home)
+      try {
+        const id = `${MARK}${randomUUID().slice(8)}`
+        await makoTurn(priming, { pass: "first", scenario: "cold", others: 0, run: 0, id, project, tuned: true, notes: {} })
+        await priming.call("mako:live-close", id).catch(() => undefined)
+      } finally {
+        await priming.stop()
+      }
+    }
     for (let run = 1; run <= FIRST_RUNS; run += 1) {
       note(`  ${harness} first launch ${run}/${FIRST_RUNS}: bare, then a new host`)
       const bareSamples = await bareRun("first", 0, run, ["first", "cold"])
@@ -952,9 +979,11 @@ async function measure(harness: string, bare: BareHarness): Promise<{ samples: S
       try {
         // One first launch a host: with `--tuning`, every other run's sends carry it.
         const tuned = TUNING && run % 2 === 0
+        await delay(FIRST_SETTLE_MS)
+        const hostRestMB = host.residentMB() ?? null
         for (const scenario of ["first", "cold"] as const) {
           const id = `${MARK}${randomUUID().slice(8)}`
-          samples.push(await makoTurn(host, { pass: "first", scenario, others: 0, run, id, project, tuned, notes: { hostReadyMs: Math.round(host.readyMs) } }))
+          samples.push(await makoTurn(host, { pass: "first", scenario, others: 0, run, id, project, tuned, notes: { hostReadyMs: Math.round(host.readyMs), hostRestMB } }))
           await host.call("mako:live-close", id).catch(() => undefined)
         }
         samples.push(...bareSamples)
@@ -1262,8 +1291,10 @@ const PHASES = {
     "runtime-discovery": { why: "the harness's executable is found (`claudeRuntime`) and held to the oldest version Mako runs (`RuntimeFloor.before`)" },
     "mcp-preparation": { why: "`mcpSnapshot(cwd)` reads the folder's MCP servers for the launch" },
     configuration: { why: "the rest of `claudeSdkOptions`: the environment, the MCP servers, Mako's in-process server and the system prompt" },
-    observation: { why: "the write-hold check (`personCodeRuns`), then `prepareApprovals` sets up the watch on native approvals" },
-    spawn: { why: "the CLI is spawned (`spawnClaudeProcess`), called by the Agent SDK's `query`, which the driver awaits before it, outside this phase" },
+    settings: { why: "the write-hold check: whether code of the person's runs beside Mako's hook (`personCodeRuns`), asked of the settings reader's worker thread, which the first check starts and which loads the Agent SDK" },
+    observation: { why: "`prepareApprovals` sets up the watch on native approvals" },
+    "sdk-load": { why: "the Agent SDK's package is loaded into the host on its first use (`heavy.claudeAgentSdk.load`)" },
+    spawn: { why: "the CLI is spawned (`spawnClaudeProcess`), called by the Agent SDK's `query`" },
     "sdk-initialization": { why: "the CLI boots and answers the SDK's initialize", own: true },
     "session-resume": { why: "`transcript.locate` finds the resumed session's transcript" },
   },
@@ -1429,7 +1460,7 @@ function report(harness: string, pass: Pass, others: number, samples: readonly S
     say(`  the write, from the model's last token before it to the request carrying its result: bare ${ms(tool(bare), 0)} ms, Mako ${ms(tool(mako), 0)} ms`)
     say(`  checkpoint: gate ${said("gate")} (${said("gate") === "held" ? "the message went at once and the agent's first write waited on the checkpoint" : "the message waited for its checkpoint"}); before-point ${said("checkpoint")}; held the workspace ${ms(number("checkpointHeldMs"), 0)} ms and was saved ${ms(number("checkpointSavedMs"), 0)} ms after it began; went ahead of it: ${said("wentBeforeCheckpoint")}`)
     if (scenario === "wake") say(`  the plain wake, a person's send to a sleeping conversation: hibernated because ${said("hibernatedBecause")}, ${ms(number("hibernatedAfterMs"), 0)} ms after ${said("fillers")} other conversations were sent a short turn (the host's warm limit read ${said("warmLimit")}); at the send its connection read ${said("connectionAtSend")}, and a wake started ahead of the send (\`mako:live-prewarm\`, or the host's own for an agent's message) was logged: ${said("prewarmed")}`)
-    if (pass === "first") say(`  the host: ready ${ms(number("hostReadyMs"), 0)} ms after its process started (its catalog read, both streams attached), and the send followed at once`)
+    if (pass === "first") say(`  the host: ready ${ms(number("hostReadyMs"), 0)} ms after its process started (its catalog read, both streams attached); the first send followed ${FIRST_SETTLE_MS ? `${FIRST_SETTLE_MS} ms later (\`--first-settle\`)` : "at once"}, when the host's own process held ${ms(number("hostRestMB"), 0)} MB (median; least ${ms(least(defined(mako.map((sample) => Amount.safeParse(sample.notes.hostRestMB).data))), 0)}, most ${ms(worst(defined(mako.map((sample) => Amount.safeParse(sample.notes.hostRestMB).data))), 0)})`)
     const whole = [...mako, ...tuned, ...bare].filter((sample) => sample.notes.characters !== sample.notes.expected || sample.notes.wrote !== "yes")
     say(whole.length ? `  CHECK: ${whole.length} turns did not deliver the whole answer or the file (${whole.map((sample) => `${sample.side} run ${sample.run}: ${sample.notes.characters}/${sample.notes.expected} characters, file ${sample.notes.wrote}`).join("; ")})` : `  every turn delivered all ${ENDS.at(-1)} characters and wrote its file; the host logged ${mako.reduce((sum, sample) => sum + (Amount.safeParse(sample.notes.loopHeld).data ?? 0), 0)} held-loop lines during them`)
     if (tuned.length) {

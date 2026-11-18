@@ -102,6 +102,8 @@ const { values } = parseArgs({
     "snapshot-sends": { type: "string" },
     idle: { type: "boolean", default: false },
     "idle-only": { type: "boolean", default: false },
+    "warm-start": { type: "boolean", default: false },
+    memory: { type: "boolean", default: false },
     "summaries-every": { type: "string", default: "30000" },
     account: { type: "boolean", default: false },
     // For an explicitly pinned host predating output hints; current hosts must prove the hinted path.
@@ -357,6 +359,29 @@ if (model) {
   }
   const earlyYardstick = record ? startYardstick() : undefined
   if (earlyYardstick) await delay(1_500)
+  const hostEnv = { ...env, HOME: world.home, TMPDIR: world.temporary, MAKO_DATA_ROOT: world.dataRoot, MAKO_WEB_SOCKET: socket, MAKO_PROD: "1", MAKO_TELEMETRY: "off" }
+  // `--warm-start`: the host is started and stopped once on this world before the start that is measured, as an
+  // installed host is one that ran before: its compiled code is in the data root's cache and its stores were opened.
+  if (values["warm-start"]) {
+    host = spawn("nice", ["-n", values.nice, process.execPath, ...HOST_NODE_OPTIONS, hostScript], { env: hostEnv, stdio: ["ignore", "ignore", "inherit"] })
+    const first = host
+    const gone = new Promise<void>((done) => first.once("exit", () => done()))
+    for (const deadline = Date.now() + 60_000; ; await delay(100)) {
+      const probe = await probeRuntime(socket, { timeoutMs: 2_000 }).catch(() => undefined)
+      if (probe?.state === "ready") break
+      if (Date.now() > deadline) throw new Error("the host's first start didn't answer /health within a minute")
+    }
+    const firstClient = randomUUID()
+    for (const deadline = Date.now() + 180_000; ; await delay(500)) {
+      const listed = z.object({ ready: z.boolean() }).loose().parse(await invokeRuntime(socket, firstClient, "mako:threads", [], 1, { timeoutMs: 600_000 }))
+      if (listed.ready) break
+      if (Date.now() > deadline) throw new Error("the host's first start hasn't read its catalog within three minutes")
+    }
+    first.kill("SIGTERM")
+    await Promise.race([gone, delay(60_000)])
+    if (first.exitCode === null && first.signalCode === null) throw new Error("the host's first start didn't quit within a minute")
+    say("started and stopped once; the measured start is a warm one")
+  }
   const phases: Phase[] = []
   const spawnedAt = Date.now()
   host = spawn("nice", ["-n", values.nice, process.execPath, ...nodeArgs, ...(profileDir ? ["--cpu-prof", "--cpu-prof-dir", profileDir, "--cpu-prof-interval", "1000"] : []), hostScript], {
@@ -372,7 +397,7 @@ if (model) {
       ...harness === "grok" && model && {
         GROK_HOME: join(world.home, ".grok"), XAI_API_KEY: "mako-host-load", GROK_DISABLE_AUTOUPDATER: "1",
         GROK_XAI_API_BASE_URL: `${model.url}/v1`, GROK_CLI_CHAT_PROXY_BASE_URL: `${model.url}/v1`, GROK_MODELS_BASE_URL: `${model.url}/v1`,
-      }, MAKO_WEB_SOCKET: socket, MAKO_PROD: "1", MAKO_TELEMETRY: "off", ...Object.fromEntries((values["host-env"] ?? []).map((pair) => [pair.slice(0, pair.indexOf("=")), pair.slice(pair.indexOf("=") + 1)])), ...finCount > 0 && { MAKO_FIN_SLOTS: "8" }, ...workingCount > 0 && { MAKO_FIN_SLOTS: String(workingCount + 2) }, ...record && { MAKO_HOST_LOAD_RECORD: record }, ...cloud && { MAKO_CLOUD_URL: cloud.url } },
+      }, MAKO_WEB_SOCKET: socket, MAKO_PROD: "1", MAKO_TELEMETRY: "off", ...values.memory && { MAKO_HOST_LOAD_HEAP: "1" }, ...Object.fromEntries((values["host-env"] ?? []).map((pair) => [pair.slice(0, pair.indexOf("=")), pair.slice(pair.indexOf("=") + 1)])), ...finCount > 0 && { MAKO_FIN_SLOTS: "8" }, ...workingCount > 0 && { MAKO_FIN_SLOTS: String(workingCount + 2) }, ...record && { MAKO_HOST_LOAD_RECORD: record }, ...cloud && { MAKO_CLOUD_URL: cloud.url } },
     stdio: ["ignore", values.gc ? "pipe" : "ignore", "inherit"],
     ...profileDir && values["node-arg"]?.some((arg) => arg.startsWith("--heap-prof")) && { cwd: profileDir },
     ...snapshots && { cwd: snapshots },
@@ -404,6 +429,12 @@ if (model) {
     const kb = Number(spawnSync("ps", ["-o", "rss=", "-p", hostPid], { encoding: "utf8" }).stdout.trim())
     if (kb > 0) rssSeries.push([Date.now(), Math.round(kb / 1024)])
   }, 5_000)
+  // `--memory`: what the host's memory is made of, as the system counts its regions, at the end of the quiet minute
+  // and of the measured seconds. Reading it stops the host for a moment, so it is taken after a phase, never in one.
+  const regions = (name: string) => {
+    if (!values.memory || !record || process.platform !== "darwin") return
+    writeFileSync(join(record, `regions-${name}.txt`), spawnSync("vmmap", ["--summary", hostPid], { encoding: "utf8", timeout: 60_000 }).stdout)
+  }
   for (const deadline = Date.now() + 60_000; ; await delay(100)) {
     const probe = await probeRuntime(socket, { timeoutMs: 2_000 }).catch(() => undefined)
     if (probe?.state === "ready") break
@@ -469,6 +500,7 @@ if (model) {
     const jobRuns = Object.values(jobs).reduce((sum, runs) => sum + runs, 0)
     idle = { hostPercent: Math.round(((toCpu - fromCpu) / ((to - from) / 1000)) * 1000) / 10, from, to, jobRuns, loopChecks: after.checks - before.checks, jobs }
     phases.push({ name: "baseline", from, to })
+    regions("rest")
     say(`idle: the host used ${idle.hostPercent}% of a core; ${jobRuns} job runs and ${idle.loopChecks} event loop checks in 60 s`)
     for (const [name, runs] of Object.entries(jobs)) say(`  ${String(runs).padStart(4)} ${name}`)
   }
@@ -677,6 +709,7 @@ if (model) {
   const reportsFrom = cloud?.reported?.()
   await delay(Number(values.seconds) * 1000)
   phases.push({ name: "steady", from: probedFrom, to: Date.now() })
+  regions("working")
   // The burst: every working Fin's turn ends in one moment, while a window opens the longest conversation and reads
   // it back a page at a time, and each seeded Apex's Fins are listed, as its own turn and its window's crew ask.
   let burst: { seconds: number; finsEnded: number; finsGated: number; openMs: number | null; pages: number; bytes: number; listMs: (number | null)[]; railMs: number | null } | undefined

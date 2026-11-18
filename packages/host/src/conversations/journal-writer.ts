@@ -4,12 +4,14 @@ import { errorMessage } from "../base/error-message.js"
 import { hostWarn } from "../base/host-log.js"
 
 /** One row a streamed flush writes: a block whole (its appends cleared), or what a block grew by, at its place among its appends. */
-export type JournalWriteOp = ["block", index: number, value: string] | ["append", index: number, sequence: number, value: string]
+export type JournalWriteOp =
+  | ["block", index: number, value: string, turn: [type: string, steering: number, request: string | null, message: string | null] | null]
+  | ["append", index: number, sequence: number, value: string]
 
 /** A journal's streamed writes, in the writer's hands. */
 export interface JournalWrites {
   /** Rows of one flush, written after every one given before. While a write is under way they join the next, one transaction for all that came meanwhile. */
-  write(revision: number, ops: readonly JournalWriteOp[]): void
+  write(revision: number, ops: readonly JournalWriteOp[], indexed: boolean): void
   /** Whether any of them isn't written yet. */
   pending(): boolean
   /**
@@ -31,7 +33,7 @@ interface Handle {
   cell: Int32Array
   /** The last message sent, and what waits for it to be done. */
   posted: number
-  next: { revision: number; ops: JournalWriteOp[] } | undefined
+  next: { revision: number; ops: JournalWriteOp[]; indexed: boolean } | undefined
   failure: string | undefined
   closed: boolean
 }
@@ -76,12 +78,13 @@ export class JournalWriter {
       }
     }
     return {
-      write: (revision, ops) => {
+      write: (revision, ops, indexed) => {
         if (handle.closed) return
         if (handle.next) {
           handle.next.revision = revision
+          handle.next.indexed = indexed
           handle.next.ops.push(...ops)
-        } else handle.next = { revision, ops: [...ops] }
+        } else handle.next = { revision, ops: [...ops], indexed }
         if (Atomics.load(handle.cell, 0) >= handle.posted) this.send(handle)
       },
       pending: () => handle.next !== undefined || Atomics.load(handle.cell, 0) < handle.posted,
@@ -117,7 +120,7 @@ export class JournalWriter {
     if (!next || !this.worker) return
     handle.next = undefined
     handle.posted += 1
-    this.worker.postMessage({ kind: "write", key: handle.key, seq: handle.posted, revision: next.revision, ops: next.ops })
+    this.worker.postMessage({ kind: "write", key: handle.key, seq: handle.posted, revision: next.revision, ops: next.ops, indexed: next.indexed })
   }
 
   private thread(): Worker {

@@ -1,8 +1,10 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { delimiter, join } from "node:path"
+import { Executables, resolveExecutable } from "@mako/host/base/executable"
+import { StdoutPace } from "@mako/host/harnesses/stdout-pace"
 import type { AgentsReportResult, AgentsStarted } from "@mako/host/contracts/agent-tools"
 import type { AgentRefused } from "@mako/host/contracts/agents"
 import { applyRosterPatch, rosteredLiveBatch, sharedFields, type CompactLiveBatch } from "@mako/host/contracts/live-conversations"
@@ -396,6 +398,61 @@ try {
     assert.equal(mine.owns("codex", "native-a", "conversation-a"), false, "a hold this host let go is gone at once")
     mine.close()
     other.close()
+  }
+  // Executables are found off the thread and kept: the same as the walk that waits finds, found again by asking
+  // only whether it is still there, looked for whole once it is gone, and a command that isn't here never kept.
+  {
+    const first = join(root, "bin-first"), second = join(root, "bin-second"), home = join(root, "no-home")
+    for (const folder of [first, second]) mkdirSync(folder)
+    writeFileSync(join(second, "mako-test-tool"), "#!/bin/sh\n", { mode: 0o755 })
+    writeFileSync(join(first, "unrunnable"), "", { mode: 0o644 })
+    const env = { PATH: [first, second].join(delimiter) }
+    const executables = new Executables()
+    assert.equal(await executables.find("mako-test-tool", env, home), join(second, "mako-test-tool"))
+    assert.equal(await executables.find("mako-test-tool", env, home), resolveExecutable("mako-test-tool", env, home), "as the walk on the thread finds it")
+    assert.equal(await executables.find("unrunnable", env, home), resolveExecutable("unrunnable", env, home))
+    assert.equal(await executables.find(join(second, "mako-test-tool"), env, home), join(second, "mako-test-tool"), "a path is itself")
+    // One earlier on the path, installed since: the one kept is still there, so it is still the answer for this
+    // host, as a launch already running from it would have it; gone, the walk finds the other.
+    writeFileSync(join(first, "mako-test-tool"), "#!/bin/sh\n", { mode: 0o755 })
+    assert.equal(await executables.find("mako-test-tool", env, home), join(second, "mako-test-tool"))
+    rmSync(join(second, "mako-test-tool"))
+    assert.equal(await executables.find("mako-test-tool", env, home), join(first, "mako-test-tool"), "one that went is looked for again")
+    assert.equal(await executables.find("mako-test-absent", env, home), null)
+    writeFileSync(join(second, "mako-test-absent"), "#!/bin/sh\n", { mode: 0o755 })
+    assert.equal(await executables.find("mako-test-absent", env, home), join(second, "mako-test-absent"), "one not found is looked for each time")
+    assert.equal(await executables.find("mako-test-tool", { PATH: second }, home), null, "what was found is kept for the folders it was looked for in")
+  }
+  // Processes' output is handled a turn's worth at a time: what the turn has no time for waits, paused, for the
+  // next, each process's in its order, and a process that ends has all it said taken first.
+  {
+    const taken: string[] = [], paused = new Set<string>()
+    const spin = (ms: number) => { for (const until = performance.now() + ms; performance.now() < until;) void 0 }
+    const pace = new StdoutPace<string>({
+      turnMs: 10,
+      take: (source, chunk) => { taken.push(`${source}:${chunk.toString()}`); spin(6) },
+      pause: (source) => void paused.add(source),
+      resume: (source) => void paused.delete(source),
+    })
+    const turned = () => new Promise((resolve) => setImmediate(resolve))
+    for (const source of ["a", "b", "c", "d"]) pace.read(source, Buffer.from("1"))
+    assert.deepEqual(taken, ["a:1", "b:1"], "a turn takes what it has time for")
+    assert.deepEqual([...paused], ["c", "d"])
+    pace.read("c", Buffer.from("2"))
+    pace.read("a", Buffer.from("2"))
+    assert.deepEqual(taken, ["a:1", "b:1"], "and nothing more, whoever it is from")
+    pace.flush("d")
+    assert.deepEqual(taken, ["a:1", "b:1", "d:1"], "a process that ended is heard out at once")
+    assert.deepEqual([...paused], ["c", "a"])
+    await turned()
+    assert.deepEqual(taken, ["a:1", "b:1", "d:1", "c:1", "c:2"], "the next turn takes the longest waiting first, in its order")
+    assert.deepEqual([...paused], ["a"])
+    await turned()
+    await turned()
+    assert.deepEqual(taken.slice(5), ["a:2"])
+    assert.equal(paused.size, 0)
+    pace.read("b", Buffer.from("2"))
+    assert.equal(taken.at(-1), "b:2", "a turn with time takes output as it comes")
   }
   console.log("flush costs ok")
 } finally {

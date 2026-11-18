@@ -755,6 +755,8 @@ export class LiveJournal {
   private writes?: JournalWrites
   private queued?: { from: number; blocks: Entry[]; revision: number }
   private settling = false
+  /** Whether the turn index holds every block (`turnIndexed`): then each commit says so again at its revision. */
+  private indexed = false
   /** Log events `streamed` found while it looked whether a flush could go to the writer: the commit that follows writes them. */
   private carried?: readonly MakoLogEvent[]
   private readonly path: string
@@ -835,7 +837,9 @@ export class LiveJournal {
       CREATE TABLE IF NOT EXISTS prompted (id INTEGER PRIMARY KEY, at INTEGER, requests INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS harness_turns (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS block_appends (block_id INTEGER NOT NULL, sequence INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (block_id, sequence));
+      ${TURN_INDEX_TABLE};
       ${MAKO_LOG_TABLE}`)
+      this.indexed = turnIndexed(this.connection)
       for (const value of this.db
         .prepare(
           "SELECT block_id, count(*) AS count FROM block_appends GROUP BY block_id"
@@ -897,12 +901,16 @@ export class LiveJournal {
       try {
         db.exec("BEGIN IMMEDIATE")
         db.prepare("INSERT OR REPLACE INTO progress VALUES (1, ?)").run(queued.revision)
+        if (this.indexed) db.prepare(TURN_INDEX_THROUGH).run(queued.revision)
         const upsert = db.prepare("INSERT OR REPLACE INTO blocks VALUES (?, ?)")
         const clear = db.prepare("DELETE FROM block_appends WHERE block_id=?")
         for (let index = queued.from; index < queued.blocks.length; index += 1) {
           upsert.run(index, JSON.stringify(queued.blocks[index]))
           clear.run(index)
           this.appends.delete(index)
+          const turn = turnRowOf(queued.blocks[index]!)
+          if (turn) db.prepare(TURN_INDEX_PUT).run(index, ...turn)
+          else db.prepare(TURN_INDEX_DROP).run(index)
         }
         db.exec("COMMIT")
       } catch (error) {
@@ -960,7 +968,7 @@ export class LiveJournal {
         counts.set(index, count + 1)
       } else {
         this.pager.detach("blocks", index, block)
-        ops.push(["block", index, JSON.stringify(block)])
+        ops.push(["block", index, JSON.stringify(block), turnRowOf(block)])
         counts.set(index, 0)
       }
     }
@@ -969,7 +977,7 @@ export class LiveJournal {
       else this.appends.delete(index)
     }
     this.queued = { from: Math.min(this.queued?.from ?? from, from), blocks, revision: next.revision }
-    writes.write(next.revision, ops)
+    writes.write(next.revision, ops, this.indexed)
     return true
   }
 
@@ -990,6 +998,18 @@ export class LiveJournal {
   }
 
   /**
+   * Gives back the pages its connection read: SQLite keeps up to 2 MB of them for each connection until it closes,
+   * and a few hundred conversations in memory, each read in once and at rest since, held 240 MB of them. A journal
+   * at work keeps its pages; one read in, or gone quiet, reads the few its next commit touches from the disk's cache.
+   */
+  rest(): void {
+    if (this.closed || this.connection.isTransaction) return
+    try {
+      this.connection.exec("PRAGMA shrink_memory")
+    } catch { /* The pages stay until it closes. */ }
+  }
+
+  /**
    * The worker checkpoints this journal while it commits (a turn running, or commits coming often), and no longer. A resident took its place on the worker
    * as it was read in and kept it at rest: with a few hundred conversations in memory the worker's places went to
    * the first ones read, and the ones at work checkpointed inside their own commits, 96% of the commits of 30 Fins.
@@ -1006,12 +1026,16 @@ export class LiveJournal {
     if (running || often) {
       if (!this.checkpoints && this.primer) this.lease(this.primer)
       if (!running && this.checkpoints) {
-        this.quiet = setTimeout(() => this.leaveWorker(), QUIET_MS)
+        this.quiet = setTimeout(() => {
+          this.leaveWorker()
+          this.rest()
+        }, QUIET_MS)
         this.quiet.unref()
       }
       return
     }
     this.leaveWorker()
+    this.rest()
   }
 
   /** Lets go of its place on the worker, which checkpoints what it left as it closes its connection. */
@@ -1325,6 +1349,7 @@ export class LiveJournal {
           .prepare("INSERT OR REPLACE INTO metadata VALUES (1, ?)")
           .run(JSON.stringify({ ...metadata, session: { ...session, failureEvidence: session.failureEvidence && storedFailureEvidence(session.failureEvidence) }, nativeAgents: providerRoster(metadata.nativeAgents), control: controlRow(metadata.control), base: undefined, activityAt: undefined, nativeActivity: undefined, side: undefined, turnWait: undefined, historyFailure: undefined, spentThrough: undefined }))
       this.kept("INSERT OR REPLACE INTO progress VALUES (1, ?)").run(next.revision)
+      if (this.indexed) this.kept(TURN_INDEX_THROUGH).run(next.revision)
       // An unread base stays unread here: Mako's own blocks can follow it
       // meanwhile, and nothing reaches its harness until it is read.
       const stored = storedBase(next)
@@ -1339,6 +1364,10 @@ export class LiveJournal {
         upsertBlock.run(index, value)
         clear.run(index)
         counts.set(index, 0)
+        // Its line of the turn index, in the same transaction as the block: neither is ever there without the other.
+        const turn = turnRowOf(blocks[index]!)
+        if (turn) this.kept(TURN_INDEX_PUT).run(index, ...turn)
+        else this.kept(TURN_INDEX_DROP).run(index)
       }
       const from = previous ? changedEntryStart(previous.blocks, blocks) : 0
       for (let index = from; index < blocks.length; index++) {
@@ -1376,6 +1405,7 @@ export class LiveJournal {
       if (!previous || blocks.length < previous.blocks.length) {
         this.pager.detachFrom("blocks", blocks.length)
         this.db.prepare("DELETE FROM blocks WHERE id>=?").run(blocks.length)
+        this.db.prepare("DELETE FROM turn_index WHERE id>=?").run(blocks.length)
         this.db
           .prepare("DELETE FROM block_appends WHERE block_id>=?")
           .run(blocks.length)
@@ -1971,6 +2001,91 @@ const TURN_ROWS_WHERE = "WHERE json_extract(value,'$.type') IN ('user','provider
  * A reader thread makes it (`JournalReaders.scan`), and the opening uses it when the journal still stands at its
  * revision.
  */
+/**
+ * The turn index: one line for each block that begins a turn or names a request (what `TURN_ROWS` reads of it),
+ * written in the transaction that writes the block, so a cold open reads these few lines and the newest blocks and
+ * never walks `blocks`. Walked, a 158 MB journal's first read was 2.3 s with its pages in the disk's cache and 8 to
+ * 10 s without. The index holds every block only once it was built from a walk (`buildTurnIndex`, on a reader's
+ * thread the first time a journal is opened cold); from then each commit says so again by writing its revision in
+ * `progress` row 2. A commit by a build that knows no index writes row 1 alone, the two differ, and the journal is
+ * walked and its index built again.
+ */
+const TURN_INDEX_TABLE = "CREATE TABLE IF NOT EXISTS turn_index (id INTEGER PRIMARY KEY, type TEXT NOT NULL, steering INTEGER NOT NULL, request TEXT, message TEXT)"
+const TURN_INDEX_PUT = "INSERT OR REPLACE INTO turn_index VALUES (?, ?, ?, ?, ?)"
+const TURN_INDEX_DROP = "DELETE FROM turn_index WHERE id=?"
+const TURN_INDEX_THROUGH = "INSERT OR REPLACE INTO progress VALUES (2, ?)"
+const ThroughRowsSchema = z.array(z.object({ id: z.number(), revision: z.number() }))
+const LastBlockSchema = z.object({ last: z.number().int().nullable() })
+
+/** A block's line of the turn index, as `TURN_ROWS` reads the same block; null for one that has none. */
+export function turnRowOf(block: Entry): [type: string, steering: number, request: string | null, message: string | null] | null {
+  if (block.type !== "user" && block.type !== "provider-turn") return null
+  const steering = "steeringFor" in block && block.steeringFor !== undefined && block.steeringFor !== null ? 1 : 0
+  const request = "requestId" in block ? block.requestId ?? null : null
+  const message = "messageId" in block ? block.messageId ?? null : null
+  return [block.type, steering, request, message]
+}
+
+/** Whether the journal's turn index holds every block as of its last commit. */
+function turnIndexed(db: DatabaseSync): boolean {
+  const rows = ThroughRowsSchema.safeParse(db.prepare("SELECT id, revision FROM progress WHERE id IN (1, 2)").all()).data ?? []
+  const through = rows.find((row) => row.id === 2)?.revision
+  return through !== undefined && through === rows.find((row) => row.id === 1)?.revision
+}
+
+/** Whether the journal at `path` has a whole turn index: its cold open then needs no reader's walk. */
+export function turnIndexWhole(path: string): boolean {
+  try {
+    const db = new DatabaseSync(path, { readOnly: true })
+    try {
+      return Boolean(db.prepare("SELECT 1 AS found FROM sqlite_master WHERE type='table' AND name='turn_index'").get()) && turnIndexed(db)
+    } finally {
+      db.close()
+    }
+  } catch {
+    return false
+  }
+}
+
+/** `coldScan`, from the turn index and no walk of `blocks`; undefined for a journal whose index doesn't hold every block. */
+export function readTurnIndex(db: DatabaseSync): ColdScan | undefined {
+  if (!db.prepare("SELECT 1 AS found FROM sqlite_master WHERE type='table' AND name='turn_index'").get() || !turnIndexed(db)) return undefined
+  const revision = ProgressSchema.safeParse(db.prepare("SELECT revision FROM progress WHERE id=1").get()).data?.revision ?? 0
+  const last = LastBlockSchema.parse(db.prepare("SELECT max(id) AS last FROM blocks").get()).last
+  const appended = db.prepare("SELECT block_id, count(*) AS count FROM block_appends GROUP BY block_id").all().map((value): [number, number] => {
+    const row = AppendCountSchema.parse(value)
+    return [row.block_id, row.count]
+  })
+  const turns = db.prepare("SELECT id, type, steering, request, message FROM turn_index ORDER BY id").all().map((row) => TurnRowSchema.parse(row))
+  // Blocks are written by index from the first, so the newest one's id is how many there are: what the walk counted.
+  return { revision, count: last === null ? 0 : last + 1, last, appended, turns }
+}
+
+/**
+ * Writes the turn index from a walk (`scan`) and marks it whole, when the journal is still as the walk found it and
+ * its blocks are numbered from the first with none missing. Returns whether it did.
+ */
+export function buildTurnIndex(db: DatabaseSync, scan: ColdScan): boolean {
+  if (scan.last !== (scan.count === 0 ? null : scan.count - 1)) return false
+  db.exec("BEGIN IMMEDIATE")
+  try {
+    const revision = ProgressSchema.safeParse(db.prepare("SELECT revision FROM progress WHERE id=1").get()).data?.revision
+    if (revision !== scan.revision) {
+      db.exec("ROLLBACK")
+      return false
+    }
+    db.exec(`${TURN_INDEX_TABLE}; DELETE FROM turn_index`)
+    const put = db.prepare(TURN_INDEX_PUT)
+    for (const turn of scan.turns) put.run(turn.id, turn.type, turn.steering, turn.request, turn.message)
+    db.prepare(TURN_INDEX_THROUGH).run(scan.revision)
+    db.exec("COMMIT")
+    return true
+  } catch (error) {
+    if (db.isTransaction) db.exec("ROLLBACK")
+    throw error
+  }
+}
+
 export const ColdScanSchema = z.object({
   revision: z.number().int().nonnegative(),
   count: z.number().int().nonnegative(),
@@ -2057,7 +2172,7 @@ export class ColdJournal {
       const revision = ProgressSchema.safeParse(db.prepare("SELECT revision FROM progress WHERE id=1").get()).data?.revision ?? 0
       // What a reader thread read of every block stands while the journal is at the revision it read; one written
       // since is read here, as every one was.
-      const scan = scanned?.revision === revision ? scanned : undefined
+      const scan = scanned?.revision === revision ? scanned : readTurnIndex(db)
       const counted = scan ?? BlockCountSchema.parse(db.prepare("SELECT count(*) AS count, max(id) AS last FROM blocks").get())
       // Blocks are kept by index; a journal whose ids say otherwise is read whole, as it always was. One whose history is
       // its session's record is read cold only when that record covers every block with nothing to merge: its pages are

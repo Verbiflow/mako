@@ -9,6 +9,7 @@ import { ColdScanSchema, type ColdScan, type JournalRows } from "./live-journal.
 const READERS = Math.max(1, Math.min(4, availableParallelism() - 1))
 /** A reader with nothing to read for this long ends; the next read starts one. */
 const READER_IDLE_MS = 60_000
+const READER_YOUNG_MB = 32
 /** A read that takes longer than this is given up on, and its journal read on the loop instead. */
 const READ_TIMEOUT_MS = 120_000
 
@@ -114,7 +115,9 @@ export class JournalReaders {
   private reader(): Reader {
     const free = this.readers.reduce<Reader | undefined>((least, reader) => (!least || reader.busy < least.busy ? reader : least), undefined)
     if (free && (free.busy === 0 || this.readers.length >= READERS)) return free
-    const worker = new Worker(this.entry, { resourceLimits: { maxOldGenerationSizeMb: 1024 } })
+    // A reader's young generation grows to 120 MB while it parses a journal and stays that size while it is idle
+    // with 3 MB of it in use: held to `READER_YOUNG_MB`, it collects more often, on its own thread.
+    const worker = new Worker(this.entry, { resourceLimits: { maxOldGenerationSizeMb: 1024, maxYoungGenerationSizeMb: READER_YOUNG_MB } })
     worker.unref()
     const reader: Reader = { worker, busy: 0 }
     worker.on("message", (message) => {

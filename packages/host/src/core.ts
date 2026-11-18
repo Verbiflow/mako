@@ -29,6 +29,7 @@ import type { ArchivedThread, ReportedSession } from "@mako/protocol/thread-list
 import type { LiveSummary } from "./contracts/live-conversations.js"
 import type { Domain } from "./base/host-domains.js"
 import { hostLog, hostWarn, logsRoot } from "./base/host-log.js"
+import { HostWarmer, warmPieces } from "./harnesses/index.js"
 import { HeapWatch, afterCollections, readHeap } from "./base/heap-watch.js"
 import { cloudUrl } from "./base/build-identity.js"
 import { NativeUnknown } from "./base/native-unknown.js"
@@ -83,6 +84,8 @@ type WebHost = Awaited<ReturnType<typeof startWebHost>>
 
 /** How long after start the held messages the last host left are first looked at for their time. */
 const HELD_WAKES_AFTER_START_MS = 2_000
+/** How long after the core opens the host starts loading what a first launch loads (`HostWarmer`): past a window's opening calls. */
+const WARM_AFTER_READY_MS = 1_000
 /** A project whose checkout this host couldn't read, or let go of, is asked about again at most this often. */
 const HEAD_ASK_AGAIN_MS = 60_000
 /**
@@ -2061,7 +2064,16 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   )
   declareControlMethods(methods, control, environment.appRoot, config.executable)
   declareCloudControlPreviewMethods(methods, () => cloudConversations?.controlPreviews)
-  declareToolMethods(methods, { tools, control, workspace, dataRoot: environment.dataRoot, machine })
+  // What a first launch loads into the host, loaded once nobody waits on a start: for the harnesses used on this
+  // device, and never a harness's own process (`host-warmup.ts`).
+  const warmer = new HostWarmer(() => warmPieces({
+    drivers: providerHost.liveDrivers.list(),
+    used: Object.keys(finDefaults.reading().used),
+    cwd: environment.appRoot,
+    shared: [{ name: "Mako's MCP servers", load: async () => late.agentServers?.warm() }],
+  }), { busy: () => shell.foreground.busy, idle: () => shell.foreground.idle(), stopped: () => shell.stopping.signal.aborted })
+  const warmLaunch = (why: string) => void warmer.warm(why).catch((error: Error) => hostWarn("warmup", "a first launch's loads weren't made ahead", { error: error.message }))
+  declareToolMethods(methods, { tools, control, workspace, dataRoot: environment.dataRoot, machine, warmLaunch: () => warmLaunch("a new conversation's first message is being written") })
   const usage = declareUsageMethods(methods, {
     dataRoot: environment.dataRoot,
     userRoot: environment.userRoot,
@@ -2273,6 +2285,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     "catalog calls": () => catalog.stop(),
   } satisfies Record<string, () => void | Promise<void>>
   for (const [name, cancel] of Object.entries(outside)) shell.stopping.register(name, cancel)
+  // A moment after the host answers its first clients, so a window's opening calls aren't behind a package's load.
+  setTimeout(() => warmLaunch("the host is ready"), WARM_AFTER_READY_MS).unref()
 
   return {
     route: async (channel, args) => {
