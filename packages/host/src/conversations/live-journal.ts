@@ -27,7 +27,7 @@ import {
 } from "../contracts/conversation-control.js"
 import { existsSync, mkdirSync, readdirSync, realpathSync, statSync } from "node:fs"
 import { join, resolve } from "node:path"
-import { DatabaseSync } from "node:sqlite"
+import { DatabaseSync, type StatementSync } from "node:sqlite"
 import { z } from "zod"
 import { ExecutionContextSchema } from "../contracts/execution-context.js"
 import { DecodedEntrySchema, entriesFromMessages, ThreadRefSchema, type DecodedEntry, type ThreadPage } from "@mako/sessions"
@@ -44,6 +44,7 @@ import { hostWarn } from "../base/host-log.js"
 import { foldMakoLog, MAKO_LOG_SCHEMA, makoFacts, makoLogDifference, type MakoLogEvent, type MakoLogState } from "./mako-log.js"
 import { baseKeptBecause, baseKeptOnceHeld, refreshedFacts, sourceOfPage, storedBase } from "./base-source.js"
 import { RECLAIM_MIN_BYTES, journalOpened, type Reclaimed } from "./journal-reclaim.js"
+import { topic } from "../base/topic.js"
 import { cutOffRequests, mergedBaseSteps } from "./stream-merging.js"
 import { errorMessage } from "../base/error-message.js"
 import { EntrySchema, type Entry } from "@mako/sessions/entries"
@@ -711,7 +712,21 @@ export class JournalWriteError extends HostFailureError {
   }
 }
 
+/**
+ * What a journal's log is cut back to as it starts over after a checkpoint. SQLite reuses the file at the size it
+ * reached, so without this a log that once passed `CHECKPOINT_WAL_LIMIT` reads as past it for good, and its
+ * checkpoints stay on the host's thread. Above what a log reaches between two checkpoints, so a usual one is never
+ * cut and grown again.
+ */
+const WAL_KEPT_BYTES = 2 * 1024 * 1024
 const AutoCheckpointSchema = z.object({ wal_autocheckpoint: z.number().int().nonnegative() })
+
+/**
+ * Each commit's milliseconds by part, for a bench that asks what a commit waits on (`bench:host-load --record`): taking
+ * the write lock, the rows, and the commit itself, and whether a worker checkpoints this journal (`background`) or the
+ * commit does. Nothing is timed while nobody listens.
+ */
+export const journalCommits = topic<{ beginMs: number; rowsMs: number; commitMs: number; background: boolean }>("mako:journal-commit")
 
 /**
  * One independent journal per conversation. Only changed blocks and requests
@@ -761,6 +776,10 @@ export class LiveJournal {
   /** The pages a commit checkpoints the journal at when it isn't writing rows ahead (`STAGE_CHECKPOINT_PAGES`). */
   private checkpointPages?: number
   private checkpoints?: WalCheckpoint
+  /** Where a running turn's checkpoints go (`checkpointWhile`), and a place on the worker this journal is still leaving. */
+  private primer?: WalPrimer
+  private readonly statements = new Map<string, StatementSync>()
+  private left?: Promise<void>
   private foregroundPages = 1_000
   private checkpointPolicyDirty = false
   /** Whether the base row names the rows; unknown until the journal is read or writes it. */
@@ -790,7 +809,7 @@ export class LiveJournal {
     try {
       // The checkpoint owner's final close may still hold the WAL lock. Install the existing wait before opening it.
       this.db
-        .exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
+        .exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA journal_size_limit=${WAL_KEPT_BYTES};
       CREATE TABLE IF NOT EXISTS metadata (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS options (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS progress (id INTEGER PRIMARY KEY, revision INTEGER NOT NULL);
@@ -824,15 +843,49 @@ export class LiveJournal {
 
   /** Live resident only: listings and independent read connections retain their original policy. */
   checkpointWith(primer: WalPrimer): void {
-    if (this.closed || this.checkpoints) return
-    this.foregroundPages = AutoCheckpointSchema.parse(this.db.prepare("PRAGMA wal_autocheckpoint").get()).wal_autocheckpoint
-    this.checkpoints = primer.watch(this.path, () => {
+    if (!this.closed) this.primer = primer
+  }
+
+  /**
+   * The worker checkpoints this journal while its turn runs, and no longer. A resident took its place on the worker
+   * as it was read in and kept it at rest: with a few hundred conversations in memory the worker's places went to
+   * the first ones read, and the ones at work checkpointed inside their own commits, 96% of the commits of 30 Fins.
+   */
+  private checkpointWhile(running: boolean): void {
+    if (this.closed) return
+    if (running) {
+      if (!this.checkpoints && this.primer) this.lease(this.primer)
+      return
+    }
+    const held = this.checkpoints
+    if (!held) return
+    this.checkpoints = undefined
+    const closed = held.close()
+    const left = Promise.all([this.left, closed]).then(() => {})
+    this.left = left
+    void left.then(() => { if (this.left === left) this.left = undefined })
+  }
+
+  private lease(primer: WalPrimer): void {
+    if (this.checkpointPolicyDirty) return
+    // With no place free on the worker this answers nothing, and the next commit of the turn asks again.
+    const held = primer.watch(this.path, () => {
       if (this.closed) return
       this.checkpointPolicyDirty = true
       try { this.checkpointPolicy() }
       catch (error) { hostWarn("journal", "foreground checkpoint policy will be retried before the next write", { error: errorMessage({ error }) }) }
     })
-    this.checkpoints?.pages(this.foregroundPages)
+    if (!held) return
+    this.foregroundPages = AutoCheckpointSchema.parse(this.db.prepare("PRAGMA wal_autocheckpoint").get()).wal_autocheckpoint
+    this.checkpoints = held
+    held.pages(this.foregroundPages)
+  }
+
+  /** A statement every commit runs, prepared once for this connection: prepared at each commit, four of them were a fifth of a streamed commit. */
+  private kept(sql: string): StatementSync {
+    let statement = this.statements.get(sql)
+    if (!statement) this.statements.set(sql, statement = this.db.prepare(sql))
+    return statement
   }
 
   private checkpointPolicy(): void {
@@ -1089,12 +1142,14 @@ export class LiveJournal {
 
   /** `grown`: tool blocks of `next` that differ from `previous` only by these appends (`deliverLiveUpdates`). */
   commit(next: LiveSnapshot, previous?: LiveSnapshot, grown?: ReadonlyMap<number, ToolGrowth>): void {
+    const timed = journalCommits.heard ? performance.now() : undefined
     try {
       this.beforeWrite()
       this.db.exec("BEGIN IMMEDIATE")
     } catch (error) {
       throw new JournalWriteError(error)
     }
+    const begun = timed === undefined ? 0 : performance.now()
     let written: BaseWrite | undefined
     try {
       const { blocks, requests, harnessTurns, ...metadata } = next
@@ -1108,21 +1163,15 @@ export class LiveJournal {
         this.db
           .prepare("INSERT OR REPLACE INTO metadata VALUES (1, ?)")
           .run(JSON.stringify({ ...metadata, session: { ...session, failureEvidence: session.failureEvidence && storedFailureEvidence(session.failureEvidence) }, nativeAgents: providerRoster(metadata.nativeAgents), control: controlRow(metadata.control), base: undefined, activityAt: undefined, nativeActivity: undefined, side: undefined, turnWait: undefined, historyFailure: undefined, spentThrough: undefined }))
-      this.db.prepare("INSERT OR REPLACE INTO progress VALUES (1, ?)").run(next.revision)
+      this.kept("INSERT OR REPLACE INTO progress VALUES (1, ?)").run(next.revision)
       // An unread base stays unread here: Mako's own blocks can follow it
       // meanwhile, and nothing reaches its harness until it is read.
       const stored = storedBase(next)
       if (!previous || this.messageBase || stored !== storedBase(previous)) written = this.writeBase(stored)
-      const upsertBlock = this.db.prepare(
-        "INSERT OR REPLACE INTO blocks VALUES (?, ?)"
-      )
+      const upsertBlock = this.kept("INSERT OR REPLACE INTO blocks VALUES (?, ?)")
       const counts = new Map<number, number>()
-      const append = this.db.prepare(
-        "INSERT INTO block_appends VALUES (?, ?, ?)"
-      )
-      const clear = this.db.prepare(
-        "DELETE FROM block_appends WHERE block_id=?"
-      )
+      const append = this.kept("INSERT INTO block_appends VALUES (?, ?, ?)")
+      const clear = this.kept("DELETE FROM block_appends WHERE block_id=?")
       const writeBlock = (index: number) => {
         const value = JSON.stringify(blocks[index])
         this.pager.detach("blocks", index, blocks[index])
@@ -1203,8 +1252,11 @@ export class LiveJournal {
         const difference = makoLogDifference(this.makoLog(), makoFacts(next))
         if (difference) throw new Error(`Mako's log lost a change to ${next.session.id}'s facts. ${difference}`)
       }
+      const rows = timed === undefined ? 0 : performance.now()
       this.db.exec("COMMIT")
+      if (timed !== undefined) journalCommits.publish({ beginMs: begun - timed, rowsMs: rows - begun, commitMs: performance.now() - rows, background: this.checkpoints?.active() ?? false })
       this.checkpoints?.committed()
+      this.checkpointWhile(next.session.status === "running")
       if (writeOptions) this.optionsStored = true
       this.messageBase = false
       for (const [index, count] of counts) {
@@ -1453,7 +1505,7 @@ export class LiveJournal {
       })
     }
     const freed = this.pager.release(readOnlyRows(this.path))
-    const checkpointsClosed = this.checkpoints?.close()
+    const checkpointsClosed = this.leftWorker()
     if (checkpointsClosed || (paged && !abandon)) {
       const unwatch = journalOpened.subscribe(opened => {
         if (opened === this.releaseKey) this.keepFile()
@@ -1476,7 +1528,13 @@ export class LiveJournal {
     this.untidy = true
     this.stopStaging()
     this.db.close()
-    this.closing = this.checkpoints?.close()
+    this.closing = this.leftWorker()
+  }
+
+  /** Once the worker holds no connection to this journal's file: the place it has, and one it was already leaving. */
+  private leftWorker(): Promise<void> | undefined {
+    const closed = this.checkpoints?.close()
+    return closed || this.left ? Promise.all([this.left, closed]).then(() => {}) : undefined
   }
 
   /** Once the journal closed and what it waited on before tidying its file (`close`) is done. */

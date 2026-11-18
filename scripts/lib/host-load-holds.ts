@@ -17,6 +17,8 @@ export const RecordingSchema = z.object({
   holds: z.array(z.object({ from: z.number(), to: z.number(), during: z.array(z.string()) })),
   samples: z.array(z.object({ at: z.number(), activeMs: z.number(), idleMs: z.number(), rssMb: z.number(), heapUsedMb: z.number(), heapTotalMb: z.number(), externalMb: z.number(), cpuMs: z.number() })),
   collections: z.array(z.tuple([z.number(), z.number(), z.number()])),
+  /** Journal commits: every one summed by part, and each slow one as `[at, begin, rows, commit, background]`. */
+  commits: z.object({ count: z.number(), beginMs: z.number(), rowsMs: z.number(), commitMs: z.number(), foreground: z.number(), slow: z.array(z.tuple([z.number(), z.number(), z.number(), z.number(), z.number()])) }).optional(),
 })
 export type Recording = z.infer<typeof RecordingSchema>
 
@@ -225,8 +227,23 @@ export function recordedRun(run: RecordedRun) {
     }
   })
 
+  const slow = recording.commits?.slow ?? []
+  const part = (at: 1 | 2 | 3, of: typeof slow) => round(of.reduce((sum, commit) => sum + commit[at], 0))
+  const over = (ms: number, of: typeof slow) => of.filter((commit) => commit[1] + commit[2] + commit[3] >= ms)
+  const commits = recording.commits && {
+    count: recording.commits.count, foreground: recording.commits.foreground,
+    beginMs: round(recording.commits.beginMs), rowsMs: round(recording.commits.rowsMs), commitMs: round(recording.commits.commitMs),
+    meanMicros: Math.round(((recording.commits.beginMs + recording.commits.rowsMs + recording.commits.commitMs) / Math.max(1, recording.commits.count)) * 1000),
+    slow: [5, 20, 100].map((ms) => {
+      const these = over(ms, slow)
+      return { overMs: ms, count: these.length, beginMs: part(1, these), rowsMs: part(2, these), commitMs: part(3, these), foreground: these.filter((commit) => commit[4] === 0).length }
+    }),
+    worst: [...slow].sort((a, b) => b[1] + b[2] + b[3] - (a[1] + a[2] + a[3])).slice(0, 8).map(([at, beginMs, rowsMs, commitMs, background]) => ({ phase: phaseOf(at), beginMs, rowsMs, commitMs, background: background === 1 })),
+  }
+
   return {
     minMs, tickMs: recording.tickMs,
+    ...commits && { commits },
     phases,
     holds: { count: holds.length, totalMs: round(holds.reduce((sum, hold) => sum + hold.ms, 0)) },
     byTotal: [...byTop].sort((a, b) => b.totalMs - a.totalMs),

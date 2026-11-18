@@ -1106,6 +1106,8 @@ export function applyRosterPatch(held: NativeAgentRoster, patch: RosterPatch): N
 
 /** `next` as what changed of `held`, where that makes `next` exactly, order included, in fewer characters than `next` whole. */
 function rosterPatch(held: NativeAgentRoster, next: NativeAgentRoster): RosterPatch | undefined {
+  const inPlace = rosterPatchInPlace(held, next)
+  if (inPlace !== null) return inPlace
   const heldEntries = new Map(held.agents.map((agent) => [agentKey(agent), agent]))
   const stays = new Set(next.agents.map(agentKey))
   const agents = next.agents.filter((agent) => {
@@ -1122,6 +1124,24 @@ function rosterPatch(held: NativeAgentRoster, next: NativeAgentRoster): RosterPa
   if (applyRosterPatch(held, patch)?.agents.length !== next.agents.length) return undefined
   // The roster whole is as long as its entries, each one's length kept with its seal: written out to be measured, an
   // Apex's 226 entries were, at every step of any one of them.
+  const whole = next.agents.reduce((sum, agent) => sum + entrySeal(agent)[2] + 1, '{"agents":[],"limited":false}'.length)
+  return JSON.stringify(patch).length < whole ? patch : undefined
+}
+
+/**
+ * `rosterPatch` for the usual move, entries changed where they stand and none come, gone or moved: found by comparing
+ * the two lists place by place, with no index of either built. Null when the rosters differ any other way.
+ */
+function rosterPatchInPlace(held: NativeAgentRoster, next: NativeAgentRoster): RosterPatch | undefined | null {
+  if (held.agents.length !== next.agents.length) return null
+  const agents: NativeAgent[] = []
+  for (let at = 0; at < next.agents.length; at += 1) {
+    const agent = next.agents[at]!, was = held.agents[at]!
+    if (agent === was) continue
+    if (agentKey(agent) !== agentKey(was)) return null
+    if (canonicalJson(agent) !== canonicalJson(was)) agents.push(agent)
+  }
+  const patch: RosterPatch = { ...(agents.length && { agents }), ...(next.limited !== held.limited && { limited: next.limited }), seal: rosterSeal(next) }
   const whole = next.agents.reduce((sum, agent) => sum + entrySeal(agent)[2] + 1, '{"agents":[],"limited":false}'.length)
   return JSON.stringify(patch).length < whole ? patch : undefined
 }

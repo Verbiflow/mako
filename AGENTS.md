@@ -781,7 +781,11 @@ unless the last host left that Apex's own queue unsettled. Reading
 one in commits the restart's changes, the first frame into a WAL its last
 host closed, whose header SQLite syncs even at `synchronous=NORMAL`: 100 to
 300 ms on a busy disk, on the host's thread, until a worker wrote it first
-(`WalPrimer`). A crash's
+(`WalPrimer`). The same worker checkpoints a journal while a turn of it runs
+and no longer (`LiveJournal.checkpointWhile`; held by every conversation in
+memory, its 32 places went to the first read in and the ones at work
+checkpointed inside their own commits), once its log runs `CHECKPOINT_PAGES`
+ahead of the last checkpoint. A crash's
 cut reads as `uncertain`. A Fin's cut turn that nothing picks up within
 `STRANDED_AFTER_MS` (`strandedTurn`) becomes a question for its Apex
 (`reportCut`). That covers the loop guard being spent, a sign-out, a reason
