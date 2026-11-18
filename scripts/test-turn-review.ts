@@ -490,25 +490,27 @@ test("the journal's reader answers a turn's writers, its own lines and an undo's
   await f.tracker.settled()
   const store = f.tracker.store
   const stored = storedView(store)
+  // The Thread's second and third turns, as the journal has them.
+  const [, second = "", third = ""] = store.activityOfThread("T1").filter((activity) => activity.kind === "turn").map((activity) => activity.id)
   const reader = new JournalReader(store.path)
   try {
-    const file = appRecord(turnChanges(stored, "T1", R2))
+    const file = appRecord(turnChanges(stored, "T1", second))
     const shown = { before: app.r1.split(/(?<=\n)/), after: ["header by you\n", ...final.split(/(?<=\n)/)] }
-    const writers = turnWriters(stored, "T1", R2, file)
-    assert.deepEqual(writers, turnWriters(f.view, "T1", R2, file), "the journal as committed reads as the tracker's own view does")
+    const writers = turnWriters(stored, "T1", second, file)
+    assert.deepEqual(writers, turnWriters(f.view, "T1", second, file), "the journal as committed reads as the tracker's own view does")
     assert.ok(writers?.some((run) => run.writer === "other" && run.thread === "T2"))
-    assert.deepEqual(await reader.turnWriters("T1", R2, file), writers)
-    assert.deepEqual(await reader.turnWriters("T1", R2, file, shown), turnWriters(stored, "T1", R2, file, shown), "on the checkpoints' sides, walked from the turn's start")
-    assert.deepEqual(await reader.turnWriters("T1", R2, file, { before: null, after: shown.after }), turnWriters(stored, "T1", R2, file, { before: null, after: shown.after }), "a side with no file")
-    assert.deepEqual(await reader.turnOnly("T1", R2, file), turnOnlyPair(stored, "T1", R2, file))
-    for (const scope of [{ kind: "turn", requestId: R2 }, { kind: "turn", requestId: R3 }, { kind: "thread" }] as const) {
+    assert.deepEqual(await reader.turnWriters("T1", second, file), writers)
+    assert.deepEqual(await reader.turnWriters("T1", second, file, shown), turnWriters(stored, "T1", second, file, shown), "on the checkpoints' sides, walked from the turn's start")
+    assert.deepEqual(await reader.turnWriters("T1", second, file, { before: null, after: shown.after }), turnWriters(stored, "T1", second, file, { before: null, after: shown.after }), "a side with no file")
+    assert.deepEqual(await reader.turnOnly("T1", second, file), turnOnlyPair(stored, "T1", second, file))
+    for (const scope of [{ kind: "turn", requestId: second }, { kind: "turn", requestId: third }, { kind: "thread" }] as const) {
       const plan = undoPlan(stored, "T1", scope, f.repo)
       assert.ok(plan.writes.length && plan.token, "there is something to undo")
       assert.deepEqual(await reader.undoPlan("T1", scope, f.repo), plan, `the same writes, lines kept and token for ${scope.kind === "turn" ? scope.requestId : "the Thread"}`)
     }
 
     // The first entry on a file since a turn began, by the file's own index: what reading every entry since then found.
-    const began = store.turn("T1", R2)!.start
+    const began = store.turn("T1", second)!.start
     const since = store.entriesBetween(began, Number.MAX_SAFE_INTEGER)
     for (const path of ["app.ts", "util.ts", "never.ts"])
       for (const before of [1, file.entries.first, file.entries.last, store.lastSeq() + 1])
@@ -520,8 +522,8 @@ test("the journal's reader answers a turn's writers, its own lines and an undo's
     const rows = new DatabaseSync(store.path)
     rows.exec("DELETE FROM blobs")
     rows.close()
-    assert.equal(turnWriters(storedView(store), "T1", R2, file), undefined)
-    assert.deepEqual([await reader.turnWriters("T1", R2, file), await reader.turnOnly("T1", R2, file)], [undefined, undefined], "no answer stays no answer")
+    assert.equal(turnWriters(storedView(store), "T1", second, file), undefined)
+    assert.deepEqual([await reader.turnWriters("T1", second, file), await reader.turnOnly("T1", second, file)], [undefined, undefined], "no answer stays no answer")
   } finally {
     await reader.close()
     await f.tracker.close()
