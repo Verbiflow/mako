@@ -64,6 +64,8 @@ const CASES: Case[] = [
   { name: "a field sent over REST", thread: inWorktree, command: "gh api repos/o/r/pulls/12 -f state=closed", cwd: worktree, route: "allow" },
   { name: "GraphQL", thread: inWorktree, command: "gh api graphql -f query='{ viewer { login } }'", cwd: worktree, route: "allow" },
   { name: "an issue over REST", thread: inWorktree, command: "gh api repos/o/r/issues/12", cwd: worktree, route: "allow" },
+  { name: "review bodies, which pull_request_status doesn't return", thread: inWorktree, command: "gh api repos/o/r/pulls/12/reviews --jq '.[-1].body'", cwd: worktree, route: "allow" },
+  { name: "a pull request's files", thread: inWorktree, command: "gh api repos/o/r/pulls/12/files", cwd: worktree, route: "allow" },
   { name: "runs listed", thread: inWorktree, command: "gh run list --branch mako/x --limit 5", cwd: worktree, route: "warn", rule: "gh-run-list" },
   { name: "reading an issue", thread: inWorktree, command: "gh issue view 12", cwd: worktree, route: "allow" },
   { name: "a PR in a repository elsewhere", thread: inWorktree, command: "cd /tmp/other && gh pr create --fill", cwd: worktree, route: "allow" },
@@ -144,6 +146,7 @@ assert.equal(routeNativeTool(inMain, { tool: "mcp__linear__save_issue", server: 
   assert.match(message("gh pr view https://github.com/Verbiflow/mako/pull/838 --json state"), /`mcp__mako__pull_request_status\(\{"number":838\}\)`/)
   assert.match(message("gh api repos/Verbiflow/mako/pulls/838"), /`mcp__mako__pull_request_status\(\{"number":838\}\)`/)
   assert.match(message("gh api repos/Verbiflow/mako/actions/jobs/5512/logs"), /`mcp__mako__pull_request_status\(\{"job":5512\}\)`/)
+  assert.match(message(`for j in 1 2; do gh api "repos/Verbiflow/mako/actions/jobs/$j/logs" 2>/dev/null | tail -40; done`), /`mcp__mako__pull_request_status\(\{"job":"<job id in \$j>"\}\)`/, "an id the shell fills in is named as a placeholder")
   assert.match(message("gh api -H 'Accept: application/vnd.github+json' repos/o/r/actions/runs/77/jobs"), /`mcp__mako__pull_request_status\(\{"run":77\}\)`/)
   assert.match(message("gh run view 991 --log-failed"), /`mcp__mako__pull_request_status\(\{"run":991\}\)`/)
   assert.match(message("gh run view --job 5512 --log"), /`mcp__mako__pull_request_status\(\{"job":5512\}\)`/)

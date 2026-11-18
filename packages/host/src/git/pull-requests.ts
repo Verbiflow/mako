@@ -395,7 +395,8 @@ function pullView(pull: PullRequest, threads: ReviewThread[] | null, checks: "al
 export interface PullByNumberReport {
   /** Why GitHub can't be used here. */
   github?: string
-  pullRequest?: PullView & { head: string }
+  /** Its head branch, and the commit at its head as GitHub has it. */
+  pullRequest?: PullView & { head: string; headCommit?: string }
 }
 
 export async function pullRequestByNumber(cwd: string, number: number, options: { logs?: boolean; checks?: "all" } = {}): Promise<PullByNumberReport> {
@@ -405,7 +406,8 @@ export async function pullRequestByNumber(cwd: string, number: number, options: 
   const pull = await pullByNumber(cwd, number)
   if (!pull) throw new Error(`${status.repo ?? "This repository"} has no pull request #${number} that gh could read. A pull request of another repository is read from a checkout of that repository.`)
   const threads = pull.state === "open" && status.repo ? await openReviewThreads(cwd, status.repo, pull.number) : null
-  const view = { ...pullView(pull, threads, options.checks), head: pull.head }
+  const view: NonNullable<PullByNumberReport["pullRequest"]> = { ...pullView(pull, threads, options.checks), head: pull.head }
+  if (pull.headCommit) view.headCommit = pull.headCommit
   if (options.logs) view.failedLogs = pull.headCommit ? await failedLogs(cwd, pull.head, pull.headCommit) : "GitHub didn't say which commit is its head, so its runs can't be matched."
   return { pullRequest: view }
 }

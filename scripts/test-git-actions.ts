@@ -340,6 +340,7 @@ try {
   const byNumber = parseYaml(text(await agent.callTool({ name: "pull_request_status", arguments: { number: 100, logs: true } })))
   assert.deepEqual([byNumber.pullRequest.number, byNumber.pullRequest.state, byNumber.pullRequest.head, byNumber.pullRequest.merge], [100, "merged", "mako/feature", "It is merged."], "another pull request reads by its number, whatever this branch is")
   assert.deepEqual(byNumber.pullRequest.failedLogs, [{ workflow: "Docs", url: "https://ci/10", log: "build\tBuild\tThe operation was canceled." }], "its failed logs are its own head's, not this branch's")
+  assert.equal(byNumber.pullRequest.headCommit, pushed, "with its head commit, which an Apex checks before a merge")
   assert.equal(byNumber.branch, undefined, "a pull request by number says nothing of this branch")
   const job = parseYaml(text(await agent.callTool({ name: "pull_request_status", arguments: { job: 5512 } })))
   assert.deepEqual(job, { job: 5512, log: "e2e\tRun\texpected 1 row, got 0" }, "a named job's failed steps, without timestamps")

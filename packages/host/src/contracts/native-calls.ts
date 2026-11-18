@@ -412,12 +412,19 @@ function portOf(argv: readonly string[]): number | undefined {
   return undefined
 }
 
-/** An API path's reading of a pull request, a job or a run, and the `pull_request_status` call that reads the same. */
-const API_READS: [RegExp, (match: RegExpExecArray) => Record<string, number | boolean>][] = [
-  [/^\/?repos\/[^/]+\/[^/]+\/pulls\/(\d+)(?:\/(?:reviews|comments|commits|files|requested_reviewers))?(?:[?#]|$)/, (match) => ({ number: Number(match[1]) })],
-  [/^\/?repos\/[^/]+\/[^/]+\/issues\/(\d+)\/comments(?:[?#]|$)/, (match) => ({ number: Number(match[1]) })],
-  [/^\/?repos\/[^/]+\/[^/]+\/actions\/jobs\/(\d+)(?:\/logs)?(?:[?#]|$)/, (match) => ({ job: Number(match[1]) })],
-  [/^\/?repos\/[^/]+\/[^/]+\/actions\/runs\/(\d+)(?:\/(?:jobs|logs|attempts\/\d+(?:\/jobs)?))?(?:[?#]|$)/, (match) => ({ run: Number(match[1]) })],
+/** An id in an API path: digits, or a shell variable the command fills in (`actions/jobs/$id/logs`). */
+const API_ID = "(\\d+|\\$\\{?\\w+\\}?)"
+const apiId = (id: string, what: string): number | string => /^\d+$/.test(id) ? Number(id) : `<${what} id in ${id}>`
+
+/**
+ * An API path's reading that `pull_request_status` gives the same of, and its call: a pull request's state, checks,
+ * head and unresolved review comments; a job's or a run's log; a commit's checks. Not a review's or the pull request's
+ * body, its files or its commits, which it doesn't return.
+ */
+const API_READS: [RegExp, (match: RegExpExecArray) => { readonly [key: string]: CallValue }][] = [
+  [new RegExp(`^/?repos/[^/]+/[^/]+/pulls/${API_ID}(?:/comments)?(?:[?#]|$)`), (match) => ({ number: apiId(match[1]!, "pull request") })],
+  [new RegExp(`^/?repos/[^/]+/[^/]+/actions/jobs/${API_ID}(?:/logs)?(?:[?#]|$)`), (match) => ({ job: apiId(match[1]!, "job") })],
+  [new RegExp(`^/?repos/[^/]+/[^/]+/actions/runs/${API_ID}(?:/(?:jobs|logs|attempts/\\d+(?:/jobs)?))?(?:[?#]|$)`), (match) => ({ run: apiId(match[1]!, "run") })],
   [/^\/?repos\/[^/]+\/[^/]+\/(?:commits\/[^/]+\/(?:check-runs|check-suites|status|statuses)|actions\/runs)(?:[?#]|$)/, () => ({ logs: true })],
 ]
 
