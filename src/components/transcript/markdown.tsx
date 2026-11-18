@@ -8,6 +8,7 @@ import type { AttachmentContent } from "@mako/sessions"
 import { Paragraph } from "./paragraph"
 import { useParsedProse } from "./use-parsed-prose"
 import { useStreamReveal } from "./stream-reveal"
+import { useStreamedText } from "./use-live-answer"
 import { forgetWarmedProse, warmedProse } from "@/lib/prose-parser-client"
 import { rememberSettledProse, settledProse } from "./settled-prose"
 import {
@@ -26,7 +27,6 @@ import type { PromptReference, SentProse } from "@/lib/prompt-markdown"
 import { isSkillName } from "@/lib/skill-references"
 import { ProseStreamingContext } from "./prose-layout-context"
 import { streamPieces, streamingMarkdown } from "@/lib/streaming-markdown"
-import { StreamFrames } from "@/lib/stream-frames"
 import { ChangingLabel } from "@/components/ui/changing-label"
 import { useCopy } from "@/components/ui/use-copy"
 import {
@@ -35,8 +35,8 @@ import {
   useMemo,
   isValidElement,
   memo,
-  useEffect,
   useContext,
+  useEffect,
   useRef,
   useState,
   type ComponentProps,
@@ -138,15 +138,18 @@ export const Prose = memo(function Prose({
     const entries = sent?.items.flatMap((item) => (item.kind === "skill" ? [item.skill] : [])) ?? []
     return entries.length > 0 ? new Map(entries.map((entry) => [entry.name, entry])) : EMPTY_SKILLS
   }, [sent])
-  const throttled = useThrottled(text, Boolean(streaming))
+  // A reply being written takes its words from its conversation as they land, not from the turn's paced draw.
   // A streaming answer draws only whole structure, and keeps the pieces
   // before the last as parsed (`streamPieces`); the last piece is the one that grows.
   const pieced = Boolean(streaming) && !sent && !urlTransform
+  const { shown: throttled, parsed: parsedChars } = useStreamedText(text, Boolean(streaming), sent ? undefined : answerId)
   const pieces = useMemo(
     () => (pieced ? streamPieces(streamingMarkdown(throttled)) : [throttled]),
     [pieced, throttled]
   )
   const growing = pieces.at(-1) ?? ""
+  // The next paint waits by what this one parsed: the piece being written, not the whole answer.
+  useEffect(() => parsedChars(growing.length), [parsedChars, growing])
   const kept = pieces.slice(0, -1)
   const keptChars = kept.reduce((total, piece) => total + piece.length, 0)
   const parsed = useParsedProse(growing, Boolean(streaming) && !sent)
@@ -263,34 +266,6 @@ const KeptPiece = memo(function KeptPiece({ text, assets }: { text: string; asse
     [text, assets]
   )
 })
-
-/**
- * Latest value while it streams, painted as `StreamFrames` paces it: the first
- * change of a burst at once, then at most once a frame. Only unmount (or
- * StrictMode's simulated one) stops a pending paint, and the effect after it
- * schedules again.
- */
-function useThrottled(text: string, active: boolean): string {
-  const [shown, setShown] = useState(text)
-  const [frames] = useState(() => new StreamFrames(setShown))
-
-  // A settled message renders its exact text with no delay. Adjusting during
-  // render rather than in an effect avoids the extra pass a cascading setState
-  // would cost on the frame the turn completes.
-  if (!active && shown !== text) {
-    setShown(text)
-  }
-
-  // Settled, a paint still pending would draw a streaming text over it.
-  useEffect(() => {
-    if (active) frames.next(text)
-    else frames.stop()
-  }, [active, text, frames])
-
-  useEffect(() => () => frames.stop(), [frames])
-
-  return shown
-}
 
 const components = {
   p: Paragraph,

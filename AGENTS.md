@@ -2273,10 +2273,21 @@ Four rules hold this together, and each has a specific failure it prevents:
   one's do (mounted only once they'd arrived, a 260-turn one jumped 48 px).
   `test-phone-open-ui.mjs` reads every frame for it, a Thread and an Apex,
   cold and warm, on a Mac and on a machine.
-- **Streamed prose is throttled, not debounced.** `useThrottled` in
-  `markdown.tsx` paints through `StreamFrames` (`src/lib/stream-frames.ts`):
-  the first token of a burst at once, then at most every 50 ms, up to 90 ms
-  for a long piece, whose re-parse costs about 1.2 ms per 1,000 characters.
+- **Streamed prose is throttled, not debounced.** `useStreamedText`
+  (`use-live-answer.ts`) paints through `StreamFrames`
+  (`src/lib/stream-frames.ts`): the first token of a burst at once, then at
+  most every 32 ms for a paragraph, up to 90 ms for a long piece, by how much
+  a paint parses (`streamFrameMs`, about 1.2 ms per 1,000 characters). A
+  reply being written reads its words from its conversation itself, outside
+  React, as each batch and each line said ahead lands: a paint renders that
+  prose alone, never the turn or the timeline, so a word is drawn a frame or
+  two after the window hears it however long the answer has grown. The turn
+  around it is drawn again once a second while only words arrive
+  (`ExchangePacer`, `STREAM_PACE_MS`), and at once for anything else. Words
+  once reached the page only through the turn's draw, which a long answer
+  paced at 400 ms: a long answer's prose was drawn 57 ms after the window was
+  told of it at the median and 368 at the 95th percentile, against 29 and 44
+  now (`npm run bench:window`).
   A pending frame survives further tokens (cancelling it per token would
   never fire under a steady stream). Only unmount stops it, and stopping must
   forget it was pending: StrictMode's simulated remount once ran that cleanup,
@@ -2287,8 +2298,8 @@ Four rules hold this together, and each has a specific failure it prevents:
   while the turn is still running. What a paint brings is revealed at a
   steady pace and fades in (`useStreamReveal`, `RevealPace`): each lump over
   about the gap the lumps come at, whole words at a time, never more than
-  400 ms behind the page (`REVEAL_MAX_MS`, the longest gap between a long
-  answer's paints) and all of it within 160 ms of the stream's end; at once
+  120 ms behind the page (`REVEAL_MAX_MS`, past the longest gap between two
+  paints) and all of it within 160 ms of the stream's end; at once
   in a hidden tab or with reduced motion. It adds nothing to the page: the
   text is there as it's painted, and CSS custom highlights (`mako-reveal-*`)
   draw what isn't revealed yet transparent and what just was part-way to
