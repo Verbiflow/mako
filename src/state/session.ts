@@ -19,7 +19,7 @@ import { applyFileEvents, loadFileEvents } from "@/state/file-events"
 import { applyMcpSignIns, loadMcpSignIns } from "@/state/mcp-sign-ins"
 import { loadUnopened } from "@/state/unopened-conversations"
 import { applyThreadTitles, loadThreadTitles } from "@/state/thread-titles"
-import { applyWorktreeSummaries, refreshWorktrees, refreshWorktreeSummaries } from "@/state/worktrees"
+import { applyWorktreeSummaries, applyWorktreeSummaryChanges, refreshWorktrees, refreshWorktreeSummaries, worktreeSizesWereMeasured } from "@/state/worktrees"
 import { github, githubStore } from "@/state/github"
 import { applyWorkspaceMoves, loadWorkspaceMoves, workspaceMoved } from "@/state/workspace-moves"
 import { applyPlanBuilds, loadPlanBuilds } from "@/state/plan-builds"
@@ -262,6 +262,14 @@ function apply(event: HostEvent) {
   }
   if (event.type === "worktree-summaries") {
     applyWorktreeSummaries(event.summaries)
+    return
+  }
+  if (event.type === "worktree-summary-changes") {
+    applyWorktreeSummaryChanges(event)
+    return
+  }
+  if (event.type === "worktree-sizes") {
+    worktreeSizesWereMeasured()
     return
   }
   if (event.type === "worktree-ready") {

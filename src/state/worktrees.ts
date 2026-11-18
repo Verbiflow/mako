@@ -173,11 +173,27 @@ function refreshOutside(): void {
   if (placesKey(next) !== placesKey(current)) worktreesStore.set(next)
 }
 checkoutHeadsStore.subscribe(refreshOutside)
+
+/**
+ * All the list says of worktrees, which is all `stateOf` reads of it: each session's linked checkouts, in order. The
+ * list changes with every session's activity, and making the state again each time (a set of every worktree, a map of
+ * every linked checkout, the mirrors sorted) only to find its places unchanged was the list's cost on every change.
+ */
+function linkedKey(threads: readonly ThreadRef[]): string {
+  let key = ""
+  for (const ref of threads) for (const linked of ref.worktrees ?? []) key += `${linked.path}\n${linked.repoRoot}\n${linked.mirrors ? "m" : ""}\n`
+  return key
+}
+
 let listed = threadsStore.get().threads
+let linked = linkedKey(listed)
 threadsStore.subscribe(() => {
   const { threads } = threadsStore.get()
   if (threads === listed) return
   listed = threads
+  const key = linkedKey(threads)
+  if (key === linked) return
+  linked = key
   refreshOutside()
 })
 
@@ -220,14 +236,49 @@ export function refreshWorktreeSummaries(): Promise<void> {
 
 async function readWorktreeSummaries(): Promise<void> {
   const mine = ++summaryReads
-  const summaries = await getMako().worktreeSummaries()
-  if (mine === summaryReads) applyWorktreeSummaries(summaries)
+  const answer = await getMako().worktreeSummaries()
+  if (mine !== summaryReads) return
+  // A host from before it answers the list alone, read to its end.
+  applyWorktreeSummaries(Array.isArray(answer) ? answer : answer.summaries)
+  worktreeSummariesReading.set({ byPath: Array.isArray(answer) ? {} : Object.fromEntries(answer.reading.map((path) => [path, true as const])) })
 }
 
 /**
- * The host's word on every worktree's summary: an answer, or its `worktree-summaries` event when one changed. Each
- * comes whole and new, so a summary that says what the held one does stays the held object: one worktree's change
- * draws that worktree's row again, not every row with a worktree.
+ * The worktrees whose summary the host is still reading: those it has none for yet, and those it holds from before it
+ * started and hasn't looked at since. The answer comes at once with what's held, so the rail has its marks while a
+ * pass runs; each of these follows as a `worktree-summary-changes` event.
+ */
+export const worktreeSummariesReading = createStore<{ byPath: Readonly<Record<string, true>> }>({ byPath: {} })
+
+/**
+ * The host's word on the summaries that changed, each as it was read (`worktree-summary-changes`). Only those paths
+ * get a new object, so only the rows that show them draw again: nothing is compared or copied for the others' sake
+ * beyond the one record, and an event that changes nothing held sets nothing.
+ */
+export function applyWorktreeSummaryChanges(changes: { changed: readonly WorktreeSummary[]; removed: readonly string[] }): void {
+  const held = worktreeSummariesStore.get().byPath
+  let byPath: Record<string, WorktreeSummary> | undefined
+  for (const summary of changes.changed) {
+    const before = held[summary.path]
+    if (before !== undefined && JSON.stringify(before) === JSON.stringify(summary)) continue
+    byPath ??= { ...held }
+    byPath[summary.path] = summary
+  }
+  for (const path of changes.removed) {
+    if (!(path in held)) continue
+    byPath ??= { ...held }
+    delete byPath[path]
+  }
+  if (byPath) worktreeSummariesStore.set({ byPath })
+  const reading = worktreeSummariesReading.get().byPath
+  const read = [...changes.changed.map((summary) => summary.path), ...changes.removed].filter((path) => reading[path])
+  if (read.length) worktreeSummariesReading.set({ byPath: Object.fromEntries(Object.keys(reading).filter((path) => !read.includes(path)).map((path) => [path, true as const])) })
+}
+
+/**
+ * The host's word on every worktree's summary: an answer, or the `worktree-summaries` event of a host that says the
+ * whole list on each change. Each comes whole and new, so a summary that says what the held one does stays the held
+ * object: one worktree's change draws that worktree's row again, not every row with a worktree.
  */
 export function applyWorktreeSummaries(summaries: readonly WorktreeSummary[]): void {
   summaryReads++
@@ -244,9 +295,10 @@ export function applyWorktreeSummaries(summaries: readonly WorktreeSummary[]): v
 }
 
 /**
- * Asks for the summaries when the rail shows and when the worktrees change; the host says each change after that
- * itself (`worktree-summaries`), read on each worktree's own events, so no window polls, and coming back to the window
- * asks nothing: it was a read of every worktree's Git on each focus, for what the events had already said.
+ * Asks for the summaries when the rail shows and when the worktrees change: the host answers at once with what it
+ * holds and says each change after that itself (`worktree-summary-changes`), read on each worktree's own events, so no
+ * window polls or waits on a pass, and coming back to the window asks nothing: it was a read of every worktree's Git
+ * on each focus, for what the events had already said.
  */
 export function useKeepWorktreeSummaries(): void {
   useEffect(() => {
@@ -516,6 +568,14 @@ export async function removeWorktree(worktree: RemovableWorktree): Promise<void>
 export async function readWorktreeInventory(): Promise<WorktreeInventory> {
   if (!hasBridge()) return { worktrees: [], spares: { count: 0, bytes: null } }
   return getMako().worktreeInventory()
+}
+
+/** Counts the host's word that sizes an inventory asked for are measured (`worktree-sizes`): whoever shows one reads it again. */
+export const worktreeSizesMeasured = createStore<{ rounds: number }>({ rounds: 0 })
+export const useWorktreeSizesMeasured = createHook(worktreeSizesMeasured)
+
+export function worktreeSizesWereMeasured(): void {
+  worktreeSizesMeasured.set({ rounds: worktreeSizesMeasured.get().rounds + 1 })
 }
 
 /** One of its worktrees: removing any removes the checkout whole. */

@@ -281,7 +281,9 @@ assert.deepEqual((await detail(other.path))?.landing, { kind: "empty" })
 writeFileSync(join(other.path, "scratch.txt"), "x\n")
 const dirty = await detail(other.path)
 assert.equal(dirty?.changes, 1)
-assert.ok((dirty?.bytes ?? 0) > 0, "its own files are measured")
+// Its size isn't walked for before the list answers: it's measured behind it, and the next list has it.
+await worktrees.settled()
+assert.ok(((await detail(other.path))?.bytes ?? 0) > 0, "its own files are measured")
 rmSync(join(other.path, "scratch.txt"))
 busy.set(other.path, ["“Other”"])
 assert.deepEqual((await detail(other.path))?.users, ["“Other”"])
@@ -1067,8 +1069,8 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
 }
 
 // A worktree is read again on its own events (its index or HEAD moved, a turn in it ended), and the windows hear it:
-// however often they ask, one nothing happened in is read only past the backstop. One with a conversation at work is
-// read as often as they ask, and one asked of alone is read then.
+// however often they ask, one nothing happened in is read only past the backstop, a conversation at work in it or
+// not. One asked of alone is read then.
 {
   const quiet = repository("quiet")
   const id = randomUUID()
@@ -1132,16 +1134,18 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
       return reads - before
     }
     await passes(1)
-    // A quiet worktree's status is read again as its own wait runs out, doubling to five minutes while nothing
-    // changes: however often windows ask, a handful of reads in nine and a half minutes.
-    assert.ok(await passes(19) <= 6, "nine and a half quiet minutes of windows asking read it a handful of times, not nineteen")
-    assert.ok(await passes(20) >= 1, "a quiet worktree is still read now and then")
+    // A quiet worktree is read on its own events alone: however often windows ask, nothing of its moved, so nothing
+    // is asked of Git. Past the hour's backstop it's read whatever was heard, should an event have been missed.
+    assert.equal(await passes(19), 0, "nine and a half quiet minutes of windows asking read it not once")
+    now += 76 * 60_000
+    assert.equal(await passes(1), 1, "a quiet worktree is still read now and then")
+    // A conversation at work there is read when its turn ends or its index moves, not on every pass meanwhile.
     at = [made.path]
-    assert.equal(await passes(4), 4, "a conversation at work there keeps it current")
+    assert.equal(await passes(4), 0, "a conversation at work there isn't read on every pass")
     at = [join(made.path, "packages")]
-    assert.equal(await passes(2), 2, "so does one in a folder inside it")
+    assert.equal(await passes(2), 0, "nor one in a folder inside it")
     at = [dirname(made.path)]
-    assert.equal(await passes(2), 2, "and one in the project folder around it")
+    assert.equal(await passes(2), 0, "nor one in the project folder around it")
     at = []
     await passes(2)
     // A terminal's `git add`, the window left focused and asking nothing: the index's own event reads it, though no

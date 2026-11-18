@@ -183,6 +183,27 @@ async function machineUser(): Promise<GitHubUser | undefined> {
   }
 }
 
+/** How long a `gh` that ran answers for: every status asked started one just to hear its version. */
+const INSTALLED_FOR_MS = 10 * 60_000
+// Per host, as its readings are: the executable that ran, and when.
+const installed = new WeakMap<HostStopping, Map<string, number>>()
+
+/** Whether `gh` runs here. One that ran is taken as there for `INSTALLED_FOR_MS`; one that didn't is tried on every ask, so installing it shows at once. */
+async function githubInstalled(cwd: string): Promise<boolean> {
+  const host = hostStopping()
+  let ran = host && installed.get(host)
+  if (host && !ran) installed.set(host, ran = new Map())
+  try {
+    const executable = await githubExecutable()
+    if (ran && Date.now() - (ran.get(executable) ?? -Infinity) < INSTALLED_FOR_MS) return true
+    await run(executable, ["--version"], { cwd, timeout: TIMEOUT })
+    ran?.set(executable, Date.now())
+    return true
+  } catch {
+    return false
+  }
+}
+
 /**
  * Whether GitHub is usable here, and if not, exactly why.
  *
@@ -190,14 +211,7 @@ async function machineUser(): Promise<GitHubUser | undefined> {
  * retains the host's deadline instead of becoming a missing login or remote.
  */
 export async function githubStatus(cwd: string): Promise<GitHubStatus> {
-  try {
-    await run(await githubExecutable(), ["--version"], {
-      cwd,
-      timeout: TIMEOUT,
-    })
-  } catch {
-    return { installed: false, authenticated: false }
-  }
+  if (!(await githubInstalled(cwd))) return { installed: false, authenticated: false }
 
   let who: GitHubUser | null | undefined
   try {
@@ -767,7 +781,15 @@ export async function listPullHeads(cwd: string): Promise<WorktreePull[] | null>
   )
 }
 
-/** Recent pull requests in any state, newest first, with the head commit and one word for their checks. Null when `gh` can't answer here. */
+/** Checks that ended, by pull request and head commit, at most this many: what a pull request says of them once it's merged or closed. */
+const SETTLED_CHECKS = 512
+// Per host, as its readings are.
+const settledChecks = new WeakMap<HostStopping, Map<string, "passed" | "failed">>()
+
+/**
+ * Recent pull requests in any state, newest first, with the head commit and one word for their checks. Null when `gh`
+ * can't answer here. Checks are read only for an open pull request whose head a worktree has out (`liveHeads`).
+ */
 export async function listBranchPulls(cwd: string, liveHeads: readonly string[] = [], liveBranches: ReadonlyMap<string, string> = new Map()): Promise<WorktreeBranchPull[] | null> {
   const listed = await ghJson(
     cwd,
@@ -807,9 +829,15 @@ export async function listBranchPulls(cwd: string, liveHeads: readonly string[] 
   )
   if (!listed) return null
   const live = new Set(liveHeads)
+  const host = hostStopping()
+  let settled = host && settledChecks.get(host)
+  if (host && !settled) settledChecks.set(host, settled = new Map())
   return Promise.all(listed.map(async pull => {
     const expected = liveBranches.get(pull.branch)
     const staleBranch = expected && expected !== pull.head && (pull.state === "open" || pull.state === "draft")
+    // A merged or closed pull request's checks are over: a worktree kept after its merge had them asked for every
+    // minute. It keeps the word they ended on, when that was read while it was open.
+    if (pull.state === "merged" || pull.state === "closed") return { ...pull, checks: settled?.get(`${pull.url}\0${pull.head}`) ?? pull.checks }
     if (!live.has(pull.head) && !staleBranch) return pull
     const reading = await ghJson(cwd, ["pr", "view", String(pull.number), "--json", "number,title,url,headRefName,headRefOid,state,isDraft,statusCheckRollup"], value => {
       if (!isJsonObject(value)) return null
@@ -820,7 +848,13 @@ export async function listBranchPulls(cwd: string, liveHeads: readonly string[] 
     }, expected ?? pull.head)
     if (!reading || reading.number !== pull.number || reading.branch !== pull.branch || reading.head !== (expected ?? pull.head)) return { ...pull, checks: null }
     const checks = reading.checks
-    return { ...pull, head: reading.head, state: reading.state === "MERGED" ? "merged" as const : reading.state === "CLOSED" ? "closed" as const : reading.draft ? "draft" as const : "open" as const, checks: checks.length === 0 ? null : checks.some(check => check.state === "failed" || check.state === "cancelled") ? "failed" as const : checks.some(check => check.state === "running") ? "running" as const : "passed" as const }
+    const word = checks.length === 0 ? null : checks.some(check => check.state === "failed" || check.state === "cancelled") ? "failed" as const : checks.some(check => check.state === "running") ? "running" as const : "passed" as const
+    if (settled && (word === "passed" || word === "failed")) {
+      settled.delete(`${pull.url}\0${reading.head}`)
+      settled.set(`${pull.url}\0${reading.head}`, word)
+      while (settled.size > SETTLED_CHECKS) settled.delete(settled.keys().next().value!)
+    }
+    return { ...pull, head: reading.head, state: reading.state === "MERGED" ? "merged" as const : reading.state === "CLOSED" ? "closed" as const : reading.draft ? "draft" as const : "open" as const, checks: word }
   }))
 }
 

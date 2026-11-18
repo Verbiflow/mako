@@ -22,7 +22,7 @@ import type { SetupAct, SetupActOutcome, SetupView } from "./setup.js"
 import type { ThreadPurpose } from "./thread-purposes.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
 import type { ProjectAppSetup } from "./project-app.js"
-import type { WorktreeRetentionSettings, WorktreeRetentionReport, ThreadWorktrees, WorktreeBranch, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStartPoint, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "./thread-worktrees.js"
+import type { WorktreeRetentionSettings, WorktreeRetentionReport, ThreadWorktrees, WorktreeBranch, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStartPoint, WorktreeSummariesHeld, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "./thread-worktrees.js"
 import type { MergeMethod } from "./git-actions.js"
 import type { PullRequestSearchRequest, PullRequestSearchResult } from "./pull-request-search.js"
 import type { ChatFolders } from "./chat-folders.js"
@@ -211,7 +211,10 @@ export function createMakoBridge(transport: BridgeTransport) {
     worktreeStartPoint: (cwd: string, fetch: boolean) => invokeTrustedHost<WorktreeStartPoint | null>("mako:worktree-start-point", cwd, fetch),
     worktreeBranches: (cwd: string) => invokeTrustedHost<WorktreeBranch[]>("mako:worktree-branches", cwd),
     worktreePulls: (cwd: string) => invokeTrustedHost<WorktreePull[] | null>("mako:worktree-pulls", cwd),
-    worktreeSummaries: () => invokeTrustedHost<WorktreeSummary[]>("mako:worktree-summaries"),
+    // What the host holds, at once, with what it's still reading. A host from before that form takes no argument and
+    // answers the list alone, saying the whole list on each change after.
+    worktreeSummaries: () => invokeTrustedHost<WorktreeSummary[] | WorktreeSummariesHeld>("mako:worktree-summaries", "changes")
+      .catch(() => invokeTrustedHost<WorktreeSummary[]>("mako:worktree-summaries")),
     worktreeUpdate: (path: string) => invokeTrustedHost<WorktreeUpdate>("mako:worktree-update", path),
     worktreeRemoval: (path: string) => invokeTrustedHost<WorktreeRemoval>("mako:worktree-removal", path),
     skipWorktree: (conversationId: string) => invokeTrustedHost<void>("mako:worktree-skip", conversationId),

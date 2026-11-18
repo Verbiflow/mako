@@ -110,6 +110,22 @@ export interface WorktreeSummary {
   behind: { from: string; commits: number } | null
 }
 
+/**
+ * Every summary a host holds when asked, at once, and the worktrees it's still reading (`reading`, by path): those
+ * with no summary yet, and those whose summary is from before the host started and not looked at since. Each comes as
+ * a `worktree-summary-changes` event once read.
+ */
+export interface WorktreeSummariesHeld {
+  summaries: WorktreeSummary[]
+  reading: string[]
+}
+
+/** The summaries that changed, as each was read, and the paths of worktrees that are gone. */
+export interface WorktreeSummaryChanges {
+  changed: WorktreeSummary[]
+  removed: string[]
+}
+
 /** What removing one worktree would meet: why it can't go now, if it can't, and where its branch stands. */
 export interface WorktreeRemoval {
   held: string | null

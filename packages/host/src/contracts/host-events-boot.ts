@@ -11,7 +11,7 @@ import type { FileEventsService } from "./file-events-service.js"
 import type { McpSignIns } from "./mcp-sign-ins.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
 import type { Entry } from "@mako/sessions/entries"
-import type { WorktreeStep, WorktreeSummary } from "./thread-worktrees.js"
+import type { WorktreeStep, WorktreeSummary, WorktreeSummaryChanges } from "./thread-worktrees.js"
 import type { MachineOffer } from "./machine-offer.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { CloudStartStep, ThreadContinueStep, ThreadMoveStep, ThreadReturnStep } from "./cloud-threads.js"
@@ -80,8 +80,16 @@ export type HostEventBody =
   | { type: "cloud-archive-step"; step: CloudArchiveStep }
   /** A followed checkout's HEAD moved, by folder; window-wide. */
   | { type: "checkout-heads"; heads: CheckoutHeads }
-  /** Every worktree's summary, said whenever one changes (`ThreadWorktreeService.followSummaries`); window-wide. */
+  /**
+   * Every worktree's summary, the whole list, said whenever one changes (`ThreadWorktreeService.followSummaries`);
+   * window-wide. The form a window knew before `worktree-summary-changes`: a host says it until a window has asked
+   * for changes and none for the whole list.
+   */
   | { type: "worktree-summaries"; summaries: WorktreeSummary[] }
+  /** The summaries that changed, each as it was read, and the worktrees that went (`followSummaryChanges`); window-wide. */
+  | ({ type: "worktree-summary-changes" } & WorktreeSummaryChanges)
+  /** The sizes an inventory asked for are measured: the next `mako:worktree-inventory` has them. */
+  | { type: "worktree-sizes" }
   /** A new Thread's worktree is checked out; its provider starts next. */
   | { type: "worktree-ready"; conversationId: string }
   | { type: "worktree-step"; conversationId: string; step: WorktreeStep }

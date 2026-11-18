@@ -18,6 +18,7 @@ import {
   type ReviewThread,
 } from "./github.js"
 import { GitError, type Git } from "@mako/git"
+import { checkoutStatuses } from "./checkout-status.js"
 import { authorWords, personTokenRefusal, type GitHubPerson, type PersonTokenProblem, type PullRequestAuthor } from "../contracts/github-person.js"
 import { MACHINE_GITHUB_AS } from "../contracts/machine-agent.js"
 
@@ -110,7 +111,7 @@ async function branchOf(git: Git, cwd: string): Promise<string> {
 }
 
 async function uncommitted(git: Git, cwd: string): Promise<number> {
-  const status = await git.readOutput(cwd, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => "")
+  const status = await checkoutStatuses(git).read(cwd).catch(() => "")
   return status ? status.split("\n").length : 0
 }
 

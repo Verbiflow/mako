@@ -4,17 +4,21 @@ import { createHash, randomUUID } from "node:crypto"
 import { existsSync } from "node:fs"
 import { mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises"
 import { basename, dirname, isAbsolute, join, matchesGlob, relative, resolve } from "node:path"
+import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
 import type { ThreadStore } from "../threads/index.js"
 import type { ThreadId } from "../contracts/thread-identity.js"
 import { WORKTREE_BRANCH_PREFIX as BRANCH_PREFIX, PROJECT_CHECKOUT_FILE, worktreeCheckout, worktreeSlug } from "../contracts/thread-worktrees.js"
 import type { GitDiff } from "../contracts/git-workspace-search.js"
-import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeBranch, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStart, WorktreeStartPoint, WorktreeStep, WorktreeBranchPull, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "../contracts/thread-worktrees.js"
+import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeBranch, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStart, WorktreeStartPoint, WorktreeStep, WorktreeBranchPull, WorktreeSummary, WorktreeSummariesHeld, WorktreeSummaryChanges, WorktreeRemoval, WorktreeUpdate } from "../contracts/thread-worktrees.js"
 import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
-import { previewDiffs, projectRepositories } from "../git/index.js"
+import { checkoutStatuses, previewDiffs, projectRepositories, type CheckoutStatuses } from "../git/index.js"
 import { CheckoutBorrowing } from "./checkout-borrowing.js"
-import { carryOutputs, outputNames, ownBytes, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
-import { commonDirOf, GitError, NO_INDEX_REFRESH, numstatEntries, untrackedLines, type Git } from "@mako/git"
+import { carryOutputs, outputNames, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
+import { commonDirOf, gitFileText, GitError, NO_INDEX_REFRESH, numstatEntries, untrackedLines, type Git } from "@mako/git"
+import { locateGitDir } from "../base/checkout-location.js"
+import { CommitAnswers, WorktreeSummaryCache, type HeldPoint, type HeldSummary, type SummaryMemory } from "./worktree-summary-cache.js"
+import { storedRefs, WorktreeSizes } from "./worktree-status.js"
 import { WorktreeSpares, type Spare } from "./worktree-spares.js"
 import { fetchQuietly, WorktreeStarts } from "./worktree-start.js"
 import { bringStayed, broughtSentence, MovePlanSchema, MoveOutcomeSchema, moveByAuthor, previewShares, pruneBackups, putBack, resumeMove, returnedSentence, type AdjustHooks, type MoveLedger, type MovePlan } from "./worktree-move.js"
@@ -32,13 +36,6 @@ const UNDER_WAY: readonly (readonly [string, string])[] = [
   ["CHERRY_PICK_HEAD", "cherry-pick"], ["REVERT_HEAD", "revert"], ["BISECT_LOG", "bisect"],
 ]
 const MAX_REMEMBERED_CARRIES = 64
-/**
- * A worktree's summary is read again only on its own events: its HEAD moved, its repository's main checkout moved, a
- * turn in it ended, or its pull request changed. Past this it's read again whatever was heard, should an
- * event have been missed. Read on a 30 s poll by every window, summaries held the person's loop 1,340 s in 3.5 h on
- * 2026-11-11.
- */
-const SUMMARY_BACKSTOP_MS = 10 * 60_000
 /** Events in a burst (an agent's `git add` then commit) read the worktree once, this long after the first. */
 const SUMMARY_SETTLE_MS = 1_000
 /** A worktree whose events keep coming (an agent's own `git status` rewriting its index) is read at most this often. */
@@ -48,8 +45,28 @@ const SUMMARY_GAP_MS = 5_000
  * agent edits) reads a worktree at most this often: read on each, the summaries cost more than the poll they replace.
  */
 const SUMMARY_INDEX_GAP_MS = 30_000
-/** The host's own pass, while a window listens: what no event says (a pull request on GitHub, an editor's edit). */
+/**
+ * The host's own pass, while a window listens: what no event says (a pull request on GitHub). A pass asks Git only of
+ * what moved (`readListed`), so one that finds everything as it was starts no process.
+ */
 export const SUMMARY_PASS_MS = 60_000
+/**
+ * A worktree's `status` is read on its own events: its index or HEAD moved, or a turn in it ended. Past this it's read
+ * again whatever was heard, should an event have been missed or an editor have changed a file no event says: an hour,
+ * spread by `STATUS_SPREAD` so a hundred worktrees don't come due together. Read every five minutes each, a hundred
+ * worktrees were twenty to thirty walks of a checkout a minute with nothing happening in any.
+ */
+const STATUS_BACKSTOP_MS = 60 * 60_000
+const STATUS_SPREAD = 0.25
+/** A worktree asked of alone (an agent's `worktree_status`) reads its status again past this, whatever was heard. */
+const STATUS_FRESH_MS = 15_000
+/**
+ * When the branch the main checkout has out moves, every open branch's landing is asked again, a merge in memory
+ * each. Those a window shows or a conversation works in are read first; the rest one at a time, this far apart.
+ */
+const LANDING_SPREAD_MS = 150
+/** `for-each-ref`'s `ahead-behind`, which counts every branch against a commit in one process, came with Git 2.41. */
+const AHEAD_BEHIND_GIT = [2, 41] as const
 /** A new Thread's branch search lists this many branches, the most recently committed. */
 const LISTED_BRANCHES = 200
 const BRANCH_PULLS_EVERY_MS = 60_000
@@ -161,14 +178,15 @@ const COUNTED_UNTRACKED = 200
  * uncommitted files, a rebase or merge under way, or a detached HEAD on a
  * commit no branch or tag has. Anything committed on a branch stays with it.
  */
-async function removalBlocker(git: Git, path: string, status?: string, remoteProof = false): Promise<string | undefined> {
+async function removalBlocker(git: Git, path: string, status?: string | Promise<string>, remoteProof = false): Promise<string | undefined> {
   const name = basename(path)
   let changes: string
   let gitDir: string
   try {
     ;[changes, gitDir] = await Promise.all([
       status ?? git.readOutput(path, ["status", "--porcelain", "--untracked-files=normal"]),
-      git.output(path, ["rev-parse", "--absolute-git-dir"]),
+      // A linked worktree's `.git` file names its Git directory; anything else is asked of Git.
+      worktreeGitDir(path).then((named) => named ?? git.output(path, ["rev-parse", "--absolute-git-dir"])),
     ])
   } catch (error) {
     return `Git couldn't read ${name}: ${error instanceof Error ? error.message : String(error)}`
@@ -176,11 +194,18 @@ async function removalBlocker(git: Git, path: string, status?: string, remotePro
   if (changes) return `${name} has changes that aren't committed. Commit or discard them, then remove the worktree.`
   const underWay = UNDER_WAY.find(([marker]) => existsSync(join(gitDir, marker)))
   if (underWay) return `${name} is in the middle of a ${underWay[1]}. Finish or abort it, then remove the worktree.`
-  if (!remoteProof && !(await git.succeeds(path, ["symbolic-ref", "-q", "HEAD"]))) {
+  if (!remoteProof && !(await onBranch(git, path, gitDir))) {
     const kept = await git.output(path, ["for-each-ref", "--count=1", "--contains", "HEAD", "--format=%(refname)", "refs/heads", "refs/tags", "refs/remotes"]).catch(() => "")
     if (!kept) return `${name} is on a commit no branch has. Create a branch there, then remove the worktree.`
   }
   return undefined
+}
+
+/** Whether the checkout is on a branch: its `HEAD` file says so, and Git is asked only when the file can't be read. */
+async function onBranch(git: Git, path: string, gitDir: string): Promise<boolean> {
+  const head = await gitFileText(join(gitDir, "HEAD"))
+  if (head) return head.startsWith("ref: ")
+  return git.succeeds(path, ["symbolic-ref", "-q", "HEAD"])
 }
 
 const inUseBy = (folder: string, users: readonly string[]) =>
@@ -201,8 +226,56 @@ interface RepositoryPoints {
   branches: ReadonlyMap<string, string>
 }
 
-/** Answers kept by the commits they depend on: a few per worktree, for far more worktrees than a Mac holds. */
-const COMMIT_ANSWERS = 4096
+/** A worktree's count of changed files as a `status` read it, with when, and its index's modification time then. */
+interface StatusHeld {
+  at: number
+  index: number
+  changes: Promise<number>
+}
+
+/** The summaries that changed and the worktrees that went, until they're said together. */
+interface UnsaidSummaries {
+  changed: Map<string, WorktreeSummary>
+  removed: Set<string>
+}
+
+/** A repository's pull requests being read, and the reading once it's in. */
+interface PullsReading {
+  pulls: Promise<WorktreeBranchPull[] | null>
+  read?: { pulls: WorktreeBranchPull[] | null }
+}
+
+/** The commits a landing is asked at. */
+interface LandingAt {
+  repoRoot: string
+  base: string
+  into: string
+  tip: string
+  target: string
+}
+
+/**
+ * A landing that may wait: `previous` is what the worktree's summary said before, which stands meanwhile when it was
+ * merged, and `read` takes the merge to make once the worktrees someone is looking at are read.
+ */
+interface LaterLanding {
+  previous: WorktreeLanding
+  read(tip: string, job: () => Promise<WorktreeLanding>): void
+}
+
+/** Ends the `refs` of a summary held while its landing waits its turn (`laterLandings`). */
+const LANDING_AWAITED = "\nlanding awaited"
+
+const aheadKey = (repoRoot: string, from: string, tip: string) => `ahead\0${repoRoot}\0${from}\0${tip}`
+const behindKey = (repoRoot: string, head: string, point: string) => `behind\0${repoRoot}\0${head}\0${point}`
+
+/** `STATUS_BACKSTOP_MS` for one worktree, longer by up to `STATUS_SPREAD` by its path, so those read together don't come due together. */
+function statusBackstop(path: string): number {
+  let hash = 0
+  for (let at = 0; at < path.length; at += 1) hash = (hash * 31 + path.charCodeAt(at)) % 1_000
+  return STATUS_BACKSTOP_MS * (1 + STATUS_SPREAD * hash / 1_000)
+}
+
 
 /**
  * The commit a linked worktree has checked out, read from its files rather
@@ -229,9 +302,17 @@ async function worktreeBranch(path: string): Promise<string | undefined> {
   return head?.trim().startsWith("ref: refs/heads/") ? head.trim().slice("ref: refs/heads/".length) : undefined
 }
 
-/** Ref facts a held summary depends on, checked even before the file watcher delivers its event. */
-function summaryRefs(worktree: ThreadWorktree, facts: RepositoryFacts): string {
-  return JSON.stringify([facts.into, facts.tips.get(facts.into), facts.tips.get(worktree.branch), facts.point?.commit])
+/**
+ * The commits a held summary was read at, checked even before the file watcher delivers its event: the worktree's own
+ * first (its branch's and its HEAD's), then the main checkout's branch and its commit, and where new Threads start.
+ */
+function summaryRefs(worktree: ThreadWorktree, facts: RepositoryFacts, head: string | undefined): string {
+  return `${ownRefs(worktree, facts, head)}${JSON.stringify([facts.into, facts.tips.get(facts.into), facts.point?.commit, facts.point?.from])}`
+}
+
+/** The part of `summaryRefs` only the worktree's own commits move. */
+function ownRefs(worktree: ThreadWorktree, facts: RepositoryFacts, head: string | undefined): string {
+  return `${JSON.stringify([facts.tips.get(worktree.branch), head])}\n`
 }
 
 /** A linked worktree's folder in its repository, from the `gitdir:` line of its `.git` file. */
@@ -239,17 +320,6 @@ async function worktreeGitDir(path: string): Promise<string | undefined> {
   const link = /^gitdir: (.+)$/m.exec(await readFile(join(path, ".git"), "utf8").catch(() => ""))?.[1]
   return link && resolve(path, link)
 }
-
-/**
- * How long a worktree's `status` answers for the summaries after it. It starts at `STATUS_FRESH_MS`, and each read that
- * finds nothing changed doubles it, to `STATUS_QUIET_MS`: a Mac keeps a hundred or more worktrees and few are at work,
- * and reading them all every half minute took 5 cores on 2026-11-05. A commit, staging, checkout or merge rewrites the
- * index, which asks again at once, and a conversation at work in the worktree, whose edits the index can't show, keeps
- * it at `STATUS_FRESH_MS`. The wait is spread by `STATUS_SPREAD`, so worktrees that went quiet together don't come due together.
- */
-const STATUS_FRESH_MS = 15_000
-const STATUS_QUIET_MS = 5 * 60_000
-const STATUS_SPREAD = 0.25
 
 /**
  * Work every worktree pays for, one pass at a time: one asking while a pass runs gets the next, which starts once that
@@ -355,14 +425,34 @@ export class ThreadWorktreeService {
   private readonly branchPulls = new Map<string, { at: number; heads: ReadonlySet<string>; branches: ReadonlyMap<string, string>; pulls: Promise<WorktreeBranchPull[] | null> }>()
   /** Each repository's pull requests as last read, kept past `forgetPulls`, for what a Fin's strip says (`heldPulls`). */
   private readonly pullsRead = new Map<string, WorktreeBranchPull[]>()
+  /** What each repository's last reading of its pull requests came to, null when GitHub couldn't answer or nobody looked. */
+  private readonly pullsSaid = new Map<string, WorktreeBranchPull[] | null>()
   /** Each receipt's `untold`, read without waiting, as a turn is sent. */
   private readonly untold = new Map<string, string[]>()
   private readonly summaryPasses = new SharedPasses<WorktreeSummary[]>()
-  /** Each worktree's summary as last read, by path, with when and its index's modification time then (`readSummaries`). */
-  private readonly heldSummaries = new Map<string, { summary: WorktreeSummary; at: number; index: number; refs: string }>()
-  /** Worktrees an event says changed since their summary was read, and whether all it said is that the index moved. */
-  private readonly staleSummaries = new Set<string>()
-  private readonly indexOnly = new Set<string>()
+  /**
+   * Each worktree's summary as last read, by path, with when, its index's modification time then and the commits it
+   * was read at (`readSummaries`). Kept between hosts (`cache`), so a start answers with them at once.
+   */
+  private readonly heldSummaries = new Map<string, HeldSummary>()
+  /** Summaries held from the file, which this host hasn't looked at yet: said as still being read (`held`). */
+  private readonly unchecked = new Set<string>()
+  /**
+   * Worktrees an event says changed since their summary was read, and what it said: `status` for a turn's end or a
+   * moved HEAD, `index` when all it said is that the index moved, `refs` when a ref every checkout shares moved,
+   * which changes no worktree's files and so asks for no `status`.
+   */
+  private readonly staleSummaries = new Map<string, "status" | "index" | "refs">()
+  /** The summaries' answers between hosts, and whether they've been read in (`remember`). */
+  private readonly cache: WorktreeSummaryCache
+  private remembered: Promise<void> | undefined
+  /** Each repository's start point by what it was read at (`WorktreeStarts`), kept between hosts with the rest. */
+  private readonly points = new Map<string, HeldPoint>()
+  /** Landings waiting their turn after a pass (`laterLandings`), by worktree, and the one drain that reads them. */
+  private readonly landingsLater = new Map<string, { refs: string; awaiting: string; tip: string; read: () => Promise<WorktreeLanding> }>()
+  private landingDrain: Promise<void> | undefined
+  /** Whether a window shows the worktree at `path` now, which reads it ahead of the others. */
+  private readonly shown: (path: string) => boolean
   /** The watches that say so: each worktree's Git directory, and each repository's own. */
   private summaryWatchesClosed = false
   private summaryWatchGeneration = 0
@@ -373,6 +463,17 @@ export class ThreadWorktreeService {
   /** Who hears the summaries when they change (the windows); without one, an event only marks the worktree. */
   private summaryListener: ((summaries: WorktreeSummary[]) => void) | undefined
   private summariesSaid: readonly string[] | undefined
+  /** Who hears each summary as it's read, only those that changed (`followSummaryChanges`). */
+  private changesListener: ((changes: WorktreeSummaryChanges) => void) | undefined
+  /** Each summary as last said to `changesListener`, and what waits to be said in this turn of the loop. */
+  private readonly saidRows = new Map<string, string>()
+  private unsaid: UnsaidSummaries | undefined
+  /**
+   * How the windows take the summaries: `changes` once one has asked for them that way and none the other, so the
+   * whole list is no longer said on every change; `whole` once a window of an earlier build asked, which knows only
+   * that form.
+   */
+  private summaryForm: "unasked" | "changes" | "whole" = "unasked"
   private summaryTimer: NodeJS.Timeout | undefined
   private summaryTimerAt = 0
   private lastPullsOf: PullsOf | undefined
@@ -381,13 +482,19 @@ export class ThreadWorktreeService {
   /** The worktrees as the last full pass listed them: an event reads only what it marked, never the list again. */
   private summaryListed: ThreadWorktree[] = []
   private readonly inventoryPasses = new SharedPasses<WorktreeInventory>()
-  /** Each worktree's `status` as a summary last read it, with when, its index's modification time then, and how long it answers (`statusOf`). */
-  private readonly statuses = new Map<string, { at: number; index: number; status: Promise<string>; freshMs: number }>()
+  /** Each worktree's count of changed files as a `status` last read it, with when and its index's modification time then (`statusOf`). */
+  private readonly statuses = new Map<string, StatusHeld>()
+  /** Each checkout's own size on disk, measured behind an inventory and said when a round of them is in. */
+  private readonly sizes: WorktreeSizes
+  private sizesListener: (() => void) | undefined
+  /** One `status` of a checkout for everyone who asks while it's read. */
+  private readonly shared: CheckoutStatuses
   /** Each receipt as last parsed, by the file's modification time and size then (`receipt`). */
   private readonly receiptsRead = new Map<string, { stamp: string; receipt: Receipt }>()
-  /** Answers fixed by the commits they were read at, least recently asked first (`byCommits`): landings, and counts of commits. */
-  private readonly landings = new Map<string, Promise<WorktreeLanding>>()
-  private readonly counts = new Map<string, Promise<number>>()
+  /** Answers fixed by the commits they were read at (`CommitAnswers`): landings, counts of commits, a commit's tree. */
+  private readonly landings = new CommitAnswers<WorktreeLanding>(() => this.keep())
+  private readonly counts = new CommitAnswers<number>(() => this.keep())
+  private readonly trees = new CommitAnswers<string>(() => this.keep())
   /** What each agent's move asked of its branch (`wantBranch`), by its conversation. */
   private readonly wanted = new Map<string, WorktreeWanted>()
 
@@ -405,6 +512,8 @@ export class ThreadWorktreeService {
    * `workingFolders`, every folder a conversation is mid-turn in, read once a
    * summaries pass: `working` for each of a hundred worktrees would read every
    * conversation a hundred times.
+   * `shown`, whether a window shows a worktree now: its landing is read ahead of the others' when the main checkout
+   * moves.
    */
   constructor(
     git: Git,
@@ -420,7 +529,9 @@ export class ThreadWorktreeService {
     pullsVisible: () => boolean = () => true,
     pullsChanged: (repoRoot: string) => Promise<void> = async () => {},
     watch: WatchBackend = childBackend(),
+    shown: (path: string) => boolean = () => false,
   ) {
+    this.shown = shown
     this.watch = watch
     this.git = git
     this.root = root
@@ -435,7 +546,16 @@ export class ThreadWorktreeService {
     this.pullsChanged = pullsChanged
     this.pullsVisible = pullsVisible
     this.workingFolders = workingFolders
-    this.starts = new WorktreeStarts(git)
+    this.cache = new WorktreeSummaryCache(join(root, "summaries.json"))
+    this.sizes = new WorktreeSizes(() => this.sizesListener?.())
+    this.shared = checkoutStatuses(git)
+    this.starts = new WorktreeStarts(git, Date.now, {
+      get: (repoRoot) => this.points.get(repoRoot),
+      set: (repoRoot, point) => {
+        this.points.set(repoRoot, point)
+        this.keep()
+      },
+    })
     this.spares = new WorktreeSpares(git, root, (repoRoot) => this.projectFolder(repoRoot), setup)
   }
 
@@ -691,12 +811,14 @@ export class ThreadWorktreeService {
   }
 
   /**
-   * At start: give back spares that are idle or were half-made by a host
-   * that died, and empty the trash; finish or undo moves a host was making
-   * when it died; drop move backups past 14 days.
+   * At start and every hour: give back spares that are idle or were half-made
+   * by a host that died, make again those a project still wants that are
+   * gone or no longer fit its lockfile, and empty the trash; finish or undo
+   * moves a host was making when it died; drop move backups past 14 days.
    */
   async tidy(): Promise<void> {
     await this.spares.sweep()
+    await this.spares.refill()
     const repositories = new Set<string>()
     for (const { id, receipt } of await this.receiptsList()) {
       for (const member of membersOf(receipt)) repositories.add(member.repoRoot)
@@ -721,22 +843,29 @@ export class ThreadWorktreeService {
   async settled(): Promise<void> {
     await Promise.all([...this.wanting, ...this.carrying.values()])
     await this.spares.settled()
+    await this.sizes.settled()
     await Promise.all(this.retiredWatches)
     if (this.watchReleaseFailure) throw this.watchReleaseFailure.error
   }
 
   /**
-   * Every worktree with what decides whether it can go: uncommitted files,
-   * what runs there, whether its branch landed, and its own size. Sizes are
-   * read in the background band, a few at a time.
+   * Every worktree with what decides whether it can go: uncommitted files, what runs there, whether its branch landed,
+   * and its own size. Whoever asks during one shares the next. Each worktree costs the list one `status`, read now
+   * since it decides what's offered for removal; its landing is kept by its commits, what else holds it is read from
+   * its files, and its size is whatever was measured last, null until then (`WorktreeSizes`): measured behind the
+   * answer and said through `followSizes`, where a `du` of every worktree used to come before any answer.
    */
-  /** Every worktree with what decides whether it can go: a walk of each, so whoever asks during one shares the next. */
   inventory(): Promise<WorktreeInventory> {
     return this.inventoryPasses.ask(() => this.readInventory())
   }
 
+  /** Hears that sizes an inventory asked for are measured: the next inventory has them. */
+  followSizes(listener: () => void): void {
+    this.sizesListener = listener
+  }
+
   private async readInventory(): Promise<WorktreeInventory> {
-    const { worktrees } = await this.list()
+    const [{ worktrees }] = await Promise.all([this.list(), this.remember()])
     const attached = new Set(worktrees.map((worktree) => worktree.path))
     // Starts that failed or were cut short after their worktree was made: no Thread lists these.
     const loose = new Map<string, Omit<WorktreeDetail, "changes" | "held" | "landing" | "users" | "bytes">>()
@@ -753,20 +882,44 @@ export class ThreadWorktreeService {
       if (!names) skipped.set(repoRoot, names = (this.setup?.recipe(repoRoot) ?? Promise.resolve(undefined)).then(outputNames, () => []))
       return names
     }
+    const facts = new Map<string, Promise<RepositoryFacts | undefined>>()
+    const factsOf = (repoRoot: string) => {
+      let known = facts.get(repoRoot)
+      if (!known) facts.set(repoRoot, known = this.repositoryFacts(repoRoot, false, worktrees).catch(() => undefined))
+      return known
+    }
     const detailed = await mapLimit([...worktrees, ...loose.values()], 4, async (worktree): Promise<WorktreeDetail> => {
-      const [status, landing, users, bytes] = await Promise.all([
-        this.git.readOutput(worktree.path, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => null),
-        this.landing(worktree),
+      const [changes, landing, users, names] = await Promise.all([
+        this.changesNow(worktree.path),
+        factsOf(worktree.repoRoot).then((known) => this.landing(worktree, known)),
         this.inUse(worktree.path),
-        outputsOf(worktree.repoRoot).then((names) => ownBytes(worktree.path, names)),
+        outputsOf(worktree.repoRoot),
       ])
-      const held = await removalBlocker(this.git, worktree.path, status ?? undefined) ?? null
-      return { ...worktree, changes: status ? status.split("\n").length : 0, held, landing, users, bytes }
+      // A status that couldn't be read is the blocker's own to ask for and report.
+      const held = await removalBlocker(this.git, worktree.path, changes === null ? undefined : changes ? "changed" : "") ?? null
+      return { ...worktree, changes: changes ?? 0, held, landing, users, bytes: this.sizes.of(worktree.path, await this.sizeStamp(worktree.path), names) }
     })
     const spares = await this.spares.recorded()
-    const spareBytes = await mapLimit(spares, 4, async (spare) => ownBytes(spare.path, await outputsOf(spare.repoRoot)))
+    const spareBytes = await Promise.all(spares.map(async (spare) => this.sizes.of(spare.path, `${spare.createdAt}:${spare.state}`, await outputsOf(spare.repoRoot))))
+    this.sizes.keep(new Set([...detailed.map((worktree) => worktree.path), ...spares.map((spare) => spare.path)]))
+    this.sizes.begin()
     const known = spareBytes.filter((bytes) => bytes !== null)
     return { worktrees: detailed, spares: { count: spares.length, bytes: known.length ? known.reduce((sum, bytes) => sum + bytes, 0) : null } }
+  }
+
+  /**
+   * A worktree's count of changed files for the list, read now: it decides what the list offers to remove, and an
+   * edit moves nothing a held answer could be checked against. Shared with a read of the same checkout under way.
+   * Null when it couldn't be read.
+   */
+  private changesNow(path: string): Promise<number | null> {
+    return this.shared.read(path).then((status) => (status ? status.split("\n").length : 0), () => null)
+  }
+
+  /** What a checkout's size was measured at: its HEAD and when its index was written, which every commit, checkout and staging moves. */
+  private async sizeStamp(path: string): Promise<string> {
+    const gitDir = await worktreeGitDir(path)
+    return `${await this.indexTime(path)}:${gitDir ? await gitFileText(join(gitDir, "HEAD")) ?? "" : ""}`
   }
 
   /**
@@ -775,7 +928,7 @@ export class ThreadWorktreeService {
    * a squash doesn't, so a branch whose merge would leave the target's tree
    * as it is has landed too.
    */
-  private async landing(worktree: Pick<ThreadWorktree, "repoRoot" | "branch" | "base">, known?: RepositoryFacts, idle = false): Promise<WorktreeLanding> {
+  private async landing(worktree: Pick<ThreadWorktree, "repoRoot" | "branch" | "base">, known?: RepositoryFacts, idle = false, ahead?: number, later?: LaterLanding): Promise<WorktreeLanding> {
     const into = known ? known.into : await this.git.readOutput(worktree.repoRoot, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => "")
     if (!into) return { kind: "unknown" }
     const tip = known?.tips.get(worktree.branch)
@@ -783,14 +936,61 @@ export class ThreadWorktreeService {
     // Whether a branch landed is fixed by the commits it's asked at: asked again only once one of them moves.
     if (!tip || !target) return this.readLanding(worktree, into, idle)
     const key = `landing\0${worktree.repoRoot}\0${worktree.base}\0${tip}\0${into}\0${target}`
-    const landing = this.byCommits(this.landings, key, () => this.readLanding(worktree, into, idle))
+    const at: LandingAt = { repoRoot: worktree.repoRoot, base: worktree.base, into, tip, target }
     // A read that failed (a timeout under load) says nothing of the commits: asked again next time.
-    void landing.then((read) => {
-      if (read.kind === "unknown") this.landings.delete(key)
-    })
-    return landing
+    const decided = (landing: WorktreeLanding) => landing.kind !== "unknown"
+    if (!later || this.landings.has(key)) return this.landings.ask(key, async () => await this.countedLanding(at, ahead, idle) ?? this.mergedLanding(at, idle), decided)
+    const counted = await this.countedLanding(at, ahead, idle)
+    if (counted) return this.landings.ask(key, async () => counted, decided)
+    // Only a merge in memory can tell, and nobody is looking at this one: it takes its turn after the pass.
+    later.read(tip, () => this.landings.ask(key, () => this.mergedLanding(at, idle), decided))
+    return later.previous.kind === "merged" ? later.previous : { kind: "open", into, commits: await this.commitsSince(at, idle).catch(() => 0) }
   }
 
+  /** Commits on the branch since it started: fixed by the two commits, so counted once. */
+  private commitsSince(at: LandingAt, idle: boolean): Promise<number> {
+    return this.counts.ask(`commits\0${at.repoRoot}\0${at.base}\0${at.tip}`, () =>
+      (idle ? this.git.idleOutput(at.repoRoot, ["rev-list", "--count", `${at.base}..${at.tip}`]) : this.git.readOutput(at.repoRoot, ["rev-list", "--count", `${at.base}..${at.tip}`])).then(Number))
+  }
+
+  /**
+   * What counting commits says of a landing: nothing committed, or every commit reachable from the target (`ahead`
+   * is 0: a merge, a fast-forward, a rebase onto it). Undefined when only a merge in memory can tell a squash from
+   * work still open.
+   */
+  private async countedLanding(at: LandingAt, ahead: number | undefined, idle: boolean): Promise<WorktreeLanding | undefined> {
+    try {
+      const commits = await this.commitsSince(at, idle)
+      if (commits === 0) return { kind: "empty" }
+      const reachable = ahead !== undefined
+        ? ahead === 0
+        : await (idle ? this.git.idleOutput(at.repoRoot, ["merge-base", "--is-ancestor", at.tip, at.target]) : this.git.readOutput(at.repoRoot, ["merge-base", "--is-ancestor", at.tip, at.target])).then(() => true, () => false)
+      if (reachable) return { kind: "merged", into: at.into }
+      // A squash merge shows only through an in-memory merge, which older Git can't do.
+      return await this.git.mergesWithoutCheckout() ? undefined : { kind: "open", into: at.into, commits }
+    } catch {
+      return { kind: "unknown" }
+    }
+  }
+
+  /**
+   * A squash's landing: merging the branch would leave the target's tree as it is. The merge is made in memory, as
+   * a read (it takes a read slot, an idle one in a pass, and no lock), and the target's tree is read once per commit.
+   */
+  private async mergedLanding(at: LandingAt, idle: boolean): Promise<WorktreeLanding> {
+    try {
+      const [commits, merged, target] = await Promise.all([
+        this.commitsSince(at, idle),
+        this.git.run({ cwd: at.repoRoot, args: ["merge-tree", "--write-tree", at.target, at.tip], read: true, idle, maxBytes: 16 * 1024 * 1024 }).then((result) => result.stdout.toString("utf8").trim(), () => ""),
+        this.trees.ask(`tree\0${at.repoRoot}\0${at.target}`, () => (idle ? this.git.idleOutput(at.repoRoot, ["rev-parse", `${at.target}^{tree}`]) : this.git.readOutput(at.repoRoot, ["rev-parse", `${at.target}^{tree}`]))),
+      ])
+      return merged === target ? { kind: "merged", into: at.into } : { kind: "open", into: at.into, commits }
+    } catch {
+      return { kind: "unknown" }
+    }
+  }
+
+  /** A landing by the branches' names, for a repository whose files don't say its commits: asked of Git each time. */
   private async readLanding(worktree: Pick<ThreadWorktree, "repoRoot" | "branch" | "base">, into: string, idle = false): Promise<WorktreeLanding> {
     const read = (args: string[]) => (idle ? this.git.idleOutput(worktree.repoRoot, args) : this.git.readOutput(worktree.repoRoot, args))
     try {
@@ -800,7 +1000,7 @@ export class ThreadWorktreeService {
       // A squash merge shows only through an in-memory merge, which older Git can't do.
       if (!await this.git.mergesWithoutCheckout()) return { kind: "open", into, commits }
       const [merged, target] = await Promise.all([
-        this.git.output(worktree.repoRoot, ["merge-tree", "--write-tree", into, worktree.branch]).catch(() => ""),
+        this.git.run({ cwd: worktree.repoRoot, args: ["merge-tree", "--write-tree", into, worktree.branch], read: true, idle, maxBytes: 16 * 1024 * 1024 }).then((result) => result.stdout.toString("utf8").trim(), () => ""),
         read(["rev-parse", `${into}^{tree}`]),
       ])
       return merged === target ? { kind: "merged", into } : { kind: "open", into, commits }
@@ -809,23 +1009,26 @@ export class ThreadWorktreeService {
     }
   }
 
-  /**
-   * An answer that depends only on the commits in `key`, kept while the
-   * host runs: commits never change, so it's read once whoever asks again.
-   * A failed read isn't kept.
-   */
-  private byCommits<T>(answers: Map<string, Promise<T>>, key: string, read: () => Promise<T>): Promise<T> {
-    const known = answers.get(key)
-    if (known) {
-      answers.delete(key)
-      answers.set(key, known)
-      return known
-    }
-    const reading = read()
-    answers.set(key, reading)
-    reading.catch(() => answers.delete(key))
-    while (answers.size > COMMIT_ANSWERS) answers.delete(answers.keys().next().value!)
-    return reading
+  /** Reads in what the last host held (`cache`), once: nothing read since then is replaced. */
+  private remember(): Promise<void> {
+    return this.remembered ??= this.cache.load().then((memory) => {
+      this.landings.restore(memory.landings)
+      this.counts.restore(memory.counts)
+      this.trees.restore(memory.trees)
+      for (const [path, held] of memory.worktrees) {
+        if (this.heldSummaries.has(path)) continue
+        this.heldSummaries.set(path, held)
+        this.unchecked.add(path)
+        if (!this.statuses.has(path)) this.statuses.set(path, { at: held.statusAt, index: held.index, changes: Promise.resolve(held.summary.changes) })
+      }
+      for (const [repoRoot, pulls] of memory.pulls) if (!this.pullsRead.has(repoRoot)) this.pullsRead.set(repoRoot, pulls)
+      for (const [repoRoot, point] of memory.points) if (!this.points.has(repoRoot)) this.points.set(repoRoot, point)
+    })
+  }
+
+  /** What's held changed: the file follows soon. */
+  private keep(): void {
+    this.cache.changed((): SummaryMemory => ({ landings: this.landings.known, counts: this.counts.known, trees: this.trees.known, worktrees: this.heldSummaries, pulls: this.pullsRead, points: this.points }))
   }
 
   /**
@@ -834,19 +1037,51 @@ export class ThreadWorktreeService {
    * repository's pull requests, newest first, and is asked at most once a
    * minute per repository.
    *
-   * Every window asks every half minute and as it gains focus, so callers
-   * share passes: one asking while a pass runs gets the next one, which
-   * starts once that ends and serves everyone who asked meanwhile. Each
-   * caller's answer was read after it asked, and at most one pass runs.
+   * This runs a pass and answers when it ends: callers share passes, so one asking while a pass runs gets the next
+   * one, which starts once that ends and serves everyone who asked meanwhile, and at most one pass runs. A pass asks
+   * Git only of what moved since it was last read (`readListed`). A window doesn't wait for one: it takes what's held
+   * (`heldNow`) and hears the rest as it's read.
    */
   summaries(pullsOf?: PullsOf): Promise<WorktreeSummary[]> {
     if (pullsOf) this.lastPullsOf = pullsOf
     return this.summaryPasses.ask(() => this.readSummaries(pullsOf ?? this.lastPullsOf))
   }
 
-  /** Hears every worktree's summaries whenever one changes, read on its own events (`SUMMARY_BACKSTOP_MS`). */
+  /**
+   * Every summary held now, at once, and the worktrees still being read: those never read, and those whose summary
+   * the last host left and this one hasn't looked at yet. A pass starts behind the answer and says each as it's read
+   * (`followSummaryChanges`). Waiting for the pass instead, a window had no marks in its rail for as long as the
+   * first pass after a start took, 12 to 31 minutes in one log. `form` is how the asker takes what follows: `changes`,
+   * or the `whole` list a window of an earlier build knows.
+   */
+  async heldNow(pullsOf?: PullsOf, form: "whole" | "changes" = "whole"): Promise<WorktreeSummariesHeld> {
+    if (pullsOf) this.lastPullsOf = pullsOf
+    if (form === "whole") this.summaryForm = "whole"
+    else if (this.summaryForm === "unasked") this.summaryForm = "changes"
+    await this.remember()
+    const rows = this.threads.worktrees()
+    const summaries = rows.flatMap((row) => this.heldSummaries.get(row.path)?.summary ?? [])
+    const reading = rows.flatMap((row) => (!this.heldSummaries.has(row.path) || this.unchecked.has(row.path) ? [row.path] : []))
+    void this.summaries(pullsOf).catch(() => undefined)
+    return { summaries, reading }
+  }
+
+  /**
+   * Hears every worktree's summaries, the whole list, whenever one changes: the form windows knew before
+   * `followSummaryChanges`, said until a window asks for changes and none for the whole list (`heldNow`).
+   */
   followSummaries(listener: (summaries: WorktreeSummary[]) => void): void {
     this.summaryListener = listener
+    this.summaryWatchesClosed = false
+    this.closingWatches = undefined
+  }
+
+  /**
+   * Hears each summary as it's read, when it isn't what was last said, and the worktrees that went: read on each
+   * worktree's own events, and by the host's pass. What's read in one turn of the loop is said together.
+   */
+  followSummaryChanges(listener: (changes: WorktreeSummaryChanges) => void): void {
+    this.changesListener = listener
     this.summaryWatchesClosed = false
     this.closingWatches = undefined
   }
@@ -856,13 +1091,13 @@ export class ThreadWorktreeService {
     for (const path of this.heldSummaries.keys()) if (folder === path || folder.startsWith(`${path}/`)) this.summaryStale([path])
   }
 
-  private summaryStale(paths: Iterable<string>, after = SUMMARY_SETTLE_MS, index = false): void {
+  private summaryStale(paths: Iterable<string>, after = SUMMARY_SETTLE_MS, kind: "status" | "index" | "refs" = "status"): void {
     for (const path of paths) {
-      if (index && !this.staleSummaries.has(path)) this.indexOnly.add(path)
-      if (!index) this.indexOnly.delete(path)
-      this.staleSummaries.add(path)
+      const marked = this.staleSummaries.get(path)
+      // The most an event asks for stands: a status over an index's own wait, either over a look at the refs alone.
+      if (kind === "status" || !marked || (kind === "index" && marked === "refs")) this.staleSummaries.set(path, kind)
     }
-    if (!this.summaryListener) return
+    if (!this.summaryListener && !this.changesListener) return
     // One timer, at the soonest any event asks: a turn's end doesn't wait behind an index's half minute.
     const at = performance.now() + after
     if (this.summaryTimer && this.summaryTimerAt <= at) return
@@ -875,67 +1110,109 @@ export class ThreadWorktreeService {
     this.summaryTimer.unref()
   }
 
-  /** What events marked, read again from the last full pass's list, each at most every `SUMMARY_GAP_MS`; said if it changed. */
+  /**
+   * What events marked, read again from the last full pass's list; said if it changed. One whose files may have
+   * changed is read at most every `SUMMARY_GAP_MS`; one marked only because a shared ref moved is looked at at once,
+   * which reads its commits' files and asks Git nothing unless they moved.
+   */
   private async readStale(): Promise<WorktreeSummary[]> {
     const now = Date.now()
-    const due = this.summaryListed.filter((worktree) => this.staleSummaries.has(worktree.path) &&
-      now - (this.heldSummaries.get(worktree.path)?.at ?? 0) >= (this.indexOnly.has(worktree.path) ? SUMMARY_INDEX_GAP_MS : SUMMARY_GAP_MS))
-    const later = [...this.staleSummaries].filter((path) => !due.some((worktree) => worktree.path === path))
-    const facts = new Map<string, Promise<RepositoryFacts>>()
-    const factsOf = (repoRoot: string) => {
-      let known = facts.get(repoRoot)
-      if (!known) facts.set(repoRoot, known = this.repositoryFacts(repoRoot, true))
-      return known
+    const dueAt = (path: string) => {
+      const kind = this.staleSummaries.get(path)
+      return (this.heldSummaries.get(path)?.at ?? 0) + (kind === "refs" ? 0 : kind === "index" ? SUMMARY_INDEX_GAP_MS : SUMMARY_GAP_MS)
     }
-    const points = new Map<string, Promise<RepositoryPoints>>()
-    const pointsOf = (repoRoot: string) => {
-      let known = points.get(repoRoot)
-      if (!known) points.set(repoRoot, known = factsOf(repoRoot).then(facts => this.repositoryPoints(repoRoot, this.summaryListed, facts)))
-      return known
-    }
-    await mapLimit(due, 6, async (worktree) => {
-      this.staleSummaries.delete(worktree.path)
-      this.indexOnly.delete(worktree.path)
-      this.statuses.delete(worktree.path)
-      const index = await this.indexTime(worktree.path)
-      const summary = await this.summarize(worktree, this.lastPullsOf, await factsOf(worktree.repoRoot), await pointsOf(worktree.repoRoot), false, true)
-      this.heldSummaries.set(worktree.path, { summary, at: Date.now(), index, refs: summaryRefs(worktree, await factsOf(worktree.repoRoot)) })
-    })
+    const due = this.summaryListed.filter((worktree) => this.staleSummaries.has(worktree.path) && now >= dueAt(worktree.path))
+    const reading = new Set(due.map((worktree) => worktree.path))
     const listed = new Set(this.summaryListed.map((worktree) => worktree.path))
-    const waiting = later.filter((path) => listed.has(path))
-    for (const path of later) if (!listed.has(path)) {
-      this.staleSummaries.delete(path)
-      this.indexOnly.delete(path)
+    let soonest: number | undefined
+    for (const path of this.staleSummaries.keys()) {
+      if (!listed.has(path)) this.staleSummaries.delete(path)
+      else if (!reading.has(path)) soonest = Math.min(soonest ?? Infinity, dueAt(path) - now)
     }
+    await this.readListed(this.summaryListed, due, this.lastPullsOf, () => false)
     // Asked again once the first of them is due, not a whole gap from now.
-    if (waiting.length) {
-      const dueIn = Math.min(...waiting.map((path) => (this.heldSummaries.get(path)?.at ?? 0) + (this.indexOnly.has(path) ? SUMMARY_INDEX_GAP_MS : SUMMARY_GAP_MS) - now))
-      this.summaryStale([], Math.max(SUMMARY_SETTLE_MS, dueIn))
-    }
-    const summaries = this.summaryListed.flatMap((worktree) => {
-      const held = this.heldSummaries.get(worktree.path)
-      return held ? [held.summary] : []
-    })
+    if (soonest !== undefined) this.summaryStale([], Math.max(SUMMARY_SETTLE_MS, soonest))
+    const summaries = this.listedSummaries()
     await this.sayIfChanged(summaries)
     return summaries
   }
 
+  /** The summaries held for the worktrees the last full pass listed, in its order. */
+  private listedSummaries(): WorktreeSummary[] {
+    return this.summaryListed.flatMap((worktree) => this.heldSummaries.get(worktree.path)?.summary ?? [])
+  }
+
+  /** The whole list, to a listener that takes it that way, when any of it changed. */
   private async sayIfChanged(summaries: WorktreeSummary[]): Promise<void> {
+    if (!this.summaryListener || this.summaryForm === "changes") return
     const { said, changed } = await inSlices(summaryRows(summaries, this.summariesSaid))
     this.summariesSaid = said
-    if (changed) this.summaryListener?.(summaries)
+    if (changed) this.summaryListener(summaries)
+  }
+
+  /** Holds a worktree's summary as just read, and says it if it isn't what was last said. */
+  private hold(path: string, summary: WorktreeSummary, refs: string): void {
+    const status = this.statuses.get(path)
+    this.heldSummaries.set(path, { summary, at: Date.now(), statusAt: status?.at ?? 0, index: status?.index ?? 0, refs })
+    this.unchecked.delete(path)
+    this.say(summary)
+    this.keep()
+  }
+
+  private say(summary: WorktreeSummary): void {
+    const row = JSON.stringify(summary)
+    if (this.saidRows.get(summary.path) === row) return
+    this.saidRows.set(summary.path, row)
+    const unsaid = this.sayingSoon()
+    unsaid.removed.delete(summary.path)
+    unsaid.changed.set(summary.path, summary)
+  }
+
+  /** What changed in this turn of the loop, said together at its end. */
+  private sayingSoon(): UnsaidSummaries {
+    if (this.unsaid) return this.unsaid
+    const unsaid: UnsaidSummaries = this.unsaid = { changed: new Map(), removed: new Set() }
+    queueMicrotask(() => {
+      if (this.unsaid === unsaid) this.unsaid = undefined
+      this.changesListener?.({ changed: [...unsaid.changed.values()], removed: [...unsaid.removed] })
+    })
+    return unsaid
+  }
+
+  /** Landings put off by a pass, read one at a time, `LANDING_SPREAD_MS` apart; resolves once none waits. */
+  private laterLandings(): Promise<void> {
+    if (!this.landingsLater.size) return this.landingDrain ?? Promise.resolve()
+    return this.landingDrain ??= (async () => {
+      for (let first = true; ; first = false) {
+        const [path, job] = this.landingsLater.entries().next().value ?? []
+        if (path === undefined || !job) return
+        this.landingsLater.delete(path)
+        if (this.summaryWatchesClosed) continue
+        if (!first) await delay(LANDING_SPREAD_MS)
+        const landing = await job.read().catch(() => undefined)
+        const held = this.heldSummaries.get(path)
+        // Read at commits that moved since: the read that follows them has its own answer. One Git couldn't make
+        // leaves the summary marked as waiting, so the next pass asks again.
+        if (!landing || landing.kind === "unknown" || !held || held.refs !== job.awaiting) continue
+        const pull = held.summary.pull
+        const squashedThere = landing.kind === "open" && pull?.state === "merged" && pull.head === job.tip
+        this.hold(path, { ...held.summary, landing: squashedThere ? { kind: "merged", into: landing.into } : landing }, job.refs)
+      }
+    })().finally(() => {
+      this.landingDrain = undefined
+    })
   }
 
   /** Watches each listed worktree's Git directory and each repository's, and lets go of the rest. */
   private async watchSummaries(worktrees: readonly ThreadWorktree[]): Promise<void> {
     if (this.summaryWatchesClosed) return
     const generation = this.summaryWatchGeneration
-    const wanted = new Map<string, { gitDir: () => Promise<string | undefined>; paths: () => string[]; index: boolean; markers: readonly string[]; roots: readonly string[] }>()
+    const wanted = new Map<string, { gitDir: () => Promise<string | undefined>; paths: () => string[]; kind: "status" | "index" | "refs"; markers: readonly string[]; roots: readonly string[] }>()
     const shared = new Map<string, { paths: string[]; roots: Set<string>; branches: Set<string> }>()
     for (const worktree of worktrees) {
       const own = () => [worktree.path]
-      wanted.set(worktree.path, { gitDir: () => worktreeGitDir(worktree.path), paths: own, index: false, markers: HEAD_MARKER, roots: [] })
-      wanted.set(`index\0${worktree.path}`, { gitDir: () => worktreeGitDir(worktree.path), paths: own, index: true, markers: INDEX_MARKER, roots: [] })
+      wanted.set(worktree.path, { gitDir: () => worktreeGitDir(worktree.path), paths: own, kind: "status", markers: HEAD_MARKER, roots: [] })
+      wanted.set(`index\0${worktree.path}`, { gitDir: () => worktreeGitDir(worktree.path), paths: own, kind: "index", markers: INDEX_MARKER, roots: [] })
       const common = commonDirOf(worktree.repoRoot)
       let group = shared.get(common)
       if (!group) shared.set(common, group = { paths: [], roots: new Set(), branches: new Set() })
@@ -952,21 +1229,22 @@ export class ThreadWorktreeService {
       // Local moves stale summaries, but only remote-ref changes invalidate GitHub's five-minute list.
       for (const [kind, markers, roots] of [["local", local, []], ["remote", remote, [...group.roots]]] as const) {
         const key = `${kind}\0${common}\0${[...markers, ...group.paths].sort().join("\0")}`
-        wanted.set(key, { gitDir: async () => common, paths: () => group.paths, index: false, markers, roots })
+        // A ref every checkout shares changes no worktree's files: its worktrees' commits are looked at, no status read.
+        wanted.set(key, { gitDir: async () => common, paths: () => group.paths, kind: "refs", markers, roots })
       }
     }
     for (const [key, watch] of this.summaryWatches) if (!wanted.has(key)) {
       this.retireWatch(watch)
       this.summaryWatches.delete(key)
     }
-    await Promise.all([...wanted].map(async ([key, { gitDir: locate, paths, index, markers, roots }]) => {
+    await Promise.all([...wanted].map(async ([key, { gitDir: locate, paths, kind, markers, roots }]) => {
       if (this.summaryWatches.has(key)) return
       const gitDir = await locate()
       if (this.summaryWatchesClosed || generation !== this.summaryWatchGeneration) return
       if (!gitDir || this.summaryWatches.has(key)) return
       const invalidate = () => {
         for (const repoRoot of roots) this.invalidatePulls(repoRoot)
-        this.summaryStale(paths(), SUMMARY_SETTLE_MS, index)
+        this.summaryStale(paths(), SUMMARY_SETTLE_MS, kind)
       }
       let reachedReady = false
       const retire = () => {
@@ -975,7 +1253,7 @@ export class ThreadWorktreeService {
         this.retireWatch(watch)
         if (!this.summaryWatchesClosed && generation === this.summaryWatchGeneration) {
           if (reachedReady) invalidate()
-          else this.summaryStale(paths(), SUMMARY_SETTLE_MS, index)
+          else this.summaryStale(paths(), SUMMARY_SETTLE_MS, kind)
         }
       }
       // An injected port may report loss during subscribe, before the proxy has been published in the map.
@@ -1029,67 +1307,180 @@ export class ThreadWorktreeService {
     for (const watch of this.summaryWatches.values()) this.retireWatch(watch)
     this.summaryWatches.clear()
     this.summaryListener = undefined
+    this.changesListener = undefined
+    this.landingsLater.clear()
+    const saved = this.cache.flush()
     return this.closingWatches ??= (async () => {
+      await saved
       await Promise.all(this.retiredWatches)
       if (this.watchReleaseFailure) throw this.watchReleaseFailure.error
     })()
   }
 
-  /** One pass: each repository's facts read once, then each worktree's status, and what its commits say where they moved. */
+  /**
+   * One pass: the worktrees listed, each repository's facts read from its files, and each worktree asked of Git only
+   * where what it was read at moved (`readListed`). One that finds everything as it was starts no process.
+   */
   private async readSummaries(pullsOf: PullsOf | undefined): Promise<WorktreeSummary[]> {
-    const { worktrees } = await this.list()
+    const [{ worktrees }] = await Promise.all([this.list(), this.remember()])
     const listed = new Set(worktrees.map((worktree) => worktree.path))
     for (const path of this.statuses.keys()) if (!listed.has(path)) this.statuses.delete(path)
-    const facts = new Map<string, Promise<RepositoryFacts>>()
-    const factsOf = (repoRoot: string) => {
-      let known = facts.get(repoRoot)
-      if (!known) facts.set(repoRoot, known = this.repositoryFacts(repoRoot, true))
-      return known
-    }
     const working = await this.workingFolders().catch(() => [])
     const atWork = ({ path }: ThreadWorktree) => working.some((folder) => folder === path || folder === dirname(path) || folder.startsWith(`${path}/`))
     await this.watchSummaries(worktrees)
     this.summaryListed = worktrees
-    for (const path of this.heldSummaries.keys()) if (!listed.has(path)) this.heldSummaries.delete(path)
+    let gone = false
+    for (const path of this.heldSummaries.keys()) if (!listed.has(path)) {
+      this.heldSummaries.delete(path)
+      this.unchecked.delete(path)
+      gone = true
+    }
     for (const path of this.gitDirs.keys()) if (!listed.has(path)) this.gitDirs.delete(path)
-    const now = Date.now()
-    // Pull requests are read at most once a minute a repository (`pullsIn`); one that changed is the worktree's event too.
-    const pulls = new Map<string, WorktreeBranchPull[] | null>()
-    const points = new Map<string, RepositoryPoints>()
-    for (const repoRoot of new Set(worktrees.map((worktree) => worktree.repoRoot))) {
-      const live = await this.repositoryPoints(repoRoot, worktrees, await factsOf(repoRoot))
-      points.set(repoRoot, live)
-      pulls.set(repoRoot, await this.pullsIn(repoRoot, pullsOf, live))
+    for (const path of this.saidRows.keys()) if (!listed.has(path)) {
+      this.saidRows.delete(path)
+      const unsaid = this.sayingSoon()
+      unsaid.changed.delete(path)
+      unsaid.removed.add(path)
     }
-    const current = async (worktree: ThreadWorktree) => {
-      const held = this.heldSummaries.get(worktree.path)
-      if (!held || this.staleSummaries.has(worktree.path) || now - held.at > SUMMARY_BACKSTOP_MS) return undefined
-      if (held.refs !== summaryRefs(worktree, await factsOf(worktree.repoRoot))) return undefined
-      // Asked, it answers what's staged: a stat of its index, as `statusOf` waits.
-      if ((await this.indexTime(worktree.path)) !== held.index) return undefined
-      // A conversation at work there edits what its index can't show: read as often as a status answers (`statusOf`).
-      if (atWork(worktree) && now - held.at > STATUS_FRESH_MS) return undefined
-      // An edit outside a turn (the person's editor, a background process) moves neither HEAD nor the index: its
-      // status is read again once its own wait runs out, 15 s at first and doubling while nothing changes (`statusOf`).
-      const status = this.statuses.get(worktree.path)
-      if (!status || now - status.at >= status.freshMs) return undefined
-      const pull = branchPull(pulls.get(worktree.repoRoot) ?? [], worktree.branch)
-      return JSON.stringify(pull ?? null) === JSON.stringify(held.summary.pull ?? null) ? held.summary : undefined
-    }
-    // Nobody waits on a pass as it's made (windows ask for it): its reads go behind every other (`Git.idleOutput`).
-    const summaries = await mapLimit(worktrees, 6, async (worktree) => {
-      const held = await current(worktree)
-      if (held) return held
-      // An event while it's read marks it again. One it heard reads its status afresh: a turn's edits leave the index
-      // as it was, which is all `statusOf`'s own wait looks at.
-      if (this.staleSummaries.delete(worktree.path)) this.statuses.delete(worktree.path)
-      const index = await this.indexTime(worktree.path)
-      const summary = await this.summarize(worktree, pullsOf, await factsOf(worktree.repoRoot), points.get(worktree.repoRoot)!, atWork(worktree), true)
-      this.heldSummaries.set(worktree.path, { summary, at: now, index, refs: summaryRefs(worktree, await factsOf(worktree.repoRoot)) })
-      return summary
-    })
+    if (gone) this.keep()
+    await this.readListed(worktrees, worktrees, pullsOf, atWork)
+    const summaries = this.listedSummaries()
     await this.sayIfChanged(summaries)
     return summaries
+  }
+
+  /**
+   * Reads `targets`, some of the worktrees in `all`, each only as far as it moved. A summary stands while the commits
+   * it was read at are the ones its files name now (`summaryRefs`) and its `status` still answers (`statusCurrent`):
+   * such a worktree costs a few reads of small files. One whose commits moved is counted again, with every other of
+   * its repository in one process (`countBranches`); one whose index or HEAD moved, or that an event marked, has its
+   * `status` read too. Each is held and said as it's read, not when the pass ends.
+   *
+   * GitHub isn't waited for: a worktree is said with the pull request last read, and again if the reading now under
+   * way has another. A landing only a merge can tell, of a worktree nobody shows or works in, waits until the others
+   * are read (`laterLandings`).
+   */
+  private async readListed(all: readonly ThreadWorktree[], targets: readonly ThreadWorktree[], pullsOf: PullsOf | undefined, atWork: (worktree: ThreadWorktree) => boolean): Promise<void> {
+    if (!targets.length) return this.laterLandings()
+    const now = Date.now()
+    const facts = new Map<string, RepositoryFacts>()
+    // Pull requests are read at most once a minute a repository (`pullsIn`); one that changed is the worktree's event too.
+    const pulls = new Map<string, PullsReading>()
+    for (const repoRoot of new Set(targets.map((worktree) => worktree.repoRoot))) {
+      const known = await this.repositoryFacts(repoRoot, true, all)
+      facts.set(repoRoot, known)
+      const reading: PullsReading = { pulls: this.pullsIn(repoRoot, pullsOf, await this.repositoryPoints(repoRoot, all, known)) }
+      void reading.pulls.then((read) => {
+        reading.read = { pulls: read }
+        this.pullsSaid.set(repoRoot, read)
+      })
+      pulls.set(repoRoot, reading)
+    }
+    // A reading kept from the last minute, or none while no window looks, is in by the next turn of the loop.
+    await Promise.race([Promise.all([...pulls.values()].map((reading) => reading.pulls)), new Promise((resolve) => setImmediate(resolve))])
+    const plans = await mapLimit(targets, 12, async (worktree) => {
+      const known = facts.get(worktree.repoRoot)!
+      const head = await worktreeHead(worktree.path, known.tips)
+      const refs = summaryRefs(worktree, known, head)
+      const held = this.heldSummaries.get(worktree.path)
+      // An event while it's read marks it again. One that says its files may have changed reads its status afresh: a
+      // turn's edits leave the index as it was, which is all a status's own standing looks at. So does a branch or
+      // HEAD moved from outside the worktree, which leaves its files and index behind.
+      const marked = this.staleSummaries.get(worktree.path)
+      this.staleSummaries.delete(worktree.path)
+      if (marked === "status" || marked === "index" || (held && !held.refs.startsWith(ownRefs(worktree, known, head)))) this.statuses.delete(worktree.path)
+      const asRead = held !== undefined && held.refs === refs && await this.statusCurrent(worktree.path, now)
+      return { worktree, head, refs, asRead }
+    })
+    for (const [repoRoot, known] of facts)
+      await this.countBranches(repoRoot, known, plans.filter((plan) => !plan.asRead && plan.worktree.repoRoot === repoRoot), true)
+    const afterPulls: (() => Promise<void>)[] = []
+    // Nobody waits on a pass as it's made (windows take what's held): its reads go behind every other (`Git.idleOutput`).
+    await mapLimit(plans, 6, async ({ worktree, head, refs, asRead }) => {
+      const known = facts.get(worktree.repoRoot)!
+      const reading = pulls.get(worktree.repoRoot)!
+      const read = async (from: readonly WorktreeBranchPull[] | null) => {
+        const before = this.heldSummaries.get(worktree.path)
+        // Its own commits as they were, so only the main checkout moved: its landing can wait unless someone is looking.
+        const waits = before !== undefined && before.refs.startsWith(ownRefs(worktree, known, head)) && !this.shown(worktree.path) && !atWork(worktree)
+        // A summary whose landing waits is held as read at `awaiting`, which no commits are: a pass before the landing
+        // is in, or a host that starts before it is, asks for it again rather than taking the summary as read.
+        const awaiting = `${refs}${LANDING_AWAITED}`
+        let putOff = false
+        const later: LaterLanding | undefined = waits ? {
+          previous: before.summary.landing,
+          read: (tip, job) => {
+            putOff = true
+            this.landingsLater.set(worktree.path, { refs, awaiting, tip, read: job })
+          },
+        } : undefined
+        const summary = await this.summarize(worktree, from, known, head, { fresh: false, idle: true, later })
+        if (!putOff) this.landingsLater.delete(worktree.path)
+        this.hold(worktree.path, summary, putOff ? awaiting : refs)
+      }
+      const pullMoved = (from: readonly WorktreeBranchPull[] | null) =>
+        JSON.stringify(branchPull(from ?? [], worktree.branch) ?? null) !== JSON.stringify(this.heldSummaries.get(worktree.path)?.summary.pull ?? null)
+      const again = async () => {
+        const from = await reading.pulls
+        if (pullMoved(from)) await read(from)
+      }
+      if (asRead) {
+        const held = this.heldSummaries.get(worktree.path)
+        if (held) {
+          // Held from the last host and as it was: looked at now, and said to whoever hasn't heard it.
+          this.unchecked.delete(worktree.path)
+          this.say(held.summary)
+        }
+        if (!reading.read) afterPulls.push(again)
+        else if (pullMoved(reading.read.pulls)) await read(reading.read.pulls)
+        return
+      }
+      if (reading.read) return read(reading.read.pulls)
+      // Said with what GitHub last answered, none included, so a reading that says the same changes nothing twice.
+      await read(this.pullsSaid.has(worktree.repoRoot) ? this.pullsSaid.get(worktree.repoRoot) ?? null : this.pullsRead.get(worktree.repoRoot) ?? null)
+      afterPulls.push(again)
+    })
+    await mapLimit(afterPulls, 6, (work) => work())
+    await this.laterLandings()
+  }
+
+  /** Whether the `status` held for a worktree still answers: its index as it was when read, and read within `STATUS_BACKSTOP_MS`. */
+  private async statusCurrent(path: string, now: number): Promise<boolean> {
+    const status = this.statuses.get(path)
+    // An index time of 0 is a checkout with no index to stat: nothing says it's unchanged.
+    return status !== undefined && status.index !== 0 && now - status.at < statusBackstop(path) && status.index === await this.indexTime(path)
+  }
+
+  /**
+   * `ahead` and `behind` for several worktrees of a repository, counted by one `for-each-ref` (`ahead-behind`, Git
+   * 2.41) against the main checkout's branch and the start point, and kept by their commits for `summarize` to find.
+   * When the main checkout moves, every worktree's counts move with it: asked a worktree at a time that was two
+   * processes each, a couple of hundred at once on a Mac with a hundred worktrees. Older Git, or a worktree off its
+   * branch, is counted by `summarize` itself.
+   */
+  private async countBranches(repoRoot: string, facts: RepositoryFacts, wanted: readonly { worktree: ThreadWorktree; head: string | undefined }[], idle: boolean): Promise<void> {
+    const target = facts.into ? facts.tips.get(facts.into) : undefined
+    const point = facts.point?.commit
+    const missing = wanted.filter(({ worktree, head }) => {
+      const tip = facts.tips.get(worktree.branch)
+      if (!tip || head !== tip) return false
+      return (target !== undefined && !this.counts.has(aheadKey(repoRoot, target, tip))) || (point !== undefined && !this.counts.has(behindKey(repoRoot, tip, point)))
+    })
+    if (!missing.length || !(await this.git.atLeast(...AHEAD_BEHIND_GIT))) return
+    // Counted once where new Threads start at the main checkout's own commit, as they do unless its upstream is ahead.
+    const against = [...new Set([target, point].flatMap((commit) => (commit ? [commit] : [])))]
+    const args = ["for-each-ref", `--format=%(refname)%00%(objectname)%00${against.map((commit) => `%(ahead-behind:${commit})`).join("%00")}`, ...new Set(missing.map(({ worktree }) => `refs/heads/${worktree.branch}`))]
+    const listed = await (idle ? this.git.idleOutput(repoRoot, args) : this.git.readOutput(repoRoot, args)).catch(() => "")
+    for (const line of listed.split("\n")) {
+      const [ref = "", tip = "", ...pairs] = line.split("\0")
+      // A branch that moved while it was counted is counted at the commit it has now, by the read that follows.
+      if (!ref.startsWith("refs/heads/") || facts.tips.get(ref.slice("refs/heads/".length)) !== tip) continue
+      const counted = pairs.map((pair) => pair.split(" ").map(Number))
+      const ahead = target ? counted[against.indexOf(target)]?.[0] : undefined
+      const behind = point ? counted[against.indexOf(point)]?.[1] : undefined
+      if (target && ahead !== undefined && Number.isInteger(ahead)) this.counts.set(aheadKey(repoRoot, target, tip), ahead)
+      if (point && behind !== undefined && Number.isInteger(behind)) this.counts.set(behindKey(repoRoot, tip, point), behind)
+    }
   }
 
   /** The same repository-wide input for full, stale and single-summary PR reads. */
@@ -1103,38 +1494,67 @@ export class ThreadWorktreeService {
     }
   }
 
-  /** What every worktree of a repository shares: the branch its main checkout has out, every branch's commit, where new Threads start. */
-  private async repositoryFacts(repoRoot: string, idle = false): Promise<RepositoryFacts> {
+  /**
+   * What every worktree of a repository shares: the branch its main checkout has out, the commit of each branch
+   * `worktrees` are on, where new Threads start. Read from Git's files, which starts no process; a repository whose
+   * files can't say (`storedFacts`) is asked of Git, every branch's commit with one `for-each-ref`.
+   */
+  private async repositoryFacts(repoRoot: string, idle: boolean, worktrees: readonly Pick<ThreadWorktree, "repoRoot" | "branch" | "path">[]): Promise<RepositoryFacts> {
+    const point = this.starts.point(repoRoot, false).catch(() => null)
+    const stored = await this.storedFacts(repoRoot, worktrees).catch(() => undefined)
+    if (stored) return { ...stored, point: await point }
     const read = (args: string[]) => (idle ? this.git.idleOutput(repoRoot, args) : this.git.readOutput(repoRoot, args))
-    const [into, refs, point] = await Promise.all([
+    const [into, refs] = await Promise.all([
       read(["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => ""),
       read(["for-each-ref", "--format=%(objectname) %(refname:short)", "refs/heads"]).catch(() => ""),
-      this.starts.point(repoRoot, false).catch(() => null),
     ])
     const tips = await inSlices(summaryTips(refs))
-    return { into, tips, point }
+    return { into, tips, point: await point }
   }
 
   /**
-   * A worktree's `git status` for its summary, read again once its answer has aged out (`STATUS_QUIET_MS`) or its
-   * index changed, and past `STATUS_FRESH_MS` while `busy`. Each read is a spawn, which holds the host's thread
-   * (hundreds of milliseconds each on a loaded Linux machine), and walks the worktree in the kernel, and a hundred
-   * worktrees were read on every pass.
+   * The main checkout's branch and the commits of the branches `worktrees` are on, from the repository's files.
+   * Undefined when they can't say: no HEAD to read, a branch with no commit yet, refs kept another way.
    */
-  private async statusOf(path: string, busy: boolean, idle: boolean): Promise<string> {
-    const gitDir = await worktreeGitDir(path)
-    const index = gitDir ? await stat(join(gitDir, "index")).then(({ mtimeMs }) => mtimeMs, () => 0) : 0
+  private async storedFacts(repoRoot: string, worktrees: readonly Pick<ThreadWorktree, "repoRoot" | "branch" | "path">[]): Promise<Pick<RepositoryFacts, "into" | "tips"> | undefined> {
+    const gitDir = await locateGitDir(repoRoot)
+    const head = gitDir ? await gitFileText(join(gitDir, "HEAD")) : undefined
+    if (!head) return undefined
+    const into = head.startsWith("ref: refs/heads/") ? head.slice("ref: refs/heads/".length) : ""
+    if (!into && !/^[0-9a-f]{40,64}$/.test(head)) return undefined
+    const branches = new Set(into ? [into] : [])
+    await Promise.all(worktrees.map(async (worktree) => {
+      if (worktree.repoRoot !== repoRoot) return
+      branches.add(worktree.branch)
+      const on = await worktreeBranch(worktree.path)
+      if (on) branches.add(on)
+    }))
+    const stored = await storedRefs(commonDirOf(repoRoot), [...branches].map((branch) => `refs/heads/${branch}`))
+    if (!stored || (into && !stored.has(`refs/heads/${into}`))) return undefined
+    return { into, tips: new Map([...stored].map(([ref, commit]) => [ref.slice("refs/heads/".length), commit])) }
+  }
+
+  /**
+   * How many files a worktree's `git status` lists, for its summary: read again when its index changed, when an
+   * event dropped what was held (`readListed`), or once the answer is `STATUS_BACKSTOP_MS` old; `fresh`, for a
+   * worktree asked of alone, past `STATUS_FRESH_MS`. Each read is a spawn, which holds the host's thread (hundreds of
+   * milliseconds each on a loaded Linux machine), and walks the worktree in the kernel.
+   */
+  private async statusOf(path: string, fresh: boolean, idle: boolean): Promise<number> {
+    const index = await this.indexTime(path)
     const known = this.statuses.get(path)
-    const unchanged = known !== undefined && gitDir !== undefined && known.index === index
-    if (unchanged && Date.now() - known.at < (busy ? STATUS_FRESH_MS : known.freshMs)) return known.status
-    const args = ["status", "--porcelain", "--untracked-files=normal"]
-    const status = (idle ? this.git.idleOutput(path, args) : this.git.readOutput(path, args)).catch(() => "")
-    const read = { at: Date.now(), index, status, freshMs: STATUS_FRESH_MS }
+    if (known && index !== 0 && known.index === index && Date.now() - known.at < (fresh ? STATUS_FRESH_MS : statusBackstop(path))) return known.changes
+    const read: StatusHeld = {
+      at: Date.now(),
+      index,
+      // A read that failed (a timeout under load) counts nothing and isn't kept: the next look reads it again.
+      changes: this.shared.read(path, idle).then((status) => inSlices(summaryChanges(status)), () => {
+        if (this.statuses.get(path) === read) this.statuses.delete(path)
+        return 0
+      }),
+    }
     this.statuses.set(path, read)
-    if (unchanged) void Promise.all([known.status, status]).then(([before, now]) => {
-      if (before === now) read.freshMs = Math.min(STATUS_QUIET_MS, known.freshMs * 2) * (1 - STATUS_SPREAD * Math.random())
-    })
-    return status
+    return read.changes
   }
 
   /** One worktree's summary, with where its branch started; undefined for a folder that isn't one of Mako's worktrees. */
@@ -1142,9 +1562,11 @@ export class ThreadWorktreeService {
     const { worktrees } = await this.list()
     const worktree = worktrees.find(entry => entry.path === path)
     if (!worktree) return undefined
-    const facts = await this.repositoryFacts(worktree.repoRoot)
-    const points = await this.repositoryPoints(worktree.repoRoot, worktrees, facts)
-    return { ...await this.summarize(worktree, pullsOf, facts, points, true), startedFrom: worktree.start?.from ?? null }
+    await this.remember()
+    const facts = await this.repositoryFacts(worktree.repoRoot, false, worktrees)
+    const head = await worktreeHead(worktree.path, facts.tips)
+    const pulls = await this.pullsIn(worktree.repoRoot, pullsOf, await this.repositoryPoints(worktree.repoRoot, worktrees, facts))
+    return { ...await this.summarize(worktree, pulls, facts, head, { fresh: true, idle: false }), startedFrom: worktree.start?.from ?? null }
   }
 
   /** Where a worktree's new branch started (`origin/main`); null on a branch that existed already, or a folder that isn't one of Mako's worktrees. */
@@ -1184,41 +1606,54 @@ export class ThreadWorktreeService {
     const cached = this.branchPulls.get(repoRoot)
     // A shell push can precede its file event. Changed local facts must reach the per-PR reader now,
     // while an unchanged HEAD still shares the minute cache and the broad list keeps its five-minute TTL.
-    if (cached && now - cached.at < BRANCH_PULLS_EVERY_MS && liveHeads.every(head => cached.heads.has(head)) &&
-      [...liveBranches].every(([branch, head]) => cached.branches.get(branch) === head)) return cached.pulls
+    // A commit on a branch with no open pull request changes nothing GitHub would say of it: with a hundred
+    // worktrees, every commit in any of them asked GitHub about all of them again.
+    if (cached && now - cached.at < BRANCH_PULLS_EVERY_MS) {
+      const read = this.pullsRead.get(repoRoot)
+      const moved = [...liveBranches].filter(([branch, head]) => cached.branches.get(branch) !== head)
+      const movedHeads = new Set(moved.map(([, head]) => head))
+      const pullOpen = ([branch]: readonly [string, string]) => {
+        const pull = read && branchPull(read, branch)
+        return read === undefined || pull?.state === "open" || pull?.state === "draft"
+      }
+      if (liveHeads.every((head) => cached.heads.has(head) || movedHeads.has(head)) && !moved.some(pullOpen)) return cached.pulls
+    }
     const pulls = Promise.resolve(this.pullInvalidations.get(repoRoot)).then(() => pullsOf?.(repoRoot, liveHeads, liveBranches) ?? null).catch(() => null)
     this.branchPulls.set(repoRoot, { at: now, heads: new Set(liveHeads), branches: new Map(liveBranches), pulls })
     void pulls.then((read) => {
-      if (read && this.branchPulls.get(repoRoot)?.pulls === pulls) this.pullsRead.set(repoRoot, read)
+      if (!read || this.branchPulls.get(repoRoot)?.pulls !== pulls) return
+      this.pullsRead.set(repoRoot, read)
+      this.keep()
     })
     return pulls
   }
 
-  private async summarize(worktree: ThreadWorktree, pullsOf: PullsOf | undefined, facts: RepositoryFacts, points: RepositoryPoints, busy: boolean, idle = false): Promise<WorktreeSummary> {
+  /**
+   * A worktree's summary at the commits `facts` and `head` name. Its counts and its landing are kept by those commits
+   * (`CommitAnswers`), and its `status` while its index stands (`statusOf`), so only what moved is asked of Git.
+   */
+  private async summarize(worktree: ThreadWorktree, pulls: readonly WorktreeBranchPull[] | null, facts: RepositoryFacts, head: string | undefined, how: { fresh: boolean; idle: boolean; later?: LaterLanding }): Promise<WorktreeSummary> {
     const { into, point } = facts
+    const { repoRoot } = worktree
     const tip = facts.tips.get(worktree.branch) ?? ""
     const from = into ? facts.tips.get(into) : worktree.base
-    const currentHead = await worktreeHead(worktree.path, facts.tips)
-    const [status, landing, pulls, head] = await Promise.all([
-      this.statusOf(worktree.path, busy, idle),
-      this.landing(worktree, facts, idle),
-      this.pullsIn(worktree.repoRoot, pullsOf, points),
-      currentHead,
-    ])
-    const count = (cwd: string, range: string) => (idle ? this.git.idleOutput(cwd, ["rev-list", "--count", range]) : this.git.readOutput(cwd, ["rev-list", "--count", range])).then(Number)
+    const count = (cwd: string, range: string) => (how.idle ? this.git.idleOutput(cwd, ["rev-list", "--count", range]) : this.git.readOutput(cwd, ["rev-list", "--count", range])).then(Number)
     const aheadRange = into ? `${into}..${worktree.branch}` : `${worktree.base}..${worktree.branch}`
-    const [ahead, behindBy] = await Promise.all([
-      (tip && from ? this.byCommits(this.counts, `ahead\0${worktree.repoRoot}\0${from}\0${tip}`, () => count(worktree.repoRoot, aheadRange)) : count(worktree.repoRoot, aheadRange)).catch(() => 0),
-      point && (head ? this.byCommits(this.counts, `behind\0${worktree.repoRoot}\0${head}\0${point.commit}`, () => count(worktree.repoRoot, `${head}..${point.commit}`)) : count(worktree.path, `HEAD..${point.commit}`)).catch(() => null),
+    const [changes, aheadRead, behindBy] = await Promise.all([
+      this.statusOf(worktree.path, how.fresh, how.idle),
+      (tip && from ? this.counts.ask(aheadKey(repoRoot, from, tip), () => count(repoRoot, `${from}..${tip}`)) : count(repoRoot, aheadRange)).catch(() => undefined),
+      point && (head ? this.counts.ask(behindKey(repoRoot, head, point.commit), () => count(repoRoot, `${head}..${point.commit}`)) : count(worktree.path, `HEAD..${point.commit}`)).catch(() => null),
     ])
+    // A count against the main checkout's branch that came back 0 says the branch is in it; one that failed says nothing.
+    const landing = await this.landing(worktree, facts, how.idle, into && tip && from ? aheadRead : undefined, how.later)
     const behind = point && behindBy !== null ? { from: point.from, commit: point.commit, commits: behindBy } : null
     const pull = branchPull(pulls ?? [], worktree.branch)
     const squashedThere = landing.kind === "open" && pull?.state === "merged" && pull.head === tip
     return {
       path: worktree.path,
       into: into || null,
-      ahead,
-      changes: await inSlices(summaryChanges(status)),
+      ahead: aheadRead ?? 0,
+      changes,
       landing: squashedThere ? { kind: "merged", into: landing.into } : landing,
       pull,
       behind: behind && { from: behind.from, commits: behind.commits },
@@ -1251,7 +1686,7 @@ export class ThreadWorktreeService {
       this.git.output(path, ["rev-list", "--count", `${base}..HEAD`]).then(Number),
       this.git.run({ cwd: path, args: [...NO_INDEX_REFRESH, "diff", "--numstat", "-z", "-M", "--no-ext-diff", base, "--"], read: true }).then((result) => numstatEntries(result.stdout)),
       this.git.output(path, ["ls-files", "--others", "--exclude-standard", "-z"]),
-      this.git.readOutput(path, ["status", "--porcelain", "--untracked-files=normal"]),
+      this.shared.read(path),
       this.behind(worktree.repoRoot, path, false),
     ])
     const files = diffed.map(({ path: file, from, lines }) => {
@@ -1449,11 +1884,12 @@ export class ThreadWorktreeService {
   }
 
   /** Why the checkout cannot go: live users or work a removal would lose. */
-  private async held(checkout: string, worktrees: readonly { path: string }[], waitingFor?: string): Promise<string | null> {
+  private async held(checkout: string, worktrees: readonly { path: string }[], waitingFor?: string, preview = false): Promise<string | null> {
     const users = await (this.conversations ? this.conversations.holding(checkout, waitingFor) : this.inUse(checkout))
     if (users.length) return inUseBy(checkout, users)
     for (const { path } of worktrees) {
-      const blocked = existsSync(path) ? await removalBlocker(this.git, path) : undefined
+      // What a removal would meet is shown from a status shared with whoever else is reading it now; the removal reads its own.
+      const blocked = existsSync(path) ? await removalBlocker(this.git, path, preview ? this.shared.read(path) : undefined) : undefined
       if (blocked) return blocked
     }
     return null
@@ -1469,8 +1905,11 @@ export class ThreadWorktreeService {
     const made = attached ?? membersOf(receipts[0]!.receipt).find((member) => member.path === path)
     const branch = attached?.branch ?? receipts[0]?.receipt.branch
     const [held, landing] = await Promise.all([
-      this.held(checkout, together, waitingFor),
-      made && branch ? this.landing({ repoRoot, branch, base: made.base }) : Promise.resolve({ kind: "unknown" as const }),
+      this.held(checkout, together, waitingFor, true),
+      // By the commits its repository's files name, so one the summaries or the list already read isn't asked of Git again.
+      made && branch
+        ? this.repositoryFacts(repoRoot, false, [{ repoRoot, branch, path }]).then((known) => this.landing({ repoRoot, branch, base: made.base }, known), () => this.landing({ repoRoot, branch, base: made.base }))
+        : Promise.resolve({ kind: "unknown" as const }),
     ])
     return { held, landing }
   }
@@ -1838,6 +2277,8 @@ export class ThreadWorktreeService {
     if (receipt && receipt.source !== source) throw new Error("This conversation's worktree was made from another folder")
     if (receipt?.state === "ready" && existsSync(receipt.path)) return receipt
     if (receipt?.members) return this.createProject(conversationId, source, name, from, began, onStep, receipt, branch)
+    /** The receipt's branch is known to be there: this start made it, or found it. */
+    let branched = false
     if (!receipt) {
       let repoRoot: string
       let base: string
@@ -1875,12 +2316,14 @@ export class ThreadWorktreeService {
       }
       if (adopted) receipt.adopted = true
       if (started) receipt.from = started
+      branched = adopted !== undefined || receipt.branch === `${BRANCH_PREFIX}${slug}`
       await this.save(receipt)
     }
     onStep?.("checkout")
     let spare: Spare | undefined
-    // A receipt from before names were held by their branch may not have one yet.
-    if (!(await this.git.succeeds(receipt.repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${receipt.branch}`])))
+    // A receipt from before names were held by their branch may not have one yet, nor one for a branch the start was
+    // given by name. One this start just made by reserving its name, or found to adopt, is there.
+    if (!branched && !(await this.git.succeeds(receipt.repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${receipt.branch}`])))
       await this.git.output(receipt.repoRoot, ["branch", "--no-track", receipt.branch, receipt.base])
     // `.git` rather than asking Git, which would answer for a repository around an empty folder.
     const existed = existsSync(join(receipt.path, ".git"))
@@ -2042,6 +2485,8 @@ export class ThreadWorktreeService {
       }
     }
     await this.spares.used(spare)
+    // One taken is made again now, behind the rest of this start, not once it has finished.
+    this.wantSpares(receipt.repoRoot)
     // A warmed spare must obey the current recipe as well as the current inputs.
     const recipe = await this.setup?.recipe(receipt.path)
     for (const outputs of spare.outputs) {
@@ -2146,9 +2591,11 @@ export class ThreadWorktreeService {
    * or another sharing the folder, never get the same name and folder.
    */
   private async reserveSlug(repoRoot: string, parent: string, slug: string, base: string): Promise<string> {
-    const taken = new Set((await this.git.output(repoRoot, ["for-each-ref", "--format=%(refname:short)", `refs/heads/${BRANCH_PREFIX}`])).split("\n").filter(Boolean))
+    // A name whose branch has its file, or a folder, is passed over without asking Git. One whose branch Git has
+    // packed away is found by the attempt itself, as a name another start takes at the same moment is.
+    const branches = join(commonDirOf(repoRoot), "refs", "heads")
     for (const candidate of slugCandidates(slug)) {
-      if (taken.has(`${BRANCH_PREFIX}${candidate}`) || existsSync(join(parent, candidate))) continue
+      if (existsSync(join(branches, `${BRANCH_PREFIX}${candidate}`)) || existsSync(join(parent, candidate))) continue
       try {
         await this.git.output(repoRoot, ["branch", "--no-track", `${BRANCH_PREFIX}${candidate}`, base])
         return candidate

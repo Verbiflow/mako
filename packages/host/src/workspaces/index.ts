@@ -256,7 +256,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
       } : undefined, deps.conversations, deps.ledger, deps.workingFolders, () => deps.subscribed?.on ?? true, async repoRoot => {
         await forgetGitHubReads(repoRoot)
         emit({ type: "github-changed" })
-      }, deps.watch)
+      }, deps.watch, (path) => checkoutHeads.known(path) !== undefined)
     : null
   const openFiles = async (): Promise<string[]> => {
     const { stdout, stderr } = await reader.run("lsof", ["-nP", "-F0n", "-u", String(process.getuid?.())], { timeout: 10_000, maxBuffer: 32 * 1024 * 1024 })
@@ -324,16 +324,19 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
   // Reconsider registered worlds left by a crash once conversations have opened, then hourly.
   if (scratch) deps.jobs.every("retire owned Thread scratch", SCRATCH_PASS_MS, async () => { await scratch?.run(); await threadData?.run() }, { firstAfterMs: 60_000 })
   if (retention && !deps.readOnly) deps.jobs.every("retire finished Thread worktrees", WORKTREE_RETENTION_MS, async () => { await retention.run() })
-  // Windows hear the summaries as they change, rather than each asking every half minute. What no event of its own
-  // says (a pull request on GitHub, an edit outside a turn) a pass of the host's says, each worktree read only once
-  // its index, pull request, status's freshness or age moved (`current`).
+  // Windows hear the summaries as they change, rather than each asking every half minute: each one as it's read
+  // (`worktree-summary-changes`), and the whole list too while a window that knows only that form may be listening.
+  // What no event of its own says (a pull request on GitHub) a pass of the host's says, each worktree asked of Git
+  // only where what it was read at moved (`readListed`).
   if (worktrees) {
-    worktrees.followSummaries((summaries) => {
-      emit({ type: "worktree-summaries", summaries })
+    worktrees.followSummaries((summaries) => emit({ type: "worktree-summaries", summaries }))
+    worktrees.followSummaryChanges((changes) => {
+      emit({ type: "worktree-summary-changes", ...changes })
       retention?.changed()
       scratch?.changed()
       threadData?.changed()
     })
+    worktrees.followSizes(() => emit({ type: "worktree-sizes" }))
     deps.jobs.every("say the worktrees' summaries as they change", SUMMARY_PASS_MS, () => void worktrees.summaries().catch(() => undefined), deps.subscribed ? { needs: [deps.subscribed] } : {})
   }
   if (worktrees) {

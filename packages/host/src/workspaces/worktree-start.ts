@@ -1,5 +1,8 @@
+import { join } from "node:path"
 import type { WorktreeStanding, WorktreeStartPoint } from "../contracts/thread-worktrees.js"
-import type { Git } from "@mako/git"
+import { commonDirOf, fileStamp, gitFileText, parseGitConfig, personalGitConfigFiles, storedRef, type Git } from "@mako/git"
+import { locateGitDir } from "../base/checkout-location.js"
+import type { HeldPoint } from "./worktree-summary-cache.js"
 
 /** A fetch younger than this answers for the next one. */
 const FETCH_EVERY_MS = 60_000
@@ -9,6 +12,28 @@ const FETCH_TIMEOUT_MS = 15_000
 /** `git fetch` that never asks for credentials and gives up after the timeout. */
 export async function fetchQuietly(git: Git, repoRoot: string, args: string[]): Promise<void> {
   await git.run({ cwd: repoRoot, args: ["fetch", "--quiet", "--no-tags", ...args], timeoutMs: FETCH_TIMEOUT_MS })
+}
+
+/** Each repository's start point as last read, with what it was read at; a host hands in the one it keeps between starts. */
+export interface HeldPoints {
+  get(repoRoot: string): HeldPoint | undefined
+  set(repoRoot: string, point: HeldPoint): void
+}
+
+/** What a point was read at, and the upstream ref among it; null when its branch has none. */
+interface PointKey {
+  key: string
+  upstream: string | null
+}
+
+interface Tracked {
+  remote: string
+  ref: string
+}
+
+interface PointRead {
+  point: WorktreeStartPoint
+  tracked: Tracked | null
 }
 
 interface Fetch {
@@ -22,32 +47,98 @@ interface Fetch {
  * fetch that keeps the project folder's upstream current for it. The fetch
  * runs at most once a minute per upstream and never asks for credentials;
  * a start reads the refs as they are and never waits on the network.
+ *
+ * A point is read once for what it depends on (`pointKey`): the main checkout's HEAD, its branch's commit, its
+ * upstream's, and the configuration that names the upstream. All of those are in Git's files, so asking again while
+ * none moved starts no process. Read by seven processes on every summaries pass and every event, a hundred worktrees
+ * of two repositories kept Git reading what hadn't changed.
  */
 export class WorktreeStarts {
   private readonly fetches = new Map<string, Fetch>()
   private readonly git: Git
   private readonly now: () => number
+  private readonly held: HeldPoints
+  /** Reads under way, by repository and key: those who ask while one runs share it. */
+  private readonly reading = new Map<string, Promise<WorktreeStartPoint>>()
 
-  constructor(git: Git, now: () => number = Date.now) {
+  constructor(git: Git, now: () => number = Date.now, held: HeldPoints = new Map()) {
     this.git = git
     this.now = now
+    this.held = held
   }
 
   /** `fetch` refreshes the upstream first when its last fetch is a minute old, waiting no longer than the fetch's timeout. */
   async point(repoRoot: string, fetch: boolean): Promise<WorktreeStartPoint> {
+    const at = await this.pointKey(repoRoot).catch(() => undefined)
+    const key = at?.key
+    const known = this.held.get(repoRoot)
+    const current = at && known?.key === key ? known : undefined
+    if (fetch) {
+      const tracked = current ? current.tracked : await this.tracked(repoRoot, await this.git.readOutput(repoRoot, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => ""))
+      if (tracked) await this.fetch(repoRoot, tracked)
+      // The fetch may have moved the upstream: the point is whatever the refs say now.
+      return this.point(repoRoot, false)
+    }
+    if (current) return { ...current.point, fetched: current.tracked ? this.fetched(repoRoot, current.tracked) : null }
+    if (!at || key === undefined) return (await this.read(repoRoot)).point
+    const sharing = `${repoRoot}\0${key}`
+    let reading = this.reading.get(sharing)
+    if (!reading) {
+      reading = this.read(repoRoot).then(async ({ point, tracked }) => {
+        // Kept only when nothing it depends on moved while it was read, and its upstream is the ref the key watches.
+        const watched = point.upstream === null || at.upstream === `refs/remotes/${point.upstream}` || at.upstream === `refs/heads/${point.upstream}`
+        if (watched && (await this.pointKey(repoRoot).catch(() => undefined))?.key === key) {
+          // Without when it was last fetched, which is this host's to say each time it answers.
+          this.held.set(repoRoot, { key, point: { from: point.from, commit: point.commit, branch: point.branch, upstream: point.upstream, standing: point.standing }, tracked })
+        }
+        return point
+      }).finally(() => this.reading.delete(sharing))
+      this.reading.set(sharing, reading)
+    }
+    return reading
+  }
+
+  /**
+   * What a start point depends on, from Git's files: the main checkout's HEAD, the commit of the branch it names, the
+   * upstream its configuration gives that branch and that ref's commit, and the configuration files' stamps. Undefined
+   * when the files can't say (no commit yet, a reftable repository), and Git is asked every time.
+   */
+  private async pointKey(repoRoot: string): Promise<PointKey | undefined> {
+    const gitDir = await locateGitDir(repoRoot)
+    if (!gitDir) return undefined
+    const common = commonDirOf(repoRoot)
+    const [head, config, ...stamps] = await Promise.all([
+      gitFileText(join(gitDir, "HEAD")),
+      gitFileText(join(common, "config")),
+      ...[join(common, "config"), ...personalGitConfigFiles()].map((file) => fileStamp(file)),
+    ])
+    if (!head || config === undefined) return undefined
+    if (!head.startsWith("ref: refs/heads/")) return /^[0-9a-f]{40,64}$/.test(head) ? { key: JSON.stringify([head, null, null, null, stamps]), upstream: null } : undefined
+    const branch = head.slice("ref: refs/heads/".length)
+    const tip = await storedRef(common, `refs/heads/${branch}`)
+    if (!tip) return undefined
+    const values = parseGitConfig(config ?? "")
+    const remote = values.get(`branch.${branch}.remote`)?.at(-1)
+    const merge = values.get(`branch.${branch}.merge`)?.at(-1)
+    const upstream = remote && merge?.startsWith("refs/heads/") ? remote === "." ? merge : `refs/remotes/${remote}/${merge.slice("refs/heads/".length)}` : null
+    const commit = upstream ? await storedRef(common, upstream) : null
+    if (commit === undefined) return undefined
+    return { key: JSON.stringify([head, tip, upstream, commit, stamps]), upstream }
+  }
+
+  private async read(repoRoot: string): Promise<PointRead> {
     const read = (args: string[]) => this.git.readOutput(repoRoot, args)
     const branch = await read(["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => "")
     if (!branch) {
       const commit = await read(["rev-parse", "--verify", "HEAD^{commit}"])
-      return { from: commit.slice(0, 7), commit, branch: null, upstream: null, standing: { kind: "detached" }, fetched: null }
+      return { point: { from: commit.slice(0, 7), commit, branch: null, upstream: null, standing: { kind: "detached" }, fetched: null }, tracked: null }
     }
     const tracked = await this.tracked(repoRoot, branch)
-    if (fetch && tracked) await this.fetch(repoRoot, tracked)
     const upstream = await read(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]).catch(() => "")
     const fetched = tracked ? this.fetched(repoRoot, tracked) : null
     if (!upstream || !(await read(["rev-parse", "--verify", "--quiet", `${upstream}^{commit}`]).then(Boolean, () => false))) {
       const commit = await read(["rev-parse", "--verify", "HEAD^{commit}"])
-      return { from: branch, commit, branch, upstream: null, standing: { kind: "alone" }, fetched }
+      return { point: { from: branch, commit, branch, upstream: null, standing: { kind: "alone" }, fetched }, tracked }
     }
     const [ahead = 0, behind = 0] = (await read(["rev-list", "--left-right", "--count", `HEAD...${upstream}`])).split(/\s+/).map(Number)
     const standing: WorktreeStanding = ahead && behind ? { kind: "diverged", ahead, behind }
@@ -56,7 +147,7 @@ export class WorktreeStarts {
       : { kind: "level" }
     const from = standing.kind === "behind" ? upstream : branch
     const commit = await read(["rev-parse", "--verify", `${standing.kind === "behind" ? upstream : "HEAD"}^{commit}`])
-    return { from, commit, branch, upstream, standing, fetched }
+    return { point: { from, commit, branch, upstream, standing, fetched }, tracked }
   }
 
   /** The remote and branch `branch` pulls from, when that is another repository. */
