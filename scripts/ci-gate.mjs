@@ -370,6 +370,8 @@ export const STEPS = [
   [1, "tsx scripts/test-run-output.ts"],
   [2, "tsx scripts/test-runtime-updates.ts"],
   // Every script that runs a harness gives it a scratch or sealed home; red on main until 2026-11-17.
+  // A moved Grok session's replayed context and summary name its new folder (relocateGrokSession).
+  [1, "tsx scripts/test-grok-retarget.ts"],
   [6, "tsx scripts/test-scratch-home.ts"],
   [1, "tsx scripts/test-session-usage.ts"],
   [1, "tsx scripts/test-shared-continuation-upgrade.ts"],
