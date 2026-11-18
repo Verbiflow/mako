@@ -82,8 +82,18 @@ await test("an idle read leaves two slots to reads someone waits on, and never g
 
 await test("an idle read that waited too long takes a slot kept for the others, one at a time and never ahead of a waiting read", async () => {
   const { PassThrough } = await import("node:stream")
-  const reads = new Git({ idleReadWaitMs: 400 })
-  const settle = (ms = 80) => new Promise((resolve) => setTimeout(resolve, ms))
+  // The test says when each idle read's wait has run out, in the order they began waiting: no clock decides it.
+  const waits = []
+  const reads = new Git({
+    idleReadWait: (ms, overdue) => {
+      const wait = { ms, overdue, cancelled: false }
+      waits.push(wait)
+      return () => { wait.cancelled = true }
+    },
+  })
+  // A turn of the loop: every read that may start has taken its slot by the end of one (a slot is taken in promise
+  // continuations, which all run before the loop moves on).
+  const turn = () => new Promise((resolve) => setImmediate(resolve))
   // A read that holds its slot until its stdin ends.
   const held = (idle) => {
     const input = new PassThrough()
@@ -91,41 +101,71 @@ await test("an idle read that waited too long takes a slot kept for the others, 
     return { done, end: () => input.end("x") }
   }
   const pass = Array.from({ length: 7 }, () => held(true))
-  await settle()
+  await turn()
   assert.equal(reads.activity().running.length, 4, "idle reads take four slots")
   assert.equal(reads.activity().queued, 3)
-  // Nothing ends: without the bound the other three wait for as long as that lasts.
-  await settle(600)
+  assert.deepEqual(waits.map((wait) => wait.ms), [5_000, 5_000, 5_000], "each one waiting has its own wait, of the bound")
+  // Nothing ends: without the bound the other three wait for as long as that lasts. The newest one's wait running out
+  // first changes nothing, since the oldest goes first and its wait hasn't.
+  waits[2].overdue()
+  await turn()
+  assert.equal(reads.activity().running.length, 4)
+  waits[0].overdue()
+  await turn()
   assert.equal(reads.activity().running.length, 5, "the oldest one waiting took a kept slot once its wait ran out")
-  await settle(600)
+  assert.equal(waits[0].cancelled, true)
+  waits[1].overdue()
+  await turn()
   assert.equal(reads.activity().running.length, 5, "one at a time: a slot is still kept for a read someone waits on")
   // Which starts at once.
-  const began = performance.now()
   assert.match(await reads.readOutput(scratch, ["version"]), /^git version /)
-  assert.ok(performance.now() - began < 5_000)
   // With every slot full and a read someone waits on waiting, a slot coming free is that read's, not an overdue idle one's.
   const busy = held(false)
-  await settle()
+  await turn()
   assert.equal(reads.activity().running.length, 6)
   const waiting = held(false)
-  await settle()
+  await turn()
   assert.equal(reads.activity().queued, 3)
   // The fifth of the pass is the one in the kept slot.
   pass[4].end()
   await pass[4].done
-  await settle()
+  await turn()
   assert.equal(reads.activity().running.length, 6, "the waiting read took the slot")
   assert.equal(reads.activity().queued, 2, "the two idle reads still wait, however long they have")
-  // Once nobody waits and a kept slot is free again, the next overdue one has it.
+  // Once nobody waits and a kept slot is free again, the next overdue one has it, with no timer left to say so.
   busy.end()
   await busy.done
-  await settle()
+  await turn()
   assert.equal(reads.activity().running.length, 6)
   assert.equal(reads.activity().queued, 1)
   for (const read of [...pass, waiting]) read.end()
   await Promise.all([...pass, waiting].map((read) => read.done))
   assert.equal(reads.activity().queued, 0)
   assert.equal(reads.activity().running.length, 0)
+  reads.close()
+})
+
+await test("an idle read's own timer admits it when its wait runs out, with nothing else ending", async () => {
+  const { PassThrough } = await import("node:stream")
+  // The real timer, at a bound of 1 ms, heard as it fires: the read is admitted in that same call, whatever a clock says then.
+  const fired = Promise.withResolvers()
+  const reads = new Git({
+    idleReadWait: (_ms, overdue) => {
+      const timer = setTimeout(() => { overdue(); fired.resolve() }, 1)
+      return () => clearTimeout(timer)
+    },
+  })
+  const held = () => {
+    const input = new PassThrough()
+    const done = reads.run({ cwd: scratch, args: ["hash-object", "--stdin"], input, read: true, idle: true })
+    return { done, end: () => input.end("x") }
+  }
+  const pass = Array.from({ length: 5 }, held)
+  await fired.promise
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(reads.activity().running.length, 5, "the timer's firing is itself what admits the read")
+  for (const read of pass) read.end()
+  await Promise.all(pass.map((read) => read.done))
   reads.close()
 })
 

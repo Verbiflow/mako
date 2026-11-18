@@ -40,8 +40,11 @@ export interface GitRuntime {
   trace?: (trace: GitTrace) => void
   /** How long a write waits for its repository's earlier writes; `WRITE_TURN_WAIT_MS` unless a test shortens it. */
   writeTurnWaitMs?: number
-  /** How long an idle read waits before it may take a slot kept for the others; `IDLE_READ_WAIT_MS` unless a test shortens it. */
-  idleReadWaitMs?: number
+  /**
+   * Calls `overdue` once an idle read has waited `ms` (`IDLE_READ_WAIT_MS`), and returns what calls the wait off: a
+   * timer, unless a test says itself when the wait has run out.
+   */
+  idleReadWait?: (ms: number, overdue: () => void) => () => void
 }
 
 export interface RunOptions {
@@ -139,10 +142,10 @@ export class Git {
    * Idle reads waiting, oldest first: each starts once no other read waits and a slot past `FOREGROUND_SLOTS` is free,
    * or, having waited `IDLE_READ_WAIT_MS`, in one of those (`borrowed`).
    */
-  readonly #idleWaiting: Array<{ since: number; overdue: ReturnType<typeof setTimeout>; start: (borrowed: boolean) => void }> = []
+  readonly #idleWaiting: Array<{ overdue: boolean; cancel: () => void; start: (borrowed: boolean) => void }> = []
   /** Idle reads running in a slot kept for the others, having waited too long: one at most. */
   #idleBorrowed = 0
-  readonly #idleReadWaitMs: number
+  readonly #idleReadWait: (ms: number, overdue: () => void) => () => void
   readonly #running = new Set<{ command: string; cwd: string; started: number; repository?: string }>()
   /** Each repository's last write asked for, by the folder its checkouts share: the next one starts once it ends. */
   readonly #writes = new Map<string, Promise<void>>()
@@ -156,7 +159,7 @@ export class Git {
   constructor(runtime: GitRuntime = {}) {
     this.#runtime = runtime
     this.#writeTurnWaitMs = runtime.writeTurnWaitMs ?? WRITE_TURN_WAIT_MS
-    this.#idleReadWaitMs = runtime.idleReadWaitMs ?? IDLE_READ_WAIT_MS
+    this.#idleReadWait = runtime.idleReadWait ?? timedWait
     this.processes = trackProcesses(runtime.processes ?? processRunner, runtime.signal, this.#children)
     this.#repositories = new Repositories(this)
   }
@@ -310,10 +313,15 @@ export class Git {
       if (this.#readsRunning >= READ_SLOTS) await new Promise<void>((resolve) => this.#readsWaiting.push(resolve))
     } else if (this.#readsRunning >= READ_SLOTS - FOREGROUND_SLOTS || this.#readsWaiting.length > 0 || this.#idleWaiting.length > 0) {
       borrowed = await new Promise<boolean>((start) => {
-        // A slot coming free asks who is next; so does this read's own wait running out, when none has.
-        const overdue = setTimeout(() => this.#nextIdle(), this.#idleReadWaitMs)
-        overdue.unref()
-        this.#idleWaiting.push({ since: performance.now(), overdue, start })
+        // A slot coming free asks who is next; so does this read's own wait running out, when none has. The wait
+        // says itself that it ran out: compared with a clock again, a timer that fired a fraction of a millisecond
+        // early by that clock was told "not yet", and nothing asked again until some other read ended.
+        const waiting = { overdue: false, cancel: () => {}, start }
+        this.#idleWaiting.push(waiting)
+        waiting.cancel = this.#idleReadWait(IDLE_READ_WAIT_MS, () => {
+          waiting.overdue = true
+          this.#nextIdle()
+        })
       })
     }
     this.#readsRunning += 1
@@ -379,9 +387,9 @@ export class Git {
     const oldest = this.#idleWaiting[0]
     if (!oldest || this.#readsWaiting.length > 0) return
     const borrowed = this.#readsRunning >= READ_SLOTS - FOREGROUND_SLOTS
-    if (borrowed && (this.#readsRunning >= READ_SLOTS || this.#idleBorrowed > 0 || performance.now() - oldest.since < this.#idleReadWaitMs)) return
+    if (borrowed && (this.#readsRunning >= READ_SLOTS || this.#idleBorrowed > 0 || !oldest.overdue)) return
     this.#idleWaiting.shift()
-    clearTimeout(oldest.overdue)
+    oldest.cancel()
     if (borrowed) this.#idleBorrowed += 1
     oldest.start(borrowed)
   }
@@ -492,6 +500,13 @@ export class Git {
       }, (error: Error) => fail(error, "failed", code)) })
     })
   }
+}
+
+/** `overdue` after `ms`, on a timer that keeps no process alive; the returned call cancels it. */
+function timedWait(ms: number, overdue: () => void): () => void {
+  const timer = setTimeout(overdue, ms)
+  timer.unref()
+  return () => clearTimeout(timer)
 }
 
 function trackProcesses(runner: Pick<ProcessRunner, "spawn" | "close">, signal: AbortSignal | undefined, children: Set<ChildProcess>): Pick<ProcessRunner, "spawn" | "close"> {
