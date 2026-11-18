@@ -1869,14 +1869,15 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     ...workspaceMovers.agentTools,
     (server, conversationId) => registerThreadHistoryTools(server, history, conversationId),
     (server, conversationId) => registerShowTool(server, { media: turnMedia, cwd: (id) => live.session(id)?.cwd }, conversationId),
-    (server, conversationId) => registerAgentTools(server, {
+    // Each role is listed only the agents_* tools it may call (`ROLE_HIDES`), read as the listing is built.
+    (server, conversationId, conversation) => registerAgentTools(server, {
       invoke: async (channel, args) => AgentAnswerSchema.parse(decodeRuntimeValue(await methods.invoke(channel, args))),
       caller: () => {
         const session = threads.store?.journalPlacement(conversationId())?.session
         return session ? { kind: "agent", session } : { kind: "person" }
       },
       filled: () => ({ cwd: live.session(conversationId())?.cwd }),
-    }),
+    }, conversation === undefined ? undefined : late.conversations?.agents?.toolRole(conversation)),
     // Always as the Thread's agent: a conversation without a Session is refused, never taken for the person.
     (server, conversationId) => registerThreadTools(server, {
       invoke: async (channel, args) => ThreadMoveAnswerSchema.parse(decodeRuntimeValue(await methods.invoke(channel, args))),
