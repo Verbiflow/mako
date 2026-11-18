@@ -9,6 +9,7 @@ import { classify, type FootprintInput, type RuleFolder, type TurnEvidence } fro
 import type { PathVerdict } from "@mako/host/attribution/footprint-reader"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { otherAppsData } from "@mako/host/base/other-apps-data"
+import { otherAppsTemporary } from "@mako/host/attribution/footprint-reader"
 import { childHistory } from "@mako/host/workspaces/watch-backend"
 import { WatchReadings } from "@mako/host/workspaces/watch-readings"
 
@@ -441,6 +442,64 @@ test("another app's container is never stat-ed or read, even when a call named i
   } finally {
     await world.close()
   }
+})
+
+test("another app's folder in a temporary folder is never claimed, stat-ed or read, though a command listed it", async () => {
+  const world = await footprintWorld()
+  const { fs, events, tracker, reader, verdicts, mark, readRoots } = world
+  const touched: string[] = []
+  const stat = fs.stat.bind(fs)
+  fs.stat = async (path) => (touched.push(path), stat(path))
+  try {
+    // An updater stages its app in the temporary folder; a command's output (a listing of it) names that folder.
+    const update = "/private/tmp/com.electron.example-notes.ShipIt.Q1w2E3/Example Notes.app/Contents/Resources/app.asar"
+    reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "start", cwd: "/h/work/app" }))
+    await reader.settled()
+    reader.activity(mark("T1", { kind: "call", id: "c1", edge: "start", turn: "t1", mentioned: ["/private/tmp/com.electron.example-notes.ShipIt.Q1w2E3", "/private/tmp/build-1"] }))
+    fs.write(update, "an update another app staged")
+    fs.write("/private/tmp/build-1/out.txt", "the turn's own output")
+    reader.activity(mark("T1", { kind: "call", id: "c1", edge: "end", turn: "t1" }))
+    reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "end" }))
+    await reader.settled()
+    assert.deepEqual(touched.filter((path) => path.includes("ShipIt")), [], "another app's folder is never stat-ed")
+    assert.deepEqual(readRoots().filter((path) => path.includes("ShipIt")), [], "nor its history read")
+    assert.equal(described(verdicts.get(update)), "not read")
+    assert.deepEqual(tracker.footprint("T1").map((entry) => entry.path), ["/private/tmp/build-1/out.txt"])
+    assert.ok(events.reads.length > 0)
+  } finally {
+    await world.close()
+  }
+})
+
+test("a path that can't be read leaves the turn's footprint incomplete, never lost", async () => {
+  const world = await footprintWorld()
+  const { fs, tracker, reader, mark } = world
+  const stat = fs.stat.bind(fs)
+  // Electron's Node opened an `.asar` being written as an archive: "Invalid package", and the turn's whole read was lost.
+  fs.stat = async (path) => { if (path.endsWith(".asar")) throw new Error(`Invalid package ${path}`); return stat(path) }
+  try {
+    reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "start", cwd: "/private/tmp/packaging-1" }))
+    await reader.settled()
+    fs.write("/private/tmp/packaging-1/App.app/Contents/Resources/app.asar", "half an archive")
+    fs.write("/private/tmp/packaging-1/notes.txt", "written by the turn")
+    reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "end" }))
+    await reader.settled()
+    assert.deepEqual(tracker.footprint("T1").map((entry) => entry.path), ["/private/tmp/packaging-1/notes.txt"])
+    const [turn] = tracker.footprintTurns("T1")
+    assert.equal(turn?.complete, false, "the footprint says a path of it couldn't be read")
+  } finally {
+    await world.close()
+  }
+})
+
+test("another app's temporary folder is one named by its bundle id, right under a temporary folder", () => {
+  const roots = ["/private/tmp", "/scratch/tmp-root/T"]
+  assert.equal(otherAppsTemporary("/scratch/tmp-root/T/com.electron.example.ShipIt.Ab12/App.app/x", roots), "/scratch/tmp-root/T/com.electron.example.ShipIt.Ab12")
+  assert.equal(otherAppsTemporary("/private/tmp/com.apple.Safari/cache", roots), "/private/tmp/com.apple.Safari")
+  assert.equal(otherAppsTemporary("/private/tmp/mako-environment-Ab12/Mako.app/Contents/Resources/app.asar", roots), undefined)
+  assert.equal(otherAppsTemporary("/private/tmp/build/com.example.app/x", roots), undefined, "only right under the temporary folder")
+  assert.equal(otherAppsTemporary("/private/tmp/notes.v1.txt", roots), undefined, "a file's name is no bundle id")
+  assert.equal(otherAppsTemporary("/h/com.example.app/x", roots), undefined)
 })
 
 test("a path a call names through a link is the path the history reports", async () => {
