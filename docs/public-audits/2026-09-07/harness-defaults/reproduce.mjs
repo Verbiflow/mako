@@ -41,8 +41,9 @@ try {
     kind: 'select', id: 'effort', label: 'Reasoning',
     values: [{ value: 'high', label: 'High', default: true, description: 'Provider description' }],
   }] }] }
-  await new ProviderProfileCache(path).put('sample', cachedProfile)
-  const restored = await new ProviderProfileCache(path).get('sample')
+  // The cache keeps a list under its account (`<harness>:<account>:`) and a line for the folder it was read in.
+  await new ProviderProfileCache(path).put('devin:sample:', 'devin:sample:/work', cachedProfile)
+  const restored = (await new ProviderProfileCache(path).get('devin:sample:', 'devin:sample:/work')).profile
   assert.deepEqual(restored.models[0].options[0].values[0], { value: 'high', label: 'High', default: true, description: 'Provider description' })
   console.log('PASS: disk cache retains default and description')
 } finally {
