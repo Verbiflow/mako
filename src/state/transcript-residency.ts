@@ -12,12 +12,19 @@ export interface ReleasedTurn {
   base: { start: number; end: number }
 }
 
-export function releasedExchanges(exchanges: Exchange[], released: readonly ReleasedTurn[] = []): Exchange[] {
+/** `exchanges` with the released turns as their placeholders: the ones `previous` already held as it would make them, where it has them. */
+export function releasedExchanges(exchanges: Exchange[], released: readonly ReleasedTurn[] = [], previous: readonly Exchange[] = []): Exchange[] {
   if (!released.length) return exchanges
   const byId = new Map(released.map(turn => [turn.id, turn]))
+  const held = new Map(previous.flatMap(exchange => exchange.unloaded === undefined ? [] : [[exchange.id, exchange] as const]))
   return exchanges.map(exchange => {
     const turn = byId.get(exchange.id)
-    return turn ? { ...exchange, response: [], system: [], unloaded: turn.label } : exchange
+    if (!turn) return exchange
+    const old = held.get(exchange.id)
+    // Made again each time, every placeholder row of a long conversation drew again whenever it was projected whole.
+    return old && old.unloaded === turn.label && old.prompt === exchange.prompt && old.opener === exchange.opener &&
+      old.direct === exchange.direct && old.timestamp === exchange.timestamp && old.refused === exchange.refused
+      ? old : { ...exchange, response: [], system: [], unloaded: turn.label }
   })
 }
 

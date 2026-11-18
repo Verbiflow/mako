@@ -7,7 +7,7 @@ import { Prose } from "@/components/transcript/markdown"
 import { useTranscriptSource } from "@/components/transcript/source-context"
 import { formatTime } from "@/lib/format"
 import { useApexHarness, useApexTitle, useThreadChildren } from "@/state/apex-fins"
-import { useAcp } from "@/state/acp"
+import { useAcpConversation } from "@/state/acp-state"
 
 /**
  * Words another Thread wrote into this one, where a prompt would stand: a
@@ -52,7 +52,7 @@ export const AgentWordsCard = memo(function AgentWordsCard({ words, raw, timesta
 
 /** The harness of the Fin of this Thread named `name`, for its avatar on what it wrote. */
 function useFinHarness(liveId: string | undefined, name: string | undefined): string | undefined {
-  const thread = useAcp((state) => (liveId ? state.conversations[liveId]?.threadId : undefined))
+  const thread = useAcpConversation(liveId, (conversation) => conversation?.threadId)
   const children = useThreadChildren(name ? thread : undefined)
   return name ? children.find((agent) => agent.title === name || agent.child?.name === name)?.provider : undefined
 }

@@ -15,7 +15,7 @@ import { acp, useAcp, type ForkAnswer } from "@/state/acp"
 import { descriptorFor } from "@/state/descriptors"
 import { threadsStore } from "@/state/thread-store"
 import { scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
-import { acpStore } from "@/state/acp-state"
+import { acpStore, requestOf, useAcpConversation } from "@/state/acp-state"
 import { PlanSummary } from "./tool-details"
 import { ReviewFindings, ReviewRequest } from "./review-card"
 import { TranscriptAttachments } from "./attachment-collection"
@@ -60,6 +60,7 @@ import {
   isContinuation,
   notesBesideContinuations, notesBesideFailure,
   notesBesideStop,
+  replyProse,
   responseSections,
   responseText,
   turnRequest,
@@ -447,7 +448,7 @@ function MovedDivider({ at }: { at: number | undefined }) {
 function TurnWentOn({ continued, message, provider }: { continued: SavedContinuation; message: ChatMessage; provider?: string }) {
   useHarnessIdentity()
   const { liveId } = useTranscriptSource()
-  const harness = useAcp((state) => (liveId ? state.conversations[liveId]?.harness : undefined))
+  const harness = useAcpConversation(liveId, (conversation) => conversation?.harness)
   const diagnosing = usePrefs((prefs) => prefs.showOriginals)
   const dividers = useContext(MoveDividersContext)
   // Only a turn that went on in the cloud moved: one that stayed, its move refused, goes on as one run.
@@ -593,7 +594,7 @@ const LONG_CAUSE = 96
 function ProviderTurn({ message, provider }: { message: ChatMessage; provider?: string }) {
   useHarnessIdentity()
   const { liveId } = useTranscriptSource()
-  const harness = useAcp((state) => (liveId ? state.conversations[liveId]?.harness : undefined))
+  const harness = useAcpConversation(liveId, (conversation) => conversation?.harness)
   const agent = provider ?? harness
   const said = textOf(message.blocks)
   const note = message.note
@@ -1167,17 +1168,16 @@ function Response({
 
   const { thinking, tools, text } = useMemo(() => {
     const thinkingParts: string[] = []
-    const textParts: string[] = []
     for (const block of message.blocks) {
       if (block.type === "thinking" && block.thinking && !live?.thought)
         thinkingParts.push(block.thinking)
-      if (block.type === "text" && block.text) textParts.push(block.text)
     }
     const paired = pairTools(message.blocks)
     return {
       thinking: thinkingParts.join("\n\n"),
       tools: live?.calls.size ? paired.filter((call) => !live.calls.has(call.id)) : paired,
-      text: textParts.join(""),
+      // The same words the timeline parses ahead of this turn's mounting (`replyProse`).
+      text: replyProse(message.blocks),
     }
   }, [message.blocks, live])
 
@@ -1372,7 +1372,7 @@ function CompactFooter({ exchange, text, streaming, interrupted, reply }: { exch
 function Stopped({ stop }: { stop: true | TurnStop }) {
   useHarnessIdentity()
   const { liveId } = useTranscriptSource()
-  const harness = useAcp((state) => (liveId ? state.conversations[liveId]?.harness : undefined))
+  const harness = useAcpConversation(liveId, (conversation) => conversation?.harness)
   const [sending, setSending] = useState(false)
   const detail = stop === true ? undefined : stop
   const reason = detail?.reason ?? "stopped"
@@ -1428,7 +1428,7 @@ function useLiveFork(exchange: ExchangeData): (() => Promise<string | undefined>
   const requestId = exchange.prompt?.requestId
   const live = useAcp((state) => {
     const current = scopedLiveAcp(state, scope)
-    if (!current || !requestId || current.requests?.find((request) => request.id === requestId)?.status !== "completed") return undefined
+    if (!current || !requestId || requestOf(current, requestId)?.status !== "completed") return undefined
     return descriptorFor(threadsStore.get(), current.harness)?.capabilities.fork.state === "implemented" ? current.key : undefined
   })
   if (!live || !requestId) return undefined
@@ -1458,8 +1458,7 @@ function ForkButton({ exchange }: { exchange: ExchangeData }) {
     const live = scopedLiveAcp(state, scope)
     const requestId = exchange.prompt?.requestId
     if (!requestId) return null
-    return live?.requests?.find((request) => request.id === requestId)
-      ?.status === "completed"
+    return requestOf(live, requestId)?.status === "completed"
       ? requestId
       : null
   })

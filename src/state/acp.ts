@@ -209,10 +209,13 @@ export const acp = {
   activate(key: string, refresh = true): boolean {
     const conversation = acpStore.get().conversations[key]
     if (!conversation) return false
+    // Batches it took while it wasn't shown are drawn now, from what it last drew: the turns they left alone are the
+    // objects they were, and their rows draw nothing again.
     if (conversation.hydrated && !conversation.projection)
       replaceAcpConversation(key, {
         ...conversation,
         projection: projectAcp(conversation),
+        behind: undefined,
       })
     acpStore.set({ activeKey: key })
     if (conversation.kind === "live" && refresh)
@@ -242,6 +245,17 @@ export const acp = {
   activateThread(ref: ThreadRef | { path: string }): boolean {
     const conversation = acpForThread(acpStore.get(), ref)
     return conversation ? acp.activate(conversation.key) : false
+  },
+
+  /**
+   * A Thread's row opened: the conversation this window holds of it, shown as it's held, with a reply going where the
+   * conversation is now, whichever of its records the row shows. False when it holds none, and its owner is asked.
+   */
+  openThread(ref: ThreadRef): boolean {
+    const conversation = acpForThread(acpStore.get(), ref)
+    if (!conversation) return false
+    if (conversation.replyBindingId) updateAcpConversation(conversation.key, (current) => ({ ...current, replyBindingId: undefined }))
+    return acp.activate(conversation.key)
   },
 
   deactivate(): void {
