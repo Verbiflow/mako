@@ -112,11 +112,13 @@ try {
     // A production host's environment, so the configuration reads no development build (none exists before CI builds one).
     const shared = processHostConfig({ HOME: root, MAKO_PROD: "1", MAKO_WEB_SOCKET: socket, MAKO_PROFILE: "dev", MAKO_CLOUD_FIN_PROOF: "open" })
     assert.ok("refused" in shared && shared.code === 78, "a profile shares the person's ~/.mako: refused")
-    const proof = processHostConfig({ HOME: root, MAKO_PROD: "1", MAKO_WEB_SOCKET: socket, MAKO_DATA_ROOT: join(root, "proof-host"), MAKO_CLOUD_FIN_PROOF: "open" })
-    assert.ok(!("refused" in proof) && proof.environment.isolated && proof.cloudFinProof, "an isolated host opens them when asked")
+    const proof = processHostConfig({ HOME: root, MAKO_PROD: "1", MAKO_WEB_SOCKET: socket, MAKO_DATA_ROOT: join(root, "proof-host"), MAKO_CLOUD_URL: "https://cloud.proof.test", MAKO_CLOUD_FIN_PROOF: "open" })
+    assert.ok(!("refused" in proof) && proof.environment.isolated && proof.cloudFinProof, "an isolated host opens them when asked, naming its cloud")
+    const unnamed = processHostConfig({ HOME: root, MAKO_PROD: "1", MAKO_WEB_SOCKET: socket, MAKO_DATA_ROOT: join(root, "proof-host"), MAKO_CLOUD_FIN_PROOF: "open" })
+    assert.ok("refused" in unnamed && unnamed.code === 78 && unnamed.refused.includes("MAKO_CLOUD_URL"), "with no MAKO_CLOUD_URL it would reach the build's own cloud: refused")
     const unasked = processHostConfig({ HOME: root, MAKO_PROD: "1", MAKO_WEB_SOCKET: socket, MAKO_DATA_ROOT: join(root, "proof-host") })
     assert.ok(!("refused" in unasked) && !unasked.cloudFinProof, "and only when asked")
-    console.log("proof gate: only an isolated host asked by MAKO_CLOUD_FIN_PROOF opens cloud Fins")
+    console.log("proof gate: only an isolated host asked by MAKO_CLOUD_FIN_PROOF, naming a cloud of its own, opens cloud Fins")
   }
 
   // Closed, as it ships: refused exactly as before, nothing asked of the account.

@@ -61,6 +61,9 @@ export function processHostConfig(env: NodeJS.ProcessEnv = process.env): HostCon
   const cloudFinProof = env.MAKO_CLOUD_FIN_PROOF === "open"
   if (cloudFinProof && (!environment.isolated || environment.packaged))
     return { refused: "MAKO_CLOUD_FIN_PROOF opens cloud Fins only on a proof's host, one isolated from the person's own; leave it unset here", code: 78 }
+  // A proof names the cloud it runs against; the one a build was stamped with is the person's, never a proof's.
+  if (cloudFinProof && (!env.MAKO_CLOUD_URL || env.MAKO_CLOUD_URL === environment.build.makoCloud))
+    return { refused: "MAKO_CLOUD_FIN_PROOF needs MAKO_CLOUD_URL naming the proof's own cloud, not this build's", code: 78 }
   const executable = env.MAKO_HOST_EXECUTABLE ?? process.execPath
   const agentFd = env[MACHINE_AGENT_FD_ENV]
   if (agentFd !== undefined && !/^[3-9]$/.test(agentFd)) return { refused: `${MACHINE_AGENT_FD_ENV} names the agent's channel, a descriptor from 3 to 9`, code: 64 }

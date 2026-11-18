@@ -288,9 +288,12 @@ here, or on another of the person's devices (`place: device:<name>`,
 below); `cloud` is refused for now. Its host side is built behind
 `AgentsDeps.cloudFins`, which no shipping wiring sets; only a proof's host
 opens it (`MAKO_CLOUD_FIN_PROOF=open`, `HostConfig.cloudFinProof`), and a host
-that isn't isolated or is packaged refuses to start with it
+that isn't isolated, is packaged, or names no cloud of its own (`MAKO_CLOUD_URL`
+unset or the one its build was stamped with) refuses to start with it
 (`scripts/prove-fins-cloud.ts` is that host, its Apex driven a line at a
-time): opened, a start keeps
+time, against a gateway the driver names in `MAKO_PROOF_CLOUDS` whose
+`/health` says `staging`, and ending through one path that signs out, stops
+the host's process group and removes its folders): opened, a start keeps
 its row (with its launch digest, `cloudFinInputSha256`, and its folder's
 committed source) before the account reserves it and makes it into its own
 cloud Thread (`cloudFinThread(op)`), then is placed there through
