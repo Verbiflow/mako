@@ -24,7 +24,7 @@ import {
   type TrackerFileStat,
   type TrackerPorts,
 } from "@mako/protocol/attribution"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { inSlices, StepsStopped } from "@mako/sessions/slices"
 import { HourCounts } from "../base/hour-counts.js"
 import { mapLimit } from "@mako/protocol/map-limit"
@@ -385,12 +385,15 @@ export class LaptopTracker implements AttributionTracker {
   }
 
   /**
-   * Open the journal in `ports.storage` and resume every root it tracked,
-   * catching up from the system's history. The journal is open as soon as
-   * its file is: catching a large checkout up takes a minute and more, and
-   * the turns that run meanwhile must still be heard. The roots resume one
-   * after another behind it; `track` on one waits for its resume, and
-   * `settled` for them all.
+   * Open the journal in `ports.storage`. Every root it tracked starts asleep
+   * (`sleepIdle`): still tracked, its uncommitted files kept, not watched and
+   * its stat cache not read. The first turn there, or a status, a move or a
+   * tree read of its checkout, wakes it (`track`), and what changed since it
+   * was last seen is read then, from the system's history or a rescan, into
+   * the gap since. So a start costs a stat of each root's folder, whatever
+   * the journal tracks: resumed here one after another, a day's 90 worktrees
+   * read 630,000 stat rows and looked at as many files on every start, and
+   * every scoped wait (`whatWasHeard`) stood behind the roots ahead of its own.
    */
   static async open(ports: TrackerPorts, options: TrackerOptions = {}): Promise<LaptopTracker> {
     const store = JournalStore.open(join(ports.storage, "journal.sqlite"), { device: ports.device })
@@ -399,44 +402,34 @@ export class LaptopTracker implements AttributionTracker {
     const lastSeen = Math.max(0, ...roots.map((root) => root.seenAt))
     // Whatever was running when the last host stopped ran until it was last seen.
     if (lastSeen) store.closeOpenActivity(lastSeen)
-    let previous = Promise.resolve()
-    const quiet = tracker.now() - (options.sleepAfterMs ?? SLEEP_AFTER_MS)
-    for (const root of roots) {
-      // Unseen for longer than a root stays awake (it was asleep when the host stopped, or the host was away that
-      // long): it starts asleep, and the next turn there wakes it.
-      const resumed = previous.then(() => (root.seenAt < quiet ? tracker.restOrLetGo(root) : tracker.resumeOrLetGo(root)))
-      tracker.tracking.set(root.path, resumed)
-      void resumed.then(() => {
-        if (tracker.tracking.get(root.path) === resumed) tracker.tracking.delete(root.path)
-      })
-      previous = resumed
+    // The uncommitted files of every root, read once: asked per root, 153 roots read the whole table 153 times.
+    const files = new Map<string, Map<string, FileState>>()
+    for (const file of store.files()) {
+      const held = files.get(file.root) ?? new Map<string, FileState>()
+      held.set(file.path, file)
+      files.set(file.root, held)
     }
-    tracker.resuming = previous
+    const resting = Promise.all(roots.map((root) => {
+      const rested = tracker.restOrLetGo(root, files.get(root.id) ?? new Map())
+      // A `track` of the root waits for this look at its folder, and no other root's.
+      tracker.tracking.set(root.path, rested)
+      void rested.then(() => {
+        if (tracker.tracking.get(root.path) === rested) tracker.tracking.delete(root.path)
+      })
+      return rested
+    }))
+    tracker.resuming = resting.then(() => undefined)
     return tracker
   }
 
-  /** Resume a root `open` found; one that can't be watched again (its folder went while the host was away) is let go. */
-  private async resumeOrLetGo(root: StoredRoot): Promise<void> {
-    if (this.closing) return
-    try {
-      await this.resume(root)
-    } catch (error) {
-      this.states.get(root.id)?.watch?.close()
-      this.states.delete(root.id)
-      this.store.forgetRoot(root.id)
-      this.options.log?.("a root could not be resumed", { root: root.path, error: error instanceof Error ? error.message : String(error) })
-    }
-  }
-
-  /** A root `open` found long unseen, kept asleep; one whose folder went is let go, as a resume would. */
-  private async restOrLetGo(root: StoredRoot): Promise<void> {
+  /** A root `open` found, kept asleep until something asks for it; one whose folder went is let go, as a wake would. */
+  private async restOrLetGo(root: StoredRoot, files: Map<string, FileState>): Promise<void> {
     if (this.closing) return
     if ((await this.ports.fs.stat(root.path))?.kind !== "directory") {
       this.store.forgetRoot(root.id)
       this.options.log?.("a root could not be resumed", { root: root.path, error: "The folder is gone." })
       return
     }
-    const files = new Map(this.store.files().filter((file) => file.root === root.id).map((file) => [file.path, file]))
     this.state(root, null, new StatCache(), files).asleep = true
   }
 
@@ -1561,6 +1554,7 @@ export class LaptopTracker implements AttributionTracker {
     const interval = this.evidence.mark(mark)
     this.store.saveActivity({ ...storedActivity(interval), ...(mark.run && { run: mark.run }) })
     this.footprints?.activity(mark)
+    if (mark.edge === "start") this.wakeAround(mark.checkout ?? mark.cwd)
     if (mark.kind === "turn") {
       const key = `${mark.session}:${mark.id}`
       if (mark.edge === "start") this.shellTurns.set(key, new Map())
@@ -1579,6 +1573,20 @@ export class LaptopTracker implements AttributionTracker {
       }
     }
     this.reattribute()
+  }
+
+  /**
+   * Wake the sleeping roots work starts in: the one holding `folder`, and those directly inside it (a project folder
+   * of several repositories). Every root sleeps after `open`, so this is what reads a root's time away for a turn
+   * nobody tracked it for: one still running when another host's journal became this one's (its start is replayed).
+   */
+  private wakeAround(folder: string | undefined): void {
+    if (!folder) return
+    for (const { root, asleep } of [...this.states.values()]) {
+      if (!asleep || !(within(root.path, folder) || dirname(root.path) === folder)) continue
+      this.track({ id: root.id, path: root.path, kind: root.kind, ...(root.carry && { carry: root.carry }) }).catch((error: Error) =>
+        this.log("a root could not be woken", { root: root.path, error: error.message }))
+    }
   }
 
   reported(input: ReportedCall): void {
@@ -2085,6 +2093,9 @@ export class LaptopTracker implements AttributionTracker {
   async settled(options: { rescans?: boolean; checkouts?: readonly string[] } = {}): Promise<void | boolean> {
     if (options.rescans === false) return this.whatWasHeard(options.checkouts)
     await this.resuming
+    // A root being woken or first tracked catches up before anything is called settled: its state and queue exist only
+    // once its folder and repository are read.
+    while (this.tracking.size) await Promise.all([...this.tracking.values()].map((tracked) => tracked.catch(() => undefined)))
     this.settling++
     try {
       for (;;) {
