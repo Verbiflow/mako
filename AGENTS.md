@@ -372,7 +372,13 @@ its branch against the one it goes into, with commits landed there touching
 its files (`branchSince`). Its turns report and wake the Apex again, and a
 repeat of the message resumes it once. Archiving its Thread is the one
 end: one at work stops in those words, once (`Agents.archived`), and
-nothing resumes it until the person restores it (`test:fin-resume`). A
+nothing resumes it until the person restores it (`test:fin-resume`). That
+is the archive of its Thread's last Session the person hadn't archived: one
+archived while another goes on, as the Session a move into the worktree
+forked from, ends nothing. A move whose Session began a turn while its
+worktree was made waits that turn out and keeps the worktree and the
+branch its agent asked for (`relocateOnceIdle`), never giving them back to
+fork (`test:fin-own-move`). A
 stop also pauses what was queued for the Fin (`halt`), and a stop of one
 stopped already ends whatever still runs there. A paused message first in
 line holds the ones behind it (the person editing it keeps its place), and

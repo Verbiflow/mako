@@ -41,19 +41,28 @@ function snapshot(id: string, cwd: string): LiveSnapshot {
 
 const now: Relocation = { kind: "now" }
 
-function world(options: { relocation: Relocation; relocates?: boolean; refuses?: string }) {
+function world(options: { relocation: Relocation; relocates?: boolean; refuses?: string; busyFor?: number }) {
   const calls: Calls = []
   const id = randomUUID()
   const conversations = new Map<string, LiveSnapshot>([[id, snapshot(id, join(project, "app"))]])
   let attached = false
+  // Turns the conversation began while its worktree was made, each ending as the move waits on it.
+  let busy = 0
   const owners = new Set<string>()
   const deps: ConversationMoveDeps = {
     conversations: {
       snapshot: (target) => conversations.get(target) ?? null,
-      relocationWithin: async () => options.relocation,
+      relocation: () => busy > 0 ? { kind: "wait", reason: "is running a turn" } : options.relocation,
+      relocationWithin: async () => {
+        if (busy > 0) {
+          calls.push("turn ends")
+          busy -= 1
+        }
+        return options.relocation
+      },
       relocate: async (target, cwd) => {
         calls.push(`relocate ${cwd}`)
-        if (options.relocates === false) return undefined
+        if (options.relocates === false || busy > 0) return undefined
         const current = conversations.get(target)!
         conversations.set(target, snapshot(target, cwd))
         return current.session.cwd
@@ -77,6 +86,7 @@ function world(options: { relocation: Relocation; relocates?: boolean; refuses?:
       prepareFork: async (_source, owner) => {
         calls.push(`prepare ${owner === id ? "self" : "fork"}`)
         owners.add(owner)
+        if (owner === id) busy = options.busyFor ?? 0
         return { cwd: worktree, path: worktree, branch: "mako/fixture", copied: 0, tookMs: 0, spare: false }
       },
       moveChanges: async () => { calls.push("move changes"); return cameAlong(2) },
@@ -126,7 +136,14 @@ try {
   const late = await moveIntoWorktree(slipped.deps, slipped.id, slipped.input, project)
   assert.equal(late.relocated, false)
   assert.deepEqual(slipped.calls, ["prepare self", `relocate ${join(worktree, "app")}`, "abandon", "warn busy before it moved", "prepare fork", `fork ${join(worktree, "app")}`, "move changes", "attach"],
-    "a conversation that got busy before it moved gives its worktree back and forks")
+    "a conversation that can't go as itself, and isn't waiting on a turn, gives its worktree back and forks")
+
+  const turning = world({ relocation: now, busyFor: 2 })
+  const waited = await moveIntoWorktree(turning.deps, turning.id, turning.input, project)
+  assert.equal(waited.relocated, true, "a conversation whose turns began while its worktree was made moves as itself once they end")
+  assert.equal(waited.conversation.session.id, turning.id)
+  assert.deepEqual(turning.calls, ["prepare self", `relocate ${join(worktree, "app")}`, "turn ends", `relocate ${join(worktree, "app")}`, "turn ends", `relocate ${join(worktree, "app")}`, "move changes", "attach", "resume"],
+    "its worktree, and the branch its agent asked for, are kept for it: nothing given back, nothing forked")
 
   const earlier = world({ relocation: now })
   const fromEarlier = await moveIntoWorktree(earlier.deps, earlier.id, { ...earlier.input, point: { kind: "run", requestId: "an earlier answer" } }, project)
