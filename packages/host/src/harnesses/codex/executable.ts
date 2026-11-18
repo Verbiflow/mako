@@ -1,6 +1,6 @@
 import { hostCommand } from "../../base/host-command.js"
 import { constants } from "node:fs"
-import { access, readFile, readdir, realpath } from "node:fs/promises"
+import { access, readFile, readdir, realpath, stat } from "node:fs/promises"
 import { arch, homedir } from "node:os"
 import { basename, dirname, join, parse, resolve } from "node:path"
 import {
@@ -9,6 +9,8 @@ import {
 } from "../../base/executable.js"
 import { isJsonObject, stringValue } from "../../base/json-values.js"
 import { nodePlatform, onMac } from "../../base/platform.js"
+import { z } from "zod"
+import type { JsonObject } from "@mako/sessions/store-format"
 import type { JsonValue } from "../../contracts/json.js"
 
 const run = hostCommand
@@ -39,8 +41,8 @@ export function codexExecutableCandidates(env = process.env): string[] {
  * carries (`@openai/codex-<platform>/vendor/<target>/bin/codex`), in the package's own node_modules or beside it.
  * Any other install is the native build itself.
  */
-export async function codexStartFiles(env = process.env): Promise<string[]> {
-  const command = await resolveCodexExecutable(env)
+export async function codexStartFiles(env = process.env, remembered?: CodexExecutables): Promise<string[]> {
+  const command = await resolveCodexExecutable(env, remembered)
   if (!command) return []
   const real = await realpath(command).catch(() => command)
   if (!real.endsWith(".js")) return [real]
@@ -184,25 +186,122 @@ async function vitePlusOwns(packagesDir: string, root: string): Promise<boolean>
   return false
 }
 
-/** Check configuration compatibility before creating any native thread. Explicit selection is respected. */
+/** An exit with a status: the CLI ran and refused, rather than timing out or failing to start. */
+const RefusedSchema = z.object({ code: z.number().int(), killed: z.literal(true).optional() })
+
+/**
+ * Whether the installation at `command` reads the person's configuration (`codex features list`): true, false when
+ * it ran and refused, undefined when it couldn't be asked (it timed out, or didn't start).
+ */
+async function codexReadsConfiguration(command: string, env: NodeJS.ProcessEnv): Promise<boolean | undefined> {
+  try {
+    await run(command, ["features", "list"], {
+      env: environmentForExecutable(command, env),
+      timeout: 5_000,
+      maxBuffer: 256 * 1024,
+      windowsHide: true,
+    })
+    return true
+  } catch (error) {
+    const refused = RefusedSchema.safeParse(error)
+    return refused.success && !refused.data.killed ? false : undefined
+  }
+}
+
+const KeptProbesSchema = z.object({ probes: z.record(z.string(), z.boolean()) })
+/** Answers remembered at once: a Mac has two or three installations, and each update of one leaves an old identity. */
+const REMEMBERED = 32
+
+/**
+ * Which Codex installation a start runs, with what each answered remembered. With two or more installed (npm's and
+ * the desktop app's), every start asked each in turn whether it reads the configuration, by running it: 6 s on
+ * average on a busy Mac, twice a start and once more per model discovery. An answer holds for the binary and the
+ * configuration it was given about, so it is kept by the binary's path, size and change time and the
+ * configuration's: an update of either asks again. Kept between hosts beside the harness's version readings
+ * (`ProviderUpdateSource.remembered`). An installation that couldn't be asked is asked again next time.
+ */
+export class CodexExecutables {
+  private readonly answers = new Map<string, boolean>()
+  private readonly asking = new Map<string, Promise<boolean | undefined>>()
+  private readonly listeners = new Set<(kept: JsonObject) => void>()
+  private readonly probe: typeof codexReadsConfiguration
+
+  constructor(probe = codexReadsConfiguration) {
+    this.probe = probe
+  }
+
+  /** The installation a start runs under `env`, as `resolveCodexExecutable` picks it. */
+  resolve(env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
+    return resolveCodexExecutable(env, this)
+  }
+
+  /** What the last host kept. An answer this host has taken since stands. */
+  restore(kept: JsonObject): void {
+    const parsed = KeptProbesSchema.safeParse(kept)
+    if (!parsed.success) return
+    for (const [identity, answer] of Object.entries(parsed.data.probes))
+      if (!this.answers.has(identity)) this.answers.set(identity, answer)
+    this.trim()
+  }
+
+  /** Hears what to keep each time an answer is taken. */
+  follow(listener: (kept: JsonObject) => void): void {
+    this.listeners.add(listener)
+  }
+
+  async reads(command: string, env: NodeJS.ProcessEnv): Promise<boolean> {
+    const identity = await codexProbeIdentity(command, env)
+    // A binary that can't be stat'ed has no identity to remember an answer under.
+    if (identity === undefined) return (await this.probe(command, env)) === true
+    const known = this.answers.get(identity)
+    if (known !== undefined) return known
+    let asking = this.asking.get(identity)
+    if (!asking) {
+      asking = this.probe(command, env).finally(() => this.asking.delete(identity))
+      this.asking.set(identity, asking)
+      void asking.then((answer) => {
+        if (answer === undefined) return
+        this.answers.set(identity, answer)
+        this.trim()
+        const kept = { probes: Object.fromEntries(this.answers) }
+        for (const listener of this.listeners) listener(kept)
+      }, () => undefined)
+    }
+    return (await asking) === true
+  }
+
+  private trim(): void {
+    for (const oldest of this.answers.keys()) {
+      if (this.answers.size <= REMEMBERED) break
+      this.answers.delete(oldest)
+    }
+  }
+}
+
+/** What an answer is remembered under: the binary and the configuration as they are now; undefined with no binary to stat. */
+async function codexProbeIdentity(command: string, env: NodeJS.ProcessEnv): Promise<string | undefined> {
+  const real = await realpath(command).catch(() => command)
+  const stamp = (path: string) => stat(path).then((found) => `${found.size}:${found.mtimeMs}`, () => undefined)
+  const binary = await stamp(real)
+  if (binary === undefined) return undefined
+  const configuration = await stamp(join(env.CODEX_HOME || join(homedir(), ".codex"), "config.toml"))
+  return [real, binary, configuration ?? "none"].join("|")
+}
+
+/**
+ * Check configuration compatibility before creating any native thread. Explicit selection is respected. With
+ * `remembered`, an installation already asked as it is now isn't run again.
+ */
 export async function resolveCodexExecutable(
-  env = process.env
+  env = process.env,
+  remembered?: CodexExecutables
 ): Promise<string | null> {
   const candidates = codexExecutableCandidates(env)
   if (env.CODEX_EXECUTABLE || candidates.length < 2)
     return candidates[0] ?? null
   for (const command of candidates) {
-    try {
-      await run(command, ["features", "list"], {
-        env: environmentForExecutable(command, env),
-        timeout: 5_000,
-        maxBuffer: 256 * 1024,
-        windowsHide: true,
-      })
-      return command
-    } catch {
-      /* The next installed CLI may understand a newer configuration format. */
-    }
+    // The next installed CLI may understand a newer configuration format.
+    if (remembered ? await remembered.reads(command, env) : (await codexReadsConfiguration(command, env)) === true) return command
   }
   // Preserve the selected CLI's actual startup diagnostic when no compatible installation exists.
   return candidates[0] ?? null

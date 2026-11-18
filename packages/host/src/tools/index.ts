@@ -3,6 +3,7 @@ import { AuthoringFiles } from "./authoring-files.js"
 import type { MethodTable } from "../base/methods.js"
 import { deletePlugin, listPlugins, pluginsDir, watchPlugins, writePlugin, type PluginWatch, type PluginWatchPort } from "./plugins.js"
 import { mcpRegistry, type McpRegistry } from "./mcp-registry.js"
+import { mcpListingsPath } from "./mcp-listing-store.js"
 import { integrationCatalog } from "./integrations.js"
 import { mcpSync, type McpSync } from "./mcp-sync.js"
 import { nativeAuthoring, type NativeAuthoring } from "./native-authoring.js"
@@ -47,9 +48,13 @@ export function authoringBackups(dataRoot: string): string {
   return join(dataRoot, "backups", "native-config")
 }
 
-/** `idle` resolves when no harness start is waiting: background work on a start's path waits for it. */
-export function openTools(harnesses: ToolHarnesses, dataRoot: string, idle?: () => Promise<void>): Tools {
-  const mcp = mcpRegistry(harnesses, idle)
+/**
+ * `idle` resolves when no harness start is waiting: background work on a start's path waits for it. `userRoot` is where
+ * the harnesses' MCP listings are kept between hosts (`mcpListingsPath`); without it they are kept in memory alone.
+ * `repository` names the repository a folder is a checkout of, for a new worktree to borrow another's listing.
+ */
+export function openTools(harnesses: ToolHarnesses, dataRoot: string, idle?: () => Promise<void>, userRoot?: string, repository?: (folder: string) => string): Tools {
+  const mcp = mcpRegistry(harnesses, idle, { ...userRoot !== undefined && { listings: mcpListingsPath(userRoot) }, ...repository && { repository } })
   const skills = skillRegistry(harnesses)
   // One writer, so a sync and an edit of the same file in this process queue behind each other.
   const files = new AuthoringFiles(authoringBackups(dataRoot))

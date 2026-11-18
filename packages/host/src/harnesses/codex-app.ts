@@ -23,7 +23,7 @@ import type {
   ProviderSteerInput,
   ProviderSteerResult,
 } from "./live-driver.js"
-import { codexLaunch, resolveCodexExecutable } from "./codex/executable.js"
+import { codexLaunch, resolveCodexExecutable, type CodexExecutables } from "./codex/executable.js"
 import { SHUTDOWN_GRACE_MS, type AdmittedStartOptions, type DriverGoalCommand, type DriverSideQuestion } from "./live-driver.js"
 import { codexGoalObservation } from "./codex/goals.js"
 import { reviewDisplayText, type ReviewTarget } from "../contracts/live-reviews.js"
@@ -179,8 +179,8 @@ export async function codexChildLaunch(env: NodeJS.ProcessEnv, command: string):
  * thread is ephemeral and never takes a turn, so Codex keeps nothing of it: a process's first `thread/start` costs it
  * 0.4 s cold and the next process's 0.12 s (2026-10-20).
  */
-export async function codexStartPrefetch(base: NodeJS.ProcessEnv, cwd: string): Promise<PrefetchLaunch | undefined> {
-  const command = await resolveCodexExecutable(base)
+export async function codexStartPrefetch(base: NodeJS.ProcessEnv, cwd: string, executables?: CodexExecutables): Promise<PrefetchLaunch | undefined> {
+  const command = await resolveCodexExecutable(base, executables)
   if (!command) return undefined
   const launch = await codexChildLaunch(base, command)
   const initialize = { jsonrpc: "2.0", id: 0, method: "initialize", params: CODEX_INITIALIZE }
@@ -197,7 +197,7 @@ export async function codexStartPrefetch(base: NodeJS.ProcessEnv, cwd: string): 
 }
 
 /** Codex's sessions, each an app-server this engine started and closes. */
-export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "streams" | "writeHolds">) {
+export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "streams" | "writeHolds">, executables?: CodexExecutables) {
   const engine = createLiveEngine<Live>()
   const sessions = engine.sessions
   const closingSessions = new Map<string, Promise<void>>()
@@ -212,7 +212,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
       env.MAKO_CONVERSATIONS_TOKEN = options.conversationTools.token
     applyControlEnvironment(env, options.conversationTools?.control)
     applyThreadEnvironment(env, options.threadEnvironment)
-    const executable = await trace.step("runtime-discovery", () => resolveCodexExecutable(env))
+    const executable = await trace.step("runtime-discovery", () => resolveCodexExecutable(env, executables))
     if (!executable) throw new Error("Codex is not installed")
     const launch = await trace.step("runtime-discovery", () => codexChildLaunch(env, executable))
     const child = trace.sync("spawn", () => spawnProviderProcess(launch.command, CODEX_APP_SERVER_ARGS, {

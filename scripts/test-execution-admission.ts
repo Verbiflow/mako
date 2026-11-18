@@ -1,11 +1,13 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { syncBuiltinESMExports } from "node:module"
 import os from "node:os"
 import { join } from "node:path"
 import { mock } from "node:test"
-import type { AccountLaunch } from "@mako/host/harnesses/accounts"
+import { HarnessAccounts, type AccountLaunch } from "@mako/host/harnesses/accounts"
+import { AccountRoot } from "@mako/host/harnesses/accounts-common"
+import { CREDENTIAL_HOLD_MS, CredentialRevisions } from "@mako/host/harnesses/credential-revisions"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { createProviderHost } from "@mako/host/harnesses/host"
 import { withExecutionAdmission } from "@mako/host/harnesses/execution-admission"
@@ -216,6 +218,35 @@ try {
   cleanupFails = false
   await race.close("race")
 
+  // A message waiting for its checkpoint has its admission's reads begun meanwhile (`admitAhead`): they decide nothing
+  // and never throw, and the prompt's own admission, made as it goes, still refuses what it finds.
+  {
+    let checks = 0
+    let current = true
+    let delivered = 0
+    const ahead = withExecutionAdmission({ ...prototype, provider: "ahead-fixture",
+      start: async (_cwd, options) => state("ahead-fixture", options.conversationId),
+      prompt: async () => { delivered++ }, close: async () => {},
+    }, { ...identityChecks, resolve: async () => launch("one"), assertCurrent: async () => { checks++; if (!current) throw new Error("The selected account changed.") } })
+    await ahead.start(root, startOptions("ahead"))
+    const started = checks
+    ahead.admitAhead?.("ahead")
+    await delay(20)
+    assert.equal(checks, started + 1, "the account is read while the message still waits")
+    assert.equal(delivered, 0, "and nothing is sent by it")
+    await ahead.prompt("ahead", "goes", [], undefined, dispatch())
+    assert.equal(delivered, 1)
+    current = false
+    const before = evidence.length
+    ahead.admitAhead?.("ahead")
+    ahead.admitAhead?.("never-started")
+    await delay(20)
+    assert.equal(evidence.length, before, "a read ahead that finds the account changed reports nothing: no prompt was refused yet")
+    await assert.rejects(ahead.prompt("ahead", "refused", [], undefined, dispatch()), /account changed/, "the prompt's own admission still refuses")
+    assert.equal(delivered, 1)
+    await ahead.close("ahead")
+  }
+
   // An early cancellation failure must still drain and close a late startup.
   // Keep the binding reserved until an explicit successful cleanup retry.
   const lateStart = Promise.withResolvers<void>()
@@ -375,6 +406,101 @@ try {
       assert.equal(delivered, 1)
     }
     await checked.close("identity")
+  }
+
+  // A credential revision that costs a process to read (Claude's, from the Keychain) is held a few seconds for an
+  // adapter that names the files it reads: concurrent prompts share one read, and an account change in Mako or a
+  // change to those files ends the hold at once. The real facade over a fake adapter and clock; no Keychain is read.
+  {
+    const held = "held-revision-fixture"
+    const source = join(root, "held-credential-source.json")
+    await writeFile(source, "one")
+    let reads = 0
+    let principal = "first-principal"
+    let slow: PromiseWithResolvers<void> | undefined
+    let now = 1_000_000
+    const facade = new HarnessAccounts(host.accountCapabilities, new AccountRoot(join(root, ".mako-held")), new CredentialRevisions(CREDENTIAL_HOLD_MS, () => now))
+    const unregister = host.accountCapabilities.register({
+      provider: held, mode: "selectable", label: held, loginCommand: "fixture", listAccounts: async () => [],
+      accountEnv: async (name, base) => ({ ...base, FIXTURE_IDENTITY: name ?? "default" }),
+      selectedAccount: name => ({ name: name ?? "default", dir: join(root, name ?? "default") }),
+      credentialRevision: async () => { reads++; const read = principal; await slow?.promise; return read },
+      credentialSources: () => [source],
+      accountUsage: async () => ({ status: "unavailable" }),
+      captureAccount: async () => { principal = "captured-principal" }, removeAccount: async () => ({}),
+    })
+    try {
+      const first = await facade.launch(held, process.env)
+      assert.equal(reads, 1, "a launch's two reads of the revision are one within the hold")
+      await facade.assertLaunch(held, first)
+      await facade.assertLaunch(held, first)
+      assert.equal(reads, 1, "the checks before and after a start, and a warm prompt after them, read nothing more")
+      // Concurrent prompts as the hold has aged out: one read between them.
+      now += CREDENTIAL_HOLD_MS
+      slow = Promise.withResolvers<void>()
+      const prompts = Array.from({ length: 8 }, () => facade.assertLaunch(held, first))
+      await delay(50)
+      assert.equal(reads, 2, "eight concurrent prompts share one credential read")
+      slow.resolve()
+      slow = undefined
+      await Promise.all(prompts)
+      assert.equal(reads, 2)
+      // A sign-in changed outside Mako that moves none of the files is seen once the hold ends, and no later.
+      principal = "changed-outside"
+      now += CREDENTIAL_HOLD_MS - 1
+      await facade.assertLaunch(held, first)
+      now += 1
+      await assert.rejects(facade.assertLaunch(held, first), /credentials changed/, "an outside change is caught within the hold time")
+      // One that moves a file the revision reads is seen at once.
+      const second = await facade.launch(held, process.env)
+      principal = "changed-with-its-file"
+      await facade.assertLaunch(held, second)
+      await writeFile(source, "two, longer")
+      await assert.rejects(facade.assertLaunch(held, second), /credentials changed/, "a changed source file ends the hold at once")
+      // An account change made in Mako ends it at once, with no time passed and no file moved: a sign-in copied over
+      // the account (`capture`), and a switch of account.
+      const third = await facade.launch(held, process.env)
+      const before = reads
+      await facade.assertLaunch(held, third)
+      assert.equal(reads, before, "held")
+      await facade.capture(held, "captured")
+      await assert.rejects(facade.assertLaunch(held, third), /credentials changed/, "a sign-in changed in Mako is seen by the next prompt")
+      const fourth = await facade.launch(held, process.env)
+      await facade.select(held, "captured")
+      await assert.rejects(facade.assertLaunch(held, fourth), /selected account changed/, "a prompt never goes out under an account switched away from")
+      const afterSwitch = reads
+      const fifth = await facade.launch(held, process.env)
+      assert.equal(fifth.account.name, "captured")
+      assert.ok(reads > afterSwitch, "and the switch itself ended what was held")
+      fifth.hold?.release()
+      // A change in Mako that lands while a read is under way: that read answers nobody who asks after the change.
+      const sixth = await facade.launch(held, process.env)
+      now += CREDENTIAL_HOLD_MS
+      slow = Promise.withResolvers<void>()
+      const waiting = facade.assertLaunch(held, sixth)
+      await delay(50)
+      const selecting = facade.select(held, null)
+      await delay(50)
+      slow.resolve()
+      slow = undefined
+      await assert.rejects(waiting, /selected account changed/, "a read that spans an account change admits nothing")
+      await selecting
+      sixth.hold?.release()
+      // A launch holds the accounts' lease only to read the selection: a switch isn't kept waiting behind its
+      // credential read, and the launch that read the selection before it is refused where it is checked.
+      now += CREDENTIAL_HOLD_MS
+      slow = Promise.withResolvers<void>()
+      const launching = facade.launch(held, process.env)
+      await delay(50)
+      await facade.select(held, "captured")
+      slow.resolve()
+      slow = undefined
+      const raced = await launching
+      await assert.rejects(facade.assertLaunch(held, raced), /selected account changed/, "a launch a switch overtook is refused before anything is sent")
+      raced.hold?.release()
+    } finally {
+      unregister()
+    }
   }
 
   // Exercise production Claude SDK configuration, not a copied environment

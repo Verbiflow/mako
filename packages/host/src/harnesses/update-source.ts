@@ -1,6 +1,7 @@
 import type { HarnessUpdateCommand } from "../contracts/harness-updates.js"
 import type { HarnessVersions } from "../contracts/harness-versions.js"
 import type { ProviderCapability } from "./registry.js"
+import type { JsonObject } from "@mako/sessions/store-format"
 
 /**
  * What a provider knows about the runtime it launches, stated once.
@@ -49,6 +50,12 @@ export interface RuntimeUpdateSource {
 
   /** Resolve the binary the driver actually launches. */
   binary(env: NodeJS.ProcessEnv): string | null | Promise<string | null>
+  /**
+   * What the harness remembers of its installations between hosts, kept beside its readings in the same file:
+   * `restore` is given what the last host kept, once the readings are loaded, and `follow` hears what to keep from
+   * then on. Whatever it holds is answered again from the installation when it isn't there.
+   */
+  remembered?: { restore(kept: JsonObject): void; follow(listener: (kept: JsonObject) => void): void }
   /** Arguments that print the installed version. Default `--version`. */
   versionArgs?: string[]
   /** The npm package, when the CLI publishes one: feeds `latest` and the npm, bun and pnpm plans. */

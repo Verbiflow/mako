@@ -573,10 +573,14 @@ export async function claudeOAuthUsage(
   }
 }
 
-async function usageEnv(root: AccountRoot, name: string, base: NodeJS.ProcessEnv = process.env): Promise<NodeJS.ProcessEnv> {
+function accountBase(root: AccountRoot, name: string, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env = nativeEnv(base)
   if (name !== "default") env.CLAUDE_CONFIG_DIR = root.dir("claude", name)
   return env
+}
+
+async function usageEnv(root: AccountRoot, name: string, base: NodeJS.ProcessEnv = process.env): Promise<NodeJS.ProcessEnv> {
+  return accountBase(root, name, base)
 }
 
 function claudeState(env: NodeJS.ProcessEnv): string {
@@ -714,6 +718,12 @@ export function claudeAccountCapability(root: AccountRoot): SelectableAccountCap
         // A first startup creates non-auth state; absent identity and an empty projection are the same principal.
         principalFingerprint(state ?? "{}", ClaudeAccount),
         await homeSettings(defaultHome(env))])
+    },
+    // The Keychain item the sign-in is read from first can't be stat'ed: a change to it alone is seen once the held
+    // revision ages out. Signing in also rewrites the state file named here, which is seen at once.
+    credentialSources: (name, base = process.env) => {
+      const env = accountBase(root, name, base)
+      return [claudeState(env), join(credentialScope(env).dir, ".credentials.json"), join(defaultHome(env), "settings.json")]
     },
   }
 }
