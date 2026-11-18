@@ -4066,6 +4066,24 @@ startup, so a default Mako read from the first can be a model it no longer
 routes: the driver treats `models-dev.refreshed` and `integration.updated` as
 catalog changes, and a session still on the default it was given moves to the
 refreshed default before its next prompt.
+
+A new OpenCode conversation asks its model about 380 ms later through Mako than
+`opencode run` does by itself (`npm run bench:vs-bare -- --harness opencode`,
+N=5 on 2026-11-18: 917 ms against 533), most of it OpenCode's own: Mako runs one
+`opencode serve` per conversation (`opencode/servers.ts`), so each new one pays
+the server's handshake (159 ms) and its plugin activation (310 ms). Starting
+that server ahead while the person types was looked at and left: the server is
+the conversation's own, spawned with its grant (the write-hold plugin's URL and
+token, minted per binding), its permission tier, routing denies, primer and
+Thread values in its environment, so the one a launch would start exists only
+once the conversation does, and a conversation started ahead and never sent
+leaves a journal, a Thread in the person's list and a native session, at some
+400 MB of server for every draft. One server shared by every conversation isn't
+safe as Mako uses OpenCode for the same reason: those settings are the
+process's, so every session's calls would post under one binding's grant and
+one tier. `mako:launch-prewarm` still lists the folder's MCP servers and loads
+what a first launch loads (`host-warmup.ts`); it carries the folder alone, and
+the warm-up already keeps to the harnesses used on this device.
 No test, probe or proof runs a real harness in the person's own home. A
 session it starts there is a real entry in their Codex, Cursor, Claude or
 Grok history, and their own Mako lists it and keeps a copy: deleting the

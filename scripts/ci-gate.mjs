@@ -245,7 +245,7 @@ export const STEPS = [
   // on main on a Mac before it came in, as its npm script runs it. Not yet here: test-thread-processes.ts (160 s, past
   // a shard's floor, to be split), the manual proofs (live harnesses, packaged builds, arguments), the *-ui suites of
   // those npm scripts, and the ones red on main (test-control-recording-failures.ts, test-update-performance.ts, test-local-update-startup.ts,
-  // test-repository-discovery.ts, test-transcript-residency.ts).
+  // test-repository-discovery.ts).
   [2, "tsx scripts/test-acp-background.ts"],
   [2, "tsx scripts/test-acp-notifications.ts"],
   [7, "node scripts/test-acp-provider-turn.mjs"],
@@ -398,6 +398,7 @@ export const STEPS = [
   [1, "tsx scripts/test-thread-store-read-only.ts"],
   [2, "tsx scripts/test-thread-store.ts"],
   [3, "tsx scripts/test-trace-history-holds.ts"],
+  [3, "tsx scripts/test-transcript-residency.ts"],
   [1, "tsx scripts/test-transport-agreement.ts"],
   [1, "node scripts/test-ui-feedback.mjs"],
   [2, "tsx --tsconfig tsconfig.app.json scripts/test-warm-open.ts"],
