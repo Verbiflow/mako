@@ -270,15 +270,17 @@ const threadCatalogActions = {
 
   async load() {
     if (!hasBridge()) return
+    // Asked beside the catalog, never before its rows: the rail draws without them, and a host whose loop is held
+    // answers each ask after the hold, so one after another waited out a hold each.
+    const requests = getMako()
+      .nativeRequests()
+      .catch(() => [])
+      .then((nativeRequests) => threadsStore.set({ nativeRequests }))
     const [raw, descriptors]: [ThreadCatalogResponse, HarnessDescriptor[]] =
       await Promise.all([
         getMako().threads().catch(unavailableThreadCatalog),
         harnessDescriptors(),
       ])
-    const nativeRequests = await getMako()
-      .nativeRequests()
-      .catch(() => [])
-    threadsStore.set({ nativeRequests })
     // An engine one vintage older answers with a bare array; treat it as
     // ready rather than spinning forever against the shape difference.
     const result = normalizeThreadCatalog(raw)
@@ -292,6 +294,7 @@ const threadCatalogActions = {
     if (!result.ready) {
       setTimeout(() => void threadCatalogActions.load(), 1500)
     }
+    await requests
   },
 }
 
