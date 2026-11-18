@@ -3,7 +3,7 @@ import { parentPort } from "node:worker_threads"
 import { z } from "zod"
 import { atOnce } from "@mako/sessions/slices"
 import { errorMessage } from "../base/error-message.js"
-import { journalRowSteps } from "./live-journal.js"
+import { coldScan, journalRowSteps } from "./live-journal.js"
 
 /**
  * A reader of journals (`JournalReaders`): each asked file is opened to query only, its rows read and parsed in one read
@@ -11,7 +11,7 @@ import { journalRowSteps } from "./live-journal.js"
  */
 /** About a megabyte of a long session's entries: a part the host takes in within a few milliseconds. */
 const ENTRIES_PER_PART = 150
-const AskSchema = z.object({ id: z.number(), path: z.string(), withLog: z.boolean() })
+const AskSchema = z.object({ id: z.number(), path: z.string(), withLog: z.boolean(), scan: z.literal(true).optional() })
 
 parentPort?.on("message", (message) => {
   const ask = AskSchema.parse(message)
@@ -23,6 +23,17 @@ parentPort?.on("message", (message) => {
     db = new DatabaseSync(ask.path)
     db.exec("PRAGMA busy_timeout=5000; PRAGMA query_only=ON")
     db.exec("BEGIN")
+    // A cold journal's opening asks only what it reads of every block (`ColdScan`): none of its content comes back.
+    if (ask.scan) {
+      const scan = coldScan(db)
+      db.exec("COMMIT")
+      // Closed before the answer goes: the opening that waits on it reads the file at once, and a connection still
+      // closing here (the last one checkpoints and removes the log) would have it find the file locked.
+      db.close()
+      db = undefined
+      parentPort?.postMessage({ id: ask.id, scan })
+      return
+    }
     const rows = atOnce(journalRowSteps(db, ask.withLog))
     db.exec("COMMIT")
     // Handed over a part at a time: the host takes each in on a turn of its own, so no one message holds its loop

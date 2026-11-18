@@ -24,6 +24,7 @@ import type { MethodTable } from "../base/methods.js"
 import { hostWarn } from "../base/host-log.js"
 import { WorktreeThreadState } from "./worktree-thread-state.js"
 import { LiveConversations } from "./live-conversations.js"
+import { listJournals } from "./live-records.js"
 import type { Dependencies as LiveDependencies } from "./live-runtime.js"
 import { NativeRequests } from "./native-requests.js"
 import { SharedConversations, type ConversationRoutingResult } from "./shared-conversations.js"
@@ -273,7 +274,9 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   deps.jobs.every("settled rewind snapshot budget", 60 * 60_000, async () => {
     if ((await workspaceSnapshots.budget.settings()).mode === "evict") await workspaceSnapshots.budget.run()
   })
+  const listed = await listJournals(join(dataRoot, "conversations"))
   const live = new LiveConversations({
+    listed,
     agents: () => agents,
     heldModels: (harness) => harnesses.profiles.held(harness)?.models,
     ...(deps.stopping && { stopping: deps.stopping }),
