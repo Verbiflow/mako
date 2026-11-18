@@ -261,6 +261,12 @@ export class LiveRecords {
     return this.unsettled.has(id)
   }
 
+  /** Whether `id` holds work for a sign-in (`hasSignInHold`): from memory when it's there, else from its journal's summary. */
+  leftSignInHold(id: string): boolean {
+    const resident = this.residents.get(id)
+    return resident ? residentSummary(resident.snapshot).hasSignInHold === true : this.recovered.get(id)?.hasSignInHold === true
+  }
+
   /** Whether `id`'s last request that ran was cut short (`cutLast`): from memory when it's there, else from its journal's summary. */
   turnCut(id: string): boolean {
     const resident = this.residents.get(id)

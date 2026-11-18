@@ -330,7 +330,7 @@ interface Crossing {
 
 type Live = Pick<
   LiveConversations,
-  "session" | "held" | "nativeIds" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "rewordWaiting" | "adoptPin" | "wakeDue" | "snapshot" | "editQueued" | "switchSettled" | "stopMark" | "pinnedAccount" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "turnCut" | "waitingOn" | "workOf" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "switching" | "readIn"
+  "session" | "held" | "nativeIds" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "rewordWaiting" | "adoptPin" | "wakeDue" | "snapshot" | "editQueued" | "switchSettled" | "stopMark" | "pinnedAccount" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "leftSignInHold" | "turnCut" | "waitingOn" | "workOf" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "switching" | "readIn"
 > & Partial<Pick<LiveConversations, "waitChanged">>
 
 /** What starting a Fin in the cloud asks of the account and this device (`AgentsDeps.cloudFins`). */
@@ -1076,7 +1076,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       const last = store.reportsOf(edge.child, 0).at(-1)
       const conversation = this.conversationOf(edge.child)
       // A Fin that finished is read in only when the last host left a message of it waiting, paused or running.
-      if ((last?.status !== "done" && last?.status !== "failed") || (conversation && this.deps.live.leftUnsettled(conversation))) this.resumePaused(edge)
+      // So is one holding work for a sign-in: its row reads it from its conversation, as waiting for an execution place.
+      if ((last?.status !== "done" && last?.status !== "failed") || (conversation && (this.deps.live.leftUnsettled(conversation) || this.deps.live.leftSignInHold(conversation)))) this.resumePaused(edge)
       // Whatever the last host left of it, a cut turn nothing picks up reaches its Apex.
       if (conversation) this.watchCut(conversation)
       // One at work as this host starts is watched from the last activity its journal kept: a turn hung across a
