@@ -76,7 +76,6 @@ import { devHostBuildDirectories } from "./base/dev-host-build.js"
 import type { HostOwner } from "./create-host.js"
 import { backgroundWork } from "./contracts/background-work.js"
 import { withChildren } from "./contracts/native-agents.js"
-import { personPromptedAt } from "./contracts/worked-at.js"
 import { projectFolder, worktreeAt } from "./contracts/worktree-paths.js"
 
 type WebHost = Awaited<ReturnType<typeof startWebHost>>
@@ -709,7 +708,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       summaries: () => nativeAt ? live.summaries().filter(opening) : live.summaries(only),
       native: () => natives ?? (only ? [] : window()),
       activity: (path) => activity[path],
-      work: () => application.lifecycle.snapshot().work,
+      // A few rows' making asks of its own conversations alone (`workOf`, as the lifecycle lists each): the lifecycle's
+      // other work is named with a prefix (`native:`, `request:`, `capture:`), never as a conversation, and its whole
+      // snapshot scans every conversation in memory.
+      work: () => only ? [...only].flatMap((id) => live.workOf(id) ?? []) : application.lifecycle.snapshot().work,
       waitingOn: (id) => live.waitingOn(id),
       hidden: () => threads.archives.hidden(),
       lastMoved: (id, revision) => live.lastMoved(id, revision),
@@ -760,7 +762,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         working: live.workOf(id)?.status,
         waitingOn: (conversation) => live.waitingOn(conversation),
         background: heldWork(id),
-        promptedAt: held ? personPromptedAt(held.requests, held.control?.actions) : undefined,
+        // Read off its listing line, which keeps it until its requests or actions change: no batch scans them again.
+        promptedAt: held ? live.listedOne(id)?.promptedAt : undefined,
         asking: (conversation) => finAsking(late.conversations?.agents?.personAsk(conversation)),
         asked: (conversation) => live.askWaiting(conversation),
         fins: (conversation) => listedFins(late.conversations?.agents?.roster(conversation)),
@@ -1146,7 +1149,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           const execution = store.execution(session.data)
           if (execution && execution.state !== "here") return "not-mine"
           // A session a terminal ran, which Mako here hasn't opened: opened as the conversation the list named.
-          const opened = live.summaries().some((summary) => summary.session.id === message.conversation)
+          const opened = live.listedOne(message.conversation) !== undefined
           const ref = opened ? undefined : (windowRows ??= catalog.recent(windowStart(Date.now()))).find((row) => row.sessionId === message.session)
           if (!opened && !ref) return "not-mine"
           if (!(await claim())) return "refused"

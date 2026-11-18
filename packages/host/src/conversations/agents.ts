@@ -711,7 +711,12 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** This host's generation as a writer of reports: a report from an older owner is refused (`keepReport`). */
   private readonly generation: number
   private readonly entries = new Map<string, NativeAgent>()
-  private readonly rosters = new Map<string, readonly NativeAgent[]>()
+  /**
+   * Each Thread's roster as last built, with the entries that wear a limit's notice (`noticed`): those alone can go
+   * stale with no commit (the notice's reset passes, a wait behind it moves), so a held roster is checked by them
+   * and not by every entry it has.
+   */
+  private readonly rosters = new Map<string, { agents: readonly NativeAgent[]; noticed: readonly NativeAgent[] }>()
   /** `personAsk`'s walk of a Thread's tree, kept until the store commits, a Fin moves (`askEpoch`) or `ASKS_KEPT_MS` passes. */
   private readonly asksKept = new Map<string, { edges: ReturnType<ThreadStore["edges"]>; epoch: number; at: number; found: ReturnType<Agents["personAsk"]> }>()
   private askEpoch = 0
@@ -1238,16 +1243,16 @@ export class Agents implements AgentOperations, ConversationChildren {
     const thread = store.journalPlacement(conversation)?.thread
     if (!thread) return NONE
     const held = this.rosters.get(thread)
-    if (held && !held.some(agent => {
+    if (held && !held.noticed.some(agent => {
       if (!agent.child?.limitNotice) return false
       const edge = this.store()?.edges().of(agent.child.thread)
       return !edge || !sameLimitNotice(agent.child.limitNotice, this.noticeOn(edge))
-    })) return held
+    })) return held.agents
     const children = store.edges().children(thread)
     const queued = this.queuedOf(thread)
     if (!children.length && !queued.length) return NONE
     const agents = [...children.map((edge) => this.entryOf(edge)), ...queued]
-    this.rosters.set(thread, agents)
+    this.rosters.set(thread, { agents, noticed: agents.filter((agent) => agent.child?.limitNotice) })
     return agents
   }
 

@@ -958,6 +958,10 @@ async function bulkLoadsAreNamed() {
     }
     const rows = work.run("tell the account this host's Sessions", () => ownedSessions(sources))
     assert.equal(rows.length, ids.length, "every conversation is listed")
+    // A few rows' report looks its conversations up by ID, in the order the whole listing has them, on disk as in memory.
+    const few = new Set<string>([ids[5]!, ids[0]!, ids[2]!])
+    assert.deepEqual(owner.summaries(few), owner.summaries().filter((summary) => few.has(summary.session.id)), "conversations looked up by ID are listed as the whole listing lists them")
+    assert.deepEqual(owner.summaries(new Set([randomUUID()])), [], "and one this host doesn't have isn't")
     for (const id of ids) assert.equal(work.run("archive check", () => lifecycle.archived({ kind: "live", id })), false)
     work.run("archive", () => lifecycle.archive({ id: randomUUID(), target: { kind: "live", id: ids[0]! }, archived: true }))
     assert.equal(work.run("report again", () => ownedSessions(sources)).length, ids.length - 1, "an archived conversation leaves the list, by its listing's keys")
@@ -988,6 +992,82 @@ async function bulkLoadsAreNamed() {
     console.log("PASS: the report and the lifecycle load no journal; a reader loading in bulk is named")
   } finally {
     stopHearing()
+    await owner.stop()
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+/**
+ * The listing costs a lookup for a conversation that didn't change: its line is the object it was, a change to one
+ * makes that one's again, what's scanned of its requests and control is kept through a batch that changed neither, and
+ * a few rows' report makes only their lines.
+ */
+async function listingIsKept() {
+  const root = mkdtempSync(join(tmpdir(), "mako-live-listing-"))
+  const ids = [randomUUID(), randomUUID(), randomUUID()]
+  let owner: LiveConversations
+  const driver: ProviderLiveDriver = {
+    ...fixtureCapabilities,
+    resume: fixtureResume(),
+    provider: "test-provider",
+    available: () => true,
+    start: async (_cwd, options) => ({ id: options.conversationId, nativeId: options.conversationId, nativePath: join(root, options.conversationId), harness: "test-provider", cwd: root, status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] }),
+    prompt: async (prompted, _text, _attachments, _settings, dispatch) => {
+      dispatch.report({ kind: "submitted", source: "transport-call" })
+      const current = owner.snapshot(prompted)?.session
+      assert.ok(current)
+      owner.observe({ type: "live-session", session: { ...current, status: "running" } })
+      owner.observe({ type: "live-update", id: prompted, update: { kind: "text", text: "kept" } })
+      owner.observe({ type: "live-session", session: { ...current, status: "ready" } })
+    },
+    permission: async () => {},
+    cancel: async () => {},
+    close: () => {},
+    setMode: async () => {},
+  }
+  owner = new LiveConversations({ appPath: root, root: join(root, "journals"), driver: () => driver, history: async () => null, emit: () => {}, resumeVerdict: async () => ({ kind: "resumable", record: "same" }) })
+  try {
+    for (const id of ids) await owner.start("test-provider", root, { conversationId: id })
+    const [changed, ...others] = ids
+    assert.ok(changed)
+    const line = (id: string) => owner.listed().find((summary) => summary.session.id === id)
+    await waitFor(() => ids.every((id) => line(id)?.session.status === "ready"), "the conversations didn't start")
+    const records = owner["records"]
+    let made = 0
+    const summaryOf = records["summaryOf"].bind(records)
+    records["summaryOf"] = (resident) => { made++; return summaryOf(resident) }
+    const first = owner.listed()
+    const second = owner.listed()
+    assert.equal(first.length, ids.length)
+    first.forEach((summary, at) => assert.equal(second[at], summary, "a conversation that didn't change is listed by the line it had"))
+
+    // One conversation's turn: its line is made again, and no other's.
+    owner.submit(changed, randomUUID(), "seed")
+    await waitFor(() => line(changed)?.promptedAt !== undefined && line(changed)?.session.status === "ready", "the turn didn't end")
+    const after = owner.listed()
+    assert.notEqual(after.find((summary) => summary.session.id === changed), first.find((summary) => summary.session.id === changed), "a conversation that changed is listed by a new line")
+    for (const id of others) assert.equal(after.find((summary) => summary.session.id === id), first.find((summary) => summary.session.id === id), "and the others by the lines they had")
+
+    // A batch that changes neither its requests nor its control moves its revision: nothing of them is scanned again.
+    const before = line(changed)
+    const revision = owner.snapshot(changed)?.revision
+    owner.observe({ type: "live-update", id: changed, update: { kind: "text", text: " more" } })
+    await waitFor(() => (owner.snapshot(changed)?.revision ?? 0) > (revision ?? 0), "the batch wasn't committed")
+    const moved = line(changed)
+    assert.ok(before && moved && moved !== before && moved.revision > before.revision, "its line follows its revision")
+    assert.equal(moved.nativeIds, before.nativeIds, "what was scanned of its requests and control is what it was")
+    assert.equal(moved.promptedAt, before.promptedAt)
+
+    // A few rows' report makes their lines alone.
+    made = 0
+    const only = owner.summaries(new Set([others[0]!]))
+    assert.deepEqual([only.length, only[0]?.session.id, made], [1, others[0], 1], "a report of one row reads one conversation")
+    made = 0
+    const ordered = owner.summaries(new Set([others[1]!, changed]))
+    assert.deepEqual([ordered.map((summary) => summary.session.id), made], [[changed, others[1]], 2], "several go in the listing's order, each looked up alone")
+    assert.deepEqual(ordered, owner.summaries().filter((summary) => summary.session.id === changed || summary.session.id === others[1]), "as the whole listing has them")
+    console.log("PASS: a listing line is kept until its conversation changes, and a few rows' report makes only theirs")
+  } finally {
     await owner.stop()
     rmSync(root, { recursive: true, force: true })
   }
@@ -3097,6 +3177,7 @@ await boundsWarmProviders()
 await prewarmOverlapsTyping()
 await unloadsHibernatedConversations()
 await bulkLoadsAreNamed()
+await listingIsKept()
 await failedCloseKeepsOwnership()
 await heldUntilReset()
 await heldWakeResumes()
