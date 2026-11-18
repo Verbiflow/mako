@@ -474,6 +474,8 @@ async function liveWorld() {
     async restart() {
       await tracker.close()
       tracker = await LaptopTracker.open(ports)
+      // The next turn in the folder asks for it again, which is what reads its time away.
+      await tracker.track({ id: "turns", path: folder, kind: "attached" })
       await tracker.settled()
       adapter = adapterOf(tracker)
     },
