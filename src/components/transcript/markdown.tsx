@@ -7,6 +7,7 @@ import { useMediaAnswers } from "@/state/turn-media"
 import type { AttachmentContent } from "@mako/sessions"
 import { Paragraph } from "./paragraph"
 import { useParsedProse } from "./use-parsed-prose"
+import { useStreamReveal } from "./stream-reveal"
 import { forgetWarmedProse, warmedProse } from "@/lib/prose-parser-client"
 import { rememberSettledProse, settledProse } from "./settled-prose"
 import {
@@ -36,6 +37,7 @@ import {
   memo,
   useEffect,
   useContext,
+  useRef,
   useState,
   type ComponentProps,
   type ReactElement,
@@ -205,8 +207,13 @@ export const Prose = memo(function Prose({
     return element
   }, [source, plugins, referenceMap, urlTransform, rehypePlugins, settled])
 
+  // A streaming answer's newest words are revealed at a steady pace and fade in (`useStreamReveal`).
+  const root = useRef<HTMLDivElement>(null)
+  useStreamReveal(root, Boolean(streaming) && !sent, keptChars + source.length)
+
   return (
     <div
+      ref={root}
       className={cn("mako-prose", className)}
       data-answer={answerId}
       data-rendered-chars={keptChars + source.length}
