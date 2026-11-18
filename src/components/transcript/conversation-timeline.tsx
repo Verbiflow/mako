@@ -32,7 +32,7 @@ import {
   type LeftAt,
   isInterruptedNote,
   renamedExchanges,
-  replyProse,
+  drawnProse,
   turnRequest,
   type Exchange as ExchangeData,
 } from "@/lib/exchanges"
@@ -1701,8 +1701,7 @@ export function ConversationTimeline({
     if (firstRow !== undefined && lastRow !== undefined)
       for (let step = 1; step <= PARSED_AHEAD; step += 1) coming.push(firstRow - step, lastRow + step)
     else for (let index = hidden + undrawn - 1; index >= hidden; index -= 1) coming.push(index)
-    const texts = coming.flatMap((index) => exchanges[index]?.response.flatMap((message) =>
-      message.role === "assistant" && !message.streaming ? [replyProse(message.blocks)] : []) ?? [])
+    const texts = coming.flatMap((index) => drawnProse(exchanges[index]?.response ?? []))
     if (texts.length) warmSettledProse(texts)
   }, [firstRow, lastRow, hidden, undrawn])
 

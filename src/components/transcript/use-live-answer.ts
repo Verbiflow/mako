@@ -1,18 +1,32 @@
 import { useEffect, useRef, useState } from "react"
+import { responseSections } from "@/lib/exchanges"
 import { StreamFrames } from "@/lib/stream-frames"
 import { acpConversations, type AcpConversation } from "@/state/acp-state"
 import { useTranscriptSource } from "./source-context"
 
+/** The part that draws a turn's last block, for the turn as it was counted then: its parts are numbered by its messages and blocks alone. */
+let writingPart: { turn: string; id: string | undefined } | undefined
+
 /**
- * The text being written in `conversation`, where it belongs to the reply `answer` draws a part of: the newest block
- * of the newest reply of the newest turn (what `ExchangePacer` reads as the answer growing). A reply's prose is drawn
- * a text block to a part (`responseSections`), named after its reply.
+ * The text being written in `conversation`, where `answer` is the part that draws it: the newest block of the newest
+ * reply of the newest turn (what `ExchangePacer` reads as the answer growing). A reply's prose is drawn a text block
+ * to a part (`responseSections`), and every part of a reply still being written is streaming, so the part is told by
+ * its id, not by its words: a reply whose earlier paragraph reads "Done." would otherwise take a last block that
+ * begins "Done. Next" for its own. The id is read from the turn's sections once for each count of the turn's
+ * messages and of its last one's blocks: text arriving changes neither.
  */
-export function writtenSoFar(conversation: AcpConversation | undefined, answer: string): string | undefined {
-  const message = conversation?.projection?.exchanges.at(-1)?.response.at(-1)
+export function writtenSoFar(conversation: Pick<AcpConversation, "key" | "projection"> | undefined, answer: string): string | undefined {
+  const exchange = conversation?.projection?.exchanges.at(-1)
+  const message = exchange?.response.at(-1)
   const block = message?.blocks.at(-1)
-  if (!message || block?.type !== "text" || message.role !== "assistant") return undefined
-  return answer === message.id || answer.startsWith(`${message.id}-part-`) ? block.text : undefined
+  if (!exchange || !message || block?.type !== "text" || message.role !== "assistant") return undefined
+  if (answer !== message.id && !answer.startsWith(`${message.id}-part-`)) return undefined
+  const turn = `${conversation?.key}\n${exchange.id}\n${exchange.response.length}\n${message.id}\n${message.blocks.length}`
+  if (writingPart?.turn !== turn) {
+    const last = responseSections(exchange.response).findLast((section) => section.kind === "prose")
+    writingPart = { turn, id: last?.kind === "prose" && last.message.blocks[0] === block ? last.id : undefined }
+  }
+  return writingPart.id === answer ? block.text : undefined
 }
 
 /**

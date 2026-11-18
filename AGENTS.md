@@ -2215,7 +2215,8 @@ Four rules hold this together, and each has a specific failure it prevents:
   (`test-row-heights.ts`). Below the window, an open draws the turns
   that fill the pane and a pane's worth above them before it paints, and the
   rest in idle moments (`FIRST_TURNS`); the answers of turns about to mount
-  are parsed ahead in the prose worker (`warmSettledProse`), so mounting one
+  are parsed ahead in the prose worker (`warmSettledProse`), a text block
+  at a time as a reply's parts draw them (`drawnProse`), so mounting one
   builds elements from a tree and parses nothing. A row coming in restyles itself, never the
   page: no `group-has-[…]`, whose universal last part restyles all of `main` for
   any element added, so write `[.group:has(…)_&]:…`
