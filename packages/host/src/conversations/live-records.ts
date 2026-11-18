@@ -249,6 +249,12 @@ export class LiveRecords {
     return [...this.recovered.values(), ...[...this.residents.values()].map(({ snapshot }) => residentSummary(snapshot))]
   }
 
+  /** Conversation `id`'s entry of `listing`, made alone: from memory when it's there, else as the journal last listed it. */
+  listedOf(id: string): LiveSummary | undefined {
+    const resident = this.residents.get(id)
+    return resident ? residentSummary(resident.snapshot) : this.recovered.get(id)
+  }
+
   /** Whether the host before this one left a message of `id` waiting, paused or running (`open`). */
   leftUnsettled(id: string): boolean {
     return this.unsettled.has(id)

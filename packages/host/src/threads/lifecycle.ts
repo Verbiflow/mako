@@ -18,6 +18,8 @@ export interface LiveThreads {
    * keys an archive knows it by, which a Fin's ask reads on every batch of its Apex.
    */
   listed?(): LiveSummary[]
+  /** One conversation as `listed` has it, without listing the rest (`LiveConversations.listedOf`). */
+  listedOf?(id: string): LiveSummary | undefined
   activeRequest(id: string): string | null
   setArchived(id: string, archived: boolean): void
   stopRequest(id: string, requestId: string): Promise<boolean>
@@ -52,6 +54,9 @@ export class ThreadLifecycle {
 
   private owner(target: ThreadTarget, listed = false) {
     const live = this.dependencies.live
+    // A conversation is found by its id alone: listing all of them to find one ran once per Fin in an Apex's walk of its
+    // tree (`archivedHere`), 864 listed for each of 139 Fins, and held the loop seconds at a time.
+    if (target.kind === "live" && listed && live.listedOf) return live.listedOf(target.id)
     return (listed && live.listed ? live.listed() : live.summaries()).find((summary) => target.kind === "live"
       ? summary.session.id === target.id
       : target.kind === "file" ? summary.threadPath === target.path || summary.nativePaths?.includes(target.path)
