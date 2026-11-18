@@ -601,7 +601,7 @@ export function applyLiveAhead(ahead: LiveAhead): void {
   if (current?.kind !== "live" || !current.hydrated || !sameEpoch(current, ahead) || current.revision !== ahead.revision) return
   if (current.ahead?.revision === ahead.revision && current.ahead.more === ahead.more) return
   const next = { ...current, ahead: { revision: ahead.revision, more: ahead.more } }
-  // One that isn't shown keeps what it last drew (`behind`), as a batch leaves it.
+  // One that isn't shown keeps what it last drew for when it's opened (`behind`), as a batch leaves it.
   const shown = acpStore.get().activeKey === ahead.id
   replaceAcpConversation(ahead.id, {
     ...next,
@@ -738,7 +738,6 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
       )
     : current.pendingPrompts
   // Nothing a projection reads moved: it stands as it is, shown or not.
-  // Text said ahead was drawn on the last block; the batch that carries it draws again from what it holds.
   const unchanged =
     !current.ahead &&
     requests === current.requests &&

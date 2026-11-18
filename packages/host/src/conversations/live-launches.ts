@@ -20,7 +20,7 @@ import { captureNativeHistory } from "./native-history.js"
 
 type LaunchAccess = Pick<LiveAccess,
   "dependencies" | "admission" | "load" | "add" | "bindingOwners" | "startingSession" | "register" | "markPurpose" | "markParent" |
-  "actor" | "retainAttachments" | "moves" | "flush" | "noteWork" | "drain" | "scheduleHibernation" | "failedStart" | "driverEvents">
+  "actor" | "retainAttachments" | "holdAttachments" | "moves" | "flush" | "noteWork" | "drain" | "scheduleHibernation" | "failedStart" | "driverEvents">
 
 /** New conversations, from their journal's first write to their provider's first native session. */
 export class LiveLaunches {
@@ -120,6 +120,9 @@ export class LiveLaunches {
       throw new Error(
         "The saved history could not be loaded; the conversation was not started"
       )
+    // Its first message's files are hashed and copied here, off the turn that builds the conversation below.
+    if (options.initialRequest?.attachments.length)
+      await this.access.holdAttachments(options.initialRequest.id, options.initialRequest.attachments)
     const id = options.conversationId
     const session = options.session === undefined ? undefined : this.access.startingSession(options.session)
     const snapshot: LiveSnapshot = {
@@ -176,7 +179,8 @@ export class LiveLaunches {
                 tuning
               ),
               attachments: this.access.retainAttachments(
-                options.initialRequest.attachments
+                options.initialRequest.attachments,
+                options.initialRequest.id
               ),
               status: "queued",
             }),

@@ -5,9 +5,10 @@ import { existsSync } from "node:fs"
 import { locate } from "@mako/git"
 import { hostLog, hostWarn, hostError } from "../base/host-log.js"
 import { gitRepository } from "./ports.js"
-import type { AttributionDeps } from "./index.js"
+import type { AttributionDeps, CataloguedSession } from "./index.js"
+import type { BackfillResult } from "./backfill.js"
 import type { TrackerRepository } from "./tracker.js"
-import { FromWriterSchema, WriterSnapshotSchema, WriterCommandResults, type WriterReply, type WriterStateMessage, type WriterCommandResult, type WriterHostResult, type ToWriter, type WriterCommand, type WriterHostRequest, type WriterSettings, type WriterSnapshot } from "./writer-protocol.js"
+import { FromWriterSchema, WriterSnapshotSchema, WriterCommandResults, type WriterReply, type WriterStateMessage, type WriterCommandResult, type WriterHostResult, type ToWriter, type WriterCommand, type WriterHostRequest, type WriterSettings, type WriterSnapshot, type WriterContextChange } from "./writer-protocol.js"
 
 const ASK_MS = 30_000
 const PROBE_MS = 5_000
@@ -23,6 +24,7 @@ interface Generation {
   pending: Map<number, Pending>
   subscriptions: Map<number, Subscription>
   repositories: Map<string, TrackerRepository>
+  context: SentContext
   closed: boolean
   started: boolean
   privateReason?: string
@@ -33,6 +35,10 @@ interface WriterClientOptions {
   entry?: string
   applied?(): Promise<void>
   timing?: { startMs?: number; askMs?: number; probeMs?: number }
+  /** A read-back pass asked with `read-back` ended. */
+  readBack?(result: BackfillResult | undefined): void
+  /** The writer settled every change made by `through`. */
+  settled?(through: number): void
 }
 
 /** The host talks to a writing worker; its normal journal client still owns replay and acknowledgements. */
@@ -41,6 +47,7 @@ export class AttributionWriter {
   private readonly settings: Omit<WriterSettings, "privateReason">
   private readonly entry: string
   private readonly applied: (() => Promise<void>) | undefined
+  private readonly said: Pick<WriterClientOptions, "readBack" | "settled">
   private generation: Generation | undefined
   private next = 0
   private closed = false
@@ -53,6 +60,7 @@ export class AttributionWriter {
     this.settings = settings
     this.entry = options.entry ?? defaultEntry()
     this.applied = options.applied
+    this.said = { readBack: options.readBack, settled: options.settled }
     this.timing = { startMs: options.timing?.startMs ?? START_MS, askMs: options.timing?.askMs ?? ASK_MS, probeMs: options.timing?.probeMs ?? PROBE_MS }
   }
 
@@ -131,7 +139,7 @@ export class AttributionWriter {
     // A late startup failure is consumed even when the host began closing before joining ready.
     void ready.catch(() => {})
     const exit = new Promise<void>(resolve => child.once("exit", () => resolve()))
-    const generation: Generation = { child, ready, accept, fail, exit, pending: new Map(), subscriptions: new Map(), repositories: new Map(), closed: false, started: false, privateReason }
+    const generation: Generation = { child, ready, accept, fail, exit, pending: new Map(), subscriptions: new Map(), repositories: new Map(), context: { version: 0, byPath: new Map(), running: "" }, closed: false, started: false, privateReason }
     const timer = setTimeout(() => {
       this.retire(generation, new Error("The record of changes' writer took too long to open."))
       void child.terminate()
@@ -169,6 +177,12 @@ export class AttributionWriter {
           else pending.reject(new Error(reply.error ?? "The writing owner refused the request."))
           return
         }
+        case "read-back":
+          this.said.readBack?.(reply.result)
+          return
+        case "settled":
+          this.said.settled?.(reply.through)
+          return
         case "host-request":
           void this.host(generation, reply.request).then(
             value => this.send(generation, { type: "host-reply", id: reply.id, ok: true, value, lagMs: this.lag() }),
@@ -228,7 +242,7 @@ export class AttributionWriter {
   private async host(generation: Generation, request: WriterHostRequest): Promise<WriterHostResult> {
     if (generation.closed || this.closed) throw new Error("The writing owner has stopped.")
     switch (request.kind) {
-      case "context": return { sessions: this.deps.catalogued?.() ?? [], running: this.deps.running?.() ?? {}, stores: this.deps.stores() }
+      case "context": return this.context(generation, request.have)
       case "repository": {
         const found = await locate(this.deps.git, request.root).catch(() => null)
         if (generation.closed) throw new Error("The writing owner has stopped.")
@@ -272,10 +286,54 @@ export class AttributionWriter {
     }
   }
 
+  private context(generation: Generation, have: number): WriterContextChange {
+    const told = contextChange(generation.context, have, { rows: this.deps.catalogued?.() ?? [], running: this.deps.running?.() ?? {}, stores: this.deps.stores() })
+    generation.context = told.sent
+    return told.change
+  }
+
   private repository(generation: Generation, root: string): TrackerRepository {
     const repository = generation.repositories.get(root)
     if (!repository) throw new Error("The writing owner asked for a repository it hasn't opened.")
     return repository
+  }
+}
+
+/** The context a writer was last sent: the catalog's rows as they were then, by path, and what else it holds. */
+export interface SentContext {
+  version: number
+  rows?: readonly CataloguedSession[]
+  byPath: Map<string, CataloguedSession>
+  running: string
+  stores?: readonly string[]
+}
+
+/**
+ * What moved in the host's context since the writer's version of it (`have`), and what the writer holds once told.
+ * The catalog keeps a row's object until that row changes and its list until any does, so the same list is nothing
+ * to send, and of another list only the rows that are other objects are. Each is cut to what the writer reads
+ * before it crosses.
+ */
+export function contextChange(sent: SentContext, have: number, now: { rows: readonly CataloguedSession[]; running: Readonly<Record<string, { status: string }>>; stores: readonly string[] }) {
+  const ran = JSON.stringify(now.running)
+  if (have === sent.version && sent.version > 0 && now.rows === sent.rows && now.stores === sent.stores && ran === sent.running) return { change: { same: true } satisfies WriterContextChange, sent }
+  // A writer holding another version (a new one, or one whose answer was lost) is sent everything.
+  const whole = have !== sent.version || sent.version === 0
+  const byPath = new Map(now.rows.map(row => [row.path, row]))
+  const sessions = now.rows.filter(row => whole || sent.byPath.get(row.path) !== row).map(reduced)
+  const removed = whole ? [] : [...sent.byPath.keys()].filter(path => !byPath.has(path))
+  const version = Math.max(sent.version, have) + 1
+  const change: WriterContextChange = { version, whole, sessions, removed, running: { ...now.running }, stores: [...now.stores] }
+  return { change, sent: { version, rows: now.rows, byPath, running: ran, stores: now.stores } satisfies SentContext }
+}
+
+/** A catalogued session as the writer reads it (`CataloguedSession`): its own fields, never the rest of the catalog's row. */
+function reduced(row: CataloguedSession): Extract<WriterContextChange, { version: number }>["sessions"][number] {
+  return {
+    harness: row.harness, nativeId: row.nativeId, path: row.path,
+    ...(row.cwd !== undefined && { cwd: row.cwd }), ...(row.currentCwd !== undefined && { currentCwd: row.currentCwd }),
+    ...(row.worktrees && { worktrees: row.worktrees.map(worktree => ({ path: worktree.path })) }),
+    ...(row.updatedAt !== undefined && { updatedAt: row.updatedAt }), ...(row.threadId !== undefined && { threadId: row.threadId }), ...(row.sessionId !== undefined && { sessionId: row.sessionId }),
   }
 }
 

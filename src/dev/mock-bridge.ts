@@ -1,3 +1,4 @@
+import { getMako } from "@/lib/bridge"
 import type { LimitNoticeChoice } from "@mako/host/contracts/agents"
 import { fixtureHarnesses } from "./harness-fixtures"
 import type { ToolStep } from "@mako/host/contracts/tool-steps"
@@ -142,6 +143,8 @@ async function mockThreadContexts(paths: string[]): Promise<Array<ThreadFileCont
 /** What the page staged, so a pasted or reloaded attachment reads back the words it was given. */
 const STAGED_TEXT = new Map<string, string>()
 const STAGED_MEDIA = new Map<string, string>()
+/** A file staged in pieces (`stageFilePart`), as base64 so far, by its path. */
+const STAGED_PARTS = new Map<string, string>()
 
 const utilityChoices: UtilityWorkChoices = { commit: "auto" }
 /** Whether a fixture hands agents to the cloud as the Mac sleeps. */
@@ -1351,6 +1354,13 @@ export function installMockBridge() {
       elapsed: 3,
     }),
     watchFile: async () => {},
+    stageFilePart: async (name: string, data: string, into?: { path: string; offset: number }) => {
+      // Pieces are whole three-byte groups, so their base64 joins: the file is what `stageFile` makes of them so far.
+      const whole = (into ? STAGED_PARTS.get(into.path) ?? "" : "") + data
+      const staged = await getMako().stageFile(name, whole)
+      STAGED_PARTS.set(staged.path, whole)
+      return staged
+    },
     stageFilePath: async (sourcePath: string) => ({
       path: sourcePath,
       name: sourcePath.split("/").pop() ?? "f",

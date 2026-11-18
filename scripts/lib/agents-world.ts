@@ -34,6 +34,7 @@ import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import { ThreadStore } from "@mako/host/threads/store"
 import { fixtureResume, noCapabilities } from "../fixtures/driver-capabilities.ts"
 import type { NativeTurnReader } from "@mako/host/harnesses/native-turn"
+import type { WorktreeRestored } from "@mako/host/contracts/thread-worktrees"
 
 /** The host's jobs without the engine's room watch. */
 class WithoutRoomWatch extends HostJobs {
@@ -201,6 +202,11 @@ export interface WorldOptions {
   heldPulls?: AgentsDeps["heldPulls"]
   /** The engine's clock (`AgentsDeps.now`), for a case that needs two moments to read the same. */
   now?: () => number
+  /**
+   * What makes a retired worktree again for a conversation about to run in a folder that's gone, as the host wires
+   * `ThreadWorktreeService.restoreRetired` to both the live engine's starts and the engine's deliveries.
+   */
+  restoreWorktree?: (conversation: string, cwd: string) => Promise<WorktreeRestored | undefined> | undefined
   /** Whether a session may be resumed, as its harness's ownership check says; resumable without it. */
   resumeVerdict?: (binding: ProviderBinding) => Promise<ResumeVerdict>
   /** Harnesses whose background work outlives their turn, as Claude Code's commands and Monitors do; any other ends with it. */
@@ -345,6 +351,7 @@ export class AgentsWorld {
       threads: this.store,
       agents: () => this.agents,
       settled: (id) => this.agents?.moved(id),
+      ...(this.options.restoreWorktree && { restoreWorktree: (id: string, cwd: string) => (existsSync(cwd) ? undefined : this.options.restoreWorktree?.(id, cwd)?.then(() => undefined)) }),
       autoContinueDelayMs: this.options.autoContinueDelayMs ?? 10,
       ...(this.options.conversationMemory && { conversationMemory: this.options.conversationMemory }),
       ...(this.options.providerIdleMs !== undefined && { providerIdleMs: this.options.providerIdleMs }),
@@ -427,6 +434,10 @@ export class AgentsWorld {
       ...(this.options.quietMs !== undefined && { quietMs: this.options.quietMs }),
       ...(this.options.later && { later: this.options.later }),
       ...(this.options.heldPulls && { heldPulls: this.options.heldPulls }),
+      ...(this.options.restoreWorktree && { restoreWorktree: (conversation: string) => {
+        const cwd = live.session(conversation)?.cwd
+        return cwd === undefined || existsSync(cwd) ? undefined : this.options.restoreWorktree?.(conversation, cwd)
+      } }),
       ...(this.options.readPull && { readPull: this.options.readPull }),
       ...(this.options.watchCheck && { watchCheck: this.options.watchCheck }),
       ...(this.options.now && { now: this.options.now }),

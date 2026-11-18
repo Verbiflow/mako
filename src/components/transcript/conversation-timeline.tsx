@@ -7,7 +7,8 @@ import {
   TranscriptSourceContext,
   type TranscriptSource,
 } from "./source-context"
-import type { CSSProperties, ReactNode, Ref, WheelEvent as ReactWheelEvent, PointerEvent as ReactPointerEvent, TouchEvent as ReactTouchEvent } from "react"
+import { flushSync } from "react-dom"
+import type { ReactNode, Ref, WheelEvent as ReactWheelEvent, PointerEvent as ReactPointerEvent, TouchEvent as ReactTouchEvent } from "react"
 import {
   useCallback,
   useContext,
@@ -92,7 +93,7 @@ const MORE_TURNS = 30
  * How many of those turns are drawn in the commit that opens a conversation, before the pane has been measured, and
  * how many more each idle moment after it adds. Thirty turns parsed and rendered in the click was most of what an open
  * cost, for a pane that shows two or three of them: the rest fill in above the reader while nothing else wants the
- * page. Before the first paint the count is raised until the pane is covered with a pane's worth to spare
+ * page, and all at once the moment the reader moves (`drawAll`). Before the first paint the count is raised until the pane is covered with a pane's worth to spare
  * (`layOutEnd`), so the newest turn paints at the end and what mounts above it afterwards moves nothing.
  */
 const FIRST_TURNS = 6
@@ -115,9 +116,6 @@ const WINDOWED_ITEMS = 120
  * when the estimate moved (these sizes replaced, a new width) every such row moved with it, and no resize said so.
  */
 type RowSizes = Virtualizer<HTMLDivElement, Element>["itemSizeCache"]
-type RowKey = RowSizes extends Map<infer Key, number> ? Key : never
-/** A windowed row's place, and the size it stands at while the browser skips it (`--row-size`, read in index.css). */
-type RowStyle = CSSProperties & { "--row-size"?: string }
 const measuredRows = new Map<string, { width: number; sizes: RowSizes }>()
 const MEASURED_KEPT = 8
 const ESTIMATED_ROW = 360
@@ -879,6 +877,15 @@ export function ConversationTimeline({
   staged.current = { shown, undrawn }
   /** What the end's last layout found (`layOutEnd`): the turns drawn above those that fill the pane. */
   const endSpare = useRef(0)
+  /**
+   * The reader has begun to move: every turn still waiting is drawn now, in this event, so wherever their input takes
+   * them the turn is there, as it was when an open drew them all. It costs that one input what the open was spared,
+   * and only for a reader who moves in the moments before the idle slices finish.
+   */
+  const drawAll = useCallback(() => {
+    if (staged.current.undrawn === 0) return
+    flushSync(() => setStage((current) => (current.first === null ? current : { ...current, first: null })))
+  }, [])
   const isEmpty = exchanges.length === 0
   const more = hidden > 0 || hasEarlier
   const edge = more || everMore || exchanges.length > INITIAL_TURNS
@@ -1122,18 +1129,38 @@ export function ConversationTimeline({
     ? virtualRows.map((row) => row.key).join("\0")
     : ""
   /*
-   * The rows kept mounted around the pane (the overscan) that have been measured, and at what size. Such a row is left
-   * to the browser to skip while it's out of view (`content-visibility: auto`, in index.css), standing at that size,
-   * the one the virtualizer placed it by: it then costs no layout or paint until it's read. A row in view, and one not
-   * yet measured, is laid out for real: its measured size is what places every row after it.
+   * The rows kept mounted around the pane (the overscan) are left to the browser to skip while they're out of view
+   * (`data-sized`: `content-visibility: auto` in index.css), each standing at the height it was just laid out at, so
+   * it costs no layout or paint until it's read and the virtualizer finds it the size it placed. A row in view is laid
+   * out for real. Marked in the next frame's first moment, by hand: marked in the render a row's measurement caused,
+   * it changed size under the observer delivering that measurement, which Chromium reports as a resize loop.
    */
-  const sizedRows = new Map<RowKey, number>()
   const inView = rows.range
-  if (windowed && inView)
-    for (const row of virtualRows) {
-      const size = row.index < inView.startIndex || row.index > inView.endIndex ? rows.itemSizeCache.get(row.key) : undefined
-      if (size !== undefined) sizedRows.set(row.key, size)
-    }
+  const firstInView = windowed ? inView?.startIndex : undefined
+  const lastInView = windowed ? inView?.endIndex : undefined
+  useLayoutEffect(() => {
+    if (firstInView === undefined || lastInView === undefined) return
+    const frame = requestAnimationFrame(() => {
+      const list = viewport.current?.querySelector("[data-virtual-transcript]")
+      if (!list) return
+      const skip: [HTMLElement, number][] = []
+      const draw: HTMLElement[] = []
+      for (const row of list.children) {
+        if (!(row instanceof HTMLElement)) continue
+        const index = Number(row.dataset.index)
+        const out = index < firstInView || index > lastInView
+        if (out && !row.hasAttribute("data-sized")) skip.push([row, row.getBoundingClientRect().height])
+        else if (!out && row.hasAttribute("data-sized")) draw.push(row)
+      }
+      for (const [row, height] of skip) {
+        if (!height) continue
+        row.style.setProperty("--row-size", `${height}px`)
+        row.setAttribute("data-sized", "")
+      }
+      for (const row of draw) row.removeAttribute("data-sized")
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [firstInView, lastInView, mountedKeys])
 
   useLayoutEffect(() => {
     const node = viewport.current,
@@ -1205,6 +1232,7 @@ export function ConversationTimeline({
     const node = viewport.current
     if (!node) return
     const readerScroll = () => {
+      drawAll()
       endSeek(node)
       bookmarkRestore.current = undefined
       if (!awaitingEarlier.current) node.removeAttribute("data-preserve-scroll")
@@ -1219,7 +1247,7 @@ export function ConversationTimeline({
     }
     node.addEventListener(READER_SCROLL_EVENT, readerScroll)
     return () => node.removeEventListener(READER_SCROLL_EVENT, readerScroll)
-  }, [endSeek, displaceCorrection, settleCorrection, settleInput])
+  }, [endSeek, displaceCorrection, settleCorrection, settleInput, drawAll])
   useEffect(() => transcriptEnd?.away(showJump), [transcriptEnd, showJump])
   useEffect(() => {
     if (!transcriptEnd) return
@@ -1302,6 +1330,7 @@ export function ConversationTimeline({
 
   const onWheel = useCallback(
     (event: ReactWheelEvent<HTMLDivElement>) => {
+      drawAll()
       // The crew card's list or a code block taking the wheel: it scrolls that, and the transcript is left as it was.
       if (viewport.current && wheelTakenInside(event.target, viewport.current, event.deltaY)) innerWheel.current = true
       if (innerWheel.current) return settleInput()
@@ -1333,7 +1362,7 @@ export function ConversationTimeline({
       if (event.deltaY < 0) wake.current()
       reportReading.current()
     },
-    [endSeek, settleInput, displaceCorrection, settleCorrection]
+    [endSeek, settleInput, displaceCorrection, settleCorrection, drawAll]
   )
 
   /** The last finger lifts: a glide may go on, and the end, if followed, is caught up with. */
@@ -1343,6 +1372,7 @@ export function ConversationTimeline({
   }, [])
 
   const onPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    drawAll()
     // Preview controls may change layout without scrolling. Keep the media
     // anchor while a mouse click loads, folds, or starts a preview.
     if (event.pointerType === "mouse" && event.target instanceof Element &&
@@ -1383,7 +1413,7 @@ export function ConversationTimeline({
     stalled.current = false
     if (!awaitingEarlier.current) restore.current = null
     reportReading.current()
-  }, [endSeek, displaceCorrection, settleCorrection])
+  }, [endSeek, displaceCorrection, settleCorrection, drawAll])
 
   useEffect(() => {
     const node = viewport.current
@@ -2166,6 +2196,8 @@ export function ConversationTimeline({
             settleInput()
           }}
           onTouchStart={(event) => {
+            // Before the finger counts as down: the end is still written for the turns this draws.
+            drawAll()
             touching.current = event.touches.length > 0
           }}
           onTouchEnd={lifted}
@@ -2204,6 +2236,7 @@ export function ConversationTimeline({
                 scrollToEnd()
                 return
               }
+              drawAll()
               if (viewport.current) endSeek(viewport.current)
               pendingJump.current = null
               bookmarkRestore.current = undefined
@@ -2240,22 +2273,16 @@ export function ConversationTimeline({
               {/* One tree either way: a turn on screen as the column crosses into a window is the same element after it. */}
               {windowed ? (
                 <div ref={rows.containerRef} data-virtual-transcript style={{ position: "relative" }}>
-                  {virtualRows.map((row) => {
-                    const size = sizedRows.get(row.key)
-                    const style: RowStyle = { position: "absolute", top: 0, left: 0, width: "100%" }
-                    if (size !== undefined) style["--row-size"] = `${size}px`
-                    return (
-                      <div
-                        key={row.key}
-                        data-index={row.index}
-                        data-sized={size === undefined ? undefined : ""}
-                        ref={measureRow}
-                        style={style}
-                      >
-                        {renderExchange(exchanges[row.index]!)}
-                      </div>
-                    )
-                  })}
+                  {virtualRows.map((row) => (
+                    <div
+                      key={row.key}
+                      data-index={row.index}
+                      ref={measureRow}
+                      style={{ position: "absolute", top: 0, left: 0, width: "100%" }}
+                    >
+                      {renderExchange(exchanges[row.index]!)}
+                    </div>
+                  ))}
                 </div>
               ) : (
                 <div style={{ display: "contents" }}>

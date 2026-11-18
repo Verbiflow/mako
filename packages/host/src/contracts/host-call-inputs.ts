@@ -3088,6 +3088,12 @@ const inputs = {
       }),
     ]),
   "mako:stage-file": () => z.tuple([z.string(), z.string()]),
+  "mako:stage-file-part": () =>
+    z.tuple([
+      z.string(),
+      z.string(),
+      z.object({ path: z.string(), offset: z.number() }).optional(),
+    ]),
   "mako:stage-file-path": () => z.tuple([z.string()]),
   "mako:storage": () => z.tuple([z.boolean()]),
   "mako:storage-free": () => z.tuple([]),
@@ -3545,6 +3551,7 @@ const inputs = {
         ]),
         days: z.number(),
         kept: z.array(z.string()),
+        finishedFins: z.boolean().optional(),
       }),
     ]),
   "mako:worktree-review": () => z.tuple([z.string()]),
@@ -3917,6 +3924,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:snapshot-budget", "conversations"],
   ["mako:snapshot-budget-set", "conversations"],
   ["mako:stage-file", "workspaces"],
+  ["mako:stage-file-part", "workspaces"],
   ["mako:stage-file-path", "workspaces"],
   ["mako:storage", "usage"],
   ["mako:storage-free", "usage"],

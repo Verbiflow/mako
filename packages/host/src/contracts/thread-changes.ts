@@ -18,6 +18,11 @@ export interface ThreadChangeSummary {
   outside: { named: number; maybe: number }
   /** Files that might be its too, never counted in `files`: changed while it ran with nothing tying them to it. */
   maybe: number
+  /**
+   * Set when the journal no longer keeps what the Thread changed before this instant: it went unworked past the
+   * journal's retention, and its records were dropped. The counts are then of what it changed since, zero at first.
+   */
+  keptSince?: number
 }
 
 /** Files changed, each counted once per project, and lines summed over every change. */

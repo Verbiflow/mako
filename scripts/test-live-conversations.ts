@@ -7,12 +7,12 @@ import { workingThreads } from "@mako/host/conversations/cloud-handoffs"
 import { ThreadIdSchema, SessionIdSchema } from "@mako/host/contracts/thread-identity"
 import { AgentAskGate } from "@mako/host/conversations/agent-ask-gate"
 import { mock } from "node:test"
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { JournalWriteError, LiveJournal } from "@mako/host/conversations/live-journal"
 import { followHostLog, type HostLogLine } from "@mako/host/base/host-log"
@@ -1951,6 +1951,48 @@ async function makoStopsAreSaid() {
 }
 
 /** SQLite's own error for a full disk, as node:sqlite reports it. */
+/**
+ * A message's files are kept before it's admitted (`holdAttachments`), so admitting it copies nothing: its request
+ * names the file by its content's hash in the conversation's store, the same file for the same picture sent again,
+ * and a conversation's first message is kept the same way as it starts.
+ */
+async function heldAttachmentsAreAdmitted() {
+  const f = fixture()
+  const first = fixture()
+  try {
+    const picture = join(f.root, "shot.png")
+    writeFileSync(picture, "a picture's bytes")
+    const digest = createHash("sha256").update("a picture's bytes").digest("hex")
+    const kept = join(f.root, "assets", `${digest}-shot.png`)
+    const attachments = [{ name: "shot.png", mimeType: "image/png", size: 17, path: picture }]
+    await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
+    f.started.resolve(f.state)
+    await tick()
+    const request = randomUUID()
+    await f.owner.holdAttachments(request, attachments)
+    assert.equal(readFileSync(kept, "utf8"), "a picture's bytes", "kept before the message is admitted")
+    const admitted = f.owner.submit(f.id, request, "look at this", attachments)
+    assert.deepEqual(admitted.attachments, [{ ...attachments[0], path: kept }], "admitted with the kept file's path")
+    f.owner.releaseAttachments(request)
+    // The same message again under its ID is the same message: what it's known by is what it came as.
+    assert.equal(f.owner.submit(f.id, request, "look at this", attachments).id, request)
+    const again = randomUUID()
+    await f.owner.holdAttachments(again, attachments)
+    assert.deepEqual(f.owner.submit(f.id, again, "and again", attachments).attachments, [{ ...attachments[0], path: kept }])
+    assert.deepEqual(readdirSync(join(f.root, "assets")), [`${digest}-shot.png`], "the same picture sent twice is stored once")
+
+    const opening = randomUUID()
+    const starting = first.owner.start("test-provider", "/tmp", { conversationId: first.id, initialRequest: { id: opening, text: "start with this", attachments } })
+    first.started.resolve(first.state)
+    await starting
+    assert.deepEqual(first.owner.snapshot(first.id)?.requests[0]?.attachments, [{ ...attachments[0], path: join(first.root, "assets", `${digest}-shot.png`) }], "a first message's file is kept by its hash as the conversation starts")
+    console.log("PASS: a message's files are kept before it's admitted, by their content, once")
+  } finally {
+    await f.cleanup()
+    await first.cleanup()
+  }
+}
+
 function diskFull(): Error {
   return Object.assign(new Error("database or disk is full"), { code: "ERR_SQLITE_ERROR", errcode: 13, errstr: "database or disk is full" })
 }
@@ -3150,6 +3192,7 @@ await quietTurnsCarryLastActivity()
 await nativeActivityLastsItsTurn()
 await failureIsolationAndAssets()
 await makoStopsAreSaid()
+await heldAttachmentsAreAdmitted()
 await unsavedTurnIsMakos()
 await otherFailuresDontStop()
 await unsavedConversationDoesntBlockStop()

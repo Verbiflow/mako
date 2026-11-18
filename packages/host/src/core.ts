@@ -1329,6 +1329,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         flushed: (checkout) => attribution.heard(checkout ? [checkout] : []),
         countTurn: (thread, turn, state) => attribution.countTurn(thread, turn, state),
         settledThrough: (at) => attribution.settledThrough(at),
+        settledAfter: (at, withinMs) => attribution.settledAfter(at, withinMs),
         counted: (summary, session) => attribution.counted(summary, session),
         turnsChangedAfter: (thread, after) => attribution.turnsChangedAfter(thread, after),
         settleMs: ATTRIBUTION_SETTLE_MS,
@@ -2044,7 +2045,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // The fixture desk writes no store and stands in for no one's disk.
   if (!fixtureDesk) storage.schedule(shell.jobs)
   declareStorageMethods(methods, storage)
-  declareFootprintMethods(methods, () => ({ watching: watchReadings.reading(), rescans: late.attribution?.rescans() ?? null, attributionFailure: late.attribution?.failure() }))
+  declareFootprintMethods(methods, () => ({ watching: watchReadings.reading(), rescans: late.attribution?.rescans() ?? null, journalWriter: late.attribution?.writerMemory(), attributionFailure: late.attribution?.failure() }))
   /** On a cloud machine: what a Thread arriving from a device needs (`mako:move-arrive`), and a lost machine's restore. */
   const arrival: MoveArrivalDeps | undefined = config.machineAgentFd === undefined ? undefined : {
     git,

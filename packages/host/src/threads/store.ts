@@ -47,11 +47,11 @@ import {
   type SessionExecution,
 } from "../contracts/thread-execution.js"
 import { ThreadGroupSchema, type ThreadGroup } from "../contracts/thread-groups.js"
-import type { ThreadWorktree } from "../contracts/thread-worktrees.js"
+import type { RetiredWorktree, ThreadWorktree } from "../contracts/thread-worktrees.js"
 import type { ThreadPurpose, ThreadPurposeKind } from "../contracts/thread-purposes.js"
 import type { ThreadTitleEntry } from "../contracts/thread-titles.js"
 import { AppKeySchema, type AppKey, type ThreadEnvironmentValues } from "../contracts/thread-environments.js"
-import { FinTurnSchema, LimitNoticeSchema, ReportSchema, ThreadParentSchema, internalDiscoveredRun, type FinRerouted, type FinTurn, type FollowedRun, type LimitNotice, type Placed, type Report, type ThreadParent } from "../contracts/agents.js"
+import { FinTurnSchema, INTERNAL_RUN_CLOSE, LimitNoticeSchema, ReportSchema, ThreadParentSchema, internalDiscoveredRun, type FinRerouted, type FinTurn, type FollowedRun, type LimitNotice, type Placed, type Report, type ThreadParent } from "../contracts/agents.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { enableSharedWal } from "../base/sqlite-wal.js"
 import { keepPreSplitCopy, SPLIT_TABLES, splitThreads } from "./thread-split.js"
@@ -91,6 +91,10 @@ export const THREAD_STORE_READS = 1
  * only one older than `THREAD_STORE_READS` leaves it.
  *
  * Migration 7 adds `thread_places` and `thread_splits` (`thread-split.ts`), which older builds ignore.
+ *
+ * Later additions take no number, since a reader from an older build looks for its own: `retired_worktrees`, a table
+ * such a build never reads, and the closing of internal reviewer runs' edges (`closeInternalRuns`), which it reads as
+ * any closed edge. Both are done again, harmlessly, at every open.
  */
 export const THREAD_STORE_MIGRATION = 7
 
@@ -336,6 +340,9 @@ const LocatorRowSchema = z.object({ session_id: z.string(), harness: z.string(),
 const LocatorPathRowSchema = z.object({ path: z.string(), harness: z.string() })
 /** An answered ask's row, read for every row each time a Fin's open asks are read, so its schema is made once. */
 const AnsweredAskRowSchema = z.object({ ask: z.string() })
+const ReportStampRowSchema = z.object({ seq: z.number(), count: z.number() })
+const DeliveredAtRowSchema = z.object({ delivered_at: z.number().nullable() })
+const PendingActionRowSchema = z.object({ child_thread: z.string(), owner: z.string().nullable() })
 const SessionDetailSchema = z.object({
   id: z.string(),
   origin: z.string(),
@@ -496,6 +503,19 @@ CREATE TABLE IF NOT EXISTS thread_worktree_repositories (
   path TEXT PRIMARY KEY, checkout TEXT NOT NULL, repo_root TEXT NOT NULL, base TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS thread_worktree_repositories_checkout ON thread_worktree_repositories(checkout);
 `
+/**
+ * Worktrees retired from under Fins closed as finished, each as it stood (`RetiredWorktree`), until a message to its
+ * Fin makes it again. A table of its own, which a build from before it never reads: such a build opens the Fin in its
+ * project's folder, as it does any Fin whose worktree is gone.
+ */
+const RETIRED_WORKTREE_TABLE = `
+CREATE TABLE IF NOT EXISTS retired_worktrees (
+  path TEXT PRIMARY KEY, thread_id TEXT NOT NULL, device_id TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL);
+`
+const RetiredWorktreeSchema = z.object({
+  path: z.string().min(1), thread: ThreadIdSchema, repoRoot: z.string().min(1), project: z.string().min(1), recorded: z.string(),
+  branch: z.string().min(1).optional(), head: z.string().min(1), base: z.string(), at: z.number(),
+})
 const WorktreeRowSchema = z.object({
   path: z.string(), thread_id: z.string(), repo_root: z.string(), project: z.string(),
   branch: z.string(), base: z.string(), created_at: z.number(),
@@ -796,6 +816,11 @@ export class ThreadStore {
   /** Read again only once the store moves, as a roster reads each Fin's on every look: */
   private readonly threadsSeen = new Map<string, ThreadRecord | null>()
   private readonly reportAsksSeen = new Map<string, readonly Report[]>()
+  /**
+   * By child, what `openReportAsks` took from its reports: the ones that ask, what they supersede and the newest. Kept
+   * while its reports are the same rows (`stamp`), across commits, so a commit of anything else parses none of them again.
+   */
+  private readonly reportAsksKept = new Map<string, { stamp: string; asking: readonly Report[]; superseded: ReadonlySet<string>; latest: string | undefined }>()
   private readonly answersSeen = new Map<string, KeptAnswer | null>()
   private readonly forksSeen = new Map<string, SessionId | null>()
   private groupsSeen: { revision: number; groups: ThreadGroup[] } | undefined
@@ -1073,7 +1098,7 @@ export class ThreadStore {
       if (byOp && !previous) return ThreadParentSchema.parse(JSON.parse(RecordRowSchema.parse(byOp).record))
       if (previous && (previous.parent !== edge.parent || previous.op !== edge.op)) return previous
       // Reclassified discoveries are immutable history. Stale catalog/adoption or run callbacks cannot make them workers again.
-      if (previous && internalDiscoveredRun(previous)) return previous
+      if (previous && internalDiscoveredRun(previous)) return this.closedInternalRun(previous)
       // The end of an edge that lives on another device has a row here only so the edge and its reports can name it:
       // a Thread with no Session, which nothing lists.
       if (edge.remote) this.keepAwayThread(edge.parent, edge.startedBy)
@@ -1083,9 +1108,11 @@ export class ThreadStore {
       const run: FollowedRun | undefined = edge.run && previous?.run?.ended ? { ...edge.run, ended: previous.run.ended } : edge.run
       const closedAt = previous?.closedAt ?? edge.closedAt
       const closedReason = previous?.closedAt !== undefined ? previous.closedReason : edge.closedReason
-      const next: ThreadParent = previous
+      const written: ThreadParent = previous
         ? { ...previous, ...(run && { run }), ...(closedAt !== undefined && { closedAt, ...(closedReason && { closedReason }) }) }
         : { ...edge, ...(run && { run }) }
+      // Known now for its harness's own reviewer run: it closes in the write that says so, and is no open delegation after.
+      const next: ThreadParent = internalDiscoveredRun(written) && written.closedAt === undefined ? { ...written, closedAt: this.now(), closedReason: INTERNAL_RUN_CLOSE } : written
       this.sql(`INSERT INTO thread_parents (child_thread, parent_thread, name, op, run_harness, run_native_id, record, created_at, closed_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (child_thread) DO UPDATE SET run_harness = excluded.run_harness, run_native_id = excluded.run_native_id,
@@ -1093,6 +1120,14 @@ export class ThreadStore {
         .run(next.child, next.parent, next.name, next.op, next.run?.harness ?? null, next.run?.nativeId ?? null, JSON.stringify(next), next.createdAt, next.closedAt ?? null)
       return next
     })
+  }
+
+  /** An internal reviewer run's edge, closed if a build from before that rule left it open; inside a write. */
+  private closedInternalRun(edge: ThreadParent): ThreadParent {
+    if (edge.closedAt !== undefined) return edge
+    const closed: ThreadParent = { ...edge, closedAt: this.now(), closedReason: INTERNAL_RUN_CLOSE }
+    this.sql("UPDATE thread_parents SET record = ?, closed_at = ? WHERE child_thread = ?").run(JSON.stringify(closed), closed.closedAt ?? null, closed.child)
+    return closed
   }
 
   /** Replace a followed run only while its persisted generation and delegation still match the caller's snapshot. */
@@ -1371,15 +1406,55 @@ export class ThreadStore {
     this.syncVersion()
     const known = this.depth === 0 ? this.reportAsksSeen.get(child) : undefined
     if (known) return known
-    const reports = this.reportsOf(child)
+    // Reports are only ever added, so the newest row and how many there are say whether any is new. Every commit asked
+    // this of every open Fin again: one Apex's Fins' 6,520 reports were parsed for each prompt it was sent.
+    const rows = ReportStampRowSchema.parse(this.sql("SELECT coalesce(max(rowid), 0) AS seq, count(*) AS count FROM thread_reports WHERE child_thread = ?").get(child))
+    const stamp = `${rows.seq}:${rows.count}`
+    let kept = this.depth === 0 ? this.reportAsksKept.get(child) : undefined
+    if (kept?.stamp !== stamp) {
+      const reports = this.reportsOf(child)
+      kept = {
+        stamp,
+        asking: reports.filter((report) => !report.implicit && (report.status === "done" || report.status === "blocked" || report.status === "needs-input") && report.question?.trim()),
+        superseded: new Set(reports.flatMap((report) => report.supersedes ?? [])),
+        latest: reports.at(-1)?.id,
+      }
+      if (this.depth === 0) this.reportAsksKept.set(child, kept)
+    }
+    const { asking, superseded, latest } = kept
     const answered = new Set(this.sql("SELECT ask FROM agent_answers WHERE child_thread = ?").all(child).map((row) => AnsweredAskRowSchema.parse(row).ask))
-    const superseded = new Set(reports.flatMap((report) => report.supersedes ?? []))
-    const latest = reports.at(-1)
-    const open = reports.filter((report) => (report.retainsQuestion || report === latest) && !report.implicit &&
-      (report.status === "done" || report.status === "blocked" || report.status === "needs-input") && report.question?.trim() &&
-      !answered.has(report.id) && !superseded.has(report.id))
+    const open = asking.filter((report) => (report.retainsQuestion || report.id === latest) && !answered.has(report.id) && !superseded.has(report.id))
     if (this.depth === 0) this.reportAsksSeen.set(child, open)
     return open
+  }
+
+  /** Whether a report of this id is kept. */
+  hasReport(id: string): boolean {
+    this.syncVersion()
+    return this.sql("SELECT 1 AS found FROM thread_reports WHERE id = ?").get(id) !== undefined
+  }
+
+  /** When a report was marked heard (`markReportsDelivered`); undefined for one nobody has heard, or that isn't kept. */
+  reportDeliveredAt(id: string): number | undefined {
+    this.syncVersion()
+    const row = this.sql("SELECT delivered_at FROM thread_reports WHERE id = ?").get(id)
+    return row ? DeliveredAtRowSchema.parse(row).delivered_at ?? undefined : undefined
+  }
+
+  /**
+   * Every Thread a pending follow-up action names, as the Fin that reported it or as its owner now: one read for a
+   * reader that asks it of many Fins (`Agents.closeFinished`, `agents_list`).
+   */
+  pendingActionThreads(): ReadonlySet<string> {
+    this.syncVersion()
+    const threads = new Set<string>()
+    if (!this.sql("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_report_actions'").get()) return threads
+    for (const row of this.sql("SELECT child_thread, json_extract(record, '$.owner') AS owner FROM agent_report_actions WHERE pending = 1").all()) {
+      const found = PendingActionRowSchema.parse(row)
+      threads.add(found.child_thread)
+      if (found.owner) threads.add(found.owner)
+    }
+    return threads
   }
 
   /** A follow-up's immutable report/target plus its current exact disposition. Never a delivery receipt. */
@@ -2182,6 +2257,32 @@ export class ThreadStore {
       this.sql("UPDATE thread_worktrees SET repo_root = ?, project = ? WHERE path = ? AND device_id = ?").run(repoRoot, project, path, this.deviceId)
     })
     this.worktreesMoved()
+  }
+
+  /** Keeps what a worktree was as it's retired from under a finished Fin, so it can be made again; one kept for its path stands. */
+  retireWorktree(input: RetiredWorktree): void {
+    const retired = RetiredWorktreeSchema.parse(input)
+    this.write(() => {
+      this.sql("INSERT OR IGNORE INTO retired_worktrees (path, thread_id, device_id, record, at) VALUES (?, ?, ?, ?, ?)")
+        .run(retired.path, retired.thread, this.deviceId, JSON.stringify(retired), retired.at)
+    })
+  }
+
+  /** This device's retired worktrees, oldest first; a build from before the table has none. */
+  retiredWorktrees(): RetiredWorktree[] {
+    this.syncVersion()
+    if (!this.sql("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'retired_worktrees'").get()) return []
+    return this.sql("SELECT record FROM retired_worktrees WHERE device_id = ? ORDER BY at, path").all(this.deviceId).flatMap((row) => {
+      const parsed = RetiredWorktreeSchema.safeParse(JSON.parse(RecordRowSchema.parse(row).record))
+      return parsed.success ? [parsed.data] : []
+    })
+  }
+
+  /** A retired worktree was made again, or never will be: its record goes. */
+  forgetRetiredWorktree(path: string): void {
+    this.write(() => {
+      this.sql("DELETE FROM retired_worktrees WHERE path = ? AND device_id = ?").run(path, this.deviceId)
+    })
   }
 
   /** Forget a worktree; a checkout of several repositories goes with the last of its worktrees, or at once by its own folder. */
@@ -3344,6 +3445,23 @@ export class ThreadStore {
     }
   }
 
+  /**
+   * Closes every internal reviewer run's edge an earlier build left open: one Apex held 130 of them, each read as an
+   * open delegation by whatever walks the open ones. Looked for at every open, since a build from before the rule may
+   * share the store and leave more; it finds none once they're closed. An older build reads each as a closed edge.
+   */
+  private closeInternalRuns(): void {
+    const open = this.db.prepare(`SELECT record FROM thread_parents WHERE closed_at IS NULL
+      AND json_extract(record, '$.origin') = 'discovered' AND json_extract(record, '$.run.nativeAgent.kind') = 'internal-review'`).all()
+    const close = this.db.prepare("UPDATE thread_parents SET record = ?, closed_at = ? WHERE child_thread = ?")
+    const at = this.now()
+    for (const row of open) {
+      const parsed = ThreadParentSchema.safeParse(JSON.parse(RecordRowSchema.parse(row).record))
+      if (!parsed.success || !internalDiscoveredRun(parsed.data) || parsed.data.closedAt !== undefined) continue
+      close.run(JSON.stringify({ ...parsed.data, closedAt: at, closedReason: INTERNAL_RUN_CLOSE }), at, parsed.data.child)
+    }
+  }
+
   private migrate(self: ExecutionOwner | undefined): void {
     this.db.exec(EXECUTION_TABLES)
     this.db.exec(PLACEMENT_LOG)
@@ -3351,10 +3469,12 @@ export class ThreadStore {
     this.db.exec("DROP TABLE IF EXISTS regroups")
     this.db.exec(WORKTREE_TABLE)
     this.db.exec(WORKTREE_REPOSITORY_TABLE)
+    this.db.exec(RETIRED_WORKTREE_TABLE)
     this.keepOneWorktreePerThread()
     this.db.exec(ENVIRONMENT_TABLE)
     this.db.exec(PURPOSE_TABLE)
     this.db.exec(EDGE_TABLES)
+    this.closeInternalRuns()
     // Delegate, retired, made forks with a task; their Sessions are forks.
     this.db.exec("UPDATE sessions SET origin = 'fork' WHERE origin = 'delegation'")
     const columns = new Set(this.db.prepare("PRAGMA table_info(threads)").all().map((row) => ColumnRowSchema.parse(row).name))

@@ -31,4 +31,17 @@ assert.match(card, /<bdi>\/tmp\/mako-control-artifacts\/shot\.png<\/bdi>/)
 const named = renderToStaticMarkup(<MediaUnavailable name="shot.png" reason={`No file at ${missing}`} path={missing} />)
 assert.doesNotMatch(named, /<bdi>/, "a reason that names the file isn't followed by it again")
 
+// A large picture alone draws the rendition that fills its box, never the original, which is the lightbox's; in a
+// grid it draws the tile's thumbnail. A picture the host offers no rendition of draws as it is.
+const large = { path: "shot.png", contents: "", size: 1, binary: true, truncated: false, mimeType: "image/png", previewUrl: "mako-file://asset/p/s/shot.png", thumbnailUrl: "mako-file://asset/p/s/shot.png?rendition=thumbnail", width: 3840, height: 2160 }
+const picture = (file: typeof large | Omit<typeof large, "thumbnailUrl">, grid?: typeof tile) => renderToStaticMarkup(
+  <InlineMedia hostRef={createRef()} path="shot.png" name="shot.png" format="image" file={file} tile={grid ?? null} onRetry={() => {}} onMediaError={() => {}} />,
+)
+const sources = (html: string) => [...html.matchAll(/<img[^>]* src="([^"]+)"/g)].map((match) => match[1])
+assert.deepEqual(sources(picture(large)), ["mako-file://asset/p/s/shot.png?rendition=thumbnail"], "alone, at one pixel to a point: the rendition that fills a 30rem box")
+assert.match(picture(large), /aspect-ratio:3840 \/ 2160/, "in the picture's own shape, from its header")
+assert.deepEqual(sources(picture(large, tile)), ["mako-file://asset/p/s/shot.png?rendition=thumbnail"])
+const { thumbnailUrl: _none, ...small } = large
+assert.deepEqual(sources(picture({ ...small, width: 800, height: 500 })), ["mako-file://asset/p/s/shot.png"])
+
 console.log("media unavailable: ok")
