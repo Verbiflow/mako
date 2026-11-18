@@ -1,7 +1,7 @@
 import { realpath, stat } from "node:fs/promises"
 import { basename } from "node:path"
 import { ADVERTISED_CLIS } from "../base/capabilities.js"
-import { environmentForExecutable } from "../base/executable.js"
+import { environmentForExecutable, resolveExecutable } from "../base/executable.js"
 import type { HarnessUpdates } from "../contracts/harness-updates.js"
 import { parseVersion } from "../contracts/runtime-version.js"
 import type { DiscoveryProcesses } from "./discovery-process.js"
@@ -18,7 +18,7 @@ export interface CliReadingsDeps {
   installed(): HarnessUpdates
   processes: DiscoveryProcesses
   /** Where a command resolves, as a launch would find it; null when it isn't here. */
-  resolve?(command: string): string | null | Promise<string | null>
+  resolve?(command: string): string | null
   /** A binary's identity, so a reading is taken again only when the binary changed. */
   signature?(binary: string): Promise<string>
   /** A binary's version output (`readRuntimeVersion`). */
@@ -38,8 +38,7 @@ export class CliReadings {
   constructor(deps: CliReadingsDeps) {
     this.#deps = {
       installed: deps.installed,
-      // Found off the thread: the probe asks for a dozen tools, most of them in none of some twenty folders.
-      resolve: deps.resolve ?? ((command) => deps.processes.executables.find(command)),
+      resolve: deps.resolve ?? ((command) => resolveExecutable(command)),
       signature: deps.signature ?? binarySignature,
       version: deps.version ?? ((binary, args) => readRuntimeVersion(deps.processes, binary, args, environmentForExecutable(binary, process.env))),
     }
@@ -58,7 +57,7 @@ export class CliReadings {
   }
 
   async #version(command: string): Promise<string | undefined> {
-    const binary = await this.#deps.resolve(command)
+    const binary = this.#deps.resolve(command)
     if (!binary) return undefined
     const signature = await this.#deps.signature(binary).catch(() => undefined)
     if (signature === undefined) return undefined

@@ -82,11 +82,7 @@ export function worktreeIn<Worktree extends { path: string; repoRoot?: string; p
 /** The same folder in the main checkout, when `path` is in one of `worktrees`. */
 export function projectFolder(worktrees: readonly { path: string; repoRoot: string; project?: string }[] | undefined, path: string | undefined): string | undefined {
   const found = worktreeAt(worktrees, path)
-  return found && projectFolderOf(found, path)
-}
-
-/** `projectFolder` of a worktree already found for `path` (`worktreeAt`, `worktreeIn`): no second look for it. */
-export function projectFolderOf(found: { worktree: { path: string; repoRoot: string; project?: string }; inside: string }, path: string | undefined): string {
+  if (!found) return undefined
   const { worktree, inside } = found
   return pathInside(worktree.path, path ?? "") ? `${worktree.repoRoot}${inside}` : `${worktree.project}${inside}`
 }

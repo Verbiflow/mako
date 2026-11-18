@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { GitHubReads, GitHubRateLimitError, GitHubRepositoryLookupError, githubRateLimit } from "./github-reads.js"
 import { hostLog } from "../base/host-log.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
-import { findExecutable } from "../base/executable.js"
+import { resolveExecutable } from "../base/executable.js"
 import { MACHINE_GITHUB_ENV } from "../contracts/machine-agent.js"
 import type { PullRequest, GitHubStatus, CheckSummary, ReviewSummary } from "../contracts/git-workspace-search.js"
 import type { PullRequestListing } from "../contracts/pull-request-search.js"
@@ -43,7 +43,7 @@ const RepositoryResponse = z.object({
 })
 const CommandFailure = z.object({ stderr: z.string() })
 async function githubExecutable(): Promise<string> {
-  const executable = await findExecutable(process.env.GH_PATH ?? "gh")
+  const executable = resolveExecutable(process.env.GH_PATH ?? "gh")
   if (!executable) throw new Error("GitHub CLI was not found")
   return executable
 }

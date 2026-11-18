@@ -19,9 +19,6 @@ const CurrentFailureEvidenceSchema = z.union([
 const ExactFailureEvidenceSchema = z.object({ exact: CurrentFailureEvidenceSchema })
 const UnknownExactFailureSchema = z.object({ exact: z.unknown().refine(value => value !== undefined) })
 export const ProviderFailureEvidenceSchema = z.preprocess(value => {
-  // Most requests have no evidence and most evidence no `exact`: neither is put to the two schemas below, whose
-  // refusals each built an error, a quarter of a cold open's time for a conversation of five thousand requests.
-  if (!(value instanceof Object) || !("exact" in value)) return value
   const exact = ExactFailureEvidenceSchema.safeParse(value)
   return exact.success ? exact.data.exact : UnknownExactFailureSchema.safeParse(value).success ? { kind: "unknown", source: "host" } : value
 }, CurrentFailureEvidenceSchema)

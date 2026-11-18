@@ -3,8 +3,6 @@ import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { monitorEventLoopDelay, performance, PerformanceObserver } from "node:perf_hooks"
 import { isMainThread, threadId } from "node:worker_threads"
-import { Session } from "node:inspector"
-import { getHeapSpaceStatistics } from "node:v8"
 
 /*
  * What the host's own threads did, kept from inside the host `bench:host-load --record` starts (`--import`): the
@@ -121,29 +119,6 @@ function recordMain(into) {
     for (const entry of list.getEntries()) collections.push([Math.round((origin + entry.startTime) * 10) / 10, Math.round(entry.duration * 100) / 100, entry.detail?.kind ?? 0])
   }).observe({ entryTypes: ["gc"] })
 
-  // What holds memory, when the run asks (`MAKO_HOST_LOAD_HEAP=1`): the heap's spaces and a sample of what is live
-  // on it by the function that allocated it, written every half minute so a reader takes the one in the phase it wants.
-  if (process.env.MAKO_HOST_LOAD_HEAP === "1") {
-    const session = new Session()
-    session.connect()
-    session.post("HeapProfiler.startSampling", { samplingInterval: 16_384 })
-    let taken = 0
-    setInterval(() => {
-      session.post("HeapProfiler.getSamplingProfile", (error, result) => {
-        if (error) return
-        const memory = process.memoryUsage()
-        try {
-          writeFileSync(join(into, `heap-${String(taken += 1).padStart(3, "0")}.json`), JSON.stringify({
-            at: Date.now(), rssMb: megabytes(memory.rss), heapUsedMb: megabytes(memory.heapUsed), heapTotalMb: megabytes(memory.heapTotal),
-            externalMb: megabytes(memory.external), arrayBuffersMb: megabytes(memory.arrayBuffers),
-            spaces: getHeapSpaceStatistics().map((space) => [space.space_name, megabytes(space.space_used_size), megabytes(space.space_size)]),
-            head: result.profile.head,
-          }))
-        } catch { /* The folder went with the run. */ }
-      })
-    }, 30_000).unref()
-  }
-
   process.on("exit", () => {
     try {
       writeFileSync(join(into, `main-${process.pid}.json`), JSON.stringify({ pid: process.pid, tickMs: TICK_MS, holdMs: HOLD_MS, mark, ticks, holds, samples, collections, commits }))
@@ -161,10 +136,7 @@ function recordWorker(into) {
     const busy = performance.eventLoopUtilization()
     try {
       writeFileSync(join(into, `thread-${process.pid}-${threadId}.json`), JSON.stringify({
-        pid: process.pid, threadId, script: process.argv[1], since, at: Date.now(), activeMs: Math.round(busy.active), idleMs: Math.round(busy.idle),
-        // This thread's own heap: the process's resident memory is every thread's, and what is in none of their heaps.
-        heapUsedMb: Math.round(process.memoryUsage().heapUsed / 104_857.6) / 10, heapTotalMb: Math.round(process.memoryUsage().heapTotal / 104_857.6) / 10,
-        spaces: getHeapSpaceStatistics().map((space) => [space.space_name, Math.round(space.space_used_size / 104_857.6) / 10, Math.round(space.physical_space_size / 104_857.6) / 10]),
+        pid: process.pid, threadId, since, at: Date.now(), activeMs: Math.round(busy.active), idleMs: Math.round(busy.idle),
         delayMs: { p50: ms(delay.percentile(50)), p99: ms(delay.percentile(99)), max: ms(delay.max) },
       }))
     } catch { /* The folder went with the run. */ }

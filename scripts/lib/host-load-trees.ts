@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite"
 import type { Entry } from "@mako/sessions/entries"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
-import { buildTurnIndex, coldScan, LiveJournal } from "@mako/host/conversations/live-journal"
+import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { AgentsWorld } from "./agents-world.ts"
 
 /*
@@ -159,10 +159,5 @@ export async function writeLongJournal(dataRoot: string, long: LongJournal): Pro
   const journal = new LiveJournal(root, id)
   journal.commit(snapshot)
   await journal.close()
-  // Its turn index is whole, as a journal's is once it has been opened cold: the run's open reads it, and no walk.
-  const db = new DatabaseSync(join(root, `${id}.sqlite`))
-  try {
-    buildTurnIndex(db, coldScan(db))
-  } finally { db.close() }
   return statSync(join(root, `${id}.sqlite`)).size
 }

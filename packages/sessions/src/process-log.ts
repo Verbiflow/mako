@@ -1,5 +1,5 @@
 import { appendFileSync, mkdirSync, renameSync, statSync } from "node:fs"
-import { appendFile, mkdir, rename, stat } from "node:fs/promises"
+import { mkdir } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { makoUserRoot } from "./mako-root.js"
 
@@ -94,34 +94,15 @@ export function openProcessLog(
     appendFileSync(path, text, "utf8")
   }
 
-  /** Moves each time `writeNow` takes every pending line: an append under way then leaves `pending` alone. */
-  let taken = 0
-
   const appendNext = async () => {
     if (!pending.length) return
     await mkdir(dirname(path), { recursive: true })
-    // Every line pending goes as one append, off the caller's thread: appended a line at a time on it, each was a
-    // stat and a write the host's loop waited on, 100 to 280 ms on a busy disk. The lines stay pending until they're
-    // written, so `writeNow` takes any still under way: an exit can write a line twice, never lose one.
-    if (!pending.length) return
-    const before = taken
-    let lines = 0
-    try {
-      let size = await stat(path).then((found) => found.size, () => 0)
-      if (taken !== before || !pending.length) return
-      if (size > 0 && size + pending[0]!.length > maxBytes) {
-        await rename(path, `${path}.1`)
-        size = 0
-      }
-      if (taken !== before) return
-      // As many lines as the file has room for, and one at least: the rest go with the next append, after its rotation.
-      let length = 0
-      while (lines < pending.length && (lines === 0 || size + length + pending[lines]!.length <= maxBytes)) length += pending[lines++]!.length
-      await appendFile(path, pending.slice(0, lines).join(""), "utf8")
-    } finally {
-      // Written or not, they are done with: lines a failing disk refuses aren't kept to be tried forever.
-      if (taken === before) pending.splice(0, lines)
-    }
+    // Keep the line pending across every await: writeNow may take it while the
+    // directory is prepared. Removing it and appending it must be one synchronous
+    // step, so exit cannot lose a line or write it after the process's last words.
+    const line = pending.shift()
+    if (line === undefined) return
+    appendNow(line)
   }
 
   return {
@@ -133,7 +114,6 @@ export function openProcessLog(
     writeNow(level, scope, message, fields) {
       pending.push(formatLogLine(now(), level, scope, message, fields))
       const text = pending.splice(0).join("")
-      taken += 1
       try {
         mkdirSync(dirname(path), { recursive: true })
         appendNow(text)

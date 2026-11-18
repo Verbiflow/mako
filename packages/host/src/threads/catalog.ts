@@ -1053,8 +1053,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     const worker = new Worker(compiled, {
       workerData: data,
       transferList: [channel.port2],
-      // Its young generation held to 32 MB: grown to 76 MB reading the catalog in, it stayed that size at rest with 6 MB in use.
-      resourceLimits: { maxOldGenerationSizeMb: 768, maxYoungGenerationSizeMb: 32 },
+      resourceLimits: { maxOldGenerationSizeMb: 768 },
     })
     catalogWorker = worker
     // The worker's own log lines (the record store's backfill), kept with the host's.

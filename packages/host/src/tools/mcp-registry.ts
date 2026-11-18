@@ -6,7 +6,7 @@ import { cliListingCache, type CliListingCache } from "./mcp-cli-cache.js"
 import { mcpListingStore } from "./mcp-listing-store.js"
 import type { McpReadFormat, ProviderMcpSource } from "./mcp-source.js"
 import type { ToolHarnesses } from "./harnesses.js"
-import { environmentForExecutable, findExecutable } from "../base/executable.js"
+import { environmentForExecutable, resolveExecutable } from "../base/executable.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import { projectedMcpServers } from "../contracts/mcp-reach.js"
 import { parseJsonc } from "./authoring-text.js"
@@ -343,6 +343,12 @@ function sameOrigin(left: McpServerOrigin, right: McpServerOrigin): boolean {
   )
 }
 
+async function findExecutable(
+  command: string,
+  env: NodeJS.ProcessEnv
+): Promise<string | null> {
+  return resolveExecutable(command, env)
+}
 
 async function canExecute(
   command: string,
