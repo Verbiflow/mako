@@ -1,5 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
+import { z } from "zod"
+import { createMakoBridge } from "@mako/host/contracts/renderer-bridge"
 import type { WorktreeSummariesHeld, WorktreeSummary } from "@mako/host/contracts/thread-worktrees"
 import { applyWorktreeSummaries, applyWorktreeSummaryChanges, refreshWorktreeSummaries, worktreeSummariesReading, worktreeSummariesStore } from "../src/state/worktrees"
 
@@ -103,4 +105,46 @@ test("coming back to the window asks saying so, and an ask behind one that's out
   } finally {
     Reflect.deleteProperty(globalThis, "window")
   }
+})
+
+/** A host's argument schema for a call that takes none, as a host from before the `changes` form has for this one. */
+const NoArguments = z.tuple([])
+
+test("the bridge asks a host once how it takes the call: an older one's refusal of the argument is learnt, any other refusal stands", async () => {
+  const over = (invoke: (channel: string, args: readonly string[]) => Promise<WorktreeSummary[] | WorktreeSummariesHeld>) => {
+    const seen: string[][] = []
+    const bridge = createMakoBridge({
+      invoke: async <Result,>(channel: string, ...args: unknown[]) => {
+        const words = args.map(String)
+        seen.push([channel, ...words])
+        // SAFETY: the fake answers this one channel with the shapes the bridge names for it.
+        return await invoke(channel, words) as Result
+      },
+      onEvent: () => () => {}, onTerminalEvent: () => () => {},
+      pathForFile: () => null, resolveFileUrl: (url) => url,
+    })
+    return { bridge, seen }
+  }
+  // A host that takes the form: one call each time.
+  const current = over(async () => ({ summaries: [], reading: [] }))
+  await current.bridge.worktreeSummaries()
+  await current.bridge.worktreeSummaries("focus")
+  assert.deepEqual(current.seen, [["mako:worktree-summaries", "changes"], ["mako:worktree-summaries", "changes", "focus"]])
+  // A host from before it refuses the argument, as its schema words it: asked again the plain way once, then plainly.
+  const older = over(async (_channel, args) => {
+    NoArguments.parse(args)
+    return [summary(paths[0]!, 0)]
+  })
+  assert.deepEqual(await older.bridge.worktreeSummaries(), [summary(paths[0]!, 0)])
+  assert.equal(older.seen.length, 2, "the first ask learns it")
+  await older.bridge.worktreeSummaries("focus")
+  await older.bridge.worktreeSummaries()
+  assert.deepEqual(older.seen.slice(2), [["mako:worktree-summaries"], ["mako:worktree-summaries"]], "and every ask after is one call, with no argument")
+  // A call refused for another reason (the gateway keeps it to this Mac's own windows) is refused once, not asked twice.
+  const refused = over(async () => {
+    throw new Error("Only this Mac's own windows make this call")
+  })
+  await assert.rejects(refused.bridge.worktreeSummaries(), /own windows/)
+  await assert.rejects(refused.bridge.worktreeSummaries(), /own windows/)
+  assert.equal(refused.seen.length, 2, "one call an ask")
 })

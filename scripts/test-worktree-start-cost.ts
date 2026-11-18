@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { subscribe } from "node:diagnostics_channel"
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
@@ -94,10 +94,43 @@ async function start(worktrees: ThreadWorktreeService, repo: string, name: strin
   traces.length = 0
   started = []
   const began = performance.now()
-  const made = await worktrees.prepare(begin(), repo, name)
+  const id = begin()
+  const made = await worktrees.prepare(id, repo, name)
   const ms = Math.round(performance.now() - began)
   const git = traces.map((trace) => trace.args.filter((word) => !word.startsWith("-c") && !word.includes("=")).slice(0, 2).join(" "))
-  return { made, ms, git, others: others(started) }
+  return { id, made, ms, git, others: others(started) }
+}
+
+/**
+ * Whether this volume shares blocks between copies, asked as the host asks (`sharesBlocks`): APFS does; on Linux a
+ * forced clone of one file says, and ext4, where CI and most Linux disks are, says no. Install outputs are carried
+ * only as clones: where a copy would cost their full size for every worktree, nothing is carried, the start says why
+ * (`OutputsCarry.skipped`), and the install runs in the worktree in full.
+ */
+function volumeClones(): boolean {
+  if (process.platform === "darwin") return true
+  if (process.platform !== "linux") return false
+  writeFileSync(join(root, "clone-probe"), "probe\n")
+  try {
+    copyFileSync(join(root, "clone-probe"), join(root, "clone-probe.copy"), constants.COPYFILE_FICLONE_FORCE)
+    return true
+  } catch {
+    return false
+  }
+}
+const clones = volumeClones()
+const packagesIn = (checkout: string) => existsSync(join(checkout, "node_modules", "pack-0", "lib", "m0.js"))
+
+/** A start's install outputs once its background carry has ended: cloned in where the volume clones, else left out and said why. */
+async function carriedAsTheVolumeAllows(worktrees: ThreadWorktreeService, started: { id: string; made: { path: string } }, what: string): Promise<void> {
+  const carry = await worktrees.outputs(started.id)
+  if (clones) {
+    assert.ok(packagesIn(started.made.path), `${what}: its install's outputs were cloned in behind the start`)
+    return
+  }
+  assert.equal(packagesIn(started.made.path), false, `${what}: on a volume that can't share blocks nothing is copied in at full size`)
+  assert.ok(carry?.skipped.some((reason) => reason.includes("can't share files between copies")), `${what}: and the start says the install runs in full here`)
+  assert.deepEqual(carry?.carried, [])
 }
 
 try {
@@ -115,7 +148,7 @@ try {
   assert.equal(second.made.spare, false)
   assert.equal(git(second.made.path, "status", "--porcelain"), "", "the checkout is whole and clean")
   await unspared.settled()
-  assert.ok(existsSync(join(second.made.path, "node_modules", "pack-0", "lib", "m0.js")), "its install's outputs were cloned in behind the start")
+  await carriedAsTheVolumeAllows(unspared, second, "a start with no spare")
 
   const cold = repository("cold")
   const plain = service("plain")
@@ -125,14 +158,14 @@ try {
   assert.equal(git(fresh.made.path, "status", "--porcelain"), "", "the checkout is whole and clean")
   assert.equal(statSync(join(fresh.made.path, "src", "part-0", "file-0.ts")).isFile(), true)
   await plain.settled()
-  assert.ok(existsSync(join(fresh.made.path, "node_modules", "pack-0", "lib", "m0.js")), "the install's outputs were cloned in behind the start")
+  await carriedAsTheVolumeAllows(plain, fresh, "a project's first start")
 
   // The background fill made spares behind that start; the next takes one.
   const spared = await start(plain, cold, "With a spare")
   assert.equal(spared.made.spare, true, "a spare was ready")
   assert.equal(git(spared.made.path, "status", "--porcelain"), "", "the spare's checkout is whole and clean")
   assert.equal(git(spared.made.path, "symbolic-ref", "--short", "HEAD"), spared.made.branch)
-  assert.ok(existsSync(join(spared.made.path, "node_modules", "pack-0", "lib", "m0.js")), "with its install outputs already in")
+  assert.equal(packagesIn(spared.made.path), clones, "with its install outputs already in, where the volume clones them")
   assert.equal(lstatSync(join(spared.made.path, ".env")).isFile(), true)
 
   // One taken is made again at once: the start after it finds one ready too.
@@ -149,7 +182,7 @@ try {
   const relocked = await start(plain, cold, "After the lockfile changed")
   assert.equal(relocked.made.spare, true)
   // Read as the start answers, before anything is cloned behind it: the packages came with the spare, or didn't.
-  const packaged = existsSync(join(relocked.made.path, "node_modules", "pack-0", "lib", "m0.js"))
+  const packaged = packagesIn(relocked.made.path)
 
   const report = {
     files: FILES,
@@ -159,10 +192,11 @@ try {
     withSpare: { ms: spared.ms, git: spared.git.length, commands: spared.git, others: spared.others, copied: spared.made.copied },
     refilled: { ms: next.ms, git: next.git.length },
     afterLockfile: { ms: relocked.ms, git: relocked.git.length, packages: packaged },
+    volumeClones: clones,
   }
   console.log(JSON.stringify(report, null, 1))
   if (!process.env.MAKO_START_COST_MEASURE) {
-    assert.ok(packaged, "a spare made again after the lockfile changed has the packages that fit it")
+    assert.equal(packaged, clones, "a spare made again after the lockfile changed has the packages that fit it, where the volume clones them")
     assert.ok(second.git.length <= 6, `a start with no spare ran ${second.git.length} Git processes, not at most 6: ${second.git.join(", ")}`)
     // The spare that replaces the one taken is being made behind the start, by commands of its own.
     const refill = /^(rev-parse --verify|worktree add|worktree lock|ls-tree|ls-files -s|status|read-tree|update-index|reset)/
