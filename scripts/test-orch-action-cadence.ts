@@ -92,7 +92,8 @@ try {
   await world.restart()
   const restart = await emit(apex.conversation, "service", "JOINT source after restart", false)
   assert.ok(restart.includes(`ask ${nextQuestion.id}`) && restart.includes(`v4 · owner ${receiver.child}`) && restart.includes("request failed"))
-  await emit(apex.conversation, "person", "JOINT first person after restart", true)
+  // The restarted host resumes the same session, whose transcript holds the guidance from before the restart.
+  await emit(apex.conversation, "person", "JOINT first person after restart", false)
   const receiverRestart = await emit(receiver.conversation!, "service", "JOINT receiver after restart", false)
   assert.ok(receiverRestart.includes(`v4 · owner ${receiver.child}`) && receiverRestart.includes("request failed"))
   kept(await world.agents.stop(apex.caller, { child: "source", reason: "Source fixture Stop; decision remains owed." }))
