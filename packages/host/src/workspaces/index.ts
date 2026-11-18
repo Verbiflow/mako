@@ -34,6 +34,8 @@ import { CheckoutHeadService } from "./checkout-heads.js"
 import { PlanBuilds } from "./plan-builds.js"
 import { beginTrace, TraceRefresh } from "./app-probe.js"
 import { childHistory, childProcessReader, type DaemonRestarts, type ProcessReader, type WatchBackend } from "./watch-backend.js"
+import type { WatchedTrees } from "./watched-trees.js"
+export { WatchedTrees } from "./watched-trees.js"
 import type { WatchReadings } from "./watch-readings.js"
 import { commandEnvironment, environmentTools, registerEnvironmentTools, type EnvironmentTools } from "./environment-tools.js"
 import { spareInstaller } from "./spare-install.js"
@@ -161,6 +163,8 @@ export interface WorkspacesDeps {
   watchReadings?: WatchReadings
   /** Every native and tree watch shares this host-owned child. */
   watch: WatchBackend
+  /** The folders the host's tree watches hear, for the worktrees' summaries to take their file events from. */
+  trees?: WatchedTrees
   /** When fseventsd started over, so a read of history across it is reported lost. */
   daemonRestarts?: DaemonRestarts
   /** The host's probe child (`childProcessReader`), which reads the apps' processes too; one of its own without it. */
@@ -257,8 +261,14 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
       } : undefined, deps.conversations, deps.ledger, deps.workingFolders, () => deps.subscribed?.on ?? true, async repoRoot => {
         await forgetGitHubReads(repoRoot)
         emit({ type: "github-changed" })
-      }, deps.watch)
+      }, deps.watch, {
+        // A row asks for its worktree's branch as it's drawn (`CheckoutHeadService`), so what's followed there is what windows show.
+        shown: (path) => checkoutHeads.known(path) !== undefined,
+        heard: (path) => deps.trees?.covers(path) ?? false,
+      })
     : null
+  // A worktree's files changing is heard from the tree watches the host already keeps, never from one of its own.
+  if (worktrees) deps.trees?.follow((root, paths) => worktrees.filesHeard(root, paths))
   const openFiles = async (): Promise<string[]> => {
     const { stdout, stderr } = await reader.run("lsof", ["-nP", "-F0n", "-u", String(process.getuid?.())], { timeout: 10_000, maxBuffer: 32 * 1024 * 1024 })
     if (stderr.trim() || !stdout.trim()) throw new Error("Open-file inspection was incomplete.")
@@ -328,16 +338,19 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
   // Reconsider registered worlds left by a crash once conversations have opened, then hourly.
   if (scratch) deps.jobs.every("retire owned Thread scratch", SCRATCH_PASS_MS, async () => { await scratch?.run(); await threadData?.run() }, { firstAfterMs: 60_000 })
   if (retention && !deps.readOnly) deps.jobs.every("retire finished Thread worktrees", WORKTREE_RETENTION_MS, async () => { await retention.run() })
-  // Windows hear the summaries as they change, rather than each asking every half minute. What no event of its own
-  // says (a pull request on GitHub, an edit outside a turn) a pass of the host's says, each worktree read only once
-  // its index, pull request, status's freshness or age moved (`current`).
+  // Windows hear the summaries as they change, rather than each asking every half minute: each one as it's read
+  // (`worktree-summary-changes`), and the whole list too while a window that knows only that form may be listening.
+  // What no event of its own says (a pull request on GitHub) a pass of the host's says, each worktree asked of Git
+  // only where what it was read at moved (`readListed`).
   if (worktrees) {
-    worktrees.followSummaries((summaries) => {
-      emit({ type: "worktree-summaries", summaries })
+    worktrees.followSummaries((summaries) => emit({ type: "worktree-summaries", summaries }))
+    worktrees.followSummaryChanges((changes) => {
+      emit({ type: "worktree-summary-changes", ...changes })
       retention?.changed()
       scratch?.changed()
       threadData?.changed()
     })
+    worktrees.followSizes(() => emit({ type: "worktree-sizes" }))
     deps.jobs.every("say the worktrees' summaries as they change", SUMMARY_PASS_MS, () => void worktrees.summaries().catch(() => undefined), deps.subscribed ? { needs: [deps.subscribed] } : {})
   }
   if (worktrees) {

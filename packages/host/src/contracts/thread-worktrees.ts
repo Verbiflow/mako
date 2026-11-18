@@ -78,6 +78,11 @@ export interface WorktreeDetail extends Omit<ThreadWorktree, "thread"> {
   users: string[]
   /** Its own files; dependency folders cloned from the main checkout share their blocks and aren't counted. */
   bytes: number | null
+  /**
+   * `changes` and `held` are from before something changed in the worktree, or were never read: the host is reading
+   * them behind this answer and says when they're in (`worktree-sizes`). A removal reads the worktree itself.
+   */
+  refreshing?: true
 }
 
 /** A pull request whose head is a worktree's branch. */
@@ -108,6 +113,22 @@ export interface WorktreeSummary {
   pull: WorktreeBranchPull | null
   /** Commits on the branch new Threads start from that this branch lacks, by the last fetch. */
   behind: { from: string; commits: number } | null
+}
+
+/**
+ * Every summary a host holds when asked, at once, and the worktrees it's still reading (`reading`, by path): those
+ * with no summary yet, and those whose summary is from before the host started and not looked at since. Each comes as
+ * a `worktree-summary-changes` event once read.
+ */
+export interface WorktreeSummariesHeld {
+  summaries: WorktreeSummary[]
+  reading: string[]
+}
+
+/** The summaries that changed, as each was read, and the paths of worktrees that are gone. */
+export interface WorktreeSummaryChanges {
+  changed: WorktreeSummary[]
+  removed: string[]
 }
 
 /** What removing one worktree would meet: why it can't go now, if it can't, and where its branch stands. */
