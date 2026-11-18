@@ -1,27 +1,23 @@
 import parcel from "@parcel/watcher"
 import { execFileSync } from "node:child_process"
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
-import { HOME_NOISE } from "@mako/host/attribution/footprint"
+import { noiseFolders } from "@mako/host/attribution/footprint"
 import { childHistory } from "@mako/host/workspaces/watch-backend"
 
 /*
- * What a history read costs on this Mac, read only. Takes one mark of the
- * FSEvents history, lets the machine run for `--wait` seconds, then reads
- * everything since the mark under each `--root <folder>` (repeatable)
+ * What a turn's footprint read costs on this Mac, read only. Takes one mark
+ * of the FSEvents history, lets the machine run for `--wait` seconds, then
+ * reads everything since the mark under the home and temporary folders
  * three ways, interleaved over `--rounds`:
- *   - all:    every path crosses to the host;
- *   - js:     parcel returns every path and the child leaves the ignore folders out, counting them;
- *   - native: parcel leaves the ignore folders out itself, before it stats a path or makes an event of it.
+ *   - all:    every path crosses to the host (the read before footprints left anything out);
+ *   - js:     parcel returns every path and the child leaves rule folders out, counting them;
+ *   - native: parcel leaves rule folders out itself, before it stats a path or makes an event of it.
  * Then the host's real history child end to end, with and without the
- * ignore folders. Reports wall time, this process's CPU, fseventsd's CPU and
- * the paths and bytes that would cross to the host. A turn's footprint reads
- * only the folders the turn claimed, so pass one such folder as `--root` for
- * what a turn costs; with none, the roots are the home and temporary
- * folders, which footprints once read whole at every turn. Pass
- * `--ignore <folder>` (repeatable) to add folders, as the checkouts and
- * stores inside a claimed folder would be.
+ * rule folders. Reports wall time, this process's CPU, fseventsd's CPU and
+ * the paths and bytes that would cross to the host. Pass `--ignore <folder>`
+ * (repeatable) to add folders, as tracked checkouts and other sessions' folders would be.
  */
 
 if (process.platform !== "darwin") {
@@ -37,12 +33,10 @@ const option = (name: string, fallback: number) => {
 const waitS = option("--wait", 60)
 const rounds = option("--rounds", 5)
 const home = homedir()
-const named = (name: string) => argv.flatMap((item, index) => (argv[index - 1] === name ? [item] : []))
-const given = named("--root").map((folder) => realpathSync(folder))
-const roots = given.length ? given : [home, "/private/tmp"]
-const extra = named("--ignore")
+const roots = [home, "/private/tmp"]
+const extra = argv.flatMap((item, index) => (argv[index - 1] === "--ignore" ? [item] : []))
 const stores = [".claude", ".claude.json", ".codex", ".cursor", ".grok", ".local/share/opencode", ".mako", "Library/Application Support/mako"].map((item) => join(home, item))
-const ignore = [...new Set([...HOME_NOISE.map((folder) => join(home, folder)), ...stores, ...extra])].filter((folder) => existsSync(folder))
+const ignore = [...new Set([...noiseFolders(home).map((item) => item.folder), ...stores, ...extra])].filter((folder) => existsSync(folder))
 
 const fseventsd = Number(execFileSync("pgrep", ["-x", "fseventsd"], { encoding: "utf8" }).trim().split("\n")[0])
 /** fseventsd's CPU seconds so far, from `ps` (hundredths of a second). */
@@ -114,7 +108,7 @@ const line = (name: string, samples: Sample[]) =>
 try {
   await parcel.writeSnapshot(tmpdir(), file, { backend: "fs-events" })
   const [id = "", at = ""] = readFileSync(file, "utf8").trim().split(/\s+/)
-  console.log(`reading ${roots.join(", ")} with ${ignore.length} ignore folders; waiting ${waitS} s for the machine's own churn…`)
+  console.log(`${ignore.length} rule folders; waiting ${waitS} s for the machine's own churn…`)
   await new Promise((resolve) => setTimeout(resolve, waitS * 1000))
   writeFileSync(file, `${id}\n${at}`)
   const samples: Sample[] = []
@@ -137,7 +131,7 @@ try {
     ruled.push(await timed(ignore))
   }
   const summary = (runs: readonly ChildRun[]) => `${median(runs.map((run) => run.ms)).toFixed(0)} ms (${runs.at(-1)?.paths ?? 0} paths)`
-  console.log(`history child, end to end: all ${summary(all)}, with ignore folders ${summary(ruled)}`)
+  console.log(`history child, end to end: all ${summary(all)}, with rule folders ${summary(ruled)}`)
 } finally {
   rmSync(snapshot, { recursive: true, force: true })
 }

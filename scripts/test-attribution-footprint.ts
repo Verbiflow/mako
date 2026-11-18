@@ -3,20 +3,21 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
-import type { ActivityMark, HistorySince } from "@mako/protocol"
+import type { ActivityMark } from "@mako/protocol"
 import { FakeClock, FakeEventSource, FakeFileSystem } from "@mako/protocol/attribution-conformance"
-import { classify, type FootprintInput, type RuleFolder, type TurnEvidence } from "@mako/host/attribution/footprint"
-import type { PathVerdict } from "@mako/host/attribution/footprint-reader"
+import { classify, noiseFolders, readIgnore, type FootprintInput, type RuleFolder, type TurnEvidence } from "@mako/host/attribution/footprint"
+import { MAX_WEAK, type PathVerdict } from "@mako/host/attribution/footprint-reader"
+import { NoiseBaseline, template, type NoiseRow, type NoiseStore } from "@mako/host/attribution/noise-baseline"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { otherAppsData } from "@mako/host/base/other-apps-data"
 import { childHistory } from "@mako/host/workspaces/watch-backend"
 import { WatchReadings } from "@mako/host/workspaces/watch-readings"
 
 /*
- * The footprint outside the checkouts: each rule in its order, and turns
- * read end to end through the tracker on fakes: the history read only under
- * what a turn named, mentioned or ran in, and never anywhere else. On
- * macOS, the watcher child's history read leaves folders out and counts them.
+ * The footprint outside the checkouts: each rule in its order, what a
+ * history read may leave out before anything crosses to the host, the
+ * learned baseline, and a turn read end to end through the tracker on fakes.
+ * On macOS, the watcher child's history read leaves folders out and counts them.
  */
 
 const HOME = "/h"
@@ -28,6 +29,7 @@ function input(over: Partial<FootprintInput> = {}): FootprintInput {
     { folder: "/h/work/app", rule: "tracked", why: "a tracked checkout" },
     { folder: "/h/.claude", rule: "store", why: "a harness's store" },
     { folder: "/h/other", rule: "other-session", why: "codex session 9f2c" },
+    ...noiseFolders(HOME),
   ]
   return { home: HOME, roots: ROOTS, folders, turn: none, others: new Set(), ...over }
 }
@@ -41,6 +43,7 @@ test("the rules decide in their order", () => {
   const named = new Map<string, "read" | "write">([["/h/work/app/a.ts", "write"], ["/h/other/shared.txt", "write"], ["/h/.config/tool", "write"]])
   const turn: TurnEvidence = { named, mentioned: new Set(["/h/out/report.txt"]), cwds: new Set(["/h/scratch"]) }
   const others = new Set(["/h/shared"])
+  const baseline = (path: string) => (path.startsWith("/h/.sync/") ? { key: "/h/.sync", why: "changed while no Thread ran" } : undefined)
   const cases: [string, string][] = [
     // A tracked checkout and a store win over everything the turn said.
     ["/h/work/app/a.ts", "out tracked"],
@@ -56,14 +59,13 @@ test("the rules decide in their order", () => {
     ["/h/Library/Caches/x", "out noise"],
     ["/h/elsewhere/node_modules/p/index.js", "out noise"],
     ["/h/.zsh_history", "out noise"],
-    // What only the turn's window links to it is `window`: the reader counts it and keeps no row.
-    ["/h/.sync/index/1.db", "kept window"],
+    ["/h/.sync/index/1.db", "out baseline"],
     ["/h/notes.txt", "kept window"],
     // The temporary root is no `tmp` folder: only folders below it count.
     ["/private/tmp/tool-out/run.txt", "kept window"],
     ["/private/tmp/build/node_modules/p/index.js", "out noise"],
   ]
-  for (const [path, expected] of cases) assert.equal(outcome(path, { turn, others }), expected, path)
+  for (const [path, expected] of cases) assert.equal(outcome(path, { turn, others, baseline }), expected, path)
 })
 
 test("a folder that is a footprint root says nothing: a turn run in the home folder doesn't own it", () => {
@@ -99,23 +101,132 @@ test("where the platform names writers, the writer decides before any name", () 
   assert.equal(outcome("/h/.config/c.json", { writers, ours }), "kept window")
 })
 
-const described = (verdict: PathVerdict | undefined) => (!verdict ? "not read" : "rule" in verdict ? `out ${verdict.rule}` : `kept ${verdict.kept}`)
+test("a history read leaves out only the folders no evidence of the turn can win back", () => {
+  const folders: RuleFolder[] = [
+    { folder: "/h/work/app", rule: "tracked", why: "" },
+    { folder: "/h/.claude", rule: "store", why: "" },
+    { folder: "/h/other", rule: "other-session", why: "" },
+    { folder: "/h/api", rule: "other-session", why: "" },
+    { folder: "/h/.sync/index", rule: "baseline", why: "" },
+    { folder: "/h/Library", rule: "noise", why: "" },
+  ]
+  const left = (turn: TurnEvidence, writers = false) => readIgnore(folders, turn, writers).map((item) => item.folder)
+  assert.deepEqual(left(none), folders.map((item) => item.folder))
+  // A name inside a folder, or a folder the turn ran above, keeps that folder's paths crossing.
+  const turn: TurnEvidence = { named: new Map([["/h/other/x.ts", "write"]]), mentioned: new Set(["/h/Library/Preferences/tool.plist"]), cwds: new Set(["/h/.sync"]) }
+  assert.deepEqual(left(turn), ["/h/work/app", "/h/.claude", "/h/api"])
+  // A writer can win a path back from any folder but a checkout or a store.
+  assert.deepEqual(left(none, true), ["/h/work/app", "/h/.claude"])
+  // A folder inside one whose rule comes first is not sent, so its paths are counted under the rule that decides them; a checkout inside another session's folder still is.
+  const nested: RuleFolder[] = [
+    { folder: "/h/proj/mine", rule: "tracked", why: "" },
+    { folder: "/h/proj", rule: "other-session", why: "" },
+    { folder: "/h/proj/pkg/dist", rule: "baseline", why: "" },
+    { folder: "/h/.claude", rule: "store", why: "" },
+    { folder: "/h/.claude/projects", rule: "noise", why: "" },
+  ]
+  assert.deepEqual(readIgnore(nested, none, false).map((item) => item.folder), ["/h/proj/mine", "/h/proj", "/h/.claude"])
+})
 
-/** An event source that remembers every history read, and can fail the reads under a folder. */
-class CountedEvents extends FakeEventSource {
-  readonly reads: { mark: string; root: string }[] = []
-  readonly broken = new Set<string>()
-  override async since(mark: string, root: string, options?: { ignore?: readonly string[] }): Promise<HistorySince | null> {
-    this.reads.push({ mark, root })
-    if (this.broken.has(root)) return null
-    return super.since(mark, root, options)
+/** The baseline's rows in memory, as the journal keeps them. */
+class MemoryNoise implements NoiseStore {
+  readonly rows = new Map<string, NoiseRow>()
+  noise(): NoiseRow[] {
+    return [...this.rows.values()]
+  }
+  saveNoise(rows: readonly NoiseRow[]): void {
+    for (const row of rows) this.rows.set(row.key, { ...row })
+  }
+  dropNoise(keys: readonly string[]): void {
+    for (const key of keys) this.rows.delete(key)
   }
 }
 
-/** A tracker on fakes with a footprint whose containers are `/h` and `/private/tmp`, the history reads it made and the verdicts they gave. */
-async function footprintWorld(over: { segmentMs?: number } = {}) {
+test("a template turns ids, hashes and numbers into stars, and leaves words", () => {
+  assert.equal(template("/tmp/claude-1f2e-cwd"), "/tmp/claude-*-cwd")
+  assert.equal(template("/h/.sync/7c9e6679-7425-40de-944b-e07fc1f90ae7.json"), "/h/.sync/*.json")
+  assert.equal(template("/h/.cache/9b0c41d2/log.2.txt"), "/h/.cache/*/log.*.txt")
+  assert.equal(template("/h/cafe/beef/face.txt"), "/h/cafe/beef/face.txt")
+})
+
+test("the baseline learns what changes while no Thread runs, folder by folder, and forgets it", () => {
+  const store = new MemoryNoise()
   const clock = new FakeClock()
-  const events = new CountedEvents()
+  const halfLifeMs = 3_600_000
+  const baseline = new NoiseBaseline(store, { roots: ROOTS, now: () => clock.now(), halfLifeMs })
+  // A folder is a key only two levels or more below a root.
+  assert.deepEqual(baseline.keys("/h/.sync/index/a.db"), { template: "/h/.sync/index/a.db", folder: "/h/.sync/index" })
+  assert.equal(baseline.keys("/h/.sync/a.db").folder, undefined)
+  assert.equal(baseline.keys("/h/notes.txt").folder, undefined)
+
+  baseline.idle(["/h/.sync/index/a.db", "/h/.daemon-state.json"])
+  assert.match(baseline.verdict("/h/.sync/index/a.db")?.why ?? "", /no Thread ran/)
+  assert.ok(baseline.verdict("/h/.daemon-state.json"))
+  // One window teaches a file, not its folder.
+  assert.equal(baseline.verdict("/h/.sync/index/b.db"), undefined)
+  assert.deepEqual(baseline.folders(), [])
+  clock.advance(60_000)
+  baseline.idle(["/h/.sync/index/c.db"])
+  assert.equal(baseline.verdict("/h/.sync/index/b.db")?.key, "/h/.sync/index/")
+  assert.deepEqual(baseline.folders(), ["/h/.sync/index"])
+
+  // What stops changing decays below its threshold, then is forgotten at the next learning.
+  clock.advance(2 * halfLifeMs)
+  assert.equal(baseline.verdict("/h/.daemon-state.json"), undefined)
+  assert.deepEqual(baseline.folders(), [])
+  clock.advance(4 * halfLifeMs)
+  baseline.idle(["/h/.other/x"])
+  assert.deepEqual([...store.rows.keys()], ["/h/.other/x"])
+
+  // Rows outlive the process.
+  assert.ok(new NoiseBaseline(store, { roots: ROOTS, now: () => clock.now(), halfLifeMs }).verdict("/h/.other/x"))
+})
+
+test("a folder whose subfolders churn while no Thread runs is churn as a whole, but not a root's own folders", () => {
+  const clock = new FakeClock()
+  const baseline = new NoiseBaseline(new MemoryNoise(), { roots: ROOTS, now: () => clock.now() })
+  // A sync tool rewrites one project's sections, then others'.
+  baseline.idle(["/h/.sync/sections/claude/ky/a1/m1.md", "/h/.sync/sections/claude/notes/b2/m1.md"])
+  clock.advance(60_000)
+  baseline.idle(["/h/.sync/sections/claude/ky/a3/m2.md"])
+  assert.equal(baseline.verdict("/h/.sync/sections/claude/mako/c4/m1.md"), undefined, "two subfolders are not enough")
+  clock.advance(60_000)
+  baseline.idle(["/h/.sync/sections/claude/clamp/d5/m1.md"])
+  clock.advance(60_000)
+  assert.match(baseline.verdict("/h/.sync/sections/claude/mako/c4/m1.md")?.why ?? "", /3 of its folders changed while no Thread ran/)
+  assert.ok(baseline.folders().includes("/h/.sync/sections/claude"))
+  // Folders a root holds directly never become churn whole: `/h/work` is where projects are.
+  const projects = new NoiseBaseline(new MemoryNoise(), { roots: ROOTS, now: () => clock.now() })
+  for (let window = 0; window < 3; window++) projects.idle(["/h/work/a/x/f", "/h/work/b/x/f", "/h/work/c/x/f", "/h/work/d/x/f"])
+  assert.equal(projects.verdict("/h/work/new/x/f"), undefined)
+  assert.ok(!projects.folders().includes("/h/work"))
+})
+
+test("a path left weak in turns of three different Threads is churn; one Thread's repeats are not", () => {
+  const baseline = new NoiseBaseline(new MemoryNoise(), { roots: ROOTS, now: () => 1 })
+  for (let turn = 0; turn < 5; turn++) baseline.weak("T1", ["/h/.tool/state/x.json"])
+  baseline.weak("T2", ["/h/.tool/state/x.json"])
+  assert.equal(baseline.verdict("/h/.tool/state/x.json"), undefined)
+  baseline.weak("T3", ["/h/.tool/state/x.json"])
+  assert.match(baseline.verdict("/h/.tool/state/x.json")?.why ?? "", /3 Threads/)
+})
+
+test("the baseline keeps at most its cap of rows, dropping the weakest", () => {
+  const store = new MemoryNoise()
+  const baseline = new NoiseBaseline(store, { roots: ROOTS, now: () => 1, maxRows: 3 })
+  baseline.idle(["/h/.a/strong"])
+  baseline.idle(["/h/.a/strong"])
+  baseline.idle(["/h/.b/one", "/h/.c/two", "/h/.d/three"])
+  assert.equal(baseline.size, 3)
+  assert.ok(store.rows.has("/h/.a/strong"))
+})
+
+const described = (verdict: PathVerdict | undefined) => (!verdict ? "not read" : "rule" in verdict ? `out ${verdict.rule}` : `kept ${verdict.kept}`)
+
+/** A tracker on fakes with a footprint over `/h` and `/private/tmp`, and the verdicts its reads gave. */
+async function footprintWorld() {
+  const clock = new FakeClock()
+  const events = new FakeEventSource()
   const fs = new FakeFileSystem(clock, events)
   const storage = mkdtempSync(join(tmpdir(), "mako-footprint-test-"))
   const verdicts = new Map<string, PathVerdict>()
@@ -125,10 +236,9 @@ async function footprintWorld(over: { segmentMs?: number } = {}) {
       footprint: {
         home: HOME,
         roots: ROOTS,
-        stores: () => ["/h/.harness", "/h/proj/.store"],
-        others: () => [{ folder: "/h/proj/other", why: "codex session 9f2c" }],
+        stores: () => ["/h/.harness"],
+        others: () => [{ folder: "/h/other", why: "codex session 9f2c" }],
         explain: (_turn, path, verdict) => verdicts.set(path, verdict),
-        ...over,
       },
     },
   )
@@ -138,235 +248,88 @@ async function footprintWorld(over: { segmentMs?: number } = {}) {
     await tracker.close()
     rmSync(storage, { recursive: true, force: true })
   }
-  /** The folders whose history was read, each once, in order. */
-  const readRoots = () => [...new Set(events.reads.map((read) => read.root))].sort()
-  return { clock, fs, events, tracker, reader, verdicts, mark, close, readRoots }
+  return { clock, fs, events, tracker, reader, verdicts, mark, close }
 }
 
-test("a turn with no claims outside its checkout reads no history, whatever else the machine changes", async () => {
-  const world = await footprintWorld()
-  const { clock, fs, events, tracker, reader, verdicts, mark } = world
-  try {
-    fs.write("/h/work/app/a.ts", "one")
-    await tracker.track({ id: "app", path: "/h/work/app", kind: "attached" })
-    await tracker.settled()
-    events.reads.length = 0
-    clock.advance(1_000)
-    reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "start", cwd: "/h/work/app" }))
-    reader.activity(mark("T1", { kind: "call", id: "c1", edge: "start", turn: "t1", cwd: "/h/work/app", named: ["/h/work/app/a.ts"] }))
-    fs.write("/h/work/app/a.ts", "two")
-    fs.write("/h/notes.txt", "a note another app wrote")
-    fs.write("/h/.sync/index/c3.db", "x")
-    fs.write("/h/Library/Caches/tool/x", "x")
-    fs.write("/private/tmp/scratch-1.txt", "x")
-    clock.advance(1_000)
-    reader.activity(mark("T1", { kind: "call", id: "c1", edge: "end", turn: "t1" }))
-    reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "end" }))
-    await reader.settled()
-    assert.deepEqual(events.reads, [], "no history read")
-    assert.equal(verdicts.size, 0)
-    assert.deepEqual(tracker.footprint("T1"), [])
-    const [summary] = tracker.footprintTurns("T1")
-    assert.ok(summary, "the turn's summary is still saved")
-    assert.equal(summary.read, 0)
-    assert.equal(summary.complete, true)
-    assert.deepEqual(summary.kept, { strong: 0, weak: 0 })
-    assert.deepEqual(summary.excluded, {})
-  } finally {
-    await world.close()
-  }
-})
-
-test("a named file changed during the turn is kept as written and one it only read as read, with no history read", async () => {
-  const world = await footprintWorld()
-  const { clock, fs, events, tracker, reader, mark } = world
-  try {
-    fs.write("/h/docs/read.md", "notes")
-    fs.write("/h/docs/beside.md", "never named")
-    clock.advance(1_000)
-    reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "start" }))
-    reader.activity(mark("T1", { kind: "call", id: "c1", edge: "start", turn: "t1", named: ["/h/docs/read.md", "/private/tmp/out.txt", "/private/tmp/never-made.txt"] }))
-    clock.advance(100)
-    fs.write("/private/tmp/out.txt", "made")
-    // Changed beside a named file, in a folder nothing claimed: not the turn's.
-    fs.write("/h/docs/beside.md", "changed by another app")
-    clock.advance(100)
-    reader.activity(mark("T1", { kind: "call", id: "c1", edge: "end", turn: "t1" }))
-    reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "end" }))
-    await reader.settled()
-    assert.deepEqual(events.reads, [], "a file's own times say whether it changed")
-    const kept = tracker.footprint("T1").map((entry) => ({ path: entry.path, access: entry.access, basis: entry.basis, evidence: entry.evidence, size: entry.size })).sort((a, b) => a.path.localeCompare(b.path))
-    assert.deepEqual(kept, [
-      { path: "/h/docs/read.md", access: "read", basis: "named", evidence: "strong", size: undefined },
-      { path: "/private/tmp/out.txt", access: "write", basis: "named", evidence: "strong", size: 4 },
-    ])
-    assert.ok(tracker.footprint("T1").find((entry) => entry.path === "/private/tmp/out.txt")?.ref, "what it wrote is addressed, to be carried")
-  } finally {
-    await world.close()
-  }
-})
-
-test("a folder the turn ran in, outside every checkout, has its changed files kept, read only from that folder's history", async () => {
-  const world = await footprintWorld()
-  const { clock, fs, events, tracker, reader, verdicts, mark } = world
-  try {
-    fs.write("/h/scratch/seed.txt", "x")
-    fs.write("/h/scratch/untouched.txt", "x")
-    clock.advance(1_000)
-    reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "start", cwd: "/h/scratch" }))
-    fs.write("/h/scratch/build/out.o", "obj")
-    fs.remove("/h/scratch/seed.txt")
-    // The rest of the home folder and the temporary folder churn all along.
-    fs.write("/h/notes.txt", "a note another app wrote")
-    fs.write("/h/.sync/index/c3.db", "x")
-    for (let index = 0; index < 300; index++) fs.write(`/private/tmp/zz/many/f${index}.txt`, "x")
-    clock.advance(1_000)
-    reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "end" }))
-    await reader.settled()
-    assert.deepEqual(events.reads.map((read) => read.root), ["/h/scratch"])
-    assert.equal(described(verdicts.get("/h/scratch/build/out.o")), "kept cwd")
-    assert.equal(described(verdicts.get("/h/notes.txt")), "not read")
-    assert.equal(described(verdicts.get("/private/tmp/zz/many/f0.txt")), "not read")
-    const kept = tracker.footprint("T1").map((entry) => ({ path: entry.path, access: entry.access, basis: entry.basis, evidence: entry.evidence, size: entry.size }))
-    // A file removed in the folder is the turn's write too, with nothing left to carry.
-    assert.deepEqual(kept.sort((a, b) => a.path.localeCompare(b.path)), [
-      { path: "/h/scratch/build/out.o", access: "write", basis: "cwd", evidence: "strong", size: 3 },
-      { path: "/h/scratch/seed.txt", access: "write", basis: "cwd", evidence: "strong", size: undefined },
-    ])
-    const [summary] = tracker.footprintTurns("T1")
-    assert.equal(summary?.read, 2)
-    assert.deepEqual(summary?.kept, { strong: 2, weak: 0 })
-    assert.deepEqual(summary?.bases, { cwd: 2 })
-    assert.deepEqual(summary?.excluded, {})
-  } finally {
-    await world.close()
-  }
-})
-
-test("what a claim folder holds is decided by rule: checkouts and stores inside it never cross, other sessions and Threads are left out with why", async () => {
+test("a turn's footprint on a busy machine: churn learned while idle, other sessions, stores and other Threads left out, with why", async () => {
   const world = await footprintWorld()
   const { clock, fs, tracker, reader, verdicts, mark } = world
   try {
-    fs.write("/h/proj/app/src/a.ts", "one")
-    await tracker.track({ id: "app", path: "/h/proj/app", kind: "attached" })
-    await tracker.settled()
-    world.events.reads.length = 0
-    clock.advance(1_000)
-    reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "start", cwd: "/h/proj" }))
+    // Nothing runs: a sync daemon's index changes twice, so its folder is learned.
+    fs.write("/h/.sync/index/a1.db", "x")
+    clock.advance(30_000)
+    await reader.sampleIdleNow()
+    fs.write("/h/.sync/index/b2.db", "x")
+    clock.advance(30_000)
+    await reader.sampleIdleNow()
+    assert.deepEqual(reader.baseline.folders(), ["/h/.sync/index"])
+
+    reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "start", cwd: "/h/work/app" }))
     reader.activity(mark("T2", { kind: "turn", id: "u1", edge: "start" }))
-    // A folder named inside the folder the turn runs in is read with it, not again.
-    reader.activity(mark("T1", { kind: "call", id: "c1", edge: "start", turn: "t1", named: ["/h/.config/tool", "/h/proj/gen", "/h/elsewhere/shared.txt"] }))
-    reader.activity(mark("T2", { kind: "call", id: "d1", edge: "start", turn: "u1", named: ["/h/proj/shared"] }))
+    // Idle sampling stops while any turn runs.
+    assert.equal(await reader.sampleIdleNow(), 0)
+    // T2's start cut a segment; its read follows within a round trip to the child, before the turn's writes.
+    await reader.settled()
+    // Naming a file in another session's folder keeps that folder's paths crossing, each decided by rule.
+    reader.activity(mark("T1", { kind: "call", id: "c1", edge: "start", turn: "t1", named: ["/h/.config/tool", "/h/other/shared.txt"] }))
+    reader.activity(mark("T2", { kind: "call", id: "d1", edge: "start", turn: "u1", named: ["/h/shared"] }))
     fs.write("/h/.config/tool/state.json", "{}")
-    fs.write("/h/elsewhere/shared.txt", "x")
-    fs.write("/h/proj/build/out.o", "x")
-    fs.write("/h/proj/gen/x.ts", "x")
-    fs.write("/h/proj/app/src/a.ts", "two")
-    fs.write("/h/proj/.store/s.jsonl", "{}")
-    fs.write("/h/proj/other/b.ts", "x")
-    fs.write("/h/proj/shared/out.json", "{}")
-    fs.write("/h/proj/state.db-wal", "x")
+    fs.write("/h/.sync/index/c3.db", "x")
+    fs.write("/h/other/b.ts", "x")
     fs.write("/h/.harness/s.jsonl", "{}")
+    fs.write("/h/shared/out.json", "{}")
     fs.write("/h/notes.txt", "a note another app wrote")
+    fs.write("/private/tmp/scratch-1.txt", "x")
+    fs.remove("/private/tmp/scratch-1.txt")
+    // Weak paths fill the cap in path order, so these come after the note and the scratch file.
+    for (let index = 0; index < MAX_WEAK + 5; index++) fs.write(`/private/tmp/zz/many/f${index}.txt`, "x")
     clock.advance(1_000)
     reader.activity(mark("T1", { kind: "call", id: "c1", edge: "end", turn: "t1" }))
     reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "end" }))
     await reader.settled()
 
-    assert.deepEqual(world.readRoots().filter((root) => root !== "/h/proj/app"), ["/h/.config/tool", "/h/proj"])
     const verdict = (path: string) => described(verdicts.get(path))
     assert.equal(verdict("/h/.config/tool/state.json"), "kept folder")
-    assert.equal(verdict("/h/elsewhere/shared.txt"), "kept named")
-    assert.equal(verdict("/h/proj/build/out.o"), "kept cwd")
-    assert.equal(verdict("/h/proj/gen/x.ts"), "kept folder")
-    assert.equal(verdict("/h/proj/other/b.ts"), "out other-session")
-    assert.equal(verdict("/h/proj/shared/out.json"), "out other-thread")
-    assert.equal(verdict("/h/proj/state.db-wal"), "out bookkeeping")
-    // A checkout and a store inside the folder never cross from the history: only counted.
-    assert.equal(verdict("/h/proj/app/src/a.ts"), "not read")
-    assert.equal(verdict("/h/proj/.store/s.jsonl"), "not read")
+    assert.equal(verdict("/h/shared/out.json"), "out other-thread")
+    assert.equal(verdict("/h/notes.txt"), "kept window")
+    assert.equal(verdict("/private/tmp/scratch-1.txt"), "out gone")
+    // Rule folders no evidence can win back never cross from the history: only counted.
     assert.equal(verdict("/h/.harness/s.jsonl"), "not read")
-    assert.equal(verdict("/h/notes.txt"), "not read")
+    assert.equal(verdict("/h/.sync/index/c3.db"), "not read")
+    assert.equal(verdict("/h/other/b.ts"), "out other-session")
 
     const [summary] = tracker.footprintTurns("T1")
     assert.ok(summary)
-    assert.deepEqual(summary.kept, { strong: 4, weak: 0 })
-    assert.deepEqual(summary.excluded, { tracked: 1, store: 1, "other-session": 1, "other-thread": 1, bookkeeping: 1 })
+    assert.deepEqual(summary.kept, { strong: 1, weak: MAX_WEAK })
+    assert.equal(summary.excluded.store, 1)
+    assert.equal(summary.excluded.baseline, 1)
+    assert.equal(summary.excluded["other-session"], 1)
+    assert.equal(summary.excluded["other-thread"], 1)
+    assert.equal(summary.excluded.gone, 1)
+    assert.equal(summary.excluded.capped, 6)
     assert.equal(summary.ignored, 2)
     assert.ok(summary.groups.some((group) => group.rule === "other-session" && group.why === "codex session 9f2c"))
     const entries = tracker.footprint("T1")
-    assert.equal(entries.length, 4)
-    assert.ok(entries.every((entry) => entry.evidence === "strong"))
+    assert.equal(entries.filter((entry) => entry.evidence === "strong").length, 1)
+    assert.equal(entries.filter((entry) => entry.evidence === "weak").length, MAX_WEAK)
   } finally {
     await world.close()
   }
 })
 
-test("a folder first claimed late in a long turn still gets changes from before the claim, and a folder read once goes on from where that read stood", async () => {
-  // Segments of 25 ms, so the turn's folders are read while it runs.
-  const world = await footprintWorld({ segmentMs: 25 })
-  const { clock, fs, events, tracker, reader, mark } = world
-  try {
-    fs.write("/h/one/seed.txt", "x")
-    clock.advance(1_000)
-    reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "start", cwd: "/h/one" }))
-    fs.write("/h/one/a1.txt", "x")
-    // Written in a folder the turn has not claimed yet.
-    fs.write("/h/late/b0.txt", "x")
-    while (!events.reads.length) await new Promise((done) => setTimeout(done, 5))
-    await reader.settled()
-    assert.ok(events.reads.every((read) => read.root === "/h/one"), "only the claimed folder is read so far")
-    reader.activity(mark("T1", { kind: "call", id: "c1", edge: "start", turn: "t1", cwd: "/h/late" }))
-    fs.write("/h/one/a2.txt", "x")
-    fs.write("/h/late/b1.txt", "x")
-    clock.advance(1_000)
-    reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "end" }))
-    await reader.settled()
-    assert.deepEqual(tracker.footprint("T1").map((entry) => entry.path).sort(), ["/h/late/b0.txt", "/h/late/b1.txt", "/h/one/a1.txt", "/h/one/a2.txt"])
-    const of = (root: string) => events.reads.filter((read) => read.root === root).map((read) => Number(read.mark))
-    const [started] = of("/h/one")
-    assert.equal(of("/h/late")[0], started, "the late folder is read from the turn's start")
-    assert.ok(of("/h/one").at(-1)! > started!, "the first folder's last read starts after its first")
-    assert.deepEqual(of("/h/one"), [...of("/h/one")].sort((a, b) => a - b), "and never goes back")
-    assert.equal(tracker.footprintTurns("T1")[0]?.complete, true)
-  } finally {
-    await world.close()
-  }
-})
-
-test("a history read that fails, or one that lost events, says the footprint is incomplete", async () => {
+test("a change between a segment's cut and its read reaches the turn that just started, and is kept once by the one running on", async () => {
   const world = await footprintWorld()
-  const { clock, fs, events, tracker, reader, mark } = world
+  const { fs, tracker, reader, mark } = world
   try {
-    fs.write("/h/scratch/seed.txt", "x")
-    clock.advance(1_000)
-    events.broken.add("/h/scratch")
-    reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "start", cwd: "/h/scratch" }))
-    fs.write("/h/scratch/out.txt", "x")
+    reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "start" }))
+    reader.activity(mark("T2", { kind: "turn", id: "u1", edge: "start" }))
+    // Written before the read of the segment T2's start ended: both of T1's reads hear it.
+    fs.write("/h/.config/early.json", "{}")
     reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "end" }))
+    reader.activity(mark("T2", { kind: "turn", id: "u1", edge: "end" }))
     await reader.settled()
-    assert.equal(events.reads.length, 1, "the history was asked")
-    assert.equal(tracker.footprintTurns("T1").find((item) => item.turn === "t1")?.complete, false)
-    assert.deepEqual(tracker.footprint("T1"), [])
-
-    // Events dropped mid-turn: the history answers, and says it lost some.
-    events.broken.clear()
-    clock.advance(1_000)
-    reader.activity(mark("T1", { kind: "turn", id: "t2", edge: "start", cwd: "/h/scratch" }))
-    events.drop()
-    fs.write("/h/scratch/lost.txt", "x")
-    events.restore()
-    reader.activity(mark("T1", { kind: "turn", id: "t2", edge: "end" }))
-    await reader.settled()
-    assert.equal(tracker.footprintTurns("T1").find((item) => item.turn === "t2")?.complete, false)
-
-    // A turn after, with nothing lost, is whole again.
-    clock.advance(1_000)
-    reader.activity(mark("T1", { kind: "turn", id: "t3", edge: "start", cwd: "/h/scratch" }))
-    fs.write("/h/scratch/whole.txt", "x")
-    reader.activity(mark("T1", { kind: "turn", id: "t3", edge: "end" }))
-    await reader.settled()
-    assert.equal(tracker.footprintTurns("T1").find((item) => item.turn === "t3")?.complete, true)
+    assert.deepEqual(tracker.footprint("T1").map((entry) => entry.path), ["/h/.config/early.json"])
+    assert.deepEqual(tracker.footprint("T2").map((entry) => entry.path), ["/h/.config/early.json"])
   } finally {
     await world.close()
   }
@@ -378,18 +341,17 @@ test("a wait scoped to a checkout stands behind the footprints of turns that ran
   try {
     reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "start", cwd: "/h/one" }))
     reader.activity(mark("T2", { kind: "turn", id: "u1", edge: "start", cwd: "/h/two" }))
-    fs.write("/h/one/out.json", "{}")
-    fs.write("/h/two/out.json", "{}")
+    fs.write("/h/.config/one.json", "{}")
     reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "end" }))
     // T1's footprint is being read; a count or a checkpoint of T2's checkout goes on without it.
     await reader.settled(["/h/two"])
     assert.deepEqual(tracker.footprint("T1"), [], "T1's read is still under way")
     // One of T1's own checkout, or of a folder holding it, waits for it.
     await reader.settled(["/h/one"])
-    assert.deepEqual(tracker.footprint("T1").map((entry) => entry.path), ["/h/one/out.json"])
+    assert.deepEqual(tracker.footprint("T1").map((entry) => entry.path), ["/h/.config/one.json"])
     reader.activity(mark("T2", { kind: "turn", id: "u1", edge: "end" }))
     await reader.settled(["/h"])
-    assert.deepEqual(tracker.footprint("T2").map((entry) => entry.path), ["/h/two/out.json"])
+    assert.deepEqual(tracker.footprint("T2").map((entry) => entry.path), ["/h/.config/one.json"])
   } finally {
     await world.close()
   }
@@ -433,9 +395,9 @@ test("another app's container is never stat-ed or read, even when a call named i
     reader.activity(mark("T1", { kind: "call", id: "c1", edge: "end", turn: "t1" }))
     reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "end" }))
     await reader.settled()
-    // A container is no claim: nothing under it is read from the history, so nothing is decided.
-    for (const path of [chat, notes, read1]) assert.equal(described(verdicts.get(path)), "not read")
-    assert.ok(touched.includes("/h/work/app/a.ts"), "the stats were heard")
+    assert.equal(described(verdicts.get(chat)), "out noise")
+    const noted = verdicts.get(notes)
+    assert.equal(noted && "rule" in noted ? noted.group : undefined, "/h/Library/Containers/com.example.notes")
     assert.deepEqual(touched.filter((path) => /\/library\//i.test(path)), [])
     assert.deepEqual(tracker.footprint("T1").map((entry) => entry.path), ["/h/work/app/a.ts"])
   } finally {
@@ -470,7 +432,66 @@ test("a path a call names through a link is the path the history reports", async
   }
 })
 
-test("where the platform names writers, a Thread's own process keeps a path no call named, in a folder the turn claimed", async () => {
+test("a temporary folder watched live gives the turn its paths without a history read, and a broken watch says the footprint is incomplete", async () => {
+  // A source with no history for the temporary folder, as on Linux: only the live watch can see it.
+  class NoTemporaryHistory extends FakeEventSource {
+    reads = 0
+    override async since(mark: string, root: string, options?: { ignore?: readonly string[] }) {
+      if (root === "/private/tmp") {
+        this.reads++
+        return null
+      }
+      return super.since(mark, root, options)
+    }
+  }
+  const clock = new FakeClock()
+  const events = new NoTemporaryHistory()
+  const fs = new FakeFileSystem(clock, events)
+  const storage = mkdtempSync(join(tmpdir(), "mako-footprint-test-"))
+  const verdicts = new Map<string, PathVerdict>()
+  const tracker = await LaptopTracker.open(
+    { fs, events, clock, storage, device: "test" },
+    { footprint: { home: HOME, roots: ROOTS, live: ["/private/tmp"], stores: () => ["/private/tmp/mako-history"], explain: (_turn, path, verdict) => verdicts.set(path, verdict) } },
+  )
+  try {
+    await tracker.settled()
+    clock.advance(1_000)
+    const turn = { thread: "T1", session: "S1" }
+    tracker.activity({ ...turn, kind: "turn", id: "t1", edge: "start", at: clock.now() })
+    clock.advance(100)
+    tracker.activity({ ...turn, kind: "call", id: "c1", edge: "start", at: clock.now(), turn: "t1", named: ["/private/tmp/probe/run.sh"] })
+    fs.write("/private/tmp/probe/run.sh", "echo")
+    fs.write("/private/tmp/probe/out.txt", "x")
+    fs.write("/private/tmp/mako-history/123-abc", "1 2")
+    clock.advance(100)
+    tracker.activity({ ...turn, kind: "turn", id: "t1", edge: "end", at: clock.now() })
+    await tracker.settled()
+    assert.equal(described(verdicts.get("/private/tmp/probe/run.sh")), "kept named")
+    assert.equal(described(verdicts.get("/private/tmp/probe/out.txt")), "kept window")
+    assert.equal(verdicts.has("/private/tmp/mako-history/123-abc"), false, "the watcher child's own marks never cross")
+    assert.equal(events.reads, 0, "no history read of the live folder")
+    assert.equal(tracker.footprintTurns("T1")[0]?.complete, true)
+
+    // Events dropped mid-turn: the live watch can't vouch for the turn, and there's no history to fall back on.
+    clock.advance(1_000)
+    tracker.activity({ ...turn, kind: "turn", id: "t2", edge: "start", at: clock.now() })
+    clock.advance(100)
+    events.drop()
+    fs.write("/private/tmp/probe/lost.txt", "x")
+    events.restore()
+    clock.advance(100)
+    tracker.activity({ ...turn, kind: "turn", id: "t2", edge: "end", at: clock.now() })
+    await tracker.settled()
+    assert.ok(events.reads > 0, "the history was asked")
+    const second = tracker.footprintTurns("T1").find((item) => item.turn === "t2")
+    assert.equal(second?.complete, false)
+  } finally {
+    await tracker.close()
+    rmSync(storage, { recursive: true, force: true })
+  }
+})
+
+test("where the platform names writers, a Thread's own process keeps a path no call named", async () => {
   const clock = new FakeClock()
   const events = new FakeEventSource()
   const fs = new FakeFileSystem(clock, events)
@@ -482,7 +503,7 @@ test("where the platform names writers, a Thread's own process keeps a path no c
   )
   try {
     const turn = { thread: "T1", session: "S1" }
-    tracker.activity({ ...turn, kind: "turn", id: "t1", edge: "start", at: clock.now(), cwd: "/h/.config" })
+    tracker.activity({ ...turn, kind: "turn", id: "t1", edge: "start", at: clock.now() })
     fs.write("/h/.config/mine.json", "{}")
     events.changed("/h/.config/mine.json", 7)
     fs.write("/h/.config/theirs.json", "{}")

@@ -345,7 +345,7 @@ export class LaptopTracker implements AttributionTracker {
   private readonly shellTurns = new Map<string, Map<string, { since: number; start: number }>>()
   private readonly silentRoots = new Map<string, { start: number; due: number }[]>()
   private readonly shells: ShellReconciliations
-  /** Each turn's footprint outside the tracked roots. */
+  /** Each turn's footprint outside the tracked roots, and the machine's learned churn. */
   readonly footprints?: FootprintReader
   private readonly flushes: Flush[] = []
   private logged = 0

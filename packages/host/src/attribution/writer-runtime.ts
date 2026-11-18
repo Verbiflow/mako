@@ -162,6 +162,7 @@ export async function openWriter(settings: WriterSettings, ports: WriterPorts) {
         footprint: {
           home,
           roots: [home, ...temporary],
+          live: temporary,
           stores: async () => [...(await ports.context()).stores, ...harnessScratch(home), ...own, ...(sharing.journal?.followers() ?? []).map((follower) => follower.host.dataRoot)],
           others: async (thread, since) => { const context = await ports.context(); return sessionFolders(placed(context.sessions), context.running, thread, since) },
           sessions: async (thread) => sessionIds(await catalogued(), thread),

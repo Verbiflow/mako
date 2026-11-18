@@ -24,6 +24,7 @@ import { TurnChangesSchema, type TurnChanges } from "../contracts/turn-changes.j
 import { compress, decompress } from "./content.js"
 import { StatCache } from "./stat-cache.js"
 import { FootprintTurnSchema, type FootprintTurn } from "./footprint.js"
+import type { NoiseRow } from "./noise-baseline.js"
 import { decodeMap, encodeMap, type Run } from "./line-map.js"
 
 /*
@@ -181,6 +182,7 @@ const FootprintRow = z.object({
   at: z.number(), size: z.number().nullable(), ref: Ref, secret: z.number(), basis: FootprintBasisSchema.nullable().optional(),
 })
 const FootprintTurnRow = z.object({ summary: z.string() })
+const NoiseRowSchema = z.object({ key: z.string(), kind: z.enum(["template", "folder"]), idle: z.number(), weak: z.number(), threads: z.string(), at: z.number() })
 const ActivityRow = z.object({
   kind: z.enum(["turn", "call", "background"]), id: z.string(), session: z.string(), thread: z.string(), turn: z.string().nullable(), checkout: z.string().nullable(),
   cwd: z.string().nullable(), label: z.string().nullable(), named: z.string(), record: z.string().nullable(), started_at: z.number(), ended_at: z.number().nullable(), effects: z.string().nullable(),
@@ -1184,6 +1186,27 @@ export class JournalStore {
     return this.statement("SELECT summary FROM footprint_turns WHERE thread=? ORDER BY at DESC LIMIT ?").all(thread, limit)
       .map((value) => FootprintTurnSchema.parse(JSON.parse(FootprintTurnRow.parse(value).summary)))
       .reverse()
+  }
+
+  noise(): NoiseRow[] {
+    return this.statement("SELECT * FROM noise").all().map((value) => {
+      const row = NoiseRowSchema.parse(value)
+      return { ...row, threads: NamedSchema.parse(JSON.parse(row.threads)) }
+    })
+  }
+
+  saveNoise(rows: readonly NoiseRow[]): void {
+    const save = this.statement("INSERT OR REPLACE INTO noise (key, kind, idle, weak, threads, at) VALUES (?, ?, ?, ?, ?, ?)")
+    this.transaction(() => {
+      for (const row of rows) save.run(row.key, row.kind, row.idle, row.weak, JSON.stringify(row.threads), row.at)
+    })
+  }
+
+  dropNoise(keys: readonly string[]): void {
+    const drop = this.statement("DELETE FROM noise WHERE key=?")
+    this.transaction(() => {
+      for (const key of keys) drop.run(key)
+    })
   }
 
   footprint(column: "thread" | "session", id: string): FootprintEntry[] {

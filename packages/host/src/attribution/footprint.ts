@@ -3,17 +3,15 @@ import { z } from "zod"
 import { within } from "./paths.js"
 
 /*
- * A turn's footprint: what it changed outside every tracked root, and why
- * each path is the Thread's. A path is kept only on the turn's own word: one
- * its calls named, one its commands' output mentioned, or one in a folder it
- * named or ran in (or, where the platform names writers, one its processes
- * wrote). The reader reads the system's history only under those claims, so
- * the rest of a busy Mac's churn never reaches the rules. Each path that
- * does is put through them in a fixed order and the first that decides says
- * why: kept with a basis, or left out by a rule. What no rule explains is
- * `window`: linked to the turn only by when it changed, which the reader
- * counts and never keeps. `classify` is pure, so a test can state every rule
- * and the debugging script shows the same reasons.
+ * A turn's footprint: what changed outside every tracked root while it ran,
+ * read from the system's history, and which of those paths are the
+ * Thread's. Most of a busy Mac's churn is explained by something Mako
+ * already knows (a harness's store, another session's checkout, a cache,
+ * what changes while no Thread runs), so each path is put through rules in
+ * a fixed order and the first that decides says why: kept with a basis, or
+ * left out by a rule. What no rule explains stays as `window`, the weak
+ * list a person sees as a count. `classify` is pure, so a test can state
+ * every rule and the debugging script shows the same reasons.
  */
 
 /** Why a changed path is not the turn's footprint, in the order the rules run. */
@@ -32,12 +30,12 @@ export const EXCLUSION_RULES = [
   "other-thread",
   /** Caches, package stores, histories and the system's own churn. */
   "noise",
-  /** In summaries saved before footprints were read only under claims: learned churn, a weak path gone at the turn's end, one past the weak list's cap. */
+  /** Learned: it changes while no Thread runs, or across unrelated Threads. */
   "baseline",
+  /** Gone at the turn's end and no call named it: a temporary file. */
   "gone",
+  /** Past the weak list's cap. */
   "capped",
-  /** Under a claim, yet no rule ties it to the turn: counted, never kept. */
-  "unclaimed",
 ] as const
 export type ExclusionRule = (typeof EXCLUSION_RULES)[number]
 
@@ -46,6 +44,12 @@ export interface RuleFolder {
   folder: string
   rule: ExclusionRule
   /** In a few words: `claude session 9f2c… in ~/work/api`. */
+  why: string
+}
+
+/** What a learned baseline says about a path; undefined when it says nothing. */
+export interface NoiseVerdict {
+  key: string
   why: string
 }
 
@@ -61,9 +65,9 @@ export interface TurnEvidence {
 
 export interface FootprintInput {
   home: string
-  /** The folders too broad to stand for a turn (the home folder, the temporary folder): never a claim, never a folder a rule can take whole. */
+  /** Where footprints are read from (the home folder, the temporary folder): never a folder a rule can take whole. */
   roots: readonly string[]
-  /** Folders whose paths are excluded whole, by rule: tracked roots, stores, other sessions' folders. */
+  /** Folders whose paths are excluded whole, by rule: tracked roots, stores, other sessions' folders, noise. */
   folders: readonly RuleFolder[]
   turn: TurnEvidence
   /** Paths and folders other Threads' calls named during the turn. */
@@ -73,6 +77,8 @@ export interface FootprintInput {
   /** Which processes wrote each path, where the platform says; `ours` says whether one is the Thread's. */
   writers?: ReadonlyMap<string, readonly number[]>
   ours?(pid: number): boolean
+  /** The learned baseline. */
+  baseline?(path: string): NoiseVerdict | undefined
 }
 
 export type Classified =
@@ -104,6 +110,11 @@ const NOISE_PARTS = new Set(["node_modules", "__pycache__", ".git", ".DS_Store",
 /** Files whose churn is a program's own bookkeeping: SQLite's journals, locks, temporary copies. */
 const BOOKKEEPING = /(-wal|-shm|-journal|\.lock|\.pid|\.tmp|\.swp|~)$|\.tmp\b/
 
+/** The static noise folders under `home`, as folders a history read can leave out. */
+export function noiseFolders(home: string): RuleFolder[] {
+  return HOME_NOISE.map((folder) => ({ folder: `${home}/${folder}`, rule: "noise", why: "caches and the system's churn" }))
+}
+
 /**
  * Whether `path` is static noise: a cache or history anywhere outside the
  * tracked checkouts. Only folders below the footprint root holding it
@@ -122,7 +133,7 @@ export function staticNoise(path: string, home: string, roots: readonly string[]
 }
 
 /**
- * Whether `folder` is too broad to stand for anything: one of `roots`
+ * Whether `folder` is too broad to stand for anything: a footprint root
  * (the home folder, the temporary folder) or above one. A command run in
  * the home folder, or a call naming `/tmp`, says nothing about one file.
  */
@@ -197,9 +208,37 @@ export class FolderRules {
 }
 
 /**
+ * The folders a history read can leave out before anything crosses to the
+ * tracker: a rule folder no evidence of the turn can win back. `tracked`
+ * and `store` always qualify; the others only when nothing the turn named,
+ * mentioned or ran in lies in or above them, and only where no platform
+ * names writers (a writer can win a path back from any of them). The
+ * reader counts each path under the innermost folder holding it, so a
+ * folder inside one whose rule comes first is not sent: it would only
+ * lengthen the list and count its paths under the later rule.
+ */
+export function readIgnore(folders: readonly RuleFolder[], turn: TurnEvidence, writers: boolean): RuleFolder[] {
+  const claims = [...turn.named.keys(), ...turn.mentioned, ...turn.cwds]
+  const chosen = new Map<string, RuleFolder>()
+  for (const item of folders) {
+    if (chosen.has(item.folder)) continue
+    const always = item.rule === "tracked" || item.rule === "store"
+    if (always || (!writers && !claims.some((path) => within(item.folder, path) || within(path, item.folder)))) chosen.set(item.folder, item)
+  }
+  return [...chosen.values()].filter((item) => {
+    for (let end = item.folder.lastIndexOf("/"); end > 0; end = item.folder.lastIndexOf("/", end - 1)) {
+      const outer = chosen.get(item.folder.slice(0, end))
+      if (outer && RULE_ORDER.get(outer.rule)! <= RULE_ORDER.get(item.rule)!) return false
+    }
+    return true
+  })
+}
+
+/**
  * The rules, in order, for one changed path. A path no rule decides is
- * `window`: only when it changed links it to the turn, and the caller
- * counts it without keeping it.
+ * `window`: weak, kept as a count. Paths that are gone at the turn's end,
+ * and the weak list's cap, are decided after, by the caller, because they
+ * need the disk.
  */
 export function classify(path: string, input: FootprintInput, rules: FolderRules = new FolderRules(input.folders)): Classified {
   const folder = rules.find(path)
@@ -223,6 +262,8 @@ export function classify(path: string, input: FootprintInput, rules: FolderRules
   if (holder(input.turn.cwds, path, input.roots)) return { path, kept: true, basis: "cwd", access: "write" }
   const noise = folder?.rule === "noise" ? folder.folder : staticNoise(path, input.home, input.roots)
   if (noise) return { path, kept: false, rule: "noise", group: noise, why: folder?.why }
+  const learned = input.baseline?.(path)
+  if (learned) return { path, kept: false, rule: "baseline", group: learned.key, why: learned.why }
   return { path, kept: true, basis: "window", access: "write" }
 }
 
@@ -269,18 +310,17 @@ export class Exclusions {
 
 const ExcludedGroupSchema = z.object({ rule: z.enum(EXCLUSION_RULES), folder: z.string(), count: z.number(), why: z.string().optional() })
 
-/** One turn's footprint as read: the window, what the history returned under its claims, what was kept and what each rule left out. */
+/** One turn's footprint as read: the window, what the history returned, what was kept and what each rule left out. */
 export const FootprintTurnSchema = z.object({
   thread: z.string(),
   session: z.string(),
   turn: z.string().optional(),
   start: z.number(),
   end: z.number(),
-  /** Paths the history returned, and those the reader left out under checkouts and stores inside a claim folder. */
+  /** Paths the history returned, and those the reader left out under rule folders. */
   read: z.number(),
   ignored: z.number(),
   complete: z.boolean(),
-  /** `weak` is 0 since weak paths stopped being kept; older summaries count theirs. */
   kept: z.object({ strong: z.number(), weak: z.number() }),
   /** Paths each kept basis covers. */
   bases: z.record(z.string(), z.number()),
@@ -292,7 +332,7 @@ export const FootprintTurnSchema = z.object({
 })
 export type FootprintTurn = z.infer<typeof FootprintTurnSchema>
 
-/** Strong bases, for the contract's `evidence`. Only rows written before weak paths stopped being kept are `window`. */
+/** Strong bases, for the contract's `evidence`. */
 export function strength(basis: FootprintBasis): "strong" | "weak" {
   return basis === "window" ? "weak" : "strong"
 }
