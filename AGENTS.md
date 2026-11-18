@@ -172,6 +172,15 @@ conversations?.live`) rather than a domain importing another's files.
   it fails only on a clear regression (a loop held for seconds, or several
   times the yardstick's waits), never on a fixed number of milliseconds, and
   writes every number to the job's summary. CI runs it as `host-load`.
+- **A flush costs its own conversation's change.** What `LiveConversations.write`
+  calls (`relocations.changed` and its `settled` listeners, `emit` and its)
+  never reads every conversation, Fin, Thread or worktree: who works is kept
+  as conversations change (`WorkingSet`), the person's asks of a tree until an
+  edge, a report, an answer or a Fin's own ask changes (`Agents.personAsk`),
+  and a roster takes the one entry that moved. `npm run test:flush-costs`
+  holds each to what must change it at once and what must not;
+  `bench:host-load --scale person --record` says where the thread's time
+  went by source (`host-load-sources.ts`).
 - **Follow, don't poll.** What only says where something stands (a line a
   window shows) reads what each owner already holds, and is woken by the
   owner's own change (its event or callback). That read never sets off the
@@ -1362,7 +1371,10 @@ or one from before this rule, is stopped inside SQLite. Inserts name their
 columns and nothing writes with `INSERT OR REPLACE`, so a column a newer
 build added keeps its values through an older build's writes. Every
 SQLite store rereads its format after any other build's commit (`PRAGMA
-data_version`), so one raised under a running host turns read-only there:
+data_version`; the host's Thread store looks once in each turn of the event
+loop for its reads and inside every write, `versionPerTurn`, since read at
+every read the pragma was a third of the thread with 30 Fins at work), so one
+raised under a running host turns read-only there:
 the Thread store and the session ledger; the record store's `access`, so
 capture and the backfill stop, said once (`RecordCapture.declined`); the
 unread index (still counted by diagnostics) and the kept outputs
@@ -2074,7 +2086,7 @@ record lands on what streamed travels as its frames alone
 renderer side components subscribe through selectors, so a token wakes the one
 turn rendering it — not the rail, the stage strip, or the titlebar's readings.
 
-Three rules hold this together, and each has a specific failure it prevents:
+Four rules hold this together, and each has a specific failure it prevents:
 
 - **Select the narrowest slice.** `useSession((s) => s.meta)` in the transcript
   re-renders the whole list whenever a token count moves. Take `s.meta?.cwd`.
@@ -2083,11 +2095,26 @@ Three rules hold this together, and each has a specific failure it prevents:
   same state, said only when a fact a row shows moved. What's derived from
   every conversation (`selectAcpPresence`, the Fin indexes) is kept across the
   batches that move none (`railDerived`, `sayings`), and a list of
-  conversations goes in as one change (`admitAcpConversations`).
+  conversations goes in as one change (`admitAcpConversations`). A
+  transcript's rows read their own conversation through `useAcpConversation`
+  (`keyedSubscriptions` in `store.ts`), which another conversation's batch
+  doesn't wake, and find a turn's request with `requestOf`, a map made once
+  for the requests as they stand; the maps a row is handed from the requests
+  keep the values that say the same (`keptEntries`).
 - **Reconcile message identity** (`src/lib/reconcile.ts`). The host rebuilds
   the entire message array whenever a tool returns, so every object arrives
   new; without reconciliation one tool result re-parses the markdown of every
-  turn in the session.
+  turn in the session. Entries that are the same objects are told so by
+  identity, and only ones read again are serialized to compare. A batch
+  re-projects the tail from its last turn's start (`projectLive`), through a
+  change of requests or status too, where the prompts they name stand. A
+  conversation that isn't shown isn't projected at each batch: what it last
+  drew waits (`behind`), and opening it projects from that, so an open costs
+  what its batches changed and every turn before them is the object it was
+  (`test-warm-open.ts`). Opening one this window holds reads one snapshot,
+  its own (`acp.openThread`), never its owner's as well; one it holds nothing
+  of is read at its newest page, and a place a pane was reading further back
+  is read after that page is drawn, in one read (`loadEarlierLive`).
 - **Long lists are virtualized, long content uses `content-visibility`.** The
   rail isn't windowed: it draws only the rows of open folders, a few per
   folder behind "More" (`FolderSection`), and a closed folder's rows aren't
@@ -2095,13 +2122,26 @@ Three rules hold this together, and each has a specific failure it prevents:
   surface-panel rows carry `.contain-turn`. Timelines above 40 turns or 120
   messages and calls (a few prompts can hold thousands of calls), and
   navigators above 100 prompts, additionally window measured rows; a timeline
-  stays windowed while it's shown. A row coming in restyles itself, never the
+  stays windowed while it's shown. A window keeps two turns mounted each side
+  of the pane, and each of those is skipped, at the height it was laid out at,
+  until it's read (`data-sized`). Below the window, an open draws the turns
+  that fill the pane and a pane's worth above them before it paints, and the
+  rest in idle moments (`FIRST_TURNS`); the answers of turns about to mount
+  are parsed ahead in the prose worker (`warmSettledProse`), so mounting one
+  builds elements from a tree and parses nothing. A row coming in restyles itself, never the
   page: no `group-has-[…]`, whose universal last part restyles all of `main` for
   any element added, so write `[.group:has(…)_&]:…`
   (`test-transcript-rows-ui.mjs` counts it). Its mounted rows are also held against the
   virtualizer before each paint (`row-check.ts`), so an observer that goes quiet
   never shows, and a correction it didn't report is logged with what was found
-  (`Transcript row corrected` in the host's log). A conversation keeps at most 24 MB of
+  (`Transcript row corrected` in the host's log): the rows something changed
+  in for that change, and every row when rows come or go, the reader scrolls,
+  and each second, since a stream changes one row a frame apart and reading
+  every row's box for each was its cost. What a pane is reading (the report
+  memory cleanup and bookmarks go by) is set up once per pane and said on the
+  reader's input and when the turns on the page change, at most once a second
+  while a followed answer grows: nothing measures the page for a streamed
+  frame but the end being followed. A conversation keeps at most 24 MB of
   finished turns (`CONVERSATION_MEMORY` in `live-residency.ts`), the one being
   read included: what's on screen, near it, read in the last minute or still
   at work stays, and the rest come back as the reader nears them. Preserve
@@ -2151,6 +2191,14 @@ Three rules hold this together, and each has a specific failure it prevents:
   tool rows). `test-streaming-markdown.ts` holds `StreamFrames` to both, and
   `test-workspace-ui.mjs` streams a reply and requires the prose to catch up
   while the turn is still running.
+- **Heavy content is made once, off the page.** A code block's tokens come
+  from a worker and are kept by language and source (`codeHighlights`), so a
+  block mounting again draws its colours in its first render and an answer's
+  blocks colour a frame apart, not in the tick it settles. An opened Edit or
+  Write reads its lines once per content (`editLines`) and draws 400 of them,
+  the rest on "Show all", a part at a time as each nears the viewport: every
+  line is four elements, and a 5,000-line Write was 25,000 in one click.
+  `test-render-caches.ts` holds each to once.
 
 The rail bounds mounted rows through folder pagination and an explicit search
 result cap; it never renders the full catalog. Components that genuinely use

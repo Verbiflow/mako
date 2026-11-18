@@ -14,7 +14,7 @@ import type {
   PromptAttachment,
   LiveSessionState,
 } from "@/lib/types"
-import { createHook, createStore } from "@/state/store"
+import { createEntryHook, createHook, createStore, keyedSubscriptions } from "@/state/store"
 import { backgroundWork, type BackgroundWork } from "@mako/host/contracts/background-work"
 import { entryState, type ChildState } from "@mako/host/contracts/agents"
 import { finsAsChildren, rosterChildren, type Rollup } from "@mako/host/contracts/children"
@@ -100,6 +100,11 @@ interface AcpConversationBase {
   nativeActivity?: LiveSnapshot["nativeActivity"]
   hydrated?: boolean
   projection?: LiveProjection
+  /**
+   * The projection it last had, while it isn't shown and its batches go undrawn: the next one starts from it
+   * (`projectAcp`), so opening it draws what those batches changed and every turn before them is the object it was.
+   */
+  behind?: LiveProjection
   blocks: Entry[]
   /**
    * What the host said its next batch will add to the last block (`LiveAhead`), drawn until that batch lands
@@ -184,6 +189,34 @@ acpStore.subscribe(() => {
 export const useAcp = createHook(acpStore)
 
 /**
+ * One conversation as its transcript's rows read it: `selector` is given the conversation `key` names and runs when
+ * that conversation changes. A batch of any other conversation runs none of them, where a selector on `useAcp` runs
+ * for every row of every mounted transcript on every batch in the window.
+ */
+export const acpConversations = keyedSubscriptions(acpStore, (state) => state.conversations)
+export const useAcpConversation = createEntryHook(acpConversations)
+
+type LiveRequest = NonNullable<LiveSnapshot["requests"]>[number]
+const requestsById = new WeakMap<readonly LiveRequest[], Map<string, LiveRequest>>()
+
+/**
+ * The conversation's request `id`, from a map made once for its requests as they stand: they're a new array whenever
+ * one changes. Each turn's rows looked theirs up by walking the array, on every batch.
+ */
+export function requestOf(conversation: Pick<AcpConversation, "requests"> | null | undefined, id: string | undefined): LiveRequest | undefined {
+  const requests = conversation?.requests
+  if (!requests || id === undefined) return undefined
+  let byId = requestsById.get(requests)
+  if (!byId) {
+    byId = new Map()
+    // The first of an id is the one a walk of the array found.
+    for (const request of requests) if (!byId.has(request.id)) byId.set(request.id, request)
+    requestsById.set(requests, byId)
+  }
+  return byId.get(id)
+}
+
+/**
  * The live store as the rail reads it: the same state, said to its readers only when a fact a row shows moved (a
  * conversation listed or gone, its status, title, place or Fins; the one on screen; a Thread's Sessions). A streamed
  * batch moves none of them, so it runs no row's selector. What streams (`STREAMED`, and a session's `usage`) stands
@@ -199,7 +232,7 @@ type Conversations = AcpState["conversations"]
  * and `updatedAt` only ranks two conversations that stand for one row (`overtakes`).
  */
 const STREAMED: ReadonlySet<string> = new Set<keyof LiveAcpConversation>([
-  "session", "blocks", "projection", "revision", "epoch", "updatedAt", "activityAt", "nativeActivity", "history",
+  "session", "blocks", "projection", "behind", "revision", "epoch", "updatedAt", "activityAt", "nativeActivity", "history",
   "releasedTurns", "base", "baseSource", "baseCoveredBlocks", "harnessTurns", "spentThrough", "turnWait", "goal", "side",
   "historyFailure", "queued", "pendingPrompts", "hiddenUserPrompt", "replyBindingId", "sending", "canceling", "ahead",
 ])

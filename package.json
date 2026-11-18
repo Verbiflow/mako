@@ -136,6 +136,7 @@
     "test:thread-history": "tsx scripts/test-thread-history.ts",
     "test:child-input": "npm run -s build --workspace @mako/sessions && tsx scripts/test-child-input.ts",
     "test:keep-awake": "tsx scripts/test-keep-awake.ts",
+    "test:flush-costs": "tsx scripts/test-flush-costs.ts",
     "test:move-haste": "tsx scripts/test-move-haste.ts",
     "test:handoff-going-off": "tsx scripts/test-handoff-going-off.ts",
     "mako-log": "tsx --tsconfig tsconfig.app.json scripts/mako-log.ts",

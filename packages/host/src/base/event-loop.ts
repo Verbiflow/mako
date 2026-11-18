@@ -2,6 +2,13 @@ import { AsyncLocalStorage } from "node:async_hooks"
 import { createHistogram, performance } from "node:perf_hooks"
 import type { EventLoop, LoopHold } from "../contracts/runtime.js"
 import { hostWarn } from "./host-log.js"
+import { topic } from "./topic.js"
+
+/**
+ * Each piece of named work as it opens and as it ends, for a bench that records what was open at every hold, the short
+ * ones the watch doesn't log included (`bench:host-load --record`). Nothing is built while nobody listens.
+ */
+export const hostWorkSpans = topic<{ id: number; label: string; open: boolean }>("mako:host-work")
 
 /** Work the host does, named, so a held event loop can say what was running, and a load can say who asked. */
 export interface HostWork {
@@ -146,9 +153,11 @@ export class EventLoopWatch implements HostWork {
     const id = this.nextSpan++
     const span: Span = { label, since: performance.now() }
     this.open.set(id, span)
+    if (hostWorkSpans.heard) hostWorkSpans.publish({ id, label, open: true })
     this.watch()
     return () => {
       if (!this.open.delete(id)) return
+      if (hostWorkSpans.heard) hostWorkSpans.publish({ id, label, open: false })
       span.ended = performance.now()
       this.recent.push(span)
       if (this.recent.length > RECENT_SPANS) this.recent.shift()

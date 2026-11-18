@@ -36,6 +36,7 @@ export const STEPS = [
   [1, "npx tsx scripts/test-owned-files.ts"],
   [13, "npx tsx scripts/test-cloud-returns.ts"],
   [1, "npm run test:keep-awake"],
+  [4, "npm run test:flush-costs"],
   // The renderer's and the live state's own suites, in Node without a window, and the web client's build.
   [4, "npm run build -w @mako/web-client"],
   // What the desk loads before it draws: no Office viewer, and within its byte budget (builds the renderer in memory).
@@ -361,6 +362,7 @@ export const STEPS = [
   [3, "tsx scripts/test-refreshed-fork.ts"],
   [2, "tsx scripts/test-release-timelines.ts"],
   [3, "node scripts/test-remove-fixture-desk.mjs"],
+  [1, "tsx --tsconfig tsconfig.app.json scripts/test-render-caches.ts"],
   [1, "tsx scripts/test-repeated-calls.ts"],
   [3, "tsx scripts/test-replay-setup-notices.ts"],
   [1, "tsx scripts/test-review-notes.ts"],
@@ -396,6 +398,7 @@ export const STEPS = [
   [3, "tsx scripts/test-trace-history-holds.ts"],
   [1, "tsx scripts/test-transport-agreement.ts"],
   [1, "node scripts/test-ui-feedback.mjs"],
+  [2, "tsx --tsconfig tsconfig.app.json scripts/test-warm-open.ts"],
   [2, "node scripts/test-web-proxy.mjs"],
   [2, "tsx scripts/test-window-shutdown.ts"],
   [1, "tsx scripts/test-window-tree.ts"],
