@@ -592,10 +592,12 @@ export interface WorkspaceMethodsDeps {
   emit(event: HostEvent): void
   /** The machine the host runs on, which opens, reveals and picks what people ask for. */
   machine: MachineCapability
+  /** A window saying whether it's on screen, for what's sent to it only to be painted; false when it has no stream here. */
+  windowShown?: (client: string, shown: boolean) => boolean
 }
 
 /** The files people open, the editors and folders they reach for, worktrees, moves, apps and automations. */
-export function declareWorkspaceMethods(methods: MethodTable, { workspaces, movers, live, automations, withHost, session, emit, machine }: WorkspaceMethodsDeps): WatchedFile {
+export function declareWorkspaceMethods(methods: MethodTable, { workspaces, movers, live, automations, withHost, session, emit, machine, windowShown }: WorkspaceMethodsDeps): WatchedFile {
   declareSessionMethods(methods, session)
   const files = declareFileMethods(methods, { withHost, emit, machine })
   methods.handle("mako:pick-folder", () => presentMachine(machine).chooseFolder("Choose a folder"))
@@ -631,7 +633,7 @@ export function declareWorkspaceMethods(methods: MethodTable, { workspaces, move
   declareMoveMethods(methods, movers.moves, (target) => moveHold(live, movers.worktreeMoves, movers.moves, target), workspaces.worktrees)
   declarePlanBuildMethods(methods, workspaces.planBuilds)
   declareCheckoutHeadMethods(methods, workspaces.checkoutHeads)
-  declareThreadAppMethods(methods, movers.appTools?.desk, movers.sampler, apps => movers.outputHints?.ready(apps) ?? false)
+  declareThreadAppMethods(methods, movers.appTools?.desk, movers.sampler, apps => movers.outputHints?.ready(apps) ?? false, windowShown)
   return files
 }
 

@@ -10,7 +10,8 @@ import { threadsStore } from "@/state/thread-store"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
 import { changesSession, expandLiveBatch, isCompactBatch, requestsAfter, sessionAfter, type HeardLiveBatch, type LiveAhead } from "@mako/host/contracts/live-conversations"
 import { laterPrompt, personPromptedAt, promptedAfter } from "@mako/host/contracts/worked-at"
-import { projectLive, shownBlocks } from "@/state/live-projection"
+import { projectAcp, projectLive, shownBlocks } from "@/state/live-projection"
+import { windowShown } from "@/lib/window-shown"
 import { toast } from "sonner"
 import { settleMessage } from "@/state/message-outbox"
 import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
@@ -593,23 +594,57 @@ export function applyLiveBatch(heard: HeardLiveBatch, replayed = false): void {
 /**
  * What the host said a conversation's next batch will add to its last block (`LiveAhead`): drawn at once on this
  * machine's windows, which hear it every paint frame while the batches keep the pace every device and the journal
- * share. Only where this window shows the conversation at the revision it names; anywhere else the batch says it.
+ * share. Only where this window shows the conversation, on screen and seen, at the revision it names; anywhere else
+ * the batch says it, and nothing is set.
  * Nothing the window holds of the conversation changes: `blocks` and `revision` stay the last batch's.
  */
 export function applyLiveAhead(ahead: LiveAhead): void {
+  // It exists only to be painted, and a hidden window paints nothing: the batch that follows says the same text.
+  if (!windowShown()) return
   const current = acpStore.get().conversations[ahead.id]
   if (current?.kind !== "live" || !current.hydrated || !sameEpoch(current, ahead) || current.revision !== ahead.revision) return
   if (current.ahead?.revision === ahead.revision && current.ahead.more === ahead.more) return
+  // One that isn't on screen draws nothing, so it keeps nothing of this: every paint frame it was a change to the
+  // store that every reader of it woke for, to hold text its next batch says anyway.
+  if (acpStore.get().activeKey !== ahead.id) return
   const next = { ...current, ahead: { revision: ahead.revision, more: ahead.more } }
-  // One that isn't shown keeps what it last drew for when it's opened (`behind`), as a batch leaves it.
-  const shown = acpStore.get().activeKey === ahead.id
   replaceAcpConversation(ahead.id, {
     ...next,
-    projection: shown
-      ? projectLive({ blocks: shownBlocks(next), base: next.base ?? null, baseCoveredBlocks: next.baseCoveredBlocks, history: next.history, session: next.session, requests: next.requests, releasedTurns: next.releasedTurns }, current.projection ?? current.behind, next.pendingPrompts)
-      : undefined,
-    behind: shown ? undefined : current.projection ?? current.behind,
+    projection: projectLive({ blocks: shownBlocks(next), base: next.base ?? null, baseCoveredBlocks: next.baseCoveredBlocks, history: next.history, session: next.session, requests: next.requests, releasedTurns: next.releasedTurns }, current.projection ?? current.behind, next.pendingPrompts),
+    behind: undefined,
   })
+}
+
+/**
+ * The conversations on screen that took batches in while nobody could see the window, each still holding what it last
+ * drew: `drawUndrawn` draws them once when the window shows.
+ */
+const undrawn = new Set<string>()
+
+/**
+ * A batch for the conversation on screen in a hidden window: everything it says is kept, and nothing is drawn. Its
+ * projection stays the object it was, so no row reads anything again, and the batches it missed are projected from it
+ * in one pass when the window is back (`drawUndrawn`), as a conversation that wasn't shown is from `behind`.
+ */
+function undrawnWhileHidden(id: string, current: LiveAcpConversation): Pick<LiveAcpConversation, "projection" | "behind"> {
+  undrawn.add(id)
+  return { projection: current.projection, behind: current.behind }
+}
+
+/**
+ * The window shows again: what it took in while hidden is drawn, once. The conversation on screen is projected from
+ * what it last drew; one that left the screen meanwhile keeps that as `behind`, for when it's opened.
+ */
+export function drawUndrawn(): void {
+  if (!undrawn.size) return
+  const ids = [...undrawn]
+  undrawn.clear()
+  for (const id of ids) {
+    const conversation = acpStore.get().conversations[id]
+    if (conversation?.kind !== "live" || !conversation.hydrated) continue
+    if (acpStore.get().activeKey === id) replaceAcpConversation(id, { ...conversation, projection: projectAcp(conversation), behind: undefined })
+    else if (conversation.projection) replaceAcpConversation(id, { ...conversation, projection: undefined, behind: conversation.projection })
+  }
 }
 
 function takeBatch(heard: HeardLiveBatch): void {
@@ -750,16 +785,18 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
   // One that isn't shown isn't drawn at every batch: what it last drew waits (`behind`) for when it's opened.
   const drawn: Pick<LiveAcpConversation, "projection" | "behind"> = unchanged
     ? { projection: current.projection, behind: current.behind }
-    : acpStore.get().activeKey === batch.id
-      ? {
-          projection: projectLive(
-            { blocks, base, baseCoveredBlocks, history, session, requests, releasedTurns: current.releasedTurns },
-            current.projection ?? current.behind,
-            pendingPrompts
-          ),
-          behind: undefined,
-        }
-      : { projection: undefined, behind: current.projection ?? current.behind }
+    : acpStore.get().activeKey !== batch.id
+      ? { projection: undefined, behind: current.projection ?? current.behind }
+      : windowShown()
+        ? {
+            projection: projectLive(
+              { blocks, base, baseCoveredBlocks, history, session, requests, releasedTurns: current.releasedTurns },
+              current.projection ?? current.behind,
+              pendingPrompts
+            ),
+            behind: undefined,
+          }
+        : undrawnWhileHidden(batch.id, current)
   replaceAcpConversation(batch.id, {
     ...current,
     control: batch.control ?? current.control,

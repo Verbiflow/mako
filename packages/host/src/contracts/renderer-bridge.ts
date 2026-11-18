@@ -208,6 +208,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<AppOutputChunk>("mako:thread-app-output", cwd, key, cursor),
     threadAppMarks: () => invokeTrustedHost<AppMark[]>("mako:thread-app-marks"),
     followThreadApps: (demand?: AppSamplingDemand) => invokeTrustedHost<AppSamplingReply>("mako:thread-app-demand", demand),
+    /** Tells the host whether anyone can see this window; a host before this refuses the call, and goes on sending everything. */
+    windowShown: (shown: boolean) => invokeTrustedHost<boolean>("mako:window-shown", shown),
     followConversationApp: (conversation: string, demand: RemoteAppDemand) => invokeTrustedHost<RemoteAppReply>("mako:conversation-app-demand", conversation, demand),
     conversationApp: (conversation: string, view: string) => invokeTrustedHost<RemoteAppSnapshot>("mako:conversation-app", conversation, view),
     viewHints: () => invokeTrustedHost<ViewHintsStatus | null>("mako:view-hints"),

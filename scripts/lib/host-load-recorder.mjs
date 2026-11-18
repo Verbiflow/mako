@@ -22,6 +22,7 @@ const HOLD_MS = 20
 const MARK_MS = 30
 const NAMED_PER_HOLD = 5
 const RECENT_SPANS = 256
+const SLOW_COMMIT_MS = 5
 
 const folder = process.env.MAKO_HOST_LOAD_RECORD
 if (folder) (isMainThread ? recordMain : recordWorker)(folder)
@@ -62,6 +63,18 @@ function recordMain(into) {
     return [...longest].sort((a, b) => b[1] - a[1]).slice(0, NAMED_PER_HOLD).map(([label, ms]) => `${label} (${Math.round(ms)} ms)`)
   }
 
+  // Each journal commit by part (`mako:journal-commit`): all of them summed, and each of `SLOW_COMMIT_MS` or more kept.
+  const commits = { count: 0, beginMs: 0, rowsMs: 0, commitMs: 0, foreground: 0, slow: [] }
+  subscribe("mako:journal-commit", (message) => {
+    commits.count += 1
+    commits.beginMs += message.beginMs
+    commits.rowsMs += message.rowsMs
+    commits.commitMs += message.commitMs
+    if (!message.background) commits.foreground += 1
+    const whole = message.beginMs + message.rowsMs + message.commitMs
+    if (whole >= SLOW_COMMIT_MS) commits.slow.push([Math.round(origin + performance.now()), Math.round(message.beginMs * 10) / 10, Math.round(message.rowsMs * 10) / 10, Math.round(message.commitMs * 10) / 10, message.background ? 1 : 0])
+  })
+
   const ticks = { at: [], late: [] }
   const holds = []
   let last = performance.now()
@@ -101,7 +114,7 @@ function recordMain(into) {
 
   process.on("exit", () => {
     try {
-      writeFileSync(join(into, `main-${process.pid}.json`), JSON.stringify({ pid: process.pid, tickMs: TICK_MS, holdMs: HOLD_MS, mark, ticks, holds, samples, collections }))
+      writeFileSync(join(into, `main-${process.pid}.json`), JSON.stringify({ pid: process.pid, tickMs: TICK_MS, holdMs: HOLD_MS, mark, ticks, holds, samples, collections, commits }))
     } catch { /* A recording that can't be written is a run without one; the host's exit is its own. */ }
   })
 }

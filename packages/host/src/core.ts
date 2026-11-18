@@ -1964,6 +1964,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     live,
     automations: workspaceAutomations,
     withHost,
+    windowShown: (client, shown) => web()?.windowShown(client, shown) ?? false,
     session: {
       // A conversation that moved to the cloud is the cloud's: its journal here stands aside.
       // The cloud's summary of a conversation stands in for this Mac's only when it has one: a moved conversation it

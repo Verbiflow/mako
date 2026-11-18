@@ -1,28 +1,30 @@
 import { useCallback, useSyncExternalStore } from "react"
+import { everyWhileShown } from "@/lib/window-shown"
 
 /**
  * One clock for every elapsed time on screen. A row counting up subscribes
  * while it is mounted and active; the interval runs only while someone
- * listens, so a hundred background tasks tick on one timer, not a hundred,
- * and nothing ticks when none is shown.
+ * listens and the window shows (`everyWhileShown`), so a hundred background
+ * tasks tick on one timer, not a hundred, nothing ticks when none is shown,
+ * and a hidden window's rows read the time again the moment it's back.
  */
 const listeners = new Set<() => void>()
-let timer: ReturnType<typeof setInterval> | undefined
+let timer: (() => void) | undefined
 let now = Date.now()
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener)
   if (!timer) {
     now = Date.now()
-    timer = setInterval(() => {
+    timer = everyWhileShown(1_000, () => {
       now = Date.now()
       for (const notify of listeners) notify()
-    }, 1_000)
+    })
   }
   return () => {
     listeners.delete(listener)
     if (listeners.size === 0 && timer) {
-      clearInterval(timer)
+      timer()
       timer = undefined
     }
   }

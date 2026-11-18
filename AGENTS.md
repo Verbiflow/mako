@@ -238,7 +238,7 @@ messages it was read from (`source`); the host stamps `startedAt` and
 counted as the larger of the roster's active non-ambient entries and the
 provider's own level (`backgroundTasks`), which can't wedge on a missed end.
 The window shows it as an hourglass on the row and tab, a quiet line at the
-transcript's end and the Agents panel; ambient watchers are listed and never
+transcript's end and the Agents panel (an Apex's Overview lists it as Background work); ambient watchers are listed and never
 counted there. What a provider still holds that wakes it, ambient watchers such
 as Claude's Monitor included, is `pendingWake`: a Fin's turn that ends on it
 waits on it, and a session holding it is never hibernated (`canHibernate`),
@@ -781,7 +781,11 @@ unless the last host left that Apex's own queue unsettled. Reading
 one in commits the restart's changes, the first frame into a WAL its last
 host closed, whose header SQLite syncs even at `synchronous=NORMAL`: 100 to
 300 ms on a busy disk, on the host's thread, until a worker wrote it first
-(`WalPrimer`). A crash's
+(`WalPrimer`). The same worker checkpoints a journal while a turn of it runs
+and no longer (`LiveJournal.checkpointWhile`; held by every conversation in
+memory, its 32 places went to the first read in and the ones at work
+checkpointed inside their own commits), once its log runs `CHECKPOINT_PAGES`
+ahead of the last checkpoint. A crash's
 cut reads as `uncertain`. A Fin's cut turn that nothing picks up within
 `STRANDED_AFTER_MS` (`strandedTurn`) becomes a question for its Apex
 (`reportCut`). That covers the loop guard being spent, a sign-out, a reason
@@ -2074,7 +2078,8 @@ lands (`shownBlocks`); the batch then carries the same text to everyone. Nothing
 of it is journaled or numbered, no other device, outlet or reader of the compact
 form hears it (`windowEvent` in `transport/server.ts`), and a window whose
 stream holds more than 64 KB unread is told nothing ahead until it has caught
-up. Only text going on with the last block is said ahead; a new block or a call
+up, nor is a window that said nobody can see it (`mako:window-shown`, kept on
+its stream; a stream that never says is shown, as an older window's is). Only text going on with the last block is said ahead; a new block or a call
 waits for its batch, a frame at most. Held to the batches' pace, a token reached
 the window 30 ms after the host had it at the median and 400 ms at worst;
 `scripts/test-live-ahead.ts` holds the batches to what they were and the
@@ -2085,6 +2090,25 @@ record lands on what streamed travels as its frames alone
 (`deliverLiveUpdates`). On the
 renderer side components subscribe through selectors, so a token wakes the one
 turn rendering it — not the rail, the stage strip, or the titlebar's readings.
+
+**A hidden window draws nothing, so it does nothing for drawing**
+(`lib/window-shown.ts`, `state/window-hidden.ts`). While
+`document.visibilityState` is hidden (minimized, covered, another Space) a
+window still takes every batch in, so its revisions stay continuous and
+nothing is read again when it's back, but the conversation on screen isn't
+projected (its projection stays the object it was, `undrawnWhileHidden`),
+text said ahead is dropped, and every clock that only ages a label is gone,
+timer and all (`everyWhileShown`: the second clocks, the rail's and the
+tabs' minutes, the wait and quiet clocks, the layout watch). It tells its
+host, which sends it no `live-ahead`. Shown again, it tells the host, draws
+the conversation once from what it last drew (`drawUndrawn`) and reads each
+clock at once. `test-window-hidden.ts` holds a hidden window to no
+projection and no tick, and to the same state on return as a window that was
+visible throughout; `test-window-shown-host.ts` holds the host's side. Text
+said ahead of a conversation that isn't on screen sets nothing either, and
+what follows only the rail's facts of the live store (which folders run,
+what's on screen for notifications, the first-run agent) hears the rail's
+store, not every batch.
 
 Four rules hold this together, and each has a specific failure it prevents:
 
@@ -2124,7 +2148,14 @@ Four rules hold this together, and each has a specific failure it prevents:
   navigators above 100 prompts, additionally window measured rows; a timeline
   stays windowed while it's shown. A window keeps two turns mounted each side
   of the pane, and each of those is skipped, at the height it was laid out at,
-  until it's read (`data-sized`). Below the window, an open draws the turns
+  until it's read (`data-sized`). A row measured before stands at that size
+  again, for the window's life and across a reload (`RowHeights`, twelve
+  conversations in `localStorage`, a row dropped when what it holds or the
+  window's width changed), and one never measured is estimated from its
+  words and calls at the pixels a character has been taking in this window,
+  not at one constant: scrolling a 300-turn transcript end to end corrected
+  its column by 243,000 px with the constant, and by nothing once measured
+  (`test-row-heights.ts`). Below the window, an open draws the turns
   that fill the pane and a pane's worth above them before it paints, and the
   rest in idle moments (`FIRST_TURNS`); the answers of turns about to mount
   are parsed ahead in the prose worker (`warmSettledProse`), so mounting one
@@ -2159,7 +2190,13 @@ Four rules hold this together, and each has a specific failure it prevents:
   with no `scrollend`: left standing, the next layout shift would read as the
   reader's. Focus resting in a turn keeps that turn, and only a selection or
   moving input postpones what's released; `test-follow-ui.mjs` holds all of it
-  through bursts of reports on every form. Under a finger the end
+  through bursts of reports on every form. A message the person just sent is
+  placed 24 px below the pane's top with its answer growing under it
+  (`sentTurn`): still the end being followed, over room kept after the
+  column (`data-send-room`) that is as tall as it takes and shorter by every
+  line the answer adds, so nothing moves while it fills, and once the turn
+  fills the pane the room is nothing and the end is followed as ever. The
+  room isn't kept past the transcript being shown. Under a finger the end
   waits for it to lift, and a `scrollend` there (the browser sends one for the
   page's own writes too) doesn't end the gesture;
   `test-phone-scroll-ui.mjs` holds both by touch and by wheel. A Thread
@@ -2190,7 +2227,16 @@ Four rules hold this together, and each has a specific failure it prevents:
   every answer sat on its first character until the turn ended ("I", then the
   tool rows). `test-streaming-markdown.ts` holds `StreamFrames` to both, and
   `test-workspace-ui.mjs` streams a reply and requires the prose to catch up
-  while the turn is still running.
+  while the turn is still running. What a paint brings is revealed at a
+  steady pace and fades in (`useStreamReveal`, `RevealPace`): each lump over
+  about the gap the lumps come at, whole words at a time, never more than
+  400 ms behind the page (`REVEAL_MAX_MS`, the longest gap between a long
+  answer's paints) and all of it within 160 ms of the stream's end; at once
+  in a hidden tab or with reduced motion. It adds nothing to the page: the
+  text is there as it's painted, and CSS custom highlights (`mako-reveal-*`)
+  draw what isn't revealed yet transparent and what just was part-way to
+  the text colour, so the parse runs no more often and a row is as tall as
+  it would be without it. `test-reveal-pace.ts` holds the pace.
 - **Heavy content is made once, off the page.** A code block's tokens come
   from a worker and are kept by language and source (`codeHighlights`), so a
   block mounting again draws its colours in its first render and an answer's
@@ -2295,8 +2341,27 @@ row-check's warnings are. `test:stage-panes-ui` holds both.
 
 The stage's surfaces — Changes, Files, Terminal, Control, Agents —
 are all registered through `registerSurface` on exactly the same footing as
-anything a plugin would add. One reading surface opens in the right rail at
-a fixed, draggable width; the independent Terminal dock can remain open below it
+anything a plugin would add. Agents is one surface with two names
+(`useLabel`): for a Thread that leads Fins it is the **Overview**
+(`ApexOverview` in `inspector/apex-overview.tsx`), and an Apex's right rail
+opens on it, over whatever the rail last showed, until the person picks
+another surface while that Thread is on screen; the pick is that Thread's
+(`apexCompanions` in the prefs, `shownCompanion` in `state/stage.ts`), and a
+Thread with no Fins keeps the tab's own surface. The Overview's sections draw
+only while they hold something, in this order: Needs you (each ask in a line,
+with the crew card's own answer buttons), Working, Waiting (the idle and the
+queued, what a Fin waits on first), Failed, Done (newest first), Pull requests
+(each Thread of the tree's worktree branch's, from the worktree summaries the
+rail keeps, and any a Fin says it waits on: nothing is read for it), then
+Background work, the Apex's own provider's entries. A section shows ten rows
+until it's opened, and past a hundred draws the ones in view
+(`overview-window.tsx`); its heading folds it, kept for the Thread while the
+window is. Each section reads its own Fins from the roster through the rail's
+store (`useOverviewSection`), divided once per roster, so a token streaming
+anywhere runs none of them and a Fin's step draws that Fin's row
+(`test-apex-overview.ts`; `apex-overview-screenshots.mjs` draws it). One
+reading surface opens in the right rail at a fixed, draggable width (the
+divider writes the width in a frame and the pref on release); the independent Terminal dock can remain open below it
 at a fixed, draggable height. Neither uses percentage splits. The central workbench
 stays mounted under a covering sidebar so transcripts and file tabs keep their state.
 
@@ -3333,7 +3398,7 @@ deliberate action and never rides along with a commit.
   on screen, and `watchApexView` ends the desk's view once anything else shows. `npm run test:side-rail-ui` holds the
   rail, and `test:fin-transitions-ui` each way in through closing, another Thread, a reload and the rail on every form.
 - **One count and one vocabulary for an Apex's Fins.** Every surface (the
-  composer's chip, the crew card, the rail's pips, the Agents panel, the stop
+  composer's chip, the crew card, the rail's pips, the Overview, the stop
   card, the phone's row) counts from the Thread's one roster
   (`threadChildren` / `threadRollup` in `src/state/apex-fins.ts`) through
   `rollup`, and words it with `rollupLine`, `rollupChip` or `rollupLabel`
