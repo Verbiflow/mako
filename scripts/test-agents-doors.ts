@@ -112,8 +112,9 @@ try {
   const doors = { "in-thread": thread, "mako mcp": stdio }
   const listed: Record<string, Awaited<ReturnType<Client["listTools"]>>["tools"]> = {}
   for (const [door, client] of Object.entries(doors)) {
-    assert.ok(client.getInstructions()?.includes(REPORT_FOLLOW_UP_INSTRUCTIONS), `${door} carries the common actionable-report directive`)
     listed[door] = (await client.listTools()).tools
+    // Said once where a Fin reads it as it reports (and in its brief), not again in the server's instructions.
+    assert.ok(listed[door]!.find((tool) => tool.name === "agents_report")?.description?.includes(REPORT_FOLLOW_UP_INSTRUCTIONS), `${door}'s agents_report carries the common actionable-report directive`)
     assert.deepEqual(listed[door]!.map((tool) => tool.name).filter((name) => name.startsWith("agents_")).sort(), AGENT_TOOLS.map((tool) => tool.mcp.name).sort(), `${door} lists every tool`)
     for (const tool of AGENT_TOOLS) {
       const schema = listed[door]!.find((listedTool) => listedTool.name === tool.mcp.name)!.inputSchema
