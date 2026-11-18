@@ -116,6 +116,15 @@ const { values } = parseArgs({
     // The budget of a recorded run (`bench:host-person`): the steady busy share and the longest hold it may reach.
     "max-busy": { type: "string" },
     "max-hold-ms": { type: "string" },
+    // And the longest hold the thread spent computing (its own CPU time in the gap): what the host's code did, apart
+    // from a write or a read it waited on.
+    "max-run-ms": { type: "string" },
+    // The host's niceness, 5 as it always ran here; 0 runs it as the yardstick runs, to tell a hold that is the host's
+    // from one that is the machine not running a lowered process.
+    nice: { type: "string", default: "5" },
+    // A recorded run without the CPU profile: its holds have no function, only their length and the thread's own CPU
+    // time, to tell what the sampler itself adds (it stops the thread it samples).
+    "no-profile": { type: "boolean", default: false },
   },
 })
 /** The harness the timed sends go through (`--harness`). */
@@ -252,6 +261,8 @@ if (workingCount > 0 && !world.trees.length) throw new Error("--working needs a 
 const workSteps = new Map<string, number>()
 const workDone = new Set<string>()
 const gate = { bursting: false, waiting: new Set<string>(), open: () => {} }
+/** The working Fins' conversations, to say whose journal commits were slow. */
+const workingConversations = new Set<string>()
 const gateOpened = new Promise<void>((opened) => { gate.open = opened })
 const WORK_WORDS = "reading the module and its callers then changing the one function that decides it and running the checks again before the next part".split(" ")
 const workText = (seed: number, words: number) => Array.from({ length: words }, (_, index) => WORK_WORDS[(seed * 7 + index * 13) % WORK_WORDS.length]).join(" ")
@@ -324,7 +335,7 @@ if (model) {
   const { directory, socket } = runtimeLocation(world.dataRoot)
   mkdirSync(directory, { recursive: true, mode: 0o700 })
   const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(MAKO_|CLAUDE_|CODEX_HOME|CURSOR_|GROK_|XAI_)/.test(name)))
-  const profileDir = values["cpu-prof"] ? resolve(values["cpu-prof"]) : record && join(record, "profiles")
+  const profileDir = values["cpu-prof"] ? resolve(values["cpu-prof"]) : record && !values["no-profile"] ? join(record, "profiles") : undefined
   if (profileDir) mkdirSync(profileDir, { recursive: true })
   // `--node-arg` passes options to the host's Node (a heap limit, `--heap-prof`); `--gc` traces its collections.
   // The host's own options first, as the app starts it (`hostCommand`): the program's first line isn't read when Node runs it.
@@ -345,7 +356,7 @@ if (model) {
   if (earlyYardstick) await delay(1_500)
   const phases: Phase[] = []
   const spawnedAt = Date.now()
-  host = spawn("nice", ["-n", "5", process.execPath, ...nodeArgs, ...(profileDir ? ["--cpu-prof", "--cpu-prof-dir", profileDir, "--cpu-prof-interval", "1000"] : []), hostScript], {
+  host = spawn("nice", ["-n", values.nice, process.execPath, ...nodeArgs, ...(profileDir ? ["--cpu-prof", "--cpu-prof-dir", profileDir, "--cpu-prof-interval", "1000"] : []), hostScript], {
     // Claude Code's config folder named outright: its login, and so its keychain item, are the world's own
     // (`Claude Code-credentials-<hash of the folder>`), never the person's.
     env: { ...env, HOME: world.home, TMPDIR: world.temporary, MAKO_DATA_ROOT: world.dataRoot, ...harness === "claude" && { CLAUDE_CONFIG_DIR: join(world.home, ".claude") },
@@ -559,10 +570,11 @@ if (model) {
     const all = world.trees.reduce((sum, tree) => sum + tree.fins, 0)
     for (let i = 0, of = 0, within = world.trees[0]!.fins; i < workingCount; i += 1) {
       while (of < world.trees.length - 1 && (i / workingCount) * all >= within) within += world.trees[++of]!.fins
-      const started = z.object({ refused: z.string().optional() }).loose().parse(await call("mako:agents-start", { kind: "agent", session: world.trees[of]!.session }, {
+      const started = z.object({ refused: z.string().optional(), conversation: z.string().optional() }).loose().parse(await call("mako:agents-start", { kind: "agent", session: world.trees[of]!.session }, {
         brief: { objective: `BENCH-W${i} work on part ${i}.` }, harness: "codex", name: `work-${i}`, clientKey: `work-${i}`, cwd: fins[i % fins.length]!.path, mode: "background", wake: values.wake, queue: true,
       }))
       if (started.refused) throw new Error(`Working Fin ${i} was refused: ${JSON.stringify(started)}`)
+      if (started.conversation) workingConversations.add(started.conversation)
     }
     say(`${workingCount} working Fins started; waiting for each to ask the model`)
     for (const deadline = Date.now() + 10 * 60_000; workSteps.size < workingCount; await delay(500))
@@ -762,6 +774,7 @@ if (model) {
   // A recorded run: every hold with its function goes to `holds.json` beside the report, and the host's log is kept.
   let recorded: Omit<ReturnType<typeof recordedRun>, "every"> | undefined
   let sources: ReturnType<typeof bySource> | undefined
+  let slowCommits: Record<string, { count: number; ms: number; worstMs: number }> | undefined
   const overBudget: string[] = []
   let threads: { threadId: number; busyShare: number; delayMs: { p50: number; p99: number; max: number }; profile?: ReturnType<typeof threadProfile> }[] | undefined
   if (record && profile && profileDir) {
@@ -772,16 +785,30 @@ if (model) {
     // yardstick's own worst wait over the same stretch, so a machine that stopped every process fails nothing. The
     // host's start and its stop are not judged: what they hold is said, and nobody is streaming through them.
     const judged = new Set(["baseline", "steady", "burst"])
-    const stalled = new Map(rest.phases.map((phase) => [phase.name, phase.yardstickLateMs?.max ?? 0]))
     if (values["max-hold-ms"]) {
       const limit = Number(values["max-hold-ms"])
-      const over = every.filter((hold) => judged.has(hold.phase) && hold.ms > limit + (stalled.get(hold.phase) ?? 0)).sort((a, b) => b.ms - a.ms)
+      const over = every.filter((hold) => judged.has(hold.phase) && hold.ms > limit + (hold.yardstickMs ?? 0)).sort((a, b) => b.ms - a.ms)
       if (over.length) overBudget.push(`${over.length} holds past ${limit} ms outside start and stop; the longest ${over[0]!.ms} ms in ${over[0]!.phase}, in ${over[0]!.top}`)
+    }
+    if (values["max-run-ms"]) {
+      const limit = Number(values["max-run-ms"])
+      const over = every.filter((hold) => judged.has(hold.phase) && (hold.cpuMs ?? 0) > limit).sort((a, b) => (b.cpuMs ?? 0) - (a.cpuMs ?? 0))
+      if (over.length) overBudget.push(`${over.length} holds in which the thread computed past ${limit} ms; the longest ${over[0]!.cpuMs} ms in ${over[0]!.phase}, in ${over[0]!.top}`)
     }
     if (values["max-busy"]) {
       const steady = rest.phases.find((phase) => phase.name === "steady")
       if (steady && steady.busyShare > Number(values["max-busy"])) overBudget.push(`the thread was busy ${Math.round(steady.busyShare * 1000) / 10}% of the steady stretch, past ${Number(values["max-busy"]) * 100}%`)
     }
+    // Whose commits were slow: a working Fin's, a seeded Apex's (which takes its Fins' roster at rest), the timed sends'.
+    const seededApexes = new Set(world.trees.map((tree) => tree.conversation))
+    const whose = (id: string) => workingConversations.has(id) ? "working Fin" : seededApexes.has(id) ? "seeded Apex" : id === conversation ? "timed sends" : "another"
+    const slowBy = new Map<string, { count: number; ms: number; worstMs: number }>()
+    for (const commit of rest.commits?.slowOnes ?? []) {
+      const key = `${whose(commit.conversation)}, ${commit.running ? "turn running" : "at rest"}, ${commit.background ? "worker checkpoints" : "own checkpoints"}`
+      const held = slowBy.get(key) ?? { count: 0, ms: 0, worstMs: 0 }
+      slowBy.set(key, { count: held.count + 1, ms: Math.round(held.ms + commit.ms), worstMs: Math.max(held.worstMs, commit.ms) })
+    }
+    slowCommits = Object.fromEntries(slowBy)
     sources = bySource(join(record, `main-${hostPid}.json`), profile, phases)
     writeFileSync(join(record, "holds.json"), JSON.stringify(every))
     threads = readdirSync(record).filter((name) => name.startsWith(`thread-${hostPid}-`)).map((name) => {
@@ -794,7 +821,7 @@ if (model) {
   }
   const report = {
     scale: values.scale, host: hostScript, seconds: Number(values.seconds), fins: fins.length, windows, windowCalls, windowFailures,
-    ...record && { world: worldSaid, start, ...quiet && { quiet }, phases, working: { fins: workingCount, steps: [...workSteps.values()].reduce((sum, steps) => sum + steps, 0) }, ...burst && { burst }, ...recorded && { recorded }, ...sources && { sources }, ...threads && { threads } },
+    ...record && { world: worldSaid, start, ...quiet && { quiet }, phases, working: { fins: workingCount, steps: [...workSteps.values()].reduce((sum, steps) => sum + steps, 0) }, ...burst && { burst }, ...recorded && { recorded }, ...sources && { sources }, ...slowCommits && { slowCommits }, ...threads && { threads } },
     measuredWindow: { from: probedFrom, to: probedTo }, outputs,
     ...values["tool-heavy"] && { toolWorkload: { callsPerTurn: TOOL_CALLS, requestedTurns: TOOL_TURNS, steps: Object.fromEntries(toolSteps), completed: [...completedTools] } },
     ...answers, ...model && { sendSamples: sends, sendDetails }, eventLoop: health.eventLoop, peakMb: unread ? null : peakMb, memoryReadings: memory.readings, memoryMisses: memory.misses,

@@ -11,7 +11,8 @@ import { COMPACT_LIVE_FORM, WINDOW_LIVE_FORM } from "@mako/protocol/live-form"
 import type { NativeAgent, NativeAgentRoster } from "@mako/host/contracts/native-agents"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { WorkingSet, workingThreads, type WorkingSnapshot } from "@mako/host/conversations/cloud-handoffs"
-import { ThreadStore } from "@mako/host/threads/store"
+import { HELD_BY_TABLE, heldBy, ThreadStore } from "@mako/host/threads/store"
+import { readFileSync } from "node:fs"
 import { DatabaseSync } from "node:sqlite"
 import { atOnce } from "@mako/sessions/slices"
 import { JournalReaders } from "@mako/host/conversations/journal-readers"
@@ -214,7 +215,7 @@ try {
       world.agents.moved(fins[1]!.conversation!)
       assert.deepEqual(asked(), { found: asked().found, walked: false }, "a Fin's token batch walks nothing")
 
-      // A commit that kept no report, answer or edge, this host's and another's.
+        // A commit that kept no report, answer or edge, this host's and another's.
       world.store.registerJournal({ conversationId: randomUUID(), createdAt: now, harness: "claude", bindings: [{ provider: "claude", nativeId: randomUUID() }] }, { kind: "service", name: "migration" })
       assert.equal(asked().walked, false, "this host's unrelated commit walks nothing")
       const other = new ThreadStore(join(root, "asks", "threads.sqlite"))
@@ -242,6 +243,65 @@ try {
       const afterStop = asked().found
       assert.notEqual(afterStop?.ask.id, second.id, "a stopped Fin's ask is hidden at once")
       assert.equal(afterStop?.more, 0)
+
+    // The edges this host's store holds: what a fresh read of the store says, after each kind of change, and read
+      // again only for a change that can move them.
+      {
+        const path = join(root, "asks", "threads.sqlite")
+        let reads = 0
+        const sql = world.store["sql"].bind(world.store)
+        world.store["sql"] = (text: string) => { if (text.startsWith("SELECT record FROM thread_parents ORDER BY")) reads += 1; return sql(text) }
+        // With them, each Thread's record and conversations, held through the same commits.
+        const said = (store: ThreadStore) => {
+          const threads = store.edges().all.flatMap((edge) => [edge.parent, edge.child])
+          return JSON.stringify([store.edges().all, [...store.threadConversations(threads)].sort(([left], [right]) => (left < right ? -1 : 1)), threads.map((thread) => store.thread(ThreadIdSchema.parse(thread)))])
+        }
+        const fresh = () => { const store = new ThreadStore(path); try { return said(store) } finally { store.close() } }
+        const same = (after: string) => assert.equal(said(world.store), fresh(), `the edges and Threads held are the store's ${after}`)
+        const d = kept(await world.agents.start(apex.caller, { name: "d", clientKey: "d", harness: "claude", brief: { objective: "Work on d" }, cwd: root }))
+        const e = kept(await world.agents.start(apex.caller, { name: "e", clientKey: "e", harness: "claude", brief: { objective: "Work on e" }, cwd: root }))
+        await world.settle(100)
+        same("as the Fins started")
+        const held = world.store.edges()
+        reads = 0
+        world.store.keepReport({ id: `report:${d.child!}:note`, child: ThreadIdSchema.parse(d.child!), status: "progress", summary: "Half way.", ownerGeneration: Number.MAX_SAFE_INTEGER, at: now })
+        assert.equal(world.store.edges(), held, "a commit that writes no edge leaves the edges held")
+        assert.equal(reads, 0, "and reads none of them")
+        // A Session placed in a Thread of its own could have been a child's: read again, and the same edges still.
+        world.store.registerJournal({ conversationId: randomUUID(), createdAt: now, harness: "claude", bindings: [] }, { kind: "service", name: "migration" })
+        assert.equal(world.store.edges(), held)
+        // A Session bound to a child's Thread is one of `childNative`'s: a claim moves the edges.
+        const bound = randomUUID()
+        assert.equal(world.store.edges().childNative("claude", bound), false)
+        world.store.registerJournal({ conversationId: d.conversation!, createdAt: now, harness: "claude", bindings: [{ provider: "claude", nativeId: bound }] }, { kind: "service", name: "migration" })
+        assert.equal(world.store.edges().childNative("claude", bound), true, "a child's new native session is seen at once")
+        same("after a native claim")
+        const stopped = kept(await world.agents.stop(apex.caller, { child: "e" }))
+        assert.ok(stopped)
+        await world.settle(100)
+        assert.notEqual(world.store.edges().of(ThreadIdSchema.parse(e.child!))?.closedAt, undefined, "an edge closed is seen at once")
+        same("after a Fin was stopped")
+        const elsewhere = new ThreadStore(path)
+        const edge = elsewhere.edges().of(ThreadIdSchema.parse(d.child!))!
+        elsewhere.keepEdge({ ...edge, closedAt: now, closedReason: "stopped" })
+        elsewhere.close()
+        assert.notEqual(world.store.edges().of(edge.child)?.closedAt, undefined, "an edge another host closed is seen at once")
+        same("after another host's commit")
+        const renamed = ThreadIdSchema.parse(d.child!)
+        world.store.renameThread({ operationId: randomUUID(), thread: renamed, title: "Renamed", actor: { kind: "service", name: "migration" } })
+        assert.equal(world.store.thread(renamed)?.title, "Renamed", "a Thread renamed is read at once")
+        same("after a Thread was renamed")
+        // A store opened with the split on (one conversation a Thread), which writes on the connection itself as it
+        // opens: what it holds once open is what a fresh read says.
+        const split = new ThreadStore(path, { oneConversation: true })
+        const afterSplit = said(split)
+        split.close()
+        const again = new ThreadStore(path, { oneConversation: true })
+        assert.equal(afterSplit, said(again), "a store that split Threads as it opened holds what the store says")
+        again.close()
+        same("after another host split Threads")
+        world.store["sql"] = sql
+      }
     } finally {
       await world.close()
     }
@@ -281,6 +341,33 @@ try {
       await readers.stop()
     }
   }
+  // What the store holds through a commit is decided by the table a statement writes, and every table says which:
+  // one added to the schema without a line here fails, as does the connection used outside the store's opening,
+  // where a write would pass `sql` unseen.
+  {
+    const source = ["store.ts", "thread-split.ts"].map((name) => readFileSync(new URL(`../packages/host/src/threads/${name}`, import.meta.url), "utf8"))
+    const tables = new Set(source.flatMap((text) => [...text.matchAll(/CREATE TABLE (?:IF NOT EXISTS )?([a-z_]+)/g)].map((found) => found[1]!)))
+    tables.delete("background_agents")
+    assert.ok(tables.size > 30)
+    assert.deepEqual([...tables].filter((table) => !HELD_BY_TABLE.has(table)), [], "every table of the store says what its writes can change")
+    assert.equal(heldBy("INSERT INTO a_table_added_later (id) VALUES (?)"), "both", "a table without a line drops everything held")
+    assert.equal(heldBy("WITH moved AS (SELECT 1) UPDATE memberships SET thread_id = ?"), "both", "a statement that can't be read drops everything held")
+    assert.equal(heldBy("INSERT OR IGNORE INTO thread_reports (id) VALUES (?)"), "neither")
+    assert.equal(heldBy("UPDATE memberships SET thread_id = ? WHERE session_id = ?"), "both")
+    assert.equal(heldBy("DELETE FROM sources WHERE session_id = ?"), "edges")
+    assert.equal(heldBy("SELECT record FROM thread_parents ORDER BY created_at"), "neither")
+    // The connection itself is used only while the store opens, and by what every write and read goes through.
+    const opening = new Set(["constructor", "create", "migrate", "migrateBackgroundAgents", "keepOneWorktreePerThread", "closeInternalRuns", "checkReadable", "close", "sql", "meta", "syncVersion", "write"])
+    let method = ""
+    const direct = new Set<string>()
+    for (const line of source[0]!.split("\n")) {
+      const named = /^  (?:private |static |async |get |protected |override )*(#?[A-Za-z]+)(?:<[^>]*>)?\(/.exec(line)?.[1]
+      if (named && !["if", "for", "while", "switch", "return"].includes(named)) method = named
+      if (/\bthis\.db\b/.test(line)) direct.add(method)
+    }
+    assert.deepEqual([...direct].filter((name) => !opening.has(name)), [], "the store's connection is used directly only as it opens")
+  }
+
   console.log("flush costs ok")
 } finally {
   rmSync(root, { recursive: true, force: true })

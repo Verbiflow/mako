@@ -115,7 +115,7 @@
     "bench:orch-ask": "tsx scripts/bench-orch-ask.ts",
     "bench:sync-pipeline": "npm run -s build --workspace @mako/sessions && tsx scripts/bench-sync-pipeline.ts",
     "bench:host-load": "tsx --tsconfig tsconfig.scripts.json scripts/bench-host-load.ts",
-    "bench:host-person": "tsx --tsconfig tsconfig.scripts.json scripts/bench-host-load.ts --scale person --record ${MAKO_BENCH_OUT:?name a folder for the recording} --account --send --send-every 20000 --working 30 --seconds 300 --warmup 30 --burst 60 --probe-every 100,1000 --times 1000000 --max-busy 0.5 --max-hold-ms 600",
+    "bench:host-person": "tsx --tsconfig tsconfig.scripts.json scripts/bench-host-load.ts --scale person --record ${MAKO_BENCH_OUT:?name a folder for the recording} --account --send --send-every 20000 --working 30 --seconds 300 --warmup 30 --burst 60 --probe-every 100,1000 --times 1000000 --max-busy 0.47 --max-hold-ms 1000 --max-run-ms 250",
     "bench:vs-bare": "tsx --tsconfig tsconfig.scripts.json scripts/bench-vs-bare.ts",
     "bench:window": "node scripts/bench-window.mjs",
     "test:host-load-world": "tsx --tsconfig tsconfig.scripts.json scripts/test-host-load-world.ts",

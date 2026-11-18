@@ -107,6 +107,37 @@ export const THREAD_STORE_MIGRATION = 7
 const OPEN_WAIT_MS = 5000
 const WRITE_WAIT_MS = 1000
 const PLACE_BATCH = 500
+/**
+ * A statement that can change what `edges` reads: the parent edges, and the native sessions of their children's
+ * Threads (a claim, a source, a Session's Thread). A Session or a Thread removed takes its memberships with it.
+ */
+/**
+ * Every table of the store, and what the store holds in memory that a write to it can change: the parent `edges`
+ * (the edges, and the native sessions of their children's Threads), each Thread's record and conversations
+ * (`threads`), `both`, or `neither`. A statement that writes a table goes by this (`heldBy`); a table that isn't
+ * here, and a statement that can't be read, drop both, so a table or a statement added without a line here is slow,
+ * never stale. `test:flush-costs` fails on a table of the schema that has no line.
+ */
+export const HELD_BY_TABLE = new Map<string, "edges" | "threads" | "both" | "neither">(Object.entries({
+  thread_parents: "edges", native_claims: "edges", sources: "edges",
+  memberships: "both", threads: "both", sessions: "both",
+  journals: "threads",
+  agent_answers: "neither", agent_cancels: "neither", agent_placings: "neither", agent_pull_wakes: "neither", agent_report_action_ops: "neither",
+  agent_report_actions: "neither", agent_spawns: "neither", app_environments: "neither", executions: "neither", fin_moves: "neither",
+  limit_notices: "neither", locators: "neither", moves: "neither", operations: "neither", placement_changes: "neither", principals: "neither",
+  retired_worktrees: "neither", store_meta: "neither", store_migrations: "neither", thread_environments: "neither", thread_places: "neither",
+  thread_purposes: "neither", thread_reports: "neither", thread_splits: "neither", thread_worktree_repositories: "neither",
+  thread_worktrees: "neither", title_changes: "neither", title_exchanges: "neither", turn_waits: "neither",
+}))
+const TABLE_WRITE = /^\s*(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE(?:\s+OR\s+\w+)?|DELETE\s+FROM)\s+["`]?([A-Za-z_]+)/i
+const READ_ONLY = /^\s*(?:SELECT|PRAGMA\s+\w+\s*$|PRAGMA\s+table_info)/i
+
+/** What a statement of the store can change of what it holds in memory (`HELD_BY_TABLE`): everything, unless it reads or writes a table known not to. */
+export function heldBy(text: string): "edges" | "threads" | "both" | "neither" {
+  const table = TABLE_WRITE.exec(text)?.[1]
+  if (table) return HELD_BY_TABLE.get(table) ?? "both"
+  return READ_ONLY.test(text) ? "neither" : "both"
+}
 /** Rows `placeAll` places between two turns of the loop: under 20 ms of it. */
 const PLACE_ALL_BATCH = 200
 
@@ -807,6 +838,11 @@ export class ThreadStore {
   private readonly realPath: (path: string) => string
   private depth = 0
   private readonly placements = new Map<string, ThreadPlacement>()
+  /** The statements of `sql` that write a table the edges are read from (`heldBy`). */
+  private readonly edgeWrites = new Set<string>()
+  /** The statements that write what a Thread's record and conversations are read from (`heldBy`), and whether one ran since they were last dropped. */
+  private readonly threadWrites = new Set<string>()
+  private threadsTouched = false
   /** Moves whenever a placement this store holds is new, changed or forgotten (`placementVersion`). */
   private placementEpoch = 0
   /** The cache keys holding each Session, so a logged change forgets only those. */
@@ -836,7 +872,14 @@ export class ThreadStore {
   private readonly answersSeen = new Map<string, KeptAnswer | null>()
   private readonly forksSeen = new Map<string, SessionId | null>()
   private groupsSeen: { revision: number; groups: ThreadGroup[] } | undefined
-  private edgesSeen: { revision: number; edges: ThreadEdges } | undefined
+  private edgesSeen: { epoch: number; edges: ThreadEdges } | undefined
+  /**
+   * Moves when the edges may have changed: a statement of this store's that writes a table they are read from
+   * (`heldBy`), another process's commit, a write rolled back. A commit of anything else leaves it, and `edges`
+   * answers what it holds without reading: read again at every commit, 30 Fins ending their turns at once re-read
+   * every edge of 356 for each of their commits, 445 ms of the loop in one stretch.
+   */
+  private edgesEpoch = 0
   private asksSeen: { revision: number; stamp: string } | undefined
   private queuedSeen: { revision: number; spawns: QueuedSpawn[] } | undefined
   private childSessionsSeen: { revision: number; children: ReadonlyMap<string, { harness: string; nativeId: string }[]> } | undefined
@@ -897,6 +940,17 @@ export class ThreadStore {
       this.close()
       throw error
     }
+    // Opening writes on the connection itself (the schema, migrations, `splitThreads`), which `sql` never sees: what
+    // was read while it did is dropped, and from here every write is a statement of `sql`.
+    this.dropHeld()
+  }
+
+  /** Everything held of the edges and of each Thread: read again as it's next asked for. */
+  private dropHeld(): void {
+    this.edgesEpoch += 1
+    this.conversationsSeen.clear()
+    this.threadsSeen.clear()
+    this.threadsTouched = false
   }
 
   /** Create or migrate the store; false, with nothing written, for one in a newer Mako's format this build may read. */
@@ -1051,7 +1105,8 @@ export class ThreadStore {
   edges(): ThreadEdges {
     this.syncVersion()
     const held = this.edgesSeen
-    if (held && held.revision === this.revision && this.depth === 0) return held.edges
+    if (held && held.epoch === this.edgesEpoch && this.depth === 0) return held.edges
+    const epoch = this.edgesEpoch
     const records = this.sql("SELECT record FROM thread_parents ORDER BY created_at, child_thread").all().map((row) => RecordRowSchema.parse(row).record)
     const nativeRows = records.length ? this.sql(`SELECT c.harness, c.native_id FROM native_claims c JOIN memberships m ON m.session_id = c.session_id
         WHERE c.device_id = ? AND m.thread_id IN (SELECT child_thread FROM thread_parents)
@@ -1061,7 +1116,7 @@ export class ThreadStore {
     const same = this.edgesKept && this.edgesKept.records.length === records.length && this.edgesKept.records.every((record, index) => record === records[index]) &&
       this.edgesKept.native.size === native.size && [...native].every((key) => this.edgesKept!.native.has(key))
     if (same) {
-      if (this.depth === 0) this.edgesSeen = { revision: this.revision, edges: this.edgesKept!.edges }
+      if (this.depth === 0) this.edgesSeen = { epoch, edges: this.edgesKept!.edges }
       return this.edgesKept!.edges
     }
     const all: ThreadParent[] = []
@@ -1094,7 +1149,7 @@ export class ThreadStore {
       childNative: (harness, nativeId) => native.has(runKey(harness, nativeId)) || byRun.has(runKey(harness, nativeId)),
     }
     if (this.depth === 0) {
-      this.edgesSeen = { revision: this.revision, edges }
+      this.edgesSeen = { epoch, edges }
       this.edgesKept = { records, native, edges }
     }
     return edges
@@ -3750,7 +3805,13 @@ export class ThreadStore {
     if (!statement) {
       statement = this.db.prepare(text)
       this.statements.set(text, statement)
+      const held = heldBy(text)
+      if (held === "edges" || held === "both") this.edgeWrites.add(text)
+      if (held === "threads" || held === "both") this.threadWrites.add(text)
     }
+    // Asked for to be run: what the edges are read from is about to change.
+    if (this.edgeWrites.has(text)) this.edgesEpoch += 1
+    if (this.threadWrites.has(text)) this.threadsTouched = true
     return statement
   }
 
@@ -3788,6 +3849,7 @@ export class ThreadStore {
     // Another host committed: a newer Mako may have raised the format since this one opened.
     if (!this.reader) this.format = readStoreFormat(this.db, "store_meta") ?? this.format
     this.executions.clear()
+    this.edgesEpoch += 1
     this.committed(true)
     this.consumeChanges(true)
   }
@@ -3819,13 +3881,18 @@ export class ThreadStore {
     this.revision += 1
     this.executionsSeen.clear()
     this.titlesSeen.clear()
-    this.conversationsSeen.clear()
-    this.threadsSeen.clear()
+    // Each Thread's record and conversations stand through a commit that wrote none of what they're read from: read
+    // again at every commit, 30 Fins ending their turns at once re-read every Fin's of 356 for each of their commits.
+    if (external) this.dropHeld()
+    else if (this.threadsTouched) {
+      this.conversationsSeen.clear()
+      this.threadsSeen.clear()
+      this.threadsTouched = false
+    }
     this.reportAsksSeen.clear()
     this.answersSeen.clear()
     this.forksSeen.clear()
     this.groupsSeen = undefined
-    this.edgesSeen = undefined
     if (external) this.worktreesSeen = undefined
   }
 
@@ -3871,6 +3938,7 @@ export class ThreadStore {
       this.db.exec("ROLLBACK")
       this.forgetPlacements()
       this.executions.clear()
+      this.edgesEpoch += 1
       this.committed()
       // A newer Mako's guard stopped the write inside SQLite: it raised the format after this check.
       if (error instanceof Error && guardRefused(error)) {

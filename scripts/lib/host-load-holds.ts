@@ -14,11 +14,11 @@ export const RecordingSchema = z.object({
   pid: z.number(), tickMs: z.number(), holdMs: z.number(),
   mark: z.object({ at: z.number(), name: z.string() }),
   ticks: z.object({ at: z.array(z.number()), late: z.array(z.number()) }),
-  holds: z.array(z.object({ from: z.number(), to: z.number(), during: z.array(z.string()) })),
+  holds: z.array(z.object({ from: z.number(), to: z.number(), cpuMs: z.number().optional(), during: z.array(z.string()) })),
   samples: z.array(z.object({ at: z.number(), activeMs: z.number(), idleMs: z.number(), rssMb: z.number(), heapUsedMb: z.number(), heapTotalMb: z.number(), externalMb: z.number(), cpuMs: z.number() })),
   collections: z.array(z.tuple([z.number(), z.number(), z.number()])),
   /** Journal commits: every one summed by part, and each slow one as `[at, begin, rows, commit, background]`. */
-  commits: z.object({ count: z.number(), beginMs: z.number(), rowsMs: z.number(), commitMs: z.number(), foreground: z.number(), slow: z.array(z.tuple([z.number(), z.number(), z.number(), z.number(), z.number()])) }).optional(),
+  commits: z.object({ count: z.number(), beginMs: z.number(), rowsMs: z.number(), commitMs: z.number(), foreground: z.number(), slow: z.array(z.tuple([z.number(), z.number(), z.number(), z.number(), z.number(), z.string(), z.number()])) }).optional(),
 })
 export type Recording = z.infer<typeof RecordingSchema>
 
@@ -49,6 +49,10 @@ export interface Hold {
   frames: { frame: string; ms: number }[]
   leaves: { frame: string; ms: number }[]
   gcMs: number
+  /** The thread's own CPU time in the gap, where the recorder kept it: the rest of the gap it waited, or wasn't run. */
+  cpuMs?: number
+  /** The yardstick's worst lateness over the same moments: a machine that stopped every process stops it too. */
+  yardstickMs?: number
   during: string[]
 }
 
@@ -121,6 +125,19 @@ export function timeline(profile: CpuProfile, recording: Recording) {
   return { each }
 }
 
+/** The yardstick's worst lateness in the ticks from just before `from` to just after `to`. */
+function yardstickOver(series: Series, from: number, to: number): number {
+  let low = 0, high = series.at.length
+  while (low < high) {
+    const middle = (low + high) >> 1
+    if (series.at[middle]! < from - 25) low = middle + 1
+    else high = middle
+  }
+  let worst = 0
+  for (let at = low; at < series.at.length && series.at[at]! <= to + 25; at += 1) worst = Math.max(worst, series.late[at]!)
+  return round(worst)
+}
+
 const most = (totals: Map<string, number>, top: number) => [...totals].sort((a, b) => b[1] - a[1]).slice(0, top).map(([frame, ms]) => ({ frame, ms: round(ms) }))
 const add = (totals: Map<string, number>, key: string, ms: number) => totals.set(key, (totals.get(key) ?? 0) + ms)
 
@@ -155,7 +172,8 @@ export function recordedRun(run: RecordedRun) {
     holds.push({
       at: Math.round(gap.from), phase: phaseOf(gap.from), gapMs: round(gap.to - gap.from), ms: round(ms),
       top: most(tops, 1)[0]?.frame ?? NONE, entry: most(entries, 1)[0]?.frame ?? NONE,
-      frames: most(own, 6), leaves: most(leaves, 3), gcMs: round(leaves.get("(garbage collector)") ?? 0), during: gap.during,
+      frames: most(own, 6), leaves: most(leaves, 3), gcMs: round(leaves.get("(garbage collector)") ?? 0),
+      ...gap.cpuMs !== undefined && { cpuMs: gap.cpuMs }, ...run.yardstick && { yardstickMs: yardstickOver(run.yardstick, gap.from, gap.to) }, during: gap.during,
     })
   }
 
@@ -239,6 +257,8 @@ export function recordedRun(run: RecordedRun) {
       return { overMs: ms, count: these.length, beginMs: part(1, these), rowsMs: part(2, these), commitMs: part(3, these), foreground: these.filter((commit) => commit[4] === 0).length }
     }),
     worst: [...slow].sort((a, b) => b[1] + b[2] + b[3] - (a[1] + a[2] + a[3])).slice(0, 8).map(([at, beginMs, rowsMs, commitMs, background]) => ({ phase: phaseOf(at), beginMs, rowsMs, commitMs, background: background === 1 })),
+    /** Each commit of 20 ms or more: whose it was, whether its turn ran and a worker checkpointed it, and its milliseconds. */
+    slowOnes: over(20, slow).map(([at, beginMs, rowsMs, commitMs, background, conversation, running]) => ({ phase: phaseOf(at), conversation, running: running === 1, background: background === 1, ms: round(beginMs + rowsMs + commitMs) })),
   }
 
   return {

@@ -719,6 +719,9 @@ export class JournalWriteError extends HostFailureError {
  * cut and grown again.
  */
 const WAL_KEPT_BYTES = 2 * 1024 * 1024
+/** Two commits this close together are a journal at rest that commits often; this long without one, it's quiet. */
+const OFTEN_MS = 2_000
+const QUIET_MS = 5_000
 const AutoCheckpointSchema = z.object({ wal_autocheckpoint: z.number().int().nonnegative() })
 
 /**
@@ -726,7 +729,7 @@ const AutoCheckpointSchema = z.object({ wal_autocheckpoint: z.number().int().non
  * the write lock, the rows, and the commit itself, and whether a worker checkpoints this journal (`background`) or the
  * commit does. Nothing is timed while nobody listens.
  */
-export const journalCommits = topic<{ beginMs: number; rowsMs: number; commitMs: number; background: boolean }>("mako:journal-commit")
+export const journalCommits = topic<{ conversation: string; running: boolean; beginMs: number; rowsMs: number; commitMs: number; background: boolean }>("mako:journal-commit")
 
 /**
  * One independent journal per conversation. Only changed blocks and requests
@@ -778,6 +781,9 @@ export class LiveJournal {
   private checkpoints?: WalCheckpoint
   /** Where a running turn's checkpoints go (`checkpointWhile`), and a place on the worker this journal is still leaving. */
   private primer?: WalPrimer
+  /** When this journal last committed, and the timer that lets a journal at rest go from the worker once it's quiet. */
+  private committedAt?: number
+  private quiet?: ReturnType<typeof setTimeout>
   private readonly statements = new Map<string, StatementSync>()
   private left?: Promise<void>
   private foregroundPages = 1_000
@@ -847,16 +853,33 @@ export class LiveJournal {
   }
 
   /**
-   * The worker checkpoints this journal while its turn runs, and no longer. A resident took its place on the worker
+   * The worker checkpoints this journal while it commits (a turn running, or commits coming often), and no longer. A resident took its place on the worker
    * as it was read in and kept it at rest: with a few hundred conversations in memory the worker's places went to
    * the first ones read, and the ones at work checkpointed inside their own commits, 96% of the commits of 30 Fins.
    */
   private checkpointWhile(running: boolean): void {
     if (this.closed) return
-    if (running) {
+    // A journal at rest that still commits often (an Apex's, which takes its Fins' roster as they work) keeps a place
+    // too, until it has been quiet a while: its commits were the slowest left once the running ones had theirs.
+    const now = performance.now()
+    const often = !running && this.committedAt !== undefined && now - this.committedAt < OFTEN_MS
+    this.committedAt = now
+    clearTimeout(this.quiet)
+    this.quiet = undefined
+    if (running || often) {
       if (!this.checkpoints && this.primer) this.lease(this.primer)
+      if (!running && this.checkpoints) {
+        this.quiet = setTimeout(() => this.leaveWorker(), QUIET_MS)
+        this.quiet.unref()
+      }
       return
     }
+    this.leaveWorker()
+  }
+
+  /** Lets go of its place on the worker, which checkpoints what it left as it closes its connection. */
+  private leaveWorker(): void {
+    if (this.closed) return
     const held = this.checkpoints
     if (!held) return
     this.checkpoints = undefined
@@ -1254,7 +1277,7 @@ export class LiveJournal {
       }
       const rows = timed === undefined ? 0 : performance.now()
       this.db.exec("COMMIT")
-      if (timed !== undefined) journalCommits.publish({ beginMs: begun - timed, rowsMs: rows - begun, commitMs: performance.now() - rows, background: this.checkpoints?.active() ?? false })
+      if (timed !== undefined) journalCommits.publish({ conversation: next.session.id, running: next.session.status === "running", beginMs: begun - timed, rowsMs: rows - begun, commitMs: performance.now() - rows, background: this.checkpoints?.active() ?? false })
       this.checkpoints?.committed()
       this.checkpointWhile(next.session.status === "running")
       if (writeOptions) this.optionsStored = true
@@ -1475,6 +1498,7 @@ export class LiveJournal {
   close(compact?: (path: string) => void | Promise<Reclaimed | void>, abandon = false): Promise<void> {
     if (this.closed) return this.released()
     this.closed = true
+    clearTimeout(this.quiet)
     if (abandon) this.keepFile()
     this.stopStaging()
     // Rows written ahead that the base row doesn't name go with the journal: dropped by the compaction, off this
@@ -1525,6 +1549,7 @@ export class LiveJournal {
   discard(): void {
     if (this.closed) return
     this.closed = true
+    clearTimeout(this.quiet)
     this.untidy = true
     this.stopStaging()
     this.db.close()
