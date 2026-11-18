@@ -106,6 +106,12 @@ interface AcpConversationBase {
    */
   behind?: LiveProjection
   blocks: Entry[]
+  /**
+   * What the host said its next batch will add to the last block (`LiveAhead`), drawn until that batch lands
+   * (`shownBlocks`). It counts only while `revision` is the one it names; `blocks` never holds it, so every batch and
+   * snapshot is read against what the host's journal holds.
+   */
+  ahead?: { revision: number; more: string }
   queued: AcpQueuedPrompt[]
   hiddenUserPrompt: string | null
   createdAt: number
@@ -228,7 +234,7 @@ type Conversations = AcpState["conversations"]
 const STREAMED: ReadonlySet<string> = new Set<keyof LiveAcpConversation>([
   "session", "blocks", "projection", "behind", "revision", "epoch", "updatedAt", "activityAt", "nativeActivity", "history",
   "releasedTurns", "base", "baseSource", "baseCoveredBlocks", "harnessTurns", "spentThrough", "turnWait", "goal", "side",
-  "historyFailure", "queued", "pendingPrompts", "hiddenUserPrompt", "replyBindingId", "sending", "canceling",
+  "historyFailure", "queued", "pendingPrompts", "hiddenUserPrompt", "replyBindingId", "sending", "canceling", "ahead",
 ])
 /** What a session says that no rail row reads: its context reading moves through a turn. */
 const SESSION_STREAMED: ReadonlySet<string> = new Set<keyof LiveSessionState>(["usage"])

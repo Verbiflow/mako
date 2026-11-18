@@ -14,6 +14,7 @@ import { LiveJournal, LiveRequestSchema } from "./live-journal.js"
 import { releaseHold } from "./live-ledger.js"
 import { snapshotFacts } from "./live-moves.js"
 import { activeBinding, launchAccount, launchCalls, launched, launchRouting, residentOf, revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
+import { liveStages } from "./live-stages.js"
 import { updateBinding } from "./live-sources.js"
 import { captureNativeHistory } from "./native-history.js"
 
@@ -209,6 +210,7 @@ export class LiveLaunches {
         releaseHold(dependencies.memory, provider, options.resume, options.conversationId)
       throw error
     }
+    if (options.initialRequest && liveStages.heard) liveStages.publish({ stage: "admitted", conversation: id, request: options.initialRequest.id })
     this.access.add(resident)
     this.access.bindingOwners.set(id, id)
     this.access.register(snapshot, this.access.actor(actor))

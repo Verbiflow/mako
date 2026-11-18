@@ -1966,7 +1966,23 @@ on (past `LONG_ANSWER_CHARS`, 1,500, with nothing else changed) waits up to
 `LONG_ANSWER_FLUSH_MS` (400 ms) or a paragraph's end instead
 (`conversations/answer-pace.ts`): sent each frame, its batches were mostly
 envelope, 156 bytes a token to a phone with 7 of them its words. Status changes,
-questions and approvals don't wait for it. A batch says `activityAt` only when
+questions and approvals don't wait for it. A turn's first words (its first
+text or thinking) flush at once whatever flushed before them: the turn's own
+status flushes had just started a frame, and its first token waited that frame
+out, 46 to 51 ms in every turn `npm run bench:vs-bare` measured. A window on the
+host's own machine doesn't wait for the batches' pace at all: every paint frame
+(`LIVE_AHEAD_MS`, 16 ms) it hears the text that waits for the next batch
+(`LiveAhead`, `LiveConversations.ahead`), all of it each time, said of the
+revision the last batch made, and draws it over its last block until that batch
+lands (`shownBlocks`); the batch then carries the same text to everyone. Nothing
+of it is journaled or numbered, no other device, outlet or reader of the compact
+form hears it (`windowEvent` in `transport/server.ts`), and a window whose
+stream holds more than 64 KB unread is told nothing ahead until it has caught
+up. Only text going on with the last block is said ahead; a new block or a call
+waits for its batch, a frame at most. Held to the batches' pace, a token reached
+the window 30 ms after the host had it at the median and 400 ms at worst;
+`scripts/test-live-ahead.ts` holds the batches to what they were and the
+window to its frame. A batch says `activityAt` only when
 it moved into another second, and carries a whole value (a control, a request,
 a roster) only when its content changed (`sharedFields`); a message whose
 record lands on what streamed travels as its frames alone

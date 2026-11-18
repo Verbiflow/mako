@@ -282,10 +282,21 @@ function toolInputs(messages: ChatMessage[]) {
   )
 }
 
+/**
+ * A conversation's blocks as they're drawn: what it holds, its last block going on with what the host said ahead of
+ * its next batch, where that was said of the revision it holds.
+ */
+export function shownBlocks(conversation: Pick<AcpConversation, "blocks" | "ahead" | "revision">): Entry[] {
+  const { blocks, ahead } = conversation
+  const last = blocks.at(-1)
+  if (!ahead || ahead.revision !== conversation.revision || (last?.type !== "text" && last?.type !== "thinking")) return blocks
+  return [...blocks.slice(0, -1), { ...last, text: last.text + ahead.more }]
+}
+
 export function projectAcp(conversation: AcpConversation): LiveProjection {
   return projectLive(
     {
-      blocks: conversation.blocks,
+      blocks: shownBlocks(conversation),
       base: conversation.base ?? null,
       baseCoveredBlocks: conversation.baseCoveredBlocks,
       history: conversation.history,

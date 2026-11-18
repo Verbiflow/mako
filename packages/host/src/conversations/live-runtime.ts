@@ -134,6 +134,13 @@ export interface Resident {
   timerDue?: number
   /** When it last flushed (`performance.now()`): the next change waits until a batch's frame has passed since. */
   flushedAt?: number
+  /** Whether the turn under way has flushed any of its words: its first text or thinking goes at once (`schedule`). */
+  saidWords?: boolean
+  /** The timer that says what waits ahead of its batch to this machine's windows (`LiveAhead`), and when it last did. */
+  aheadTimer?: ReturnType<typeof setTimeout>
+  aheadAt?: number
+  /** How much waiting text was last said ahead, so the same text isn't said twice. */
+  aheadSaid?: number
   displayPrompt?: string
   /** When anything last loaded or changed it; the memory budget lets the oldest go first. */
   usedAt?: number

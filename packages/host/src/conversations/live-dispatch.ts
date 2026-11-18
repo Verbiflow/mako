@@ -27,6 +27,7 @@ import type { LiveActions } from "./live-actions.js"
 import type { LiveCheckpoints } from "./live-checkpoints.js"
 import { contextPrompt } from "./live-context.js"
 import type { LiveAccess, Resident } from "./live-runtime.js"
+import { liveStages } from "./live-stages.js"
 import type { LiveTransfers } from "./live-transfers.js"
 import { baseUnread } from "./base-source.js"
 import { turnStart, usageMark } from "./live-settlement.js"
@@ -503,6 +504,7 @@ export class LiveDispatch {
       this.access.storageFailed(resident, { error })
       return
     }
+    if (liveStages.heard) liveStages.publish({ stage: "dispatching", conversation: resident.snapshot.session.id, request: request.id })
     const generation = resident.generation
     // Whether this prompt carries an Apex's roster after its harness forgot it (`rosterForgotten`): the handoff clears
     // the flag in the write that records it sent, so a send that goes no further leaves it for the next.
@@ -578,6 +580,7 @@ export class LiveDispatch {
         // carried answer what the Apex has heard, and Fins' news answers nothing.
         for (const each of resident.snapshot.requests) if (each.joinedInto === request.id) agents?.inputDelivered?.(resident.snapshot.session.id, each, "turn")
       }
+      if (liveStages.heard) liveStages.publish({ stage: "delivery", conversation: resident.snapshot.session.id, request: request.id, evidence: next.kind })
     }
     const drewIt = !shown && Boolean(text || request.attachments.length)
     const dispatch: PromptDispatch = { operationId: request.id, attemptId, report, ...text && { shown: text }, ...drewIt && { shownAt: toldAt } }
@@ -647,6 +650,7 @@ export class LiveDispatch {
           ]),
           current.context.reduce((text, manifest) => contextPrompt(manifest, text, dependencies.harnessLabel), moved ? `${words}\n\n${moved}` : words),
         ].filter(Boolean).join("\n\n")
+        if (liveStages.heard) liveStages.publish({ stage: "assembled", conversation: resident.snapshot.session.id, request: request.id, chars: text.length })
         // Where writes are held the message went ahead of its checkpoint; one whose submission runs the person's
         // code by itself waits for it here, as it is worded and before it is admitted.
         const held = heldSubmission(dependencies.writeHolds, driver.firstWrite?.submitRuns, active, text)
