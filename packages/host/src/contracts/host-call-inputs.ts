@@ -3513,6 +3513,7 @@ const inputs = {
   "mako:utility-model-settings": () => z.tuple([]),
   "mako:view-hints": () => z.tuple([]),
   "mako:watch-file": () => z.tuple([z.string()]),
+  "mako:window-shown": () => z.tuple([z.boolean()]),
   "mako:workspace-move-answer": () =>
     z.tuple([
       z.string(),
@@ -4010,6 +4011,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:utility-model-settings", "git"],
   ["mako:view-hints", "workspaces"],
   ["mako:watch-file", "workspaces"],
+  ["mako:window-shown", "workspaces"],
   ["mako:workspace-move-answer", "workspaces"],
   ["mako:workspace-move-bring", "workspaces"],
   ["mako:workspace-move-bring-stayed", "workspaces"],

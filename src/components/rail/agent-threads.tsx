@@ -1,4 +1,5 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
+import { everyWhileShown } from "@/lib/window-shown"
 import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { RailAnnouncer } from "@/components/rail/thread-status"
 import type { RailAsk } from "@/lib/rail-announcement"
@@ -193,8 +194,7 @@ function useLiveTime(): number {
   const [now, setNow] = useState(INITIAL_TIME)
 
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), LIVE_TIME_MS)
-    return () => window.clearInterval(timer)
+    return everyWhileShown(LIVE_TIME_MS, () => setNow(Date.now()))
   }, [])
 
   return now

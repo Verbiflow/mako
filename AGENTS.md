@@ -238,7 +238,7 @@ messages it was read from (`source`); the host stamps `startedAt` and
 counted as the larger of the roster's active non-ambient entries and the
 provider's own level (`backgroundTasks`), which can't wedge on a missed end.
 The window shows it as an hourglass on the row and tab, a quiet line at the
-transcript's end and the Agents panel; ambient watchers are listed and never
+transcript's end and the Agents panel (an Apex's Overview lists it as Background work); ambient watchers are listed and never
 counted there. What a provider still holds that wakes it, ambient watchers such
 as Claude's Monitor included, is `pendingWake`: a Fin's turn that ends on it
 waits on it, and a session holding it is never hibernated (`canHibernate`),
@@ -2124,7 +2124,8 @@ lands (`shownBlocks`); the batch then carries the same text to everyone. Nothing
 of it is journaled or numbered, no other device, outlet or reader of the compact
 form hears it (`windowEvent` in `transport/server.ts`), and a window whose
 stream holds more than 64 KB unread is told nothing ahead until it has caught
-up. Only text going on with the last block is said ahead; a new block or a call
+up, nor is a window that said nobody can see it (`mako:window-shown`, kept on
+its stream; a stream that never says is shown, as an older window's is). Only text going on with the last block is said ahead; a new block or a call
 waits for its batch, a frame at most. Held to the batches' pace, a token reached
 the window 30 ms after the host had it at the median and 400 ms at worst;
 `scripts/test-live-ahead.ts` holds the batches to what they were and the
@@ -2135,6 +2136,25 @@ record lands on what streamed travels as its frames alone
 (`deliverLiveUpdates`). On the
 renderer side components subscribe through selectors, so a token wakes the one
 turn rendering it — not the rail, the stage strip, or the titlebar's readings.
+
+**A hidden window draws nothing, so it does nothing for drawing**
+(`lib/window-shown.ts`, `state/window-hidden.ts`). While
+`document.visibilityState` is hidden (minimized, covered, another Space) a
+window still takes every batch in, so its revisions stay continuous and
+nothing is read again when it's back, but the conversation on screen isn't
+projected (its projection stays the object it was, `undrawnWhileHidden`),
+text said ahead is dropped, and every clock that only ages a label is gone,
+timer and all (`everyWhileShown`: the second clocks, the rail's and the
+tabs' minutes, the wait and quiet clocks, the layout watch). It tells its
+host, which sends it no `live-ahead`. Shown again, it tells the host, draws
+the conversation once from what it last drew (`drawUndrawn`) and reads each
+clock at once. `test-window-hidden.ts` holds a hidden window to no
+projection and no tick, and to the same state on return as a window that was
+visible throughout; `test-window-shown-host.ts` holds the host's side. Text
+said ahead of a conversation that isn't on screen sets nothing either, and
+what follows only the rail's facts of the live store (which folders run,
+what's on screen for notifications, the first-run agent) hears the rail's
+store, not every batch.
 
 Four rules hold this together, and each has a specific failure it prevents:
 
@@ -2367,8 +2387,27 @@ row-check's warnings are. `test:stage-panes-ui` holds both.
 
 The stage's surfaces — Changes, Files, Terminal, Control, Agents —
 are all registered through `registerSurface` on exactly the same footing as
-anything a plugin would add. One reading surface opens in the right rail at
-a fixed, draggable width; the independent Terminal dock can remain open below it
+anything a plugin would add. Agents is one surface with two names
+(`useLabel`): for a Thread that leads Fins it is the **Overview**
+(`ApexOverview` in `inspector/apex-overview.tsx`), and an Apex's right rail
+opens on it, over whatever the rail last showed, until the person picks
+another surface while that Thread is on screen; the pick is that Thread's
+(`apexCompanions` in the prefs, `shownCompanion` in `state/stage.ts`), and a
+Thread with no Fins keeps the tab's own surface. The Overview's sections draw
+only while they hold something, in this order: Needs you (each ask in a line,
+with the crew card's own answer buttons), Working, Waiting (the idle and the
+queued, what a Fin waits on first), Failed, Done (newest first), Pull requests
+(each Thread of the tree's worktree branch's, from the worktree summaries the
+rail keeps, and any a Fin says it waits on: nothing is read for it), then
+Background work, the Apex's own provider's entries. A section shows ten rows
+until it's opened, and past a hundred draws the ones in view
+(`overview-window.tsx`); its heading folds it, kept for the Thread while the
+window is. Each section reads its own Fins from the roster through the rail's
+store (`useOverviewSection`), divided once per roster, so a token streaming
+anywhere runs none of them and a Fin's step draws that Fin's row
+(`test-apex-overview.ts`; `apex-overview-screenshots.mjs` draws it). One
+reading surface opens in the right rail at a fixed, draggable width (the
+divider writes the width in a frame and the pref on release); the independent Terminal dock can remain open below it
 at a fixed, draggable height. Neither uses percentage splits. The central workbench
 stays mounted under a covering sidebar so transcripts and file tabs keep their state.
 
@@ -3405,7 +3444,7 @@ deliberate action and never rides along with a commit.
   on screen, and `watchApexView` ends the desk's view once anything else shows. `npm run test:side-rail-ui` holds the
   rail, and `test:fin-transitions-ui` each way in through closing, another Thread, a reload and the rail on every form.
 - **One count and one vocabulary for an Apex's Fins.** Every surface (the
-  composer's chip, the crew card, the rail's pips, the Agents panel, the stop
+  composer's chip, the crew card, the rail's pips, the Overview, the stop
   card, the phone's row) counts from the Thread's one roster
   (`threadChildren` / `threadRollup` in `src/state/apex-fins.ts`) through
   `rollup`, and words it with `rollupLine`, `rollupChip` or `rollupLabel`
