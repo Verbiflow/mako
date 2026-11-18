@@ -246,6 +246,7 @@ export async function openWriter(settings: WriterSettings, ports: WriterPorts) {
   const journal = await SharedJournal.open({
     folder, host: { pid: settings.hostPid, dataRoot: settings.dataRoot, label: settings.label },
     privateAddress: ownerAddress(privateFolder),
+    socketOnly: true,
     privateReason: settings.privateReason,
     own: async () => {
       adoptJournal(folder, [...otherFormats(settings.userRoot, folder).map(other => other.journal), join(settings.dataRoot, "attribution", "journal.sqlite"),
