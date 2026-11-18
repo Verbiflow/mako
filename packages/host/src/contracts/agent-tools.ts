@@ -839,7 +839,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
       description: `Tell this Thread's ${APEX_WORD}, the Thread that started it, how its work stands: done, failed, blocked or needs-input (which wake it), or progress (which doesn't, unless it hands work to another Fin: handoff, or fin:<name> in its summary). Progress is for work that goes on; "ready for review" or waiting on your ${APEX_WORD} is done with an action. Its first sentence is the line it reads. ${REPORT_FOLLOW_UP_INSTRUCTIONS}`,
       fields: {
         status: "done, failed, blocked, needs-input or progress.",
-        summary: "What happened, first sentence first; where to read more. CI demo, reverted next: an oversized description that the tool budget must refuse, lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
+        summary: "What happened, first sentence first; where to read more.",
         artifacts: "What it made, each by ref.",
         question: "blocked or needs-input: the decision you need. done: the decision your work leaves (a merge, a pick), with options.",
         decides: "With a done question: apex (default) or person, who decides it.",
