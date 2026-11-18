@@ -701,6 +701,8 @@ export function journalSummary(metadata: string) {
     ),
     steeredAt: personPromptedAt(undefined, control?.actions),
     transferWakeAt: transferDue(control),
+    // A switch or move still waiting as the journal was last written: a host taking it on settles it (`afterRestart`).
+    ...control?.transfers.some((transfer) => transfer.state.kind === "queued" || transfer.state.kind === "preparing") && { transferLeft: true as const },
   }
 }
 

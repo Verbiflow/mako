@@ -1828,6 +1828,11 @@ export class LiveConversations {
     return this.records.leftSignInHold(id)
   }
 
+  /** Whether the host before this one left a switch or move of `id` waiting: taking `id` on settles it. */
+  leftTransfer(id: string): boolean {
+    return this.records.leftTransfer(id)
+  }
+
   /** Whether `id`'s last request that ran was cut short (`cutLast`), without reading its journal in when it's on disk. */
   turnCut(id: string): boolean {
     return this.records.turnCut(id)

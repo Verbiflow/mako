@@ -122,6 +122,8 @@ export class LiveRecords {
    * for (`Agents.watchCut`), from each journal's summary and kept as each is let go, so starting reads none in for it.
    */
   private readonly cutAtRest = new Set<string>()
+  /** Conversations whose journal was left with a switch or move waiting (`transferLeft`): a host takes those on as it starts. */
+  private readonly transferLeft = new Set<string>()
   /** Conversations `sweep` let go this host life; `load` puts each back as it was. */
   private readonly unloaded = new Map<string, Unloaded>()
   /** Residents `unload` let go, so a continuation still holding one cannot write through it. */
@@ -177,8 +179,9 @@ export class LiveRecords {
         try {
           const found = journal.summary()
           if (found) {
-            const { ancestry, threadSession, unsettled, cut, ...summary } = found
+            const { ancestry, threadSession, unsettled, cut, transferLeft, ...summary } = found
             if (unsettled) this.unsettled.add(id)
+            if (transferLeft) this.transferLeft.add(id)
             if (cut) this.cutAtRest.add(id)
             if (ancestry) this.forks.set(id, { parentId: ancestry.parentId, point: ancestry.point, createdAt: summary.createdAt, ...ancestry.firstRequest && { firstRequest: ancestry.firstRequest } })
             dependencies.memory?.rememberBindings(id, summary.nativeBindings, summary.createdAt)
@@ -265,6 +268,11 @@ export class LiveRecords {
   leftSignInHold(id: string): boolean {
     const resident = this.residents.get(id)
     return resident ? residentSummary(resident.snapshot).hasSignInHold === true : this.recovered.get(id)?.hasSignInHold === true
+  }
+
+  /** Whether the host before this one left a switch or move of `id` waiting, which taking it on settles (`afterRestart`). */
+  leftTransfer(id: string): boolean {
+    return this.transferLeft.has(id)
   }
 
   /** Whether `id`'s last request that ran was cut short (`cutLast`): from memory when it's there, else from its journal's summary. */
