@@ -215,6 +215,11 @@ function Blocks({ starting = false, continued = false, compact = false }: { star
   const madeByMako = useKeptEntries(useMemo(() => makoPrompts(requests), [requests]))
   const carried = useKeptEntries(useMemo(() => carriedHistories(requests), [requests]))
   const askedAt = useKeptEntries(useMemo(() => new Map(requests.flatMap((request) => (request.createdAt === undefined ? [] : [[request.id, request.createdAt] as const]))), [requests]), Object.is)
+  // The turn the person's newest message opened: not one Mako or an agent sent, nor a digest of Fins' news.
+  const sentId = useMemo(() => {
+    const sent = requests.findLast((request) => (!request.actor || request.actor.kind === "person") && !request.digest && !request.joined?.length && !request.continues)
+    return sent ? `acp-request-${sent.id}` : undefined
+  }, [requests])
   const waitingLimits = useMemo(() => copy ? new Set<string>() : usageLimitSources(requests), [requests, copy])
   const exchanges = useMemo(() => withoutWaitingLimitNotes(projection?.exchanges ?? EMPTY_QUEUE, waitingLimits), [projection?.exchanges, waitingLimits])
   const unread = useAcp((state) => scopedLiveAcp(state, scope)?.hydrated === false)
@@ -246,6 +251,7 @@ function Blocks({ starting = false, continued = false, compact = false }: { star
       makoPrompts={madeByMako}
       carriedHistories={carried}
       askedAt={askedAt}
+      sentId={sentId}
       failedId={session?.status === "failed" ? lastExchangeId : undefined}
       opening={historyNote ?? (worktree?.start ? <WorktreeOpening worktree={worktree} start={worktree.start} /> : undefined)}
       empty={unread ? null : historyState === "reading" ? (
