@@ -55,6 +55,7 @@ const ThreadChangeSummarySchema = z.object({
   commands: CountSchema,
   outside: z.object({ named: CountSchema, maybe: CountSchema }),
   maybe: CountSchema,
+  keptSince: z.number().optional(),
 })
 const ChangeTotalsSchema = z.object({ files: CountSchema, added: CountSchema, removed: CountSchema, threads: CountSchema })
 const ChangeUsageSchema = z.object({

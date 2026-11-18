@@ -1,5 +1,5 @@
 import { hostProbe } from "../base/host-command.js"
-import type { MakoFootprint, MakoProcess, RescanFootprint, WatchFootprint } from "../contracts/mako-footprint.js"
+import type { JournalWriterFootprint, MakoFootprint, MakoProcess, RescanFootprint, WatchFootprint } from "../contracts/mako-footprint.js"
 import type { MethodTable } from "../base/methods.js"
 
 
@@ -98,7 +98,7 @@ export async function readProcessTable(): Promise<ProcessRow[]> {
 }
 
 /** Mako's footprint on this Mac now: its processes from `ps`, and the file watching and rescans this host reports. */
-export async function readMakoFootprint(deps: { watching: WatchFootprint; rescans: RescanFootprint | null; attributionFailure?: string }): Promise<MakoFootprint> {
+export async function readMakoFootprint(deps: { watching: WatchFootprint; rescans: RescanFootprint | null; journalWriter?: JournalWriterFootprint; attributionFailure?: string }): Promise<MakoFootprint> {
   const rows = await readProcessTable()
   const own = new Map<number, string>()
   if (deps.watching.child?.pid) own.set(deps.watching.child.pid, "file watcher")
@@ -108,10 +108,11 @@ export async function readMakoFootprint(deps: { watching: WatchFootprint; rescan
     ...makoProcesses(rows, { pid: process.pid, ppid: process.ppid, inApp: Boolean(process.versions.electron) }, own),
     watching: deps.watching,
     rescans: deps.rescans,
+    ...(deps.journalWriter && { journalWriter: deps.journalWriter }),
     ...(deps.attributionFailure !== undefined && { attributionFailure: deps.attributionFailure }),
   }
 }
 
-export function declareFootprintMethods(methods: MethodTable, read: () => { watching: WatchFootprint; rescans: RescanFootprint | null; attributionFailure?: string }): void {
+export function declareFootprintMethods(methods: MethodTable, read: () => { watching: WatchFootprint; rescans: RescanFootprint | null; journalWriter?: JournalWriterFootprint; attributionFailure?: string }): void {
   methods.handle("mako:mako-footprint", () => readMakoFootprint(read()))
 }

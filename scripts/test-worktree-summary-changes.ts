@@ -78,3 +78,29 @@ test("a host that answers the list alone and says the whole list on a change sti
     Reflect.deleteProperty(globalThis, "window")
   }
 })
+
+test("coming back to the window asks saying so, and an ask behind one that's out carries it", async () => {
+  const asked: (string | undefined)[] = []
+  const answers: (() => void)[] = []
+  Object.assign(globalThis, { window: { mako: { worktreeSummaries: (why?: "focus") => {
+    asked.push(why)
+    return new Promise<WorktreeSummariesHeld>((resolve) => answers.push(() => resolve({ summaries: [], reading: [] })))
+  } } } })
+  try {
+    const first = refreshWorktreeSummaries()
+    const behind = refreshWorktreeSummaries("focus")
+    assert.deepEqual(asked, [undefined], "one ask is out, as the rail asks")
+    answers[0]!()
+    await first
+    await Promise.resolve()
+    assert.deepEqual(asked, [undefined, "focus"], "the ask behind it says the window came to the front")
+    answers[1]!()
+    await behind
+    const alone = refreshWorktreeSummaries("focus")
+    assert.deepEqual(asked, [undefined, "focus", "focus"])
+    answers[2]!()
+    await alone
+  } finally {
+    Reflect.deleteProperty(globalThis, "window")
+  }
+})

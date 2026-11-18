@@ -88,7 +88,7 @@ export type HostEventBody =
   | { type: "worktree-summaries"; summaries: WorktreeSummary[] }
   /** The summaries that changed, each as it was read, and the worktrees that went (`followSummaryChanges`); window-wide. */
   | ({ type: "worktree-summary-changes" } & WorktreeSummaryChanges)
-  /** The sizes an inventory asked for are measured: the next `mako:worktree-inventory` has them. */
+  /** What an inventory listed as measured or read behind it is in, sizes or statuses: the next `mako:worktree-inventory` has them. */
   | { type: "worktree-sizes" }
   /** A new Thread's worktree is checked out; its provider starts next. */
   | { type: "worktree-ready"; conversationId: string }

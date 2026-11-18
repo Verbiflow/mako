@@ -110,7 +110,8 @@ export async function within(folder: string, path: string): Promise<boolean> {
 }
 
 async function uncommitted(git: Git, cwd: string): Promise<number | undefined> {
-  const status = await checkoutStatuses(git).read(cwd).catch(() => undefined)
+  // An agent acts on this count: read as of now.
+  const status = await checkoutStatuses(git).read(cwd, { fresh: true }).catch(() => undefined)
   return status === undefined ? undefined : status.split("\n").filter(Boolean).length
 }
 

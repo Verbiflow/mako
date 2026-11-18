@@ -35,8 +35,8 @@ import { NativeUnknown } from "./base/native-unknown.js"
 import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
-import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
-import { childProcessReader, CheckoutLeave, cloudHasAll, cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, AutomationLaunches, AutomationNotStartedError, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, declareRemoteAppMethods, ViewHints, declareViewHints, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers, declareSetupMethods, SetupViews } from "./workspaces/index.js"
+import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAttribution, writtenPaths, type Attribution } from "./attribution/index.js"
+import { childProcessReader, CheckoutLeave, cloudHasAll, cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, WatchedTrees, Automations, AutomationLaunches, AutomationNotStartedError, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, declareRemoteAppMethods, ViewHints, declareViewHints, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers, declareSetupMethods, SetupViews } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
 import { commonDirOf } from "@mako/git"
@@ -354,7 +354,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   declareViewHints(methods, viewHints)
   const previews = new ArtifactPreviews(() => providerHost.artifactPreviews.list())
   const watchReadings = new WatchReadings((message, fields) => hostLog("watch", message, fields))
-  const watchBackend = childBackend(undefined, watchReadings)
+  // Every tree watch goes through one backend, which says what each hears to whoever follows files without watching.
+  const watchedTrees = new WatchedTrees()
+  const watchBackend = watchedTrees.over(childBackend(undefined, watchReadings))
   const conversationFiles = new ConversationFiles(git, previews, (root, changed, gone, dropped) => watchTree(git, watchBackend, root, changed, gone, dropped))
   // On while an agent works here (a turn, an approval or question waiting, background work) or this Mac serves another
   // place's: what keeps the Mac awake, readies Threads to move and hands them off on sleep looks only then.
@@ -538,6 +540,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     },
     watchReadings,
     watch: watchBackend,
+    trees: watchedTrees,
     daemonRestarts: fileEvents,
   })
   late.fileHistory = workspaces.fileHistory
@@ -546,6 +549,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     late.attribution?.effects(reported.conversation, reported.call)
     // A call that may have written: the Thread's checkpoint follows a few seconds later, when it's kept ready.
     if (reported.call.status !== "refused" && reported.call.effects.some((effect) => effect.kind !== "read")) late.readiness?.wrote(reported.conversation)
+    // And the worktree it wrote in has its uncommitted files counted again for the rail, once the writes settle.
+    if (reported.call.status !== "refused") workspaces.worktrees?.wrote(writtenPaths(reported.call.effects, reported.cwd))
   })
   const unfollowBounds = fixtureDesk ? undefined : liveCallBounds.subscribe((bounds) => late.attribution?.bounds(bounds))
   // MCP servers a harness couldn't start, each with the one thing that fixes it (the harness's own sign-in where it has
@@ -1329,6 +1334,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         flushed: (checkout) => attribution.heard(checkout ? [checkout] : []),
         countTurn: (thread, turn, state) => attribution.countTurn(thread, turn, state),
         settledThrough: (at) => attribution.settledThrough(at),
+        settledAfter: (at, withinMs) => attribution.settledAfter(at, withinMs),
         counted: (summary, session) => attribution.counted(summary, session),
         turnsChangedAfter: (thread, after) => attribution.turnsChangedAfter(thread, after),
         settleMs: ATTRIBUTION_SETTLE_MS,
@@ -2044,7 +2050,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // The fixture desk writes no store and stands in for no one's disk.
   if (!fixtureDesk) storage.schedule(shell.jobs)
   declareStorageMethods(methods, storage)
-  declareFootprintMethods(methods, () => ({ watching: watchReadings.reading(), rescans: late.attribution?.rescans() ?? null, attributionFailure: late.attribution?.failure() }))
+  declareFootprintMethods(methods, () => ({ watching: watchReadings.reading(), rescans: late.attribution?.rescans() ?? null, journalWriter: late.attribution?.writerMemory(), attributionFailure: late.attribution?.failure() }))
   /** On a cloud machine: what a Thread arriving from a device needs (`mako:move-arrive`), and a lost machine's restore. */
   const arrival: MoveArrivalDeps | undefined = config.machineAgentFd === undefined ? undefined : {
     git,

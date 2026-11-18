@@ -278,12 +278,19 @@ assert.deepEqual(listed.worktrees.map((worktree) => worktree.path).sort(), [prep
 const detail = async (path: string) => (await worktrees.inventory()).worktrees.find((worktree) => worktree.path === path)
 assert.deepEqual((await detail(prepared.path))?.landing, { kind: "open", into: "main", commits: 1 })
 assert.deepEqual((await detail(other.path))?.landing, { kind: "empty" })
-writeFileSync(join(other.path, "scratch.txt"), "x\n")
-const dirty = await detail(other.path)
-assert.equal(dirty?.changes, 1)
-// Its size isn't walked for before the list answers: it's measured behind it, and the next list has it.
+// The list is drawn from what's held and read behind its answer, sizes too: the next list has them.
 await worktrees.settled()
-assert.ok(((await detail(other.path))?.bytes ?? 0) > 0, "its own files are measured")
+assert.deepEqual([(await detail(other.path))?.changes, (await detail(other.path))?.refreshing], [0, undefined])
+writeFileSync(join(other.path, "scratch.txt"), "x\n")
+// What decides a removal is read as it's asked, whatever the list holds.
+assert.match((await worktrees.removal(other.path)).held ?? "", /has changes that aren't committed/)
+// A tool's write there is the list's signal: listed as being read again, then with what was read.
+worktrees.wrote([join(other.path, "scratch.txt")])
+assert.equal((await detail(other.path))?.refreshing, true, "a worktree whose files changed is listed as being read again")
+await worktrees.settled()
+const dirty = await detail(other.path)
+assert.deepEqual([dirty?.changes, dirty?.refreshing], [1, undefined])
+assert.ok((dirty?.bytes ?? 0) > 0, "its own files are measured")
 rmSync(join(other.path, "scratch.txt"))
 busy.set(other.path, ["“Other”"])
 assert.deepEqual((await detail(other.path))?.users, ["“Other”"])

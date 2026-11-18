@@ -2,7 +2,8 @@ import { cloudFinLimits } from "./fin-capacity.js"
 import { SnapshotBudgetSettingsSchema } from "../contracts/snapshot-budget.js"
 import type { SnapshotBudget } from "../workspaces/index.js"
 import { readSnapshotSettlement } from "./live-journal.js"
-import type { LimitNoticeChoice } from "../contracts/agents.js"
+import { edgeStopped, FIN_WORD, type LimitNoticeChoice } from "../contracts/agents.js"
+import type { WorktreeRestored } from "../contracts/thread-worktrees.js"
 import { noteCarried } from "@mako/sessions/record-carried"
 import { GATEWAY_CLIENT, hostClient } from "../base/host-client.js"
 import type { Foreground } from "../base/foreground.js"
@@ -12,6 +13,7 @@ import type { HostWork } from "../base/event-loop.js"
 import { makoRecords } from "@mako/sessions/record-streams"
 import type { Git } from "@mako/git"
 import { randomUUID } from "node:crypto"
+import { existsSync } from "node:fs"
 import { join } from "node:path"
 import type { Admission } from "../base/admission.js"
 import { readPull, RequiredChecks } from "../git/index.js"
@@ -248,6 +250,23 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   })
   const assessResume = resumingUnder(memory ?? undefined, restoring)
   let agents: Agents | undefined
+  /**
+   * Makes again the worktree Mako retired from under a finished Fin, for conversation `id` about to run in `cwd`, and
+   * says in its transcript how that went, once: the person reading the Fin's Thread sees where it works now, or why it
+   * isn't in a worktree of its own. Undefined, nothing asked of Git, for a folder no retired worktree held.
+   */
+  const remakeWorktree = (id: string, cwd: string): Promise<WorktreeRestored | undefined> | undefined => {
+    const worktrees = workspaces.worktrees
+    if (!worktrees || !threads.store?.retiredWorktrees().some((retired) => cwd === retired.path || cwd.startsWith(`${retired.path}/`))) return undefined
+    return worktrees.restoreRetired(cwd).then((restored) => {
+      if (restored?.kind === "restored") live.recordNote(id, "Worktree made again", `Mako removed this worktree after its ${FIN_WORD} finished, and made it again at ${restored.path} ${restored.note}`)
+      else if (restored) live.recordNote(id, "Worktree couldn't be made again", `Mako removed this worktree after its ${FIN_WORD} finished: ${restored.why} It goes on in its project's folder where its harness resumes there.`)
+      return restored
+    }, (error) => {
+      hostWarn("worktrees", "a finished Fin's worktree couldn't be made again", { conversation: id, error: error instanceof Error ? error.message : String(error) })
+      return undefined
+    })
+  }
   const workspaceSnapshots = new WorkspaceSnapshots(deps.git, join(dataRoot, "workspace-snapshots"))
   workspaceSnapshots.followHistory(workspaces.fileHistory)
   workspaceSnapshots.followSettlement(() => readSnapshotSettlement(join(dataRoot, "conversations"), id => deps.elsewhere?.(id) ?? false))
@@ -288,12 +307,13 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       const summary = live.listed().find(summary => summary.session.id === id)
       const placed = threads.store?.journalPlacement(id)
       const edge = placed && threads.store?.edges().of(placed.thread)
-      return edge?.closedAt === undefined && summary !== undefined && !archivedByKeys(liveArchiveKeys(summary), threads.archives.hidden(), catalog.ref(summary.session.nativePath ?? ""))
+      return !edgeStopped(edge) && summary !== undefined && !archivedByKeys(liveArchiveKeys(summary), threads.archives.hidden(), catalog.ref(summary.session.nativePath ?? ""))
     },
     children: catalog.childSource,
     harnessLabel: (harness) => harnessLabel(host, harness),
     resumeVerdict: assessResume,
     projectFolderOfRemoved: (folder) => threads.origins.projectFolderOfRemoved(folder),
+    restoreWorktree: (id, cwd) => (existsSync(cwd) ? undefined : remakeWorktree(id, cwd)?.then(() => undefined)),
     settled: (id) => {
       workspaceSnapshots.budget.changed()
       deps.settled(id)
@@ -443,6 +463,10 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       finCeiling: () => deps.finDefaults?.reading().ceiling ?? FIN_CEILING,
       capacity: new MacCapacity(),
       heldPulls: (repoRoot, branch) => workspaces.worktrees?.heldPulls(repoRoot, branch) ?? [],
+      restoreWorktree: (conversation) => {
+        const cwd = live.session(conversation)?.cwd
+        return cwd === undefined || existsSync(cwd) ? undefined : remakeWorktree(conversation, cwd)
+      },
       readPull: (target) => readPull(target, undefined, requiredChecks),
       watchCheck: (conversation, tier, onEnd) => deps.watchCheck?.(conversation, tier, onEnd) ?? Promise.resolve(false),
       ...(away && { away }),
@@ -715,7 +739,16 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   methods.handle("mako:live-rewind-recover", () => live.recoverRewinds())
   methods.handle("mako:live-prompt-versions", (id: string) => live.promptVersions(id))
   methods.handle("mako:unopened-conversations", () => live.unopened())
-  methods.handle("mako:live-action", (id: string, input: LiveActionInput) => live.act(id, input))
+  methods.handle("mako:live-action", async (id: string, input: LiveActionInput) => {
+    // A steer's files are kept before it goes into the turn, as a message's are (`holdAttachments`).
+    if (input.kind !== "steer" || !input.attachments?.length) return live.act(id, input)
+    await live.holdAttachments(input.id, input.attachments)
+    try {
+      return await live.act(id, input)
+    } finally {
+      live.releaseAttachments(input.id)
+    }
+  })
   // A separate method advertises atomic queued steering to clients whose UI
   // can update while the shared host remains alive. Keep live-action for
   // existing clients and receipts written before this capability was named.
@@ -769,9 +802,15 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     const binding = snapshot?.control?.bindings.find((item) => item.id === bindingId)
     if (!snapshot || !binding) throw new Error("The selected native session is unavailable")
     // Which binding is active is read as it's admitted: a move may land while the selection resolves.
-    const continued = await conversations.continueOn(id, { kind: "reply", reply: { bindingId, provider: binding.provider, requestId, text, ...(attachments && { attachments }), tuning: tuning ?? binding.tuning } })
-    if (!continued) throw new Error("The selected native session is unavailable")
-    return continued
+    // A reply with no files reaches `continueOn` in this same turn, as it always did; one with files keeps them first.
+    if (attachments?.length) await live.holdAttachments(requestId, attachments)
+    try {
+      const continued = await conversations.continueOn(id, { kind: "reply", reply: { bindingId, provider: binding.provider, requestId, text, ...(attachments && { attachments }), tuning: tuning ?? binding.tuning } })
+      if (!continued) throw new Error("The selected native session is unavailable")
+      return continued
+    } finally {
+      live.releaseAttachments(requestId)
+    }
   })
   // `options.actor`: Mako's own words a move carries (a wait the move ended), drawn and read as Mako's, never the
   // person's. A host that answers `mako:move-ready` with `promptActor` takes it; the device sends none to one that doesn't.
@@ -779,8 +818,12 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     const session = live.session(id)
     if (!session) throw new Error("This conversation is no longer available")
     deps.used?.(session.harness, tuning)
-    return live.admitInOrder(id, profiles.resolveLaunch(session.harness, session.cwd, tuning),
+    // The settings and the attachments' files are readied together; the message is admitted in one turn after both.
+    const held = live.holdAttachments(requestId, attachments)
+    const ready = Promise.all([profiles.resolveLaunch(session.harness, session.cwd, tuning), held]).then(([selected]) => selected)
+    return live.admitInOrder(id, ready,
       (selected) => live.submit(id, requestId, text, attachments, selected, undefined, undefined, options?.actor))
+      .finally(() => live.releaseAttachments(requestId))
   })
   // A failed message sent again at a time: a usage limit's reset.
   methods.handle("mako:live-hold-until", (id: string, requestId: string, input: { after: string; at: number }) =>

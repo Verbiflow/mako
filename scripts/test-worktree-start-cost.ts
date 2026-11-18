@@ -178,5 +178,5 @@ try {
 } finally {
   threads.close()
   await runner.close()
-  rmSync(root, { recursive: true, force: true })
+  rmSync(root, { recursive: true, force: true, maxRetries: 3 })
 }

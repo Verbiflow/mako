@@ -206,7 +206,11 @@ export class LiveTurnReview {
     await target.ledger.settled()
     const plan = await target.ledger.undoPlan(target.thread, scope, target.checkout)
     const refused = this.undoneAlready(id, scope) ?? target.refused
-    return { scope, checkout: target.checkout, undo: plan.undo, kept: plan.kept, left: plan.left, token: plan.token, ...(refused && { refused }) }
+    // The turn's record lists files the journal plans nothing for: its entries are past retention, so each file is left and says why.
+    const record = scope.kind === "turn" ? countedChanges(this.host.request(id, scope.requestId)?.changes) : undefined
+    const gone = record?.files.length && !plan.undo.length && !plan.kept.length && !plan.left.length
+    const left = gone ? record.files.map((file): TurnUndoPreview["left"][number] => ({ path: file.relative, reason: "content-not-kept", by: [] })) : plan.left
+    return { scope, checkout: target.checkout, undo: plan.undo, kept: plan.kept, left, token: plan.token, ...(refused && { refused }) }
   }
 
   /** Why a turn can't be undone again: it was, and its record says so. */

@@ -373,6 +373,62 @@ its files (`branchSince`). Its turns report and wake the Apex again, and a
 repeat of the message resumes it once. Archiving its Thread is the one
 end: one at work stops in those words, once (`Agents.archived`), and
 nothing resumes it until the person restores it (`test:fin-resume`). A
+finished Fin's edge closes by itself (`Agents.closeFinished`, `closedFinished`):
+six hours after its last report (`FINISHED_CLOSE_MS`), when that report is
+`done`, or `failed` asking nothing, and nothing is pending. Until 2026-11-17
+only a stop or an archive closed an edge, and the person's store held 113
+open Fins, 98 of them done, each in every prompt's note, every list and
+every start's read of its journal. A closed edge is passed over by what
+looks for open questions and waits, so it closes only with none: no open
+question, decision or action (`openReportAsks`, `pendingActionThreads`), no
+answer owed either way, no report, answer or pull request's outcome
+undelivered, its result taken by its Apex's harness, no queued start or
+armed wait naming it, no open Fin of its own, no pull request its report
+waits on, and its conversations in memory, idle and empty-handed (no turn,
+no message queued, held or being sent, nothing asked, no work its harness
+left running, no cut turn, no armed wait). `keptOpen` and
+`conversationHolds` read all of it in the same step as the write; a
+conversation not in memory is read in first, a slice at a time, and one
+this host can't read stays open. A Fin placed on another device, or whose
+Apex is, is left alone. Closing is bookkeeping: its reason is
+`FINISHED_CLOSE`, a stop's reason on the wire, so an older build shows it
+as any closed edge and opens it as it opens a stopped one; this build reads
+it as done or failed (`childState`), never stopped. Nothing is cancelled,
+stopped or reported, and it leaves the front door's note, the crew view,
+the `apexes` digest, `personAsk`'s walk and the list (counted in `folded`).
+It never cuts a Fin off: whatever reaches it opens it again in the same
+Session (`reopen`), and the Fin above it with it when that one is closed
+the same way: `agents_send` however delivered, `agents_answer`, the
+person in its own Thread or by `@`, a pull request's outcome, a digest of
+its own Fins, any input its harness takes (`inputDelivered`), any message in
+its queue (`moved`) and any report of its (`keepReport`). Only a stop is a
+pause Mako's own notes don't lift. Its six hours start over at its next
+report, and a stop or an archive of it closes it in those words
+(`test:fin-close`). The sweep runs on the job `close finished Fins`, only
+while an open Fin has finished, as a turn settles and as a host starts. Its
+worktree goes after it: the retention pass (`WorktreeRetention`, Settings ›
+Worktrees), preview-only for every other checkout until the person chooses
+removal, retires the checkout of a Fin closed as finished by default, under
+every guard a checkout's retirement has (nothing uncommitted, its HEAD on a
+fetched remote ref, no private ignored files, no process, terminal, app or
+open file in it, not shared, not kept, quiet for the setting's days), and
+only one repository's worktree, which Mako can make again. The person turns
+it off with one switch, kept in a file of its own
+(`worktree-retention-fins.json`) because a build from before it reads the
+settings strictly and writes them whole. What the worktree was is kept
+(`retired_worktrees`, `ThreadStore.retireWorktree`), its conversations stay
+in their folder, and whatever next reaches the Fin makes it again at the
+same path before its harness is sent anything
+(`ThreadWorktreeService.restoreRetired`, from `Agents.deliver` and from the
+live engine's wake and transfer, `restoreRetiredWorktree`): on its branch;
+on that branch made again at the commit it was at when it was deleted
+since; detached at its tip when another checkout holds it. The Fin reads
+which beneath the message, and that installed packages and build output are
+gone (`worktreeRemadeText`); its sender reads it in the receipt. When it
+can't be made again (its project or its commit gone) the message is
+delivered all the same, saying exactly why, and the start goes on as for any
+removed worktree (`test-worktree-retention-fins.ts`, in
+`test:thread-worktrees`). A
 stop also pauses what was queued for the Fin (`halt`), and a stop of one
 stopped already ends whatever still runs there. A paused message first in
 line holds the ones behind it (the person editing it keeps its place), and
@@ -403,9 +459,25 @@ when the Fin said so, when its Apex left it to them, or when its spawn's
 `wake` isn't `decisions`. Its result wakes the Apex as any done report does,
 its line in the digest, the front door and the `apexes` digest one
 (`decisionWords`: "done; decide: Merge #371? (Merge · Leave open, recommends
-Merge)"). One its Apex leaves for `APEX_ANSWER_MS` goes to the person too, as
-a done report of the same decision (`escalateDecision`, on `AgentsDeps.later`,
-which a test fakes). The person's counts under needs you (`childGroup`) and
+Merge)"). One its Apex leaves for `APEX_ANSWER_MS` after hearing it goes to
+the person too, as a done report of the same decision (`escalateDecision`, on
+`AgentsDeps.later`, which a test fakes). The minute starts when the Apex's
+harness takes the digest or the steer that carries it (`decisionHeardAt`: that
+request's handoff, or the store's receipt for a steer), never when the Fin
+reported: on 2026-11-16 two of three escalations fired while the Apex was
+mid-turn on a harness that hears a digest only at its turn's end, and couldn't
+have answered. One it still hasn't heard `DECISION_HEARD_BY_MS` after the
+report (three minutes: `FOCUS_MS`, as long as Mako lets a working Apex go
+before it steers in what waits, and the minute to answer) goes to the person
+as before, so none waits behind a long turn; heard just before that, it has
+its minute. Both times are read from what's kept (the report, the Apex's
+queue, the store), so a restart keeps them. The digest's decision block and
+`agents_answer`'s description say the rule where the Apex reads it: answered
+with `agents_answer` even when already acted on, the person's otherwise
+(`ORCHESTRATION_INSTRUCTIONS` has no room for it under the 4,096 characters
+Claude Code shows of a server's instructions, `test:mako-instructions`). A
+plain `agents_send` to a Fin with one open decision answers nothing
+(`test-fin-decision-window.ts`, in `test:orch-answer`). The person's counts under needs you (`childGroup`) and
 reads "Done · needs you: <question>" (`askWords`) wherever asks are answered
 (`openAsk`, `personAsks`); the Apex's counts as done. An answer claims the
 question before it's delivered, so of two at once (its Apex's and the
@@ -691,7 +763,12 @@ exit paused go on. So does an Apex's own turn while it has open Fins
 (`inTree`, `continueCrashed`), under the same loop guard. The next host reads
 every journal that resume looks at in first, one at a time and a slice at a
 time (`Agents.resumeInSlices`, `LiveConversations.readIn`): read whole, a
-day's Fins held its loop 4.8 s as it started (`test:resume-holds`). Reading
+day's Fins held its loop 4.8 s as it started (`test:resume-holds`). It
+looks at open delegations only: a Fin closed, stopped or finished, isn't
+read, nor is its Apex for it, nor an Apex for the reviewer runs its harness
+once ran under it (`internalRuns`, each closed as it's classified, and at
+the store's next open for rows an older build left, `closeInternalRuns`),
+unless the last host left that Apex's own queue unsettled. Reading
 one in commits the restart's changes, the first frame into a WAL its last
 host closed, whose header SQLite syncs even at `synchronous=NORMAL`: 100 to
 300 ms on a busy disk, on the host's thread, until a worker wrote it first
@@ -844,10 +921,17 @@ deployed cloud.
 What an Apex and its Fins tell each other is kept short without dropping
 what the reader needs. Every `agents_*` answer is its JSON on one line
 (`agentToolText`), every field kept. `agents_list` lists what an Apex can act on (`foldList`): a Fin that ended over a day ago with
-nothing open is counted in `folded`, not listed; past `LIST_BUDGET_CHARS` (16 KB) idle and ended rows lose
+nothing open, or was closed as finished, is counted in `folded`, not listed, its row never built (`Agents.unlisted`); past `LIST_BUDGET_CHARS` (16 KB) idle and ended rows lose
 their pull requests, then fold, oldest first. A Fin needing attention (a question, an action, a decision, at work,
 waiting or blocked) is never folded, past the budget if it must be; `scope: all` lists every one. An Apex's 130 Fins were once 105 KB, about 26,000 tokens, a
-call (`test-agents-list-fold.ts`). Each Fin has a change mark the host keeps
+call (`test-agents-list-fold.ts`). Neither a list nor a prompt reads a Fin's
+reports again while none is new: the engine keeps, by Fin, what a row takes
+from them (`Agents.reportsOf`: the pull requests they name and each one's
+mark for `owesApex`), added to as each report is kept (`reportKept`) and read
+again only when its newest isn't the store's, and the store keeps which
+reports ask while a Fin's reports are the same rows (`openReportAsks`).
+Before, each read every report of every Fin, 11 MB parsed a call for an Apex
+whose Fins held 6,520 (`test-fin-reports-held.ts`). Each Fin has a change mark the host keeps
 (`FinChanges`): when its state, report, open questions or pull requests last
 changed as the host read them, a working Fin's step and a queued one's place in
 line not counting, on the host's own clock (a tick never earlier than the
@@ -2994,7 +3078,7 @@ Every Git process Mako starts goes through `@mako/git` (`packages/git`, no Elect
 
 A move into a Thread's worktree takes only the Thread's own uncommitted changes (`workspaces/worktree-move.ts`), never a stash of the whole checkout. The attribution journal (`attribution/`, `partition`) names each changed line's last writer: the worktree gets the base plus the Thread's lines and the files it created, deleted or renamed; the main checkout keeps everyone else's. Lines that might be the Thread's (`window`, `ambiguous`, and a `window` found only after lost events, `entrySide`) and changes nobody can be named for (there before tracking, `unattributed`) stay unless the person chooses Bring these, on the move card before or on the toast after. A hunk that can't be split by line goes whole to whoever wrote most of it and is named. Without the journal nothing is attributed, so nothing moves unless brought. The move is all-or-nothing: it reads each file, checks it is what the journal holds and that the two sides add back up to it line for line, stores every version in the repository's objects, keeps the main checkout's whole state (files and index) as a commit under `refs/mako/moves/<id>` for 14 days, saves its plan (`<worktrees>/moves/<id>.json`, the receipt's `moving`), writes each file by a rename after checking it is still what it read, then reads both sides back. Anything off rolls back. A host that dies mid-move finishes it on the next start (`tidy`) when every file is as it was or as planned, and otherwise rolls back around whatever changed since. Each step is logged under `worktree-move`. `worktree_status` reports whose the main checkout's changes are; the move's result and the agent's message in the worktree say what came and what stayed. `npm run test:attribution` ends with `test-worktree-attribution-moves.ts`: three writers in one file, renames, deletes, binary and untracked files, staging, two repositories, and a process killed at each step.
 
-What a turn changed has one source: the attribution journal, keyed by the request the turn answers (`LiveRequest.id` is the `turn` on every activity mark and entry; the harness's own run id rides along as `run`, metadata only). When a request's turn ends, `LiveTurnChanges` marks it `pending`, counts it from the journal once every change heard is in (`settling`), and again once the journal settles them (`settled`), into `LiveRequest.changes` (`contracts/turn-changes.ts`, `queries.ts` `turnChanges`: per file, first entry's before to last entry's after, each line counted for its last writer, the Thread's own apart from what only might be its). A count reads the journal a step at a time (`countingTurn`, run in slices, one count at a time), through the newest entry when it began, and letting go of idle roots reads it the same way (`JournalStore.recency`): each read at once held the host's loop over a second (`test:attribution-holds`). The same record is kept beside the entries (`turn_changes`). The line under an answer, its file links' "Changed in this answer" and "Changes made by the thread" (the sum of those records) all read it, so they agree, and a reopened conversation reads the stored record instead of counting again. A turn from before the record falls back to its checkpoints. The work summary counts steps ("made 2 edits"), never files. What Git put back (a checkout, pull, rebase, reset or stash no call named the file for) is journaled with `git` set, or not at all when a file holds exactly the new commit's content; no turn, "changes made", others' count, rewind writer, move or `worktree_status` share counts it, and a version Git puts back keeps the writers it had (a whole file's, too: `lastEntry`). A change a rescan finds after lost events is placed by its file's modification time: content older than the gap names nobody, and a file the journal holds as created though HEAD has it as it is (a commit took it before the journal read it) is settled as clean on the next start or rescan (`settleCommitted`). A Fin's roster entry on its Apex is no background work of the Apex's: the Fin is a Thread of its own, and its Sessions mark their own work. A call's exact bounds from a harness's hooks (`harnesses/call-bounds.ts`) go through `LiveActivity.bounds`, under the same request-keyed turn as the call's marks, so the journal has one record of each call.
+What a turn changed has one source: the attribution journal, keyed by the request the turn answers (`LiveRequest.id` is the `turn` on every activity mark and entry; the harness's own run id rides along as `run`, metadata only). When a request's turn ends, `LiveTurnChanges` marks it `pending`, counts it from the journal once every change heard is in (`settling`), and again once the journal settles them (`settled`), into `LiveRequest.changes` (`contracts/turn-changes.ts`, `queries.ts` `turnChanges`: per file, first entry's before to last entry's after, each line counted for its last writer, the Thread's own apart from what only might be its). A count reads the journal a step at a time (`countingTurn`, run in slices, one count at a time), through the newest entry when it began: read at once it held the host's loop over a second (`test:attribution-holds`). Which roots are idle is read from what the journal keeps as it writes, a row a root and a row a folder by triggers (`JournalStore.recency`); a journal from before those is read once, in slices, and the same test holds that reading. The journal keeps 14 days, the window stored content already had: the hourly collection also drops, a short transaction at a time, the entries, calls, turn counts, footprints, commits' line writers and gaps past it (`LaptopTracker.prune`), keeping every entry an uncommitted line or file needs and everything of a Thread worked in since, and notes a Thread whose records went (`pruned_threads`), so a window reads "no longer kept" rather than "changed nothing" (`test-attribution-retention.ts`). The same record is kept beside the entries (`turn_changes`). The line under an answer, its file links' "Changed in this answer" and "Changes made by the thread" (the sum of those records) all read it, so they agree, and a reopened conversation reads the stored record instead of counting again. A turn from before the record falls back to its checkpoints. The work summary counts steps ("made 2 edits"), never files. What Git put back (a checkout, pull, rebase, reset or stash no call named the file for) is journaled with `git` set, or not at all when a file holds exactly the new commit's content; no turn, "changes made", others' count, rewind writer, move or `worktree_status` share counts it, and a version Git puts back keeps the writers it had (a whole file's, too: `lastEntry`). A change a rescan finds after lost events is placed by its file's modification time: content older than the gap names nobody, and a file the journal holds as created though HEAD has it as it is (a commit took it before the journal read it) is settled as clean on the next start or rescan (`settleCommitted`). A Fin's roster entry on its Apex is no background work of the Apex's: the Fin is a Thread of its own, and its Sessions mark their own work. A call's exact bounds from a harness's hooks (`harnesses/call-bounds.ts`) go through `LiveActivity.bounds`, under the same request-keyed turn as the call's marks, so the journal has one record of each call.
 
 Changes › Turn reviews any turn of the open conversation, live or reopened (`conversations/live-turn-review.ts`). Its files are the request's record; each diff is the turn's checkpoints when both were saved, else the journal's versions either side of the turn's entries, so Review on the turn line works without checkpoints, and a conversation nobody has open is read from its journal without loading it (`storedRequest`). Who wrote each changed line comes from the same walk the record counts with (`attribution/line-walk.ts`, `turn-lines.ts`), as runs per side (`mako:live-turn-writers`), drawn in the diff's annotation slot only where another writer shares a change block; "Only this thread's lines" redraws each diff with every other writer's change on both sides. "Undo this turn" (and "undo this thread") takes the scope's own lines back out of the files as they are now and puts back the lines it removed, keeping everyone else's; a stretch someone edited on top of since, or where a writer put back a line the scope removed, is left whole and named; what Git or Mako wrote is nobody's and stays. It's refused while a turn or background work runs in the checkout (the journal's open activity, on any host, and this host's own runs), and when the files changed after the preview (`token`). It writes with the move's writer (`rewriteInPlace` in `worktree-move.ts`): every version stored, the checkout kept under `refs/mako/moves/<id>` for 14 days, the plan saved in `<conversations>/undos`, each file checked and renamed into place, then read back; a failure puts every file back, and a host that dies mid-write finishes or undoes it on the next start (`resumeMove`). The index is left as it is. Rewind stays the whole-workspace restore. `scripts/test-turn-review.ts` covers it, and `scripts/turn-review-screenshots.mjs` draws it.
 
@@ -3010,7 +3094,7 @@ A spare belongs to a project, whatever a start comes from: a Fin started from it
 
 A spare's tracked files are cloned from the main checkout wherever it holds the same file (`cloneTracked`), so a worktree shares their blocks rather than writing them: 59 MB of its own for `mako-backend` where a checkout wrote 694 MB, with a stale main checkout too, since only what differs is written. It's a hint for Git: the index is refreshed, which hashes every clone, and `reset --hard` writes what's missing or came out different. That costs time, 7.3 s against 3.3 s for `mako-backend` on a busy Mac, so only a spare's fill does it, in the background: a start with no spare ready writes its checkout as Git does. Node's `COPYFILE_FICLONE` copies on macOS, reporting success, and `FICLONE_FORCE` is `ENOSYS` there, so this calls `clonefile` itself.
 
-Every spawn holds the host's thread for a moment, so a worktree's summary is asked of Git only where what it was read at moved. A window asking (`mako:worktree-summaries`) is answered at once with what's held (`heldNow`), marked with what is still being read, and never waits for a pass; each summary follows as it's read, in an event that carries only those that changed (`worktree-summary-changes`), and the whole list (`worktree-summaries`) is said only while a window that knows no other form may listen. One pass runs at a time (`readListed`): the main checkout's branch and each branch's commit are read from Git's files (`storedFacts`), the start point once per change of what it depends on (`WorktreeStarts.pointKey`: HEAD, the branch's and upstream's commits, the configuration files), and a summary stands while those commits and its index's time are as they were. A worktree's `status` is read when its index or HEAD moves or a turn in it ends, and past an hour whatever was heard (`STATUS_BACKSTOP_MS`), a conversation at work in it or not; a shared ref moving reads no status. `ahead` and `behind` for every worktree of a repository are one `for-each-ref` (`ahead-behind`, `countBranches`), and a landing only a merge in memory can tell is an idle read, made first for the worktrees a window shows or a conversation works in and one at a time for the rest (`laterLandings`), whose `behind` and `ahead` are current meanwhile and whose landing follows. Landings, counts, each worktree's summary with its index time, each repository's pull requests and start point are kept in `<worktrees>/summaries.json` (`WorktreeSummaryCache`, the store-format rule), so the first pass after a start with nothing moved starts no Git process; cold, 107 worktrees were about 700 processes four at a time, and one ask stayed open 12 to 31 minutes. Callers of one checkout's `status` share the read under way (`checkoutStatuses`), never one that finished before they asked; a removal reads its own. Settings › Worktrees lists with one `status` a worktree and no size: sizes are measured behind the answer, kept until the checkout's HEAD or index moves, and said with `worktree-sizes`. `test-worktree-summary-passes.ts` counts the processes of each of these.
+Every spawn holds the host's thread for a moment, so a worktree's summary is asked of Git only where what it was read at moved. A window asking (`mako:worktree-summaries`) is answered at once with what's held (`heldNow`), marked with what is still being read, and never waits for a pass; each summary follows as it's read, in an event that carries only those that changed (`worktree-summary-changes`), and the whole list (`worktree-summaries`) is said only while a window that knows no other form may listen. One pass runs at a time (`readListed`): the main checkout's branch and each branch's commit are read from Git's files (`storedFacts`), the start point once per change of what it depends on (`WorktreeStarts.pointKey`: HEAD, the branch's and upstream's commits, the configuration files), and a summary stands while those commits and its index's time are as they were. A worktree's `status` is read on what says its files may have changed: its index or HEAD moving, a turn in it ending, a tool call reporting a write there (`mako:tool-effects`, `wrote`), and a file changing in it while a window shows its row or has it open (`filesHeard`). File events come from the tree watches the host already keeps, through the one backend they all use (`WatchedTrees`): the folder a tab has open, each checkout attribution follows while a Thread works in it, a conversation's files, an automation's folder. The summaries start no watch of their own and walk no tree. Writes are waited out (`FILES_SETTLE_MS`, 3 s after the last, the wait between reads doubling to 30 s while they keep coming), so a turn editing two hundred files is a handful of reads; a file event in a worktree nobody shows only marks it (`unseen`), read once a window shows it. A window coming to focus says so, and the worktrees it shows that no tree watch covers are read then, each at most once a minute. A worktree a delivering tree watch covers, with nothing heard, is never read on a timer; one nothing covers is read again past an hour (`STATUS_BACKSTOP_MS`), since nothing would say an editor changed a file there. A shared ref moving reads no status. `ahead` and `behind` for every worktree of a repository are one `for-each-ref` (`ahead-behind`, `countBranches`), and a landing only a merge in memory can tell is an idle read, made first for the worktrees a window shows or a conversation works in and one at a time for the rest (`laterLandings`), whose `behind` and `ahead` are current meanwhile and whose landing follows. Landings, counts, each worktree's summary with its index time, each repository's pull requests and start point are kept in `<worktrees>/summaries.json` (`WorktreeSummaryCache`, the store-format rule), so the first pass after a start with nothing moved starts no Git process; cold, 107 worktrees were about 700 processes four at a time, and one ask stayed open 12 to 31 minutes. A caller says how it wants a checkout's `status` (`checkoutStatuses`, `StatusAsk`): one that decides on it (a review, a merge, what a removal would meet, an agent's `worktree_status`, opening a pull request) asks for `fresh` and gets a read made after it asked, shared with others asking the same then; one that only shows it takes the status held since the checkout's last signal, and where a tab has the checkout open, the one its watcher keeps (`Repository.status`) when that lists the same files. A removal reads its own. Settings › Worktrees is drawn from what's held and asks Git nothing: a worktree with no count that still stands is listed with its last one and `refreshing`, read behind the answer as sizes are measured behind it (kept until the checkout's HEAD or index moves), and `worktree-sizes` says when either is in. What the list shows never decides a removal. `test-worktree-summary-passes.ts` counts the processes of each of these.
 
 Debug Git through host.log: with `MAKO_GIT_TRACE=1` (`HostConfig.gitTrace`) every Git process is logged under `git` with its arguments, folder, queued and running time, exit code and bytes. Without it, only processes slower than two seconds or stopped for time are logged. A failed probe alone isn't logged, since probes such as `rev-parse --verify` fail by design.
 
@@ -3398,6 +3482,38 @@ turns it back into a draft. Adding a kind is a detail schema, a writer and
 reader in `kinds.ts`, a chip in `reference-chip.tsx` and a glyph; nothing
 else branches on it. `scripts/test-context-wire.ts` and
 `test-context-kinds.ts` hold every kind's round trip and the old formats.
+
+A file in a draft is a reference from the composer to the harness, never
+its bytes. `stageAttachment` (`src/lib/attachment-staging.ts`) stages one
+with a path on this Mac by that path (a clone, `workspaces/staging.ts`) and
+one without (a paste, a capture) 510 KiB at a time (`stageFilePart`), so
+the window never reads or encodes a whole file and no call carries more
+than a piece; the draft holds the staged path and an object URL for its
+chip. The message carries the path (`promptAttachment`). The host keeps the
+file before it admits the message: `LiveAssets.hold` hashes it as a stream
+and clones it under `<sha256>-<name>`, or only restarts its times when the
+store holds that hash already, and `retainPrompt` under the same request ID
+then swaps the path in with no file touched, since admission runs in one
+turn (`holdAttachments` in the `mako:live-prompt`, `live-continue`,
+`live-start` and steer handlers; a caller that doesn't hold still works,
+and pays the copy as it's admitted). A message that carries `data` (the web
+app's, which has no path to stage from and stays under its 700 KiB budget;
+a cloud move's; an older window's) is kept the same way, decoded a piece at
+a time, and keeps its bytes for the harnesses that take them inline (ACP
+image blocks, Cursor, OpenCode); Claude's SDK needs base64 and encodes it
+from the kept file as it's read, a step at a time; Codex takes the path.
+What a message is known by (`promptFingerprint`) is still what it came as,
+so a retry is the same message to a host from before this. In the
+transcript a read is kept by its conversation, path and purpose
+(`src/state/transcript-media.ts`: a row scrolled back or a Thread reopened
+draws at once; a file the agent may rewrite is asked again once the
+conversation has moved, and soon while it works), and a large picture alone
+draws the host's `inline` rendition rather than the original
+(`lonePictureUrl`; `MediaRenditions` keeps a picture's renditions by its
+content's hash, so the staged file and the kept one share one, and
+attaching a picture asks for it ahead). The original loads in the lightbox.
+`tsx --tsconfig tsconfig.app.json scripts/test-attachment-pipeline.ts`
+holds all of it and prints what sending a 10 MB picture costs.
 
 The textarea holds each chip's label (`@`, which its mark covers, then its
 words: `draftView` in `src/lib/draft-view.ts`), never its token or anchor,

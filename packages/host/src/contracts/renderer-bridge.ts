@@ -211,9 +211,10 @@ export function createMakoBridge(transport: BridgeTransport) {
     worktreeStartPoint: (cwd: string, fetch: boolean) => invokeTrustedHost<WorktreeStartPoint | null>("mako:worktree-start-point", cwd, fetch),
     worktreeBranches: (cwd: string) => invokeTrustedHost<WorktreeBranch[]>("mako:worktree-branches", cwd),
     worktreePulls: (cwd: string) => invokeTrustedHost<WorktreePull[] | null>("mako:worktree-pulls", cwd),
-    // What the host holds, at once, with what it's still reading. A host from before that form takes no argument and
-    // answers the list alone, saying the whole list on each change after.
-    worktreeSummaries: () => invokeTrustedHost<WorktreeSummary[] | WorktreeSummariesHeld>("mako:worktree-summaries", "changes")
+    // What the host holds, at once, with what it's still reading; `focus` when the window asks because it came to
+    // the front. A host from before that form takes no argument and answers the list alone, saying the whole list on
+    // each change after.
+    worktreeSummaries: (why?: "focus") => (why ? invokeTrustedHost<WorktreeSummary[] | WorktreeSummariesHeld>("mako:worktree-summaries", "changes", why) : invokeTrustedHost<WorktreeSummary[] | WorktreeSummariesHeld>("mako:worktree-summaries", "changes"))
       .catch(() => invokeTrustedHost<WorktreeSummary[]>("mako:worktree-summaries")),
     worktreeUpdate: (path: string) => invokeTrustedHost<WorktreeUpdate>("mako:worktree-update", path),
     worktreeRemoval: (path: string) => invokeTrustedHost<WorktreeRemoval>("mako:worktree-removal", path),
@@ -943,6 +944,9 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<void>("mako:utility-model-disconnect", provider),
     stageFile: (name: string, base64: string) =>
       invokeTrustedHost<StagedFile>("mako:stage-file", name, base64),
+    /** One piece of a file with no path, at most `STAGED_PART_BYTES` of it; `into` is what the piece before answered. */
+    stageFilePart: (name: string, base64: string, into?: { path: string; offset: number }) =>
+      invokeTrustedHost<StagedFile>("mako:stage-file-part", name, base64, into),
     stageFilePath: (sourcePath: string) =>
       invokeTrustedHost<StagedFile>("mako:stage-file-path", sourcePath),
     /** The OS path behind a dropped/picked File — the fast lane for staging. */

@@ -26,10 +26,7 @@ interface PointKey {
   upstream: string | null
 }
 
-interface Tracked {
-  remote: string
-  ref: string
-}
+type Tracked = { remote: string; ref: string }
 
 interface PointRead {
   point: WorktreeStartPoint

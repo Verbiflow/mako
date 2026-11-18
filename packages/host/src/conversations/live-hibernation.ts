@@ -22,7 +22,7 @@ export const PROVIDER_WARM_LIMIT = 2
 
 type HibernationAccess = Pick<LiveAccess,
   "dependencies" | "residents" | "resident" | "load" | "flush" | "noteWork" | "drain" | "moves" | "retireFromAccount" | "locateNativePath" |
-  "failedStart" | "returnFromRemovedWorktree" | "driverEvents" | "reconcileCut" | "restartContinued" | "reconnectQueued" | "stopMark">
+  "failedStart" | "returnFromRemovedWorktree" | "restoreRetiredWorktree" | "driverEvents" | "reconcileCut" | "restartContinued" | "reconnectQueued" | "stopMark">
 
 /**
  * Which conversations keep a provider process: a ready one stays warm for
@@ -405,6 +405,10 @@ export class LiveHibernation {
 
   private async wakeNow(resident: Resident): Promise<void> {
     const { dependencies } = this.access
+    // A finished Fin's retired worktree is made again first, where it was: awaited only when there is one, and what
+    // the wake depends on is read after it.
+    const restoring = this.access.restoreRetiredWorktree(resident)
+    if (restoring) await restoring
     if (
       !this.access.moves.executes(resident) ||
       this.access.moves.ownerCheck(resident) !== undefined ||

@@ -154,7 +154,7 @@ export class LiveTransfers {
       throw new Error(
         `${command.provider} has no available interactive transport`
       )
-    command.attachments = this.host.retainAttachments(command.attachments)
+    command.attachments = this.host.retainAttachments(command.attachments, command.id)
     const previous = resident.snapshot
     resident.snapshot = {
       ...previous,
@@ -336,6 +336,11 @@ export class LiveTransfers {
         return
       }
       if (!owned()) return
+      const restoring = this.host.restoreRetiredWorktree(resident)
+      if (restoring) {
+        await restoring
+        if (!owned()) return
+      }
       this.host.returnFromRemovedWorktree(resident)
       const source = resident.snapshot
       const control = this.host.control(resident)

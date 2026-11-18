@@ -15,13 +15,14 @@ const VERSION = 1
 const SAVE_DELAY_MS = 30_000
 const KNOWN = ["version", "landings", "counts", "trees", "worktrees", "pulls", "points"]
 
+// Objects are read loose throughout: a field a newer build added stays on what's held, and goes back to the file.
 const LandingSchema: z.ZodType<WorktreeLanding> = z.union([
-  z.object({ kind: z.literal("merged"), into: z.string() }),
-  z.object({ kind: z.literal("empty") }),
-  z.object({ kind: z.literal("open"), into: z.string(), commits: z.number() }),
-  z.object({ kind: z.literal("unknown") }),
+  z.looseObject({ kind: z.literal("merged"), into: z.string() }),
+  z.looseObject({ kind: z.literal("empty") }),
+  z.looseObject({ kind: z.literal("open"), into: z.string(), commits: z.number() }),
+  z.looseObject({ kind: z.literal("unknown") }),
 ])
-const PullSchema: z.ZodType<WorktreeBranchPull> = z.object({
+const PullSchema: z.ZodType<WorktreeBranchPull> = z.looseObject({
   number: z.number(),
   title: z.string(),
   url: z.string(),
@@ -31,24 +32,24 @@ const PullSchema: z.ZodType<WorktreeBranchPull> = z.object({
   checks: z.enum(["passed", "failed", "running"]).nullable(),
 })
 const PullsSchema = z.array(PullSchema)
-const SummarySchema: z.ZodType<WorktreeSummary> = z.object({
+const SummarySchema: z.ZodType<WorktreeSummary> = z.looseObject({
   path: z.string(),
   into: z.string().nullable(),
   ahead: z.number(),
   changes: z.number(),
   landing: LandingSchema,
   pull: PullSchema.nullable(),
-  behind: z.object({ from: z.string(), commits: z.number() }).nullable(),
+  behind: z.looseObject({ from: z.string(), commits: z.number() }).nullable(),
 })
-const HeldSchema = z.object({
+const HeldSchema = z.looseObject({
   summary: SummarySchema,
-  /** When the summary was last read, and when its `status` was. */
-  at: z.number(),
-  statusAt: z.number(),
+  /** When the summary was last read, and when its `status` was; 0 from a build that didn't say, which reads it again. */
+  at: z.number().default(0),
+  statusAt: z.number().default(0),
   /** Its index's modification time when the status was read. */
-  index: z.number(),
+  index: z.number().default(0),
   /** The commits the summary was read at (`summaryRefs`). */
-  refs: z.string(),
+  refs: z.string().default(""),
 })
 export type HeldSummary = z.infer<typeof HeldSchema>
 
@@ -60,17 +61,17 @@ const StandingSchema: z.ZodType<WorktreeStartPoint["standing"]> = z.union([
   z.object({ kind: z.literal("ahead"), ahead: z.number() }),
   z.object({ kind: z.literal("diverged"), ahead: z.number(), behind: z.number() }),
 ])
-const PointSchema = z.object({
+const PointSchema = z.looseObject({
   /** What the point was read at: the main checkout's HEAD, its branch's and upstream's commits, its configuration files' stamps. */
   key: z.string(),
-  point: z.object({
+  point: z.looseObject({
     from: z.string(),
     commit: z.string(),
     branch: z.string().nullable(),
     upstream: z.string().nullable(),
     standing: StandingSchema,
   }),
-  tracked: z.object({ remote: z.string(), ref: z.string() }).nullable(),
+  tracked: z.looseObject({ remote: z.string(), ref: z.string() }).nullable(),
 })
 export type HeldPoint = z.infer<typeof PointSchema>
 
@@ -194,6 +195,8 @@ export class WorktreeSummaryCache {
   private timer: NodeJS.Timeout | undefined
   private saving: Promise<void> = Promise.resolve()
   private source: (() => SummaryMemory) | undefined
+  /** Its owner is closing: what's held is written once more, and nothing after it until it's followed again. */
+  private stopped = false
 
   constructor(file: string) {
     this.file = file
@@ -232,6 +235,7 @@ export class WorktreeSummaryCache {
 
   /** Something held changed: `memory` is written soon, as it is then. */
   changed(memory: () => SummaryMemory): void {
+    if (this.stopped) return
     this.source = memory
     if (this.timer || this.newer) return
     this.timer = setTimeout(() => {
@@ -239,6 +243,18 @@ export class WorktreeSummaryCache {
       void this.flush()
     }, SAVE_DELAY_MS)
     this.timer.unref()
+  }
+
+  /** Writes what changed and takes no more changes: a pass still ending as its host stops doesn't write after it. */
+  stop(): Promise<void> {
+    const saved = this.flush()
+    this.stopped = true
+    return saved
+  }
+
+  /** Takes changes again. */
+  resume(): void {
+    this.stopped = false
   }
 
   /** Writes what changed now, and resolves once every write has finished. */

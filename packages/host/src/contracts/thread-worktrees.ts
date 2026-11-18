@@ -78,6 +78,11 @@ export interface WorktreeDetail extends Omit<ThreadWorktree, "thread"> {
   users: string[]
   /** Its own files; dependency folders cloned from the main checkout share their blocks and aren't counted. */
   bytes: number | null
+  /**
+   * `changes` and `held` are from before something changed in the worktree, or were never read: the host is reading
+   * them behind this answer and says when they're in (`worktree-sizes`). A removal reads the worktree itself.
+   */
+  refreshing?: true
 }
 
 /** A pull request whose head is a worktree's branch. */
@@ -254,14 +259,43 @@ export interface WorktreeStartPoint {
   fetched: { at: number; failed: string | null } | null
 }
 
-/** Preview is the default: the person must opt in before any automatic removal. */
+/**
+ * Preview is the default: the person must opt in before any automatic removal, but for one case. The checkout of a Fin
+ * whose edge Mako closed as finished (`closedFinished`) is retired without their opting in, under every guard a
+ * checkout's retirement has, unless they turn that off (`finishedFins`).
+ */
 export interface WorktreeRetentionSettings {
   mode: "preview" | "packages" | "checkout"
   /** Quiet days for checkout removal only; finished Threads' packages need no age or Git proof. */
   days: number
   /** Explicitly kept checkouts are never retired automatically. */
   kept: string[]
+  /** False keeps the worktrees of Fins closed as finished, as every other checkout is kept in preview. Absent: retired. */
+  finishedFins?: boolean
 }
+
+/**
+ * A worktree retired from under a Fin closed as finished, as it stood: enough to make it again at the same path when
+ * a message opens the Fin (`ThreadWorktreeService.restoreRetired`). `branch` is what it had checked out, absent for a
+ * detached HEAD; `head` is its commit, which a fetched remote ref held as it was removed.
+ */
+export interface RetiredWorktree {
+  path: string
+  thread: ThreadId
+  repoRoot: string
+  project: string
+  /** The branch its row recorded, kept for the row made again. */
+  recorded: string
+  branch?: string
+  head: string
+  base: string
+  at: number
+}
+
+/** How a retired worktree came back, or why it couldn't, in words its Fin and the person read. */
+export type WorktreeRestored =
+  | { kind: "restored"; path: string; branch?: string; head: string; note: string }
+  | { kind: "failed"; path: string; why: string }
 
 export interface WorktreeRetirement {
   path: string
@@ -278,6 +312,8 @@ export interface WorktreeRetirement {
   checkoutSkip: string | null
   /** The registry ownership captured with this decision, rechecked before removal. */
   owners: Array<{ path: string; thread: ThreadId; createdAt: number }>
+  /** Its Thread is a Fin closed as finished, so its checkout is retired without the person choosing removal. */
+  finished?: true
   /** Null means it is eligible now; an unreadable guard always gives a reason. */
   skip: string | null
 }

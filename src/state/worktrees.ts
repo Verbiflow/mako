@@ -214,19 +214,24 @@ let summaryReads = 0
 /** The ask that's out, and the one more that waits for it: whoever asks meanwhile shares that one. */
 let summariesOut: Promise<void> | undefined
 let summariesNext: Promise<void> | undefined
+let focusWaits = false
 
 /**
  * Asks the host for every summary. One ask is out at a time: a caller that arrives while it is gets the next one,
  * which starts when it lands, so what it reads is no older than its asking, and ten callers at once make two asks.
  */
-export function refreshWorktreeSummaries(): Promise<void> {
+export function refreshWorktreeSummaries(why?: "focus"): Promise<void> {
   if (!hasBridge()) return Promise.resolve()
   if (!summariesOut) {
-    summariesOut = readWorktreeSummaries().finally(() => {
+    const focus = why === "focus" || focusWaits
+    focusWaits = false
+    summariesOut = readWorktreeSummaries(focus).finally(() => {
       summariesOut = undefined
     })
     return summariesOut
   }
+  // The ask behind the one that's out says the window came to the front, if any who wait for it did.
+  if (why === "focus") focusWaits = true
   summariesNext ??= summariesOut.catch(() => {}).then(() => {
     summariesNext = undefined
     return refreshWorktreeSummaries()
@@ -234,9 +239,9 @@ export function refreshWorktreeSummaries(): Promise<void> {
   return summariesNext
 }
 
-async function readWorktreeSummaries(): Promise<void> {
+async function readWorktreeSummaries(focus: boolean): Promise<void> {
   const mine = ++summaryReads
-  const answer = await getMako().worktreeSummaries()
+  const answer = await (focus ? getMako().worktreeSummaries("focus") : getMako().worktreeSummaries())
   if (mine !== summaryReads) return
   // A host from before it answers the list alone, read to its end.
   applyWorktreeSummaries(Array.isArray(answer) ? answer : answer.summaries)
@@ -297,20 +302,27 @@ export function applyWorktreeSummaries(summaries: readonly WorktreeSummary[]): v
 /**
  * Asks for the summaries when the rail shows and when the worktrees change: the host answers at once with what it
  * holds and says each change after that itself (`worktree-summary-changes`), read on each worktree's own events, so no
- * window polls or waits on a pass, and coming back to the window asks nothing: it was a read of every worktree's Git
- * on each focus, for what the events had already said.
+ * window polls or waits on a pass. Coming back to the window asks too, saying so: the host then reads the worktrees
+ * on screen that nothing watches the files of, each at most once a minute, where a focus used to read every
+ * worktree's Git. An edit made in an editor meanwhile is on the row when the person looks.
  */
 export function useKeepWorktreeSummaries(): void {
   useEffect(() => {
     const refresh = () => void refreshWorktreeSummaries().catch(() => {})
+    const focused = () => void refreshWorktreeSummaries("focus").catch(() => {})
     refresh()
+    window.addEventListener("focus", focused)
     let listed = worktreesStore.get().worktrees
-    return worktreesStore.subscribe(() => {
+    const stop = worktreesStore.subscribe(() => {
       const { worktrees } = worktreesStore.get()
       if (worktrees === listed) return
       listed = worktrees
       refresh()
     })
+    return () => {
+      window.removeEventListener("focus", focused)
+      stop()
+    }
   }, [])
 }
 

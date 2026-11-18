@@ -323,7 +323,7 @@ export class LiveActions {
         return this.receipt(resident, { input, digest, bindingId, createdAt: Date.now(), sender, state: { kind: "accepted" } })
       }
       const expectedRunId = request.nativeRun.runId
-      const attachments = this.host.retainAttachments(input.attachments)
+      const attachments = this.host.retainAttachments(input.attachments, input.id)
       retained = { ...input, attachments }
       const send = () =>
         steer(bindingId, {

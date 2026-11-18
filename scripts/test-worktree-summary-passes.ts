@@ -5,30 +5,40 @@ import { randomUUID } from "node:crypto"
 import { subscribe } from "node:diagnostics_channel"
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
+import { mock } from "node:test"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
 import { Git, type GitTrace } from "@mako/git"
 import { HostStopping } from "@mako/host/base/host-stopping"
 import type { WorktreeSummary, WorktreeSummaryChanges } from "@mako/host/contracts/thread-worktrees"
+import { writtenPaths } from "@mako/host/attribution/written-paths"
 import { checkoutStatuses } from "@mako/host/git/checkout-status"
 import { forgetGitHubReads, githubStatus, listBranchPulls } from "@mako/host/git/github"
 import { ThreadStore } from "@mako/host/threads/store"
 import { ThreadWorktreeService } from "@mako/host/workspaces/thread-worktrees"
+import type { WatchListener } from "@mako/host/workspaces/watch-backend"
+import { WatchedTrees } from "@mako/host/workspaces/watched-trees"
+import { WorktreeSummaryCache } from "@mako/host/workspaces/worktree-summary-cache"
 
 /**
  * The worktree summaries as a host with many worktrees pays for them, counted in Git processes: an ask answers at
  * once with what's held while a pass is held open; a pass after a restart with nothing moved starts none; one
  * worktree's commit reads that worktree; the main checkout moving counts every branch in one process and reads the
  * landings a window shows first, the rest spread; an event carries only what changed, and a window that knows only the
- * whole list still gets it; several askers of one status in a moment cost one process; a merged pull request gets no
- * check read; and an inventory answers before any size is measured. `npx tsx scripts/test-worktree-summary-passes.ts`
+ * whole list still gets it; a status is read fresh for what decides and taken from what's held, or from a tab's
+ * watcher, for what only shows; a turn editing two hundred files costs a read or two and an edit outside Mako in a
+ * shown worktree is counted within seconds, while a worktree nobody shows costs nothing; an inventory asks Git
+ * nothing; an older Git counts the same; the file loses nothing between builds; and a merged pull request gets no
+ * check read. `npx tsx scripts/test-worktree-summary-passes.ts`
  */
 
 /** A child process as Node says it was made (`child_process` channel): its command line is there once it has started. */
 const SpawnedSchema = z.object({ process: z.object({ spawnargs: z.array(z.string()) }) })
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-summary-passes-")))
 const WORKTREES = 12
+/** Past the wait a write's status read is put off by (`FILES_SETTLE_MS`), with room for the read. */
+const FILES_WAIT_MS = 4_500
 const noWatch = async () => ({ unsubscribe: async () => {} })
 
 function git(cwd: string, ...args: string[]): string {
@@ -70,7 +80,15 @@ const repo = repository("repo")
 const worktreesRoot = join(root, "worktrees")
 const shown = new Set<string>()
 let working: () => Promise<string[]> = async () => []
-const service = (runner: Git) => new ThreadWorktreeService(runner, worktreesRoot, threads, undefined, undefined, undefined, undefined, undefined, undefined, () => working(), undefined, undefined, noWatch, (path) => shown.has(path))
+/** The host's tree watches, over a backend that delivers what the test says changed: no watcher runs here. */
+const trees = new WatchedTrees()
+const delivering = new Map<string, WatchListener>()
+const treeBackend = trees.over(Object.assign(async (watched: string, _ignore: readonly string[], listener: WatchListener) => {
+  delivering.set(watched, listener)
+  return { unsubscribe: async () => { delivering.delete(watched) } }
+}, { recover: () => {}, paced: () => {} }))
+const quietListener: WatchListener = { events: () => {}, dropped: () => {}, gone: () => {}, muted: () => {} }
+const service = (runner: Git) => new ThreadWorktreeService(runner, worktreesRoot, threads, undefined, undefined, undefined, undefined, undefined, undefined, () => working(), undefined, undefined, noWatch, { shown: (path) => shown.has(path), heard: (path) => trees.covers(path) })
 
 async function make(worktrees: ThreadWorktreeService, from: string, name: string) {
   const id = randomUUID()
@@ -139,7 +157,8 @@ try {
   assert.equal(stored.version, 1, "the file says its format")
   assert.equal(Object.keys(stored.worktrees).length, WORKTREES)
   // A field a newer build added is written back as it was.
-  writeFileSync(file, JSON.stringify({ ...stored, later: { kept: true } }))
+  const entryOf = Object.keys(stored.worktrees)[0]!
+  writeFileSync(file, JSON.stringify({ ...stored, later: { kept: true }, worktrees: { ...stored.worktrees, [entryOf]: { ...stored.worktrees[entryOf], measured: 7 } } }))
   const second = counting()
   const after = service(second.git)
   const changes: WorktreeSummaryChanges[] = []
@@ -194,6 +213,12 @@ try {
   // and the rest one at a time.
   const shownNow = [open[4]!.path, open[5]!.path]
   for (const path of shownNow) shown.add(path)
+  // Shown for the first time since this host started: the count the last host left is read again, once.
+  second.ran.length = 0
+  await before.summaries()
+  assert.deepEqual(named(second.ran, "status").map((each) => each.cwd).sort(), [...shownNow].sort(), "a worktree a window shows has the status the last host left read again")
+  await before.summaries()
+  assert.equal(named(second.ran, "status").length, shownNow.length, "once")
   second.ran.length = 0
   changes.length = 0
   const saidBehind = new Map<string, number>()
@@ -248,22 +273,145 @@ try {
   assert.deepEqual(wholes.at(-1), fourth, "and hears the whole list again on a change")
   assert.ok(wholes.length > wholeBefore)
 
-  // --- Several askers of one checkout's status while it's read share one process; one who asks after it's in gets
-  // a read of its own, so no answer is older than its asking.
+  // --- A checkout's status: those who need it as of now share one read made after they asked; those who only show
+  // it take the one held while nothing has signalled since; and a checkout a tab has open is read from its watcher.
   const statuses = checkoutStatuses(second.git)
-  const statusReads = () => second.ran.filter((each) => each.command === "status --porcelain" && each.cwd === busy.path && each.args.includes("--untracked-files=normal")).length
+  const statusReads = (path = busy.path) => second.ran.filter((each) => each.command === "status --porcelain" && each.cwd === path).length
   second.ran.length = 0
-  const asked = await Promise.all(Array.from({ length: 5 }, () => statuses.read(busy.path)))
-  assert.deepEqual(asked, ["", "", "", "", ""])
-  assert.equal(statusReads(), 1, "five askers at once cost one status")
+  assert.deepEqual(await Promise.all(Array.from({ length: 5 }, () => statuses.read(busy.path, { fresh: true }))), ["", "", "", "", ""])
+  assert.equal(statusReads(), 1, "five who ask for it as of now at once cost one status")
+  await Promise.all(Array.from({ length: 5 }, () => statuses.read(busy.path)))
+  assert.equal(statusReads(), 1, "and those who only show it take that one: nothing has signalled since")
   assert.equal((await after.review(busy.path)).commits, 4)
+  assert.equal(statusReads(), 2, "a review decides on its own read")
   writeFileSync(join(busy.path, "unsaved.txt"), "x\n")
   assert.match((await after.removal(busy.path)).held ?? "", /has changes that aren't committed/, "what a removal would meet is read after it's asked, never taken from before")
   assert.equal((await after.review(busy.path)).merge.ok, false, "and so is a review's")
   rmSync(join(busy.path, "unsaved.txt"))
   assert.equal((await after.removal(busy.path)).held, null)
+  const beforeSignal = statusReads()
+  statuses.touched(busy.path)
+  await Promise.all(Array.from({ length: 3 }, () => statuses.read(busy.path)))
+  assert.equal(statusReads(), beforeSignal + 1, "after a signal, those who show it share one read")
+  // A tab has the worktree open: its watcher keeps the status, and showing it starts no process of its own.
+  const tab = await second.git.openRepository(busy.path)
+  assert.ok(tab)
+  const closeTab = tab.watch()
+  await tab.status()
+  second.ran.length = 0
+  statuses.touched(busy.path)
+  assert.equal(await statuses.read(busy.path), "")
+  writeFileSync(join(busy.path, "in-tab.txt"), "x\n")
+  tab.changed(["in-tab.txt"])
+  statuses.touched(busy.path)
+  assert.equal(await statuses.read(busy.path), "?? in-tab.txt", "what the tab's watcher holds is what's shown")
+  assert.equal(statusReads(), 0, "with no status process of the summaries' own")
+  rmSync(join(busy.path, "in-tab.txt"))
+  tab.changed(["in-tab.txt"])
+  statuses.touched(busy.path)
+  closeTab()
 
-  // --- An inventory answers before any size is measured, and runs one status a worktree and no other Git process.
+  // --- What reads a worktree's status between its Git events: a tool's write, a file event while a window shows
+  // it, the window coming to focus. A worktree nobody shows and nothing writes in costs nothing.
+  const said = (path: string) => changes.flatMap((each) => each.changed).filter((summary) => summary.path === path).at(-1)?.changes
+  const until = async (what: string, done: () => boolean, ms = 20_000) => {
+    for (const deadline = performance.now() + ms; !done(); await delay(50)) if (performance.now() > deadline) throw new Error(`never: ${what}`)
+  }
+  await after.summaries()
+  second.ran.length = 0
+  changes.length = 0
+  // An agent's turn editing two hundred files through its tools, over a second and a half.
+  const edited = others[1]!
+  for (let n = 0; n < 200; n += 1) {
+    writeFileSync(join(edited.path, `edit-${n}.txt`), "x\n")
+    after.wrote([join(edited.path, `edit-${n}.txt`)])
+    if (n % 20 === 19) await delay(150)
+  }
+  const lastEdit = performance.now()
+  await until("the turn's edits counted", () => said(edited.path) === 200)
+  const editsSeenMs = Math.round(performance.now() - lastEdit)
+  const editReads = statusReads(edited.path)
+  assert.ok(editReads <= 2, `two hundred edits cost ${editReads} status reads, not at most 2`)
+  assert.ok(editsSeenMs < 8_000, `the count was right ${editsSeenMs} ms after the last edit`)
+  // More writes straight after are waited out longer: the reads of one long turn stay a handful.
+  for (let n = 200; n < 230; n += 1) {
+    writeFileSync(join(edited.path, `edit-${n}.txt`), "x\n")
+    after.wrote([join(edited.path, `edit-${n}.txt`)])
+  }
+  await until("the later edits counted", () => said(edited.path) === 230)
+  assert.ok(statusReads(edited.path) <= editReads + 1)
+  assert.deepEqual(named(second.ran, "status").filter((each) => each.cwd !== edited.path), [], "and no other worktree was read for them")
+
+  // What a finished call says it wrote: the files it changed, and the folder of a command that may have written.
+  assert.deepEqual(writtenPaths([
+    { kind: "modify", path: "/w/a/src/x.ts" }, { kind: "read", path: "/w/a/README" }, { kind: "rename", from: "/w/a/old", to: "/w/a/new" },
+    { kind: "command", command: "git status" }, { kind: "command", command: "npm test", cwd: "/w/a/web" }, { kind: "command", command: "make build" },
+  ], "/w/a"), ["/w/a/src/x.ts", "/w/a/old", "/w/a/new", "/w/a/web", "/w/a"], "a read and a command that only reads name nothing")
+
+  // An edit outside Mako, in a worktree a window shows that a tree watch the host already keeps covers.
+  const [watchedShown, watchedUnshown, plainShown] = [open[4]!, others[4]!, open[5]!]
+  trees.follow((watched, paths) => after.filesHeard(watched, paths))
+  await treeBackend(watchedShown.path, [], quietListener)
+  await treeBackend(watchedUnshown.path, [], quietListener)
+  assert.equal(trees.covers(join(watchedShown.path, "src")), true)
+  // A watch that just began heard nothing of what came before it: the shown one is read once.
+  await until("the shown worktree read as its watch began", () => statusReads(watchedShown.path) === 1)
+  second.ran.length = 0
+  changes.length = 0
+  writeFileSync(join(watchedShown.path, "outside.txt"), "x\n")
+  delivering.get(watchedShown.path)?.events([{ path: join(watchedShown.path, "outside.txt"), type: "create" }])
+  const outsideAt = performance.now()
+  await until("the outside edit counted", () => said(watchedShown.path) === 1)
+  const outsideSeenMs = Math.round(performance.now() - outsideAt)
+  assert.ok(outsideSeenMs < 8_000, `an edit outside Mako in a shown worktree was on its row after ${outsideSeenMs} ms`)
+  assert.equal(statusReads(watchedShown.path), 1)
+  // The same in a worktree nobody shows: heard, and not read until a window shows it.
+  writeFileSync(join(watchedUnshown.path, "outside.txt"), "x\n")
+  delivering.get(watchedUnshown.path)?.events([{ path: join(watchedUnshown.path, "outside.txt"), type: "create" }])
+  await delay(FILES_WAIT_MS)
+  await after.summaries()
+  assert.equal(statusReads(watchedUnshown.path), 0, "a worktree nobody shows isn't read for a file event")
+  shown.add(watchedUnshown.path)
+  await after.summaries()
+  assert.equal(statusReads(watchedUnshown.path), 1, "and is once a window shows it")
+  assert.equal(said(watchedUnshown.path), 1)
+  shown.delete(watchedUnshown.path)
+
+  // A shown worktree no tree watch covers: nothing says an editor changed a file in it, so the window coming to
+  // focus reads it, at most once a minute.
+  const realNow = Date.now
+  let ahead = 0
+  Date.now = () => realNow() + ahead
+  try {
+    writeFileSync(join(plainShown.path, "editor.txt"), "x\n")
+    second.ran.length = 0
+    await after.heldNow(undefined, "changes", true)
+    await after.summaries()
+    assert.equal(statusReads(plainShown.path), 0, "read within the last minute, a focus doesn't read it again")
+    ahead += 61_000
+    await after.heldNow(undefined, "changes")
+    await after.summaries()
+    assert.equal(statusReads(plainShown.path), 0, "an ask that isn't a focus reads nothing")
+    await after.heldNow(undefined, "changes", true)
+    await after.summaries()
+    assert.equal(statusReads(plainShown.path), 1, "the window coming to focus reads the shown worktree nothing watches")
+    assert.equal(said(plainShown.path), 1)
+    assert.deepEqual(named(second.ran, "status").map((each) => each.cwd), [plainShown.path], "and no other: the watched one would have been heard, the rest aren't shown")
+    // Past the hour: a worktree a tree watch covers, with nothing heard, isn't read; one nothing covers is.
+    ahead += 2 * 60 * 60_000
+    second.ran.length = 0
+    await after.summaries()
+    const backstopped = named(second.ran, "status").map((each) => each.cwd)
+    assert.equal(backstopped.includes(watchedShown.path) || backstopped.includes(watchedUnshown.path), false, "a covered worktree has no hourly read")
+    assert.equal(backstopped.length, WORKTREES - 2, "the hour's backstop reads those nothing would say changed")
+    second.ran.length = 0
+    await after.summaries()
+    assert.equal(second.ran.length, 0, "and an idle worktree costs nothing between")
+  } finally {
+    Date.now = realNow
+  }
+
+  // --- An inventory is drawn from what's held: it asks Git nothing and measures no size before it answers.
   const children: unknown[] = []
   subscribe("child_process", (message) => {
     children.push(message)
@@ -271,6 +419,7 @@ try {
   const sized = () => children.filter((child) => SpawnedSchema.safeParse(child).data?.process.spawnargs.some((word) => word.endsWith("du"))).length
   let sizesSaid = 0
   after.followSizes(() => { sizesSaid += 1 })
+  await after.summaries()
   second.ran.length = 0
   const inventoryBegan = performance.now()
   const inventory = await after.inventory()
@@ -278,8 +427,9 @@ try {
   assert.equal(inventory.worktrees.length, WORKTREES)
   assert.ok(inventory.worktrees.every((worktree) => worktree.bytes === null), "no size is in the first answer")
   assert.equal(sized(), 0, "and no checkout was walked for one before it")
-  assert.deepEqual([...new Set(second.ran.map((each) => each.command))], ["status --porcelain"], "the list reads each worktree's status and nothing else of Git")
-  assert.equal(second.ran.length, WORKTREES)
+  assert.deepEqual(second.ran.map((each) => each.command), [], "the list asks Git nothing: every count is one held")
+  assert.ok(inventory.worktrees.every((worktree) => worktree.refreshing === undefined))
+  assert.equal(inventory.worktrees.find((worktree) => worktree.path === edited.path)?.changes, 230)
   assert.equal(inventory.worktrees.find((worktree) => worktree.path === busy.path)?.landing.kind, "open")
   await after.settled()
   assert.equal(sizesSaid, 1, "the sizes are said once, when they're all in")
@@ -289,10 +439,29 @@ try {
   assert.ok(sizedInventory.worktrees.every((worktree) => (worktree.bytes ?? 0) > 0), "the next list has them")
   await after.settled()
   assert.equal(sized(), measuredOnce, "and measures none again while no checkout changed")
+  // One something signalled is listed with its last count, marked, and read behind the answer.
+  const signalled = others[5]!
+  writeFileSync(join(signalled.path, "listed.txt"), "x\n")
+  after.wrote([join(signalled.path, "listed.txt")])
+  second.ran.length = 0
+  const marked = await after.inventory()
+  assert.deepEqual(marked.worktrees.filter((worktree) => worktree.refreshing).map((worktree) => [worktree.path, worktree.changes]), [[signalled.path, 0]], "a worktree whose files changed is listed as being read again, alone")
+  await after.settled()
+  assert.deepEqual(named(second.ran, "status").map((each) => each.cwd), [signalled.path], "and it alone is read, behind the answer")
+  const listedAgain = (await after.inventory()).worktrees.find((worktree) => worktree.path === signalled.path)
+  assert.deepEqual([listedAgain?.changes, listedAgain?.refreshing, listedAgain?.held === null], [1, undefined, false])
+  // What the list shows doesn't decide a removal: a file nothing signalled isn't in the list, and holds the removal.
+  const unsignalled = others[6]!
+  writeFileSync(join(unsignalled.path, "quiet.txt"), "x\n")
+  assert.equal((await after.inventory()).worktrees.find((worktree) => worktree.path === unsignalled.path)?.held, null)
+  assert.match((await after.removal(unsignalled.path)).held ?? "", /has changes that aren't committed/, "the removal reads the worktree as it is")
+  await assert.rejects(after.remove(unsignalled.path), /has changes that aren't committed/)
+  rmSync(join(unsignalled.path, "quiet.txt"))
+  const sizedBefore = sized()
   commit(busy.path, "fifth.txt", "5\n", "fifth")
   await after.inventory()
   await after.settled()
-  assert.equal(sized(), measuredOnce + 1, "a checkout that changed is measured again, alone")
+  assert.equal(sized(), sizedBefore + 1, "a checkout that changed is measured again, alone")
 
   console.log(JSON.stringify({
     worktrees: WORKTREES,
@@ -301,11 +470,14 @@ try {
     oneCommit: { git: commitProcesses.length, commands: commitProcesses },
     mainMoved: { git: movedProcesses, ms: movedMs, mergesShownFirst: shownNow.length, mergesSpread: rest.length },
     answerWhilePassOpenMs: Math.round(answerMs),
-    inventory: { git: WORKTREES, ms: inventoryMs, sizesBeforeAnswer: 0 },
+    turnOf200Edits: { statusReads: editReads, countRightAfterMs: editsSeenMs },
+    outsideEditInShownWorktree: { statusReads: 1, seenAfterMs: outsideSeenMs },
+    inventory: { git: 0, ms: inventoryMs, sizesBeforeAnswer: 0 },
   }))
   await after.closeSummaries()
   const kept = JSON.parse(readFileSync(file, "utf8"))
   assert.deepEqual(kept.later, { kept: true }, "a field this build doesn't know is written back")
+  assert.equal(kept.worktrees[entryOf].measured, 7, "and one beside a worktree's summary, through every read of it since")
   // A file in a newer format is left alone, and nothing is read from it.
   writeFileSync(file, JSON.stringify({ ...kept, version: 99 }))
   const newer = service(counting().git)
@@ -347,8 +519,61 @@ try {
     }
     assert.equal(await landing.git.output(lands, ["merge-tree", "--write-tree", mainTip, tip(conflict)]).catch(() => ""), "", "a conflict answers nothing either way")
     for (const worktree of [clean, conflict, merged, squashed, empty]) assert.equal((await landed.removal(worktree.path)).landing.kind, kinds.get(worktree.path), "a removal's own landing agrees")
+    // Git before 2.41 has no `ahead-behind` for `for-each-ref`: each worktree is counted on its own, to the same numbers.
+    const counts = (summaries: readonly WorktreeSummary[]) => summaries.map((summary) => [summary.path, summary.ahead, summary.behind?.commits, summary.landing])
+    const withAheadBehind = counts(await landed.summaries())
+    assert.ok(named(landing.ran, "for-each-ref").some((each) => each.args.some((word) => word.includes("ahead-behind"))))
+    assert.ok(withAheadBehind.some(([, ahead, behind]) => ahead === 1 && Number(behind) > 1), "the fixture has branches both ahead and behind")
+    // Nothing of the counts kept in the file: the older Git counts every one itself.
+    rmSync(file, { force: true })
+    const older = counting()
+    const atLeast = older.git.atLeast.bind(older.git)
+    const faked = mock.method(older.git, "atLeast", async (major: number, minor: number) => (major > 2 || (major === 2 && minor >= 41) ? false : atLeast(major, minor)))
+    const olderService = service(older.git)
+    assert.deepEqual(counts(await olderService.summaries()), withAheadBehind, "an older Git's counts and landings are the same")
+    assert.equal(named(older.ran, "for-each-ref").filter((each) => each.args.some((word) => word.includes("ahead-behind"))).length, 0, "counted without the atom it lacks")
+    assert.ok(named(older.ran, "rev-list").length >= 2 * 5, "by a count a worktree and side")
+    faked.mock.restore()
+    await olderService.closeSummaries()
+    await older.git.close()
     await landed.closeSummaries()
     await landing.git.close()
+  }
+
+  // --- The file between builds: one a newer build wrote keeps every field this build doesn't know through this
+  // build's rewrite, and one from a build that knew fewer fields is read for what it has, and loses none of it.
+  {
+    const formats = join(root, "formats.json")
+    const summary = { path: "/w/a", into: "main", ahead: 1, changes: 2, landing: { kind: "open", into: "main", commits: 1, since: 5 }, pull: null, behind: { from: "main", commits: 0 }, review: "asked" }
+    const newer = {
+      version: 1,
+      later: { kept: true },
+      landings: { "landing-key": { kind: "merged", into: "main", by: "squash" } },
+      counts: { "count-key": 3 },
+      trees: { "tree-key": "abc" },
+      worktrees: { "/w/a": { summary, at: 1, statusAt: 1, index: 1, refs: "r", measured: 7 } },
+      pulls: { "/repo": [{ number: 1, title: "t", url: "u", branch: "b", state: "open", head: "h", checks: null, reviewers: 2 }] },
+      points: { "/repo": { key: "k", point: { from: "main", commit: "c", branch: "main", upstream: null, standing: { kind: "alone" }, fetchedBy: "x" }, tracked: null, seen: 9 } },
+    }
+    writeFileSync(formats, JSON.stringify(newer))
+    const cache = new WorktreeSummaryCache(formats)
+    const memory = await cache.load()
+    assert.deepEqual([memory.worktrees.get("/w/a")?.summary.changes, memory.counts.get("count-key"), memory.landings.get("landing-key")?.kind], [2, 3, "merged"], "this build reads what it knows of it")
+    memory.counts.set("another", 4)
+    cache.changed(() => memory)
+    await cache.flush()
+    assert.deepEqual(JSON.parse(readFileSync(formats, "utf8")), { ...newer, counts: { ...newer.counts, another: 4 } }, "and writes back every field, at every depth, with what it added")
+    // From a build that knew fewer: no trees, no points, no pull requests, and a worktree's entry without its times.
+    const fewer = { worktrees: { "/w/b": { summary: { path: "/w/b", into: null, ahead: 0, changes: 0, landing: { kind: "empty" }, pull: null, behind: null } } }, counts: { "count-key": 3 } }
+    writeFileSync(formats, JSON.stringify(fewer))
+    const upgraded = new WorktreeSummaryCache(formats)
+    const read = await upgraded.load()
+    assert.deepEqual(read.worktrees.get("/w/b"), { summary: fewer.worktrees["/w/b"].summary, at: 0, statusAt: 0, index: 0, refs: "" }, "an entry without the times this build keeps is read as never checked, so it's read again")
+    read.trees.set("tree-key", "abc")
+    upgraded.changed(() => read)
+    await upgraded.flush()
+    const rewritten = JSON.parse(readFileSync(formats, "utf8"))
+    assert.deepEqual([rewritten.counts, rewritten.worktrees["/w/b"].summary, rewritten.trees, rewritten.version], [fewer.counts, fewer.worktrees["/w/b"].summary, { "tree-key": "abc" }, 1], "nothing it held is lost, and this build's fields join it")
   }
 
   // --- GitHub: a merged pull request gets no check read, an open one whose head a worktree has out gets one; the
@@ -400,10 +625,10 @@ else console.log(JSON.stringify(pulls))
     }
   }
 
-  console.log("worktree summaries: held answer at once, no Git after a restart with nothing moved, one commit reads one worktree, the main checkout moving reads shown landings first, changed-only events with the whole list for an older window, shared status, lazy sizes, landing as an idle read, merged pull requests' checks left alone")
+  console.log("worktree summaries: held answer at once, no Git after a restart with nothing moved, one commit reads one worktree, the main checkout moving reads shown landings first, changed-only events with the whole list for an older window, status fresh for what decides and held for what shows, a tab's watcher for an open worktree, tool writes and file events and focus reading what they touch and nothing else, an inventory from what's held, landing as an idle read, an older Git's counts, the file between builds, merged pull requests' checks left alone")
 } finally {
   await before.closeSummaries().catch(() => undefined)
   threads.close()
   await first.git.close()
-  rmSync(root, { recursive: true, force: true })
+  rmSync(root, { recursive: true, force: true, maxRetries: 3 })
 }

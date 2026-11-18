@@ -31,10 +31,12 @@ export function declareWorktreeMethods(methods: MethodTable, worktrees: ThreadWo
   methods.handle("mako:worktree-pulls", (cwd: string): Promise<WorktreePull[] | null> => pulls.heads(cwd))
   // Answers at once with what's held, and a pass reads behind it: a window never waits for Git. `form` is how the
   // window takes what follows: `changes` for the summaries that changed, each as it's read; none for the whole list
-  // on every change, the only form a window of an earlier build knows, which also gets a plain list back.
-  methods.handle("mako:worktree-summaries", async (form?: "changes"): Promise<WorktreeSummary[] | WorktreeSummariesHeld> => {
+  // on every change, the only form a window of an earlier build knows, which also gets a plain list back. `why` is
+  // `focus` when the window asks because it came to the front: the worktrees it shows that no tree watch covers are
+  // read then, since nothing else says an editor changed a file in one.
+  methods.handle("mako:worktree-summaries", async (form?: "changes", why?: "focus"): Promise<WorktreeSummary[] | WorktreeSummariesHeld> => {
     if (!worktrees) return form === "changes" ? { summaries: [], reading: [] } : []
-    const held = await worktrees.heldNow(pulls.branches, form === "changes" ? "changes" : "whole")
+    const held = await worktrees.heldNow(pulls.branches, form === "changes" ? "changes" : "whole", why === "focus")
     return form === "changes" ? held : held.summaries
   })
   methods.handle("mako:worktree-skip", (conversationId: string): void => {
