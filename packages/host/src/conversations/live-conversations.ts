@@ -316,7 +316,8 @@ export class LiveConversations {
       takeUpdates: (resident, updates) => this.events.take(resident, updates),
       driverEvents: (resident, bindingId) => driverEvents(resident, bindingId, observe),
       nativeStart,
-      retainAttachments: (attachments) => this.assets.retainPrompt(attachments),
+      retainAttachments: (attachments, key) => this.assets.retainPrompt(attachments, key),
+      holdAttachments: (key, attachments) => this.assets.hold(key, attachments),
       reconcileQuestions: (resident) => this.questions.reconcile(resident),
       pending: (resident) => this.transfers.pending(resident),
       admit: (resident, request) => this.admit(resident, request),
@@ -931,6 +932,20 @@ export class LiveConversations {
    * before it, and a person's second message could overtake their first. Each send's wait starts as it arrives, so
    * they overlap; only admission waits for the ones ahead. One refused lets the next go.
    */
+  /**
+   * Keeps a message's attachments before it is admitted: hashed and copied off this thread (`LiveAssets.hold`), so
+   * admitting it, which runs in one turn, only takes the kept files by the message's ID. A caller that doesn't is
+   * still served; its files are then copied as it's admitted.
+   */
+  holdAttachments(requestId: string, attachments: readonly PromptAttachment[] | undefined): Promise<void> {
+    return attachments?.length ? this.assets.hold(requestId, attachments) : Promise.resolve()
+  }
+
+  /** Lets go of what `holdAttachments` kept for a message that was admitted or refused. */
+  releaseAttachments(requestId: string): void {
+    this.assets.release(requestId)
+  }
+
   admitInOrder<Ready, Admitted>(id: string, ready: Promise<Ready>, admit: (ready: Ready) => Admitted): Promise<Admitted> {
     // Its refusal is this send's own answer, read once the sends ahead are in; until then nothing else watches it.
     ready.catch(() => undefined)
@@ -1238,7 +1253,7 @@ export class LiveConversations {
 
   /** Record a new request in the journal and start it when the session is free. */
   private admit(resident: Resident, request: LiveRequest): LiveRequest {
-    request.attachments = this.assets.retainPrompt(request.attachments)
+    request.attachments = this.assets.retainPrompt(request.attachments, request.id)
     const previousSnapshot = resident.snapshot
     const control = request.continues?.auto ? conversationControl(resident) : retireQuestionsForInput(conversationControl(resident), request.id)
     // A fork's first request is the version of the prompt it was made before: kept with its ancestry, and indexed.

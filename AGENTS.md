@@ -3383,6 +3383,38 @@ reader in `kinds.ts`, a chip in `reference-chip.tsx` and a glyph; nothing
 else branches on it. `scripts/test-context-wire.ts` and
 `test-context-kinds.ts` hold every kind's round trip and the old formats.
 
+A file in a draft is a reference from the composer to the harness, never
+its bytes. `stageAttachment` (`src/lib/attachment-staging.ts`) stages one
+with a path on this Mac by that path (a clone, `workspaces/staging.ts`) and
+one without (a paste, a capture) 512 KiB at a time (`stageFilePart`), so
+the window never reads or encodes a whole file and no call carries more
+than a piece; the draft holds the staged path and an object URL for its
+chip. The message carries the path (`promptAttachment`). The host keeps the
+file before it admits the message: `LiveAssets.hold` hashes it as a stream
+and clones it under `<sha256>-<name>`, or only restarts its times when the
+store holds that hash already, and `retainPrompt` under the same request ID
+then swaps the path in with no file touched, since admission runs in one
+turn (`holdAttachments` in the `mako:live-prompt`, `live-continue`,
+`live-start` and steer handlers; a caller that doesn't hold still works,
+and pays the copy as it's admitted). A message that carries `data` (the web
+app's, which has no path to stage from and stays under its 700 KiB budget;
+a cloud move's; an older window's) is kept the same way, decoded a piece at
+a time, and keeps its bytes for the harnesses that take them inline (ACP
+image blocks, Cursor, OpenCode); Claude's SDK needs base64 and encodes it
+from the kept file as it's read, a step at a time; Codex takes the path.
+What a message is known by (`promptFingerprint`) is still what it came as,
+so a retry is the same message to a host from before this. In the
+transcript a read is kept by its conversation, path and purpose
+(`src/state/transcript-media.ts`: a row scrolled back or a Thread reopened
+draws at once; a file the agent may rewrite is asked again once the
+conversation has moved, and soon while it works), and a large picture alone
+draws the host's `inline` rendition rather than the original
+(`lonePictureUrl`; `MediaRenditions` keeps a picture's renditions by its
+content's hash, so the staged file and the kept one share one, and
+attaching a picture asks for it ahead). The original loads in the lightbox.
+`tsx --tsconfig tsconfig.app.json scripts/test-attachment-pipeline.ts`
+holds all of it and prints what sending a 10 MB picture costs.
+
 The textarea holds each chip's label (`@`, which its mark covers, then its
 words: `draftView` in `src/lib/draft-view.ts`), never its token or anchor,
 which stay in the saved draft. A conversation's token is 50 to 100

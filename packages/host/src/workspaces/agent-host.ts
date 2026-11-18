@@ -7,6 +7,7 @@ import { type GitTab, WorkspaceGit } from "../git/index.js"
 import { searchWorkspace } from "./search.js"
 import type { FileFindResults, FileFolders, FileFoldersOptions, FileGrepOptions, FileGrepResults } from "../contracts/file-index.js"
 import { WorkspaceFiles } from "./files.js"
+import { stageBytes, stagePart, stagePath } from "./staging.js"
 import type { ArtifactPreviews } from "./artifact-previews.js"
 import type { ElsewhereFolder } from "./elsewhere.js"
 import { decodeRuntimeValue } from "../contracts/runtime-value.js"
@@ -352,11 +353,15 @@ export class AgentHost implements GitTab {
   }
 
   async stageFile(name: string, base64: string): Promise<StagedFile> {
-    return this.workspaceFiles.stage(this.attachments, name, base64)
+    return stageBytes(this.attachments, name, base64)
+  }
+
+  async stageFilePart(name: string, base64: string, into?: { path: string; offset: number }): Promise<StagedFile> {
+    return stagePart(this.attachments, name, base64, into)
   }
 
   async stageFilePath(sourcePath: string): Promise<StagedFile> {
-    return this.workspaceFiles.stagePath(this.attachments, sourcePath)
+    return stagePath(this.attachments, sourcePath)
   }
 
   async search(

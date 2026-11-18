@@ -510,7 +510,10 @@ export interface LiveAccess {
     bindingId: string,
     start: () => Promise<LiveSessionState>
   ): Promise<LiveSessionState>
-  retainAttachments(attachments: PromptAttachment[]): PromptAttachment[]
+  /** `key`: the request the attachments were held for ahead of this (`LiveAssets.hold`), whose kept files are taken. */
+  retainAttachments(attachments: PromptAttachment[], key?: string): PromptAttachment[]
+  /** Keep a request's attachments off this turn, for `retainAttachments` under the same key. */
+  holdAttachments(key: string, attachments: readonly PromptAttachment[]): Promise<void>
   reconcileQuestions(resident: Resident): Promise<void> | undefined
   pending(resident: Resident): ContextTransfer | undefined
   /** Record a new request in the journal and start it when the session is free. */
