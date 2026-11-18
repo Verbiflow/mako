@@ -7,6 +7,7 @@ import { handOff } from "@/state/handoff"
 import { conversationSettings } from "@/state/conversation-settings"
 import { keepAwake } from "@/state/keep-awake"
 import { revealWorkedProject } from "@/state/prefs"
+import { revealFolder } from "@/state/rail-ranks"
 import { playFeedback } from "@/state/feedback"
 import { workspaceTransitionStore } from "@/state/workspace-transition"
 import { promptClipboard } from "@/lib/prompt-clipboard"
@@ -1138,6 +1139,7 @@ export const actions = {
       return false
     }
     revealWorkedProject(folder)
+    revealFolder(folder, tabsStore.get().activeId || null)
     viewer.close()
     stage.close()
     requestAnimationFrame(() =>

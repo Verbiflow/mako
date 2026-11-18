@@ -11,12 +11,14 @@ import { LiveAgentRow } from "@/components/rail/active-threads"
 import { AppMarkIcon } from "@/components/rail/app-mark"
 import { threadAppDriver } from "@/state/thread-app"
 import type { AcpPresence } from "@/state/acp-presence"
-import { ThreadRow } from "@/components/rail/thread-row"
+import { ROW_SURFACE, ThreadRow } from "@/components/rail/thread-row"
 import { harnessLabels, harnessLabel } from "@/components/rail/harness-meta"
 import { formatRelative } from "@/lib/format"
 import {
   groupThreadFolders,
+  heldFolderRanks,
   orderThreadFolders,
+  settledFolderRanks,
   showsInRecent,
   stableThreadRanks,
   threadBelongsToWorkspace,
@@ -32,7 +34,7 @@ import { useRowFlip } from "@/components/rail/use-row-flip"
 import { EMPTY_FOLD, foldThreads, foldedThreadState, presenceStatusOf, unreadReview, type FoldRow, type ThreadFold } from "@/lib/thread-fold"
 import { useThreadGroups } from "@/state/thread-groups"
 import { RailTip } from "@/components/rail/rail-tip"
-import { railRanksStore } from "@/state/rail-ranks"
+import { keepFolderRanks, railRanksStore, useRailRanks } from "@/state/rail-ranks"
 import {
   threadStatus,
   threadStatusPriority,
@@ -40,7 +42,8 @@ import {
   useThreads,
   type ThreadStatus,
 } from "@/state/threads"
-import { actions, useCanChooseFolder } from "@/state/session"
+import { actions, useCanChooseFolder, useSession } from "@/state/session"
+import { useTabs } from "@/state/tabs"
 import { IfCanChooseFolder, IfCanReveal } from "@/components/ui/machine-gate"
 import { checkoutSentence, followCheckouts, useCheckoutHead } from "@/state/checkout-heads"
 import { CheckoutLabel } from "@/components/rail/checkout-label"
@@ -96,6 +99,7 @@ import {
   ListFilterIcon,
   MessagesSquareIcon,
   MoreHorizontalIcon,
+  PencilLineIcon,
   PinIcon,
   PinOffIcon,
   PlusIcon,
@@ -378,17 +382,55 @@ export function AgentThreads() {
   )
   // A folder sits by when you last worked there, on any device: every Session counts, a Thread's folded ones too, so
   // agent output never moves one and every device puts them in the same order.
-  const folderRanks = useMemo(
+  const workedRanks = useMemo(
     () => workedFolderRanks({ refs: matched, live: unboundLiveAgents, owners, folderMap }),
     [matched, unboundLiveAgents, owners, folderMap]
   )
+  // What has landed so far, never below where each folder last settled: the catalog's scan and another device's
+  // Sessions arrive after the first paint, and each used to reorder the whole list (`railRanksStore`).
+  const keptRanks = useRailRanks((state) => state.folders)
+  const folderRanks = useMemo(() => settledFolderRanks(workedRanks, keptRanks), [workedRanks, keptRanks])
   useEffect(() => {
     if (loaded) railRanksStore.set({ ranks })
   }, [loaded, ranks])
+  // Only the unfiltered list says where a folder settled: a search or a harness filter ranks on part of it.
+  const unfiltered = !deferred.trim() && filter.length === 0 && scope === "all" && grouping === "project"
+  useEffect(() => {
+    if (loaded && unfiltered) keepFolderRanks(workedRanks)
+  }, [loaded, unfiltered, workedRanks])
   const folders = useMemo(
-    () => orderThreadFolders(grouped, hold?.folderRanks ?? folderRanks, sortBy),
+    () => orderThreadFolders(grouped, hold ? heldFolderRanks(hold.folderRanks, folderRanks) : folderRanks, sortBy),
     [grouped, hold, folderRanks, sortBy]
   )
+  // A Thread the person just started, or a folder they just added, lands where they're looking: its folder open,
+  // scrolled into view, and its unsent Thread drawn there, lit, until it's sent or they look elsewhere.
+  const reveal = useRailRanks((state) => state.reveal)
+  const activeTab = useTabs((state) => state.activeId)
+  const viewingThread = useThreads((state) => Boolean(state.opening ?? state.viewing))
+  const liveOpen = useAcp((state) => state.activeKey !== null)
+  const unsent = useSession((state) => state.messages.length === 0)
+  const unsentIn = reveal && reveal.tab === activeTab && !viewingThread && !liveOpen && unsent ? reveal.key : null
+  // The stored flag flips a folder from its default (`FolderSection`): a cold one opens when flagged, a warm one when not.
+  const revealedFolder = reveal ? folders.find((entry) => entry.key === reveal.key) : undefined
+  const revealedCold = Boolean(revealedFolder && folderStartsClosed(revealedFolder, now))
+  useEffect(() => {
+    if (!reveal) return
+    const key = `ws:${reveal.key}`
+    const { collapsedGroups } = prefsStore.get()
+    if (revealedCold !== collapsedGroups.includes(key)) {
+      setPref("collapsedGroups", revealedCold ? [...collapsedGroups, key] : collapsedGroups.filter((entry) => entry !== key))
+    }
+  }, [reveal, revealedCold])
+  // A folder just added has no row until its first Session's folder is known, so this waits for it to be drawn.
+  const revealedShown = Boolean(revealedFolder)
+  useEffect(() => {
+    if (!reveal || !revealedShown) return
+    const frame = requestAnimationFrame(() => {
+      const head = rail.current?.querySelector(`[data-flip-key="folder:${CSS.escape(reveal.key)}"]`)
+      ;(head?.closest("section") ?? head)?.scrollIntoView({ block: "nearest" })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [reveal, revealedShown])
   const recent = useMemo(() => [
     ...shownRefs.filter((ref) => showsInRecent(ref, threadActivity[ref.path])).map((ref) => ({ kind: "native" as const, key: ref.path, at: shownRanks[ref.path]?.at ?? ref.updatedAt ?? "", ref })),
     ...shownLive.map((presence) => ({ kind: "live" as const, key: presence.key, at: new Date(presence.movedAt ?? presence.createdAt).toISOString(), presence })),
@@ -424,6 +466,7 @@ export function AgentThreads() {
       fold={fold}
       liveAgents={shownLive.filter((presence) => (threadFolderKey(presence, folderMap) || "~") === folder.key).sort(byLatestMove)}
       collapsed={collapsed.includes(`ws:${folder.key}`)}
+      unsent={unsentIn === folder.key}
       hidden={hidden}
       onToggle={() => {
         const key = `ws:${folder.key}`
@@ -973,12 +1016,18 @@ function hideProject(folder: ThreadFolder & { cwd: string }, hidden: boolean) {
   })
 }
 
+/** A cold folder starts closed, a warm one open (`COLD_MS`). */
+function folderStartsClosed(folder: ThreadFolder, now: number): boolean {
+  return !folder.current && !folder.priority && folder.latest !== "" && now - Date.parse(folder.latest) > COLD_MS
+}
+
 function FolderSection({
   folder,
   now,
   fold,
   liveAgents,
   collapsed,
+  unsent = false,
   hidden = false,
   onToggle,
   onNew,
@@ -991,6 +1040,8 @@ function FolderSection({
   fold: ThreadFold
   liveAgents: AcpPresence[]
   collapsed: boolean
+  /** The Thread the person just started here and hasn't sent yet: drawn first, lit (`revealFolder`). */
+  unsent?: boolean
   /** Shown from the Hidden row: dimmed, and its menu offers Show. */
   hidden?: boolean
   onToggle: () => void
@@ -1001,11 +1052,7 @@ function FolderSection({
 }) {
   // A cold folder starts closed, a warm one open; the stored flag means
   // "the user flipped this one from its default", so both kinds remember.
-  const cold =
-    !folder.current &&
-    !folder.priority &&
-    folder.latest !== "" &&
-    now - Date.parse(folder.latest) > COLD_MS
+  const cold = folderStartsClosed(folder, now)
   const closed = collapsed ? !cold : cold
   const head = useCheckoutHead(folder.cwd ?? undefined)
   const contentId = `folder-${folder.key.replace(/[^a-zA-Z0-9_-]/g, "-")}`
@@ -1141,6 +1188,12 @@ function FolderSection({
         )}
       >
         <div className="min-h-0 overflow-hidden">
+          {unsent ? (
+            <div data-active data-unsent-thread className={cn(ROW_SURFACE, "pl-2")} aria-current="page">
+              <PencilLineIcon className="size-3 shrink-0 text-faint" />
+              <span className="min-w-0 flex-1 truncate text-ui text-foreground/85">New thread</span>
+            </div>
+          ) : null}
           {shownLive.map((presence) => <LiveAgentRow key={presence.key} presence={presence} folded={fold.byLead.get(presence.key)} indent />)}
           {visible.map((ref) => (
             <ThreadRow key={ref.path} threadRef={ref} folded={fold.byLead.get(ref.path)} indent />

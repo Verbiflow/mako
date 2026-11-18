@@ -3,6 +3,7 @@ import { fixtureHarnesses } from "./harness-fixtures"
 import type { ToolStep } from "@mako/host/contracts/tool-steps"
 import { FileIndexCore, type FileFoldersOptions, type FileGrepResults } from "@mako/host/contracts/file-index"
 import { mockAppshots } from "./mock-appshots"
+import { crowdedRail } from "./mock-crowded-rail"
 import { mockAuthoring } from "./mock-authoring"
 import { encodeControlVideoBatch } from "@mako/control-runtime/contracts"
 import { planContinuation, resumeLedger } from "@mako/host/contracts/thread-continuation"
@@ -313,6 +314,18 @@ function mockPick() {
   }
 }
 
+/**
+ * The crowded world's clock, kept across reloads: a real host's times stay where they were when the window reloads,
+ * and a world stamped afresh on each load would read as new work everywhere.
+ */
+function crowdedClock(): number {
+  const kept = Number(localStorage.getItem("mako.mock.crowded.now"))
+  if (kept > 0) return kept
+  const now = Date.now()
+  localStorage.setItem("mako.mock.crowded.now", String(now))
+  return now
+}
+
 export function installMockBridge() {
   const pickStarted = new Map<string, number>()
   const listeners = new Set<(event: HostEvent) => void>()
@@ -488,6 +501,10 @@ export function installMockBridge() {
    * (`ThreadRef.copyOnly`), as the archive's migration leaves them.
    */
   const keptScene = scene === "kept"
+  /** `?app=crowded`: many projects, an Apex with 60 Fins, a catalog that lands in steps and another device's rows after it (`crowdedRail`). */
+  const crowded = scene === "crowded" ? crowdedRail(crowdedClock()) : undefined
+  let crowdedReads = 0
+  if (crowded) boot.live.push(...crowded.own)
   /** `?app=busy`: a long Thread of four Sessions, its first waiting on three agents and twenty-two commands. */
   if (scene === "busy") {
     BUSY_SESSIONS.forEach((entry, index) => liveSnapshots.set(entry.conversation, busySnapshot(index)))
@@ -1766,6 +1783,12 @@ export function installMockBridge() {
     openUrl: async () => {},
     threads: async () => {
       const fixture = mockThreads()
+      if (crowded) {
+        crowdedReads += 1
+        // The first read finds the host still scanning; the other device's Sessions arrive once the list is whole.
+        if (crowdedReads === 2) setTimeout(() => emit({ type: "live-listed", summaries: crowded.elsewhere }), 1_000)
+        return { ready: crowdedReads > 1, threads: crowdedReads > 1 ? crowded.refs : crowded.early, activity: {} }
+      }
       const threads = scene === "rail" ? fixture.threads.map(railRef) : [...keptThreads(), ...(scene === "busy" ? busyRefs() : []), ...(scene === "apex" ? [...apexRefs(), ...benchScene.refs] : []), ...fixture.threads]
       if (scene === "rail" && !railRunsSent) {
         railRunsSent = true
