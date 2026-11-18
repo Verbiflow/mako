@@ -16,7 +16,9 @@ import { FinCostModel } from "@mako/host/conversations/fin-cost"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { swapFreeOf, type MacReading } from "@mako/host/conversations/mac-capacity"
 import { WARM_CEILING, WARM_FLOOR, WARM_MOST_BYTES, WARM_RELIEF_MS, warmLimit, type WarmReading } from "@mako/host/conversations/warm-limit"
-import { WARM_FIRST_LOOK_MS, WARM_LOOK_MS, WARM_WATCH_JOB, watchWarmProviders } from "@mako/host/conversations/warm-watch"
+import { ACCOUNT_WATCH_JOB, keepAccountsFresh, WARM_FIRST_LOOK_MS, WARM_LOOK_MS, WARM_WATCH_JOB, watchWarmProviders } from "@mako/host/conversations/warm-watch"
+import { keychainUnchangedSince } from "@mako/host/harnesses/accounts-common"
+import { CREDENTIAL_HOLD_MS, CREDENTIAL_REFRESH_FOR_MS, CREDENTIAL_REFRESH_MS, CredentialRevisions } from "@mako/host/harnesses/credential-revisions"
 import type { AdmittedLiveDriver, ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 import { AgentsWorld, type Script } from "./lib/agents-world.ts"
@@ -438,6 +440,143 @@ async function wakeReusesLaunchValues(): Promise<void> {
   }
 }
 
+// ── A held credential read kept standing while a conversation is warm, by a check that never reads the secret again.
+async function heldReadsStayFresh(): Promise<void> {
+  let now = 1_000
+  const revisions = new CredentialRevisions(CREDENTIAL_HOLD_MS, () => now)
+  let reads = 0
+  let checks = 0
+  let stored = "signed-in"
+  let stands: () => Promise<boolean> = async () => true
+  const read = async () => {
+    reads += 1
+    return stored
+  }
+  const readAts: number[] = []
+  const ask = () => revisions.holder("claude")("keychain", read, (_value, readAt) => {
+    checks += 1
+    readAts.push(readAt)
+    return stands()
+  })
+  const warm = new Set(["claude"])
+  assert.equal(await ask(), "signed-in")
+  assert.equal(reads, 1)
+  now += CREDENTIAL_REFRESH_MS
+  assert.equal(revisions.refresh(new Set(["devin"])), 0, "another harness's warm conversation checks nothing of this one's")
+  assert.equal(revisions.refresh(warm), 1)
+  await pause(0)
+  assert.deepEqual([reads, checks, readAts[0]], [1, 1, 1_000], "the store is asked whether it still stands as read; the secret isn't read again")
+  now += CREDENTIAL_REFRESH_MS
+  assert.equal(await ask(), "signed-in")
+  assert.equal(reads, 1, "five seconds after the read, a send finds it standing from the check and reads nothing")
+
+  // What a send takes is never older than the hold: with no check since, the ask reads for itself.
+  now += CREDENTIAL_HOLD_MS
+  assert.equal(await ask(), "signed-in")
+  assert.equal(reads, 2)
+
+  // The store changed outside Mako: the check says so, the read is left to age out, and nothing checks it again.
+  stored = "signed-out"
+  stands = async () => false
+  now += CREDENTIAL_REFRESH_MS
+  assert.equal(revisions.refresh(warm), 1)
+  await pause(0)
+  assert.equal(revisions.refresh(warm), 0, "a read its store no longer vouches for isn't checked again")
+  assert.equal(await ask(), "signed-in", "inside the hold the read still answers, as it would have with no check at all")
+  now += CREDENTIAL_HOLD_MS
+  assert.equal(await ask(), "signed-out", "and past it the send reads the change for itself")
+  assert.equal(reads, 3)
+
+  // A check that fails (a locked keychain, a `security` that won't run) is never begun again: no loop of asking.
+  stands = async () => { throw new Error("security failed") }
+  now += CREDENTIAL_REFRESH_MS
+  const before = checks
+  assert.equal(revisions.refresh(warm), 1)
+  await pause(0)
+  for (let tick = 0; tick < 5; tick++) {
+    now += CREDENTIAL_REFRESH_MS
+    assert.equal(revisions.refresh(warm), 0)
+  }
+  await pause(0)
+  assert.equal(checks, before + 1, "one failed check, and none after it")
+  assert.equal(await ask(), "signed-out")
+  assert.equal(reads, 4, "the next send reads for itself, as every send did")
+
+  // A check that hasn't answered (one waiting on the person) has no second begun beside it.
+  let answer = (_current: boolean) => {}
+  stands = () => new Promise<boolean>((resolve) => { answer = resolve })
+  now += CREDENTIAL_HOLD_MS
+  assert.equal(await ask(), "signed-out")
+  const hanging = checks
+  for (let tick = 0; tick < 4; tick++) {
+    now += CREDENTIAL_REFRESH_MS
+    assert.equal(revisions.refresh(warm), 1, "it still counts as being checked")
+    await pause(0)
+  }
+  assert.equal(checks, hanging + 1, "four ticks, one check")
+  answer(true)
+  await pause(0)
+
+  // A check that spans an account change made in Mako vouches for nothing.
+  stands = () => new Promise<boolean>((resolve) => { answer = resolve })
+  now += CREDENTIAL_HOLD_MS
+  assert.equal(await ask(), "signed-out")
+  now += CREDENTIAL_REFRESH_MS
+  revisions.refresh(warm)
+  await pause(0)
+  revisions.forget("claude")
+  stored = "another account"
+  answer(true)
+  await pause(0)
+  assert.equal(await ask(), "another account", "a read from before the change never answers an ask after it")
+
+  // Left unasked past the bound, nothing is checked for it.
+  stands = async () => true
+  const settled = checks
+  now += CREDENTIAL_REFRESH_FOR_MS
+  assert.equal(revisions.refresh(warm), 0, "a sign-in nothing has asked about for two minutes isn't checked")
+  await pause(0)
+  assert.equal(checks, settled)
+
+  // A read whose adapter can't say whether its store stands is never checked, and only ages.
+  assert.equal(await revisions.holder("codex")("plain", async () => "x"), "x")
+  assert.equal(revisions.refresh(new Set(["codex"])), 0)
+
+  // The Keychain's own answer, on a Mac, for an item that isn't there: attributes alone, and nothing of anyone's.
+  if (process.platform === "darwin") {
+    const absent = `mako-warm-wakes-absent-${randomUUID()}`
+    assert.equal(await keychainUnchangedSince(absent, "nobody", false, Date.now()), true, "an item read as missing still stands while it's missing")
+    assert.equal(await keychainUnchangedSince(absent, "nobody", true, Date.now()), false, "one read as there doesn't once it's gone")
+  }
+
+  // The job: on while a provider rests warm and something is held for its harness, off otherwise.
+  const fake = fakeJobs()
+  const asked: string[][] = []
+  let held = 1
+  let harnesses = new Set(["claude"])
+  const wired = keepAccountsFresh({ jobs: fake, accounts: { refreshCredentials: (providers) => { asked.push([...providers]); return held } }, live: () => ({ warmHarnesses: () => harnesses }) })
+  const job = fake.jobs[0]!
+  const demand = fake.demands[0]!
+  assert.deepEqual([job.name, job.everyMs, job.firstAfterMs], [ACCOUNT_WATCH_JOB, CREDENTIAL_REFRESH_MS, 0])
+  assert.ok(CREDENTIAL_REFRESH_MS * 1.1 + 200 < CREDENTIAL_HOLD_MS, "a check lands inside the hold, the job's drift and the check's own time counted")
+  assert.equal(demand.on, false, "with nothing warm the job holds no timer")
+  wired.cameToRest()
+  assert.equal(demand.on, true)
+  await job.run()
+  assert.deepEqual(asked, [["claude"]])
+  assert.equal(demand.on, true)
+  held = 0
+  await job.run()
+  assert.equal(demand.on, false, "a harness that holds no read is asked once and left alone")
+  wired.cameToRest()
+  held = 1
+  harnesses = new Set()
+  await job.run()
+  assert.equal(demand.on, false, "and nothing is read once no provider is warm")
+  assert.equal(asked.length, 2)
+  console.log("accounts: a warm conversation's held read stands while its store vouches for it, by a check that never reads the secret; a failed or hanging check isn't repeated")
+}
+
 // ── A draft begun in a warm conversation has its account check begun, so a send soon after finds the read done.
 async function prewarmBeginsTheAccountCheck(): Promise<void> {
   const folder = mkdtempSync(join(root, "ahead-"))
@@ -700,6 +839,7 @@ try {
   await watchReadsWhilePastFloor()
   await pressureShrinksThePool()
   await wakeReusesLaunchValues()
+  await heldReadsStayFresh()
   await prewarmBeginsTheAccountCheck()
   await expectRefusesWhatWontGo()
   await sendWakesASleepingFin()

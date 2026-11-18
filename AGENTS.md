@@ -4740,6 +4740,19 @@ in starts with the Thread's values its launch read (`Resident.startedWith`);
 past the window, in another folder or title, or after its worktree was made
 again, it reads them again. The resume verdict and the tools' grant are asked
 at every wake.
+While a provider rests warm, a job has its harness's held credential reads
+checked every 2.5 s (`keepAccountsFresh`, `CredentialRevisions.refresh`): on
+Claude, the Keychain item's last-written stamp, read from its attributes by
+`security` without its secret, so nothing is asked of the person. A read its
+store vouches for stands from that check, and a message's admission finds it
+instead of waiting on a read of its own. A store that changed, or a check that
+failed or couldn't say, ends the checking until the next message reads for
+itself. An admission still takes only a read that stood inside the 3 s hold,
+nothing is checked two minutes after the last ask, and with no provider warm
+the job holds no timer.
+Running or queued work, permissions, child delivery, transfers, checkpoints,
+rewinds and automatic continuation prevent hibernation. A retired driver's late
+events are fenced by the resident generation and cannot close its replacement.
 Running or queued work, permissions, child delivery, transfers, checkpoints,
 rewinds and automatic continuation prevent hibernation. A retired driver's late
 events are fenced by the resident generation and cannot close its replacement.

@@ -468,6 +468,8 @@ export interface Dependencies {
   warmLimit?(): number
   /** How many idle providers stay warm after a decision: past the floor, the host reads the machine's memory while they do. */
   warmKept?(count: number): void
+  /** A provider came to rest warm: the host keeps what its next message's admission reads of the account fresh while one is. */
+  cameToRest?(): void
   /** Test override for `CONVERSATION_MEMORY` and the wait before a sweep. */
   conversationMemory?: ResidencyBudget & { sweepMs: number }
   /**

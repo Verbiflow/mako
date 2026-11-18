@@ -118,6 +118,7 @@
     "bench:host-person": "tsx --tsconfig tsconfig.scripts.json scripts/bench-host-load.ts --scale person --record ${MAKO_BENCH_OUT:?name a folder for the recording} --account --send --send-every 20000 --working 30 --seconds 300 --warmup 30 --burst 60 --probe-every 100,1000 --times 1000000 --max-busy 0.47 --max-hold-ms 1000 --max-run-ms 250",
     "bench:vs-bare": "tsx --tsconfig tsconfig.scripts.json scripts/bench-vs-bare.ts",
     "bench:window": "node scripts/bench-window.mjs",
+    "test:host-warmup": "tsx scripts/test-host-warmup.ts",
     "bench:actions": "tsx --tsconfig tsconfig.scripts.json scripts/bench-actions.ts",
     "test:claude-stop-live": "tsx --tsconfig tsconfig.scripts.json scripts/test-claude-stop-live.ts",
     "probe:claude-stop": "tsx --tsconfig tsconfig.scripts.json scripts/probe-claude-stop.ts",

@@ -195,6 +195,8 @@ export interface ClaudeSdkDependencies {
     prompt: AsyncIterable<SDKUserMessage>
     options: Options
   }): Promise<ClaudeQuery>
+  /** Loads what `query` loads, apart from it, so a launch's trace says how long the package took. */
+  loadSdk?(): Promise<void>
   interruptTimeoutMs?: number
   /** How long a Stop that keeps the process waits for the CLI before it closes it instead (`STOP_KEPT_MS`). */
   stopKeptMs?: number
@@ -831,7 +833,8 @@ export function createClaudeSdkDriver(
         // to only read (`claudeCallHooks`), so what such a tool writes waits for the checkpoint like an edit. The two
         // messages that reach a server with no tool call, its prompt as a command and a mention of its resource, wait
         // for the checkpoint themselves (`claudeSubmitRunsServer`).
-        if (dependencies.writeHolds) dependencies.writeHolds.attend(conversationId, Boolean(dependencies.personCodeRuns) && !await dependencies.personCodeRuns!(config))
+        // Traced as Codex's and OpenCode's same check is (`settings`): the first one starts the settings reader's worker.
+        if (dependencies.writeHolds) dependencies.writeHolds.attend(conversationId, Boolean(dependencies.personCodeRuns) && !await trace.step("settings", () => dependencies.personCodeRuns!(config)))
         toolApprovals = await trace.step("observation", async () => {
           try {
             return await dependencies.prepareApprovals?.({ config, sessionId: nativeId,
@@ -903,6 +906,8 @@ export function createClaudeSdkDriver(
       }
       const callHooks = claudeCallHooks(new CallBounds(conversationId), routing, dependencies.writeHolds && ((signal) => dependencies.writeHolds!.beforeWrite(conversationId, signal)))
       let query: ClaudeQuery
+      // The Agent SDK's package, which the first query of a host loads: traced apart from the query, which spawns.
+      if (dependencies.loadSdk) await trace.step("sdk-load", () => dependencies.loadSdk!())
       try { query = await dependencies.query({
         prompt: input,
         options: {
