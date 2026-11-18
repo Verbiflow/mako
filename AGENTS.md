@@ -160,9 +160,12 @@ conversations?.live`) rather than a domain importing another's files.
   failure as `jobs <name> failed`, and stops with the host.
 - **A held loop says what held it.** `loop event loop held` names every piece
   of work open at a hold, most of it waiting on a process or a reply; a hold
-  of a second or more starts a 10-second profile of the host's own thread
-  (`HeldLoopProfiler`, at most one per 10 minutes), logged as `held loop
-  profiled` with its longest slices by the host's own functions. On a day of
+  of five seconds or more (one second with `MAKO_HELD_LOOP_PROFILE=1`) starts
+  a 10-second profile of the host's own thread once the loop turns freely
+  (`HeldLoopProfiler`, at most one per 10 minutes; its start is itself a
+  hold of a few hundred milliseconds, V8 listing its compiled functions),
+  logged as `held loop profiled` with its longest slices by the host's own
+  functions. On a day of
   many Fins the log blamed worktree summaries and live reads while Git
   spawns held the thread. `npm run bench:host-load` runs a real host on a
   world of that day's size (52 Threads' worktrees, 95 apps, Fins editing,
@@ -188,6 +191,46 @@ conversations?.live`) rather than a domain importing another's files.
   start's listing and the stop's closes go a slice at a time (`listJournals`,
   `LiveClosing.stop`), and a whole catalog is placed a batch a turn
   (`ThreadStore.placeAll`).
+- **The Thread store keeps what a commit didn't change.** The parent edges,
+  each Thread's record and its conversations stand through a commit that
+  wrote none of the tables they're read from, and are read again after one
+  that did, another process's commit, a rollback, and the store's opening.
+  Every table says what its writes can change (`HELD_BY_TABLE`); a statement
+  `sql` hands out goes by its table (`heldBy`), and a table without a line or
+  a statement that can't be read drops everything, so what is added
+  unclassified is slow, never stale. Read again at every commit, 30 Fins
+  ending their turns at once re-read every Fin's for each of their commits.
+  After its opening the store writes only through `sql`: `test:flush-costs`
+  fails on a table of the schema without a line, and on the connection used
+  directly outside the opening.
+- **A running turn's streamed flushes are written off the thread**
+  (`JournalWriter`, `LiveJournal.streamed`). A flush that is only blocks new
+  or grown and the revision, of a turn running before and after it, goes to
+  the writer's connection, in order, one transaction a message, and what
+  comes while one is written waits as one message more. Every other flush (a
+  request, the session's state, a permission, the base, the controls, Mako's
+  log, a turn's start and end) the journal commits on its own connection
+  before the batch goes out, after waiting for the writer (`settleWrites`),
+  as does every read of its rows (`db`). So what a window or a harness is
+  told happened is committed first, as it always was, and a host killed
+  mid-stream may lose the last streamed frames the writer hadn't written
+  (one transaction under way and one waiting), which the provider's own
+  record still holds. A write that fails on the writer is made good by the
+  journal from memory, block by block, and failing that is a
+  `JournalWriteError` like any commit. `MAKO_JOURNAL_WRITER=0` has each
+  journal write its own. `npm run test:journal-writer` holds it (a reader
+  following a write, close and stop with writes waiting, a failed write, a
+  host killed mid-stream).
+- **A hold says whether the thread ran.** `bench:host-load --record` keeps
+  the thread's own CPU time for each hold: one that used little of its gap
+  waited (a file call, or not being run), and no function on its stack
+  explains it. `--max-run-ms` budgets what the thread computed,
+  `--max-hold-ms` any hold. File calls a flush or a recurring job makes go
+  off the thread where they can: the process log appends what is pending as
+  one awaited write, the Git index lock's steps are awaited, `docker context
+  inspect` runs in the probe child, and whether this host holds a session
+  (`SessionMemory.owns`) is answered from what was read until a hold is
+  written.
 - **Follow, don't poll.** What only says where something stands (a line a
   window shows) reads what each owner already holds, and is woken by the
   owner's own change (its event or callback). That read never sets off the

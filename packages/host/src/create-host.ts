@@ -106,7 +106,10 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       })
     },
   })
-  const loop = new EventLoopWatch({ heldLong: () => profiler.held() })
+  // A profile's start holds the loop itself, a few hundred milliseconds in a host (`HeldLoopProfiler`): by itself it
+  // is taken for a hold of five seconds, where that is nothing beside it; `MAKO_HELD_LOOP_PROFILE=1` takes one for any
+  // hold of a second, as it did, for a host being looked into. Every hold still logs the work open at it.
+  const loop = new EventLoopWatch({ heldLong: () => profiler.held(), longMs: process.env.MAKO_HELD_LOOP_PROFILE === "1" ? 1_000 : 5_000 })
   const foreground = new Foreground()
   const jobs = new HostJobs(loop, foreground)
   // A cloud machine is made for its Thread's first start, which its routine work waits for.

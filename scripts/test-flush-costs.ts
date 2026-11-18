@@ -13,6 +13,7 @@ import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-ide
 import { WorkingSet, workingThreads, type WorkingSnapshot } from "@mako/host/conversations/cloud-handoffs"
 import { HELD_BY_TABLE, heldBy, ThreadStore } from "@mako/host/threads/store"
 import { readFileSync } from "node:fs"
+import { SessionMemory } from "@mako/host/threads/session-memory"
 import { DatabaseSync } from "node:sqlite"
 import { atOnce } from "@mako/sessions/slices"
 import { JournalReaders } from "@mako/host/conversations/journal-readers"
@@ -254,7 +255,8 @@ try {
         // With them, each Thread's record and conversations, held through the same commits.
         const said = (store: ThreadStore) => {
           const threads = store.edges().all.flatMap((edge) => [edge.parent, edge.child])
-          return JSON.stringify([store.edges().all, [...store.threadConversations(threads)].sort(([left], [right]) => (left < right ? -1 : 1)), threads.map((thread) => store.thread(ThreadIdSchema.parse(thread)))])
+          return JSON.stringify([store.edges().all, [...store.threadConversations(threads)].sort(([left], [right]) => (left < right ? -1 : 1)), threads.map((thread) => store.thread(ThreadIdSchema.parse(thread))),
+            [...store.childSessions()].sort(([left], [right]) => (left < right ? -1 : 1))])
         }
         const fresh = () => { const store = new ThreadStore(path); try { return said(store) } finally { store.close() } }
         const same = (after: string) => assert.equal(said(world.store), fresh(), `the edges and Threads held are the store's ${after}`)
@@ -368,6 +370,33 @@ try {
     assert.deepEqual([...direct].filter((name) => !opening.has(name)), [], "the store's connection is used directly only as it opens")
   }
 
+  // Whether this host holds a session, asked at every flush: read from its row once, then answered from what was
+  // read until a hold is written, by this host or another, and then at that same asking.
+  {
+    const path = join(root, "memory.sqlite")
+    const mine = new SessionMemory(path, { pid: 500, startedAt: 5, label: "this host" }, { now: () => 100, alive: () => true })
+    const other = new SessionMemory(path, { pid: 501, startedAt: 6, label: "another host" }, { now: () => 100, alive: () => false })
+    let reads = 0
+    const readHold = mine["readHold"].bind(mine)
+    mine["readHold"] = (...args) => { reads += 1; return readHold(...args) }
+    assert.equal(mine.owns("codex", "native-a", "conversation-a"), false)
+    mine.hold("codex", "native-a", "conversation-a")
+    assert.equal(mine.owns("codex", "native-a", "conversation-a"), true, "a hold this host took is its own at the next asking")
+    reads = 0
+    for (let flush = 0; flush < 100; flush += 1) assert.equal(mine.owns("codex", "native-a", "conversation-a"), true)
+    assert.equal(reads, 0, "asked again with no hold written, the row isn't read")
+    assert.equal(mine.owns("codex", "native-a", "conversation-b"), false, "another conversation of the session is asked of its row")
+    // Another host takes the session (this one's process reads as gone to it): seen at the very next asking.
+    other.hold("codex", "native-a", "conversation-elsewhere")
+    assert.equal(mine.owns("codex", "native-a", "conversation-a"), false, "a hold another host took is seen at once")
+    other.release("codex", "native-a")
+    mine.holdRunning("codex", "native-a", "conversation-a")
+    assert.equal(mine.owns("codex", "native-a", "conversation-a"), true)
+    mine.release("codex", "native-a", "conversation-a")
+    assert.equal(mine.owns("codex", "native-a", "conversation-a"), false, "a hold this host let go is gone at once")
+    mine.close()
+    other.close()
+  }
   console.log("flush costs ok")
 } finally {
   rmSync(root, { recursive: true, force: true })

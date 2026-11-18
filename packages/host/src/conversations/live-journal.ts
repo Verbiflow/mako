@@ -45,6 +45,7 @@ import { foldMakoLog, MAKO_LOG_SCHEMA, makoFacts, makoLogDifference, type MakoLo
 import { baseKeptBecause, baseKeptOnceHeld, refreshedFacts, sourceOfPage, storedBase } from "./base-source.js"
 import { RECLAIM_MIN_BYTES, journalOpened, type Reclaimed } from "./journal-reclaim.js"
 import { topic } from "../base/topic.js"
+import type { JournalWriteOp, JournalWriter, JournalWrites } from "./journal-writer.js"
 import { cutOffRequests, mergedBaseSteps } from "./stream-merging.js"
 import { errorMessage } from "../base/error-message.js"
 import { EntrySchema, type Entry } from "@mako/sessions/entries"
@@ -748,7 +749,14 @@ export const journalCommits = topic<{ conversation: string; running: boolean; be
  * times a second per running conversation.
  */
 export class LiveJournal {
-  private readonly db: DatabaseSync
+  /** The journal's own connection, read through `db`. */
+  private readonly connection: DatabaseSync
+  /** A running turn's streamed rows go to a writer thread through these (`writeWith`), and what they have queued since this connection last wrote. */
+  private writes?: JournalWrites
+  private queued?: { from: number; blocks: Entry[]; revision: number }
+  private settling = false
+  /** Log events `streamed` found while it looked whether a flush could go to the writer: the commit that follows writes them. */
+  private carried?: readonly MakoLogEvent[]
   private readonly path: string
   private readonly appends = new Map<number, number>()
   /** Mako's log folded, once read; a failed commit drops it so the next reads it again. */
@@ -811,7 +819,7 @@ export class LiveJournal {
     journalOpened.publish(this.releaseKey)
     // A different LiveRecords owner, or an independent opener, takes the same file too. Even a failed open keeps
     // its data: an old close must not tidy a file another owner may already have begun opening.
-    this.db = new DatabaseSync(this.path)
+    this.connection = new DatabaseSync(this.path)
     try {
       // The checkpoint owner's final close may still hold the WAL lock. Install the existing wait before opening it.
       this.db
@@ -844,7 +852,136 @@ export class LiveJournal {
       this.db.close()
       throw error
     }
-    this.pager = new EntryPager(journalRows(this.db, () => this.appends))
+    this.pager = new EntryPager(journalRows(() => this.db, () => this.appends))
+  }
+
+  /**
+   * The journal's own connection, once what its writer still holds is written (`settleWrites`): every read of its rows
+   * and every write made here comes through this, so neither goes ahead of a streamed row given before it.
+   */
+  private get db(): DatabaseSync {
+    if (this.writes) this.settleWrites()
+    return this.connection
+  }
+
+  /**
+   * Live resident only: a running turn's streamed flushes are written by `writer`, off this thread (`streamed`).
+   * Everything else this journal writes, it writes itself as before.
+   */
+  writeWith(writer: JournalWriter): void {
+    if (this.closed || this.writes) return
+    this.writes = writer.open(this.path, WAL_KEPT_BYTES)
+  }
+
+  /**
+   * Waits for the writer to have written what it was given. A write that failed there is made good here, at once: each
+   * block the writer was given since this connection last wrote is written whole from what memory holds, so the rows
+   * say what a commit of the same flushes would have, and the writer is let go of. Failing that too, the journal
+   * couldn't be written, as any commit that can't be (`JournalWriteError`).
+   */
+  private settleWrites(): void {
+    const writes = this.writes
+    if (!writes || this.settling) return
+    if (!writes.pending() && !this.queued) return
+    this.settling = true
+    try {
+      const failure = writes.settle()
+      const queued = this.queued
+      this.queued = undefined
+      if (failure === undefined) return
+      this.writes = undefined
+      writes.close()
+      hostWarn("journal", "a journal's writer couldn't write its streamed rows; the journal writes them itself", { path: this.path, error: failure })
+      if (!queued) return
+      const db = this.connection
+      try {
+        db.exec("BEGIN IMMEDIATE")
+        db.prepare("INSERT OR REPLACE INTO progress VALUES (1, ?)").run(queued.revision)
+        const upsert = db.prepare("INSERT OR REPLACE INTO blocks VALUES (?, ?)")
+        const clear = db.prepare("DELETE FROM block_appends WHERE block_id=?")
+        for (let index = queued.from; index < queued.blocks.length; index += 1) {
+          upsert.run(index, JSON.stringify(queued.blocks[index]))
+          clear.run(index)
+          this.appends.delete(index)
+        }
+        db.exec("COMMIT")
+      } catch (error) {
+        if (db.isTransaction) db.exec("ROLLBACK")
+        throw new JournalWriteError(error)
+      }
+    } finally {
+      this.settling = false
+    }
+  }
+
+  /**
+   * Hands a flush to the writer when it is only what a running turn streams: blocks new or grown, and the revision.
+   * Anything else in it (a request, the session's state, the base, the controls, Mako's log) is this connection's to
+   * commit, and so is every flush of a turn that isn't running that changes anything the journal keeps, so what a
+   * window or a harness is told happened is committed before either hears it, as it always was. A flush that changes
+   * nothing kept (a roster of Fins moving) has only its revision to write, and that goes to the writer too: a host
+   * killed then reads the revision a few such flushes back, and the roster again from its Fins, as every start does. What streams rides behind by what the writer hasn't written
+   * yet: one transaction under way and one waiting, whatever the disk does.
+   */
+  private streamed(next: LiveSnapshot, previous: LiveSnapshot | undefined, grown: ReadonlyMap<number, ToolGrowth> | undefined): boolean {
+    const writes = this.writes
+    if (!writes || !previous || this.closed || this.settling) return false
+    // Of a turn that isn't running, only a flush that changes nothing the journal keeps: its Fins' roster moved (an
+    // Apex's, at each step of each Fin), which is never saved, so all there is to write is the revision.
+    const running = next.session.status === "running" && previous.session.status === "running"
+    if (!running && (next.session.status !== previous.session.status || next.blocks !== previous.blocks)) return false
+    if (!this.optionsStored || this.messageBase || next.session.configOptions !== previous.session.configOptions) return false
+    if (next.requests !== previous.requests || next.harnessTurns !== previous.harnessTurns || next.blocks.length < previous.blocks.length) return false
+    if ((!this.rowsNamed && next.base) || this.staging || storedBase(next) !== storedBase(previous) || metadataChanged(previous, next)) return false
+    if (this.checkpointPolicyDirty) return false
+    const events = this.logState().advance(makoFacts(next))
+    if (events.length) {
+      this.carried = [...(this.carried ?? []), ...events]
+      return false
+    }
+    const { blocks } = next
+    const ops: JournalWriteOp[] = []
+    const counts = new Map<number, number>()
+    const from = changedEntryStart(previous.blocks, blocks)
+    for (let index = from; index < blocks.length; index++) {
+      const block = blocks[index]!
+      const before = previous.blocks[index]
+      if (block === before) continue
+      const count = this.appends.get(index) ?? 0
+      const growth = grown?.get(index)
+      if (count < 128 && growth && block.type === "tool" && before?.type === "tool") {
+        this.pager.detach("blocks", index)
+        ops.push(["append", index, count, JSON.stringify(growth)])
+        counts.set(index, count + 1)
+      } else if (count < 128 && (block.type === "text" || block.type === "thinking") && before?.type === block.type && before.id === block.id &&
+        block.text.length > before.text.length && continues(block.text, before.text)) {
+        this.pager.detach("blocks", index)
+        ops.push(["append", index, count, JSON.stringify(block.text.slice(before.text.length))])
+        counts.set(index, count + 1)
+      } else {
+        this.pager.detach("blocks", index, block)
+        ops.push(["block", index, JSON.stringify(block)])
+        counts.set(index, 0)
+      }
+    }
+    for (const [index, count] of counts) {
+      if (count) this.appends.set(index, count)
+      else this.appends.delete(index)
+    }
+    this.queued = { from: Math.min(this.queued?.from ?? from, from), blocks, revision: next.revision }
+    writes.write(next.revision, ops)
+    return true
+  }
+
+  /** What the writer holds is written and its connection closed, before this journal's own closes: the last to close checkpoints the file. */
+  private leaveWriter(): void {
+    try {
+      this.settleWrites()
+    } finally {
+      const writes = this.writes
+      this.writes = undefined
+      writes?.close()
+    }
   }
 
   /** Live resident only: listings and independent read connections retain their original policy. */
@@ -1165,6 +1302,7 @@ export class LiveJournal {
 
   /** `grown`: tool blocks of `next` that differ from `previous` only by these appends (`deliverLiveUpdates`). */
   commit(next: LiveSnapshot, previous?: LiveSnapshot, grown?: ReadonlyMap<number, ToolGrowth>): void {
+    if (this.streamed(next, previous, grown)) return
     const timed = journalCommits.heard ? performance.now() : undefined
     try {
       this.beforeWrite()
@@ -1269,7 +1407,8 @@ export class LiveJournal {
         const insert = this.db.prepare("INSERT OR IGNORE INTO harness_turns VALUES (?, ?)")
         for (const turn of harnessTurns) if (!kept.has(turn.id)) insert.run(turn.id, JSON.stringify(turn))
       }
-      const events = this.logState().advance(makoFacts(next))
+      const events = [...(this.carried ?? []), ...this.logState().advance(makoFacts(next))]
+      this.carried = undefined
       if (events.length) this.appendLog(events, "host")
       if (events.length && process.env.MAKO_LOG_CHECK === "1") {
         const difference = makoLogDifference(this.makoLog(), makoFacts(next))
@@ -1291,6 +1430,7 @@ export class LiveJournal {
       // SQLite rolls a full disk, an I/O error or a busy lock back itself, and a ROLLBACK then would throw over why.
       if (this.db.isTransaction) this.db.exec("ROLLBACK")
       this.log = undefined
+      this.carried = undefined
       // What the rows hold is no longer known: the next write of the base writes each.
       if (written) this.forgetBaseRows()
       throw new JournalWriteError(error)
@@ -1515,7 +1655,8 @@ export class LiveJournal {
         hostWarn("journal", "a journal's history rows couldn't be dropped", { path: this.path, error: errorMessage({ error }) })
       }
     }
-    this.db.close()
+    this.leaveWriter()
+    this.connection.close()
     // Closed, it writes nothing more, so it lets go of what its rows held by identity: kept, they were the paged
     // entries' last holder, so none was ever collected and a journal waiting on them (`LiveRecords.releasing`) stayed
     // for the host's life with its connection and its log (2026-11-12: 68 journals, 80 MB, after 60 opens).
@@ -1552,7 +1693,8 @@ export class LiveJournal {
     clearTimeout(this.quiet)
     this.untidy = true
     this.stopStaging()
-    this.db.close()
+    this.leaveWriter()
+    this.connection.close()
     this.closing = this.leftWorker()
   }
 
@@ -1603,12 +1745,14 @@ export class LiveJournal {
 }
 
 /** Rows as the journal at `db` holds them; a block's appends (`appends`, by block) are folded in. */
-function journalRows(db: DatabaseSync, appends: () => ReadonlyMap<number, number>): PagedRows {
+function journalRows(connection: () => DatabaseSync, appends: () => ReadonlyMap<number, number>): PagedRows {
   let base: ReturnType<DatabaseSync["prepare"]> | undefined
   let block: ReturnType<DatabaseSync["prepare"]> | undefined
   let tail: ReturnType<DatabaseSync["prepare"]> | undefined
   return {
     read(table: PagedTable, row: number): string | undefined {
+      // Asked for at each read: a journal whose streamed rows are still with its writer waits for them first.
+      const db = connection()
       if (table === "base") {
         base ??= db.prepare("SELECT value FROM base_entries WHERE id=?")
         return RowSchema.safeParse(base.get(row)).data?.value
@@ -1639,7 +1783,7 @@ function readOnlyRows(path: string): PagedRows {
           const counted = AppendCountSchema.parse(value)
           counts.set(counted.block_id, counted.count)
         }
-        open = { db, rows: journalRows(db, () => counts) }
+        open = { db, rows: journalRows(() => db, () => counts) }
       }
       return open.rows.read(table, row)
     },

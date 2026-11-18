@@ -229,6 +229,12 @@ export class SessionMemory {
   private verifying = false
   private holdCheckOffset = 0
   private holdRead: { db: DatabaseSync; statement: StatementSync } | undefined
+  /** What `owns` last answered of each session and conversation, and what those answers were read at. */
+  private readonly ownsSeen = new Map<string, boolean>()
+  private ownsAt: { db: DatabaseSync; version: number; epoch: number } | undefined
+  private versionRead: { db: DatabaseSync; statement: StatementSync } | undefined
+  /** Moves at each write this host makes to `holds`: its own commits don't move its connection's `data_version`. */
+  private holdsEpoch = 0
   private stopHeartbeat: (() => void) | null = null
   /** On while this host holds a session: the heartbeat runs only then (`startHeartbeat`). */
   private holding: JobDemand | undefined
@@ -440,6 +446,7 @@ export class SessionMemory {
       await Promise.all(rows.map(async (row) => {
         const current = await this.identityCurrent(row.host_pid, row.host_started_at, this.lifecycle.signal).catch(() => undefined)
         if (current !== false || this.lifecycle.signal.aborted) return
+        this.holdsEpoch += 1
         this.writer.prepare("DELETE FROM holds WHERE provider = ? AND native_id = ? AND host_pid = ? AND host_started_at = ? AND heartbeat_at = ?")
           .run(row.provider, row.native_id, row.host_pid, row.host_started_at, row.heartbeat_at)
         this.annotations.delete(`${row.provider}\n${row.native_id}`)
@@ -517,8 +524,24 @@ export class SessionMemory {
 
   /** Another host's live hold on this session, or null when none, ours, or stale. */
   owns(provider: string, nativeId: string, conversationId: string): boolean {
+    // Asked at every flush of every conversation at work. The answer stands until a hold is written: by this host
+    // (`holdsEpoch`, moved at each of its writes of `holds`) or by another (`PRAGMA data_version`, which reads the
+    // log's header in shared memory, no page of the file). Read from its row each time, the read waited on the disk:
+    // 777 ms once in a five-minute run. A change is seen at the same asking it always was.
+    const db = this.db
+    if (this.versionRead?.db !== db) this.versionRead = { db, statement: db.prepare("PRAGMA data_version") }
+    const version = DataVersionSchema.parse(this.versionRead.statement.get()).data_version
+    if (version !== this.ownsAt?.version || this.holdsEpoch !== this.ownsAt.epoch || db !== this.ownsAt.db) {
+      this.ownsSeen.clear()
+      this.ownsAt = { db, version, epoch: this.holdsEpoch }
+    }
+    const key = `${provider}\n${nativeId}\n${conversationId}`
+    const seen = this.ownsSeen.get(key)
+    if (seen !== undefined) return seen
     const row = this.readHold(provider, nativeId)
-    return row !== null && this.ownHold(row) && row.conversation_id === conversationId
+    const owns = row !== null && this.ownHold(row) && row.conversation_id === conversationId
+    this.ownsSeen.set(key, owns)
+    return owns
   }
 
   /** Whether this host holds the session: one it runs, whose harness process is Mako's own and not another app's. */
@@ -533,6 +556,7 @@ export class SessionMemory {
     if (this.ownHold(row)) return null
     if (this.holdLive(row)) return this.describe(row)
     // Another host's row is a newer Mako's to clear on its ledger.
+    this.holdsEpoch += 1
     if (!this.newer) this.writable?.prepare("DELETE FROM holds WHERE provider = ? AND native_id = ? AND host_pid = ? AND host_started_at = ?").run(provider, nativeId, row.host_pid, row.host_started_at)
     return null
   }
@@ -564,6 +588,7 @@ export class SessionMemory {
       )
         throw new SessionHeldError(this.describe(row))
       const since = row && this.ownHold(row) ? row.since : at
+      this.holdsEpoch += 1
       this.writer
         .prepare(
           `INSERT INTO holds (provider, native_id, host_pid, host_started_at, host_label, conversation_id, since, heartbeat_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -613,6 +638,7 @@ export class SessionMemory {
     this.annotations.delete(`${provider}\n${nativeId}`)
     // A host that opened a newer ledger read-only never took a hold; one raised under it releases its own (`SESSION_MEMORY_SHARED`).
     if (!this.writable) return
+    this.holdsEpoch += 1
     if (conversationId === undefined)
       this.writer
         .prepare("DELETE FROM holds WHERE provider = ? AND native_id = ? AND host_pid = ? AND host_started_at = ?")
@@ -734,6 +760,7 @@ export class SessionMemory {
     this.annotations.clear()
     // Its own rows only, which every format lets it release (`SESSION_MEMORY_SHARED`); a host that opened a newer ledger read-only holds none.
     if (!this.writable) return
+    this.holdsEpoch += 1
     this.writer.prepare("DELETE FROM holds WHERE host_pid = ? AND host_started_at = ?").run(this.host.pid, this.host.startedAt)
   }
 

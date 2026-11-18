@@ -20,6 +20,7 @@ import { inSlices, StepsStopped } from "@mako/sessions/slices"
 import { closeCutOffCalls, recordCutOffCalls } from "./interrupted-turn.js"
 import { clearAutoContinue } from "./live-auto-continue.js"
 import { JournalReaders } from "./journal-readers.js"
+import { JournalWriter } from "./journal-writer.js"
 import { ColdJournal, LiveJournal, journalIds, storedRequest } from "./live-journal.js"
 import { backfillMemory } from "./live-ledger.js"
 import { conversationControl, residentOf, type Dependencies, type Resident } from "./live-runtime.js"
@@ -184,6 +185,8 @@ export class LiveRecords {
 
   /** Writes a journal's WAL header off the host's thread before reading it in commits (`WalPrimer`). */
   private readonly primer = new WalPrimer()
+  /** Where running turns' streamed rows are written (`JournalWriter`); `MAKO_JOURNAL_WRITER=0` has each journal write its own, as before. */
+  private readonly writer = process.env.MAKO_JOURNAL_WRITER === "0" ? undefined : new JournalWriter()
 
   constructor(dependencies: Dependencies, hooks: RecordHooks) {
     this.dependencies = dependencies
@@ -270,6 +273,7 @@ export class LiveRecords {
   /** Keeps a new conversation, its journal already written. */
   add(resident: Resident): void {
     resident.journal.checkpointWith(this.primer)
+    if (this.writer) resident.journal.writeWith(this.writer)
     this.residents.set(resident.snapshot.session.id, resident)
     // A fork made now joins the index as a saved one does at `open`.
     const ancestry = resident.snapshot.control?.ancestry
@@ -801,7 +805,7 @@ export class LiveRecords {
 
   /** All resident journals closed: join their checkpoint handles before the host releases its data root. */
   stopCheckpoints(): Promise<void> {
-    return this.primer.stop()
+    return Promise.all([this.primer.stop(), this.writer?.stop()]).then(() => {})
   }
 
   clear(): void {

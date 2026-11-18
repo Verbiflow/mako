@@ -125,6 +125,9 @@ const { values } = parseArgs({
     // A recorded run without the CPU profile: its holds have no function, only their length and the thread's own CPU
     // time, to tell what the sampler itself adds (it stops the thread it samples).
     "no-profile": { type: "boolean", default: false },
+    // `NAME=value` for the host's environment, which otherwise takes none of this process's `MAKO_` settings: a
+    // switch to measure with and without (`MAKO_JOURNAL_WRITER=0`).
+    "host-env": { type: "string", multiple: true },
   },
 })
 /** The harness the timed sends go through (`--harness`). */
@@ -369,7 +372,7 @@ if (model) {
       ...harness === "grok" && model && {
         GROK_HOME: join(world.home, ".grok"), XAI_API_KEY: "mako-host-load", GROK_DISABLE_AUTOUPDATER: "1",
         GROK_XAI_API_BASE_URL: `${model.url}/v1`, GROK_CLI_CHAT_PROXY_BASE_URL: `${model.url}/v1`, GROK_MODELS_BASE_URL: `${model.url}/v1`,
-      }, MAKO_WEB_SOCKET: socket, MAKO_PROD: "1", MAKO_TELEMETRY: "off", ...finCount > 0 && { MAKO_FIN_SLOTS: "8" }, ...workingCount > 0 && { MAKO_FIN_SLOTS: String(workingCount + 2) }, ...record && { MAKO_HOST_LOAD_RECORD: record }, ...cloud && { MAKO_CLOUD_URL: cloud.url } },
+      }, MAKO_WEB_SOCKET: socket, MAKO_PROD: "1", MAKO_TELEMETRY: "off", ...Object.fromEntries((values["host-env"] ?? []).map((pair) => [pair.slice(0, pair.indexOf("=")), pair.slice(pair.indexOf("=") + 1)])), ...finCount > 0 && { MAKO_FIN_SLOTS: "8" }, ...workingCount > 0 && { MAKO_FIN_SLOTS: String(workingCount + 2) }, ...record && { MAKO_HOST_LOAD_RECORD: record }, ...cloud && { MAKO_CLOUD_URL: cloud.url } },
     stdio: ["ignore", values.gc ? "pipe" : "ignore", "inherit"],
     ...profileDir && values["node-arg"]?.some((arg) => arg.startsWith("--heap-prof")) && { cwd: profileDir },
     ...snapshots && { cwd: snapshots },
