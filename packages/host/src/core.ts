@@ -469,7 +469,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   late.updates = appUpdates
   // Every host's record of the agents it starts, found through the session ledger, this host's own root always.
   const makoProcesses = () => readMakoProcesses([environment.dataRoot, ...threads.memory?.hostDataRoots() ?? []])
-  const harnesses = openHarnesses({ host: providerHost, appRoot: environment.appRoot, userRoot: environment.userRoot, catalog, live: () => late.conversations?.live, emit, jobs: shell.jobs, subscribed: shell.subscribed, makoProcesses })
+  const harnesses = openHarnesses({ host: providerHost, appRoot: environment.appRoot, userRoot: environment.userRoot, catalog, live: () => late.conversations?.live, emit, jobs: shell.jobs, subscribed: shell.subscribed, makoProcesses, foreground: shell.foreground })
   const tools = openTools(harnesses.tools, environment.dataRoot, () => shell.foreground.idle())
   const conversationsIn = (path: string, status: (value: string) => boolean) => (late.conversations?.live.listed() ?? [])
     .filter(({ session }) => status(session.status) && (session.cwd === path || session.cwd.startsWith(`${path}/`)))
@@ -645,7 +645,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     account: () => late.cloud?.id() ?? Promise.resolve(undefined),
     attended: () => (web()?.clients().length ?? 0) > 0,
     inventory: async () => ({
-      harnesses: (await harnesses.profiles.all()).filter((profile) => profile.available).map((profile) => profile.id),
+      // What is held, never a discovery: the heartbeat once started six CLIs to count them.
+      harnesses: (await harnesses.profiles.snapshots()).filter((profile) => profile.available).map((profile) => profile.id),
       runtimes: harnesses.updates.snapshot(),
       threads: catalog.list().length,
     }),

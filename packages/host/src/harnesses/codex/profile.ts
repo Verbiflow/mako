@@ -54,6 +54,9 @@ export function codexProfileLoader(processes: DiscoveryProcesses): ProviderProfi
     },
     transport: "app-server",
     cacheKey: (env) => `${env.CODEX_HOME ?? ""}\0${env.CODEX_EXECUTABLE ?? ""}`,
+    // `config/read` layers the project's file over the person's, under Codex's own trust and profile rules, so only
+    // Codex resolves it: nothing here parses it.
+    folder: { files: [".codex/config.toml"], configuredModel: true },
     async load(env, cwd, context) {
       const executable = await resolveCodexExecutable(env)
       if (!executable)

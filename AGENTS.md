@@ -1291,8 +1291,9 @@ written over, and this build keeps its own in memory; JSON files keep
 `version` (and `reads` once a newer build sets it, `jsonStoreAccess`):
 `runtime-updates.json` and `provider-profiles.json` aren't written by an
 older build, and every rewrite of `runtime-updates.json`,
-`worktree-origins.json` and `utility-work.json` writes back the fields and
-entries it doesn't name (`unknownFields`); an account lease whose accounts
+`worktree-origins.json`, `utility-work.json` and `provider-profiles.json`
+writes back the fields and entries it doesn't name (`unknownFields`, or a
+loose schema); an account lease whose accounts
 an older build can't read holds them. `mako:store-formats` reports every
 store's standing; the rail shows the Thread store's line above its footer
 and Settings › Diagnostics one per store, each with Update, which installs
@@ -5215,17 +5216,55 @@ refresh (`mako:harness-updates` with `true`) gets the reading taken after
 its ask, so a refresh right after an update or a terminal's install never
 answers the old version. Settings > Agents
 therefore shows versions the moment it opens, and opening the model picker
-runs nothing. Before this the card was one IPC that spawned five CLIs and
+reads no version. Before this the card was one IPC that spawned five CLIs and
 ran `npm view` for each on every open of Settings, read "No runtimes found"
 for the second that took, and stalled ten seconds offline.
 
 The installed reading is keyed by the binary's mtime and size (Omnigent's
 rule for its Codex catalog): a re-read spawns nothing until the file moves,
 and when it moves — Mako's update or the user's `npm i -g` in a terminal —
-`onRuntimeChanged` fires and `refreshHarnessProfiles` drops that provider's
-model catalog in every workspace and discovers again, so an updated Codex
-lists its new models without a restart (it once served the old CLI's list
-for the rest of the host's life). The public version is
+`onRuntimeChanged` fires and `HarnessProfiles.refresh` reads that provider's
+model list again, once, in the folder it was last read in, and every folder
+of the account hears the new list, so an updated Codex lists its new models
+without a restart (it once served the old CLI's list for the rest of the
+host's life).
+
+A harness's model list is the account's and is read rarely
+(`HarnessProfiles`, `harness-profiles.ts`). Every read answers from what is
+held: memory, then `provider-profiles.json`, then the account's list in a
+folder it was never discovered in (with Mako's defaults; a folder's own
+`settings` and `configuredModel` are never another folder's), then a pending
+placeholder. A discovery runs only when nothing is held for the account,
+when the list is older than six hours (`DISPLAY_TTL_MS`, behind the answer),
+when the person opens the model picker (`mako:harness-tuning` with `force`,
+at most once a minute per folder), when a send's options were refused by the
+held catalogue (behind the refusal), and when the runtime, the account or a
+connection changed. A window's start (`mako:harness-profiles`) and the
+telemetry heartbeat read `snapshots()`, which never discovers, and a send or
+a Fin's start never waits while what it launches on is held. A harness
+whose profile says what the folder itself configures (`folder` on its
+loader: Codex's `configuredModel`, OpenCode's default, Claude Code's
+settings where Mako's default isn't listed) is the exception in a folder
+never discovered: a send there takes the folder's fields from the loader's
+own parse where it has one (none of the six does), else from a folder of
+the same repository and account whose project configuration files are the
+same bytes (`sameProjectConfiguration`, reading its own behind the send),
+else it waits for that folder's discovery, so a project never launches on
+a model it didn't choose. All six CLIs once ran at
+every window's start, every five minutes and on every focus, and a Claude
+Code process ran for each Fin. A discovery nobody waits for starts once the
+foreground is free, one per account at a time, and a failed one is held 5 s,
+doubling to ten minutes; the window's own retry reads without forcing.
+Claude Code's answers about each model (`set_model`, `get_settings`) are
+kept per binary and account (`runtimeStamp`, `ProfileLoadContext.kept`), so
+a discovery is `list_models` and the default model's settings. The file
+keeps one entry per account and a line per folder, is written only when
+something changed (or to confirm a list once an hour), and is read again and
+merged before each write, since every host of the user shares it. The picker
+draws "Checking…" only for a harness with no models to show
+(`profileUnread`). `scripts/test-send-discovery.ts`,
+`test-provider-reads.ts`, `test-providers.ts` and
+`test-claude-discovery.ts` hold this. The public version is
 `registry.npmjs.org/<pkg>/latest` with a four-second deadline and a bounded
 body, held an hour, a failure ten minutes; it never blocks the installed
 reading and leaves it standing with `latestError` beside it. Versions are
