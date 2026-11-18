@@ -1,5 +1,6 @@
 import type { Attribution, Certainty, ContentRef, FootprintEntry } from "@mako/protocol"
 import { atOnce, inSlices, StepsStopped, type Steps } from "@mako/sessions/slices"
+import type { ChangeUsage, ThreadChangeSummary } from "../contracts/thread-changes.js"
 import { TURN_CHANGES_VERSION, type TurnChangedFile, type TurnChangeLines, type TurnChanges, type TurnChangeShare } from "../contracts/turn-changes.js"
 import { decodeText } from "./content.js"
 import { wholeChange, type FileState, type JournalStore, type StatRow, type StoredEntry, type StoredRoot } from "./journal-store.js"
@@ -579,6 +580,97 @@ export function changes(view: JournalView, thread: string): ThreadChanges {
       if (effect.kind === "command") result.commands.push({ command: effect.command, cwd: effect.cwd, exitCode: effect.exitCode, at: activity.start })
   result.maybe = uncertain + view.store.ambiguousWith(thread)
   return result
+}
+
+/** Paths outside its checkouts a Thread touched, each once: those its calls named, and those that only changed while it ran. */
+export const outsideCounts = (found: Pick<ThreadChanges, "outside">): ThreadChangeSummary["outside"] => ({
+  named: new Set(found.outside.filter((entry) => entry.evidence === "strong").map((entry) => entry.path)).size,
+  maybe: new Set(found.outside.filter((entry) => entry.evidence === "weak").map((entry) => entry.path)).size,
+})
+
+/**
+ * "Changes made" by a Thread: the sum of its turns' summaries, the same
+ * records each turn's line under its answer draws. Its own lines only, each
+ * file once at what its turns did to it in all; files that might be its
+ * are counted apart. Commands and paths outside its checkouts come from
+ * its calls, as before.
+ */
+export function threadTotals(turns: readonly TurnChanges[], found: Pick<ThreadChanges, "commands" | "outside">): ThreadChangeSummary {
+  return sumTurns(turns, found.commands.length, outsideCounts(found))
+}
+
+/**
+ * `threadTotals` from the journal, reading only what it sums: the turns' summaries, and the commands and outside paths
+ * as SQLite counts them. Through `changes` it read every entry and call the Thread ever made, then kept two numbers.
+ * A Thread's summaries and calls are still as many as its history is long, so the host asks on the reader.
+ */
+export function threadSummary(store: JournalStore, thread: string): ThreadChangeSummary {
+  return sumTurns(store.turnChangesOf(thread), store.commandsOf(thread), store.outsideCounts(thread))
+}
+
+function sumTurns(turns: readonly TurnChanges[], commands: number, outside: ThreadChangeSummary["outside"]): ThreadChangeSummary {
+  const files = new Map<string, { first: TurnChangedFile["kind"]; last: TurnChangedFile["kind"] }>()
+  const maybe = new Set<string>()
+  const lines = { added: 0, removed: 0 }
+  let unlisted = 0
+  for (const turn of turns) {
+    lines.added += turn.own.added
+    lines.removed += turn.own.removed
+    unlisted += turn.more
+    for (const file of turn.files) {
+      if (file.own === undefined) {
+        maybe.add(file.path)
+        continue
+      }
+      const seen = files.get(file.from ?? file.path)
+      if (seen && file.from) files.delete(file.from)
+      files.set(file.path, { first: seen?.first ?? file.kind, last: file.kind })
+    }
+  }
+  const kinds = { created: 0, changed: 0, deleted: 0, renamed: 0 }
+  for (const { first, last } of files.values()) {
+    if (first === "create" && last === "delete") continue
+    if (first === "create") kinds.created++
+    else if (last === "delete") kinds.deleted++
+    else if (first === "rename" || last === "rename") kinds.renamed++
+    else kinds.changed++
+  }
+  kinds.changed += unlisted
+  for (const path of files.keys()) maybe.delete(path)
+  return { files: kinds, lines, commands, outside, maybe: maybe.size }
+}
+
+/** The journal kept this long: its retention, and the window "changes made" covers. */
+export const RETENTION_DAYS = 14
+
+/** Every Thread's changes made since `since`, by project, with how surely each was known and how moves went. */
+export function changeUsage(store: JournalStore, since: number): ChangeUsage {
+  const paths = new Map(store.roots().map((root) => [root.id, root.path]))
+  const { roots, threads } = store.changesSince(since)
+  const projects = roots
+    .flatMap(({ root, ...totals }) => {
+      const path = paths.get(root)
+      return path ? [{ path, ...totals }] : []
+    })
+    .sort((a, b) => b.added + b.removed - (a.added + a.removed) || b.files - a.files)
+  const sum = (key: "files" | "added" | "removed") => projects.reduce((total, project) => total + project[key], 0)
+  const mix = store.certaintyMix(since)
+  const moves = store.moveTotals(since)
+  const move = moves.get("move")
+  return {
+    days: RETENTION_DAYS,
+    total: { files: sum("files"), added: sum("added"), removed: sum("removed"), threads },
+    projects,
+    certainty: { exact: mix.get("exact") ?? 0, named: mix.get("named") ?? 0, window: mix.get("window") ?? 0, ambiguous: mix.get("ambiguous") ?? 0, person: mix.get("person") ?? 0, mako: mix.get("mako") ?? 0 },
+    moves: {
+      moves: move?.count ?? 0,
+      came: move?.files ?? 0,
+      guessed: move?.guessed ?? 0,
+      putBack: moves.get("put-back")?.files ?? 0,
+      offered: move?.offered ?? 0,
+      brought: moves.get("bring")?.files ?? 0,
+    },
+  }
 }
 
 export interface Restorable {
