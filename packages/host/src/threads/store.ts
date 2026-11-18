@@ -1350,7 +1350,7 @@ export class ThreadStore {
           .run(report.id, edge.parent, edge.child, JSON.stringify(action))
       }
       return { report, deduped: false }
-    })
+    }, [report.child])
   }
 
   /**
@@ -1572,7 +1572,7 @@ export class ThreadStore {
     this.write(() => {
       const assign = this.sql("UPDATE thread_reports SET wake_request = ? WHERE id = ? AND wake_request IS NULL AND delivered_at IS NULL")
       for (const id of ids) assign.run(request, id)
-    })
+    }, [])
   }
 
   /** The parent heard these reports, in the turn or step that carried them. */
@@ -1581,7 +1581,7 @@ export class ThreadStore {
     this.write(() => {
       const mark = this.sql("UPDATE thread_reports SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL")
       for (const id of ids) mark.run(at, id)
-    })
+    }, [])
   }
 
   /**
@@ -1596,7 +1596,7 @@ export class ThreadStore {
       this.sql("INSERT INTO agent_answers (ask, child_thread, op, record, at, delivered_at) VALUES (?, ?, ?, ?, ?, NULL)")
         .run(answer.ask, answer.child, answer.op, JSON.stringify(answer), answer.at)
       return { answer, claimed: true }
-    })
+    }, [answer.child])
   }
 
   /** The answer an operation claimed with, delivered or not. */
@@ -1647,7 +1647,7 @@ export class ThreadStore {
       if (!held) return
       const answer = { ...keptAnswer(held), delivered }
       this.sql("UPDATE agent_answers SET record = ?, delivered_at = ? WHERE ask = ?").run(JSON.stringify(answer), delivered.at, ask)
-    })
+    }, [])
   }
 
   /** Lets go of a claim whose delivery failed, so another answer can take the ask; one delivered stays. */
@@ -3621,13 +3621,14 @@ export class ThreadStore {
   }
 
   /** Invalidate shared views after a commit or rollback; worktree inputs have their own local boundaries. */
-  private committed(external = false): void {
+  private committed(external = false, asks?: readonly string[]): void {
     this.revision += 1
     this.executionsSeen.clear()
     this.titlesSeen.clear()
     this.conversationsSeen.clear()
     this.threadsSeen.clear()
-    this.reportAsksSeen.clear()
+    if (asks) for (const child of asks) this.reportAsksSeen.delete(child)
+    else this.reportAsksSeen.clear()
     this.answersSeen.clear()
     this.forksSeen.clear()
     this.groupsSeen = undefined
@@ -3656,7 +3657,12 @@ export class ThreadStore {
     this.keysBySession.clear()
   }
 
-  private write<T>(work: () => T): T {
+  /**
+   * `asks`: the Fins whose open report questions (`openReportAsks`) this write can change, when it says. A write that
+   * says nothing may change any; one that says so leaves every other Fin's kept, as an Apex's walk of a hundred Fins
+   * reads them after each report (`Agents.personAsk`). Another process's commit says nothing either.
+   */
+  private write<T>(work: () => T, asks?: readonly string[]): T {
     const newer = this.newer
     if (newer) throw declinedThreads(newer)
     if (this.reader) throw new ReadOnlyStoreError("The Thread store")
@@ -3670,7 +3676,7 @@ export class ThreadStore {
       if (raised) throw declinedThreads(raised)
       const result = work()
       this.db.exec("COMMIT")
-      this.committed()
+      this.committed(false, asks)
       this.consumeChanges(false)
       return result
     } catch (error) {
