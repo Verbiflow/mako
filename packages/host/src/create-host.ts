@@ -102,7 +102,11 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         windowMs: ms,
         slices: slices.length,
         heldMs: slices.reduce((sum, slice) => sum + slice.ms, 0),
-        longest: longest.map((slice) => `${slice.ms} ms: ${slice.frames.map((frame) => `${frame.frame} (${frame.ms})`).join(" < ")}`).join(" | "),
+        longest: longest.map((slice) => `${slice.ms} ms: ${[
+          slice.frames.map((frame) => `${frame.frame} (${frame.ms})`).join(" < "),
+          // What held it outside the host's own code, which named nothing: GC, a native call, Node's or a dependency's.
+          slice.outside.length ? `outside: ${slice.outside.map((frame) => `${frame.frame} (${frame.ms})`).join(", ")}` : "",
+        ].filter(Boolean).join(" ")}`).join(" | "),
       })
     },
   })
