@@ -330,7 +330,7 @@ interface Crossing {
 
 type Live = Pick<
   LiveConversations,
-  "session" | "held" | "nativeIds" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "rewordWaiting" | "adoptPin" | "wakeDue" | "snapshot" | "editQueued" | "switchSettled" | "stopMark" | "pinnedAccount" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "workOf" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "switching" | "readIn"
+  "session" | "held" | "nativeIds" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "rewordWaiting" | "adoptPin" | "wakeDue" | "snapshot" | "editQueued" | "switchSettled" | "stopMark" | "pinnedAccount" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "turnCut" | "waitingOn" | "workOf" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "switching" | "readIn"
 > & Partial<Pick<LiveConversations, "waitChanged">>
 
 /** What starting a Fin in the cloud asks of the account and this device (`AgentsDeps.cloudFins`). */
@@ -5020,9 +5020,9 @@ export class Agents implements AgentOperations, ConversationChildren {
    * becomes a question for its Apex (`reportCut`). Looked at once per cut.
    */
   private watchCut(conversation: string): void {
-    if (this.stopped || this.cutChecks.has(conversation)) return
-    const last = this.deps.live.snapshot(conversation)?.requests.filter((request) => request.status !== "queued" && request.status !== "held" && request.status !== "canceled").at(-1)
-    if ((last?.status !== "interrupted" && last?.status !== "uncertain") || !last.interruption || last.interruption.reason === "stopped" || last.interruption.reason === "steered") return
+    // Read from memory, or from its journal's summary: a host starting with a hundred Fins on disk read each in to learn it,
+    // and the residency budget had let most go again since `resumeInSlices` read them, so each came back on the loop.
+    if (this.stopped || this.cutChecks.has(conversation) || !this.deps.live.turnCut(conversation)) return
     const timer = setTimeout(() => {
       this.cutChecks.delete(conversation)
       this.checkCut(conversation)
