@@ -36,8 +36,7 @@ import { cn } from "@/lib/utils"
 import { togglePinned, usePrefs } from "@/state/prefs"
 import { actions, useSession } from "@/state/session"
 import { useTabs, type TabInfo } from "@/state/tabs"
-import { acpForThread, activeAcp } from "@/state/acp"
-import { useRailAcp } from "@/state/acp-state"
+import { acpForThread, activeAcp, useAcp } from "@/state/acp"
 import { keptSessionText } from "@/lib/kept-session"
 import { sameThreadStatus, threadStatus, threads, useThreads } from "@/state/threads"
 import { threadLiveKey } from "@/state/thread-status"
@@ -128,7 +127,7 @@ export const ThreadRow = memo(function ThreadRow({
   // A thread whose CLI is being driven from here right now wears a pulse —
   // the same promise a tab's dot makes: something is working behind this row.
   // Its status also reads the live store; this repaints the row when those facts move, so it never stays stale.
-  useRailAcp((state) => threadLiveKey(state, ref))
+  useAcp((state) => threadLiveKey(state, ref))
   const ownStatus = useThreads((state) => threadStatus(ref, state), sameThreadStatus)
   const foldState = useThreads(
     (state) => (folded ? foldedThreadState(folded.members, (member) => threadStatus(member, state)) : null),
@@ -137,7 +136,7 @@ export const ThreadRow = memo(function ThreadRow({
   const status = foldState?.status ?? ownStatus
   const archived = useThreadArchives((state) => archivedThread(ref, state.keys))
   const target = nativeThreadTarget(ref)
-  const foldedLive = useRailAcp((state) =>
+  const foldedLive = useAcp((state) =>
     Boolean(
       folded &&
         state.activeKey &&
@@ -173,9 +172,9 @@ export const ThreadRow = memo(function ThreadRow({
   const selectedPath = useThreads(
     (state) => state.opening?.ref.path ?? state.viewing?.ref.path
   )
-  const livePath = useRailAcp((state) => activeAcp(state)?.threadPath)
-  const liveProvider = useRailAcp((state) => acpForThread(state, ref)?.harness)
-  const selectedLive = useRailAcp((state) =>
+  const livePath = useAcp((state) => activeAcp(state)?.threadPath)
+  const liveProvider = useAcp((state) => acpForThread(state, ref)?.harness)
+  const selectedLive = useAcp((state) =>
     Boolean(
       state.activeKey && acpForThread(state, ref)?.key === state.activeKey
     )

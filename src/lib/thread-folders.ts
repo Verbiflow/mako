@@ -72,37 +72,16 @@ function normalizedPath(path: string | undefined): string {
 /** The project folder a Thread worktree's folder stands for, when it is one. */
 export type FolderMap = (path: string) => string | undefined
 
-const NO_FOLDERS: FolderMap = () => undefined
+/** The current map, for callers without their own; `state/worktrees` sets it. */
+let currentFolderMap: FolderMap = () => undefined
 
-/** The current map, for callers without their own; `state/worktrees` says where to read it. */
-let currentFolderMap: () => FolderMap = () => NO_FOLDERS
-
-/** `current` reads the map as it stands: a map is one object while its worktrees are, which is what its answers are kept by. */
-export function mapWorktreeFolders(current: () => FolderMap): void {
-  currentFolderMap = current
+export function mapWorktreeFolders(map: FolderMap): void {
+  currentFolderMap = map
 }
 
-/** Each map's answers, by path and by row: a map never changes its mind (`state/worktrees` makes a new one instead). */
-const folderPaths = new WeakMap<FolderMap, Map<string, string>>()
-const folderKeys = new WeakMap<FolderMap, WeakMap<object, string>>()
-
-function folderPath(path: string | undefined, folderMap: FolderMap = currentFolderMap()): string {
-  if (!path) return ""
-  let held = folderPaths.get(folderMap)
-  if (!held) {
-    held = new Map()
-    folderPaths.set(folderMap, held)
-  }
-  let folder = held.get(path)
-  if (folder === undefined) {
-    folder = filedUnder(path, folderMap)
-    held.set(path, folder)
-  }
-  return folder
-}
-
-function filedUnder(path: string, folderMap: FolderMap): string {
-  const normalized = normalizedPath(folderMap(path) ?? path)
+function folderPath(path: string | undefined, folderMap: FolderMap = currentFolderMap): string {
+  const project = path ? folderMap(path) : undefined
+  const normalized = normalizedPath(project ?? path)
   if (!normalized) return ""
   if (/^\/(?:private\/)?tmp(?:\/|$)/.test(normalized)) return ""
   if (/^\/(?:private\/)?var\/folders(?:\/|$)/.test(normalized)) return ""
@@ -130,20 +109,9 @@ export function threadBelongsToWorkspace(
 }
 
 /** A session in a linked worktree files under the project it belongs to, as its host found. */
-export function threadFolderKey(ref: Pick<ThreadRef, "cwd" | "workspace" | "worktrees">, folderMap: FolderMap = currentFolderMap()): string {
-  // A row is one object while it stands, and the rail asks for every row's folder each time it groups them.
-  let held = folderKeys.get(folderMap)
-  if (!held) {
-    held = new WeakMap()
-    folderKeys.set(folderMap, held)
-  }
-  let key = held.get(ref)
-  if (key === undefined) {
-    const folder = ref.workspace ?? ref.cwd
-    key = folderPath(projectFolder(ref.worktrees, folder) ?? folder, folderMap)
-    held.set(ref, key)
-  }
-  return key
+export function threadFolderKey(ref: Pick<ThreadRef, "cwd" | "workspace" | "worktrees">, folderMap?: FolderMap): string {
+  const folder = ref.workspace ?? ref.cwd
+  return folderPath(projectFolder(ref.worktrees, folder) ?? folder, folderMap)
 }
 
 /**
@@ -227,7 +195,7 @@ export function workedFolderRanks({
   refs,
   live,
   owners,
-  folderMap = currentFolderMap(),
+  folderMap = currentFolderMap,
 }: {
   refs: readonly ThreadRef[]
   live: readonly Pick<AcpPresence, "cwd" | "workspace" | "promptedAt" | "createdAt">[]
@@ -293,7 +261,7 @@ export function groupThreadFolders({
   activity = {},
   ranks = {},
   sortBy,
-  folderMap = currentFolderMap(),
+  folderMap = currentFolderMap,
 }: {
   refs: ThreadRef[]
   live?: AcpPresence[]
@@ -321,14 +289,9 @@ export function groupThreadFolders({
     if (held.has(ref.path)) continue
     byCwd.get(key)?.push(ref)
   }
-  // Each folder's conversations, found in one pass rather than one per folder.
-  const liveByCwd = new Map<string, AcpPresence[]>()
   for (const presence of live) {
     const key = threadFolderKey(presence, folderMap)
     if (!byCwd.has(key)) byCwd.set(key, [])
-    const present = liveByCwd.get(key)
-    if (present) present.push(presence)
-    else liveByCwd.set(key, [presence])
   }
   const normalizedCurrent = folderPath(currentCwd, folderMap)
   const currentKey =
@@ -351,7 +314,7 @@ export function groupThreadFolders({
   const result: ThreadFolder[] = [...byCwd.entries()].map(([key, entries]) => {
     entries.sort(byOrder)
     const allEntries = allByCwd.get(key) ?? entries
-    const present = liveByCwd.get(key) ?? []
+    const present = live.filter((presence) => threadFolderKey(presence, folderMap) === key)
     const liveLatest = present.reduce((latest, presence) => Math.max(latest, presence.movedAt ?? presence.createdAt), 0)
     const latest = allEntries.reduce(
       (top, ref) => ((ref.updatedAt ?? "") > top ? ref.updatedAt! : top),

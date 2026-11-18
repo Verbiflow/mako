@@ -180,24 +180,6 @@ export function clearObserved(path: string) {
   threadsStore.set({ observed })
 }
 
-/**
- * `markObserved` (`seen`) or `clearObserved` for a caller that writes the store itself, with what else changed: the
- * path's timer moves now, and the `observed` to set comes back, or undefined when it stands as it is.
- */
-export function observedAfter(path: string, seen: boolean): ThreadsState["observed"] | undefined {
-  const { observed, working } = threadsStore.get()
-  if (seen && working[path]) return undefined
-  const held = observedTimers.get(path)
-  if (held) clearTimeout(held)
-  observedTimers.delete(path)
-  if (seen) observedTimers.set(path, setTimeout(() => clearObserved(path), OBSERVED_IDLE_MS))
-  if (Boolean(observed[path]) === seen) return undefined
-  const next = { ...observed }
-  if (seen) next[path] = true
-  else delete next[path]
-  return next
-}
-
 export function markObserved(path: string, duration = OBSERVED_IDLE_MS) {
   if (threadsStore.get().working[path]) return
   if (!threadsStore.get().observed[path]) {

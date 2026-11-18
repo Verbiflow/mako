@@ -1,5 +1,4 @@
-import { conversationWork, railDerived, threadChildren, type AcpConversation, type AcpState } from "@/state/acp-state"
-import type { NativeAgent } from "@mako/host/contracts/native-agents"
+import { conversationWork, type AcpState } from "@/state/acp-state"
 import { agentAskOf } from "@/state/agent-asks"
 import type { ThreadPurposeKind } from "@mako/host/contracts/thread-purposes"
 import { autoContinuePending } from "@/state/prompt-delivery"
@@ -52,138 +51,82 @@ export interface AcpPresence {
   forkOf?: string
 }
 
-/** One conversation as the rail lists it, or null for a closed one: read from it and its Thread's Fins as they stand (`threadChildren`). */
-function presenceOf(state: AcpState, conversation: AcpConversation): AcpPresence | null {
-  if (conversation.kind === "starting") {
-    const presence: AcpPresence = {
-      key: conversation.key,
-      harness: conversation.harness,
-      cwd: conversation.cwd,
-      createdAt: conversation.createdAt,
-      title: conversation.title,
-      threadPath: conversation.threadPath,
-      nativePaths: conversation.nativePaths,
-      threadId: conversation.threadId,
-      sessionId: conversation.sessionId,
-      status: "starting",
-    }
-    if (conversation.purpose) presence.purpose = conversation.purpose
-    return presence
-  }
-  if (conversation.session.status === "closed") return null
-  // Listed from another device and not opened here: the account's list says what its ended turn waits on.
-  const listedBackground = conversation.session.connection === "hibernated" ? conversation.rail?.background : undefined
-  const work = conversationWork(state, conversation) ?? (listedBackground ? { count: listedBackground } : null)
-  const signedOut = signInPause(conversation.requests ?? [])
-  const resuming = signInResuming(signedOut, conversation.requests ?? [])
-  const presence: AcpPresence = {
-    key: conversation.key,
-    harness: conversation.harness,
-    nativeId: conversation.session.nativeId,
-    cwd: conversation.cwd,
-    createdAt: conversation.createdAt,
-    title: conversation.title,
-    threadPath: conversation.threadPath,
-    nativePaths: conversation.nativePaths,
-    threadId: conversation.threadId,
-    sessionId: conversation.sessionId,
-    // A dropped connection Mako is about to continue itself is a working
-    // row, not a failed one: the send is seconds away. Work paused on a
-    // sign-out waits on the person, as a question does.
-    status:
-      (conversation.permission && conversation.session.status !== "failed") ||
-      // Waiting on a person on the device it runs on: they're needed here too.
-      Boolean(conversation.waitingOn) ||
-      // One of its Fins asking them, as an ask of its own would.
-      (conversation.session.status !== "failed" && finAskLine(state, conversation) !== undefined) ||
-      (conversation.session.status !== "failed" && agentAskOf(conversation) !== undefined) ||
-      (conversation.session.status !== "running" && signedOut && !signedOut.hold.ready)
-        ? "needs-permission"
-        : signedOut?.hold.ready && !resuming
-          ? "ready"
-        : resuming || conversation.session.status === "failed" && autoContinuePending(conversation.requests)
-          ? "running"
-          : conversation.session.status === "failed" && conversation.failureSeen
-            ? "ready"
-            : work && conversation.session.status === "ready"
-              ? "background"
-              : conversation.session.status,
-  }
-  if (presence.status === "background" && work) presence.background = work.count
-  if (conversation.parent) presence.apex = conversation.parent.thread
-  if (conversation.elsewhere) presence.elsewhere = conversation.elsewhere
-  if (conversation.elsewhereKind) presence.elsewhereKind = conversation.elsewhereKind
-  if (conversation.waitingOn) presence.waitingOn = conversation.waitingOn
-  if (conversation.threadTitle) presence.threadTitle = conversation.threadTitle
-  if (conversation.quietSince !== undefined) presence.quietSince = conversation.quietSince
-  if (conversation.movedAt !== undefined) presence.movedAt = conversation.movedAt
-  const rail = conversation.rail
-  if (rail?.project) presence.workspace = rail.project.folder
-  if (rail?.worktree) presence.worktreeBranch = rail.worktree.branch
-  if (rail?.lineage) presence.lineage = rail.lineage
-  if (rail?.forkOf) presence.forkOf = rail.forkOf
-  if (rail?.openElsewhere && presence.status === "ready" && conversation.session.connection === "hibernated") presence.openElsewhere = true
-  if (conversation.promptedAt !== undefined) presence.promptedAt = conversation.promptedAt
-  return presence
-}
-
-/** What one conversation object reads as, and the Fins it was read with: a list built again reads only what changed. */
-const read = new WeakMap<AcpConversation, { children: readonly NativeAgent[]; presence: AcpPresence | null }>()
-
-/**
- * Every open conversation as the rail lists it, newest first. Kept while no conversation's rail facts move
- * (`railDerived`), and built again one conversation at a time: each presence is the object it was while its fields
- * stand, and the list the same array while every one of them does, so a row whose conversation didn't change isn't
- * drawn again.
- */
-export const selectAcpPresence = railDerived((state: AcpState, last: AcpPresence[] | undefined): AcpPresence[] => {
-  const before = new Map(last?.map((presence) => [presence.key, presence]))
-  const list: AcpPresence[] = []
-  for (const conversation of Object.values(state.conversations)) {
-    const children = threadChildren(state, conversation.threadId)
-    let held = read.get(conversation)
-    if (!held || held.children !== children) {
-      const presence = presenceOf(state, conversation)
-      const stood = presence ? before.get(presence.key) : undefined
-      held = { children, presence: presence && stood && samePresence(stood, presence) ? stood : presence }
-      read.set(conversation, held)
-    }
-    if (held.presence) list.push(held.presence)
-  }
-  list.sort((left, right) => right.createdAt - left.createdAt)
-  return last && last.length === list.length && last.every((presence, index) => presence === list[index]) ? last : list
-})
-
-function samePresence(presence: AcpPresence, candidate: AcpPresence): boolean {
-  return (
-    candidate.key === presence.key &&
-    candidate.harness === presence.harness &&
-    candidate.nativeId === presence.nativeId &&
-    candidate.cwd === presence.cwd &&
-    candidate.createdAt === presence.createdAt &&
-    candidate.title === presence.title &&
-    candidate.threadPath === presence.threadPath &&
-    candidate.threadId === presence.threadId &&
-    candidate.sessionId === presence.sessionId &&
-    candidate.apex === presence.apex &&
-    candidate.purpose === presence.purpose &&
-    (candidate.nativePaths ?? []).join("\0") ===
-      (presence.nativePaths ?? []).join("\0") &&
-    candidate.status === presence.status &&
-    candidate.elsewhere === presence.elsewhere &&
-    candidate.elsewhereKind === presence.elsewhereKind &&
-    candidate.waitingOn === presence.waitingOn &&
-    candidate.threadTitle === presence.threadTitle &&
-    candidate.quietSince === presence.quietSince &&
-    candidate.movedAt === presence.movedAt &&
-    candidate.workspace === presence.workspace &&
-    candidate.worktreeBranch === presence.worktreeBranch &&
-    candidate.lineage === presence.lineage &&
-    candidate.promptedAt === presence.promptedAt &&
-    candidate.openElsewhere === presence.openElsewhere &&
-    candidate.forkOf === presence.forkOf &&
-    candidate.background === presence.background
-  )
+export function selectAcpPresence(state: AcpState): AcpPresence[] {
+  return Object.values(state.conversations)
+    .flatMap((conversation) => {
+      if (conversation.kind === "starting") {
+        const presence: AcpPresence = {
+          key: conversation.key,
+          harness: conversation.harness,
+          cwd: conversation.cwd,
+          createdAt: conversation.createdAt,
+          title: conversation.title,
+          threadPath: conversation.threadPath,
+          nativePaths: conversation.nativePaths,
+          threadId: conversation.threadId,
+          sessionId: conversation.sessionId,
+          status: "starting",
+        }
+        if (conversation.purpose) presence.purpose = conversation.purpose
+        return [presence]
+      }
+      if (conversation.session.status === "closed") return []
+      // Listed from another device and not opened here: the account's list says what its ended turn waits on.
+      const listedBackground = conversation.session.connection === "hibernated" ? conversation.rail?.background : undefined
+      const work = conversationWork(state, conversation) ?? (listedBackground ? { count: listedBackground } : null)
+      const signedOut = signInPause(conversation.requests ?? [])
+      const resuming = signInResuming(signedOut, conversation.requests ?? [])
+      const presence: AcpPresence = {
+        key: conversation.key,
+        harness: conversation.harness,
+        nativeId: conversation.session.nativeId,
+        cwd: conversation.cwd,
+        createdAt: conversation.createdAt,
+        title: conversation.title,
+        threadPath: conversation.threadPath,
+        nativePaths: conversation.nativePaths,
+        threadId: conversation.threadId,
+        sessionId: conversation.sessionId,
+        // A dropped connection Mako is about to continue itself is a working
+        // row, not a failed one: the send is seconds away. Work paused on a
+        // sign-out waits on the person, as a question does.
+        status:
+          (conversation.permission && conversation.session.status !== "failed") ||
+          // Waiting on a person on the device it runs on: they're needed here too.
+          Boolean(conversation.waitingOn) ||
+          // One of its Fins asking them, as an ask of its own would.
+          (conversation.session.status !== "failed" && finAskLine(state, conversation) !== undefined) ||
+          (conversation.session.status !== "failed" && agentAskOf(conversation) !== undefined) ||
+          (conversation.session.status !== "running" && signedOut && !signedOut.hold.ready)
+            ? "needs-permission"
+            : signedOut?.hold.ready && !resuming
+              ? "ready"
+            : resuming || conversation.session.status === "failed" && autoContinuePending(conversation.requests)
+              ? "running"
+              : conversation.session.status === "failed" && conversation.failureSeen
+                ? "ready"
+                : work && conversation.session.status === "ready"
+                  ? "background"
+                  : conversation.session.status,
+      }
+      if (presence.status === "background" && work) presence.background = work.count
+      if (conversation.parent) presence.apex = conversation.parent.thread
+      if (conversation.elsewhere) presence.elsewhere = conversation.elsewhere
+      if (conversation.elsewhereKind) presence.elsewhereKind = conversation.elsewhereKind
+      if (conversation.waitingOn) presence.waitingOn = conversation.waitingOn
+      if (conversation.threadTitle) presence.threadTitle = conversation.threadTitle
+      if (conversation.quietSince !== undefined) presence.quietSince = conversation.quietSince
+      if (conversation.movedAt !== undefined) presence.movedAt = conversation.movedAt
+      const rail = conversation.rail
+      if (rail?.project) presence.workspace = rail.project.folder
+      if (rail?.worktree) presence.worktreeBranch = rail.worktree.branch
+      if (rail?.lineage) presence.lineage = rail.lineage
+      if (rail?.forkOf) presence.forkOf = rail.forkOf
+      if (rail?.openElsewhere && presence.status === "ready" && conversation.session.connection === "hibernated") presence.openElsewhere = true
+      if (conversation.promptedAt !== undefined) presence.promptedAt = conversation.promptedAt
+      return [presence]
+    })
+    .sort((left, right) => right.createdAt - left.createdAt)
 }
 
 export function sameAcpPresence(
@@ -191,12 +134,39 @@ export function sameAcpPresence(
   right: AcpPresence[]
 ): boolean {
   return (
-    left === right ||
-    (left.length === right.length &&
-      left.every((presence, index) => {
-        const candidate = right[index]
-        return candidate !== undefined && (candidate === presence || samePresence(presence, candidate))
-      }))
+    left.length === right.length &&
+    left.every((presence, index) => {
+      const candidate = right[index]
+      return (
+        candidate?.key === presence.key &&
+        candidate.harness === presence.harness &&
+        candidate.nativeId === presence.nativeId &&
+        candidate.cwd === presence.cwd &&
+        candidate.createdAt === presence.createdAt &&
+        candidate.title === presence.title &&
+        candidate.threadPath === presence.threadPath &&
+        candidate.threadId === presence.threadId &&
+        candidate.sessionId === presence.sessionId &&
+        candidate.apex === presence.apex &&
+        candidate.purpose === presence.purpose &&
+        (candidate.nativePaths ?? []).join("\0") ===
+          (presence.nativePaths ?? []).join("\0") &&
+        candidate.status === presence.status &&
+        candidate.elsewhere === presence.elsewhere &&
+        candidate.elsewhereKind === presence.elsewhereKind &&
+        candidate.waitingOn === presence.waitingOn &&
+        candidate.threadTitle === presence.threadTitle &&
+        candidate.quietSince === presence.quietSince &&
+        candidate.movedAt === presence.movedAt &&
+        candidate.workspace === presence.workspace &&
+        candidate.worktreeBranch === presence.worktreeBranch &&
+        candidate.lineage === presence.lineage &&
+        candidate.promptedAt === presence.promptedAt &&
+        candidate.openElsewhere === presence.openElsewhere &&
+        candidate.forkOf === presence.forkOf &&
+        candidate.background === presence.background
+      )
+    })
   )
 }
 
@@ -214,8 +184,8 @@ export type SessionPaths = Pick<AcpPresence, "harness" | "nativeId" | "title" | 
  * that has ended still stands for each session it moved through, so a move
  * across harnesses stays one row after the app restarts.
  */
-export const selectSessionOwners = railDerived((state: AcpState): SessionOwner[] =>
-  Object.values(state.conversations).map((conversation) => ({
+export function selectSessionOwners(state: AcpState): SessionOwner[] {
+  return Object.values(state.conversations).map((conversation) => ({
     harness: conversation.harness,
     nativeId: conversation.kind === "live" ? conversation.session.nativeId : undefined,
     title: conversation.title,
@@ -223,11 +193,10 @@ export const selectSessionOwners = railDerived((state: AcpState): SessionOwner[]
     nativePaths: conversation.nativePaths,
     worked: workedAt(conversation),
   }))
-)
+}
 
 export function sameSessionOwners(left: SessionOwner[], right: SessionOwner[]): boolean {
   return (
-    left === right ||
     left.length === right.length &&
     left.every((owner, index) => {
       const candidate = right[index]

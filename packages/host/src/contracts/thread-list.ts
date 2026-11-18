@@ -65,26 +65,6 @@ export function threadList<Ref extends ListedRef>(list: readonly Ref[]): Ref[] {
 }
 
 /**
- * `list` (newest first, as `threadList` leaves it) with `ref` in place of the row at `at`, or added when `at` is -1,
- * where sorting the list again would put it: among rows of its own time, where it stood, or last when it's new. One
- * row changes far more often than the list does, and each change copied and sorted every row to place it.
- */
-export function withListedRef<Ref extends Pick<ThreadRef, "updatedAt">>(list: readonly Ref[], ref: Ref, at: number): Ref[] {
-  const rest = at === -1 ? [...list] : [...list.slice(0, at), ...list.slice(at + 1)]
-  const time = ref.updatedAt ?? ""
-  let low = 0
-  let high = rest.length
-  while (low < high) {
-    const middle = (low + high) >> 1
-    const order = (rest[middle]!.updatedAt ?? "").localeCompare(time)
-    if (order < 0 || (order === 0 && at !== -1 && middle >= at)) high = middle
-    else low = middle + 1
-  }
-  rest.splice(low, 0, ref)
-  return rest
-}
-
-/**
  * The Sessions of listed Threads that have no listed row: the host places
  * the rows past the cap only to find these, since the cap is cut before
  * rows are placed.

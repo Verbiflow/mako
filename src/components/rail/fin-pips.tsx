@@ -2,7 +2,7 @@ import { rollupLabel } from "@mako/host/contracts/children"
 import { memo } from "react"
 import { observePhaseLockedAnimation } from "@/lib/visible-animation"
 import { apexPips, pipsCounts, settledWords, type Pips } from "@/state/fin-pips"
-import { useRailAcp } from "@/state/acp-state"
+import { useAcp } from "@/state/acp-state"
 
 const PIP = new Map([["n", "needs"], ["w", "working"], ["l", "lead"], ["q", "queued"], ["i", "idle"], ["f", "failed"], ["d", "done"]])
 const MAX_PIPS = 16
@@ -42,7 +42,7 @@ export function FinPips({ pips }: { pips: Pips }) {
 
 /** The second line of an Apex's rail row: its pips and how many Fins. Repaints when a pip changes, never its row. */
 export const ApexCrewLine = memo(function ApexCrewLine({ thread }: { thread: string | undefined }) {
-  const pips = useRailAcp((state) => apexPips(state, thread))
+  const pips = useAcp((state) => apexPips(state, thread))
   if (!pips) return null
   const label = rollupLabel(pipsCounts(pips))
   return (

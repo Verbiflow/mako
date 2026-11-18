@@ -17,7 +17,7 @@ import type {
 import { createHook, createStore } from "@/state/store"
 import { backgroundWork, type BackgroundWork } from "@mako/host/contracts/background-work"
 import { entryState, type ChildState } from "@mako/host/contracts/agents"
-import { finsAsChildren, rosterChildren, type Rollup } from "@mako/host/contracts/children"
+import { finsAsChildren, rosterChildren } from "@mako/host/contracts/children"
 import { withChildren, type NativeAgent, type NativeAgentRoster } from "@mako/host/contracts/native-agents"
 
 export interface AcpQueuedPrompt {
@@ -177,92 +177,6 @@ acpStore.subscribe(() => {
 
 export const useAcp = createHook(acpStore)
 
-/**
- * The live store as the rail reads it: the same state, said to its readers only when a fact a row shows moved (a
- * conversation listed or gone, its status, title, place or Fins; the one on screen; a Thread's Sessions). A streamed
- * batch moves none of them, so it runs no row's selector. What streams (`STREAMED`, and a session's `usage`) stands
- * here as of the last such change: a reader of any of it takes `useAcp`.
- */
-export const railAcpStore = createStore<AcpState>(acpStore.get())
-export const useRailAcp = createHook(railAcpStore)
-
-type Conversations = AcpState["conversations"]
-
-/**
- * What a batch changes of a conversation that no rail row reads. `session` is read field by field (`SESSION_STREAMED`),
- * and `updatedAt` only ranks two conversations that stand for one row (`overtakes`).
- */
-const STREAMED: ReadonlySet<string> = new Set<keyof LiveAcpConversation>([
-  "session", "blocks", "projection", "revision", "epoch", "updatedAt", "activityAt", "nativeActivity", "history",
-  "releasedTurns", "base", "baseSource", "baseCoveredBlocks", "harnessTurns", "spentThrough", "turnWait", "goal", "side",
-  "historyFailure", "queued", "pendingPrompts", "hiddenUserPrompt", "replyBindingId", "sending", "canceling",
-])
-/** What a session says that no rail row reads: its context reading moves through a turn. */
-const SESSION_STREAMED: ReadonlySet<string> = new Set<keyof LiveSessionState>(["usage"])
-
-/** The fields a conversation or its session holds, as its type names them. */
-function fieldsOf<Value extends LiveAcpConversation | StartingAcpConversation | LiveSessionState>(value: Value): (keyof Value & string)[] {
-  // SAFETY: conversations and sessions are built only from their typed values, so every own key is one of their fields.
-  return Object.keys(value) as (keyof Value & string)[]
-}
-
-function fieldsMoved<Value extends LiveAcpConversation | StartingAcpConversation | LiveSessionState>(before: Value, after: Value, unread: ReadonlySet<string>): boolean {
-  for (const key of fieldsOf(after)) if (!unread.has(key) && !Object.is(before[key], after[key])) return true
-  for (const key of fieldsOf(before)) if (!unread.has(key) && !(key in after) && before[key] !== undefined) return true
-  return false
-}
-
-/** Whether `after` differs from `before` in anything a rail row could show: any field but the streamed ones. */
-function railFactsMoved(before: AcpConversation, after: AcpConversation): boolean {
-  if (before.kind === "starting") return after.kind !== "starting" || fieldsMoved(before, after, STREAMED)
-  if (after.kind !== "live" || fieldsMoved(before, after, STREAMED)) return true
-  return before.session !== after.session && fieldsMoved(before.session, after.session, SESSION_STREAMED)
-}
-
-/** The newest conversations object that shows the rail nothing `railAcpStore` doesn't already hold. */
-let quiet: Conversations | null = null
-
-acpStore.subscribe(() => {
-  const state = acpStore.get()
-  const shown = railAcpStore.get()
-  if (
-    (state.conversations === shown.conversations || state.conversations === quiet) &&
-    state.activeKey === shown.activeKey &&
-    state.threadSessions === shown.threadSessions
-  )
-    return
-  quiet = null
-  railAcpStore.set(state)
-})
-
-/** What's kept by the conversations object it was derived from, and how it follows a change that leaves it true. */
-const derived: { carry: (before: Conversations, after: Conversations) => void; drop: (conversations: Conversations) => void }[] = []
-
-function carried<Value extends object>(cache: WeakMap<Conversations, Value>, before: Conversations, after: Conversations): void {
-  const held = cache.get(before)
-  if (held) cache.set(after, held)
-}
-
-/**
- * `derive` over the whole state, kept while no conversation's rail facts move and the Threads' Sessions stand: a
- * streamed batch reads it back, where it once built it again. `last` is what it derived before, for a derivation
- * that keeps the identity of what didn't change.
- */
-export function railDerived<Value>(derive: (state: AcpState, last: Value | undefined) => Value): (state: AcpState) => Value {
-  const held = new WeakMap<Conversations, { order: AcpState["threadSessions"]; value: Value }>()
-  let last: Value | undefined
-  derived.push({ carry: (before, after) => carried(held, before, after), drop: (conversations) => held.delete(conversations) })
-  return (state) => {
-    let entry = held.get(state.conversations)
-    if (!entry || entry.order !== state.threadSessions) {
-      last = derive(state, last)
-      entry = { order: state.threadSessions, value: last }
-      held.set(state.conversations, entry)
-    }
-    return entry.value
-  }
-}
-
 export function activeAcp(state: AcpState): AcpConversation | null {
   return state.activeKey ? (state.conversations[state.activeKey] ?? null) : null
 }
@@ -272,7 +186,10 @@ export function activeLiveAcp(state: AcpState): LiveAcpConversation | null {
   return active?.kind === "live" ? active : null
 }
 
-const threadIndexes = new WeakMap<Conversations, Map<string, Set<string>>>()
+const threadIndexes = new WeakMap<
+  AcpState["conversations"],
+  Map<string, Set<string>>
+>()
 
 function lookupKeys(conversation: AcpConversation): string[] {
   const keys = new Set<string>()
@@ -312,14 +229,14 @@ function threadIndex(conversations: AcpState["conversations"]) {
 }
 
 function carryThreadIndex(
-  before: Conversations,
-  after: Conversations,
-  id: string,
-  oldKeys: readonly string[],
-  newKeys: readonly string[]
+  before: AcpState["conversations"],
+  after: AcpState["conversations"],
+  id: string
 ): void {
   const held = threadIndexes.get(before)
   if (!held) return
+  const oldKeys = before[id] ? lookupKeys(before[id]) : []
+  const newKeys = after[id] ? lookupKeys(after[id]) : []
   if (
     oldKeys.length === newKeys.length &&
     oldKeys.every((key, index) => key === newKeys[index])
@@ -391,34 +308,8 @@ export function acpForThread(
 }
 
 const NO_CHILDREN: readonly NativeAgent[] = []
-// The three indexes below are of what the conversations say of their Threads' Fins (`sayings`): each is kept by the
-// conversations object it was built from, and follows a change that says nothing new (`replaceAcpConversation`).
-const finByThread = new WeakMap<Conversations, { order: AcpState["threadSessions"]; index: Map<string, FinSource> }>()
-const byThread = new WeakMap<Conversations, { order: AcpState["threadSessions"]; index: Map<string, readonly NativeAgent[]> }>()
-const listedByThread = new WeakMap<Conversations, { order: AcpState["threadSessions"]; index: Map<string, Rollup> }>()
-
-const NOTHING_SAID: readonly unknown[] = []
-
-/**
- * Everything the indexes read of one conversation (`finSources`, `threadChildren`, `listedCounts`, and `placedEntry`
- * of a row listed from elsewhere): while these stand, the indexes built with it do.
- */
-function sayings(conversation: AcpConversation | undefined): readonly unknown[] {
-  if (conversation?.kind !== "live" || !conversation.threadId) return NOTHING_SAID
-  const own = [conversation.threadId, conversation.sessionId, conversation.order, rosterChildren(conversation.nativeAgents), conversation.fins, conversation.children, conversation.elsewhere !== undefined]
-  return conversation.elsewhere === undefined ? own : [...own, conversation.key, conversation.waitingFor, conversation.waitingOn, conversation.quietSince, conversation.session.status]
-}
-
-function saysTheSame(before: AcpConversation | undefined, after: AcpConversation | undefined): boolean {
-  const left = sayings(before)
-  const right = sayings(after)
-  return left.length === right.length && left.every((value, index) => value === right[index])
-}
-
-derived.push(
-  { carry: () => {}, drop: (conversations) => threadIndexes.delete(conversations) },
-  { carry: () => {}, drop: (conversations) => { finByThread.delete(conversations); byThread.delete(conversations); listedByThread.delete(conversations) } }
-)
+const finByThread = new WeakMap<AcpState["conversations"], { order: AcpState["threadSessions"]; index: Map<string, FinSource> }>()
+const byThread = new WeakMap<AcpState["conversations"], { order: AcpState["threadSessions"]; index: Map<string, readonly NativeAgent[]> }>()
 
 /**
  * What a conversation says of a Thread's Fins: which Thread, from which of its Sessions (none for a word from outside
@@ -502,16 +393,6 @@ export function finSources(state: AcpState): Map<string, FinSource> {
   return held.index
 }
 
-/** Each Thread's Fins counted, as its host listed them (`LiveSummary.children`), by its newest Session (`newestSaid`). */
-export function listedCounts(state: AcpState): Map<string, Rollup> {
-  let held = listedByThread.get(state.conversations)
-  if (!held || held.order !== state.threadSessions) {
-    held = { order: state.threadSessions, index: newestSaid(state, (conversation) => (conversation.children ? [{ thread: conversation.threadId!, session: conversation.sessionId, order: conversation.order, value: conversation.children, fullness: 0 }] : [])) }
-    listedByThread.set(state.conversations, held)
-  }
-  return held.index
-}
-
 /**
  * A Thread's Fins, as its conversations' rosters carry them (`childEntry`, never a harness's roster), in
  * `orderedChildren`' order, or as the account lists them where this window holds no roster of that Session (another
@@ -572,25 +453,8 @@ function placedState(said: ChildState | undefined, listed: LiveAcpConversation):
  * on a question long answered, and miss a new one. Whatever a window says of a Session's Fins reads them here.
  */
 export function conversationRoster(state: AcpState, conversation: Pick<LiveAcpConversation, "threadId" | "nativeAgents">): NativeAgentRoster | undefined {
-  if (!conversation.threadId) return conversation.nativeAgents
-  const children = threadChildren(state, conversation.threadId)
-  const own = conversation.nativeAgents
-  // `withChildren` makes a roster whenever the own one files its children in another order than the Thread's, as an
-  // unopened Apex's does: made once for the pair, every reader sorts and reads that one roster's children once.
-  if (!own) {
-    if (!withoutRoster.has(children)) withoutRoster.set(children, withChildren(undefined, children))
-    return withoutRoster.get(children)
-  }
-  let held = withRoster.get(own)
-  if (!held || held.children !== children) {
-    held = { children, roster: withChildren(own, children) }
-    withRoster.set(own, held)
-  }
-  return held.roster
+  return conversation.threadId ? withChildren(conversation.nativeAgents, threadChildren(state, conversation.threadId)) : conversation.nativeAgents
 }
-
-const withRoster = new WeakMap<NativeAgentRoster, { children: readonly NativeAgent[]; roster: NativeAgentRoster | undefined }>()
-const withoutRoster = new WeakMap<readonly NativeAgent[], NativeAgentRoster | undefined>()
 
 /** What the conversation waits on between turns (`backgroundWork`), its Thread's Fins as they stand (`conversationRoster`). */
 export function conversationWork(state: AcpState, conversation: LiveAcpConversation): BackgroundWork | null {
@@ -622,75 +486,14 @@ function withLiveReplyTarget(previous: AcpConversation | undefined, next: AcpCon
   return moved ? { ...next, replyBindingId: undefined } : next
 }
 
-/**
- * Whether `next` in `previous`'s place changes which conversation a row reads: of two that stand for one row the one
- * that moved last does (`acpForThread`), and this one wasn't already it.
- */
-function overtakes(conversations: Conversations, id: string, previous: AcpConversation, next: AcpConversation, keys: readonly string[]): boolean {
-  if (next.updatedAt === previous.updatedAt) return false
-  const index = threadIndex(conversations)
-  for (const key of keys) {
-    const matches = index.get(key)
-    if (!matches || matches.size < 2) continue
-    if (next.updatedAt < previous.updatedAt) return true
-    for (const other of matches) if (other !== id && (conversations[other]?.updatedAt ?? 0) >= previous.updatedAt) return true
-  }
-  return false
-}
-
-/** The conversations object a list being taken in builds (`admitAcpConversations`): no listener has seen it, so it's written in place. */
-let admitting: Conversations | null = null
-let admits = 0
-
-/**
- * Takes in a list as one change: `run` replaces each conversation the list names, the next state is built once, and
- * the store says it once when `run` ends. A boot or a reconnect of 300 conversations was 300 sets, each copying the
- * map and running every selector in the window.
- */
-export function admitAcpConversations(run: () => void): void {
-  acpStore.batch(() => {
-    admits += 1
-    try {
-      run()
-    } finally {
-      admits -= 1
-      if (!admits) admitting = null
-    }
-  })
-}
-
 export function replaceAcpConversation(
   key: string,
   conversation: AcpConversation
 ): void {
   const before = acpStore.get().conversations
-  const previous = before[key]
-  const next = withLiveReplyTarget(previous, conversation)
-  if (admits && before === admitting) {
-    // What was derived from it while the list came in (a row's status read between two entries) no longer stands.
-    for (const entry of derived) entry.drop(before)
-    if (quiet === before) quiet = null
-    before[key] = next
-    return
-  }
-  const oldKeys = previous ? lookupKeys(previous) : []
-  const newKeys = lookupKeys(next)
-  const moved = !previous || railFactsMoved(previous, next) || overtakes(before, key, previous, next, oldKeys)
-  const conversations = { ...before, [key]: next }
-  carryThreadIndex(before, conversations, key, oldKeys, newKeys)
-  if (saysTheSame(previous, next)) carrySayings(before, conversations)
-  if (!moved) {
-    for (const entry of derived) entry.carry(before, conversations)
-    if (before === quiet || before === railAcpStore.get().conversations) quiet = conversations
-  }
-  if (admits) admitting = conversations
+  const conversations = { ...before, [key]: withLiveReplyTarget(before[key], conversation) }
+  carryThreadIndex(before, conversations, key)
   acpStore.set({ conversations })
-}
-
-function carrySayings(before: Conversations, after: Conversations): void {
-  carried(finByThread, before, after)
-  carried(byThread, before, after)
-  carried(listedByThread, before, after)
 }
 
 export function updateAcpConversation(
@@ -711,8 +514,7 @@ export function removeAcpConversation(key: string): AcpConversation | null {
   if (!current) return null
   const conversations = { ...state.conversations }
   delete conversations[key]
-  carryThreadIndex(state.conversations, conversations, key, lookupKeys(current), [])
-  if (saysTheSame(current, undefined)) carrySayings(state.conversations, conversations)
+  carryThreadIndex(state.conversations, conversations, key)
   acpStore.set({
     conversations,
     activeKey: state.activeKey === key ? null : state.activeKey,

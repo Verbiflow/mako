@@ -10,7 +10,7 @@ import { getMako, hasBridge } from "@/lib/bridge"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { landedFor, removable, removedNote, type CheckoutDetail } from "@/lib/worktree-removal"
 import { mapWorktreeFolders, type FolderMap } from "@/lib/thread-folders"
-import { pathInside, plainPath, worktreeIn } from "@mako/host/contracts/worktree-paths"
+import { pathInside, plainPath, projectFolder, worktreeAt } from "@mako/host/contracts/worktree-paths"
 import { chatFoldersStore, chatGroupOf } from "@/state/chat-folders"
 import { checkoutHeadsStore } from "@/state/checkout-heads"
 import { confirmAction } from "@/state/confirm"
@@ -49,11 +49,7 @@ export interface OutsideWorktree extends LinkedCheckout {
   branch: string | undefined
 }
 
-/**
- * The worktree holding `path` (`worktreeAt` in the host's contract), for the lists this store keeps: each is indexed
- * once (`worktreeIn`), so the rail's rows asking it on every change don't each pass over every worktree.
- */
-export const worktreeAt = worktreeIn
+export { worktreeAt }
 
 export type WorktreePlaces = Pick<WorktreesState, "worktrees" | "outside">
 
@@ -82,11 +78,9 @@ export function workingFolder(state: WorktreePlaces, ref: { cwd?: string; curren
 
 function outsideOf(heads: CheckoutHeads, refs: readonly ThreadRef[], worktrees: readonly ThreadWorktree[]): OutsideWorktree[] {
   const found = new Map<string, OutsideWorktree>()
-  // Asked once per listed session's checkout on every change to the list: a set, not a pass over the worktrees each time.
-  const made = new Set(worktrees.map((worktree) => plainPath(worktree.path)))
   const add = (linked: LinkedCheckout, head: CheckoutHead | null | undefined) => {
     const key = plainPath(linked.path)
-    if (found.has(key) || made.has(key)) return
+    if (found.has(key) || worktrees.some((worktree) => plainPath(worktree.path) === key)) return
     found.set(key, { path: linked.path, repoRoot: linked.repoRoot, branch: head && head.kind !== "detached" ? head.name : undefined })
   }
   for (const head of Object.values(heads)) if (head?.linked) add(head.linked, head)
@@ -117,41 +111,19 @@ function stateOf(worktrees: readonly ThreadWorktree[]): WorktreesState {
   const outside = outsideOf(checkoutHeadsStore.get().heads, threads, worktrees)
   const mirrors = mirrorsOf(threads)
   const mirrorsByPath = new Map(mirrors.map((mirror) => [plainPath(mirror.path), mirror]))
-  // Everything it reads is fixed when it's made, so each path is worked out once: the rail asks for every row's folder
-  // each time it groups them.
-  const mapped = new Map<string, string | undefined>()
   return {
     worktrees,
     outside,
     mirrors,
     folderMap: (path) => {
-      if (mapped.has(path)) return mapped.get(path)
       const found = worktreeAt(outside, path)
-      const folder = projectIn(worktrees, path) ?? (found ? `${found.worktree.repoRoot}${found.inside}` : mirroredFolder(mirrorsByPath, path) ?? chatGroupOf(path, chats))
-      mapped.set(path, folder)
-      return folder
+      return projectFolder(worktrees, path) ?? (found ? `${found.worktree.repoRoot}${found.inside}` : mirroredFolder(mirrorsByPath, path) ?? chatGroupOf(path, chats))
     },
   }
 }
 
-/** `projectFolder` (the host's contract) over the indexed list. */
-function projectIn(worktrees: readonly ThreadWorktree[], path: string): string | undefined {
-  const found = worktreeAt(worktrees, path)
-  if (!found) return undefined
-  const { worktree, inside } = found
-  return pathInside(worktree.path, path) ? `${worktree.repoRoot}${inside}` : `${worktree.project}${inside}`
-}
-
-const placesKeys = new WeakMap<object, string>()
-
-/** A state's places in one string, made once per state: the list changing asks for the held state's again each time. */
-function placesKey(state: Pick<WorktreesState, "outside" | "mirrors">): string {
-  let key = placesKeys.get(state)
-  if (key === undefined) {
-    key = [...state.outside.map((worktree) => `${worktree.path}\n${worktree.branch ?? ""}`), ...state.mirrors.map((mirror) => `${mirror.path}\n${mirror.repoRoot}`)].join("\n")
-    placesKeys.set(state, key)
-  }
-  return key
+function placesKey({ outside, mirrors }: Pick<WorktreesState, "outside" | "mirrors">): string {
+  return [...outside.map((worktree) => `${worktree.path}\n${worktree.branch ?? ""}`), ...mirrors.map((mirror) => `${mirror.path}\n${mirror.repoRoot}`)].join("\n")
 }
 
 export const worktreesStore = createStore<WorktreesState>(stateOf([]))
@@ -165,7 +137,7 @@ export function useStartedWorktree(thread: string | undefined, cwd: string | und
   })
 }
 
-mapWorktreeFolders(() => worktreesStore.get().folderMap)
+mapWorktreeFolders((path) => worktreesStore.get().folderMap(path))
 chatFoldersStore.subscribe(() => worktreesStore.set(stateOf(worktreesStore.get().worktrees)))
 function refreshOutside(): void {
   const current = worktreesStore.get()
@@ -195,70 +167,40 @@ export const worktreeSummariesStore = createStore<{ byPath: Readonly<Record<stri
 export const useWorktreeSummaries = createHook(worktreeSummariesStore)
 
 let summaryReads = 0
-/** The ask that's out, and the one more that waits for it: whoever asks meanwhile shares that one. */
-let summariesOut: Promise<void> | undefined
-let summariesNext: Promise<void> | undefined
 
-/**
- * Asks the host for every summary. One ask is out at a time: a caller that arrives while it is gets the next one,
- * which starts when it lands, so what it reads is no older than its asking, and ten callers at once make two asks.
- */
-export function refreshWorktreeSummaries(): Promise<void> {
-  if (!hasBridge()) return Promise.resolve()
-  if (!summariesOut) {
-    summariesOut = readWorktreeSummaries().finally(() => {
-      summariesOut = undefined
-    })
-    return summariesOut
-  }
-  summariesNext ??= summariesOut.catch(() => {}).then(() => {
-    summariesNext = undefined
-    return refreshWorktreeSummaries()
-  })
-  return summariesNext
-}
-
-async function readWorktreeSummaries(): Promise<void> {
+export async function refreshWorktreeSummaries(): Promise<void> {
+  if (!hasBridge()) return
   const mine = ++summaryReads
   const summaries = await getMako().worktreeSummaries()
   if (mine === summaryReads) applyWorktreeSummaries(summaries)
 }
 
-/**
- * The host's word on every worktree's summary: an answer, or its `worktree-summaries` event when one changed. Each
- * comes whole and new, so a summary that says what the held one does stays the held object: one worktree's change
- * draws that worktree's row again, not every row with a worktree.
- */
+/** The host's word on every worktree's summary: an answer, or its `worktree-summaries` event when one changed. */
 export function applyWorktreeSummaries(summaries: readonly WorktreeSummary[]): void {
   summaryReads++
-  const held = worktreeSummariesStore.get().byPath
-  let moved = summaries.length !== Object.keys(held).length
-  const byPath: Record<string, WorktreeSummary> = {}
-  for (const summary of summaries) {
-    const before = held[summary.path]
-    const same = before !== undefined && JSON.stringify(before) === JSON.stringify(summary)
-    byPath[summary.path] = same ? before : summary
-    if (!same) moved = true
-  }
-  if (moved) worktreeSummariesStore.set({ byPath })
+  worktreeSummariesStore.set({ byPath: Object.fromEntries(summaries.map((summary) => [summary.path, summary])) })
 }
 
 /**
- * Asks for the summaries when the rail shows and when the worktrees change; the host says each change after that
- * itself (`worktree-summaries`), read on each worktree's own events, so no window polls, and coming back to the window
- * asks nothing: it was a read of every worktree's Git on each focus, for what the events had already said.
+ * Asks for the summaries when the rail shows, when the window comes back and when the worktrees change; the host says
+ * each change after that itself (`worktree-summaries`), read on each worktree's own events, so no window polls.
  */
 export function useKeepWorktreeSummaries(): void {
   useEffect(() => {
     const refresh = () => void refreshWorktreeSummaries().catch(() => {})
     refresh()
     let listed = worktreesStore.get().worktrees
-    return worktreesStore.subscribe(() => {
+    const unsubscribe = worktreesStore.subscribe(() => {
       const { worktrees } = worktreesStore.get()
       if (worktrees === listed) return
       listed = worktrees
       refresh()
     })
+    window.addEventListener("focus", refresh)
+    return () => {
+      unsubscribe()
+      window.removeEventListener("focus", refresh)
+    }
   }, [])
 }
 

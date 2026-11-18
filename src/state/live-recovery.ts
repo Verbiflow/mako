@@ -3,7 +3,7 @@ import { acknowledgeComposerSettings } from "@/state/composer-settings"
 import { playFeedback } from "@/state/feedback"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type { ContinuationResolution, LiveAction, LiveBatch, LiveSnapshot, LiveSummary } from "@/lib/types"
-import { acpStore, admitAcpConversations, carriedFailureSeen, removeAcpConversation, replaceAcpConversation, updateAcpConversation, type AcpConversation, type LiveAcpConversation } from "@/state/acp-state"
+import { acpStore, carriedFailureSeen, removeAcpConversation, replaceAcpConversation, updateAcpConversation, type AcpConversation, type LiveAcpConversation } from "@/state/acp-state"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { noteFinAsks, noteListedOutcome, syncThreadStatus } from "@/state/acp-live"
 import { threadsStore } from "@/state/thread-store"
@@ -17,7 +17,7 @@ import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
 import { prependLiveHistory, readLiveSnapshot, readLiveValue, retainLiveDetails } from "@/state/live-history"
 import { isHistoryExpired, type LiveHistoryCursor, type LiveHistoryPage } from "@mako/host/contracts/live-history"
 import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading"
-import { currentStarts, readsOut, readsSettled, readsSince, receiveLive, receiveLiveList, unlistedSince, unplacedReadAnswered, unplacedReadGoesOut, type ReadOut, type Received } from "@/state/live-door"
+import { currentStarts, readsOut, readsSettled, readsSince, receiveLive, unlistedSince, unplacedReadAnswered, unplacedReadGoesOut, type ReadOut, type Received } from "@/state/live-door"
 
 const fetching = new Map<string, Promise<boolean>>()
 const pending = new Map<string, HeardLiveBatch[]>()
@@ -876,13 +876,10 @@ export function hydrateLiveSummaries(
  * reconnect's read again. Boot and a reconnect select and open after; a listing selects nothing.
  */
 function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void {
-  // One change to the store for the whole list (`admitAcpConversations`), said while the door is open for each of them.
-  receiveLiveList(summaries.map((summary) => summary.session.id), () => admitAcpConversations(() => {
-    for (const summary of summaries) {
-      const said: Received = { from: "said", revision: summary.revision, ...(summary.epoch && { epoch: summary.epoch }) }
-      receiveLive(summary.session.id, said, () => admitSummary(summary, reconnect))
-    }
-  }))
+  for (const summary of summaries) {
+    const said: Received = { from: "said", revision: summary.revision, ...(summary.epoch && { epoch: summary.epoch }) }
+    receiveLive(summary.session.id, said, () => admitSummary(summary, reconnect))
+  }
 }
 
 /** One summary of the host's, listed (`admitLiveSummaries`). */
