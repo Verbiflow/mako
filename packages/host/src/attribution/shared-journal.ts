@@ -626,7 +626,11 @@ export class SharedJournal {
       }
       const lock = await acquireHostLock(this.options.folder, { purpose: "owner" }).catch((error: Error) => error)
       if (lock instanceof Error) return this.keepOwn(`the lock couldn't be taken: ${lock.message}`)
-      if (lock.kind === "held") return this.own(lock)
+      if (lock.kind === "held") {
+        // Closed while the lock was being taken: nothing is opened under it.
+        if (this.closed) return lock.release()
+        return this.own(lock)
+      }
       if (Date.now() - began > unanswered) return this.keepOwn(`another Mako (pid ${lock.holder ?? "unknown"}) holds it but doesn't answer`)
       await new Promise((done) => setTimeout(done, Math.min(maxRetry, retry * 2 ** Math.min(attempt, 6))))
     }
@@ -687,7 +691,15 @@ export class SharedJournal {
     if (deaf) this.options.log("followers can't reach this owner", { error: deaf.message })
     const owned = await this.options.own()
     if (this.closed) {
+      // `close` ran while the journal opened and found neither it nor, perhaps, this socket and lock: they end here,
+      // or the socket keeps the process alive and the lock keeps the journal from the next owner.
       await owned.close()
+      const server = this.server
+      this.server = undefined
+      if (server?.listening) await new Promise<void>((done) => server.close(() => done()))
+      if (server && onFileSystem(this.address)) rmSync(this.address, { force: true })
+      if (this.lock === lock) this.lock = undefined
+      await lock.release()
       return
     }
     this.owned = owned
@@ -824,6 +836,11 @@ export class SharedJournal {
   // The follower's side.
 
   private follow(socket: Socket): Promise<"following" | "lost" | { why: string }> {
+    // A connection made while this journal closed is nobody's to close later: it ends here, or it keeps the process alive.
+    if (this.closed) {
+      socket.destroy()
+      return Promise.resolve("lost")
+    }
     this.following = socket
     return new Promise((settle) => {
       const finish = (outcome: "following" | "lost" | { why: string }) => {

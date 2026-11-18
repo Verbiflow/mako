@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
-import { mkdirSync, realpathSync, statSync } from "node:fs"
-import { createServer, type Socket } from "node:net"
+import { spawn, spawnSync } from "node:child_process"
+import { mkdirSync, realpathSync, rmSync, statSync } from "node:fs"
+import { connect, createServer, type Socket } from "node:net"
 import { join } from "node:path"
 import { test } from "node:test"
 import { z } from "zod"
@@ -90,23 +91,57 @@ test("an owner whose journal and temporary folder are both deep is listened to a
   }
 })
 
-test("an owner reached only by its socket fails to open when it can't listen, says why, and lets the journal go", async () => {
+/**
+ * Take the owner's address so that nothing can listen there and nothing answers there; the returned function gives
+ * it back. On macOS the address is a path: a folder with something in it sits there, which isn't a socket and can't
+ * be removed as one. On Linux it is a name the kernel keeps, with no file to put in the way, and a name a server
+ * listens on would be connected to and followed, not owned beside: so another process binds the name and never
+ * listens, which refuses every connection and every other bind. Undefined where that can't be arranged.
+ */
+async function occupy(address: string): Promise<(() => Promise<void>) | undefined> {
+  if (process.platform === "darwin") {
+    mkdirSync(join(address, "in-the-way"), { recursive: true })
+    return async () => rmSync(address, { recursive: true, force: true })
+  }
+  if (process.platform !== "linux" || spawnSync("python3", ["--version"]).status !== 0) return undefined
+  const holder = spawn("python3", ["-c", "import socket, sys\ns = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\ns.bind(chr(0) + sys.argv[1])\nprint('bound', flush=True)\nsys.stdin.read()", address.slice(1)], { stdio: ["pipe", "pipe", "inherit"] })
+  const gone = new Promise<void>((done) => holder.once("exit", () => done()))
+  const bound = await new Promise<boolean>((done) => {
+    holder.stdout.once("data", () => done(true))
+    holder.once("exit", () => done(false))
+  })
+  const release = async () => {
+    holder.kill()
+    await gone
+  }
+  if (bound) return release
+  await release()
+  return undefined
+}
+
+test("an owner reached only by its socket fails to open when it can't listen, says why, and lets the journal go", async (t) => {
   const folder = realpathSync(testScratch("mako-journal-deaf-"))
-  // Something that isn't a socket and can't be removed as one sits at the address.
-  mkdirSync(join(ownerAddress(folder), "in-the-way"), { recursive: true })
+  const address = ownerAddress(folder)
+  const release = await occupy(address)
+  if (!release) return t.skip("nothing here can hold the owner's address without answering on it")
   const one = recorder()
   const open = (socketOnly: boolean) => SharedJournal.open({ folder, host: { pid: process.pid, dataRoot: "/a", label: "a" }, own: async () => one.owned, follow: quiet, alone: async () => one.owned, log: quiet, socketOnly })
-  if (process.platform === "win32" || process.platform === "linux") return
-  await assert.rejects(open(true), /can't listen at .*owner\.sock/)
-  const lock = await acquireHostLock(folder, { purpose: "owner" })
-  assert.equal(lock.kind, "held", "the lock it took is released, for an owner that can listen")
-  if (lock.kind === "held") await lock.release()
-  // An owner in its host's own process still serves that host without a socket, as it did.
-  const inProcess = await open(false)
+  let opened: SharedJournal | undefined
+  let lock: Awaited<ReturnType<typeof acquireHostLock>> | undefined
   try {
-    assert.equal(inProcess.role().kind, "owner")
+    // Should it open after all, it is closed below.
+    await assert.rejects(async () => { opened = await open(true) }, /can't listen at /)
+    lock = await acquireHostLock(folder, { purpose: "owner" })
+    assert.equal(lock.kind, "held", "the lock it took is released, for an owner that can listen")
+    if (lock.kind === "held") await lock.release()
+    lock = undefined
+    // An owner in its host's own process still serves that host without a socket, as it did.
+    opened = await open(false)
+    assert.equal(opened.role().kind, "owner")
   } finally {
-    await inProcess.close()
+    await opened?.close()
+    if (lock?.kind === "held") await lock.release()
+    await release()
   }
 })
 
@@ -134,7 +169,7 @@ test("a stopping host doesn't wait for an acknowledgement nobody can send", asyn
 test("a host waiting on its owner's acknowledgement stops when the owner goes, and waits on while it acknowledges", async () => {
   const folder = realpathSync(testScratch("mako-journal-applied-owner-"))
   const lock = await acquireHostLock(folder, { purpose: "owner" })
-  assert.equal(lock.kind, "held")
+  let shared: SharedJournal | undefined
   // An owner that welcomes a host and acknowledges only when told to.
   const sockets = new Set<Socket>()
   let heard = 0
@@ -151,17 +186,18 @@ test("a host waiting on its owner's acknowledgement stops when the owner goes, a
     })
   })
   const acknowledge = (n: number) => { for (const socket of sockets) socket.write(`${JSON.stringify({ t: "ack", n })}\n`) }
-  await new Promise<void>((done) => server.listen(ownerAddress(folder), done))
   const next = recorder()
-  const shared = await SharedJournal.open({ folder, host: { pid: process.pid, dataRoot: "/follower", label: "follower" }, own: async () => next.owned, follow: quiet, alone: async () => next.owned, log: quiet, timing: { retryMs: 5, maxRetryMs: 20, appliedQuietMs: 300 } })
   try {
-    assert.equal(shared.role().kind, "follower")
-    for (const id of ["t1", "t2", "t3"]) shared.writes.activity(mark(id, "start"))
+    assert.equal(lock.kind, "held")
+    await new Promise<void>((done, fail) => server.once("error", fail).listen(ownerAddress(folder), done))
+    const opened = (shared = await SharedJournal.open({ folder, host: { pid: process.pid, dataRoot: "/follower", label: "follower" }, own: async () => next.owned, follow: quiet, alone: async () => next.owned, log: quiet, timing: { retryMs: 5, maxRetryMs: 20, appliedQuietMs: 300 } }))
+    assert.equal(opened.role().kind, "follower")
+    for (const id of ["t1", "t2", "t3"]) opened.writes.activity(mark(id, "start"))
     await until("the owner heard them", () => heard === 3)
     // Each acknowledgement starts the wait over: three, 200 ms apart, outlast one quiet stretch of 300 ms.
     let outcome = "waiting"
     const began = performance.now()
-    const all = shared.applied().then(() => { outcome = "applied" }, (error: Error) => { outcome = error.message })
+    const all = opened.applied().then(() => { outcome = "applied" }, (error: Error) => { outcome = error.message })
     for (const n of [1, 2, 3]) {
       await new Promise((resolve) => setTimeout(resolve, 200))
       assert.equal(outcome, "waiting", `still waiting before acknowledgement ${n}`)
@@ -172,18 +208,81 @@ test("a host waiting on its owner's acknowledgement stops when the owner goes, a
     assert.ok(performance.now() - began >= 550, "it waited past one quiet stretch, on an owner that kept acknowledging")
 
     // A connected owner that says nothing is waited on for the quiet stretch, no longer.
-    shared.writes.activity(mark("t4", "start"))
-    await assert.rejects(shared.applied(), /did not acknowledge/)
+    opened.writes.activity(mark("t4", "start"))
+    await assert.rejects(opened.applied(), /did not acknowledge/)
 
     // The owner goes while a host waits: it hears that, and stops waiting.
     const waited = performance.now()
-    const left = assert.rejects(shared.applied(), /owner left|no owner connected|closed before/)
+    const left = assert.rejects(opened.applied(), /owner left|no owner connected|closed before/)
     for (const socket of sockets) socket.destroy()
     await left
     assert.ok(performance.now() - waited < 250, "as the owner goes, not when a clock runs out")
   } finally {
+    // The journal and every connection first: a server waits for its connections before it says it closed.
+    await shared?.close()
+    for (const socket of sockets) socket.destroy()
+    if (server.listening) await new Promise<void>((done) => server.close(() => done()))
+    if (lock.kind === "held") await lock.release()
+  }
+})
+
+// Closed once it has begun opening the journal, and closed the instant the owner goes, while it is still finding out
+// whether the lock is free: the second left a listening socket and a held lock behind, which on Linux kept this file's
+// process alive after every test had passed.
+for (const when of ["as it opens the journal", "at once"] as const) test(`a journal closed ${when}, taking over from an owner that left, leaves no socket and no lock behind`, async () => {
+  const folder = realpathSync(testScratch("mako-journal-closing-"))
+  const lock = await acquireHostLock(folder, { purpose: "owner" })
+  const sockets = new Set<Socket>()
+  const server = createServer((socket) => {
+    sockets.add(socket)
+    socket.setEncoding("utf8")
+    socket.on("error", quiet)
+    socket.on("data", (chunk: string) => {
+      for (const line of chunk.split("\n").filter(Boolean)) {
+        const message = HelloSchema.parse(JSON.parse(line))
+        if (message.t === "hello") socket.write(`${JSON.stringify({ t: "welcome", format: message.format, host: { pid: 1, dataRoot: "/owner", label: "owner" } })}\n`)
+      }
+    })
+  })
+  const next = recorder()
+  const opening = Promise.withResolvers<void>()
+  let asked = false
+  let shared: SharedJournal | undefined
+  let after: Awaited<ReturnType<typeof acquireHostLock>> | undefined
+  try {
+    assert.equal(lock.kind, "held")
+    await new Promise<void>((done, fail) => server.once("error", fail).listen(ownerAddress(folder), done))
+    const own = async () => {
+      asked = true
+      await opening.promise
+      return next.owned
+    }
+    const opened = (shared = await SharedJournal.open({ folder, host: { pid: process.pid, dataRoot: "/follower", label: "follower" }, own, follow: quiet, alone: own, log: quiet, timing: { retryMs: 5, maxRetryMs: 20 } }))
+    assert.equal(opened.role().kind, "follower")
+    // The owner goes for good; this host begins to take the journal over, and is closed before it has opened it.
+    for (const socket of sockets) socket.destroy()
     await new Promise<void>((done) => server.close(() => done()))
     if (lock.kind === "held") await lock.release()
-    await shared.close()
+    if (when === "as it opens the journal") await until("this host began opening the journal", () => asked)
+    const closed = opened.close()
+    opening.resolve()
+    await closed
+    // What an election still under way does after the close has had time to happen.
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    after = await acquireHostLock(folder, { purpose: "owner" })
+    assert.equal(after.kind, "held", "the lock it took while closing is released")
+    const found = await new Promise<boolean>((done) => {
+      const probe = connect(ownerAddress(folder))
+      probe.once("connect", () => { probe.destroy(); done(true) })
+      probe.once("error", () => done(false))
+    })
+    assert.equal(found, false, "and nothing listens at the owner's address")
+  } finally {
+    opening.resolve()
+    await shared?.close()
+    for (const socket of sockets) socket.destroy()
+    if (server.listening) await new Promise<void>((done) => server.close(() => done()))
+    if (lock.kind === "held") await lock.release()
+    if (after?.kind === "held") await after.release()
   }
 })
