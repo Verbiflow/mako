@@ -1,13 +1,13 @@
 {
   "harness": "grok",
   "native": {
-    "version": "1.0.88"
+    "version": "1.0.89"
   },
   "about": "Read notes.md and tell me the release day. Don't run commands. / /compact / (resumed) / Without reading anything, which day did notes.md name? A turn, a manual compaction, the harness's process closed and the session resumed in a new one, then a turn that leans on the summary. What the harness replays while it opens is history.",
   "stores": [
     {
       "reader": "grok",
-      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a1eb1c-11ee-76d3-8d23-40ab88647f9b/updates.jsonl",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a1ef53-7731-72c2-af7d-b54b3603efd5/updates.jsonl",
       "known": [
         {
           "side": "-",
