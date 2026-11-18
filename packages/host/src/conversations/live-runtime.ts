@@ -150,6 +150,12 @@ export interface Resident {
   /** Intentional transport teardown; prompts accepted during it wake afterwards. */
   hibernating?: Promise<void>
   /**
+   * The Thread's values its provider last started with, and what they were read for. A wake starts with them again,
+   * unread, only while `until` hasn't passed: the end of the idle window the provider was hibernated inside (the warm
+   * pool's limit or memory pressure closed it), when the process the wake replaces would still be running on them.
+   */
+  startedWith?: StartedWith
+  /**
    * A model, reasoning or fast its own harness's session takes from the next message on (a move to the harness it's on,
    * `moveOn`): the process running now was started on what it had, so the next message that names none carries this.
    */
@@ -206,6 +212,20 @@ export interface Resident {
   controlSaid?: ControlSaid
 }
 
+
+/** What a provider's start read that a wake of the same session can start with again (`Resident.startedWith`). */
+export interface StartedWith {
+  bindingId: string
+  cwd: string
+  title: string | undefined
+  environment: ThreadEnvironment
+  until?: number
+}
+
+/** Notes the Thread's values a provider is about to start with; one that got none keeps nothing. */
+export function noteStartedWith(resident: Resident, bindingId: string, cwd: string, title: string | undefined, environment: ThreadEnvironment | undefined): void {
+  resident.startedWith = environment && { bindingId, cwd, title, environment }
+}
 
 /** A launch's native routing (`ProviderStartOptions.nativeRouting`): only a Thread given Mako's tools has `agents_start` to route to. */
 export function launchRouting(dependencies: Pick<Dependencies, "agents">, session: string, tools: ConversationTools | undefined): (() => RoutedThread) | undefined {
@@ -329,6 +349,11 @@ export interface Dependencies {
   /** The provider hibernates: its grants end, and what its agent built in Local Control waits for it to wake. Without this, `revokeTools`. */
   suspendTools?(bindingId: string, conversationId: string): void | Promise<void>
   root: string
+  /**
+   * What each saved journal says of its conversation, read before the conversations are made (`listJournals`): `open`
+   * lists from it and opens only a journal it doesn't have. Without it, `open` reads every journal as it runs.
+   */
+  listed?: ReadonlyMap<string, import("./live-records.js").ListedJournal>
   checkpoint?(path: string, provider?: string): Promise<string | undefined>
   /** Where the catalog lists the session with this identity now; `nativePath` is kept when it still lists it there. */
   nativePath?(identity: NativeSourceIdentity): string | undefined
@@ -434,8 +459,15 @@ export interface Dependencies {
   saveAgainMs?: number
   /** Test override for ready provider residency. */
   providerIdleMs?: number
-  /** Test override for the number of ready transports retained for fast reuse. */
+  /** Test override for the number of ready transports retained for fast reuse: a fixed number in place of `warmLimit`. */
   providerWarmLimit?: number
+  /**
+   * How many idle providers this machine keeps warm now, from its memory and what a provider holds (`warmLimit` in
+   * `warm-limit.ts`). Read at every decision, so it must be cheap; without it, `PROVIDER_WARM_LIMIT`.
+   */
+  warmLimit?(): number
+  /** How many idle providers stay warm after a decision: past the floor, the host reads the machine's memory while they do. */
+  warmKept?(count: number): void
   /** Test override for `CONVERSATION_MEMORY` and the wait before a sweep. */
   conversationMemory?: ResidencyBudget & { sweepMs: number }
   /**

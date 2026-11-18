@@ -79,6 +79,7 @@ export function consumeStdout(context: ProtocolContext, chunk: Buffer): void {
   // 64 KB pieces, and re-measuring the whole buffer for each one once held
   // the host's main thread for seconds while Codex streamed.
   const lines = context.stdoutLines.push(chunk)
+  context.rolloutRead = false
   if (!lines) {
     context.protocol.handleFatal(
       "Codex app-server sent an oversized JSON-RPC message"
@@ -105,7 +106,7 @@ function processLine(context: ProtocolContext, line: string): void {
   }
   if (context.sides?.route(message.method, message.params, message.kind === "request" ? message.id : undefined)) return
   if (message.kind === "request") {
-    drawRollout(context)
+    drawRolloutOnce(context)
     const frame = context.stream?.record({ request: message.method, id: message.id, params: message.params })
     withFrame(frame, () => context.protocol.handleServerRequest(
       message.id,
@@ -114,11 +115,44 @@ function processLine(context: ProtocolContext, line: string): void {
     ))
     return
   }
+  // A delta is part of an item whose record Codex writes when the item ends, so no record waits on it.
+  if (/[dD]elta$/.test(message.method)) {
+    drawRolloutPaced(context)
+    const frame = context.stream?.record({ method: message.method, params: message.params })
+    withFrame(frame, () => deliver(context, context.decoder.decode({ method: message.method, params: message.params })))
+    return
+  }
   const before = codexReadsBefore(message.method)
-  if (before) drawRollout(context)
+  if (before) drawRolloutOnce(context)
   const frame = context.stream?.record({ method: message.method, params: message.params })
   withFrame(frame, () => deliver(context, context.decoder.decode({ method: message.method, params: message.params })))
-  if (!before) drawRollout(context)
+  if (!before) drawRolloutOnce(context)
+}
+
+/**
+ * The rollout read for the first message of a stdout chunk that asks, and not again for the rest of it. Codex wrote
+ * each message's record before the message, so what the chunk's messages need was in the file before the chunk was
+ * read; a read is a `stat` of the file, and one for every streamed token was 1.8% of the host's thread with 30 Fins
+ * at work. What Codex writes while the chunk is handled comes with the watcher's word or the next chunk.
+ */
+function drawRolloutOnce(context: ProtocolContext): void {
+  if (context.rolloutRead) return
+  context.rolloutRead = true
+  drawRollout(context)
+}
+
+/** A streamed delta reads the rollout this often at most: a frame, as the windows see what it would draw. */
+const DELTA_READ_MS = 50
+
+/**
+ * The rollout read for a streamed delta, when none was read in the last frame. Deltas come a token at a time, each in
+ * a chunk of its own, and each read is a `stat`; what Codex writes between them comes with the watcher's word, the
+ * next notification that isn't a delta, or this.
+ */
+function drawRolloutPaced(context: ProtocolContext): void {
+  if (context.rolloutRead || performance.now() - (context.rolloutReadAt ?? 0) < DELTA_READ_MS) return
+  context.rolloutRead = true
+  drawRollout(context)
 }
 
 /**
@@ -129,6 +163,7 @@ function processLine(context: ProtocolContext, line: string): void {
  */
 export function drawRollout(context: ProtocolContext): void {
   const rollout = context.rollout
+  context.rolloutReadAt = performance.now()
   const records = rollout?.read()
   if (!rollout || !records?.length) return
   // The rollout is the session's own record, which the store keeps: the stream names the bytes read (`rolloutRecords`).

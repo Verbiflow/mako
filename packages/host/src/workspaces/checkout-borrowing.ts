@@ -4,7 +4,7 @@ import { isAbsolute, join, relative } from "node:path"
 import type { Git } from "@mako/git"
 import type { BorrowAnswer, BorrowPush, Borrower, Grant, Kind, Mode, Need, Refusal, SourceAnswer, SourceAsk } from "@mako/protocol/borrow"
 import { LocalBorrowing, type LocalBorrowingOptions, type SourceFn } from "../base/local-borrowing.js"
-import { bringFiles, carryFiles, matchedEntries, type BringEntry, type BringReport, type Staged } from "./worktree-carry.js"
+import { bringFiles, carryFiles, ignoredEntries, matchedEntries, type BringEntry, type BringReport, type Staged } from "./worktree-carry.js"
 import type { CarryEntry } from "./thread-recipe.js"
 
 /**
@@ -190,9 +190,9 @@ export class CheckoutBorrowing {
 
   /** The recipe's carry into a new worktree: each entry the grants allow and the worktree doesn't have, copied or linked. */
   async carry(thread: string, repoRoot: string, checkout: string, entries: readonly CarryEntry[]): Promise<{ copied: number; refused: string[] }> {
-    const { granted, refused } = await this.#decide(thread, repoRoot, checkout, entries.map((entry) => ({ path: entry.path, link: Boolean(entry.link) })), "the recipe's carry")
+    const { granted, refused, listed } = await this.#decide(thread, repoRoot, checkout, entries.map((entry) => ({ path: entry.path, link: Boolean(entry.link) })), "the recipe's carry")
     const stopped = new Map<string, Refusal>()
-    const placed = granted.length ? await carryFiles(this.#git, repoRoot, checkout, granted.map(({ entry, link }) => ({ path: entry, link })), this.#told(granted, stopped)) : []
+    const placed = granted.length ? await carryFiles(this.#git, repoRoot, checkout, granted.map(({ entry, link }) => ({ path: entry, link })), this.#told(granted, stopped), listed) : []
     await this.#afterPlacing?.(checkout)
     await this.#settle(granted, placed, stopped)
     refused.push(...[...stopped].map(([entry, refusal]) => refusalText(entry, refusal)))
@@ -249,8 +249,11 @@ export class CheckoutBorrowing {
     const granted: Granted[] = []
     const refused: string[] = []
     const missing: string[] = []
+    // What the main checkout ignores, listed once for every entry asked for and for placing them: a walk of the main
+    // checkout each, a recipe carrying five entries walked it six times on every start.
+    const listed = asked.length ? ignoredEntries(this.#git, repoRoot).catch((): string[] => []) : undefined
     for (const request of asked) {
-      const matches = await matchedEntries(this.#git, repoRoot, [request.path])
+      const matches = await matchedEntries(this.#git, repoRoot, [request.path], listed)
       if (!matches.length) missing.push(request.path)
       for (const entry of matches) {
         const kind: Kind = (await lstat(join(repoRoot, entry)).catch(() => undefined))?.isDirectory() ? "tree" : "file"
@@ -260,7 +263,7 @@ export class CheckoutBorrowing {
         else refused.push(`${entry}: waiting on the person`)
       }
     }
-    return { granted, refused, missing }
+    return { granted, refused, missing, listed }
   }
 
   /**

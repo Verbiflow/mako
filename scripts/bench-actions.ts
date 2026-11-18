@@ -28,6 +28,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import { parseArgs } from "node:util"
 import { z } from "zod"
 import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
+import { WARM_CEILING } from "@mako/host/conversations/warm-limit"
 import { bundledClaudeExecutable } from "@mako/host/harnesses/claude/runtime"
 import { invokeRuntime, subscribeRuntime } from "@mako/host/transport/connection"
 import { sandboxed, type Sandbox } from "./harness-sandbox.ts"
@@ -504,7 +505,7 @@ async function benchHarness(harness: string, results: Map<string, HarnessResult>
         }
       }
 
-      // 3. and 4. on a hibernated session: the host keeps two idle sessions warm, so a third puts the oldest to sleep.
+      // 3. and 4. on a hibernated session: one idle session more than the host keeps warm puts the oldest to sleep.
       await hibernated(stand, id, shell.full, selection, asks?.id, other?.id)
 
       if (harness === "claude") await bareClaude(sandbox, stand.model, bare, asks?.id ?? "default", other?.id ?? "acceptEdits")
@@ -597,8 +598,17 @@ async function raise(harness: string, sandbox: Sandbox): Promise<Stand | undefin
 async function hibernated(stand: Stand, first: string, full: string | undefined, selection: Selection | undefined, asks: string | undefined, other: string | undefined): Promise<void> {
   const { win } = stand
   const ids = [first]
+  /** The first of them the host has hibernated, looked for up to `withinMs`. */
+  const asleep = async (withinMs = 30_000) => {
+    for (const deadline = Date.now() + withinMs; ; await delay(100)) {
+      for (const id of ids) if ((await snapshot(stand, id)).session.connection === "hibernated") return id
+      if (Date.now() > deadline) return undefined
+    }
+  }
   try {
-    for (let extra = 0; extra < 2; extra += 1) {
+    // The host keeps as many idle sessions warm as this machine's memory allows, two to eight (`warm-limit.ts`): one
+    // more than that puts the oldest to sleep, so helpers are added until one sleeps.
+    for (let extra = 0; extra < WARM_CEILING && !await asleep(extra < 2 ? 0 : 2_000); extra += 1) {
       const id = await startConversation(stand, full)
       const sent = now()
       await win.call("mako:live-prompt", id, randomUUID(), `BENCH-H${extra} say done.`, [], selection)
@@ -609,12 +619,6 @@ async function hibernated(stand: Stand, first: string, full: string | undefined,
   } catch (error) {
     console.log(`  ${stand.harness} hibernated actions: not measured: ${error instanceof Error ? error.message : String(error)}`)
     return
-  }
-  const asleep = async () => {
-    for (const deadline = Date.now() + 30_000; ; await delay(100)) {
-      for (const id of ids) if ((await snapshot(stand, id)).session.connection === "hibernated") return id
-      if (Date.now() > deadline) return undefined
-    }
   }
   for (let run = 1; run <= RUNS; run += 1) {
     const id = await asleep()

@@ -96,7 +96,7 @@ export function openThreads({ environment, readOnly, ledger, harnesses, readFile
   const threadsPath = threadStorePath(userRoot)
   // One conversation per Thread waits on the windows that draw it; until then only an isolated host may ask for it.
   const oneConversation = process.env.MAKO_ONE_CONVERSATION === "1" && environment.isolated
-  const { store, problem } = openThreadStore(threadsPath, { readOnly, writer, oneConversation })
+  const { store, problem } = openThreadStore(threadsPath, { readOnly, writer, oneConversation, versionPerTurn: true })
   if (problem) hostWarn("threads", "Thread store problem", { problem })
   const formats = () => storeFormats({
     threads: store,

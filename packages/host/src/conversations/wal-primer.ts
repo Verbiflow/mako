@@ -1,13 +1,20 @@
 import { statSync } from "node:fs"
 import { Worker } from "node:worker_threads"
 import { z } from "zod"
+import { hostLog } from "../base/host-log.js"
 
 const IDLE_MS = 5_000
 const REQUEST_MS = 10_000
-const MAX_OPEN = 32
+/** Journals with a turn running at once: a place is held only while one runs (`LiveJournal.checkpointWhile`). */
+const MAX_OPEN = 64
 const MAX_PENDING = 128
-/** Leave headroom below the foreground's usual 1,000-page threshold. */
-const CHECKPOINT_PAGES = 750
+/**
+ * The pages a journal's log runs ahead of what is checkpointed before the worker checkpoints it again: well below the
+ * foreground's usual 1,000, and counted from the last checkpoint, never from the log's start. A log that a commit
+ * landed in during its checkpoint doesn't start over, and checkpointed again at once for being long, each of its
+ * commits brought two more syncs: on a busy disk every journal at work did that at once.
+ */
+const CHECKPOINT_PAGES = 250
 /** This exits background mode; a reader can still pin the WAL after foreground checkpoints resume. */
 export const CHECKPOINT_WAL_LIMIT = 4 * 1024 * 1024
 
@@ -48,13 +55,15 @@ parentPort.on("message", ({ id, kind, path, lease, pages }) => {
       const journal = journals.get(lease)
       if (!journal) throw new Error("Checkpoint lease has closed")
       let row = journal.progress.get()
-      if (row.log >= pages && row.log > row.checkpointed) row = journal.checkpoint.get()
+      if (row.log - row.checkpointed >= pages) row = journal.checkpoint.get()
       const bytes = statSync(journal.path + "-wal", { throwIfNoEntry: false })?.size ?? 0
       parentPort.postMessage({ id, kind, ok: true, bytes, log: row.log, checkpointed: row.checkpointed })
       return
     } else if (kind === "release") {
       const journal = journals.get(lease)
       journals.delete(lease)
+      // What its turn left in the log is checkpointed here, not in its next commit on the host's thread.
+      try { journal?.checkpoint.get() } catch {}
       journal?.db.close()
     } else throw new Error("Unknown checkpoint request")
     parentPort.postMessage({ id, kind, ok: true })
@@ -129,7 +138,7 @@ export class WalPrimer {
     this.leases.add(lease)
     void this.ask(generation, { kind: "open", lease: lease.id, path }).then(answer => {
       if (lease.disposed || generation.closing) return
-      if (!answer?.ok) { void this.release(lease); return }
+      if (!answer?.ok) { void this.release(lease, "its connection wasn't opened"); return }
       lease.active = true
       changed()
       this.check(lease)
@@ -140,11 +149,12 @@ export class WalPrimer {
       committed: () => {
         if (!lease.active || lease.disposed) return
         try {
-          if ((statSync(`${path}-wal`, { throwIfNoEntry: false })?.size ?? 0) >= CHECKPOINT_WAL_LIMIT) {
-            void this.release(lease)
+          const bytes = statSync(`${path}-wal`, { throwIfNoEntry: false })?.size ?? 0
+          if (bytes >= CHECKPOINT_WAL_LIMIT) {
+            void this.release(lease, `its log reached ${bytes} bytes at a commit`)
             return
           }
-        } catch { void this.release(lease); return }
+        } catch { void this.release(lease, "its log couldn't be measured"); return }
         if (lease.checking) lease.dirty = true
         else this.check(lease)
       },
@@ -169,13 +179,18 @@ export class WalPrimer {
     void this.ask(lease.generation, { kind: "check", lease: lease.id, pages: lease.pages }).then(answer => {
       lease.checking = false
       if (lease.disposed) return
-      if (answer?.kind !== "check" || !answer.ok || answer.bytes >= CHECKPOINT_WAL_LIMIT) { void this.release(lease); return }
+      if (answer?.kind !== "check" || !answer.ok || answer.bytes >= CHECKPOINT_WAL_LIMIT) {
+        void this.release(lease, answer?.kind === "check" && answer.ok ? `its log was ${answer.bytes} bytes after a check, ${answer.checkpointed} of ${answer.log} pages checkpointed` : "a check went unanswered")
+        return
+      }
       if (lease.dirty) this.check(lease)
     })
   }
 
-  private release(lease: Lease): Promise<void> {
+  private release(lease: Lease, lost?: string): Promise<void> {
     if (lease.closing) return lease.closing
+    // Its commits checkpoint on the host's thread from here: said, since that is where a slow commit comes from.
+    if (lost) hostLog("journal", "a journal's checkpoints left the worker", { path: lease.path, why: lost })
     lease.disposed = true
     lease.active = false
     lease.changed()

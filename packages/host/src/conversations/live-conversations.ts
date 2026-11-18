@@ -3,7 +3,7 @@ import { z } from "zod"
 import type { PromptVersions, PromptVersionsByRequest } from "../contracts/live-conversations.js"
 import { randomBytes, randomUUID } from "node:crypto"
 import type { UnopenedConversation } from "../contracts/unopened-conversations.js"
-import { statSync } from "node:fs"
+import { existsSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { Admission } from "../base/admission.js"
 import { NativeVerificationPendingError } from "../contracts/native-verification.js"
@@ -43,7 +43,7 @@ import {
 } from "../contracts/live-conversations.js"
 import { QueuedPromptEditSchema, type QueuedPromptEdit } from "../contracts/live-queue.js"
 import { digestAsks, edgeStopped } from "../contracts/agents.js"
-import { childGroup, childStateOf, DIGEST_WAITS, rollup, WAKE_COALESCE_MS } from "../contracts/children.js"
+import { childGroup, childStateOf, DIGEST_WAITS, rollup, WAKE_COALESCE_MS, WAKES_PER_MINUTE } from "../contracts/children.js"
 import { latestPendingQuestion, retireQuestionsForInput, type PendingAsk } from "../contracts/live-questions.js"
 import { isActiveNativeAgent, isBusyProviderWork, withChildren } from "../contracts/native-agents.js"
 import type { ProviderResidencySnapshot } from "../contracts/provider-residency.js"
@@ -76,7 +76,7 @@ import type { TurnUndoScope } from "../contracts/turn-review.js"
 import { LiveClosing } from "./live-closing.js"
 import { LiveDispatch, nextQueued } from "./live-dispatch.js"
 import { latchedByStop } from "../contracts/delivery-retry.js"
-import { arriving, goesNext, goingFirst, holdDue, holdOf, released, sooner, transferDue } from "../contracts/request-hold.js"
+import { arriving, goesNext, goingFirst, holdDue, holdOf, keepsLine, released, sooner, transferDue } from "../contracts/request-hold.js"
 import { driverEvents, LiveEvents } from "./live-events.js"
 import { LiveForks } from "./live-forks.js"
 import { LiveGoals, turnReply, type TurnReply } from "./live-goals.js"
@@ -839,6 +839,58 @@ export class LiveConversations {
 
   prewarm(id: string): "waking" | "kept-warm" | "unchanged" {
     return this.hibernation.prewarm(id)
+  }
+
+  /**
+   * A message is on its way to this conversation: an agent's send still being prepared (no `request` yet), or the
+   * digest `request` waiting out its burst's window. A hibernated provider wakes now, as it does while the person
+   * types (`prewarm`), so its restart overlaps the wait instead of following it, and a warm one restarts its idle
+   * window. Nothing is sent by this. It leaves the conversation alone wherever the message wouldn't then go: what
+   * `prewarm` refuses (closing, archived, a sign-in pause), a host that takes no new work, a rewind, a switch or a move
+   * that refuses or holds a message, a message ahead that keeps the line, and a digest that's paused, held past its
+   * window, or over its minute's budget (`LiveDispatch.overBudget`). A conversation whose folder is gone is left too:
+   * its message's own path makes a retired worktree again and says how that went.
+   */
+  expect(id: string, request?: string): "waking" | "kept-warm" | "unchanged" {
+    if (this.records.stopping() || this.admission.closed) return "unchanged"
+    let resident: Resident | undefined
+    try {
+      resident = this.records.load(id)
+    } catch {
+      // A journal that can't be read refuses the message too, and says so there.
+      return "unchanged"
+    }
+    if (!resident || resident.rewinding || this.transfers.pending(resident) || this.moves.holdsQueued(resident)) return "unchanged"
+    try {
+      this.moves.assertAdmits(resident)
+    } catch {
+      return "unchanged"
+    }
+    if (!resident.driver && !existsSync(resident.snapshot.session.cwd)) return "unchanged"
+    const now = Date.now()
+    const { requests } = resident.snapshot
+    if (requests.some((asked) => {
+      const hold = holdOf(asked)
+      return hold !== undefined && keepsLine(hold)
+    })) return "unchanged"
+    if (request !== undefined) {
+      const digest = requests.find((asked) => asked.id === request)
+      const hold = digest && holdOf(digest)
+      const windowed = hold?.kind === "until" && hold.wake.after === DIGEST_WAITS && hold.wake.at - now <= WAKE_COALESCE_MS
+      if (!digest || !(digest.status === "queued" || windowed)) return "unchanged"
+      if (requests.filter((asked) => asked.digest?.sentAt !== undefined && asked.digest.sentAt > now - 60_000).length >= WAKES_PER_MINUTE) return "unchanged"
+    }
+    return this.hibernation.prewarm(id, true)
+  }
+
+  /** How many providers are idle and warm now (`LiveHibernation.warmCount`). */
+  warmProviders(): number {
+    return this.hibernation.warmCount()
+  }
+
+  /** The machine was read short of memory: the idle providers past the number now kept warm hibernate at once. */
+  memoryPressed(): void {
+    this.hibernation.enforceWarmLimit("memory-pressure")
   }
 
   setArchived(id: string, archived: boolean): void {

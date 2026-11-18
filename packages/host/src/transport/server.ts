@@ -66,6 +66,11 @@ type EventStream = {
   live: WindowLiveForm
   openedAt: number
   /**
+   * Its window said nobody can see it (`windowShown`): it's told nothing that exists only to be painted (`sendWindows`)
+   * until it says it shows again. A stream that never says is shown, as every window before this was.
+   */
+  hidden?: boolean
+  /**
    * Past `STREAM_BEHIND_BYTES`, until it catches up: the notice to read each conversation again, at the latest revision
    * it missed. Never the batch itself: a stream's memory is only what `heldBy` counts.
    */
@@ -412,7 +417,8 @@ export async function startWebHost(
     const lineOf = (payload: string) => {
       let held = lines.get(payload)
       if (!held) {
-        const line = runtimeEventLine(channel, { ...event, payload })
+        // Named field by field: a copy of the event would write out every form it has (`encodeRuntimeEvent`).
+        const line = runtimeEventLine(channel, { type: event.type, conversation: event.conversation, payload })
         lines.set(payload, (held = { line, bytes: Buffer.byteLength(line) }))
       }
       return held
@@ -462,7 +468,7 @@ export async function startWebHost(
   const sendWindows = (event: Extract<HostEvent, { type: "live-ahead" }>) => {
     let line: string | undefined
     for (const [stream, owner] of streams) {
-      if (owner.live < ROSTER_LIVE_FORM || stream.destroyed || owner.missed || stream.writableLength > AHEAD_HOLD_BYTES) continue
+      if (owner.live < ROSTER_LIVE_FORM || owner.hidden || stream.destroyed || owner.missed || stream.writableLength > AHEAD_HOLD_BYTES) continue
       line ??= runtimeEventLine("event", { type: event.type, conversation: event.ahead.id, payload: JSON.stringify(event) })
       stream.write(line)
       if (streamWrites.heard) streamWrites.publish({ client: owner.client, type: event.type, conversation: event.ahead.id, line })
@@ -478,6 +484,19 @@ export async function startWebHost(
       let id: string | undefined
       for (const stream of streams.values()) if (stream.client === client && stream.current && !stream.observer) id = stream.id
       return id
+    },
+    /**
+     * A window saying whether anyone can see it, for its newest stream alone: a stream opened after this is shown
+     * until its window says otherwise. False when this client has no window stream to mark.
+     */
+    windowShown: (client: string, shown: boolean): boolean => {
+      // Anonymous readers share "web": one of them hidden says nothing of the others.
+      if (client === "web") return false
+      let found: EventStream | undefined
+      for (const stream of streams.values()) if (stream.client === client && stream.current && !stream.observer) found = stream
+      if (!found) return false
+      found.hidden = !shown
+      return true
     },
     event: (event: HostEvent, client?: string) => send("event", encodeRuntimeEvent(event), client),
     /** Another host's conversation event, as that host encoded it. */

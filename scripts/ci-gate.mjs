@@ -36,6 +36,7 @@ export const STEPS = [
   [1, "npx tsx scripts/test-owned-files.ts"],
   [13, "npx tsx scripts/test-cloud-returns.ts"],
   [1, "npm run test:keep-awake"],
+  [4, "npm run test:flush-costs"],
   // The renderer's and the live state's own suites, in Node without a window, and the web client's build.
   [4, "npm run build -w @mako/web-client"],
   // What the desk loads before it draws: no Office viewer, and within its byte budget (builds the renderer in memory).
@@ -364,10 +365,12 @@ export const STEPS = [
   [1, "tsx --tsconfig tsconfig.app.json scripts/test-render-caches.ts"],
   [1, "tsx scripts/test-repeated-calls.ts"],
   [3, "tsx scripts/test-replay-setup-notices.ts"],
+  [1, "tsx --tsconfig tsconfig.app.json scripts/test-reveal-pace.ts"],
   [1, "tsx scripts/test-review-notes.ts"],
   [9, "node scripts/test-role-rules-window.mjs"],
   [1, "esbuild scripts/test-room-view.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-room-view.mjs --log-level=warning"],
   [4, "tsx scripts/test-roster-turn-ends.ts"],
+  [1, "tsx --tsconfig tsconfig.app.json scripts/test-row-heights.ts"],
   [1, "tsx scripts/test-run-output.ts"],
   [2, "tsx scripts/test-runtime-updates.ts"],
   // Every script that runs a harness gives it a scratch or sealed home; red on main until 2026-11-17.

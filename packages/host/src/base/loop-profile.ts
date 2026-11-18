@@ -30,7 +30,7 @@ export interface LoopSlice {
 }
 
 /** `function package/file:line` for a frame of Mako's own packages; undefined for a dependency's, Node's or V8's. */
-function ownFrame(frame: CpuProfile["nodes"][number]["callFrame"]): string | undefined {
+export function ownFrame(frame: CpuProfile["nodes"][number]["callFrame"]): string | undefined {
   // The installed app runs the host bundled into `dist-electron/<program>/` (`bundle-main.mjs`), which holds Mako's
   // packages alone, every other package staying external: each frame there is Mako's, named by its chunk. Unmatched,
   // every slice of the installed host's profile named nothing ("7288 ms:"), on a day its loop was held 97% of a launch.
@@ -98,8 +98,12 @@ export function heldBy(slices: readonly LoopSlice[], top = 25): { frame: string;
   return [...total].sort((a, b) => b[1].ms - a[1].ms).slice(0, top).map(([frame, { ms, slices }]) => ({ frame, ms, slices }))
 }
 
-/** Samples a millisecond apart: fine enough to name a 100 ms slice, light enough for a window of seconds. */
-const SAMPLE_US = 1_000
+/**
+ * Samples four milliseconds apart: 25 to name a 100 ms slice, and a window's profile small enough to hand over. V8
+ * writes the profile out on the thread it profiled; at a millisecond apart a 10 s window's took 300 to 500 ms of the
+ * loop it was there to explain.
+ */
+const SAMPLE_US = 4_000
 
 /**
  * A window of the host's own profile once its loop has been held, in this

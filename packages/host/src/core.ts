@@ -35,8 +35,8 @@ import { NativeUnknown } from "./base/native-unknown.js"
 import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
-import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
-import { childProcessReader, CheckoutLeave, cloudHasAll, cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, AutomationLaunches, AutomationNotStartedError, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, declareRemoteAppMethods, ViewHints, declareViewHints, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers, declareSetupMethods, SetupViews } from "./workspaces/index.js"
+import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAttribution, writtenPaths, type Attribution } from "./attribution/index.js"
+import { childProcessReader, CheckoutLeave, cloudHasAll, cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, WatchedTrees, Automations, AutomationLaunches, AutomationNotStartedError, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, declareRemoteAppMethods, ViewHints, declareViewHints, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers, declareSetupMethods, SetupViews } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
 import { commonDirOf } from "@mako/git"
@@ -66,7 +66,7 @@ import { accountBorrowing, BorrowedSimulators, ControlResidency, controlLine, op
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
 import { SyncRecorder } from "./contracts/sync-readings.js"
-import { AgentAskGate, AutomationTool, HarnessTool, SettingsTool, declareAutomationToolMethods, declareHarnessToolMethods, declareSettingsMethods, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, machineLeaving, SHUTDOWN_HOLD_MS, CloudWorktrees, CloudMoves, CloudReadiness, AwayNotes, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, workingThreads, conversationShown, finAsking, ownedSessions, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, CheckoutRepositories, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type ThreadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations, sessionOrderIn } from "./conversations/index.js"
+import { AgentAskGate, AutomationTool, HarnessTool, SettingsTool, declareAutomationToolMethods, declareHarnessToolMethods, declareSettingsMethods, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, machineLeaving, SHUTDOWN_HOLD_MS, CloudWorktrees, CloudMoves, CloudReadiness, AwayNotes, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, WorkingSet, conversationShown, finAsking, ownedSessions, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, CheckoutRepositories, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type ThreadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations, sessionOrderIn } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, McpSignIns, declareMcpSignInMethods, type ConversationMcp } from "./tools/index.js"
 import { hostCommand } from "./base/host-command.js"
 import { declareGitMethods, hostGit, machinePullRequestsAs } from "./git/index.js"
@@ -223,7 +223,9 @@ interface LateParts {
   /** Keeps Threads at work ready to move, and takes their checkpoints as they write (`CloudReadiness`). */
   readiness?: CloudReadiness
   /** Counts again, once a burst, whether agents work here (`atWork`). */
-  recountWork?: () => void
+  recountWork?: (all?: boolean) => void
+  /** The Threads at work, kept as conversations change (`WorkingSet`). */
+  working?: WorkingSet
   /** The Sessions a going-away's note the account took, waiting for its word once this Mac is back (`AwayNotes`). */
   awayNotes?: AwayNotes
   /** This host's Sessions on the account's list: told again when one is archived here. */
@@ -346,7 +348,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     }
     if (recountsWork(event)) {
       late.keepAwake?.changed()
-      late.recountWork?.()
+      // A batch says its own conversation's work, which its flush has counted; a sign-out can change any of them.
+      late.recountWork?.(event.type !== "live-batch")
     }
     web()?.event(event, client)
   }
@@ -354,7 +357,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   declareViewHints(methods, viewHints)
   const previews = new ArtifactPreviews(() => providerHost.artifactPreviews.list())
   const watchReadings = new WatchReadings((message, fields) => hostLog("watch", message, fields))
-  const watchBackend = childBackend(undefined, watchReadings)
+  // Every tree watch goes through one backend, which says what each hears to whoever follows files without watching.
+  const watchedTrees = new WatchedTrees()
+  const watchBackend = watchedTrees.over(childBackend(undefined, watchReadings))
   const conversationFiles = new ConversationFiles(git, previews, (root, changed, gone, dropped) => watchTree(git, watchBackend, root, changed, gone, dropped))
   // On while an agent works here (a turn, an approval or question waiting, background work) or this Mac serves another
   // place's: what keeps the Mac awake, readies Threads to move and hands them off on sleep looks only then.
@@ -538,6 +543,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     },
     watchReadings,
     watch: watchBackend,
+    trees: watchedTrees,
     daemonRestarts: fileEvents,
   })
   late.fileHistory = workspaces.fileHistory
@@ -546,6 +552,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     late.attribution?.effects(reported.conversation, reported.call)
     // A call that may have written: the Thread's checkpoint follows a few seconds later, when it's kept ready.
     if (reported.call.status !== "refused" && reported.call.effects.some((effect) => effect.kind !== "read")) late.readiness?.wrote(reported.conversation)
+    // And the worktree it wrote in has its uncommitted files counted again for the rail, once the writes settle.
+    if (reported.call.status !== "refused") workspaces.worktrees?.wrote(writtenPaths(reported.call.effects, reported.cwd))
   })
   const unfollowBounds = fixtureDesk ? undefined : liveCallBounds.subscribe((bounds) => late.attribution?.bounds(bounds))
   // MCP servers a harness couldn't start, each with the one thing that fixes it (the harness's own sign-in where it has
@@ -1301,6 +1309,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     rewindWriters: (paths, since) => late.attribution?.rewindWriters(paths, since),
     suspendTools: (bindingId, conversationId) => residency.suspend(bindingId, conversationId),
     settled: (id) => {
+      // First, so what reads the working Threads next sees this conversation as its batch left it.
+      late.working?.observe(id)
       late.readiness?.settled(id)
       late.movers?.moves.settled(id)
       late.movers?.leaves.settled(id)
@@ -1691,9 +1701,16 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     if (blocked === "no-cloud") return "Your Mako account doesn't have the cloud yet."
     return undefined
   }
+  // Who works here, kept as each conversation changes: a flush counts its own conversation, never all of them.
+  const working = new WorkingSet({
+    live,
+    get threads() { return threads.store ?? undefined },
+    cloud: (id) => cloudConversations?.has(id) ?? false,
+  })
+  late.working = working
   const cloudHandOffs = cloudMoves && new CloudHandOffs({
     file: join(environment.dataRoot, "cloud", "handoff.json"),
-    working: () => workingThreads({ live, threads: threads.store ?? undefined, cloud: (id) => cloudConversations?.has(id) ?? false }),
+    working: () => working.threads(),
     moves: cloudMoves,
     unavailable: handOffUnavailable,
     // A sleep or a shutdown: each Thread paused and parked here, its last changes sent, and the account told this Mac
@@ -1741,7 +1758,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       scratch: join(environment.dataRoot, "cloud", "ready"),
       account: () => late.cloud,
       enabled: async () => (await cloudHandOffs.onSleep()) && !(await handOffUnavailable()),
-      working: () => workingThreads({ live, threads: threads.store ?? undefined, cloud: (id) => cloudConversations?.has(id) ?? false }),
+      working: () => working.threads(),
+      workingOf: (conversationId) => working.of(conversationId),
       revision: (conversationId) => live.held(conversationId)?.revision,
       leaving: (thread) => cloudMoves.leaving(thread),
       plan: (conversationId) => cloudMoves.readyPlan(conversationId),
@@ -1768,7 +1786,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const keepAwake = cloudConversations && onMac() ? new KeepAwake({
     file: join(environment.dataRoot, "keep-awake.json"),
     helper: () => sleepWatchHelper(environment),
-    working: () => workingThreads({ live, threads: threads.store ?? undefined, cloud: (id) => cloudConversations.has(id), ownWork: true }).length,
+    working: () => working.threads(true).length,
     serving: () => lent.count(),
     changed: (state) => emit({ type: "keep-awake", state }),
   }) : undefined
@@ -1776,21 +1794,29 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // Who works, counted once a burst: as a batch says it may have changed, a lease starts or ends, and at the minute's
   // recount while any works, which catches what no batch says (a conversation closed, or gone to the cloud).
   let recountQueued = false
-  const recountWork = () => atWork.set(workingThreads({ live, threads: threads.store ?? undefined, cloud: (id) => cloudConversations?.has(id) ?? false }).length + lent.count() > 0)
-  late.recountWork = () => {
+  let recountAll = false
+  // `all` reads every conversation again: at the start, at the minute's recount, and when what changed names none.
+  const recountWork = (all = false) => {
+    if (all) working.recount()
+    atWork.set(working.threads().length + lent.count() > 0)
+  }
+  late.recountWork = (all = false) => {
+    recountAll ||= all
     if (recountQueued) return
     recountQueued = true
     setImmediate(() => {
       recountQueued = false
-      recountWork()
+      const every = recountAll
+      recountAll = false
+      recountWork(every)
     })
   }
-  recountWork()
+  recountWork(true)
   if (keepAwake) {
     void keepAwake.refresh()
     // While agents work, a helper that failed is tried again within a minute; with none, nothing is held to keep.
     shell.jobs.every("keep this Mac awake while agents work", 60_000, () => {
-      recountWork()
+      recountWork(true)
       return keepAwake.refresh()
     }, { needs: [atWork] })
   }
@@ -1938,6 +1964,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     live,
     automations: workspaceAutomations,
     withHost,
+    windowShown: (client, shown) => web()?.windowShown(client, shown) ?? false,
     session: {
       // A conversation that moved to the cloud is the cloud's: its journal here stands aside.
       // The cloud's summary of a conversation stands in for this Mac's only when it has one: a moved conversation it

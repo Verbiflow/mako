@@ -3,7 +3,7 @@ import { realpath } from "node:fs/promises"
 import { basename, dirname, isAbsolute, relative } from "node:path"
 import { z } from "zod"
 import { locateCheckout } from "../base/checkout-location.js"
-import { discoverRepositories, projectRepositories, type ReachableRepository, type RepositoryPlace } from "../git/index.js"
+import { checkoutStatuses, discoverRepositories, projectRepositories, type ReachableRepository, type RepositoryPlace } from "../git/index.js"
 import type { ThreadCheckout, ThreadWorktreeService, WorktreeWanted } from "./thread-worktrees.js"
 import { toolText } from "../base/tool-text.js"
 import type { WorkspaceMoves } from "./moves.js"
@@ -110,7 +110,8 @@ export async function within(folder: string, path: string): Promise<boolean> {
 }
 
 async function uncommitted(git: Git, cwd: string): Promise<number | undefined> {
-  const status = await git.readOutput(cwd, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => undefined)
+  // An agent acts on this count: read as of now.
+  const status = await checkoutStatuses(git).read(cwd, { fresh: true }).catch(() => undefined)
   return status === undefined ? undefined : status.split("\n").filter(Boolean).length
 }
 

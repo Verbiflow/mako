@@ -1,4 +1,5 @@
 import { useHarnessIdentity, useHarnessLabels } from "@/lib/harness-label"
+import { everyWhileShown } from "@/lib/window-shown"
 import { quietly } from "@/lib/quiet-retry"
 import { latestPendingQuestion } from "@mako/host/contracts/live-questions"
 import { carriedHistories, promptDelivery, recoveriesByPlace, makoPrompts, turnStops } from "@/state/prompt-delivery"
@@ -19,6 +20,7 @@ import { useStartedWorktree } from "@/state/worktrees"
 import { BackgroundWorkLine } from "./background-work-line"
 import { TurnWaitLineView } from "./turn-wait-line"
 import { CrewCard } from "./crew-card"
+import { ActivityPill, WaitingLine } from "./waiting-line"
 import { useEffect, useMemo, useState } from "react"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
 import { useKeptEntries } from "@/components/transcript/use-kept-entries"
@@ -214,6 +216,11 @@ function Blocks({ starting = false, continued = false, compact = false }: { star
   const madeByMako = useKeptEntries(useMemo(() => makoPrompts(requests), [requests]))
   const carried = useKeptEntries(useMemo(() => carriedHistories(requests), [requests]))
   const askedAt = useKeptEntries(useMemo(() => new Map(requests.flatMap((request) => (request.createdAt === undefined ? [] : [[request.id, request.createdAt] as const]))), [requests]), Object.is)
+  // The turn the person's newest message opened: not one Mako or an agent sent, nor a digest of Fins' news.
+  const sentId = useMemo(() => {
+    const sent = requests.findLast((request) => (!request.actor || request.actor.kind === "person") && !request.digest && !request.joined?.length && !request.continues)
+    return sent ? `acp-request-${sent.id}` : undefined
+  }, [requests])
   const waitingLimits = useMemo(() => copy ? new Set<string>() : usageLimitSources(requests), [requests, copy])
   const exchanges = useMemo(() => withoutWaitingLimitNotes(projection?.exchanges ?? EMPTY_QUEUE, waitingLimits), [projection?.exchanges, waitingLimits])
   const unread = useAcp((state) => scopedLiveAcp(state, scope)?.hydrated === false)
@@ -245,6 +252,7 @@ function Blocks({ starting = false, continued = false, compact = false }: { star
       makoPrompts={madeByMako}
       carriedHistories={carried}
       askedAt={askedAt}
+      sentId={sentId}
       failedId={session?.status === "failed" ? lastExchangeId : undefined}
       opening={historyNote ?? (worktree?.start ? <WorktreeOpening worktree={worktree} start={worktree.start} /> : undefined)}
       empty={unread ? null : historyState === "reading" ? (
@@ -270,6 +278,7 @@ function Blocks({ starting = false, continued = false, compact = false }: { star
           />
         </div>
       )}
+      beside={<ActivityPill />}
       footer={
         <>
           {sessionId && recoveries.apart.length ? (
@@ -286,6 +295,8 @@ function Blocks({ starting = false, continued = false, compact = false }: { star
             hosted={exchanges.length > 0}
           />
           {/* The Fins stand through every turn and transition; only the background line waits for the turn's end. */}
+          {/* What an Apex waits on, by name, once its turn has ended; the card under it is every Fin as it stands. */}
+          {running ? null : <WaitingLine />}
           <CrewCard compact={compact} fallback={running ? null : <BackgroundWorkLine />} />
           {/* The wait its agent armed for when its turn ends: said once the turn has. */}
           {running ? null : <TurnWaitLineView />}
@@ -404,8 +415,7 @@ function WaitClock({ waitKey }: { waitKey: string | undefined }) {
   const began = waitKey ? (waitsBegan.get(waitKey) ?? now) : now
   useEffect(() => {
     if (waitKey && !waitsBegan.has(waitKey)) waitsBegan.set(waitKey, began)
-    const timer = setInterval(() => setNow(Date.now()), 1_000)
-    return () => clearInterval(timer)
+    return everyWhileShown(1_000, () => setNow(Date.now()))
   }, [waitKey, began])
   const waited = now - began
   if (waited < WAIT_CLOCK_MS) return null
@@ -423,10 +433,7 @@ function WaitClock({ waitKey }: { waitKey: string | undefined }) {
  */
 function NativeClock({ since, retryAt }: { since: number; retryAt?: number }) {
   const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1_000)
-    return () => clearInterval(timer)
-  }, [])
+  useEffect(() => everyWhileShown(1_000, () => setNow(Date.now())), [])
   const text = retryAt !== undefined && retryAt > now
     ? `next try in ${durationText(retryAt - now + 999)}`
     : now - since >= 1_000 ? durationText(now - since) : undefined
@@ -447,10 +454,10 @@ function useQuietFor(activityAt: number | undefined): number {
     if (activityAt === undefined) return
     const read = () => setNow(Date.now())
     const first = setTimeout(read, 0)
-    const timer = setInterval(read, 5_000)
+    const stop = everyWhileShown(5_000, read)
     return () => {
       clearTimeout(first)
-      clearInterval(timer)
+      stop()
     }
   }, [activityAt])
   return activityAt === undefined ? 0 : Math.max(0, now - activityAt)

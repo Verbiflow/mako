@@ -27,7 +27,7 @@ import {
 } from "../contracts/conversation-control.js"
 import { existsSync, mkdirSync, readdirSync, realpathSync, statSync } from "node:fs"
 import { join, resolve } from "node:path"
-import { DatabaseSync } from "node:sqlite"
+import { DatabaseSync, type StatementSync } from "node:sqlite"
 import { z } from "zod"
 import { ExecutionContextSchema } from "../contracts/execution-context.js"
 import { DecodedEntrySchema, entriesFromMessages, ThreadRefSchema, type DecodedEntry, type ThreadPage } from "@mako/sessions"
@@ -44,6 +44,7 @@ import { hostWarn } from "../base/host-log.js"
 import { foldMakoLog, MAKO_LOG_SCHEMA, makoFacts, makoLogDifference, type MakoLogEvent, type MakoLogState } from "./mako-log.js"
 import { baseKeptBecause, baseKeptOnceHeld, refreshedFacts, sourceOfPage, storedBase } from "./base-source.js"
 import { RECLAIM_MIN_BYTES, journalOpened, type Reclaimed } from "./journal-reclaim.js"
+import { topic } from "../base/topic.js"
 import { cutOffRequests, mergedBaseSteps } from "./stream-merging.js"
 import { errorMessage } from "../base/error-message.js"
 import { EntrySchema, type Entry } from "@mako/sessions/entries"
@@ -711,7 +712,24 @@ export class JournalWriteError extends HostFailureError {
   }
 }
 
+/**
+ * What a journal's log is cut back to as it starts over after a checkpoint. SQLite reuses the file at the size it
+ * reached, so without this a log that once passed `CHECKPOINT_WAL_LIMIT` reads as past it for good, and its
+ * checkpoints stay on the host's thread. Above what a log reaches between two checkpoints, so a usual one is never
+ * cut and grown again.
+ */
+const WAL_KEPT_BYTES = 2 * 1024 * 1024
+/** Two commits this close together are a journal at rest that commits often; this long without one, it's quiet. */
+const OFTEN_MS = 2_000
+const QUIET_MS = 5_000
 const AutoCheckpointSchema = z.object({ wal_autocheckpoint: z.number().int().nonnegative() })
+
+/**
+ * Each commit's milliseconds by part, for a bench that asks what a commit waits on (`bench:host-load --record`): taking
+ * the write lock, the rows, and the commit itself, and whether a worker checkpoints this journal (`background`) or the
+ * commit does. Nothing is timed while nobody listens.
+ */
+export const journalCommits = topic<{ conversation: string; running: boolean; beginMs: number; rowsMs: number; commitMs: number; background: boolean }>("mako:journal-commit")
 
 /**
  * One independent journal per conversation. Only changed blocks and requests
@@ -761,6 +779,13 @@ export class LiveJournal {
   /** The pages a commit checkpoints the journal at when it isn't writing rows ahead (`STAGE_CHECKPOINT_PAGES`). */
   private checkpointPages?: number
   private checkpoints?: WalCheckpoint
+  /** Where a running turn's checkpoints go (`checkpointWhile`), and a place on the worker this journal is still leaving. */
+  private primer?: WalPrimer
+  /** When this journal last committed, and the timer that lets a journal at rest go from the worker once it's quiet. */
+  private committedAt?: number
+  private quiet?: ReturnType<typeof setTimeout>
+  private readonly statements = new Map<string, StatementSync>()
+  private left?: Promise<void>
   private foregroundPages = 1_000
   private checkpointPolicyDirty = false
   /** Whether the base row names the rows; unknown until the journal is read or writes it. */
@@ -790,7 +815,7 @@ export class LiveJournal {
     try {
       // The checkpoint owner's final close may still hold the WAL lock. Install the existing wait before opening it.
       this.db
-        .exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
+        .exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA journal_size_limit=${WAL_KEPT_BYTES};
       CREATE TABLE IF NOT EXISTS metadata (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS options (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS progress (id INTEGER PRIMARY KEY, revision INTEGER NOT NULL);
@@ -824,15 +849,66 @@ export class LiveJournal {
 
   /** Live resident only: listings and independent read connections retain their original policy. */
   checkpointWith(primer: WalPrimer): void {
-    if (this.closed || this.checkpoints) return
-    this.foregroundPages = AutoCheckpointSchema.parse(this.db.prepare("PRAGMA wal_autocheckpoint").get()).wal_autocheckpoint
-    this.checkpoints = primer.watch(this.path, () => {
+    if (!this.closed) this.primer = primer
+  }
+
+  /**
+   * The worker checkpoints this journal while it commits (a turn running, or commits coming often), and no longer. A resident took its place on the worker
+   * as it was read in and kept it at rest: with a few hundred conversations in memory the worker's places went to
+   * the first ones read, and the ones at work checkpointed inside their own commits, 96% of the commits of 30 Fins.
+   */
+  private checkpointWhile(running: boolean): void {
+    if (this.closed) return
+    // A journal at rest that still commits often (an Apex's, which takes its Fins' roster as they work) keeps a place
+    // too, until it has been quiet a while: its commits were the slowest left once the running ones had theirs.
+    const now = performance.now()
+    const often = !running && this.committedAt !== undefined && now - this.committedAt < OFTEN_MS
+    this.committedAt = now
+    clearTimeout(this.quiet)
+    this.quiet = undefined
+    if (running || often) {
+      if (!this.checkpoints && this.primer) this.lease(this.primer)
+      if (!running && this.checkpoints) {
+        this.quiet = setTimeout(() => this.leaveWorker(), QUIET_MS)
+        this.quiet.unref()
+      }
+      return
+    }
+    this.leaveWorker()
+  }
+
+  /** Lets go of its place on the worker, which checkpoints what it left as it closes its connection. */
+  private leaveWorker(): void {
+    if (this.closed) return
+    const held = this.checkpoints
+    if (!held) return
+    this.checkpoints = undefined
+    const closed = held.close()
+    const left = Promise.all([this.left, closed]).then(() => {})
+    this.left = left
+    void left.then(() => { if (this.left === left) this.left = undefined })
+  }
+
+  private lease(primer: WalPrimer): void {
+    if (this.checkpointPolicyDirty) return
+    // With no place free on the worker this answers nothing, and the next commit of the turn asks again.
+    const held = primer.watch(this.path, () => {
       if (this.closed) return
       this.checkpointPolicyDirty = true
       try { this.checkpointPolicy() }
       catch (error) { hostWarn("journal", "foreground checkpoint policy will be retried before the next write", { error: errorMessage({ error }) }) }
     })
-    this.checkpoints?.pages(this.foregroundPages)
+    if (!held) return
+    this.foregroundPages = AutoCheckpointSchema.parse(this.db.prepare("PRAGMA wal_autocheckpoint").get()).wal_autocheckpoint
+    this.checkpoints = held
+    held.pages(this.foregroundPages)
+  }
+
+  /** A statement every commit runs, prepared once for this connection: prepared at each commit, four of them were a fifth of a streamed commit. */
+  private kept(sql: string): StatementSync {
+    let statement = this.statements.get(sql)
+    if (!statement) this.statements.set(sql, statement = this.db.prepare(sql))
+    return statement
   }
 
   private checkpointPolicy(): void {
@@ -1089,12 +1165,14 @@ export class LiveJournal {
 
   /** `grown`: tool blocks of `next` that differ from `previous` only by these appends (`deliverLiveUpdates`). */
   commit(next: LiveSnapshot, previous?: LiveSnapshot, grown?: ReadonlyMap<number, ToolGrowth>): void {
+    const timed = journalCommits.heard ? performance.now() : undefined
     try {
       this.beforeWrite()
       this.db.exec("BEGIN IMMEDIATE")
     } catch (error) {
       throw new JournalWriteError(error)
     }
+    const begun = timed === undefined ? 0 : performance.now()
     let written: BaseWrite | undefined
     try {
       const { blocks, requests, harnessTurns, ...metadata } = next
@@ -1108,21 +1186,15 @@ export class LiveJournal {
         this.db
           .prepare("INSERT OR REPLACE INTO metadata VALUES (1, ?)")
           .run(JSON.stringify({ ...metadata, session: { ...session, failureEvidence: session.failureEvidence && storedFailureEvidence(session.failureEvidence) }, nativeAgents: providerRoster(metadata.nativeAgents), control: controlRow(metadata.control), base: undefined, activityAt: undefined, nativeActivity: undefined, side: undefined, turnWait: undefined, historyFailure: undefined, spentThrough: undefined }))
-      this.db.prepare("INSERT OR REPLACE INTO progress VALUES (1, ?)").run(next.revision)
+      this.kept("INSERT OR REPLACE INTO progress VALUES (1, ?)").run(next.revision)
       // An unread base stays unread here: Mako's own blocks can follow it
       // meanwhile, and nothing reaches its harness until it is read.
       const stored = storedBase(next)
       if (!previous || this.messageBase || stored !== storedBase(previous)) written = this.writeBase(stored)
-      const upsertBlock = this.db.prepare(
-        "INSERT OR REPLACE INTO blocks VALUES (?, ?)"
-      )
+      const upsertBlock = this.kept("INSERT OR REPLACE INTO blocks VALUES (?, ?)")
       const counts = new Map<number, number>()
-      const append = this.db.prepare(
-        "INSERT INTO block_appends VALUES (?, ?, ?)"
-      )
-      const clear = this.db.prepare(
-        "DELETE FROM block_appends WHERE block_id=?"
-      )
+      const append = this.kept("INSERT INTO block_appends VALUES (?, ?, ?)")
+      const clear = this.kept("DELETE FROM block_appends WHERE block_id=?")
       const writeBlock = (index: number) => {
         const value = JSON.stringify(blocks[index])
         this.pager.detach("blocks", index, blocks[index])
@@ -1203,8 +1275,11 @@ export class LiveJournal {
         const difference = makoLogDifference(this.makoLog(), makoFacts(next))
         if (difference) throw new Error(`Mako's log lost a change to ${next.session.id}'s facts. ${difference}`)
       }
+      const rows = timed === undefined ? 0 : performance.now()
       this.db.exec("COMMIT")
+      if (timed !== undefined) journalCommits.publish({ conversation: next.session.id, running: next.session.status === "running", beginMs: begun - timed, rowsMs: rows - begun, commitMs: performance.now() - rows, background: this.checkpoints?.active() ?? false })
       this.checkpoints?.committed()
+      this.checkpointWhile(next.session.status === "running")
       if (writeOptions) this.optionsStored = true
       this.messageBase = false
       for (const [index, count] of counts) {
@@ -1423,6 +1498,7 @@ export class LiveJournal {
   close(compact?: (path: string) => void | Promise<Reclaimed | void>, abandon = false): Promise<void> {
     if (this.closed) return this.released()
     this.closed = true
+    clearTimeout(this.quiet)
     if (abandon) this.keepFile()
     this.stopStaging()
     // Rows written ahead that the base row doesn't name go with the journal: dropped by the compaction, off this
@@ -1453,7 +1529,7 @@ export class LiveJournal {
       })
     }
     const freed = this.pager.release(readOnlyRows(this.path))
-    const checkpointsClosed = this.checkpoints?.close()
+    const checkpointsClosed = this.leftWorker()
     if (checkpointsClosed || (paged && !abandon)) {
       const unwatch = journalOpened.subscribe(opened => {
         if (opened === this.releaseKey) this.keepFile()
@@ -1473,10 +1549,17 @@ export class LiveJournal {
   discard(): void {
     if (this.closed) return
     this.closed = true
+    clearTimeout(this.quiet)
     this.untidy = true
     this.stopStaging()
     this.db.close()
-    this.closing = this.checkpoints?.close()
+    this.closing = this.leftWorker()
+  }
+
+  /** Once the worker holds no connection to this journal's file: the place it has, and one it was already leaving. */
+  private leftWorker(): Promise<void> | undefined {
+    const closed = this.checkpoints?.close()
+    return closed || this.left ? Promise.all([this.left, closed]).then(() => {}) : undefined
   }
 
   /** Once the journal closed and what it waited on before tidying its file (`close`) is done. */
@@ -1735,6 +1818,36 @@ export function journalIds(root: string): string[] {
 /** A block that begins a turn or names a request, as a cold journal's index holds it (`ColdJournal`). */
 const TurnRowSchema = z.object({ id: z.number().int().nonnegative(), type: z.string().nullable(), steering: z.number().int(), request: z.string().nullable(), message: z.string().nullable() })
 const BlockCountSchema = z.object({ count: z.number().int().nonnegative(), last: z.number().int().nullable() })
+const TURN_ROWS_WHERE = "WHERE json_extract(value,'$.type') IN ('user','provider-turn') ORDER BY id"
+
+/**
+ * What a cold journal's opening reads of every block: how many there are, which have appends, and the ones that begin
+ * a turn or name a request, with the revision they were read at. Each is a walk of the whole `blocks` table, most of a
+ * 158 MB journal's file: read where the file had left the disk's cache, the count alone held the host's thread 8.6 s.
+ * A reader thread makes it (`JournalReaders.scan`), and the opening uses it when the journal still stands at its
+ * revision.
+ */
+export const ColdScanSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  count: z.number().int().nonnegative(),
+  last: z.number().int().nullable(),
+  appended: z.array(z.tuple([z.number().int(), z.number().int()])),
+  turns: z.array(z.object({ id: z.number().int().nonnegative(), type: z.string().nullable(), steering: z.number().int(), request: z.string().nullable(), message: z.string().nullable() })),
+})
+export type ColdScan = z.infer<typeof ColdScanSchema>
+
+/** `ColdScan` of an open journal, in one read transaction the caller holds. */
+export function coldScan(db: DatabaseSync): ColdScan {
+  const revision = ProgressSchema.safeParse(db.prepare("SELECT revision FROM progress WHERE id=1").get()).data?.revision ?? 0
+  const counted = BlockCountSchema.parse(db.prepare("SELECT count(*) AS count, max(id) AS last FROM blocks").get())
+  const appended = db.prepare("SELECT block_id, count(*) AS count FROM block_appends GROUP BY block_id").all().map((value): [number, number] => {
+    const row = AppendCountSchema.parse(value)
+    return [row.block_id, row.count]
+  })
+  const turns = db.prepare(`${TURN_ROWS} ${TURN_ROWS_WHERE}`).all().map((row) => TurnRowSchema.parse(row))
+  return { revision, count: counted.count, last: counted.last, appended, turns }
+}
+
 const TURN_ROWS = `SELECT id, json_extract(value,'$.type') AS type, json_extract(value,'$.steeringFor') IS NOT NULL AS steering,
   json_extract(value,'$.requestId') AS request, json_extract(value,'$.messageId') AS message FROM blocks`
 
@@ -1763,8 +1876,9 @@ export class ColdJournal {
   #turns: z.infer<typeof TurnRowSchema>[] | undefined
   #chars = 0
 
-  private constructor(db: DatabaseSync, key: string, snapshot: LiveSnapshot, length: number, appended: ReadonlyMap<number, number>) {
+  private constructor(db: DatabaseSync, key: string, snapshot: LiveSnapshot, length: number, appended: ReadonlyMap<number, number>, turns?: z.infer<typeof TurnRowSchema>[]) {
     this.#db = db
+    this.#turns = turns
     this.key = key
     this.snapshot = snapshot
     this.length = length
@@ -1779,7 +1893,7 @@ export class ColdJournal {
   }
 
   /** `open` as `Steps`, its requests parsed `ROWS_PER_STEP` at a time: a long Fin's 793 held the loop 73 ms at once. */
-  static *opening(root: string, id: string): Steps<ColdJournal | undefined> {
+  static *opening(root: string, id: string, scanned?: ColdScan): Steps<ColdJournal | undefined> {
     const path = join(root, `${id}.sqlite`)
     if (!existsSync(path)) return undefined
     const key = join(realpathSync(root), `${id}.sqlite`)
@@ -1796,7 +1910,11 @@ export class ColdJournal {
         return undefined
       }
       const stored = MetadataSchema.parse(JSON.parse(metadata))
-      const counted = BlockCountSchema.parse(db.prepare("SELECT count(*) AS count, max(id) AS last FROM blocks").get())
+      const revision = ProgressSchema.safeParse(db.prepare("SELECT revision FROM progress WHERE id=1").get()).data?.revision ?? 0
+      // What a reader thread read of every block stands while the journal is at the revision it read; one written
+      // since is read here, as every one was.
+      const scan = scanned?.revision === revision ? scanned : undefined
+      const counted = scan ?? BlockCountSchema.parse(db.prepare("SELECT count(*) AS count, max(id) AS last FROM blocks").get())
       // Blocks are kept by index; a journal whose ids say otherwise is read whole, as it always was. One whose history is
       // its session's record is read cold only when that record covers every block with nothing to merge: its pages are
       // the record's, read a page at a time (`LiveConversations.coldView`); one that merges reads them all.
@@ -1806,7 +1924,6 @@ export class ColdJournal {
         ColdJournal.#end(db)
         return undefined
       }
-      const revision = ProgressSchema.safeParse(db.prepare("SELECT revision FROM progress WHERE id=1").get()).data?.revision ?? 0
       const requests: LiveRequest[] = []
       const requestRows = db.prepare("SELECT rowid AS at, value FROM requests WHERE rowid > ? ORDER BY rowid LIMIT ?")
       for (let last = -1; ;) {
@@ -1824,11 +1941,12 @@ export class ColdJournal {
       if (order) inOrder(requests, order)
       const harnessTurns = db.prepare("SELECT value FROM harness_turns ORDER BY rowid").all()
         .map((row) => HarnessTurnSchema.parse(JSON.parse(RowSchema.parse(row).value)))
-      const appended = new Map<number, number>()
-      for (const value of db.prepare("SELECT block_id, count(*) AS count FROM block_appends GROUP BY block_id").all()) {
-        const row = AppendCountSchema.parse(value)
-        appended.set(row.block_id, row.count)
-      }
+      const appended = new Map<number, number>(scan?.appended)
+      if (!scan)
+        for (const value of db.prepare("SELECT block_id, count(*) AS count FROM block_appends GROUP BY block_id").all()) {
+          const row = AppendCountSchema.parse(value)
+          appended.set(row.block_id, row.count)
+        }
       const snapshot: LiveSnapshot = {
         ...stored,
         revision: Math.max(stored.revision, revision),
@@ -1837,7 +1955,7 @@ export class ColdJournal {
         blocks: [],
         requests,
       }
-      return new ColdJournal(db, key, snapshot, counted.count, appended)
+      return new ColdJournal(db, key, snapshot, counted.count, appended, scan?.turns)
     } catch (error) {
       ColdJournal.#end(db)
       throw error
@@ -1921,7 +2039,7 @@ export class ColdJournal {
     if (this.#turns) return this.#turns
     // One scan of the blocks, whatever order a row's keys are in: a probe for that first was a second whole scan, about
     // 40 ms more a call on a 117 MB journal (pr-review, 2026-11-16).
-    const rows = this.#db.prepare(`${TURN_ROWS} WHERE json_extract(value,'$.type') IN ('user','provider-turn') ORDER BY id`).all()
+    const rows = this.#db.prepare(`${TURN_ROWS} ${TURN_ROWS_WHERE}`).all()
     this.#turns = rows.map((row) => TurnRowSchema.parse(row))
     return this.#turns
   }

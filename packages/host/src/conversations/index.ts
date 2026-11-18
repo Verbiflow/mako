@@ -24,6 +24,7 @@ import type { MethodTable } from "../base/methods.js"
 import { hostWarn } from "../base/host-log.js"
 import { WorktreeThreadState } from "./worktree-thread-state.js"
 import { LiveConversations } from "./live-conversations.js"
+import { listJournals } from "./live-records.js"
 import type { Dependencies as LiveDependencies } from "./live-runtime.js"
 import { NativeRequests } from "./native-requests.js"
 import { SharedConversations, type ConversationRoutingResult } from "./shared-conversations.js"
@@ -50,6 +51,7 @@ import { restorePlan, restoringResume } from "./kept-resume.js"
 import type { RestorePlan } from "../contracts/restore-plan.js"
 import { FIN_CEILING } from "../contracts/fin-tuning.js"
 import type { FinCapacity } from "./fin-capacity-host.js"
+import { watchWarmProviders } from "./warm-watch.js"
 import { TransferInputSchema } from "../contracts/conversation-control.js"
 import type { TurnUndoScope } from "../contracts/turn-review.js"
 import type { CloudAccount, HostTelemetry } from "../usage/index.js"
@@ -90,7 +92,7 @@ export { OwnerFiles } from "./owner-files.js"
 export { CheckoutRepositories, ListedRepositories } from "./listed-repositories.js"
 export { CloudMoves, namedUuid } from "./cloud-moves.js"
 export { CloudContinues } from "./cloud-continues.js"
-export { CloudHandOffs, machineLeaving, SHUTDOWN_HOLD_MS, workingThreads } from "./cloud-handoffs.js"
+export { CloudHandOffs, machineLeaving, SHUTDOWN_HOLD_MS, workingThreads, WorkingSet } from "./cloud-handoffs.js"
 export { conversationShown, finAsking, ownedSessions, sessionOrderIn, REPORT_WORK, SessionPublisher, SessionReporter, type FinAsking, type ReportSources, type SessionLink } from "./session-report.js"
 export { MovesUnderWay } from "./moves-under-way.js"
 export { CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, turnOnOf, type TurnOnReading, type TurnOnSources } from "./cloud-turn-on.js"
@@ -221,7 +223,7 @@ export interface ConversationsDeps {
   /** This machine's build slots now, for a heavy suite's note (`build-slots-full`). */
   builds?(): { slots: number; holders: string[] }
   /** This device's Fins at once (`FinCapacity`); without it, `FIN_LIMIT`. */
-  finCapacity?: Pick<FinCapacity, "atOnce" | "observe" | "subscribe">
+  finCapacity?: Pick<FinCapacity, "atOnce" | "observe" | "subscribe"> & Partial<Pick<FinCapacity, "warm" | "look" | "subscribeMemoryPressure">>
   /** Operations this device runs for another place's Threads (`LentHere`): each takes a Fin's place here. */
   lent?: () => number
   /**
@@ -274,7 +276,15 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   deps.jobs.every("settled rewind snapshot budget", 60 * 60_000, async () => {
     if ((await workspaceSnapshots.budget.settings()).mode === "evict") await workspaceSnapshots.budget.run()
   })
-  const live = new LiveConversations({
+  const listed = await listJournals(join(dataRoot, "conversations"))
+  // Idle providers stay warm by this machine's memory, where the host reads it; two of them where it doesn't.
+  const capacity = deps.finCapacity
+  const warmProviders = capacity?.warm && capacity.look && capacity.subscribeMemoryPressure
+    ? watchWarmProviders({ jobs: deps.jobs, capacity: { warm: capacity.warm.bind(capacity), look: capacity.look.bind(capacity), subscribeMemoryPressure: capacity.subscribeMemoryPressure.bind(capacity) }, live: () => live })
+    : undefined
+  const live: LiveConversations = new LiveConversations({
+    listed,
+    ...warmProviders,
     agents: () => agents,
     heldModels: (harness) => harnesses.profiles.held(harness)?.models,
     ...(deps.stopping && { stopping: deps.stopping }),

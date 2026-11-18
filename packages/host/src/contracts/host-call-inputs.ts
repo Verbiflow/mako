@@ -3513,6 +3513,7 @@ const inputs = {
   "mako:utility-model-settings": () => z.tuple([]),
   "mako:view-hints": () => z.tuple([]),
   "mako:watch-file": () => z.tuple([z.string()]),
+  "mako:window-shown": () => z.tuple([z.boolean()]),
   "mako:workspace-move-answer": () =>
     z.tuple([
       z.string(),
@@ -3558,7 +3559,8 @@ const inputs = {
   "mako:worktree-review-diffs": () => z.tuple([z.string()]),
   "mako:worktree-skip": () => z.tuple([z.string()]),
   "mako:worktree-start-point": () => z.tuple([z.string(), z.boolean()]),
-  "mako:worktree-summaries": () => z.tuple([]),
+  "mako:worktree-summaries": () =>
+    z.tuple([z.literal("changes").optional(), z.literal("focus").optional()]),
   "mako:worktree-update": () => z.tuple([z.string()]),
   "mako:worktree-want": () => z.tuple([z.string()]),
   "mako:worktrees": () => z.tuple([]),
@@ -4010,6 +4012,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:utility-model-settings", "git"],
   ["mako:view-hints", "workspaces"],
   ["mako:watch-file", "workspaces"],
+  ["mako:window-shown", "workspaces"],
   ["mako:workspace-move-answer", "workspaces"],
   ["mako:workspace-move-bring", "workspaces"],
   ["mako:workspace-move-bring-stayed", "workspaces"],

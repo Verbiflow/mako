@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import type { Exchange } from "../src/lib/exchanges"
 import type { StreamClock } from "../src/lib/stream-frames"
-import { ExchangePacer, STREAM_PACE_LONG_MS, STREAM_PACE_SHORT_CHARS, answerGrew, answerPaceMs } from "../src/lib/stream-pace"
+import { ExchangePacer, STREAM_PACE_MS, answerGrew, answerPaceMs } from "../src/lib/stream-pace"
 
 // A turn whose answer reads `text`, the turns before it kept as they are.
 const prompt = { id: "p", role: "user" as const, blocks: [{ type: "text" as const, text: "Explain it" }] }
@@ -23,13 +23,13 @@ const turns = (text: string, extra?: Partial<Exchange>): Turns => ({ exchanges: 
   assert.equal(answerGrew(before.exchanges, tool.exchanges), undefined, "a tool call isn't growth")
 }
 
-// The pace: the first words at once, a short answer each frame, a long one each paragraph or 400 ms.
+// The pace: the first words at once, then the turn every second while only its answer grows, short or long. The words
+// themselves don't wait for it: the prose reads them from the conversation (`useStreamedText`).
 {
-  assert.equal(answerPaceMs("", "Hi"), 0)
-  assert.equal(answerPaceMs("Hi", "Hi there"), 50)
-  const long = "word ".repeat(STREAM_PACE_SHORT_CHARS / 5)
-  assert.equal(answerPaceMs(long, `${long}more`), STREAM_PACE_LONG_MS)
-  assert.equal(answerPaceMs(long, `${long}end.\n\nNext`), 50, "a paragraph that ended draws on the next frame")
+  assert.equal(answerPaceMs(""), 0)
+  assert.equal(answerPaceMs("  \n"), 0, "nothing but space is nothing drawn yet")
+  assert.equal(answerPaceMs("Hi"), STREAM_PACE_MS)
+  assert.equal(answerPaceMs("word ".repeat(600)), STREAM_PACE_MS)
 }
 
 // The pacer, on a clock the test turns.
@@ -73,32 +73,26 @@ const turns = (text: string, extra?: Partial<Exchange>): Turns => ({ exchanges: 
   advance(50)
   write("Hello")
   assert.equal(draws.at(-1)!.text, "Hello")
-  // Short: each frame, the latest text.
+  // After them the turn waits its pace, however short the answer, and then draws the latest.
   advance(20)
   write("Hello the")
   write("Hello there")
-  assert.equal(draws.at(-1)!.text, "Hello", "held until the frame")
+  assert.equal(draws.at(-1)!.text, "Hello", "held until the pace allows")
   assert.equal(pacer.shown(store)!.exchanges.at(-1)!.response[0]!.blocks[0]!.type, "text")
-  advance(30)
+  advance(STREAM_PACE_MS - 20)
   assert.equal(draws.at(-1)!.text, "Hello there")
-  // Long: every 400 ms while a paragraph grows.
-  const long = "word ".repeat(STREAM_PACE_SHORT_CHARS / 5)
+  // A long answer the same: every second while it grows, a paragraph's end included.
+  const long = "word ".repeat(300)
   advance(100)
   write(long)
   const from = draws.length
-  for (let at = 0; at < 1_200; at += 50) {
+  for (let at = 0; at < 3_200; at += 50) {
     advance(50)
-    write(`${long}${"x".repeat(at / 50 + 1)}`)
+    write(`${long}${"x".repeat(at / 50 + 1)}${at === 1_600 ? " end.\n\nNext" : ""}`)
   }
   const gaps = draws.slice(from).map((each, index, all) => (index ? each.at - all[index - 1]!.at : 0)).slice(1)
-  assert.ok(gaps.length >= 2 && gaps.every((gap) => gap >= STREAM_PACE_LONG_MS - 1), `long answer drew every 400 ms (${gaps})`)
-  // A paragraph ends: drawn on the next frame, not at the 400 ms mark.
-  const before = draws.length
-  advance(60)
-  write(`${long}${"x".repeat(30)} end.\n\nNext`)
-  advance(60)
-  assert.equal(draws.length, before + 1)
-  assert.ok(draws.at(-1)!.text.endsWith("Next"))
+  assert.ok(gaps.length >= 2 && gaps.every((gap) => gap >= STREAM_PACE_MS - 1), `the turn drew every second (${gaps})`)
+  advance(STREAM_PACE_MS)
   // A change that isn't growth draws at once, with what was held.
   advance(10)
   write(`${long}${"x".repeat(30)} end.\n\nNext words`)
@@ -111,4 +105,4 @@ const turns = (text: string, extra?: Partial<Exchange>): Turns => ({ exchanges: 
   pacer.stop()
 }
 
-console.log("stream pace: an answer's first words draw at once, a short answer each frame, a long one each paragraph or every 400 ms, and anything else at once with what was held")
+console.log("stream pace: an answer's first words draw at once, its turn then every second while only the answer grows, and anything else at once with what was held")

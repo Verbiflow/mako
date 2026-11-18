@@ -355,7 +355,7 @@ interface Crossing {
 type Live = Pick<
   LiveConversations,
   "session" | "held" | "nativeIds" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "rewordWaiting" | "adoptPin" | "wakeDue" | "snapshot" | "editQueued" | "switchSettled" | "stopMark" | "pinnedAccount" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "workOf" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "switching" | "readIn"
-> & Partial<Pick<LiveConversations, "waitChanged">>
+> & Partial<Pick<LiveConversations, "waitChanged" | "expect">>
 
 /** What starting a Fin in the cloud asks of the account and this device (`AgentsDeps.cloudFins`). */
 export interface CloudFins {
@@ -775,9 +775,14 @@ export class Agents implements AgentOperations, ConversationChildren {
    * and not by every entry it has.
    */
   private readonly rosters = new Map<string, { agents: readonly NativeAgent[]; noticed: readonly NativeAgent[] }>()
-  /** `personAsk`'s walk of a Thread's tree, kept until the store commits, a Fin moves (`askEpoch`) or `ASKS_KEPT_MS` passes. */
-  private readonly asksKept = new Map<string, { edges: ReturnType<ThreadStore["edges"]>; epoch: number; at: number; found: ReturnType<Agents["personAsk"]> }>()
-  private askEpoch = 0
+  /**
+   * `personAsk`'s walk of a Thread's tree, kept while what it read stands: the edges, the reports and answers kept
+   * (`ThreadStore.asksStamp`), and what each Fin beneath it asks, whose change drops the walks above that Fin alone
+   * (`asksMoved`). `ASKS_KEPT_MS` bounds what none of those says (a Thread archived, an ask passed on by a timer).
+   */
+  private readonly asksKept = new Map<string, { edges: ReturnType<ThreadStore["edges"]>; reports: string; at: number; found: ReturnType<Agents["personAsk"]> }>()
+  /** What each Fin asked when it last moved (`askKey`): a move that asks the same drops no walk. */
+  private readonly askKeys = new Map<string, string>()
   private readonly conversations = new Map<string, string>()
   private readonly childOf = new Map<string, string>()
   private readonly starting = new Set<string>()
@@ -961,6 +966,9 @@ export class Agents implements AgentOperations, ConversationChildren {
           digest: { notices: [...notices], ...(lines?.length && { lines: [...lines] }) },
           ...hold === "paused" ? { pause: "stop" as const } : hold && { wake: { at: hold.at, after: DIGEST_WAITS } },
         })
+        // An idle Apex's digest goes when its burst's window ends: a provider that sleeps wakes through the window, not
+        // after it. One paused for a stopped Fin wakes nothing, and the conversation says no to what it wouldn't send.
+        if (hold && hold !== "paused") deps.live.expect?.(conversation, request)
       },
       rewrite: (conversation, request, text, notices, lines) => deps.live.rewriteWaiting(conversation, request, text, { notices: [...notices], ...(lines?.length && { lines: [...lines] }) }),
       steer: (conversation, id, text) => this.steer(conversation, id, text),
@@ -3009,13 +3017,33 @@ export class Agents implements AgentOperations, ConversationChildren {
     const notice = placed.thread === this.rootOf(placed.thread) ? this.standingNotice(placed.thread) : undefined
     if (notice) return { fin: ThreadIdSchema.parse(notice.fin), name: "Usage", line: notice.line, ask: { kind: "report", id: notice.id, options: SEEN_OPTIONS }, more: 0 }
     // Asked on every batch of the Apex's conversation and every report of its row: the walk of its tree is kept until
-    // the store commits or a Fin of it moves. Worked out afresh each time, with 57 Fins it held the loop 0.3-0.6 s a batch.
+    // an edge, a report or an answer changes or a Fin beneath it asks something else. Worked out afresh each time, with
+    // 57 Fins it held the loop 0.3-0.6 s a batch; dropped at every Fin's every batch, 17% of the thread with 30 at work.
     const edges = store.edges()
+    const reports = store.asksStamp()
     const kept = this.asksKept.get(placed.thread)
-    if (kept && kept.edges === edges && kept.epoch === this.askEpoch && this.now() - kept.at < ASKS_KEPT_MS) return kept.found
+    if (kept && kept.edges === edges && kept.reports === reports && this.now() - kept.at < ASKS_KEPT_MS) return kept.found
     const found = this.walkAsks(store, placed.thread)
-    this.asksKept.set(placed.thread, { edges, epoch: this.askEpoch, at: this.now(), found })
+    this.asksKept.set(placed.thread, { edges, reports, at: this.now(), found })
     return found
+  }
+
+  /** What `edge`'s Fin asks now, as `walkAsks` reads it of its state and its conversation: the same words, the same walk. */
+  private askKey(edge: ThreadParent, state = this.stateOf(edge)): string {
+    const open = openAsk(state)
+    if (!open) return ""
+    const conversation = open.ask && open.ask.kind !== "report" ? this.askingConversation(edge.child) : undefined
+    return JSON.stringify([open, conversation && this.personWaiting(conversation)?.line])
+  }
+
+  /** What `edge`'s Fin asks changed: the walks of every Thread above it are made again. With no edge, every walk is. */
+  private asksMoved(edge: ThreadParent | undefined): void {
+    if (!edge) return this.asksKept.clear()
+    const edges = this.store()?.edges()
+    for (let thread: string | undefined = edge.parent, depth = 0; thread !== undefined && depth < 64; depth += 1) {
+      this.asksKept.delete(thread)
+      thread = edges?.of(thread)?.parent
+    }
   }
 
   private walkAsks(store: ThreadStore, top: string): ReturnType<Agents["personAsk"]> {
@@ -4679,10 +4707,12 @@ export class Agents implements AgentOperations, ConversationChildren {
    */
   private limitMove(edge: ThreadParent, conversation: string, ended?: LiveRequest, reply?: TurnReply): boolean {
     const moves = this.moves
-    if (!moves?.on() || !edge.asked.access || edge.closedAt !== undefined || (edge.run && !edge.run.ended)) return false
+    if (!moves || !edge.asked.access || edge.closedAt !== undefined || (edge.run && !edge.run.ended)) return false
     const requests = this.deps.live.held(conversation)?.requests ?? []
     const wait = requests.find((request) => waitsOnLimit(request) && (ended ? request.continues?.requestId === ended.id : request.continues === undefined))
-    if (!wait || this.moving.has(wait.id)) return false
+    // Whether Fins move on is the person's setting, read from its file: asked only of a Fin that waits on a limit, not
+    // at every batch of every Fin.
+    if (!wait || this.moving.has(wait.id) || !moves.on()) return false
     const origin = wait.continues ? requests.find((request) => request.id === wait.continues!.requestId) : wait
     if (!origin || origin.actor?.kind === "person") return false
     const harness = this.deps.live.session(conversation)?.harness
@@ -4978,7 +5008,7 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /** The notice on `edge`'s entry came or went: every surface reads the entry again. */
   private noticeChanged(edge: ThreadParent | undefined): void {
-    this.askEpoch += 1
+    this.asksMoved(edge)
     if (!edge) return
     this.entries.delete(edge.child)
     this.forget(edge.parent)
@@ -5879,23 +5909,30 @@ export class Agents implements AgentOperations, ConversationChildren {
     return { ...(latest && { latest }), ...(kept && { answered: { by: kept.by, answer: kept.answer, ask: kept.ask, request: kept.request, at: kept.at, ...(kept.op === kept.request && { routine: true as const }), ...(kept.delivered && { delivered: true as const }) } }) }
   }
 
-  private entryOf(edge: ThreadParent): NativeAgent {
+  private entryOf(edge: ThreadParent, read?: { reading: ChildThread; journal: ChildJournal }): NativeAgent {
     this.sync()
     const held = this.entries.get(edge.child)
     // A notice past its reset leaves what's held whatever's next to say so: the Inbox and a phone read it from here.
     if (held && (!held.child?.limitNotice || sameLimitNotice(held.child.limitNotice, this.noticeOn(edge)))) return held
-    const read = childEntry(edge, this.childReading(edge), this.journalOf(edge.child))
+    const made = childEntry(edge, read?.reading ?? this.childReading(edge), read?.journal ?? this.journalOf(edge.child))
     const notice = this.noticeOn(edge)
-    const entry = notice && read.child ? { ...read, child: { ...read.child, limitNotice: notice } } : read
+    const entry = notice && made.child ? { ...made, child: { ...made.child, limitNotice: notice } } : made
     this.entries.set(edge.child, entry)
     return entry
   }
 
   /** A Fin's entry moved: its Apex's conversations hear it, and a decision it waits on reaches its Apex once. */
   private childMoved(edge: ThreadParent, progressOnly: boolean): void {
-    this.askEpoch += 1
     if (this.stopped) return
     this.sync()
+    // Every batch of a working Fin comes here, so the Fin is read once for what it asks and for its entry. Only a batch
+    // that changes what it asks drops its Apexes' kept walks.
+    const moved = { reading: this.childReading(edge), journal: this.journalOf(edge.child) }
+    const asks = this.askKey(edge, childState(edge, moved.reading, moved.journal))
+    if (this.askKeys.get(edge.child) !== asks) {
+      this.askKeys.set(edge.child, asks)
+      this.asksMoved(edge)
+    }
     if (this.store()?.edges().internalRuns.some((internal) => internal.child === edge.child)) {
       this.occupying.delete(edge.child)
       for (const conversation of this.conversationsOfThread(edge.parent)) {
@@ -5919,13 +5956,21 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (edge.remote && holds !== held && this.standingSaid.get(edge.child) !== holds) this.restate(edge)
     const before = this.entries.get(edge.child)
     this.entries.delete(edge.child)
-    const entry = this.entryOf(edge)
+    const entry = this.entryOf(edge, moved)
     if (before && sameChildEntry(before, entry)) {
       this.entries.set(edge.child, before)
       if (released) void this.drain()
       return
     }
-    this.rosters.delete(edge.parent)
+    // Its one entry takes its place in the roster held, whose other entries stand as they were: read again, each of an
+    // Apex's 226 was looked up for every step of any one of them.
+    const roster = this.rosters.get(edge.parent)
+    const at = roster && before ? roster.agents.indexOf(before) : -1
+    if (roster && at >= 0) {
+      const agents = roster.agents.slice()
+      agents[at] = entry
+      this.rosters.set(edge.parent, { agents, noticed: before?.child?.limitNotice || entry.child?.limitNotice ? agents.filter((agent) => agent.child?.limitNotice) : roster.noticed })
+    } else this.rosters.delete(edge.parent)
     const kindChanged = !before || before.state.kind !== entry.state.kind || before.stoppable !== entry.stoppable
     for (const conversation of this.finReaders(edge.parent)) this.deps.live.childrenChanged(conversation, progressOnly && !kindChanged)
     // A digest still unsent is in memory, whose queue keeps it there: one only on disk holds none, and isn't read in.
@@ -7280,6 +7325,12 @@ export class Agents implements AgentOperations, ConversationChildren {
     // One closed as finished wasn't stopped by anyone: Mako's own note opens it again, as any message does.
     if (automatic && (edgeStopped(stopped) || (stopped.run && (!stopped.run.ended || !before))))
       return { refused: "unavailable", why: `${stopped.name} is stopped or runs outside Mako.` }
+    // From here the message goes as a Fin at rest's next turn unless something below refuses it: a provider that
+    // sleeps wakes while its words are gathered (the checkout's account, attached Threads). A run that must be taken
+    // over first, a Stop that crossed, a Fin at work, a hold ahead of the message and a folder that's gone (its
+    // worktree is made again below, and the message says how that went) wake nothing.
+    const wokeAhead = before !== undefined && !crossing.stopped && !(stopped.run && !stopped.run.ended) && !this.deps.live.atWork(before) && !this.messageHold(before) &&
+      this.deps.live.expect?.(before) === "waking"
     const resumed = automatic ? undefined : await this.resumeAccount(stopped)
     const edge = automatic && !closedFinished(stopped) ? stopped : this.reopen(stopped, "a message")
     const taken = !automatic && edge.run && (!edge.run.ended || !this.conversationOf(edge.child)) ? await this.takeOver(edge) : undefined
@@ -7298,7 +7349,12 @@ export class Agents implements AgentOperations, ConversationChildren {
     // A Fin reopening its session, as the next host relaunches one an exit cut, takes a message once that settles.
     if (conversation && !(await this.switchSettled(conversation)))
       return { refused: "unavailable", why: `${edge.name} is still reopening its session; send it again in a moment.` }
-    const ready = conversation ? this.ready(conversation) : "gone"
+    const stands = conversation ? this.ready(conversation) : "gone"
+    // The wake begun above reads as a session starting, which is work to every other reader. It is this message's own
+    // way in, not a turn ahead of it: with nothing sent or queued there meanwhile, the Fin is at rest as it was.
+    const ready = wokeAhead && conversation === before && (stands === "steer" || stands === "queue") &&
+      !(this.deps.live.held(conversation)?.requests ?? []).some((asked) => asked.status === "dispatching" || asked.status === "queued")
+      ? "idle" : stands
     if (!conversation || ready === "gone") return { refused: "unavailable", why: `${edge.name}'s conversation isn't on this device.` }
     const name = edge.name
     const held = sentAs(this.deps.live.held(conversation)?.requests ?? [], request)

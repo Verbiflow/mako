@@ -26,10 +26,13 @@ import {
 import { useNavigatorPrompts } from "@/components/transcript/navigator-prompts"
 import {
   LEAD_EXCHANGE_ID,
+  arrivedSince,
   continuedFrom,
+  endOf,
+  type LeftAt,
   isInterruptedNote,
   renamedExchanges,
-  replyProse,
+  drawnProse,
   turnRequest,
   type Exchange as ExchangeData,
 } from "@/lib/exchanges"
@@ -48,8 +51,11 @@ import { rowChecker } from "./row-check"
 import { warmSettledProse } from "./settled-prose"
 import { wokeAfterRest, type WokeAfterRest } from "@/lib/woke-after-rest"
 import { keptEntries } from "@/lib/kept-entries"
+import { RowHeights, estimateRow, sameFacts, type KeptRow, type RowFacts } from "@/lib/row-heights"
 
 const NEAR_BOTTOM = 96
+/** How far below the pane's top a message just sent is placed (`sentTurn`). */
+const SENT_TOP = 24
 /**
  * How far a reader moves to mean it. Fingers resting on a trackpad send a few pixels each way, which is no leaving the
  * end; a flick passes this in a few events, a wheel's notch in one. Short of the 60 px a slow move up is kept at.
@@ -109,35 +115,83 @@ const WINDOWED_TURNS = 40
 const WINDOWED_ITEMS = 120
 
 /**
- * What each windowed transcript's rows measured, by row key, at the window's width, for the few read last. Opened
- * again, the virtualizer starts from these as its own measurements (`seedMeasured`), so its rows are placed at those
- * sizes in the first frame: its measurements arrive a frame after it paints, and placed at the estimate the newest turn
- * painted, then jumped as they landed. They can't be its estimates: a row measured at its estimate is never stored, so
- * when the estimate moved (these sizes replaced, a new width) every such row moved with it, and no resize said so.
+ * What each windowed transcript's rows measured, by row key, at the window's width (`RowHeights`): for the window's
+ * life, and across a reload. Opened again, the virtualizer starts from these as its own measurements (`seedMeasured`),
+ * so its rows are placed at those sizes in the first frame: its measurements arrive a frame after it paints, and
+ * placed at the estimate the newest turn painted, then jumped as they landed. They can't be its estimates: a row
+ * measured at its estimate is never stored, so when the estimate moved every such row moved with it, and no resize
+ * said so. A row that no longer holds what it held when it was measured (`rowFacts`) is measured again.
  */
 type RowSizes = Virtualizer<HTMLDivElement, Element>["itemSizeCache"]
-const measuredRows = new Map<string, { width: number; sizes: RowSizes }>()
-const MEASURED_KEPT = 8
+type RowKey = RowSizes extends Map<infer Key, number> ? Key : never
+/** The window's storage, where it has one it may use: a page refused it keeps its sizes for its own life only. */
+function windowStorage(): Storage | undefined {
+  try {
+    return globalThis.localStorage
+  } catch {
+    return undefined
+  }
+}
+const rowHeights = new RowHeights(windowStorage())
+/** The window's width, which the sizes are kept by; none where a transcript is drawn without a window (a test's render). */
+const windowWidth = () => globalThis.innerWidth ?? 0
+/** A turn nothing can be told about (a released one) stands at this until it's measured. */
 const ESTIMATED_ROW = 360
 /** The column's `gap-7` between turns, kept by the virtualizer between windowed rows. */
 const ROW_GAP = 28
 /** A row can grow with nothing in the document changing (an image's size, a font): how long that can go unseen. */
 const ROW_CHECK_MS = 1_000
+/** How often, at most, a transcript's measured rows are kept while it's read, and how soon after they're written. */
+const KEEP_ROWS_MS = 2_000
 
-function keepMeasured(source: string, sizes: RowSizes): void {
-  if (!sizes.size) return
-  measuredRows.delete(source)
-  measuredRows.set(source, { width: innerWidth, sizes })
-  for (const oldest of measuredRows.keys()) {
-    if (measuredRows.size <= MEASURED_KEPT) break
-    measuredRows.delete(oldest)
+/** What a turn's height comes from, read once for the turn as it stands. */
+const turnFacts = new WeakMap<ExchangeData, RowFacts>()
+function rowFacts(exchange: ExchangeData): RowFacts {
+  let facts = turnFacts.get(exchange)
+  if (!facts) {
+    facts = { chars: 0, lines: 0, tools: 0 }
+    for (const message of exchange.prompt ? [exchange.prompt, ...exchange.response] : exchange.response)
+      for (const block of message.blocks) {
+        if (block.type === "toolCall") facts.tools += 1
+        else if (block.type === "text") {
+          facts.chars += block.text.length
+          for (let at = block.text.indexOf("\n"); at >= 0; at = block.text.indexOf("\n", at + 1)) facts.lines += 1
+        }
+      }
+    turnFacts.set(exchange, facts)
   }
+  return facts
 }
 
-function seedMeasured(source: string, sizes: RowSizes): void {
-  const kept = measuredRows.get(source)
-  if (kept?.width !== innerWidth || kept.sizes === sizes) return
-  for (const [key, size] of kept.sizes) if (!sizes.has(key)) sizes.set(key, size)
+let savingRows: ReturnType<typeof setTimeout> | undefined
+
+function keepMeasured(source: string, sizes: RowSizes, exchanges: readonly ExchangeData[], keyOf: (index: number) => RowKey): void {
+  const rows = new Map<string, KeptRow>()
+  for (let index = 0; index < exchanges.length; index += 1) {
+    const exchange = exchanges[index]!
+    const size = exchange.unloaded === undefined ? sizes.get(keyOf(index)) : undefined
+    if (size !== undefined) rows.set(String(keyOf(index)), { size, ...rowFacts(exchange) })
+  }
+  rowHeights.keep(source, windowWidth(), rows)
+  savingRows ??= setTimeout(() => {
+    savingRows = undefined
+    rowHeights.save()
+  }, KEEP_ROWS_MS)
+}
+
+/** Each row kept at this width that still holds what it held stands at its size; one that changed is measured again. */
+function seedMeasured(source: string, sizes: RowSizes, exchanges: readonly ExchangeData[], keyOf: (index: number) => RowKey): void {
+  const kept = rowHeights.kept(source, windowWidth())
+  if (!kept) return
+  for (let index = 0; index < exchanges.length; index += 1) {
+    // A released turn holds nothing to compare: its placeholder stands at the height its row last had.
+    if (exchanges[index]!.unloaded !== undefined) continue
+    const key = keyOf(index)
+    const row = kept.get(String(key))
+    if (!row) continue
+    if (!sameFacts(row, rowFacts(exchanges[index]!))) sizes.delete(key)
+    else if (!sizes.has(key)) sizes.set(key, row.size)
+  }
 }
 
 /** A turn's messages and calls, counted once for the turn as it stands: a settled turn is the same object in every frame. */
@@ -546,9 +600,11 @@ export function ConversationTimeline({
   makoPrompts,
   carriedHistories,
   askedAt,
+  sentId,
   failedId,
   empty,
   footer,
+  beside,
   opening,
   hasEarlier = false,
   loadingEarlier = false,
@@ -568,9 +624,13 @@ export function ConversationTimeline({
   carriedHistories?: ReadonlyMap<string, CarriedHistory>
   /** When each request was sent, by request id: a live prompt's time, which its blocks don't carry. */
   askedAt?: ReadonlyMap<string, number>
+  /** The turn the person's newest message opened, by its id: arriving at the end, it's placed near the top (`sentTurn`). */
+  sentId?: string
   failedId?: string
   empty: ReactNode
   footer?: ReactNode
+  /** What stands beside "Jump to latest" while the reader is away from the end: the conversation's activity pill. */
+  beside?: ReactNode
   /** The transcript's first line in place of "Beginning of conversation", once its start is on screen. */
   opening?: ReactNode
   hasEarlier?: boolean
@@ -779,6 +839,11 @@ export function ConversationTimeline({
   /** The latest proximity check, for callers that outlive one render. */
   const wake = useRef<() => void>(() => {})
   const [showJump, setShowJump] = useState(false)
+  // Where the transcript ended when the reader left its end, so the way back says how much arrived since.
+  const [leftAt, setLeftAt] = useState<LeftAt | null>(null)
+  if (!showJump && leftAt !== null) setLeftAt(null)
+  else if (showJump && leftAt === null) setLeftAt(endOf(exchanges))
+  const arrived = showJump && leftAt ? arrivedSince(exchanges, leftAt) : 0
   const transcriptEnd = useContext(TranscriptEndContext)
   // A phone's width keeps no rail of turns: its gutter would take a tenth of the screen, and it reads back by hover.
   const navigates = useContext(CompactPresentationContext)?.navigator !== false
@@ -903,9 +968,30 @@ export function ConversationTimeline({
     let height = 0
     for (let index = 0; index < exchanges.length; index += 1) {
       const key = rowKey(index)
-      if (!rows.itemSizeCache.has(key)) height += ESTIMATED_ROW
+      if (!rows.itemSizeCache.has(key)) height += estimateTurn(index)
     }
     return height
+  }
+  /*
+   * A row never measured is placed at what its turn's words and calls come to, at the pixels a character has been
+   * taking in this window (`RowHeights.pxPerChar`), read once for the conversation shown: an estimate that moved
+   * while its rows stood on it would move them. One constant for every turn left a long transcript's column wrong by
+   * most of its height, and corrected it a row at a time as a reader scrolled.
+   */
+  const pxPerChar = useRef({ identity: "", value: 0, made: new Map<RowKey, number>() })
+  if (pxPerChar.current.identity !== identity) pxPerChar.current = { identity, value: rowHeights.pxPerChar(windowWidth()), made: new Map() }
+  // A row keeps the estimate it was first given: a turn released from memory holds nothing to estimate from, and
+  // given another, every unmeasured row above a reader moved at once as memory was trimmed.
+  const estimateTurn = (index: number) => {
+    const exchange = exchanges[index]
+    if (!exchange) return ESTIMATED_ROW
+    const key = rowKey(index)
+    let estimate = pxPerChar.current.made.get(key)
+    if (estimate === undefined) {
+      estimate = exchange.unloaded !== undefined ? ESTIMATED_ROW : estimateRow(rowFacts(exchange), pxPerChar.current.value)
+      pxPerChar.current.made.set(key, estimate)
+    }
+    return estimate
   }
   /*
    * A row's new size is placed in the frame it is laid out, never the next: the resize observer's sizes apply in its
@@ -925,7 +1011,7 @@ export function ConversationTimeline({
     getScrollElement: () => viewport.current,
     initialRect: crossingRect.current,
     initialOffset: () => crossingOffset.current,
-    estimateSize: () => ESTIMATED_ROW,
+    estimateSize: (index) => estimateTurn(index),
     getItemKey: (index) => rowKey(index),
     // Two turns each way: six drew, parsed and laid out a dozen turns nobody was looking at on every open and jump.
     overscan: 2,
@@ -971,7 +1057,7 @@ export function ConversationTimeline({
     if (!anchor) return
     let start = rows.options.scrollMargin
     for (let index = 0; index < anchor.index; index += 1)
-      start += (rows.itemSizeCache.get(rowKey(index)) ?? ESTIMATED_ROW) + ROW_GAP
+      start += (rows.itemSizeCache.get(rowKey(index)) ?? estimateTurn(index)) + ROW_GAP
     crossingRect.current.width = node.clientWidth
     crossingRect.current.height = node.clientHeight
     crossingOffset.current = Math.max(0, start + view.top - anchor.top)
@@ -983,7 +1069,7 @@ export function ConversationTimeline({
     crossingRect.current.width = crossingRect.current.height = crossingOffset.current = 0
   } else if (seeded.current !== identity) {
     seeded.current = identity
-    seedMeasured(readingSource, rows.itemSizeCache)
+    seedMeasured(readingSource, rows.itemSizeCache, exchanges, rowKey)
     carryIntoWindow()
   }
   const mountedRows = useRef<(only?: ReadonlySet<Element>) => boolean>(() => false)
@@ -995,6 +1081,40 @@ export function ConversationTimeline({
     streaming: (index) => exchanges[index]!.id === streamingId,
     following: pinned.current,
   }, only)
+  /*
+   * A message the person just sent is placed near the pane's top (`SENT_TOP`), and its answer grows under it with
+   * nothing moving: the reader starts each answer at its first line, not by chasing its last. It's the end being
+   * followed, as ever, over room kept after the column (`sendRoom`): as tall as it takes for the end of the scroller
+   * to put the sent turn's top there, and shorter by every line the answer adds, so the scroller's height stands
+   * still while it fills. Once the turn fills the pane the room is nothing, and the end is followed as it always
+   * was, without a step between the two. Every rule of following holds through it: only the reader lets go.
+   * The room is the transcript's while it's shown: a Thread opened lands on its newest turn at its end.
+   */
+  const sendRoom = useRef<HTMLDivElement>(null)
+  const sentTurn = useRef<string | null>(null)
+  const keepSendRoom = useCallback((node: HTMLDivElement) => {
+    const room = sendRoom.current
+    const id = sentTurn.current
+    if (!room || !id) return
+    const view = node.getBoundingClientRect()
+    const place = room.getBoundingClientRect()
+    const held = place.height
+    const turn = node.querySelector(`[data-exchange="${CSS.escape(id)}"]`)
+    if (!turn) {
+      // Its turn left the page (a window's reader far up): room nobody can see goes, and seen, it stays as it is.
+      if (held && place.top < view.bottom) return
+      room.style.height = "0px"
+      sentTurn.current = null
+      return
+    }
+    // From the turn's top to the scroller's end, less the room itself: what the scroller holds for the pane to show.
+    const below = place.top - turn.getBoundingClientRect().top
+    const after = view.top - node.scrollTop + node.scrollHeight - place.bottom
+    // To the fraction of a pixel the boxes are at: rounded, the turn sat half a pixel off and stepped as it filled.
+    const want = Math.max(0, node.clientHeight - SENT_TOP - below - after)
+    if (Math.abs(want - held) > 0.05) room.style.height = `${want}px`
+    if (!want) sentTurn.current = null
+  }, [])
   /** Sends the virtualizer toward a row or the end, which it keeps reconciling toward until `endSeek`. */
   const seek = useCallback((target: number | "end") => {
     seeking.current = true
@@ -1452,8 +1572,8 @@ export function ConversationTimeline({
   }, [readingSource, paneKey])
 
   /** What a report reads of the last render, so the report itself is set up once per pane and source. */
-  const reported = useRef({ exchanges, historyBlocks, historyBase })
-  reported.current = { exchanges, historyBlocks, historyBase }
+  const reported = useRef({ exchanges, historyBlocks, historyBase, rowKey })
+  reported.current = { exchanges, historyBlocks, historyBase, rowKey }
   /*
    * What the pane is reading, said to its lease: on the reader's scroll and input, a resize of the pane, a selection
    * or focus moving, and whenever the turns on the page change (the effect after this one). Never for each frame of a stream:
@@ -1468,6 +1588,8 @@ export function ConversationTimeline({
     if (!node || !lease) return
     let frame = 0
     let paced: ReturnType<typeof setTimeout> | undefined
+    /** When this transcript's measured rows were last kept (`keepMeasured`): every row is read for it. */
+    let keptRowsAt = -KEEP_ROWS_MS
     /** Whether the last report said the end was followed: only then is the next one of the transcript's own doing. */
     let followed = false
     const report = () => {
@@ -1479,7 +1601,10 @@ export function ConversationTimeline({
       // A collapsed/covered pane hasn't proved a new reading location. The
       // lease remains conservative until the actual transcript is painted.
       if (!node.clientHeight || !node.clientWidth || !node.isConnected) return
-      if (windowed) keepMeasured(readingSource, rows.itemSizeCache)
+      if (windowed && performance.now() - keptRowsAt >= KEEP_ROWS_MS) {
+        keptRowsAt = performance.now()
+        keepMeasured(readingSource, rows.itemSizeCache, exchanges, reported.current.rowKey)
+      }
       const elements = Array.from(node.querySelectorAll<HTMLElement>("[data-exchange]"))
       const visible = elements.filter(element => {
         const rect = element.getBoundingClientRect()
@@ -1576,8 +1701,7 @@ export function ConversationTimeline({
     if (firstRow !== undefined && lastRow !== undefined)
       for (let step = 1; step <= PARSED_AHEAD; step += 1) coming.push(firstRow - step, lastRow + step)
     else for (let index = hidden + undrawn - 1; index >= hidden; index -= 1) coming.push(index)
-    const texts = coming.flatMap((index) => exchanges[index]?.response.flatMap((message) =>
-      message.role === "assistant" && !message.streaming ? [replyProse(message.blocks)] : []) ?? [])
+    const texts = coming.flatMap((index) => drawnProse(exchanges[index]?.response ?? []))
     if (texts.length) warmSettledProse(texts)
   }, [firstRow, lastRow, hidden, undrawn])
 
@@ -1676,6 +1800,7 @@ export function ConversationTimeline({
       if (pinned.current && (userScrolling.current || scrollMotion.current || touching.current) && leftEnd(node, lastScrollTop.current) &&
         node.scrollHeight - node.scrollTop - node.clientHeight >= LEFT_END)
         pinned.current = false
+      keepSendRoom(node)
       const column = node.firstElementChild
       const spacer = steadyEnd.current
       if (spacer && column instanceof HTMLElement) {
@@ -1761,7 +1886,27 @@ export function ConversationTimeline({
     })
     structure.observe(node, { childList: true, characterData: true, subtree: true })
     return () => { structure.disconnect(); grown.disconnect(); cancelAnimationFrame(shrinkFrame); node.style.overflowY = "" }
-  }, [identity, isEmpty, owned, holdReader])
+  }, [identity, isEmpty, owned, holdReader, keepSendRoom])
+
+  // A turn arrived at the end, opened by a message the person just sent (the one the panel names, or one still in
+  // this window's outbox, which no request says yet), under a reader following the end: it goes near the top.
+  const endTurn = useRef({ identity, newest })
+  useLayoutEffect(() => {
+    const was = endTurn.current
+    endTurn.current = { identity, newest }
+    if (was.identity !== identity) {
+      sentTurn.current = null
+      if (sendRoom.current) sendRoom.current.style.height = "0px"
+      return
+    }
+    if (was.newest === newest || was.newest === undefined || !pinned.current) return
+    const turn = exchanges.at(-1)
+    const request = turn?.prompt?.requestId
+    if (!turn || !request || exchanges.at(-2)?.id !== was.newest) return
+    if (turn.id !== sentId && (!askedAt || askedAt.has(request))) return
+    sentTurn.current = turn.id
+    followEnd.current()
+  }, [identity, newest, exchanges, sentId, askedAt])
 
   /*
    * The rows are held against the virtualizer before a frame paints (`row-check.ts`): all of them when rows come or
@@ -2296,6 +2441,7 @@ export function ConversationTimeline({
               {footer}
             </div>
           )}
+          {isEmpty ? null : <div ref={sendRoom} aria-hidden data-send-room />}
           {transcriptEnd && !isEmpty ? <div ref={steadyEnd} aria-hidden data-steady-end /> : null}
         </div>
         {showNavigator ? (
@@ -2306,26 +2452,33 @@ export function ConversationTimeline({
             paneRef={pane}
           />
         ) : null}
-        {transcriptEnd ? null : <button
-          type="button"
-          onClick={() => scrollToEnd("smooth")}
-          aria-hidden={!showJump}
-          tabIndex={showJump ? 0 : -1}
-          style={{
-            left: `calc(50% - ${showNavigator ? NAVIGATOR_WIDTH / 2 : 0}px)`,
-          }}
-          className={cn(
-            "pressable absolute bottom-3 flex h-7 -translate-x-1/2 items-center gap-1.5 rounded-full",
-            "bg-raised px-3 text-ui text-muted-foreground ring-1 ring-hairline",
-            "[transition:opacity_180ms_var(--ease-out),transform_180ms_var(--ease-out)]",
-            showJump
-              ? "pointer-events-auto opacity-100"
-              : "pointer-events-none translate-y-1 opacity-0"
-          )}
-        >
-          <ArrowDownIcon className="size-3" />
-          Jump to latest
-        </button>}
+        {transcriptEnd ? null : (
+          <div
+            data-transcript-jump
+            inert={!showJump}
+            style={{
+              left: `calc(50% - ${showNavigator ? NAVIGATOR_WIDTH / 2 : 0}px)`,
+            }}
+            className={cn(
+              "absolute bottom-3 flex -translate-x-1/2 items-end gap-2",
+              "[transition:opacity_180ms_var(--ease-out),transform_180ms_var(--ease-out)]",
+              showJump ? "pointer-events-auto opacity-100" : "pointer-events-none translate-y-1 opacity-0"
+            )}
+          >
+            <button
+              type="button"
+              onClick={() => scrollToEnd("smooth")}
+              aria-hidden={!showJump}
+              tabIndex={showJump ? 0 : -1}
+              className="pressable flex h-7 items-center gap-1.5 rounded-full bg-raised px-3 text-ui whitespace-nowrap text-muted-foreground ring-1 ring-hairline"
+            >
+              <ArrowDownIcon className="size-3" />
+              Jump to latest
+              {arrived > 0 ? <span data-jump-new={arrived} className="tabular text-foreground">· {arrived} new</span> : null}
+            </button>
+            {showJump ? beside : null}
+          </div>
+        )}
       </div>
     </TranscriptSourceContext>
   )

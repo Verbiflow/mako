@@ -349,6 +349,21 @@ export function replyProse(blocks: ChatMessage["blocks"]): string {
   return text
 }
 
+/**
+ * Each prose a turn's settled replies draw, as its part is given it: a reply is drawn a text block to a part
+ * (`responseSections`), so these are its text blocks one by one, never a reply's text joined. What parses a turn's
+ * prose ahead of its mounting asks for exactly these (`warmSettledProse`): asked for the joined text, the tree it
+ * got back matched no part of a reply with a call between two paragraphs, and every such part parsed again on mount.
+ */
+export function drawnProse(messages: readonly ChatMessage[]): string[] {
+  const texts: string[] = []
+  for (const message of messages) {
+    if (message.role !== "assistant" || message.streaming) continue
+    for (const block of message.blocks) if (block.type === "text" && block.text) texts.push(block.text)
+  }
+  return texts
+}
+
 export function toExchanges(
   messages: ChatMessage[],
   previous: Exchange[] = []
@@ -627,6 +642,25 @@ function labelOf(exchange: Exchange): string {
   const line = label(text)
   if (line) return line
   return exchange.response.length > 0 ? "Agent turn" : "Empty turn"
+}
+
+/** The transcript's end as a reader left it: its last turn and how much that turn held. */
+export interface LeftAt {
+  id: string | undefined
+  held: number
+}
+
+export function endOf(exchanges: readonly Exchange[]): LeftAt {
+  const last = exchanges.at(-1)
+  return { id: last?.id, held: last ? last.response.length + last.system.length : 0 }
+}
+
+/** The rows that arrived below `left`: each later turn, and each message or note the turn it ended on has gained. Earlier pages loading above count nothing. */
+export function arrivedSince(exchanges: readonly Exchange[], left: LeftAt): number {
+  const at = exchanges.findLastIndex((exchange) => exchange.id === left.id)
+  if (at < 0) return 0
+  const turn = exchanges[at]!
+  return exchanges.length - 1 - at + Math.max(0, turn.response.length + turn.system.length - left.held)
 }
 
 /** The local automatic wait already says this limit; keep the native marker in history, outside the live projection. */

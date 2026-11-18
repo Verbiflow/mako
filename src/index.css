@@ -2076,6 +2076,31 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
   content-visibility: auto;
 }
 
+/*
+ * A streaming answer's reveal (stream-reveal.ts): the text is in the page as it lands, drawn transparent until its
+ * turn in the reveal comes, then at a few steps toward its own colour. Custom highlights over the text nodes that are
+ * there: nothing is added to the page for it.
+ */
+::highlight(mako-reveal-hidden) {
+  color: transparent;
+}
+
+::highlight(mako-reveal-0) {
+  color: color-mix(in oklab, var(--foreground) 20%, transparent);
+}
+
+::highlight(mako-reveal-1) {
+  color: color-mix(in oklab, var(--foreground) 45%, transparent);
+}
+
+::highlight(mako-reveal-2) {
+  color: color-mix(in oklab, var(--foreground) 70%, transparent);
+}
+
+::highlight(mako-reveal-3) {
+  color: color-mix(in oklab, var(--foreground) 88%, transparent);
+}
+
 .scroll-fade-scroller[data-preserve-scroll] .contain-turn,
 .scroll-fade-scroller[data-preserve-scroll] [data-estimated-paragraph],
 .contain-turn[data-preserve-height],

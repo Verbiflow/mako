@@ -278,9 +278,18 @@ assert.deepEqual(listed.worktrees.map((worktree) => worktree.path).sort(), [prep
 const detail = async (path: string) => (await worktrees.inventory()).worktrees.find((worktree) => worktree.path === path)
 assert.deepEqual((await detail(prepared.path))?.landing, { kind: "open", into: "main", commits: 1 })
 assert.deepEqual((await detail(other.path))?.landing, { kind: "empty" })
+// The list is drawn from what's held and read behind its answer, sizes too: the next list has them.
+await worktrees.settled()
+assert.deepEqual([(await detail(other.path))?.changes, (await detail(other.path))?.refreshing], [0, undefined])
 writeFileSync(join(other.path, "scratch.txt"), "x\n")
+// What decides a removal is read as it's asked, whatever the list holds.
+assert.match((await worktrees.removal(other.path)).held ?? "", /has changes that aren't committed/)
+// A tool's write there is the list's signal: listed as being read again, then with what was read.
+worktrees.wrote([join(other.path, "scratch.txt")])
+assert.equal((await detail(other.path))?.refreshing, true, "a worktree whose files changed is listed as being read again")
+await worktrees.settled()
 const dirty = await detail(other.path)
-assert.equal(dirty?.changes, 1)
+assert.deepEqual([dirty?.changes, dirty?.refreshing], [1, undefined])
 assert.ok((dirty?.bytes ?? 0) > 0, "its own files are measured")
 rmSync(join(other.path, "scratch.txt"))
 busy.set(other.path, ["“Other”"])
@@ -1067,8 +1076,8 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
 }
 
 // A worktree is read again on its own events (its index or HEAD moved, a turn in it ended), and the windows hear it:
-// however often they ask, one nothing happened in is read only past the backstop. One with a conversation at work is
-// read as often as they ask, and one asked of alone is read then.
+// however often they ask, one nothing happened in is read only past the backstop, a conversation at work in it or
+// not. One asked of alone is read then.
 {
   const quiet = repository("quiet")
   const id = randomUUID()
@@ -1132,16 +1141,18 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
       return reads - before
     }
     await passes(1)
-    // A quiet worktree's status is read again as its own wait runs out, doubling to five minutes while nothing
-    // changes: however often windows ask, a handful of reads in nine and a half minutes.
-    assert.ok(await passes(19) <= 6, "nine and a half quiet minutes of windows asking read it a handful of times, not nineteen")
-    assert.ok(await passes(20) >= 1, "a quiet worktree is still read now and then")
+    // A quiet worktree is read on its own events alone: however often windows ask, nothing of its moved, so nothing
+    // is asked of Git. Past the hour's backstop it's read whatever was heard, should an event have been missed.
+    assert.equal(await passes(19), 0, "nine and a half quiet minutes of windows asking read it not once")
+    now += 76 * 60_000
+    assert.equal(await passes(1), 1, "a quiet worktree is still read now and then")
+    // A conversation at work there is read when its turn ends or its index moves, not on every pass meanwhile.
     at = [made.path]
-    assert.equal(await passes(4), 4, "a conversation at work there keeps it current")
+    assert.equal(await passes(4), 0, "a conversation at work there isn't read on every pass")
     at = [join(made.path, "packages")]
-    assert.equal(await passes(2), 2, "so does one in a folder inside it")
+    assert.equal(await passes(2), 0, "nor one in a folder inside it")
     at = [dirname(made.path)]
-    assert.equal(await passes(2), 2, "and one in the project folder around it")
+    assert.equal(await passes(2), 0, "nor one in the project folder around it")
     at = []
     await passes(2)
     // A terminal's `git add`, the window left focused and asking nothing: the index's own event reads it, though no

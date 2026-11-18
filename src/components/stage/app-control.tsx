@@ -1,4 +1,5 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
+import { everyWhileShown } from "@/lib/window-shown"
 import { Fragment, useEffect, useState, type ReactNode } from "react"
 import { toast } from "sonner"
 import { CheckIcon, ChevronDownIcon, HourglassIcon, MoonIcon, PauseIcon, PlayIcon, TriangleAlertIcon, XIcon } from "lucide-react"
@@ -101,8 +102,7 @@ function AppMark({ mark, className }: { mark: Mark; className?: string }) {
 function useNow(): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 15_000)
-    return () => clearInterval(timer)
+    return everyWhileShown(15_000, () => setNow(Date.now()))
   }, [])
   return now
 }
