@@ -21,7 +21,7 @@ import type { ChangeUsage, LostVersion, ThreadChangeSummary } from "../contracts
 import type { TurnChangedFile, TurnChanges } from "../contracts/turn-changes.js"
 import { JournalReader } from "./journal-reader.js"
 import { AttributionWriter } from "./writer-client.js"
-import { WriterPathsSchema, WriterCollectionSchema } from "./writer-protocol.js"
+import { WriterPathsSchema, WriterCollectionSchema, type WriterMemory } from "./writer-protocol.js"
 import { JournalStore, type MoveRecord } from "./journal-store.js"
 import { PlacedSessionSchema, SharedJournal, sharedJournalFolder, type SharingStatus } from "./shared-journal.js"
 import type { ChosenFile, FileReferenceSource, FileResolution, FileSpelling, FileSpellings, MovedPaths } from "../contracts/file-references.js"
@@ -204,6 +204,11 @@ export interface Attribution {
   countTurn(thread: string, turn: string, state: TurnChanges["state"]): Promise<TurnChanges | undefined>
   /** Whether every change by `at` has its author for good, so a turn that ended then can be counted once and for all. */
   settledThrough(at: number): boolean
+  /**
+   * Resolves once every change by `at` has its author for good, as the journal's writer says it (`settledThrough`
+   * of the tracker), or after `withinMs`; on a host that only follows the journal, after a quarter of the settle time.
+   */
+  settledAfter(at: number, withinMs: number): Promise<void>
   /** Keep a turn's summary beside the entries, for "changes made" to sum. */
   counted(summary: TurnChanges, session: string): void
   /** The Thread's turns with entries after `after`, each with its newest: a summary counted through less is behind. */
@@ -247,6 +252,8 @@ export interface Attribution {
   status(): AttributionStatus & { sharing: SharingStatus }
   /** The rescans for lost events this host's tracker made lately; null where another host owns the journal. */
   rescans(): RescanFootprint | null
+  /** What this host's journal writer holds in memory, as its last snapshot said; undefined where it runs none. */
+  writerMemory(): WriterMemory | undefined
   close(): Promise<void>
 }
 
@@ -288,7 +295,17 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
   const writer = new AttributionWriter(deps, {
     dataRoot: deps.dataRoot, userRoot: deps.userRoot, defaultDataRoot: deps.defaultDataRoot, label: deps.label, hostPid: process.pid,
     home, temporary, own, history: Boolean(deps.history), children: Boolean(deps.children), catalogued: Boolean(deps.catalogued), running: Boolean(deps.running),
-  }, { applied: () => sharing.journal?.applied() ?? Promise.resolve() })
+  }, {
+    applied: () => sharing.journal?.applied() ?? Promise.resolve(),
+    readBack: (result) => {
+      if (result?.partial) hostLog("attribution", "a read-back pass ran out of its budget; the next reads on", { sessions: result.sessions, ms: result.ms })
+    },
+    settled: (through) => {
+      for (const waiter of settledWaiters) if (through >= waiter.at) waiter.done()
+    },
+  })
+  /** Turns waiting for the journal's writer to say their changes are settled (`settledAfter`). */
+  const settledWaiters = new Set<{ at: number; done(): void }>()
   /** The journal another host owns, read from the file, and its view as of the last commit read. */
   let reader: { store: JournalStore; version: number; view?: JournalView } | undefined
 
@@ -465,7 +482,8 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     if (!write.paths.length) return
     journal.writes.makoWrote({ kind: write.kind, operation: write.operation.slice(0, 200), paths: write.paths.slice(0, 4096) }, write.startedAt, write.endedAt)
   })
-  // Sessions imported since, moved since, or lines that turned unsure: a pass opens only those.
+  // Sessions imported since, moved since, or lines that turned unsure: a pass opens only those. The writer answers as
+  // the pass starts and says when it ends (`readBack` above): a pass can take longer than any ask waits.
   deps.jobs.every("read back unsure lines", 10 * 60_000, async () => {
     await writer.command({ kind: "read-back" })
   }, { firstAfterMs: 60_000 })
@@ -585,6 +603,22 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       }
     },
     settledThrough: (at) => !view().store.unsettledThrough(at + TRAIL_MS),
+    settledAfter: (at, withinMs) => new Promise((resolve) => {
+      if (!view().store.unsettledThrough(at + TRAIL_MS)) return resolve()
+      // Only the host whose writer owns the journal hears it say so; any other looks again as it did.
+      const hears = writer.snapshot()?.role.kind === "owner" || writer.snapshot()?.role.kind === "private"
+      const waiter = {
+        at: at + TRAIL_MS,
+        done: () => {
+          clearTimeout(timer)
+          settledWaiters.delete(waiter)
+          resolve()
+        },
+      }
+      const timer = setTimeout(waiter.done, hears ? withinMs : Math.min(withinMs, ATTRIBUTION_SETTLE_MS / 4))
+      timer.unref?.()
+      settledWaiters.add(waiter)
+    }),
     counted: (summary, session) => journal.writes.counted(summary, session),
     turnsChangedAfter: (thread, after) => view().store.turnsChangedAfter(thread, after),
     turnWriters: (thread, turn, file, shown) => offLoopRead((reader) => reader.turnWriters(thread, turn, file, shown)),
@@ -610,6 +644,7 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       sharing: { ...(journal.role().kind === "failed" ? journal.status() : writer.snapshot()?.sharing ?? journal.status()), unsent: journal.status().unsent },
     }),
     rescans: () => { void writer.command({ kind: "snapshot" }).catch(() => {}); return writer.snapshot()?.rescans ?? null },
+    writerMemory: () => writer.snapshot()?.memory,
     close: () => closePromise ??= (async () => {
       closing = true
       unwatch()

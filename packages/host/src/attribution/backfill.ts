@@ -43,8 +43,8 @@ export interface BackfillSession {
 export interface BackfillDeps {
   sessions(): readonly BackfillSession[] | Promise<readonly BackfillSession[]>
   records: ChildSource
-  /** Text files with uncommitted lines nobody is sure of, each with its tracked root and its oldest such change's time (0: unknown). */
-  unsure(): ReadonlyMap<string, { root: string; since: number }>
+  /** Text files with uncommitted lines nobody is sure of, in the roots in or around `folder` (every root without one), each with its tracked root and its oldest such change's time (0: unknown). */
+  unsure(folder?: string): ReadonlyMap<string, { root: string; since: number }>
   reconcile(calls: readonly ReportedCall[]): Promise<{ entries: number; lines: number }>
   now(): number
   log?(message: string, facts: Readonly<Record<string, string | number | boolean>>): void
@@ -67,27 +67,58 @@ export class Backfill {
   /** The unsure files the last pass read for, with their oldest change's time. */
   private readonly readFor = new Map<string, number>()
   private running?: Promise<BackfillResult>
+  /** The one pass waiting behind the running one, with every folder asked for meanwhile: none listed for all of them. */
+  private queued?: { folders: Set<string> | undefined; budgetMs: number; pass: Promise<BackfillResult> }
 
   constructor(deps: BackfillDeps) {
     this.deps = deps
   }
 
-  /** Read back what sessions that worked in `folder` (every tracked folder when unset) wrote to its unsure lines. */
+  /**
+   * Read back what sessions that worked in `folder` (every tracked folder when unset) wrote to its unsure lines. One
+   * pass at a time, and at most one waiting: every ask that comes while a pass runs shares the pass after it, which
+   * reads for all their folders with the longest of their budgets. Each queued its own pass before, so the ten-minute
+   * job's and every newly tracked root's stood in line behind one another, each up to its whole budget.
+   */
   run(folder?: string, budgetMs = BUDGET_MS): Promise<BackfillResult> {
-    // One pass at a time: a second asked for meanwhile reads what moved since.
-    const previous = this.running ?? Promise.resolve(undefined)
-    const next = previous.then(() => this.pass(folder, budgetMs), () => this.pass(folder, budgetMs))
-    this.running = next.finally(() => {
-      if (this.running === next) this.running = undefined
-    })
-    return next
+    if (!this.running && !this.queued) return this.begin(folder === undefined ? undefined : new Set([folder]), budgetMs)
+    if (this.queued) {
+      if (folder === undefined) this.queued.folders = undefined
+      else this.queued.folders?.add(folder)
+      this.queued.budgetMs = Math.max(this.queued.budgetMs, budgetMs)
+      return this.queued.pass
+    }
+    const queued: NonNullable<Backfill["queued"]> = {
+      folders: folder === undefined ? undefined : new Set([folder]),
+      budgetMs,
+      pass: (this.running ?? Promise.resolve()).then(() => undefined, () => undefined).then(() => {
+        this.queued = undefined
+        return this.begin(queued.folders, queued.budgetMs)
+      }),
+    }
+    this.queued = queued
+    return queued.pass
   }
 
-  private async pass(folder: string | undefined, budgetMs: number): Promise<BackfillResult> {
+  private begin(folders: ReadonlySet<string> | undefined, budgetMs: number): Promise<BackfillResult> {
+    const pass = this.pass(folders, budgetMs)
+    this.running = pass
+    const ended = () => {
+      if (this.running === pass) this.running = undefined
+    }
+    pass.then(ended, ended)
+    return pass
+  }
+
+  private async pass(folders: ReadonlySet<string> | undefined, budgetMs: number): Promise<BackfillResult> {
     const started = this.deps.now()
     const result: BackfillResult = { sessions: 0, calls: 0, entries: 0, lines: 0, ms: 0, partial: false }
-    const unsure = new Map([...this.deps.unsure()].filter(([path]) => !folder || within(folder, path)))
+    const unsure = new Map<string, { root: string; since: number }>()
+    // Only the roots asked for are read: every root's files were, to keep one folder's.
+    for (const folder of folders ?? [undefined])
+      for (const [path, file] of this.deps.unsure(folder)) if (!folder || within(folder, path)) unsure.set(path, file)
     if (!unsure.size) return result
+    const spent = () => this.deps.now() - started > budgetMs
     // Lines unsure since the last pass (a stash popped, a gap) may be any session's, however long it's been still.
     if ([...unsure].some(([path, file]) => this.readFor.get(path) !== file.since)) this.read.clear()
     for (const [path, file] of unsure) this.readFor.set(path, file.since)
@@ -104,20 +135,28 @@ export class Backfill {
       .sort((left, right) => Date.parse(right.updatedAt!) - Date.parse(left.updatedAt!))
     const calls: ReportedCall[] = []
     for (const session of candidates) {
-      if (result.sessions >= MAX_SESSIONS || this.deps.now() - started > budgetMs) {
+      if (result.sessions >= MAX_SESSIONS || spent()) {
         result.partial = true
         break
       }
       try {
         const own = await this.deps.records.open(session.path)
         if (own) calls.push(...this.calls(session, own, undefined, unsure))
-        const children = await this.deps.records.children(session.path).catch(() => null)
+        // The budget is looked at after every record read, not once a session: one slow record used to run a pass far past it.
+        let whole = !spent()
+        const children = whole ? await this.deps.records.children(session.path).catch(() => null) : null
         for (const child of children?.children ?? []) {
-          if (!child.path || child.state.kind === "missing" || this.deps.now() - started > budgetMs) continue
+          if (!child.path || child.state.kind === "missing") continue
+          if (spent()) {
+            whole = false
+            break
+          }
           const thread = await this.deps.records.open(child.path).catch(() => null)
           if (thread) calls.push(...this.calls(session, thread, child.nativeId, unsure))
         }
-        this.read.set(session.path, session.updatedAt!)
+        // A session cut short is read again by the next pass.
+        if (whole) this.read.set(session.path, session.updatedAt!)
+        else result.partial = true
         result.sessions++
       } catch (error) {
         this.deps.log?.("a session's record could not be read back", { path: session.path, error: error instanceof Error ? error.message : String(error) })

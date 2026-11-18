@@ -2,9 +2,12 @@ import type { z } from "zod"
 import { parentPort } from "node:worker_threads"
 import { followHostLog } from "../base/host-log.js"
 import { openWriter } from "./writer-runtime.js"
-import { ToWriterSchema, WriterContextSchema, WriterRepositorySchema, WriterInventorySchema, WriterStringSchema, WriterSetSchema, WriterBytesSchema, WriterBooleanSchema, WriterVoidSchema, WriterHistoryMarkSchema, WriterHistorySchema, WriterChildrenSchema, WriterThreadSchema, WriterPathsSchema, type WriterHostReply, type FromWriter, type WriterHostRequest, type WriterPorts } from "./writer-protocol.js"
+import { headFromFiles } from "./ports.js"
+import { applyContextChange, ToWriterSchema, WriterContextChangeSchema, WriterRepositorySchema, WriterInventorySchema, WriterStringSchema, WriterSetSchema, WriterBytesSchema, WriterBooleanSchema, WriterVoidSchema, WriterHistoryMarkSchema, WriterHistorySchema, WriterChildrenSchema, WriterThreadSchema, WriterPathsSchema, type WriterHostReply, type FromWriter, type WriterHostRequest, type WriterPorts, type WriterContext, type HeldContext } from "./writer-protocol.js"
 
 interface WriterExecution { next: number; lag: number; closed: boolean; opening?: ReturnType<typeof openWriter>; stopping?: Promise<void> }
+/** The host's context as held here, and the ask for it under way. */
+interface ContextAsk { held: HeldContext; asking?: Promise<WriterContext> }
 interface HostPending { resolve(reply: WriterHostReply): void; reject(error: Error): void; timer: NodeJS.Timeout }
 
 function disconnect(): void { parentPort?.close() }
@@ -35,14 +38,28 @@ async function main(): Promise<void> {
     subscriptions.delete(id)
     if (!state.closed) void ask({ kind: "unwatch", subscription: id }, WriterVoidSchema).catch(() => {})
   }
+  // The host's context as last told, kept by session: each ask sends the version held, and takes back only what moved.
+  const context: ContextAsk = { held: { version: 0, sessions: new Map(), context: { sessions: [], running: {}, stores: [] } } }
+  const askContext = (): Promise<WriterContext> => context.asking ??= (async () => {
+    try {
+      context.held = applyContextChange(context.held, await ask({ kind: "context", have: context.held.version }, WriterContextChangeSchema))
+      return context.held.context
+    } finally { context.asking = undefined }
+  })()
   const ports: WriterPorts = {
-    context: () => ask({ kind: "context" }, WriterContextSchema),
+    context: askContext,
+    readBack: result => { void send({ type: "read-back", result }).catch(() => {}) },
+    settledThrough: through => { void send({ type: "settled", through }).catch(() => {}) },
     deliveryLagMs: () => state.lag,
     async repository(root) {
       const found = await ask({ kind: "repository", root }, WriterRepositorySchema)
       if (!found) return null
       return {
-        head: () => ask({ kind: "head", root }, WriterStringSchema),
+        // Read here from Git's files, with no trip to the host; the host asks Git where they can't say.
+        head: async () => {
+          const found = await headFromFiles(root)
+          return found === undefined ? ask({ kind: "head", root }, WriterStringSchema) : found
+        },
         inventory: (includeTracked) => ask({ kind: "inventory", root, includeTracked }, WriterInventorySchema),
         ignored: paths => ask({ kind: "ignored", root, paths: [...paths] }, WriterSetSchema),
         ...(found.ignoredEntries && { ignoredEntries: () => ask({ kind: "ignored-entries", root }, WriterPathsSchema) }),

@@ -14,6 +14,12 @@ export interface TurnLedger {
   countTurn(thread: string, turn: string, state: TurnChanges["state"]): Promise<TurnChanges | undefined>
   /** Whether every change by `at` has its author for good. */
   settledThrough(at: number): boolean
+  /**
+   * Resolves once the journal says every change by `at` has its author for good, or after `withinMs` at the latest
+   * (sooner where this host can't hear the journal's writer say so). Absent, the count asks again every quarter of
+   * `settleMs`.
+   */
+  settledAfter?(at: number, withinMs: number): Promise<void>
   /** Keep the summary beside the entries, for "changes made". */
   counted(summary: TurnChanges, session: string): void
   /** The Thread's turns with entries after `after`, each with its newest. */
@@ -92,7 +98,10 @@ export class LiveTurnChanges {
           flushFailed = true
         }
         if ((!flushed || !ledger.settledThrough(endedAt)) && Date.now() - endedAt < GIVE_UP_MS) {
-          setTimeout(settle, ledger.settleMs / 4).unref?.()
+          // Heard and not settled yet: the journal's writer says when it is, so nothing is asked meanwhile. Each try
+          // was a command to the writer, a request to the journal's owner and a read, every 2.5 s for up to two minutes.
+          if (flushed && ledger.settledAfter) void ledger.settledAfter(endedAt, Math.max(0, endedAt + GIVE_UP_MS - Date.now())).then(settle, settle)
+          else setTimeout(settle, ledger.settleMs / 4).unref?.()
           return false
         }
         const summary = await this.count(resident, ledger, placed.thread, requestId, "settled")
