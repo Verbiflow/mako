@@ -26,7 +26,10 @@ import {
 import { useNavigatorPrompts } from "@/components/transcript/navigator-prompts"
 import {
   LEAD_EXCHANGE_ID,
+  arrivedSince,
   continuedFrom,
+  endOf,
+  type LeftAt,
   isInterruptedNote,
   renamedExchanges,
   replyProse,
@@ -549,6 +552,7 @@ export function ConversationTimeline({
   failedId,
   empty,
   footer,
+  beside,
   opening,
   hasEarlier = false,
   loadingEarlier = false,
@@ -571,6 +575,8 @@ export function ConversationTimeline({
   failedId?: string
   empty: ReactNode
   footer?: ReactNode
+  /** What stands beside "Jump to latest" while the reader is away from the end: the conversation's activity pill. */
+  beside?: ReactNode
   /** The transcript's first line in place of "Beginning of conversation", once its start is on screen. */
   opening?: ReactNode
   hasEarlier?: boolean
@@ -779,6 +785,11 @@ export function ConversationTimeline({
   /** The latest proximity check, for callers that outlive one render. */
   const wake = useRef<() => void>(() => {})
   const [showJump, setShowJump] = useState(false)
+  // Where the transcript ended when the reader left its end, so the way back says how much arrived since.
+  const [leftAt, setLeftAt] = useState<LeftAt | null>(null)
+  if (!showJump && leftAt !== null) setLeftAt(null)
+  else if (showJump && leftAt === null) setLeftAt(endOf(exchanges))
+  const arrived = showJump && leftAt ? arrivedSince(exchanges, leftAt) : 0
   const transcriptEnd = useContext(TranscriptEndContext)
   // A phone's width keeps no rail of turns: its gutter would take a tenth of the screen, and it reads back by hover.
   const navigates = useContext(CompactPresentationContext)?.navigator !== false
@@ -2306,26 +2317,33 @@ export function ConversationTimeline({
             paneRef={pane}
           />
         ) : null}
-        {transcriptEnd ? null : <button
-          type="button"
-          onClick={() => scrollToEnd("smooth")}
-          aria-hidden={!showJump}
-          tabIndex={showJump ? 0 : -1}
-          style={{
-            left: `calc(50% - ${showNavigator ? NAVIGATOR_WIDTH / 2 : 0}px)`,
-          }}
-          className={cn(
-            "pressable absolute bottom-3 flex h-7 -translate-x-1/2 items-center gap-1.5 rounded-full",
-            "bg-raised px-3 text-ui text-muted-foreground ring-1 ring-hairline",
-            "[transition:opacity_180ms_var(--ease-out),transform_180ms_var(--ease-out)]",
-            showJump
-              ? "pointer-events-auto opacity-100"
-              : "pointer-events-none translate-y-1 opacity-0"
-          )}
-        >
-          <ArrowDownIcon className="size-3" />
-          Jump to latest
-        </button>}
+        {transcriptEnd ? null : (
+          <div
+            data-transcript-jump
+            inert={!showJump}
+            style={{
+              left: `calc(50% - ${showNavigator ? NAVIGATOR_WIDTH / 2 : 0}px)`,
+            }}
+            className={cn(
+              "absolute bottom-3 flex -translate-x-1/2 items-end gap-2",
+              "[transition:opacity_180ms_var(--ease-out),transform_180ms_var(--ease-out)]",
+              showJump ? "pointer-events-auto opacity-100" : "pointer-events-none translate-y-1 opacity-0"
+            )}
+          >
+            <button
+              type="button"
+              onClick={() => scrollToEnd("smooth")}
+              aria-hidden={!showJump}
+              tabIndex={showJump ? 0 : -1}
+              className="pressable flex h-7 items-center gap-1.5 rounded-full bg-raised px-3 text-ui whitespace-nowrap text-muted-foreground ring-1 ring-hairline"
+            >
+              <ArrowDownIcon className="size-3" />
+              Jump to latest
+              {arrived > 0 ? <span data-jump-new={arrived} className="tabular text-foreground">· {arrived} new</span> : null}
+            </button>
+            {showJump ? beside : null}
+          </div>
+        )}
       </div>
     </TranscriptSourceContext>
   )

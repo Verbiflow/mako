@@ -5,6 +5,8 @@ import { readPersonTokenProblem } from "@mako/host/contracts/github-person"
 import { useToolView, type ToolCall } from "@/extend/slots"
 import {
   failedExitCode,
+  toolOpens,
+  bodyIsResult,
   formatToolArguments,
   hasToolArguments,
   makoCallWords,
@@ -85,23 +87,37 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
     return () => { active = false }
   }, [rest, threadPath, liveId, readAttempt])
 
+  // A row opens only onto what its line can't say (`toolOpens`), or onto a body a view gives it.
+  const opens = Boolean(Body) || toolOpens(call)
+  const line = (
+    <>
+      <LeadSlot open={open} opens={opens} glyph={<CallGlyph call={call} icon={view?.icon} />} />
+      <ToolWords call={call} />
+      <span className="flex-1" />
+      {server ? <span className="shrink-0 text-label text-faint/70">{server}</span> : null}
+      <Status call={call} />
+    </>
+  )
   return (
     <div data-transcript-tool={call.id}>
       <div className="group/row -mx-1.5 flex min-w-0 items-center transition-colors duration-100 hover:bg-fill-hover">
-        <button
-          type="button"
-          aria-expanded={open}
-          data-open={open || undefined}
-          data-pending={call.pending || undefined}
-          onClick={() => setOpen((value) => !value)}
-          className="pressable flex h-7 min-w-0 flex-1 items-center gap-2 px-1.5 text-left text-ui"
-        >
-          <LeadSlot open={open} glyph={<CallGlyph call={call} icon={view?.icon} />} />
-          <ToolWords call={call} />
-          <span className="flex-1" />
-          {server ? <span className="shrink-0 text-label text-faint/70">{server}</span> : null}
-          <Status call={call} />
-        </button>
+        {opens ? (
+          <button
+            type="button"
+            aria-expanded={open}
+            data-open={open || undefined}
+            data-pending={call.pending || undefined}
+            onClick={() => setOpen((value) => !value)}
+            className="pressable flex h-7 min-w-0 flex-1 items-center gap-2 px-1.5 text-left text-ui"
+          >
+            {line}
+          </button>
+        ) : (
+          // Nothing to open: the row is its words, and a file or a page it names opens from its end.
+          <div data-tool-plain data-pending={call.pending || undefined} className="flex h-7 min-w-0 flex-1 items-center gap-2 px-1.5 text-ui">
+            {line}
+          </div>
+        )}
         {openPath ? (
           <button
             type="button"
@@ -134,7 +150,7 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
       </div>
 
       {tokenProblem ? <PersonTokenNotice problem={tokenProblem} /> : null}
-      {open ? (
+      {open && opens ? (
         <div data-tool-body className="ml-1.75 space-y-2 border-l border-hairline py-1.5 pl-3.75">
           {!rest && call.details?.length ? <ToolDetails details={call.details} /> : null}
           {!rest && (Body && !call.details?.some((detail) => detail.type === "diff") ? (
@@ -317,7 +333,8 @@ export function Ending({ call }: { call: ToolCall }) {
 
 function DefaultBody({ call, dense }: { call: ToolCall; dense: boolean }) {
   const steps = useRunningSteps(call)
-  const args = hasToolArguments(call.arguments)
+  // A search, a listing or a page says what was asked in its row: its body is what came back.
+  const args = hasToolArguments(call.arguments) && !bodyIsResult(call.tool.kind)
   const input = args ? formatToolArguments(call.arguments) : ""
 
   return (

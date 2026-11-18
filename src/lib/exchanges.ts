@@ -629,6 +629,25 @@ function labelOf(exchange: Exchange): string {
   return exchange.response.length > 0 ? "Agent turn" : "Empty turn"
 }
 
+/** The transcript's end as a reader left it: its last turn and how much that turn held. */
+export interface LeftAt {
+  id: string | undefined
+  held: number
+}
+
+export function endOf(exchanges: readonly Exchange[]): LeftAt {
+  const last = exchanges.at(-1)
+  return { id: last?.id, held: last ? last.response.length + last.system.length : 0 }
+}
+
+/** The rows that arrived below `left`: each later turn, and each message or note the turn it ended on has gained. Earlier pages loading above count nothing. */
+export function arrivedSince(exchanges: readonly Exchange[], left: LeftAt): number {
+  const at = exchanges.findLastIndex((exchange) => exchange.id === left.id)
+  if (at < 0) return 0
+  const turn = exchanges[at]!
+  return exchanges.length - 1 - at + Math.max(0, turn.response.length + turn.system.length - left.held)
+}
+
 /** The local automatic wait already says this limit; keep the native marker in history, outside the live projection. */
 export function withoutWaitingLimitNotes(exchanges: Exchange[], waiting: ReadonlySet<string>): Exchange[] {
   if (!waiting.size) return exchanges
