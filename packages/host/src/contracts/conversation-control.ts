@@ -266,6 +266,14 @@ export const RESTART_RETIRED_MOVE = "Mako restarted before it moved. Nothing cha
 export function retiredMove(transfer: ContextTransfer, error: string): ContextTransfer {
   return { ...transfer, retry: undefined, state: { kind: "failed", error, removed: true } }
 }
+/** What a native session's transcript holds of Mako's note (`ConversationControl.noteHeard`). */
+export const NoteHeardSchema = z.object({
+  bindingId: z.string(),
+  nativeId: z.string(),
+  cwd: z.string(),
+  lines: z.record(z.string(), z.string()),
+})
+export type NoteHeard = z.infer<typeof NoteHeardSchema>
 export const ConversationControlSchema = z.object({
   questions: z.array(LiveQuestionSchema).max(2000).optional(),
   approvalResponses: z.array(ApprovalResponseSchema).optional(),
@@ -280,6 +288,12 @@ export const ConversationControlSchema = z.object({
    * restart, an unload or a failed send between keeps it.
    */
   rosterForgotten: z.literal(true).optional(),
+  /**
+   * The standing lines of Mako's note the native session's transcript holds (`heardBy`), by fingerprint: written once
+   * the model answers a prompt that carried them, cleared by a compaction or a rewind. A new process resuming the same
+   * session in the same folder hears only what changed since; a new session, another binding or folder hears it whole.
+   */
+  noteHeard: NoteHeardSchema.optional(),
   /** New episodes and phases use a new wire field so older hosts can still read the rest of the journal. */
   pendingCompactionRecovery: CompactionRecoverySchema.optional(),
   /** What its agent asked the person to let it do through Mako's tools, until they answer (`LiveAsks`). */

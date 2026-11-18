@@ -183,6 +183,8 @@ function applyEffect(context: ProtocolContext, effect: CodexEffect): void {
     }
     case "compaction-item":
       if (context.compaction?.turnId === effect.turnId) context.compaction.confirmed = true
+      // The app-server says so before the rollout's record is drawn, which can be after the next turn starts.
+      context.primer?.forgot()
       return
     case "server-request-resolved":
       context.protocol.resolveServerRequest(effect.requestId)
