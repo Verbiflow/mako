@@ -282,7 +282,8 @@ export interface Dependencies {
   foreground?: Pick<Foreground, "hold" | "started">
   /** What the host is doing, named: who reads a conversation in from disk is counted to it (`LiveRecords`). */
   work?: Pick<HostWork, "current">
-  mcpSnapshot?(cwd: string): Promise<McpRegistrySnapshot>
+  /** `starting`: the harness whose start waits on it, which waits for that harness's own listing alone (`McpRegistry.discover`). */
+  mcpSnapshot?(cwd: string, starting?: string): Promise<McpRegistrySnapshot>
   workspaceSnapshots?: WorkspaceSnapshots
   /** How long a turn waits for its checkpoint to hold the workspace before it goes without (`BEFORE_CHECKPOINT_WAIT_MS`). */
   checkpointWaitMs?: number

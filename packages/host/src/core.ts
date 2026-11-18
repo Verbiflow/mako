@@ -39,6 +39,7 @@ import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAt
 import { childProcessReader, CheckoutLeave, cloudHasAll, cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, Automations, AutomationLaunches, AutomationNotStartedError, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, declareRemoteAppMethods, ViewHints, declareViewHints, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers, declareSetupMethods, SetupViews } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
+import { commonDirOf } from "@mako/git"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { makoRecords, streamsRoot } from "@mako/sessions/record-streams"
 import { makoViews, type ThreadRef } from "@mako/sessions"
@@ -395,6 +396,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
 
   trace("host ready")
   const children = new ProviderChildren(environment.dataRoot)
+  // A liveness check of one of this host's own running children is answered from its record, with no process listing.
+  shell.stopping.spawnedAt = (pid) => children.observedStart(pid)
   // What decoders and spawners report is this host's from here until it stops.
   const unfollow = [unknown.follow(), mismatches.follow(), children.follow()]
   // Agents an earlier host left running are ended before this one starts any.
@@ -470,7 +473,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // Every host's record of the agents it starts, found through the session ledger, this host's own root always.
   const makoProcesses = () => readMakoProcesses([environment.dataRoot, ...threads.memory?.hostDataRoots() ?? []])
   const harnesses = openHarnesses({ host: providerHost, appRoot: environment.appRoot, userRoot: environment.userRoot, catalog, live: () => late.conversations?.live, emit, jobs: shell.jobs, subscribed: shell.subscribed, makoProcesses })
-  const tools = openTools(harnesses.tools, environment.dataRoot, () => shell.foreground.idle())
+  const tools = openTools(harnesses.tools, environment.dataRoot, () => shell.foreground.idle(), environment.userRoot, commonDirOf)
   const conversationsIn = (path: string, status: (value: string) => boolean) => (late.conversations?.live.listed() ?? [])
     .filter(({ session }) => status(session.status) && (session.cwd === path || session.cwd.startsWith(`${path}/`)))
     .map(({ session }) => `“${session.title || "Untitled conversation"}”`)
@@ -1264,7 +1267,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     foreground: shell.foreground,
     work: shell.work,
     jobs: shell.jobs,
-    mcpSnapshot: (cwd) => tools.mcp.discover(cwd),
+    mcpSnapshot: (cwd, starting) => tools.mcp.discover(cwd, starting),
     tools: (bindingId, conversationId) => residency.tools(bindingId, conversationId),
     controlInstructions: makoNote({
       cloudMachine: config.machineAgentFd !== undefined,
@@ -2368,7 +2371,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     /**
      * Every harness's MCP servers as a start in `path` reads them. Codex and Grok list theirs by running their CLIs,
      * 1.5 to 3.5 s on a copy (2026-10-20); a copy of a base made after this finds the listing in its host's memory,
-     * kept while nothing either CLI reads has changed.
+     * and its user root's file (`mcpListingsPath`), kept while nothing either CLI reads has changed.
      */
     prepareFolder: async (path) => {
       await tools.mcp.discover(path)

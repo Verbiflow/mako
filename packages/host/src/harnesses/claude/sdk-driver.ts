@@ -48,7 +48,7 @@ import type { ClaudePermissionObserver, prepareClaudePermissionObserver } from "
 import { ClaudeTranscript } from "./sdk-transcript.js"
 import { CallBounds } from "../call-bounds.js"
 import type { WriteHolds } from "../write-holds.js"
-import { launchRunsServers } from "./person-code.js"
+import { claudeSubmitRunsServer } from "./person-code.js"
 import { claudeCallHooks } from "./call-hooks.js"
 import { claudeSubagentStart } from "./routing.js"
 import { ClaudeRequests, ClaudeTranscriptTail, openedTurnLines, takenIn, TASK_PROMPT_WAIT_MS, transcriptNotification, type TranscriptNotification, type TranscriptTailStats } from "./transcript-tail.js"
@@ -615,7 +615,7 @@ export function createClaudeSdkDriver(
     provider: "claude",
     launchEnvironment: { kind: "prepared", via: "SDK configuration consumes AdmittedStartOptions.accountLaunch." },
     makoInstructions: { via: "`systemPrompt.append` on the claude_code preset, which Claude Code keeps out of its transcript." },
-    ...dependencies.writeHolds && { firstWrite: { via: "The PreToolUse callback Mako registers, which every tool call passes, a subagent's included, and which Claude Code awaits before the tool runs." } },
+    ...dependencies.writeHolds && { firstWrite: { via: "The PreToolUse callback Mako registers, which every tool call passes, a subagent's included, and which Claude Code awaits before the tool runs.", submitRuns: claudeSubmitRunsServer } },
     nativeIdentity: CLAUDE_NATIVE_IDENTITY,
     nativeExclusion: NO_NATIVE_EXCLUSION,
     nativePromptIdentity: { kind: "supplied-message-id", evidence: "SDKUserMessage.uuid is dispatch.attemptId; the native history reader preserves it as the user entry ID." },
@@ -700,9 +700,13 @@ export function createClaudeSdkDriver(
         const configured = await trace.step("configuration", () => dependencies.configure(cwd, options, trace))
         config = configured.options
         account = configured.account
-        // This launch's writes are held only where none of the person's own code runs beside Mako's hook: no stdio MCP
-        // server of theirs, and nothing in the settings Claude Code resolves for it (`settingsRunCode`). Unasked, it may.
-        if (dependencies.writeHolds) dependencies.writeHolds.attend(conversationId, Boolean(dependencies.personCodeRuns) && !launchRunsServers(config) && !await dependencies.personCodeRuns!(config))
+        // This launch's writes are held only where nothing in the settings Claude Code resolves for it runs the person's
+        // own code beside Mako's hook (`settingsRunCode`). Unasked, it may. A stdio MCP server of theirs doesn't stop it:
+        // Claude Code calls a server's tool only after the PreToolUse callback answers, which holds every tool not known
+        // to only read (`claudeCallHooks`), so what such a tool writes waits for the checkpoint like an edit. The two
+        // messages that reach a server with no tool call, its prompt as a command and a mention of its resource, wait
+        // for the checkpoint themselves (`claudeSubmitRunsServer`).
+        if (dependencies.writeHolds) dependencies.writeHolds.attend(conversationId, Boolean(dependencies.personCodeRuns) && !await dependencies.personCodeRuns!(config))
         toolApprovals = await trace.step("observation", async () => {
           try {
             return await dependencies.prepareApprovals?.({ config, sessionId: nativeId,
@@ -732,7 +736,7 @@ export function createClaudeSdkDriver(
         // Read from here on: what the file holds already is the session's history.
         transcriptTail(live)
         if (live.state.nativePath !== path) engine.patch(live, { nativePath: path })
-      })
+      }, { ...options.resume && !options.fork && options.threadPath !== undefined && { path: options.threadPath }, cwd })
       const decoder = new ClaudeDecoder({
         get state() { return live.state },
         restores: options.resume && !options.fork ? { totals: options.observedUsage } : undefined,

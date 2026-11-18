@@ -61,6 +61,7 @@ import { AccountUsageReadings } from "./account-usage-readings.js"
 import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import { bindingWindow, LIMIT_NEAR_PERCENT, limitOffer, spentUntil, windowsAt, type AccountLimitOffer, type HarnessLimit } from "../contracts/account-usage.js"
 import type { FallbackAccount } from "../contracts/fin-fallback.js"
+import { CredentialRevisions } from "./credential-revisions.js"
 import { AccountSignIns, SignInRecoveryWriteError, type VerifiedSignIn } from "./account-sign-ins.js"
 
 /** Host-only, prepared once for an execution. Never serialize the environment. */
@@ -144,6 +145,10 @@ export class HarnessAccounts {
   /** Each account's usage, read from its provider on demand. */
   readonly usage: AccountUsageReadings
   private readonly signIns: AccountSignIns
+  /** Credential revisions held a few seconds; every account change made here ends what it holds (`changing`). */
+  private readonly revisions: CredentialRevisions
+  /** The account changes asked for here and not yet over, by harness: the account each changes, null for the selection. */
+  private readonly underWay = new Map<string, Set<{ account: string | null; done: Promise<void> }>>()
   /** Serializes identity mutations per provider so selecting and deleting cannot race. */
   private readonly mutations = new Map<string, Promise<unknown>>()
   private readonly removalListeners = new Set<(harness: string, name: string, event: AccountRemovalEvent) => void>()
@@ -153,8 +158,9 @@ export class HarnessAccounts {
   private route: ((provider: string, env: NodeJS.ProcessEnv) => Promise<NodeJS.ProcessEnv>) | undefined
   private readonly capabilities: ProviderRegistry<ProviderAccountCapability>
 
-  constructor(capabilities: ProviderRegistry<ProviderAccountCapability>, root: AccountRoot) {
+  constructor(capabilities: ProviderRegistry<ProviderAccountCapability>, root: AccountRoot, revisions = new CredentialRevisions()) {
     this.capabilities = capabilities
+    this.revisions = revisions
     this.root = root
     this.holds = new AccountHolds(root)
     this.usage = new AccountUsageReadings(capabilities)
@@ -205,7 +211,7 @@ export class HarnessAccounts {
    * switch back — browser OAuth is a dance only the CLI itself can drive.
    */
   async capture(harness: AccountHarness, name: string): Promise<void> {
-    await this.mutate(harness, async () => {
+    await this.changing(harness, name, async () => {
       const capability = this.selectable(harness)
       if (!capability.captureAccount)
         throw new Error(`${capability.label} logins can't be copied. Add the account by signing in.`)
@@ -232,7 +238,7 @@ export class HarnessAccounts {
   }
 
   async remove(harness: AccountHarness, name: string): Promise<AccountRemovalOutcome> {
-    const outcome = await this.mutate(harness, async (): Promise<AccountRemovalOutcome> => {
+    const outcome = await this.changing(harness, name, async (): Promise<AccountRemovalOutcome> => {
       const capability = this.selectable(harness)
       // Removing credentials must never choose a different paying identity.
       // The user first selects another saved account or explicitly selects the
@@ -263,7 +269,7 @@ export class HarnessAccounts {
 
   /** Withdraw a pending removal. False when it already finished. */
   async keep(harness: AccountHarness, name: string): Promise<boolean> {
-    const kept = await this.mutate(harness, async () => {
+    const kept = await this.changing(harness, name, async () => {
       const marker = removalMarker(this.root, harness, name)
       if (!existsSync(marker)) return false
       await rm(marker, { force: true })
@@ -293,7 +299,7 @@ export class HarnessAccounts {
    * sign-in per provider at a time.
    */
   async prepareLogin(harness: AccountHarness, target: AccountLoginTarget): Promise<{ launch: AccountLoginLaunch; previousEmail?: string }> {
-    return this.mutate(harness, async () => {
+    return this.changing(harness, target.name, async () => {
       const capability = this.nativeLogin(harness)
       const root = this.root.provider(harness)
       for (const entry of await readdir(root).catch(() => []))
@@ -317,7 +323,7 @@ export class HarnessAccounts {
     const capability = this.nativeLogin(harness)
     const confirm = capability.confirmAccountLogin?.bind(capability)
     if (!confirm) return false
-    return this.mutate(harness, () => confirm(target).then(() => true, () => false))
+    return this.changing(harness, target.name, () => confirm(target).then(() => true, () => false))
   }
 
   /**
@@ -331,7 +337,7 @@ export class HarnessAccounts {
     target: AccountLoginTarget,
     options: { verify?: (env: NodeJS.ProcessEnv) => Promise<void>; confirmed?: boolean; previousEmail?: string }
   ): Promise<AccountLoginResult> {
-    const { result, receipt } = await this.mutate(harness, async () => {
+    const { result, receipt } = await this.changing(harness, target.name, async () => {
       const result = await this.finishVerifiedLogin(harness, target, options)
       const verified = options.confirmed || options.verify !== undefined || this.nativeLogin(harness).confirmAccountLogin !== undefined
       let receipt: VerifiedSignIn | undefined
@@ -384,7 +390,7 @@ export class HarnessAccounts {
 
   /** A sign-in that will not finish leaves nothing behind; an account being signed in again keeps what it had. */
   async discardLogin(harness: AccountHarness, target: AccountLoginTarget): Promise<void> {
-    await this.mutate(harness, async () => {
+    await this.changing(harness, target.name, async () => {
       const capability = this.nativeLogin(harness)
       await capability.abandonAccountLogin?.(target)
       if (!target.renew) await capability.removeAccount(target.name)
@@ -395,7 +401,7 @@ export class HarnessAccounts {
 
   /** `null` is the CLI's ordinary login, the one a terminal signs in to. */
   async select(harness: AccountHarness, name: string | null): Promise<void> {
-    return this.mutate(harness, async () => {
+    return this.changing(harness, null, async () => {
       const capability = this.selectable(harness)
       if (name !== null) {
         this.refuseRemoving(harness, name)
@@ -444,8 +450,8 @@ export class HarnessAccounts {
     }
   }
 
-  /** Resolve selection and its launch environment together under the identity lease.
-   * This is configured identity, not proof of the identity reported by native code.
+  /** Resolve selection under the identity lease, then its launch environment between two reads of the credential
+   * revision, which must agree. This is configured identity, not proof of the identity reported by native code.
    * A `holder` keeps the account from being removed until it releases the
    * launch's `hold`; work that outlives the call must pass one.
    */
@@ -476,23 +482,32 @@ export class HarnessAccounts {
     const capability = this.capabilities.get(provider)
     if (!capability) return { env: await this.routed(provider, env), account: { name: "default" }, selection: { kind: "unavailable" } }
     const pinned = capability.mode === "selectable" && options.account !== undefined ? selectionOf(options.account) : undefined
-    const resolve = async () => {
+    // The lease covers only what must not race an account change in any host sharing this root: reading the selection
+    // and taking the hold that keeps the account from being removed. Reading the credentials under it held every
+    // other launch of the harness behind two Keychain reads.
+    const select = async () => {
       if (pinned) this.refuseRemoving(provider, pinned)
       const selection = pinned !== undefined ? pinned : await capabilitySelection(this.root, capability)
+      // The CLI's own login is never Mako's to remove; only kept accounts are held.
+      const hold = options.holder && capability.mode === "selectable" && selection !== null ? this.holds.hold(provider, selection, options.holder) : undefined
+      return { selection, hold }
+    }
+    const { selection, hold } = capability.mode === "selectable" ? await this.mutate(provider, select) : await select()
+    try {
       const name = selection ?? "default"
-      const before = options.trackCredential === false ? undefined : await capability.credentialRevision(name, env)
+      const before = options.trackCredential === false ? undefined : await capability.credentialRevision(name, env, this.revisions.holder(provider))
       const resolved = await this.routed(provider, await capability.accountEnv(selection, env))
-      const revision = options.trackCredential === false ? undefined : await capability.credentialRevision(name, env)
+      const revision = options.trackCredential === false ? undefined : await capability.credentialRevision(name, env, this.revisions.holder(provider))
       if (before !== revision) throw new ExecutionAccountChanged("credentials")
       const launch: AccountLaunch = { env: resolved, account: capability.selectedAccount(selection, resolved), selection: capability.mode === "selectable"
         ? { kind: "selectable" as const, name: selection, ...(pinned !== undefined && { pinned: true as const }) }
         : { kind: "observed" as const }, credential: revision === undefined ? undefined : { name, revision } }
-      // The CLI's own login is never Mako's to remove; only kept accounts are held.
-      if (options.holder && capability.mode === "selectable" && selection !== null)
-        launch.hold = this.holds.hold(provider, selection, options.holder)
+      if (hold) launch.hold = hold
       return launch
+    } catch (error) {
+      hold?.release()
+      throw error
     }
-    return capability.mode === "selectable" ? this.mutate(provider, resolve) : resolve()
   }
 
   /** `env` with the routes `provider` takes; a route that can't be applied never stops the launch. */
@@ -512,14 +527,29 @@ export class HarnessAccounts {
    * `pinned` is the account the conversation runs on now instead of the selected one; a pin set or cleared since
    * the launch changes it as a selection would. */
   async assertLaunch(provider: string, launch: AccountLaunch, pinned?: string): Promise<void> {
-    const wanted = pinned !== undefined && this.capabilities.get(provider)?.mode === "selectable" ? selectionOf(pinned) : undefined
-    if (launch.selection.kind === "selectable" && (wanted !== undefined ? wanted : await this.root.readSelection(provider)) !== launch.selection.name)
-      throw new ExecutionAccountChanged("selection")
-    if (launch.credential) {
-      const capability = this.capabilities.get(provider)
-      if (!capability || await capability.credentialRevision(launch.credential.name, launch.env) !== launch.credential.revision)
+    const capability = this.capabilities.get(provider)
+    const wanted = pinned !== undefined && capability?.mode === "selectable" ? selectionOf(pinned) : undefined
+    const selected = async () => launch.selection.kind !== "selectable" || (wanted !== undefined ? wanted : await this.root.readSelection(provider)) === launch.selection.name
+    const account = launch.credential?.name ?? (launch.selection.kind === "selectable" ? launch.selection.name ?? "default" : "default")
+    // A change Mako is making to this account, or to the selection this launch follows, is decided before the input
+    // is: asked for and not yet finished, it would otherwise be read half made, and the input let out under the
+    // account being switched away from. Nothing is decided on a read such a change began under.
+    const changing = () => [...this.underWay.get(provider) ?? []].filter((change) => change.account === account || (change.account === null && wanted === undefined)).map((change) => change.done)
+    for (;;) {
+      const changes = changing()
+      if (changes.length) {
+        await Promise.all(changes)
+        continue
+      }
+      if (!await selected()) throw new ExecutionAccountChanged("selection")
+      if (!launch.credential) return
+      if (!capability || await capability.credentialRevision(launch.credential.name, launch.env, this.revisions.holder(provider)) !== launch.credential.revision)
         throw new ExecutionAccountChanged("credentials")
+      if (!changing().length) break
     }
+    // Read again last: a switch another Mako on this root made while the revision was read must not let this input
+    // out under the account switched away from.
+    if (!await selected()) throw new ExecutionAccountChanged("selection")
   }
 
   /**
@@ -711,6 +741,33 @@ export class HarnessAccounts {
     return capability ? this.capabilityAccounts(capability) : []
   }
 
+  /**
+   * `run` as a change to `provider`'s accounts (a sign-in, a switch, a removal): no credential read held before it,
+   * or while it runs, answers a prompt afterwards. Forgotten as it begins and as it ends, with nothing awaited
+   * between the change and the forgetting. `account` is the account it changes, or null for the selection: input for
+   * that account, or for whichever is selected, isn't admitted until it is over.
+   */
+  private changing<T>(provider: string, account: string | null, run: () => Promise<T>): Promise<T> {
+    const task = this.mutate(provider, async () => {
+      this.revisions.forget(provider)
+      try {
+        return await run()
+      } finally {
+        this.revisions.forget(provider)
+      }
+    })
+    // Under way from the moment it is asked for, before its turn at the lease comes (`assertLaunch`).
+    const change = { account, done: task.then(() => undefined, () => undefined) }
+    const changes = this.underWay.get(provider) ?? new Set()
+    this.underWay.set(provider, changes)
+    changes.add(change)
+    void change.done.then(() => {
+      changes.delete(change)
+      if (!changes.size && this.underWay.get(provider) === changes) this.underWay.delete(provider)
+    })
+    return task
+  }
+
   private async mutate<T>(provider: string, run: () => Promise<T>): Promise<T> {
     const previous = this.mutations.get(provider) ?? Promise.resolve()
     const task = previous.catch(() => undefined).then(() => this.root.withMutation(provider, run))
@@ -751,7 +808,7 @@ export class HarnessAccounts {
   private async completeRemoval(provider: string, name: string): Promise<void> {
     let event: AccountRemovalEvent | undefined
     try {
-      event = await this.mutate(provider, async () => {
+      event = await this.changing(provider, name, async () => {
         const marker = removalMarker(this.root, provider, name)
         if (!existsSync(marker)) return undefined
         const capability = this.capabilities.get(provider)
