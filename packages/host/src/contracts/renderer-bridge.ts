@@ -962,6 +962,9 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<void>("mako:utility-model-disconnect", provider),
     stageFile: (name: string, base64: string) =>
       invokeTrustedHost<StagedFile>("mako:stage-file", name, base64),
+    /** One piece of a file with no path, at most `STAGED_PART_BYTES` of it; `into` is what the piece before answered. */
+    stageFilePart: (name: string, base64: string, into?: { path: string; offset: number }) =>
+      invokeTrustedHost<StagedFile>("mako:stage-file-part", name, base64, into),
     stageFilePath: (sourcePath: string) =>
       invokeTrustedHost<StagedFile>("mako:stage-file-path", sourcePath),
     /** The OS path behind a dropped/picked File — the fast lane for staging. */
