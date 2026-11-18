@@ -44,7 +44,7 @@ function arrival(requests: readonly LiveRequest[], arrived: LiveRequest, ahead: 
 /** The refusal a resume that can't go raises: `SessionBusyError` while a process has the session open. */
 export function reconnectError(verdict: ResumeVerdict | undefined): Error {
   return verdict?.kind === "held" ? new SessionBusyError(verdict.by)
-    : verdict?.kind === "unavailable" && verdict.retry ? new NativeVerificationPendingError(verdict.reason, verdict.soon === true)
+    : verdict?.kind === "unavailable" && verdict.retry ? new NativeVerificationPendingError(verdict.reason)
       : new HostFailureError("resume-failed", reconnectRefusal(verdict))
 }
 
@@ -511,7 +511,7 @@ export class LiveTransfers {
           unattended: this.host.dependencies.unattended,
           emit: this.host.driverEvents(resident, bindingId),
           mcpSnapshot: this.host.dependencies.mcpSnapshot
-            ? () => this.host.dependencies.mcpSnapshot!(source.session.cwd, driver.provider)
+            ? () => this.host.dependencies.mcpSnapshot!(source.session.cwd)
             : undefined,
           conversationId: bindingId,
           resume: resume?.nativeId,
@@ -852,7 +852,7 @@ export class LiveTransfers {
         const failure = classifyStartFailure(words, reconnect, evidence)
         // A cause that clears by itself: the transfer stays queued and goes again at its time (`wakeDue`), once.
         const cause = transientCause(words, failure, error instanceof SessionBusyError || error instanceof SessionHeldError, evidence)
-        const retry = cause && nextRetry(transfer.retry, cause, words, Date.now(), undefined, error instanceof NativeVerificationPendingError && error.soon)
+        const retry = cause && nextRetry(transfer.retry, cause, words, Date.now())
         try {
           if (retry) {
             this.save(resident, { ...transfer, behind: undefined, state: { kind: "queued" }, retry })

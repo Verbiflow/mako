@@ -39,19 +39,19 @@ async function validatedSessions<Value>(
 ): Promise<{ sessions: ProviderActivitySession[]; pids: Set<number> }> {
   const active: ProviderActivitySession[] = []
   const pids = new Set<number>()
-  const registered = GrokActiveSessionsSchema.parse(value).map((session) => {
+  for (const session of GrokActiveSessionsSchema.parse(value)) {
     const nativeId = session.session_id ?? session.sessionId ?? session.id
     if (!nativeId) throw new Error("Grok activity record has no session identity")
-    return { nativeId, session }
-  })
-  // Every pid is asked about in one turn, so their start times are one process listing (`HostProbes.startedAt`).
-  const live = await Promise.all(registered.map(({ session }) =>
-    processIdentityMatches({ pid: session.pid, startedAt: session.opened_at ?? session.openedAt, signal })
-  ))
-  for (const [index, { nativeId, session }] of registered.entries()) {
-    if (!live[index]) continue
-    active.push({ nativeId, status: "open" })
-    pids.add(session.pid)
+    if (
+      (await processIdentityMatches({
+        pid: session.pid,
+        startedAt: session.opened_at ?? session.openedAt,
+        signal,
+      }))
+    ) {
+      active.push({ nativeId, status: "open" })
+      pids.add(session.pid)
+    }
   }
   return { sessions: active, pids }
 }
@@ -69,23 +69,20 @@ async function placedByMako(
 ): Promise<ProviderActivitySession[] | undefined> {
   if (!target.mako) return undefined
   const mako = target.mako()
-  const placed = pids.map((pid) => {
+  const holders: ProviderActivitySession[] = []
+  for (const pid of pids) {
     const group = groups.get(pid)
     const leader = mako.has(pid) ? pid : group !== undefined && mako.has(group) ? group : undefined
     const recorded = leader === undefined ? undefined : mako.get(leader)
-    return leader === undefined || !recorded ? undefined : { leader, recorded }
-  })
-  if (placed.includes(undefined)) return undefined
-  // Asked together, so the leaders' start times are one process listing.
-  const same = await Promise.all(placed.map((one) => one !== undefined && processIdentityMatches({
-    pid: one.leader, startedAt: one.recorded.startedAt, signal,
-    exact: one.recorded.observed, toleranceMs: one.recorded.observed ? undefined : START_READING_TOLERANCE_MS,
-  }).catch(() => false)))
-  if (same.includes(false)) return undefined
-  const holders: ProviderActivitySession[] = []
-  for (const one of placed)
-    if (one?.recorded.session === target.nativeId)
-      holders.push({ nativeId: target.nativeId, status: "open", detail: `Mako's host (pid ${one.recorded.host})` })
+    if (leader === undefined || !recorded) return undefined
+    const same = await processIdentityMatches({
+      pid: leader, startedAt: recorded.startedAt, signal,
+      exact: recorded.observed, toleranceMs: recorded.observed ? undefined : START_READING_TOLERANCE_MS,
+    }).catch(() => false)
+    if (!same) return undefined
+    if (recorded.session === target.nativeId)
+      holders.push({ nativeId: target.nativeId, status: "open", detail: `Mako's host (pid ${recorded.host})` })
+  }
   return holders
 }
 

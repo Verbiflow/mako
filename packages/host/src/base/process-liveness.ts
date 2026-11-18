@@ -127,11 +127,6 @@ export async function processIdentityMatches({
   if (startedAt === undefined) return true
   if (onWindows())
     throw new Error("Process start identity is unavailable on this platform")
-  // The host's own running child: its pid can't have been reused while the host holds it, and its start was read
-  // once as it was spawned. Most of the pids a harness's registry names on a busy Mac are these.
-  const own = hostStopping()?.spawnedAt?.(pid)
-  if (own !== undefined)
-    return processStartMatches(startedAt, own, toleranceMs ?? (exact ? 0 : START_TOLERANCE_MS))
   let actual: number
   try {
     actual = await processStartedAt(pid, signal)

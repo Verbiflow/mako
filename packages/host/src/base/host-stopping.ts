@@ -50,11 +50,6 @@ export class HostStopping {
   private stopped: Promise<void> | undefined
   /** Where this host's probes run, once composition gives it one; without it they're spawned here. */
   probes: HostProbes | undefined
-  /**
-   * When a provider process this host spawned and still runs started (`ProviderChildren.observedStart`), once
-   * composition gives it one: a liveness check of the host's own child reads it here, with no process listing.
-   */
-  spawnedAt: ((pid: number) => number | undefined) | undefined
 
   get signal(): AbortSignal { return this.controller.signal }
 

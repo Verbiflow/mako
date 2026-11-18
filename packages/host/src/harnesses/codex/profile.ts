@@ -1,4 +1,4 @@
-import { resolveCodexExecutable, type CodexExecutables } from "./executable.js"
+import { resolveCodexExecutable } from "./executable.js"
 import {
   normalizeCodexModels,
   type CodexModelListResponse,
@@ -45,7 +45,7 @@ const ModelPageSchema = z.object({
 type ModelListParams = { limit: number; cursor?: string }
 type ConfigReadParams = { includeLayers: boolean; cwd?: string }
 
-export function codexProfileLoader(processes: DiscoveryProcesses, executables?: CodexExecutables): ProviderProfileLoader {
+export function codexProfileLoader(processes: DiscoveryProcesses): ProviderProfileLoader {
   const loader: ProviderProfileLoader = {
     provider: "codex",
     label: "Codex",
@@ -55,7 +55,7 @@ export function codexProfileLoader(processes: DiscoveryProcesses, executables?: 
     transport: "app-server",
     cacheKey: (env) => `${env.CODEX_HOME ?? ""}\0${env.CODEX_EXECUTABLE ?? ""}`,
     async load(env, cwd, context) {
-      const executable = await resolveCodexExecutable(env, executables)
+      const executable = await resolveCodexExecutable(env)
       if (!executable)
         throw new Error("The selected Codex executable is not available")
       return withDiscoveryRpc(

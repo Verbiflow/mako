@@ -1289,11 +1289,10 @@ catalog and the sync daemon (`MAKO_STORE_WRITER`) stamp formats with the
 host's `storeWriter`. A view in a newer format is neither removed nor
 written over, and this build keeps its own in memory; JSON files keep
 `version` (and `reads` once a newer build sets it, `jsonStoreAccess`):
-`runtime-updates.json`, `provider-profiles.json` and `mcp-listings.json`
-aren't written by an older build, and every rewrite of
-`runtime-updates.json`, `mcp-listings.json`, `worktree-origins.json` and
-`utility-work.json` writes back the fields and entries it doesn't name
-(`unknownFields`); an account lease whose accounts
+`runtime-updates.json` and `provider-profiles.json` aren't written by an
+older build, and every rewrite of `runtime-updates.json`,
+`worktree-origins.json` and `utility-work.json` writes back the fields and
+entries it doesn't name (`unknownFields`); an account lease whose accounts
 an older build can't read holds them. `mako:store-formats` reports every
 store's standing; the rail shows the Thread store's line above its footer
 and Settings › Diagnostics one per store, each with Update, which installs
@@ -5015,11 +5014,7 @@ and a new message supersedes the continuation. The held-wakes job sends each
 again when its time comes (`wakeDue`), across restarts, as it does a usage
 limit's timed resume; a Resume sends it now. A session Mako's exit closed
 reopens for it, while the person's own close stops it waiting. The waits grow
-from ten seconds to ten minutes and repeat (`RETRY_STEPS_MS`); a wake whose
-ownership check only ran out of time found nothing against the session, so
-it is asked again after a second and a half, three times, before those steps
-(`QUICK_RETRY_MS`, `ResumeVerdict.soon`), while a session open elsewhere or
-an inventory that can't be completed waits the steps from the first. Every
+from ten seconds to ten minutes and repeat (`RETRY_STEPS_MS`), and every
 cause ends (`GIVE_UP_MS`): a rate limit after six hours, so a usage limit's
 window is waited out, the service, the network or a stalled start after an
 hour, a session open elsewhere after half an hour, each then failing with its
@@ -5052,10 +5047,7 @@ fails the turn and disconnects in one patch. Claude's hooks report a fresh
 session's transcript only when its first turn ends, so a death before that
 finds the file by session id under the account's `CLAUDE_CONFIG_DIR`
 (`ClaudeTranscript.locate`); without it the reconnect refused with "native
-session source has not been located". A resume looks first where the file
-is already known to be, one stat each: the path its binding saved, then the
-folder Claude names after the working folder, and only then every project
-folder at once. A resumable ACP source declares
+session source has not been located". A resumable ACP source declares
 `locateSession` (`acpLiveDriver` refuses one without it), and the transport
 reports the located source on the ready update and again on the exit update,
 since a new session is not on disk when it opens: Grok searches
@@ -5227,12 +5219,7 @@ version itself. The host reads every runtime five seconds after it starts,
 when a window asks and the reading is over ten minutes old, hourly for the
 public version, and after an update; each reading is pushed to every window
 as `runtime-updates` and kept in `~/.mako/runtime-updates.json` so the next
-host paints the last reading before its own lands. The same file keeps what
-a harness remembers of its installations (`ProviderUpdateSource.remembered`):
-Codex's answer to which installation reads the person's configuration, by
-each binary's and the configuration's size and change time
-(`CodexExecutables`), so a start runs `codex features list` once per binary
-and not on every start. A window that asks for a
+host paints the last reading before its own lands. A window that asks for a
 refresh (`mako:harness-updates` with `true`) gets the reading taken after
 its ask, so a refresh right after an update or a terminal's install never
 answers the old version. Settings > Agents

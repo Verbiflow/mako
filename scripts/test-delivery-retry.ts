@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { GIVE_UP_MS, nextRetry, QUICK_RETRIES, QUICK_RETRY_MS, RETRY_STEPS_MS, transientCause, type RetryCause } from "@mako/host/contracts/delivery-retry"
+import { GIVE_UP_MS, nextRetry, RETRY_STEPS_MS, transientCause, type RetryCause } from "@mako/host/contracts/delivery-retry"
 import { classifyProviderText } from "@mako/host/contracts/provider-failure"
 import { describeTransferRecovery } from "@mako/host/contracts/operation-recovery"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
@@ -157,20 +157,6 @@ try {
     let retry = first
     for (let attempt = 2; attempt <= 40; attempt++) retry = nextRetry(retry, "rate-limited", "usage limit", now)!
     assert.equal(retry.at - now, 600_000, "the fortieth attempt waits ten minutes, as every one past the sixth")
-    // A check that only timed out is asked again soon, a few times, then on the steps from their start; a real conflict
-    // (a session open elsewhere) waits the steps from the first.
-    {
-      const waits: number[] = []
-      let quick: ReturnType<typeof nextRetry>
-      for (let attempt = 1; attempt <= QUICK_RETRIES + 2; attempt++) {
-        quick = nextRetry(quick, "launch-stalled", "timed out", now, undefined, true)!
-        waits.push(quick.at - now)
-      }
-      assert.deepEqual(waits, [...Array.from({ length: QUICK_RETRIES }, () => QUICK_RETRY_MS), RETRY_STEPS_MS[0], RETRY_STEPS_MS[1]], "a timed-out check goes again in a second or two, then backs off")
-      assert.ok(QUICK_RETRY_MS >= 1_000 && QUICK_RETRY_MS <= 2_000)
-      assert.equal(nextRetry(undefined, "busy", "open elsewhere", now)!.at - now, RETRY_STEPS_MS[0], "a session held elsewhere backs off as before")
-      assert.equal(nextRetry(undefined, "launch-stalled", "inventory incomplete", now)!.at - now, RETRY_STEPS_MS[0], "as does a check that answered it can't tell")
-    }
     // Every cause ends: past its bound the message fails with its card, so nothing waits unseen forever.
     for (const cause of ["rate-limited", "provider-unavailable", "network", "launch-stalled", "busy"] as const) {
       const begun = nextRetry(undefined, cause, "why", now)!

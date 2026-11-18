@@ -2,9 +2,7 @@ import { claudeRecoveryControls } from "./lib/claude-recovery-controls.ts"
 import type { PromptDeliveryEvidence } from "@mako/host/contracts/prompt-delivery"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import fsPromises, { mkdir, mkdtemp, writeFile, readFile, rm } from "node:fs/promises"
-import { syncBuiltinESMExports } from "node:module"
-import { mock } from "node:test"
+import { mkdir, mkdtemp, writeFile, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
@@ -29,8 +27,7 @@ import { ClaudeProjection } from "@mako/sessions/claude-projection"
 import { readPromptAttachments } from "@mako/sessions/prompt-attachments"
 import { claudeInputContent, ClaudeInput } from "@mako/host/harnesses/claude/input"
 import { ClaudePermissions } from "@mako/host/harnesses/claude/sdk-permissions"
-import { WriteHolds } from "@mako/host/harnesses/write-holds"
-import { claudeProjectFolder, ClaudeTranscript } from "@mako/host/harnesses/claude/sdk-transcript"
+import { ClaudeTranscript } from "@mako/host/harnesses/claude/sdk-transcript"
 import { launchContext } from "@mako/host/base/execution-context"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import { claudeAuthCause, claudeAuthDiagnostics } from "@mako/host/harnesses/claude/auth-diagnostics"
@@ -1232,94 +1229,6 @@ console.log(
   await started("after-clear", "clear")
   cleared.follow("after-clear")
   assert.equal(cleared.path, "/disposable/after-clear.jsonl", "the new session's transcript is kept whichever arrives first")
-}
-
-// A launch with a stdio MCP server of the person's holds its writes, so its message goes at once: the server's tools
-// reach Mako's PreToolUse callback like any other, and wait there for the turn's checkpoint. The person's hooks still
-// stop it (`personCodeRuns`). A fake query; the callback is the one the driver registered with it.
-{
-  const holds = new WriteHolds()
-  const theirs = { options: { mcpServers: { theirs: { command: "node", args: ["server.js"] } } }, account: { name: "fixture-launch" } }
-  const launch = async (id: string, personCodeRuns: boolean) => {
-    const messages = new Messages()
-    let hooks: Options["hooks"]
-    const held = createClaudeSdkDriver({ ...dependencies, writeHolds: holds, personCodeRuns: async () => personCodeRuns, configure: async () => theirs, async query(options) {
-      hooks = options.options.hooks
-      return { ...(await dependencies.query(options)), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close() }
-    } })
-    await held.start("/disposable", admitted("claude", { conversationId: id, emit: () => {} }))
-    return { held, pre: hooks?.PreToolUse?.at(-1)?.hooks[0] }
-  }
-  const hooked = await launch("stdio-server-hooks", true)
-  assert.equal(holds.attends("stdio-server-hooks"), false, "the person's own hooks still make the message wait for the checkpoint")
-  await hooked.held.close("stdio-server-hooks")
-  const { held, pre } = await launch("stdio-server", false)
-  assert.equal(holds.attends("stdio-server"), true, "a launch with a stdio MCP server holds its writes, so its message is sent at once")
-  assert.ok(pre, "the driver registered its PreToolUse callback")
-  // What reaches the server with no tool call is told from the message, and waits for the checkpoint itself.
-  const submitRuns = held.firstWrite?.submitRuns
-  assert.ok(submitRuns, "the driver says which messages run a server's code as they are submitted")
-  assert.deepEqual(["fix the test", "/mcp__theirs__review", "see @theirs:file:///notes.md"].map((text) => submitRuns(text)), [false, true, true], "a plain message goes at once; a server's prompt command and a resource mention wait")
-  const gate = Promise.withResolvers<void>()
-  let frozen = false
-  let early = 0
-  const unhold = holds.hold("stdio-server", { until: gate.promise, frozen: () => frozen, wrote: () => { early += 1 } })
-  const call = (tool_name: string) => pre({ hook_event_name: "PreToolUse", tool_name, tool_input: {}, tool_use_id: randomUUID(), session_id: "s", transcript_path: "t", cwd: "/disposable" }, undefined, { signal: new AbortController().signal })
-  const settles = (pending: Promise<unknown>, ms: number) => Promise.race([pending.then(() => true), delay(ms).then(() => false)])
-  assert.equal(await settles(call("Read"), 50), true, "a read goes at once")
-  // The server's tool, in the main agent or a subagent, and the tools that read its resources, which run its code too.
-  const writes = ["mcp__theirs__write_file", "mcp__theirs__anything_else", "ListMcpResourcesTool", "ReadMcpResourceTool"].map(call)
-  assert.equal(await settles(Promise.race(writes), 100), false, "the server's tools wait for the turn's checkpoint")
-  frozen = true
-  gate.resolve()
-  assert.equal(await settles(Promise.all(writes), 1_000), true, "and run once it holds the workspace")
-  assert.equal(early, 0, "none of them went before it")
-  unhold()
-  await held.close("stdio-server")
-}
-
-// A resumed session's transcript is found where it is already known to be, with no project folder listed: the path
-// its binding saved, else the folder Claude names after the working folder. Only a session in neither is looked for
-// in every folder, all at once. One folder after another took 13 s on average with 152 of them, on every wake.
-{
-  const home = await mkdtemp(join(tmpdir(), "mako-sdk-locate-"))
-  const listed = mock.method(fsPromises, "readdir")
-  syncBuiltinESMExports()
-  try {
-    const id = randomUUID()
-    const projects = join(home, "projects")
-    const workspace = "/Users/someone/code/my.project"
-    assert.equal(claudeProjectFolder(workspace), "-Users-someone-code-my-project")
-    const saved = join(projects, "zz-saved-by-the-binding", `${id}.jsonl`)
-    const derived = join(projects, claudeProjectFolder(workspace), `${id}.jsonl`)
-    // A file of the same name in another folder: what looking in every folder could come back with.
-    const first = join(projects, "-another-folder", `${id}.jsonl`)
-    for (const file of [saved, derived, first]) {
-      await mkdir(dirname(file), { recursive: true })
-      await writeFile(file, "")
-    }
-    for (let index = 0; index < 150; index++) await mkdir(join(projects, `-other-project-${index}`))
-    assert.equal(await new ClaudeTranscript(home, undefined, { path: saved, cwd: workspace }).locate(id), saved, "the path the binding saved is the transcript")
-    assert.equal(await new ClaudeTranscript(home, undefined, { cwd: workspace }).locate(id), derived, "without one, the working folder's own project folder")
-    assert.equal(listed.mock.callCount(), 0, "and neither lists the project folders")
-    // What is known must be this session's file in this account's home, or it is looked for.
-    await rm(saved)
-    await rm(derived)
-    const elsewhere = join(home, "another-home", "projects", "p", `${id}.jsonl`)
-    await mkdir(dirname(elsewhere), { recursive: true })
-    await writeFile(elsewhere, "")
-    assert.equal(await new ClaudeTranscript(home, undefined, { path: elsewhere }).locate(id), first, "another account's file isn't taken for this one's")
-    assert.equal(await new ClaudeTranscript(home, undefined, { path: first }).locate(randomUUID()), undefined, "nor another session's (a fork's source)")
-    assert.equal(await new ClaudeTranscript(home, undefined, { path: saved, cwd: "/moved/elsewhere" }).locate(id), first, "a saved path that is gone falls back to every folder")
-    assert.equal(listed.mock.callCount(), 3, "one listing each")
-    const hooked = new ClaudeTranscript(home, undefined, { path: first })
-    await hooked.hook({ hook_event_name: "SessionStart", source: "resume", session_id: id, transcript_path: elsewhere, cwd: workspace }, undefined, { signal: new AbortController().signal })
-    assert.equal(await hooked.locate(id), elsewhere, "what a hook reported stands over what was known")
-  } finally {
-    listed.mock.restore()
-    syncBuiltinESMExports()
-    await rm(home, { recursive: true, force: true })
-  }
 }
 
 const transcriptRoot = await mkdtemp(join(tmpdir(), "mako-sdk-flush-"))

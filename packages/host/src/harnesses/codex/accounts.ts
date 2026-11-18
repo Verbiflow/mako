@@ -40,7 +40,7 @@ import { chatGptUsage } from "../chatgpt-usage.js"
 import { chainFingerprint, jwtExpiry, objectValue, placeSecret, removeSecret, replaceFile, WITHHELD, type CloudSignInCapability, type CloudSignInMirror } from "../cloud-sign-in.js"
 import { rpcRequest, withDiscoveryRpc } from "../profile-transport.js"
 import type { DiscoveryProcesses } from "../discovery-process.js"
-import { resolveCodexExecutable, type CodexExecutables } from "./executable.js"
+import { resolveCodexExecutable } from "./executable.js"
 import { parseCodexRateLimits, parseResetOutcome } from "./rate-limits.js"
 import { codexCredentialStore, managedCodexConfig, readCodexCredentials } from "./credentials.js"
 
@@ -339,15 +339,15 @@ async function usageForDir(dir: string): Promise<AccountUsage> {
  * credits under the account's own home and refreshes the sign-in to do it.
  * The usage endpoint with the stored token covers a Codex that can't start.
  */
-async function accountUsage(root: AccountRoot, processes: DiscoveryProcesses, name: string, executables?: CodexExecutables): Promise<AccountUsage> {
-  const fromCodex = await codexAppServerUsage(root, processes, name, executables).catch(() => null)
+async function accountUsage(root: AccountRoot, processes: DiscoveryProcesses, name: string): Promise<AccountUsage> {
+  const fromCodex = await codexAppServerUsage(root, processes, name).catch(() => null)
   if (fromCodex?.status === "ok") return fromCodex
   return usageForDir(name === "default" ? join(homedir(), HOME) : root.dir("codex", name))
 }
 
-async function codexAppServerUsage(root: AccountRoot, processes: DiscoveryProcesses, name: string, executables?: CodexExecutables): Promise<AccountUsage | null> {
+async function codexAppServerUsage(root: AccountRoot, processes: DiscoveryProcesses, name: string): Promise<AccountUsage | null> {
   const env = await accountEnv(root, name === "default" ? null : name, childProcessEnv(process.env))
-  const executable = await resolveCodexExecutable(env, executables)
+  const executable = await resolveCodexExecutable(env)
   if (!executable) return null
   return parseCodexRateLimits(await rpcRequest(processes, executable, ["app-server"], "account/rateLimits/read", env, false))
 }
@@ -465,7 +465,7 @@ export const codexCloudSignIn: CloudSignInCapability = {
 }
 
 /** Codex's accounts: its own login, and those Mako keeps in `root`. */
-export function codexAccountCapability(root: AccountRoot, processes: DiscoveryProcesses, executables?: CodexExecutables): SelectableAccountCapability {
+export function codexAccountCapability(root: AccountRoot, processes: DiscoveryProcesses): SelectableAccountCapability {
   return {
     provider: "codex",
     mode: "selectable",
@@ -479,7 +479,7 @@ export function codexAccountCapability(root: AccountRoot, processes: DiscoveryPr
     accountEnv: (selection, base) => accountEnv(root, selection, base),
     selectedAccount: (selection, env) =>
       ({ name: selection ?? "default", dir: codexHome(env) }),
-    accountUsage: (name) => accountUsage(root, processes, name, executables),
+    accountUsage: (name) => accountUsage(root, processes, name),
     cloudSignIn: codexCloudSignIn,
     credentialRevision: async (name) => {
       const home = name === "default" ? join(homedir(), HOME) : null

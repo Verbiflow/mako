@@ -95,9 +95,7 @@ const fileSchema = z.object({
   updates: z.record(z.string(), persistedInfoSchema),
   signatures: z.record(z.string(), signatureSchema),
 })
-/** What harnesses remember of their installations, by provider: another harness's, or a newer build's, is written back as found. */
-const rememberedSchema = z.object({ remembered: z.record(z.string(), JsonObjectSchema) })
-type PersistedFile = z.infer<typeof fileSchema> & Partial<z.infer<typeof rememberedSchema>>
+type PersistedFile = z.infer<typeof fileSchema>
 /** What a newer Mako added that this build doesn't name: kept and written back untouched. */
 interface Carried {
   file: JsonObject
@@ -202,8 +200,6 @@ export class RuntimeUpdates {
   /** The file is a newer Mako's: this host keeps its readings in memory and writes none. */
   private declined = false
   private carried: Carried = { file: {}, updates: {} }
-  /** What each harness remembers of its installations (`ProviderUpdateSource.remembered`), by provider, as it was last told. */
-  private remembered: Record<string, JsonObject> = {}
   private readonly checking = new Map<string, Promise<HarnessUpdateInfo>>()
   /** The npm prefix each npm global install was last read under: where its update installs (`npmUpdate`). */
   private readonly npmRoots = new Map<string, NpmRoot>()
@@ -237,49 +233,32 @@ export class RuntimeUpdates {
 
   /** Reads the last host's readings so the first snapshot is never empty. */
   async load(): Promise<void> {
-    this.loaded ??= this.loadFile().then(() => {
-      // Each harness is given what the last host kept of its installations, and says what to keep from here on.
-      for (const source of this.options.sources()) {
-        const remembered = source.remembered
-        if (!remembered) continue
-        remembered.restore(this.remembered[source.provider] ?? {})
-        remembered.follow((kept) => {
-          this.remembered = { ...this.remembered, [source.provider]: kept }
-          void this.persist()
-        })
+    this.loaded ??= (async () => {
+      try {
+        const parsed = JsonValueSchema.parse(JSON.parse(
+          await readFile(this.options.path, "utf8")
+        ))
+        const access = jsonStoreAccess(parsed, FORMAT)
+        if (access !== "write") {
+          this.declined = true
+          hostLog("runtime", "readings kept by a newer Mako; this host keeps its own in memory", { access })
+          if (access === "refused") return
+        }
+        const result = fileSchema.safeParse(parsed)
+        if (!result.success) return
+        this.updates = result.data.updates
+        this.signatures = new Map(Object.entries(result.data.signatures))
+        const raw = z.object({ updates: JsonObjectSchema }).safeParse(parsed)
+        this.carried = {
+          file: unknownFields(parsed, ["version", "reads", "updates", "signatures"]),
+          updates: Object.fromEntries(Object.entries(raw.success ? raw.data.updates : {})
+            .map(([provider, entry]) => [provider, unknownFields(entry, READING_FIELDS)])),
+        }
+      } catch {
+        // No readings yet, or an unreadable file: the first check writes a fresh one.
       }
-    })
+    })()
     await this.loaded
-  }
-
-  /** The file as the last host left it; nothing is read from one a newer Mako made unreadable to this build. */
-  private async loadFile(): Promise<void> {
-    try {
-      const parsed = JsonValueSchema.parse(JSON.parse(
-        await readFile(this.options.path, "utf8")
-      ))
-      const access = jsonStoreAccess(parsed, FORMAT)
-      if (access !== "write") {
-        this.declined = true
-        hostLog("runtime", "readings kept by a newer Mako; this host keeps its own in memory", { access })
-        if (access === "refused") return
-      }
-      // Read apart from the readings: neither's shape decides whether the other is kept.
-      const kept = rememberedSchema.safeParse(parsed)
-      if (kept.success) this.remembered = kept.data.remembered
-      const result = fileSchema.safeParse(parsed)
-      if (!result.success) return
-      this.updates = result.data.updates
-      this.signatures = new Map(Object.entries(result.data.signatures))
-      const raw = z.object({ updates: JsonObjectSchema }).safeParse(parsed)
-      this.carried = {
-        file: unknownFields(parsed, ["version", "reads", "updates", "signatures", "remembered"]),
-        updates: Object.fromEntries(Object.entries(raw.success ? raw.data.updates : {})
-          .map(([provider, entry]) => [provider, unknownFields(entry, READING_FIELDS)])),
-      }
-    } catch {
-      // No readings yet, or an unreadable file: the first check writes a fresh one.
-    }
   }
 
   /** Schedules the first reading behind startup (or after `firstAfterMs`, when it was read already) and the hourly public reading. */
@@ -1076,7 +1055,6 @@ export class RuntimeUpdates {
       version: FORMAT,
       updates,
       signatures: Object.fromEntries(this.signatures),
-      ...Object.keys(this.remembered).length > 0 && { remembered: this.remembered },
     }
     this.writes = this.writes
       .then(async () => {

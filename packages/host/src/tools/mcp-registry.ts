@@ -3,7 +3,6 @@ import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import { z } from "zod"
 import { cliListingCache, type CliListingCache } from "./mcp-cli-cache.js"
-import { mcpListingStore } from "./mcp-listing-store.js"
 import type { McpReadFormat, ProviderMcpSource } from "./mcp-source.js"
 import type { ToolHarnesses } from "./harnesses.js"
 import { environmentForExecutable, resolveExecutable } from "../base/executable.js"
@@ -400,37 +399,27 @@ async function readJsonDefinitions(
 
 async function readCliDefinitions(
   cliListings: CliListingCache<string>,
-  route: McpDiscoveryRoute,
-  /**
-   * Answer with what is kept and list behind the answer (`CliListingCache.peek`), for a harness that isn't the one
-   * starting: given what says two folders are checkouts of one repository, or nothing where that can't be told.
-   */
-  kept?: { sameRepository?: (folder: string, other: string) => boolean }
+  route: McpDiscoveryRoute
 ): Promise<McpDiscoveredDefinition[]> {
   if (!route.cliInputs || !route.command) return []
   const command = route.command
   const executable = await findExecutable(command, route.env)
   if (!executable) return []
   try {
-    const key = [route.provider, route.account, route.cwd, executable].join("\0")
-    const inputs = [executable, ...route.cliInputs]
-    const list = async () =>
-      (
-        await run(executable, ["mcp", "list", "--json"], {
-          cwd: route.cwd,
-          env: environmentForExecutable(executable, route.env),
-          timeout: 8_000,
-          maxBuffer: MAX_CLI_OUTPUT,
-          windowsHide: true,
-        })
-      ).stdout
-    const sameRepository = kept?.sameRepository
-    // Another checkout's listing stands in only for the same harness, account and CLI, in the same repository.
-    const sibling = sameRepository && ((other: string) => {
-      const [provider, account, folder, cli] = other.split("\0")
-      return provider === route.provider && account === route.account && cli === executable && folder !== undefined && folder !== route.cwd && sameRepository(route.cwd, folder)
-    })
-    const stdout = kept ? await cliListings.peek(key, inputs, list, sibling) : await cliListings.read(key, inputs, list)
+    const stdout = await cliListings.read(
+      [route.provider, route.account, route.cwd, executable].join("\0"),
+      [executable, ...route.cliInputs],
+      async () =>
+        (
+          await run(executable, ["mcp", "list", "--json"], {
+            cwd: route.cwd,
+            env: environmentForExecutable(executable, route.env),
+            timeout: 8_000,
+            maxBuffer: MAX_CLI_OUTPUT,
+            windowsHide: true,
+          })
+        ).stdout
+    )
     const parsed = parseProviderJson(route.readFormat, stdout)
     return parsed
       .filter(
@@ -453,38 +442,17 @@ async function readCliDefinitions(
 
 /** Every harness's MCP servers, as its own config and CLI list them. */
 export interface McpRegistry {
-  /**
-   * `starting`: the harness a start in `cwd` waits on this for. That harness's own CLI listing is always read as it
-   * is now. Another harness's is taken as kept for this folder, or for another checkout of its repository that would
-   * list the same, and read again behind the start; with neither kept, it is waited for too, so a start never goes
-   * without a server another harness lists.
-   */
-  discover(cwd: string, starting?: McpProvider): Promise<McpRegistrySnapshot>
+  discover(cwd: string): Promise<McpRegistrySnapshot>
   /** Where `provider` reads and writes its servers for `cwd`, as its selected account. */
   route(provider: McpProvider, cwd: string): Promise<McpDiscoveryRoute>
 }
 
 /**
  * A harness's CLI listing is kept until a file it reads changes, or for five minutes; `idle` resolves when no start is
- * waiting, which a listing read again only for its age waits for. With `kept.listings` (`mcpListingsPath`) they are
- * kept in that file too, so a host's first start finds what the last host read; without it, in memory alone.
- * `kept.repository` names the repository a folder is a checkout of (Git's common directory): with it, a folder never
- * listed borrows another checkout's listing for the harnesses a start doesn't wait for.
+ * waiting, which a listing read again only for its age waits for.
  */
-export function mcpRegistry(harnesses: ToolHarnesses, idle?: () => Promise<void>, kept: { listings?: string; repository?: (folder: string) => string } = {}): McpRegistry {
-  const cliListings = cliListingCache<string>({ refreshAfterMs: 5 * 60_000, limit: 64, idle, ...kept.listings !== undefined && { store: mcpListingStore(kept.listings) } })
-  /** Each folder's repository as last read: a kept listing's folder is asked about on every start in a new one. */
-  const repositories = new Map<string, string>()
-  const repositoryOf = (folder: string, read: (folder: string) => string): string => {
-    const known = repositories.get(folder)
-    if (known !== undefined) return known
-    const found = read(folder)
-    if (repositories.size >= 256) repositories.clear()
-    repositories.set(folder, found)
-    return found
-  }
-  const repository = kept.repository
-  const sameRepository = repository && ((folder: string, other: string) => repositoryOf(folder, repository) === repositoryOf(other, repository))
+export function mcpRegistry(harnesses: ToolHarnesses, idle?: () => Promise<void>): McpRegistry {
+  const cliListings = cliListingCache<string>({ refreshAfterMs: 5 * 60_000, limit: 64, idle })
 
   async function route(provider: McpProvider, cwd: string): Promise<McpDiscoveryRoute> {
     const source = harnesses.mcpSources.get(provider)
@@ -505,7 +473,7 @@ export function mcpRegistry(harnesses: ToolHarnesses, idle?: () => Promise<void>
     }
   }
 
-  async function discover(cwd: string, starting?: McpProvider): Promise<McpRegistrySnapshot> {
+  async function discover(cwd: string): Promise<McpRegistrySnapshot> {
     const routes = await Promise.all(
       harnesses.mcpSources.list().map((source) => route(source.provider, cwd))
     )
@@ -518,10 +486,7 @@ export function mcpRegistry(harnesses: ToolHarnesses, idle?: () => Promise<void>
       Promise.all(
         routes.map(async (entry) => [
           ...(await readJsonDefinitions(entry)),
-          // A start reads its own harness's CLI as it is now. Each start of any harness also waited for Codex's and
-          // Grok's, 7 to 11 s on average on a busy Mac: another harness's servers come as last listed, here or in
-          // another checkout of the repository, and only a folder with neither kept waits for them.
-          ...(await readCliDefinitions(cliListings, entry, starting !== undefined && entry.provider !== starting ? { sameRepository } : undefined)),
+          ...(await readCliDefinitions(cliListings, entry)),
         ])
       ),
     ])

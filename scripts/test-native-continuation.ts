@@ -70,19 +70,6 @@ try {
     }),
     false
   )
-  // Only a check that ran out of time is worth asking again at once: it found nothing against the session.
-  const timedOut = await resumeVerdict(binding, { ...idle, probe: async () => ({ kind: "unavailable", reason: "timeout" }) })
-  assert.deepEqual([timedOut.kind, "retry" in timedOut && timedOut.retry, "soon" in timedOut && timedOut.soon], ["unavailable", true, true], "a timed-out probe is retried soon")
-  const cut = await resumeVerdict(binding, { ...idle, timeoutMs: 20, probe: (signal) => new Promise((_, reject) => {
-    // The limit's own timer doesn't hold the process open; this one does until it fires.
-    const keep = setTimeout(() => {}, 5_000)
-    signal.addEventListener("abort", () => { clearTimeout(keep); reject(signal.reason) })
-  }) })
-  assert.ok("soon" in cut && cut.soon === true, "a probe cut by the check's own limit is a timeout too")
-  for (const reason of ["failed", "incomplete", "permission"] as const) {
-    const verdict = await resumeVerdict(binding, { ...idle, probe: async () => ({ kind: "unavailable", reason }) })
-    assert.ok(verdict.kind === "unavailable" && verdict.retry === true && !("soon" in verdict && verdict.soon), `${reason} keeps the long backoff`)
-  }
   for (const session of [{ nativeId: binding.nativeId }, { path }]) {
     const busy: ProviderProcessProbe = {
       ...idle,

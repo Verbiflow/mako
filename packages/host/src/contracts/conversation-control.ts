@@ -91,8 +91,7 @@ export type ResumeVerdict =
    */
   | { kind: "unavailable"; reason: string; lost?: true; retry?: never }
   /** Native ownership or source could not be observed now. Recheck later; this never permits a replacement session. */
-  /** `soon`: the check only ran out of time, with nothing found against the session, so it is worth asking again at once. */
-  | { kind: "unavailable"; reason: string; retry: true; lost?: never; soon?: true }
+  | { kind: "unavailable"; reason: string; retry: true; lost?: never }
   /**
    * The harness keeps this record closed to resumes (a Codex archive, a
    * Cursor desktop chat) and the catalog says so; continuing it starts a new

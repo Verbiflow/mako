@@ -1,19 +1,9 @@
 import assert from "node:assert/strict"
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { z } from "zod"
 import { dirname, join } from "node:path"
 import { codexChildLaunch, codexStartPrefetch } from "@mako/host/harnesses/codex-app"
-import { CodexExecutables, codexLaunch, resolveCodexExecutable } from "@mako/host/harnesses/codex/executable"
-import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
-import { RuntimeUpdates } from "@mako/host/harnesses/runtime-updates"
-
-/** The readings file, of what these cases read back from it. */
-const KeptReadings = z.object({
-  version: z.number(),
-  future: z.string().optional(),
-  remembered: z.record(z.string(), z.object({ probes: z.record(z.string(), z.boolean()).optional() }).loose()),
-})
+import { codexLaunch, resolveCodexExecutable } from "@mako/host/harnesses/codex/executable"
 
 const root = await mkdtemp(join(tmpdir(), "mako-codex-executable-"))
 try {
@@ -192,97 +182,6 @@ try {
   assert.equal(customPrefetch.command, custom, "prefetch leaves a custom wrapper in place")
   assert.equal(customPrefetch.env.CODEX_MANAGED_BY_NPM, undefined)
 
-  // Two installations (a CLI on PATH and the desktop app's): each is asked whether it reads the configuration once
-  // per binary and configuration as they are, however many starts and discoveries ask, in this host and the next.
-  // A stand-in answers for the installations; none is run.
-  {
-    const home = join(root, "two-installations")
-    const cli = join(home, "bin", "codex")
-    const app = join(home, "Applications", "Codex.app", "Contents", "Resources", "codex")
-    const config = join(home, ".codex", "config.toml")
-    for (const file of [cli, app]) {
-      await mkdir(dirname(file), { recursive: true })
-      await writeFile(file, "#!/bin/sh\nexit 0\n")
-      await chmod(file, 0o755)
-    }
-    await mkdir(dirname(config), { recursive: true })
-    await writeFile(config, "model = 'one'\n")
-    {
-      // The two are named to the memory itself: which installations a machine has is the platform's (only a Mac
-      // looks in its application folders), and none of the machine's own is touched.
-      const installed = () => [cli, app]
-      const twoEnv = { HOME: home, PATH: join(home, "bin"), CODEX_HOME: dirname(config) }
-      const asked: string[] = []
-      // The CLI on PATH refuses the configuration, so every installation after it is asked too.
-      let answer = (command: string): boolean | undefined => command !== cli
-      const stand = async (command: string) => { asked.push(command); return answer(command) }
-      const timesAsked = (command: string) => asked.filter((one) => one === command).length
-      const executables = new CodexExecutables(stand, installed)
-      let kept: Parameters<CodexExecutables["restore"]>[0] | undefined
-      executables.follow((next) => { kept = next })
-      const first = await executables.resolve(twoEnv)
-      assert.equal(first, app, "the installation that reads the configuration is the one started")
-      assert.deepEqual([timesAsked(cli), timesAsked(app)], [1, 1])
-      const asks = asked.length
-      // A start resolves twice, a discovery once, and several starts at once: none asks again.
-      await Promise.all([executables.resolve(twoEnv), resolveCodexExecutable(twoEnv, executables), codexStartPrefetch(twoEnv, root, executables), executables.resolve(twoEnv)])
-      assert.equal(asked.length, asks, "an installation is asked once per binary identity")
-      // Asked together before any answer: one ask between them.
-      const fresh = new CodexExecutables(stand, installed)
-      await Promise.all([fresh.resolve(twoEnv), fresh.resolve(twoEnv), fresh.resolve(twoEnv)])
-      assert.equal(asked.length, asks * 2, "concurrent asks share one run")
-      // The next host is given what this one kept, and asks nothing.
-      assert.ok(kept, "an answer is handed on to be kept")
-      const next = new CodexExecutables(stand, installed)
-      next.restore(kept)
-      assert.equal(await next.resolve(twoEnv), first)
-      assert.equal(asked.length, asks * 2, "a restarted host answers from what was kept")
-      // A binary that changed is asked again, it alone; so is every one when the configuration changes.
-      await writeFile(cli, "#!/bin/sh\n# updated\nexit 0\n")
-      answer = () => true
-      assert.equal(await executables.resolve(twoEnv), cli, "the updated CLI reads the configuration now")
-      assert.equal(asked.length, asks * 2 + 1, "only the changed binary was asked")
-      await writeFile(config, "model = 'another, in a newer format'\n")
-      answer = (command) => command !== cli
-      const after = asked.length
-      assert.notEqual(await executables.resolve(twoEnv), cli, "a changed configuration is asked about again")
-      assert.ok(asked.length > after)
-      // An installation that couldn't be asked (it timed out) isn't remembered as refusing.
-      const unsure = new CodexExecutables(stand, installed)
-      answer = () => undefined
-      assert.equal(await unsure.resolve(twoEnv), cli, "with none answering, the first is started for its own diagnostic")
-      answer = () => true
-      const again = asked.length
-      assert.equal(await unsure.resolve(twoEnv), cli)
-      assert.equal(asked.length, again + 1, "and it is asked again the next time")
-
-      // Kept beside the harness's version readings, in the same file, and given back by the next host's.
-      const readings = join(root, "runtime-updates.json")
-      await writeFile(readings, JSON.stringify({ version: 2, updates: {}, signatures: {}, future: "a newer build's", remembered: { another: { kept: 1 } } }))
-      const updates = (source: CodexExecutables) => new RuntimeUpdates({
-        processes: new DiscoveryProcesses(), path: readings, emit: () => undefined,
-        sources: () => [{ provider: "codex", binary: (env) => source.resolve(env), remembered: source, install: [] }],
-      })
-      const before = new CodexExecutables(stand, installed)
-      await updates(before).load()
-      const cold = asked.length
-      const chosen = await before.resolve(twoEnv)
-      assert.ok(asked.length > cold, "nothing kept yet: asked")
-      let written = KeptReadings.parse(JSON.parse(await readFile(readings, "utf8")))
-      for (let waited = 0; waited < 5_000 && !written.remembered.codex; waited += 20) {
-        await new Promise((done) => setTimeout(done, 20))
-        written = KeptReadings.parse(JSON.parse(await readFile(readings, "utf8")))
-      }
-      assert.ok(Object.keys(written.remembered.codex?.probes ?? {}).length >= 1, "the answers are kept with the readings")
-      assert.deepEqual([written.version, written.future, written.remembered.another], [2, "a newer build's", { kept: 1 }], "beside what the file held, which is written back")
-      const restarted = new CodexExecutables(stand, installed)
-      await updates(restarted).load()
-      const warm = asked.length
-      assert.equal(await restarted.resolve(twoEnv), chosen)
-      assert.equal(asked.length, warm, "the next host starts Codex without asking any installation")
-    }
-  }
-
   if (process.argv.includes("--live")) {
     const selected = await resolveCodexExecutable({
       HOME: process.env.HOME,
@@ -298,5 +197,5 @@ try {
   await rm(root, { recursive: true, force: true })
 }
 console.log(
-  "Codex executable: standalone compatibility and explicit selection hold with desktop PATH; only @openai/codex's own bin starts as its native build, and the package manager matches the wrapper's; with two installations each is asked once per binary and configuration, in this host and the next"
+  "Codex executable: standalone compatibility and explicit selection hold with desktop PATH; only @openai/codex's own bin starts as its native build, and the package manager matches the wrapper's"
 )

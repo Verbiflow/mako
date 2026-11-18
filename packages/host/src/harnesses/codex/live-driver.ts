@@ -2,7 +2,7 @@ import { prefetchProcess } from "../start-prefetch.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"
 import { codexQuestionAnswer } from "./questions.js"
 import { CodexQuestionReader } from "./question-reader.js"
-import { codexExecutableCandidates, codexStartFiles, type CodexExecutables } from "./executable.js"
+import { codexExecutableCandidates, codexStartFiles } from "./executable.js"
 import { codexAccessModes, CODEX_DEFAULT_MODE } from "./access.js"
 import { CODEX_PLAN_OPTION } from "@mako/sessions/model-catalog"
 import type { ProviderLiveDriver } from "../live-driver.js"
@@ -17,10 +17,10 @@ import { codexLayer } from "./layer.js"
 export const CODEX_NATIVE_IDENTITY = { kind: "reported", via: "app-server account/read" } as const
 
 /** The app-server engine loads with the first session; a host that never opens one never loads it. */
-export function createCodexLiveDriver(probe: ProviderProcessProbe, context: Pick<HarnessContext, "dataRoot" | "streams" | "writeHolds">, executables?: CodexExecutables): ProviderLiveDriver {
+export function createCodexLiveDriver(probe: ProviderProcessProbe, context: Pick<HarnessContext, "dataRoot" | "streams" | "writeHolds">): ProviderLiveDriver {
   const questions = new CodexQuestionReader()
   let loading: Promise<CodexEngine> | undefined
-  const engine = () => (loading ??= import("../codex-app.js").then(({ createCodexEngine }) => createCodexEngine(context, executables)))
+  const engine = () => (loading ??= import("../codex-app.js").then(({ createCodexEngine }) => createCodexEngine(context)))
   return {
     provider: "codex",
     launchEnvironment: { kind: "prepared", via: "app-server spawn consumes AdmittedStartOptions.accountLaunch." },
@@ -63,8 +63,8 @@ export function createCodexLiveDriver(probe: ProviderProcessProbe, context: Pick
     backgroundStop: { kind: "ends-on-stop", how: "Stop terminates exact native terminal IDs before interruption and checks again after settlement, including child threads. Stopped turn IDs retain a bounded guard for commands reported after interruption; failed native termination disconnects instead of claiming cleanup. Checked on Codex 0.159.3: foreground child exit and same-session follow-up. Closing ends terminals and subagents before the app-server exits." },
     startPrefetch: {
       via: "The app-server, launched as a start launches it, through `initialize` and an ephemeral `thread/start`, with its native build read alongside.",
-      files: (env) => codexStartFiles(env, executables),
-      run: async (env, cwd, owner, stop) => prefetchProcess(await (await import("../codex-app.js")).codexStartPrefetch(env, cwd, executables), cwd, owner, stop),
+      files: (env) => codexStartFiles(env),
+      run: async (env, cwd, owner, stop) => prefetchProcess(await (await import("../codex-app.js")).codexStartPrefetch(env, cwd), cwd, owner, stop),
     },
     turnRecovery: {
       kind: "continues",

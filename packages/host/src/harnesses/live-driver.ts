@@ -461,13 +461,6 @@ export interface ProviderLiveDriver extends ProviderCapability {
      * waits for the checkpoint instead.
      */
     openCommands?: string
-    /**
-     * Whether submitting `text` runs the person's code with no tool call between, which nothing could hold: a
-     * message that does waits for the checkpoint itself (`heldSubmission`), as a message of a launch that holds no
-     * writes does. Told from the text as it is sent, in the harness's own syntax; where that can't be told surely,
-     * true.
-     */
-    submitRuns?(text: string): boolean
   }
   /** Native principal evidence, separately from configured account selection. */
   nativeIdentity: NativeIdentityCapability
@@ -576,12 +569,6 @@ export type AdmittedLiveDriver = Omit<ProviderLiveDriver, "start"> & {
   start(cwd: string, options: ProviderStartOptions): Promise<LiveSessionState>
   /** The harness's declared oldest version, which a reopened session's runtime change is judged by. */
   runtimeOldest?(): string | undefined
-  /**
-   * Reads what a prompt's admission reads (the launch account's selection and credential revision, who it is signed
-   * in as), ahead of the prompt and deciding nothing: a message that waits for its checkpoint has them read
-   * meanwhile, and its own admission, still made as it is sent, finds them held or under way. Never throws.
-   */
-  admitAhead?(id: string): void
 }
 
 export interface ProviderSteerInput {

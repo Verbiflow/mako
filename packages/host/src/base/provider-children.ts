@@ -111,15 +111,6 @@ export class ProviderChildren {
     return this.records
   }
 
-  /**
-   * When `pid` started, as the host read it once after spawning it; undefined for a pid that isn't this host's
-   * running child, or whose start hasn't been read yet. A child the host spawned and hasn't seen exit can't have had
-   * its pid reused, so this answers a liveness check without another process listing (`HostStopping.spawnedAt`).
-   */
-  observedStart(pid: number): number | undefined {
-    return this.records.find((entry) => entry.pid === pid)?.processStartedAt
-  }
-
   /** A recorded process taken over by another owner (a child spawned ahead, adopted by a session); its birth stays. */
   reown(info: { pid: number; owner: string }): void {
     if (!this.records.some((entry) => entry.pid === info.pid && entry.owner !== info.owner)) return

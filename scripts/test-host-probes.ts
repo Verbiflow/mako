@@ -1,13 +1,10 @@
 import assert from "node:assert/strict"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
-import { spawn } from "node:child_process"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { hostProbe, isProbe } from "@mako/host/base/host-command"
 import { HostStopping } from "@mako/host/base/host-stopping"
 import { processIdentityMatches, processStartedAt } from "@mako/host/base/process-liveness"
-import { claudeProcessProbeFor } from "@mako/host/harnesses/claude/process-probe"
-import { grokProcessProbe } from "@mako/host/harnesses/grok/process-probe"
 import { childProcessReader } from "@mako/host/workspaces/watch-backend"
 
 /**
@@ -56,48 +53,6 @@ try {
     assert.equal(reads.length, 1, "by one ps")
     assert.ok(reads[0]!.includes(pids.join(",")), "naming both pids")
     assert.equal(await processIdentityMatches({ pid: process.pid, startedAt: mine, signal: AbortSignal.timeout(5_000), exact: true }), true, "a live process matches its start")
-
-    // A harness's registry of several sessions costs one process listing, however many records it holds: asked one
-    // record at a time each cost its own, and a wake's ownership check ran out of time (`claudeProcessProbeFor`).
-    const sleepers = Array.from({ length: 4 }, () => spawn("/bin/sleep", ["60"], { stdio: "ignore" }))
-    try {
-      const profile = join(root, "claude-home")
-      mkdirSync(join(profile, "sessions"), { recursive: true })
-      const owners = [process.pid, process.ppid, ...sleepers.map((child) => child.pid!)]
-      for (const [index, pid] of owners.entries())
-        writeFileSync(join(profile, "sessions", `${pid}.json`), JSON.stringify({ sessionId: `session-${index}`, pid, startedAt: pid === process.pid ? mine : pid === process.ppid ? parent : Date.now(), state: "working" }))
-      const target = { nativeId: "session-0", path: join(profile, "projects", "workspace", "session-0.jsonl") }
-      const listings = noted().length
-      const registry = await claudeProcessProbeFor(join(root, "no-home")).probe(AbortSignal.timeout(5_000), target)
-      assert.ok(registry.kind === "available" && registry.sessions.length === owners.length, `every live record is a session: ${JSON.stringify(registry)}`)
-      const listed = noted().slice(listings)
-      assert.equal(listed.length, 1, `${owners.length} registry records cost one process listing, not ${listed.length}`)
-      assert.ok(owners.every((pid) => listed[0]!.some((word) => word.split(",").includes(String(pid)))), "naming every pid")
-      // Grok's registry is one file of many sessions: the same single listing.
-      const grok = join(root, "grok-home")
-      mkdirSync(join(grok, "sessions", "workspace", "session-0"), { recursive: true })
-      writeFileSync(join(grok, "active_sessions.json"), JSON.stringify(owners.map((pid, index) => ({ session_id: `session-${index}`, pid, opened_at: pid === process.pid ? mine : pid === process.ppid ? parent : Date.now() }))))
-      const grokListings = noted().length
-      const grokRegistry = await grokProcessProbe.probe(AbortSignal.timeout(5_000), { nativeId: "session-0", path: join(grok, "sessions", "workspace", "session-0", "updates.jsonl") })
-      assert.ok(grokRegistry.kind === "available" && grokRegistry.sessions.length === owners.length, JSON.stringify(grokRegistry))
-      assert.equal(noted().length - grokListings, 1, "Grok's registry costs one process listing too")
-      // The host's own running children are answered from its record of their start: no listing for them at all.
-      const spawned = new Map(sleepers.map((child) => [child.pid!, Date.now()]))
-      stopping.spawnedAt = (pid) => spawned.get(pid)
-      const own = noted().length
-      const again = await claudeProcessProbeFor(join(root, "no-home")).probe(AbortSignal.timeout(5_000), target)
-      assert.ok(again.kind === "available" && again.sessions.length === owners.length)
-      const asked = noted().slice(own)
-      assert.equal(asked.length, 1, "one listing for the pids that aren't the host's")
-      assert.ok(sleepers.every((child) => !asked[0]!.some((word) => word.split(",").includes(String(child.pid)))), "and none of the host's own children in it")
-      // Its record still decides: a registry record naming one of its pids with another start isn't that process.
-      spawned.set(sleepers[0]!.pid!, Date.now() - 3_600_000)
-      const stale = await claudeProcessProbeFor(join(root, "no-home")).probe(AbortSignal.timeout(5_000), target)
-      assert.ok(stale.kind === "available" && stale.sessions.length === owners.length - 1, "a record that started at another time is skipped")
-    } finally {
-      stopping.spawnedAt = undefined
-      for (const child of sleepers) child.kill("SIGKILL")
-    }
 
     // A pid that has ended among them: the rest still read, it alone fails.
     const ended = 99_999

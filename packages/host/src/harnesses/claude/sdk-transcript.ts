@@ -1,5 +1,5 @@
 import { open, readdir, stat } from "node:fs/promises"
-import { basename, dirname, join } from "node:path"
+import { basename, join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
 import type { HookCallback, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
@@ -19,24 +19,6 @@ const PersistedHead = z.object({
 const tailBytes = 16 * 1024 * 1024
 const recordBytes = 1024 * 1024
 
-/** What a start already knows of where its session's transcript is: the path its binding saved, and its working folder. */
-export interface ClaudeTranscriptHint {
-  path?: string
-  cwd?: string
-}
-
-/** How many project folders are tried at once when the transcript is in none of the known places. */
-const SCAN_AT_ONCE = 64
-
-/**
- * The folder under `projects` Claude Code keeps a working folder's sessions in: its path with every character that
- * isn't a letter or a digit made a dash. A guess only (Claude shortens a very long one its own way): a file not found
- * there is looked for in every folder.
- */
-export function claudeProjectFolder(cwd: string): string {
-  return cwd.replace(/[^a-zA-Z0-9]/g, "-")
-}
-
 /** The SDK supplies the account-scoped transcript path through its lifecycle hook. */
 export class ClaudeTranscript {
   path: string | undefined
@@ -48,13 +30,9 @@ export class ClaudeTranscript {
   /** Told the path when a hook first reports it or a new one, so the binding records it mid-turn. */
   private readonly located: ((path: string) => void) | undefined
 
-  /** Where the session's file is already said to be, tried before any folder is listed (`locate`). */
-  private readonly known: ClaudeTranscriptHint
-
-  constructor(configDir?: string, located?: (path: string) => void, known: ClaudeTranscriptHint = {}) {
+  constructor(configDir?: string, located?: (path: string) => void) {
     this.configDir = configDir
     this.located = located
-    this.known = known
   }
 
   readonly hook: HookCallback = async (input) => {
@@ -69,30 +47,15 @@ export class ClaudeTranscript {
    * reported it: a fresh session's hooks report it only when its first turn
    * ends, and a process that dies in that turn must still leave the record
    * it resumes from. Session IDs are unique across project folders.
-   *
-   * One stat where the path is already known: the one the binding saved, when it is this session's file in this
-   * account's home, then the folder Claude names after the working folder. Only then is every project folder
-   * tried, all at once: one at a time, 152 folders took 13 s on average on a busy Mac, on every wake.
    */
   async locate(sessionId: string | undefined): Promise<string | undefined> {
     if (this.path || !sessionId || !this.configDir) return this.path
     const root = join(this.configDir, "projects")
-    const file = `${sessionId}.jsonl`
-    const isFile = (candidate: string) => stat(candidate).then((entry) => entry.isFile(), () => false)
-    const saved = this.known.path
-    // Another account's home, or another session's file (a fork's source), is not what this process writes.
-    if (saved && basename(saved) === file && dirname(dirname(saved)) === root && await isFile(saved)) return (this.path ??= saved)
-    const derived = this.known.cwd && join(root, claudeProjectFolder(this.known.cwd), file)
-    if (derived && derived !== saved && await isFile(derived)) return (this.path ??= derived)
-    const candidates = (await readdir(root).catch(() => [])).map((project) => join(root, project, file))
-    for (let offset = 0; offset < candidates.length; offset += SCAN_AT_ONCE) {
-      const batch = candidates.slice(offset, offset + SCAN_AT_ONCE)
-      const found = await Promise.all(batch.map(isFile))
-      const index = found.indexOf(true)
-      // A hook may have reported the path while the folders were read: that one stands.
-      if (index >= 0) return (this.path ??= batch[index])
+    for (const project of await readdir(root).catch(() => [])) {
+      const candidate = join(root, project, `${sessionId}.jsonl`)
+      if (await stat(candidate).then((entry) => entry.isFile(), () => false)) return (this.path = candidate)
     }
-    return this.path
+    return undefined
   }
 
   reset(): void {

@@ -197,8 +197,6 @@ export function withExecutionAdmission(driver: ProviderLiveDriver, admission: Ac
   return {
     ...driver, start, close,
     runtimeOldest: () => floor?.oldest(driver.provider),
-    // What it finds decides nothing: the prompt's own admission reads again as it is sent, and refuses there.
-    admitAhead: (id) => { void ready(id).catch(() => undefined) },
     prompt: async (id, ...args) => {
       const dispatch = args[3]
       const owner = await preparePromptAsync(dispatch, () => ready(id))
