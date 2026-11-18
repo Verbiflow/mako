@@ -94,6 +94,7 @@ import { LiveRestarts } from "./live-restarts.js"
 import { ContextBundles, prepareLiveContext } from "./live-context.js"
 import { activeBinding, conversationControl, launched, type Dependencies, type LiveAccess, type ProviderStop, type Resident, STOPPED_FOR } from "./live-runtime.js"
 import { flushFrameMs } from "./answer-pace.js"
+import { emittedBatches, liveStages } from "./live-stages.js"
 import { LiveSources, settled, updateBinding, type SettledBases } from "./live-sources.js"
 import { LiveThreads } from "./live-threads.js"
 import { holdSwitches, LiveTransfers, withdrawGone } from "./live-transfers.js"
@@ -972,6 +973,7 @@ export class LiveConversations {
     // Settings may finish resolving after stop cleared the residents. A replay's earlier admission may be durable;
     // callers must read its receipt from the next host under the same ID, not treat this as a definitive refusal.
     if (this.records.stopping()) throw new RuntimeDisconnectedError(true, id)
+    if (liveStages.heard) liveStages.publish({ stage: "submit", conversation: id, request: requestId })
     this.admission.assert()
     const resident = this.records.require(id)
     if (resident.rewinding)
@@ -1260,6 +1262,7 @@ export class LiveConversations {
       const indexed = this.records.forks.get(resident.snapshot.session.id)
       if (indexed) indexed.firstRequest = request.id
     }
+    if (liveStages.heard) liveStages.publish({ stage: "admitted", conversation: resident.snapshot.session.id, request: request.id })
     this.dispatch.drain(resident)
     return request
   }
@@ -2479,6 +2482,7 @@ export class LiveConversations {
     // Readers hold `previous`; its updates were reduced against the blocks it held only when nothing replaced them since.
     const compact = compactLiveBatch(batch, { blocks: previous.blocks === delivered ? delivered : [], requests: previous.requests, ...(previous.control && { control: previous.control }) })
     const rostered = rosteredLiveBatch(compact, previous.nativeAgents)
+    emittedBatches.publish(batch)
     this.dependencies.emit({ type: "live-batch", batch, compact, ...(rostered && { rostered }) })
     this.relocations.changed(resident)
     // A turn that ended, as it ended, failed included: what its record holds is all it will.

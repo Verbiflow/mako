@@ -16,12 +16,19 @@ import { encodeRuntimeEvent, payloadFor, runtimeEventLine, runtimeSuccessBody, t
 import { HOST_CLOSED_CODE, HOST_RECONNECTING_MESSAGE, HOST_RESTARTING_CODE } from "../contracts/host-connection.js"
 import { historyChangedNotice } from "./gateway.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import { topic } from "../base/topic.js"
 import { failedCallWords } from "./failed-calls.js"
 import { filePolicyHeaders } from "../base/file-policy.js"
 import type { SecretKeyHandover } from "../base/host-secrets.js"
 import { HostJobs, type JobDemand } from "../base/host-jobs.js"
 import { DESKTOP_PATH } from "../contracts/desktop-channel.js"
 import { CONTROL_VIDEO_BATCH_TYPE, PREVIEW_MEDIA_TYPE, encodePreviewMedia, type ControlPreview } from "@mako/control-runtime/contracts"
+
+/** Each call as it arrives, its arguments decoded and before its method runs: when the host heard a send. */
+export const hostCalls = topic<{ channel: string; args: readonly unknown[] }>("mako:host-call")
+
+/** Each event line as it is written to a subscriber's stream: when a batch left the host for a window. */
+export const streamWrites = topic<{ client: string; type: string | undefined; conversation: string | undefined; line: string }>("mako:stream-write")
 
 /** How the host runs one call: the encoded value of `channel(...args)`, on behalf of `client`. */
 export type HostInvoke = (channel: string, args: unknown[], client?: string, history?: boolean, correlationId?: string) => Promise<EncodedValue>
@@ -286,6 +293,7 @@ export async function startWebHost(
         const { channel, attempt } = call
         called = channel
         const args = decodeRuntimeArgs(call.args)
+        if (hostCalls.heard) hostCalls.publish({ channel, args })
         if (channel === "mako:control-preview" && request.headers.accept === PREVIEW_MEDIA_TYPE) {
           if (!preview) throw new Error("Preview delivery requires a newer Mako host. Existing agents have not been restarted.")
           if (media.size >= 16 || [...media.values()].filter(owner => owner === clientId).length >= 2)
@@ -425,7 +433,12 @@ export async function startWebHost(
         if (holds(stream, owner, Buffer.byteLength(notice()!))) stream.write(notice()!)
         continue
       }
-      if (holds(stream, owner, bytes)) stream.write(line)
+      if (!holds(stream, owner, bytes)) continue
+      stream.write(line)
+      if (streamWrites.heard) {
+        const { type, conversation } = runtimeEventRouting(event)
+        streamWrites.publish({ client: owner.client, type, conversation, line })
+      }
     }
   }
   return {
