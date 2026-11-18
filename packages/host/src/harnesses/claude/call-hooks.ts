@@ -36,18 +36,19 @@ export interface ClaudeCallHooks {
  * on the same events run beside them as before. A subagent's calls come
  * through too (`agent_id`), which the stream never shows.
  *
- * `beforeWrite`, when given, is what a tool that may write waits on first: its
- * turn's checkpoint holding the workspace (`WriteHolds`), or the tool being
- * cancelled.
+ * `beforeTool`, when given, is what each tool waits on first, told whether it
+ * may write: its turn's checkpoint holding the workspace (`WriteHolds`), or the
+ * tool being cancelled. One that never writes waits only where the launch holds
+ * every tool (`WriteHolds.beforeTool`).
  */
-export function claudeCallHooks(bounds: CallBounds, routing?: ClaudeRouting, beforeWrite?: (signal: AbortSignal) => Promise<void> | undefined): ClaudeCallHooks {
+export function claudeCallHooks(bounds: CallBounds, routing?: ClaudeRouting, beforeTool?: (signal: AbortSignal, mayWrite: boolean) => Promise<void> | undefined): ClaudeCallHooks {
   return {
     pre: async (input, _toolUseId, { signal }) => {
       if (input.hook_event_name !== "PreToolUse") return {}
       const routed = routing && claudeRoutedCall(routing, input)
       if (routed) return routed
       // A tool Claude Code cancels meanwhile (the turn stopped) lets go at once.
-      if (!NEVER_WRITE.has(input.tool_name)) await beforeWrite?.(signal)
+      await beforeTool?.(signal, !NEVER_WRITE.has(input.tool_name))
       const tool = ToolInputSchema.safeParse(input.tool_input).data
       const path = FILE_TOOLS.has(input.tool_name) ? (tool?.file_path ?? tool?.notebook_path) : undefined
       bounds.before(input.tool_use_id, path && isAbsolute(path) ? [path] : [])

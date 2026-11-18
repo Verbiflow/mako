@@ -8,6 +8,13 @@
  * A turn's checkpoint is late only if a write was let go before it held the workspace (`TurnHold.wrote`): a turn
  * that writes nothing keeps its checkpoint however long the capture takes.
  *
+ * Where the person's own code runs beside Mako's hook (`attend`'s `everyTool`: their hooks, plugins or helper commands
+ * in a Claude Code session), the message still goes at once, and every tool waits, reads included (`beforeTool`), so
+ * nothing their code does after a tool runs ahead of the checkpoint either. Their code that runs with no tool, or
+ * beside Mako's hook rather than after it (a SessionStart, UserPromptSubmit or Stop hook, their own hook on a tool, a
+ * status line), isn't held: a write it makes before the checkpoint holds the workspace lands in the checkpoint, not
+ * in the turn's changes. That is the person's choice of 2026-11-17, over every send waiting for the checkpoint.
+ *
  * Keyed by the provider binding a driver was started for (its `conversationId`). One per host, which its harnesses and
  * its live conversations share.
  */
@@ -22,12 +29,19 @@ export interface TurnHold {
 
 export class WriteHolds {
   private readonly attended = new Set<string>()
+  /** Bindings whose every tool waits, not only those that may write (`attend`'s `everyTool`). */
+  private readonly everyTool = new Set<string>()
   private readonly holds = new Map<string, TurnHold>()
 
-  /** The binding's launch passes every write through `beforeWrite`, or doesn't (`held` false), until it's forgotten. */
-  attend(binding: string, held: boolean): void {
+  /**
+   * The binding's launch passes every write through `beforeWrite`, or doesn't (`held` false), until it's forgotten.
+   * `everyTool`: the person's own code runs beside Mako's hook, so its tools that never write wait too (`beforeTool`).
+   */
+  attend(binding: string, held: boolean, options: { everyTool?: boolean } = {}): void {
     if (held) this.attended.add(binding)
     else this.attended.delete(binding)
+    if (held && options.everyTool) this.everyTool.add(binding)
+    else this.everyTool.delete(binding)
   }
 
   /** Whether the binding's writes are held: a turn of it may go before its checkpoint holds the workspace. */
@@ -38,6 +52,7 @@ export class WriteHolds {
   /** Its launch ended. */
   forget(binding: string): void {
     this.attended.delete(binding)
+    this.everyTool.delete(binding)
     this.holds.delete(binding)
   }
 
@@ -58,9 +73,24 @@ export class WriteHolds {
    * first, so the write it then makes is counted as early rather than missed.
    */
   async beforeWrite(binding: string, signal?: AbortSignal, withinMs?: number): Promise<void> {
+    const early = await this.wait(binding, signal, withinMs)
+    early?.wrote()
+  }
+
+  /**
+   * Before a tool that never writes runs: where the binding holds every tool (`attend`'s `everyTool`), it waits as a
+   * write does, but going before the checkpoint held the workspace doesn't make it late, since the tool itself wrote
+   * nothing. Elsewhere it goes at once.
+   */
+  async beforeTool(binding: string, signal?: AbortSignal): Promise<void> {
+    if (this.everyTool.has(binding)) await this.wait(binding, signal)
+  }
+
+  /** Waits while the binding's turn holds; the hold it waited on when it was let go, uncancelled, before that held. */
+  private async wait(binding: string, signal?: AbortSignal, withinMs?: number): Promise<TurnHold | undefined> {
     const hold = this.holds.get(binding)
-    if (!hold || hold.frozen()) return
-    if (signal?.aborted) return
+    if (!hold || hold.frozen()) return undefined
+    if (signal?.aborted) return undefined
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
     let cancel = () => {}
@@ -76,6 +106,6 @@ export class WriteHolds {
       clearTimeout(timer)
       signal?.removeEventListener("abort", cancel)
     })
-    if (!cancelled && !hold.frozen()) hold.wrote()
+    return !cancelled && !hold.frozen() ? hold : undefined
   }
 }

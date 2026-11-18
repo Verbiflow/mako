@@ -23,7 +23,8 @@ function sourceRunsCode(settings: SourceSettings): boolean {
  * turn's checkpoint holds the workspace, as Claude Code itself resolves its settings (`resolveSettings`: every tier,
  * the policy tier's remote-cached, MDM and `managedSettings` sources included): any source with hooks, an enabled
  * plugin, a command it runs or managed MCP servers, or a machine policy source that didn't load (it may hold any of
- * them). A launch where this is true holds no writes; its message waits for the checkpoint (`WriteHolds.attend`).
+ * them). A launch where this is true holds every tool, reads included, and its message still goes at once
+ * (`WriteHolds.attend`'s `everyTool`).
  */
 export function settingsRunCode(resolved: ResolvedSettings): boolean {
   if (resolved.machinePolicy && resolved.machinePolicy.didNotLoad !== false) return true
