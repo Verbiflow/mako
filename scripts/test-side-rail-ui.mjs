@@ -109,7 +109,13 @@ async function check() {
   // A row a surface, in their order, with Agents' Fins there to show.
   assert.deepEqual(await rowIds(), ["changes", "files", "control", "agents", "setup"], "the surfaces, in their fixed order")
   assert.equal(await evaluate("document.querySelector('[data-side-rail]').getAttribute('aria-orientation')"), "vertical")
-  assert.equal(await selectedRow(), "changes", "the rail opens on Changes")
+  // An Apex's rail opens on its Overview, over what the rail last showed; Changes is a press away, and kept for the Thread.
+  assert.equal(await selectedRow(), "agents", "an Apex's rail opens on its Overview")
+  assert.equal(await evaluate("document.querySelector('[data-side-rail] [data-surface-id=agents]').getAttribute('aria-label')"), "Overview", "named so on an Apex")
+  await until("Boolean(document.querySelector('.companion-panel [data-apex-fins]'))", "the Overview's Fins")
+  await click("[data-side-rail] [data-surface-id=changes]")
+  await until("document.querySelector('[data-side-rail] [aria-selected=true]')?.dataset.surfaceId === 'changes'", "Changes from its row")
+  assert.equal(await selectedRow(), "changes", "the rail on Changes once it's picked")
 
   // The twin: the same tone as the left rail, the same row.
   const twin = await evaluate(`(() => {

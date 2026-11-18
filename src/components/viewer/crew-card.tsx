@@ -10,20 +10,19 @@ import {
   type ReactNode,
 } from "react"
 import { FinRowActions } from "@/components/viewer/fin-row-actions"
-import { FinTypedAnswer } from "@/components/composer/fin-typed-answer"
+import { FinAnswerButtons } from "@/components/viewer/fin-answer-buttons"
+import { useFinAnswer } from "@/components/viewer/use-fin-answer"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useRowRef } from "@/lib/virtual-row-ref"
 import { finMoved } from "@/state/fin-moved"
 import {
   ArrowRightLeftIcon,
-  CheckIcon,
   ChevronRightIcon,
   CornerUpLeftIcon,
   GitPullRequestIcon,
   SquareIcon,
-  XIcon,
 } from "lucide-react"
-import { approvalWords, CHILD_GROUPS, askWords, childGroup, childLine, childStateOf, openAsk, rollup, rollupLabel, rollupLine, stoodFor, timeWords, type ChildGroup, type Rollup } from "@mako/host/contracts/children"
+import { CHILD_GROUPS, askWords, childGroup, childLine, childStateOf, openAsk, rollup, rollupLabel, rollupLine, stoodFor, timeWords, type ChildGroup, type Rollup } from "@mako/host/contracts/children"
 import { APEX_WORD, FIN_WORD, finsWord } from "@mako/host/contracts/agents"
 import { isLimitAsk } from "@mako/host/contracts/fin-fallback"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
@@ -48,7 +47,6 @@ import {
   useThreadAsks,
   useThreadChildren,
 } from "@/state/apex-fins"
-import { answerFin, type FinAnswer } from "@/state/fin-asks"
 import { mountCrewCard, unmountCrewCard } from "@/state/crew-card-view"
 
 const HEADINGS = {
@@ -136,37 +134,12 @@ const NeedsRow = memo(function NeedsRow({
   compact?: boolean
 }) {
   useHarnessIdentity()
-  const [sent, setSent] = useState<FinAnswer | undefined>(undefined)
   const state = childStateOf(agent)
   const openable = useFinOpenable(agent)
   const open = openAsk(state)
+  const { sent, send } = useFinAnswer(agent, apex)
   if (!open || !agent.child) return null
   const ask = open.ask
-  const approval = ask?.kind === "approval"
-  const options = ask?.options ?? []
-  const order = options
-    .map((_, index) => index)
-    .sort((left, right) =>
-      left === ask?.recommended ? -1 : right === ask?.recommended ? 1 : 0
-    )
-  const send = (answer: FinAnswer) => {
-    if (sent || !ask || !agent.child) return
-    setSent(answer)
-    void answerFin(
-      apex,
-      {
-        fin: agent.child.thread,
-        title: agent.title,
-        harness: agent.provider,
-        question: open.question,
-        ask,
-        ...(open.done && { done: true as const }),
-      },
-      answer
-    ).then((answered) => {
-      if (!answered) setSent(undefined)
-    })
-  }
   return (
     <div
       data-crew-row={agent.child.thread}
@@ -201,88 +174,7 @@ const NeedsRow = memo(function NeedsRow({
         <CrewElapsed agent={agent} className="text-label text-faint" />
       </div>
       <p className="mt-1.5 pl-7 text-ui text-foreground/90">{askWords(open)}</p>
-      {ask ? (
-        <div className="mt-2 flex flex-wrap items-center gap-1.5 pl-7">
-          {approval ? (
-            <>
-              <button
-                type="button"
-                data-fin-answer="allow"
-                disabled={Boolean(sent)}
-                data-chosen={sent?.allow === true || undefined}
-                onClick={() => send({ allow: true })}
-                className={cn(
-                  "pressable flex items-center gap-1.5 bg-foreground px-2.5 text-label font-medium text-background hover:bg-foreground/90 disabled:opacity-50",
-                  compact ? "h-9" : "h-7"
-                )}
-              >
-                <CheckIcon className="size-3.5" />
-                {approvalWords(ask ?? {}).allow}
-              </button>
-              <button
-                type="button"
-                data-fin-answer="refuse"
-                disabled={Boolean(sent)}
-                data-chosen={sent?.allow === false || undefined}
-                onClick={() => send({ allow: false })}
-                className={cn(
-                  "pressable flex items-center gap-1.5 bg-raised px-2.5 text-label font-medium text-foreground/85 hover:bg-fill-selected disabled:opacity-50",
-                  compact ? "h-9" : "h-7"
-                )}
-              >
-                <XIcon className="size-3.5" />
-                {approvalWords(ask ?? {}).refuse}
-              </button>
-            </>
-          ) : (
-            order.map((index) => {
-              const option = options[index]!
-              const primary = index === order[0]
-              return (
-                <button
-                  key={`${index}:${option.label}`}
-                  type="button"
-                  data-fin-answer={index}
-                  data-recommended={index === ask.recommended || undefined}
-                  title={option.detail}
-                  disabled={Boolean(sent)}
-                  data-chosen={sent?.option === index || undefined}
-                  onClick={() => send({ option: index })}
-                  className={cn(
-                    "pressable flex items-center gap-1.5 px-2.5 text-label font-medium disabled:opacity-50",
-                    compact ? "h-9" : "h-7",
-                    primary
-                      ? "bg-foreground text-background hover:bg-foreground/90"
-                      : "bg-raised text-foreground/85 hover:bg-fill-selected"
-                  )}
-                >
-                  {option.label}
-                  {index === ask.recommended ? (
-                    <span
-                      className={cn(
-                        "font-normal",
-                        primary ? "text-background/70" : "text-faint"
-                      )}
-                    >
-                      Recommended
-                    </span>
-                  ) : null}
-                </button>
-              )
-            })
-          )}
-          {approval ? null : (
-            <FinTypedAnswer title={agent.title} options={options.length} disabled={Boolean(sent)} onAnswer={(words) => send({ answer: words })} />
-          )}
-          {!compact ? (
-            <span className="ml-auto text-label text-faint">
-              {approval
-                ? ask?.named ? `${agent.title} waits on your answer` : `${agent.title} waits on this command`
-                : `Or tell ${apexTitle}`}
-            </span>
-          ) : null}
-        </div>
-      ) : null}
+      {ask ? <FinAnswerButtons agent={agent} ask={ask} apexTitle={apexTitle} sent={sent} send={send} compact={compact} hint={!compact} className="mt-2 pl-7" /> : null}
     </div>
   )
 })
@@ -293,7 +185,7 @@ const NeedsRow = memo(function NeedsRow({
  * minute or an hour is the same string for that whole stretch, so the row's
  * label doesn't repaint on the seconds in between.
  */
-const CrewElapsed = memo(function CrewElapsed({
+export const CrewElapsed = memo(function CrewElapsed({
   agent,
   className,
 }: {

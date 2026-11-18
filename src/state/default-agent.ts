@@ -1,6 +1,6 @@
 import { agentOrder, harnessesByRecency } from "@mako/host/contracts/agent-order"
 import type { HarnessProfile, ThreadRef } from "@/lib/types"
-import { acpStore, activeAcp } from "@/state/acp-state"
+import { acpStore, activeAcp, railAcpStore } from "@/state/acp-state"
 import { currentHarnessOrder, loadHarnessOrder, subscribeHarnessOrder } from "@/state/harness-order"
 import { prefsStore } from "@/state/prefs"
 import { providerStore } from "@/state/providers"
@@ -31,6 +31,7 @@ export function firstRunAgent(profiles: Record<string, HarnessProfile>, threads:
  * pick stands.
  */
 export function followFirstRunAgent(): () => void {
+  // Whether a conversation is on screen is a fact the rail's store says; no streamed batch needs to ask again.
   const follow = () => {
     if (prefsStore.get().composerHarness) return
     const state = threadsStore.get()
@@ -40,7 +41,7 @@ export function followFirstRunAgent(): () => void {
   }
   void loadHarnessOrder()
   follow()
-  const stops = [providerStore.subscribe(follow), threadsStore.subscribe(follow), prefsStore.subscribe(follow), acpStore.subscribe(follow), subscribeHarnessOrder(follow)]
+  const stops = [providerStore.subscribe(follow), threadsStore.subscribe(follow), prefsStore.subscribe(follow), railAcpStore.subscribe(follow), subscribeHarnessOrder(follow)]
   return () => {
     for (const stop of stops) stop()
   }

@@ -1,4 +1,5 @@
 import { finDefaultsStore } from "./fin-defaults"
+import { followWindowShown } from "@/state/window-hidden"
 import { accounts } from "@/state/accounts"
 import { toolStepped } from "@/state/tool-steps"
 import { quietly } from "@/lib/quiet-retry"
@@ -922,7 +923,12 @@ export const actions = {
       })
       return () => {}
     }
-    const unsubscribe = bridge.onEvent(apply)
+    const unsubscribeEvents = bridge.onEvent(apply)
+    const unfollowShown = followWindowShown(bridge)
+    const unsubscribe = () => {
+      unsubscribeEvents()
+      unfollowShown()
+    }
     const epoch = ++connectionEpoch
     void providers.loadAll()
     // Settings paints versions the moment it opens; the host has been reading them since it started.
