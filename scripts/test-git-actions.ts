@@ -307,7 +307,7 @@ try {
   assert.match(describe("pull_request_open").description!, /instead of `gh pr create`/)
   assert.equal(describe("pull_request_status").annotations?.readOnlyHint, true)
   assert.equal(describe("pull_request_merge").annotations?.destructiveHint, true)
-  assert.match(agent.getInstructions() ?? "", /^pull_request_\*: /m, "the server says what the family is for")
+  assert.match(agent.getInstructions() ?? "", /^- pull request: .*pull_request_\*/m, "the server says what the family is for")
   const text = (result: Awaited<ReturnType<typeof agent.callTool>>) => z.array(z.object({ text: z.string() })).parse(result.content)[0]!.text
   const read = parseYaml(text(await agent.callTool({ name: "pull_request_status", arguments: {} })))
   assert.equal(read.opening.base, "release", "the tool targets where this Thread's worktree started")

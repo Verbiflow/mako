@@ -13,6 +13,7 @@ import type { Entry } from "@mako/sessions/entries"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { copiedBaseBytes, LiveJournal } from "@mako/host/conversations/live-journal"
 import { registerThreadHistoryTools, threadHistoryTools, type ThreadHistoryInput } from "@mako/host/conversations/thread-history"
+import { primerText } from "@mako/host/contracts/primer"
 import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
 import { ThreadStore } from "@mako/host/threads/store"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
@@ -268,7 +269,9 @@ async function main() {
 
   try {
     // The server says what the tool is for, and the tool says it changes nothing.
-    assert.match(agent.getInstructions() ?? "", /thread_history: this Thread's earlier turns/)
+    // The route is the primer's (`contracts/primer.ts`), said once; the server names the Thread its tools act on.
+    assert.match(agent.getInstructions() ?? "", /^Mako's tools for the Thread this Session belongs to\./)
+    assert.match(primerText({ role: "thread", noRecipe: false, computer: true }), /Prefer thread_history for what this Thread, in any harness, and the threads it referenced already said and did, read whole/)
     const listed = (await agent.listTools()).tools.find((tool) => tool.name === "thread_history")
     assert.ok(listed, "the mako server lists thread_history")
     assert.deepEqual(listed.annotations, { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false })
