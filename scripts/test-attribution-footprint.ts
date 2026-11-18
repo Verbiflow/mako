@@ -335,6 +335,28 @@ test("a change between a segment's cut and its read reaches the turn that just s
   }
 })
 
+test("a wait scoped to a checkout stands behind the footprints of turns that ran there, never another Thread's read", async () => {
+  const world = await footprintWorld()
+  const { fs, tracker, reader, mark } = world
+  try {
+    reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "start", cwd: "/h/one" }))
+    reader.activity(mark("T2", { kind: "turn", id: "u1", edge: "start", cwd: "/h/two" }))
+    fs.write("/h/.config/one.json", "{}")
+    reader.activity(mark("T1", { kind: "turn", id: "t1", edge: "end" }))
+    // T1's footprint is being read; a count or a checkpoint of T2's checkout goes on without it.
+    await reader.settled(["/h/two"])
+    assert.deepEqual(tracker.footprint("T1"), [], "T1's read is still under way")
+    // One of T1's own checkout, or of a folder holding it, waits for it.
+    await reader.settled(["/h/one"])
+    assert.deepEqual(tracker.footprint("T1").map((entry) => entry.path), ["/h/.config/one.json"])
+    reader.activity(mark("T2", { kind: "turn", id: "u1", edge: "end" }))
+    await reader.settled(["/h"])
+    assert.deepEqual(tracker.footprint("T2").map((entry) => entry.path), ["/h/.config/one.json"])
+  } finally {
+    await world.close()
+  }
+})
+
 test("another app's data is every container, group, daemon container and scripts folder, by case on macOS only", () => {
   assert.equal(otherAppsData("/h/Library/Containers/com.example.notes/Data/a.json", "/h", "darwin"), "/h/Library/Containers/com.example.notes")
   assert.equal(otherAppsData("/h/Library/Group Containers/group.example.chat/db", "/h", "darwin"), "/h/Library/Group Containers/group.example.chat")

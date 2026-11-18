@@ -30,13 +30,29 @@ export interface JournalView {
   author(seq: number): Attribution | null
 }
 
-/** A read-only view of a journal no tracker is running. */
+/**
+ * A read-only view of a journal no tracker is running. Its uncommitted files are read when a root is first asked
+ * for, once, and kept by root: most readers want only the store, and the host makes a view after every commit of the
+ * journal's writer, so reading the table for each, then filtering it once per root, was every root against every file
+ * on the host's thread.
+ */
 export function storedView(store: JournalStore): JournalView {
-  const files = store.files()
+  let files: Map<string, Map<string, FileState>> | undefined
+  const filesOf = (root: string): ReadonlyMap<string, FileState> => {
+    if (!files) {
+      files = new Map()
+      for (const file of store.files()) {
+        const held = files.get(file.root) ?? new Map<string, FileState>()
+        held.set(file.path, file)
+        files.set(file.root, held)
+      }
+    }
+    return files.get(root) ?? new Map()
+  }
   const authors = new Map<number, Attribution | null>()
   return {
     store,
-    roots: () => store.roots().filter((root) => root.active).map((root) => ({ root, files: new Map(files.filter((file) => file.root === root.id).map((file) => [file.path, file])) })),
+    roots: () => store.roots().filter((root) => root.active).map((root) => ({ root, files: filesOf(root.id) })),
     author: (seq) => {
       if (!authors.has(seq)) authors.set(seq, store.author(seq) ?? null)
       return authors.get(seq) ?? null

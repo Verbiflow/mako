@@ -4,7 +4,7 @@ import { z } from "zod"
 import { decompress } from "./content.js"
 import { JournalReadSchema } from "./journal-reader.js"
 import { CheckpointFingerprints } from "./checkpoint-fingerprints.js"
-import { JournalStore } from "./journal-store.js"
+import { ACTIVITY_OVERLAPPING, JournalStore } from "./journal-store.js"
 import { countTurnInSlices, partition, storedView } from "./queries.js"
 
 /*
@@ -56,7 +56,7 @@ parentPort?.on("message", async (message) => {
       return
     }
     if (request.data.kind === "activity-overlapping") {
-      const rows = open().prepare("SELECT * FROM activity WHERE started_at <= ? AND (ended_at IS NULL OR ended_at >= ?)").all(request.data.to, request.data.from)
+      const rows = open().prepare(ACTIVITY_OVERLAPPING).all(request.data.from, request.data.to, request.data.to)
       parentPort?.postMessage({ id, ok: true, rows })
       return
     }

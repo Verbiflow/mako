@@ -1453,7 +1453,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     // Where that branch's worktree would be now, made nothing of: a Thread at work there is kept ready at it.
     planned: async (id) => late.movers?.worktreeMoves?.planned(id),
     // What it carries besides its checkout: the paths outside it the journal ties to it, and its file history.
-    outside: (thread) => late.attribution?.changes(thread).outside.filter((entry) => entry.evidence === "strong").map(({ path, access, secret }) => ({ path, access, secret })) ?? [],
+    outside: (thread) => late.attribution?.outside(thread).filter((entry) => entry.evidence === "strong").map(({ path, access, secret }) => ({ path, access, secret })) ?? [],
     history: (thread) => late.attribution?.threadHistory(thread),
     archived: (conversationId) => late.archivedHere?.(conversationId) ?? false,
     repositoryOf: (cwd) => folderRepository(git, cwd),
@@ -2058,7 +2058,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     clone: (repository) => cloneRepository(git, repository),
   }
   /** The Thread's files outside its folder that this machine's journal ties to it, with strong evidence: what a carry takes. */
-  const threadOutside = (thread: ThreadId) => late.attribution?.changes(thread).outside.filter((entry) => entry.evidence === "strong").map(({ path, access, secret }) => ({ path, access, secret })) ?? []
+  const threadOutside = (thread: ThreadId) => late.attribution?.outside(thread).filter((entry) => entry.evidence === "strong").map(({ path, access, secret }) => ({ path, access, secret })) ?? []
   const threadHistory = (thread: ThreadId) => late.attribution?.threadHistory(thread)
   /** On a cloud machine: its tracker, which saves the Thread as it changes and restores a lost machine's save. */
   const machineTracker = arrival && openMachineTracker({

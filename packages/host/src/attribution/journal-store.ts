@@ -467,6 +467,29 @@ const LIVE_REFS = `SELECT base FROM files WHERE base IS NOT NULL UNION SELECT cu
     UNION SELECT e.after FROM entries e JOIN files f ON f.root = e.root AND f.path = e.path AND e.seq > f.base_seq WHERE e.after IS NOT NULL
     UNION SELECT ref FROM stats WHERE ref IS NOT NULL`
 /** The same, without the stat cache's (a million rows): what a drop checks again, the stat cache's being in `touched`. */
+/**
+ * Indexes added since the journal's format was named, for reads that scanned a table whole. Outside `MIGRATION`, as
+ * `CHANGE_TRACKING` is and for its reason; a journal without them (an older owner's) reads the same, only slower.
+ */
+const ADDED_INDEXES = `CREATE INDEX IF NOT EXISTS activity_ended ON activity(ended_at);`
+
+/**
+ * Activity overlapping a stretch, bound as (from, to, to): what ended since `from`, by `activity_ended`, and what is
+ * still open. As one `WHERE` with an `OR` no index served it, and every flush inside a gap read the table whole
+ * (210 MB on 2026-11-17). Rows come in no order: `byActivityKey` gives the table's own.
+ */
+export const ACTIVITY_OVERLAPPING = `SELECT * FROM activity WHERE ended_at >= ? AND started_at <= ?
+  UNION ALL SELECT * FROM activity WHERE ended_at IS NULL AND started_at <= ?`
+
+/** The activity table's own order, by its key. */
+export function byActivityKey(a: { session: string; kind: string; id: string }, b: { session: string; kind: string; id: string }): number {
+  return compareText(a.session, b.session) || compareText(a.kind, b.kind) || compareText(a.id, b.id)
+}
+
+function compareText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
 const LIVE_FILE_REFS = `SELECT base FROM files WHERE base IS NOT NULL UNION SELECT current FROM files WHERE current IS NOT NULL
     UNION SELECT e.before FROM entries e JOIN files f ON f.root = e.root AND f.path = e.path AND e.seq > f.base_seq WHERE e.before IS NOT NULL
     UNION SELECT e.after FROM entries e JOIN files f ON f.root = e.root AND f.path = e.path AND e.seq > f.base_seq WHERE e.after IS NOT NULL`
@@ -604,6 +627,7 @@ export class JournalStore {
       if (!columns.includes(added.column)) db.exec(added.add)
     }
     db.exec(CHANGE_TRACKING)
+    db.exec(ADDED_INDEXES)
     // The clock becomes visible with every trigger installed, including to older writers sharing this journal.
     db.exec("BEGIN IMMEDIATE")
     try { db.exec(CHECKPOINT_CHANGES); db.exec("COMMIT") }
@@ -963,7 +987,7 @@ export class JournalStore {
 
   /** Activity that overlaps `[from, to]`. */
   activityBetween(from: number, to: number): StoredActivity[] {
-    return this.statement("SELECT * FROM activity WHERE started_at <= ? AND (ended_at IS NULL OR ended_at >= ?)").all(to, from).map((row) => this.activityOf(row))
+    return this.statement(ACTIVITY_OVERLAPPING).all(from, to, to).map((row) => this.activityOf(row)).sort(byActivityKey)
   }
 
   /**
