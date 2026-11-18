@@ -11,7 +11,8 @@ import { COMPACT_LIVE_FORM, WINDOW_LIVE_FORM } from "@mako/protocol/live-form"
 import type { NativeAgent, NativeAgentRoster } from "@mako/host/contracts/native-agents"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { WorkingSet, workingThreads, type WorkingSnapshot } from "@mako/host/conversations/cloud-handoffs"
-import { ThreadStore } from "@mako/host/threads/store"
+import { HELD_BY_TABLE, heldBy, ThreadStore } from "@mako/host/threads/store"
+import { readFileSync } from "node:fs"
 import { DatabaseSync } from "node:sqlite"
 import { atOnce } from "@mako/sessions/slices"
 import { JournalReaders } from "@mako/host/conversations/journal-readers"
@@ -290,6 +291,15 @@ try {
         world.store.renameThread({ operationId: randomUUID(), thread: renamed, title: "Renamed", actor: { kind: "service", name: "migration" } })
         assert.equal(world.store.thread(renamed)?.title, "Renamed", "a Thread renamed is read at once")
         same("after a Thread was renamed")
+        // A store opened with the split on (one conversation a Thread), which writes on the connection itself as it
+        // opens: what it holds once open is what a fresh read says.
+        const split = new ThreadStore(path, { oneConversation: true })
+        const afterSplit = said(split)
+        split.close()
+        const again = new ThreadStore(path, { oneConversation: true })
+        assert.equal(afterSplit, said(again), "a store that split Threads as it opened holds what the store says")
+        again.close()
+        same("after another host split Threads")
         world.store["sql"] = sql
       }
     } finally {
@@ -331,6 +341,33 @@ try {
       await readers.stop()
     }
   }
+  // What the store holds through a commit is decided by the table a statement writes, and every table says which:
+  // one added to the schema without a line here fails, as does the connection used outside the store's opening,
+  // where a write would pass `sql` unseen.
+  {
+    const source = ["store.ts", "thread-split.ts"].map((name) => readFileSync(new URL(`../packages/host/src/threads/${name}`, import.meta.url), "utf8"))
+    const tables = new Set(source.flatMap((text) => [...text.matchAll(/CREATE TABLE (?:IF NOT EXISTS )?([a-z_]+)/g)].map((found) => found[1]!)))
+    tables.delete("background_agents")
+    assert.ok(tables.size > 30)
+    assert.deepEqual([...tables].filter((table) => !HELD_BY_TABLE.has(table)), [], "every table of the store says what its writes can change")
+    assert.equal(heldBy("INSERT INTO a_table_added_later (id) VALUES (?)"), "both", "a table without a line drops everything held")
+    assert.equal(heldBy("WITH moved AS (SELECT 1) UPDATE memberships SET thread_id = ?"), "both", "a statement that can't be read drops everything held")
+    assert.equal(heldBy("INSERT OR IGNORE INTO thread_reports (id) VALUES (?)"), "neither")
+    assert.equal(heldBy("UPDATE memberships SET thread_id = ? WHERE session_id = ?"), "both")
+    assert.equal(heldBy("DELETE FROM sources WHERE session_id = ?"), "edges")
+    assert.equal(heldBy("SELECT record FROM thread_parents ORDER BY created_at"), "neither")
+    // The connection itself is used only while the store opens, and by what every write and read goes through.
+    const opening = new Set(["constructor", "create", "migrate", "migrateBackgroundAgents", "keepOneWorktreePerThread", "closeInternalRuns", "checkReadable", "close", "sql", "meta", "syncVersion", "write"])
+    let method = ""
+    const direct = new Set<string>()
+    for (const line of source[0]!.split("\n")) {
+      const named = /^  (?:private |static |async |get |protected |override )*(#?[A-Za-z]+)(?:<[^>]*>)?\(/.exec(line)?.[1]
+      if (named && !["if", "for", "while", "switch", "return"].includes(named)) method = named
+      if (/\bthis\.db\b/.test(line)) direct.add(method)
+    }
+    assert.deepEqual([...direct].filter((name) => !opening.has(name)), [], "the store's connection is used directly only as it opens")
+  }
+
   console.log("flush costs ok")
 } finally {
   rmSync(root, { recursive: true, force: true })

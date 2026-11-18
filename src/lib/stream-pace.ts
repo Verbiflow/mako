@@ -1,18 +1,22 @@
 import type { Exchange } from "@/lib/exchanges"
-import { STREAM_FRAME_MS, type StreamClock } from "@/lib/stream-frames"
+import type { StreamClock } from "@/lib/stream-frames"
 
 /**
  * How often a streaming answer's turn is drawn again. Every batch the host sends (one a frame, `LIVE_FRAME_MS`) used to
- * draw the transcript again: the timeline, the turn and its answer. For a long answer that's most of the renderer's time
- * while it streams, and nobody reads a long answer word by word as it lands. So, as T3 Code paces its own:
- * - the first words of an answer draw at once;
- * - an answer shorter than `STREAM_PACE_SHORT_CHARS` draws every frame, word by word as before;
- * - a longer one draws when a paragraph ends, and otherwise at most every `STREAM_PACE_LONG_MS`, so its newest paragraph
- *   still grows while it's written.
+ * draw the transcript again: the timeline, the turn and its answer. That is most of the renderer's time while an
+ * answer streams, and none of it is the answer's words: those reach the page by themselves, a frame after the window
+ * hears them (`useStreamedText`, the prose reading its own text from the conversation). So:
+ * - the first words of an answer draw at once, which is what mounts that prose;
+ * - after them the turn is drawn again at most every `STREAM_PACE_MS` while only the answer grows, whatever its
+ *   length: what the turn holds besides the words doesn't change with them, and a second is soon enough for
+ *   anything that reads the turns as drawn (the navigator, the reading report).
  * Anything but an answer growing (a tool call, a status, its end) draws at once, with what it held.
+ *
+ * A short answer once drew its turn every frame and a long one every 400 ms or at a paragraph's end, because the turn's
+ * draw was also how the words arrived: a long answer's words then waited for it, 69 ms at the median and 400 at worst
+ * after the window had them.
  */
-export const STREAM_PACE_SHORT_CHARS = 1_500
-export const STREAM_PACE_LONG_MS = 400
+export const STREAM_PACE_MS = 1_000
 
 /** The answer being written in a turn: the text of its newest block, where that's text. */
 function growing(exchange: Exchange): string | undefined {
@@ -44,13 +48,9 @@ export function answerGrew(before: readonly Exchange[], after: readonly Exchange
   return { drawn, now }
 }
 
-/** How long after `paintedAt` the answer may next be drawn, now that it reads `now` and was last drawn as `drawn`. */
-export function answerPaceMs(drawn: string, now: string): number {
-  if (!drawn.trim()) return 0
-  if (now.length < STREAM_PACE_SHORT_CHARS) return STREAM_FRAME_MS
-  // A paragraph ended since it was last drawn: draw it whole, on the next frame.
-  if (now.indexOf("\n\n", Math.max(0, drawn.length - 1)) >= 0) return STREAM_FRAME_MS
-  return STREAM_PACE_LONG_MS
+/** How long after `paintedAt` the turn may next be drawn, now that its answer was last drawn as `drawn` and has grown. */
+export function answerPaceMs(drawn: string): number {
+  return drawn.trim() ? STREAM_PACE_MS : 0
 }
 
 /**
@@ -92,7 +92,7 @@ export class ExchangePacer<Turns extends { exchanges: readonly Exchange[] }> {
       return
     }
     const now = this.#clock.now()
-    const due = this.#paintedAt + answerPaceMs(grew.drawn, grew.now)
+    const due = this.#paintedAt + answerPaceMs(grew.drawn)
     // A draw already waits for as soon or sooner: it shows this too.
     if (this.#held && due >= this.#due) return
     if (due <= now) {

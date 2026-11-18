@@ -27,7 +27,7 @@ import { subscribeRuntime } from "@mako/host/transport/connection"
 import { startWebHost, streamWrites } from "@mako/host/transport/server"
 import { COMPACT_LIVE_FORM, WINDOW_LIVE_FORM } from "@mako/protocol/live-form"
 import { shownBlocks } from "../src/state/live-projection.js"
-import { StreamFrames, STREAM_FRAME_MS } from "../src/lib/stream-frames.js"
+import { StreamFrames, STREAM_FRAME_MIN_MS, STREAM_FRAME_MS } from "../src/lib/stream-frames.js"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 /* ------------------------------------------------------------ a clock the test turns */
@@ -385,9 +385,24 @@ mock.method(performance, "now", realNow)
     }
     if (at.now % LIVE_AHEAD_MS === 0) frames.next(text += "word ")
   }
-  assert.ok(paints.length <= 1_000 / STREAM_FRAME_MS + 1, `${paints.length} paints in a second of text every ${LIVE_AHEAD_MS} ms`)
-  assert.ok(paints.every((paint, index) => index === 0 || paint.at - paints[index - 1]!.at >= STREAM_FRAME_MS), "never two within its frame")
+  // A small piece paints every other frame its text is said ahead on, so a line is drawn within a frame or two of
+  // coming; one that takes a while to parse is what the throttle holds to the batches' frame (below).
+  assert.ok(paints.length >= 1_000 / STREAM_FRAME_MIN_MS - 2 && paints.length <= 1_000 / STREAM_FRAME_MIN_MS + 1, `${paints.length} paints in a second of text every ${LIVE_AHEAD_MS} ms`)
+  assert.ok(paints.every((paint, index) => index === 0 || paint.at - paints[index - 1]!.at >= STREAM_FRAME_MIN_MS), "never two within its frame")
   assert.ok(paints.every((paint, index) => index === 0 || text.startsWith(paint.text) && paint.text.length > paints[index - 1]!.text.length), "each showing more")
+  // The same lines into a piece of 9,000 characters: its parse is what a paint costs, and it paints on the batches' frame.
+  const from = paints.length
+  const began = at.now
+  for (; at.now <= began + 1_000; at.now += 1) {
+    for (const timer of timers.filter((each) => each.due <= at.now)) {
+      timers.splice(timers.indexOf(timer), 1)
+      timer.run()
+    }
+    if (at.now % LIVE_AHEAD_MS === 0) frames.next(text += "word ", 9_000)
+  }
+  const long = paints.slice(from)
+  assert.ok(long.length <= 1_000 / STREAM_FRAME_MS + 1, `${long.length} paints in a second of a long piece`)
+  assert.ok(long.every((paint, index) => index === 0 || paint.at - long[index - 1]!.at >= STREAM_FRAME_MS), "never two within the long piece's frame")
 }
 
 console.log("live ahead: a window hears waiting text within its frame, the batches go as they did, a turn's first words go at once, and a window that stops reading is told nothing ahead")

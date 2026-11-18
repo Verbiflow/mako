@@ -4,6 +4,9 @@ import { KeptResults } from "../src/lib/kept-results"
 import { HighlightCache, type CodeLines } from "../src/lib/highlight-client"
 import { diffLines, keptLines, writtenLines } from "../src/lib/tool-diff"
 import { keptEntries } from "../src/lib/kept-entries"
+import { drawnProse, replyProse, responseSections } from "../src/lib/exchanges"
+import { writtenSoFar } from "../src/components/transcript/use-live-answer"
+import type { ChatMessage } from "../src/lib/types"
 import { createStore, keyedSubscriptions } from "../src/state/store"
 import { requestOf } from "../src/state/acp-state"
 import { rowChecker } from "../src/components/transcript/row-check"
@@ -192,6 +195,62 @@ import { rowChecker } from "../src/components/transcript/row-check"
   } finally {
     warned.mock.restore()
   }
+}
+
+// A reply is drawn a text block to a part. What is parsed ahead for a turn is asked for by those same texts, so each
+// part of a reply with calls between its paragraphs finds its tree when it mounts; the reply's text joined finds none.
+{
+  const reply: ChatMessage = {
+    id: "acp-assistant-4", role: "assistant",
+    blocks: [
+      { type: "text", text: "First I read the file.\n\nIt has two exports." },
+      { type: "toolCall", id: "1:t1", name: "Read", arguments: { path: "src/a.ts" } },
+      { type: "toolResult", id: "1:t1", name: "Read", text: "export const a = 1" },
+      { type: "text", text: "Then I changed the second." },
+      { type: "text", text: "" },
+      { type: "text", text: "## Done\n\nBoth pass." },
+    ],
+  }
+  const prompt: ChatMessage = { id: "acp-user-3", role: "user", blocks: [{ type: "text", text: "Change the second export" }] }
+  const streaming: ChatMessage = { id: "acp-assistant-9", role: "assistant", streaming: true, blocks: [{ type: "text", text: "Still being written" }] }
+  const ahead = drawnProse([prompt, reply, streaming])
+  const mounted = responseSections([reply]).flatMap((section) => (section.kind === "prose" ? [replyProse(section.message.blocks)] : [])).filter(Boolean)
+  assert.deepEqual(ahead, mounted, "What is parsed ahead is what each part asks for, in order")
+  assert.equal(mounted.length, 3, "one prose for each text block that says something")
+  assert.ok(!ahead.includes(replyProse(reply.blocks)), "never the reply's text joined")
+  let parses = 0
+  const trees = new KeptResults<string>(async (text) => { parses += 1; return `tree of ${text.length}` }, { entries: 8, weight: 10_000 })
+  await Promise.all(ahead.map((text) => trees.want(text)))
+  assert.deepEqual(mounted.map((text) => trees.get(text)), mounted.map((text) => `tree of ${text.length}`), "every part of a multi-block reply finds its tree on mount")
+  assert.equal(trees.get(replyProse(reply.blocks)), undefined)
+  assert.equal(parses, 3)
+  assert.deepEqual(drawnProse([streaming]), [], "a reply still being written is parsed by its own prose as it grows")
+}
+
+// A reply being written hands its growing words to the one part that draws its last block, told by the part's id: an
+// earlier paragraph that reads like the start of the last one never takes them, and nothing does once a call follows.
+{
+  const prompt: ChatMessage = { id: "acp-request-r1", role: "user", requestId: "r1", blocks: [{ type: "text", text: "Go on" }] }
+  const reply = (blocks: ChatMessage["blocks"]): ChatMessage => ({ id: "acp-assistant-7", role: "assistant", streaming: true, blocks })
+  const call = { type: "toolCall" as const, id: "1:t1", name: "Read", arguments: { path: "src/a.ts" } }
+  const result = { type: "toolResult" as const, id: "1:t1", name: "Read", text: "export const a = 1" }
+  const holding = (message: ChatMessage) => {
+    const exchange = { id: "acp-request-r1", prompt, response: [message], system: [] }
+    // Only what the reading looks at: the conversation's key and the turns it draws.
+    return { key: "live-1", projection: { exchanges: [exchange], messages: [prompt, message], plan: [], files: [] } }
+  }
+  const writing = reply([{ type: "text", text: "Done." }, call, result, { type: "text", text: "Done. Next, the second" }])
+  const parts = responseSections(writing.blocks.length ? [writing] : []).flatMap((section) => (section.kind === "prose" ? [section.id] : []))
+  assert.equal(parts.length, 2)
+  const [first, last] = parts
+  assert.equal(writtenSoFar(holding(writing), last!), "Done. Next, the second", "The part that draws the last block reads it as it grows")
+  assert.equal(writtenSoFar(holding(writing), first!), undefined, "An earlier part never takes the last block's words, though they begin with its own")
+  const more = reply([...writing.blocks.slice(0, -1), { type: "text", text: "Done. Next, the second export" }])
+  assert.equal(writtenSoFar(holding(more), last!), "Done. Next, the second export", "and goes on reading it")
+  const called = reply([...more.blocks, { ...call, id: "1:t2" }])
+  assert.equal(writtenSoFar(holding(called), last!), undefined, "A call after it: nothing is being written")
+  assert.equal(writtenSoFar(holding(more), "acp-assistant-8-part-1"), undefined, "Another reply's part reads nothing of this one")
+  assert.equal(writtenSoFar(undefined, last!), undefined)
 }
 
 console.log("PASS: results kept and made once, code tokens read synchronously on a second mount, edit lines read once per content, kept map values, per-conversation listeners, requests by id, and the row check's named rows")
