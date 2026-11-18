@@ -32,6 +32,53 @@ export function worktreeAt<Worktree extends { path: string; repoRoot?: string; p
   return undefined
 }
 
+/** A list's folders by path, each with its first place in the list: `worktreeAt` returns the first that holds a path. */
+interface WorktreeFolders {
+  paths: Map<string, number>
+  checkouts: Map<string, number>
+}
+
+const foldersOf = new WeakMap<readonly { path: string }[], WorktreeFolders>()
+
+/** The first place in the list of a folder holding `plain`, by `pathInside`'s rule: the path itself, or any stretch of it that ends before a `/`. */
+function firstHolding(folders: Map<string, number>, plain: string): number | undefined {
+  let first = folders.get(plain)
+  for (let cut = plain.lastIndexOf("/"); cut >= 0; cut = cut === 0 ? -1 : plain.lastIndexOf("/", cut - 1)) {
+    const at = folders.get(plain.slice(0, cut))
+    if (at !== undefined && (first === undefined || at < first)) first = at
+  }
+  return first
+}
+
+/**
+ * `worktreeAt`, for a list that's asked about many paths while it stands (a window's worktrees, asked by every row of
+ * its rail): the list's folders are indexed once, and a path is found by its own parent folders, not by a pass over
+ * every worktree. The answers are `worktreeAt`'s.
+ */
+export function worktreeIn<Worktree extends { path: string; repoRoot?: string; project?: string }>(
+  worktrees: readonly Worktree[] | undefined,
+  path: string | undefined
+): { worktree: Worktree; inside: string } | undefined {
+  if (!path || !worktrees) return undefined
+  let folders = foldersOf.get(worktrees)
+  if (!folders) {
+    folders = { paths: new Map(), checkouts: new Map() }
+    for (const [at, worktree] of worktrees.entries()) {
+      const own = plainPath(worktree.path)
+      if (!folders.paths.has(own)) folders.paths.set(own, at)
+      const checkout = checkoutOf(worktree)
+      if (checkout !== worktree.path && !folders.checkouts.has(plainPath(checkout))) folders.checkouts.set(plainPath(checkout), at)
+    }
+    foldersOf.set(worktrees, folders)
+  }
+  const plain = plainPath(path)
+  const within = firstHolding(folders.paths, plain)
+  if (within !== undefined) return { worktree: worktrees[within]!, inside: plain.slice(plainPath(worktrees[within]!.path).length) }
+  const mirrored = firstHolding(folders.checkouts, plain)
+  if (mirrored !== undefined) return { worktree: worktrees[mirrored]!, inside: plain.slice(plainPath(checkoutOf(worktrees[mirrored]!)).length) }
+  return undefined
+}
+
 /** The same folder in the main checkout, when `path` is in one of `worktrees`. */
 export function projectFolder(worktrees: readonly { path: string; repoRoot: string; project?: string }[] | undefined, path: string | undefined): string | undefined {
   const found = worktreeAt(worktrees, path)

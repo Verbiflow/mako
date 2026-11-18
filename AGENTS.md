@@ -1977,12 +1977,20 @@ Three rules hold this together, and each has a specific failure it prevents:
 
 - **Select the narrowest slice.** `useSession((s) => s.meta)` in the transcript
   re-renders the whole list whenever a token count moves. Take `s.meta?.cwd`.
+  A selector on `useAcp` runs on every streamed batch of every conversation,
+  so the rail's rows read `useRailAcp` (`railAcpStore` in `acp-state.ts`): the
+  same state, said only when a fact a row shows moved. What's derived from
+  every conversation (`selectAcpPresence`, the Fin indexes) is kept across the
+  batches that move none (`railDerived`, `sayings`), and a list of
+  conversations goes in as one change (`admitAcpConversations`).
 - **Reconcile message identity** (`src/lib/reconcile.ts`). The host rebuilds
   the entire message array whenever a tool returns, so every object arrives
   new; without reconciliation one tool result re-parses the markdown of every
   turn in the session.
 - **Long lists are virtualized, long content uses `content-visibility`.** The
-  rail is windowed with `@tanstack/react-virtual`; transcript turns and
+  rail isn't windowed: it draws only the rows of open folders, a few per
+  folder behind "More" (`FolderSection`), and a closed folder's rows aren't
+  in the page; transcript turns and
   surface-panel rows carry `.contain-turn`. Timelines above 40 turns or 120
   messages and calls (a few prompts can hold thousands of calls), and
   navigators above 100 prompts, additionally window measured rows; a timeline
