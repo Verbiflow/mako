@@ -77,7 +77,10 @@ function walkTurnFile(view: JournalView, thread: string, turn: string, file: Tur
   // By each path's own entries: found among every file's since the turn began, it read up to 10,000 entries for one.
   if (began !== undefined)
     for (const path of group.paths) group.first = view.store.firstOfPathFrom(group.root, path, began, group.first) ?? group.first
-  return walkLines(turnChain(view, group), (ref) => linesOf(view, ref), (entry) => handOf(view, thread, scope, entry), UNKNOWN)
+  const chain = turnChain(view, group)
+  // None of the file's entries left: past retention (`JournalStore.pruneEntries`), read as a version that isn't kept is.
+  if (!chain.length) return undefined
+  return walkLines(chain, (ref) => linesOf(view, ref), (entry) => handOf(view, thread, scope, entry), UNKNOWN)
 }
 
 /** The two sides a diff shows: lines with their endings, null for no file. */

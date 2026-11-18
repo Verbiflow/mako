@@ -34,7 +34,7 @@ import { attribute, authorOf, claim, Evidence, LEAD_MS, reaches as reachesChange
 import { WorkingSets } from "./working-set.js"
 import { StatCache } from "./stat-cache.js"
 import { collectPlanOffThread, JournalReader } from "./journal-reader.js"
-import { JournalStore, byActivityKey, wholeChange, type FileState, type Recency, type StatRow, type ActivityKey, type Collected, type Row, type StoredActivity, type StoredEntry, type StoredRoot } from "./journal-store.js"
+import { JournalStore, byActivityKey, wholeChange, type FileState, type Recency, type StatRow, type ActivityKey, type Collected, type CommitKey, type Pruned, type Row, type StoredActivity, type StoredEntry, type StoredRoot } from "./journal-store.js"
 import { diffLines, splitLines } from "./line-diff.js"
 import { applyHunks, BASE, baseMap, onlyBase, presentLines, presentRuns, rebase, UNKNOWN, withKnownWriters, withWriter, writers, type Run } from "./line-map.js"
 import { FootprintReader, type FootprintOptions } from "./footprint-reader.js"
@@ -72,6 +72,8 @@ export interface TrackerOptions {
   sleepAfterMs?: number
   /** The most kept content may take, compressed. Default 2 GB. */
   budgetBytes?: number
+  /** How long a sleeping root with nothing uncommitted is kept before it's let go (`letGoIdle`). Default 14 days. */
+  cleanRetentionMs?: number
   /** Where a turn's footprint is read from (the home folder and temporary folders), and what the host knows to leave out. */
   footprint?: FootprintOptions
   /** A change heard live came out uncertain while these Sessions were running: their child agents' records may name its author. */
@@ -86,6 +88,11 @@ export interface TrackerOptions {
    * for it to reach.
    */
   deliveryLagMs?(): number
+  /**
+   * Every change made by `through` has its author for good. Said when a settling pass moves that point on, so what
+   * waits for a turn's changes to settle follows this instead of asking again and again.
+   */
+  settledThrough?(through: number): void
 }
 
 /** Events for a root are gathered this long before they're read, so a burst is one flush. */
@@ -168,6 +175,12 @@ const COLLECT_BATCH = 200
 const ACTIVITY_PAGE = 2_000
 /** How long a root nobody changed or worked around stays awake: it sleeps after, and the next turn there wakes it. */
 const SLEEP_AFTER_MS = 6 * 60 * 60_000
+/** A sleeping root with nothing uncommitted is let go after this long asleep (`letGoClean`): the retention window. */
+const CLEAN_RETENTION_MS = 14 * 86_400_000
+/** Entries a step of retention looks at, and rows of one Thread or table it drops, in one transaction. */
+const PRUNE_STEP = 512
+/** Steps a pass of retention takes at the most, over all it sweeps: the rest is the next pass's, an hour on. */
+const PRUNE_STEPS = 400
 /** How many times `whatWasHeard` journals what flushing turned up (a folder that came stands for its files) before it answers. */
 const HEARD_PASSES = 3
 /** Spacing past which a root is reported as rescanned less often because its losses keep coming. */
@@ -248,6 +261,17 @@ interface RootState {
   /** The history position taken last, saved once the next is taken: by then everything before it has been heard. */
   markTaken?: { mark: string; at: number }
   markTimer?: ReturnType<typeof setTimeout>
+}
+
+/** Where each sweep of retention (`LaptopTracker.prune`) goes on from, and whether every Thread has been swept once. */
+interface Sweeps {
+  entries: number
+  thread: string
+  /** The Thread whose records a step dropped only part of. */
+  unfinished?: string
+  commits?: CommitKey
+  statRoot: string
+  threadsSwept: boolean
 }
 
 /** What Git ignores in a root, as `ignoredEntries` lists it: folders it ignores whole, and single files, relative to the root. */
@@ -358,6 +382,9 @@ export class LaptopTracker implements AttributionTracker {
   private readonly rescans = { done: new HourCounts(), files: new HourCounts(), ms: new HourCounts() }
   /** The last entry's number. */
   private seq: number
+  /** The point `TrackerOptions.settledThrough` was last told. */
+  private settledSaid = -Infinity
+  private readonly sweeps: Sweeps = { entries: 0, thread: "", statRoot: "", threadsSwept: false }
 
   private constructor(ports: TrackerPorts, options: TrackerOptions, store: JournalStore) {
     this.ports = ports
@@ -1392,8 +1419,7 @@ export class LaptopTracker implements AttributionTracker {
   private restored(file: FileState, ref: ContentRef): { seq?: number; map: Run[] } | undefined {
     if (file.text && ref === file.base) return { map: baseMap(presentRuns(file.map).reduce((sum, run) => sum + (run.ins === 0 ? run.length : 0), 0) + deadBase(file.map)) }
     if (ref === file.current) return undefined
-    const earlier = this.store.chain(file.root, file.path, file.baseSeq).reverse().find((entry) => entry.after === ref && entry.map)
-    return earlier ? { seq: earlier.seq, map: earlier.map! } : undefined
+    return this.store.versionWith(file.root, file.path, file.baseSeq, ref)
   }
 
   /**
@@ -1643,7 +1669,12 @@ export class LaptopTracker implements AttributionTracker {
     }
   }
 
-  /** Git's dirty/untracked inventory plus paths that left it catches silent writes and clean returns to HEAD. */
+  /**
+   * A root whose watch said nothing while a turn's commands ran is looked at once the turn ends, in case the watch
+   * held back what they wrote: Git's dirty and untracked files, plus the paths that left that set, which catches
+   * silent writes and clean returns to HEAD. HEAD is read from Git's files and the listing is one `git status`
+   * (`gitRepository`): one process a reconciliation, where there were five.
+   */
   private async refreshShell(id: string): Promise<void> {
     const checks = this.silentRoots.get(id) ?? []
     const due = checks.filter((check) => this.closing || check.due <= Date.now())
@@ -1931,12 +1962,15 @@ export class LaptopTracker implements AttributionTracker {
    * Text files with uncommitted lines nobody is sure of, which a session's
    * record could still name: absolute paths, each with its tracked root and
    * the time of its oldest such change, 0 when it was there before tracking
-   * or its writer was never seen.
+   * or its writer was never seen. With `folder`, only of the roots in or
+   * around it: each file's lines are looked up entry by entry, and a pass for
+   * one newly tracked checkout read every root's.
    */
-  unsureFiles(): Map<string, { root: string; since: number }> {
+  unsureFiles(folder?: string): Map<string, { root: string; since: number }> {
     const out = new Map<string, { root: string; since: number }>()
     const times = new Map<number, number | undefined>()
-    for (const state of this.states.values())
+    for (const state of this.states.values()) {
+      if (folder !== undefined && !within(folder, state.root.path) && !within(state.root.path, folder)) continue
       for (const file of state.files.values()) {
         if (!file.text) continue
         let since: number | undefined
@@ -1951,6 +1985,7 @@ export class LaptopTracker implements AttributionTracker {
         }
         if (since !== undefined) out.set(join(state.root.path, file.path), { root: state.root.path, since })
       }
+    }
     return out
   }
 
@@ -2075,6 +2110,15 @@ export class LaptopTracker implements AttributionTracker {
       })
     } else slice.done()
     if (stale) this.reattribute()
+    if (this.options.settledThrough && !more) {
+      let through = now
+      for (const pending of this.pending.values()) through = Math.min(through, pending.change.changedAt - 1)
+      // Only forward: an old change heard late doesn't take back what was said.
+      if (through > this.settledSaid) {
+        this.settledSaid = through
+        this.options.settledThrough(through)
+      }
+    }
     if (!more && !this.pending.size) this.evidence.prune(Math.min(now - SETTLE_MS - this.lateMs(), this.shells.since()))
   }
 
@@ -2245,7 +2289,8 @@ export class LaptopTracker implements AttributionTracker {
    * Their watches close and their stat cache goes; their entries stay until
    * collected. A turn or a move there tracks the root again, from a fresh
    * baseline. A root with lost events not yet rescanned is let go too: on a
-   * Mac where they're lost every few minutes, one always has some. Returns
+   * Mac where they're lost every few minutes, one always has some. Then
+   * sleeping roots with nothing uncommitted, sooner (`letGoClean`). Returns
    * the paths let go.
    */
   async letGoIdle(): Promise<string[]> {
@@ -2265,11 +2310,33 @@ export class LaptopTracker implements AttributionTracker {
       if (stopping()) break
       // Other work ran since the reading, and runs while each root is let go: what was journaled or began there since
       // keeps it. Nothing stops between this reading and `untrack` taking the root out of `states`.
-      if (this.states.get(state.root.id) !== state || !this.idle(this.store.recencySince(read.mark, this.now()), before).includes(state)) continue
+      if (this.states.get(state.root.id) !== state || !this.idle(this.store.recencyNow(this.now()), before).includes(state)) continue
       await this.untrack(state.root.id)
       paths.push(state.root.path)
     }
+    paths.push(...await this.letGoClean())
     if (paths.length) this.log("let go of idle roots", { roots: paths.length, paths: paths.join(", ").slice(0, 500) })
+    return paths
+  }
+
+  /**
+   * Let go of sleeping roots that hold nothing uncommitted once they have slept `cleanRetentionMs` (the retention window): a
+   * root's stat rows are what its wake compares the disk against, about 6,500 a checkout and 994,166 in all on
+   * 2026-11-17, and a clean root loses no line's writer by tracking anew instead, from Git's own view of it. What
+   * changes there before its next baseline is read is journaled as there before tracking, as in any root first
+   * tracked. Unlike `letGoIdle` it doesn't ask whether Threads worked around the root, only that it slept: one with
+   * uncommitted lines is `letGoIdle`'s alone. Returns the paths let go.
+   */
+  private async letGoClean(): Promise<string[]> {
+    const before = this.now() - (this.options.cleanRetentionMs ?? CLEAN_RETENTION_MS)
+    const paths: string[] = []
+    for (const state of this.states.values()) {
+      if (this.closing || this.store.closed) break
+      if (!state.asleep || state.files.size || state.root.seenAt >= before || this.states.get(state.root.id) !== state || this.tracking.has(state.root.path)) continue
+      await this.untrack(state.root.id)
+      paths.push(state.root.path)
+    }
+    if (paths.length) this.log("let go of clean sleeping roots", { roots: paths.length, paths: paths.join(", ").slice(0, 500) })
     return paths
   }
 
@@ -2301,8 +2368,8 @@ export class LaptopTracker implements AttributionTracker {
     const paths: string[] = []
     for (const state of awake(this.idle(read, before))) {
       if (stopping()) break
-      if (this.states.get(state.root.id) !== state || !this.idle(this.store.recencySince(read.mark, this.now()), before).includes(state)) continue
-      if (await this.sleep(state, () => this.idle(this.store.recencySince(read.mark, this.now()), before).includes(state))) paths.push(state.root.path)
+      if (this.states.get(state.root.id) !== state || !this.idle(this.store.recencyNow(this.now()), before).includes(state)) continue
+      if (await this.sleep(state, () => this.idle(this.store.recencyNow(this.now()), before).includes(state))) paths.push(state.root.path)
     }
     if (paths.length) this.log("roots asleep", { roots: paths.length, asleep: [...this.states.values()].filter((item) => item.asleep).length, paths: paths.join(", ").slice(0, 500) })
     return paths
@@ -2361,7 +2428,7 @@ export class LaptopTracker implements AttributionTracker {
   /**
    * `collect`, its reading on a worker with a connection of its own and its deletes here a batch at a time, leaving
    * this thread free: what this connection writes meanwhile is kept whatever the reading found. At most
-   * `COLLECT_MOST` blobs a pass.
+   * `COLLECT_MOST` blobs a pass. Then the records past the same window (`prune`).
    */
   async collectOffThread(): Promise<Collected & { ms: number }> {
     const started = performance.now()
@@ -2378,9 +2445,102 @@ export class LaptopTracker implements AttributionTracker {
         bytes += batch.bytes
       }
       if (!this.closed) this.store.dropOld(retainAfter)
+      if (!this.closed) await this.prune()
       return { dropped, bytes, ms: Math.round(performance.now() - started) }
     } finally {
       this.store.untouched()
+    }
+  }
+
+  /**
+   * Drop the records past the retention window that nothing needs, as stored content already was: entries, calls and
+   * turns, turns' counts and footprints, commits' line writers, gaps, and stat rows of roots let go. Nothing but
+   * content was ever dropped, and the journal held five weeks in 2.7 GB on 2026-11-17. Each step is one short
+   * transaction of at most `PRUNE_STEP` rows (`JournalStore.pruneEntries`, `pruneThread`, `pruneCommits`), with the
+   * thread free between steps, and each sweep goes on where the last pass left it, at most `steps` steps a pass over
+   * all of them. What stays, and why, is said where each is dropped. Once every Thread has been swept the footprint
+   * table is rebuilt without its second copy (`JournalStore.beginCompactFootprint`), a step at a time too.
+   */
+  async prune(steps = PRUNE_STEPS): Promise<Pruned> {
+    const started = performance.now()
+    const retainAfter = this.now() - (this.options.retentionMs ?? 14 * DAY_MS)
+    const out: Pruned = { entries: 0, activity: 0, commits: 0, footprint: 0, turns: 0, gaps: 0, stats: 0, threads: 0 }
+    // What an uncommitted line or an open change names, however old: read from memory, where every tracked root's files are.
+    const spared = new Set(this.pending.keys())
+    for (const state of this.states.values())
+      for (const file of state.files.values())
+        for (const run of file.map) for (const seq of [run.ins, run.del, run.over]) if (seq > 0) spared.add(seq)
+    this.store.retaining(spared)
+    const stopped = () => this.closed || this.closing || this.store.closed
+    /** One sweep's share of the pass: `step` until it says it reached its end, the thread free after each. */
+    const sweep = async (share: number, step: () => boolean) => {
+      for (let taken = 0; taken < Math.max(1, Math.round(steps * share)) && !stopped(); taken++) {
+        if (step()) return
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+    }
+    try {
+      const live = this.store.liveness(retainAfter)
+      for (let from = retainAfter; from <= this.now() && !stopped(); from += DAY_MS) {
+        this.store.workEndedInside(live, from, from + DAY_MS)
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+      const at = this.sweeps
+      await sweep(0.4, () => {
+        const page = this.store.pruneEntries(at.entries, PRUNE_STEP, live)
+        out.entries += page.dropped
+        at.entries = page.next ?? 0
+        return page.next === undefined
+      })
+      await sweep(0.4, () => {
+        const thread = at.unfinished ?? this.store.nextThread(at.thread)
+        if (thread === undefined) {
+          at.thread = ""
+          at.threadsSwept = true
+          return true
+        }
+        const page = this.store.pruneThread(thread, live, PRUNE_STEP)
+        out.activity += page.activity
+        out.footprint += page.footprint
+        out.turns += page.turns
+        out.threads += page.threads
+        at.unfinished = page.done ? undefined : thread
+        at.thread = thread
+        return false
+      })
+      await sweep(0.15, () => {
+        // A quarter of a step's rows: each carries a line a writer, and 512 of them took 180 ms to drop.
+        const page = this.store.pruneCommits(at.commits, retainAfter, PRUNE_STEP / 4)
+        out.commits += page.dropped
+        at.commits = page.next
+        return page.next === undefined
+      })
+      await sweep(0.02, () => {
+        const page = this.store.pruneGaps(retainAfter, PRUNE_STEP)
+        out.gaps += page.dropped
+        return !page.more
+      })
+      await sweep(0.03, () => {
+        const root = this.store.nextStatRoot(at.statRoot)
+        if (root === undefined) {
+          at.statRoot = ""
+          return true
+        }
+        const dropped = this.store.dropStrayStats(root, PRUNE_STEP * 4)
+        out.stats += dropped
+        // A root with more than a step's rows is asked again.
+        if (dropped < PRUNE_STEP * 4) at.statRoot = root
+        return false
+      })
+      // Once, after every Thread's turn in the sweep: nothing else deletes from the table while its rows are copied.
+      let compacted = false
+      if (at.threadsSwept && !stopped() && this.store.beginCompactFootprint())
+        while (!stopped() && !(compacted = this.store.compactFootprintStep(PRUNE_STEP))) await new Promise<void>((resolve) => setImmediate(resolve))
+      const total = out.entries + out.activity + out.commits + out.footprint + out.turns + out.gaps + out.stats
+      if (total || compacted) this.log("records past retention dropped", { ...out, compacted: Boolean(compacted), ms: Math.round(performance.now() - started) })
+      return out
+    } finally {
+      this.store.retained()
     }
   }
 

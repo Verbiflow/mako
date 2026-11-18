@@ -605,7 +605,8 @@ export function threadTotals(turns: readonly TurnChanges[], found: Pick<ThreadCh
  * A Thread's summaries and calls are still as many as its history is long, so the host asks on the reader.
  */
 export function threadSummary(store: JournalStore, thread: string): ThreadChangeSummary {
-  return sumTurns(store.turnChangesOf(thread), store.commandsOf(thread), store.outsideCounts(thread))
+  const keptSince = store.prunedBefore(thread)
+  return { ...sumTurns(store.turnChangesOf(thread), store.commandsOf(thread), store.outsideCounts(thread)), ...(keptSince !== undefined && { keptSince }) }
 }
 
 function sumTurns(turns: readonly TurnChanges[], commands: number, outside: ThreadChangeSummary["outside"]): ThreadChangeSummary {
@@ -761,8 +762,11 @@ export function turnChanges(view: JournalView, thread: string, turn: string, sta
  * `countingTurn` a slice at a time; undefined when the journal closed under
  * it (its host stopping, or another host taking it over): not counted, and
  * nothing went wrong. Its turn is counted when the journal next opens.
+ * Undefined too for a turn the journal no longer keeps (`JournalStore.turnKept`).
  */
 export async function countTurnInSlices(view: JournalView, thread: string, turn: string, state: TurnChanges["state"]): Promise<TurnChanges | undefined> {
+  // A turn whose record retention dropped isn't counted again as having changed nothing: its request keeps the count it has.
+  if (!view.store.turnKept(thread, turn)) return undefined
   try {
     return await inSlices(countingTurn(view, thread, turn, state), undefined, () => view.store.closed)
   } catch (error) {
