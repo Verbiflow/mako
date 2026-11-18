@@ -31,15 +31,21 @@ import { installClaude } from "@mako/host/harnesses/claude/index"
 import { admitted } from "./fixtures/admitted-start.ts"
 import { sealedDrivers } from "./fixtures/sealed-drivers.ts"
 import { removeScratchSync } from "./lib/scratch-processes.mjs"
-import { assertScratchEnvironment } from "./scratch-harness-home.ts"
+import { assertScratchEnvironment, readPersonSignIns, seedScratchHome } from "./scratch-harness-home.ts"
 
-const { values } = parseArgs({ options: { home: { type: "string" }, model: { type: "string" } } })
-if (!values.home) throw new Error("--home <scratch home> is required: a folder Claude Code is signed in under, never your own home")
-const home = realpathSync(resolve(values.home))
-if (!existsSync(join(home, ".claude"))) throw new Error(`${home} holds no .claude: sign Claude Code in there first (or make it with seedScratchHome)`)
+const { values } = parseArgs({ options: { home: { type: "string" }, seed: { type: "string" }, model: { type: "string" } } })
+if (!values.home && !values.seed) throw new Error("--seed <new folder> (a scratch home is made there with a copy of your Claude Code sign-in) or --home <scratch home> is required, never your own home")
+// `--seed` makes the home as the other probes do: the sign-in's access token without what renews it, handed to
+// Claude Code in its environment, which is how a scratch home is signed in (its Keychain is not the person's).
+const seeded = values.seed ? seedScratchHome(resolve(values.seed), readPersonSignIns(), { keep: true }) : undefined
+if (values.seed && !seeded?.env["CLAUDE_CODE_OAUTH_TOKEN"]) throw new Error("No Claude Code sign-in could be read to seed the scratch home")
+const home = realpathSync(seeded?.env["HOME"] ?? resolve(values.home ?? ""))
+if (!existsSync(join(home, ".claude")) && !seeded) throw new Error(`${home} holds no .claude: sign Claude Code in there first (or pass --seed)`)
 // Credentials, endpoints and the parent session's variables stay behind: the sign-in is the scratch home's own.
-const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(ANTHROPIC_|CLAUDE|MAKO_)/.test(name)))
+// npm's own variables too: run through `npm run` or under nvm they name folders in the person's home.
+const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(ANTHROPIC_|CLAUDE|MAKO_)/.test(name) && !/^(npm_|XDG_)/i.test(name)))
 Object.assign(env, { HOME: home, CLAUDE_CONFIG_DIR: join(home, ".claude"), TMPDIR: join(home, "tmp") })
+if (seeded) Object.assign(env, { CLAUDE_CODE_OAUTH_TOKEN: seeded.env["CLAUDE_CODE_OAUTH_TOKEN"], PATH: seeded.env["PATH"] })
 assertScratchEnvironment(env, "probe:claude-stop")
 mkdirSync(join(home, "tmp"), { recursive: true })
 const project = join(home, `probe-claude-stop-${randomUUID().slice(0, 8)}`)
