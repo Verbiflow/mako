@@ -37,7 +37,7 @@ const approved = [
   ["packages/control-runtime/src/processes.ts", "standalone", "spawn", "standalone CLI/worker default; embedded hosts bind their scoped spawn adapter"],
   ["packages/control-runtime/src/processes.ts", "standalone", "fork", "standalone CLI/worker default; embedded hosts bind their scoped fork adapter"],
   ["packages/sessions/src/processes.ts", "standalone", "fork", "standalone catalog default; embedded hosts bind their scoped fork adapter"],
-  ["packages/sessions/src/daemon-main.ts", "run", "spawn", "shared reader's backfill process belongs to that independent daemon, not a profile host"],
+  ["packages/sessions/src/daemon-main.ts", "spawnBackfillPass", "spawn", "shared reader's backfill process belongs to that independent daemon, not a profile host"],
   ["packages/control-runtime/src/control-cli.ts", "runControlCli", "spawn", "explicit detached cloud-job handoff survives the CLI that started it"],
   ["packages/control-runtime/src/cloud-control-main.ts", "main", "fork", "standalone cloud supervisor owns the worker group and confirms its end"],
   ["packages/control-runtime/src/process-registration.ts", "processRegistrationStartedAt", "execFileSync", "bounded synchronous identity read finishes before stop can run"],
