@@ -154,7 +154,7 @@ export class LiveTransfers {
       throw new Error(
         `${command.provider} has no available interactive transport`
       )
-    command.attachments = this.host.retainAttachments(command.attachments)
+    command.attachments = this.host.retainAttachments(command.attachments, command.id)
     const previous = resident.snapshot
     resident.snapshot = {
       ...previous,

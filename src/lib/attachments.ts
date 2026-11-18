@@ -1,13 +1,15 @@
 import { classify } from "./attachment-kind"
 export { classify } from "./attachment-kind"
 import type { ContextDetail, ContextInput } from "./context-detail"
-import { mediaTypeForPath } from "./transcript-media"
+import { lonePictureUrl, mediaTypeForPath } from "./transcript-media"
+import { readTranscriptFile } from "@/state/transcript-media"
 import {
   readAttachmentDrafts,
   writeAttachmentDrafts,
 } from "./draft-persistence"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { getMako } from "@/lib/bridge"
+import { stageAttachment } from "./attachment-staging"
 import { toast } from "sonner"
 import {
   attachmentReference,
@@ -75,7 +77,7 @@ export interface Attachment {
   /** Native history may retain a file path without its original byte count. */
   size?: number
   kind: AttachmentKind
-  /** Base64, for images. */
+  /** Base64, only on an image restored from a message that carried its bytes and no path (another device's). */
   data?: string
   /** Decoded contents, for text-ish files. */
   text?: string
@@ -422,65 +424,37 @@ async function resolve(
   attachment: Attachment,
   file: File
 ): Promise<Attachment> {
-  const sourcePath = getMako().pathForFile?.(file) ?? null
-  const data = sourcePath ? undefined : await toBase64(file)
-  const staged = sourcePath
-    ? await getMako().stageFilePath(sourcePath)
-    : await getMako().stageFile(file.name, data ?? "")
+  const bridge = getMako()
+  const staged = await stageAttachment(file, bridge)
   const text =
     attachment.kind === "text"
       ? await file.slice(0, MAX_INLINE_TEXT).text()
       : undefined
   const context = attachment.context
   const contextFile = context
-    ? await getMako().stageFile(
-        `${file.name}.context.txt`,
-        await toBase64(
-          new File([context], `${file.name}.context.txt`, {
-            type: "text/plain",
-          })
-        )
-      )
+    ? await stageAttachment(new File([context], `${file.name}.context.txt`, { type: "text/plain" }), bridge)
     : undefined
+  if (attachment.kind === "image") void warmPicture(staged.path).catch(() => undefined)
+  // The draft keeps where the file is, never its bytes: its chip draws the object URL made as it was added, the
+  // message carries the path, and the host reads the file from there.
   return {
     ...attachment,
     stagedPath: staged.path,
     contextPath: contextFile?.path,
-    data:
-      attachment.kind === "image"
-        ? (data ?? (await toBase64(file)))
-        : undefined,
     text,
     pending: false,
   }
 }
 
 /**
- * The browser's own encoder, off the main thread — not a fromCharCode loop
- * that freezes the composer for the length of a video.
+ * Ask the host for the rendition the transcript draws a large picture from, while the person is still writing. The
+ * host keeps a picture's renditions by its content, so the one made here is the one the sent message's copy draws,
+ * with no wait for it then. A picture small enough to draw as it is asks for nothing.
  */
-function toBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onerror = () => reject(reader.error ?? new Error("read failed"))
-    reader.onload = () => {
-      try {
-        resolve(parseDataUrl(reader.result))
-      } catch (error) {
-        reject(error)
-      }
-    }
-    reader.readAsDataURL(file)
-  })
-}
-
-function parseDataUrl(result: string | ArrayBuffer | null): string {
-  if (result === null || result instanceof ArrayBuffer)
-    throw new Error("file reader returned no data URL")
-  const separator = result.indexOf(",")
-  if (separator === -1)
-    throw new Error("file reader returned an invalid data URL")
-  return result.slice(separator + 1)
+async function warmPicture(path: string): Promise<void> {
+  const file = await readTranscriptFile({ path, settled: true })
+  const url = lonePictureUrl(file, globalThis.devicePixelRatio || 1)
+  if (url && url !== file.previewUrl) new Image().src = url
 }
 
 /**
@@ -529,11 +503,11 @@ export function useAttachmentPreview(item: Attachment) {
     const path = item.stagedPath
     if ((!/^(image|video|audio)\//.test(item.mimeType) && item.mimeType !== "application/pdf") || item.preview || !path) return
     let current = true
-    void getMako()
-      .readFile(path)
+    // A staged file is never rewritten, so its read is shared with every chip and preview that asks for it.
+    void readTranscriptFile({ path, settled: true })
       .then((file) => {
         if (current)
-          setResolved({ path, preview: file.previewUrl ? { kind: "ready", url: getMako().resolveFileUrl(file.previewUrl) } : { kind: "unavailable" } })
+          setResolved({ path, preview: file.previewUrl ? { kind: "ready", url: file.previewUrl } : { kind: "unavailable" } })
       })
       .catch(() => {
         if (current) setResolved({ path, preview: { kind: "unavailable" } })

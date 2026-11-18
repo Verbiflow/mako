@@ -1,7 +1,8 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { existsSync, statSync } from "node:fs"
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import fsPromises, { chmod, mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises"
+import { syncBuiltinESMExports } from "node:module"
 import { tmpdir } from "node:os"
 import { join, relative } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -332,6 +333,43 @@ try {
     assert.equal(createHash("sha256").update(back).digest("hex"), carriedAsset.digest, "the restore wrote the session's own copy, byte for byte")
     await capture.stop()
     await store.close()
+  }
+
+  // A pass that moves nothing lists each folder once: the sweep and the count read one listing, so each file is
+  // stat'ed once, where it was twice. Once the pass moves a file, the folder is listed again and the count is of what's left.
+  {
+    const alone = join(root, "listed-once", ".mako")
+    const folder = join(alone, "archive", "assets")
+    await mkdir(folder, { recursive: true })
+    pinned = Date.now()
+    const young = await Promise.all([1, 2, 3, 4, 5].map((at) => write(`listed once ${at}`, folder)))
+    const real = fsPromises.lstat
+    let stats = 0
+    fsPromises.lstat = (path, ...rest) => {
+      if (String(path).startsWith(folder)) stats += 1
+      return real(path, ...rest)
+    }
+    syncBuiltinESMExports()
+    try {
+      const sweep = new AttachmentSweep({ archive: join(alone, "archive"), views: join(alone, "views"), readers: async () => ({ roots: [], browsers: [], holds: [], unreadable: [] }), graceMs: GRACE, now })
+      const quiet = await sweep.pass(control, { sweep: true })
+      assert.ok(quiet.ran && quiet.swept)
+      assert.equal(quiet.folders.archive.files, young.length)
+      assert.equal(stats, young.length, "a pass that moves nothing stats each file once")
+      // Past the grace, nothing names them: the pass takes them, and counts the folder as it left it.
+      pinned += GRACE * 3
+      const fresh = join(folder, "0f6c2b7e-0000-4000-8000-00000000000c-kept.png")
+      await writeFile(fresh, "written as the pass begins")
+      await utimes(fresh, new Date(pinned), new Date(pinned))
+      const moved = await new AttachmentSweep({ archive: join(alone, "archive"), views: join(alone, "views"), readers: async () => ({ roots: [], browsers: [], holds: [], unreadable: [] }), graceMs: GRACE, now }).pass(control, { sweep: true })
+      assert.equal(moved.folders.archive.trashed.files, young.length)
+      assert.equal(moved.folders.archive.files, 1, "what's counted is the folder after the sweep, listed again")
+      assert.equal(moved.folders.archive.trash.files, young.length)
+    } finally {
+      fsPromises.lstat = real
+      syncBuiltinESMExports()
+      pinned = undefined
+    }
   }
 
   // The catalog worker's backfill sweeps once its pass ends, after the archive's migration, and keeps the sweep in its progress.

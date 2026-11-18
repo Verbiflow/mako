@@ -715,7 +715,16 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   methods.handle("mako:live-rewind-recover", () => live.recoverRewinds())
   methods.handle("mako:live-prompt-versions", (id: string) => live.promptVersions(id))
   methods.handle("mako:unopened-conversations", () => live.unopened())
-  methods.handle("mako:live-action", (id: string, input: LiveActionInput) => live.act(id, input))
+  methods.handle("mako:live-action", async (id: string, input: LiveActionInput) => {
+    // A steer's files are kept before it goes into the turn, as a message's are (`holdAttachments`).
+    if (input.kind !== "steer" || !input.attachments?.length) return live.act(id, input)
+    await live.holdAttachments(input.id, input.attachments)
+    try {
+      return await live.act(id, input)
+    } finally {
+      live.releaseAttachments(input.id)
+    }
+  })
   // A separate method advertises atomic queued steering to clients whose UI
   // can update while the shared host remains alive. Keep live-action for
   // existing clients and receipts written before this capability was named.
@@ -769,9 +778,15 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     const binding = snapshot?.control?.bindings.find((item) => item.id === bindingId)
     if (!snapshot || !binding) throw new Error("The selected native session is unavailable")
     // Which binding is active is read as it's admitted: a move may land while the selection resolves.
-    const continued = await conversations.continueOn(id, { kind: "reply", reply: { bindingId, provider: binding.provider, requestId, text, ...(attachments && { attachments }), tuning: tuning ?? binding.tuning } })
-    if (!continued) throw new Error("The selected native session is unavailable")
-    return continued
+    // A reply with no files reaches `continueOn` in this same turn, as it always did; one with files keeps them first.
+    if (attachments?.length) await live.holdAttachments(requestId, attachments)
+    try {
+      const continued = await conversations.continueOn(id, { kind: "reply", reply: { bindingId, provider: binding.provider, requestId, text, ...(attachments && { attachments }), tuning: tuning ?? binding.tuning } })
+      if (!continued) throw new Error("The selected native session is unavailable")
+      return continued
+    } finally {
+      live.releaseAttachments(requestId)
+    }
   })
   // `options.actor`: Mako's own words a move carries (a wait the move ended), drawn and read as Mako's, never the
   // person's. A host that answers `mako:move-ready` with `promptActor` takes it; the device sends none to one that doesn't.
@@ -779,8 +794,12 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     const session = live.session(id)
     if (!session) throw new Error("This conversation is no longer available")
     deps.used?.(session.harness, tuning)
-    return live.admitInOrder(id, profiles.resolveLaunch(session.harness, session.cwd, tuning),
+    // The settings and the attachments' files are readied together; the message is admitted in one turn after both.
+    const held = live.holdAttachments(requestId, attachments)
+    const ready = Promise.all([profiles.resolveLaunch(session.harness, session.cwd, tuning), held]).then(([selected]) => selected)
+    return live.admitInOrder(id, ready,
       (selected) => live.submit(id, requestId, text, attachments, selected, undefined, undefined, options?.actor))
+      .finally(() => live.releaseAttachments(requestId))
   })
   // A failed message sent again at a time: a usage limit's reset.
   methods.handle("mako:live-hold-until", (id: string, requestId: string, input: { after: string; at: number }) =>
