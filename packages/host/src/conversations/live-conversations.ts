@@ -500,10 +500,15 @@ export class LiveConversations {
     return this.records.listing()
   }
 
-  /** Every conversation's summary as a list shows it, or those of `only` alone. */
+  /** The listing's line for one conversation, loaded or not, without its Fins; none of the others' is made. */
+  listedOne(id: string): LiveSummary | undefined {
+    return this.records.summary(id)
+  }
+
+  /** Every conversation's summary as a list shows it, or those of `only` alone, each looked up by its ID (`listingOf`). */
   summaries(only?: ReadonlySet<string>): LiveSummary[] {
     const agents = this.dependencies.agents?.()
-    const listing = only ? this.records.listing().filter((summary) => only.has(summary.session.id)) : this.records.listing()
+    const listing = only ? this.records.listingOf(only) : this.records.listing()
     const away = this.threads.runningElsewhere(listing.map((summary) => summary.session.id))
     return listing.map((summary) => {
       const children = agents ? rollup(agents.roster(summary.session.id)) : undefined
@@ -834,7 +839,7 @@ export class LiveConversations {
   setArchived(id: string, archived: boolean): void {
     // A conversation not in memory is read in only when it has a compaction to withdraw, as its listing says:
     // archiving otherwise reads no journal (a report over the host's conversations must load none of them).
-    const pending = archived && !this.records.has(id) && this.records.listing().some((summary) => summary.session.id === id && summary.hasCompactionRecovery)
+    const pending = archived && !this.records.has(id) && Boolean(this.records.summary(id)?.hasCompactionRecovery)
     const resident = this.records.has(id) || pending ? this.records.load(id) : undefined
     if (archived && resident && this.compactions.withdraw(resident, "archive")) this.flush(resident)
     this.hibernation.setArchived(id, archived)

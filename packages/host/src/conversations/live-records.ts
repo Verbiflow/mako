@@ -121,6 +121,8 @@ export class LiveRecords {
   /** Residents `unload` let go, so a continuation still holding one cannot write through it. */
   private readonly released = new WeakSet<Resident>()
   private readonly weights = new ContentWeights(pagedWeight)
+  /** Each loaded conversation's listing line as last made, with what it was read from (`summaryOf`); gone with its resident. */
+  private readonly summarized = new WeakMap<Resident, { requests: LiveSnapshot["requests"]; control: LiveSnapshot["control"]; facts: SummaryFacts; summary: LiveSummary }>()
   /** Journals being read in a slice at a time (`loadSliced`). */
   private readonly reading = new Map<string, Promise<Resident | undefined>>()
   /** Paging under way, one conversation at a time; see `pageOut`. */
@@ -244,9 +246,57 @@ export class LiveRecords {
     return this.residents.get(id)?.snapshot.session ?? this.recovered.get(id)?.session
   }
 
-  /** The listing's line for every conversation, loaded or not. */
+  /**
+   * The listing's line for every conversation, loaded or not. A loaded one's line is kept (`summaryOf`), so listing
+   * again costs a lookup for each conversation that didn't change.
+   */
   listing(): LiveSummary[] {
-    return [...this.recovered.values(), ...[...this.residents.values()].map(({ snapshot }) => residentSummary(snapshot))]
+    const listing = [...this.recovered.values()]
+    for (const resident of this.residents.values()) listing.push(this.summaryOf(resident))
+    return listing
+  }
+
+  /** The listing's line for one conversation, loaded or not, as `listing` has it: no other's is made. */
+  summary(id: string): LiveSummary | undefined {
+    const resident = this.residents.get(id)
+    return resident ? this.summaryOf(resident) : this.recovered.get(id)
+  }
+
+  /**
+   * The listing's lines for the conversations of `only`, in the order `listing` has them, each looked up by its ID:
+   * a report of one row makes one line, never every conversation's.
+   */
+  listingOf(only: ReadonlySet<string>): LiveSummary[] {
+    const onDisk: string[] = []
+    const loaded: string[] = []
+    for (const id of only) {
+      if (this.recovered.has(id)) onDisk.push(id)
+      if (this.residents.has(id)) loaded.push(id)
+    }
+    // Several of one kind go in the order they're kept, which the IDs alone say: nothing is made to find it.
+    const ordered = (found: string[], kept: ReadonlyMap<string, object>) => found.length > 1 ? [...kept.keys()].filter((id) => only.has(id)) : found
+    return [
+      ...ordered(onDisk, this.recovered).flatMap((id) => this.recovered.get(id) ?? []),
+      ...ordered(loaded, this.residents).flatMap((id) => this.summary(id) ?? []),
+    ]
+  }
+
+  /**
+   * A loaded conversation's line, made again only for what changed of what it's read from. A snapshot is never changed
+   * in place, so each part is the same while the object it's read from is: the scans of its requests, actions and
+   * transfers (`summaryFacts`) run again when its requests or its control are other objects, and the line is another
+   * object only when those facts, its session or its revision are. An Apex with thousands of digests was scanned
+   * three times on every listing, by every report.
+   */
+  private summaryOf(resident: Resident): LiveSummary {
+    const { snapshot } = resident
+    const held = this.summarized.get(resident)
+    const facts = held && held.requests === snapshot.requests && held.control === snapshot.control ? held.facts : summaryFacts(snapshot)
+    if (held && held.facts === facts && held.summary.session === snapshot.session && held.summary.revision === snapshot.revision &&
+      held.summary.threadPath === snapshot.threadPath && held.summary.createdAt === snapshot.createdAt) return held.summary
+    const summary = residentSummary(snapshot, facts)
+    this.summarized.set(resident, { requests: snapshot.requests, control: snapshot.control, facts, summary })
+    return summary
   }
 
   /** Whether the host before this one left a message of `id` waiting, paused or running (`open`). */
@@ -672,7 +722,7 @@ export class LiveRecords {
     if (this.pinned(resident)) return false
     const { snapshot } = resident
     const id = snapshot.session.id
-    this.recovered.set(id, residentSummary(snapshot))
+    this.recovered.set(id, this.summaryOf(resident))
     this.unloaded.set(id, {
       generation: resident.generation,
       commands: snapshot.session.commands,
@@ -924,13 +974,16 @@ function residentWeight(weights: ContentWeights, { snapshot }: Resident): number
   })
 }
 
-/** The listing's line for a conversation, loaded or not. */
 /** The functions a stack names past this file's, nearest first: work with no name of its own is known by who called it. */
 function callers(stack: string | undefined): string {
   return (stack ?? "").split("\n").slice(1).filter((line) => !line.includes("live-records")).slice(0, 4).map((line) => /at (?:async )?(\S+)/.exec(line)?.[1]).filter(Boolean).join(" < ")
 }
 
-function residentSummary(snapshot: LiveSnapshot): LiveSummary {
+/** What a listing line says that is read by scanning a conversation's requests and its control: the costly part of it. */
+type SummaryFacts = Pick<LiveSummary, "hasCompactionRecovery" | "hasSignInHold" | "hasSessionQuestions" | "nativePaths" | "nativeIds" | "wakeAt" | "promptedAt">
+
+/** A pure reading of a snapshot's requests and control, so it holds for as long as both are the same objects. */
+function summaryFacts(snapshot: Pick<LiveSnapshot, "requests" | "control">): SummaryFacts {
   const wakes = sooner(wakeAt(snapshot.requests), transferDue(snapshot.control))
   const promptedAt = personPromptedAt(snapshot.requests, snapshot.control?.actions)
   return {
@@ -943,6 +996,16 @@ function residentSummary(snapshot: LiveSnapshot): LiveSummary {
     nativeIds: snapshot.control?.bindings.flatMap((binding) =>
       binding.nativeId ? [{ provider: binding.provider, nativeId: binding.nativeId }] : []
     ),
+    ...wakes !== undefined && { wakeAt: wakes },
+    ...promptedAt !== undefined && { promptedAt },
+  }
+}
+
+/** The listing's line for a loaded conversation: what was scanned of it (`summaryFacts`) and what its snapshot says outright. */
+function residentSummary(snapshot: LiveSnapshot, facts: SummaryFacts): LiveSummary {
+  const { wakeAt: wakes, promptedAt, ...scanned } = facts
+  return {
+    ...scanned,
     session: snapshot.session,
     revision: snapshot.revision,
     threadPath: snapshot.threadPath,

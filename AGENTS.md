@@ -4194,6 +4194,15 @@ the list shows of its conversation (`conversationShown`, the rule its row is
 made with), and one that moved it (working, waiting, idle, failed, what it
 waits on, its title) is reported on the next turn of the event loop, at most
 every 100 ms, without waiting for the second's pacing or a held foreground.
+A report is also paced by what it costs: after one that took 5 ms or more,
+none starts until five times that from its start (`REPORT_COST_TIMES`), a
+change a list shows included, so reports take a fifth of the host's thread at
+most however slow one gets, and the waiting report goes on the rest's own
+deadline. A loaded conversation's listing line is kept until what it is read
+from changes (`LiveRecords.summaryOf`), and a few rows' report looks its
+conversations up by ID (`listingOf`).
+`scripts/test-session-report-deadlines.ts` and
+`scripts/test-live-conversations.ts` (`listingIsKept`) hold these.
 A Thread renamed or a Session archived here goes the same way: no batch says
 either, and a rename once waited for whatever next marked the list changed. So
 does a new conversation, once its journal is placed (`opened`), before its
