@@ -7,6 +7,8 @@ import {
   editPull,
   failedRunLog,
   failedRuns,
+  jobLog,
+  pullByNumber,
   forgetGitHubReads,
   githubStatus,
   listRemoteBranches,
@@ -271,7 +273,7 @@ export interface PullRequestReport {
     number: number
     title: string
     url: string
-    state: "open" | "draft"
+    state: "open" | "draft" | "merged" | "closed"
     base: string
     unpushedCommits?: number
     /** Totals and the checks that didn't pass (`compactChecks`); with `checks: "all"`, every check. */
@@ -346,25 +348,9 @@ export async function pullRequestReport(git: Git, cwd: string, options: { starte
   if (pull?.state === "open") {
     const [remote, threads] = await Promise.all([pushedRef(git, cwd, branch), status.repo ? openReviewThreads(cwd, status.repo, pull.number) : null])
     const unpushed = remote ? await count(git, cwd, `${remote}..HEAD`) : null
-    const view: NonNullable<PullRequestReport["pullRequest"]> = {
-      number: pull.number,
-      title: pull.title,
-      url: pull.url,
-      state: pull.draft ? "draft" : "open",
-      base: pull.base,
-      checks: !pull.checks.length
-        ? "none reported"
-        : options.checks === "all"
-          ? pull.checks.map(({ name, state, skipped, url }) => ({ name, state: skipped ? "skipped" : state, ...url && { url } }))
-          : compactChecks(pull.checks),
-      review: pull.reviewDecision,
-      mergeable: pull.mergeable,
-      merge: pullMergeReason(pull) ?? "GitHub would merge it now. Merge only when the user asks.",
-    }
+    const view = pullView(pull, threads, options.checks)
     if (unpushed) view.unpushedCommits = unpushed
-    if (pull.reviews.length) view.reviews = pull.reviews.map((review) => `${review.login}: ${review.state}`)
-    if (threads?.length) view.reviewComments = threadLines(threads)
-    if (options.logs) view.failedLogs = await failedLogs(git, cwd, branch)
+    if (options.logs) view.failedLogs = await failedLogs(cwd, branch, await pushedCommit(git, cwd, branch))
     return { ...report, pullRequest: view }
   }
   if (pull) report.lastPullRequest = { number: pull.number, state: pull.state === "merged" ? "merged" : "closed", url: pull.url }
@@ -381,8 +367,61 @@ export async function pullRequestReport(git: Git, cwd: string, options: { starte
   return report
 }
 
-async function failedLogs(git: Git, cwd: string, branch: string): Promise<NonNullable<PullRequestReport["pullRequest"]>["failedLogs"]> {
-  const runs = await failedRuns(cwd, branch, await pushedCommit(git, cwd, branch))
+type PullView = NonNullable<PullRequestReport["pullRequest"]>
+
+/** A pull request as `pull_request_status` reads it: its checks, reviews and unresolved comments. */
+function pullView(pull: PullRequest, threads: ReviewThread[] | null, checks: "all" | undefined): PullView {
+  const view: PullView = {
+    number: pull.number,
+    title: pull.title,
+    url: pull.url,
+    state: pull.state === "open" ? (pull.draft ? "draft" : "open") : pull.state,
+    base: pull.base,
+    checks: !pull.checks.length
+      ? "none reported"
+      : checks === "all"
+        ? pull.checks.map(({ name, state, skipped, url }) => ({ name, state: skipped ? "skipped" : state, ...url && { url } }))
+        : compactChecks(pull.checks),
+    review: pull.reviewDecision,
+    mergeable: pull.mergeable,
+    merge: pull.state === "open" ? pullMergeReason(pull) ?? "GitHub would merge it now. Merge only when the user asks." : `It is ${pull.state}.`,
+  }
+  if (pull.reviews.length) view.reviews = pull.reviews.map((review) => `${review.login}: ${review.state}`)
+  if (threads?.length) view.reviewComments = threadLines(threads)
+  return view
+}
+
+/** Another pull request of the same repository, read by its number as `pull_request_status` reads the branch's own: read only. */
+export interface PullByNumberReport {
+  /** Why GitHub can't be used here. */
+  github?: string
+  pullRequest?: PullView & { head: string }
+}
+
+export async function pullRequestByNumber(cwd: string, number: number, options: { logs?: boolean; checks?: "all" } = {}): Promise<PullByNumberReport> {
+  const status = await githubStatus(cwd)
+  const reason = pullSetupReason(status)
+  if (reason) return { github: reason }
+  const pull = await pullByNumber(cwd, number)
+  if (!pull) throw new Error(`${status.repo ?? "This repository"} has no pull request #${number} that gh could read. A pull request of another repository is read from a checkout of that repository.`)
+  const threads = pull.state === "open" && status.repo ? await openReviewThreads(cwd, status.repo, pull.number) : null
+  const view = { ...pullView(pull, threads, options.checks), head: pull.head }
+  if (options.logs) view.failedLogs = pull.headCommit ? await failedLogs(cwd, pull.head, pull.headCommit) : "GitHub didn't say which commit is its head, so its runs can't be matched."
+  return { pullRequest: view }
+}
+
+/** One GitHub Actions job's or run's log in the repository, by the id its check's link ends with: read only. */
+export async function namedLog(cwd: string, named: { job: number } | { run: number }): Promise<{ job?: number; run?: number; log: string }> {
+  const status = await githubStatus(cwd)
+  const reason = pullSetupReason(status)
+  if (reason) throw new Error(reason)
+  if ("job" in named) return { job: named.job, log: await jobLog(cwd, named.job, LOG_LINES) }
+  const log = await failedRunLog(cwd, named.run, LOG_LINES)
+  return { run: named.run, log: log || "No job of this run failed, so it has no failed log." }
+}
+
+async function failedLogs(cwd: string, branch: string, commit: string): Promise<PullView["failedLogs"]> {
+  const runs = await failedRuns(cwd, branch, commit)
   if (!runs.length) return "No GitHub Actions run failed on the pushed commit. A failing check from another service has its link in checks."
   return Promise.all(runs.slice(0, LOG_RUNS).map(async (run) => ({
     workflow: run.workflow,
