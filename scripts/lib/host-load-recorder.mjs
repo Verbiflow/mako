@@ -72,18 +72,25 @@ function recordMain(into) {
     commits.commitMs += message.commitMs
     if (!message.background) commits.foreground += 1
     const whole = message.beginMs + message.rowsMs + message.commitMs
-    if (whole >= SLOW_COMMIT_MS) commits.slow.push([Math.round(origin + performance.now()), Math.round(message.beginMs * 10) / 10, Math.round(message.rowsMs * 10) / 10, Math.round(message.commitMs * 10) / 10, message.background ? 1 : 0])
+    if (whole >= SLOW_COMMIT_MS) commits.slow.push([Math.round(origin + performance.now()), Math.round(message.beginMs * 10) / 10, Math.round(message.rowsMs * 10) / 10, Math.round(message.commitMs * 10) / 10, message.background ? 1 : 0, message.conversation, message.running ? 1 : 0])
   })
 
   const ticks = { at: [], late: [] }
   const holds = []
   let last = performance.now()
+  // The thread's own CPU time at each tick: a gap it spent little of was a wait (a write, a lock, or not being run at
+  // all), which no function on its stack explains.
+  const cpuNow = () => { const used = process.threadCpuUsage(); return (used.user + used.system) / 1000 }
+  let cpuLast = cpuNow()
   const tick = () => {
     const now = performance.now()
     const gap = now - last
+    const cpu = cpuNow()
+    const ran = cpu - cpuLast
+    cpuLast = cpu
     ticks.at.push(Math.round(origin + now))
     ticks.late.push(Math.round(Math.max(0, gap - TICK_MS) * 10) / 10)
-    if (gap >= HOLD_MS) holds.push({ from: origin + last, to: origin + now, during: during(last, now) })
+    if (gap >= HOLD_MS) holds.push({ from: origin + last, to: origin + now, cpuMs: Math.round(ran * 10) / 10, during: during(last, now) })
     last = now
     setTimeout(tick, TICK_MS).unref()
   }

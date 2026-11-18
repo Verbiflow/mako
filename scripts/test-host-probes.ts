@@ -37,6 +37,7 @@ try {
   await stopping.run(async () => {
     assert.ok(isProbe("ps", []) && isProbe("/usr/sbin/lsof", []) && isProbe("/usr/bin/nice", ["-n", "19", "/usr/bin/footprint"]), "the probes are known")
     assert.ok(!isProbe("git", []) && !isProbe("/usr/bin/nice", ["-n", "19", "git"]), "nothing else is")
+    assert.ok(isProbe("docker", ["context", "inspect", "--format", "{{.Name}}"]) && !isProbe("docker", ["run", "alpine"]) && !isProbe("docker", []), "of a program that can write, only its reading command is")
 
     // A probe runs in the child, and answers as hostCommand does.
     const { stdout } = await hostProbe("ps", ["-o", "pid=", "-p", String(process.pid)])

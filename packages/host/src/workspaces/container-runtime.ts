@@ -1,11 +1,9 @@
-import { hostCommand } from "../base/host-command.js"
+import { hostProbe } from "../base/host-command.js"
 import { request } from "node:http"
 import { stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join, sep } from "node:path"
 import { z } from "zod"
-
-const run = hostCommand
 
 /** One request to the engine; a slower one is a runtime too busy to ask now. */
 const REQUEST_MS = 2_000
@@ -89,7 +87,7 @@ export class ContainerEngine {
 async function findSocket(): Promise<string | undefined> {
   const named = process.env.DOCKER_HOST?.trim()
   if (named) return named.startsWith("unix://") ? named.slice("unix://".length) : undefined
-  const host = await run("docker", ["context", "inspect", "--format", "{{.Endpoints.docker.Host}}"], { timeout: 3_000 })
+  const host = await hostProbe("docker", ["context", "inspect", "--format", "{{.Endpoints.docker.Host}}"], { timeout: 3_000 })
     .then(({ stdout }) => stdout.trim(), () => "")
   if (host.startsWith("unix://")) return host.slice("unix://".length)
   if (host) return undefined

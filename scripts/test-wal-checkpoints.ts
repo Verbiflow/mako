@@ -517,23 +517,35 @@ test("a failed policy restoration blocks a write until foreground policy can be 
   }
 })
 
-test("a journal holds its place on the worker only while its turn runs", async () => {
+test("a journal holds its place on the worker while it commits, and lets go once quiet", async () => {
   const primer = new WalPrimer(), item = opened(primer)
+  // What its quiet timer does once no commit has come for a while, without the wait.
+  const quiet = () => { item.journal["committedAt"] = performance.now() - 60_000; item.journal["leaveWorker"]() }
   try {
     await until(() => item.policy() === 0)
     assert.equal(primer["leases"].size, 1)
-    // Its turn ends: the place is let go, what the turn left is checkpointed there, and commits checkpoint here again.
+    // Its turn ends: it keeps its place for the commits that follow a turn, then lets go, and what the turn left is
+    // checkpointed on the worker as it does.
     const ended = { ...item.snapshot(), revision: item.snapshot().revision + 1, session: { ...item.snapshot().session, status: "ready" as const } }
     item.journal.commit(ended, item.snapshot())
-    assert.equal(item.policy(), 1000, "a journal at rest checkpoints in its own commits")
+    assert.equal(item.policy(), 0, "the commits just after a turn still checkpoint on the worker")
+    quiet()
+    assert.equal(item.policy(), 1000, "a quiet journal checkpoints in its own commits")
     await until(() => primer["leases"].size === 0)
     const log = item.db.prepare("PRAGMA wal_checkpoint(NOOP)").get()
     assert.equal(log?.checkpointed, log?.log, "the worker checkpointed what the turn left as it let go")
-    // A journal at rest takes no place however many are read in; its next turn takes one again.
+    // One commit at rest takes no place, however many journals are read in; a second soon after does (an Apex's, as
+    // its Fins work), and so does its next turn.
+    quiet()
     item.journal.commit({ ...ended, revision: ended.revision + 1 }, ended)
     assert.equal(primer["leases"].size, 0)
-    const again = { ...ended, revision: ended.revision + 2, session: { ...ended.session, status: "running" as const } }
-    item.journal.commit(again, ended)
+    item.journal.commit({ ...ended, revision: ended.revision + 2 }, { ...ended, revision: ended.revision + 1 })
+    assert.equal(primer["leases"].size, 1, "a second commit at rest within two seconds takes a place")
+    await until(() => item.policy() === 0)
+    quiet()
+    await until(() => primer["leases"].size === 0)
+    const again = { ...ended, revision: ended.revision + 3, session: { ...ended.session, status: "running" as const } }
+    item.journal.commit(again, { ...ended, revision: ended.revision + 2 })
     await until(() => item.policy() === 0)
     assert.deepEqual(item.journal.read()?.blocks, again.blocks)
   } finally {
