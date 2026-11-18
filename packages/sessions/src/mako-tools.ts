@@ -288,8 +288,10 @@ const TOOLS: ReadonlyMap<string, MakoTool> = new Map<string, MakoTool>([
   ["pull_request_status", {
     group: "pull-request",
     say: ({ args, text: answer }) => {
-      const asked = typeof args["number"] === "number" ? String(args["number"]) : undefined
-      const job = typeof args["job"] === "number" ? `job ${args["job"]}'s log` : typeof args["run"] === "number" ? `run ${args["run"]}'s log` : undefined
+      const asked = text(args["number"])
+      const jobId = text(args["job"])
+      const runId = text(args["run"])
+      const job = jobId ? `job ${jobId}'s log` : runId ? `run ${runId}'s log` : undefined
       if (job && !asked) return { verb: READ, what: `${job}${inRepository(args)}` }
       const number = pullNumber(answer) ?? asked
       const link = pullLink(answer)

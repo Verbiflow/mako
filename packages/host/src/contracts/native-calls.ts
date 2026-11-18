@@ -41,8 +41,11 @@ export interface CallThread {
 export type ToolNames = (tool: string) => string
 export const bareNames: ToolNames = (tool) => tool
 
+/** A value in a Mako tool call a note writes out: what its JSON arguments hold. */
+export type CallValue = string | number | boolean | readonly CallValue[] | { readonly [key: string]: CallValue }
+
 /** A Mako tool call written out whole, its arguments as JSON: `` `pull_request_status({"number":926})` ``. */
-export function exactCall(names: ToolNames, tool: string, args: Readonly<Record<string, unknown>> = {}): string {
+export function exactCall(names: ToolNames, tool: string, args: { readonly [key: string]: CallValue } = {}): string {
   return `\`${names(tool)}(${JSON.stringify(args)})\``
 }
 
@@ -380,20 +383,24 @@ function runNamed(args: readonly string[]): { job: number } | { run: number } | 
   return run ? { run: Number(run) } : undefined
 }
 
+/** `pull_request_open`'s arguments, as a note writes them out. */
+interface DraftCall {
+  [key: string]: CallValue
+  title: string
+  body: string
+}
+
 /** The flags `gh pr create` and `gh pr edit` take, as `pull_request_open`'s arguments. */
-function draftOf(args: readonly string[]): Record<string, unknown> {
+function draftOf(args: readonly string[]): DraftCall {
   const value = (...flags: string[]) => {
     const at = args.findIndex((word) => flags.includes(word))
     return at >= 0 ? args[at + 1] : undefined
   }
-  const title = value("--title", "-t")
+  const draft: DraftCall = { title: value("--title", "-t") ?? "<title>", body: value("--body", "-b") ?? "<body>" }
   const base = value("--base", "-B")
-  return {
-    title: title ?? "<title>",
-    body: value("--body", "-b") ?? "<body>",
-    ...(base && { base }),
-    ...(args.includes("--draft") || args.includes("-d") ? { draft: true } : {}),
-  }
+  if (base) draft.base = base
+  if (args.includes("--draft") || args.includes("-d")) draft.draft = true
+  return draft
 }
 
 /** A port a command names: `-i :3000`, `-iTCP:3000`, `-ti:3000`, `:3000`. */
