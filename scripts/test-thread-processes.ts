@@ -16,6 +16,7 @@ import type { SetupProgress } from "@mako/host/contracts/thread-app"
 import { AppKeySchema, type ThreadEnvironment } from "@mako/host/contracts/thread-environments"
 import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
 import { environmentTools, registerEnvironmentTools } from "@mako/host/workspaces/environment-tools"
+import { ENVIRONMENT_GUIDE, GUIDE_SECTIONS } from "@mako/host/workspaces/environment-guide"
 import { applyThreadEnvironment, folderApp, portListening, ThreadEnvironments, threadEnvironmentInstructions } from "@mako/host/workspaces/thread-environment"
 import { freeThreadBlock } from "./lib/thread-ports.ts"
 import { ThreadProcesses } from "@mako/host/workspaces/thread-processes"
@@ -403,8 +404,20 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   const probe = z.object({ running: z.boolean(), listening: z.record(z.string(), z.string()) }).parse(parseYaml(probeText))
   assert.equal(probe.running, true)
   assert.match(probe.listening[String(toolBase)] ?? "", /^pid \d+$/, "the probe sees the app's own port, inside this Thread's block")
-  const guide = JSON.stringify(await agent.callTool({ name: "recipe_guide", arguments: {} }))
-  assert.match(guide, /Setting up this project's recipe/)
+  // recipe_guide gives an overview with a section index; each section, and the whole guide, comes when asked.
+  const overview = JSON.stringify(await agent.callTool({ name: "recipe_guide", arguments: {} }))
+  assert.match(overview, /Setting up this project's recipe/)
+  assert.match(overview, /- save: 4\. Save the recipe\./, "the index names each section")
+  assert.doesNotMatch(overview, /verify\.run\): only a command/, "a section's text waits until it's asked for")
+  assert.ok(overview.length < ENVIRONMENT_GUIDE.length / 4, "the overview is a fraction of the guide")
+  const sections = await Promise.all(GUIDE_SECTIONS.map(async ({ name }) => String(JSON.parse(JSON.stringify(await agent.callTool({ name: "recipe_guide", arguments: { section: name } }))).content[0].text)))
+  const opening = ENVIRONMENT_GUIDE.indexOf("\n## What each Thread") + 1
+  assert.ok(JSON.parse(overview).content[0].text.startsWith(ENVIRONMENT_GUIDE.slice(0, opening).trimEnd()), "the overview opens with the guide's opening")
+  assert.equal(sections.join("\n\n"), ENVIRONMENT_GUIDE.slice(opening).trimEnd(), "the sections hold everything after it, nothing lost")
+  assert.match(sections[GUIDE_SECTIONS.findIndex(({ name }) => name === "save")]!, /^## 4\. Save the recipe/)
+  const guide = JSON.stringify(await agent.callTool({ name: "recipe_guide", arguments: { section: "all" } }))
+  assert.equal(JSON.parse(guide).content[0].text, ENVIRONMENT_GUIDE, "all is the whole guide")
+  assert.equal((await agent.callTool({ name: "recipe_guide", arguments: { section: "nope" } })).isError, true, "a section the guide lacks is refused")
   assert.match(guide, /verify\.run\): only a command the project already has/, "an agent writes what to see as a check rather than a script of its own for verify")
   assert.match(guide, /A desktop or mobile app beside a web app or a server it loads is such a project/, "a desktop app beside its web app gets targets")
   assert.match(guide, /a recipe that names one needs a cleanup; recipe_save says when it's missing/, "what's kept under a Thread's name gets a cleanup")

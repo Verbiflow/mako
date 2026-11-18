@@ -444,9 +444,24 @@ try {
   // The project recipe committed with this checkout is read from the worktree too.
   mkdirSync(join(worktreePath, ".mako"))
   writeFileSync(join(worktreePath, RECIPE_PATH), readFileSync(join(project, RECIPE_PATH)))
+  mkdirSync(join(project, "node_modules"))
+  writeFileSync(join(project, ".git", "info", "exclude"), "local.json\n.env\n.env.local\n.env.alias\nshared.json\nconfig/\nbundle/\nassets/\nnode_modules/\nshots/\n")
+  writeFileSync(join(project, "node_modules", "x.js"), "")
+  mkdirSync(join(project, "shots"))
+  for (let index = 0; index < 30; index++) writeFileSync(join(project, "shots", `frame-${index}.png`), "")
+  // By default: a count, what the recipe's carry names, and the credentials and installed packages this worktree lacks; never every path.
   const inventory = parseYaml(text(await agent.callTool({ name: "worktree_status", arguments: {} }))).ignoredInMain
   assert.equal(inventory.folder, project)
-  assert.ok(inventory.paths.includes(".env") && inventory.paths.includes("local.json"))
+  assert.equal(inventory.count, 5, "every ignored entry is counted, a folder once")
+  assert.equal(inventory.paths, undefined, "the paths aren't listed unless asked")
+  assert.deepEqual(inventory.carried, [".env", "local.json"], "what the recipe's carry (its secrets included) names")
+  assert.deepEqual(inventory.missing, [".env", "node_modules"], "credentials and installed packages this worktree lacks")
+  assert.match(inventory.all, /ignored: true lists every path/)
+  // Asked, it lists every path, as worktree_bring takes them.
+  const listedAll = parseYaml(text(await agent.callTool({ name: "worktree_status", arguments: { ignored: true } }))).ignoredInMain
+  assert.equal(listedAll.count, 5)
+  assert.ok(listedAll.paths.includes(".env") && listedAll.paths.includes("local.json") && listedAll.paths.includes("shots"))
+  assert.equal(listedAll.carried, undefined)
   const bring = async (entries?: { path: string; link?: boolean }[]) => agent.callTool({ name: "worktree_bring", arguments: entries ? { entries } : {} })
   const carried = parseYaml(text(await bring()))
   assert.deepEqual([carried.copied, carried.missing], [["local.json", ".env"], [".env.local", ".env.alias"]], "a recipe saved with secrets brings them as carry")
@@ -597,7 +612,9 @@ try {
   assert.deepEqual(ofFolder.repositories, ["api", "web"])
   assert.equal(ofFolder.uncommittedFiles, 1)
   assert.equal(ofFolder.ignoredInMain.folder, many)
-  assert.ok(ofFolder.ignoredInMain.paths.includes("api/local.env"), "its ignored files are listed for bringing along")
+  assert.equal(ofFolder.ignoredInMain.count, 1)
+  const ofFolderAll = parseYaml(text(await agent.callTool({ name: "worktree_status", arguments: { ignored: true } })))
+  assert.ok(ofFolderAll.ignoredInMain.paths.includes("api/local.env"), "its ignored files are listed for bringing along")
   assert.deepEqual(await repositoryPlace(gitRunner, worktrees, "g", many), {
     folder: many,
     repositories: [{ name: "api", root: join(many, "api"), startedFrom: null }, { name: "web", root: join(many, "web"), startedFrom: null }],

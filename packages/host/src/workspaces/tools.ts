@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { realpath } from "node:fs/promises"
-import { basename, dirname, isAbsolute, relative } from "node:path"
+import { basename, dirname, isAbsolute, matchesGlob, relative } from "node:path"
 import { z } from "zod"
 import { locateCheckout } from "../base/checkout-location.js"
 import { discoverRepositories, projectRepositories, type ReachableRepository, type RepositoryPlace } from "../git/index.js"
@@ -10,7 +10,7 @@ import type { WorkspaceMoves } from "./moves.js"
 import type { WorktreeLeaves } from "./worktree-leaves.js"
 import type { Git } from "@mako/git"
 import { checkoutPattern, projectRoot, projectRecipe } from "./thread-recipe.js"
-import { ignoredEntries, type BringEntry } from "./worktree-carry.js"
+import { ignoredEntries, missingEntries, type BringEntry } from "./worktree-carry.js"
 import { CheckoutBorrowing } from "./checkout-borrowing.js"
 import { gitActionPrompt } from "../contracts/git-actions.js"
 import type { ThreadWorktree, WorktreeBranchPull, WorktreeUpdate } from "../contracts/thread-worktrees.js"
@@ -68,7 +68,23 @@ export interface WorkspaceStatus {
     mightBeThisThread: ChangeCount & { paths: string[] }
     notAttributed: ChangeCount & { paths: string[] }
   }
-  ignoredInMain?: { folder: string; paths: string[]; omitted?: number }
+  ignoredInMain?: IgnoredInMain
+}
+
+/**
+ * The main checkout's ignored paths. By default a count and only what an
+ * agent acts on: what the recipe's carry names, and the credentials files and
+ * installed-package folders this checkout lacks. `paths` lists them all, only
+ * when asked.
+ */
+export interface IgnoredInMain {
+  folder: string
+  count: number
+  carried?: string[]
+  missing?: string[]
+  paths?: string[]
+  omitted?: number
+  all?: string
 }
 
 /** Changed files and lines (added plus removed; 0 when Mako couldn't count them). */
@@ -93,7 +109,7 @@ function changesOf(shares: MoveShares): NonNullable<WorkspaceStatus["changes"]> 
 }
 
 export interface WorkspaceTools {
-  status(conversationId: string): Promise<WorkspaceStatus>
+  status(conversationId: string, options?: { ignored?: boolean }): Promise<WorkspaceStatus>
   move(conversationId: string, wanted?: WorktreeWanted): Promise<string>
   update(conversationId: string): Promise<string>
   merge(conversationId: string): Promise<string>
@@ -120,6 +136,8 @@ async function uncommittedAcross(git: Git, roots: readonly string[]): Promise<nu
 }
 
 const IGNORED_LISTED = 200
+/** How many carried or missing entries worktree_status names by default. */
+const IGNORED_NAMED = 20
 
 /**
  * Ignored entries short enough to list. Past `limit`, folders show as one
@@ -220,6 +238,37 @@ export async function moveablePlace(git: Git, worktrees: Worktrees | null, conve
   return shares ? { project, changed: changed ?? 0, shares } : { project, changed: changed ?? 0 }
 }
 
+/**
+ * `main`'s ignored paths as worktree_status reports them: with `all`, every
+ * path (folded past `IGNORED_LISTED`); otherwise their count, the ones the
+ * recipe's carry names, and the credentials files and installed-package
+ * folders `checkout` lacks (or, from the main checkout, that a new worktree
+ * wouldn't get).
+ */
+export async function ignoredInMain(git: Git, main: string, checkout: string | undefined, all: boolean, recipesRoot?: string): Promise<IgnoredInMain | undefined> {
+  const entries = await ignoredEntries(git, main).catch((): string[] => [])
+  if (!entries.length) return undefined
+  const report: IgnoredInMain = { folder: main, count: entries.length }
+  if (all) {
+    const folded = foldIgnored(entries, IGNORED_LISTED)
+    report.paths = folded.slice(0, IGNORED_LISTED)
+    if (folded.length > IGNORED_LISTED) report.omitted = folded.length - IGNORED_LISTED
+    return report
+  }
+  const recipe = await projectRecipe(git, checkout ?? main, recipesRoot).catch(() => undefined)
+  const patterns = (recipe?.carry ?? []).map((entry) => entry.path)
+  const named = (entry: string) => patterns.some((pattern) => entry === pattern || entry.startsWith(`${pattern}/`) || matchesGlob(entry, pattern))
+  // A carry entry inside an ignored folder is named as the recipe names it.
+  const inside = patterns.filter((pattern) => entries.some((entry) => pattern.startsWith(`${entry}/`)))
+  const carried = foldIgnored([...new Set([...entries.filter(named), ...inside])], IGNORED_NAMED)
+  const lacking = await missingEntries(git, main, recipe, checkout).catch(() => ({ credentials: [], dependencies: [] }))
+  const missing = [...lacking.credentials, ...lacking.dependencies]
+  if (carried.length) report.carried = carried
+  if (missing.length) report.missing = missing.length > IGNORED_NAMED ? [...missing.slice(0, IGNORED_NAMED), `and ${missing.length - IGNORED_NAMED} more`] : missing
+  report.all = "worktree_status with ignored: true lists every path"
+  return report
+}
+
 export function workspaceTools(deps: Deps): WorkspaceTools {
   const { git } = deps
   const borrowing = deps.worktrees?.borrowing ?? CheckoutBorrowing.inMemory(git)
@@ -250,7 +299,7 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
     return state
   }
   return {
-    async status(conversationId) {
+    async status(conversationId, options = {}) {
       const cwd = cwdOf(conversationId)
       const current = deps.worktrees?.threadCheckout(conversationId)
       const onIt = current ? await within(current.path, cwd) : false
@@ -274,11 +323,8 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
       if (branch) status.branch = branch
       const main = onIt && current ? current.project : project ? checkout?.linked?.repoRoot ?? project : projectFolder
       if (main) {
-        const ignored = foldIgnored(await ignoredEntries(git, main).catch((): string[] => []), IGNORED_LISTED)
-        if (ignored.length) {
-          status.ignoredInMain = { folder: main, paths: ignored.slice(0, IGNORED_LISTED) }
-          if (ignored.length > IGNORED_LISTED) status.ignoredInMain.omitted = ignored.length - IGNORED_LISTED
-        }
+        const ignored = await ignoredInMain(git, main, onIt && current ? current.path : undefined, options.ignored === true, deps.recipesRoot)
+        if (ignored) status.ignoredInMain = ignored
       }
       if (changed !== undefined) status.uncommittedFiles = changed
       if (changed && !onIt && !checkout?.linked && (project || projectFolder)) {
@@ -443,11 +489,11 @@ export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools,
     "worktree_status",
     {
       description:
-        "Call when you're unsure which checkout your edits land in, and before moving, bringing files, updating, merging or removing. Says whether this Session edits in the main checkout, in this Thread's worktree, or in a worktree made outside Mako. A project folder holding several repositories is a main checkout too, with its repositories listed. Returns the folder with its branch and uncommitted files, and, in the main checkout, whose those changes are: how many changed files and lines are this Thread's (each line counts for its last writer), other Threads', the user's, might be this Thread's, or not attributed (changed before Mako tracked the checkout); this Thread's worktree with the commits on its branch, where it started, how far behind the branch new Threads start from it is, whether its work has landed in the main checkout's branch, and its pull request with one word for its checks (for a project folder holding several repositories, the worktree holds one per repository on the same branch, each listed with these under its name, which the pull_request_* tools take as repository); the user's answer to a move you asked for; and ignored paths in the originating main checkout. Lists names only; ignored folders are named once, and when there are many, a folder of many shows as one folder/** pattern that worktree_bring takes as it is.",
-      inputSchema: none,
+        "Call when you're unsure which checkout your edits land in, and before moving, bringing files, updating, merging or removing. Says whether this Session edits in the main checkout, in this Thread's worktree, or in a worktree made outside Mako. A project folder holding several repositories is a main checkout too, with its repositories listed. Returns the folder with its branch and uncommitted files, and, in the main checkout, whose those changes are: how many changed files and lines are this Thread's (each line counts for its last writer), other Threads', the user's, might be this Thread's, or not attributed (changed before Mako tracked the checkout); this Thread's worktree with the commits on its branch, where it started, how far behind the branch new Threads start from it is, whether its work has landed in the main checkout's branch, and its pull request with one word for its checks (for a project folder holding several repositories, the worktree holds one per repository on the same branch, each listed with these under its name, which the pull_request_* tools take as repository); the user's answer to a move you asked for; and the originating main checkout's ignored paths: a count, those the recipe's carry names, and credentials and package folders this checkout lacks; ignored: true lists all, a big folder as folder/**.",
+      inputSchema: z.object({ ignored: z.boolean().optional() }).strict(),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    () => reply(async () => toolText(await tools.status(conversationId())))
+    ({ ignored }) => reply(async () => toolText(await tools.status(conversationId(), { ignored: ignored === true })))
   )
   server.registerTool(
     "worktree_bring",
