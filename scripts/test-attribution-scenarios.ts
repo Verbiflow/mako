@@ -270,7 +270,7 @@ test("a commit moves the base and records who wrote what it took", async () => {
   assert.deepEqual(tracker.blame(ROOT, "a.ts")?.map((run) => [run.start, run.length, run.entry === null]), [[0, 24, true], [24, 1, false]])
 })
 
-test("a turn's footprint outside the checkout: named paths strong, the rest weak, stores and churn left out", async () => {
+test("a turn's footprint outside the checkout: what it named is kept, what it didn't is never read, stores and churn left out", async () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), "mako-attribution-home-")))
   const footClock = new FakeClock(Date.now())
   const footEvents = new FakeEventSource()
@@ -285,6 +285,9 @@ test("a turn's footprint outside the checkout: named paths strong, the rest weak
       writeFileSync(path, text)
       footEvents.changed(path)
     }
+    // A named file's own times say whether it changed in the turn, so the file it only reads is there a second before.
+    writeFileSync(join(home, "read-me.md"), "read\n")
+    footClock.advance(1_000)
     const turn = { thread: "T1", session: "S1", checkout: root }
     footprinted.activity({ ...turn, kind: "turn", id: "f1", edge: "start", at: footClock.now() })
     footprinted.activity({ ...turn, kind: "call", id: "fc1", edge: "start", at: footClock.now(), turn: "f1", named: [join(home, ".config/tool")] })
@@ -293,7 +296,6 @@ test("a turn's footprint outside the checkout: named paths strong, the rest weak
     touch(join(home, ".harness/sessions/s1.jsonl"), "{}\n")
     touch(join(home, ".config/tool/state.json.tmp"), "{}\n")
     touch(join(home, ".ssh/known_hosts"), "host\n")
-    writeFileSync(join(home, "read-me.md"), "read\n")
     footprinted.reported({ ...turn, turn: "f1", call: "fc1", status: "completed", effects: [{ kind: "read", path: join(home, "read-me.md") }] })
     footClock.advance(100)
     footprinted.activity({ ...turn, kind: "call", id: "fc1", edge: "end", at: footClock.now(), turn: "f1" })
@@ -302,8 +304,6 @@ test("a turn's footprint outside the checkout: named paths strong, the rest weak
     const found = footprinted.footprint("T1").map((entry) => [entry.path.slice(home.length + 1), entry.access, entry.evidence, entry.secret, Boolean(entry.ref)])
     assert.deepEqual(found.sort(), [
       [".config/tool/state.json", "write", "strong", false, true],
-      [".ssh/known_hosts", "write", "weak", true, false],
-      ["notes.txt", "write", "weak", false, false],
       ["read-me.md", "read", "strong", false, false],
     ])
   } finally {
