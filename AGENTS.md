@@ -53,7 +53,14 @@ Inside the package, `contracts/` is the wire and imports only itself;
 reports, the platform, secrets, the lifecycle, the scheduler, the lock, heavy
 packages) and imports only itself and the contracts. Each domain is a folder
 that reaches another domain only through its entry, `<domain>/index.ts`, and
-files directly in `src/` compose the host. `transport/` is how a host is
+files directly in `src/` compose the host. A domain too large to read and
+run in one stretch of the host's thread has a second entry for those files
+alone, `<domain>/load.ts`: its modules in parts, the last its `index.ts`,
+which `create-host.ts` imports a part a turn of the loop before the core
+opens (workspaces, harnesses, conversations: with the compile cache warm no
+part holds the loop 50 ms, where each whole held it 60 to 90). A part is
+only modules the entry imports anyway; a harness added to the host is a
+part of `harnesses/load.ts`. `transport/` is how a host is
 reached: the socket server and the method table, and the wire's client end
 (`connection.ts`, and `service.ts` for where a host lives and how it starts),
 which the desktop imports by file and another host through the entry.
@@ -247,17 +254,35 @@ conversations?.live`) rather than a domain importing another's files.
   off the thread where they can: the process log appends what is pending as
   one awaited write, the Git index lock's steps are awaited, `docker context
   inspect` runs in the probe child, whether this host holds a session
-  (`SessionMemory.owns`) is answered from what was read until a hold is
-  written, and a launch, a discovery query and the advertised tools find
+  (`SessionMemory.owns`) is answered from what was read until that session's
+  hold is written (another host's commits looked for once a turn of the
+  loop), and a launch, a discovery query and the advertised tools find
   their executable awaited and kept (`Executables`, held by
   `DiscoveryProcesses`), `gh` and an MCP server's command awaited each time
   (`findExecutable`); `resolveExecutable` waits on the thread and is for
   code that runs once or at the person's own action. Codex processes' output is handled a turn's worth at
   a time (`StdoutPace`): what one turn of the loop has no time for waits,
-  its pipe paused, for the next.
+  its pipe paused, for the next. The rollout a Codex message's handling
+  reads is read ahead, awaited (`CodexRolloutTail.load`, the pace's
+  `before`), with that process's output queued behind it in order; `read`
+  takes what was loaded and goes to the file itself only for what wasn't.
+  The writer holds a journal's connection only while it streams: opened at
+  its first streamed flush, let go at rest, and a journal's close lets go of
+  it without waiting on the thread (`JournalWrites.release`, awaited before
+  the file is tidied); waited on the thread, a close sat behind every other
+  journal's writes. As the host stops, the journal writer closes every
+  journal's writes awaited (`JournalWriter.closeAll`) before the journals
+  close.
 - **A journal at rest gives back its pages** (`LiveJournal.rest`): SQLite
   keeps up to 2 MB of pages for each connection, and every conversation in
   memory has one. Read in, or quiet after its turn, a journal frees them.
+  A conversation in memory weighs its content and `RESIDENT_HELD_BYTES`
+  beside it (its connection, statements and log index, about 160 KB outside
+  the heap), so a few hundred small ones at rest count against the budget
+  and are let go to their listing's line; reading one back takes about a
+  millisecond. What waits on the person (an approval, a question, an
+  agent's ask) keeps a conversation in memory, so a row never reads one back
+  to say what it waits on.
   A worker that parses much (a journal reader, the catalog's) has its young
   generation held to 32 MB (`maxYoungGenerationSizeMb`): V8 grew each to 76
   to 122 MB while it read and kept it at rest with a few MB in use.

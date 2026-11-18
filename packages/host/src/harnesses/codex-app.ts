@@ -61,7 +61,9 @@ import {
   endSubagents,
   consumeStdout,
   MAX_STDOUT_BUFFER,
+  DELTA_READ_MS,
   drawRollout,
+  onlyDeltas,
   rpcRequest,
   sendRpc,
   sendRpcError,
@@ -125,6 +127,9 @@ type Live = {
   serverRequests: Map<string, PendingServerRequest>
   decoder: CodexDecoder
   rollout?: CodexRolloutTail
+  /** As the protocol keeps them on its context (`drawRolloutOnce`, `drawRolloutPaced`). */
+  rolloutRead?: boolean
+  rolloutReadAt?: number
   stream: NativeStream<CodexFrame> | null
   background: ProtocolContext["background"]
   subagentTurns: Map<string, Array<() => void>>
@@ -341,7 +346,10 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
       live.threadId = response.thread.id
       live.rollout = response.thread.path ? new CodexRolloutTail(response.thread.path) : undefined
       live.rollout?.follow(() => {
-        if (!live.exited) drawRollout(live)
+        // Read off the thread, then drawn: the watcher's word waits on no message.
+        void live.rollout?.load().then(() => {
+          if (!live.exited) drawRollout(live)
+        })
       })
       if (options.resume === response.thread.id && !options.fork)
         live.agents.restore(options.observedAgents ?? [])
@@ -782,6 +790,13 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
     take: (live, chunk) => consumeStdout(live, chunk),
     pause: (live) => live.child.stdout.pause(),
     resume: (live) => live.child.stdout.resume(),
+    // The rollout is read before a message that isn't a streamed delta is handled (`drawRolloutOnce`), and for
+    // deltas a frame apart (`drawRolloutPaced`): read ahead here, awaited, the handling takes it with no file call.
+    before: (live, chunk) => {
+      if (!live.rollout || live.exited) return undefined
+      if (onlyDeltas(chunk) && performance.now() - (live.rolloutReadAt ?? 0) < DELTA_READ_MS) return undefined
+      return live.rollout.load()
+    },
   })
 
   function bindProcess(live: Live): void {

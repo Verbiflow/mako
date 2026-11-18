@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { z } from "zod"
 import { fork } from "node:child_process"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -145,6 +146,55 @@ try {
     assert.deepEqual(turn.journal.read()?.blocks, turn.snapshot().blocks)
     await turn.journal.close()
     assert.deepEqual(reopened(join(root, "stopped"), turn.id), turn.snapshot().blocks, "a journal whose writer is gone writes what it was given itself")
+  }
+
+  // Every journal's writes closed at once, awaited, as the host stops: what each was given is written, a journal that
+  // streams after writes its own rows, and its close waits for nothing of the writer's.
+  {
+    const writer = new JournalWriter()
+    const turns = [0, 1, 2].map((at) => streaming(join(root, `closed-${at}`), writer))
+    for (let flush = 0; flush < 60; flush += 1) for (const turn of turns) turn.flush()
+    await writer.closeAll()
+    for (const turn of turns) {
+      assert.equal(turn.journal["writes"]?.pending(), false, "nothing of it waits on the writer")
+      assert.equal(turn.journal["writes"]?.closed(), true)
+    }
+    // Read on a connection of its own: all of it is in the file, with no word from the journal.
+    const db = new DatabaseSync(join(root, "closed-0", `${turns[0]!.id}.sqlite`), { readOnly: true })
+    assert.equal(z.object({ revision: z.number() }).parse(db.prepare("SELECT revision FROM progress WHERE id=1").get()).revision, turns[0]!.snapshot().revision)
+    db.close()
+    for (let flush = 0; flush < 20; flush += 1) turns[1]!.flush()
+    assert.equal(turns[1]!.journal["writes"], undefined, "a journal that streams after writes its own")
+    for (const [at, turn] of turns.entries()) {
+      turn.end()
+      await turn.journal.close()
+      assert.deepEqual(reopened(join(root, `closed-${at}`), turn.id), turn.snapshot().blocks)
+    }
+    await writer.stop()
+  }
+
+  // The writer holds a journal's connection only while it streams: none for one read in and at rest, one from its
+  // first streamed flush, let go at rest without waiting on the thread, and opened again at the next turn.
+  {
+    const writer = new JournalWriter()
+    const turn = streaming(join(root, "lazy"), writer)
+    assert.equal(turn.journal["writes"], undefined, "given the writer, a journal opens nothing on it until it streams")
+    for (let flush = 0; flush < 30; flush += 1) turn.flush()
+    assert.ok(turn.journal["writes"], "its first streamed flush opens its writes")
+    turn.end()
+    turn.journal.rest()
+    assert.equal(turn.journal["writes"], undefined, "at rest its writes are let go")
+    assert.equal(writer["handles"].size, 1, "the writer still closes it, off the thread")
+    await turn.journal["left"]
+    assert.equal(writer["handles"].size, 0, "and then holds nothing of it")
+    assert.deepEqual(turn.journal.read()?.blocks, turn.snapshot().blocks)
+    const rested = turn.snapshot()
+    assert.equal(turn.journal["streamed"]({ ...rested, revision: rested.revision + 1 }, rested, undefined), true, "the next streamed flush opens them again")
+    assert.equal(writer["handles"].size, 1)
+    await turn.journal.close()
+    assert.equal(writer["handles"].size, 0, "a close lets go of them, awaited before it settles")
+    assert.equal(reopened(join(root, "lazy"), turn.id).length, turn.snapshot().blocks.length)
+    await writer.stop()
   }
 
   // A write that fails on the writer (a row it can't insert): the journal writes each block whole from memory and

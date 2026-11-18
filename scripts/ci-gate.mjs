@@ -37,6 +37,7 @@ export const STEPS = [
   [13, "npx tsx scripts/test-cloud-returns.ts"],
   [1, "npm run test:keep-awake"],
   [4, "npm run test:flush-costs"],
+  [4, "npx tsx --tsconfig tsconfig.scripts.json scripts/test-host-boundaries.ts"],
   [6, "npm run test:journal-writer"],
   // The renderer's and the live state's own suites, in Node without a window, and the web client's build.
   [4, "npm run build -w @mako/web-client"],

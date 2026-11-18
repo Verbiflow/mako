@@ -1,4 +1,5 @@
 import { closeSync, fstatSync, openSync, readSync, statSync, watch, type FSWatcher } from "node:fs"
+import { open } from "node:fs/promises"
 import { isJsonObject } from "../../base/json-values.js"
 import type { JsonObject, JsonValue } from "../../contracts/json.js"
 
@@ -43,6 +44,10 @@ export class CodexRolloutTail {
   private skipping = false
   private changed: (() => void) | undefined
   private watcher: FSWatcher | undefined
+  /** What `load` read of the file off the thread, for the next `read` to take; `null` for a file that wasn't there. */
+  private ahead: { ino: number; size: number; from: number; chunks: Buffer[] } | null | undefined
+  private loading: Promise<void> | undefined
+  private queued: Promise<void> | undefined
 
   constructor(path: string) {
     this.path = path
@@ -91,9 +96,75 @@ export class CodexRolloutTail {
     }
   }
 
+  /**
+   * Reads what was appended since the last read without holding the thread, for the next `read` to take with no file
+   * call of its own. `read` waits on the disk where it stands, the host's thread with every conversation's tokens
+   * behind it: 410 ms once with 30 Fins at work. Codex wrote a message's record before the message, so a `load`
+   * begun after a message was heard holds its record; `read` falls back to the file for anything else.
+   */
+  load(): Promise<void> {
+    // One asked for while another is under way begins after it: only a read begun after the asking is sure to hold
+    // what was written before it. Every asking meanwhile shares that one.
+    if (this.queued) return this.queued
+    if (!this.loading) return this.begin()
+    const queued = this.loading.then(() => {
+      this.queued = undefined
+      return this.begin()
+    })
+    this.queued = queued
+    return queued
+  }
+
+  private begin(): Promise<void> {
+    const loading = this.loadAhead().finally(() => {
+      if (this.loading === loading) this.loading = undefined
+    })
+    this.loading = loading
+    return loading
+  }
+
+  private async loadAhead(): Promise<void> {
+    let handle: Awaited<ReturnType<typeof open>> | undefined
+    try {
+      handle = await open(this.path, "r")
+      const { size, ino } = await handle.stat()
+      const from = this.file !== undefined && (ino !== this.file || size < this.offset) ? 0 : this.offset
+      const chunks: Buffer[] = []
+      for (let at = from; at < size;) {
+        const chunk = Buffer.allocUnsafe(Math.min(CHUNK, size - at))
+        const { bytesRead } = await handle.read(chunk, 0, chunk.length, at)
+        if (bytesRead === 0) break
+        chunks.push(chunk.subarray(0, bytesRead))
+        at += bytesRead
+      }
+      this.ahead = { ino, size, from, chunks }
+    } catch {
+      this.ahead = null
+    } finally {
+      await handle?.close().catch(() => undefined)
+    }
+  }
+
   /** Each record appended since the last read, in order. */
   read(): RolloutRecord[] {
     const records: RolloutRecord[] = []
+    const ahead = this.ahead
+    this.ahead = undefined
+    // Not there when `load` looked: nothing to read, as a `stat` that fails says.
+    if (ahead === null) return records
+    if (ahead) {
+      if (this.file !== undefined && (ahead.ino !== this.file || ahead.size < this.offset)) this.restart()
+      // Read from where this tail stands, by the same file: taken as read. Anything else is read from the file below.
+      if (ahead.from === this.offset) {
+        this.file = ahead.ino
+        this.watchFile()
+        for (const chunk of ahead.chunks) {
+          this.lines(chunk, this.offset, records)
+          this.offset += chunk.length
+        }
+        return records
+      }
+    }
     let size: number
     let ino: number
     try {
