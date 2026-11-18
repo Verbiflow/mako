@@ -1,4 +1,5 @@
 import { useHarnessIdentity, useHarnessLabels } from "@/lib/harness-label"
+import { everyWhileShown } from "@/lib/window-shown"
 import { quietly } from "@/lib/quiet-retry"
 import { latestPendingQuestion } from "@mako/host/contracts/live-questions"
 import { carriedHistories, promptDelivery, recoveriesByPlace, makoPrompts, turnStops } from "@/state/prompt-delivery"
@@ -410,8 +411,7 @@ function WaitClock({ waitKey }: { waitKey: string | undefined }) {
   const began = waitKey ? (waitsBegan.get(waitKey) ?? now) : now
   useEffect(() => {
     if (waitKey && !waitsBegan.has(waitKey)) waitsBegan.set(waitKey, began)
-    const timer = setInterval(() => setNow(Date.now()), 1_000)
-    return () => clearInterval(timer)
+    return everyWhileShown(1_000, () => setNow(Date.now()))
   }, [waitKey, began])
   const waited = now - began
   if (waited < WAIT_CLOCK_MS) return null
@@ -429,10 +429,7 @@ function WaitClock({ waitKey }: { waitKey: string | undefined }) {
  */
 function NativeClock({ since, retryAt }: { since: number; retryAt?: number }) {
   const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1_000)
-    return () => clearInterval(timer)
-  }, [])
+  useEffect(() => everyWhileShown(1_000, () => setNow(Date.now())), [])
   const text = retryAt !== undefined && retryAt > now
     ? `next try in ${durationText(retryAt - now + 999)}`
     : now - since >= 1_000 ? durationText(now - since) : undefined
@@ -453,10 +450,10 @@ function useQuietFor(activityAt: number | undefined): number {
     if (activityAt === undefined) return
     const read = () => setNow(Date.now())
     const first = setTimeout(read, 0)
-    const timer = setInterval(read, 5_000)
+    const stop = everyWhileShown(5_000, read)
     return () => {
       clearTimeout(first)
-      clearInterval(timer)
+      stop()
     }
   }, [activityAt])
   return activityAt === undefined ? 0 : Math.max(0, now - activityAt)

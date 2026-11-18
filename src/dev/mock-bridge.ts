@@ -97,7 +97,7 @@ import {
 } from "./mock-runtime-fixtures"
 import { agedGroup, busyRefs, busySnapshot, busySummaries, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE } from "./mock-busy-thread"
 import { openAsk } from "@mako/host/contracts/children"
-import { benchChild, benchApexes, CHURN, apexRefs, apexSnapshots, apexSummaries, placedSnapshot, APEX_CONVERSATION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
+import { apexWorktrees, apexWorktreeSummaries, benchChild, benchApexes, CHURN, apexRefs, apexSnapshots, apexSummaries, placedSnapshot, APEX_CONVERSATION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
 
 /** The repository's pull requests as the `#` menu finds them. */
 const MOCK_PULLS: PullRequestListing[] = [
@@ -369,7 +369,7 @@ export function installMockBridge() {
   const removedWorktrees = new Set<string>()
   const listedWorktrees = () => ({
     root: SETUP_WORKTREE_ROOT,
-    worktrees: [...(setupWorktree ? [setupWorktree] : []), ...madeWorktrees, ...(scene === "rail" ? RAIL_WORKTREES : [])].filter((worktree) => !removedWorktrees.has(worktree.path)),
+    worktrees: [...(setupWorktree ? [setupWorktree] : []), ...madeWorktrees, ...(scene === "rail" ? RAIL_WORKTREES : []), ...(scene === "apex" ? apexWorktrees() : [])].filter((worktree) => !removedWorktrees.has(worktree.path)),
   })
   let meta = { ...META }
   if (sinceWorktree) meta.cwd = sinceWorktree.path
@@ -1039,6 +1039,7 @@ export function installMockBridge() {
     threadAppOutput: async () => ({ text: "", cursor: { file: "", offset: 0 }, reset: false }),
     threadAppMarks: async () => [],
     followThreadApps: async () => ({ kind: "unavailable" }),
+    windowShown: async () => false,
     viewHints: async () => null,
     followConversationApp: async () => ({ kind: "unavailable" }),
     conversationApp: async () => ({ folder: "/fixture", app: { kind: "none", project: "fixture", root: "/fixture" } }),
@@ -1082,6 +1083,7 @@ export function installMockBridge() {
     },
     worktreeSummaries: async (): Promise<WorktreeSummary[]> => [
       ...madeWorktrees.map((worktree) => ({ path: worktree.path, into: "main", ahead: 0, changes: 0, landing: { kind: "empty" as const }, pull: null, behind: { from: "origin/main", commits: 0 } })),
+      ...(scene === "apex" ? apexWorktreeSummaries() : []),
       ...(scene === "rail" ? RAIL_SUMMARIES.map((summary) => summary.path !== sinceWorktree?.path ? summary : {
         ...summary,
         ahead: sinceLanded ? 0 : 3,

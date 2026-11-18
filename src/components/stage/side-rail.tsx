@@ -27,6 +27,7 @@ export function SideRail({ surfaces, activeId }: { surfaces: SurfaceDefinition[]
 /** A hook of each surface's own runs here, so a surface comes and goes without the list's order of hooks moving. */
 function SideRow({ surface, active }: { surface: SurfaceDefinition; active: boolean }) {
   const offered = useOffered(surface)
+  const label = useLabel(surface)
   if (!offered && !active) return null
   const Icon = surface.icon
   const Reading = surface.reading
@@ -38,7 +39,7 @@ function SideRow({ surface, active }: { surface: SurfaceDefinition; active: bool
       tabIndex={active ? 0 : -1}
       data-surface-id={surface.id}
       icon={Icon ? <Icon /> : null}
-      label={surface.label}
+      label={label}
       open={active}
       end={Reading ? <Reading /> : null}
       onClick={() => stage.open(surface.id)}
@@ -51,3 +52,10 @@ const always = () => true
 function useOffered(surface: SurfaceDefinition): boolean {
   return (surface.useOffered ?? always)()
 }
+
+function useLabel(surface: SurfaceDefinition): string {
+  const named = (surface.useLabel ?? never)()
+  return named ?? surface.label
+}
+
+const never = () => undefined

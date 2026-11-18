@@ -1,4 +1,5 @@
 import { useEffect, type RefObject } from "react"
+import { everyWhileShown } from "@/lib/window-shown"
 
 /** How often the stage's layout is read: a few rects, while the window is in front. */
 const CHECK_EVERY_MS = 2_000
@@ -112,7 +113,6 @@ export function useStageLayoutWatch(stage: RefObject<HTMLElement | null>): void 
       said = key
       console.warn(`Stage layout off ${JSON.stringify(reading)}`)
     }
-    const timer = setInterval(check, CHECK_EVERY_MS)
-    return () => clearInterval(timer)
+    return everyWhileShown(CHECK_EVERY_MS, check)
   }, [stage])
 }

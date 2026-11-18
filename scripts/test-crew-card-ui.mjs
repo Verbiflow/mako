@@ -320,11 +320,12 @@ async function checkPage({ window, page, shots, base }) {
   )
   assert.match(starting?.text ?? "", /\d+s\b/, "under a minute stays seconds")
 
-  // One place for an ask. While the card is in view the dock draws none of it; scrolled away, one line, and that
+  // One place for an ask in the conversation (`main`: the card and the dock; the Overview beside it lists the same ask
+  // with the same buttons). While the card is in view the dock draws none of it; scrolled away, one line, and that
   // line brings Needs you back.
   assert.equal(
     await evaluate(
-      "document.querySelectorAll('[data-fin-answer=allow]').length"
+      "document.querySelectorAll('main [data-fin-answer=allow]').length"
     ),
     1,
     "the approval is drawn once, in the card"
@@ -357,7 +358,7 @@ async function checkPage({ window, page, shots, base }) {
   assert.match(away, /2 Fins need you/)
   assert.equal(
     await evaluate(
-      "document.querySelectorAll('[data-fin-answer=allow]').length"
+      "document.querySelectorAll('main [data-fin-answer=allow]').length"
     ),
     1,
     "the ask is still only in the card"
@@ -458,7 +459,8 @@ async function checkPage({ window, page, shots, base }) {
   const railBefore = await evaluate(
     "document.querySelector('.thread-jump-scope [data-fin-pips]').getAttribute('aria-label')"
   )
-  await click("[data-agents-toggle]")
+  // An Apex's rail opens on its Overview, so the chip, which puts the panel away when it's showing, is pressed only when it isn't.
+  if (!(await evaluate("Boolean(document.querySelector('[data-apex-fins]'))"))) await click("[data-agents-toggle]")
   await until(
     "Boolean(document.querySelector('[data-apex-fins]'))",
     "the Agents panel's Fins section"
@@ -889,15 +891,19 @@ async function checkPage({ window, page, shots, base }) {
   assert.match(escalated.fold ?? "", /^Thread list swipe, Haptics audit and 2 more finished 2 PRs Show$/, `the finished ones fold without it: ${escalated.fold}`)
   console.log("PASS: a done Fin's decision escalated to the person stays open in the crew update")
 
-  // One crew list: the side rail folds finished and idle Fins as the card does, and the phone has Stop all too.
+  // One crew list: the side rail holds the finished and idle Fins the card folds, and the phone has Stop all too.
   window.setContentSize(1440, 900)
   await navigate(window, `${base}?mock&app=apex`)
   await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, one list")
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
   await evaluate("window.apexScene.setRunning(false); true")
-  await until("document.querySelectorAll('[data-crew-settled]').length === 2", "the card and the side rail each fold their settled Fins")
-  const folds = await evaluate("[...document.querySelectorAll('[data-crew-settled]')].map((node) => node.innerText.trim())")
-  assert.equal(folds[0], folds[1], `the two surfaces fold alike: ${JSON.stringify(folds)}`)
+  // The card folds them into a line; the rail's Overview lists the same Fins under Done and, the idle ones, Waiting.
+  await until("document.querySelectorAll('[data-crew-settled]').length === 1 && Boolean(document.querySelector('[data-apex-fins] [data-overview-section=done]'))", "the card's settled line and the Overview's Done section")
+  const folds = await evaluate(`(() => {
+    const count = (selector) => document.querySelectorAll('[data-apex-fins] ' + selector).length
+    return [document.querySelector('[data-crew-settled]').innerText.trim(), count('[data-overview-section=done] [data-child-row]') + ' done · ' + count('[data-overview-section=waiting] [data-child-state=idle]') + ' idle']
+  })()`)
+  assert.equal(folds[0], folds[1], `the two surfaces count the settled Fins alike: ${JSON.stringify(folds)}`)
   const deskWords = await evaluate("document.querySelector('.thread-jump-scope [data-fin-pips]')?.innerText.trim()")
   window.setContentSize(390, 844)
   await navigate(window, `${base}scripts/phone-apex.html?app=apex`)
@@ -921,7 +927,7 @@ async function checkPage({ window, page, shots, base }) {
   await evaluate("document.querySelector('[data-stop-all-yes]').click(); true")
   await until("!document.querySelector('[data-stop-all-confirm]') && !document.querySelector('[data-crew] [data-stop-all]')", "Stop stops every Fin it can")
   console.log(`PASS: the phone's Stop all asks first ("${question.replace(/ Cancel Stop$/, "")}"), Cancel keeps them, Stop stops them`)
-  console.log(`PASS: one crew list: the side rail folds as the card does (${folds[0]}), the phone says "${phoneWords}" and has Stop all`)
+  console.log(`PASS: one crew list: the side rail lists what the card folds (${folds[0]}), the phone says "${phoneWords}" and has Stop all`)
 
   // What changed in the crew outside the Apex's turns reads as lines of its own in its transcript, desk and phone.
   window.setContentSize(1440, 900)

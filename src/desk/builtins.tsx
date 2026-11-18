@@ -30,7 +30,7 @@ import { registerSurface } from "@/extend/surfaces"
 import { IdentityRow } from "@/components/identity/identity-row"
 import { ChangesPanel } from "@/components/inspector/changes-lazy"
 import { AgentsReading, ChangesReading, ControlReading } from "@/components/stage/side-readings"
-import { useAgentsOffered } from "@/state/agents-offered"
+import { AGENTS_LABEL, useAgentsLabel, useAgentsOffered } from "@/state/agents-offered"
 import { ApexMark } from "@/components/ui/apex-mark"
 import { FileTree } from "@/components/rail/file-tree"
 import { TerminalPanel } from "@/components/inspector/terminal-lazy"
@@ -90,7 +90,8 @@ export function installBuiltins(): () => void {
       order: 3,
       reading: ControlReading,
     }),
-    registerSurface({ id: "agents", label: "Agents", icon: ApexMark, render: AgentsPanel, order: 4, reading: AgentsReading, useOffered: () => useAgentsOffered() }),
+    // An Apex's Overview, and any other Session's Agents: one surface, named by what's on screen.
+    registerSurface({ id: "agents", label: AGENTS_LABEL, icon: ApexMark, render: AgentsPanel, order: 4, reading: AgentsReading, useOffered: () => useAgentsOffered(), useLabel: () => useAgentsLabel() }),
     registerSurface({ id: "setup", label: "Setup", icon: PackageIcon, render: SetupPanel, order: 6, reading: SetupReading, useOffered: useSetupOffered }),
     installSetupDrafter(),
     installSimulatorSurface(),
