@@ -223,7 +223,7 @@ function RetentionSettings() {
   }
   return <section>
     <h3 className="text-ui font-medium">Finished Thread worktrees</h3>
-    <p className="mt-0.5 pb-3 text-label text-muted-foreground">Preview only by default. Finished Threads can release their installed packages immediately when nothing has the folder open, regardless of Git changes. Checkout retirement waits seven quiet days and requires a clean current HEAD kept on a fetched remote, with no ignored private files. Shared or explicitly kept folders stay. Enabled removal checks hourly and on events, at most once every ten minutes. No GitHub API lookups.</p>
+    <p className="mt-0.5 pb-3 text-label text-muted-foreground">Preview only by default, except for the worktrees of finished Fins. Finished Threads can release their installed packages immediately when nothing has the folder open, regardless of Git changes. Checkout retirement waits seven quiet days and requires a clean current HEAD kept on a fetched remote, with no ignored private files. Shared or explicitly kept folders stay. Enabled removal checks hourly and on events, at most once every ten minutes. No GitHub API lookups.</p>
     {report ? <ListCard>
       <SettingRow title="Automatic retirement" description="Removed packages return on the next app start or check. Agents running commands directly may need to reinstall. Checkout removal keeps committed branches. Choosing removal enables it on the next pass.">
         <select aria-label="Automatic retirement" value={report.settings.mode} disabled={busy} onChange={(event) => {
@@ -241,7 +241,10 @@ function RetentionSettings() {
           if (Number.isInteger(days) && days >= 0 && days <= 3650) void save({ ...report.settings, days })
         }} />
       </SettingRow>
-      {report.checkouts.map((row) => <SettingRow key={row.path} title={row.branch} description={row.skip ?? `${row.packageSkip ?? `${plural(row.packages.length, "install folder")} can be reclaimed.`} ${row.checkoutSkip ?? "The checkout is eligible for retirement."} No files were removed by this preview.`}>
+      <SettingRow title="Worktrees of finished Fins" description="A Fin that finished is closed after six hours with nothing pending. Its worktree is then retired under the same checks as any checkout, whatever is chosen above, and a message to the Fin makes it again on its branch. Off keeps them.">
+        <Toggle label="Remove the worktrees of finished Fins" on={report.settings.finishedFins !== false} onChange={() => void save({ ...report.settings, finishedFins: report.settings.finishedFins === false })} />
+      </SettingRow>
+      {report.checkouts.map((row) => <SettingRow key={row.path} title={row.branch} description={row.skip ?? `${row.packageSkip ?? `${plural(row.packages.length, "install folder")} can be reclaimed.`} ${row.checkoutSkip ?? (row.finished && report.settings.mode !== "checkout" ? "Its Fin finished, so the checkout is retired at the next pass." : "The checkout is eligible for retirement.")} No files were removed by this preview.`}>
         <Toggle label={`Keep ${row.branch}`} on={report.settings.kept.includes(row.path)} onChange={() => void save({ ...report.settings, kept: report.settings.kept.includes(row.path) ? report.settings.kept.filter((path) => path !== row.path) : [...report.settings.kept, row.path] })} />
       </SettingRow>)}
       <p className="text-label text-faint">Checkout eligibility is as of the last fetch. Preview never fetches or prunes remote refs. GitHub API lookups: 0.</p>

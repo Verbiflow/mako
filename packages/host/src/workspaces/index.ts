@@ -3,6 +3,7 @@ import { declareThreadScratchMethods } from "./thread-scratch-methods.js"
 import { AppOutputHints } from "./app-output-hints.js"
 import type { BuildSlots } from "./build-slots.js"
 import { sessionAccessTier } from "../contracts/access.js"
+import { closedFinished } from "../contracts/agents.js"
 import type { GitHubPerson } from "../contracts/github-person.js"
 import type { PullRequestsAs } from "../contracts/github-authorship.js"
 import type { Git } from "@mako/git"
@@ -108,7 +109,7 @@ export interface Workspaces {
   processes: ThreadProcesses | null
   /** Beside the Thread store, so every profile sharing the store shares its worktrees. */
   worktrees: ThreadWorktreeService | null
-  /** Automatic retirement is off until the person enables it in Settings. */
+  /** Automatic retirement is off until the person enables it in Settings, but for the worktrees of Fins closed as finished. */
   retention: WorktreeRetention | null
   scratch: ThreadScratch | null
   threadData: ThreadScratch | null
@@ -279,6 +280,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     root: worktrees.root,
     worktrees: () => store.worktrees(),
     finished: (thread) => deps.finished?.(thread),
+    closedFinished: (thread) => closedFinished(store.edges().of(thread)),
     using: async (path) => {
       if (!deps.retirementUsers || !processes) throw new Error("Live-use checks are unavailable.")
       const users = await deps.retirementUsers(path)
@@ -291,10 +293,12 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     repository: (worktree, refresh) => worktrees.retirementRepository(worktree, refresh),
     fetch: (common) => worktrees.retirementFetch(common),
     openFiles,
-    remove: async (path) => {
+    remove: async (path, finished) => {
       const member = store.worktrees().find((row) => worktreeCheckout(row) === path)
       if (!member) throw new Error("The checkout is no longer registered.")
-      await worktrees.remove(member.path, true)
+      // Read again as it goes: a Fin opened since is no longer one whose worktree is Mako's to retire.
+      if (finished && !closedFinished(store.edges().of(member.thread))) throw new Error("The Fin was opened again; its checkout was kept.")
+      await worktrees.remove(member.path, finished ? "finished" : true)
     },
     packagesRemoved: async (path) => {
       await processes?.forgetPrepared(path)

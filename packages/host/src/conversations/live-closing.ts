@@ -1,5 +1,6 @@
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import { edgeStopped } from "../contracts/agents.js"
 import { disconnectNativeAgents } from "../contracts/native-agents.js"
 import { autoContinueCandidate } from "../contracts/turn-continuation.js"
 import { stoppedWork } from "./interrupted-turn.js"
@@ -115,7 +116,8 @@ export class LiveClosing {
     const placed = threads?.journalPlacement(resident.snapshot.session.id)
     if (!placed || !threads) return false
     const edges = threads.edges()
-    return edges.of(placed.thread) !== undefined || edges.children(placed.thread).some((edge) => edge.closedAt === undefined)
+    // A Fin closed as finished counts as before it closed: only a stop takes its Apex out of the tree.
+    return edges.of(placed.thread) !== undefined || edges.children(placed.thread).some((edge) => !edgeStopped(edge))
   }
 
   private async closeResident(

@@ -373,6 +373,62 @@ its files (`branchSince`). Its turns report and wake the Apex again, and a
 repeat of the message resumes it once. Archiving its Thread is the one
 end: one at work stops in those words, once (`Agents.archived`), and
 nothing resumes it until the person restores it (`test:fin-resume`). A
+finished Fin's edge closes by itself (`Agents.closeFinished`, `closedFinished`):
+six hours after its last report (`FINISHED_CLOSE_MS`), when that report is
+`done`, or `failed` asking nothing, and nothing is pending. Until 2026-11-17
+only a stop or an archive closed an edge, and the person's store held 113
+open Fins, 98 of them done, each in every prompt's note, every list and
+every start's read of its journal. A closed edge is passed over by what
+looks for open questions and waits, so it closes only with none: no open
+question, decision or action (`openReportAsks`, `pendingActionThreads`), no
+answer owed either way, no report, answer or pull request's outcome
+undelivered, its result taken by its Apex's harness, no queued start or
+armed wait naming it, no open Fin of its own, no pull request its report
+waits on, and its conversations in memory, idle and empty-handed (no turn,
+no message queued, held or being sent, nothing asked, no work its harness
+left running, no cut turn, no armed wait). `keptOpen` and
+`conversationHolds` read all of it in the same step as the write; a
+conversation not in memory is read in first, a slice at a time, and one
+this host can't read stays open. A Fin placed on another device, or whose
+Apex is, is left alone. Closing is bookkeeping: its reason is
+`FINISHED_CLOSE`, a stop's reason on the wire, so an older build shows it
+as any closed edge and opens it as it opens a stopped one; this build reads
+it as done or failed (`childState`), never stopped. Nothing is cancelled,
+stopped or reported, and it leaves the front door's note, the crew view,
+the `apexes` digest, `personAsk`'s walk and the list (counted in `folded`).
+It never cuts a Fin off: whatever reaches it opens it again in the same
+Session (`reopen`), and the Fin above it with it when that one is closed
+the same way: `agents_send` however delivered, `agents_answer`, the
+person in its own Thread or by `@`, a pull request's outcome, a digest of
+its own Fins, any input its harness takes (`inputDelivered`), any message in
+its queue (`moved`) and any report of its (`keepReport`). Only a stop is a
+pause Mako's own notes don't lift. Its six hours start over at its next
+report, and a stop or an archive of it closes it in those words
+(`test:fin-close`). The sweep runs on the job `close finished Fins`, only
+while an open Fin has finished, as a turn settles and as a host starts. Its
+worktree goes after it: the retention pass (`WorktreeRetention`, Settings ›
+Worktrees), preview-only for every other checkout until the person chooses
+removal, retires the checkout of a Fin closed as finished by default, under
+every guard a checkout's retirement has (nothing uncommitted, its HEAD on a
+fetched remote ref, no private ignored files, no process, terminal, app or
+open file in it, not shared, not kept, quiet for the setting's days), and
+only one repository's worktree, which Mako can make again. The person turns
+it off with one switch, kept in a file of its own
+(`worktree-retention-fins.json`) because a build from before it reads the
+settings strictly and writes them whole. What the worktree was is kept
+(`retired_worktrees`, `ThreadStore.retireWorktree`), its conversations stay
+in their folder, and whatever next reaches the Fin makes it again at the
+same path before its harness is sent anything
+(`ThreadWorktreeService.restoreRetired`, from `Agents.deliver` and from the
+live engine's wake and transfer, `restoreRetiredWorktree`): on its branch;
+on that branch made again at the commit it was at when it was deleted
+since; detached at its tip when another checkout holds it. The Fin reads
+which beneath the message, and that installed packages and build output are
+gone (`worktreeRemadeText`); its sender reads it in the receipt. When it
+can't be made again (its project or its commit gone) the message is
+delivered all the same, saying exactly why, and the start goes on as for any
+removed worktree (`test-worktree-retention-fins.ts`, in
+`test:thread-worktrees`). A
 stop also pauses what was queued for the Fin (`halt`), and a stop of one
 stopped already ends whatever still runs there. A paused message first in
 line holds the ones behind it (the person editing it keeps its place), and
@@ -403,9 +459,25 @@ when the Fin said so, when its Apex left it to them, or when its spawn's
 `wake` isn't `decisions`. Its result wakes the Apex as any done report does,
 its line in the digest, the front door and the `apexes` digest one
 (`decisionWords`: "done; decide: Merge #371? (Merge · Leave open, recommends
-Merge)"). One its Apex leaves for `APEX_ANSWER_MS` goes to the person too, as
-a done report of the same decision (`escalateDecision`, on `AgentsDeps.later`,
-which a test fakes). The person's counts under needs you (`childGroup`) and
+Merge)"). One its Apex leaves for `APEX_ANSWER_MS` after hearing it goes to
+the person too, as a done report of the same decision (`escalateDecision`, on
+`AgentsDeps.later`, which a test fakes). The minute starts when the Apex's
+harness takes the digest or the steer that carries it (`decisionHeardAt`: that
+request's handoff, or the store's receipt for a steer), never when the Fin
+reported: on 2026-11-16 two of three escalations fired while the Apex was
+mid-turn on a harness that hears a digest only at its turn's end, and couldn't
+have answered. One it still hasn't heard `DECISION_HEARD_BY_MS` after the
+report (three minutes: `FOCUS_MS`, as long as Mako lets a working Apex go
+before it steers in what waits, and the minute to answer) goes to the person
+as before, so none waits behind a long turn; heard just before that, it has
+its minute. Both times are read from what's kept (the report, the Apex's
+queue, the store), so a restart keeps them. The digest's decision block and
+`agents_answer`'s description say the rule where the Apex reads it: answered
+with `agents_answer` even when already acted on, the person's otherwise
+(`ORCHESTRATION_INSTRUCTIONS` has no room for it under the 4,096 characters
+Claude Code shows of a server's instructions, `test:mako-instructions`). A
+plain `agents_send` to a Fin with one open decision answers nothing
+(`test-fin-decision-window.ts`, in `test:orch-answer`). The person's counts under needs you (`childGroup`) and
 reads "Done · needs you: <question>" (`askWords`) wherever asks are answered
 (`openAsk`, `personAsks`); the Apex's counts as done. An answer claims the
 question before it's delivered, so of two at once (its Apex's and the
@@ -691,7 +763,12 @@ exit paused go on. So does an Apex's own turn while it has open Fins
 (`inTree`, `continueCrashed`), under the same loop guard. The next host reads
 every journal that resume looks at in first, one at a time and a slice at a
 time (`Agents.resumeInSlices`, `LiveConversations.readIn`): read whole, a
-day's Fins held its loop 4.8 s as it started (`test:resume-holds`). Reading
+day's Fins held its loop 4.8 s as it started (`test:resume-holds`). It
+looks at open delegations only: a Fin closed, stopped or finished, isn't
+read, nor is its Apex for it, nor an Apex for the reviewer runs its harness
+once ran under it (`internalRuns`, each closed as it's classified, and at
+the store's next open for rows an older build left, `closeInternalRuns`),
+unless the last host left that Apex's own queue unsettled. Reading
 one in commits the restart's changes, the first frame into a WAL its last
 host closed, whose header SQLite syncs even at `synchronous=NORMAL`: 100 to
 300 ms on a busy disk, on the host's thread, until a worker wrote it first
@@ -844,10 +921,17 @@ deployed cloud.
 What an Apex and its Fins tell each other is kept short without dropping
 what the reader needs. Every `agents_*` answer is its JSON on one line
 (`agentToolText`), every field kept. `agents_list` lists what an Apex can act on (`foldList`): a Fin that ended over a day ago with
-nothing open is counted in `folded`, not listed; past `LIST_BUDGET_CHARS` (16 KB) idle and ended rows lose
+nothing open, or was closed as finished, is counted in `folded`, not listed, its row never built (`Agents.unlisted`); past `LIST_BUDGET_CHARS` (16 KB) idle and ended rows lose
 their pull requests, then fold, oldest first. A Fin needing attention (a question, an action, a decision, at work,
 waiting or blocked) is never folded, past the budget if it must be; `scope: all` lists every one. An Apex's 130 Fins were once 105 KB, about 26,000 tokens, a
-call (`test-agents-list-fold.ts`). Each Fin has a change mark the host keeps
+call (`test-agents-list-fold.ts`). Neither a list nor a prompt reads a Fin's
+reports again while none is new: the engine keeps, by Fin, what a row takes
+from them (`Agents.reportsOf`: the pull requests they name and each one's
+mark for `owesApex`), added to as each report is kept (`reportKept`) and read
+again only when its newest isn't the store's, and the store keeps which
+reports ask while a Fin's reports are the same rows (`openReportAsks`).
+Before, each read every report of every Fin, 11 MB parsed a call for an Apex
+whose Fins held 6,520 (`test-fin-reports-held.ts`). Each Fin has a change mark the host keeps
 (`FinChanges`): when its state, report, open questions or pull requests last
 changed as the host read them, a working Fin's step and a queued one's place in
 line not counting, on the host's own clock (a tick never earlier than the

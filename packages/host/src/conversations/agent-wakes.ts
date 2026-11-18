@@ -424,6 +424,7 @@ export function digest(notices: readonly Notice[], counts: string): string {
         lines.push(`    options: ${report.options.map((option, index) => `${option.label}${index === report.recommended ? " (recommended)" : ""}`).join(" · ")}`)
     }
     lines.push("  agents_answer answers each, or leaves it to the person with person: true.")
+    lines.push("  Answer with agents_answer even if you already acted on it: left unanswered, it goes to the person.")
   }
   if (persons.length) {
     lines.push(`${persons.length} ${persons.length === 1 ? "waits" : "wait"} on the person:`)

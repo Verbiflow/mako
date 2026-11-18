@@ -336,6 +336,11 @@ export class LiveTransfers {
         return
       }
       if (!owned()) return
+      const restoring = this.host.restoreRetiredWorktree(resident)
+      if (restoring) {
+        await restoring
+        if (!owned()) return
+      }
       this.host.returnFromRemovedWorktree(resident)
       const source = resident.snapshot
       const control = this.host.control(resident)
