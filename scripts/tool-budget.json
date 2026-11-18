@@ -3,8 +3,8 @@
   "roles": {
     "thread": {
       "total": {
-        "tokens": 13954,
-        "bytes": 61299
+        "tokens": 13970,
+        "bytes": 61372
       },
       "instructions": {
         "tokens": 941,
@@ -108,8 +108,8 @@
           "bytes": 1168
         },
         "agents_start": {
-          "tokens": 1248,
-          "bytes": 5269
+          "tokens": 1264,
+          "bytes": 5342
         },
         "agents_link": {
           "tokens": 239,
@@ -171,8 +171,8 @@
     },
     "apex": {
       "total": {
-        "tokens": 14572,
-        "bytes": 63987
+        "tokens": 14588,
+        "bytes": 64060
       },
       "instructions": {
         "tokens": 941,
@@ -276,8 +276,8 @@
           "bytes": 1168
         },
         "agents_start": {
-          "tokens": 1248,
-          "bytes": 5269
+          "tokens": 1264,
+          "bytes": 5342
         },
         "agents_link": {
           "tokens": 239,
@@ -343,8 +343,8 @@
     },
     "fin": {
       "total": {
-        "tokens": 14038,
-        "bytes": 61658
+        "tokens": 14054,
+        "bytes": 61731
       },
       "instructions": {
         "tokens": 941,
@@ -448,8 +448,8 @@
           "bytes": 1168
         },
         "agents_start": {
-          "tokens": 1248,
-          "bytes": 5269
+          "tokens": 1264,
+          "bytes": 5342
         },
         "agents_list": {
           "tokens": 568,
@@ -503,8 +503,8 @@
     },
     "fin-apex": {
       "total": {
-        "tokens": 15568,
-        "bytes": 68347
+        "tokens": 15584,
+        "bytes": 68420
       },
       "instructions": {
         "tokens": 941,
@@ -608,8 +608,8 @@
           "bytes": 1168
         },
         "agents_start": {
-          "tokens": 1248,
-          "bytes": 5269
+          "tokens": 1264,
+          "bytes": 5342
         },
         "agents_link": {
           "tokens": 239,

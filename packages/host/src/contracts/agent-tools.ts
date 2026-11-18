@@ -715,7 +715,7 @@ const START = [
   "Use it for work that outlives this turn, runs in parallel, writes beside another writer, needs another harness or model, or that the person should be able to open and steer; not for a one-file change, a question you can answer, or work that needs this conversation's context.",
   "The brief is all it knows; attach Threads it refers to with context, not paths.",
   `To replace a ${FIN_WORD} whose harness ran out or should change, use agents_move instead.`,
-  "It returns at once and its reports wake you; don't wait or poll after. Use mode wait only when your next step needs its result.",
+  "It returns at once and its reports wake you; don't wait or poll after. Use mode wait only when your next step can't go on without its result: you get it here within " + WAIT_WORDS + ", else your turn ends and the result starts your next.",
   "Pass model, reasoning or fast only as the person said them (\"Codex on high\", \"the fast one\").",
   "Never run an agent CLI with nohup instead: it can't report or ask.",
 ].join(" ")
@@ -762,7 +762,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         workspace: "Its own worktree on branch (taken if it exists, else made from base), the same branch in every repository of a project folder. Absent: your folder, for reading or one writer.",
         title: "A few words the person sees for it.",
         role: `worker (default), reviewer, verifier, researcher, or lead: an ${APEX_WORD} that starts its own ${FIN_WORD}s.`,
-        mode: `background (default): returns at once. wait: only when your next step needs its result; you get it here within ${WAIT_WORDS}, else your turn ends and the result starts your next.`,
+        mode: "background (default): returns at once. wait: only when your next step needs its result. Never wait on work that can run while you do other things.",
         wake: "decisions (default): its result, a block or a question wakes you. finish: only its result. never: nothing; read it with agents_read. With finish or never, its questions go to the person.",
         timeoutMs: `For wait: how long to hold here, at most ${WAIT_LIMIT_MS} (the default).`,
         after: `Your ${FIN_WORD}s (names or Threads, queued ones too, at most ${AFTER_LIMIT}) that must finish first; if one fails or is stopped this doesn't start, and you're woken to decide.`,
