@@ -23,7 +23,7 @@ import { SessionHeldError } from "../threads/index.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { LiveRequestSchema } from "./live-journal.js"
 import { prepareLiveContext } from "./live-context.js"
-import { bindingPath, launchAccount, launchCalls, launchRouting, neverRan, noteCarriedFolders } from "./live-runtime.js"
+import { bindingPath, launchAccount, launchCalls, launchRouting, neverRan, noteCarriedFolders, noteStartedWith } from "./live-runtime.js"
 import { errorMessage } from "../base/error-message.js"
 import type {
   LiveAccess,
@@ -512,6 +512,7 @@ export class LiveTransfers {
           source.session.title,
           source.session.cwd
         )
+        noteStartedWith(resident, bindingId, source.session.cwd, source.session.title, threadEnvironment)
         const open = (resume?: { nativeId?: string; path?: string }) => this.host.nativeStart(resident, driver, bindingId, () => driver.start(source.session.cwd, {
           unattended: this.host.dependencies.unattended,
           emit: this.host.driverEvents(resident, bindingId),
