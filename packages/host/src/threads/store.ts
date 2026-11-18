@@ -882,7 +882,7 @@ export class ThreadStore {
   private edgesEpoch = 0
   private asksSeen: { revision: number; stamp: string } | undefined
   private queuedSeen: { revision: number; spawns: QueuedSpawn[] } | undefined
-  private childSessionsSeen: { revision: number; children: ReadonlyMap<string, { harness: string; nativeId: string }[]> } | undefined
+  private childSessionsSeen: { epoch: number; children: ReadonlyMap<string, { harness: string; nativeId: string }[]> } | undefined
   /** The rows the last edges were read from, kept through commits: a read that finds the same keeps the same object. */
   private edgesKept: { records: string[]; native: Set<string>; edges: ThreadEdges } | undefined
   /** Worktree inputs survive unrelated local commits; worktree/alias changes and foreign commits invalidate. */
@@ -1644,8 +1644,12 @@ export class ThreadStore {
    */
   childSessions(): ReadonlyMap<string, { harness: string; nativeId: string }[]> {
     this.syncVersion()
+    // Read from the tables the edges are (`heldBy`), so held as they are: read again at every commit, it was a join
+    // over every child's Sessions for each report of the uploads' scope, and once waited 1.09 s on the disk as 30
+    // turns ended.
     const seen = this.depth === 0 ? this.childSessionsSeen : undefined
-    if (seen && seen.revision === this.revision) return seen.children
+    if (seen && seen.epoch === this.edgesEpoch) return seen.children
+    const epoch = this.edgesEpoch
     const native = new Map<string, { harness: string; nativeId: string }[]>()
     const rows = this.sql(`SELECT m.thread_id, c.harness, c.native_id FROM native_claims c JOIN memberships m ON m.session_id = c.session_id
       WHERE c.device_id = ? AND m.thread_id IN (SELECT child_thread FROM thread_parents)
@@ -1665,7 +1669,7 @@ export class ThreadStore {
       if (held) held.push(...claimed)
       else children.set(edge.parent, [...claimed])
     }
-    if (this.depth === 0) this.childSessionsSeen = { revision: this.revision, children }
+    if (this.depth === 0) this.childSessionsSeen = { epoch, children }
     return children
   }
 

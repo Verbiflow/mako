@@ -3,7 +3,7 @@ import { parentPort } from "node:worker_threads"
 import { z } from "zod"
 import { atOnce } from "@mako/sessions/slices"
 import { errorMessage } from "../base/error-message.js"
-import { coldScan, journalRowSteps } from "./live-journal.js"
+import { buildTurnIndex, coldScan, journalRowSteps, readTurnIndex } from "./live-journal.js"
 
 /**
  * A reader of journals (`JournalReaders`): each asked file is opened to query only, its rows read and parsed in one read
@@ -25,8 +25,17 @@ parentPort?.on("message", (message) => {
     db.exec("BEGIN")
     // A cold journal's opening asks only what it reads of every block (`ColdScan`): none of its content comes back.
     if (ask.scan) {
-      const scan = coldScan(db)
+      // From the journal's turn index where that holds every block; walked otherwise, and the index built from the
+      // walk, so the journal's next cold open reads it.
+      const indexed = readTurnIndex(db)
+      const scan = indexed ?? coldScan(db)
       db.exec("COMMIT")
+      if (!indexed) {
+        try {
+          db.exec("PRAGMA query_only=OFF")
+          buildTurnIndex(db, scan)
+        } catch { /* walked again at its next cold open */ }
+      }
       // Closed before the answer goes: the opening that waits on it reads the file at once, and a connection still
       // closing here (the last one checkpoints and removes the log) would have it find the file locked.
       db.close()

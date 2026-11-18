@@ -160,9 +160,12 @@ conversations?.live`) rather than a domain importing another's files.
   failure as `jobs <name> failed`, and stops with the host.
 - **A held loop says what held it.** `loop event loop held` names every piece
   of work open at a hold, most of it waiting on a process or a reply; a hold
-  of a second or more starts a 10-second profile of the host's own thread
-  (`HeldLoopProfiler`, at most one per 10 minutes), logged as `held loop
-  profiled` with its longest slices by the host's own functions. On a day of
+  of five seconds or more (one second with `MAKO_HELD_LOOP_PROFILE=1`) starts
+  a 10-second profile of the host's own thread once the loop turns freely
+  (`HeldLoopProfiler`, at most one per 10 minutes; its start is itself a
+  hold of a few hundred milliseconds, V8 listing its compiled functions),
+  logged as `held loop profiled` with its longest slices by the host's own
+  functions. On a day of
   many Fins the log blamed worktree summaries and live reads while Git
   spawns held the thread. `npm run bench:host-load` runs a real host on a
   world of that day's size (52 Threads' worktrees, 95 apps, Fins editing,
@@ -184,10 +187,83 @@ conversations?.live`) rather than a domain importing another's files.
   (local, with `MAKO_BENCH_OUT` naming a folder) fails when the steady busy
   share or a hold outside start and stop passes its budget. What walks a
   whole journal or every journal isn't on the thread either: a cold open's
-  count and turn index come from a reader (`JournalReaders.scan`), the
-  start's listing and the stop's closes go a slice at a time (`listJournals`,
-  `LiveClosing.stop`), and a whole catalog is placed a batch a turn
-  (`ThreadStore.placeAll`).
+  count and turn lines come from a reader (`JournalReaders.scan`), the
+  start's listing, the stop's closes, the sweep that measures each journal's
+  copy and the one that lets conversations go over the memory budget go a
+  slice at a time (`listJournals`, `LiveClosing.stop`, `settleNow`,
+  `unloadOverBudget`), and a whole catalog is placed a batch a turn
+  (`ThreadStore.placeAll`). Awaiting a step that finishes within its slice
+  doesn't leave the thread: a loop over many such steps keeps one slice's
+  time for all of them.
+- **A journal keeps a turn index** (`turn_index`, `turnRowOf`): a line for
+  each block that begins a turn or names a request, written in the
+  transaction that writes the block, on the journal's connection and on the
+  writer's, and removed with it at a rewind. A cold open reads the index and
+  the newest blocks (`readTurnIndex`) and never walks `blocks`, on the host's thread and with
+  no reader (`turnIndexWhole`): 35 to 50 ms in slices for a 150 MB
+  conversation of 5,330 requests that took 2.3 s to walk, 8 to 10 s with its
+  pages out of the disk's cache. The index is whole only once built from a walk
+  (`buildTurnIndex`, on the reader's thread at a journal's first cold open);
+  each commit then says so again by writing its revision in `progress` row
+  2, so a commit by a build that knows no index leaves the two rows apart
+  and the journal is walked and indexed again. `test:journal-writer` holds
+  the index equal to the walk through appends, a block changing kind, a
+  rewind, an older build's commit and a host killed mid-stream.
+- **The Thread store keeps what a commit didn't change.** The parent edges,
+  each Thread's record and its conversations stand through a commit that
+  wrote none of the tables they're read from, and are read again after one
+  that did, another process's commit, a rollback, and the store's opening.
+  Every table says what its writes can change (`HELD_BY_TABLE`); a statement
+  `sql` hands out goes by its table (`heldBy`), and a table without a line or
+  a statement that can't be read drops everything, so what is added
+  unclassified is slow, never stale. Read again at every commit, 30 Fins
+  ending their turns at once re-read every Fin's for each of their commits.
+  After its opening the store writes only through `sql`: `test:flush-costs`
+  fails on a table of the schema without a line, and on the connection used
+  directly outside the opening.
+- **A running turn's streamed flushes are written off the thread**
+  (`JournalWriter`, `LiveJournal.streamed`). A flush that is only blocks new
+  or grown and the revision, of a turn running before and after it, goes to
+  the writer's connection, in order, one transaction a message, and what
+  comes while one is written waits as one message more. Every other flush (a
+  request, the session's state, a permission, the base, the controls, Mako's
+  log, a turn's start and end) the journal commits on its own connection
+  before the batch goes out, after waiting for the writer (`settleWrites`),
+  as does every read of its rows (`db`). So what a window or a harness is
+  told happened is committed first, as it always was, and a host killed
+  mid-stream may lose the last streamed frames the writer hadn't written
+  (one transaction under way and one waiting), which the provider's own
+  record still holds. A write that fails on the writer is made good by the
+  journal from memory, block by block, and failing that is a
+  `JournalWriteError` like any commit. `MAKO_JOURNAL_WRITER=0` has each
+  journal write its own. `npm run test:journal-writer` holds it (a reader
+  following a write, close and stop with writes waiting, a failed write, a
+  host killed mid-stream).
+- **A hold says whether the thread ran.** `bench:host-load --record` keeps
+  the thread's own CPU time for each hold: one that used little of its gap
+  waited (a file call, or not being run), and no function on its stack
+  explains it. `--max-run-ms` budgets what the thread computed,
+  `--max-hold-ms` any hold. File calls a flush or a recurring job makes go
+  off the thread where they can: the process log appends what is pending as
+  one awaited write, the Git index lock's steps are awaited, `docker context
+  inspect` runs in the probe child, whether this host holds a session
+  (`SessionMemory.owns`) is answered from what was read until a hold is
+  written, and a launch, a discovery query and the advertised tools find
+  their executable awaited and kept (`Executables`, held by
+  `DiscoveryProcesses`), `gh` and an MCP server's command awaited each time
+  (`findExecutable`); `resolveExecutable` waits on the thread and is for
+  code that runs once or at the person's own action. Codex processes' output is handled a turn's worth at
+  a time (`StdoutPace`): what one turn of the loop has no time for waits,
+  its pipe paused, for the next.
+- **A journal at rest gives back its pages** (`LiveJournal.rest`): SQLite
+  keeps up to 2 MB of pages for each connection, and every conversation in
+  memory has one. Read in, or quiet after its turn, a journal frees them.
+  A worker that parses much (a journal reader, the catalog's) has its young
+  generation held to 32 MB (`maxYoungGenerationSizeMb`): V8 grew each to 76
+  to 122 MB while it read and kept it at rest with a few MB in use.
+  `bench:host-load --memory` writes what the host's memory is made of
+  (`regions-*.txt`, each thread's heap, a sample of the live heap by the
+  function that allocated it).
 - **Follow, don't poll.** What only says where something stands (a line a
   window shows) reads what each owner already holds, and is woken by the
   owner's own change (its event or callback). That read never sets off the

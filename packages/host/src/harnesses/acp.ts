@@ -84,7 +84,7 @@ import type { DiscoveryProcesses } from "./discovery-process.js"
 import { SessionUsage, type UsageObservation } from "./session-usage.js"
 import { AcpModelWindow, acpNotificationUsage, acpUsageReading } from "./acp-usage.js"
 import type { JsonObject } from "../contracts/json.js"
-import { environmentForExecutable, resolveExecutable } from "../base/executable.js"
+import { environmentForExecutable } from "../base/executable.js"
 import { acpMcpServers } from "../tools/index.js"
 import type { McpTransport } from "../contracts/mcp-skills-integrations.js"
 import type { LiveInputQuestion, LivePermissionRequest, LivePermissionResponse, PromptAttachment, LiveSessionState } from "../contracts/providers-acp.js"
@@ -382,7 +382,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     spec.configureEnvironment(env)
     applyControlEnvironment(env, options.conversationTools?.control)
     applyThreadEnvironment(env, options.threadEnvironment)
-    const executable = resolveExecutable(spec.command, env)
+    const executable = await dependencies.processes.executables.find(spec.command, env)
     if (!executable) throw new Error(`${harness} is not installed`)
     // Before MCP preparation: a native fork only copies the session, so it starts none of the conversation's servers.
     const forkEnvironment = options.fork ? environmentForExecutable(executable, env) : undefined

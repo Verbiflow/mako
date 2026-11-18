@@ -20,7 +20,8 @@ import { inSlices, StepsStopped } from "@mako/sessions/slices"
 import { closeCutOffCalls, recordCutOffCalls } from "./interrupted-turn.js"
 import { clearAutoContinue } from "./live-auto-continue.js"
 import { JournalReaders } from "./journal-readers.js"
-import { ColdJournal, LiveJournal, journalIds, storedRequest } from "./live-journal.js"
+import { JournalWriter } from "./journal-writer.js"
+import { ColdJournal, LiveJournal, journalIds, storedRequest, turnIndexWhole } from "./live-journal.js"
 import { backfillMemory } from "./live-ledger.js"
 import { conversationControl, residentOf, type Dependencies, type Resident } from "./live-runtime.js"
 import { interruptRequests, requestTurnEnd } from "./live-settlement.js"
@@ -54,6 +55,8 @@ const COLD_VIEWS = "cold history views"
 export const WARM_CHARS = 256 * 1024
 /** How long paging a conversation's entries holds the loop before letting other work run. */
 const PAGE_SLICE_MS = 4
+/** How long a sweep lets conversations go before it leaves the thread to the rest of the host. */
+const UNLOAD_SLICE_MS = 8
 
 /** The name of a load nothing named: work outside a call, a job or a domain load. */
 const UNNAMED_READER = "unnamed work"
@@ -184,6 +187,8 @@ export class LiveRecords {
 
   /** Writes a journal's WAL header off the host's thread before reading it in commits (`WalPrimer`). */
   private readonly primer = new WalPrimer()
+  /** Where running turns' streamed rows are written (`JournalWriter`); `MAKO_JOURNAL_WRITER=0` has each journal write its own, as before. */
+  private readonly writer = process.env.MAKO_JOURNAL_WRITER === "0" ? undefined : new JournalWriter()
 
   constructor(dependencies: Dependencies, hooks: RecordHooks) {
     this.dependencies = dependencies
@@ -270,6 +275,8 @@ export class LiveRecords {
   /** Keeps a new conversation, its journal already written. */
   add(resident: Resident): void {
     resident.journal.checkpointWith(this.primer)
+    if (this.writer) resident.journal.writeWith(this.writer)
+    resident.journal.rest()
     this.residents.set(resident.snapshot.session.id, resident)
     // A fork made now joins the index as a saved one does at `open`.
     const ancestry = resident.snapshot.control?.ancestry
@@ -506,8 +513,10 @@ export class LiveRecords {
     if (!readable()) return busy()
     let journal: ColdJournal | undefined
     try {
-      // What the opening reads of every block is read on a reader's thread first; without it the opening reads it here.
-      const scanned = await this.readers.scan(join(this.dependencies.root, `${id}.sqlite`)).catch(() => undefined)
+      // A journal with a whole turn index is opened from it, here: a few pages. One without is walked on a reader's
+      // thread first, which leaves the index; without that answer the opening reads every block here.
+      const path = join(this.dependencies.root, `${id}.sqlite`)
+      const scanned = turnIndexWhole(path) ? undefined : await this.readers.scan(path).catch(() => undefined)
       if (!readable()) return busy()
       journal = await inSlices(ColdJournal.opening(this.dependencies.root, id, scanned), undefined, () => this.stopping())
     } catch (error) {
@@ -637,17 +646,28 @@ export class LiveRecords {
       this.scheduleSweep()
       return
     }
-    this.paging = this.pageAll().finally(() => {
+    this.paging = this.pageAll().then(() => this.unloadOverBudget()).finally(() => {
       this.paging = undefined
-      if (!this.stopped) this.unloadOverBudget()
     })
   }
 
-  private unloadOverBudget(): void {
+  /**
+   * A slice at a time: each conversation let go closes its journal's connection, which checkpoints what its log
+   * holds, and a sweep that let dozens go in one turn of the loop held it 207 ms. One read in again or put to work
+   * while the sweep was off the thread is found pinned or gone, and stays.
+   */
+  private async unloadOverBudget(): Promise<void> {
+    if (this.stopped) return
     const plan = this.memoryPlan()
     let freed = 0
     let count = 0
+    let until = performance.now() + UNLOAD_SLICE_MS
     for (const id of plan.evict) {
+      if (performance.now() >= until) {
+        await new Promise((resolve) => setImmediate(resolve))
+        if (this.stopped) return
+        until = performance.now() + UNLOAD_SLICE_MS
+      }
       const resident = this.residents.get(id)
       const weight = resident ? residentWeight(this.weights, resident) : 0
       if (resident && this.unload(resident)) {
@@ -801,7 +821,7 @@ export class LiveRecords {
 
   /** All resident journals closed: join their checkpoint handles before the host releases its data root. */
   stopCheckpoints(): Promise<void> {
-    return this.primer.stop()
+    return Promise.all([this.primer.stop(), this.writer?.stop()]).then(() => {})
   }
 
   clear(): void {
