@@ -1979,6 +1979,56 @@ failure only while no later call of the same kind with the same normalized
 arguments (a command's in the same folder) succeeded, by the exit facts its
 row shows (`unfixedFailures`); the failed row still says failed.
 
+A row opens only onto what its one line can't say (`toolOpens` in
+`src/lib/tools.ts`): a command's output, a diff, what a search or a page gave
+back, words handed to someone, a program's steps, an unknown tool's arguments
+and answer, a picture. A search, a listing, a fetched page and a web search
+say what was asked in the row, so their body is the result alone, with no
+arguments above it (`bodyIsResult`). A read (its file opens from the row's
+end), a tool search, a mode change and a stopped shell say all they have in
+the row, so they draw no chevron and mount no body; one that failed, or that
+carries a detail or an attachment, opens. Every row keeps its glyph: a command's row
+is its command alone, so the glyph is what says it is one, and the column the
+glyphs share is where a fold's chevron and an event's mark stand. A stretch's
+summary is generated from its counts (`workHeadline`): what failed and stayed
+failed first, in the failure's hue ("2 commands failed (exit 1)"), then one
+phrase a kind of work, three phrases at most ("made 3 edits · 9 more steps").
+
+A turn is drawn from rows made in the data (`turnRows` in
+`src/lib/turn-rows.ts`, the desk and the phone alike): between two messages,
+everything that isn't one stands behind ONE line worded from its parts
+("Docs pass finished · worked for 48s", "4 Fins finished · Context
+compacted · worked for 2m 10s"): a wake's reports, Mako's and the provider's
+lines where a prompt would stand, notices, a compaction, an Apex's own
+messages to its Fins, the work and the words on the way to the answer.
+Opened, each member draws as it does on its own, and the open state is kept
+per turn (`turn-folds.ts`). Never folded: a report that asks or waits on the
+person, failed, ended without a result or whose decision the roster still
+holds open (`reportStays`), drawn as a block in the answer's column held to
+four lines (`ReportBlock`); and what `stillDrawn` names (a failure, a
+warning, a usage limit, a stop, what the agent showed or made, where the
+person's own message went), drawn under the closed line. The line stands out
+only while a call behind it failed and it hasn't been opened. A running turn
+folds only what opened it (`mode: "head"`), under the id its settled fold
+keeps, so settling adds the work to a row that is already there. Reports that
+arrive inside another message (a steer, a joined prompt) take the same two
+forms (`FinReports`), their open state kept in the same store. A stretch of
+Mako's own tools alone is worded from what they did (`FoldRow.did`:
+"Messaged Sheet motion on iPad"), never counted as other tools. `scripts/test-turn-rows.ts` holds the rules,
+`npm run test:turn-fold-ui` that a settled fold renders nothing again while a
+later turn streams.
+
+An Apex's transcript ends, once its turn has, on what it waits on by name
+(`WaitingLine`: "Waiting on Docs pass, Token sweep, and 4 other Fins", the
+first two past three, each opening its Fin; "Queued since 3:42 PM" for a
+message a minute unsent), above the crew card; a Thread with no Fins says its
+background work on `BackgroundWorkLine` and a turn's own wait on
+`TurnWaitLineView`. Beside "Jump to latest", which counts what arrived below
+a reader who left the end ("· 3 new"), a pill counts what is at work and
+opens onto a row each (`ActivityPill`). Both read `src/state/waiting.ts`
+through the rail's store, kept by the roster they were read from, so no
+streamed batch builds them again (`scripts/test-waiting.ts`).
+
 What a call did to the machine is read once too, in
 `@mako/sessions/tool-effect-reading`: its `ToolEffect`s
 (`@mako/sessions/tool-effects`: files created, modified with a patch or an
@@ -3425,8 +3475,9 @@ deliberate action and never rides along with a commit.
 - **Every message wears who wrote it, as a square** (`message-avatar.tsx`):
   the person's own face beside their prompt, at its last line; an agent's
   fin, still, with its harness as the badge, on its reply's byline; and a
-  Fin's own fin beside each report it sent its Apex (`FinReports`), where the
-  person's face stands. Every avatar is square, the rail footer's too. Real shadows exist only on
+  Fin's own fin beside each report it sent its Apex (`FinReport`), where the
+  person's face stands, or at the block's start for one that needs someone
+  (`ReportBlock`). Every avatar is square, the rail footer's too. Real shadows exist only on
   floating surfaces (`.overlay-panel`: menus, palette, dialogs).
 - **The ramp is warm neutrals — red-shifted near-blacks, warm off-white
   text — and stays that quiet.** The one accent is the brand's sea
