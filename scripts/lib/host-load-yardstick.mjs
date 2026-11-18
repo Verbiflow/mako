@@ -8,13 +8,15 @@ import { monitorEventLoopDelay } from "node:perf_hooks"
  * large as the host's (a spawn forks the whole process on Linux, so its cost grows with the heap), starts `git
  * --version` as often as a quiet host starts Git, does a few milliseconds of JavaScript at a time, and times its own
  * event loop the way the prober times the host's: a timer every 20 ms, how late each one ran. On SIGTERM it writes
- * what it measured to `out`.
+ * what it measured to `out`; with `series` as its third argument, every tick's time and lateness too, so a run of
+ * several stretches (`--record`) judges each against the yardstick's same stretch.
  */
 
-const [out, heapMb = "300"] = process.argv.slice(2)
+const [out, heapMb = "300", keep] = process.argv.slice(2)
 // Retained, and touched, so the pages are really there when a spawn forks.
 const heap = Array.from({ length: Number(heapMb) }, (_, index) => Buffer.alloc(1024 * 1024, index % 251))
 const late = []
+const lateAt = []
 const spawns = []
 const chunks = []
 const delay = monitorEventLoopDelay({ resolution: 10 })
@@ -24,6 +26,7 @@ let due = performance.now() + 20
 const tick = () => {
   const now = performance.now()
   late.push(Math.max(0, now - due))
+  if (keep === "series") lateAt.push(Math.round(performance.timeOrigin + now))
   due = now + 20
   setTimeout(tick, 20)
 }
@@ -50,6 +53,6 @@ const summary = (values) => {
 }
 
 process.on("SIGTERM", () => {
-  writeFileSync(out, JSON.stringify({ heapMb: heap.length, late: summary(late), spawn: summary(spawns), chunk: summary(chunks), delayP99: Math.round(delay.percentile(99) / 1e5) / 10 }))
+  writeFileSync(out, JSON.stringify({ heapMb: heap.length, late: summary(late), spawn: summary(spawns), chunk: summary(chunks), delayP99: Math.round(delay.percentile(99) / 1e5) / 10, ...(keep === "series" && { series: { at: lateAt, late: late.map((ms) => Math.round(ms * 10) / 10) } }) }))
   process.exit(0)
 })
