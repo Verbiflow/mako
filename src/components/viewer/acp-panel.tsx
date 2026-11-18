@@ -20,7 +20,6 @@ import { useStartedWorktree } from "@/state/worktrees"
 import { BackgroundWorkLine } from "./background-work-line"
 import { TurnWaitLineView } from "./turn-wait-line"
 import { CrewCard } from "./crew-card"
-import { ActivityPill, WaitingLine } from "./waiting-line"
 import { useEffect, useMemo, useState } from "react"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
 import { useKeptEntries } from "@/components/transcript/use-kept-entries"
@@ -278,7 +277,6 @@ function Blocks({ starting = false, continued = false, compact = false }: { star
           />
         </div>
       )}
-      beside={<ActivityPill />}
       footer={
         <>
           {sessionId && recoveries.apart.length ? (
@@ -295,8 +293,6 @@ function Blocks({ starting = false, continued = false, compact = false }: { star
             hosted={exchanges.length > 0}
           />
           {/* The Fins stand through every turn and transition; only the background line waits for the turn's end. */}
-          {/* What an Apex waits on, by name, once its turn has ended; the card under it is every Fin as it stands. */}
-          {running ? null : <WaitingLine />}
           <CrewCard compact={compact} fallback={running ? null : <BackgroundWorkLine />} />
           {/* The wait its agent armed for when its turn ends: said once the turn has. */}
           {running ? null : <TurnWaitLineView />}

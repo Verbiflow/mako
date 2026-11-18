@@ -169,9 +169,8 @@ async function checkRows() {
           await evaluate(`document.querySelector('${summary}').click(), true`)
           await until(`document.querySelector('${summary}').getAttribute('aria-expanded') === 'true'`, `${label}: the steps opened`)
           // Open an actual settled call while later calls are still streaming, whichever pace this renderer keeps.
-          // The second call is a write, whose row opens onto its diff; a read's row says all it has and opens nothing.
-          const row = '[data-transcript-tool$=":live-1"] > div > button[aria-expanded]'
-          await until(`document.querySelector('[data-transcript-tool$=":live-2"]') && document.querySelector('${row}')`, `${label}: the third call`)
+          const row = '[data-transcript-tool$=":live-2"] > div > button'
+          await until(`document.querySelector('[data-transcript-tool$=":live-3"]') && document.querySelector('${row}')`, `${label}: the fourth call`)
           assert.equal(await evaluate("window.toolRows.streaming"), true, `${label}: the row opens mid-stream`)
           await evaluate(`document.querySelector('${row}').click(), true`)
           await until(`document.querySelector('${row}').getAttribute('aria-expanded') === 'true'`, `${label}: the settled row opened`)
@@ -199,11 +198,11 @@ async function checkRows() {
       await evaluate(`document.querySelectorAll('[data-work-summary][aria-expanded="false"]').forEach(summary => summary.click()), true`)
       await evaluate(WATCH)
       await wait(400)
-      const said = await evaluate(`[...document.querySelectorAll('[data-transcript-tool]')].map(row => row.querySelector('button[aria-expanded], [data-tool-plain]').innerText.replace(/\\s+/g, ' ').trim())`)
+      const said = await evaluate(`[...document.querySelectorAll('[data-transcript-tool]')].map(row => row.querySelector('button').innerText.replace(/\\s+/g, ' ').trim())`)
       for (const words of ["Started fin:own-words on Codex", "Answered fin:own-words: Squash it", "Messaged apex:Release notes", "Opened PR #374", "Start the app (api) failed", "Showed rows-after.png", "npm test failed · exit 2", "tool-row.tsx …/src/components/transcript :120–180", "+3 −2", "Edit 3 files +4 −2", "Starting fin:verify on"])
         assert.ok(said.some((row) => row.includes(words)), `${label}: no row says "${words}": ${JSON.stringify(said)}`)
       assert.ok(!said.some((row) => /\bmako$/.test(row)), `${label}: a Mako tool's row names its server`)
-      assert.match(await evaluate(`[...document.querySelectorAll('[data-work-summary]')].map(summary => summary.innerText).join(' ')`), /\b(?:A command|A step|1) failed\b/, `${label}: the lint a retry fixed still counts as failed`)
+      assert.match(await evaluate(`[...document.querySelectorAll('[data-work-summary]')].map(summary => summary.innerText).join(' ')`), /\b1 failed\b/, `${label}: the lint a retry fixed still counts as failed`)
       await capture(`tool-words-desk-${theme}`)
       const watched = await evaluate("window.__rows.stop()")
       assert.deepEqual(watched.faults, [], `${label}: rows drew over one another`)

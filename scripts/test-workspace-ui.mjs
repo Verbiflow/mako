@@ -214,7 +214,7 @@ async function checkWindow() {
   assert.equal(await evaluate("window.testSentinel"), "unchanged")
   assert.equal(await evaluate(`document.querySelector('.composer-input').value`), "Review ")
   await click('[data-fixture="running"]')
-  await click('[data-transcript-jump] > button')
+  await click('.scroll-fade-scope > button')
   // A running turn's motion, scrolled out of view and under reduced motion, is test:animations-ui's (gated in suites):
   // this view draws no orb for a running turn now, so the checks of one that stood here are gone.
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('[aria-label="Queued messages"]')).borderRadius`), "0px")
@@ -223,7 +223,7 @@ async function checkWindow() {
   assert.equal(await evaluate(`document.querySelectorAll('[data-agent-activity]').length`), 1)
   assert.equal(await evaluate(`Boolean(document.querySelector('[data-agent-activity] [data-size="64"]'))`), false)
   await capture("working.png")
-  await click('[data-transcript-jump] > button')
+  await click('.scroll-fade-scope > button')
   await click('[data-fixture="responding"]')
   await until(`document.querySelectorAll('[data-agent-activity]').length === 0`)
   await capture('responding-clean.png')

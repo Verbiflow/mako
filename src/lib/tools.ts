@@ -354,10 +354,6 @@ export interface ToolWorkSummary {
   stopped: number
   /** Calls cut off by a lost process or a quit before they finished; not counted as failed. */
   cutOff: number
-  /** Of `failed`, the commands. */
-  failedCommands: number
-  /** The exit code those commands share, when they all ended on one. */
-  failedExit?: number
 }
 
 /** A JSON value with its object keys in order, so two spellings of the same arguments compare equal. */
@@ -407,60 +403,23 @@ function succeeded(call: ToolCall, harness: string | undefined): boolean {
  * asks only what came after it.
  */
 export function unfixedFailures(calls: readonly ToolCall[], harness?: string): number {
-  return unfixedFailed(calls, harness).length
-}
-
-const NONE_FAILED: readonly ToolCall[] = []
-
-/** The calls `unfixedFailures` counts. */
-function unfixedFailed(calls: readonly ToolCall[], harness: string | undefined): readonly ToolCall[] {
-  if (!calls.some((call) => call.isError)) return NONE_FAILED
+  if (!calls.some((call) => call.isError)) return 0
   const fixed = new Set<string>()
-  const failed: ToolCall[] = []
+  let failed = 0
   for (let index = calls.length - 1; index >= 0; index -= 1) {
     const call = calls[index]!
     if (call.isError) {
-      if (!fixed.has(callKey(call, harness))) failed.push(call)
+      if (!fixed.has(callKey(call, harness))) failed += 1
     } else if (succeeded(call, harness)) fixed.add(callKey(call, harness))
   }
   return failed
-}
-
-/**
- * Kinds whose row already says all there is: the file a read took (which opens from the row), and calls whose body
- * would be their arguments again (a tool search, a mode change, a stopped shell).
- */
-const SAID_BY_ROW: ReadonlySet<ToolKind> = new Set(["read", "tool-search", "mode", "shell-stop"])
-
-/**
- * Kinds whose row says what was asked (the words searched, the folder listed, the page's address), so their body is
- * what came back and nothing above it: the matches, the listing, the page's text.
- */
-const RESULT_ONLY: ReadonlySet<ToolKind> = new Set(["list", "search", "find", "web-fetch", "web-search"])
-
-/** Whether a call's body is its result alone, its arguments already being its row's words. */
-export function bodyIsResult(kind: ToolKind): boolean {
-  return RESULT_ONLY.has(kind)
-}
-
-/**
- * Whether a call's row opens. A body earns its place only when it shows what the one line can't: a command's
- * output, a diff, what a search or a page gave back, words handed to someone, an unknown tool's arguments and
- * answer, a picture. A call that failed always opens, onto why.
- */
-export function toolOpens(call: Pick<ToolCall, "tool" | "isError" | "attachments" | "details">): boolean {
-  return !SAID_BY_ROW.has(call.tool.kind) || Boolean(call.isError || call.attachments?.length || call.details?.length)
 }
 
 /** `harness`, the one that made the calls, reads their exit codes and folders as their rows do. */
 export function summarizeToolWork(calls: ToolCall[], harness?: string): ToolWorkSummary {
   let edits = 0
   const counts = { command: 0, read: 0, search: 0, skill: 0, agent: 0, plan: 0, other: 0 }
-  const failures = unfixedFailed(calls, harness)
-  const failed = failures.length
-  const failedShells = failures.filter((call) => call.tool.kind === "shell")
-  const exits = new Set(failedShells.map((call) => failedExitCode(call, harness)))
-  const [failedExit] = exits
+  const failed = unfixedFailures(calls, harness)
   let stopped = 0
   let cutOff = 0
   for (const call of calls) {
@@ -486,8 +445,6 @@ export function summarizeToolWork(calls: ToolCall[], harness?: string): ToolWork
     failed,
     stopped,
     cutOff,
-    failedCommands: failedShells.length,
-    ...(exits.size === 1 && failedExit !== undefined && { failedExit }),
   }
 }
 

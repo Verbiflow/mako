@@ -23,17 +23,13 @@ installBuiltins()
 const BOX_TAG = /<(div|p|ul|ol|li|pre|table|section|h[1-6])[\s>]/
 const BOX_CLASS = new Set(["flex", "inline-flex", "grid", "inline-grid", "block", "inline-block", "table", "flow-root"])
 
-/** The elements directly inside the row's line in `markup` (its first `<button>`, or its plain element), each as its markup. */
+/** The elements directly inside the first `<button>` of `markup`, each as its markup. */
 function buttonChildren(markup: string): string[] {
   const tags = /<(\/?)([a-z][a-z0-9-]*)[^>]*?(\/?)>/g
   const children: string[] = []
   let depth = 0
   let start = -1
-  // A row that opens is a button; one with nothing to open (a read, a search) is the same line in a plain element.
-  const plain = markup.search(/<div[^>]*data-tool-plain/)
-  const button = markup.indexOf("<button")
-  const root = plain >= 0 && (button < 0 || plain < button) ? "div" : "button"
-  tags.lastIndex = root === "div" ? plain : button
+  tags.lastIndex = markup.indexOf("<button")
   for (let tag = tags.exec(markup); tag; tag = tags.exec(markup)) {
     const [whole, closing, name, selfClosing] = tag
     if (!closing && !selfClosing) {
@@ -41,7 +37,7 @@ function buttonChildren(markup: string): string[] {
       depth += 1
     } else if (closing) {
       depth -= 1
-      if (depth === 0 && name === root) break
+      if (depth === 0 && name === "button") break
       if (depth === 1) children.push(markup.slice(start, tag.index + whole.length))
     } else if (depth === 1) children.push(whole)
   }

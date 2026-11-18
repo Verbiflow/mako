@@ -31,10 +31,6 @@ const root = testScratch("mako-history-wire-")
 const socket = join(root, "owner.sock")
 const peerSocket = join(root, "peer.sock")
 const source = auditSnapshot(300, "claude", 150, 120 * 1024)
-// The row the UI proof opens is a command: a read's row says all it has in its line and opens nothing (`toolOpens`),
-// while a command's long output is what a row opens onto, its rest read from history then.
-for (const block of source.blocks ?? [])
-  if (block.type === "tool" && block.id === "tool-299") Object.assign(block, { title: "Bash", name: "Bash", toolKind: "execute", input: JSON.stringify({ command: "cat src/file-43.ts" }) })
 source.epoch = "paging-fixture"
 source.session.title = "Review retained conversation history"
 source.session.status = "ready"

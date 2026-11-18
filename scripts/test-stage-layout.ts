@@ -520,7 +520,6 @@ assert.deepEqual(
     failed: 2,
     stopped: 1,
     cutOff: 1,
-    failedCommands: 0,
   }
 )
 {

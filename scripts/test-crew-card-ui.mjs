@@ -810,44 +810,40 @@ async function checkPage({ window, page, shots, base }) {
   await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, crew wake")
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
   await evaluate("window.apexScene.setRunning(false); true")
-  // The wake's turn: what needs the person stands as its own block, the rest behind the turn's one line.
-  const WAKE = "document.querySelector('[data-standing-reports]').closest('[data-exchange]')"
-  const READ = `(() => {
-    const turn = ${WAKE}
+  await until("Boolean(document.querySelector('[data-crew-update]'))", "the crew update")
+  await evaluate("document.querySelector('[data-crew-update]').scrollIntoView({ block: 'center' }); true")
+  const update = await evaluate(`(() => {
+    const block = document.querySelector('[data-crew-update]')
     return {
-      line: turn.querySelector('[data-turn-fold] [data-fold-title]')?.innerText.replace(/\\s+/g, ' '),
-      open: [...turn.querySelectorAll('[data-standing-reports] [data-fin-report]')].map((node) => node.innerText.replace(/\\s+/g, ' ')),
-      options: turn.querySelectorAll('[data-standing-reports] [data-fin-report-option]').length,
-      hidden: turn.querySelectorAll('[data-turn-fold="closed"]').length,
+      head: block.querySelector('[data-crew-update-head]').innerText.replace(/\\s+/g, ' '),
+      open: [...block.querySelectorAll('[data-fin-report]')].map((node) => node.dataset.fin),
+      options: block.querySelectorAll('[data-fin-report-option]').length,
+      fold: block.querySelector('[data-crew-update-fold]')?.innerText.replace(/\\s+/g, ' '),
     }
-  })()`
-  await until("Boolean(document.querySelector('[data-standing-reports]'))", "the crew update")
-  await evaluate(`${WAKE}.scrollIntoView({ block: 'center' }); true`)
-  const update = await evaluate(READ)
+  })()`)
   console.log("CREW UPDATE", JSON.stringify(update))
-  assert.ok(update.open.some((text) => text.includes("Quiet-hours push wording") && text.includes("asks you")), `what needs the person is named, as theirs: ${JSON.stringify(update.open)}`)
+  assert.match(update.head, /^5 reported · Quiet-hours push wording needs you/, "the head says what the wake carried, needs-you named")
   assert.equal(update.open.length, 1, "only what needs the person stays open")
   assert.ok(update.options >= 2, "with its answers live")
-  assert.match(update.line ?? "", /^5 Fins finished/, `the rest fold into one line that says what the wake carried: ${update.line}`)
-  assert.equal(update.hidden, 1, "closed until it's opened")
+  assert.match(update.fold ?? "", /^Thread list swipe, Haptics audit and 3 more reported 2 PRs Show$/, `the rest fold into one line: ${update.fold}`)
   // Only the person's own scroll lets the transcript stop following its end: a wheel up first, then to the update.
   await page.sendInputEvent({ type: "mouseWheel", x: 800, y: 400, deltaX: 0, deltaY: 1200 })
   await new Promise((done) => setTimeout(done, 200))
-  await evaluate(`${WAKE}.scrollIntoView({ block: 'center' }); true`)
+  await evaluate("document.querySelector('[data-crew-update]').scrollIntoView({ block: 'center' }); true")
   await new Promise((done) => setTimeout(done, 400))
   await capture("crew-update")
-  await evaluate(`${WAKE}.querySelector('[data-turn-fold] > button').click(); true`)
-  await until(`${WAKE}.querySelectorAll('[data-fin-report]').length === 6`, "the line opens every report")
+  await evaluate("document.querySelector('[data-crew-update-fold]').click(); true")
+  await until("document.querySelectorAll('[data-crew-update] [data-fin-report]').length === 6", "Show opens every report")
   // A decision left to the Apex isn't the person's to pick: its options aren't drawn as buttons that do nothing.
-  const settled = await evaluate(`[...${WAKE}.querySelectorAll('[data-fin-report]')].filter((node) => node.innerText.includes('asks its Apex')).map((node) => node.querySelectorAll('[data-fin-report-option]').length)`)
+  const settled = await evaluate("[...document.querySelectorAll('[data-crew-update] [data-fin-report]')].filter((node) => node.innerText.includes('asks its Apex')).map((node) => node.querySelectorAll('[data-fin-report-option]').length)")
   assert.deepEqual(settled, [0], `an Apex's decision shows no inert options: ${JSON.stringify(settled)}`)
   await capture("crew-update-shown")
   window.setContentSize(390, 844)
   await navigate(window, `${base}scripts/phone-apex.html?app=apex&wake=crew&open=1ead1ead-0000-4000-8000-000000001ead`)
-  await until("Boolean(document.querySelector('[data-standing-reports]'))", "the phone's crew update")
-  await evaluate(`${WAKE}.scrollIntoView({ block: 'start' }); true`)
+  await until("Boolean(document.querySelector('[data-crew-update]'))", "the phone's crew update")
+  await evaluate("document.querySelector('[data-crew-update]').scrollIntoView({ block: 'start' }); true")
   await both("crew-update-phone")
-  console.log("PASS: a wake of six reports is one crew update, open where it needs the person, the rest behind one line")
+  console.log("PASS: a wake of six reports is one crew update, open where it needs the person, the rest on Show")
 
   // A done Fin's decision its Apex still has to make stays open in the update, among three finished ones: it isn't folded away.
   window.setContentSize(1440, 900)
@@ -855,15 +851,21 @@ async function checkPage({ window, page, shots, base }) {
   await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, decisions wake")
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
   await evaluate("window.apexScene.setRunning(false); true")
-  await until("Boolean(document.querySelector('[data-standing-reports]'))", "the crew update, decisions")
-  const leadUpdate = await evaluate(READ)
+  await until("Boolean(document.querySelector('[data-crew-update]'))", "the crew update, decisions")
+  const leadUpdate = await evaluate(`(() => {
+    const block = document.querySelector('[data-crew-update]')
+    return {
+      open: [...block.querySelectorAll('[data-fin-report]')].map((node) => node.innerText.replace(/\\s+/g, ' ')),
+      fold: block.querySelector('[data-crew-update-fold]')?.innerText.replace(/\\s+/g, ' '),
+    }
+  })()`)
   console.log("LEAD UPDATE", JSON.stringify(leadUpdate))
   assert.equal(leadUpdate.open.length, 2, `the person's ask and the Apex's open decision stay open: ${JSON.stringify(leadUpdate.open)}`)
   assert.ok(leadUpdate.open.some((text) => text.includes("Pull to refresh") && text.includes("asks its Apex")), "the Apex's decision is one of them")
-  assert.match(leadUpdate.line ?? "", /^4 Fins finished/, `the finished ones fold without it: ${leadUpdate.line}`)
+  assert.match(leadUpdate.fold ?? "", /^Thread list swipe, Haptics audit and 2 more finished 2 PRs Show$/, `the finished ones fold without it: ${leadUpdate.fold}`)
   await page.sendInputEvent({ type: "mouseWheel", x: 800, y: 400, deltaX: 0, deltaY: 1200 })
   await new Promise((done) => setTimeout(done, 200))
-  await evaluate(`${WAKE}.scrollIntoView({ block: 'center' }); true`)
+  await evaluate("document.querySelector('[data-crew-update]').scrollIntoView({ block: 'center' }); true")
   await new Promise((done) => setTimeout(done, 400))
   await capture("crew-update-lead")
   console.log("PASS: a done Fin's open decision for its Apex stays open in the crew update")
@@ -874,12 +876,19 @@ async function checkPage({ window, page, shots, base }) {
   await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, escalated wake")
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
   await evaluate("window.apexScene.setRunning(false); true")
-  await until("Boolean(document.querySelector('[data-standing-reports]'))", "the crew update, escalated")
-  const escalated = await evaluate(READ)
+  await until("Boolean(document.querySelector('[data-crew-update]'))", "the crew update, escalated")
+  const escalated = await evaluate(`(() => {
+    const block = document.querySelector('[data-crew-update]')
+    return {
+      head: block.querySelector('[data-crew-update-head]').innerText.replace(/\\s+/g, ' '),
+      open: [...block.querySelectorAll('[data-fin-report]')].map((node) => node.innerText.replace(/\\s+/g, ' ')),
+      fold: block.querySelector('[data-crew-update-fold]')?.innerText.replace(/\\s+/g, ' '),
+    }
+  })()`)
   console.log("ESCALATED UPDATE", JSON.stringify(escalated))
   assert.ok(escalated.open.some((text) => text.includes("Pull to refresh") && text.includes("finished · needs you")), `an escalated decision stays open, as the person's: ${JSON.stringify(escalated.open)}`)
-  assert.equal(escalated.open.filter((text) => /asks you|needs you/.test(text)).length, 2, `two of them read as needing the person: ${JSON.stringify(escalated.open)}`)
-  assert.match(escalated.line ?? "", /^4 Fins finished/, `the finished ones fold without it: ${escalated.line}`)
+  assert.match(escalated.head, /· 2 need you$/, `the head counts it as needing the person: ${escalated.head}`)
+  assert.match(escalated.fold ?? "", /^Thread list swipe, Haptics audit and 2 more finished 2 PRs Show$/, `the finished ones fold without it: ${escalated.fold}`)
   console.log("PASS: a done Fin's decision escalated to the person stays open in the crew update")
 
   // One crew list: the side rail holds the finished and idle Fins the card folds, and the phone has Stop all too.

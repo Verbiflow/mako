@@ -87,7 +87,7 @@ async function capture() {
 
   const rows = await evaluate(`[...document.querySelectorAll('[data-transcript-tool]')].map(row => ({
     id: row.dataset.transcriptTool,
-    head: row.querySelector('button[aria-expanded], [data-tool-plain]').textContent,
+    head: row.querySelector('button').textContent,
     body: row.querySelector('[data-tool-body]')?.textContent ?? "",
   }))`)
   const row = (id) => {

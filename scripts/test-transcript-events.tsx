@@ -346,11 +346,7 @@ const savedTick = saved([{ kind: "user", at: at(35), text: "Run the suite" },
   { kind: "event", id: "l1", source: { harness: "claude", record: "l1" }, ...tickMarker }, say("Two checks passed.")])
 const order = (exchanges: ExchangeData[]) => exchanges.flatMap((exchange) => exchange.response.map((message) => message.note ? `note:${message.note.label}:${message.note.source?.record}` : message.blocks.map((block) => block.type).join(",")))
 assert.deepEqual(order(liveTick), order(savedTick), "live draws the monitor's event between the command and the reply, as saved history does, citing the same line")
-// A cause the turn took in on its way is a phrase of the turn's one line, and its own line once that is opened.
-assert.match(text(draw(liveTick)), /compute-local: pass/, "the turn's line says what the monitor printed")
-setTurnFoldOpen(turnFoldKey(LIVE, liveTick.at(-1)!.id, 0), true)
 assert.match(text(draw(liveTick)), /compute-local: pass PR #8 CI checks/, "and words it from what the monitor printed")
-setTurnFoldOpen(turnFoldKey(LIVE, liveTick.at(-1)!.id, 0), false)
 // A turn Claude ran on a notification cites the prompt line it ran on, live as saved.
 const cited = entriesToMessages(reduceLiveUpdates([], [{ kind: "provider-turn", ...tick, source: { harness: "claude", record: "p1" }, at: 1 }]), { kind: "live", running: false, provider: "claude" }).messages
 assert.deepEqual(cited[0]?.note?.source, { harness: "claude", record: "p1" }, "the live opener carries the line it was read from")
