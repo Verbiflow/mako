@@ -1,7 +1,7 @@
 {
   "harness": "cursor",
-  "version": "1.4.0",
-  "on": "2026-11-17",
+  "version": "1.4.1",
+  "on": "2026-11-18",
   "searched": "25 SDK modules",
   "probed": 25,
   "missing": [],

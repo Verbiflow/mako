@@ -445,7 +445,7 @@
     "@ai-sdk/openai": "4.0.55",
     "@ai-sdk/openai-compatible": "3.0.42",
     "@anthropic-ai/claude-agent-sdk": "0.3.326",
-    "@cursor/sdk": "1.4.0",
+    "@cursor/sdk": "1.4.1",
     "@lydell/node-pty": "1.2.0-beta.15",
     "@mako/control": "^0.1.0",
     "@mako/control-runtime": "0.1.0",
@@ -546,7 +546,7 @@
     "appId": "dev.mako.app",
     "productName": "Mako",
     "artifactName": "${productName}-${arch}.${ext}",
-    "copyright": "Copyright \u00a9 2026 Verbiflow",
+    "copyright": "Copyright © 2026 Verbiflow",
     "directories": {
       "output": "release",
       "buildResources": "build"
