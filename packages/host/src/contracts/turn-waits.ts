@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { SHIVER_WORD } from "./agents.js"
 
 /**
  * A turn's wait: what a Thread's agent asked Mako to wake it with when its turn ends (`wait` on the `mako` server).
@@ -18,18 +19,18 @@ export const WAIT_LATE_MS = 60_000
  * The wait Mako arms itself when an Apex's turn ends with its Fins at work and none of its own armed: a check-in an
  * hour on, the backstop to their reports (each still wakes it as ever), so nobody has to say "check on the Fins".
  */
-export const CREW_WAIT = "Waiting for the crew"
-export const CREW_WAIT_S = 60 * 60
+export const SHIVER_WAIT = `Waiting for the ${SHIVER_WORD}`
+export const SHIVER_WAIT_S = 60 * 60
 /**
- * How far the check-in backs off: each one that found the crew still at work with no report since doubles the next
+ * How far the check-in backs off: each one that found the shiver still at work with no report since doubles the next
  * (1 h, 2 h, 4 h, 8 h, then 8 h on), so a Fin on a long, healthy job doesn't wake its Apex every hour. A report, or a
  * turn anyone but the check-in started, brings it back to an hour.
  */
-export const CREW_STEPS_MAX = 3
+export const SHIVER_STEPS_MAX = 3
 
 /** The check-in's interval at a step of its backoff, in seconds. */
-export function crewWaitSeconds(step: number): number {
-  return CREW_WAIT_S * 2 ** Math.min(Math.max(0, step), CREW_STEPS_MAX)
+export function shiverWaitSeconds(step: number): number {
+  return SHIVER_WAIT_S * 2 ** Math.min(Math.max(0, step), SHIVER_STEPS_MAX)
 }
 
 export const TurnWaitItemSchema = z.discriminatedUnion("kind", [
@@ -101,9 +102,12 @@ export const TurnWaitSchema = z.object({
   delivered: z.object({ at: z.number() }).optional(),
   /** When and by whom it ended without firing, or, fired, before its note went (then never sent). */
   cancelled: z.object({ at: z.number(), by: TurnWaitCancelSchema }).optional(),
-  /** Mako's own crew check-in (`CREW_WAIT`), not the agent's `wait`: absent for the agent's. Its note is written as it's due. */
+  /** Mako's own shiver check-in (`SHIVER_WAIT`), not the agent's `wait`: absent for the agent's. Its note is written as it's due. */
   armedBy: z.literal("mako").optional(),
-  /** The crew check-in's step of its backoff (`crewWaitSeconds`): 0 is an hour. */
+  /**
+   * The shiver check-in's step of its backoff (`shiverWaitSeconds`): 0 is an hour. Stored in `turn_waits.record` under
+   * its name from before the Shiver, kept so stored waits and older builds read the same.
+   */
   crewStep: z.number().int().min(0).max(16).optional(),
 })
 export type TurnWait = z.infer<typeof TurnWaitSchema>
@@ -173,15 +177,15 @@ export function turnWaitWords(text: string): { line: string; detail?: string } |
   return { line: first.charAt(0).toUpperCase() + first.slice(1), ...(detail && { detail }) }
 }
 
-/** A Fin at work as the crew check-in reads it: its name, its line (`childLine`), and how long it has shown nothing. */
-export interface CrewFin {
+/** A Fin at work as the shiver check-in reads it: its name, its line (`childLine`), and how long it has shown nothing. */
+export interface ShiverFin {
   name: string
   line: string
   quietMs?: number
 }
 
-/** The crew check-in's note, as it's due: each Fin still at work, what it does, and how long it has been quiet. */
-export function crewWaitNote(fins: readonly CrewFin[], quietFor: (ms: number) => string, waitedS = CREW_WAIT_S): string {
+/** The shiver check-in's note, as it's due: each Fin still at work, what it does, and how long it has been quiet. */
+export function shiverWaitNote(fins: readonly ShiverFin[], quietFor: (ms: number) => string, waitedS = SHIVER_WAIT_S): string {
   const count = fins.length === 1 ? "one of your Fins" : `${fins.length} of your Fins`
   const hours = Math.round(waitedS / 3600)
   const waited = hours <= 1 ? "an hour" : `${hours} hours`

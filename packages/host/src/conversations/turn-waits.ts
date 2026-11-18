@@ -55,9 +55,10 @@ export interface ArmTurnWait {
   at?: number
   /** Items the caller found met already as it arms, by `turnWaitItemKey`. */
   met?: Readonly<Record<string, { at: number; words: string }>>
-  /** Mako's own crew check-in (`CREW_WAIT`), not the agent's. */
+  /** Mako's own shiver check-in (`SHIVER_WAIT`), not the agent's. */
   armedBy?: "mako"
-  /** The crew check-in's step of its backoff. */
+  /** The shiver check-in's step of its backoff. */
+  // Its stored key from before the Shiver (`TurnWaitSchema.crewStep`).
   crewStep?: number
 }
 

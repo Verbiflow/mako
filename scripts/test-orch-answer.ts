@@ -845,7 +845,7 @@ try {
   }
   console.log("decision, stamp fails: the answer still reached the Fin, nothing rejected unhandled, and the next start kept its delivery without sending it again")
 
-  // What it waits on, how long it's idle and its open pull requests: on its strip, its crew mates' view and the front door.
+  // What it waits on, how long it's idle and its open pull requests: on its strip, its shiver mates' view and the front door.
   {
     const held = [{ number: 371, url: "https://git.example.com/acme/app/pull/371", state: "open" as const }, { number: 360, url: "https://git.example.com/acme/app/pull/360", state: "merged" as const }]
     const asked: { repoRoot: string; branch: string }[] = []
@@ -870,17 +870,17 @@ try {
     assert.deepEqual(asked.at(-1), { repoRoot: "/repo", branch: "fix/swipe" }, "read from its own worktree's branch")
     const sibling = await world.agents.start(apex.caller, { brief: { objective: "Write the docs" }, harness: "claude", name: "docs", clientKey: "docs", cwd: world.root })
     assert.ok(!("refused" in sibling) && sibling.conversation)
-    const crew = await world.agents.list(world.caller(sibling.conversation!), { scope: "crew" })
-    assert.ok("crew" in crew)
-    const mate = crew.crew.find((each) => each.name === "tests")!
+    const shiver = await world.agents.list(world.caller(sibling.conversation!), { scope: "shiver" })
+    assert.ok("shiver" in shiver)
+    const mate = shiver.shiver.find((each) => each.name === "tests")!
     assert.ok(Number.isInteger(mate.idleFor))
-    assert.equal(mate.openPRs?.length, 2, "its crew mates read them too")
+    assert.equal(mate.openPRs?.length, 2, "its shiver mates read them too")
     const note = world.agents.frontDoor(apex.conversation, {}).join("\n")
     assert.match(note, /- fin:tests · Codex · done; the person decides: Merge #371\? \(Merge · Leave open, recommends Merge\) · waiting on #412 checks, the person to merge · asked:/)
     assert.doesNotMatch(note, /idleFor|openPRs/, "the front door stays short")
     await world.close()
   }
-  console.log("facts: waitingOn on the strip and the front door, idleFor and openPRs on the strip and the crew, from held facts only")
+  console.log("facts: waitingOn on the strip and the front door, idleFor and openPRs on the strip and the shiver, from held facts only")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }
