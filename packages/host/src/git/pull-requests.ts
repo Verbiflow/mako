@@ -110,7 +110,7 @@ async function branchOf(git: Git, cwd: string): Promise<string> {
 }
 
 async function uncommitted(git: Git, cwd: string): Promise<number> {
-  const status = await git.output(cwd, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => "")
+  const status = await git.readOutput(cwd, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => "")
   return status ? status.split("\n").length : 0
 }
 

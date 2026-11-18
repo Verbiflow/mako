@@ -110,7 +110,7 @@ export async function within(folder: string, path: string): Promise<boolean> {
 }
 
 async function uncommitted(git: Git, cwd: string): Promise<number | undefined> {
-  const status = await git.output(cwd, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => undefined)
+  const status = await git.readOutput(cwd, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => undefined)
   return status === undefined ? undefined : status.split("\n").filter(Boolean).length
 }
 
