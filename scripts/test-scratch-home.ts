@@ -230,6 +230,8 @@ try {
     "test-background-work.ts": "recorded Agent SDK messages; no Claude runs",
     "test-claude-runtime.ts": "intercepts the SDK's spawn; no Claude runs",
     "test-claude-sdk.ts": "injected Agent SDK queries; no Claude runs",
+    "test-claude-stop.ts": "an injected Agent SDK query; no Claude runs",
+    "test-claude-tune.ts": "an injected Agent SDK query; no Claude runs",
     "test-claude-sdk-startup.ts": "a shim stands in for Claude's executable",
     "test-native-agents.ts": "a fixture driver; no harness runs",
     "test-native-failures.mjs": "stand-in native processes for every harness",
