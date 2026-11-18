@@ -3545,6 +3545,7 @@ const inputs = {
         ]),
         days: z.number(),
         kept: z.array(z.string()),
+        finishedFins: z.boolean().optional(),
       }),
     ]),
   "mako:worktree-review": () => z.tuple([z.string()]),

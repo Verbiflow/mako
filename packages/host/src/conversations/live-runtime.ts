@@ -340,6 +340,12 @@ export interface Dependencies {
   resumeVerdict?(binding: ProviderBinding): Promise<ResumeVerdict>
   /** The same folder in the project a since-removed worktree holding `cwd` was made from; undefined while `cwd` is there. */
   projectFolderOfRemoved?(cwd: string): string | undefined
+  /**
+   * Makes again the worktree Mako retired from under a finished Fin, when `cwd` is in one, before conversation `id`
+   * starts there (`ThreadWorktreeService.restoreRetired`). Undefined, with nothing awaited, for any other folder: every
+   * start asks. Settles whether or not it could: a start in a folder still gone goes on as one always has.
+   */
+  restoreWorktree?(id: string, cwd: string): Promise<void> | undefined
   /** The conversation changed in a way that may let a waiting move go ahead (`LiveConversations.relocation`); called on the write path. */
   settled?(conversationId: string): void
   /** A turn ended in `cwd`, failed or stopped included. */
@@ -561,6 +567,8 @@ export interface LiveAccess {
   homeFromRemovedWorktree(resident: Resident): string | undefined
   /** Before a native start: a conversation whose worktree was removed goes on in the project folder it was made from. */
   returnFromRemovedWorktree(resident: Resident): void
+  /** Before that: the worktree Mako retired from under a finished Fin is made again where it was; undefined when there's none to make. */
+  restoreRetiredWorktree(resident: Resident): Promise<void> | undefined
   failedStart(resident: Resident, boundary: FailureBoundary, resuming: boolean): LiveRequest[]
   signInHold(resident: Resident): SignInHold
   retireFromAccount(resident: Resident): Promise<void>

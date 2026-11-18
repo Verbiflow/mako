@@ -9,7 +9,7 @@ import type { ThreadStore } from "../threads/index.js"
 import type { ThreadId } from "../contracts/thread-identity.js"
 import { WORKTREE_BRANCH_PREFIX as BRANCH_PREFIX, PROJECT_CHECKOUT_FILE, worktreeCheckout, worktreeSlug } from "../contracts/thread-worktrees.js"
 import type { GitDiff } from "../contracts/git-workspace-search.js"
-import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeBranch, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStart, WorktreeStartPoint, WorktreeStep, WorktreeBranchPull, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "../contracts/thread-worktrees.js"
+import type { RetiredWorktree, WorktreeRestored, ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeBranch, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStart, WorktreeStartPoint, WorktreeStep, WorktreeBranchPull, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "../contracts/thread-worktrees.js"
 import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
 import { previewDiffs, projectRepositories } from "../git/index.js"
 import { CheckoutBorrowing } from "./checkout-borrowing.js"
@@ -317,6 +317,16 @@ export interface CheckoutConversations {
   leave(from: string, to: string): Promise<string[]>
 }
 
+/** The folder of the worktree that has `branch` checked out, from `git worktree list --porcelain`; undefined when none has. */
+function worktreeHolding(porcelain: string, branch: string | undefined): string | undefined {
+  if (!branch) return undefined
+  for (const block of porcelain.split("\n\n")) {
+    const lines = block.split("\n")
+    if (lines.includes(`branch refs/heads/${branch}`)) return lines.find((line) => line.startsWith("worktree "))?.slice("worktree ".length)
+  }
+  return undefined
+}
+
 /** The worktree a move onto the Thread's own branch would make now, with nothing made: its first repository's folder. */
 export interface PlannedCheckout {
   folder: string
@@ -337,6 +347,8 @@ export class ThreadWorktreeService {
   private readonly watch: WatchBackend
   private readonly git: Git
   private readonly threads: ThreadStore
+  /** Retired worktrees being made again now, by path (`restoreRetired`): a second asker joins the first. */
+  private readonly restoring = new Map<string, Promise<WorktreeRestored | undefined>>()
   private readonly inUse: (path: string) => Promise<string[]>
   private readonly working: (path: string) => Promise<string[]>
   private readonly environment: ThreadEnvironmentEnd | undefined
@@ -1482,13 +1494,25 @@ export class ThreadWorktreeService {
    * Branches stay, so committed work is never lost. Folders
    * are moved aside at once and deleted in the background, so tens of
    * thousands of installed files don't hold the answer up.
+   *
+   * `retirement`: removed by the retention pass, which runs no project cleanup and deletes no Thread data. `"finished"`
+   * is that for a Fin Mako closed as finished: what the worktree was is kept first (`retireWorktree`), and its
+   * conversations stay where they are, asleep in a folder that's gone, because the next thing to reach the Fin makes the
+   * worktree again at that path (`restoreRetired`) and it goes on there, on its branch, never in the main checkout.
    */
-  async remove(path: string, retirement = false): Promise<ThreadWorktreeList> {
+  async remove(path: string, retirement: boolean | "finished" = false): Promise<ThreadWorktreeList> {
     const { attached, receipts, checkout, home, together } = await this.made(path)
     const held = await this.held(checkout, together)
     if (held) throw new Error(held)
-    const stayed = await this.conversations?.leave(checkout, home) ?? []
-    if (stayed.length) throw new Error(inUseBy(checkout, stayed))
+    if (retirement === "finished") {
+      if (!attached || checkout !== path || together.length !== 1) throw new Error("Only one repository's worktree is made again by itself; this checkout was kept.")
+      const head = await this.git.readOutput(path, ["rev-parse", "HEAD"])
+      const branch = await this.git.output(path, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => "")
+      this.threads.retireWorktree({ path, thread: attached.thread, repoRoot: attached.repoRoot, project: attached.project, recorded: attached.branch, ...(branch && { branch }), head, base: attached.base, at: Date.now() })
+    } else {
+      const stayed = await this.conversations?.leave(checkout, home) ?? []
+      if (stayed.length) throw new Error(inUseBy(checkout, stayed))
+    }
     if (attached && !retirement) {
       await this.environment?.stop(attached.thread)
       if (existsSync(checkout)) await this.environment?.cleanup?.(attached.thread, checkout)
@@ -1509,6 +1533,74 @@ export class ThreadWorktreeService {
       await rm(join(this.receipts(), `${id}.json`), { force: true })
     }
     return this.list()
+  }
+
+  /**
+   * Makes a worktree retired from under a finished Fin again (`remove`'s `"finished"`), at its own path, for whatever
+   * runs in `folder` next: on its branch where the repository still has it and no other checkout holds it; on that
+   * branch made again at the commit it was at, when it was deleted since (a merged pull request's usually is); detached
+   * at that commit when another checkout holds the branch. Its files are its commit's: installed packages and build
+   * output went with the folder. Undefined when `folder` is in no retired worktree, or the worktree is there. A failure
+   * says exactly why, changes nothing, and keeps the record for the next try: its project gone from this Mac, or its
+   * commit gone from the repository. One at a time per path.
+   */
+  restoreRetired(folder: string): Promise<WorktreeRestored | undefined> {
+    const retired = this.threads.retiredWorktrees().find((each) => folder === each.path || folder.startsWith(`${each.path}/`))
+    if (!retired) return Promise.resolve(undefined)
+    const going = this.restoring.get(retired.path)
+    if (going) return going
+    const restoring = this.restore(retired).finally(() => this.restoring.delete(retired.path))
+    this.restoring.set(retired.path, restoring)
+    return restoring
+  }
+
+  private async restore(retired: RetiredWorktree): Promise<WorktreeRestored | undefined> {
+    const { path, repoRoot, head } = retired
+    // There already (another host made it again, or it was never gone), or its Thread is gone: nothing to make.
+    if ((await workingCheckout(this.git, path)) || !this.threads.thread(retired.thread)) {
+      this.threads.forgetRetiredWorktree(path)
+      return undefined
+    }
+    const failed = (why: string): WorktreeRestored => {
+      hostWarn("worktrees", "a finished Fin's worktree couldn't be made again", { path, repoRoot, why })
+      return { kind: "failed", path, why }
+    }
+    if (!(await this.git.succeeds(repoRoot, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])))
+      return failed(`its project, ${repoRoot}, isn't a repository on this Mac anymore: it was moved or deleted.`)
+    if (existsSync(path) && (await readdir(path)).length) return failed(`${path} holds other files now, which Mako won't write over.`)
+    await this.git.output(repoRoot, ["worktree", "prune"]).catch(() => "")
+    const branch = retired.branch
+    const has = branch !== undefined && (await this.git.succeeds(repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]))
+    const known = await this.git.succeeds(repoRoot, ["cat-file", "-e", `${head}^{commit}`])
+    if (!has && !known) return failed(`${branch ? `its branch ${branch} was deleted and ` : ""}the commit it was at (${head.slice(0, 8)}) is no longer in ${repoRoot}.`)
+    const elsewhere = has ? worktreeHolding(await this.git.output(repoRoot, ["worktree", "list", "--porcelain"]), branch) : undefined
+    let note: string
+    let on: string | undefined
+    try {
+      await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+      if (branch && has && !elsewhere) {
+        await this.git.output(repoRoot, ["worktree", "add", "--quiet", "--no-checkout", path, branch])
+        on = branch
+        note = `on its branch ${branch}`
+      } else if (branch && !has) {
+        await this.git.output(repoRoot, ["worktree", "add", "--quiet", "--no-checkout", "-b", branch, path, head])
+        on = branch
+        note = `on its branch ${branch}, which was deleted since and is made again at ${head.slice(0, 8)}, the commit it was at`
+      } else {
+        await this.git.output(repoRoot, ["worktree", "add", "--quiet", "--no-checkout", "--detach", path, has && branch ? branch : head])
+        note = elsewhere ? `detached at the tip of ${branch}, because ${elsewhere} has that branch checked out` : `detached at ${head.slice(0, 8)}, as it was`
+      }
+      await fillWorktree(this.git, path)
+    } catch (error) {
+      // Half made, it would read as there with no files in it: taken out again, so the next try starts from nothing.
+      await this.git.output(repoRoot, ["worktree", "remove", "--force", path]).catch(() => "")
+      return failed(`Git couldn't add it to ${repoRoot}: ${error instanceof Error ? error.message : "unknown error"}`)
+    }
+    const now = await this.git.readOutput(path, ["rev-parse", "HEAD"])
+    this.threads.attachWorktree({ path, thread: retired.thread, repoRoot, project: retired.project, branch: on ?? retired.recorded, base: retired.base })
+    this.threads.forgetRetiredWorktree(path)
+    hostLog("worktrees", "a finished Fin's worktree was made again", { path, repoRoot, ...(on && { branch: on }), head: now })
+    return { kind: "restored", path, ...(on && { branch: on }), head: now, note: `${note}. Its files are that commit's: installed packages and build output went with the folder, so install again before you build or test.` }
   }
 
   /** A project checkout's own folder, once its worktrees are set aside: what the recipe carried into it, deleted in the background. */

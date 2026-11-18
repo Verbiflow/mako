@@ -42,7 +42,7 @@ import {
   type TurnContinuation,
 } from "../contracts/live-conversations.js"
 import { QueuedPromptEditSchema, type QueuedPromptEdit } from "../contracts/live-queue.js"
-import { digestAsks } from "../contracts/agents.js"
+import { digestAsks, edgeStopped } from "../contracts/agents.js"
 import { childGroup, childStateOf, DIGEST_WAITS, rollup, WAKE_COALESCE_MS } from "../contracts/children.js"
 import { latestPendingQuestion, retireQuestionsForInput, type PendingAsk } from "../contracts/live-questions.js"
 import { isActiveNativeAgent, isBusyProviderWork, withChildren } from "../contracts/native-agents.js"
@@ -346,6 +346,7 @@ export class LiveConversations {
       },
       homeFromRemovedWorktree: (resident) => this.relocations.homeFromRemovedWorktree(resident),
       returnFromRemovedWorktree: (resident) => this.relocations.returnFromRemovedWorktree(resident),
+      restoreRetiredWorktree: (resident) => this.relocations.restoreRetiredWorktree(resident),
       failedStart: (resident, boundary, resuming) => this.accounts.failedStart(resident, boundary, resuming),
       signInHold: (resident) => this.accounts.signInHold(resident),
       retireFromAccount: (resident) => this.accounts.retireFromAccount(resident),
@@ -1709,7 +1710,8 @@ export class LiveConversations {
     const threads = this.dependencies.threads
     const placement = threads?.journalPlacement(id)
     if (!threads || !placement) return false
-    return threads.edges().of(placement.thread) !== undefined || threads.edges().children(placement.thread).some((edge) => edge.closedAt === undefined)
+    // A Fin closed as finished counts as before it closed: only a stop takes its Apex out of the tree.
+    return threads.edges().of(placement.thread) !== undefined || threads.edges().children(placement.thread).some((edge) => !edgeStopped(edge))
   }
 
   private ordinaryCrashIds(): readonly string[] {
