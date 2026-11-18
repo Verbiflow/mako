@@ -775,9 +775,14 @@ export class Agents implements AgentOperations, ConversationChildren {
    * and not by every entry it has.
    */
   private readonly rosters = new Map<string, { agents: readonly NativeAgent[]; noticed: readonly NativeAgent[] }>()
-  /** `personAsk`'s walk of a Thread's tree, kept until the store commits, a Fin moves (`askEpoch`) or `ASKS_KEPT_MS` passes. */
-  private readonly asksKept = new Map<string, { edges: ReturnType<ThreadStore["edges"]>; epoch: number; at: number; found: ReturnType<Agents["personAsk"]> }>()
-  private askEpoch = 0
+  /**
+   * `personAsk`'s walk of a Thread's tree, kept while what it read stands: the edges, the reports and answers kept
+   * (`ThreadStore.asksStamp`), and what each Fin beneath it asks, whose change drops the walks above that Fin alone
+   * (`asksMoved`). `ASKS_KEPT_MS` bounds what none of those says (a Thread archived, an ask passed on by a timer).
+   */
+  private readonly asksKept = new Map<string, { edges: ReturnType<ThreadStore["edges"]>; reports: string; at: number; found: ReturnType<Agents["personAsk"]> }>()
+  /** What each Fin asked when it last moved (`askKey`): a move that asks the same drops no walk. */
+  private readonly askKeys = new Map<string, string>()
   private readonly conversations = new Map<string, string>()
   private readonly childOf = new Map<string, string>()
   private readonly starting = new Set<string>()
@@ -3009,13 +3014,33 @@ export class Agents implements AgentOperations, ConversationChildren {
     const notice = placed.thread === this.rootOf(placed.thread) ? this.standingNotice(placed.thread) : undefined
     if (notice) return { fin: ThreadIdSchema.parse(notice.fin), name: "Usage", line: notice.line, ask: { kind: "report", id: notice.id, options: SEEN_OPTIONS }, more: 0 }
     // Asked on every batch of the Apex's conversation and every report of its row: the walk of its tree is kept until
-    // the store commits or a Fin of it moves. Worked out afresh each time, with 57 Fins it held the loop 0.3-0.6 s a batch.
+    // an edge, a report or an answer changes or a Fin beneath it asks something else. Worked out afresh each time, with
+    // 57 Fins it held the loop 0.3-0.6 s a batch; dropped at every Fin's every batch, 17% of the thread with 30 at work.
     const edges = store.edges()
+    const reports = store.asksStamp()
     const kept = this.asksKept.get(placed.thread)
-    if (kept && kept.edges === edges && kept.epoch === this.askEpoch && this.now() - kept.at < ASKS_KEPT_MS) return kept.found
+    if (kept && kept.edges === edges && kept.reports === reports && this.now() - kept.at < ASKS_KEPT_MS) return kept.found
     const found = this.walkAsks(store, placed.thread)
-    this.asksKept.set(placed.thread, { edges, epoch: this.askEpoch, at: this.now(), found })
+    this.asksKept.set(placed.thread, { edges, reports, at: this.now(), found })
     return found
+  }
+
+  /** What `edge`'s Fin asks now, as `walkAsks` reads it of its state and its conversation: the same words, the same walk. */
+  private askKey(edge: ThreadParent): string {
+    const open = openAsk(this.stateOf(edge))
+    if (!open) return ""
+    const conversation = open.ask && open.ask.kind !== "report" ? this.askingConversation(edge.child) : undefined
+    return JSON.stringify([open, conversation && this.personWaiting(conversation)?.line])
+  }
+
+  /** What `edge`'s Fin asks changed: the walks of every Thread above it are made again. With no edge, every walk is. */
+  private asksMoved(edge: ThreadParent | undefined): void {
+    if (!edge) return this.asksKept.clear()
+    const edges = this.store()?.edges()
+    for (let thread: string | undefined = edge.parent, depth = 0; thread !== undefined && depth < 64; depth += 1) {
+      this.asksKept.delete(thread)
+      thread = edges?.of(thread)?.parent
+    }
   }
 
   private walkAsks(store: ThreadStore, top: string): ReturnType<Agents["personAsk"]> {
@@ -4978,7 +5003,7 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /** The notice on `edge`'s entry came or went: every surface reads the entry again. */
   private noticeChanged(edge: ThreadParent | undefined): void {
-    this.askEpoch += 1
+    this.asksMoved(edge)
     if (!edge) return
     this.entries.delete(edge.child)
     this.forget(edge.parent)
@@ -5893,9 +5918,14 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /** A Fin's entry moved: its Apex's conversations hear it, and a decision it waits on reaches its Apex once. */
   private childMoved(edge: ThreadParent, progressOnly: boolean): void {
-    this.askEpoch += 1
     if (this.stopped) return
     this.sync()
+    // Every batch of a working Fin comes here: only one that changes what it asks drops its Apexes' kept walks.
+    const asks = this.askKey(edge)
+    if (this.askKeys.get(edge.child) !== asks) {
+      this.askKeys.set(edge.child, asks)
+      this.asksMoved(edge)
+    }
     if (this.store()?.edges().internalRuns.some((internal) => internal.child === edge.child)) {
       this.occupying.delete(edge.child)
       for (const conversation of this.conversationsOfThread(edge.parent)) {
@@ -5925,7 +5955,15 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (released) void this.drain()
       return
     }
-    this.rosters.delete(edge.parent)
+    // Its one entry takes its place in the roster held, whose other entries stand as they were: read again, each of an
+    // Apex's 226 was looked up for every step of any one of them.
+    const roster = this.rosters.get(edge.parent)
+    const at = roster && before ? roster.agents.indexOf(before) : -1
+    if (roster && at >= 0) {
+      const agents = roster.agents.slice()
+      agents[at] = entry
+      this.rosters.set(edge.parent, { agents, noticed: before?.child?.limitNotice || entry.child?.limitNotice ? agents.filter((agent) => agent.child?.limitNotice) : roster.noticed })
+    } else this.rosters.delete(edge.parent)
     const kindChanged = !before || before.state.kind !== entry.state.kind || before.stoppable !== entry.stoppable
     for (const conversation of this.finReaders(edge.parent)) this.deps.live.childrenChanged(conversation, progressOnly && !kindChanged)
     // A digest still unsent is in memory, whose queue keeps it there: one only on disk holds none, and isn't read in.

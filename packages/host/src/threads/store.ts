@@ -292,6 +292,12 @@ export interface ThreadStoreOptions {
   oneConversation?: boolean
   /** A test's hook after each Thread the split finishes, inside its transaction. */
   afterSplitThread?: (done: number) => void
+  /**
+   * Looks for other processes' commits once in each turn of the event loop instead of at every read (`syncVersion`):
+   * the host's store, whose reads come by the hundred in one turn. A store without it, a test's or a script's, sees a
+   * commit another connection made in the same turn.
+   */
+  versionPerTurn?: boolean
 }
 
 export interface MoveStatus {
@@ -341,6 +347,7 @@ const LocatorPathRowSchema = z.object({ path: z.string(), harness: z.string() })
 /** An answered ask's row, read for every row each time a Fin's open asks are read, so its schema is made once. */
 const AnsweredAskRowSchema = z.object({ ask: z.string() })
 const ReportStampRowSchema = z.object({ seq: z.number(), count: z.number() })
+const AsksStampRowSchema = z.object({ reports: z.number(), reportCount: z.number(), answers: z.number(), answerCount: z.number() })
 const DeliveredAtRowSchema = z.object({ delivered_at: z.number().nullable() })
 const PendingActionRowSchema = z.object({ child_thread: z.string(), owner: z.string().nullable() })
 const SessionDetailSchema = z.object({
@@ -804,6 +811,9 @@ export class ThreadStore {
   private readonly keysBySession = new Map<string, Set<string>>()
   private readonly executions = new Map<string, SessionExecution>()
   private dataVersion = -1
+  private readonly versionPerTurn: boolean
+  /** Whether this turn of the loop has looked for other processes' commits already (`versionPerTurn`). */
+  private versionRead = false
   /**
    * Counts the commits this store has seen, this host's and every other's. What's read of many Sessions or Threads at
    * once (`executionsOf`, `titlesOf`, `groups`) is answered from memory until it moves; never inside a write.
@@ -825,6 +835,9 @@ export class ThreadStore {
   private readonly forksSeen = new Map<string, SessionId | null>()
   private groupsSeen: { revision: number; groups: ThreadGroup[] } | undefined
   private edgesSeen: { revision: number; edges: ThreadEdges } | undefined
+  private asksSeen: { revision: number; stamp: string } | undefined
+  private queuedSeen: { revision: number; spawns: QueuedSpawn[] } | undefined
+  private childSessionsSeen: { revision: number; children: ReadonlyMap<string, { harness: string; nativeId: string }[]> } | undefined
   /** The rows the last edges were read from, kept through commits: a read that finds the same keeps the same object. */
   private edgesKept: { records: string[]; native: Set<string>; edges: ThreadEdges } | undefined
   /** Worktree inputs survive unrelated local commits; worktree/alias changes and foreign commits invalidate. */
@@ -848,6 +861,7 @@ export class ThreadStore {
   constructor(path: string, options: ThreadStoreOptions = {}) {
     this.path = path
     this.now = options.now ?? Date.now
+    this.versionPerTurn = options.versionPerTurn ?? false
     this.realPath = options.realPath ?? realNativePath
     this.oneConversation = options.oneConversation === true
     this.afterSplitThread = options.afterSplitThread
@@ -1401,6 +1415,23 @@ export class ThreadStore {
       })
   }
 
+  /**
+   * Says whether any report or answer was kept or taken back since it last read the same, by this host or another:
+   * the newest row and the count of each, read once a commit. Reports are only ever added, and an answer is added,
+   * marked delivered or taken back before delivery, so what a Fin asks and whether it was answered can't change under
+   * the same stamp. What walks every Fin of a tree for its open asks (`Agents.personAsk`) keeps its walk by it.
+   */
+  asksStamp(): string {
+    this.syncVersion()
+    const held = this.depth === 0 ? this.asksSeen : undefined
+    if (held && held.revision === this.revision) return held.stamp
+    const rows = AsksStampRowSchema.parse(this.sql(`SELECT (SELECT coalesce(max(rowid), 0) FROM thread_reports) AS reports, (SELECT count(*) FROM thread_reports) AS reportCount,
+      (SELECT coalesce(max(rowid), 0) FROM agent_answers) AS answers, (SELECT count(*) FROM agent_answers) AS answerCount`).get())
+    const stamp = `${rows.reports}:${rows.reportCount}:${rows.answers}:${rows.answerCount}`
+    if (this.depth === 0) this.asksSeen = { revision: this.revision, stamp }
+    return stamp
+  }
+
   /** Report questions still owned by someone: notice delivery and later narration do not answer them. */
   openReportAsks(child: string): readonly Report[] {
     this.syncVersion()
@@ -1555,6 +1586,9 @@ export class ThreadStore {
    * walks many Sessions. One Apex's 54 children read once per child and per Session of its Thread held the host 175 ms.
    */
   childSessions(): ReadonlyMap<string, { harness: string; nativeId: string }[]> {
+    this.syncVersion()
+    const seen = this.depth === 0 ? this.childSessionsSeen : undefined
+    if (seen && seen.revision === this.revision) return seen.children
     const native = new Map<string, { harness: string; nativeId: string }[]>()
     const rows = this.sql(`SELECT m.thread_id, c.harness, c.native_id FROM native_claims c JOIN memberships m ON m.session_id = c.session_id
       WHERE c.device_id = ? AND m.thread_id IN (SELECT child_thread FROM thread_parents)
@@ -1574,6 +1608,7 @@ export class ThreadStore {
       if (held) held.push(...claimed)
       else children.set(edge.parent, [...claimed])
     }
+    if (this.depth === 0) this.childSessionsSeen = { revision: this.revision, children }
     return children
   }
 
@@ -1928,12 +1963,17 @@ export class ThreadStore {
   /** Spawns waiting on a tree's running budget, oldest first. */
   queuedSpawns(): QueuedSpawn[] {
     this.syncVersion()
+    // Read once a commit: every roster asked for reads them, and a Fin's every batch asks for its Apex's.
+    const held = this.depth === 0 ? this.queuedSeen : undefined
+    if (held && held.revision === this.revision) return [...held.spawns]
     // In the order they came: two spawns of one millisecond keep it.
-    return this.sql(`SELECT op, tree, record, at, 0 AS away, rowid AS place FROM agent_spawns
-      UNION ALL SELECT op, tree, record, at, 1 AS away, rowid AS place FROM agent_placings ORDER BY at, away, place`).all().map((row) => {
+    const spawns = this.sql(`SELECT op, tree, record, at, 0 AS away, rowid AS place FROM agent_spawns
+      UNION ALL SELECT op, tree, record, at, 1 AS away, rowid AS place FROM agent_placings ORDER BY at, away, place`).all().map((row): QueuedSpawn => {
       const { op, tree, record, at, away } = QueuedSpawnRowSchema.parse(row)
       return { op, tree, record, at, ...(away === 1 && { away: true as const }) }
     })
+    if (this.depth === 0) this.queuedSeen = { revision: this.revision, spawns }
+    return [...spawns]
   }
 
   /** Holds a spawn for its tree's budget; a repeat of one held keeps its place. */
@@ -3700,8 +3740,23 @@ export class ThreadStore {
     return found ? MetaRowSchema.parse(found).value : undefined
   }
 
-  /** `data_version` moves only for other connections' commits; this host's own are consumed in `write`. */
-  private syncVersion(): void {
+  /**
+   * `data_version` moves only for other connections' commits; this host's own are consumed in `write`.
+   *
+   * With `versionPerTurn` a read looks once in a turn of the event loop: what this store holds in memory of another
+   * process's commit (its placements, executions, edges, titles, its format) is dropped by the first read of the turn
+   * after it landed, and by every write at once (`now`), inside its transaction, so a write never goes on a format a
+   * newer Mako raised or over a change it hasn't consumed. A read that goes to SQLite sees the commit as ever. Asked at every read, the pragma was 36%
+   * of the host's thread with 30 Fins at work: a batch's listeners read the store hundreds of times in one turn, in
+   * which no answer they act on can have changed (nothing here waits on another process within a turn).
+   */
+  private syncVersion(now = false): void {
+    if (this.versionRead && !now) return
+    if (this.versionPerTurn && !this.versionRead) {
+      this.versionRead = true
+      // The check phase ends the turn: whatever runs after it, a timer or a socket's read, looks again.
+      setImmediate(() => { this.versionRead = false }).unref()
+    }
     if (this.reader?.refresh()) {
       this.db = this.reader.database
       this.statements.clear()
@@ -3785,7 +3840,7 @@ export class ThreadStore {
     this.depth += 1
     try {
       // Other hosts' commits before this one are theirs; the rest are this write's.
-      this.syncVersion()
+      this.syncVersion(true)
       const raised = this.newer
       if (raised) throw declinedThreads(raised)
       const result = work()

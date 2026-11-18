@@ -172,6 +172,15 @@ conversations?.live`) rather than a domain importing another's files.
   it fails only on a clear regression (a loop held for seconds, or several
   times the yardstick's waits), never on a fixed number of milliseconds, and
   writes every number to the job's summary. CI runs it as `host-load`.
+- **A flush costs its own conversation's change.** What `LiveConversations.write`
+  calls (`relocations.changed` and its `settled` listeners, `emit` and its)
+  never reads every conversation, Fin, Thread or worktree: who works is kept
+  as conversations change (`WorkingSet`), the person's asks of a tree until an
+  edge, a report, an answer or a Fin's own ask changes (`Agents.personAsk`),
+  and a roster takes the one entry that moved. `npm run test:flush-costs`
+  holds each to what must change it at once and what must not;
+  `bench:host-load --scale person --record` says where the thread's time
+  went by source (`host-load-sources.ts`).
 - **Follow, don't poll.** What only says where something stands (a line a
   window shows) reads what each owner already holds, and is woken by the
   owner's own change (its event or callback). That read never sets off the
@@ -1362,7 +1371,10 @@ or one from before this rule, is stopped inside SQLite. Inserts name their
 columns and nothing writes with `INSERT OR REPLACE`, so a column a newer
 build added keeps its values through an older build's writes. Every
 SQLite store rereads its format after any other build's commit (`PRAGMA
-data_version`), so one raised under a running host turns read-only there:
+data_version`; the host's Thread store looks once in each turn of the event
+loop for its reads and inside every write, `versionPerTurn`, since read at
+every read the pragma was a third of the thread with 30 Fins at work), so one
+raised under a running host turns read-only there:
 the Thread store and the session ledger; the record store's `access`, so
 capture and the backfill stop, said once (`RecordCapture.declined`); the
 unread index (still counted by diagnostics) and the kept outputs
