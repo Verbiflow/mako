@@ -123,8 +123,8 @@ export function createGrokAcpSource(): ProviderAcpSource {
       // Grok loads a session only from its launch directory's sessions folder.
       beforeLoad: async ({ nativeId, cwd, env }) => { await relocateGrokSession({ nativeId, to: cwd, root: join(grokHome(env), "sessions") }) },
       elsewhere: {
-        via: "Mako moves the session's folder under the new directory's name in Grok's sessions folder, points the context Grok replays (chat_history.jsonl's `<user_info>` Workspace Path and the paths under it) and summary.json's folder at the new directory, then `session/load` from there.",
-        verified: "scripts/test-grok-relocate-live.ts against grok 1.0.88 with a stand-in model: refused from another directory as saved, then loaded there with its turns once moved; its next turn carried them, and nothing the model got named the first folder.",
+        via: "Mako moves the session's folder under the new directory's name in Grok's sessions folder, then `session/load` from there.",
+        verified: "scripts/test-grok-relocate-live.ts against grok 1.0.46 with a stand-in model: refused from another directory as saved, then loaded there with its turns once moved, and its next turn carried them.",
       },
     },
     fork: {
