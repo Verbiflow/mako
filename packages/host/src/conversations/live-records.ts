@@ -108,6 +108,42 @@ export interface ForkFacts {
  */
 export type ColdRefusal = { kind: "busy" } | { kind: "structural"; why: string; record?: { path: string; harness: string } }
 
+/** What a saved journal says of its conversation (`LiveJournal.summary`), or why it couldn't be read. */
+export type ListedJournal = { found: ReturnType<LiveJournal["summary"]> } | { error: string }
+
+/** How long journals are listed in one go before the loop turns (`listJournals`). */
+const LIST_SLICE_MS = 8
+
+function listed(root: string, id: string): ListedJournal {
+  try {
+    const journal = new LiveJournal(root, id)
+    try {
+      return { found: journal.summary() }
+    } finally {
+      journal.close()
+    }
+  } catch (error) {
+    return { error: errorMessage({ error }) }
+  }
+}
+
+/**
+ * Every saved journal's listing under `root`, read a few milliseconds' worth at a time, for the host to hand the
+ * conversations as they are made (`Dependencies.listed`). Read inside their constructor, 370 journals held the loop
+ * 460 ms as the host started, through which a window's first calls waited.
+ */
+export async function listJournals(root: string): Promise<Map<string, ListedJournal>> {
+  const journals = new Map<string, ListedJournal>()
+  let since = performance.now()
+  for (const id of journalIds(root)) {
+    journals.set(id, listed(root, id))
+    if (performance.now() - since < LIST_SLICE_MS) continue
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    since = performance.now()
+  }
+  return journals
+}
+
 export class LiveRecords {
   private readonly dependencies: Dependencies
   private readonly hooks: RecordHooks
@@ -169,9 +205,10 @@ export class LiveRecords {
     const journals: JournalFacts[] = []
     for (const id of journalIds(dependencies.root)) {
       try {
-        const journal = new LiveJournal(dependencies.root, id)
-        try {
-          const found = journal.summary()
+        const read = dependencies.listed?.get(id) ?? listed(dependencies.root, id)
+        if ("error" in read) throw new Error(read.error)
+        {
+          const { found } = read
           if (found) {
             const { ancestry, threadSession, unsettled, ...summary } = found
             if (unsettled) this.unsettled.add(id)
@@ -203,8 +240,6 @@ export class LiveRecords {
               },
             })
           }
-        } finally {
-          journal.close()
         }
       } catch (error) {
         // Kept for recovery, and said where the person looks (`unopened`) rather than as a toast at every start.
@@ -471,7 +506,10 @@ export class LiveRecords {
     if (!readable()) return busy()
     let journal: ColdJournal | undefined
     try {
-      journal = await inSlices(ColdJournal.opening(this.dependencies.root, id), undefined, () => this.stopping())
+      // What the opening reads of every block is read on a reader's thread first; without it the opening reads it here.
+      const scanned = await this.readers.scan(join(this.dependencies.root, `${id}.sqlite`)).catch(() => undefined)
+      if (!readable()) return busy()
+      journal = await inSlices(ColdJournal.opening(this.dependencies.root, id, scanned), undefined, () => this.stopping())
     } catch (error) {
       // Cut by the host's stop: the opening closed what it opened, and nothing's wrong with the journal.
       if (error instanceof StepsStopped) return busy()

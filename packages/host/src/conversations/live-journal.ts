@@ -1793,6 +1793,36 @@ export function journalIds(root: string): string[] {
 /** A block that begins a turn or names a request, as a cold journal's index holds it (`ColdJournal`). */
 const TurnRowSchema = z.object({ id: z.number().int().nonnegative(), type: z.string().nullable(), steering: z.number().int(), request: z.string().nullable(), message: z.string().nullable() })
 const BlockCountSchema = z.object({ count: z.number().int().nonnegative(), last: z.number().int().nullable() })
+const TURN_ROWS_WHERE = "WHERE json_extract(value,'$.type') IN ('user','provider-turn') ORDER BY id"
+
+/**
+ * What a cold journal's opening reads of every block: how many there are, which have appends, and the ones that begin
+ * a turn or name a request, with the revision they were read at. Each is a walk of the whole `blocks` table, most of a
+ * 158 MB journal's file: read where the file had left the disk's cache, the count alone held the host's thread 8.6 s.
+ * A reader thread makes it (`JournalReaders.scan`), and the opening uses it when the journal still stands at its
+ * revision.
+ */
+export const ColdScanSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  count: z.number().int().nonnegative(),
+  last: z.number().int().nullable(),
+  appended: z.array(z.tuple([z.number().int(), z.number().int()])),
+  turns: z.array(z.object({ id: z.number().int().nonnegative(), type: z.string().nullable(), steering: z.number().int(), request: z.string().nullable(), message: z.string().nullable() })),
+})
+export type ColdScan = z.infer<typeof ColdScanSchema>
+
+/** `ColdScan` of an open journal, in one read transaction the caller holds. */
+export function coldScan(db: DatabaseSync): ColdScan {
+  const revision = ProgressSchema.safeParse(db.prepare("SELECT revision FROM progress WHERE id=1").get()).data?.revision ?? 0
+  const counted = BlockCountSchema.parse(db.prepare("SELECT count(*) AS count, max(id) AS last FROM blocks").get())
+  const appended = db.prepare("SELECT block_id, count(*) AS count FROM block_appends GROUP BY block_id").all().map((value): [number, number] => {
+    const row = AppendCountSchema.parse(value)
+    return [row.block_id, row.count]
+  })
+  const turns = db.prepare(`${TURN_ROWS} ${TURN_ROWS_WHERE}`).all().map((row) => TurnRowSchema.parse(row))
+  return { revision, count: counted.count, last: counted.last, appended, turns }
+}
+
 const TURN_ROWS = `SELECT id, json_extract(value,'$.type') AS type, json_extract(value,'$.steeringFor') IS NOT NULL AS steering,
   json_extract(value,'$.requestId') AS request, json_extract(value,'$.messageId') AS message FROM blocks`
 
@@ -1821,8 +1851,9 @@ export class ColdJournal {
   #turns: z.infer<typeof TurnRowSchema>[] | undefined
   #chars = 0
 
-  private constructor(db: DatabaseSync, key: string, snapshot: LiveSnapshot, length: number, appended: ReadonlyMap<number, number>) {
+  private constructor(db: DatabaseSync, key: string, snapshot: LiveSnapshot, length: number, appended: ReadonlyMap<number, number>, turns?: z.infer<typeof TurnRowSchema>[]) {
     this.#db = db
+    this.#turns = turns
     this.key = key
     this.snapshot = snapshot
     this.length = length
@@ -1837,7 +1868,7 @@ export class ColdJournal {
   }
 
   /** `open` as `Steps`, its requests parsed `ROWS_PER_STEP` at a time: a long Fin's 793 held the loop 73 ms at once. */
-  static *opening(root: string, id: string): Steps<ColdJournal | undefined> {
+  static *opening(root: string, id: string, scanned?: ColdScan): Steps<ColdJournal | undefined> {
     const path = join(root, `${id}.sqlite`)
     if (!existsSync(path)) return undefined
     const key = join(realpathSync(root), `${id}.sqlite`)
@@ -1854,7 +1885,11 @@ export class ColdJournal {
         return undefined
       }
       const stored = MetadataSchema.parse(JSON.parse(metadata))
-      const counted = BlockCountSchema.parse(db.prepare("SELECT count(*) AS count, max(id) AS last FROM blocks").get())
+      const revision = ProgressSchema.safeParse(db.prepare("SELECT revision FROM progress WHERE id=1").get()).data?.revision ?? 0
+      // What a reader thread read of every block stands while the journal is at the revision it read; one written
+      // since is read here, as every one was.
+      const scan = scanned?.revision === revision ? scanned : undefined
+      const counted = scan ?? BlockCountSchema.parse(db.prepare("SELECT count(*) AS count, max(id) AS last FROM blocks").get())
       // Blocks are kept by index; a journal whose ids say otherwise is read whole, as it always was. One whose history is
       // its session's record is read cold only when that record covers every block with nothing to merge: its pages are
       // the record's, read a page at a time (`LiveConversations.coldView`); one that merges reads them all.
@@ -1864,7 +1899,6 @@ export class ColdJournal {
         ColdJournal.#end(db)
         return undefined
       }
-      const revision = ProgressSchema.safeParse(db.prepare("SELECT revision FROM progress WHERE id=1").get()).data?.revision ?? 0
       const requests: LiveRequest[] = []
       const requestRows = db.prepare("SELECT rowid AS at, value FROM requests WHERE rowid > ? ORDER BY rowid LIMIT ?")
       for (let last = -1; ;) {
@@ -1882,11 +1916,12 @@ export class ColdJournal {
       if (order) inOrder(requests, order)
       const harnessTurns = db.prepare("SELECT value FROM harness_turns ORDER BY rowid").all()
         .map((row) => HarnessTurnSchema.parse(JSON.parse(RowSchema.parse(row).value)))
-      const appended = new Map<number, number>()
-      for (const value of db.prepare("SELECT block_id, count(*) AS count FROM block_appends GROUP BY block_id").all()) {
-        const row = AppendCountSchema.parse(value)
-        appended.set(row.block_id, row.count)
-      }
+      const appended = new Map<number, number>(scan?.appended)
+      if (!scan)
+        for (const value of db.prepare("SELECT block_id, count(*) AS count FROM block_appends GROUP BY block_id").all()) {
+          const row = AppendCountSchema.parse(value)
+          appended.set(row.block_id, row.count)
+        }
       const snapshot: LiveSnapshot = {
         ...stored,
         revision: Math.max(stored.revision, revision),
@@ -1895,7 +1930,7 @@ export class ColdJournal {
         blocks: [],
         requests,
       }
-      return new ColdJournal(db, key, snapshot, counted.count, appended)
+      return new ColdJournal(db, key, snapshot, counted.count, appended, scan?.turns)
     } catch (error) {
       ColdJournal.#end(db)
       throw error
@@ -1979,7 +2014,7 @@ export class ColdJournal {
     if (this.#turns) return this.#turns
     // One scan of the blocks, whatever order a row's keys are in: a probe for that first was a second whole scan, about
     // 40 ms more a call on a 117 MB journal (pr-review, 2026-11-16).
-    const rows = this.#db.prepare(`${TURN_ROWS} WHERE json_extract(value,'$.type') IN ('user','provider-turn') ORDER BY id`).all()
+    const rows = this.#db.prepare(`${TURN_ROWS} ${TURN_ROWS_WHERE}`).all()
     this.#turns = rows.map((row) => TurnRowSchema.parse(row))
     return this.#turns
   }

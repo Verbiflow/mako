@@ -481,12 +481,12 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   function placeCatalog(refs: readonly ThreadRef[]): void {
     if (!threadStore) return
     const started = performance.now()
-    try {
-      threadStore.placeMany(refs, CATALOG_ACTOR)
-      hostLog("threads", "catalog placed in Threads", { rows: refs.length, ms: Math.round(performance.now() - started) })
-    } catch (error) {
-      hostWarn("threads", "catalog placement failed", { error: error instanceof Error ? error.message : String(error) })
-    }
+    // A batch at a time with the loop turning between: nothing waits on these, and a row served meanwhile is placed
+    // as it's served (`withThreadPlacements`).
+    void threadStore.placeAll(refs, CATALOG_ACTOR).then(
+      () => hostLog("threads", "catalog placed in Threads", { rows: refs.length, ms: Math.round(performance.now() - started) }),
+      (error: Error) => hostWarn("threads", "catalog placement failed", { error: error.message }),
+    )
   }
 
   function annotated(ref: ThreadRef): ThreadRef {

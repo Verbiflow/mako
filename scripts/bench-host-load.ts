@@ -113,6 +113,9 @@ const { values } = parseArgs({
     "probe-every": { type: "string", default: "20,100" },
     // How the working Fins wake their Apex: `never` unless given (`decisions`, `always`).
     wake: { type: "string", default: "never" },
+    // The budget of a recorded run (`bench:host-person`): the steady busy share and the longest hold it may reach.
+    "max-busy": { type: "string" },
+    "max-hold-ms": { type: "string" },
   },
 })
 /** The harness the timed sends go through (`--harness`). */
@@ -759,11 +762,26 @@ if (model) {
   // A recorded run: every hold with its function goes to `holds.json` beside the report, and the host's log is kept.
   let recorded: Omit<ReturnType<typeof recordedRun>, "every"> | undefined
   let sources: ReturnType<typeof bySource> | undefined
+  const overBudget: string[] = []
   let threads: { threadId: number; busyShare: number; delayMs: { p50: number; p99: number; max: number }; profile?: ReturnType<typeof threadProfile> }[] | undefined
   if (record && profile && profileDir) {
     const series = SeriesSchema.safeParse(z.object({ series: z.json() }).loose().safeParse(JSON.parse(readFileSync(yardstickOut, "utf8"))).data?.series).data
     const { every, ...rest } = recordedRun({ recording: join(record, `main-${hostPid}.json`), profile, phases, ...series && { yardstick: series } })
     recorded = rest
+    // The budget, judged beside the yardstick as every limit here is: a hold counts past the limit by more than the
+    // yardstick's own worst wait over the same stretch, so a machine that stopped every process fails nothing. The
+    // host's start and its stop are not judged: what they hold is said, and nobody is streaming through them.
+    const judged = new Set(["baseline", "steady", "burst"])
+    const stalled = new Map(rest.phases.map((phase) => [phase.name, phase.yardstickLateMs?.max ?? 0]))
+    if (values["max-hold-ms"]) {
+      const limit = Number(values["max-hold-ms"])
+      const over = every.filter((hold) => judged.has(hold.phase) && hold.ms > limit + (stalled.get(hold.phase) ?? 0)).sort((a, b) => b.ms - a.ms)
+      if (over.length) overBudget.push(`${over.length} holds past ${limit} ms outside start and stop; the longest ${over[0]!.ms} ms in ${over[0]!.phase}, in ${over[0]!.top}`)
+    }
+    if (values["max-busy"]) {
+      const steady = rest.phases.find((phase) => phase.name === "steady")
+      if (steady && steady.busyShare > Number(values["max-busy"])) overBudget.push(`the thread was busy ${Math.round(steady.busyShare * 1000) / 10}% of the steady stretch, past ${Number(values["max-busy"]) * 100}%`)
+    }
     sources = bySource(join(record, `main-${hostPid}.json`), profile, phases)
     writeFileSync(join(record, "holds.json"), JSON.stringify(every))
     threads = readdirSync(record).filter((name) => name.startsWith(`thread-${hostPid}-`)).map((name) => {
@@ -810,6 +828,7 @@ if (model) {
   if ((answers.reads.p99 ?? Infinity) > readLimit) failures.push(`one read in a hundred waited ${answers.reads.p99} ms, past ${readLimit} ms`)
   if (peakLimit && peakMb > peakLimit) failures.push(`the host peaked at ${peakMb} MB, past ${peakLimit} MB`)
   if (peakLimit && unread) failures.push(`the host's memory can't be judged: ${unread}`)
+  failures.push(...overBudget)
   const row = (name: string, result: { p50: number | null; p99: number | null; max: number | null }, limit: string) => `| ${name} | ${result.p50} | ${result.p99} | ${result.max} | ${limit} |`
   const table = [
     `### bench:host-load (${values.scale}${values.host ? `, ${values.host}` : ""}): ${failures.length ? "failed" : "passed"}`,
