@@ -4142,6 +4142,24 @@ startup, so a default Mako read from the first can be a model it no longer
 routes: the driver treats `models-dev.refreshed` and `integration.updated` as
 catalog changes, and a session still on the default it was given moves to the
 refreshed default before its next prompt.
+
+A new OpenCode conversation asks its model about 380 ms later through Mako than
+`opencode run` does by itself (`npm run bench:vs-bare -- --harness opencode`,
+N=5 on 2026-11-18: 917 ms against 533), most of it OpenCode's own: Mako runs one
+`opencode serve` per conversation (`opencode/servers.ts`), so each new one pays
+the server's handshake (159 ms) and its plugin activation (310 ms). Starting
+that server ahead while the person types was looked at and left: the server is
+the conversation's own, spawned with its grant (the write-hold plugin's URL and
+token, minted per binding), its permission tier, routing denies, primer and
+Thread values in its environment, so the one a launch would start exists only
+once the conversation does, and a conversation started ahead and never sent
+leaves a journal, a Thread in the person's list and a native session, at some
+400 MB of server for every draft. One server shared by every conversation isn't
+safe as Mako uses OpenCode for the same reason: those settings are the
+process's, so every session's calls would post under one binding's grant and
+one tier. `mako:launch-prewarm` still lists the folder's MCP servers and loads
+what a first launch loads (`host-warmup.ts`); it carries the folder alone, and
+the warm-up already keeps to the harnesses used on this device.
 No test, probe or proof runs a real harness in the person's own home. A
 session it starts there is a real entry in their Codex, Cursor, Claude or
 Grok history, and their own Mako lists it and keeps a copy: deleting the
@@ -4832,6 +4850,34 @@ events are fenced by the resident generation and cannot close its replacement.
 Running or queued work, permissions, child delivery, transfers, checkpoints,
 rewinds and automatic continuation prevent hibernation. A retired driver's late
 events are fenced by the resident generation and cannot close its replacement.
+Writing in the composer wakes a session whose process has gone (`noteComposing`
+in `src/state/prewarm.ts`, `mako:live-prewarm`), so the start overlaps the
+typing: once a half minute for one that's awake, and again at the next key for
+one that's hibernated or disconnected, since the signal before it woke nothing.
+
+What a person does to a conversation is timed by `npm run bench:actions`
+(`scripts/bench-actions.ts`): a message, a steer, a Stop, a message after a
+Stop or to a hibernated session, an access change, a model, reasoning or fast
+change and an approval's answer, on a real host with each real harness against
+the scripted model, with Claude Code also driven bare over its stream-json
+input. It reads the host through the probe `bench:vs-bare` uses
+(`scripts/lib/bench-host.ts`, `bench-vs-bare-probe.mjs`), and what has no
+request to be a stage of (`conversations/live-stages.ts`) is a step
+(`liveSteps`, `mako:live-step`, in `base/live-steps.ts`, where a harness's
+driver may say its own round trips too): name a new wait there (`stagedWait`,
+`stagedCall`) rather than timing it where it happens.
+Three rules came of it. A selection reaches the running process when it changes,
+never with each message: the window sends its model, reasoning and fast lane
+with every message, and Claude's `tune` sets only what differs from what the
+process has (`Live.tuned`; `test-claude-tune.ts` counts the round trips). A
+running session's access shows from the person's pick (`src/state/live-mode.ts`,
+on the desk and the phone alike) and is believed only from its host's answer:
+refused, the picker goes back and says why. And nothing starts a turn under a
+level wider than the person chose while a change is on its way: the window's
+sends, steers, goals and reviews wait for the answer (`modeSettled`), a message
+that waited on a refused narrowing isn't sent, and the host dispatches nothing
+while a `setMode` is unanswered (`Resident.modeChanging`), whichever client
+asked. `test-live-mode.ts` and `test-live-mode-gate.ts` hold both sides.
 
 A saved binding's fate is a `ResumeVerdict`
 (`packages/host/src/contracts/conversation-control.ts`), not a boolean: `resumable`
@@ -5092,7 +5138,17 @@ each real harness against the scripted model (Cursor on its own): a 15 s
 command steered 4 s in. Claude, OpenCode and Grok hear it once the command
 returns; Codex's command yields to the model at once and carries on; Devin
 hears it when its command hands back, which it does by itself after about 10 s;
-Cursor cuts the command short. A Stop ends the turn within 0.2 s on all six. Enter steers a steerable running turn and
+Cursor cuts the command short. A Stop ends the turn within 0.2 s on all six. Claude
+Code's Stop keeps its process (`keepStopped`): an `interrupt` that also drops
+what the CLI had queued (`cancel_queued`, where its `init` says
+`interrupt_cancel_queued_v1`) and a `stop_task` for each background task, so
+the next message, and the person's steer, which lands by stopping the turn,
+cost a message and not a relaunch (`bench:actions`: 16 ms where it was 300 or
+more). It closes the process, as it always did, where the CLI can't, doesn't
+answer within two seconds, or had a message queued behind the running command,
+which the CLI would otherwise let finish; `test-claude-stop.ts` holds each
+with fakes, `test-claude-stop-live.ts` on the real CLI against the scripted
+model, and `scripts/probe-claude-stop.ts` reads it on the real model. Enter steers a steerable running turn and
 Cmd/Ctrl+Enter queues; the `steerOnEnter` preference swaps them. Re-verify a
 provider's kind with a real multi-step tool task before changing it: a single
 long generation cannot distinguish step delivery from turn-end delivery.

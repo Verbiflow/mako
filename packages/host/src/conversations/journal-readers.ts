@@ -61,7 +61,8 @@ export class JournalReaders {
     if (this.stopped) return Promise.reject(new Error("The journal readers are stopped."))
     const reader = this.reader()
     const id = (this.next += 1)
-    reader.busy += 1
+    // An idle reader leaves the process free to end; one with a read under way holds it until the answer comes.
+    if ((reader.busy += 1) === 1) reader.worker.ref()
     if (reader.idle) clearTimeout(reader.idle)
     reader.idle = undefined
     return new Promise<JournalRows | null>((resolve, reject) => {
@@ -77,7 +78,8 @@ export class JournalReaders {
     if (this.stopped) return Promise.reject(new Error("The journal readers are stopped."))
     const reader = this.reader()
     const id = (this.next += 1)
-    reader.busy += 1
+    // An idle reader leaves the process free to end; one with a read under way holds it until the answer comes.
+    if ((reader.busy += 1) === 1) reader.worker.ref()
     if (reader.idle) clearTimeout(reader.idle)
     reader.idle = undefined
     return new Promise<ColdScan>((scanned, reject) => {
@@ -118,7 +120,6 @@ export class JournalReaders {
     // A reader's young generation grows to 120 MB while it parses a journal and stays that size while it is idle
     // with 3 MB of it in use: held to `READER_YOUNG_MB`, it collects more often, on its own thread.
     const worker = new Worker(this.entry, { resourceLimits: { maxOldGenerationSizeMb: 1024, maxYoungGenerationSizeMb: READER_YOUNG_MB } })
-    worker.unref()
     const reader: Reader = { worker, busy: 0 }
     worker.on("message", (message) => {
       const part = PartSchema.safeParse(message)
@@ -143,6 +144,8 @@ export class JournalReaders {
       this.retire(reader)
     })
     worker.on("exit", (code) => gone(`it exited with ${code}`))
+    // Last: a "message" listener added after `unref` refs the worker's port again, and the process stays up for it.
+    worker.unref()
     this.readers.push(reader)
     return reader
   }
@@ -154,6 +157,7 @@ export class JournalReaders {
     clearTimeout(asked.timer)
     const { reader } = asked
     reader.busy = Math.max(0, reader.busy - 1)
+    if (!reader.busy) reader.worker.unref()
     if (!reader.busy && !this.stopped && this.readers.includes(reader)) {
       reader.idle = setTimeout(() => {
         const at = this.readers.indexOf(reader)

@@ -51,6 +51,8 @@ export class JournalWriter {
   private readonly handles = new Map<number, Handle>()
   private nextKey = 0
   private stopped = false
+  /** Whether the worker holds the process up: only while a write of some journal is still owed its answer. */
+  private holding = false
   private dead: string | undefined
   private readonly entry: URL
 
@@ -121,12 +123,12 @@ export class JournalWriter {
     handle.next = undefined
     handle.posted += 1
     this.worker.postMessage({ kind: "write", key: handle.key, seq: handle.posted, revision: next.revision, ops: next.ops, indexed: next.indexed })
+    this.hold(true)
   }
 
   private thread(): Worker {
     if (this.worker) return this.worker
     const worker = new Worker(this.entry, { resourceLimits: { maxOldGenerationSizeMb: 256 } })
-    worker.unref()
     worker.on("message", (message) => {
       const reply = ReplySchema.safeParse(message)
       if (!reply.success) return
@@ -135,6 +137,7 @@ export class JournalWriter {
       if (reply.data.error !== undefined) handle.failure ??= reply.data.error
       // What came while that one was written goes now, as one.
       if (handle.next && !handle.closed && Atomics.load(handle.cell, 0) >= handle.posted) this.send(handle)
+      if (![...this.handles.values()].some((open) => open.next !== undefined || Atomics.load(open.cell, 0) < open.posted)) this.hold(false)
     })
     const lost = (why: string) => {
       if (this.worker !== worker) return
@@ -144,7 +147,21 @@ export class JournalWriter {
     }
     worker.on("error", (error) => lost(errorMessage({ error })))
     worker.on("exit", (code) => lost(`it exited with ${code}`))
+    // Last: a "message" listener added after `unref` refs the worker's port again, and the process stays up for it.
+    worker.unref()
+    this.holding = false
     this.worker = worker
     return worker
+  }
+
+  /**
+   * The worker holds the process up while a write is owed its answer, so a process that ends by itself doesn't end
+   * with streamed rows still on their way; idle, it lets the process end, whoever forgot to stop it.
+   */
+  private hold(on: boolean): void {
+    if (!this.worker || this.holding === on) return
+    this.holding = on
+    if (on) this.worker.ref()
+    else this.worker.unref()
   }
 }

@@ -96,6 +96,7 @@ import { ContextBundles, prepareLiveContext } from "./live-context.js"
 import { activeBinding, conversationControl, launched, type Dependencies, type LiveAccess, type ProviderStop, type Resident, STOPPED_FOR } from "./live-runtime.js"
 import { flushFrameMs } from "./answer-pace.js"
 import { emittedBatches, liveStages } from "./live-stages.js"
+import { stagedCall, stagedWait } from "../base/live-steps.js"
 import { LiveSources, settled, updateBinding, type SettledBases } from "./live-sources.js"
 import { LiveThreads } from "./live-threads.js"
 import { holdSwitches, LiveTransfers, withdrawGone } from "./live-transfers.js"
@@ -2048,8 +2049,9 @@ export class LiveConversations {
   }
 
   /**
-   * The message a stop was for goes once the stop settled. A harness that ends its process on Stop (Claude Code) left
-   * nothing to send it to: its session opens again under its native ID, as a message to a sleeping one does.
+   * The message a stop was for goes once the stop settled. A Stop that had to end its harness's process (Claude Code's,
+   * where its CLI couldn't end the turn and keep it) left nothing to send it to: its session opens again under its
+   * native ID, as a message to a sleeping one does.
    */
   private sendAfterStop(id: string): void {
     const resident = this.records.get(id)
@@ -2282,7 +2284,7 @@ export class LiveConversations {
     // The person's Stop: nothing of this conversation goes by itself after it (`stopHolds`).
     if (why === "person") this.stopHolds(id)
     const loaded = this.records.get(id)
-    const pauseGoal = loaded ? await this.goals.stopping(loaded) : undefined
+    const pauseGoal = loaded ? await stagedWait(id, "goal pause", () => this.goals.stopping(loaded)) : undefined
     await this.cancelTurn(id, why)
     await pauseGoal?.()
   }
@@ -2363,10 +2365,16 @@ export class LiveConversations {
       return
     }
     if (!resident.driver) throw new Error("The provider is disconnected")
-    await resident.driver.setMode(
-      conversationControl(resident).activeBindingId,
-      modeId
-    )
+    const driver = resident.driver
+    // A message behind this change waits for the harness's answer (`Resident.modeChanging`), taken or refused: refused,
+    // the session is where every window shows it, and the change's own caller says so.
+    resident.modeChanging = (resident.modeChanging ?? 0) + 1
+    try {
+      await stagedCall(id, "driver.setMode", () => driver.setMode(conversationControl(resident).activeBindingId, modeId))
+    } finally {
+      resident.modeChanging -= 1
+      if (!resident.modeChanging) this.dispatch.drain(resident)
+    }
   }
 
   /**
@@ -2630,7 +2638,7 @@ export class LiveConversations {
     }
     if (why === "not-saved") hostWarn("live", "Mako stops the provider's turn", fields)
     else hostLog("live", "Mako stops the provider's turn", fields)
-    return driver.cancel(conversationControl(resident).activeBindingId)
+    return stagedCall(id, "driver.cancel", () => driver.cancel(conversationControl(resident).activeBindingId))
   }
 
   /**
