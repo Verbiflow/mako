@@ -81,6 +81,11 @@ try {
       await appendFile(files.get('codex'), 'during discovery\n')
       await until(() => changes.some(event => event.entries.some(entry => entry.text === 'during discovery')))
       assert.equal(listed, false, 'live follow delivery must not wait for unrelated discovery')
+      // What the last run saved is answered at once, for a rail to draw; the list itself still waits.
+      const saved = await client.saved()
+      assert.deepEqual(saved.map(ref => ref.path).sort(), catalog.list().map(ref => ref.path).sort(), 'the saved list is the catalog as it stands')
+      assert.ok(saved.some(ref => ref.path === retained.ref.path), 'with what an earlier run kept')
+      assert.equal(listed, false, 'and a list is not answered by it: discovery is still running')
       console.log(`${transport}: all-six/future known paths and archived history available; follow delivered before discovery release (${Math.round(performance.now() - started)} ms including file-stat polling)`)
       gate.resolve()
       const refs = await listing

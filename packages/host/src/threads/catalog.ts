@@ -974,6 +974,18 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       applyDaemonEvent(event, true)
     })
     client.onClose(stopEvents)
+    // The rail as the last run left it, while this reader's discovery reads every store again (29 s for 5,336 sessions,
+    // and the rail stood empty for it): drawn, and no more. `list` below replaces it whole and is what's adopted, so
+    // nothing takes a saved row for discovered. A mirror that already holds a list (another reader's) keeps it.
+    void client.saved().then((refs) => {
+      if (signal.aborted || daemon !== client || hydrated || mirror.size) return
+      activityIndex = null
+      nativeFolders = null
+      for (const ref of refs) mirror.set(ref.path, ref)
+      placeCatalog(refs)
+      push()
+      hostLog("threads", "catalog drawn from the last run's list", { sessions: mirror.size, ms: Math.round(performance.now() - started), kind })
+    }, () => undefined)
     void catalogTask(signal, async () => {
       await client.list({}, (refs) => {
         signal.throwIfAborted()
