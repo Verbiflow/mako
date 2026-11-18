@@ -406,7 +406,7 @@ function draftOf(args: readonly string[]): DraftCall {
 /** A port a command names: `-i :3000`, `-iTCP:3000`, `-ti:3000`, `:3000`. */
 function portOf(argv: readonly string[]): number | undefined {
   for (const word of argv) {
-    const found = /:(\d{2,5})(?:\b|$)/.exec(word)
+    const found = /:(\d{1,5})(?:\b|$)/.exec(word)
     if (found && Number(found[1]) <= 65_535) return Number(found[1])
   }
   return undefined
