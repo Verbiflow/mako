@@ -26,16 +26,16 @@ import { JournalStore, type MoveRecord } from "./journal-store.js"
 import { PlacedSessionSchema, SharedJournal, sharedJournalFolder, type SharingStatus } from "./shared-journal.js"
 import type { ChosenFile, FileReferenceSource, FileResolution, FileSpelling, FileSpellings, MovedPaths } from "../contracts/file-references.js"
 import { spellingPath } from "../files/index.js"
-import { MAX_SPELLINGS, ThreadFiles, type ReferenceSource } from "./thread-files.js"
+import { MAX_SPELLINGS, type ReferenceSource } from "./thread-files.js"
 import { threadHistory, type CarryResult } from "./thread-history.js"
 import { projectRepositories } from "../git/index.js"
 import type { BackfillResult } from "./backfill.js"
 import { LiveActivity, reportedEffect } from "./live-activity.js"
 import { within } from "./paths.js"
 import type { SystemHistory, TreeWatcher } from "./ports.js"
-import { changes, hunks, partition, restorable, shares, storedView, type CheckoutHunk, type CheckoutShares, type JournalView, type Partition, type PartitionOptions, type Restorable, type ThreadChanges } from "./queries.js"
+import { changes, hunks, outsideCounts, partition, restorable, RETENTION_DAYS, shares, storedView, type CheckoutHunk, type CheckoutShares, type JournalView, type Partition, type PartitionOptions, type Restorable, type ThreadChanges } from "./queries.js"
 import { threadTrees, type ThreadTree } from "./thread-tree.js"
-import { runningIn, turnOnlyPair, turnWriters, undoPlan, type ShownPair, type UndoPlan } from "./turn-lines.js"
+import { runningIn, type ShownPair, type UndoPlan } from "./turn-lines.js"
 import type { TurnUndoScope, WriterRun } from "../contracts/turn-review.js"
 import type { RescanFootprint } from "../contracts/mako-footprint.js"
 import { SETTLE_MS } from "./tracker.js"
@@ -45,7 +45,7 @@ export { threadFingerprint } from "./checkpoint-fingerprints.js"
 export { JournalStore } from "./journal-store.js"
 export { readOnlyCommand } from "./read-only.js"
 export { LaptopTracker, type TrackerOptions, type TrackerRepository } from "./tracker.js"
-export { changes, classOf, hunks, partition, restorable, shares, side, storedView, turnChanges, unattributed, writerOf, type ChangeClass, type CheckoutHunk, type CheckoutShares, type FileVersion, type JournalView, type Partition, type PartitionFile, type PartitionOptions, type Restorable, type Share, type ThreadChanges, type UncertainChange, type WholeHunk } from "./queries.js"
+export { changes, changeUsage, classOf, hunks, partition, restorable, shares, side, storedView, threadTotals, turnChanges, unattributed, writerOf, type ChangeClass, type CheckoutHunk, type CheckoutShares, type FileVersion, type JournalView, type Partition, type PartitionFile, type PartitionOptions, type Restorable, type Share, type ThreadChanges, type UncertainChange, type WholeHunk } from "./queries.js"
 export { threadTrees, type ThreadTree } from "./thread-tree.js"
 export { runningIn, turnOnlyPair, turnWriters, undoPlan, type Hand, type ShownPair, type UndoPlan, type UndoWrite } from "./turn-lines.js"
 export { LOST_LISTED, lostVersions, restoreVersion } from "./recovery.js"
@@ -73,83 +73,6 @@ export function changeSummary(found: ThreadChanges): ThreadChangeSummary {
   }
 }
 
-const outsideCounts = (found: Pick<ThreadChanges, "outside">) => ({
-  named: new Set(found.outside.filter((entry) => entry.evidence === "strong").map((entry) => entry.path)).size,
-  maybe: new Set(found.outside.filter((entry) => entry.evidence === "weak").map((entry) => entry.path)).size,
-})
-
-/**
- * "Changes made" by a Thread: the sum of its turns' summaries, the same
- * records each turn's line under its answer draws. Its own lines only, each
- * file once at what its turns did to it in all; files that might be its
- * are counted apart. Commands and paths outside its checkouts come from
- * its calls, as before.
- */
-export function threadTotals(turns: readonly TurnChanges[], found: Pick<ThreadChanges, "commands" | "outside">): ThreadChangeSummary {
-  const files = new Map<string, { first: TurnChangedFile["kind"]; last: TurnChangedFile["kind"] }>()
-  const maybe = new Set<string>()
-  const lines = { added: 0, removed: 0 }
-  let unlisted = 0
-  for (const turn of turns) {
-    lines.added += turn.own.added
-    lines.removed += turn.own.removed
-    unlisted += turn.more
-    for (const file of turn.files) {
-      if (file.own === undefined) {
-        maybe.add(file.path)
-        continue
-      }
-      const seen = files.get(file.from ?? file.path)
-      if (seen && file.from) files.delete(file.from)
-      files.set(file.path, { first: seen?.first ?? file.kind, last: file.kind })
-    }
-  }
-  const kinds = { created: 0, changed: 0, deleted: 0, renamed: 0 }
-  for (const { first, last } of files.values()) {
-    if (first === "create" && last === "delete") continue
-    if (first === "create") kinds.created++
-    else if (last === "delete") kinds.deleted++
-    else if (first === "rename" || last === "rename") kinds.renamed++
-    else kinds.changed++
-  }
-  kinds.changed += unlisted
-  for (const path of files.keys()) maybe.delete(path)
-  return { files: kinds, lines, commands: found.commands.length, outside: outsideCounts(found), maybe: maybe.size }
-}
-
-/** The journal kept this long: its retention, and the window "changes made" covers. */
-const RETENTION_DAYS = 14
-
-/** Every Thread's changes made since `since`, by project, with how surely each was known and how moves went. */
-export function changeUsage(store: JournalStore, since: number): ChangeUsage {
-  const paths = new Map(store.roots().map((root) => [root.id, root.path]))
-  const { roots, threads } = store.changesSince(since)
-  const projects = roots
-    .flatMap(({ root, ...totals }) => {
-      const path = paths.get(root)
-      return path ? [{ path, ...totals }] : []
-    })
-    .sort((a, b) => b.added + b.removed - (a.added + a.removed) || b.files - a.files)
-  const sum = (key: "files" | "added" | "removed") => projects.reduce((total, project) => total + project[key], 0)
-  const mix = store.certaintyMix(since)
-  const moves = store.moveTotals(since)
-  const move = moves.get("move")
-  return {
-    days: RETENTION_DAYS,
-    total: { files: sum("files"), added: sum("added"), removed: sum("removed"), threads },
-    projects,
-    certainty: { exact: mix.get("exact") ?? 0, named: mix.get("named") ?? 0, window: mix.get("window") ?? 0, ambiguous: mix.get("ambiguous") ?? 0, person: mix.get("person") ?? 0, mako: mix.get("mako") ?? 0 },
-    moves: {
-      moves: move?.count ?? 0,
-      came: move?.files ?? 0,
-      guessed: move?.guessed ?? 0,
-      putBack: moves.get("put-back")?.files ?? 0,
-      offered: move?.offered ?? 0,
-      brought: moves.get("bring")?.files ?? 0,
-    },
-  }
-}
-
 /** What windows ask the journal: a Thread's changes made, every Thread's, versions lost from disk, and putting one back. */
 export function declareAttributionMethods(methods: MethodTable, attribution: () => Attribution | undefined): void {
   // These reads come from opening the window's changes/usage view, not background journal polling.
@@ -158,8 +81,8 @@ export function declareAttributionMethods(methods: MethodTable, attribution: () 
     journal?.retryFromPerson()
     return journal
   }
-  methods.handle("mako:thread-changes", (thread: string): ThreadChangeSummary | null => forWindowView()?.threadChanges(thread) ?? null)
-  methods.handle("mako:change-usage", (): ChangeUsage | null => forWindowView()?.changeUsage() ?? null)
+  methods.handle("mako:thread-changes", async (thread: string): Promise<ThreadChangeSummary | null> => (await forWindowView()?.threadChanges(thread)) ?? null)
+  methods.handle("mako:change-usage", async (): Promise<ChangeUsage | null> => (await forWindowView()?.changeUsage()) ?? null)
   // Null while the journal isn't open: the window links as it did before, unchecked.
   methods.handle("mako:resolve-file-references", async (source: FileReferenceSource, spellings: FileSpellings): Promise<FileResolution[] | null> =>
     (await attribution()?.resolveFiles(source, spellings)) ?? null)
@@ -240,13 +163,15 @@ export interface Attribution {
   partition(checkout: string, thread: string, options?: PartitionOptions): Partition
   /**
    * `partition` without `options`, read on a worker from what the journal committed, never on the host's thread: what
-   * work that runs on its own (a Thread's checkpoint as it writes) asks. Rejects if the worker can't answer.
+   * work that runs on its own (a Thread's checkpoint as it writes) asks, and a move. Rejects if the worker can't answer.
    */
-  partitionOffLoop(checkout: string, thread: string): Promise<Partition>
+  partitionOffLoop(checkout: string, thread: string, options?: PartitionOptions): Promise<Partition>
   /** Constant-size identity, partitioning and hashing only on the journal reader. */
   checkpointFingerprint(checkout: string, thread: string): Promise<string>
   /** How the checkout's changes divide by whose they are, for one Thread. */
   shares(checkout: string, thread: string): CheckoutShares
+  /** `shares`, read on the worker as `partitionOffLoop` is: a move reads both, of every changed file in the checkout. */
+  sharesOffLoop(checkout: string, thread: string): Promise<CheckoutShares>
   /** Every change heard so far journaled. */
   settled(checkouts?: readonly string[]): Promise<void>
   /** Only these checkouts, without lost-event rescans; false while incomplete, never a rejected readiness or move. */
@@ -269,8 +194,8 @@ export interface Attribution {
    * asks first, so it takes what's the Thread's without asking the person.
    */
   readBack(checkout: string, budgetMs?: number): Promise<BackfillResult | undefined>
-  /** "Changes made" by a Thread, in counts: the sum of its turns' summaries. */
-  threadChanges(thread: string): ThreadChangeSummary
+  /** "Changes made" by a Thread, in counts: the sum of its turns' summaries, read on the journal's reader. */
+  threadChanges(thread: string): Promise<ThreadChangeSummary>
   /**
    * Count what a Thread's turn changed, from the journal as it stands
    * (`countingTurn`, a slice at a time); `settling` while its entries may
@@ -286,17 +211,18 @@ export interface Attribution {
   /**
    * Who wrote each changed line of a turn's diff of one of its record's
    * files (`turn-lines.ts`), on the journal's sides or on `shown`'s; undefined
-   * when a version isn't kept or the file isn't text.
+   * when a version isn't kept or the file isn't text. This and the two after are read on the journal's reader: each
+   * decompresses and walks every version of the files it reads.
    */
-  turnWriters(thread: string, turn: string, file: TurnChangedFile, shown?: ShownPair): WriterRun[] | undefined
+  turnWriters(thread: string, turn: string, file: TurnChangedFile, shown?: ShownPair): Promise<WriterRun[] | undefined>
   /** The turn's diff of one file with only its own lines changed. */
-  turnOnly(thread: string, turn: string, file: TurnChangedFile): { before: string | null; after: string | null } | undefined
+  turnOnly(thread: string, turn: string, file: TurnChangedFile): Promise<{ before: string | null; after: string | null } | undefined>
   /** How to take a turn's or the Thread's own lines back out of the files in `checkout`, as they are now. */
-  undoPlan(thread: string, scope: TurnUndoScope, checkout: string): UndoPlan
+  undoPlan(thread: string, scope: TurnUndoScope, checkout: string): Promise<UndoPlan>
   /** A turn or background work running in `checkout` on any host of this journal; undefined when none is. */
   running(checkout: string): { thread: string; kind: "turn" | "background" } | undefined
-  /** "Changes made" by every Thread on this device over the journal's window, for Settings › Usage. */
-  changeUsage(): ChangeUsage
+  /** "Changes made" by every Thread on this device over the journal's window, for Settings › Usage; read on the journal's reader. */
+  changeUsage(): Promise<ChangeUsage>
   /** Which file each spelling in a message means, from its Thread's touches, folders, places and renames. */
   resolveFiles(source: FileReferenceSource, spellings: readonly string[]): Promise<FileResolution[]>
   /** The person picked `path` for `spelling` in the source's Thread: its answers link there from now on, on every host of this journal. */
@@ -376,7 +302,6 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       return thread ? { ...session, threadId: thread.thread, sessionId: thread.session } : session
     })
   }
-  const files = new ThreadFiles({ git: deps.git, home })
   /** A message's Thread and folders: a live conversation's from the live engine, a record's from the catalog. */
   const referenceSource = (source: FileReferenceSource): ReferenceSource => {
     if (source.liveId) {
@@ -408,9 +333,19 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     if (closing || !reader || reader.store.closed) throw new Error("The record of changes closed.")
     if (offLoop?.source !== reader) {
       retireReader()
-      offLoop = { source: reader, reader: new JournalReader(activeFile) }
+      offLoop = { source: reader, reader: new JournalReader(activeFile, deps.git) }
     }
     return offLoop.reader
+  }
+  /**
+   * A read a window or a move asks, made on the journal's reader from what it committed: one that grows with a Thread's
+   * history or a checkout's changes never runs on the host's thread. Rejects if the reader can't answer.
+   */
+  const offLoopRead = async <T>(read: (reader: JournalReader) => Promise<T>): Promise<T> => {
+    if (!reader) throw new Error("Mako's record of changes isn't open yet. Try again in a moment.")
+    if (releasingReaders.size) await Promise.all(releasingReaders)
+    if (readerReleaseFailure) throw readerReleaseFailure.error
+    return read(offLoopReader())
   }
 
   /**
@@ -595,11 +530,11 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       wakeFor(checkout)
       return partition(view(), checkout, thread, options)
     },
-    partitionOffLoop: async (checkout, thread) => {
+    partitionOffLoop: async (checkout, thread, options) => {
       wakeFor(checkout)
       if (releasingReaders.size) await Promise.all(releasingReaders)
       if (readerReleaseFailure) throw readerReleaseFailure.error
-      return offLoopReader().partition(checkout, thread)
+      return offLoopReader().partition(checkout, thread, options)
     },
     checkpointFingerprint: async (checkout, thread) => {
       wakeFor(checkout)
@@ -610,6 +545,10 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     shares: (checkout, thread) => {
       wakeFor(checkout)
       return shares(view(), checkout, thread)
+    },
+    sharesOffLoop: (checkout, thread) => {
+      wakeFor(checkout)
+      return offLoopRead((reader) => reader.shares(checkout, thread))
     },
     settled: (checkouts) => (checkouts ? heard(checkouts) : heardAll().then(() => journal.writes.settled())).then(() => undefined),
     heard,
@@ -630,10 +569,7 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       return threadTrees(deps.git, view(), partition(view(), checkout, thread))
     },
     restorable: (target) => restorable(view(), target),
-    threadChanges: (thread) => {
-      const current = view()
-      return threadTotals(current.store.turnChangesOf(thread), changes(current, thread))
-    },
+    threadChanges: (thread) => offLoopRead((reader) => reader.threadChanges(thread)),
     countTurn: async (thread, turn, state) => {
       const source = reader
       if (closing || !source || source.store.closed) return undefined
@@ -651,19 +587,19 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     settledThrough: (at) => !view().store.unsettledThrough(at + TRAIL_MS),
     counted: (summary, session) => journal.writes.counted(summary, session),
     turnsChangedAfter: (thread, after) => view().store.turnsChangedAfter(thread, after),
-    turnWriters: (thread, turn, file, shown) => turnWriters(view(), thread, turn, file, shown),
-    turnOnly: (thread, turn, file) => turnOnlyPair(view(), thread, turn, file),
-    undoPlan: (thread, scope, checkout) => undoPlan(view(), thread, scope, checkout),
+    turnWriters: (thread, turn, file, shown) => offLoopRead((reader) => reader.turnWriters(thread, turn, file, shown)),
+    turnOnly: (thread, turn, file) => offLoopRead((reader) => reader.turnOnly(thread, turn, file)),
+    undoPlan: (thread, scope, checkout) => offLoopRead((reader) => reader.undoPlan(thread, scope, checkout)),
     running: (checkout) => runningIn(view(), checkout),
-    changeUsage: () => changeUsage(view().store, Date.now() - RETENTION_DAYS * DAY_MS),
-    resolveFiles: (source, spellings) => files.resolve(view().store, referenceSource(source), spellings.slice(0, MAX_SPELLINGS)),
+    changeUsage: () => offLoopRead((reader) => reader.changeUsage(Date.now() - RETENTION_DAYS * DAY_MS)),
+    resolveFiles: (source, spellings) => offLoopRead((reader) => reader.resolveFiles(referenceSource(source), spellings.slice(0, MAX_SPELLINGS))),
     chooseFile(source, spelling, path) {
       const thread = referenceSource(source).thread
       if (thread) journal.writes.chose({ thread, spelling: spellingPath(spelling), path, at: Date.now() })
     },
     threadHistory: (thread) => threadHistory(view().store, thread, Date.now()),
     carryThreadHistory: (history, map = []) => journal.writes.carry(history, map),
-    movedPaths: (thread, from, to) => files.movedPaths(view().store, thread, from, to),
+    movedPaths: (thread, from, to) => offLoopRead((reader) => reader.movedPaths(thread, from, to)),
     moved: (move) => journal.writes.moved({ ...move, at: Date.now() }),
     lost: (target) => journal.writes.lost(target),
     restore: (root, entry) => journal.writes.restore(root, entry),

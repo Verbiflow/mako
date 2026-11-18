@@ -53,8 +53,11 @@ function handOf(view: JournalView, thread: string, scope: ReadonlySet<number>, e
   }
 }
 
+/** What a turn's lines are read by of its record's file: where it is and was, and the turn's entries that span it. */
+export type TurnFileSpan = Pick<TurnChangedFile, "path" | "root" | "relative" | "from" | "entries">
+
 /** A record's file as the journal groups it: its root, the paths it was at, and the turn's entries that span it. */
-function recordGroup(file: TurnChangedFile): Pick<TurnFile, "root" | "paths" | "first" | "last"> {
+function recordGroup(file: TurnFileSpan): Pick<TurnFile, "root" | "paths" | "first" | "last"> {
   const base = file.path.slice(0, file.path.length - file.relative.length - 1)
   const was = file.from?.startsWith(`${base}/`) ? file.from.slice(base.length + 1) : file.relative
   return { root: file.root, paths: new Set([file.relative, was]), first: file.entries.first, last: file.entries.last }
@@ -67,14 +70,13 @@ function recordGroup(file: TurnChangedFile): Pick<TurnFile, "root" | "paths" | "
  * turn first wrote it is walked too, and named theirs. The turn's
  * checkpoints, which its review draws when both were saved, hold that save.
  */
-function walkTurnFile(view: JournalView, thread: string, turn: string, file: TurnChangedFile, fromStart = false): Walk<Hand> | undefined {
+function walkTurnFile(view: JournalView, thread: string, turn: string, file: TurnFileSpan, fromStart = false): Walk<Hand> | undefined {
   const scope = new Set(turnEntries(view, thread, turn).map((entry) => entry.seq))
   const group = recordGroup(file)
   const began = fromStart ? view.store.turn(thread, turn)?.start : undefined
-  if (began !== undefined) {
-    const earlier = view.store.entriesBetween(began, Number.MAX_SAFE_INTEGER).find((entry) => entry.root === group.root && group.paths.has(entry.path) && entry.seq < group.first)
-    if (earlier) group.first = earlier.seq
-  }
+  // By each path's own entries: found among every file's since the turn began, it read up to 10,000 entries for one.
+  if (began !== undefined)
+    for (const path of group.paths) group.first = view.store.firstOfPathFrom(group.root, path, began, group.first) ?? group.first
   return walkLines(turnChain(view, group), (ref) => linesOf(view, ref), (entry) => handOf(view, thread, scope, entry), UNKNOWN)
 }
 
@@ -95,7 +97,7 @@ export interface ShownPair {
  * neighbour's in the hunk, or `unknown`. Undefined when a version isn't kept
  * or the file isn't text.
  */
-export function turnWriters(view: JournalView, thread: string, turn: string, file: TurnChangedFile, shown?: ShownPair): WriterRun[] | undefined {
+export function turnWriters(view: JournalView, thread: string, turn: string, file: TurnFileSpan, shown?: ShownPair): WriterRun[] | undefined {
   const walk = walkTurnFile(view, thread, turn, file, shown !== undefined)
   return walk && runsOn(walk, shown)
 }
@@ -164,7 +166,7 @@ function runsOn(walk: Walk<Hand>, shown?: ShownPair): WriterRun[] {
  * added) or isn't there (a line they removed). "Maybe" lines aren't the
  * turn's for sure, so they count as others'.
  */
-export function turnOnlyPair(view: JournalView, thread: string, turn: string, file: TurnChangedFile): { before: string | null; after: string | null } | undefined {
+export function turnOnlyPair(view: JournalView, thread: string, turn: string, file: TurnFileSpan): { before: string | null; after: string | null } | undefined {
   const walk = walkTurnFile(view, thread, turn, file)
   if (!walk) return undefined
   const own = (hand: Hand | null) => hand?.writer === "turn"

@@ -16,7 +16,7 @@ import { contentRef } from "@mako/host/attribution/content"
 import { writersSince } from "@mako/host/attribution/writers-since"
 import { CallBounds, liveCallBounds, type LiveCallBounds } from "@mako/host/harnesses/call-bounds"
 import { claudeCallHooks } from "@mako/host/harnesses/claude/call-hooks"
-import { changes, hunks, partition, restorable, shares, turnChanges, type JournalView } from "@mako/host/attribution/queries"
+import { changes, hunks, partition, restorable, shares, threadSummary, turnChanges, type JournalView } from "@mako/host/attribution/queries"
 import { lineNow, ThreadFiles } from "@mako/host/attribution/thread-files"
 import { threadTotals } from "@mako/host/attribution"
 import { threadTrees } from "@mako/host/attribution/thread-tree"
@@ -979,6 +979,7 @@ test("an agent's `git checkout -b x && git pull` in a turn: the pulled files are
   world.tracker.store.saveTurnChanges(summary, "T1-session")
   const found = changes(view, "T1")
   const made = threadTotals(world.tracker.store.turnChangesOf("T1"), found)
+  assert.deepEqual(threadSummary(world.tracker.store, "T1"), made, "and summed from the journal's own counts of its commands and outside paths, the same")
   assert.deepEqual([made.files, made.lines, made.maybe], [{ created: 1, changed: 0, deleted: 0, renamed: 0 }, { added: 1, removed: 0 }, 0])
   assert.deepEqual([found.files.created.map((path) => basename(path)), found.files.modified, found.maybe], [["own.ts"], [], 0])
   assert.deepEqual(world.tracker.store.turnsChangedAfter("T1", from), new Map(), "nothing Git wrote calls for a recount")

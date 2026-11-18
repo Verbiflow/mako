@@ -262,6 +262,9 @@ const CarriedVersionRow = z.object({ count: z.number(), through: z.number().null
 const CarriedStampRow = z.object({ through: z.number(), at: z.number() })
 const DataVersionRow = z.object({ data_version: z.number() })
 const KeyCountRow = z.object({ key: z.string(), count: z.number() })
+const PathRow = z.object({ path: z.string() })
+const EntryPathRow = z.object({ seq: z.number(), root: z.string(), path: z.string(), from_path: z.string().nullable(), kind: z.enum(["create", "modify", "delete", "rename"]) })
+const EvidenceCountRow = z.object({ evidence: z.enum(["strong", "weak"]), count: z.number() })
 
 /** A call's, turn's or background work's key in the journal. */
 export interface ActivityKey {
@@ -762,6 +765,25 @@ export class JournalStore {
       .all(after, limit).map((row) => this.entryOf(row))
   }
 
+  /**
+   * Where each entry after `after` put a file, and no more: what keeps an index of a root's paths up. `entries` reads
+   * and parses every column, the author's JSON included, for the same three fields.
+   */
+  entryPaths(after: number, limit = 1000): { seq: number; root: string; path: string; from?: string; kind: ChangeKind }[] {
+    return this.statement("SELECT seq, root, path, from_path, kind FROM entries WHERE seq > ? ORDER BY seq LIMIT ?").all(after, limit).map((value) => {
+      const row = EntryPathRow.parse(value)
+      return { seq: row.seq, root: row.root, path: row.path, from: optional(row.from_path), kind: row.kind }
+    })
+  }
+
+  /**
+   * The first entry of a file at `path` journaled at `from` or after and numbered before `before`, by the file's own
+   * index: found among `entriesBetween`, it cost reading up to 10,000 entries of every file.
+   */
+  firstOfPathFrom(root: string, path: string, from: number, before: number): number | undefined {
+    return NullableSeqRow.parse(this.statement("SELECT min(seq) AS seq FROM entries INDEXED BY entries_path WHERE root=? AND path=? AND seq < ? AND at >= ?").get(root, path, before, from)).seq ?? undefined
+  }
+
   /** A file's entries after `after` through `upTo`, oldest first, with their line maps; a rename away from it counts. */
   chain(root: string, path: string, after = 0, upTo = Number.MAX_SAFE_INTEGER): StoredEntry[] {
     return this.statement("SELECT * FROM entries WHERE root=?1 AND (path=?2 OR from_path=?2) AND seq > ?3 AND seq <= ?4 ORDER BY seq").all(root, path, after, upTo).map((row) => this.entryOf(row))
@@ -915,6 +937,14 @@ export class JournalStore {
     return out
   }
 
+  /**
+   * The paths a root's stat cache knows, in the cache's order, and nothing else of its rows: `stats` reads eight more
+   * columns as BigInts and packs each row, which an index of a root's 7,700 paths never looked at.
+   */
+  statPaths(root: string): string[] {
+    return this.statement("SELECT path FROM stats WHERE root=?").all(root).map((row) => PathRow.parse(row).path)
+  }
+
   /** Whether the stat cache knows a path of a root, for a root whose cache isn't in memory (one asleep). */
   hasStat(root: string, path: string): boolean {
     return this.statement("SELECT 1 FROM stats WHERE root=? AND path=?").get(root, path) !== undefined
@@ -1027,6 +1057,15 @@ export class JournalStore {
   /** Turns, calls and background work still running, on any host of this journal. */
   openActivity(): StoredActivity[] {
     return this.statement("SELECT * FROM activity WHERE ended_at IS NULL").all().map((row) => this.activityOf(row))
+  }
+
+  /**
+   * How many commands a Thread's calls reported (`ThreadChanges.commands`, counted): SQLite reads each call's effects
+   * and counts them. `activityOfThread` made every call of the Thread, 84,000 for one, to count the same.
+   */
+  commandsOf(thread: string): number {
+    return Count.parse(this.statement(`SELECT count(*) AS count FROM activity a, json_each(a.effects) e
+      WHERE a.thread=? AND instr(a.effects, '"command"') > 0 AND json_extract(e.value, '$.kind') = 'command'`).get(thread)).count
   }
 
   activityOfThread(thread: string): StoredActivity[] {
@@ -1196,6 +1235,16 @@ export class JournalStore {
       if (row.basis) entry.basis = row.basis
       return entry
     })
+  }
+
+  /** How many paths outside its checkouts a Thread's footprint holds by each evidence, each path once: `footprint` counted, without its rows. */
+  outsideCounts(thread: string) {
+    const counts = { named: 0, maybe: 0 }
+    for (const value of this.statement("SELECT evidence, count(DISTINCT path) AS count FROM footprint WHERE thread=? GROUP BY evidence").all(thread)) {
+      const row = EvidenceCountRow.parse(value)
+      counts[row.evidence === "strong" ? "named" : "maybe"] = row.count
+    }
+    return counts
   }
 
   /** `ref`: the file's content as committed, so a later base with the same content finds who wrote its lines. */

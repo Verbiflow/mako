@@ -514,7 +514,20 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       relocate: async (id, cwd) => late.conversations?.live.relocate(id, cwd),
     }, shellsIn),
     cleanup: (path) => late.movers?.appTools?.cleanup(path),
-    ledger: () => late.attribution,
+    // A move's division of a checkout is read on the journal's reader: on this thread, 553 changed files held it 558 ms.
+    ledger: () => {
+      const attribution = late.attribution
+      return attribution && {
+        settled: (checkouts) => attribution.settled(checkouts),
+        track: (checkout) => attribution.track(checkout),
+        head: (repository) => attribution.head(repository),
+        mako: (write) => attribution.mako(write),
+        readBack: (checkout, budgetMs) => attribution.readBack(checkout, budgetMs),
+        moved: (move) => attribution.moved(move),
+        partition: (checkout, thread, options) => attribution.partitionOffLoop(checkout, thread, options),
+        shares: (checkout, thread) => attribution.sharesOffLoop(checkout, thread),
+      }
+    },
     watchReadings,
     watch: watchBackend,
     daemonRestarts: fileEvents,
