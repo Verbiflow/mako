@@ -1,6 +1,6 @@
 /**
  * How fast streamed text is revealed. The page holds a streaming answer's text as it arrives, in lumps: a paint every
- * 50 ms or more (`StreamFrames`), each with whatever came since. Shown as it lands, the answer jumps a phrase at a
+ * frame or a few (`StreamFrames`), each with whatever came since. Shown as it lands, the answer jumps a phrase at a
  * time. Revealed at a steady pace it reads as written: each lump is spread over about the time the lumps come apart
  * (a smoothed gap between arrivals), so the reveal finishes one as the next lands.
  *
@@ -9,8 +9,8 @@
  * on the page; time is whatever clock the caller steps it with.
  */
 export const REVEAL_MIN_MS = 40
-/** The longest gap between two paints of a streaming answer (`STREAM_PACE_LONG_MS`): a long answer's lumps come this far apart. */
-export const REVEAL_MAX_MS = 400
+/** Past the longest gap between two paints of a streaming answer (`STREAM_FRAME_MAX_MS`, 90 ms, for a very long piece). */
+export const REVEAL_MAX_MS = 120
 export const REVEAL_DRAIN_MS = 160
 /** How much of the smoothed gap each new arrival's gap replaces. */
 const GAP_WEIGHT = 0.3
