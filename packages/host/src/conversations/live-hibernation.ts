@@ -13,12 +13,15 @@ import { resumes, restorableTotals, verifyRecoveredSession } from "../harnesses/
 import { knownApprovalOccurrences } from "./live-approvals.js"
 import { nativeStart } from "./live-launches.js"
 import { releaseHold } from "./live-ledger.js"
-import { activeBinding, conversationControl, launchAccount, launchCalls, launchRouting, revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
+import { activeBinding, conversationControl, launchAccount, launchCalls, launchRouting, noteStartedWith, revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
+import type { ThreadEnvironment } from "../contracts/thread-environments.js"
 import { updateBinding } from "./live-sources.js"
 import { reconnectError } from "./live-transfers.js"
+import { WARM_FLOOR } from "./warm-limit.js"
 
 export const PROVIDER_IDLE_MS = 10 * 60_000
-export const PROVIDER_WARM_LIMIT = 2
+/** The idle providers kept warm where the host gives no number of its own (`Dependencies.warmLimit`): the rule's floor. */
+export const PROVIDER_WARM_LIMIT = WARM_FLOOR
 
 type HibernationAccess = Pick<LiveAccess,
   "dependencies" | "residents" | "resident" | "load" | "flush" | "noteWork" | "drain" | "moves" | "retireFromAccount" | "locateNativePath" |
@@ -26,8 +29,9 @@ type HibernationAccess = Pick<LiveAccess,
 
 /**
  * Which conversations keep a provider process: a ready one stays warm for
- * `PROVIDER_IDLE_MS`, at most `PROVIDER_WARM_LIMIT` at once, then hibernates
- * on its native session and wakes on the next prompt.
+ * `PROVIDER_IDLE_MS`, at most as many at once as the machine's memory keeps
+ * (`warmLimit`, never fewer than `PROVIDER_WARM_LIMIT`), then hibernates on
+ * its native session and wakes on the next prompt, or as one is on its way.
  */
 export class LiveHibernation {
   private readonly access: HibernationAccess
@@ -104,8 +108,7 @@ export class LiveHibernation {
       protected: count("protected"),
       hibernated: count("hibernated"),
       disconnected: count("disconnected"),
-      warmLimit:
-        this.access.dependencies.providerWarmLimit ?? PROVIDER_WARM_LIMIT,
+      warmLimit: this.warmLimit(),
       idleMs: this.access.dependencies.providerIdleMs ?? PROVIDER_IDLE_MS,
       memory,
     }
@@ -122,14 +125,16 @@ export class LiveHibernation {
    * The user started writing to this conversation. A hibernated one wakes now,
    * so its two-second restart overlaps the typing instead of following Send;
    * a warm one restarts its idle window so it cannot hibernate under the draft.
+   * `ahead`: Mako woke it for a message of its own on its way (`LiveConversations.expect`), which nobody watches, so a
+   * failure of that wake with nothing yet queued leaves it asleep for the message's own wake to meet.
    */
-  prewarm(id: string): "waking" | "kept-warm" | "unchanged" {
+  prewarm(id: string, ahead = false): "waking" | "kept-warm" | "unchanged" {
     const resident = this.access.load(id)
     if (!resident || resident.closing || resident.retireWhenIdle || resident.snapshot.session.status === "closed") return "unchanged"
     if (signInPause(resident.snapshot.requests)) return "unchanged"
     if (resident.hibernating || (!resident.driver && this.reopens(resident))) {
       if (!resident.waking) hostLog("residency", "prewarm waking", { conversation: id, harness: resident.snapshot.session.harness })
-      void this.wake(resident)
+      void this.wake(resident, ahead)
       return "waking"
     }
     if (!this.canHibernate(resident)) return "unchanged"
@@ -228,9 +233,28 @@ export class LiveHibernation {
       void this.hibernate(resident, "idle-timeout")
     }, Math.max(0, idleMs - (now - resident.idleSince)))
     resident.idleTimer.unref?.()
-    if (!enforceWarmLimit) return
-    const warmLimit =
-      dependencies.providerWarmLimit ?? PROVIDER_WARM_LIMIT
+    if (enforceWarmLimit) this.enforceWarmLimit()
+  }
+
+  /** The idle providers kept warm now: a test's fixed number, else the machine's as it reads now, else the floor. */
+  private warmLimit(): number {
+    const { dependencies } = this.access
+    return dependencies.providerWarmLimit ?? dependencies.warmLimit?.() ?? PROVIDER_WARM_LIMIT
+  }
+
+  /** How many providers are idle and warm now: those `canHibernate` would let go. */
+  warmCount(): number {
+    let count = 0
+    for (const resident of this.access.residents()) if (this.canHibernate(resident)) count += 1
+    return count
+  }
+
+  /**
+   * Hibernates the idle providers past the number kept warm, the longest idle first. Asked as a provider comes to
+   * rest, and whenever the number may have dropped under them (memory pressure), so the excess doesn't wait for the
+   * next turn's end. Only what `canHibernate` allows is counted or closed.
+   */
+  enforceWarmLimit(reason = "warm-pool-limit"): void {
     const warm = [...this.access.residents()]
       .filter((candidate) => this.canHibernate(candidate))
       .sort(
@@ -238,11 +262,9 @@ export class LiveHibernation {
           (left.idleSince ?? Number.POSITIVE_INFINITY) -
           (right.idleSince ?? Number.POSITIVE_INFINITY)
       )
-    for (const candidate of warm.slice(
-      0,
-      Math.max(0, warm.length - warmLimit)
-    ))
-      void this.hibernate(candidate, "warm-pool-limit")
+    const excess = warm.slice(0, Math.max(0, warm.length - this.warmLimit()))
+    for (const candidate of excess) void this.hibernate(candidate, reason)
+    this.access.dependencies.warmKept?.(warm.length - excess.length)
   }
 
   private async refreshIdleCheckpoint(
@@ -314,6 +336,7 @@ export class LiveHibernation {
     const binding = activeBinding(resident)
     if (!binding?.nativeId || !binding.path) return
     const generation = resident.generation
+    const idleSince = resident.idleSince
     this.clearHibernationTimer(resident)
     const checkpointReady = await this.refreshIdleCheckpoint(
       resident,
@@ -348,6 +371,11 @@ export class LiveHibernation {
     if (resident.generation !== retiringGeneration) return
     resident.connections.clear()
     resident.driver = null
+    // Closed before its idle window ended, the process would still be running on what it started with until then.
+    if (resident.startedWith)
+      resident.startedWith.until = resident.startedWith.bindingId === binding.id && idleSince !== undefined
+        ? idleSince + (this.access.dependencies.providerIdleMs ?? PROVIDER_IDLE_MS)
+        : undefined
     this.access.noteWork(resident)
     resident.snapshot = {
       ...resident.snapshot,
@@ -387,28 +415,51 @@ export class LiveHibernation {
     return resident.snapshot.session.connection === "hibernated"
   }
 
-  wake(resident: Resident): Promise<void> {
+  /**
+   * The Thread's values the provider this wake replaces started with, when the wake may start with them unread: the
+   * same binding in the same folder under the same title and placement, and woken before the idle window it was
+   * hibernated inside has ended. Until then the closed process would itself still be running on them, so the wake is
+   * no staler than staying warm was; past it, a successor would have read them again, and so does the wake.
+   */
+  private keptEnvironment(resident: Resident, bindingId: string): ThreadEnvironment | undefined {
+    const kept = resident.startedWith
+    const { session } = resident.snapshot
+    const now = this.access.dependencies.now?.() ?? Date.now()
+    if (!kept || kept.until === undefined || now >= kept.until || kept.bindingId !== bindingId || kept.cwd !== session.cwd || kept.title !== session.title) return undefined
+    const placed = this.access.dependencies.threads?.journalPlacement(session.id)
+    if (placed?.thread !== kept.environment.thread || (placed !== undefined && placed.session !== kept.environment.session)) return undefined
+    return kept.environment
+  }
+
+  wake(resident: Resident, ahead = false): Promise<void> {
     if (resident.waking) return resident.waking
     const hibernating = resident.hibernating
     const operation = (async () => {
       await hibernating
-      await this.wakeNow(resident)
+      await this.wakeNow(resident, ahead)
     })().finally(() => {
       if (resident.waking === operation) {
         resident.waking = undefined
         this.access.drain(resident)
+        // A wake nothing was sent after (a draft given up, a message refused on its way) rests from now: while it was
+        // waking nothing could arm its idle window, and without one it would stay warm, uncounted by age, for good.
+        this.scheduleHibernation(resident)
       }
     })
     resident.waking = operation
     return operation
   }
 
-  private async wakeNow(resident: Resident): Promise<void> {
+  private async wakeNow(resident: Resident, ahead = false): Promise<void> {
     const { dependencies } = this.access
     // A finished Fin's retired worktree is made again first, where it was: awaited only when there is one, and what
     // the wake depends on is read after it.
     const restoring = this.access.restoreRetiredWorktree(resident)
-    if (restoring) await restoring
+    if (restoring) {
+      await restoring
+      // A worktree made again is not the folder the last start read its values in.
+      if (resident.startedWith) resident.startedWith.until = undefined
+    }
     if (
       !this.access.moves.executes(resident) ||
       this.access.moves.ownerCheck(resident) !== undefined ||
@@ -530,9 +581,9 @@ export class LiveHibernation {
         resident.snapshot.session.settings ??
         binding.tuning
       const conversationTools = await dependencies.tools?.(binding.id, resident.snapshot.session.id)
-      const threadEnvironment = await dependencies.threadEnvironment?.(
-        resident.snapshot.session.id, resident.snapshot.session.title, resident.snapshot.session.cwd
-      )
+      const { title, cwd } = resident.snapshot.session
+      const threadEnvironment = this.keptEnvironment(resident, binding.id) ?? await dependencies.threadEnvironment?.(resident.snapshot.session.id, title, cwd)
+      noteStartedWith(resident, binding.id, cwd, title, threadEnvironment)
       // Close or an ownership move may have happened during asynchronous preparation.
       // Keep this check and start in the same event-loop turn.
       if (resident.generation !== generation || resident.closing) {
@@ -677,8 +728,10 @@ export class LiveHibernation {
         this.access.noteWork(resident)
       }
       const requests = this.access.failedStart(resident, { error }, true)
-      // A message that goes again by itself leaves the session asleep, not failed: the next attempt wakes it.
-      const waits = retriesBegun(resident.snapshot.requests, requests)
+      // A message that goes again by itself leaves the session asleep, not failed: the next attempt wakes it. So does a
+      // wake ahead of a message not yet queued: that message's own wake meets the same failure, and holds it to retry.
+      const waits = retriesBegun(resident.snapshot.requests, requests) ||
+        (ahead && !resident.snapshot.requests.some((request) => request.status === "queued"))
       resident.snapshot = {
         ...resident.snapshot,
         session: {
@@ -700,6 +753,7 @@ export class LiveHibernation {
         nativeId: binding.nativeId,
         error: message,
         ...waits && { retries: true },
+        ...ahead && { ahead: true },
       })
     }
   }

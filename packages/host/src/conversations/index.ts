@@ -50,6 +50,7 @@ import { restorePlan, restoringResume } from "./kept-resume.js"
 import type { RestorePlan } from "../contracts/restore-plan.js"
 import { FIN_CEILING } from "../contracts/fin-tuning.js"
 import type { FinCapacity } from "./fin-capacity-host.js"
+import { watchWarmProviders } from "./warm-watch.js"
 import { TransferInputSchema } from "../contracts/conversation-control.js"
 import type { TurnUndoScope } from "../contracts/turn-review.js"
 import type { CloudAccount, HostTelemetry } from "../usage/index.js"
@@ -220,7 +221,7 @@ export interface ConversationsDeps {
   /** This machine's build slots now, for a heavy suite's note (`build-slots-full`). */
   builds?(): { slots: number; holders: string[] }
   /** This device's Fins at once (`FinCapacity`); without it, `FIN_LIMIT`. */
-  finCapacity?: Pick<FinCapacity, "atOnce" | "observe" | "subscribe">
+  finCapacity?: Pick<FinCapacity, "atOnce" | "observe" | "subscribe"> & Partial<Pick<FinCapacity, "warm" | "look" | "subscribeMemoryPressure">>
   /** Operations this device runs for another place's Threads (`LentHere`): each takes a Fin's place here. */
   lent?: () => number
   /**
@@ -273,7 +274,13 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   deps.jobs.every("settled rewind snapshot budget", 60 * 60_000, async () => {
     if ((await workspaceSnapshots.budget.settings()).mode === "evict") await workspaceSnapshots.budget.run()
   })
-  const live = new LiveConversations({
+  // Idle providers stay warm by this machine's memory, where the host reads it; two of them where it doesn't.
+  const capacity = deps.finCapacity
+  const warmProviders = capacity?.warm && capacity.look && capacity.subscribeMemoryPressure
+    ? watchWarmProviders({ jobs: deps.jobs, capacity: { warm: capacity.warm.bind(capacity), look: capacity.look.bind(capacity), subscribeMemoryPressure: capacity.subscribeMemoryPressure.bind(capacity) }, live: () => live })
+    : undefined
+  const live: LiveConversations = new LiveConversations({
+    ...warmProviders,
     agents: () => agents,
     heldModels: (harness) => harnesses.profiles.held(harness)?.models,
     ...(deps.stopping && { stopping: deps.stopping }),
