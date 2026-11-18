@@ -155,6 +155,11 @@ export class HarnessProfiles {
   private readonly failures = new Map<string, number>()
   private readonly loading = new Map<string, Promise<HarnessProfile>>()
   private readonly launching = new Map<string, Promise<HarnessProfile>>()
+  /**
+   * Discoveries waiting for the foreground to be free, each with what starts it now. A caller that waits on one
+   * starts it: a Fin's start holds the foreground, and its own send waited on a discovery that waited on it.
+   */
+  private readonly parked = new Map<string, () => void>()
   /** Discoveries in flight for each account: one of them refreshes the list for all its folders. */
   private readonly discovering = new Map<string, number>()
   private readonly discoveryOwners = new Map<AbortController, { provider: string; settled: Promise<void> }>()
@@ -171,9 +176,9 @@ export class HarnessProfiles {
   /** The last working snapshot of each account, and each folder's own defaults, answered before discovery runs. */
   private readonly store: ProviderProfileCache
   /** Held while a person waits on a start: a discovery nobody waits for starts once it is free. */
-  private readonly foreground: Pick<Foreground, "idle"> | undefined
+  private readonly foreground: Pick<Foreground, "idle" | "busy"> | undefined
 
-  constructor(host: Pick<ProviderHost, "profiles" | "accounts">, store: ProviderProfileCache, foreground?: Pick<Foreground, "idle">) {
+  constructor(host: Pick<ProviderHost, "profiles" | "accounts">, store: ProviderProfileCache, foreground?: Pick<Foreground, "idle" | "busy">) {
     this.host = host
     this.store = store
     this.foreground = foreground
@@ -377,7 +382,7 @@ export class HarnessProfiles {
     if (mode === "asked") {
       // Opening the picker twice in a minute reads the harness once.
       if (held && usable && !held.borrowed && !held.failed && Date.now() - held.loadedAt < ASKED_AGAIN_MS) return held.profile
-      return this.loading.get(key) ?? this.startLoad(scope, false)
+      return this.awaited(scope)
     }
     if (mode === "send" && held?.borrowed && usable && scope.folder && this.folderDecides(loader, held.profile)) {
       // The account's list validates the send, but this harness launches on what the folder itself configures, and
@@ -389,7 +394,7 @@ export class HarnessProfiles {
         if (own.lent && !this.discovering.get(scope.account)) this.startLoad(scope, true)
         return own.profile
       }
-      return this.loading.get(key) ?? this.startLoad(scope, false)
+      return this.awaited(scope)
     }
     // Stale beats blank, for a picker and for a send alike: the catalogue
     // answers at once, and the refresh behind it lands as an event. A send
@@ -417,7 +422,13 @@ export class HarnessProfiles {
       this.launching.set(key, request)
       return request
     }
-    return this.loading.get(key) ?? this.startLoad(scope, false)
+    return this.awaited(scope)
+  }
+
+  /** The folder's discovery for a caller that waits on it: the one in flight, started now if it was waiting its turn. */
+  private awaited(scope: ProfileScope): Promise<HarnessProfile> {
+    this.parked.get(scope.key)?.()
+    return this.loading.get(scope.key) ?? this.startLoad(scope, false)
   }
 
   /**
@@ -562,7 +573,14 @@ export class HarnessProfiles {
       let failed = false
       let stamp: string | undefined
       try {
-        if (behind) await this.foreground?.idle()
+        if (behind && this.foreground?.busy) {
+          let start: () => void = () => {}
+          const asked = new Promise<void>((resolve) => { start = resolve })
+          this.parked.set(key, start)
+          await Promise.race([this.foreground.idle(), asked]).finally(() => {
+            if (this.parked.get(key) === start) this.parked.delete(key)
+          })
+        }
         this.assertRevision(loader.provider, revision)
         owner.signal.throwIfAborted()
         stamp = await loader.runtimeStamp?.(env).catch(() => undefined)

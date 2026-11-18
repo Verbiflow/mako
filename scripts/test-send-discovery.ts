@@ -1,3 +1,4 @@
+import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { mock } from "node:test"
 import { mkdtemp, mkdir, readFile, symlink, rm, writeFile } from "node:fs/promises"
@@ -214,6 +215,16 @@ try {
   release()
   await until(() => loads === busyLoads + 1)
   await until(() => reported.at(-1) === workspace("busy"))
+  // A person who asks while one waits its turn is not kept waiting behind the start: the same discovery runs now.
+  now += DISPLAY_TTL_MS + 1
+  const releaseAgain = foreground.hold("a harness starting")
+  await profiles.forSend(profile.id, workspace("busy"))
+  await quiet()
+  assert.equal(loads, busyLoads + 1)
+  const askedWhileBusy = await Promise.race([profiles.get(profile.id, true, workspace("busy")), new Promise<"waited">((resolve) => setTimeout(() => resolve("waited"), 300))])
+  assert.notEqual(askedWhileBusy, "waited", "a caller that waits on a discovery never waits for the foreground it may itself hold")
+  assert.equal(loads, busyLoads + 2, "and it is the one discovery, not a second")
+  releaseAgain()
 
   // A runtime that changed is discovered once, in the folder last read, and every folder hears the new list.
   listed = { ...profile, models: [...profile.models, { id: "released-model", label: "Released", options: [] }] }

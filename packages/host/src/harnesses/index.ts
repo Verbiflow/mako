@@ -99,7 +99,7 @@ export interface HarnessesDeps {
   /** The harness processes Mako's hosts on this Mac recorded, with the session each holds, for a resume's check. */
   makoProcesses?: MakoProcesses
   /** Held while a person waits on a start: a discovery nobody waits for starts once it is free. */
-  foreground?: Pick<Foreground, "idle">
+  foreground?: Pick<Foreground, "idle" | "busy">
 }
 
 export function openHarnesses({ host, appRoot, userRoot, catalog, live, emit, jobs, subscribed, makoProcesses, foreground }: HarnessesDeps): Harnesses {

@@ -14,7 +14,7 @@ import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
 import { previewDiffs, projectRepositories } from "../git/index.js"
 import { CheckoutBorrowing } from "./checkout-borrowing.js"
 import { carryOutputs, outputNames, ownBytes, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
-import { commonDirOf, GitError, numstatEntries, untrackedLines, type Git } from "@mako/git"
+import { commonDirOf, GitError, NO_INDEX_REFRESH, numstatEntries, untrackedLines, type Git } from "@mako/git"
 import { WorktreeSpares, type Spare } from "./worktree-spares.js"
 import { fetchQuietly, WorktreeStarts } from "./worktree-start.js"
 import { bringStayed, broughtSentence, MovePlanSchema, MoveOutcomeSchema, moveByAuthor, previewShares, pruneBackups, putBack, resumeMove, returnedSentence, type AdjustHooks, type MoveLedger, type MovePlan } from "./worktree-move.js"
@@ -167,7 +167,7 @@ async function removalBlocker(git: Git, path: string, status?: string, remotePro
   let gitDir: string
   try {
     ;[changes, gitDir] = await Promise.all([
-      status ?? git.output(path, ["status", "--porcelain", "--untracked-files=normal"]),
+      status ?? git.readOutput(path, ["status", "--porcelain", "--untracked-files=normal"]),
       git.output(path, ["rev-parse", "--absolute-git-dir"]),
     ])
   } catch (error) {
@@ -561,7 +561,7 @@ export class ThreadWorktreeService {
       if (roots.length > 1) throw new Error("This project holds several repositories, so its worktree starts each at its own commit; leave base out.")
       if (!(await this.git.succeeds(roots[0]!, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${wanted.base}^{commit}`])))
         throw new Error(`${wanted.base} isn't a commit, branch or tag in ${basename(roots[0]!)}.`)
-      if (await this.git.output(source, ["status", "--porcelain", "--untracked-files=no"]))
+      if (await this.git.readOutput(source, ["status", "--porcelain", "--untracked-files=no"]))
         throw new Error("This checkout has uncommitted changes, which a move carries onto the commit they were made on. Leave base out, or commit them first.")
     }
     this.wanted.set(conversationId, wanted)
@@ -755,7 +755,7 @@ export class ThreadWorktreeService {
     }
     const detailed = await mapLimit([...worktrees, ...loose.values()], 4, async (worktree): Promise<WorktreeDetail> => {
       const [status, landing, users, bytes] = await Promise.all([
-        this.git.output(worktree.path, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => null),
+        this.git.readOutput(worktree.path, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => null),
         this.landing(worktree),
         this.inUse(worktree.path),
         outputsOf(worktree.repoRoot).then((names) => ownBytes(worktree.path, names)),
@@ -1249,9 +1249,9 @@ export class ThreadWorktreeService {
     const base = into ? await this.git.output(path, ["merge-base", into, "HEAD"]).catch(() => worktree.base) : worktree.base
     const [commits, diffed, untracked, status, behind] = await Promise.all([
       this.git.output(path, ["rev-list", "--count", `${base}..HEAD`]).then(Number),
-      this.git.run({ cwd: path, args: ["diff", "--numstat", "-z", "-M", "--no-ext-diff", base, "--"], read: true }).then((result) => numstatEntries(result.stdout)),
+      this.git.run({ cwd: path, args: [...NO_INDEX_REFRESH, "diff", "--numstat", "-z", "-M", "--no-ext-diff", base, "--"], read: true }).then((result) => numstatEntries(result.stdout)),
       this.git.output(path, ["ls-files", "--others", "--exclude-standard", "-z"]),
-      this.git.output(path, ["status", "--porcelain", "--untracked-files=normal"]),
+      this.git.readOutput(path, ["status", "--porcelain", "--untracked-files=normal"]),
       this.behind(worktree.repoRoot, path, false),
     ])
     const files = diffed.map(({ path: file, from, lines }) => {
@@ -1290,7 +1290,7 @@ export class ThreadWorktreeService {
    */
   async update(path: string): Promise<WorktreeUpdate> {
     const worktree = this.known(path)
-    if (await this.git.output(path, ["status", "--porcelain", "--untracked-files=no"]).catch(() => "unreadable"))
+    if (await this.git.readOutput(path, ["status", "--porcelain", "--untracked-files=no"]).catch(() => "unreadable"))
       throw new Error("Commit or stash your changes first.")
     const gitDir = await this.git.output(path, ["rev-parse", "--absolute-git-dir"])
     const underWay = UNDER_WAY.find(([marker]) => existsSync(join(gitDir, marker)))
@@ -1314,7 +1314,7 @@ export class ThreadWorktreeService {
     if (!into) return { ok: false, reason: "The main checkout isn't on a branch." }
     if (dirty) return { ok: false, reason: "Commit or discard this worktree's changes first." }
     if (commits === 0) return { ok: false, reason: `Nothing is committed here that ${into} doesn't have.` }
-    const main = await this.git.output(worktree.repoRoot, ["status", "--porcelain", "--untracked-files=no"]).catch(() => "unreadable")
+    const main = await this.git.readOutput(worktree.repoRoot, ["status", "--porcelain", "--untracked-files=no"]).catch(() => "unreadable")
     if (main) return { ok: false, reason: `The main checkout has uncommitted changes on ${into}.` }
     const busy = await this.working(worktree.repoRoot)
     if (busy.length) return { ok: false, reason: `${busy.join(", ")} ${busy.length === 1 ? "is" : "are"} working in the main checkout. Merge once ${busy.length === 1 ? "it stops" : "they stop"}.` }
