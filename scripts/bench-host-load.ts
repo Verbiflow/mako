@@ -13,6 +13,7 @@ import { claudeSessionPath, makeWorld, TODAY, type WorldScale } from "./lib/host
 import { ownedScratch } from "./lib/owned-scratch.mjs"
 import { once } from "node:events"
 import { scriptedModel } from "./scripted-model.ts"
+import { SCRIPTED_GETS } from "./scripted-harness-env.ts"
 import { hostLoadOutcome, type HostLoadExit } from "./lib/host-load-exit.ts"
 import { fakeCloud, type AccountReports } from "./lib/sync-bench-cloud.ts"
 import { createMakoBridge } from "@mako/host/contracts/renderer-bridge"
@@ -54,7 +55,7 @@ import { followHostLoadOutputs } from "./lib/host-load-output.ts"
  * `--home-from <home>` runs on APFS clones of a real home's harness stores (macOS, read-only to the original).
  * `--send` times each message from the call until its harness asks the model, reporting p50, p95, p99 and every
  * sample (`sendSamples`, and per send `sendDetails`: its request, when the host accepted it and when the model heard
- * it); `--harness claude` or `--harness opencode` sends through a sealed Claude Code or OpenCode instead of Codex,
+ * it); `--harness claude`, `--harness opencode` or `--harness grok` sends through a sealed Claude Code, OpenCode or Grok instead of Codex,
  * while the Fins stay on Codex.
  *
  *   npm run bench:host-load [-- --scale today|ci] [--seconds 60] [--warmup 20] [--host <mako-host.js>] [--cpu-prof <dir>] [--out <file>] [--keep]
@@ -95,7 +96,7 @@ const { values } = parseArgs({
   },
 })
 /** The harness the timed sends go through (`--harness`). */
-const harness = z.enum(["codex", "claude", "opencode"]).parse(values.harness)
+const harness = z.enum(["codex", "claude", "opencode", "grok"]).parse(values.harness)
 const say = (line: string) => process.stderr.write(`${line}\n`)
 const delay = (ms: number) => new Promise((done) => setTimeout(done, ms))
 const SCALES = {
@@ -217,6 +218,8 @@ if (cloud) {
 }
 const model = values.send || finCount > 0 ? await scriptedModel({
   ...values["model-port"] && { port: z.coerce.number().int().min(1).max(65535).parse(values["model-port"]) },
+  // What a harness reads before it asks (Grok's model list), as the live tests' stand-in answers it.
+  answers: SCRIPTED_GETS,
   reply: (heard) => {
     for (const match of heard.matchAll(/BENCH-([SF]\d+)/g)) if (!heardAt.has(match[1]!)) heardAt.set(match[1]!, performance.now())
     if (values["tool-heavy"]) {
@@ -248,7 +251,7 @@ if (model) {
 
   const { directory, socket } = runtimeLocation(world.dataRoot)
   mkdirSync(directory, { recursive: true, mode: 0o700 })
-  const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(MAKO_|CLAUDE_|CODEX_HOME|CURSOR_)/.test(name)))
+  const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(MAKO_|CLAUDE_|CODEX_HOME|CURSOR_|GROK_|XAI_)/.test(name)))
   const profileDir = values["cpu-prof"] && resolve(values["cpu-prof"])
   if (profileDir) mkdirSync(profileDir, { recursive: true })
   // `--node-arg` passes options to the host's Node (a heap limit, `--heap-prof`); `--gc` traces its collections.
@@ -266,6 +269,11 @@ if (model) {
       ...harness === "opencode" && model && {
         OPENCODE_CONFIG_CONTENT: JSON.stringify({ enabled_providers: ["anthropic"], provider: { anthropic: { options: { baseURL: `${model.url}/v1`, apiKey: "mako-host-load" } } } }),
         OPENCODE_DISABLE_MODELS_FETCH: "1", OPENCODE_DISABLE_AUTOUPDATE: "1",
+      },
+      // A sealed Grok (`--harness grok`): its home the world's, its key and every endpoint the stand-in's, as `pointAt` points it.
+      ...harness === "grok" && model && {
+        GROK_HOME: join(world.home, ".grok"), XAI_API_KEY: "mako-host-load", GROK_DISABLE_AUTOUPDATER: "1",
+        GROK_XAI_API_BASE_URL: `${model.url}/v1`, GROK_CLI_CHAT_PROXY_BASE_URL: `${model.url}/v1`, GROK_MODELS_BASE_URL: `${model.url}/v1`,
       }, MAKO_WEB_SOCKET: socket, MAKO_PROD: "1", MAKO_TELEMETRY: "off", ...finCount > 0 && { MAKO_FIN_SLOTS: "8" }, ...cloud && { MAKO_CLOUD_URL: cloud.url } },
     stdio: ["ignore", values.gc ? "pipe" : "ignore", "inherit"],
     ...profileDir && values["node-arg"]?.some((arg) => arg.startsWith("--heap-prof")) && { cwd: profileDir },
