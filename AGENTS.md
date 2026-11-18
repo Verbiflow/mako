@@ -2124,7 +2124,14 @@ Four rules hold this together, and each has a specific failure it prevents:
   navigators above 100 prompts, additionally window measured rows; a timeline
   stays windowed while it's shown. A window keeps two turns mounted each side
   of the pane, and each of those is skipped, at the height it was laid out at,
-  until it's read (`data-sized`). Below the window, an open draws the turns
+  until it's read (`data-sized`). A row measured before stands at that size
+  again, for the window's life and across a reload (`RowHeights`, twelve
+  conversations in `localStorage`, a row dropped when what it holds or the
+  window's width changed), and one never measured is estimated from its
+  words and calls at the pixels a character has been taking in this window,
+  not at one constant: scrolling a 300-turn transcript end to end corrected
+  its column by 243,000 px with the constant, and by nothing once measured
+  (`test-row-heights.ts`). Below the window, an open draws the turns
   that fill the pane and a pane's worth above them before it paints, and the
   rest in idle moments (`FIRST_TURNS`); the answers of turns about to mount
   are parsed ahead in the prose worker (`warmSettledProse`), so mounting one
@@ -2159,7 +2166,13 @@ Four rules hold this together, and each has a specific failure it prevents:
   with no `scrollend`: left standing, the next layout shift would read as the
   reader's. Focus resting in a turn keeps that turn, and only a selection or
   moving input postpones what's released; `test-follow-ui.mjs` holds all of it
-  through bursts of reports on every form. Under a finger the end
+  through bursts of reports on every form. A message the person just sent is
+  placed 24 px below the pane's top with its answer growing under it
+  (`sentTurn`): still the end being followed, over room kept after the
+  column (`data-send-room`) that is as tall as it takes and shorter by every
+  line the answer adds, so nothing moves while it fills, and once the turn
+  fills the pane the room is nothing and the end is followed as ever. The
+  room isn't kept past the transcript being shown. Under a finger the end
   waits for it to lift, and a `scrollend` there (the browser sends one for the
   page's own writes too) doesn't end the gesture;
   `test-phone-scroll-ui.mjs` holds both by touch and by wheel. A Thread
@@ -2190,7 +2203,16 @@ Four rules hold this together, and each has a specific failure it prevents:
   every answer sat on its first character until the turn ended ("I", then the
   tool rows). `test-streaming-markdown.ts` holds `StreamFrames` to both, and
   `test-workspace-ui.mjs` streams a reply and requires the prose to catch up
-  while the turn is still running.
+  while the turn is still running. What a paint brings is revealed at a
+  steady pace and fades in (`useStreamReveal`, `RevealPace`): each lump over
+  about the gap the lumps come at, whole words at a time, never more than
+  400 ms behind the page (`REVEAL_MAX_MS`, the longest gap between a long
+  answer's paints) and all of it within 160 ms of the stream's end; at once
+  in a hidden tab or with reduced motion. It adds nothing to the page: the
+  text is there as it's painted, and CSS custom highlights (`mako-reveal-*`)
+  draw what isn't revealed yet transparent and what just was part-way to
+  the text colour, so the parse runs no more often and a row is as tall as
+  it would be without it. `test-reveal-pace.ts` holds the pace.
 - **Heavy content is made once, off the page.** A code block's tokens come
   from a worker and are kept by language and source (`codeHighlights`), so a
   block mounting again draws its colours in its first render and an answer's
