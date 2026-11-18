@@ -232,6 +232,11 @@ export interface Attribution {
   mako(write: MakoWrite): MakoWriting
   hunks(checkout: string): CheckoutHunk[]
   changes(thread: string): ThreadChanges
+  /**
+   * The paths outside its checkouts the journal ties to the Thread (`ThreadChanges.outside`), read alone: `changes`
+   * reads every entry and call the Thread ever made, which a move's reading asked for every half minute.
+   */
+  outside(thread: string): ThreadChanges["outside"]
   partition(checkout: string, thread: string, options?: PartitionOptions): Partition
   /**
    * `partition` without `options`, read on a worker from what the journal committed, never on the host's thread: what
@@ -585,6 +590,7 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       return hunks(view(), checkout)
     },
     changes: (thread) => changes(view(), thread),
+    outside: (thread) => view().store.footprint("thread", thread),
     partition: (checkout, thread, options) => {
       wakeFor(checkout)
       return partition(view(), checkout, thread, options)

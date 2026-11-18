@@ -165,7 +165,7 @@ export class FootprintReader {
   private segment?: Segment
   /** Segment reads, one after another, so a turn's last is in before it is decided. */
   private segments: Promise<void> = Promise.resolve()
-  private readonly reads = new Set<Promise<void>>()
+  private readonly reads = new Map<Promise<void>, Trail | undefined>()
   private unlogged: FootprintTurn[] = []
   private logged = 0
   private closed = false
@@ -255,17 +255,20 @@ export class FootprintReader {
     }
     if (mark.kind === "turn" && mark.edge === "end" && trail && trail.end === undefined) {
       trail.end = mark.at
-      this.track(this.cut().then(() => this.decide(trail)))
+      this.track(this.cut().then(() => this.decide(trail)), trail)
     }
     if (!this.running.size) this.idleBegan()
   }
 
-  /** A read under way, for `settled`; a failure is logged, never thrown. */
-  private track(work: Promise<unknown>): void {
+  /**
+   * A read under way, for `settled`; a failure is logged, never thrown. `deciding` is the ended turn whose footprint the
+   * read writes: the one read a wait scoped to that turn's folders stands behind.
+   */
+  private track(work: Promise<unknown>, deciding?: Trail): void {
     const done: Promise<void> = work
       .then(() => undefined, (error: Error) => this.deps.log("a footprint could not be read", { error: error.message }))
       .finally(() => this.reads.delete(done))
-    this.reads.add(done)
+    this.reads.set(done, deciding)
   }
 
   /**
@@ -357,9 +360,16 @@ export class FootprintReader {
     trail.named.set(path, access)
   }
 
-  /** Every history read under way, for `settled`. */
-  async settled(): Promise<void> {
-    while (this.reads.size) await Promise.all(this.reads)
+  /**
+   * Every history read under way. With `folders`, only the footprints being written for turns that ran in or around
+   * them: a count or a checkpoint of one checkout never waits on another Thread's read of the home folder's history,
+   * which with many Threads at work is always under way (27 scoped waits gave up after 15 s in 16 minutes, 2026-11-17).
+   */
+  async settled(folders?: readonly string[]): Promise<void> {
+    const around = folders?.map((folder) => this.canonical(folder))
+    const waited = () => [...this.reads].filter(([, deciding]) => !around || (deciding !== undefined &&
+      [...deciding.cwds].some((cwd) => around.some((folder) => within(folder, cwd) || within(cwd, folder))))).map(([read]) => read)
+    for (let reads = waited(); reads.length; reads = waited()) await Promise.all(reads)
   }
 
   close(): void {

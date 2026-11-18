@@ -34,7 +34,7 @@ import { attribute, authorOf, claim, Evidence, LEAD_MS, reaches as reachesChange
 import { WorkingSets } from "./working-set.js"
 import { StatCache } from "./stat-cache.js"
 import { collectPlanOffThread, JournalReader } from "./journal-reader.js"
-import { JournalStore, wholeChange, type FileState, type Recency, type StatRow, type ActivityKey, type Collected, type Row, type StoredActivity, type StoredEntry, type StoredRoot } from "./journal-store.js"
+import { JournalStore, byActivityKey, wholeChange, type FileState, type Recency, type StatRow, type ActivityKey, type Collected, type Row, type StoredActivity, type StoredEntry, type StoredRoot } from "./journal-store.js"
 import { diffLines, splitLines } from "./line-diff.js"
 import { applyHunks, BASE, baseMap, onlyBase, presentLines, presentRuns, rebase, UNKNOWN, withKnownWriters, withWriter, writers, type Run } from "./line-map.js"
 import { FootprintReader, type FootprintOptions } from "./footprint-reader.js"
@@ -1148,7 +1148,7 @@ export class LaptopTracker implements AttributionTracker {
         if (first) await new Promise<void>((resolve) => setImmediate(resolve))
         found.push(...this.store.activityOfRows(rows.slice(first, first + ACTIVITY_PAGE)))
       }
-      return found
+      return found.sort(byActivityKey)
     }
     let after: ActivityKey | undefined
     for (;;) {
@@ -2146,7 +2146,7 @@ export class LaptopTracker implements AttributionTracker {
       await Promise.all(runs)
     }
     await Promise.all(this.scriptReads)
-    await this.footprints?.settled()
+    await this.footprints?.settled(checkouts)
     while (this.reattribution) await this.reattribution
     return complete
   }
