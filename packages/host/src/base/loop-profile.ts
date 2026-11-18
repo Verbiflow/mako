@@ -31,7 +31,12 @@ export interface LoopSlice {
 
 /** `function package/file:line` for a frame of Mako's own packages; undefined for a dependency's, Node's or V8's. */
 function ownFrame(frame: CpuProfile["nodes"][number]["callFrame"]): string | undefined {
-  // In a checkout under `packages/`; in the installed app, under `node_modules/@mako/`, which is the host's own too.
+  // The installed app runs the host bundled into `dist-electron/<program>/` (`bundle-main.mjs`), which holds Mako's
+  // packages alone, every other package staying external: each frame there is Mako's, named by its chunk. Unmatched,
+  // every slice of the installed host's profile named nothing ("7288 ms:"), on a day its loop was held 97% of a launch.
+  const bundled = /\/dist-electron\/([^/]+)\/([^/]+\.js)$/.exec(frame.url)
+  if (bundled) return `${frame.functionName || "(anonymous)"} ${bundled[1]}/${bundled[2]}:${frame.lineNumber + 1}`
+  // In a checkout under `packages/`; under `node_modules/@mako/`, which is the host's own too.
   const own = /\/(?:packages|node_modules\/@mako)\/([^/]+)\/(?:(?:dist|src)\/)?(.+)$/.exec(frame.url)
   if (!own || /\/node_modules\/(?!@mako\/)/.test(frame.url.slice(own.index))) return undefined
   return `${frame.functionName || "(anonymous)"} ${own[1]}/${own[2]}:${frame.lineNumber + 1}`
