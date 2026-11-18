@@ -453,8 +453,11 @@ export function childHistory(script = defaultChildScript(), readings = new Watch
   return {
     async mark() {
       if (!onMac()) throw new Error("The file system's history is read through FSEvents, on macOS only.")
-      // Looked at first, so a restart before this mark is never taken for one after it.
-      await daemon?.restartedSince(Date.now()).catch(() => false)
+      // Looked at beside the mark, not before it: a turn's checkpoint waits on the mark, and on a busy Mac the `ps`
+      // this spawns took seconds, past the checkpoint's wait for history, so every send captured afresh. A restart
+      // found only after the mark is dated when it was found, so a later read counts it as after the mark and reports
+      // its roots lost: a whole capture, never a missed change.
+      void daemon?.restartedSince(Date.now()).catch(() => false)
       const reply = await ask({ t: "mark", id: nextId++ }, MARK_MS)
       if (reply.t !== "marked") throw failed(reply)
       return reply.mark
