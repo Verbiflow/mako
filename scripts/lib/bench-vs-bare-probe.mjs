@@ -48,7 +48,8 @@ subscribe("mako:stream-write", ({ client, type, conversation, line }) => {
   if (type !== "live-batch" || !measured(conversation)) return
   say({ t, s: "wrote", c: conversation, client, r: Number(/"revision":(\d+)/.exec(line)?.[1] ?? -1), bytes: Buffer.byteLength(line) })
 })
-const SCOPES = new Set(["provider-startup", "checkpoints", "residency", "loop"])
+// `packages`: each heavy package the host loads and how long it took, which says what a first launch loaded.
+const SCOPES = new Set(["provider-startup", "checkpoints", "residency", "loop", "packages"])
 subscribe("mako:host-log", (line) => {
   const t = now()
   if (SCOPES.has(line.scope)) say({ t, s: "log", scope: line.scope, message: line.message, level: line.level, fields: line.fields })

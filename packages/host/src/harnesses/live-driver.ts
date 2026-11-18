@@ -1,3 +1,4 @@
+import type { HostWarmup } from "./host-warmup.js"
 import type { MakoProcesses } from "../threads/index.js"
 import type { StartPrefetch } from "./start-prefetch.js"
 import type { ApprovalSubmission } from "../contracts/approval-response.js"
@@ -539,6 +540,11 @@ export interface ProviderLiveDriver extends ProviderCapability {
    * declares it (`test-harness-definitions.ts`); a fixture driver may leave it out.
    */
   startPrefetch?: StartPrefetch
+  /**
+   * What its first launch loads into the host itself, which the host loads once it's ready and idle, for a harness the
+   * person has used here (`host-warmup.ts`): packages and readers only, never the harness's process.
+   */
+  hostWarmup?: HostWarmup
   available(appPath: string): boolean
   start(cwd: string, options: AdmittedStartOptions): Promise<LiveSessionState>
   /**
@@ -606,6 +612,8 @@ export function validateLiveDriver(driver: ProviderLiveDriver): void {
   const prefetch = driver.startPrefetch
   if (prefetch && !prefetch.via.trim())
     throw new Error(`${driver.provider}: explain its start prefetch`)
+  if (driver.hostWarmup && !driver.hostWarmup.via.trim())
+    throw new Error(`${driver.provider}: explain what its host warm-up loads`)
   LaunchEnvironmentCapabilitySchema.parse(driver.launchEnvironment)
   NativeIdentityCapabilitySchema.parse(driver.nativeIdentity)
   NativeExclusionCapabilitySchema.parse(driver.nativeExclusion)

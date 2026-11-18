@@ -882,6 +882,11 @@ export class LiveConversations {
     return this.hibernation.prewarm(id, true)
   }
 
+  /** The harnesses with a provider idle and warm now (`LiveHibernation.warmHarnesses`). */
+  warmHarnesses(): Set<string> {
+    return this.hibernation.warmHarnesses()
+  }
+
   /** How many providers are idle and warm now (`LiveHibernation.warmCount`). */
   warmProviders(): number {
     return this.hibernation.warmCount()

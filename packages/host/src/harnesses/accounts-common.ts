@@ -361,6 +361,32 @@ export async function keychainWrittenAt(service: string, account?: string): Prom
   }
 }
 
+const SecurityExit = z.object({ code: z.number() })
+/** `security`'s exit status for an item that isn't there. */
+const KEYCHAIN_ITEM_MISSING = 44
+/** A stamp this close to the read it's held against can't tell a write just before the read from one just after: the Keychain stamps whole seconds. */
+const KEYCHAIN_STAMP_MARGIN_MS = 2_000
+
+/**
+ * Whether a Keychain item still stands as it did when it was read at `readAt` (`found`: the read found it), told
+ * from its attributes alone: `security find-generic-password` without `-g` prints the item's dates and never asks
+ * for its secret, so no access to it is asked of the person. An item read as missing still stands while it's
+ * missing; one read as there, while its last write is from before the read. False where the item changed, where its
+ * last write is too close to the read to place, and where `security` failed or printed no date.
+ */
+export async function keychainUnchangedSince(service: string, account: string | undefined, found: boolean, readAt: number): Promise<boolean> {
+  if (!onMac()) return false
+  try {
+    const { stdout } = await run("security", ["find-generic-password", "-s", service, ...(account ? ["-a", account] : [])])
+    const stamp = /"mdat"<timedate>=0x[0-9A-F]+\s+"(\d{4})(\d\d)(\d\d)(\d\d)(\d\d)(\d\d)Z/.exec(stdout)
+    if (!found || !stamp) return false
+    return Date.UTC(Number(stamp[1]), Number(stamp[2]) - 1, Number(stamp[3]), Number(stamp[4]), Number(stamp[5]), Number(stamp[6])) + KEYCHAIN_STAMP_MARGIN_MS <= readAt
+  } catch (error) {
+    const exit = SecurityExit.safeParse(error)
+    return !found && exit.success && exit.data.code === KEYCHAIN_ITEM_MISSING
+  }
+}
+
 export async function writeKeychain(
   service: string,
   contents: string,
