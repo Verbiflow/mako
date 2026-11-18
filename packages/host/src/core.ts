@@ -1211,6 +1211,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     journal: (conversationId) => join(logsRoot(environment.dataRoot), "local-control", `${conversationId}.jsonl`),
     notice: (message) => hostWarn("control", "a control session's notice", { message }),
   })
+  // Before the conversations open, not after: its reader's discovery takes as long as the stores are large, and
+  // resuming every Thread's work takes as long as their journals. One after the other, the rail waited for both.
+  catalog.start()
+  trace("catalog starting")
   const opened = await openConversations({
     history: () => late.history,
     elsewhere: (id) => late.cloudConversations?.has(id) ?? false,
@@ -2181,8 +2185,6 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const builds = config.development ? watchOwnBuild(devHostBuildDirectories(environment.appRoot), emit) : []
   appUpdates.start()
   trace("updates ready")
-  catalog.start()
-  trace("catalog starting")
   // The last host's readings paint first; this host's own run a few seconds
   // behind startup, and hourly for the public versions.
   await harnesses.updates.load()
