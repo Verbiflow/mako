@@ -13,7 +13,7 @@ import { promptFingerprint } from "./live-assets.js"
 import { LiveJournal, LiveRequestSchema } from "./live-journal.js"
 import { releaseHold } from "./live-ledger.js"
 import { snapshotFacts } from "./live-moves.js"
-import { activeBinding, launchAccount, launchCalls, launched, launchRouting, noteStartedWith, residentOf, revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
+import { activeBinding, launchAccount, launchCalls, launched, launchRouting, residentOf, revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
 import { liveStages } from "./live-stages.js"
 import { updateBinding } from "./live-sources.js"
 import { captureNativeHistory } from "./native-history.js"
@@ -274,7 +274,6 @@ export class LiveLaunches {
       .then(async () => {
         const conversationTools = await dependencies.tools?.(id, conversation)
         const threadEnvironment = await dependencies.threadEnvironment?.(conversation, options.title, cwd)
-        noteStartedWith(resident, id, cwd, options.title, threadEnvironment)
         // Preparation may finish after Close or an execution-ownership move.
         // Check and start without yielding so a stale owner never spawns.
         if (resident.generation !== generation || resident.closing || !this.access.moves.executes(resident))

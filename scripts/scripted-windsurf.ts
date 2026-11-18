@@ -188,24 +188,21 @@ const SIGNATURE = "scripted"
  * `delta_text` (3), the call whole in `delta_tool_calls` (6), then the stop
  * reason (5) and usage (7: input 2, output 3), as the real server streams one.
  */
-function replyMessages(reply: ScriptedReply): ReplyMessage[] {
+function replyMessages(reply: ScriptedReply): Buffer[] {
   const id = randomUUID()
-  const messages: ReplyMessage[] = [{ bytes: message(write.text(1, id), write.text(17, randomUUID())) }]
-  for (const part of words(reply.reasoning)) messages.push({ bytes: write.text(9, part) })
-  if (reply.reasoning) messages.push({ bytes: message(write.text(10, SIGNATURE), write.text(21, SIGNATURE)) })
-  for (const part of words(reply.text)) messages.push({ bytes: write.text(3, part), text: part })
+  const messages = [message(write.text(1, id), write.text(17, randomUUID()))]
+  for (const part of words(reply.reasoning)) messages.push(write.text(9, part))
+  if (reply.reasoning) messages.push(message(write.text(10, SIGNATURE), write.text(21, SIGNATURE)))
+  for (const part of words(reply.text)) messages.push(write.text(3, part))
   const call = reply.call
   if (call) {
     if ("input" in call) throw new Error(`Devin's tools take JSON arguments, not ${call.name}'s freeform input`)
-    messages.push({ bytes: write.bytes(6, message(write.text(1, call.id), write.text(2, call.name), write.text(3, JSON.stringify(call.arguments)))) })
+    messages.push(write.bytes(6, message(write.text(1, call.id), write.text(2, call.name), write.text(3, JSON.stringify(call.arguments)))))
   }
   const usage = message(write.number(2, USAGE.input), write.number(3, USAGE.output))
-  messages.push({ bytes: message(write.text(1, id), write.number(5, call ? FUNCTION_CALL : STOP_PATTERN), write.bytes(7, usage)) })
+  messages.push(message(write.text(1, id), write.number(5, call ? FUNCTION_CALL : STOP_PATTERN), write.bytes(7, usage)))
   return messages
 }
-
-/** One message of a reply as written, and the answer text it carries when it is a `delta_text`. */
-interface ReplyMessage { bytes: Buffer; text?: string }
 
 /**
  * The one model the stand-in offers (`GetCliModelConfigs`'s
@@ -243,9 +240,9 @@ function endStream(fail?: ScriptedReply["fail"]): Buffer {
  * script's next step for what it carries (`heard`: its system prompt and
  * messages as JSON, so a prompt is found JSON-escaped, as `script()` looks
  * for it). Replies are never compressed: Devin 3000.10.23 refuses a
- * compressed one. `pace` and `sent` are `scriptedModel`'s, for a reply's text.
+ * compressed one.
  */
-export async function scriptedWindsurf(options: Pick<ScriptedModelOptions, "reply" | "aside" | "pace" | "sent"> & {
+export async function scriptedWindsurf(options: Pick<ScriptedModelOptions, "reply" | "aside"> & {
   /** A request that waits for other steps before it takes its own (`Script.waits`), held until it no longer does. */
   waits?: (heard: string) => boolean
 }) {
@@ -287,14 +284,7 @@ export async function scriptedWindsurf(options: Pick<ScriptedModelOptions, "repl
       requests.push({ path: `POST ${path}`, conversation: scripted, ...!reply && { unscripted: true } })
       response.writeHead(200, { "content-type": "application/connect+proto" })
       const answer = reply ?? { text: "The script has no more steps." }
-      // As `scriptedModel` paces a reply: each piece of its text waits `pace` ms, and `sent` hears it as it is written
-      // (`{ type: "delta_text", delta }`).
-      const pace = answer.pace ?? options.pace
-      if (!answer.fail) for (const each of replyMessages(answer)) {
-        if (pace && each.text !== undefined) await new Promise((resolve) => setTimeout(resolve, pace))
-        response.write(envelope(0, each.bytes))
-        if (each.text !== undefined) options.sent?.({ type: "delta_text", delta: each.text })
-      }
+      if (!answer.fail) for (const each of replyMessages(answer)) response.write(envelope(0, each))
       response.end(endStream(answer.fail), recheck)
     })
   })

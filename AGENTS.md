@@ -342,9 +342,7 @@ slot goes out, and a read of it that fails holds them all (`recoverSlots`). The 
 can fix a number per device instead of Auto (Settings › Fins), and
 `FinCapacity` reads the machine on the engine's 10 s tick, which runs only
 while a Fin here holds a place or a start waits (`roomNeeded`, a `HostJobs`
-demand): an idle host reads no load and no process table. The one other
-reader is the warm providers' watch, which reads memory pressure alone while
-more than two idle providers are warm (`FinCapacity.look`). The cloud, a
+demand): an idle host reads no load and no process table. The cloud, a
 machine per Fin, is bounded by the plan and the daily spend ceiling only
 (`cloudCapacity`, `AgentsDeps.cloudLimits`), for when placement lands. Over
 every place the person's ceiling (`FIN_CEILING`, 64) is a safety net, and a
@@ -737,8 +735,7 @@ once with its last words (`unfinishedSummary`), and asks nobody, so nothing
 reaches the person's Inbox; its Apex sends it on (the row's Continue) or takes
 the reply as its result. What was to start `after` it waits on (the digest
 says so) and starts once it reports done; a stop drops it. An idle Apex waits
-`WAKE_COALESCE_MS` and takes ONE turn with the digest, its provider waking
-through that wait when it sleeps; a busy one is left to
+`WAKE_COALESCE_MS` and takes ONE turn with the digest; a busy one is left to
 think: only a question or decision it can answer is steered into its running
 turn, at its next step where its harness steers there, and what else its
 Fins report waits for the turn's end as one digest, unless the turn is still
@@ -4713,33 +4710,11 @@ archived before the list is read again. `scripts/test-thread-store.ts`
 `test-thread-lifecycle.ts` cover these.
 
 A ready provider process is a warm cache, not active work. `LiveConversations`
-keeps as many warm bindings per host as its memory allows and hibernates either
-the oldest excess or any one idle for ten minutes. The number is `warmLimit`
-(`warm-limit.ts`): an eighth of the memory left after the person's reserve and
-the Fins at work, and never more than 3 GB, divided by what a provider holds
-there (a Fin's light memory from `FinCostModel`, 0.8 GB before it has measured
-any), never fewer than two nor more than eight. That is 2 on an 8 or 16 GB
-machine and 3 on a 36 GB Mac or anything larger. A reading that finds memory
-short (the system's pressure level, or swap nearly gone) makes it two for five
-minutes and hibernates the excess at that reading, not at the next turn's end
-(`memoryPressed`); while more than two are warm a job reads memory every 10 s
-(`watchWarmProviders`), since no Fin may be at work to have the engine look.
-Hibernation closes the provider and its MCP children, revokes its control
-grants, releases its session hold, and keeps the journal and binding. The next
-prompt takes the hold, checks the resume verdict and starts that same native
-session once; concurrent prompts share the wake. A wake also starts before
-its prompt: while the person types (`prewarm`), as `agents_send` gathers a
-message for a Fin at rest, and when a digest is queued for an idle Apex, so
-the restart overlaps the wait (`LiveConversations.expect`, which sends nothing
-and wakes nothing for a message that would be refused or held, nor a
-conversation whose folder is gone). One Mako starts for its own message,
-never the person's typing, that fails before the message is queued leaves the
-conversation asleep, unfailed: the message's own wake meets the failure and
-holds it to retry. A wake inside the idle window its provider was hibernated
-in starts with the Thread's values its launch read (`Resident.startedWith`);
-past the window, in another folder or title, or after its worktree was made
-again, it reads them again. The resume verdict and the tools' grant are asked
-at every wake.
+keeps at most two warm bindings per host and hibernates either the oldest excess
+or any one idle for ten minutes. Hibernation closes the provider and its MCP
+children, revokes its control grants, releases its session hold, and keeps the
+journal and binding. The next prompt takes the hold, checks the resume verdict
+and starts that same native session once; concurrent prompts share the wake.
 Running or queued work, permissions, child delivery, transfers, checkpoints,
 rewinds and automatic continuation prevent hibernation. A retired driver's late
 events are fenced by the resident generation and cannot close its replacement.

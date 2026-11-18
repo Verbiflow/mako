@@ -121,15 +121,8 @@ function forcedReply(choice: JsonValue | undefined, tools: readonly JsonValue[] 
   return { call: { id: "call_aside", name, arguments: Object.fromEntries(required.map((field) => [field, aside])) } }
 }
 
-/**
- * A streamed event that carries part of a reply, which `pace` spaces out: one whose `type` says so
- * (`response.output_text.delta`, `content_block_delta`), or a Chat Completions chunk with text or reasoning in it, which
- * has no `type` to say it.
- */
-const DeltaEvent = z.union([
-  z.object({ type: z.string().regex(/delta$/) }),
-  z.object({ object: z.literal("chat.completion.chunk"), choices: z.tuple([z.object({ delta: z.union([z.object({ content: z.string().min(1) }), z.object({ reasoning_content: z.string().min(1) })]) })]) }),
-])
+/** A streamed event that carries part of a reply (`response.output_text.delta`, `content_block_delta`), which `pace` spaces out. */
+const DeltaEvent = z.object({ type: z.string().regex(/delta$/) })
 
 export interface ScriptedModelOptions {
   /** GETs whose path starts with a key, answered with its JSON. */
@@ -152,9 +145,9 @@ export interface ScriptedModelOptions {
   /** A caller-owned listening port; omitted to let the OS choose. */
   port?: number
   /**
-   * Milliseconds before each streamed delta of a reply, on any of the three wires, so it arrives at a model's pace
-   * rather than all at once (20 is 50 tokens a second): `npm run bench:sync-latency` times each word from here to every
-   * device. Unpaced when not given.
+   * Milliseconds before each streamed delta of an OpenAI Responses or Anthropic Messages reply, so it arrives at a
+   * model's pace rather than all at once (20 is 50 tokens a second): `npm run bench:sync-latency` times each word from
+   * here to every device. Unpaced when not given.
    */
   pace?: number
   /** Each streamed event as it is written to the harness, so a caller can time it. */

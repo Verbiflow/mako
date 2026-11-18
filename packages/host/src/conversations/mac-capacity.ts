@@ -128,22 +128,10 @@ export function finSlots(): number | undefined {
 async function swapFree(): Promise<number | undefined> {
   if (!onMac()) return undefined
   const said = await hostProbe("/usr/sbin/sysctl", ["-n", "vm.swapusage"], { timeout: 2_000 }).then((out) => out.stdout, () => "")
-  return swapFreeOf(said)
-}
-
-/**
- * The free swap `vm.swapusage` says. Undefined when it says none is allocated ("total = 0.00M"): macOS makes its swap
- * file when it first needs one, so a Mac that has never swapped reads free = 0, which is the opposite of out of swap.
- */
-export function swapFreeOf(said: string): number | undefined {
-  const size = (word: string) => {
-    const found = new RegExp(`${word} = ([\\d.]+)([KMG])`).exec(said)
-    if (!found) return undefined
-    const unit = found[2] === "G" ? 1024 ** 3 : found[2] === "M" ? 1024 ** 2 : 1024
-    return Number(found[1]) * unit
-  }
-  const free = size("free")
-  return free === undefined || size("total") === 0 ? undefined : free
+  const free = /free = ([\d.]+)([KMG])/.exec(said)
+  if (!free) return undefined
+  const unit = free[2] === "G" ? 1024 ** 3 : free[2] === "M" ? 1024 ** 2 : 1024
+  return Number(free[1]) * unit
 }
 
 /** macOS's memory pressure (`sysctl kern.memorystatus_vm_pressure_level`: 1 normal, 2 warn, 4 critical); undefined elsewhere. */
