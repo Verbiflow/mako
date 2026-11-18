@@ -33,7 +33,18 @@ import { WalPrimer } from "./wal-primer.js"
  * Journals here run to 95MB, and a host that kept each one it loaded held
  * 640MB minutes after starting.
  */
-export const CONVERSATION_MEMORY = { bytes: 128 * 1024 * 1024, recent: 2, sweepMs: 15_000 }
+export const CONVERSATION_MEMORY = { bytes: 128 * 1024 * 1024, recent: 2, sweepMs: 15_000, idleMs: 60_000 }
+
+/**
+ * What a conversation in memory holds whatever its content weighs, nearly all of it outside the heap: its journal's
+ * connection to SQLite with its statements, pages and log index. Measured over 300 conversations read in as a host
+ * reads them (2026-11-18): 222 KB of footprint each at 43 KB of content (54 KB of heap), 283 KB at 170 KB (190 KB of
+ * heap); the writer's connection, while every resident held one, was another 270 to 300 KB (`LiveJournal.writeWith`
+ * now opens it only to stream). Counted for each beside its content, or a few hundred small conversations at rest (an
+ * Apex's Fins, all read in as the host starts) weigh next to nothing, fit any budget, and hold this each for the host's
+ * life. One let go is its listing's line, and read back in under a millisecond (p95 1 ms at 43 KB, 3 ms at 170 KB).
+ */
+export const RESIDENT_HELD_BYTES = 160 * 1024
 
 /**
  * One reader loading this many conversations from disk between two sweeps is
@@ -181,6 +192,7 @@ export class LiveRecords {
   /** Readers already named for bulk loads since the last sweep: each is said once. */
   private bulkSaid = new Set<string>()
   private sweepTimer?: ReturnType<typeof setTimeout>
+  private idleTimer?: ReturnType<typeof setTimeout>
   private stopped = false
   /** Where journals read in a slice at a time are read: off the loop (`JournalReaders`). */
   private readonly readers = new JournalReaders()
@@ -621,6 +633,29 @@ export class LiveRecords {
     this.sweepTimer.unref?.()
   }
 
+  /**
+   * A sweep once the least recently used of what stays could be idle (`ResidencyBudget.idleMs`): nothing else may
+   * come to sweep a host that's quiet. Only while something besides the most recent and the pinned is in memory.
+   */
+  private sweepWhenIdle(): void {
+    const { idleMs, recent } = this.memoryBudget()
+    if (idleMs === undefined || this.idleTimer || this.stopped) return
+    let loose = 0
+    let oldest = Infinity
+    for (const resident of this.residents.values()) {
+      if (this.pinned(resident)) continue
+      loose += 1
+      oldest = Math.min(oldest, resident.usedAt ?? 0)
+    }
+    if (loose <= recent) return
+    const now = this.dependencies.now?.() ?? Date.now()
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = undefined
+      this.scheduleSweep()
+    }, Math.max(1_000, oldest + idleMs - now))
+    this.idleTimer.unref?.()
+  }
+
   private memoryPlan(): ResidencyPlan {
     // What windows' cold views hold (`ColdJournal`) is memory too: it leaves the conversations in memory that much less.
     const cold = this.dependencies.historyHeld?.() ?? 0
@@ -628,10 +663,11 @@ export class LiveRecords {
       [...[...this.residents.values()].map((resident) => ({
         id: resident.snapshot.session.id,
         usedAt: resident.usedAt ?? 0,
-        weight: residentWeight(this.weights, resident),
+        weight: residentWeight(this.weights, resident) + RESIDENT_HELD_BYTES,
         pinned: this.pinned(resident),
       })), ...cold ? [{ id: COLD_VIEWS, usedAt: 0, weight: cold, pinned: true }] : []],
-      this.memoryBudget()
+      this.memoryBudget(),
+      this.dependencies.now?.() ?? Date.now()
     )
   }
 
@@ -669,12 +705,13 @@ export class LiveRecords {
         until = performance.now() + UNLOAD_SLICE_MS
       }
       const resident = this.residents.get(id)
-      const weight = resident ? residentWeight(this.weights, resident) : 0
+      const weight = resident ? residentWeight(this.weights, resident) + RESIDENT_HELD_BYTES : 0
       if (resident && this.unload(resident)) {
         freed += weight
         count++
       }
     }
+    this.sweepWhenIdle()
     // Who read in since the last sweep goes with what the sweep let go: a line that frees a gigabyte names who filled it.
     const loads = [...this.sinceSweep].sort((left, right) => right[1] - left[1]).slice(0, 5).map(([by, loaded]) => `${by}=${loaded}`).join(", ")
     this.sinceSweep = new Map()
@@ -702,7 +739,8 @@ export class LiveRecords {
         resident.storageFault || resident.timer || resident.updates.length ||
         resident.journalSnapshot !== snapshot ||
         snapshot.session.status === "running" || snapshot.session.status === "starting" ||
-        snapshot.permissions.length || control.questions?.length ||
+        // What waits on the person stays where every row reads it (`LiveConversations.waitingOn`), never read back to find it.
+        snapshot.permissions.length || control.questions?.length || control.asks?.length ||
         snapshot.requests.some((request) => request.status === "queued" || request.status === "dispatching") ||
         snapshot.nativeAgents?.agents.some(isBusyProviderWork) ||
         this.hooks.busy(resident)
@@ -756,7 +794,8 @@ export class LiveRecords {
         if (table === "blocks" && (resident.journalSnapshot !== snapshot || resident.updates.length || resident.storageFault)) break
         const entries = table === "blocks" ? snapshot.blocks : snapshot.base?.entries
         if (!entries) break
-        const end = table === "blocks" ? Math.min(warmFrom(entries), runningFrom(resident)) : warmFrom(entries)
+        const warm = warmFrom(entries, (entry) => this.weights.entry(entry) / 2)
+        const end = table === "blocks" ? Math.min(warm, runningFrom(resident)) : warm
         while (at < end && isPaged(entries[at]!)) at++
         if (at >= end) break
         const until = performance.now() + PAGE_SLICE_MS
@@ -810,6 +849,8 @@ export class LiveRecords {
     for (const journal of this.releasing.values()) journal.keepFile()
     clearTimeout(this.sweepTimer)
     this.sweepTimer = undefined
+    clearTimeout(this.idleTimer)
+    this.idleTimer = undefined
     return this.readers.stop()
   }
 
@@ -817,6 +858,11 @@ export class LiveRecords {
   async releasesSettled(): Promise<void> {
     if (this.stopped) return
     await Promise.all([...this.releasing.values()].map(journal => journal.released()))
+  }
+
+  /** Before the journals close as the host stops: what the writer holds of each is written and its writes closed, awaited (`JournalWriter.closeAll`). */
+  closeWrites(): Promise<void> {
+    return this.writer?.closeAll() ?? Promise.resolve()
   }
 
   /** All resident journals closed: join their checkpoint handles before the host releases its data root. */
@@ -995,21 +1041,20 @@ function afterRestart(previous: LiveSnapshot, root: string, endsWithTurn: (provi
   return snapshot
 }
 
-/** Where the newest `WARM_CHARS` of `entries` begin, or the first entry paged already after which all are warm. */
-function warmFrom(entries: readonly Entry[]): number {
-  let chars = 0
+/**
+ * Where the newest `WARM_CHARS` of `entries` begin, or the first entry paged already after which all are warm. Each
+ * entry's characters are its JSON's, measured once while it's the same object (`chars`): stringified again at each
+ * page-out, the warm end of a conversation with long outputs held the thread up to 94 ms with 30 Fins at work.
+ */
+function warmFrom(entries: readonly Entry[], chars: (entry: Entry) => number): number {
+  let total = 0
   for (let index = entries.length - 1; index >= 0; index--) {
     const entry = entries[index]!
     if (isPaged(entry)) return index + 1
-    chars += contentChars(entry)
-    if (chars > WARM_CHARS) return index + 1
+    total += chars(entry)
+    if (total > WARM_CHARS) return index + 1
   }
   return 0
-}
-
-/** About how much an entry's content weighs: its JSON, most of which paging lets go. */
-function contentChars(entry: Entry): number {
-  return JSON.stringify(entry).length
 }
 
 /** Where the turn under way begins, its blocks still changing; the end when none is. */

@@ -751,7 +751,12 @@ export const journalCommits = topic<{ conversation: string; running: boolean; be
 export class LiveJournal {
   /** The journal's own connection, read through `db`. */
   private readonly connection: DatabaseSync
-  /** A running turn's streamed rows go to a writer thread through these (`writeWith`), and what they have queued since this connection last wrote. */
+  /**
+   * A running turn's streamed rows go to a writer thread (`writeWith`) through these, opened at its first streamed flush
+   * and let go at rest, and what they have queued since this connection last wrote. Opened for every conversation in
+   * memory, the writer held a connection to each of a few hundred journals that hadn't streamed since they were read.
+   */
+  private writer?: JournalWriter
   private writes?: JournalWrites
   private queued?: { from: number; blocks: Entry[]; revision: number }
   private settling = false
@@ -825,7 +830,11 @@ export class LiveJournal {
     try {
       // The checkpoint owner's final close may still hold the WAL lock. Install the existing wait before opening it.
       this.db
+        // The tables in one transaction: each statement by itself is a commit of its own, thirteen writes of a new
+        // journal's file where one does, and thirty Fins started together waited on them 40 to 85 ms each. For a
+        // journal that has them the transaction writes nothing and takes no lock.
         .exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA journal_size_limit=${WAL_KEPT_BYTES};
+      BEGIN;
       CREATE TABLE IF NOT EXISTS metadata (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS options (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS progress (id INTEGER PRIMARY KEY, revision INTEGER NOT NULL);
@@ -838,7 +847,8 @@ export class LiveJournal {
       CREATE TABLE IF NOT EXISTS harness_turns (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS block_appends (block_id INTEGER NOT NULL, sequence INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (block_id, sequence));
       ${TURN_INDEX_TABLE};
-      ${MAKO_LOG_TABLE}`)
+      ${MAKO_LOG_TABLE};
+      COMMIT`)
       this.indexed = turnIndexed(this.connection)
       for (const value of this.db
         .prepare(
@@ -873,8 +883,8 @@ export class LiveJournal {
    * Everything else this journal writes, it writes itself as before.
    */
   writeWith(writer: JournalWriter): void {
-    if (this.closed || this.writes) return
-    this.writes = writer.open(this.path, WAL_KEPT_BYTES)
+    if (this.closed) return
+    this.writer = writer
   }
 
   /**
@@ -932,8 +942,14 @@ export class LiveJournal {
    * yet: one transaction under way and one waiting, whatever the disk does.
    */
   private streamed(next: LiveSnapshot, previous: LiveSnapshot | undefined, grown: ReadonlyMap<number, ToolGrowth> | undefined): boolean {
-    const writes = this.writes
-    if (!writes || !previous || this.closed || this.settling) return false
+    if ((!this.writes && !this.writer) || !previous || this.closed || this.settling) return false
+    // The writer closed every journal's writes as the host stops (`JournalWriter.closeAll`): this one writes its own.
+    if (this.writes?.closed()) {
+      this.settleWrites()
+      this.writes = undefined
+      this.writer = undefined
+      return false
+    }
     // Of a turn that isn't running, only a flush that changes nothing the journal keeps: its Fins' roster moved (an
     // Apex's, at each step of each Fin), which is never saved, so all there is to write is the revision.
     const running = next.session.status === "running" && previous.session.status === "running"
@@ -945,6 +961,12 @@ export class LiveJournal {
     const events = this.logState().advance(makoFacts(next))
     if (events.length) {
       this.carried = [...(this.carried ?? []), ...events]
+      return false
+    }
+    const writes = this.writes ?? (this.writes = this.writer?.open(this.path, WAL_KEPT_BYTES))
+    // A writer stopped, lost or closing for the host's stop opens nothing more: this journal writes its own.
+    if (!writes) {
+      this.writer = undefined
       return false
     }
     const { blocks } = next
@@ -981,15 +1003,30 @@ export class LiveJournal {
     return true
   }
 
-  /** What the writer holds is written and its connection closed, before this journal's own closes: the last to close checkpoints the file. */
+  /**
+   * What the writer holds is written, and its connection let go of without waiting on this thread: the close is
+   * awaited with the worker's checkpoints (`leftWorker`) before anything tidies the file.
+   */
   private leaveWriter(): void {
     try {
       this.settleWrites()
     } finally {
-      const writes = this.writes
-      this.writes = undefined
-      writes?.close()
+      this.writer = undefined
+      this.releaseWrites(true)
     }
+  }
+
+  /**
+   * The writer's connection let go of; one opens again at the next streamed flush. At rest only once nothing of it is
+   * pending; closing, whatever it still holds is written before it closes, in order.
+   */
+  private releaseWrites(closing = false): void {
+    const writes = this.writes
+    if (!writes || (!closing && (writes.pending() || this.queued))) return
+    this.writes = undefined
+    const left = Promise.all([this.left, writes.release()]).then(() => {})
+    this.left = left
+    void left.then(() => { if (this.left === left) this.left = undefined })
   }
 
   /** Live resident only: listings and independent read connections retain their original policy. */
@@ -1003,7 +1040,9 @@ export class LiveJournal {
    * at work keeps its pages; one read in, or gone quiet, reads the few its next commit touches from the disk's cache.
    */
   rest(): void {
-    if (this.closed || this.connection.isTransaction) return
+    if (this.closed) return
+    this.releaseWrites()
+    if (this.connection.isTransaction) return
     try {
       this.connection.exec("PRAGMA shrink_memory")
     } catch { /* The pages stay until it closes. */ }

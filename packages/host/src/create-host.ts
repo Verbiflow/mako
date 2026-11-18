@@ -21,6 +21,9 @@ import type { TerminalClients } from "./terminals/index.js"
 import type { Core } from "./core.js"
 import { runtimeBuild } from "./base/build-identity.js"
 import type { MachineRuntime } from "./usage/index.js"
+import { workspacesLoad } from "./workspaces/load.js"
+import { harnessesLoad } from "./harnesses/load.js"
+import { conversationsLoad } from "./conversations/load.js"
 
 /** What runs the host: the process it belongs to. */
 export interface HostOwner {
@@ -72,9 +75,11 @@ const CORE_IMPORTS = [
   () => import("./control/index.js"),
   () => import("./tools/index.js"),
   () => import("./threads/index.js"),
-  () => import("./workspaces/index.js"),
-  () => import("./harnesses/index.js"),
-  () => import("./conversations/index.js"),
+  // The three largest domains a part at a time, as each lists its own (`<domain>/load.ts`): whole, with the compile
+  // cache warm, each still held the loop 60 to 90 ms after `/health` answered.
+  ...workspacesLoad,
+  ...harnessesLoad,
+  ...conversationsLoad,
 ]
 
 /** How long a call waits for the domain that declares it before it fails. */

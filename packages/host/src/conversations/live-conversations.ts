@@ -711,6 +711,7 @@ export class LiveConversations {
    */
   waitingOn(id: string): Waiting | undefined {
     const resident = this.records.has(id) ? this.records.load(id) : undefined
+    // An open approval, question or agent's ask keeps a conversation in memory (`LiveRecords.pinned`).
     if (!resident) return undefined
     const permission = resident.snapshot.permissions[0]
     // A command as its person would type it: Codex asks about `/bin/zsh -lc '…'`, which says nothing more.
