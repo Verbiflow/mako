@@ -1223,6 +1223,25 @@ export type LiveDriverEvent =
  */
 export const LIVE_FRAME_MS = 50
 
+/**
+ * How often a window on the host's own machine hears the text a conversation's next batch will carry: a paint frame.
+ * The batches themselves keep `LIVE_FRAME_MS` and the long answer's pace, for the journal and every other device.
+ */
+export const LIVE_AHEAD_MS = 16
+
+/**
+ * The text a conversation's next batch will add to its last block, said ahead of that batch to the host's own windows
+ * (`LIVE_AHEAD_MS`): all of it that waits, each time, so one that's missed costs nothing and the next says it again.
+ * It is read only against the revision it names, the one the conversation's last batch made: a window that holds any
+ * other draws nothing of it, and the batch that follows carries the same text for everyone.
+ */
+export interface LiveAhead {
+  id: string
+  revision: number
+  epoch?: string
+  more: string
+}
+
 /** One batch in this many of a conversation is traced, besides each that changes its status, approvals or requests. */
 export const TRACE_EVERY = 25
 

@@ -8,9 +8,9 @@ import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { noteFinAsks, noteListedOutcome, syncThreadStatus } from "@/state/acp-live"
 import { threadsStore } from "@/state/thread-store"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
-import { changesSession, expandLiveBatch, isCompactBatch, requestsAfter, sessionAfter, type HeardLiveBatch } from "@mako/host/contracts/live-conversations"
+import { changesSession, expandLiveBatch, isCompactBatch, requestsAfter, sessionAfter, type HeardLiveBatch, type LiveAhead } from "@mako/host/contracts/live-conversations"
 import { laterPrompt, personPromptedAt, promptedAfter } from "@mako/host/contracts/worked-at"
-import { projectLive } from "@/state/live-projection"
+import { projectLive, shownBlocks } from "@/state/live-projection"
 import { toast } from "sonner"
 import { settleMessage } from "@/state/message-outbox"
 import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
@@ -588,6 +588,25 @@ export function applyLiveBatch(heard: HeardLiveBatch, replayed = false): void {
   receiveLive(heard.id, replayed ? { from: "answer" } : { from: "said", revision: heard.revision, ...(heard.epoch && { epoch: heard.epoch }) }, () => takeBatch(heard))
 }
 
+/**
+ * What the host said a conversation's next batch will add to its last block (`LiveAhead`): drawn at once on this
+ * machine's windows, which hear it every paint frame while the batches keep the pace every device and the journal
+ * share. Only where this window shows the conversation at the revision it names; anywhere else the batch says it.
+ * Nothing the window holds of the conversation changes: `blocks` and `revision` stay the last batch's.
+ */
+export function applyLiveAhead(ahead: LiveAhead): void {
+  const current = acpStore.get().conversations[ahead.id]
+  if (current?.kind !== "live" || !current.hydrated || !sameEpoch(current, ahead) || current.revision !== ahead.revision) return
+  if (current.ahead?.revision === ahead.revision && current.ahead.more === ahead.more) return
+  const next = { ...current, ahead: { revision: ahead.revision, more: ahead.more } }
+  replaceAcpConversation(ahead.id, {
+    ...next,
+    projection: acpStore.get().activeKey === ahead.id
+      ? projectLive({ blocks: shownBlocks(next), base: next.base ?? null, baseCoveredBlocks: next.baseCoveredBlocks, history: next.history, session: next.session, requests: next.requests, releasedTurns: next.releasedTurns }, current.projection, next.pendingPrompts)
+      : undefined,
+  })
+}
+
 function takeBatch(heard: HeardLiveBatch): void {
   if (!isCompactBatch(heard)) applyBatch(heard, heard, false)
   else {
@@ -733,6 +752,8 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
     promptedAt: promptedAfter(current.promptedAt, batch),
     pendingPrompts,
     blocks,
+    // The batch carries what was said ahead of it.
+    ahead: undefined,
     history,
     session,
     revision: batch.revision,
@@ -757,6 +778,7 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
         )
       : current.queued,
     projection:
+      !current.ahead &&
       requests === current.requests &&
       pendingPrompts === current.pendingPrompts &&
       blocks === current.blocks &&

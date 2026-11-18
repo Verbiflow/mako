@@ -313,6 +313,12 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   )
   function emit(event: HostEvent, client?: string): void {
     if (shell.closing()) return
+    // What waits for a conversation's next batch is this machine's windows' alone: no other device, no outlet, no
+    // reader of the batches hears it, and the batch that follows says the same to all of them.
+    if (event.type === "live-ahead") {
+      web()?.windowEvent(event)
+      return
+    }
     const limits = spent(event)
     if (limits) emit(limits)
     // A row's change can move only its own session's file: only conversations bound to it look again.

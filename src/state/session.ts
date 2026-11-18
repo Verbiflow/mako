@@ -42,7 +42,7 @@ import { cloudAccountStore, heardAccountEvent } from "@/state/cloud-account"
 import { offerCloudProjects } from "@/state/cloud-projects"
 import { cloudTurnOn } from "@/state/cloud-turn-on"
 import { simulatorSetup } from "@/state/simulator-setup"
-import { applyLiveBatch, hydrateLiveSummaries, hydrateLive, listLive, markLiveOwnerDisconnected, unlistLive } from "@/state/live-recovery"
+import { applyLiveAhead, applyLiveBatch, hydrateLiveSummaries, hydrateLive, listLive, markLiveOwnerDisconnected, unlistLive } from "@/state/live-recovery"
 import { replayUnconfirmedPrompts, restorePendingMessages } from "@/state/acp-queue"
 import { watchPendingMessages } from "@/state/message-outbox"
 import { createHook, createStore, shallowEqual } from "@/state/store"
@@ -402,6 +402,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "live-batch") {
     applyLiveBatch(event.batch)
+    return
+  }
+  if (event.type === "live-ahead") {
+    applyLiveAhead(event.ahead)
     return
   }
   if (event.type === "live-listed") {
