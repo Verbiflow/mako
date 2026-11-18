@@ -153,7 +153,7 @@ import { continuationsSpent, continueTurnPrompt, crashedChildTurn, CUT_BY, RESTA
 import { uniqueName, type KeptAnswer, type KeptMark, type KeptPullWake, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
 import { AgentRuns, lastStep, type ProcessReads, type RunEnd } from "./agent-runs.js"
 import { holdOf, keepsLine, nextInLine } from "../contracts/request-hold.js"
-import { foldList } from "./agent-list-fold.js"
+import { foldCrew, foldList } from "./agent-list-fold.js"
 import { FinChanges, type ChangeFacts } from "./fin-changes.js"
 import type { ThreadHistoryTools } from "./thread-history.js"
 import { AgentWakes, DIGEST_WAITS, firstParagraph, FROM_AGENTS, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
@@ -2352,7 +2352,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const apex = this.apexOf(caller)
     if ("refused" in apex) return apex
     if (input.scope === "threads") return this.threadsMatching(apex, input.query)
-    if (input.scope === "crew") return this.crewOf(apex)
+    if (input.scope === "crew") return this.crewOf(apex, input.ended === true)
     if (input.scope === "apexes") return this.apexesOf(apex)
     const store = this.store()!
     const strips: AgentStrip[] = []
@@ -2402,7 +2402,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const changed = since === undefined ? strips : strips.filter((strip) => strip.changedAt! > since || needsApex(strip))
     const unchanged = strips.length - changed.length
     const marked = { tree, mark: this.changes.mark(tick), ...(since !== undefined && { unchanged }) }
-    if (input.scope === "all") return { children: changed, ...marked }
+    if (input.scope === "all" || input.ended) return { children: changed, ...marked }
     return { ...foldList(changed, now), ...marked }
   }
 
@@ -7056,7 +7056,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /** A Fin's Apex as it stands, and the other open Fins it started, as its front-door note names them: no transcript is read. */
-  private crewOf(fin: Apex): AgentsCrew | AgentRefused {
+  private crewOf(fin: Apex, ended: boolean): AgentsCrew | AgentRefused {
     const store = this.store()!
     const edge = store.edges().of(fin.thread)
     if (!edge) return { refused: "no-parent", why: `This Thread has no ${APEX_WORD}: scope crew is for a ${FIN_WORD}. Leave scope out for this Thread's own ${FIN_WORD}s.` }
@@ -7069,6 +7069,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const step = held && session ? lastStep(held.blocks.slice(-24), session.harness) : undefined
     const title = session?.title ?? store.thread(ThreadIdSchema.parse(edge.parent))?.title
     const above = store.edges().of(edge.parent)
+    const mates = store.edges().children(edge.parent).filter((other) => other.child !== edge.child && !other.closedAt).map((other) => crewMate(this.frontDoorChild(other, true)))
     return {
       you: edge.name,
       apex: {
@@ -7078,7 +7079,7 @@ export class Agents implements AgentOperations, ConversationChildren {
         ...(step && { step }),
         ...(above && { asked: noteLine(above.asked.brief.objective, 160) }),
       },
-      crew: store.edges().children(edge.parent).filter((other) => other.child !== edge.child && !other.closedAt).map((other) => crewMate(this.frontDoorChild(other, true))),
+      ...(ended ? { crew: mates } : foldCrew(mates, this.now())),
     }
   }
 

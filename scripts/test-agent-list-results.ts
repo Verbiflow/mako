@@ -9,6 +9,7 @@ import type { AgentOperations, AgentsListInput, AgentsListResult, AgentsReadInpu
 import { decodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 import { AgentListResults } from "@mako/host/conversations/agent-list-results"
 import { AgentAnswerSchema, declareAgentMethods, registerAgentTools } from "@mako/host/conversations/agent-tools"
+import { compactAnswer } from "@mako/host/conversations/agent-tool-compact"
 import { HostMethods } from "@mako/host/transport/methods"
 
 const owner: AgentCaller = { kind: "agent", session: "fixture-owner" }
@@ -84,8 +85,11 @@ try {
   const listed = await client.listTools()
   assert.ok(listed.tools.find(tool => tool.name === "agents_read")?.inputSchema.properties?.snapshot)
   assert.ok(listed.tools.find(tool => tool.name === "agents_list")?.inputSchema.properties?.presentation)
+  // The model reads rows compacted (clock readings in words, repeats left out); every fact else, every PR fact included.
+  const modelFull = z.object({ children: z.array(z.record(z.string(), z.json())) }).loose().parse(JSON.parse(JSON.stringify(compactAnswer("agents_list", JSON.parse(JSON.stringify(full))))))
   const baseline = await call("agents_list", { presentation: "full" })
-  assert.deepEqual(JSON.parse(baseline.content[0].text), JSON.parse(JSON.stringify(full)))
+  assert.deepEqual(JSON.parse(baseline.content[0].text), modelFull)
+  assert.deepEqual(modelFull.children.map((child) => child["openPRs"]), JSON.parse(JSON.stringify(full.children.map((child) => child.openPRs))), "every PR fact inline")
   const defaultOutput = await call("agents_list", {})
   assert.deepEqual(defaultOutput, baseline, "MCP default preserves every original PR fact inline")
   assert.match(listed.tools.find(tool => tool.name === "agents_list")!.description!, /Every PR fact stays inline by default/)
@@ -97,7 +101,7 @@ try {
   assert.deepEqual(parsed.extraOutcome, full.extraOutcome, "top-level failure and unknown-outcome facts remain")
   assert.equal(parsed.children.length, 57)
   for (let i = 0; i < parsed.children.length; i++) {
-    const { openPRs: _pr, ...facts } = full.children[i]
+    const { openPRs: _pr, ...facts } = modelFull.children[i]!
     const { pulls, ...summaryFacts } = parsed.children[i]
     assert.deepEqual(summaryFacts, JSON.parse(JSON.stringify(facts)), "all state/decision/failure fields stay byte-equivalent")
     assert.deepEqual([pulls.open, pulls.draft, pulls.reported], [1, 0, 5])
@@ -249,8 +253,8 @@ try {
     await restartedServer.connect(restartServerSide)
     await restartedClient.connect(restartClientSide)
     const current = toolResult.parse(await restartedClient.callTool({ name: "agents_list", arguments: {} }))
-    assert.deepEqual(JSON.parse(current.content[0].text), JSON.parse(JSON.stringify(full)), "fresh method instance also defaults to full, including changed facts")
-    assert.deepEqual(JSON.parse(defaultOutput.content[0].text), JSON.parse(JSON.stringify(original)), "after 30 minutes and a fresh host's changed facts, the original default response still contains every ordered fact")
+    assert.deepEqual(JSON.parse(current.content[0].text), JSON.parse(JSON.stringify(compactAnswer("agents_list", JSON.parse(JSON.stringify(full))))), "fresh method instance also defaults to full, including changed facts")
+    assert.deepEqual(JSON.parse(defaultOutput.content[0].text), JSON.parse(JSON.stringify(compactAnswer("agents_list", JSON.parse(JSON.stringify(original))))), "after 30 minutes and a fresh host's changed facts, the original default response still contains every ordered fact")
     const lost = toolResult.parse(await restartedClient.callTool({ name: "agents_read", arguments: ref }))
     assert.equal(lost.isError, true, "explicit opt-in pages remain honestly unavailable after host restart")
     assert.match(lost.content[0].text, /original facts cannot be recovered here/)
