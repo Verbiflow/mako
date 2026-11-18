@@ -41,6 +41,11 @@ export interface CallThread {
 export type ToolNames = (tool: string) => string
 export const bareNames: ToolNames = (tool) => tool
 
+/** A Mako tool call written out whole, its arguments as JSON: `` `pull_request_status({"number":926})` ``. */
+export function exactCall(names: ToolNames, tool: string, args: Readonly<Record<string, unknown>> = {}): string {
+  return `\`${names(tool)}(${JSON.stringify(args)})\``
+}
+
 /** The prefix that lets a command the policy would deny run anyway. */
 export const NATIVE_OVERRIDE = "MAKO_NATIVE=1"
 
@@ -343,7 +348,7 @@ export function routeShellCall(thread: CallThread, call: { command: string; cwd?
   const findings: Finding[] = []
   const n = names
   if (line.loop && line.segments.some((segment) => basename(segment.argv[0]!) === "sleep"))
-    findings.push({ kind: "warn", family: "polling", rule: "sleep-loop", message: `Don't wait in a loop: it holds the turn and nobody else can use it. A Fin's report wakes you (${n("agents_start")} with mode wait when your next step needs its result), ${n("app_logs")} and ${n("app_status")} read the app, and ${n("pull_request_status")} reads checks; otherwise end your turn and say what you're waiting for.` })
+    findings.push({ kind: "warn", family: "polling", rule: "sleep-loop", message: loopMessage(line, n) })
   for (const segment of line.segments) {
     const found = segmentFinding(thread, segment, line, n)
     if (found && (segment.env.MAKO_NATIVE !== "1" || NO_OVERRIDE.has(found.rule))) findings.push(found)
@@ -352,6 +357,97 @@ export function routeShellCall(thread: CallThread, call: { command: string; cwd?
   const chosen = deny ?? findings[0]
   if (!chosen) return { kind: "allow" }
   return chosen.kind === "deny" && !NO_OVERRIDE.has(chosen.rule) ? { ...chosen, message: `${chosen.message} ${OVERRIDE_LINE}` } : chosen
+}
+
+/** A pull request's number among `gh pr` arguments: `926`, `#926` or its URL. */
+function pullNumberOf(args: readonly string[]): number | undefined {
+  for (const word of args) {
+    if (word.startsWith("-")) continue
+    const found = /^#?(\d+)$/.exec(word) ?? /\/pull\/(\d+)(?:[/?#]|$)/.exec(word)
+    if (found) return Number(found[1])
+  }
+  return undefined
+}
+
+/** What `gh run view` names: `--job <id>`, or the run's id. */
+function runNamed(args: readonly string[]): { job: number } | { run: number } | undefined {
+  const job = args.findIndex((word) => word === "--job" || word.startsWith("--job=") || word === "-j")
+  if (job >= 0) {
+    const value = args[job]!.startsWith("--job=") ? args[job]!.slice("--job=".length) : args[job + 1]
+    if (value && /^\d+$/.test(value)) return { job: Number(value) }
+  }
+  const run = args.find((word, index) => /^\d+$/.test(word) && !/^(-j|--job|-a|--attempt|-R|--repo)$/.test(args[index - 1] ?? ""))
+  return run ? { run: Number(run) } : undefined
+}
+
+/** The flags `gh pr create` and `gh pr edit` take, as `pull_request_open`'s arguments. */
+function draftOf(args: readonly string[]): Record<string, unknown> {
+  const value = (...flags: string[]) => {
+    const at = args.findIndex((word) => flags.includes(word))
+    return at >= 0 ? args[at + 1] : undefined
+  }
+  const title = value("--title", "-t")
+  const base = value("--base", "-B")
+  return {
+    title: title ?? "<title>",
+    body: value("--body", "-b") ?? "<body>",
+    ...(base && { base }),
+    ...(args.includes("--draft") || args.includes("-d") ? { draft: true } : {}),
+  }
+}
+
+/** A port a command names: `-i :3000`, `-iTCP:3000`, `-ti:3000`, `:3000`. */
+function portOf(argv: readonly string[]): number | undefined {
+  for (const word of argv) {
+    const found = /:(\d{2,5})(?:\b|$)/.exec(word)
+    if (found && Number(found[1]) <= 65_535) return Number(found[1])
+  }
+  return undefined
+}
+
+/** An API path's reading of a pull request, a job or a run, and the `pull_request_status` call that reads the same. */
+const API_READS: [RegExp, (match: RegExpExecArray) => Record<string, number | boolean>][] = [
+  [/^\/?repos\/[^/]+\/[^/]+\/pulls\/(\d+)(?:\/(?:reviews|comments|commits|files|requested_reviewers))?(?:[?#]|$)/, (match) => ({ number: Number(match[1]) })],
+  [/^\/?repos\/[^/]+\/[^/]+\/issues\/(\d+)\/comments(?:[?#]|$)/, (match) => ({ number: Number(match[1]) })],
+  [/^\/?repos\/[^/]+\/[^/]+\/actions\/jobs\/(\d+)(?:\/logs)?(?:[?#]|$)/, (match) => ({ job: Number(match[1]) })],
+  [/^\/?repos\/[^/]+\/[^/]+\/actions\/runs\/(\d+)(?:\/(?:jobs|logs|attempts\/\d+(?:\/jobs)?))?(?:[?#]|$)/, (match) => ({ run: Number(match[1]) })],
+  [/^\/?repos\/[^/]+\/[^/]+\/(?:commits\/[^/]+\/(?:check-runs|check-suites|status|statuses)|actions\/runs)(?:[?#]|$)/, () => ({ logs: true })],
+]
+
+/** Flags that make `gh api` write, which `pull_request_status` never does. */
+const API_WRITES = new Set(["-f", "-F", "--field", "--raw-field", "--input"])
+
+/**
+ * `gh api` reading a pull request, a job's log or a run: a note naming the `pull_request_status` call that reads it.
+ * A write (`-X POST`, fields), GraphQL and every other path go ahead unremarked.
+ */
+function ghApiFinding(args: readonly string[], n: ToolNames): Finding | undefined {
+  const path = args.find((word) => /^\/?repos\//.test(word))
+  if (!path) return undefined
+  const method = args.findIndex((word) => word === "-X" || word === "--method")
+  if (method >= 0 && (args[method + 1] ?? "").toUpperCase() !== "GET") return undefined
+  if (args.some((word) => API_WRITES.has(word) || word.startsWith("--method=") || /^-X[A-Za-z]/.test(word))) return undefined
+  for (const [pattern, call] of API_READS) {
+    const match = pattern.exec(path)
+    if (!match) continue
+    const named = call(match)
+    const what = "number" in named ? `#${named.number} of this repository with its checks, reviews and unresolved comments` : "job" in named ? "that job's log" : "run" in named ? "that run's failed jobs' log" : "this branch's checks and failed jobs' logs"
+    return { kind: "warn", family: "pull-request", rule: "gh-api-pull-request", message: `Call ${exactCall(n, "pull_request_status", named)} instead: it reads ${what} in one call.` }
+  }
+  return undefined
+}
+
+/** What a sleep loop polls, and the call that waits on it instead. */
+function loopMessage(line: ShellLine, n: ToolNames): string {
+  const programs = line.segments.map((segment) => basename(segment.argv[0]!))
+  const head = "Don't wait in a loop: it holds the turn and nobody else can use it."
+  if (programs.includes("gh")) {
+    const gh = line.segments.map((segment) => basename(segment.argv[0]!) === "gh" ? ghCommand(segment.argv) : undefined).find((found) => found?.group === "pr")
+    const number = gh ? pullNumberOf(gh.args) : undefined
+    return `${head} Call ${exactCall(n, "wait", { on: [{ pull: `<owner/name>#${number ?? "<number>"}`, until: "checks" }] })} and end your turn: Mako wakes you when its checks settle.`
+  }
+  if (programs.includes("curl") || programs.includes("wget")) return `${head} Call ${exactCall(n, "app_status")} once: it says whether each process is up, and ${exactCall(n, "app_start")} waits for them to be ready.`
+  return `${head} Call ${exactCall(n, "wait", { seconds: 300 })} and end your turn, or name what you wait on in its on: a Fin (${exactCall(n, "wait", { on: [{ fin: "<name>" }] })}) or a pull request's checks.`
 }
 
 function segmentFinding(thread: CallThread, segment: ShellSegment, line: ShellLine, n: ToolNames): Finding | undefined {
@@ -365,7 +461,7 @@ function segmentFinding(thread: CallThread, segment: ShellSegment, line: ShellLi
     if (git.sub === "worktree" && git.args[0] === "add")
       return { kind: "deny", family: "worktree", rule: "git-worktree-add", message: `Mako doesn't see a worktree made with \`git worktree add\`: its Changes panel, pull request, app and checks follow only this Thread's own checkouts. Call ${n("worktree_move")} to work on this Thread's own branch (it takes the branch's name and a base), or ${n("agents_start")} with a workspace to put parallel work on a branch of its own.` }
     if (git.sub === "worktree" && git.args[0] === "remove")
-      return { kind: "warn", family: "worktree", rule: "git-worktree-remove", message: `${n("worktree_remove")} removes this Thread's worktree with its app and data folder; use it for Mako's worktrees.` }
+      return { kind: "warn", family: "worktree", rule: "git-worktree-remove", message: `${exactCall(n, "worktree_remove")} removes this Thread's worktree with its app and data folder; use it for Mako's worktrees.` }
     const creates = (git.sub === "checkout" && git.args.some((word) => word === "-b" || word === "-B")) ||
       (git.sub === "switch" && git.args.some((word) => word === "-c" || word === "-C" || word === "--create" || word === "--force-create"))
     if (creates && place === "checkout")
@@ -375,23 +471,38 @@ function segmentFinding(thread: CallThread, segment: ShellSegment, line: ShellLi
     if (git.sub === "switch" && place === "checkout" && git.args[0] && !git.args[0].startsWith("-"))
       return { kind: "warn", family: "branch", rule: "git-switch-in-checkout", message: `This switches the branch of a checkout other Threads and the person work in. Call ${n("worktree_move")} to work on a branch of this Thread's own.` }
     if ((git.sub === "pull" || git.sub === "rebase" || git.sub === "merge") && git.args.some((word) => /^(origin\/)?(main|master)$/.test(word)))
-      return { kind: "warn", family: "branch", rule: "git-update-from-main", message: `${n("worktree_update")} brings main into this Thread's branch and reports conflicts the same way the Git sidebar does.` }
+      return { kind: "warn", family: "branch", rule: "git-update-from-main", message: `${exactCall(n, "worktree_update")} brings main into this Thread's branch and reports conflicts the same way the Git sidebar does.` }
     return undefined
   }
   if (program === "gh") {
     const gh = ghCommand(argv)
     if (!gh || placeOf(thread, segment.cwd) === "elsewhere") return undefined
+    if (gh.group === "api") return ghApiFinding([gh.command, ...gh.args], n)
     if (gh.group === "pr" && gh.command === "create")
-      return { kind: "warn", family: "pull-request", rule: "gh-pr-create", message: `Call ${n("pull_request_open")} instead: it pushes the branch and opens or updates its pull request the way the Git sidebar's button does, so the person sees it in Mako.` }
+      return { kind: "warn", family: "pull-request", rule: "gh-pr-create", message: `Call ${exactCall(n, "pull_request_open", draftOf(gh.args))} instead: it pushes the branch and opens or updates its pull request the way the Git sidebar's button does, so the person sees it in Mako.` }
     if (gh.group === "pr" && gh.command === "merge")
       return { kind: "deny", family: "pull-request", rule: "gh-pr-merge", message: `Call ${n("pull_request_merge")} instead, and only when the person asked or you're on full access with merging as the next step of your work: it merges the way the Git sidebar does and cleans up after.` }
     if (gh.group === "pr" && (gh.command === "edit" || gh.command === "ready"))
-      return { kind: "warn", family: "pull-request", rule: "gh-pr-edit", message: `${n("pull_request_open")} updates the branch's pull request (title, body, draft) too.` }
+      return { kind: "warn", family: "pull-request", rule: "gh-pr-edit", message: `${exactCall(n, "pull_request_open", draftOf(gh.args))} updates this branch's pull request (title, body) too.` }
     const watches = gh.args.includes("--watch") || (gh.group === "run" && gh.command === "watch")
-    if (watches)
-      return { kind: "warn", family: "polling", rule: "gh-watch", message: `${n("pull_request_status")} reads the checks and failed logs once; rather than watching, end your turn and say what you're waiting on, or start a Fin for it.` }
-    if ((gh.group === "pr" && (gh.command === "checks" || gh.command === "view" || gh.command === "status")) || (gh.group === "run" && (gh.command === "view" || gh.command === "list")))
-      return { kind: "warn", family: "pull-request", rule: "gh-pr-status", message: `${n("pull_request_status")} reads this branch's pull request, its checks, reviews and failed logs in one call.` }
+    if (watches) {
+      const number = gh.group === "pr" ? pullNumberOf(gh.args) : undefined
+      return { kind: "warn", family: "polling", rule: "gh-watch", message: `Rather than watching, call ${exactCall(n, "wait", { on: [{ pull: `<owner/name>#${number ?? "<number>"}`, until: "checks" }] })} and end your turn: Mako wakes you when the checks settle. ${exactCall(n, "pull_request_status", number ? { number } : {})} reads them once.` }
+    }
+    if (gh.group === "pr" && (gh.command === "checks" || gh.command === "view" || gh.command === "status")) {
+      const number = gh.command === "status" ? undefined : pullNumberOf(gh.args)
+      return { kind: "warn", family: "pull-request", rule: "gh-pr-status", message: number
+        ? `Call ${exactCall(n, "pull_request_status", { number })} instead: it reads #${number} of this repository with its checks, reviews and unresolved comments in one call, and with logs: true its failed jobs' logs.`
+        : `Call ${exactCall(n, "pull_request_status")} instead: it reads this branch's pull request with its checks, reviews and unresolved comments in one call, and with logs: true its failed jobs' logs.` }
+    }
+    if (gh.group === "run" && gh.command === "view") {
+      const named = runNamed(gh.args)
+      return { kind: "warn", family: "pull-request", rule: "gh-run-view", message: named
+        ? `Call ${exactCall(n, "pull_request_status", named)} instead: it reads that ${"job" in named ? "job's" : "run's failed jobs'"} log in this repository, without timestamps.`
+        : `Call ${exactCall(n, "pull_request_status", { logs: true })} instead: it reads this branch's checks and the end of each failed job's log.` }
+    }
+    if (gh.group === "run" && gh.command === "list")
+      return { kind: "warn", family: "pull-request", rule: "gh-run-list", message: `Call ${exactCall(n, "pull_request_status", { logs: true })} instead: it reads this branch's checks and its failed runs' logs; with a run or job id it reads that one.` }
     return undefined
   }
   const cli = AGENT_CLIS.get(program)
@@ -401,18 +512,22 @@ function segmentFinding(thread: CallThread, segment: ShellSegment, line: ShellLi
     if (placeOf(thread, segment.cwd) === "elsewhere") return undefined
     const recipe = thread.recipe
     if (recipe?.kind === "ready")
-      return { kind: "warn", family: "app", rule: "dev-server", message: `This Thread's app runs from the project's recipe: ${n("app_start")}${recipe.processes.length ? ` (${recipe.processes.join(", ")})` : ""} starts it on the Thread's own ports and keeps it running past your turn, and ${n("app_logs")} and ${n("app_probe")} read it.` }
+      return { kind: "warn", family: "app", rule: "dev-server", message: `Call ${exactCall(n, "app_start")} instead: it starts this Thread's app from the project's recipe${recipe.processes.length ? ` (${recipe.processes.join(", ")})` : ""} on the Thread's own ports and keeps it running past your turn; ${exactCall(n, "app_logs", { process: recipe.processes[0] ?? "<process>" })} reads its output.` }
     if (recipe?.kind === "none")
-      return { kind: "warn", family: "app", rule: "dev-server-no-recipe", message: `A server started here stops being anyone's when your turn ends. The project has no recipe yet: ${n("recipe_guide")} sets one up so ${n("app_start")} runs the app on this Thread's own ports.` }
-    if (segment.background) return { kind: "warn", family: "background", rule: "background-server", message: `A server left running past your turn is nobody's to stop. ${n("app_start")} runs the project's app for this Thread.` }
+      return { kind: "warn", family: "app", rule: "dev-server-no-recipe", message: `A server started here stops being anyone's when your turn ends. The project has no recipe yet: ${exactCall(n, "recipe_guide")} sets one up so ${exactCall(n, "app_start")} runs the app on this Thread's own ports.` }
+    if (segment.background) return { kind: "warn", family: "background", rule: "background-server", message: `A server left running past your turn is nobody's to stop. ${exactCall(n, "app_start")} runs the project's app for this Thread.` }
     return undefined
   }
   if ((program === "curl" || program === "wget") && thread.recipe?.kind === "ready" && argv.some(ownApp))
-    return { kind: "warn", family: "app", rule: "curl-own-app", message: `${n("app_probe")} reads this Thread's app at its own address with the status, timing and a body excerpt, and says when it isn't running; ${n("app_status")} and ${n("app_logs")} say why.` }
-  if (program === "lsof" && argv.some((word) => word.startsWith("-i") || word.startsWith("-ti")))
-    return { kind: "warn", family: "port", rule: "lsof-port", message: `${n("port_holder")} names who holds a port: which Thread's app, or which process outside Mako.` }
-  if ((program === "kill" && argv.some((word) => word.includes("lsof"))) || program === "killall" || (program === "pkill" && argv.includes("-f")))
-    return { kind: "warn", family: "port", rule: "kill-by-pattern", message: `Other Threads' agents share this machine, so stop only processes you started. ${n("port_holder")} says who holds a port, and ${n("app_stop")} stops this Thread's app.` }
+    return { kind: "warn", family: "app", rule: "curl-own-app", message: `To see whether this Thread's app is up, call ${exactCall(n, "app_status")}: its address, ports and each process's state; ${exactCall(n, "app_logs", { process: thread.recipe.processes[0] ?? "<process>" })} says why one isn't answering. Reading a page with curl is fine once it runs.` }
+  if (program === "lsof" && argv.some((word) => word.startsWith("-i") || word.startsWith("-ti"))) {
+    const port = portOf(argv)
+    return { kind: "warn", family: "port", rule: "lsof-port", message: `Call ${exactCall(n, "port_holder", { port: port ?? "<port>" })} instead: it names who holds the port, which Thread's app or which process outside Mako.` }
+  }
+  if ((program === "kill" && argv.some((word) => word.includes("lsof"))) || program === "killall" || (program === "pkill" && argv.includes("-f"))) {
+    const port = portOf(argv)
+    return { kind: "warn", family: "port", rule: "kill-by-pattern", message: `Other Threads' agents share this machine, so stop only processes you started. ${port ? `${exactCall(n, "port_holder", { port })} says who holds port ${port}` : `${exactCall(n, "port_holder", { port: "<port>" })} says who holds a port`}, and ${exactCall(n, "app_stop")} stops this Thread's app.` }
+  }
   if (thread.computer) {
     if (program === "screencapture" || program === "cliclick")
       return { kind: "warn", family: "browser", rule: program, message: `Use the js tool on the mako-computer server for screens, clicks and keys: it shares targets and recordings with the person's view of this Thread. To show the person a picture you made, use ${n("show")}.` }
@@ -424,10 +539,10 @@ function segmentFinding(thread: CallThread, segment: ShellSegment, line: ShellLi
   if (thread.builds && thread.builds.holders.length >= thread.builds.slots && heavySuite(program, argv.slice(1)))
     return { kind: "warn", family: "build", rule: "build-slots-full", message: `Every build slot on this machine is in use (${thread.builds.holders.join("; ")}), so a suite run now runs beside them and slows every Fin here. ${n("app_check")} waits its turn for one and starts the moment one frees.` }
   if (segment.background && program !== "sleep" && !line.loop)
-    return { kind: "warn", family: "background", rule: "background", message: `Work left running past your turn is nobody's to stop or read. ${n("app_start")} runs the project's app, and ${n("agents_start")} runs work the person can open and that reports back.` }
+    return { kind: "warn", family: "background", rule: "background", message: `Work left running past your turn is nobody's to stop or read. ${exactCall(n, "app_start")} runs the project's app, and ${n("agents_start")} runs work the person can open and that reports back.` }
   const seconds = sleepSeconds(argv)
   if (seconds !== undefined && seconds >= LONG_SLEEP_S && !line.loop)
-    return { kind: "warn", family: "polling", rule: "long-sleep", message: `Rather than sleeping, end your turn and say what you're waiting for: a Fin's report wakes you, and ${n("app_logs")} and ${n("pull_request_status")} read the app and checks when you're back.` }
+    return { kind: "warn", family: "polling", rule: "long-sleep", message: `Rather than sleeping, call ${exactCall(n, "wait", { seconds: Math.round(seconds) })} and end your turn: Mako wakes you then, or sooner on what you name in its on (a Fin, a pull request's checks).` }
   return undefined
 }
 

@@ -51,6 +51,7 @@ import type { WriteHolds } from "../write-holds.js"
 import { launchRunsServers } from "./person-code.js"
 import { claudeCallHooks } from "./call-hooks.js"
 import { claudeSubagentStart } from "./routing.js"
+import { CallNotes } from "../call-notes.js"
 import { ClaudeRequests, ClaudeTranscriptTail, openedTurnLines, takenIn, TASK_PROMPT_WAIT_MS, transcriptNotification, type TranscriptNotification, type TranscriptTailStats } from "./transcript-tail.js"
 import { claudeGoalFeedback, claudeGoalLine, readClaudeGoal } from "./goals.js"
 import { claudeReviewCommand } from "./review.js"
@@ -605,6 +606,8 @@ export function createClaudeSdkDriver(
   const engine = createLiveEngine<Live>()
   const sessions = engine.sessions
   const starting = new Map<string, symbol>()
+  // Each routing note once per conversation, across its launches: a resumed session still holds what it heard.
+  const callNotes = new CallNotes()
   function requireLive(id: string): Live {
     const live = sessions.get(id)
     if (!live || live.closed)
@@ -771,6 +774,7 @@ export function createClaudeSdkDriver(
         ...options.nativeCalls && { calls: options.nativeCalls },
         teams,
         conversation: conversationId,
+        notes: callNotes,
       }
       const callHooks = claudeCallHooks(new CallBounds(conversationId), routing, dependencies.writeHolds && ((signal) => dependencies.writeHolds!.beforeWrite(conversationId, signal)))
       let query: ClaudeQuery
