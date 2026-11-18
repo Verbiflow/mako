@@ -51,7 +51,7 @@ import { restorePlan, restoringResume } from "./kept-resume.js"
 import type { RestorePlan } from "../contracts/restore-plan.js"
 import { FIN_CEILING } from "../contracts/fin-tuning.js"
 import type { FinCapacity } from "./fin-capacity-host.js"
-import { watchWarmProviders } from "./warm-watch.js"
+import { keepAccountsFresh, watchWarmProviders } from "./warm-watch.js"
 import { TransferInputSchema } from "../contracts/conversation-control.js"
 import type { TurnUndoScope } from "../contracts/turn-review.js"
 import type { CloudAccount, HostTelemetry } from "../usage/index.js"
@@ -284,6 +284,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   const live: LiveConversations = new LiveConversations({
     listed,
     ...warmProviders,
+    ...keepAccountsFresh({ jobs: deps.jobs, accounts: host.accounts, live: () => live }),
     agents: () => agents,
     heldModels: (harness) => harnesses.profiles.held(harness)?.models,
     ...(deps.stopping && { stopping: deps.stopping }),

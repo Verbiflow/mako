@@ -437,6 +437,14 @@ export class HarnessAccounts {
     return capability.accountEnv(account.name, base).catch(() => base)
   }
 
+  /**
+   * Takes again the held credential reads of `providers` (`CredentialRevisions.refresh`): asked by the host while a
+   * conversation of one is warm, so its next message's admission finds a read that stands. Returns how many it began.
+   */
+  refreshCredentials(providers: ReadonlySet<string>): number {
+    return this.revisions.refresh(providers)
+  }
+
   /* ------------------------------------------------------------ launch */
 
   /** The email Mako lists for an account, to compare with what its native process reports. */

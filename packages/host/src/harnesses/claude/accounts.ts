@@ -34,6 +34,7 @@ import {
   deleteKeychain,
   ensureSharedLinks,
   jsonFields,
+  keychainUnchangedSince,
   keychainWrittenAt,
   numberValue,
   parseUsageReset,
@@ -350,7 +351,7 @@ async function signedInPrincipal(env: NodeJS.ProcessEnv, hold: CredentialHold): 
   const stored = await hold(`keychain\0${scope.service}\0${scope.account}`, async () => {
     const keychain = await readKeychain(scope.service, scope.account, "required")
     return keychain === null ? null : principalFingerprint(keychain, ClaudePrincipal)
-  })
+  }, (fingerprint, readAt) => keychainUnchangedSince(scope.service, scope.account, fingerprint !== null, readAt))
   return stored ?? principalFingerprint(await readOptionalFile(join(scope.dir, ".credentials.json")), ClaudePrincipal)
 }
 

@@ -78,6 +78,8 @@ export interface ToolMethodsDeps {
   workspace(): Promise<string>
   dataRoot: string
   machine: MachineCapability
+  /** Loads what a first launch loads into the host, should any of it not be in memory (`HostWarmer`). */
+  warmLaunch?(): void
 }
 
 /** Each harness's own hooks, commands and MCP servers, for the project in front. */
@@ -90,7 +92,7 @@ export function declareAuthoringMethods(methods: MethodTable, authoring: NativeA
 }
 
 /** Plugins, MCP servers, skills and each harness's own instructions, as people manage them. */
-export function declareToolMethods(methods: MethodTable, { tools, control, workspace, dataRoot, machine }: ToolMethodsDeps): void {
+export function declareToolMethods(methods: MethodTable, { tools, control, workspace, dataRoot, machine, warmLaunch }: ToolMethodsDeps): void {
   const { mcp, skills, authoring } = tools
   const plugins = pluginsDir(dataRoot)
   methods.handle("mako:list-plugins", () => listPlugins(plugins))
@@ -104,6 +106,8 @@ export function declareToolMethods(methods: MethodTable, { tools, control, works
   /** Someone is writing a new conversation's first message in `cwd`; listing its MCP servers now lets the launch find them cached. */
   methods.handle("mako:launch-prewarm", (cwd: string) => {
     if (isAbsolute(cwd)) void mcp.discover(cwd).catch(() => undefined)
+    // And what the launch loads into the host: in memory already unless the host sat idle or the harness is new here.
+    warmLaunch?.()
   })
   methods.handle("mako:integrations", () =>
     workspace().then(async (cwd) => {
