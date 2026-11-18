@@ -143,13 +143,16 @@ async function checkWindow() {
   app.exit(0)
 
   async function revealCheck(folder, label) {
-    const key = JSON.stringify(`folder:${folder}`)
-    await evaluate(`import('/src/state/prefs.ts').then(({ setPref, prefsStore }) => { setPref('collapsedGroups', [...prefsStore.get().collapsedGroups.filter(k => k !== 'ws:' + ${JSON.stringify(folder)}), 'ws:' + ${JSON.stringify(folder)}]); return true })`)
-    await evaluate(`(() => { document.querySelectorAll('.thread-jump-scope, .thread-jump-scope *').forEach(n => { if (n.scrollTop) n.scrollTop = 0 }); return true })()`)
-    await evaluate(`import('/src/state/session.ts').then(({ actions }) => actions.newConversationIn(${JSON.stringify(folder)})).then(() => true)`)
-    await until(`[...document.querySelectorAll('[data-flip-key]')].some(n => n.dataset.flipKey === ${key})`, `${label}: its folder shows`)
-    await until(`(() => { const head = [...document.querySelectorAll('[data-flip-key]')].find(n => n.dataset.flipKey === ${key}); const button = head?.querySelector('[aria-expanded]'); return button?.getAttribute('aria-expanded') === 'true' })()`, `${label}: its folder is open`)
-    await until(`(() => { const head = [...document.querySelectorAll('[data-flip-key]')].find(n => n.dataset.flipKey === ${key}); const row = head?.parentElement?.querySelector('[data-unsent-thread][data-active]'); if (!row) return false; const r = row.getBoundingClientRect(); const rail = document.querySelector('.thread-jump-scope').getBoundingClientRect(); return r.height > 0 && r.top >= rail.top && r.bottom <= rail.bottom })()`, `${label}: its unsent Thread is lit and in view`)
+    // The folder goes to the page as an argument, never spelled into the code it runs.
+    const { result } = await page.debugger.sendCommand("Runtime.evaluate", { expression: "globalThis" })
+    await page.debugger.sendCommand("Runtime.callFunctionOn", { objectId: result.objectId, functionDeclaration: "function (folder) { this.__revealFolder = folder }", arguments: [{ value: folder }] })
+    const head = "[...document.querySelectorAll('[data-flip-key]')].find(n => n.dataset.flipKey === 'folder:' + window.__revealFolder)"
+    await evaluate("import('/src/state/prefs.ts').then(({ setPref, prefsStore }) => { const key = 'ws:' + window.__revealFolder; setPref('collapsedGroups', [...prefsStore.get().collapsedGroups.filter(k => k !== key), key]); return true })")
+    await evaluate("(() => { document.querySelectorAll('.thread-jump-scope, .thread-jump-scope *').forEach(n => { if (n.scrollTop) n.scrollTop = 0 }); return true })()")
+    await evaluate("import('/src/state/session.ts').then(({ actions }) => actions.newConversationIn(window.__revealFolder)).then(() => true)")
+    await until(`Boolean(${head})`, `${label}: its folder shows`)
+    await until(`${head}?.querySelector('[aria-expanded]')?.getAttribute('aria-expanded') === 'true'`, `${label}: its folder is open`)
+    await until(`(() => { const row = ${head}?.parentElement?.querySelector('[data-unsent-thread][data-active]'); if (!row) return false; const r = row.getBoundingClientRect(); const rail = document.querySelector('.thread-jump-scope').getBoundingClientRect(); return r.height > 0 && r.top >= rail.top && r.bottom <= rail.bottom })()`, `${label}: its unsent Thread is lit and in view`)
     await capture(`reveal-${folder.split('/').pop()}.png`)
   }
 }
