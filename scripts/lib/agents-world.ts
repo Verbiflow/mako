@@ -606,8 +606,13 @@ export class AgentsWorld {
     const deadline = Date.now() + timeoutMs
     let quietSince = Date.now()
     let seen = this.prompts.length
+    const before = seen
     while (Date.now() - quietSince < quietMs) {
-      if (Date.now() > deadline) throw new Error(`Still busy after ${timeoutMs} ms: ${this.running.size} turns, ${this.agents.wakes.pending()} wakes`)
+      if (Date.now() > deadline) {
+        // Everything `busy` counts, so a failure on CI names what never settled, not only turns and wakes.
+        const work = this.live.lifecycleWork().map((item) => `${item.id} ${item.status}`).join(", ") || "none"
+        throw new Error(`Still busy after ${timeoutMs} ms: ${this.running.size} turns, ${this.agents.wakes.pending()} wakes, ${this.sending.size} sends, ${this.prompts.length - before} prompts meanwhile; work: ${work}`)
+      }
       await new Promise((resolve) => setTimeout(resolve, 20))
       const busy = this.running.size > 0 || this.sending.size > 0 || (wakes === "wait" && this.agents.wakes.pending() > 0) || this.live.lifecycleWork().length > 0
       if (busy || this.prompts.length !== seen) {
