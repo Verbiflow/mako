@@ -78,6 +78,11 @@ export interface RunOptions {
    * One that has waited `IDLE_READ_WAIT_MS` may take one of those slots, so it can't wait for good.
    */
   idle?: boolean
+  /**
+   * A read a turn waits on before its agent may go (its checkpoint's): ahead of every other read waiting for a slot.
+   * Behind a pass of windows' statuses, a turn's capture waited seconds a command.
+   */
+  urgent?: boolean
 }
 
 export interface RunResult {
@@ -141,6 +146,8 @@ export class Git {
   readonly #runtime: GitRuntime
   readonly #repositories: Repositories
   readonly #readsWaiting: Array<() => void> = []
+  /** Urgent reads waiting, oldest first: each takes the next slot before any in `#readsWaiting`. */
+  readonly #urgentWaiting: Array<() => void> = []
   /**
    * Idle reads waiting, oldest first: each starts once no other read waits and a slot past `FOREGROUND_SLOTS` is free,
    * or, having waited `IDLE_READ_WAIT_MS`, in one of those (`borrowed`).
@@ -203,7 +210,7 @@ export class Git {
     options.signal?.throwIfAborted()
     const queued = performance.now()
     const repository = !options.read && writesShared(options.args) ? commonDirOf(options.cwd) : undefined
-    const release = options.read ? await this.#readSlot(options.idle === true) : repository ? await this.#writeTurn(repository, options) : undefined
+    const release = options.read ? await this.#readSlot(options.idle === true, options.urgent === true) : repository ? await this.#writeTurn(repository, options) : undefined
     try {
       options.signal?.throwIfAborted()
       return await this.#execute(options, performance.now() - queued, repository)
@@ -270,7 +277,7 @@ export class Git {
     const now = performance.now()
     return {
       running: [...this.#running].map((live) => ({ command: live.command, cwd: live.cwd, ms: Math.round(now - live.started) })),
-      queued: this.#readsWaiting.length + this.#idleWaiting.length,
+      queued: this.#urgentWaiting.length + this.#readsWaiting.length + this.#idleWaiting.length,
       writesQueued: this.#writesWaiting,
     }
   }
@@ -310,11 +317,13 @@ export class Git {
     await Promise.all([...this.#children].map((child) => this.processes.close(child)))
   }
 
-  async #readSlot(idle: boolean): Promise<() => void> {
+  async #readSlot(idle: boolean, urgent: boolean): Promise<() => void> {
     let borrowed = false
-    if (!idle) {
-      if (this.#readsRunning >= READ_SLOTS) await new Promise<void>((resolve) => this.#readsWaiting.push(resolve))
-    } else if (this.#readsRunning >= READ_SLOTS - FOREGROUND_SLOTS || this.#readsWaiting.length > 0 || this.#idleWaiting.length > 0) {
+    if (urgent) {
+      if (this.#readsRunning >= READ_SLOTS) await new Promise<void>((resolve) => this.#urgentWaiting.push(resolve))
+    } else if (!idle) {
+      if (this.#readsRunning >= READ_SLOTS || this.#urgentWaiting.length > 0) await new Promise<void>((resolve) => this.#readsWaiting.push(resolve))
+    } else if (this.#readsRunning >= READ_SLOTS - FOREGROUND_SLOTS || this.#readsWaiting.length > 0 || this.#urgentWaiting.length > 0 || this.#idleWaiting.length > 0) {
       borrowed = await new Promise<boolean>((start) => {
         // A slot coming free asks who is next; so does this read's own wait running out, when none has. The wait
         // says itself that it ran out: compared with a clock again, a timer that fired a fraction of a millisecond
@@ -374,9 +383,9 @@ export class Git {
     }
   }
 
-  /** A slot came free: the oldest read someone waits on takes it, else the oldest idle one that may (`#nextIdle`). */
+  /** A slot came free: the oldest urgent read takes it, else the oldest read someone waits on, else the oldest idle one that may (`#nextIdle`). */
   #nextRead(): void {
-    const next = this.#readsWaiting.shift()
+    const next = this.#urgentWaiting.shift() ?? this.#readsWaiting.shift()
     if (next) return next()
     this.#nextIdle()
   }
@@ -388,7 +397,7 @@ export class Git {
    */
   #nextIdle(): void {
     const oldest = this.#idleWaiting[0]
-    if (!oldest || this.#readsWaiting.length > 0) return
+    if (!oldest || this.#readsWaiting.length > 0 || this.#urgentWaiting.length > 0) return
     const borrowed = this.#readsRunning >= READ_SLOTS - FOREGROUND_SLOTS
     if (borrowed && (this.#readsRunning >= READ_SLOTS || this.#idleBorrowed > 0 || !oldest.overdue)) return
     this.#idleWaiting.shift()

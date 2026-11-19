@@ -45,7 +45,7 @@ const SUITES = [
   "test:appshot-ui",
   "test:carried-files-ui",
   "test:cloud-turn-on-ui",
-  "test:crew-card-ui",
+  "test:shiver-card-ui",
   "test:fin-counts-ui",
   "test:fin-decision-ui",
   "test:fin-view-keeps-ui",
