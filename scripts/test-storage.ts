@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { after, test } from "node:test"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import { STORAGE_LOW_BYTES, type StorageCollection } from "@mako/host/contracts/storage"
+import { storageLowBytes, type StorageCollection } from "@mako/host/contracts/storage"
 import { CursorCheckpointCollector } from "@mako/host/harnesses/cursor/sdk/checkpoint-collector"
 import { MakoStorage, type HarnessStorage } from "@mako/host/usage/storage"
 import { LeftoverFiles, RecordRepacks } from "@mako/host/usage/storage-collectors"
@@ -20,6 +20,8 @@ import { LeftoverFiles, RecordRepacks } from "@mako/host/usage/storage-collector
 const scratch = await mkdtemp(join(tmpdir(), "mako-storage-"))
 after(() => rm(scratch, { recursive: true, force: true }))
 const GB = 1024 ** 3
+/** The low line of the fixture's 926 GB disk: 5% of it, at most 30 GB. */
+const STORAGE_LOW_BYTES = storageLowBytes(926 * GB)
 
 test("parts, the warning and the collectors", async () => {
   const events: HostEvent[] = []
@@ -60,7 +62,7 @@ test("parts, the warning and the collectors", async () => {
   await storage.watch()
   await storage.watch()
   assert.equal(events.length, 1, "under the line, Mako says so once")
-  assert.deepEqual(events[0], { type: "notice", level: "error", message: "This Mac has 9.0 GB free.", action: { label: "Free 1.0 GB", does: "open-storage" } }, "with the one thing that fixes it: what's left to free, in Settings › Storage")
+  assert.deepEqual(events[0], { type: "notice", level: "error", message: "This Mac has 29.0 GB free.", action: { label: "Free 1.0 GB", does: "open-storage" } }, "with the one thing that fixes it: what's left to free, in Settings › Storage")
   assert.deepEqual(triggers, ["low disk"], "and collects without waiting for the schedule")
   free = STORAGE_LOW_BYTES + GB
   await storage.watch()
