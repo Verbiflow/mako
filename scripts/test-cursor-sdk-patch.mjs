@@ -39,6 +39,8 @@ const fromArchive = (archive) => (target) => extractFile(archive, `node_modules/
 const noCache = { read: () => { throw new Error("npm's cache holds no tarball: no cached package") } }
 /** A cache that must not be needed. */
 const untouched = { read: (target) => assert.fail(`npm's cache was read for ${target}`) }
+/** A patch that needs nothing beyond the install: a read of the cache, even one the backfill records, fails here. */
+const patchAlone = () => assert.deepEqual(patchCursorSdk(sdk, untouched).unkept, [], "the patch needed npm's cache")
 try {
   writeFileSync(join(root, "package.json"), "{}")
   mkdirSync(sdk, { recursive: true })
@@ -50,12 +52,12 @@ try {
   }
   assert.throws(() => assertCursorSdkPatched(read, files), /lacks Mako's complete/)
   // A fresh install: patched from its own bytes, which it keeps before the first write.
-  patchCursorSdk(sdk, untouched)
+  patchAlone()
   const first = snapshot()
   for (const [target, source] of first) assert.equal(source, readFileSync(join(installed, target), "utf8"), `${target}: the installed SDK carries this patch exactly`)
   const store = pristineStore(sdk, version)
   for (const [target, source] of first) if (source.includes("/*mako:patched") || source !== original(target)) assert.equal(store.get(target).text, original(target), `${target}: its unpatched bytes are kept beside the package`)
-  patchCursorSdk(sdk, untouched)
+  patchAlone()
   assert.deepEqual(snapshot(), first, "repeated builds leave patched bytes unchanged")
 
   const archive = join(root, "app.asar")
@@ -73,12 +75,12 @@ try {
   assert.throws(() => assertCursorSdkPatched(fromArchive(incompleteArchive), archived(incompleteArchive)), /lacks Mako's complete/, "the package gate checks the archive, not development dependencies")
   // An incomplete patch, or one an older Mako left: patched again from the bytes kept beside the package, never over
   // the old patch, and with no npm.
-  patchCursorSdk(sdk, untouched)
+  patchAlone()
   assert.deepEqual(snapshot(), first, "an incomplete patch is redone from the kept bytes")
   const older = /\/\*mako:patched:\d+\*\//
   assert.match(read(file), older)
   writeFileSync(join(sdk, file), read(file).replace(older, () => "/*mako:patched:1*/"))
-  patchCursorSdk(sdk, untouched)
+  patchAlone()
   assert.deepEqual(snapshot(), first, "an older patch is replaced by this one")
 
   // Kept bytes that don't count: another version's, or ones that no longer hash to what was kept.
@@ -92,7 +94,7 @@ try {
   rmSync(join(sdk, PRISTINE_FOLDER), { recursive: true })
   writeFileSync(join(sdk, file), read(file).replace(older, () => "/*mako:patched:1*/"))
   const cached = { reads: 0, read(target) { this.reads++; return original(target) } }
-  patchCursorSdk(sdk, cached)
+  assert.deepEqual(patchCursorSdk(sdk, cached).unkept, [])
   assert.deepEqual(snapshot(), first, "an earlier patch with nothing kept is redone from npm's cache")
   assert.ok(cached.reads > 0)
   assert.equal(pristineStore(sdk, version).get(file).text, original(file), "and what the cache gave is kept, so the next patch needs nothing")
@@ -133,9 +135,16 @@ try {
       else process.env.npm_config_cache = previous
     }
   }
+  // A patched install with nothing kept and nothing cached: the patch stands, and each file it couldn't keep is said.
+  for (const target of targets()) writeFileSync(join(sdk, target), first.get(target))
+  rmSync(join(sdk, PRISTINE_FOLDER), { recursive: true, force: true })
+  const { unkept } = patchCursorSdk(sdk, noCache)
+  assert.deepEqual(snapshot(), first, "a finished patch is left as it is")
+  assert.equal(unkept.length, 6, "every patched file is named")
+  assert.ok(unkept.every(({ why }) => why.includes("no cached package")), "with the cache's own reason")
   // Taking the package back as npm installs it (here: its own bytes) patches with nothing else needed.
   for (const target of targets()) writeFileSync(join(sdk, target), original(target))
-  patchCursorSdk(sdk, untouched)
+  patchAlone()
   assert.deepEqual(snapshot(), first)
   assert.ok(existsSync(manifestFile) && readFileSync(manifestFile, "utf8") === manifest, "the reinstalled package keeps the same bytes")
 
@@ -147,7 +156,7 @@ try {
   const shipped = original(transcripts.file)
   assert.ok(!shipped.includes("Zq9") && !shipped.includes("Zr9"))
   writeFileSync(join(sdk, transcripts.file), renamed(shipped))
-  patchCursorSdk(sdk, untouched)
+  patchAlone()
   assert.equal(read(transcripts.file), renamed(first.get(transcripts.file)), "a release that renames takes the same patches under its names")
   assertCursorSdkPatched(read, files)
 

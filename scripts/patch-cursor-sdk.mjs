@@ -391,7 +391,7 @@ export function npmCacheCursorSdk(root, version) {
  * Patches every build, with no network. A file that needs a patch takes every patch that lives in it at once, each
  * found in its unpatched bytes before any is written: the installed bytes when it carries no patch (kept then in
  * `.mako-pristine` before the first write), else what `.mako-pristine` kept, else npm's local cache (`cache`), else
- * it fails saying why and how to get the bytes back.
+ * it fails saying why and how to get the bytes back. Answers the files left patched with nothing kept, and why.
  */
 export function patchCursorSdk(root, cache) {
   const read = (target) => readFileSync(join(root, target), "utf8")
@@ -400,6 +400,7 @@ export function patchCursorSdk(root, cache) {
   const pristine = pristineStore(root, version)
   cache ??= npmCacheCursorSdk(root, version)
   const failures = []
+  const unkept = new Map()
   try {
     for (const build of ["esm", "cjs"]) {
       const patches = CURSOR_SDK_PATCHES.filter((patch) => patch.build === build)
@@ -460,17 +461,18 @@ export function patchCursorSdk(root, cache) {
       }
     }
     // Every file holding a patch keeps its unpatched bytes, so the next patch of it needs nothing else: one an earlier
-    // build patched, and this one left as it was, takes them from npm's cache when it holds them, and goes without
-    // otherwise (a patch that later needs them says so then).
+    // build patched, and this one left as it was, takes them from npm's cache when it holds them. One it can't is said
+    // and answered (`unkept`): the patch stands, and only a later patch of that file will need the package reinstalled.
     if (!failures.length)
       for (const patch of CURSOR_SDK_PATCHES) {
         const file = patchFile(read, files, patch, true)
-        if (!file || pristine.get(file).text !== undefined) continue
+        if (!file || unkept.has(file) || pristine.get(file).text !== undefined) continue
         try {
           const text = cache.read(file)
-          if (!text.includes(ANY_MARKER)) pristine.save(file, text)
-        } catch {
-          // Nothing cached: kept the next time the file is rewritten from bytes it can read.
+          if (text.includes(ANY_MARKER)) unkept.set(file, "npm's cache gave patched bytes")
+          else pristine.save(file, text)
+        } catch (error) {
+          unkept.set(file, error instanceof Error ? error.message : String(error))
         }
       }
   } finally {
@@ -479,6 +481,9 @@ export function patchCursorSdk(root, cache) {
   if (failures.length)
     throw new Error(`@cursor/sdk ${version} changed the code Mako's patches stand on (written against ${CURSOR_SDK_ANCHORED_ON}):\n${failures.join("\n")}\nPort each of those patches, or delete it where ${version} does the same itself.`)
   assertCursorSdkPatched(read, files)
+  for (const [file, why] of unkept)
+    console.log(`@cursor/sdk ${file} is patched, but its unpatched bytes aren't kept (${why}); a later patch of it will need the package reinstalled: rm -rf node_modules/@cursor/sdk && npm install`)
+  return { unkept: [...unkept].map(([file, why]) => ({ file, why })) }
 }
 
 /** Why no file holds `patch`: its sites' problems in the file that still holds the most of them. */
