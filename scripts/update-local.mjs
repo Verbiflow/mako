@@ -124,7 +124,17 @@ async function install(options, dependencies) {
           `Waiting for Mako to close (pids ${running.join(", ")}). On the older app, finish active work and fully quit Mako. Nothing will be force-stopped. Ctrl+C cancels this wait.`
         )
       waiting = true
-      await closing?.check()
+      try {
+        await closing?.check()
+      } catch (error) {
+        // The quit was asked for and agreed to. If Mako has gone meanwhile, a
+        // failed check must not leave the person with no app: install.
+        if ((await dependencies.running()).length) throw error
+        dependencies.say(
+          `Mako has closed, though checking its quit failed: ${error instanceof Error ? error.message : error}. Installing the build.`
+        )
+        break
+      }
       await dependencies.wait()
     }
     await dependencies.run(
@@ -141,18 +151,37 @@ async function install(options, dependencies) {
     await dependencies.verifyStarted(app)
     dependencies.say("Mako updated. The new shared host is ready.")
   } catch (error) {
-    if (!installed) {
-      try {
-        await closing?.cancel()
-      } catch (cancelError) {
-        dependencies.say(
-          `Could not cancel the pending quit: ${cancelError instanceof Error ? cancelError.message : "check Settings > Updates"}`
-        )
-      }
-    }
+    if (!installed) await keepAppRunning(closing, dependencies)
     throw error
   } finally {
     await release()
+  }
+}
+
+/**
+ * Nothing was installed. While the old app still runs, take back the quit it
+ * was asked for; once it has quit, open it again (the installer restores it
+ * if it failed midway), so a failed update never leaves no Mako running.
+ */
+async function keepAppRunning(closing, dependencies) {
+  const running = await dependencies.running().catch(() => null)
+  if (running?.length !== 0) {
+    try {
+      await closing?.cancel()
+    } catch (cancelError) {
+      dependencies.say(
+        `Could not cancel the pending quit: ${cancelError instanceof Error ? cancelError.message : "check Settings > Updates"}`
+      )
+    }
+  }
+  if (running?.length) return
+  try {
+    await dependencies.run("open", ["/Applications/Mako.app"], {})
+    dependencies.say("Nothing was installed. The previous app was reopened.")
+  } catch (openError) {
+    dependencies.say(
+      `Nothing was installed, and the previous app could not be reopened: ${openError instanceof Error ? openError.message : openError}. Open Mako from /Applications.`
+    )
   }
 }
 
@@ -313,10 +342,10 @@ export async function sweepLocalUpdates({
   return removed
 }
 
-async function removeOutput(output) {
-  const { unregisterBundle } =
+export async function removeOutput(output) {
+  const { unregisterOutsideHost } =
     await import("@mako/host/application/local-update-installer")
-  await unregisterBundle(join(output, "mac-arm64/Mako.app"))
+  await unregisterOutsideHost(join(output, "mac-arm64/Mako.app"))
   await rm(output, { recursive: true, force: true })
 }
 
@@ -354,8 +383,8 @@ export async function runStep(command, args, env, signal) {
 export async function prepareToClose() {
   const { socket, host } = await localRuntime()
   if (!host?.methods.includes("mako:lifecycle-command")) return
-  const { invokeRuntime, RuntimeDisconnectedError } =
-    await import("@mako/host/transport/connection")
+  const { invokeRuntime } = await import("@mako/host/transport/connection")
+  const { RuntimeDisconnectedError } = await import("@mako/host/contracts/host-connection")
   const client = randomUUID()
   const state = z
     .object({ operation: z.object({ kind: z.string() }) })
@@ -441,8 +470,8 @@ export async function verifyStarted(candidate) {
   const expected = z
     .object({ makoBuild: z.object({ id: z.string() }) })
     .parse(readLocalAppMetadata(candidate)).makoBuild.id
-  const { invokeRuntime, RuntimeDisconnectedError } =
-    await import("@mako/host/transport/connection")
+  const { invokeRuntime } = await import("@mako/host/transport/connection")
+  const { RuntimeDisconnectedError } = await import("@mako/host/contracts/host-connection")
   const deadline = Date.now() + 45_000
   while (Date.now() < deadline) {
     const { host, socket } = await localRuntime()

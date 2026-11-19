@@ -2,7 +2,7 @@ import { existsSync, statfsSync, statSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { parseArgs } from "node:util"
 import { z } from "zod"
-import { makoViews, translatorBuild, ViewCache, VIEW_CACHE_BYTES } from "@mako/sessions"
+import { makoViews, translatorBuilds, ViewCache, VIEW_CACHE_BYTES } from "@mako/sessions"
 import { plainRecordPath } from "@mako/sessions/record-files"
 import { recordedPaths } from "@mako/sessions/record-store"
 import { makoRecords } from "@mako/sessions/record-streams"
@@ -78,9 +78,9 @@ for (const id of ids) {
   }
 }
 
-const views = new ViewCache(options.views ?? makoViews(), translatorBuild)
+const build = translatorBuilds()
+const views = new ViewCache(options.views ?? makoViews(), build)
 const viewList = await views.list()
-const build = translatorBuild()
 const report = {
   dataDir,
   journals: rows.length,
@@ -93,10 +93,10 @@ const report = {
     sessions: viewList.length,
     bytes: sum(viewList.map((view) => view.size)),
     budget: VIEW_CACHE_BYTES,
-    thisBuild: count(viewList, (view) => view.translator === build),
+    thisBuild: count(viewList, (view) => view.translator === build(view.ref.harness)),
     largest: [...viewList].sort((a, b) => b.size - a.size).slice(0, 8).map((view) => ({
       path: view.path, size: view.size, entries: view.total, decodeMs: view.decodeMs, continued: view.continued?.count ?? 0,
-      stamp: { bytes: view.bytes, mtimeMs: view.mtimeMs, revision: view.revision }, current: view.translator === build,
+      stamp: { bytes: view.bytes, mtimeMs: view.mtimeMs, revision: view.revision }, current: view.translator === build(view.ref.harness),
     })),
   },
   recordedPaths: held.size,

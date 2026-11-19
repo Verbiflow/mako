@@ -20,7 +20,7 @@ import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { parseArgs } from "node:util"
 import { z } from "zod"
-import { DecodeAside, SAVED_HISTORY_READERS, SessionCatalog, translatorBuild, VIEWER_PAGE, ViewCache } from "@mako/sessions"
+import { DecodeAside, SAVED_HISTORY_READERS, SessionCatalog, translatorBuilds, VIEWER_PAGE, ViewCache } from "@mako/sessions"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { storeReader } from "./decode-compare"
 
@@ -134,7 +134,7 @@ async function viewPhases(path: string, entries: number): Promise<Partial<Row>> 
     const first = viewing()
     const kept = await sampled(() => first.page(path, undefined, undefined, VIEWER_PAGE))
     await first.stop()
-    const views = new ViewCache(folder, () => translator)
+    const views = new ViewCache(folder, translator)
     const [view] = await views.list()
     if (!view) return { viewPageMs: kept.ms }
     const warm = viewing()
@@ -158,7 +158,7 @@ async function viewPhases(path: string, entries: number): Promise<Partial<Row>> 
 }
 
 const home = homedir()
-const translator = translatorBuild()
+const translator = translatorBuilds()
 const kept = options.against ? z.array(RowSchema).parse(JSON.parse(await readFile(options.against, "utf8"))) : undefined
 const rows: Row[] = []
 for (const reader of READERS.filter((name) => !options.only || name === options.only)) {

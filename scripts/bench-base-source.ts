@@ -107,7 +107,7 @@ const catalogAt = (name: string, translator?: string): SessionCatalog => new Ses
   recordsPath: join(scratch, "records"),
   viewsPath: join(scratch, name),
   readBack: { readers: SAVED_HISTORY_READERS, stores },
-  translator,
+  ...translator !== undefined && { translator: () => translator },
 })
 /** Listed first, as the app's catalog is before any conversation opens. */
 async function scanned(catalog: SessionCatalog): Promise<{ catalog: SessionCatalog; refs: ThreadRef[] }> {

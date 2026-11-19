@@ -313,8 +313,16 @@ export interface Dependencies {
   unattended?: boolean
   /** Held while a harness starts, so the host's routine work waits for it (`base/foreground.ts`). */
   foreground?: Pick<Foreground, "hold" | "started">
-  /** What the host is doing, named: who reads a conversation in from disk is counted to it (`LiveRecords`). */
-  work?: Pick<HostWork, "current">
+  /**
+   * What the host is doing, named: who reads a conversation in from disk is counted to it (`LiveRecords`); `run` names
+   * the conversations' own work that reads them in (the sweep moving journals' copies, a resume's reads at start).
+   */
+  work?: Pick<HostWork, "current"> & Partial<Pick<HostWork, "run">>
+  /**
+   * Whether a window shows conversation `id` now (`LiveHistoryReader.shown`): one on screen stays in memory, as the
+   * residency rule has it, so the work that reads others in never makes its next read start over.
+   */
+  historyShown?(id: string): boolean
   /** `starting`: the harness whose start waits on it, which waits for that harness's own listing alone (`McpRegistry.discover`). */
   mcpSnapshot?(cwd: string, starting?: string): Promise<McpRegistrySnapshot>
   workspaceSnapshots?: WorkspaceSnapshots

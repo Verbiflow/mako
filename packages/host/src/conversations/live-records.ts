@@ -762,7 +762,7 @@ export class LiveRecords {
         snapshot.permissions.length || control.questions?.length || control.asks?.length ||
         snapshot.requests.some((request) => request.status === "queued" || request.status === "dispatching") ||
         snapshot.nativeAgents?.agents.some(isBusyProviderWork) ||
-        this.hooks.busy(resident)
+        this.hooks.busy(resident) || this.dependencies.historyShown?.(snapshot.session.id)
     )
   }
 

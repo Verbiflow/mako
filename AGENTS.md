@@ -1784,7 +1784,17 @@ their version. `scripts/bench-unread.ts` measures it. Once a pass of the
 backfill has taken every session, it decodes again every view and every
 unread record an earlier decoder build made (`rebuildStaleViews`, newest use
 first, yielding to the person), so a decoder that learns a kind brings its
-count to zero in every past session without each being opened. When a
+count to zero in every past session without each being opened. A decoder
+build is per harness (`translatorBuild(harness)` in
+`packages/sessions/src/translator.ts`): the harness's readers and every
+module they import, without the other harnesses' vocabularies and
+`mako-tools.ts`, whose words no entry holds. An update that changed the
+record store, sync or another harness's decoder keeps every view; one hash
+over the package had each update decode every Thread again
+(`test/translator-scope.mjs`). Those rebuilds are background decodes: a
+large record's decode aside that someone waits on (a Thread opening) runs
+before them and stops the one running (`DecodeAside`,
+`test/decode-aside-order.mjs`). When a
 harness ships a release: run it (capture and the counts go on), re-record
 the fixtures (`bump-harness-versions.ts`), fix the decoder, and run `npm
 run decode-diff -- --base HEAD`: it builds `HEAD`'s `@mako/sessions` in a
@@ -1813,9 +1823,14 @@ A journal names the session its history came from (`baseSource`) instead of
 copying it, once the record store holds that session and the session covers
 every live turn (`packages/host/src/conversations/base-source.ts`). The
 history is read back when the conversation loads, and everything that needs
-it waits for the read (`baseUnread`). The host's sweep
-(`LiveSources.settleBases`) moves existing journals' copies onto their
-sessions' records. `npm run conversations:doctor` shows each journal's
+it waits for the read (`baseUnread`), but a window opening it: that is
+answered with the newest page (`LiveSources.windowSnapshot`, as a cold view
+is) while the rest is read, and reads again when the next revision says the
+history changed (`scripts/test-window-first-page.ts`). A conversation a
+window shows stays in memory (`LiveHistoryReader.shown`, pinned). The host's
+sweep (`LiveSources.settleBases`) moves existing journals' copies onto their
+sessions' records, named as host work (`SETTLE_WORK`), and reads none in
+while a window reads a conversation. `npm run conversations:doctor` shows each journal's
 history source, why a copy is kept and what would compact, from local files
 only. `npm run benchmark:base-source` measures the sweep and the opens on
 clones of real journals. A conversation that went on in several sessions
@@ -1823,7 +1838,11 @@ names a span of its first (`BaseSource.span`: its record entries' count, a
 hash of their ids, when the store held them), proven at the hold to merge to
 the same turns (`sameTurns`), and read back from the session while it still
 begins so, else from the record store as it was then
-(`RecordStore.restoreAsOf`, `ThreadPageOptions.asOf`). A native fork's
+(`RecordStore.restoreAsOf`, `ThreadPageOptions.asOf`). Read back through an
+earlier build's view (`staleHistory`), that span is read again by this
+build in the background once the session's current view names another
+decoder of its harness (`LiveSources.refreshSpan`); a span its harness's
+current decoder read is not (`scripts/test-multi-harness-views.ts`). A native fork's
 inherited turns merge with its parent's history as the parent shows it
 (`forkHistory`, `mergedBase`'s `inherited`): the copy it began from, then the
 reading it holds, or the parent's journal when read back from its session;

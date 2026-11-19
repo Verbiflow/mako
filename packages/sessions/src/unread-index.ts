@@ -92,10 +92,12 @@ export class UnreadIndex {
     }
   }
 
-  /** The sessions whose unread records a build other than `build` noted, the most recently noted first. */
-  stalePaths(build: string): string[] {
+  /** The sessions whose unread records another build of their harness's decoder (`build`) noted, the most recently noted first. */
+  stalePaths(build: (harness: string) => string): string[] {
     if (!this.db) return []
-    return z.object({ path: z.string() }).array().parse(this.prepared("SELECT path, max(noted) AS noted FROM unread WHERE translator != ? GROUP BY path ORDER BY noted DESC").all(build)).map((row) => row.path)
+    const rows = z.object({ path: z.string(), harness: z.string(), translator: z.string() }).array()
+      .parse(this.prepared("SELECT path, harness, translator, max(noted) AS noted FROM unread GROUP BY path, harness, translator ORDER BY noted DESC").all())
+    return [...new Set(rows.filter((row) => row.translator !== build(row.harness)).map((row) => row.path))]
   }
 
   forget(path: string): void {

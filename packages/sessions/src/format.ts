@@ -271,7 +271,7 @@ export interface ThreadPage {
   start: number
   total: number
   hasEarlier: boolean
-  /** `translatorBuild()` of the code that produced these entries. */
+  /** `translatorBuild` of the code that produced these entries, for their harness. */
   translator?: string
   /** The thread's `unread` records; set on a page read from the whole thread. */
   unread?: UnreadRecord[]

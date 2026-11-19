@@ -1114,7 +1114,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     await this.runs.reconciled()
     if (this.stopped) return
     // A host that stops meanwhile resumes nothing: the next one takes up what this one would have.
-    if ((await this.deps.live.readIn(this.resumeReads(store))) && !this.stopped) this.resume()
+    if ((await this.deps.live.readIn(this.resumeReads(store), "read in Fins to resume")) && !this.stopped) this.resume()
   }
 
   /**
@@ -5699,7 +5699,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       if (!standing || this.keptOpen(standing, facts)) continue
       const cold = this.conversationsOfThread(listed.child).filter((conversation) => this.deps.live.session(conversation) && !this.deps.live.held(conversation))
       if (cold.length) {
-        if (!(await this.deps.live.readIn(cold)) || this.stopped) break
+        if (!(await this.deps.live.readIn(cold, "read in a Thread's Fins")) || this.stopped) break
         // Whatever came while they were read counts: the store and the engine are read again from here.
         current()
       }

@@ -94,6 +94,15 @@ export async function unregisterBundle(app: string, run: Run): Promise<void> {
   )
 }
 
+/**
+ * For programs that run outside a host (update:local, packaging, rehearsals):
+ * no stop scope owns them, so they use this installer's own runner. Host code
+ * passes its runner to `unregisterBundle` instead.
+ */
+export function unregisterOutsideHost(app: string): Promise<void> {
+  return unregisterBundle(app, unregisterRun)
+}
+
 export async function replacePreparedApplication(
   input: PreparedApplication
 ): Promise<string | null> {

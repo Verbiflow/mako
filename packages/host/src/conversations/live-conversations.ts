@@ -429,7 +429,7 @@ export class LiveConversations {
     this.stopSignInEvents = dependencies.signInEvents?.(receipt => this.recoverSignedIn(receipt))
     queueMicrotask(() => {
       this.recoverSignedIn()
-      void this.readIn(this.records.listing().filter(summary => summary.hasCompactionRecovery).map(summary => summary.session.id))
+      void this.readIn(this.records.listing().filter(summary => summary.hasCompactionRecovery).map(summary => summary.session.id), "read in conversations recovering a compaction")
         .catch(error => hostWarn("live", "compaction recovery journals could not be read", { error: errorMessage({ error }) }))
     })
     if (dependencies.holdHistory) this.scheduleSettle(SETTLE_AFTER_START_MS)
@@ -774,6 +774,11 @@ export class LiveConversations {
 
   refreshedSnapshot(id: string): Promise<LiveSnapshot | null> {
     return this.sources.refreshedSnapshot(id)
+  }
+
+  /** What a window opening conversation `id` reads: its newest history first while the rest is read (`LiveSources.windowSnapshot`). */
+  windowSnapshot(id: string): Promise<LiveSnapshot | null> {
+    return this.sources.windowSnapshot(id)
   }
 
   /**
@@ -1879,7 +1884,7 @@ export class LiveConversations {
    * continues nothing and leaves the turns where they were, for the next.
    */
   async continueRestartedInSlices(): Promise<void> {
-    if (await this.readIn([...new Set([...this.restarts.left().map((turn) => turn.conversationId), ...this.ordinaryCrashIds()])])) this.continueRestarted()
+    if (await this.readIn([...new Set([...this.restarts.left().map((turn) => turn.conversationId), ...this.ordinaryCrashIds()])], "read in turns a restart cut short")) this.continueRestarted()
   }
 
   /**
@@ -1893,13 +1898,18 @@ export class LiveConversations {
    * would have. False when the host began to stop before all were read: it
    * ends at its next step, and what was to follow doesn't.
    */
-  async readIn(ids: Iterable<string>): Promise<boolean> {
-    for (const id of ids) {
-      if (this.records.stopping()) return false
-      await this.records.loadSliced(id).catch(() => undefined)
-      await new Promise((resolve) => setImmediate(resolve))
+  async readIn(ids: Iterable<string>, label = "read conversations in for their work"): Promise<boolean> {
+    const work = this.dependencies.work
+    const read = async () => {
+      for (const id of ids) {
+        if (this.records.stopping()) return false
+        await this.records.loadSliced(id).catch(() => undefined)
+        await new Promise((resolve) => setImmediate(resolve))
+      }
+      return !this.records.stopping()
     }
-    return !this.records.stopping()
+    // Named, so the conversations it reads in are counted to it and a bulk of them says who (`LiveRecords.noteLoad`).
+    return work?.run ? work.run(label, read) : read()
   }
 
   /** Whether `id` is switching provider or reopening its session (`transfer`): a message waits for it to settle. */

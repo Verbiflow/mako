@@ -1,13 +1,13 @@
 {
   "harness": "cursor",
   "native": {
-    "version": "1.4.0"
+    "version": "1.4.1"
   },
   "about": "Read missing.md and tell me what it says. Don't look for it anywhere else. A read of a file that does not exist fails, and the answer says so.",
   "stores": [
     {
       "reader": "cursor",
-      "path": ".mako/cursor-sdk/agents/agent-618e8b1d86dfc47f5ce1ec003032548c448042a40a35b0cb2626b400fffe55fe/store.db",
+      "path": ".mako/cursor-sdk/agents/agent-450a1786f96bfa2ef33a1ed2b769f1f091cb4f0f1c08d307e70edd07c04e0722/store.db",
       "known": []
     }
   ]

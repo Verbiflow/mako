@@ -1,13 +1,13 @@
 {
   "harness": "cursor",
   "native": {
-    "version": "1.4.0"
+    "version": "1.4.1"
   },
   "about": "Use your todo list to plan the release in two items: QA sign-off, in progress, then shipping the release, pending. Don't run commands or change files. / QA signed off. Update the todo list: QA sign-off completed, shipping in progress. Don't run commands or change files. A todo list in the first turn, updated in the second.",
   "stores": [
     {
       "reader": "cursor",
-      "path": ".mako/cursor-sdk/agents/agent-09dd7365cc521d4e76933ce2a7768e9f297aaa1478bac1894b220651bcecbcde/store.db",
+      "path": ".mako/cursor-sdk/agents/agent-002cc8a8f2249594d55c1708ab55f2bdd05df83747fe9d30d41c3e0712239d66/store.db",
       "known": []
     }
   ]

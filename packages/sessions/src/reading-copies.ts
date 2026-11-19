@@ -36,7 +36,8 @@ export { COPY_FORMAT, CopyHeaderSchema, CopyPageSchema, parseCopy, type CopyHead
 export type CopyViews = {
   view(path: string): Promise<{ view: Pick<SessionView, "total" | "translator" | "json">; ref: ThreadRef } | null>
   stamp(path: string): string | null
-  translator(): string
+  /** Each harness's `translatorBuild`. */
+  translator(harness: string): string
 }
 
 /** How often a Session at work is copied, at the most: a large one waits longer, by its size (`MS_PER_MIB`). */
@@ -200,7 +201,7 @@ export class ReadingCopies {
   current(session: Wanted): boolean {
     const records = this.#views.stamp(session.path)
     const copied = this.#copied.get(keyOf(session))
-    return !records || !copied || copied.stamp === `${records}\n${this.#views.translator()}`
+    return !records || !copied || copied.stamp === `${records}\n${this.#views.translator(session.harness)}`
   }
 
   /** Once the look under way and the pushes it started have settled. */
@@ -264,13 +265,12 @@ export class ReadingCopies {
   async #lookOnce(only?: readonly Wanted[]): Promise<void> {
     const scope = this.#scope
     if (!scope) return
-    const translator = this.#views.translator()
     for (const session of only ?? scope.sessions) {
       if (this.#stopped || !this.#uploads || this.#scope !== scope) return
       if (scope.paused && !session.busy) continue
       const records = this.#views.stamp(session.path)
       if (!records) continue
-      const stamp = `${records}\n${translator}`
+      const stamp = `${records}\n${this.#views.translator(session.harness)}`
       const key = keyOf(session)
       const file = copyFile(this.#folder, session.harness, session.nativeId)
       const copied = this.#copied.get(key) ?? (await this.#fromFile(key, file))
