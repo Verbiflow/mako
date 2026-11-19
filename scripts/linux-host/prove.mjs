@@ -195,7 +195,8 @@ try {
     const unexpected = stayed.filter(({ args }) => !sharedDaemon(args))
     for (const { args } of unexpected) failed(`still running after the host stopped: ${args}`)
     if (!unexpected.length) passed("only Mako's shared daemons outlive the host", { note: stayed.map(({ args }) => args).join(", ") || "none" })
-    await rm(dataRoot, { recursive: true, force: true })
+    // The shared daemons are still running and may write one last file while this deletes; rm retries ENOTEMPTY.
+    await rm(dataRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
     const began = performance.now()
     while ((report.leftovers = await othersRunning()).length && performance.now() - began < 20_000) await delay(250)
     for (const { args } of report.leftovers) failed(`still running 20 s after its data was deleted: ${args}`)
