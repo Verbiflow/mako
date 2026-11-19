@@ -57,7 +57,7 @@ import { LentHere } from "./base/lent.js"
 import { operationWords } from "@mako/protocol/borrow-words"
 import { setupStep } from "./contracts/simulator-setup.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, type MachineGatewayLink, MachineWorkspace, declareUsageMethods, declareStorageMethods, declareFootprintMethods, readProcessTable, HelperRuns, helperRunsRoot, LeftoverFiles, MakoStorage, RecordRepacks, spendWatch, describeThisDevice, Lending, LEND_BEAT_MS } from "./usage/index.js"
-import { createHarnessHost, CliReadings, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, mcpSetupFailures, liveCallBounds, installCloudSignIns, CloudSignInSync, AccessChoiceStore, declareAccessChoiceMethods, PreferenceStore, declarePreferenceMethods, FinDefaultsStore, declareFinDefaultMethods, callGateAnswer, heldAnswer, HookCall, WriteHolds, harnessLabel, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
+import { createHarnessHost, CliReadings, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, mcpSetupFailures, liveCallBounds, installCloudSignIns, CloudSignInSync, AccessChoiceStore, declareAccessChoiceMethods, PreferenceStore, declarePreferenceMethods, FinDefaultsStore, declareFinDefaultMethods, callGateAnswer, CallNotes, heldAnswer, HookCall, WriteHolds, harnessLabel, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
 import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins.js"
 import type { CarriedFile } from "./contracts/machine-agent.js"
 import type { GitHubPerson } from "./contracts/github-person.js"
@@ -259,6 +259,7 @@ interface LateParts {
   turnOn?: CloudTurnOnFollower
   /** The file system's history, for fseventsd's restart to end reads across it. */
   fileHistory?: FileHistory
+  checkpointHistory?: FileHistory
 }
 
 export async function openCore(shell: CoreShell): Promise<Core> {
@@ -388,6 +389,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     recover: () => {
       watchBackend.recover()
       late.fileHistory?.recover?.()
+      late.checkpointHistory?.recover?.()
     },
     activity: () => ({ ...watchReadings.totals(), turnsRunning: (late.conversations?.live.summaries() ?? []).filter(({ session }) => session.status === "running").length }),
     emit: (service) => emit({ type: "file-events-service", service }),
@@ -562,6 +564,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     daemonRestarts: fileEvents,
   })
   late.fileHistory = workspaces.fileHistory
+  late.checkpointHistory = workspaces.checkpointHistory
   // Who changed what in every checkout a Thread works in. It catches up on its own, after the host is up.
   const unfollowEffects = fixtureDesk ? undefined : liveToolEffects.subscribe((reported) => {
     late.attribution?.effects(reported.conversation, reported.call)
@@ -2151,6 +2154,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     places: machineArtifactPlaces({ artifacts: controlArtifactsRoot(), recordings: controlRecordingsRoot(), media: mediaRoot }),
   })
   machineArtifacts?.schedule(shell.jobs)
+  // Each routing note once per conversation, for the harnesses whose hooks post to the conversation server.
+  const callNotes = new CallNotes()
   late.agentServers = await startConversationMcp(live, (bindingId, operation, signal, steps) => control.sessions.request(bindingId, operation, signal, steps), [
     ...workspaceMovers.agentTools,
     (server, conversationId) => registerThreadHistoryTools(server, history, conversationId),
@@ -2181,7 +2186,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     const thread = callThreadOf(threads.store ?? undefined, conversationId, cwd, workspaces.environments?.launchedWith(conversationId), buildSlots.reading())
     const call = HookCall.safeParse(body).data
     // A call that goes and may write waits for its turn's checkpoint to hold the workspace, where the turn holds writes.
-    return heldAnswer(writeHolds, event, call, callGateAnswer(event, call, thread, conversationId), binding)
+    return heldAnswer(writeHolds, event, call, callGateAnswer(event, call, thread, conversationId, callNotes), binding)
   }, (conversationId, steps) => emit({ type: "tool-steps", conversationId, steps }))
   trace("conversation tools ready")
   late.controlService = await control.startService((conversationId, bindingId) => live.authorizeAgent(conversationId, bindingId))
@@ -2305,7 +2310,15 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   const storageRoots = [environment.userRoot, environment.dataRoot]
   const makoCollectors = [new RecordRepacks(records), new LeftoverFiles(storageRoots)]
-  const storage = new MakoStorage({ roots: storageRoots, collectors: () => [...harnesses.host.storage.list(), ...makoCollectors], emit })
+  const storage = new MakoStorage({
+    roots: storageRoots,
+    collectors: () => [...harnesses.host.storage.list(), ...makoCollectors],
+    // Each store judges its own folders; the fixture desk's workspaces have none.
+    reclaimers: () => [workspaces.scratch, workspaces.threadData, workspaces.appData, workspaces.retention, late.conversations?.snapshotBudget]
+      .filter((reclaimer) => reclaimer !== null && reclaimer !== undefined),
+    budgetFile: join(environment.userRoot, "storage-budget.json"),
+    emit,
+  })
   // The fixture desk writes no store and stands in for no one's disk.
   if (!fixtureDesk) storage.schedule(shell.jobs)
   declareStorageMethods(methods, storage)
