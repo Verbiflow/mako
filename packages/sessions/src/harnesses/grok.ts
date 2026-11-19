@@ -14,9 +14,9 @@ import { cutOffTurn, DIRECT_MESSAGES, RETRY_MARKERS, SETUP_NOTICES, STOP_MARKER 
 export const GROK_VOCABULARY = defineVocabulary({
   harness: "grok",
   checked: {
-    version: "1.0.88",
-    on: "2026-11-17",
-    against: "the model request of grok agent stdio 1.0.88 in every Mako mode (scripts/fixtures/native-tools; unchanged from 1.0.46 to 1.0.70; 1.0.88 lets image_gen name its image's file (`filename`, no folder: Grok still saves it under the session, and its result names where); 1.0.77 rewords spawn_subagent and use_tool, and lets use_tool take its arguments or its whole call from a JSON file, `tool_input_file` or `file`, which Grok reads and then reports as the call inline, live and in updates.jsonl alike (the mcp-call-file decode pair); until it does, the call names its file; Anthropic models see only the inline form), and ~/.grok/sessions updates.jsonl through audit:tools as of 2026-10-06",
+    version: "1.0.89",
+    on: "2026-11-18",
+    against: "the model request of grok agent stdio 1.0.89 in every Mako mode (scripts/fixtures/native-tools; unchanged from 1.0.46 to 1.0.70, and from 1.0.88 to 1.0.89; 1.0.88 lets image_gen name its image's file (`filename`, no folder: Grok still saves it under the session, and its result names where); 1.0.77 rewords spawn_subagent and use_tool, and lets use_tool take its arguments or its whole call from a JSON file, `tool_input_file` or `file`, which Grok reads and then reports as the call inline, live and in updates.jsonl alike (the mcp-call-file decode pair); until it does, the call names its file; Anthropic models see only the inline form), and ~/.grok/sessions updates.jsonl through audit:tools as of 2026-10-06",
   },
   mcp: ["s__t"],
   tools: {
@@ -55,8 +55,8 @@ export const GROK_VOCABULARY = defineVocabulary({
   },
   concepts: {
     checked: {
-      version: "1.0.88",
-      on: "2026-11-17",
+      version: "1.0.89",
+      on: "2026-11-18",
       against: "the binary through harness:self-report (every declared name, and every skill and MCP place listed), and the user guide grok 1.0.46 ships in ~/.grok/docs, grok --help and an initialize-only ACP call as read on 2026-10-06",
     },
     instructions: {
