@@ -9,7 +9,8 @@ export type { TransferInput } from "@mako/host/contracts/conversation-control"
 export type { HarnessDescriptor, LivePermissionRequest, PromptAttachment, LiveSessionCommand, LiveSessionMode, LiveSessionState, LiveSessionUsage, ContextBreakdown, ContextCategory, TokenCounts, LiveSteering, HarnessModel, HarnessModelOption, HarnessModelVariant, HarnessProfile, HarnessSelectValue } from "@mako/host/contracts/providers-acp"
 export type { LiveUpdate } from "@mako/sessions/live-content"
 export type { Entry, Harness, Thread, ThreadPage, ThreadRef, ThreadRunState, TurnUsage, Block, BlockType, ToolContentRest, ChatRole, ContextUsage, ModelCost, ModelInfo, ChatMessage, MessageOrigin, OriginEntry, SessionMeta, SessionState, SessionSummary, ThinkingLevel, TokenStats, TreeNode } from "@mako/host/contracts/conversation-session"
-export type { Automation, AutomationRun, AutomationTrigger, UpdateState, UsageSummary, UsageTotals } from "@mako/host/contracts/automations-usage-updates"
+export type { UpdateState, UsageSummary, UsageTotals } from "@mako/host/contracts/automations-usage-updates"
+export type { AutomationProjectReading, AutomationRun, AutomationTrigger, AutomationView, AutomationsReading } from "@mako/host/contracts/automations"
 export type { BootPayload, ExternalThreadActivity, HostEvent, TabSnapshot } from "@mako/host/contracts/host-events-boot"
 export type { Capabilities, CommandSummary, IntegrationCatalogSnapshot, IntegrationCategory, IntegrationConnection, IntegrationRecord, MakoComputerPermissions, CuaDriverStatus, McpProvider, McpRegistryProviderStatus, McpRegistrySnapshot, McpScope, McpServerDefinition, McpServerOrigin, McpServerRecord, McpSyncPreview, McpSyncTarget, McpTransport, SkillDelivery, SkillOrigin, SkillProvider, SkillProviderStatus, SkillRecord, SkillReference, SkillRegistrySnapshot, SkillScope, SkillSyncPreview, SkillSyncTarget, SkillSummary, ToolSummary } from "@mako/host/contracts/mcp-skills-integrations"
 export type { ExternalEditor, FileContents, GitBinarySide, GitCommitEntry, GitCommitFile, GitDiff, GitDiffPreview, GitFile, GitFileStatus, GitStatus, GitPushInput, GitRemoteAction, GitRemoteInput, GitRemoteResult, GitHubStatus, CheckSummary, PullRequest, ReviewSummary, FileMatches, SearchOptions, SearchResults, ThreadMatches, StagedFile, WorkspaceFile } from "@mako/host/contracts/git-workspace-search"
@@ -17,7 +18,6 @@ export type { BrowserControlStatus, ControlActivity, ControlPreview, AppshotTarg
 export type { DesktopNotification, NotificationDelivery, NotificationPermission } from "@mako/host/contracts/notifications"
 export type { TerminalCreateOptions, TerminalEvent, TerminalSession, TerminalSessionStatus, TerminalSnapshot } from "@mako/host/contracts/terminal"
 
-export { automationTriggerAvailable } from "@mako/host/contracts/automations-usage-updates"
 export { THINKING_LEVELS } from "@mako/host/contracts/conversation-session"
 
 export type { LiveSnapshot, LiveSummary, LiveBatch, LiveStartOptions, LiveRequest } from "@mako/host/contracts/live-conversations"

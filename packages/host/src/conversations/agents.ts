@@ -3242,6 +3242,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     const conversation = this.answeringConversation(edge.child, ask.id)
     const pending = conversation ? this.deps.live.pendingAsk(conversation) : undefined
     if (!conversation || !pending || pending.request !== ask.id) return { refused: "conflict", why: `${edge.name} no longer waits on that: it was answered.` }
+    if (by.kind === "apex" && pending.personOnly)
+      return { refused: "access", why: `${edge.name} proposed a change to the person's automations, which only they approve, from their Inbox. Leave it to them with person: true.` }
     if (pending.gone) return { refused: "unavailable", why: `${edge.name}'s harness exited while it waited, so no answer reaches it: agents_send gives it a message to go on.` }
     const response = permissionAnswer(pending, input)
     if ("refused" in response) return response
@@ -3757,6 +3759,24 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (live.held(wait.conversation)?.requests.some((request) => request.id === fired.request)) return "taken"
     live.submit(wait.conversation, fired.request, fired.text, [], undefined, undefined, undefined, TURN_WAIT_ACTOR)
     return "taken"
+  }
+
+  /**
+   * Mako's note to an agent, once under `request`, as a turn wait's goes: a Fin's through its delivery (queued after
+   * its turn, never steered), any other Thread's as its next message. Throws when it can't go now, to be tried again.
+   */
+  async noteFromMako(conversation: string, request: string, text: string): Promise<void> {
+    const child = this.childOfConversation(conversation)
+    const edge = child ? this.store()?.edges().of(child) : undefined
+    if (edge) {
+      const sent = await this.deliver(edge, request, text, [], TURN_WAIT_ACTOR, "queue", true)
+      if ("refused" in sent) throw new Error(sent.why)
+      return
+    }
+    const live = this.deps.live
+    if (!live.session(conversation) || this.deps.archived?.(conversation)) throw new Error("That conversation isn't open on this host.")
+    if (live.held(conversation)?.requests.some((each) => each.id === request)) return
+    live.submit(conversation, request, text, [], undefined, undefined, undefined, TURN_WAIT_ACTOR)
   }
 
   /**
@@ -8293,7 +8313,7 @@ function nativeAsk(pending: PendingAsk): FinAsk {
     : pending.questions.length === 1
       ? pending.questions[0]!.options.map((option) => ({ label: option.label.slice(0, 200), ...(option.description && { detail: option.description.slice(0, 600) }) }))
       : []
-  return { kind: pending.kind, id: pending.request, ...(options.length && { options: options.filter((option) => option.label).slice(0, ASK_OPTIONS) }), ...(pending.named && { named: true as const }) }
+  return { kind: pending.kind, id: pending.request, ...(options.length && { options: options.filter((option) => option.label).slice(0, ASK_OPTIONS) }), ...(pending.named && { named: true as const }), ...(pending.review && { review: pending.review }) }
 }
 
 /**

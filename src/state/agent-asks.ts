@@ -22,11 +22,25 @@ export function agentAskDetail(conversation: Pick<LiveAcpConversation, "control"
  * `pressBack`: how this surface brings a Thread back once the person allows its agent's ask to come back. A surface
  * without one (the Inbox) can't answer that ask, so its card says where to.
  */
-export function agentAskCard(conversationId: string, ask: AgentAsk, harness: string, pressBack?: (conversationId: string) => void): AskCard {
+export function agentAskCard(conversationId: string, ask: AgentAsk, harness: string, pressBack?: (conversationId: string) => void, review?: (project: string, id: string, change: string) => void): AskCard {
   const words = agentAskWords(ask.want, harness)
   const line = agentAskLine(ask.want)
   const said = { who: harness, want: line.charAt(0).toLowerCase() + line.slice(1), description: words.description, detail: words.detail }
   if (ask.want.kind === "back" && !pressBack) return { ...said, note: "Bring it back from its Thread", choices: [] }
+  // A proposal is approved only where what it changes is shown (its card in the Inbox or Automations): this card leads
+  // there, and declines from here, but never approves unseen.
+  if (ask.want.kind === "automation-proposal") {
+    const want = ask.want
+    const decline = { answer: "keep" as const, label: words.keep, choose: () => answerAgentAsk(conversationId, ask, false) }
+    if (!review) return { ...said, note: "Approve it where its change is shown: the Inbox or Automations on the Mac", choices: [decline] }
+    return {
+      ...said,
+      choices: [
+        { answer: "allow", label: "Review the change", primary: true, choose: async () => (review(want.cwd, want.id, want.change), false) },
+        decline,
+      ],
+    }
+  }
   const allow = async () => {
     const answered = await answerAgentAsk(conversationId, ask, true)
     if (answered && ask.want.kind === "back") pressBack?.(conversationId)

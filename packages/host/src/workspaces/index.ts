@@ -48,8 +48,7 @@ import { ThreadIdSchema, type ThreadId } from "../contracts/thread-identity.js"
 import { listExternalEditors, openInExternalEditor } from "./editors.js"
 import { revealAction } from "./reveal-policy.js"
 import { presentMachine, type MachineCapability } from "../base/machine.js"
-import type { Automations } from "./automations.js"
-import type { Automation } from "../contracts/automations-usage-updates.js"
+import { declareAutomationMethods, type Automations } from "./automations.js"
 import { declareFileMethods, type WatchedFile } from "./file-methods.js"
 import { declareWorktreeMethods } from "./worktree-methods.js"
 import { declareMoveMethods } from "./move-methods.js"
@@ -64,8 +63,11 @@ import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { ThreadWorktreeMoveDeps } from "./thread-worktree-moves.js"
 
 export { ArtifactPreviews, type ProviderArtifactPreview } from "./artifact-previews.js"
-export { Automations } from "./automations.js"
-export { AutomationLaunches, AutomationNotStartedError } from "./automation-launches.js"
+export { Automations, AutomationNotStartedError, automationUuid, decisionNote, gateContext, type AutomationLaunch, type AutomationScheduler, type AutomationThreadReading, type AutomationsDeps, type RunWhenJudge, type ThreadDraftSource } from "./automations.js"
+export { AutomationStore } from "./automation-store.js"
+export { AutomationCloud, projectKey, type AutomationCloudApi } from "./automation-cloud.js"
+export { planAutomationStart, standingTarget, type AutomationStartInput, type AutomationStartPorts, type StandingSession } from "./automation-start.js"
+export { parseAutomationFile, readAutomationFile } from "./automation-file.js"
 export { checkoutConversations } from "./checkout-conversations.js"
 export { WorkspaceClients } from "./clients.js"
 export { applyMoveCheckpoint, captureMoveCheckpoint, MoveCheckpointError, verifyMoveCheckpoint } from "./move-checkpoint.js"
@@ -666,14 +668,7 @@ export function declareWorkspaceMethods(methods: MethodTable, { workspaces, move
       await present.reveal(absolute)
     })
   )
-  methods.handle("mako:automations", () => automations.list())
-  methods.handle("mako:automation-context", () => automations.context())
-  methods.handle("mako:save-automations", (next: Automation[]) =>
-    withHost((h) => automations.save(h.workspace, next))
-  )
-  methods.handle("mako:automation-enabled", (id: string, enabled: boolean, cwd?: string) => automations.setEnabled(id, enabled, cwd))
-  methods.handle("mako:run-automation", (id: string, operation?: string, cwd?: string) => automations.fire(id, "manual", operation, cwd))
-  methods.handle("mako:reload-automations", () => withHost((h) => automations.load(h.workspace)))
+  declareAutomationMethods(methods, automations)
   declareWorktreeMethods(methods, workspaces.worktrees, { heads: listPullHeads, branches: listBranchPulls }, workspaces.retention)
   declareThreadScratchMethods(methods, workspaces.scratch, workspaces.threadData)
   declareMoveMethods(methods, movers.moves, (target) => moveHold(live, movers.worktreeMoves, movers.moves, target), workspaces.worktrees)

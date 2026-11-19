@@ -72,9 +72,16 @@ const MOVE = verb("Move", "Moving", "Moved")
 /** `automation`: the list, or what it did to one. */
 function automationWords(args: Fields): Said {
   const what = text(args.id) ? `the automation ${text(args.id)}` : "an automation"
-  if (args.action === "run") return { verb: verb("Run", "Running", "Ran"), what }
+  if (args.action === "run" || args.action === "run_now") return { verb: verb("Run", "Running", "Ran"), what }
   if (args.action === "on") return { verb: verb("Turn on", "Turning on", "Turned on"), what }
-  if (args.action === "off") return { verb: verb("Turn off", "Turning off", "Turned off"), what }
+  if (args.action === "off" || args.action === "disable") return { verb: verb("Turn off", "Turning off", "Turned off"), what }
+  if (args.action === "enable") return { verb: verb("Propose turning on", "Proposing turning on", "Proposed turning on"), what }
+  if (args.action === "create") return { verb: verb("Propose", "Proposing", "Proposed"), what: text(args.id) ? `the automation ${text(args.id)}` : "a new automation" }
+  if (args.action === "update") return { verb: verb("Propose changing", "Proposing changing", "Proposed changing"), what }
+  if (args.action === "delete") return { verb: verb("Propose deleting", "Proposing deleting", "Proposed deleting"), what }
+  if (args.action === "get") return { verb: verb("Read", "Reading", "Read"), what }
+  if (args.action === "runs") return { verb: verb("Read", "Reading", "Read"), what: text(args.id) ? `the runs of ${text(args.id)}` : "the automation runs" }
+  if (args.action === "proposal") return { verb: verb("Read", "Reading", "Read"), what: "an automation proposal" }
   return { verb: verb("List", "Listing", "Listed"), what: "the automations" }
 }
 

@@ -4,7 +4,8 @@ import { formatChord, keysFor, runCommand, useCommands } from "@/extend/commands
 import { openInbox } from "@/components/inbox/open-inbox"
 import { RailRow } from "@/components/rail/rail-row"
 import { Keys } from "@/components/ui/kit"
-import { useAutomations } from "@/state/automations"
+import { automationsOn, pendingProposals, useAutomations } from "@/state/automations"
+import { toggleAutomations } from "@/state/automations-view"
 import { inboxView, useInboxCount, useInboxRosters, useInboxView } from "@/state/inbox"
 import { OPEN_PULLS_LISTED, openPullRequests, refreshOpenPulls, useOpenPulls } from "@/state/open-pulls"
 import { usePrefs } from "@/state/prefs"
@@ -114,15 +115,22 @@ function PullsRow() {
   )
 }
 
+/** Automations over the conversation; its reading is how many wait on a decision, else how many are on. */
 function AutomationsRow() {
-  const on = useAutomations((state) => state.list.filter((automation) => automation.enabled).length)
+  const on = useAutomations(automationsOn)
+  const proposed = useAutomations(pendingProposals)
+  const open = useInboxView((state) => state.automations)
   return (
     <RailRow
       data-rail-top-row="automations"
       icon={<WorkflowIcon />}
       label="Automations"
-      onClick={() => window.dispatchEvent(new CustomEvent("mako:settings", { detail: "automations" }))}
-      end={on ? <span data-automations-on={on} className="tabular shrink-0 pr-1 text-label text-faint">{on} on</span> : null}
+      spoken={proposed ? `Automations, ${proposed} to decide` : "Automations"}
+      open={open}
+      onClick={toggleAutomations}
+      end={proposed ? (
+        <span data-automations-proposed={proposed} className="tabular flex h-[18px] min-w-[18px] items-center justify-center bg-attention/15 px-1 text-label font-medium text-attention">{proposed}</span>
+      ) : on ? <span data-automations-on={on} className="tabular shrink-0 pr-1 text-label text-faint">{on} on</span> : null}
     />
   )
 }

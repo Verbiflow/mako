@@ -3913,6 +3913,54 @@ menu draft the recipe change in a new Thread for the person to send. No value
 is ever shown. `packages/protocol/test/setup.mjs` (in `test:protocol`) covers the
 rows and words; `npm run test:setup` the host's readings and brokers.
 
+## Automations
+
+An automation is a stored `agents_start` plus triggers (`contracts/automations.ts`): its brief, start (harness,
+model, access, place, worktree with a branch template), `thread: new|standing`, triggers (`schedule` with a
+timezone, `commit`, `manual` here; GitHub, Slack, Linear, Sentry and webhook ones the cloud fires once it registers
+them), an optional gate (a command whose exit 1 skips and whose JSON `key` dedupes), limits and a result kind.
+Definitions are the project's `.mako/automations.json` (the reader takes the first shape too and keeps what it can't
+read word for word); on/off, next runs, run records and agents' proposals are the host's, in
+`<dataRoot>/automations/state.json` (`AutomationStore`), keyed by project and id. `Automations`
+(`workspaces/automations.ts`) serves every project a window has open and every one with an automation on, ticked by
+`AutomationScheduler` (`HostJobs` here, the cloud account's Durable Object later). A run is recorded before its
+Thread starts, under `automation:<id>:<occurrence>` (a schedule's occurrence is `scheduleOccurrence(slot)`), whose
+conversation id is fixed by that key, so a repeat or a restart reaches the same Thread; it completes when that
+Thread's turn ends (`turnEnded`, read back on each tick). One run at a time, one catch-up within
+`AUTOMATION_CATCH_UP_GRACE_MS`, a pause after `AUTOMATION_PAUSE_AFTER_FAILURES` failures in a row, and a pause when
+the definition changes after the person turned it on (a pull can't change what runs). An agent's create, update,
+delete or enable through the `automation` tool is a proposal: saved pending, carried to the person by an
+`automation-proposal` ask (person-only: an Apex can't answer it), decided from the card or Automations, its agent
+told by Mako's note; stale and expired ones apply nothing. `runWhen` asks the person's utility model
+(`UtilityRunWhen`). The cloud account's half is `AutomationCloud` (`workspaces/automation-cloud.ts`, wire in
+`@mako/protocol/automations-cloud`): each automation that's on with a trigger the account holds is registered under its
+project's stable key (`github.com/<owner>/<name>[/<folder>]`, never a path; `cloudRegistered`, or `cloudIssue` on a
+409), the account's runs are read every half minute while one is registered, on the account's `automations-changed`
+event and when its link opens, and kept as runs marked `cloud`, which only the account settles. An offered run is held to
+this Mac's cap, overlap and gate, then claimed (`POST /claim`) or declined; a registered schedule's slot or event is
+claimed before it runs here, and a 409 or an unreachable account means it doesn't. A cloud run's agent's proposals stay
+on its machine's host (`relaysProposals`) until the Mac reads them (`mako:automations-forwarded`), applies the
+person's decision to the project's file here, and says how it went (`mako:automations-forward-settle`).
+A cloud run starts on its cloud Thread's host through `mako:automations-cloud-start`, which settles its harness,
+rule, model, reasoning and mode with the same planner as a run here (`planAutomationStart`, `workspaces/automation-start.ts`):
+its mode is the harness's own at its access or the strictest below, and anything it can't apply fails the run, never a
+looser start. A rule a registered automation follows goes with it as what the person's rule names (`ruled`); one they
+don't have isn't registered. A cloud run past its limit is stopped on its Thread (`mako:live-cancel`), not only failed.
+`mako:automations-run-of` names the run a Thread is, from an index of every kept run by conversation.
+Nothing runs a definition the person didn't approve, by one rule (`isApproved`, `contracts/automations.ts`, the
+same in the host and every window): `AutomationLocal.approvedDefinition` is kept and its SHA-256 fingerprint is the
+file's now. No kept definition is never approved. Every run (schedule, commit, event, offer, Run now, `run_now`, a queued
+or recovered run) is of the approved definition, and only an approved one is registered with the cloud. A file that
+says something else pauses it; turning it on (the first time too), Run now, an enable proposal or an editor save shows
+all it says, or its change from what was approved, and approves only with the reviewed fingerprint (`approve`).
+Approving a create or update approves what it wrote, and a create starts off and afresh; an id that leaves its file
+keeps nothing. A proposal is approved only from its card in Automations or the Inbox (`decide`): its ask, wherever it's
+drawn (its Thread, a Fin's row, a phone), only declines and points there, and an allow sent through it is refused.
+A run's agent reads an event's words, a commit's subject and the gate's output only fenced as untrusted after the
+brief. A cloud machine's report of a decision is never one: the Mac decides. The state file is read record by record,
+a bad one passed over and the file copied aside first.
+`npm run test:automations` holds all of it.
+
 ## Notifications
 
 Five kinds, the same on every surface (desktop, web app, Web Push), declared

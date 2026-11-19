@@ -5,6 +5,13 @@ import type { ComposerNotice } from "@/extend/notices"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { agentAskCard, agentAskOf } from "@/state/agent-asks"
 import { bringBack } from "@/state/cloud-moves"
+import { openAutomations, showAutomation } from "@/state/automations-view"
+
+/** An agent's automation proposal, opened where its change is shown and decided: its page, or the list for a new one. */
+function reviewProposal(project: string, id: string, change: string): void {
+  if (change === "create") openAutomations({ kind: "list" })
+  else showAutomation(project, id)
+}
 
 /**
  * What the agent on screen asked below full access through Mako's tools, read from its conversation, so every window
@@ -20,7 +27,7 @@ export function useAskNotice(pressBack: (conversationId: string) => void): Compo
   const live = useAcp((state) => activeLiveAcp(state))
   const ask = agentAskOf(live ?? undefined)
   if (!live || !ask) return null
-  return askNotice("agent-ask", agentAskCard(live.key, ask, labels[live.harness] ?? live.harness, pressBack), {
+  return askNotice("agent-ask", agentAskCard(live.key, ask, labels[live.harness] ?? live.harness, pressBack, reviewProposal), {
     icon: <HarnessIcon harness={live.harness} />,
     data: { "data-agent-ask": ask.want.kind },
   })

@@ -104,6 +104,12 @@ const ALLOWED: readonly string[] = [
   "mako:threads-act",
   "mako:settings-act",
   "mako:automations-act",
+  // The person's Mac reads a cloud run's agent's proposals from its cloud Thread's host, and says how each went there
+  // (`AutomationCloud`): the project's file, and so the decision, is the Mac's.
+  "mako:automations-forwarded",
+  "mako:automations-forward-settle",
+  // The account starts a cloud run on its Thread's host, as the Mac that registered it, mapped as a run on that Mac is.
+  "mako:automations-cloud-start",
   "mako:harnesses-act",
   // A simulator another device borrows under a lease (`BorrowedSimulators`), with its caller stamped by the host.
   "mako:simulators-list",

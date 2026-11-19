@@ -51,7 +51,7 @@ async function until(check, what, timeoutMs = 20_000, everyMs = 100) {
   }
 }
 
-/** Run an expression in the desk window through its development automation endpoint (`electron/automation.ts`). */
+/** Run an expression in the desk window through its development eval endpoint (`electron/dev-eval.ts`). */
 async function desk(source) {
   const response = await fetch(`http://127.0.0.1:${AUTOMATION_PORT}/eval`, { method: "POST", body: source })
   const answer = await response.json()

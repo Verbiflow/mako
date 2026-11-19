@@ -118,7 +118,7 @@ for (const channel of fixtureCloudHostCalls) {
   assert.ok(isHostChannel(channel), `${channel} is a host call`)
   assert.equal(fixtureDeskRefusal(channel), undefined, `${channel} is allowed`)
 }
-for (const channel of ["mako:live-start", "mako:list-models", "mako:git-status", "mako:terminal-create", "mako:save-automations", "mako:relaunch", "mako:thread-archive", "mako:not-a-channel"]) {
+for (const channel of ["mako:live-start", "mako:list-models", "mako:git-status", "mako:terminal-create", "mako:automations-save", "mako:relaunch", "mako:thread-archive", "mako:not-a-channel"]) {
     const reply = await socketCall(call(channel, { garbage: true }, 7))
     assert.equal(reply.ok, false, channel)
     assert.equal(reply.code, "fixture-refused", `${channel} on the socket: ${JSON.stringify(reply)}`)
@@ -205,7 +205,7 @@ for (const channel of ["mako:live-start", "mako:lifecycle-command", "mako:list-m
       ["terminal-create", `window.mako.terminalCreate({ cwd: "/tmp" })`],
       ["list-models", `window.mako.listModels()`],
       ["lifecycle-command", `window.mako.lifecycleCommand({ kind: "cancel" })`],
-      ["save-automations", `window.mako.saveAutomations([])`],
+      ["automations-save", `window.mako.saveAutomation("/tmp", { id: "x", name: "x", prompt: { objective: "x" } })`],
     ]) assert.match(await outcome(expression), /fixture desk refused/, `An agent views window's ${label} is refused`)
     assert.equal(await savedAutomations(), automations, "No desk window wrote automations")
     assert.equal(await outcome("window.mako.threads()"), "ran", "An agent views window can read")

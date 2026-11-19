@@ -60,7 +60,7 @@ const fixtureReads = [
   "mako:live-snapshot",
   "mako:live-state",
   "mako:live-locate",
-  "mako:automations",
+  "mako:automations-read",
   "mako:native-requests",
   "mako:terminal-list",
   "mako:utility-model-settings",

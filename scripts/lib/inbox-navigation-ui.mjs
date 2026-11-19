@@ -171,12 +171,21 @@ export async function checkInboxNavigation({ window, page, base, evaluate, until
   await until(`document.querySelector('.composer-input')?.value === 'Keep this unsent navigation draft'`, "return restores the original draft")
   console.log("PASS: different Thread navigates, background hydration does not, original draft returns")
 
-  // These sidebar entries are Settings destinations and an external URL, not Inbox-like overlays.
-  for (const destination of ["automations", "setup"]) {
+  // Automations covers the conversation as the Inbox does: it replaces the Inbox, and the Thread's row leaves it.
+  await openInbox()
+  await click('[data-rail-top-row="automations"]')
+  await until(`Boolean(document.querySelector('[data-automations]')) && !document.querySelector('[data-inbox]')`, "Automations in place of the Inbox")
+  assert.equal(await evaluate(`window.navigationProbe.selection().key`), liveRow)
+  await click(liveSelector)
+  await until(`!document.querySelector('[data-automations]')`, "same Thread after Automations")
+  assert.equal(await evaluate(`document.querySelector('.composer-input')?.value`), "Keep this unsent navigation draft")
+
+  // Setup is a Settings destination, and Pull requests an external URL, not Inbox-like overlays.
+  for (const destination of ["setup"]) {
     await openInbox()
     await click(`[data-rail-top-row="${destination}"]`)
     await until(`Boolean(document.querySelector('[aria-label="Search settings"]'))`, `${destination} full Settings`)
-    assert.equal(await evaluate(`document.querySelector('[role="dialog"] main h2')?.textContent`), destination === "setup" ? "Apps" : "Automations")
+    assert.equal(await evaluate(`document.querySelector('[role="dialog"] main h2')?.textContent`), "Apps")
     assert.equal(await evaluate(`window.navigationProbe.selection().key`), liveRow)
     await click('[role="dialog"] header button')
     await until(`!document.querySelector('[aria-label="Search settings"]')`, "Settings Back")
@@ -200,7 +209,7 @@ export async function checkInboxNavigation({ window, page, base, evaluate, until
   assert.equal(await evaluate(`Boolean(document.querySelector('[data-inbox]'))`), true, "dismissing Search returns to Inbox")
   await click('[data-rail-top-row="session.new"]')
   await until(`!document.querySelector('[data-inbox]')`, "New thread leaves Inbox")
-  console.log("PASS: Automations/Setup Settings and Back, external Pull requests, Search and New thread")
+  console.log("PASS: Automations over the conversation, Setup Settings and Back, external Pull requests, Search and New thread")
 
   await window.loadURL(`${base}?mock&app=rail`)
   await until(`Boolean(document.querySelector('[data-thread-row][data-flip-key="/mock/devin.jsonl"]'))`, "native/folded rail fixture")
