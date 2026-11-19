@@ -359,8 +359,8 @@ type Live = Pick<
 
 /** What starting a Fin in the cloud asks of the account and this device (`AgentsDeps.cloudFins`). */
 export interface CloudFins {
-  /** The harnesses the cloud's machines run. */
-  harnesses(): string[]
+  /** The harnesses the cloud's machines run, as the cloud says. */
+  harnesses(): Promise<readonly string[]>
   /** The Fin's folder as a committed, pushed source (`captureFinSource`); throws, saying why, when it isn't one. */
   capture(folder: string): Promise<CommittedFinSource>
   reserve(start: CloudFinStart): Promise<CloudFinAnswer>
@@ -1871,7 +1871,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     const { target, where } = resolved
     const name = placeName(target)
-    const offers = cloud ? { harnesses: cloud.harnesses() } : await places.capabilities(target, where)
+    const offers = cloud ? { harnesses: await cloud.harnesses() } : await places.capabilities(target, where)
     if ("refused" in offers) return this.refuse(op, offers.refused, offers.why)
     const policy = this.deps.finPolicy?.()
     const followed = input.rule === undefined ? undefined : policy?.rules[input.rule - 1]
