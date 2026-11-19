@@ -522,6 +522,86 @@ try {
       whole.close()
     }
   }
+  // Turns starting together in several repositories (a project folder's, worktrees') read the history together: a read
+  // holds parcel's FSEvents lock, and with a read each the last waited for all the others. Those asking while a read is
+  // under way go as one read after it, from the oldest of their marks: a path that changed before a repository's own
+  // mark but after an older one is read again, never missed.
+  {
+    const repo = (name: string) => {
+      const folder = join(root, "together", name)
+      mkdirSync(folder, { recursive: true })
+      for (const args of [["init", "-q", "-b", "main"], ["config", "user.email", "test@localhost"], ["config", "user.name", "Test"]]) execFileSync("git", args, { cwd: folder })
+      writeFileSync(join(folder, "a.txt"), `${name}\n`)
+      execFileSync("git", ["add", "."], { cwd: folder })
+      execFileSync("git", ["commit", "-qm", "first"], { cwd: folder })
+      return folder
+    }
+    const one = repo("one"), two = repo("two"), three = repo("three")
+    const folders = [one, two, three]
+    // A reuse check lists the index as it asks for the history: a repository whose listing began is waiting on a read.
+    let listings = 0
+    const counted = new Git()
+    const countedRun = counted.run.bind(counted)
+    counted.run = (options: RunOptions) => {
+      if (options.args.includes("ls-files") && options.args.includes("-v")) listings++
+      return countedRun(options)
+    }
+    const storeRoot = join(root, "together-store")
+    const together = new WorkspaceSnapshots(counted, storeRoot)
+    const asked: { mark: HistoryMark; roots: readonly string[] }[] = []
+    let stall: Promise<void> | undefined
+    together.followHistory({
+      mark: history.mark,
+      since: async (mark, roots, options) => {
+        asked.push({ mark, roots })
+        await stall
+        return history.since(mark, roots, options)
+      },
+    })
+    const wholeRoot = join(root, "together-whole")
+    const whole = new WorkspaceSnapshots(new Git(), wholeRoot)
+    const ids = folders.map(() => randomUUID())
+    const until = async (done: () => boolean) => {
+      for (const began = performance.now(); !done(); await new Promise((resolve) => setTimeout(resolve, 2)))
+        if (performance.now() - began > 5_000) throw new Error("timed out")
+    }
+    try {
+      const last = new Map<string, string>()
+      for (const folder of folders) {
+        const id = randomUUID()
+        await together.beginRun(id, folder)
+        last.set(folder, (await together.endRun(id)).id)
+        // `two` changes after `one`'s last mark and before its own: only a read from `one`'s mark names it.
+        if (folder === one) {
+          writeFileSync(join(two, "a.txt"), "two, before its checkpoint\n")
+          heard.push({ at: ++count, path: join(two, "a.txt") })
+        }
+      }
+      asked.length = 0
+      // `three`'s read is under way (and held) when `one` and `two` ask.
+      let release = () => {}
+      stall = new Promise((resolve) => (release = resolve))
+      const atThree = together.beginRun(ids[2]!, three)
+      await until(() => asked.length === 1)
+      listings = 0
+      const [atOne, atTwo] = [together.beginRun(ids[0]!, one), together.beginRun(ids[1]!, two)]
+      await until(() => listings === 2)
+      release()
+      const before = await Promise.all([atOne, atTwo, atThree])
+      assert.equal(asked.length, 2, "the two that asked while a read was under way read the history once")
+      assert.deepEqual([...asked[1]!.roots].sort(), [one, two].sort(), "for both repositories")
+      assert.equal(asked[1]!.mark.id, String(count - 1), "from the older of their marks")
+      assert.equal(before[0].id, last.get(one), "a quiet repository starts on its last checkpoint")
+      assert.equal(before[2].id, last.get(three), "and so does one read alone")
+      assert.notEqual(before[1].id, last.get(two), "the path the older mark names is read again")
+      assert.equal(treeOf(storeRoot, before[1].id), treeOf(wholeRoot, (await whole.capture(two)).id), "and that checkpoint holds the workspace as it is")
+    } finally {
+      for (const id of ids) together.abandonRun(id)
+      together.close()
+      whole.close()
+    }
+    console.log("PASS: turns starting together read the history together, from the oldest mark, and miss nothing")
+  }
   console.log("checkpoint reuse: a quiet workspace's turn starts on its last checkpoint; a change, a staged path, a moved HEAD, or a lost or unread history is captured; a turn beside another follows on too, naming the runs it shares the workspace with")
 } finally {
   store.close()

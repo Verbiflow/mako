@@ -135,8 +135,8 @@ const CHILDREN: ChildFixture[] = ([
  */
 const ASK_SCENE = new URLSearchParams(globalThis.location?.search).get("ask")
 const LIMIT_SCENE = new URLSearchParams(globalThis.location?.search).get("fins") === "limit"
-/** `&crew=moves`: the crew changed outside the Apex's turns, said as lines in its transcript (`membershipLine`). */
-const MOVES_SCENE = new URLSearchParams(globalThis.location?.search).get("crew") === "moves"
+/** `&shiver=moves`: the Shiver changed outside the Apex's turns, said as lines in its transcript (`membershipLine`). */
+const MOVES_SCENE = new URLSearchParams(globalThis.location?.search).get("shiver") === "moves"
 const LIMIT_UNTIL = "Sun 12:00 AM PST"
 const LIMIT_MOVED = `Moved to Claude Code: Cursor is at its limit until ${LIMIT_UNTIL}`
 const LIMIT_OUT = `Out of accounts until ${LIMIT_UNTIL}: Cursor and Claude Code (work)`
@@ -404,11 +404,11 @@ const DICTATION = 3
 const WAKE_AT = Date.now() - 90_000
 /** A wake as the host writes one (`digest`): the Apex's words, then the same reports as data, which the person reads as each Fin's message. */
 /**
- * `&wake=crew`: the wake carries four more reports, finished or left to the Apex, so the person reads one crew update:
+ * `&wake=shiver`: the wake carries four more reports, finished or left to the Apex, so the person reads one Shiver update:
  * what needs them open, the rest folded into a line (`FinReports`).
  */
-const CREW_WAKE = new URLSearchParams(globalThis.location?.search).get("wake") === "crew"
-const CREW_WAKE_REPORTS = [
+const SHIVER_WAKE = new URLSearchParams(globalThis.location?.search).get("wake") === "shiver"
+const SHIVER_WAKE_REPORTS = [
   { report: "report:haptics:done", fin: childThread(7), name: "Haptics audit", harness: "claude", status: "done" as const, line: "Listed 31 haptics; two fire twice on long-press." },
   { report: "report:share-sheet:done", fin: childThread(8), name: "Share sheet copy", harness: "cursor", status: "done" as const, line: "Worded the share sheet's actions in the app's voice.", artifacts: [{ kind: "pull-request" as const, ref: "https://github.com/acme/phone/pull/215" }] },
   { report: "report:deep-links:done", fin: childThread(10), name: "Settings deep links", harness: "claude", status: "done" as const, line: "Every settings page opens from a link now." },
@@ -428,7 +428,7 @@ const WAKE_TEXT = appendFinReports(
   [
     { report: "report:push-wording:tone", fin: childThread(0), name: "Quiet-hours push wording", harness: "codex", status: "needs-input", line: "Which tone for the quiet-hours notice? Plain or friendly?", options: [{ label: "Plain", detail: "Pushes are held until 7:00." }, { label: "Friendly", detail: "Quiet hours: we'll tell you at 7:00." }], recommended: 0, forPerson: true },
     { report: "report:swipe:done", fin: childThread(9), name: "Thread list swipe", harness: "codex", status: "done", line: "Swipe to archive now springs back below the threshold; PR on your branch.", artifacts: [{ kind: "pull-request", ref: "https://github.com/acme/phone/pull/214" }] },
-    ...(CREW_WAKE ? CREW_WAKE_REPORTS : []),
+    ...(SHIVER_WAKE ? SHIVER_WAKE_REPORTS : []),
   ]
 )
 
@@ -441,7 +441,7 @@ interface EarlierTurns {
 const EARLIER_WORDS = [
   "The sheet measures its container once the keyboard's inset settles, so split view no longer starts it off screen.",
   "Each Fin's report lands as its own message under the wake, with its options live while the ask is yours.",
-  "The crew card keeps the Fins on screen through every transition; only the background line waits for the turn's end.",
+  "The Shiver card keeps the Fins on screen through every transition; only the background line waits for the turn's end.",
   "Rows the transcript has not laid out stand at the size they last measured, or an estimate until they mount.",
 ]
 

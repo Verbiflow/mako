@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils"
 import type { FinAnswer } from "@/state/fin-asks"
 
 /**
- * An ask's answers as buttons, wherever a Fin's ask is drawn (the crew card, the Overview): an approval's two, or its
+ * An ask's answers as buttons, wherever a Fin's ask is drawn (the Shiver card, the Overview): an approval's two, or its
  * options with the recommended one first, and the person's own words (`typed`). `hint` adds who else could answer.
  */
 export function FinAnswerButtons({

@@ -1,7 +1,7 @@
 import { z } from "zod"
 import type { AgentAnswer } from "./agent-tools.js"
 
-/** A crew mate's topic as the model reads it: what it was asked, cut here. */
+/** A Shiver mate's topic as the model reads it: what it was asked, cut here. */
 export const TOPIC_CHARS = 80
 
 /** How long ago, in one short word a model reads at a glance: "40s", "12m", "3h", "2d". */
@@ -16,7 +16,7 @@ export function age(ms: number): string {
 
 const cut = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text)
 
-/** What compaction reads of a listed Fin (`AgentStrip`, a crew mate, a summary row); every other field passes through. */
+/** What compaction reads of a listed Fin (`AgentStrip`, a Shiver mate, a summary row); every other field passes through. */
 const ListedRowSchema = z.looseObject({
   name: z.string().optional(),
   title: z.string().optional(),
@@ -31,7 +31,7 @@ const ListedRowSchema = z.looseObject({
   state: z.looseObject({ since: z.number().optional(), quiet: z.looseObject({ since: z.number() }).optional() }).optional(),
 })
 type ListedRow = z.infer<typeof ListedRowSchema>
-const ListedSchema = z.looseObject({ children: z.array(ListedRowSchema).optional(), crew: z.array(ListedRowSchema).optional() })
+const ListedSchema = z.looseObject({ children: z.array(ListedRowSchema).optional(), shiver: z.array(ListedRowSchema).optional() })
 
 /** What compaction reads of `agents_move`'s answer: each moved Fin's name and the sentence it hears, its other facts JSON. */
 const MovedRowSchema = z.object({ name: z.string(), hears: z.string() }).catchall(z.json())
@@ -91,12 +91,12 @@ function compactRows(rows: readonly ListedRow[], now: number) {
   return rows.map((row) => compactRow(row, now, shared))
 }
 
-/** `agents_list` as a model reads it: `children` and `crew` rows compacted (`compactRow`); every other field as it was. */
+/** `agents_list` as a model reads it: `children` and `shiver` rows compacted (`compactRow`); every other field as it was. */
 function compactList(answer: AgentAnswer, now: number): AgentAnswer {
   const listed = ListedSchema.safeParse(answer)
   if (!listed.success) return answer
-  const { children, crew } = listed.data
-  return { ...answer, ...(children && { children: compactRows(children, now) }), ...(crew && { crew: compactRows(crew, now) }) }
+  const { children, shiver } = listed.data
+  return { ...answer, ...(children && { children: compactRows(children, now) }), ...(shiver && { shiver: compactRows(shiver, now) }) }
 }
 
 /** A moved Fin's row without its ID, the sentence it hears said of "Each" when it begins with its name. */

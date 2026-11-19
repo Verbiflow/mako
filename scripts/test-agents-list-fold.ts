@@ -3,10 +3,10 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { LIST_BUDGET_CHARS, LIST_ENDED_FOR_MS, type AgentStrip } from "@mako/host/contracts/agent-tools"
-import { foldCrew, foldList } from "@mako/host/conversations/agent-list-fold"
+import { foldList, foldShiver } from "@mako/host/conversations/agent-list-fold"
 import { agentToolText } from "@mako/host/conversations/agent-tools"
 import { compactAnswer, TOPIC_CHARS } from "@mako/host/conversations/agent-tool-compact"
-import type { CrewMate } from "@mako/host/contracts/agent-tools"
+import type { ShiverMate } from "@mako/host/contracts/agent-tools"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { z } from "zod"
 import { AgentsWorld } from "./lib/agents-world.ts"
@@ -15,7 +15,7 @@ import { AgentsWorld } from "./lib/agents-world.ts"
  * An Apex's `agents_list` stays within `LIST_BUDGET_CHARS` however many Fins it ever started: a Fin that ended or sat idle
  * over a day ago with nothing open is counted, not listed, and past the budget idle and ended rows lose their pull
  * requests, then fold. A Fin needing attention is never folded, past the budget if it must be. `ended: true` (or
- * `scope: all`) lists every one; a Fin's `scope: crew` folds the same way. 130 Fins, an Apex's week, were 105 KB a call
+ * `scope: all`) lists every one; a Fin's `scope: shiver` folds the same way. 130 Fins, an Apex's week, were 105 KB a call
  * before. The model reads each row compacted (`compactAnswer`): clock readings in words, nothing repeated, every
  * question and pull request kept.
  */
@@ -71,19 +71,19 @@ const decision = { question: "Merge it?", on: "lead" as const, ask: { kind: "rep
   assert.deepEqual({ ...idle.folded, note: undefined }, { idle: 1, ended: 0, note: undefined })
 }
 
-// The crew view folds as the children's does: a mate needing a decision or waiting stays, whatever its age.
+// The Shiver view folds as the children's does: a mate needing a decision or waiting stays, whatever its age.
 {
-  const mate = (name: string, state: CrewMate["state"], agoMs: number): CrewMate => ({ name, harness: "Claude Code", state, topic: "Fix it.", idleFor: agoMs / 1000, report: { status: "done", line: "Done.", at: now - agoMs } })
-  const crew = [
+  const mate = (name: string, state: ShiverMate["state"], agoMs: number): ShiverMate => ({ name, harness: "Claude Code", state, topic: "Fix it.", idleFor: agoMs / 1000, report: { status: "done", line: "Done.", at: now - agoMs } })
+  const shiver = [
     mate("recent", { kind: "ended", outcome: "done" }, HOUR),
     mate("old", { kind: "ended", outcome: "done" }, 3 * LIST_ENDED_FOR_MS),
     mate("old-idle", { kind: "idle" }, 3 * LIST_ENDED_FOR_MS),
     mate("deciding", { kind: "ended", outcome: "done", decision }, 3 * LIST_ENDED_FOR_MS),
     mate("waiting", { kind: "idle", waitingOn: [{ kind: "pull-request", ref: "acme/app#9", until: "checks" }] }, 3 * LIST_ENDED_FOR_MS),
-    { name: "working", harness: "Codex", state: { kind: "working" }, topic: "Build it." } satisfies CrewMate,
+    { name: "working", harness: "Codex", state: { kind: "working" }, topic: "Build it." } satisfies ShiverMate,
   ]
-  const folded = foldCrew(crew, now)
-  assert.deepEqual(folded.crew.map((each) => each.name), ["recent", "deciding", "waiting", "working"])
+  const folded = foldShiver(shiver, now)
+  assert.deepEqual(folded.shiver.map((each) => each.name), ["recent", "deciding", "waiting", "working"])
   assert.deepEqual({ ...folded.folded, note: undefined }, { idle: 1, ended: 1, note: undefined })
   assert.match(folded.folded!.note, /ended: true/)
 }
@@ -106,11 +106,11 @@ const decision = { question: "Merge it?", on: "lead" as const, ask: { kind: "rep
   assert.equal(row!["runsOn"], "Opus 5.5 · High")
   assert.equal(row!["child"], asking.child)
   assert.ok(!text.includes(String(asking.report!.at)), "no raw report time")
-  // A crew topic is cut; the rest of a crew answer as it was.
-  const crew = compactAnswer("agents_list", { you: "me", apex: { title, working: false }, crew: [{ name: "a", harness: "Codex", state: { kind: "working" }, topic: "x".repeat(200) }] })
-  const topic = z.object({ crew: z.array(z.object({ topic: z.string() })) }).parse(crew).crew[0]!.topic
+  // A Shiver mate's topic is cut; the rest of a Shiver answer as it was.
+  const shiver = compactAnswer("agents_list", { you: "me", apex: { title, working: false }, shiver: [{ name: "a", harness: "Codex", state: { kind: "working" }, topic: "x".repeat(200) }] })
+  const topic = z.object({ shiver: z.array(z.object({ topic: z.string() })) }).parse(shiver).shiver[0]!.topic
   assert.equal(topic.length, TOPIC_CHARS)
-  assert.deepEqual(crew["apex"], { title, working: false })
+  assert.deepEqual(shiver["apex"], { title, working: false })
   // Other tools, and refusals, read as they were.
   const refusal = { refused: "unknown-child", why: "No Fin named x." }
   assert.deepEqual(compactAnswer("agents_list", refusal), refusal)
@@ -206,7 +206,7 @@ const decision = { question: "Merge it?", on: "lead" as const, ask: { kind: "rep
     console.log(`engine: 60 Fins, default ${(size / 1024).toFixed(1)} KB with ${listed.children.length} listed, all ${(JSON.stringify(all).length / 1024).toFixed(1)} KB`)
 
     // One asks its Apex to decide; then two days pass. Every other Fin folds, the one asking never does, and
-    // ended: true lists them all again, in the children's view and a Fin's crew view alike.
+    // ended: true lists them all again, in the children's view and a Fin's Shiver view alike.
     const conversationOf = (child: string) => world.store.thread(ThreadIdSchema.parse(child))!.sessions.flatMap((session) => world.store.conversationsOf(session))[0]!
     const asked = await world.agents.report(world.caller(conversationOf(children[7]!)), { status: "done", summary: "Ready to merge.", question: "Merge #907?", options: [{ label: "Merge" }, { label: "Leave open" }], clientKey: "ask-7" })
     assert.ok(!("refused" in asked), JSON.stringify(asked))
@@ -220,13 +220,13 @@ const decision = { question: "Merge it?", on: "lead" as const, ask: { kind: "rep
     assert.ok("children" in shown)
     assert.equal(shown.children.length, 60, "ended: true lists every one")
     assert.equal("folded" in shown ? shown.folded : undefined, undefined)
-    const crew = await world.agents.list(world.caller(conversationOf(children[0]!)), { scope: "crew" })
-    assert.ok("crew" in crew, JSON.stringify(crew))
-    assert.deepEqual(crew.crew.map((each) => each.name), ["fin-7"], "a Fin's crew folds the same way, keeping the one asking")
-    assert.equal(crew.folded?.ended, 58)
-    const wholeCrew = await world.agents.list(world.caller(conversationOf(children[0]!)), { scope: "crew", ended: true })
-    assert.ok("crew" in wholeCrew)
-    assert.equal(wholeCrew.crew.length, 59)
+    const shiver = await world.agents.list(world.caller(conversationOf(children[0]!)), { scope: "shiver" })
+    assert.ok("shiver" in shiver, JSON.stringify(shiver))
+    assert.deepEqual(shiver.shiver.map((each) => each.name), ["fin-7"], "a Fin's Shiver folds the same way, keeping the one asking")
+    assert.equal(shiver.folded?.ended, 58)
+    const wholeShiver = await world.agents.list(world.caller(conversationOf(children[0]!)), { scope: "shiver", ended: true })
+    assert.ok("shiver" in wholeShiver)
+    assert.equal(wholeShiver.shiver.length, 59)
     // since still lists what changed, folded or not: a Fin reporting again shows, the rest are unchanged.
     const again = await world.agents.report(world.caller(conversationOf(children[3]!)), { status: "done", summary: "Followed up.", clientKey: "again-3" })
     assert.ok(!("refused" in again), JSON.stringify(again))
@@ -245,4 +245,4 @@ const decision = { question: "Merge it?", on: "lead" as const, ask: { kind: "rep
   }
 }
 
-console.log("agents_list: a Fin ended or idle over a day ago is counted, not listed, in the children's and the crew's view; past the budget idle and ended rows lose their pull requests, then fold; what needs attention is never folded; ended: true lists every one; since still lists what changed; the model reads compact rows; agents_move all says what its Fins share once")
+console.log("agents_list: a Fin ended or idle over a day ago is counted, not listed, in the children's and the Shiver's view; past the budget idle and ended rows lose their pull requests, then fold; what needs attention is never folded; ended: true lists every one; since still lists what changed; the model reads compact rows; agents_move all says what its Fins share once")
