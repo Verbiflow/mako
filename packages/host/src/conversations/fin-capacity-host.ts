@@ -5,6 +5,7 @@ import { CapacityGovernor, deviceCapacity, reserveOf, type FinHardware, type Pre
 import type { FinCostModel } from "./fin-cost.js"
 import type { FinAtWork, FinCostReading } from "./fin-cost-sampler.js"
 import { DISK_FREE_LEAST, SWAP_FREE_LEAST, type MacReading } from "./mac-capacity.js"
+import type { WarmReading } from "./warm-limit.js"
 
 /** How long a reading of what Fins took stands when none comes after it: a few of the engine's looks. It says nothing of now past that. */
 const FIN_CORES_FRESH_MS = 30_000
@@ -38,7 +39,11 @@ export class FinCapacity {
   #allowed: number | undefined
   #busyCores: number | undefined
   #pressedNow = false
+  /** The Fins at work at the last look, and when memory was last read short: what the warm providers' number reads (`warm`). */
+  #working = 0
+  #memoryPressedAt: number | undefined
   readonly #listeners = new Set<() => void>()
+  readonly #memoryListeners = new Set<() => void>()
 
   constructor(deps: FinCapacityDeps) {
     this.#deps = deps
@@ -56,15 +61,56 @@ export class FinCapacity {
     }
     const reading = await this.#deps.read().catch(() => undefined)
     const finCores = working && this.#now() - this.#finCores.at < FIN_CORES_FRESH_MS ? this.#finCores.cores : 0
+    let memoryShort = false
     if (reading) {
       const pressure = pressureOf(reading, finCores, this.#hardware())
+      memoryShort = pressure.memory === true
       this.#governor.read(this.#now(), pressure)
       this.#busyCores = reading.busyCores
       this.#pressedNow = Object.values(pressure).some(Boolean)
     }
+    this.#working = working
     this.#deps.costs.save()
     this.#allow()
     if (this.atOnce() > before.fins || this.builds() > before.builds) this.changed()
+    this.#memoryRead(memoryShort)
+  }
+
+  /**
+   * Reads the machine for memory pressure alone, for the warm providers' number while no Fin is at work to have the
+   * engine look (`observe`): the governor's averages, the cost model and the Fins' number are left as they were.
+   */
+  async look(): Promise<void> {
+    const reading = await this.#deps.read().catch(() => undefined)
+    if (reading) this.#memoryRead(pressureOf(reading, 0, this.#hardware()).memory === true)
+  }
+
+  /**
+   * What the number of idle providers kept warm reads (`warmLimit`): this machine, what a provider's processes hold
+   * here, the Fins at work at the last look and when memory was last read short.
+   */
+  warm(): WarmReading {
+    return {
+      hardware: this.#hardware(),
+      providerBytes: this.#deps.costs.cost().memoryBytes,
+      working: this.#working,
+      ...(this.#memoryPressedAt !== undefined && { pressedAt: this.#memoryPressedAt }),
+    }
+  }
+
+  /**
+   * Hears every reading that finds the machine short of memory, as it is read and not once the governor's average
+   * holds: idle providers are let go at once, since closing one costs a later wake and nothing that runs.
+   */
+  subscribeMemoryPressure(listener: () => void): () => void {
+    this.#memoryListeners.add(listener)
+    return () => this.#memoryListeners.delete(listener)
+  }
+
+  #memoryRead(pressed: boolean): void {
+    if (!pressed) return
+    this.#memoryPressedAt = this.#now()
+    for (const listener of this.#memoryListeners) listener()
   }
 
   /**

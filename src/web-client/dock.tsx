@@ -33,7 +33,7 @@ import { Composer, type EditingQueued, type Outgoing, type Steering } from "./co
 import { HeldSendContext } from "./held-send"
 import { WebHarnessIcon } from "./harness-icon"
 import { ThreadChips } from "./thread-chips"
-import { useSwitching } from "./switching"
+import { useSwitching } from "@/state/live-mode"
 import { answeredWords, dockStatus, linkAction, linkWords, statusWords, workingWords, type DockStatus } from "./dock-status"
 import { useLinkStage } from "./link-loss"
 import { noteAnswered } from "./install"

@@ -3,21 +3,22 @@ import { acknowledgeComposerSettings } from "@/state/composer-settings"
 import { playFeedback } from "@/state/feedback"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type { ContinuationResolution, LiveAction, LiveBatch, LiveSnapshot, LiveSummary } from "@/lib/types"
-import { acpStore, carriedFailureSeen, removeAcpConversation, replaceAcpConversation, updateAcpConversation, type AcpConversation, type LiveAcpConversation } from "@/state/acp-state"
+import { acpStore, admitAcpConversations, carriedFailureSeen, removeAcpConversation, replaceAcpConversation, updateAcpConversation, type AcpConversation, type LiveAcpConversation } from "@/state/acp-state"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { noteFinAsks, noteListedOutcome, syncThreadStatus } from "@/state/acp-live"
 import { threadsStore } from "@/state/thread-store"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
-import { changesSession, expandLiveBatch, isCompactBatch, requestsAfter, sessionAfter, type HeardLiveBatch } from "@mako/host/contracts/live-conversations"
+import { changesSession, expandLiveBatch, isCompactBatch, requestsAfter, sessionAfter, type HeardLiveBatch, type LiveAhead } from "@mako/host/contracts/live-conversations"
 import { laterPrompt, personPromptedAt, promptedAfter } from "@mako/host/contracts/worked-at"
-import { projectLive } from "@/state/live-projection"
+import { projectAcp, projectLive, shownBlocks } from "@/state/live-projection"
+import { windowShown } from "@/lib/window-shown"
 import { toast } from "sonner"
 import { settleMessage } from "@/state/message-outbox"
 import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
 import { prependLiveHistory, readLiveSnapshot, readLiveValue, retainLiveDetails } from "@/state/live-history"
 import { isHistoryExpired, type LiveHistoryCursor, type LiveHistoryPage } from "@mako/host/contracts/live-history"
 import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading"
-import { currentStarts, readsOut, readsSettled, readsSince, receiveLive, unlistedSince, unplacedReadAnswered, unplacedReadGoesOut, type ReadOut, type Received } from "@/state/live-door"
+import { currentStarts, readsOut, readsSettled, readsSince, receiveLive, receiveLiveList, unlistedSince, unplacedReadAnswered, unplacedReadGoesOut, type ReadOut, type Received } from "@/state/live-door"
 
 const fetching = new Map<string, Promise<boolean>>()
 const pending = new Map<string, HeardLiveBatch[]>()
@@ -351,7 +352,7 @@ function takeSnapshot(snapshot: LiveSnapshot, replyBindingId?: string | null, co
     history: snapshot.history,
     copy: snapshot.copy,
     hydrated: true,
-    projection: projectLive(snapshot, existing?.projection, pendingPrompts),
+    projection: projectLive(snapshot, existing?.projection ?? existing?.behind, pendingPrompts),
     permission: snapshot.permissions[0] ?? null,
     queued: snapshot.requests.filter(
       (request) => request.status === "queued" || request.status === "held"
@@ -544,6 +545,7 @@ export function unloadLive(id: string): boolean {
   pending.delete(id)
   mergedSince.delete(id)
   stuck.delete(id)
+  placesRead.delete(id)
   replaceAcpConversation(id, {
     ...current,
     hydrated: false,
@@ -552,6 +554,7 @@ export function unloadLive(id: string): boolean {
     baseCoveredBlocks: undefined,
     history: undefined,
     projection: undefined,
+    behind: undefined,
     releasedTurns: undefined,
   })
   return true
@@ -586,6 +589,62 @@ function batchHistoryFailure(batch: LiveBatch, current: { historyFailure?: strin
 export function applyLiveBatch(heard: HeardLiveBatch, replayed = false): void {
   // Heard on the stream, it's its host's own word; one that waited on a snapshot, replayed after it, was heard already.
   receiveLive(heard.id, replayed ? { from: "answer" } : { from: "said", revision: heard.revision, ...(heard.epoch && { epoch: heard.epoch }) }, () => takeBatch(heard))
+}
+
+/**
+ * What the host said a conversation's next batch will add to its last block (`LiveAhead`): drawn at once on this
+ * machine's windows, which hear it every paint frame while the batches keep the pace every device and the journal
+ * share. Only where this window shows the conversation, on screen and seen, at the revision it names; anywhere else
+ * the batch says it, and nothing is set.
+ * Nothing the window holds of the conversation changes: `blocks` and `revision` stay the last batch's.
+ */
+export function applyLiveAhead(ahead: LiveAhead): void {
+  // It exists only to be painted, and a hidden window paints nothing: the batch that follows says the same text.
+  if (!windowShown()) return
+  const current = acpStore.get().conversations[ahead.id]
+  if (current?.kind !== "live" || !current.hydrated || !sameEpoch(current, ahead) || current.revision !== ahead.revision) return
+  if (current.ahead?.revision === ahead.revision && current.ahead.more === ahead.more) return
+  // One that isn't on screen draws nothing, so it keeps nothing of this: every paint frame it was a change to the
+  // store that every reader of it woke for, to hold text its next batch says anyway.
+  if (acpStore.get().activeKey !== ahead.id) return
+  const next = { ...current, ahead: { revision: ahead.revision, more: ahead.more } }
+  replaceAcpConversation(ahead.id, {
+    ...next,
+    projection: projectLive({ blocks: shownBlocks(next), base: next.base ?? null, baseCoveredBlocks: next.baseCoveredBlocks, history: next.history, session: next.session, requests: next.requests, releasedTurns: next.releasedTurns }, current.projection ?? current.behind, next.pendingPrompts),
+    behind: undefined,
+  })
+}
+
+/**
+ * The conversations on screen that took batches in while nobody could see the window, each still holding what it last
+ * drew: `drawUndrawn` draws them once when the window shows.
+ */
+const undrawn = new Set<string>()
+
+/**
+ * A batch for the conversation on screen in a hidden window: everything it says is kept, and nothing is drawn. Its
+ * projection stays the object it was, so no row reads anything again, and the batches it missed are projected from it
+ * in one pass when the window is back (`drawUndrawn`), as a conversation that wasn't shown is from `behind`.
+ */
+function undrawnWhileHidden(id: string, current: LiveAcpConversation): Pick<LiveAcpConversation, "projection" | "behind"> {
+  undrawn.add(id)
+  return { projection: current.projection, behind: current.behind }
+}
+
+/**
+ * The window shows again: what it took in while hidden is drawn, once. The conversation on screen is projected from
+ * what it last drew; one that left the screen meanwhile keeps that as `behind`, for when it's opened.
+ */
+export function drawUndrawn(): void {
+  if (!undrawn.size) return
+  const ids = [...undrawn]
+  undrawn.clear()
+  for (const id of ids) {
+    const conversation = acpStore.get().conversations[id]
+    if (conversation?.kind !== "live" || !conversation.hydrated) continue
+    if (acpStore.get().activeKey === id) replaceAcpConversation(id, { ...conversation, projection: projectAcp(conversation), behind: undefined })
+    else if (conversation.projection) replaceAcpConversation(id, { ...conversation, projection: undefined, behind: conversation.projection })
+  }
 }
 
 function takeBatch(heard: HeardLiveBatch): void {
@@ -713,6 +772,31 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
           !(batch.control ?? current.control)?.transfers.some((transfer) => transfer.input.id === prompt.id)
       )
     : current.pendingPrompts
+  // Nothing a projection reads moved: it stands as it is, shown or not.
+  const unchanged =
+    !current.ahead &&
+    requests === current.requests &&
+    pendingPrompts === current.pendingPrompts &&
+    blocks === current.blocks &&
+    base === current.base &&
+    baseCoveredBlocks === current.baseCoveredBlocks &&
+    session.status === current.session.status &&
+    session.harness === current.session.harness
+  // One that isn't shown isn't drawn at every batch: what it last drew waits (`behind`) for when it's opened.
+  const drawn: Pick<LiveAcpConversation, "projection" | "behind"> = unchanged
+    ? { projection: current.projection, behind: current.behind }
+    : acpStore.get().activeKey !== batch.id
+      ? { projection: undefined, behind: current.projection ?? current.behind }
+      : windowShown()
+        ? {
+            projection: projectLive(
+              { blocks, base, baseCoveredBlocks, history, session, requests, releasedTurns: current.releasedTurns },
+              current.projection ?? current.behind,
+              pendingPrompts
+            ),
+            behind: undefined,
+          }
+        : undrawnWhileHidden(batch.id, current)
   replaceAcpConversation(batch.id, {
     ...current,
     control: batch.control ?? current.control,
@@ -733,6 +817,8 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
     promptedAt: promptedAfter(current.promptedAt, batch),
     pendingPrompts,
     blocks,
+    // The batch carries what was said ahead of it.
+    ahead: undefined,
     history,
     session,
     revision: batch.revision,
@@ -756,22 +842,7 @@ function applyBatch(batch: LiveBatch, heard: HeardLiveBatch, unread: boolean): v
           (request) => request.status === "queued" || request.status === "held"
         )
       : current.queued,
-    projection:
-      requests === current.requests &&
-      pendingPrompts === current.pendingPrompts &&
-      blocks === current.blocks &&
-      base === current.base &&
-      baseCoveredBlocks === current.baseCoveredBlocks &&
-      session.status === current.session.status &&
-      session.harness === current.session.harness
-        ? current.projection
-        : acpStore.get().activeKey === batch.id
-          ? projectLive(
-              { blocks, base, baseCoveredBlocks, history, session, requests, releasedTurns: current.releasedTurns },
-              current.projection,
-              pendingPrompts
-            )
-          : undefined,
+    ...drawn,
     updatedAt: Date.now(),
     failureSeen: carriedFailureSeen(current, session),
   })
@@ -876,10 +947,13 @@ export function hydrateLiveSummaries(
  * reconnect's read again. Boot and a reconnect select and open after; a listing selects nothing.
  */
 function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void {
-  for (const summary of summaries) {
-    const said: Received = { from: "said", revision: summary.revision, ...(summary.epoch && { epoch: summary.epoch }) }
-    receiveLive(summary.session.id, said, () => admitSummary(summary, reconnect))
-  }
+  // One change to the store for the whole list (`admitAcpConversations`), said while the door is open for each of them.
+  receiveLiveList(summaries.map((summary) => summary.session.id), () => admitAcpConversations(() => {
+    for (const summary of summaries) {
+      const said: Received = { from: "said", revision: summary.revision, ...(summary.epoch && { epoch: summary.epoch }) }
+      receiveLive(summary.session.id, said, () => admitSummary(summary, reconnect))
+    }
+  }))
 }
 
 /** One summary of the host's, listed (`admitLiveSummaries`). */
@@ -1022,18 +1096,44 @@ export async function withLiveView<T>(id: string, attempt: () => Promise<T>): Pr
   }
 }
 
+/**
+ * The place a pane was last reading `id`, where it lies before the window held and isn't among its turns: read back to
+ * in one read, once per window, so a place the host can't reach back to pages on as any earlier history does.
+ */
+const placesRead = new Map<string, string>()
+
+function placeToRead(id: string, held: LiveAcpConversation): LiveHistoryCursor | undefined {
+  const start = windowStart(held)
+  if (!start) return undefined
+  const turns = new Set(held.projection?.exchanges.map((exchange) => exchange.id))
+  const place = transcriptReaders.rememberedWindow(liveReadingSource(id), (turn) => turns.has(turn))
+  if (!place || !reachesEarlier(place, start)) return undefined
+  const asked = JSON.stringify([place, start])
+  if (placesRead.get(id) === asked) return undefined
+  placesRead.set(id, asked)
+  return place
+}
+
 async function readEarlierLive(id: string): Promise<void> {
   const held = acpStore.get().conversations[id]
   if (held?.kind === "live" && held.history) {
     const before = held.history.before
     if (!before) return
+    // Opened at its newest page with a pane's place further back (`readLiveSnapshot`): one read reaches it, where a
+    // page at a time would draw the whole transcript again for each.
+    const place = placeToRead(id, held)
+    if (place) {
+      await readLive(id, () => readLiveSnapshot(id, false, place), (snapshot) => applyLiveSnapshot(snapshot, undefined, place))
+      return
+    }
     const page = await readLiveValue<LiveHistoryPage>(id, { kind: "earlier", token: held.history.token, before })
     const current = acpStore.get().conversations[id]
     if (current?.kind !== "live" || current.history?.token !== held.history.token ||
         current.history.before?.blocks !== before.blocks || current.history.before?.base !== before.base) return
     const next = prependLiveHistory({ ...current, base: current.base ?? null }, page)
+    // Against what it drew: the turns below the page are the objects they were, and only the page's are drawn.
     receiveLive(id, { from: "answer" }, () =>
-      replaceAcpConversation(id, { ...next, projection: projectLive({ ...next, base: next.base ?? null }, undefined, next.pendingPrompts) }))
+      replaceAcpConversation(id, { ...next, projection: projectLive({ ...next, base: next.base ?? null }, current.projection, next.pendingPrompts) }))
     return
   }
   await readLive(id, () => getMako().liveEarlier(id))

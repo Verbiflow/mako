@@ -5,11 +5,16 @@ import { hostStopping, type ProbeOptions } from "./host-stopping.js"
 
 /** Programs that only read the machine, which the host's probe child runs for it (`HostProbes`). */
 const PROBES = new Set(["ps", "pgrep", "lsof", "sysctl", "footprint", "vm_stat", "pmset", "notifyutil"])
+/**
+ * A program that can write, of which one reading command is a probe: `docker context inspect`, which the app sampler
+ * asks each time its answer is a minute old, and whose spawn from the host's own process once stalled its loop 140 ms.
+ */
+const READING_COMMANDS: readonly (readonly [string, readonly string[]])[] = [["docker", ["context", "inspect"]]]
 
 /** Whether `file args` is one of `PROBES`, itself or lowered with `nice -n <n>` (`belowAgents`). */
 export function isProbe(file: string, args: readonly string[]): boolean {
   if (basename(file) === "nice" && args[0] === "-n" && args[2] !== undefined) return isProbe(args[2], args.slice(3))
-  return PROBES.has(basename(file))
+  return PROBES.has(basename(file)) || READING_COMMANDS.some(([program, reads]) => program === basename(file) && reads.every((word, at) => args[at] === word))
 }
 
 type CommandResult = { stdout: string; stderr: string }

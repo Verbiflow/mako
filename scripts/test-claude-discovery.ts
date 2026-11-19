@@ -209,6 +209,33 @@ try {
     undefined,
     "A rejected switch must not inherit the previous model's defaults"
   )
+  // What Claude Code said of each model stands for its version and account: a discovery handed the last one's models
+  // asks only for the list and the default model's settings, three round-trips where every model cost two more.
+  const since = async (start: number) => (await requests()).slice(start).map((entry) => entry.request)
+  const owned = () => ({ signal: new AbortController().signal })
+  let start = (await requests()).length
+  const whole = await claudeProfileLoader.load(env, root, owned())
+  assert.deepEqual(await since(start), ["list_models", "set_model", "get_settings", "set_model", "get_settings"], "with nothing kept, every model is asked")
+  start = (await requests()).length
+  const carried = await claudeProfileLoader.load(env, root, { ...owned(), kept: whole.models })
+  assert.deepEqual(await since(start), ["list_models", "set_model", "get_settings"], "with the last answers kept, only the default model is asked")
+  assert.deepEqual(carried, whole, "and the profile is the one a whole read gives")
+  start = (await requests()).length
+  const refusedBefore = await claudeProfileLoader.load({ ...env, REJECT_MODEL: "other-model" }, root, { ...owned(), kept: rejected.models })
+  assert.deepEqual(await since(start), ["list_models", "set_model", "get_settings"])
+  assert.equal(refusedBefore.models[1].unavailable, rejected.models[1].unavailable, "a model it refused stays refused without asking")
+  start = (await requests()).length
+  await claudeProfileLoader.load(env, root, { ...owned(), kept: whole.models.slice(0, 1) })
+  assert.deepEqual(await since(start), ["list_models", "set_model", "get_settings", "set_model", "get_settings"], "a model listed since is asked")
+  start = (await requests()).length
+  await claudeProfileLoader.load(env, root, { ...owned(), kept: unconfirmed.models })
+  assert.deepEqual(await since(start), ["list_models", "set_model", "get_settings", "set_model", "get_settings"], "and one the last discovery couldn't confirm")
+  // The kept answers are for one binary: an update is another stamp, and a whole read.
+  assert.ok(claudeProfileLoader.runtimeStamp)
+  const stamped = await claudeProfileLoader.runtimeStamp(env)
+  assert.equal(await claudeProfileLoader.runtimeStamp(env), stamped)
+  await writeFile(executable, `${await readFile(executable, "utf8")}\n// updated\n`, { mode: 0o700 })
+  assert.notEqual(await claudeProfileLoader.runtimeStamp(env), stamped, "an updated binary is a new runtime")
   const beforeConcurrent = new Set((await requests()).map((entry) => entry.pid))
     .size
   await Promise.all([

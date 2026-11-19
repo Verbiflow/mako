@@ -6,13 +6,10 @@ import type { ArtifactPreviews } from "./artifact-previews.js"
 import { fileIdentity, filePreviewUrl } from "./file-previews.js"
 import { mediaDimensions } from "./media-dimensions.js"
 import {
-  copyFile,
-  mkdir,
   open,
   readFile,
   realpath,
   stat,
-  writeFile,
   type FileHandle,
 } from "node:fs/promises"
 import { homedir } from "node:os"
@@ -25,7 +22,7 @@ import {
   resolve,
   sep,
 } from "node:path"
-import type { FileContents, FileReadPurpose, StagedFile, WorkspaceFile } from "../contracts/git-workspace-search.js"
+import type { FileContents, FileReadPurpose, WorkspaceFile } from "../contracts/git-workspace-search.js"
 import { WorkspaceGit } from "../git/index.js"
 import { workspaceWrites } from "../base/workspace-writes.js"
 import { FolderIndex, type FolderIndexOptions } from "./file-index.js"
@@ -160,41 +157,6 @@ export class WorkspaceFiles {
       throw error
     }
     return target
-  }
-
-  /**
-   * Write an attachment the model cannot take inline into `dir` (the user
-   * root's `attachments`, `TabServices.attachments`), and return its path. Engine-owned tools can then reach
-   * it, which is the difference between "attach anything" and pretending
-   * to.
-   */
-  async stage(dir: string, name: string, base64: string): Promise<StagedFile> {
-    await mkdir(dir, { recursive: true })
-    // Keep the original name legible but collision-free, and never let a name
-    // escape the directory it is written into.
-    const safe = name.replace(/[/\\]/g, "_").slice(0, 120) || "attachment"
-    const stamp = `${Date.now().toString(36)}-${Math.round(Math.random() * 1e6).toString(36)}`
-    const target = join(dir, `${stamp}-${safe}`)
-    const bytes = Buffer.from(base64, "base64")
-    await writeFile(target, bytes)
-    return { path: target, name: safe, size: bytes.byteLength }
-  }
-
-  /**
-   * Stage by copying from where the file already is. Drag-and-drop and the
-   * file picker know the OS path, so the fast route is a filesystem copy in
-   * this process — a 200MB video costs one clonefile-ish copy, not a
-   * 270MB base64 string marshalled across the IPC boundary.
-   */
-  async stagePath(dir: string, sourcePath: string): Promise<StagedFile> {
-    await mkdir(dir, { recursive: true })
-    const name = sourcePath.split("/").pop() ?? "attachment"
-    const safe = name.replace(/[/\\]/g, "_").slice(0, 120) || "attachment"
-    const stamp = `${Date.now().toString(36)}-${Math.round(Math.random() * 1e6).toString(36)}`
-    const target = join(dir, `${stamp}-${safe}`)
-    await copyFile(sourcePath, target)
-    const info = await stat(target)
-    return { path: target, name: safe, size: info.size }
   }
 
   /**

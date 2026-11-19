@@ -3,16 +3,17 @@ import { availableParallelism } from "node:os"
 import { z } from "zod"
 import { errorMessage } from "../base/error-message.js"
 import { hostWarn } from "../base/host-log.js"
-import type { JournalRows } from "./live-journal.js"
+import { ColdScanSchema, type ColdScan, type JournalRows } from "./live-journal.js"
 
 /** At most this many readers at once, fewer on a machine with fewer cores: T3 Code reads on four beside its writer. */
 const READERS = Math.max(1, Math.min(4, availableParallelism() - 1))
 /** A reader with nothing to read for this long ends; the next read starts one. */
 const READER_IDLE_MS = 60_000
+const READER_YOUNG_MB = 32
 /** A read that takes longer than this is given up on, and its journal read on the loop instead. */
 const READ_TIMEOUT_MS = 120_000
 
-const ReplySchema = z.object({ id: z.number(), rows: z.unknown().optional(), error: z.string().optional() })
+const ReplySchema = z.object({ id: z.number(), rows: z.unknown().optional(), scan: ColdScanSchema.optional(), error: z.string().optional() })
 const PartSchema = z.object({ id: z.number(), part: z.enum(["base", "blocks"]), entries: z.array(z.unknown()) })
 
 interface Reader {
@@ -24,6 +25,8 @@ interface Reader {
 
 interface Asked {
   resolve: (rows: JournalRows | null) => void
+  /** A scan's answer goes here (`scan`); its `resolve` is never called. */
+  scanned?: (scan: ColdScan) => void
   reject: (error: Error) => void
   reader: Reader
   timer: ReturnType<typeof setTimeout>
@@ -58,7 +61,8 @@ export class JournalReaders {
     if (this.stopped) return Promise.reject(new Error("The journal readers are stopped."))
     const reader = this.reader()
     const id = (this.next += 1)
-    reader.busy += 1
+    // An idle reader leaves the process free to end; one with a read under way holds it until the answer comes.
+    if ((reader.busy += 1) === 1) reader.worker.ref()
     if (reader.idle) clearTimeout(reader.idle)
     reader.idle = undefined
     return new Promise<JournalRows | null>((resolve, reject) => {
@@ -66,6 +70,23 @@ export class JournalReaders {
       timer.unref?.()
       this.asked.set(id, { resolve, reject, reader, timer, base: [], blocks: [] })
       reader.worker.postMessage({ id, path, withLog })
+    })
+  }
+
+  /** What a cold opening reads of every block of `path` (`ColdScan`), read on a reader's thread. */
+  scan(path: string): Promise<ColdScan> {
+    if (this.stopped) return Promise.reject(new Error("The journal readers are stopped."))
+    const reader = this.reader()
+    const id = (this.next += 1)
+    // An idle reader leaves the process free to end; one with a read under way holds it until the answer comes.
+    if ((reader.busy += 1) === 1) reader.worker.ref()
+    if (reader.idle) clearTimeout(reader.idle)
+    reader.idle = undefined
+    return new Promise<ColdScan>((scanned, reject) => {
+      const timer = setTimeout(() => this.settle(id, { error: "it took too long" }), READ_TIMEOUT_MS)
+      timer.unref?.()
+      this.asked.set(id, { resolve: () => reject(new Error("The reader answered a scan with rows.")), scanned, reject, reader, timer, base: [], blocks: [] })
+      reader.worker.postMessage({ id, path, withLog: false, scan: true })
     })
   }
 
@@ -96,8 +117,9 @@ export class JournalReaders {
   private reader(): Reader {
     const free = this.readers.reduce<Reader | undefined>((least, reader) => (!least || reader.busy < least.busy ? reader : least), undefined)
     if (free && (free.busy === 0 || this.readers.length >= READERS)) return free
-    const worker = new Worker(this.entry, { resourceLimits: { maxOldGenerationSizeMb: 1024 } })
-    worker.unref()
+    // A reader's young generation grows to 120 MB while it parses a journal and stays that size while it is idle
+    // with 3 MB of it in use: held to `READER_YOUNG_MB`, it collects more often, on its own thread.
+    const worker = new Worker(this.entry, { resourceLimits: { maxOldGenerationSizeMb: 1024, maxYoungGenerationSizeMb: READER_YOUNG_MB } })
     const reader: Reader = { worker, busy: 0 }
     worker.on("message", (message) => {
       const part = PartSchema.safeParse(message)
@@ -107,6 +129,7 @@ export class JournalReaders {
       }
       const reply = ReplySchema.safeParse(message)
       if (!reply.success) return
+      if (reply.data.scan) return void this.settle(reply.data.id, { scan: reply.data.scan })
       // SAFETY: the reader posts what `journalRowSteps` returned, parsed by the same schemas the journal reads with.
       this.settle(reply.data.id, reply.data.error === undefined ? { rows: reply.data.rows as JournalRows | null } : { error: reply.data.error })
     })
@@ -121,17 +144,20 @@ export class JournalReaders {
       this.retire(reader)
     })
     worker.on("exit", (code) => gone(`it exited with ${code}`))
+    // Last: a "message" listener added after `unref` refs the worker's port again, and the process stays up for it.
+    worker.unref()
     this.readers.push(reader)
     return reader
   }
 
-  private settle(id: number, outcome: { rows: JournalRows | null } | { error: string }): void {
+  private settle(id: number, outcome: { rows: JournalRows | null } | { scan: ColdScan } | { error: string }): void {
     const asked = this.asked.get(id)
     if (!asked) return
     this.asked.delete(id)
     clearTimeout(asked.timer)
     const { reader } = asked
     reader.busy = Math.max(0, reader.busy - 1)
+    if (!reader.busy) reader.worker.unref()
     if (!reader.busy && !this.stopped && this.readers.includes(reader)) {
       reader.idle = setTimeout(() => {
         const at = this.readers.indexOf(reader)
@@ -141,6 +167,7 @@ export class JournalReaders {
       reader.idle.unref?.()
     }
     if ("error" in outcome) return asked.reject(new Error(`A journal reader couldn't read it: ${outcome.error}`))
+    if ("scan" in outcome) return asked.scanned ? asked.scanned(outcome.scan) : asked.reject(new Error("The reader answered a read with a scan."))
     const { rows } = outcome
     if (rows) {
       // SAFETY: each part is a slice of the `Entry[]` the reader parsed, in order.

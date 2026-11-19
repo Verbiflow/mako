@@ -263,8 +263,19 @@ async function reopenFails(): Promise<void> {
   assert.equal(held.status, "held")
   assert.equal(held.retry?.cause, "launch-stalled", "native read failure keeps the short verification backoff")
   assert.equal(held.retry?.until, undefined, "native verification never waits for a quota reset")
+  assert.ok(held.retry!.at - Date.now() > 5_000, "a check that answered it can't tell waits the first step")
   console.log(`reopen waits: "${said.hears}"`)
   await f.w.close()
+  // A check that only ran out of time found nothing against the session: its message goes again in a second or two.
+  const quick = await world("claude")
+  quick.w.options.resumeVerdict = async () => ({ kind: "unavailable", retry: true, soon: true, reason: "Whether another process has this session open could not be checked." })
+  await quick.w.restart()
+  const asked = Date.now()
+  await quick.send("Still there?")
+  const soon = quick.w.live.snapshot(quick.conversation())!.requests.find(request => request.text.includes("Still there?"))!
+  assert.equal(soon.status, "held")
+  assert.ok(soon.retry!.at - asked <= 2_500, `a timed-out check is asked again soon, not in ${soon.retry!.at - asked} ms`)
+  await quick.w.close()
   // One that doesn't clear (its harness is gone) refuses the message.
   const g = await world("claude")
   g.w.options.resumeVerdict = async () => ({ kind: "unavailable", reason: "The saved session's provider is not available." })

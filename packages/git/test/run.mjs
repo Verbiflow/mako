@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
-import { mkdir, mkdtemp, realpath, readFile, rm, unlink, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, realpath, readFile, rm, unlink, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -77,6 +77,95 @@ await test("an idle read leaves two slots to reads someone waits on, and never g
   for (const read of [...pass.slice(1), ...busy, waiting]) read.end()
   await Promise.all([...pass, ...busy, waiting].map((read) => read.done))
   assert.equal(reads.activity().queued, 0)
+  reads.close()
+})
+
+await test("an idle read that waited too long takes a slot kept for the others, one at a time and never ahead of a waiting read", async () => {
+  const { PassThrough } = await import("node:stream")
+  // The test says when each idle read's wait has run out, in the order they began waiting: no clock decides it.
+  const waits = []
+  const reads = new Git({
+    idleReadWait: (ms, overdue) => {
+      const wait = { ms, overdue, cancelled: false }
+      waits.push(wait)
+      return () => { wait.cancelled = true }
+    },
+  })
+  // A turn of the loop: every read that may start has taken its slot by the end of one (a slot is taken in promise
+  // continuations, which all run before the loop moves on).
+  const turn = () => new Promise((resolve) => setImmediate(resolve))
+  // A read that holds its slot until its stdin ends.
+  const held = (idle) => {
+    const input = new PassThrough()
+    const done = reads.run({ cwd: scratch, args: ["hash-object", "--stdin"], input, read: true, idle })
+    return { done, end: () => input.end("x") }
+  }
+  const pass = Array.from({ length: 7 }, () => held(true))
+  await turn()
+  assert.equal(reads.activity().running.length, 4, "idle reads take four slots")
+  assert.equal(reads.activity().queued, 3)
+  assert.deepEqual(waits.map((wait) => wait.ms), [5_000, 5_000, 5_000], "each one waiting has its own wait, of the bound")
+  // Nothing ends: without the bound the other three wait for as long as that lasts. The newest one's wait running out
+  // first changes nothing, since the oldest goes first and its wait hasn't.
+  waits[2].overdue()
+  await turn()
+  assert.equal(reads.activity().running.length, 4)
+  waits[0].overdue()
+  await turn()
+  assert.equal(reads.activity().running.length, 5, "the oldest one waiting took a kept slot once its wait ran out")
+  assert.equal(waits[0].cancelled, true)
+  waits[1].overdue()
+  await turn()
+  assert.equal(reads.activity().running.length, 5, "one at a time: a slot is still kept for a read someone waits on")
+  // Which starts at once.
+  assert.match(await reads.readOutput(scratch, ["version"]), /^git version /)
+  // With every slot full and a read someone waits on waiting, a slot coming free is that read's, not an overdue idle one's.
+  const busy = held(false)
+  await turn()
+  assert.equal(reads.activity().running.length, 6)
+  const waiting = held(false)
+  await turn()
+  assert.equal(reads.activity().queued, 3)
+  // The fifth of the pass is the one in the kept slot.
+  pass[4].end()
+  await pass[4].done
+  await turn()
+  assert.equal(reads.activity().running.length, 6, "the waiting read took the slot")
+  assert.equal(reads.activity().queued, 2, "the two idle reads still wait, however long they have")
+  // Once nobody waits and a kept slot is free again, the next overdue one has it, with no timer left to say so.
+  busy.end()
+  await busy.done
+  await turn()
+  assert.equal(reads.activity().running.length, 6)
+  assert.equal(reads.activity().queued, 1)
+  for (const read of [...pass, waiting]) read.end()
+  await Promise.all([...pass, waiting].map((read) => read.done))
+  assert.equal(reads.activity().queued, 0)
+  assert.equal(reads.activity().running.length, 0)
+  reads.close()
+})
+
+await test("an idle read's own timer admits it when its wait runs out, with nothing else ending", async () => {
+  const { PassThrough } = await import("node:stream")
+  // The real timer, at a bound of 1 ms, heard as it fires: the read is admitted in that same call, whatever a clock says then.
+  const fired = Promise.withResolvers()
+  const reads = new Git({
+    idleReadWait: (_ms, overdue) => {
+      const timer = setTimeout(() => { overdue(); fired.resolve() }, 1)
+      return () => clearTimeout(timer)
+    },
+  })
+  const held = () => {
+    const input = new PassThrough()
+    const done = reads.run({ cwd: scratch, args: ["hash-object", "--stdin"], input, read: true, idle: true })
+    return { done, end: () => input.end("x") }
+  }
+  const pass = Array.from({ length: 5 }, held)
+  await fired.promise
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(reads.activity().running.length, 5, "the timer's firing is itself what admits the read")
+  for (const read of pass) read.end()
+  await Promise.all(pass.map((read) => read.done))
   reads.close()
 })
 
@@ -203,18 +292,30 @@ try {
     const { PassThrough } = await import("node:stream")
     const root = await repository("turn-wait")
     await sh(root, "commit", "--allow-empty", "-q", "-m", "first")
-    const writes = new Git({ writeTurnWaitMs: 300 })
+    // The test says when a write's wait has run out, in the order they began waiting: no clock decides it. With a real
+    // 0.3 s bound, the write behind ran out too whenever update-ref took longer to exit than the gap between the two.
+    const waits = []
+    const writes = new Git({
+      writeTurnWait: (ms, waited) => {
+        const wait = { ms, waited, cancelled: false }
+        waits.push(wait)
+        return () => { wait.cancelled = true }
+      },
+    })
     const input = new PassThrough()
     const holding = writes.run({ cwd: root, args: ["update-ref", "--stdin"], input })
-    await new Promise((resolve) => setTimeout(resolve, 50))
     const gaveUp = writes.output(root, ["branch", "--no-track", "gave-up", "HEAD"])
-    await new Promise((resolve) => setTimeout(resolve, 100))
     // Asked for behind the one that gives up: it waits only for the write under way.
     const behind = writes.output(root, ["branch", "--no-track", "behind", "HEAD"])
-    await assert.rejects(gaveUp, (error) => error instanceof GitError && error.kind === "timeout" && /waited 0\.3 s for the repository's earlier writes, behind git update-ref/.test(error.message))
+    assert.deepEqual(waits.map((wait) => wait.ms), [60_000, 60_000], "each write behind another waits, for a minute at most")
+    waits[0].waited()
+    await assert.rejects(gaveUp, (error) => error instanceof GitError && error.kind === "timeout" && /waited 60 s for the repository's earlier writes, behind git update-ref/.test(error.message))
+    assert.ok(waits[0].cancelled, "the wait that ran out is called off")
+    assert.ok(!waits[1].cancelled, "the write behind it still waits for update-ref")
     input.end("create refs/heads/held HEAD\n")
     await holding
     await behind
+    assert.ok(waits[1].cancelled, "its turn came, and its wait was called off")
     assert.equal(await writes.readOutput(root, ["branch", "--list", "behind"]), "behind")
     assert.equal(await writes.readOutput(root, ["branch", "--list", "gave-up"]), "", "the write that gave up never ran")
     writes.close()
@@ -553,6 +654,27 @@ try {
     heard = () => {}
   })
 
+  await test("a folder in no repository is asked about once, and again only once a .git is above it", async () => {
+    const folder = join(scratch, "outside", "inner")
+    await mkdir(folder, { recursive: true })
+    const asked = []
+    heard = (trace) => { if (trace.command === "rev-parse") asked.push(trace.cwd) }
+    assert.equal(await runner.openRepository(folder), null)
+    assert.equal(asked.length, 1)
+    for (let again = 0; again < 5; again += 1) assert.equal(await runner.openRepository(folder), null)
+    assert.equal(asked.length, 1, "asking again started no Git")
+    // A folder that isn't there fails the same way, and is asked about once too.
+    const missing = join(scratch, "outside", "missing")
+    assert.equal(await runner.openRepository(missing), null)
+    const tried = asked.length
+    for (let again = 0; again < 3; again += 1) assert.equal(await runner.openRepository(missing), null)
+    assert.equal(asked.length, tried, "nor is one that isn't there tried again")
+    await runner.text({ cwd: join(scratch, "outside"), args: ["init", "-q", "-b", "main"] })
+    const repo = await runner.openRepository(folder)
+    assert.equal(repo?.root, join(scratch, "outside"), "a repository made above it since is found")
+    heard = () => {}
+  })
+
   await test("previews: whole small files, patches for long ones, binary, untracked and commits", async () => {
     const root = await repository("previews")
     await writeFile(join(root, "small.txt"), "one\ntwo\n")
@@ -887,6 +1009,27 @@ try {
     await assert.rejects(draftPullRequest(repo, "nowhere", { model, signal: AbortSignal.timeout(30_000) }), /nowhere isn't here/)
     await sh(root, "switch", "-q", "main")
     await assert.rejects(draftPullRequest(repo, "main", { model, signal: AbortSignal.timeout(30_000) }), /no commits beyond main/)
+  })
+
+  await test("a status and a count of lines never rewrite the index", async () => {
+    const root = await repository("no-refresh")
+    await writeFile(join(root, "a.txt"), "one\n")
+    await writeFile(join(root, "b.txt"), "b\n")
+    await sh(root, "add", ".")
+    await sh(root, "commit", "-qm", "init")
+    await writeFile(join(root, "b.txt"), "b\nmore\n")
+    // A file whose stat no longer matches the index, its contents the same: what Git rewrites the index to refresh.
+    await utimes(join(root, "a.txt"), 1_000_000, 1_000_000)
+    const index = join(root, ".git", "index")
+    const before = await readFile(index)
+    const repo = await runner.openRepository(root)
+    const status = await repo.status()
+    assert.deepEqual(status.entries.map((entry) => entry.path), ["b.txt"])
+    assert.deepEqual(Object.fromEntries(await repo.lineCounts(status)), { "b.txt": { insertions: 1, deletions: 0 } })
+    assert.deepEqual(await readFile(index), before, "neither read took the index's lock or wrote it")
+    // `git diff` refreshes the index unasked, whatever `--no-optional-locks` says: the same count without the option.
+    await runner.run({ cwd: root, args: ["diff", "--numstat", "HEAD", "--"], read: true })
+    assert.notDeepEqual(await readFile(index), before)
   })
 
   await test("line counts cover staged, unstaged and untracked files, and count again only what changed", async () => {

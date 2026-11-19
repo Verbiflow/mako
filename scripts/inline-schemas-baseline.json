@@ -150,7 +150,6 @@
   "scripts/eval-orch-tools/templates.ts": 1,
   "scripts/fixture-privacy.ts": 1,
   "scripts/fixtures/stand-in-harness.mjs": 1,
-  "scripts/footprint-replay.ts": 3,
   "scripts/harness-decode-pairs.ts": 22,
   "scripts/harness-doctor-report.ts": 2,
   "scripts/harness-native-tools.ts": 4,

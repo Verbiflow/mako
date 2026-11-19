@@ -18,6 +18,11 @@ export interface LiveThreads {
    * keys an archive knows it by, which a Fin's ask reads on every batch of its Apex.
    */
   listed?(): LiveSummary[]
+  /**
+   * One conversation's line of `listed`, with none of the others' made: whether a Fin's conversation is archived is
+   * asked for each Fin at every batch of its tree, and finding it among all of them was 3% of the thread.
+   */
+  listedOne?(id: string): LiveSummary | undefined
   activeRequest(id: string): string | null
   setArchived(id: string, archived: boolean): void
   stopRequest(id: string, requestId: string): Promise<boolean>
@@ -52,6 +57,7 @@ export class ThreadLifecycle {
 
   private owner(target: ThreadTarget, listed = false) {
     const live = this.dependencies.live
+    if (listed && target.kind === "live" && live.listedOne) return live.listedOne(target.id)
     return (listed && live.listed ? live.listed() : live.summaries()).find((summary) => target.kind === "live"
       ? summary.session.id === target.id
       : target.kind === "file" ? summary.threadPath === target.path || summary.nativePaths?.includes(target.path)

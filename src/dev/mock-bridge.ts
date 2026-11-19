@@ -1,3 +1,4 @@
+import { getMako } from "@/lib/bridge"
 import type { LimitNoticeChoice } from "@mako/host/contracts/agents"
 import { fixtureHarnesses } from "./harness-fixtures"
 import type { ToolStep } from "@mako/host/contracts/tool-steps"
@@ -96,7 +97,7 @@ import {
 } from "./mock-runtime-fixtures"
 import { agedGroup, busyRefs, busySnapshot, busySummaries, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE } from "./mock-busy-thread"
 import { openAsk } from "@mako/host/contracts/children"
-import { benchChild, benchApexes, CHURN, apexRefs, apexSnapshots, apexSummaries, placedSnapshot, APEX_CONVERSATION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
+import { apexWorktrees, apexWorktreeSummaries, benchChild, benchApexes, CHURN, apexRefs, apexSnapshots, apexSummaries, placedSnapshot, APEX_CONVERSATION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
 
 /** The repository's pull requests as the `#` menu finds them. */
 const MOCK_PULLS: PullRequestListing[] = [
@@ -142,6 +143,8 @@ async function mockThreadContexts(paths: string[]): Promise<Array<ThreadFileCont
 /** What the page staged, so a pasted or reloaded attachment reads back the words it was given. */
 const STAGED_TEXT = new Map<string, string>()
 const STAGED_MEDIA = new Map<string, string>()
+/** A file staged in pieces (`stageFilePart`), as base64 so far, by its path. */
+const STAGED_PARTS = new Map<string, string>()
 
 const utilityChoices: UtilityWorkChoices = { commit: "auto" }
 /** Whether a fixture hands agents to the cloud as the Mac sleeps. */
@@ -366,7 +369,7 @@ export function installMockBridge() {
   const removedWorktrees = new Set<string>()
   const listedWorktrees = () => ({
     root: SETUP_WORKTREE_ROOT,
-    worktrees: [...(setupWorktree ? [setupWorktree] : []), ...madeWorktrees, ...(scene === "rail" ? RAIL_WORKTREES : [])].filter((worktree) => !removedWorktrees.has(worktree.path)),
+    worktrees: [...(setupWorktree ? [setupWorktree] : []), ...madeWorktrees, ...(scene === "rail" ? RAIL_WORKTREES : []), ...(scene === "apex" ? apexWorktrees() : [])].filter((worktree) => !removedWorktrees.has(worktree.path)),
   })
   let meta = { ...META }
   if (sinceWorktree) meta.cwd = sinceWorktree.path
@@ -1036,6 +1039,7 @@ export function installMockBridge() {
     threadAppOutput: async () => ({ text: "", cursor: { file: "", offset: 0 }, reset: false }),
     threadAppMarks: async () => [],
     followThreadApps: async () => ({ kind: "unavailable" }),
+    windowShown: async () => false,
     viewHints: async () => null,
     followConversationApp: async () => ({ kind: "unavailable" }),
     conversationApp: async () => ({ folder: "/fixture", app: { kind: "none", project: "fixture", root: "/fixture" } }),
@@ -1079,6 +1083,7 @@ export function installMockBridge() {
     },
     worktreeSummaries: async (): Promise<WorktreeSummary[]> => [
       ...madeWorktrees.map((worktree) => ({ path: worktree.path, into: "main", ahead: 0, changes: 0, landing: { kind: "empty" as const }, pull: null, behind: { from: "origin/main", commits: 0 } })),
+      ...(scene === "apex" ? apexWorktreeSummaries() : []),
       ...(scene === "rail" ? RAIL_SUMMARIES.map((summary) => summary.path !== sinceWorktree?.path ? summary : {
         ...summary,
         ahead: sinceLanded ? 0 : 3,
@@ -1351,6 +1356,13 @@ export function installMockBridge() {
       elapsed: 3,
     }),
     watchFile: async () => {},
+    stageFilePart: async (name: string, data: string, into?: { path: string; offset: number }) => {
+      // Pieces are whole three-byte groups, so their base64 joins: the file is what `stageFile` makes of them so far.
+      const whole = (into ? STAGED_PARTS.get(into.path) ?? "" : "") + data
+      const staged = await getMako().stageFile(name, whole)
+      STAGED_PARTS.set(staged.path, whole)
+      return staged
+    },
     stageFilePath: async (sourcePath: string) => ({
       path: sourcePath,
       name: sourcePath.split("/").pop() ?? "f",
