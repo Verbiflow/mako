@@ -2,7 +2,7 @@ import { useCallback, useSyncExternalStore } from "react"
 import { scrollReaderTo } from "@/lib/reader-scroll"
 
 /**
- * Whether an Apex's crew card is on screen. The card registers itself; the
+ * Whether an Apex's Shiver card is on screen. The card registers itself; the
  * dock reads it, so a Fin's ask is drawn in one place. `null` means this
  * Thread has no card mounted, and the dock keeps its own asks.
  */
@@ -17,11 +17,11 @@ function publish(next: Seen | null) {
   for (const listener of listeners) listener()
 }
 
-export function mountCrewCard(thread: string, visible: boolean) {
+export function mountShiverCard(thread: string, visible: boolean) {
   publish({ thread, visible })
 }
 
-export function unmountCrewCard(thread: string) {
+export function unmountShiverCard(thread: string) {
   if (seen?.thread === thread) publish(null)
 }
 
@@ -33,7 +33,7 @@ function subscribe(listener: () => void) {
 const absent = () => null
 
 /** `true` in view, `false` mounted but scrolled away, `null` when no card is drawn. */
-export function useCrewCardVisible(thread: string | undefined): boolean | null {
+export function useShiverCardVisible(thread: string | undefined): boolean | null {
   const get = useCallback(() => {
     if (!thread || seen?.thread !== thread) return null
     return seen.visible
@@ -42,10 +42,10 @@ export function useCrewCardVisible(thread: string | undefined): boolean | null {
 }
 
 /** Bring the card's Needs you group back into the transcript. */
-export function scrollCrewNeedsIntoView() {
-  const card = document.querySelector("[data-crew]")
+export function scrollShiverNeedsIntoView() {
+  const card = document.querySelector("[data-shiver]")
   if (!card) return
-  const scroller = card.querySelector<HTMLElement>("[data-crew-scroller]")
+  const scroller = card.querySelector<HTMLElement>("[data-shiver-scroller]")
   if (scroller) scroller.scrollTop = 0
   scrollReaderTo(card, { block: "start" })
 }

@@ -81,7 +81,7 @@ try {
       journal.commit(snapshot)
       const placed = store.registerJournal({ conversationId: id, createdAt: 1, harness: "codex", bindings: [] }, { kind: "service", name: "migration" })
       const state = new WorktreeThreadState({ store, dataRoot })
-      assert.ok(state.finished(placed.thread) !== undefined, "an ended top-level Thread qualifies without a crew or Fin edge")
+      assert.ok(state.finished(placed.thread) !== undefined, "an ended top-level Thread qualifies without a Shiver or Fin edge")
       assert.ok(state.quietSince(placed.thread) !== undefined, "a settled local journal can age out registered scratch")
       const active = new WorktreeThreadState({ store, dataRoot, busy: () => true })
       assert.equal(active.finished(placed.thread), undefined, "current activity wins over a closed journal")

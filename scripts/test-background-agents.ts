@@ -298,7 +298,7 @@ async function finLimit(): Promise<void> {
     const heard = w.events.length
     const three = await w.agents.start(apex.caller, { brief, name: "three", queue: true, clientKey: "3", cwd: w.root })
     assert.ok(!("refused" in three) && three.state === "queued" && !three.child, "with queue it waits")
-    // The sidebar, pips and crew card read the Apex's conversation: it hears a spawn held as it hears a Fin start.
+    // The sidebar, pips and Shiver card read the Apex's conversation: it hears a spawn held as it hears a Fin start.
     await waitFor(() => w.events.slice(heard).some((event) => JSON.stringify(event).includes("Queued: 0 ahead, your limit of Fins at once is in use")), "the Apex's conversation to hear the spawn queued")
     const listed = await w.agents.list(apex.caller, {})
     assert.ok("children" in listed)
@@ -956,7 +956,7 @@ async function afterOrder(): Promise<void> {
     const announce = await w.agents.start(apex.caller, { brief: { objective: "Announce it" }, name: "announce", after: ["fin:deploy"], clientKey: "announce", cwd: w.root })
     assert.ok(!("refused" in announce) && announce.state === "queued" && announce.after?.[0] === "deploy", "a queued spawn can be waited on too")
     const waiting = () => w.agents.roster(apex.conversation).flatMap((entry) => (entry.state.kind === "waiting" ? [entry.state.reason] : []))
-    assert.deepEqual(waiting(), ["Starts after build finishes", "Starts after deploy finishes"], "the crew card says what each waits on")
+    assert.deepEqual(waiting(), ["Starts after build finishes", "Starts after deploy finishes"], "the Shiver card says what each waits on")
     const many = await w.agents.start(apex.caller, { brief: { objective: "x" }, after: Array.from({ length: AFTER_LIMIT + 1 }, (_, at) => `fin-${at}`), clientKey: "many", cwd: w.root })
     assert.ok("refused" in many && many.refused === "conflict" && w.store.queuedSpawns().length === 2, "more than a queued state carries is refused before anything is kept")
     const unknown = await w.agents.start(apex.caller, { brief: { objective: "x" }, after: ["nobody"], clientKey: "x", cwd: w.root })
@@ -1646,7 +1646,7 @@ async function listsReadNoJournal(): Promise<void> {
     }
     const asFin = w.caller(fins[0]!)
     for (const scope of [undefined, "tree", "apexes", "threads"] as const) await quiet(`an Apex's ${scope ?? "children"} list`, () => w.agents.list(apex.caller, { ...(scope && { scope }) }))
-    for (const scope of [undefined, "tree", "apexes", "crew", "threads"] as const) await quiet(`a Fin's ${scope ?? "children"} list`, () => w.agents.list(asFin, { ...(scope && { scope }) }))
+    for (const scope of [undefined, "tree", "apexes", "shiver", "threads"] as const) await quiet(`a Fin's ${scope ?? "children"} list`, () => w.agents.list(asFin, { ...(scope && { scope }) }))
     await quiet("a Fin's search of Threads", () => w.agents.list(asFin, { scope: "threads", query: "anything" }))
 
     // What a Fin may reach is exactly what it could: its tree's Sessions, unloaded or not, and nothing outside it.

@@ -25,7 +25,7 @@ function fin(index: number, state: ChildState, roster: NativeAgent["state"]): Na
 }
 
 const working = (step: string) => fin(0, { kind: "working", step }, { kind: "working", activity: step })
-const crew = [
+const shiver = [
   working("Shell cd /Users/someone/.mako/worktrees/makomono-0a1b2c3d/dogfood && npm run typecheck"),
   { ...working("Shell gh pr checks 340 -R Verbiflow/mako 2>&1 | awk '{print $1, $2}'"), nativeId: "mako-child:1" },
   { ...working("Read /Users/someone/makomono/mako/src/web-client/desk.tsx"), nativeId: "mako-child:2" },
@@ -34,7 +34,7 @@ const crew = [
 
 // An idle Fin is its own group, neither working nor done.
 assert.equal(childGroup({ kind: "idle" }), "idle")
-const counts = rollup(crew)
+const counts = rollup(shiver)
 assert.deepEqual(counts, { total: 4, needs: 0, working: 3, queued: 0, idle: 1, failed: 0, done: 0 })
 assert.equal(rollupLine(counts), "3 working · 1 idle")
 assert.equal(rollupChip(counts), "4 Fins · 3 working")
@@ -47,7 +47,7 @@ for (const words of [rollupLine(busy), rollupChip(busy), rollupLabel(busy), roll
   assert.doesNotMatch(words, /agent/i, `one word for them: ${words}`)
 
 // The session waits on the three at work, never on the idle one, and calls them Fins.
-const work = backgroundWork({ status: "ready", connection: "connected" }, { agents: crew, limited: false })
+const work = backgroundWork({ status: "ready", connection: "connected" }, { agents: shiver, limited: false })
 assert.equal(work?.count, 3, "an idle Fin is open, not running")
 assert.equal(backgroundWorkText(work!), "3 Fins")
 
@@ -62,7 +62,7 @@ assert.equal(readableStep("Edit src/components/rail/fin-pips.tsx"), "Editing fin
 assert.equal(readableStep("Search live-mark in /Users/someone/makomono"), "Searching live-mark in ~/makomono")
 assert.equal(readableStep("Writing the report"), "Writing the report")
 assert.equal(readableStep(readableStep("Read /Users/a/b/c.ts")), "Reading c.ts", "a phrase read twice stays the phrase")
-for (const agent of crew.slice(0, 3)) {
+for (const agent of shiver.slice(0, 3)) {
   const line = childLine(agent.child!.state!)!
   assert.doesNotMatch(line, /\/Users\/|2>&1|&&/, `a Fin's line is a phrase: ${line}`)
 }
