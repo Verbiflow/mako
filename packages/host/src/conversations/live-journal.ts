@@ -964,9 +964,10 @@ export class LiveJournal {
       return false
     }
     const writes = this.writes ?? (this.writes = this.writer?.open(this.path, WAL_KEPT_BYTES))
-    // A writer stopped, lost or closing for the host's stop opens nothing more: this journal writes its own.
+    // A writer still starting opens nothing yet, and this journal writes its own until it runs; one stopped, lost or
+    // closing for the host's stop opens nothing more.
     if (!writes) {
-      this.writer = undefined
+      if (this.writer?.gone()) this.writer = undefined
       return false
     }
     const { blocks } = next

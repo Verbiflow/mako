@@ -107,6 +107,10 @@ parentPort?.on("message", (message) => {
   parentPort?.postMessage({ key: ask.key, seq: ask.seq, ...(failure !== undefined && { error: failure }) })
 })
 
+// Said once its handler is installed: until then the host gives it nothing, since it would wait on its thread for a
+// worker still starting (`JournalWriter.ready`).
+parentPort?.postMessage({ ready: true })
+
 function done(cell: Int32Array, seq: number, failed: boolean): void {
   if (failed) Atomics.store(cell, 1, seq)
   Atomics.store(cell, 0, seq)

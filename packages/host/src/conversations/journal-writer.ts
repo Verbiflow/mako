@@ -35,6 +35,8 @@ export interface JournalWrites {
 const SETTLE_MS = 30_000
 
 const ReplySchema = z.object({ key: z.number(), seq: z.number(), error: z.string().optional() })
+/** What the worker says once its module has run and it takes messages (`JournalWriter.ready`). */
+const ReadySchema = z.object({ ready: z.literal(true) })
 
 interface Handle {
   key: number
@@ -53,6 +55,11 @@ interface Handle {
  * transaction a message, and while one is being written what comes meanwhile waits as one message more, so a slow
  * disk grows a transaction and no queue. What the host must know written before it goes on (a request, a status, a
  * turn's end) it still commits itself, after `settle`.
+ *
+ * `settle` waits on the host's thread, so nothing is given to a worker that hasn't yet said it runs (`ready`): a thread
+ * still starting is a wait whose length nobody bounds (85 ms here, over a second on a loaded machine), and the host,
+ * holding its thread, can't hear the worker start, fail or exit until `SETTLE_MS` is out. Until it says so, each
+ * journal writes its own rows, as it does without a writer.
  */
 export class JournalWriter {
   private worker: Worker | undefined
@@ -64,6 +71,8 @@ export class JournalWriter {
   /** Whether the worker holds the process up: only while a write of some journal is still owed its answer. */
   private holding = false
   private dead: string | undefined
+  /** The worker has said it takes messages: from then a journal's writes go to it (`open`). */
+  private ready = false
   /** Who waits, off the thread, for the writer's next answer (`reached`). */
   private readonly answered = new Set<() => void>()
   private readonly entry: URL
@@ -72,10 +81,14 @@ export class JournalWriter {
     this.entry = entry
   }
 
-  /** `path`'s streamed writes; undefined once stopped or closing, or after the writer was lost, when its journal writes its own. */
+  /**
+   * `path`'s streamed writes; undefined while the worker is starting (it's started here), once stopped or closing, and
+   * after the writer was lost: its journal writes its own then, and asks again at its next streamed flush unless `gone`.
+   */
   open(path: string, keptBytes: number): JournalWrites | undefined {
-    if (this.stopped || this.closingAll || this.dead !== undefined) return undefined
+    if (this.gone()) return undefined
     const worker = this.thread()
+    if (!this.ready) return undefined
     const handle: Handle = { key: (this.nextKey += 1), cell: new Int32Array(new SharedArrayBuffer(8)), posted: 0, next: undefined, failure: undefined, closed: false }
     this.handles.set(handle.key, handle)
     worker.postMessage({ kind: "open", key: handle.key, path, cell: handle.cell.buffer, keptBytes })
@@ -134,6 +147,27 @@ export class JournalWriter {
         this.handles.delete(handle.key)
       },
     }
+  }
+
+  /** Starts the worker, and settles once it takes journals (true) or the writer is gone (false), awaited off the thread. */
+  async started(): Promise<boolean> {
+    if (this.gone()) return false
+    this.thread()
+    // Held up meanwhile: an unreferenced worker that hasn't answered lets the process end under the wait.
+    this.hold(true)
+    while (!this.ready && !this.gone()) await new Promise<void>((resolve) => this.answered.add(resolve))
+    if (!this.owed()) this.hold(false)
+    return !this.gone()
+  }
+
+  /** Whether this writer takes no more journals: stopped, closing for the host's stop, or lost. */
+  gone(): boolean {
+    return this.stopped || this.closingAll || this.dead !== undefined
+  }
+
+  /** Whether any journal's write is still owed its answer, or waits to be sent. */
+  private owed(): boolean {
+    return [...this.handles.values()].some((open) => open.next !== undefined || Atomics.load(open.cell, 0) < open.posted)
   }
 
   /**
@@ -211,6 +245,11 @@ export class JournalWriter {
     if (this.worker) return this.worker
     const worker = new Worker(this.entry, { resourceLimits: { maxOldGenerationSizeMb: 256 } })
     worker.on("message", (message) => {
+      if (ReadySchema.safeParse(message).success) {
+        if (this.worker === worker) this.ready = true
+        this.heard()
+        return
+      }
       const reply = ReplySchema.safeParse(message)
       if (!reply.success) return
       this.heard()
@@ -221,11 +260,12 @@ export class JournalWriter {
         if (handle.next && !handle.closed && Atomics.load(handle.cell, 0) >= handle.posted) this.send(handle)
       }
       // A journal closed on the thread is gone from `handles` by the time its close is answered.
-      if (![...this.handles.values()].some((open) => open.next !== undefined || Atomics.load(open.cell, 0) < open.posted)) this.hold(false)
+      if (!this.owed()) this.hold(false)
     })
     const lost = (why: string) => {
       if (this.worker !== worker) return
       this.worker = undefined
+      this.ready = false
       this.dead = why
       this.heard()
       if (!this.stopped) hostWarn("journal", "the journal writer was lost; journals write their own streamed rows from here", { why })
