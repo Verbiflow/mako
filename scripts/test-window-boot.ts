@@ -76,7 +76,7 @@ Object.assign(globalThis, {
       openTab: async () => ({ ...payload.tabs[0], id: "new-tab", git: undefined }),
       gitStatus: () => { gitReads++; return background() }, updateState: background,
       lifecycleState: background, installationState: background,
-      automations: background, threads: background, harnessDescriptors: background, nativeRequests: background,
+      automations: background, threads: background, harnessDescriptors: background,
     },
   },
 })

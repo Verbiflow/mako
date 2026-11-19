@@ -1,5 +1,4 @@
 import { useLimitContinueNotice } from "@/components/composer/account-notice"
-import { revealFolder } from "@/state/rail-ranks"
 import { useAskNotice } from "@/components/composer/agent-ask-card"
 import { askBringBack } from "./moves"
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
@@ -129,7 +128,6 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
         },
         newSession: () => addSession.current?.() ?? false,
         newThreadIn: (cwd) => {
-          revealFolder(cwd, null)
           // Where the folder's Sessions run: its Mac, or the cloud.
           const row = latest.current.list.rows.find((each) => each.folder === cwd)
           latest.current.newThread(row ? { place: row.runsOn.kind === "cloud" ? CLOUD_PLACE : row.runsOn.deviceId, project: cwd } : undefined)

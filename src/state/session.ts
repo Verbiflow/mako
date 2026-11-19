@@ -8,7 +8,6 @@ import { handOff } from "@/state/handoff"
 import { conversationSettings } from "@/state/conversation-settings"
 import { keepAwake } from "@/state/keep-awake"
 import { revealWorkedProject } from "@/state/prefs"
-import { revealFolder } from "@/state/rail-ranks"
 import { playFeedback } from "@/state/feedback"
 import { workspaceTransitionStore } from "@/state/workspace-transition"
 import { promptClipboard } from "@/lib/prompt-clipboard"
@@ -848,21 +847,17 @@ function unread(what: string, failure: FailureBoundary): void {
 }
 
 async function loadGroups() {
-  // Each its own read, asked at once: one after another, each waited out whatever held the host's loop before it, and
-  // a host busy as it starts held the rail's groups and titles for the sum of them.
-  await Promise.all([
-    quietly("Thread groups", loadThreadGroups).catch((error) => unread("Thread groups", { error })),
-    quietly("Thread purposes", loadThreadPurposes).catch((error) => unread("Thread purposes", { error })),
-    // Which shared stores a newer Mako changed; the rail and Diagnostics say so. An older host without the method has none to say.
-    loadStoreFormats().catch(() => undefined),
-    // fseventsd's health, for the notice above the desk; a host without the reading says nothing.
-    loadFileEvents().catch(() => undefined),
-    // The MCP servers that need sign-in, said in the rail; a host without the reading has none to say.
-    loadMcpSignIns().catch(() => undefined),
-    // Saved conversations the host couldn't open, for the rail and Diagnostics; a host without the reading has none.
-    loadUnopened().catch(() => undefined),
-    quietly("Thread titles", loadThreadTitles).catch((error) => unread("Thread titles", { error })),
-  ])
+  await quietly("Thread groups", loadThreadGroups).catch((error) => unread("Thread groups", { error }))
+  await quietly("Thread purposes", loadThreadPurposes).catch((error) => unread("Thread purposes", { error }))
+  // Which shared stores a newer Mako changed; the rail and Diagnostics say so. An older host without the method has none to say.
+  await loadStoreFormats().catch(() => undefined)
+  // fseventsd's health, for the notice above the desk; a host without the reading says nothing.
+  await loadFileEvents().catch(() => undefined)
+  // The MCP servers that need sign-in, said in the rail; a host without the reading has none to say.
+  await loadMcpSignIns().catch(() => undefined)
+  // Saved conversations the host couldn't open, for the rail and Diagnostics; a host without the reading has none.
+  await loadUnopened().catch(() => undefined)
+  await quietly("Thread titles", loadThreadTitles).catch((error) => unread("Thread titles", { error }))
 }
 
 async function loadWorktrees() {
@@ -1166,7 +1161,6 @@ export const actions = {
       return false
     }
     revealWorkedProject(folder)
-    revealFolder(folder, tabsStore.get().activeId || null)
     viewer.close()
     stage.close()
     requestAnimationFrame(() =>
