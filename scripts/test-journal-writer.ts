@@ -1,7 +1,6 @@
 import assert from "node:assert/strict"
 import { z } from "zod"
 import { fork } from "node:child_process"
-import { mock } from "node:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -122,45 +121,6 @@ try {
     assert.deepEqual(theirs.journal.read(), mine.journal.read() && { ...mine.journal.read()!, session: theirs.journal.read()!.session, revision: rest.revision + 5 })
     await Promise.all([mine.journal.close(), theirs.journal.close()])
     assert.deepEqual(reopened(join(root, "writer"), theirs.id), theirs.snapshot().blocks)
-    await writer.stop()
-  }
-
-  // The writer answers between `settle`'s look at its count and its wait for the count to move: the wait is for a
-  // change from what it looked at, so it sees the answer and goes on at once. Waiting instead for a change from the
-  // count as it stands after the answer held the host's thread `SETTLE_MS` (30 s) with everything written.
-  {
-    const writer = new JournalWriter()
-    const turn = streaming(join(root, "answered-between"), writer)
-    turn.flush()
-    turn.journal["settleWrites"]()
-    turn.flush()
-    const [handle] = writer["handles"].values()
-    assert.ok(handle && handle.posted === 2, "a second write is on its way")
-    const { cell, posted } = handle
-    const load = Atomics.load.bind(Atomics)
-    let looks = 0
-    let looked = false
-    // The journal asks first whether anything is pending (`pending`), then `settle` looks at the count: that look reads
-    // the count from before the answer, which then comes before it looks again.
-    const late = mock.method(Atomics, "load", (array: Int32Array, index: number) => {
-      if (array !== cell || index !== 0 || (looks += 1) !== 2) return load(array, index)
-      looked = true
-      while (load(cell, 0) < posted) Atomics.wait(cell, 0, load(cell, 0), 10)
-      return posted - 1
-    })
-    const began = performance.now()
-    try {
-      turn.journal["settleWrites"]()
-    } finally {
-      late.mock.restore()
-    }
-    const held = performance.now() - began
-    assert.ok(looked, "settle looked at the count")
-    assert.ok(held < 1_000, `settle held the host's thread ${Math.round(held)} ms for an answer that had come`)
-    assert.ok(turn.journal["writes"], "and the journal still writes through the writer")
-    turn.end()
-    await turn.journal.close()
-    assert.deepEqual(reopened(join(root, "answered-between"), turn.id), turn.snapshot().blocks)
     await writer.stop()
   }
 

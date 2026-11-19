@@ -611,20 +611,14 @@ export class AgentsWorld {
     // off faster than `quietMs`, so a failure names what kept resetting it.
     const resets = new Map<string, number>()
     const reset = (why: string) => resets.set(why, (resets.get(why) ?? 0) + 1)
-    // How late the polls ran: a host holding this process's thread (a synchronous wait in it) starves them, and then
-    // few polls run at all, so a failure says that rather than what the state reads at the deadline.
-    let polled = Date.now()
-    let longestGap = 0
     while (Date.now() - quietSince < quietMs) {
       if (Date.now() > deadline) {
         // Everything `busy` counts, so a failure on CI names what never settled, not only turns and wakes.
         const work = this.live.lifecycleWork().map((item) => `${item.id} ${item.status}`).join(", ") || "none"
         const why = [...resets].map(([what, times]) => `${what} ×${times}`).join(", ") || "none"
-        throw new Error(`Still busy after ${timeoutMs} ms: ${this.running.size} turns, ${this.agents.wakes.pending()} wakes, ${this.sending.size} sends, ${this.prompts.length - before} prompts meanwhile; work: ${work}; quiet reset by: ${why}; longest gap between polls ${Math.max(longestGap, Date.now() - polled)} ms`)
+        throw new Error(`Still busy after ${timeoutMs} ms: ${this.running.size} turns, ${this.agents.wakes.pending()} wakes, ${this.sending.size} sends, ${this.prompts.length - before} prompts meanwhile; work: ${work}; quiet reset by: ${why}`)
       }
       await new Promise((resolve) => setTimeout(resolve, 20))
-      longestGap = Math.max(longestGap, Date.now() - polled)
-      polled = Date.now()
       const work = this.live.lifecycleWork()
       if (this.running.size > 0) reset("turns")
       if (this.sending.size > 0) reset("sends")
