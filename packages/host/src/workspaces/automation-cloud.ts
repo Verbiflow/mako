@@ -4,6 +4,7 @@ import { z } from "zod"
 import {
   AutomationProposalSchema,
   automationBriefText,
+  isApproved,
   automationFingerprint,
   triggerFiresInCloud,
   type AutomationDefinition,
@@ -230,7 +231,8 @@ export class AutomationCloud {
       const wanted = new Set<string>()
       for (const view of reading.automations) {
         const { definition, local } = view
-        const on = local.enabled && !local.paused && view.standing !== "paused" && view.standing !== "off"
+        // Only what the person approved is registered: one never approved, or changed since, runs nowhere.
+        const on = local.enabled && !local.paused && isApproved(local, view.fingerprint) && view.standing !== "paused" && view.standing !== "off"
         if (!on || !wantsCloud(definition)) continue
         wanted.add(definition.id)
         const repository = await this.#deps.repository(project)

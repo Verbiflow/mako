@@ -3926,13 +3926,16 @@ its mode is the harness's own at its access or the strictest below, and anything
 looser start. A rule a registered automation follows goes with it as what the person's rule names (`ruled`); one they
 don't have isn't registered. A cloud run past its limit is stopped on its Thread (`mako:live-cancel`), not only failed.
 `mako:automations-run-of` names the run a Thread is, from an index of every kept run by conversation.
-Nothing runs a definition the person didn't approve: `AutomationLocal` keeps the approved fingerprint (SHA-256 of
-the definition's canonical JSON) and the approved definition itself, and every run (schedule, commit, event, Run now,
-`run_now`, a queued or recovered run) is of that definition. A file that says something else pauses it; turning it on,
-Run now, an enable proposal or an editor save then shows the change from the approved definition and approves only
-with the reviewed fingerprint (`approve`). A queued or cut-short run starts from the approved definition it was
-recorded under, while that is still the approved one. A cloud machine's report of a proposal's decision is never one:
-the Mac decides. The state file is read record by record, a bad one passed over and the file copied aside first.
+Nothing runs a definition the person didn't approve, by one rule (`isApproved`, `contracts/automations.ts`, the
+same in the host and every window): `AutomationLocal.approvedDefinition` is kept and its SHA-256 fingerprint is the
+file's now. No kept definition is never approved. Every run (schedule, commit, event, offer, Run now, `run_now`, a queued
+or recovered run) is of the approved definition, and only an approved one is registered with the cloud. A file that
+says something else pauses it; turning it on (the first time too), Run now, an enable proposal or an editor save shows
+all it says, or its change from what was approved, and approves only with the reviewed fingerprint (`approve`).
+Approving a create or update approves what it wrote. A proposal's ask card never approves: it leads to the change.
+A run's agent reads an event's words, a commit's subject and the gate's output only fenced as untrusted after the
+brief. A cloud machine's report of a decision is never one: the Mac decides. The state file is read record by record,
+a bad one passed over and the file copied aside first.
 `npm run test:automations` holds all of it.
 
 ## Notifications
