@@ -37,6 +37,8 @@ export interface ProviderResidencySnapshot {
   disconnected: number
   warmLimit: number
   idleMs: number
+  /** Harnesses here whose providers rest warm for a window of their own (`ProviderLiveDriver.idleWindow`), by id. */
+  idleWindows?: Record<string, number>
   memory: ConversationMemory
 }
 

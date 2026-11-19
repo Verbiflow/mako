@@ -129,6 +129,7 @@
     "bench:orphans": "npm run -s build --workspace @mako/sessions && tsx scripts/bench-orphans.ts",
     "bench:copy-reader": "npm run -s build --workspace @mako/sessions && node packages/sessions/test/bench-copy-reader.mjs",
     "bench:cursor-fork": "tsx scripts/bench-cursor-fork.ts",
+    "bench:cursor-idle": "npm run build:electron && tsx scripts/bench-cursor-idle.ts",
     "bench:archive-migration": "tsx scripts/bench-archive-migration.ts",
     "bench:kept-children": "tsx scripts/bench-kept-children.ts",
     "bench:attachment-sweep": "tsx scripts/bench-attachment-sweep.ts",
