@@ -73,6 +73,19 @@ const discovery = mock.method(providers, "load", async () => {
   await discoveryGate.promise
 })
 assert.deepEqual(await settingsForSend(draft), {})
+assert.equal(discovery.mock.callCount(), 1, "a send with no catalogue reads the harness's profile behind it")
+// A catalogue kept through a failed refresh validates the send, and the send asks nothing: the note stood for as long
+// as the harness kept failing, and every message started another read.
+providerStore.set({
+  contexts: { [providerProfileKey("codex", "/workspace")]: { ...profile, configurationError: "codex discovery timed out. Showing the last discovered settings." } },
+})
+for (let send = 0; send < 3; send++) assert.deepEqual(await settingsForSend(draft), following.settings)
+assert.equal(discovery.mock.callCount(), 1, "a stale note on a usable catalogue does not re-ask on every send")
+providerStore.set({
+  contexts: { [providerProfileKey("codex", "/workspace")]: { ...profile, available: false, models: [], settings: undefined, error: "Codex is signed out" } },
+})
+await settingsForSend(draft).catch(() => undefined)
+assert.equal(discovery.mock.callCount(), 2, "a harness with nothing to validate against is read again")
 discoveryGate.resolve()
 discovery.mock.restore()
 providerStore.set({

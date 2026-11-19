@@ -1,8 +1,9 @@
+import { memo } from "react"
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { attentionLine } from "@mako/host/contracts/notifications"
 import { AppMarkIcon } from "@/components/rail/app-mark"
 import { ThreadPurposeChip } from "@/components/rail/purpose-chip"
-import { ApexCrewLine } from "@/components/rail/fin-pips"
+import { ApexShiverLine } from "@/components/rail/fin-pips"
 import { useIsApex } from "@/state/fin-pips"
 import { ApexAsks } from "@/components/rail/apex-asks"
 import { harnessLabel } from "@/components/rail/harness-meta"
@@ -21,7 +22,8 @@ import {
 import { ReadyBesideMark, ThreadMark, ThreadStatusEnd } from "@/components/rail/thread-status"
 import { threadStatus, useThreads, type ThreadStatus } from "@/state/threads"
 import { threadFolderKey } from "@/lib/thread-folders"
-import { acpForThread, useAcp } from "@/state/acp"
+import { acpForThread } from "@/state/acp"
+import { useRailAcp } from "@/state/acp-state"
 import { openConversation, useWindowRoutes } from "@/state/window-routes"
 import { CLOUD_WHERE } from "@/state/cloud-moves"
 import { PlaceMark } from "@/components/ui/place-mark"
@@ -36,7 +38,11 @@ import { cn } from "@/lib/utils"
 
 const IDLE: ThreadStatus = { kind: "idle" }
 
-export function LiveAgentRow({
+/**
+ * A conversation's row. Drawn again when its own facts change (a presence is one object while they stand,
+ * `selectAcpPresence`), not each time the list around it is.
+ */
+export const LiveAgentRow = memo(function LiveAgentRow({
   presence,
   folded,
   indent = false,
@@ -45,6 +51,8 @@ export function LiveAgentRow({
   /** Set when this row stands for a Thread with several Sessions. */
   folded?: FoldedThread
   indent?: boolean
+  /** The rail's minute: the times the row says (when it moved, when its device was last seen) are read again as it turns. */
+  now?: number
 }) {
   useHarnessIdentity()
   const archived = useThreadArchives((state) => archivedLive(presence, state.keys))
@@ -59,7 +67,7 @@ export function LiveAgentRow({
     const path = state.opening?.ref.path ?? state.viewing?.ref.path
     return path === undefined ? undefined : Boolean(folded?.members.some((member) => member.kind === "native" && member.ref.path === path))
   })
-  const liveOnScreen = useAcp((state) =>
+  const liveOnScreen = useRailAcp((state) =>
     Boolean(
       state.activeKey &&
         (folded
@@ -188,10 +196,10 @@ export function LiveAgentRow({
           <ThreadStatusEnd status={status} updatedAt={presence.movedAt === undefined ? undefined : new Date(presence.movedAt).toISOString()} />
         )}
         </RowLine>
-        {apex ? <ApexCrewLine thread={thread} /> : null}
+        {apex ? <ApexShiverLine thread={thread} /> : null}
       </div>
     </ThreadContextMenu>
     {apex ? <ApexAsks apex={thread} apexTitle={title} indent={indent} /> : null}
     </>
   )
-}
+})

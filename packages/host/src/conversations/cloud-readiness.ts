@@ -159,6 +159,11 @@ export type CloudReadinessOptions = {
   enabled(): Promise<boolean>
   /** This Mac's Threads at work now. */
   working(): WorkingThread[]
+  /**
+   * The working Thread `conversationId` is counted by, if it is: asked at every flush and finished call of a
+   * conversation, so the host answers from that one conversation; without it, every working Thread is read.
+   */
+  workingOf?(conversationId: string): WorkingThread | undefined
   /** Where a conversation stands (its live revision), or undefined when unknown: a round runs whenever it moved. */
   revision?(conversationId: string): number | undefined
   /** Whether a move of the Thread runs now: one on its way isn't kept ready (`CloudMoves.leaving`). */
@@ -268,7 +273,7 @@ export class CloudReadiness {
    * `CAPTURE_AFTER_WRITE_MS` from now, or `CAPTURE_EVERY_MS` after its last, whichever is later. One already due stays.
    */
   wrote(conversationId: string): void {
-    const working = this.#options.working().find((each) => each.conversationId === conversationId)
+    const working = this.#workingOf(conversationId)
     if (!working || this.#options.leaving(working.thread)) return
     this.#writing.set(conversationId, working)
     if (this.#due.has(working.thread)) return
@@ -283,10 +288,14 @@ export class CloudReadiness {
     this.#due.set(working.thread, timer)
   }
 
+  #workingOf(conversationId: string): WorkingThread | undefined {
+    return this.#options.workingOf ? this.#options.workingOf(conversationId) : this.#options.working().find((each) => each.conversationId === conversationId)
+  }
+
   /** A conversation changed (its turn may have ended): a Thread whose turn wrote and no longer works takes its checkpoint now. */
   settled(conversationId: string): void {
     const working = this.#writing.get(conversationId)
-    if (!working || this.#options.working().some((each) => each.conversationId === conversationId)) return
+    if (!working || this.#workingOf(conversationId)) return
     this.#writing.delete(conversationId)
     clearTimeout(this.#due.get(working.thread))
     this.#due.delete(working.thread)

@@ -1,4 +1,5 @@
 import { finDefaultsStore } from "./fin-defaults"
+import { followWindowShown, type WindowShownFollower } from "@/state/window-hidden"
 import { accounts } from "@/state/accounts"
 import { toolStepped } from "@/state/tool-steps"
 import { quietly } from "@/lib/quiet-retry"
@@ -7,6 +8,7 @@ import { handOff } from "@/state/handoff"
 import { conversationSettings } from "@/state/conversation-settings"
 import { keepAwake } from "@/state/keep-awake"
 import { revealWorkedProject } from "@/state/prefs"
+import { revealFolder } from "@/state/rail-ranks"
 import { playFeedback } from "@/state/feedback"
 import { workspaceTransitionStore } from "@/state/workspace-transition"
 import { promptClipboard } from "@/lib/prompt-clipboard"
@@ -19,7 +21,7 @@ import { applyFileEvents, loadFileEvents } from "@/state/file-events"
 import { applyMcpSignIns, loadMcpSignIns } from "@/state/mcp-sign-ins"
 import { loadUnopened } from "@/state/unopened-conversations"
 import { applyThreadTitles, loadThreadTitles } from "@/state/thread-titles"
-import { applyWorktreeSummaries, refreshWorktrees, refreshWorktreeSummaries } from "@/state/worktrees"
+import { applyWorktreeSummaries, applyWorktreeSummaryChanges, refreshWorktrees, refreshWorktreeSummaries, worktreeSizesWereMeasured } from "@/state/worktrees"
 import { github, githubStore } from "@/state/github"
 import { applyWorkspaceMoves, loadWorkspaceMoves, workspaceMoved } from "@/state/workspace-moves"
 import { applyPlanBuilds, loadPlanBuilds } from "@/state/plan-builds"
@@ -42,7 +44,7 @@ import { cloudAccountStore, heardAccountEvent } from "@/state/cloud-account"
 import { offerCloudProjects } from "@/state/cloud-projects"
 import { cloudTurnOn } from "@/state/cloud-turn-on"
 import { simulatorSetup } from "@/state/simulator-setup"
-import { applyLiveBatch, hydrateLiveSummaries, hydrateLive, listLive, markLiveOwnerDisconnected, unlistLive } from "@/state/live-recovery"
+import { applyLiveAhead, applyLiveBatch, hydrateLiveSummaries, hydrateLive, listLive, markLiveOwnerDisconnected, unlistLive } from "@/state/live-recovery"
 import { replayUnconfirmedPrompts, restorePendingMessages } from "@/state/acp-queue"
 import { watchPendingMessages } from "@/state/message-outbox"
 import { createHook, createStore, shallowEqual } from "@/state/store"
@@ -189,6 +191,8 @@ export function currentTurnRunning(): boolean {
  * not a render.
  */
 let connectionEpoch = 0
+/** What tells the host whether this window shows, for the boot that's attached; a new stream is told again through it. */
+let shownFollower: WindowShownFollower | undefined
 /** A built-in tab's notification identity. */
 function tabSubject(id: string, cache: TabCache) {
   const tab = tabsStore.get().tabs.find((entry) => entry.id === id)
@@ -262,6 +266,14 @@ function apply(event: HostEvent) {
   }
   if (event.type === "worktree-summaries") {
     applyWorktreeSummaries(event.summaries)
+    return
+  }
+  if (event.type === "worktree-summary-changes") {
+    applyWorktreeSummaryChanges(event)
+    return
+  }
+  if (event.type === "worktree-sizes") {
+    worktreeSizesWereMeasured()
     return
   }
   if (event.type === "worktree-ready") {
@@ -384,6 +396,7 @@ function apply(event: HostEvent) {
     // The stream attached, so the host is there. The boot brings the window up to date; on a busy host that took 18 s,
     // and it isn't an outage. One that fails says so itself.
     hostConnectionStore.set({ kind: "connected" })
+    shownFollower?.renewed()
     void actions.reconnect()
     return
   }
@@ -402,6 +415,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "live-batch") {
     applyLiveBatch(event.batch)
+    return
+  }
+  if (event.type === "live-ahead") {
+    applyLiveAhead(event.ahead)
     return
   }
   if (event.type === "live-listed") {
@@ -831,17 +848,21 @@ function unread(what: string, failure: FailureBoundary): void {
 }
 
 async function loadGroups() {
-  await quietly("Thread groups", loadThreadGroups).catch((error) => unread("Thread groups", { error }))
-  await quietly("Thread purposes", loadThreadPurposes).catch((error) => unread("Thread purposes", { error }))
-  // Which shared stores a newer Mako changed; the rail and Diagnostics say so. An older host without the method has none to say.
-  await loadStoreFormats().catch(() => undefined)
-  // fseventsd's health, for the notice above the desk; a host without the reading says nothing.
-  await loadFileEvents().catch(() => undefined)
-  // The MCP servers that need sign-in, said in the rail; a host without the reading has none to say.
-  await loadMcpSignIns().catch(() => undefined)
-  // Saved conversations the host couldn't open, for the rail and Diagnostics; a host without the reading has none.
-  await loadUnopened().catch(() => undefined)
-  await quietly("Thread titles", loadThreadTitles).catch((error) => unread("Thread titles", { error }))
+  // Each its own read, asked at once: one after another, each waited out whatever held the host's loop before it, and
+  // a host busy as it starts held the rail's groups and titles for the sum of them.
+  await Promise.all([
+    quietly("Thread groups", loadThreadGroups).catch((error) => unread("Thread groups", { error })),
+    quietly("Thread purposes", loadThreadPurposes).catch((error) => unread("Thread purposes", { error })),
+    // Which shared stores a newer Mako changed; the rail and Diagnostics say so. An older host without the method has none to say.
+    loadStoreFormats().catch(() => undefined),
+    // fseventsd's health, for the notice above the desk; a host without the reading says nothing.
+    loadFileEvents().catch(() => undefined),
+    // The MCP servers that need sign-in, said in the rail; a host without the reading has none to say.
+    loadMcpSignIns().catch(() => undefined),
+    // Saved conversations the host couldn't open, for the rail and Diagnostics; a host without the reading has none.
+    loadUnopened().catch(() => undefined),
+    quietly("Thread titles", loadThreadTitles).catch((error) => unread("Thread titles", { error })),
+  ])
 }
 
 async function loadWorktrees() {
@@ -918,7 +939,14 @@ export const actions = {
       })
       return () => {}
     }
-    const unsubscribe = bridge.onEvent(apply)
+    const unsubscribeEvents = bridge.onEvent(apply)
+    shownFollower?.stop()
+    const following = shownFollower = followWindowShown(bridge)
+    const unsubscribe = () => {
+      unsubscribeEvents()
+      following.stop()
+      if (shownFollower === following) shownFollower = undefined
+    }
     const epoch = ++connectionEpoch
     void providers.loadAll()
     // Settings paints versions the moment it opens; the host has been reading them since it started.
@@ -1138,6 +1166,7 @@ export const actions = {
       return false
     }
     revealWorkedProject(folder)
+    revealFolder(folder, tabsStore.get().activeId || null)
     viewer.close()
     stage.close()
     requestAnimationFrame(() =>

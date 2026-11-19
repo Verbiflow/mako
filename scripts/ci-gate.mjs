@@ -11,6 +11,7 @@ import { runSuite } from "./lib/run-suite.mjs"
  *
  *   node scripts/ci-gate.mjs <shard> <shards>     what CI runs, shards counted from 1
  *   node scripts/ci-gate.mjs --plan <shards>      each shard's steps and estimated seconds
+ *   node scripts/ci-gate.mjs --needs <shard> <shards>   what the shard installs first (`NEEDS`), for CI's cache
  *   --mac, before either, takes `MAC_STEPS` instead
  */
 
@@ -36,6 +37,9 @@ export const STEPS = [
   [1, "npx tsx scripts/test-owned-files.ts"],
   [13, "npx tsx scripts/test-cloud-returns.ts"],
   [1, "npm run test:keep-awake"],
+  [4, "npm run test:flush-costs"],
+  [4, "npx tsx --tsconfig tsconfig.scripts.json scripts/test-host-boundaries.ts"],
+  [6, "npm run test:journal-writer"],
   // The renderer's and the live state's own suites, in Node without a window, and the web client's build.
   [4, "npm run build -w @mako/web-client"],
   // What the desk loads before it draws: no Office viewer, and within its byte budget (builds the renderer in memory).
@@ -244,7 +248,7 @@ export const STEPS = [
   // on main on a Mac before it came in, as its npm script runs it. Not yet here: test-thread-processes.ts (160 s, past
   // a shard's floor, to be split), the manual proofs (live harnesses, packaged builds, arguments), the *-ui suites of
   // those npm scripts, and the ones red on main (test-control-recording-failures.ts, test-update-performance.ts, test-local-update-startup.ts,
-  // test-repository-discovery.ts, test-transcript-residency.ts).
+  // test-repository-discovery.ts).
   [2, "tsx scripts/test-acp-background.ts"],
   [2, "tsx scripts/test-acp-notifications.ts"],
   [7, "node scripts/test-acp-provider-turn.mjs"],
@@ -361,12 +365,15 @@ export const STEPS = [
   [3, "tsx scripts/test-refreshed-fork.ts"],
   [2, "tsx scripts/test-release-timelines.ts"],
   [3, "node scripts/test-remove-fixture-desk.mjs"],
+  [1, "tsx --tsconfig tsconfig.app.json scripts/test-render-caches.ts"],
   [1, "tsx scripts/test-repeated-calls.ts"],
   [3, "tsx scripts/test-replay-setup-notices.ts"],
+  [1, "tsx --tsconfig tsconfig.app.json scripts/test-reveal-pace.ts"],
   [1, "tsx scripts/test-review-notes.ts"],
   [9, "node scripts/test-role-rules-window.mjs"],
   [1, "esbuild scripts/test-room-view.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-room-view.mjs --log-level=warning"],
   [4, "tsx scripts/test-roster-turn-ends.ts"],
+  [1, "tsx --tsconfig tsconfig.app.json scripts/test-row-heights.ts"],
   [1, "tsx scripts/test-run-output.ts"],
   [2, "tsx scripts/test-runtime-updates.ts"],
   // Every script that runs a harness gives it a scratch or sealed home; red on main until 2026-11-17.
@@ -394,8 +401,12 @@ export const STEPS = [
   [1, "tsx scripts/test-thread-store-read-only.ts"],
   [2, "tsx scripts/test-thread-store.ts"],
   [3, "tsx scripts/test-trace-history-holds.ts"],
+  [3, "tsx scripts/test-transcript-residency.ts"],
+  // Restoring a released live turn recaptures the window; what the original capture never held stays refused.
+  [3, "tsx scripts/test-released-live-turn.ts"],
   [1, "tsx scripts/test-transport-agreement.ts"],
   [1, "node scripts/test-ui-feedback.mjs"],
+  [2, "tsx --tsconfig tsconfig.app.json scripts/test-warm-open.ts"],
   [2, "node scripts/test-web-proxy.mjs"],
   [2, "tsx scripts/test-window-shutdown.ts"],
   [1, "tsx scripts/test-window-tree.ts"],
@@ -476,9 +487,21 @@ const NEEDS = {
 const NEEDS_NOTHING = [/scripts\/test-mcp\.ts\b/, /scripts\/test-computer-tools\.ts\b/]
 /** What a part run outside an npm script needs, by its file: recording reads ffmpeg and ffprobe. */
 const NEEDS_BY_FILE = [[/scripts\/test-(native-recording|control-recording|control-recording-idle|control-recording-stream|browser-recording|browser-video)\.ts\b/, "ffmpeg"]]
+/**
+ * Each prints `install-via: <path>` last: image (already there), cache, apt or archive (`install-apt-cached.sh`), brew.
+ * On Linux, ffmpeg comes from the .debs `MAKO_APT_DEBS` holds, which the gate job keeps between runs, so a shard that
+ * restored them installs it with no network: on 2026-11-19 the runners couldn't reach Ubuntu's mirrors and every
+ * shard that recorded hung on `apt-get update` until this budget ran out.
+ */
+/** Runs `install` unless `tool` is on PATH already. */
+function unlessPresent(tool, install) {
+  return `if command -v ${tool} >/dev/null; then echo "install-via: image"; else ${install}; fi`
+}
 const INSTALL = {
   // Recording reads ffmpeg and ffprobe on PATH; the runner's image has neither.
-  ffmpeg: process.platform === "darwin" ? "command -v ffmpeg >/dev/null || HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install ffmpeg" : "command -v ffmpeg >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg)",
+  ffmpeg: unlessPresent("ffmpeg", process.platform === "darwin"
+    ? 'HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install ffmpeg && echo "install-via: brew"'
+    : `"${new URL("install-apt-cached.sh", import.meta.url).pathname}" "\${MAKO_APT_DEBS:-\${RUNNER_TEMP:-/tmp}/apt-debs}" ffmpeg`),
 }
 
 /**
@@ -657,9 +680,10 @@ if (args[0] === "--plan") {
   }
   process.exit(0)
 }
-const [shard, count] = args.map(Number)
+const needsOnly = args[0] === "--needs"
+const [shard, count] = args.slice(needsOnly ? 1 : 0).map(Number)
 if (!Number.isInteger(shard) || !Number.isInteger(count) || shard < 1 || shard > count) {
-  console.error("Use: node scripts/ci-gate.mjs [--mac] <shard> <shards>, or [--mac] --plan <shards>")
+  console.error("Use: node scripts/ci-gate.mjs [--mac] [--needs] <shard> <shards>, or [--mac] --plan <shards>")
   process.exit(2)
 }
 
@@ -671,6 +695,10 @@ const planned = lanesOf(count).slice((shard - 1) * LANES, shard * LANES).map((la
 const first = planned.flat().filter(isAlone)
 const lanes = planned.map((steps) => steps.filter((step) => !isAlone(step)).toSorted((a, b) => Number(Boolean(needOf(a))) - Number(Boolean(needOf(b)))))
 const picked = [...first, ...lanes.flat()]
+if (needsOnly) {
+  console.log([...new Set(picked.map(needOf).filter(Boolean))].join(" "))
+  process.exit(0)
+}
 /**
  * Each install starts at once, beside the parts, and only a part that needs it waits for it: awaited first, apt's
  * ffmpeg (17 to 45 s) held every test of the 20 shards that picked a recording part, and decided pr-gate's time
@@ -680,7 +708,8 @@ const installing = new Map([...new Set(picked.map(needOf).filter(Boolean))].map(
   let output = ""
   const began = Date.now()
   const code = await runSuite("bash", ["-c", INSTALL[need]], { limitMs: 5 * 60_000, quietMs: 5 * 60_000, write: (text) => { output += text } })
-  console.log(`::group::install ${need}\n${output}::endgroup::\n${code === 0 ? "installed" : "INSTALL FAILED"}: ${need} in ${Math.round((Date.now() - began) / 1000)} s`)
+  const via = output.match(/^install-via: (\S+)$/m)?.[1] ?? "nothing"
+  console.log(`::group::install ${need}\n${output}::endgroup::\n${code === 0 ? "installed" : "INSTALL FAILED"}: ${need} in ${Math.round((Date.now() - began) / 1000)} s, via ${via}`)
   return code
 })()]))
 

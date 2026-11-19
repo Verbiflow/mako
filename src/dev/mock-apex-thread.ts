@@ -9,6 +9,7 @@ import { appendFinReports } from "@mako/host/contracts/fin-reports"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import type { ThreadRef } from "@/lib/types"
+import type { ThreadWorktree, WorktreeSummary } from "@mako/host/contracts/thread-worktrees"
 
 /*
  * An Apex and its Fins for the desk's and the phone's fixtures (`?mock&app=apex`): "Mobile polish", a Claude Thread
@@ -82,6 +83,20 @@ if (ESCALATED_SCENE) {
 const QUIET_SCENE = new URLSearchParams(globalThis.location?.search).get("fins") === "quiet"
 const QUIET_STATE: ChildState = { kind: "working", step: "Shell npm run test:outbox", quiet: { since: Date.now() - 18 * 60_000, step: "Shell npm run test:outbox", running: true } }
 
+/**
+ * `&fins=overview`: the twelve with every section of the Overview filled. Thread list swipe finished with the
+ * person's decision, Settings deep links waits on its pull request's checks, Pull to refresh failed, and three of
+ * them have a worktree whose branch has an open pull request (`apexWorktrees`, `apexWorktreeSummaries`).
+ */
+const OVERVIEW_SCENE = new URLSearchParams(globalThis.location?.search).get("fins") === "overview"
+const OVERVIEW_STATES = new Map<string, ChildState>(OVERVIEW_SCENE ? [
+  ["swipe", DECIDED.get("swipe")!],
+  ["deep-links", { kind: "idle", waitingOn: [{ kind: "pull-request", ref: "you/mako#368", repository: "you/mako", number: 368, until: "checks" }], since: Date.now() - 12 * 60_000 }],
+  ["pull-refresh", { kind: "ended", outcome: "failed", reason: "npm run test:phone failed: two cases time out on the simulator." }],
+] : [])
+/** `&fincount=200`: that many Fins under the Apex in place of the twelve, in every state, for a long Overview. */
+const FIN_COUNT = Number(new URLSearchParams(globalThis.location?.search).get("fincount") ?? 0)
+
 /** The twelve, as the prototype has them: 2 need you, 5 working (one asking its Apex), 2 queued, 3 done. */
 /**
  * `&ask=fin`: "Dictation fallback"'s agent asked to move its Thread, as its Apex's host builds its row (`askWaiting`,
@@ -108,7 +123,7 @@ const CHILDREN: ChildFixture[] = ([
   { name: "swipe", title: "Thread list swipe", harness: "codex", model: "gpt-5.6-sol", state: { kind: "ended", outcome: "done", reason: "Swipe to archive now springs back below the threshold; PR on your branch." }, minutes: 31, toolUses: 52, objective: "Make the list's swipe to archive spring back below its threshold." },
   { name: "deep-links", title: "Settings deep links", harness: "claude", model: "claude-opus-5-5", state: { kind: "idle" }, minutes: 27, toolUses: 19, objective: "Open each settings page from a link." },
   { name: "pull-refresh", title: "Pull to refresh", harness: "grok", model: "grok-4.7", state: { kind: "ended", outcome: "done", reason: "Pull to refresh reads the account list again and keeps its place." }, minutes: 40, toolUses: 33, objective: "Pull to refresh reads the account list again." },
-] satisfies ChildFixture[]).map((fixture): ChildFixture => (DECISIONS_SCENE && DECIDED.has(fixture.name) ? { ...fixture, state: DECIDED.get(fixture.name)! } : QUIET_SCENE && fixture.name === "outbox" ? { ...fixture, state: QUIET_STATE } : fixture)).concat(PLACED_SCENE ? [PLACED_FIXTURE] : [])
+] satisfies ChildFixture[]).map((fixture): ChildFixture => (DECISIONS_SCENE && DECIDED.has(fixture.name) ? { ...fixture, state: DECIDED.get(fixture.name)! } : QUIET_SCENE && fixture.name === "outbox" ? { ...fixture, state: QUIET_STATE } : OVERVIEW_STATES.has(fixture.name) ? { ...fixture, state: OVERVIEW_STATES.get(fixture.name)! } : fixture)).concat(PLACED_SCENE ? [PLACED_FIXTURE] : [])
 
 /**
  * `&fins=limit`: the tree on 2026-11-05, as the host says it. Cursor ran out: three of its Fins moved to Claude Code,
@@ -120,8 +135,8 @@ const CHILDREN: ChildFixture[] = ([
  */
 const ASK_SCENE = new URLSearchParams(globalThis.location?.search).get("ask")
 const LIMIT_SCENE = new URLSearchParams(globalThis.location?.search).get("fins") === "limit"
-/** `&crew=moves`: the crew changed outside the Apex's turns, said as lines in its transcript (`membershipLine`). */
-const MOVES_SCENE = new URLSearchParams(globalThis.location?.search).get("crew") === "moves"
+/** `&shiver=moves`: the Shiver changed outside the Apex's turns, said as lines in its transcript (`membershipLine`). */
+const MOVES_SCENE = new URLSearchParams(globalThis.location?.search).get("shiver") === "moves"
 const LIMIT_UNTIL = "Sun 12:00 AM PST"
 const LIMIT_MOVED = `Moved to Claude Code: Cursor is at its limit until ${LIMIT_UNTIL}`
 const LIMIT_OUT = `Out of accounts until ${LIMIT_UNTIL}: Cursor and Claude Code (work)`
@@ -264,11 +279,46 @@ export function apexFin(index: number, state: ChildState = CHILDREN[index]!.stat
     journal
   )
   const limited = LIMIT_SCENE && entry.child ? LIMIT_FINS.get(fixture.name) : undefined
+  // What it waits on comes from its report, which this fixture doesn't write: said on the entry as its host would say it.
+  if (state.kind === "idle" && state.waitingOn && entry.child) return { ...entry, since: state.since, child: { ...entry.child, state } }
   return limited ? limited(entry) : entry
 }
 
 export function apexFins(): NativeAgent[] {
+  if (FIN_COUNT > 0) return Array.from({ length: FIN_COUNT }, (_, index) => benchChild(index, CHURN[index % CHURN.length]!))
   return CHILDREN.map((_, index) => apexFin(index))
+}
+
+/** The Fins of `&fins=overview` that work in a worktree of their own, and the pull request each branch has open. */
+const OVERVIEW_PULLS: { name: string; pull: Omit<NonNullable<WorktreeSummary["pull"]>, "branch" | "head"> }[] = [
+  { name: "swipe", pull: { number: 371, title: "Spring the list's swipe to archive back below its threshold", url: "https://github.com/you/mako/pull/371", state: "open", checks: "passed" } },
+  { name: "deep-links", pull: { number: 368, title: "Open each settings page from a link", url: "https://github.com/you/mako/pull/368", state: "open", checks: "running" } },
+  { name: "composer-chips", pull: { number: 366, title: "Wrap the composer's chips on an iPad", url: "https://github.com/you/mako/pull/366", state: "draft", checks: "failed" } },
+]
+
+export function apexWorktrees(): ThreadWorktree[] {
+  if (!OVERVIEW_SCENE) return []
+  return OVERVIEW_PULLS.map(({ name }) => ({
+    path: `/Users/you/.mako/worktrees/mako-${name}`,
+    thread: ThreadIdSchema.parse(childThread(CHILDREN.findIndex((fixture) => fixture.name === name))),
+    repoRoot: APEX_CWD,
+    project: APEX_CWD,
+    branch: `mako/${name}`,
+    base: "4f1c2e9",
+    createdAt: STARTED,
+  }))
+}
+
+export function apexWorktreeSummaries(): WorktreeSummary[] {
+  return apexWorktrees().map((worktree, index) => ({
+    path: worktree.path,
+    into: "main",
+    ahead: 2,
+    changes: 0,
+    landing: { kind: "open", into: "main", commits: 2 },
+    pull: { ...OVERVIEW_PULLS[index]!.pull, branch: worktree.branch, head: "9a1c2e4" },
+    behind: { from: "origin/main", commits: 0 },
+  }))
 }
 
 /** The states a churned Fin steps through, one a tick, as a real one moves. */
@@ -354,11 +404,11 @@ const DICTATION = 3
 const WAKE_AT = Date.now() - 90_000
 /** A wake as the host writes one (`digest`): the Apex's words, then the same reports as data, which the person reads as each Fin's message. */
 /**
- * `&wake=crew`: the wake carries four more reports, finished or left to the Apex, so the person reads one crew update:
+ * `&wake=shiver`: the wake carries four more reports, finished or left to the Apex, so the person reads one Shiver update:
  * what needs them open, the rest folded into a line (`FinReports`).
  */
-const CREW_WAKE = new URLSearchParams(globalThis.location?.search).get("wake") === "crew"
-const CREW_WAKE_REPORTS = [
+const SHIVER_WAKE = new URLSearchParams(globalThis.location?.search).get("wake") === "shiver"
+const SHIVER_WAKE_REPORTS = [
   { report: "report:haptics:done", fin: childThread(7), name: "Haptics audit", harness: "claude", status: "done" as const, line: "Listed 31 haptics; two fire twice on long-press." },
   { report: "report:share-sheet:done", fin: childThread(8), name: "Share sheet copy", harness: "cursor", status: "done" as const, line: "Worded the share sheet's actions in the app's voice.", artifacts: [{ kind: "pull-request" as const, ref: "https://github.com/acme/phone/pull/215" }] },
   { report: "report:deep-links:done", fin: childThread(10), name: "Settings deep links", harness: "claude", status: "done" as const, line: "Every settings page opens from a link now." },
@@ -378,7 +428,7 @@ const WAKE_TEXT = appendFinReports(
   [
     { report: "report:push-wording:tone", fin: childThread(0), name: "Quiet-hours push wording", harness: "codex", status: "needs-input", line: "Which tone for the quiet-hours notice? Plain or friendly?", options: [{ label: "Plain", detail: "Pushes are held until 7:00." }, { label: "Friendly", detail: "Quiet hours: we'll tell you at 7:00." }], recommended: 0, forPerson: true },
     { report: "report:swipe:done", fin: childThread(9), name: "Thread list swipe", harness: "codex", status: "done", line: "Swipe to archive now springs back below the threshold; PR on your branch.", artifacts: [{ kind: "pull-request", ref: "https://github.com/acme/phone/pull/214" }] },
-    ...(CREW_WAKE ? CREW_WAKE_REPORTS : []),
+    ...(SHIVER_WAKE ? SHIVER_WAKE_REPORTS : []),
   ]
 )
 
@@ -391,7 +441,7 @@ interface EarlierTurns {
 const EARLIER_WORDS = [
   "The sheet measures its container once the keyboard's inset settles, so split view no longer starts it off screen.",
   "Each Fin's report lands as its own message under the wake, with its options live while the ask is yours.",
-  "The crew card keeps the Fins on screen through every transition; only the background line waits for the turn's end.",
+  "The Shiver card keeps the Fins on screen through every transition; only the background line waits for the turn's end.",
   "Rows the transcript has not laid out stand at the size they last measured, or an estimate until they mount.",
 ]
 

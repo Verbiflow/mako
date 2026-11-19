@@ -1,7 +1,7 @@
 import { REPORT_FOLLOW_UP_INSTRUCTIONS } from "./report-actions.js"
 import { z } from "zod"
 import { LISTED_AFTER, LISTED_FINS, LISTED_WAITING_ON, type ListedFin, type ListedFinState } from "@mako/protocol/thread-listing"
-import { APEX_WORD, entryState, FIN_WORD, finsWord, LEGACY_APEX_WORD, UNFINISHED_WORDS, waitingStateWords, type Brief, type ChildState } from "./agents.js"
+import { APEX_WORD, entryState, FIN_WORD, finsWord, SHIVER_WORD, LEGACY_APEX_WORD, UNFINISHED_WORDS, waitingStateWords, type Brief, type ChildState } from "./agents.js"
 import type { Block } from "./conversation-session.js"
 import { CHILDREN_BINDING, isProviderWork, type FinAnswered, type FinAsk, type NativeAgent, type NativeAgentRoster, type WaitingOn } from "./native-agents.js"
 import type { Waiting } from "@mako/protocol/attention"
@@ -120,8 +120,10 @@ export function sentByMako(text: string): boolean {
 export function briefIntro(name: string): string {
   return `You're fin:${name}${INTRO_TAIL}`
 }
-const INTRO_TAIL = `, a ${FIN_WORD}: another Thread, ${YOUR_APEX}, started you for one piece of work. It reads your reports, not this conversation. agents_list with scope crew shows it and the other ${FIN_WORD}s it started.`
-/** The intro's tail before a Fin could read its crew. */
+const INTRO_TAIL = `, a ${FIN_WORD}: another Thread, ${YOUR_APEX}, started you for one piece of work. It reads your reports, not this conversation. agents_list with scope shiver shows your ${SHIVER_WORD}: ${YOUR_APEX} and the other ${FIN_WORD}s it started.`
+/** The intro's tail as builds before the Shiver wrote it, its scope then named crew: kept briefs still hold it. */
+const CREW_INTRO_TAIL = `, a ${FIN_WORD}: another Thread, ${YOUR_APEX}, started you for one piece of work. It reads your reports, not this conversation. agents_list with scope crew shows it and the other ${FIN_WORD}s it started.`
+/** The intro's tail before a Fin could read its Shiver. */
 const EARLIER_INTRO_TAIL = `, a ${FIN_WORD}: another Thread, ${YOUR_APEX}, started you for one piece of work. It reads your reports, not this conversation.`
 export const BRIEF_CLOSE = `When you finish, are blocked, or need a decision, call agents_report (from a shell, \`mako agents report\`). Ending your turn without one tells ${YOUR_APEX} how it ended.`
 /** A brief's lines as builds before the names wrote them, still left out of its card. */
@@ -190,7 +192,7 @@ function spoken(from: string): string {
 }
 
 function briefIntroLine(line: string): boolean {
-  return (line.startsWith("You're fin:") && (line.endsWith(INTRO_TAIL) || line.endsWith(EARLIER_INTRO_TAIL))) || (line.startsWith(LEGACY_INTRO.head) && line.endsWith(LEGACY_INTRO.tail))
+  return (line.startsWith("You're fin:") && (line.endsWith(INTRO_TAIL) || line.endsWith(CREW_INTRO_TAIL) || line.endsWith(EARLIER_INTRO_TAIL))) || (line.startsWith(LEGACY_INTRO.head) && line.endsWith(LEGACY_INTRO.tail))
 }
 
 /** A Fin's name as an agent may write it: `fin:<name>`, `child:<name>` as builds before the names taught it, or bare. */
@@ -409,10 +411,15 @@ function listedFinState(state: ChildState): ListedFinState {
 
 /**
  * An Apex's Fins as its row lists them for every other device (`ListedFin`, link version 19 on): its roster, in the
- * order every surface on its owner draws it. Undefined while it has none.
+ * order every surface on its owner draws it. Undefined while it has none. The same list while the roster is the same
+ * one (a roster is built again, never changed), so whoever reads it on every batch orders and writes out nothing, and
+ * tells that no Fin moved by the list being the one it had.
  */
 export function listedFins(children: readonly NativeAgent[] | undefined): ListedFin[] | undefined {
-  const fins = orderedChildren((children ?? []).filter((agent) => agent.child)).slice(0, LISTED_FINS).map((agent): ListedFin => ({
+  if (!children?.length) return undefined
+  const held = listedOfRoster.get(children)
+  if (held) return held.fins
+  const fins = orderedChildren(children.filter((agent) => agent.child)).slice(0, LISTED_FINS).map((agent): ListedFin => ({
     thread: agent.child!.thread,
     name: finNote(agent.child!.name ?? agent.title ?? FIN_WORD),
     harness: agent.provider,
@@ -420,8 +427,13 @@ export function listedFins(children: readonly NativeAgent[] | undefined): Listed
     state: listedFinState(childStateOf(agent)),
     startedAt: new Date(agent.startedAt ?? agent.observedAt).toISOString(),
   }))
-  return fins.length ? fins : undefined
+  const listed = fins.length ? fins : undefined
+  listedOfRoster.set(children, { fins: listed })
+  return listed
 }
+
+/** Each roster's Fins as listed (`listedFins`), kept for as long as the roster is. */
+const listedOfRoster = new WeakMap<readonly NativeAgent[], { fins: ListedFin[] | undefined }>()
 
 const childrenOfFins = new WeakMap<readonly ListedFin[], readonly NativeAgent[]>()
 
@@ -700,7 +712,7 @@ function capitalized(words: string): string {
 export const DIGEST_RESTART_HINT = "Fin reports may have arrived around the restart; agents_list shows each Fin's latest."
 
 /**
- * A change to an Apex's crew that happened outside its turn, said as a centred line in its transcript: a Fin moved to
+ * A change to an Apex's Shiver that happened outside its turn, said as a centred line in its transcript: a Fin moved to
  * another account or harness ("Docs pass moved to Claude (work)", why under it), or stopped by the person ("Token sweep
  * stopped by you"). A Fin it started or stopped itself is already its own tool row.
  */

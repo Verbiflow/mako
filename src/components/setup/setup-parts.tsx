@@ -124,7 +124,7 @@ function minutes(ms: number): string {
 }
 
 /**
- * An agent's ask, drawn as the crew card draws a Fin that needs you: the attention band, the asker's fin with its
+ * An agent's ask, drawn as the Shiver card draws a Fin that needs you: the attention band, the asker's fin with its
  * harness, what it wants and why in its words, and one-tap answers, the narrowest first.
  */
 export function AskRow({ folder, ask, now, compact }: { folder: string; ask: SetupAsk; now: number; compact: boolean }) {

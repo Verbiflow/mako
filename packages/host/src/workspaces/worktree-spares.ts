@@ -8,8 +8,10 @@ import { AppKeySchema } from "../contracts/thread-environments.js"
 import { PROJECT_CHECKOUT_FILE } from "../contracts/thread-worktrees.js"
 import { projectRepositories } from "../git/index.js"
 import { folderApp } from "./thread-environment.js"
+import { inputsDigest } from "./thread-recipe.js"
 import { CARRYING, CARRYING_STALE_MS, carryOutputs, cloneTracked, isSpareCheckout, removeBelowAgents, SPARE_PREFIX, type CheckoutSetup } from "./worktree-carry.js"
 import { PARALLEL_CHECKOUT, type Git } from "@mako/git"
+import { mapLimit } from "@mako/protocol/map-limit"
 
 /** Enough for two new Threads in a row without waiting; the one after that waits for a refill. */
 export const SPARES_PER_PROJECT = 2
@@ -222,9 +224,14 @@ export class WorktreeSpares {
     const kept: Spare[] = []
     for (const spare of await this.list(true)) {
       const orphaned = spare.state === "preparing" && !alive(spare.pid)
-      const wanted = Number(await readFile(this.wantedFile(spare.repoRoot), "utf8").catch(() => "0")) || spare.createdAt
-      if (orphaned || now - wanted > IDLE_MS || !existsSync(spare.path) || (await isLink(spare.path))) await this.discard(spare)
-      else {
+      if (orphaned || (await this.idle(spare.repoRoot, spare.createdAt, now)) || !existsSync(spare.path) || (await isLink(spare.path))) {
+        // Held, as a claim and a spare's last step are: one claimed meanwhile is a Thread's, and one still being made
+        // anywhere finds its record gone and gives its checkout back itself (`prepare`).
+        await this.holding(spare.id, async () => {
+          const current = await this.read(spare.id)
+          if (current) await this.discard(current)
+        }).catch(() => {})
+      } else {
         kept.push(spare)
         // Its install outlived the host that followed it.
         if (spare.install?.state === "running" && !alive(spare.install.host)) this.queue(spare.id, () => this.adopt(spare.id))
@@ -304,8 +311,13 @@ export class WorktreeSpares {
     try {
       for (;;) {
         let spares = await this.sweep()
+        // Gone idle since this fill was asked for (another host's tidy may have said so): its spares were just given back, and it gets none.
+        if (await this.idle(repoRoot, Date.now())) return
         // A project folder whose repositories changed since its spares were made: they mirror what it was. One claimed meanwhile is a Thread's.
-        const stale = spares.filter((spare) => spare.repoRoot === repoRoot && spare.state === "ready" && !fits(spare, repositories))
+        // So is one whose install outputs were cloned for inputs the main checkout no longer has (its lockfile
+        // changed): handed to a Thread, they'd be thrown away on the send and installed again, so it's made again here.
+        const outdated = await Promise.all(spares.map(async (spare) => spare.repoRoot === repoRoot && spare.state === "ready" && await this.outdated(spare)))
+        const stale = spares.filter((spare, index) => spare.repoRoot === repoRoot && spare.state === "ready" && (!fits(spare, repositories) || outdated[index]))
         for (const spare of stale) await this.holding(spare.id, async () => { if (await this.read(spare.id)) await this.discard(spare) })
         spares = spares.filter((spare) => !stale.includes(spare))
         // Installs given up on while the machine was busy, stopped to make room, or never started by a host that stopped, go again.
@@ -319,6 +331,30 @@ export class WorktreeSpares {
     } finally {
       await release()
     }
+  }
+
+  /** Whether the main checkout's install inputs are no longer the ones a spare's cloned outputs were made for. */
+  private async outdated(spare: Spare): Promise<boolean> {
+    for (const outputs of spare.outputs) {
+      const now = await inputsDigest(this.git, spare.repoRoot, outputs.inputs).catch(() => outputs.digest)
+      if (now !== outputs.digest) return true
+    }
+    return false
+  }
+
+  /**
+   * Looks again at every project that has spares: one let go, or made for a lockfile the main checkout has since
+   * changed, is made again. Runs at start and every hour (`tidy`), and a start or a composer set to Worktree asks
+   * the same of its own project (`want`).
+   */
+  async refill(): Promise<void> {
+    const now = Date.now()
+    const projects = new Set<string>()
+    for (const spare of await this.list()) {
+      // A project nobody starts Threads in anymore is giving its spares back (`sweep`), not getting new ones.
+      if (!(await this.idle(spare.repoRoot, spare.createdAt, now))) projects.add(spare.repoRoot)
+    }
+    for (const repoRoot of projects) this.filling = this.filling.then(() => this.fill(repoRoot)).catch(() => {})
   }
 
   /** One install at a time in this host, behind the others; a spare already queued here isn't queued twice. */
@@ -462,12 +498,21 @@ export class WorktreeSpares {
         // Names the project, so the spare reads its recipe as a Thread's checkout of it does.
         await writeFile(join(spare.path, PROJECT_CHECKOUT_FILE), `${JSON.stringify({ project: repoRoot })}\n`, { mode: 0o600 })
       }
-      for (const worktree of worktreesOf(spare)) {
-        await this.git.output(worktree.repoRoot, ["worktree", "add", "--detach", "--no-checkout", worktree.path, worktree.base], true)
-        await this.git.output(worktree.repoRoot, ["worktree", "lock", "--reason", LOCK_REASON, worktree.path])
-        await cloneTracked(this.git, worktree.repoRoot, worktree.path, worktree.base, true)
-        await this.git.output(worktree.path, [...PARALLEL_CHECKOUT, "reset", "--hard", "-q", worktree.base], true)
-      }
+      // A project folder's repositories each have their own turn for what their checkouts share, so their worktrees
+      // are made side by side, two at a time: one after another, a spare of two repositories took the sum of both.
+      // One that fails is thrown once none is still being written: the spare is given back whole, below.
+      const failed: Error[] = []
+      await mapLimit(worktreesOf(spare), 2, async (worktree) => {
+        try {
+          await this.git.output(worktree.repoRoot, ["worktree", "add", "--detach", "--no-checkout", worktree.path, worktree.base], true)
+          await this.git.output(worktree.repoRoot, ["worktree", "lock", "--reason", LOCK_REASON, worktree.path])
+          await cloneTracked(this.git, worktree.repoRoot, worktree.path, worktree.base, true)
+          await this.git.output(worktree.path, [...PARALLEL_CHECKOUT, "reset", "--hard", "-q", worktree.base], true)
+        } catch (error) {
+          failed.push(error instanceof Error ? error : new Error(String(error)))
+        }
+      })
+      if (failed[0]) throw failed[0]
       const written = Date.now()
       // The record goes with the spare to its Thread's path (`place`).
       const recipe = await this.setup?.recipe(spare.path)
@@ -478,9 +523,19 @@ export class WorktreeSpares {
       // second has passed moves the cost here, off the send.
       const pastSecond = Math.ceil((written + 1) / 1000) * 1000 - Date.now()
       if (pastSecond > 0) await delay(pastSecond)
-      for (const worktree of worktreesOf(spare)) await this.git.output(worktree.path, ["update-index", "-q", "--refresh"], true).catch(() => {})
-      spare = { ...spare, state: "ready", outputs: carried, tookMs: Math.round(performance.now() - began) }
-      await this.save(spare)
+      await mapLimit(worktreesOf(spare), 2, (worktree) => this.git.output(worktree.path, ["update-index", "-q", "--refresh"], true).catch(() => {}))
+      const ready: Spare = { ...spare, state: "ready", outputs: carried, tookMs: Math.round(performance.now() - began) }
+      // A sweep anywhere may have given it back while it was made (its project went idle): then it isn't saved again, but removed.
+      const kept = await this.holding(id, async () => {
+        if (!(await this.read(id))) return false
+        await this.save(ready)
+        return true
+      })
+      if (!kept) {
+        await this.discard(spare)
+        return
+      }
+      spare = ready
     } catch (error) {
       await this.discard(spare)
       throw error
@@ -526,6 +581,12 @@ export class WorktreeSpares {
       else if (prune) await rm(join(this.records, name), { force: true })
     }
     return spares
+  }
+
+  /** Whether nobody has wanted the project's spares for a day; `since` stands in when no start has ever said it did. */
+  private async idle(repoRoot: string, since: number, now = Date.now()): Promise<boolean> {
+    const wanted = Number(await readFile(this.wantedFile(repoRoot), "utf8").catch(() => "0")) || since
+    return now - wanted > IDLE_MS
   }
 
   private wantedFile(repoRoot: string): string {
@@ -658,7 +719,8 @@ export async function placeSpare(git: Git, spare: Spare, path: string, branch: s
       return
     }
     await rename(spare.path, path)
-    for (const worktree of placed) await git.output(worktree.repoRoot, ["worktree", "repair", worktree.path])
+    // Each repository is told where its own worktree is: different repositories, so none waits for another's turn.
+    await Promise.all(placed.map((worktree) => git.output(worktree.repoRoot, ["worktree", "repair", worktree.path])))
   }
   await (around ? around(move) : move())
   await Promise.all(placed.flatMap((worktree) => [

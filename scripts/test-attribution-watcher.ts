@@ -83,6 +83,8 @@ try {
     writeFileSync(join(root, "a.txt"), "one\nwhile closed\n")
     const [walked, lost] = [walks, losses]
     tracker = await LaptopTracker.open(ports, options)
+    // Asked for again, as the next turn or status there asks: that reads what changed while no tracker ran.
+    await tracker.track({ id: "repo", path: root, kind: "workspace" })
     await tracker.settled()
     // A busy fseventsd can leave the new watch deaf, and then it rescans after the history is read; the catch-up itself never walks.
     if (losses === lost) assert.equal(walks, walked, "caught up without walking the checkout")

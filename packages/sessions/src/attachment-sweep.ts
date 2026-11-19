@@ -355,6 +355,12 @@ export class AttachmentSweep {
   private child: NamesAside | null | false = null
   /** The largest the pass's child grew, for the report. */
   private childPeakRss = 0
+  /**
+   * Each folder as the pass in progress last listed it, until the pass moves a file in or out of it (`moved`): the
+   * sweep and the count read the same folders, and a stat of each of thirteen thousand files twice is most of a
+   * warm pass. Null outside a pass.
+   */
+  private listed: Map<string, AttachmentFile[]> | null = null
   /** The state file as read, whose fields this build doesn't name are written back as they were. */
   private raw: JsonValue = { version: FORMAT }
 
@@ -377,10 +383,12 @@ export class AttachmentSweep {
 
   async pass(control: AttachmentSweepControl, pass: AttachmentSweepPassOptions): Promise<AttachmentSweepReport> {
     this.childPeakRss = 0
+    this.listed = new Map()
     try {
       const report = await this.passOnce(control, pass)
       return this.childPeakRss ? { ...report, childPeakRss: this.childPeakRss } : report
     } finally {
+      this.listed = null
       if (this.child) this.child.close()
       this.child = null
     }
@@ -440,6 +448,7 @@ export class AttachmentSweep {
           if (this.named(folder, file, marks, readers)) {
             if (await this.restore(folder, file)) counts.restored += 1
           } else if (now - state.trashed[file.path]! >= this.keepTrashMs) {
+            this.moved(folder)
             await unlessGone(unlink(file.path))
             delete state.trashed[file.path]
             add(counts.deleted, file.bytes)
@@ -450,6 +459,7 @@ export class AttachmentSweep {
           if (control.stopped()) break
           await mkdir(folder.trash, { recursive: true })
           const to = join(folder.trash, file.name)
+          this.moved(folder)
           if (!(await unlessGone(rename(file.path, to)))) continue
           state.trashed[to] = now
           moved.push({ folder, file: { ...file, path: to } })
@@ -527,6 +537,7 @@ export class AttachmentSweep {
 
   /** Back from the trash; a copy written there since (the same name, so the same bytes or the same staging) is kept and the trash's dropped. */
   private async restore(folder: SweptFolder, file: AttachmentFile): Promise<boolean> {
+    this.moved(folder)
     const to = join(folder.path, file.name)
     const there = await lstat(to).catch(() => null)
     if (!there) {
@@ -570,8 +581,22 @@ export class AttachmentSweep {
     return due
   }
 
-  /** Every file in `folder`, with its size and times; nothing when there's no folder. */
+  /** The pass is about to move a file of `folder` or its trash: both are listed again when next asked for. */
+  private moved(folder: SweptFolder): void {
+    this.listed?.delete(folder.path)
+    this.listed?.delete(folder.trash)
+  }
+
+  /** Every file in `folder`, with its size and times; nothing when there's no folder. Listed once in a pass until the pass changes it. */
   private async files(folder: string): Promise<AttachmentFile[]> {
+    const known = this.listed?.get(folder)
+    if (known) return known
+    const files = await this.list(folder)
+    this.listed?.set(folder, files)
+    return files
+  }
+
+  private async list(folder: string): Promise<AttachmentFile[]> {
     let entries: Dirent[]
     try {
       entries = await readdir(folder, { withFileTypes: true })

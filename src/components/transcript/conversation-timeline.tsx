@@ -7,6 +7,7 @@ import {
   TranscriptSourceContext,
   type TranscriptSource,
 } from "./source-context"
+import { flushSync } from "react-dom"
 import type { ReactNode, Ref, WheelEvent as ReactWheelEvent, PointerEvent as ReactPointerEvent, TouchEvent as ReactTouchEvent } from "react"
 import {
   useCallback,
@@ -25,9 +26,13 @@ import {
 import { useNavigatorPrompts } from "@/components/transcript/navigator-prompts"
 import {
   LEAD_EXCHANGE_ID,
+  arrivedSince,
   continuedFrom,
+  endOf,
+  type LeftAt,
   isInterruptedNote,
   renamedExchanges,
+  drawnProse,
   turnRequest,
   type Exchange as ExchangeData,
 } from "@/lib/exchanges"
@@ -43,9 +48,14 @@ import { SCROLL_WRITE_EVENT, TRANSCRIPT_END_EVENT, TranscriptEndContext } from "
 import { READER_SCROLL_EVENT } from "@/lib/reader-scroll"
 import { CompactPresentationContext } from "./compact-presentation"
 import { rowChecker } from "./row-check"
-import { wokeAfterRest } from "@/lib/woke-after-rest"
+import { warmSettledProse } from "./settled-prose"
+import { wokeAfterRest, type WokeAfterRest } from "@/lib/woke-after-rest"
+import { keptEntries } from "@/lib/kept-entries"
+import { RowHeights, estimateRow, sameFacts, type KeptRow, type RowFacts } from "@/lib/row-heights"
 
 const NEAR_BOTTOM = 96
+/** How far below the pane's top a message just sent is placed (`sentTurn`). */
+const SENT_TOP = 24
 /**
  * How far a reader moves to mean it. Fingers resting on a trackpad send a few pixels each way, which is no leaving the
  * end; a flick passes this in a few events, a wheel's notch in one. Short of the 60 px a slow move up is kept at.
@@ -85,6 +95,17 @@ const LOAD_AHEAD = 720
  */
 const INITIAL_TURNS = 30
 const MORE_TURNS = 30
+/**
+ * How many of those turns are drawn in the commit that opens a conversation, before the pane has been measured, and
+ * how many more each idle moment after it adds. Thirty turns parsed and rendered in the click was most of what an open
+ * cost, for a pane that shows two or three of them: the rest fill in above the reader while nothing else wants the
+ * page, and all at once the moment the reader moves (`drawAll`). Before the first paint the count is raised until the pane is covered with a pane's worth to spare
+ * (`layOutEnd`), so the newest turn paints at the end and what mounts above it afterwards moves nothing.
+ */
+const FIRST_TURNS = 6
+const IDLE_TURNS = 2
+/** How many turns past the mounted rows of a window have their answers parsed ahead (`warmSettledProse`), each way. */
+const PARSED_AHEAD = 4
 
 /**
  * Past either, only the turns near the viewport mount. A session of few prompts can hold thousands of tool calls,
@@ -94,37 +115,114 @@ const WINDOWED_TURNS = 40
 const WINDOWED_ITEMS = 120
 
 /**
- * What each windowed transcript's rows measured, by row key, at the window's width, for the few read last. Opened
- * again, the virtualizer starts from these as its own measurements (`seedMeasured`), so its rows are placed at those
- * sizes in the first frame: its measurements arrive a frame after it paints, and placed at the estimate the newest turn
- * painted, then jumped as they landed. They can't be its estimates: a row measured at its estimate is never stored, so
- * when the estimate moved (these sizes replaced, a new width) every such row moved with it, and no resize said so.
+ * What each windowed transcript's rows measured, by row key, at the window's width (`RowHeights`): for the window's
+ * life, and across a reload. Opened again, the virtualizer starts from these as its own measurements (`seedMeasured`),
+ * so its rows are placed at those sizes in the first frame: its measurements arrive a frame after it paints, and
+ * placed at the estimate the newest turn painted, then jumped as they landed. They can't be its estimates: a row
+ * measured at its estimate is never stored, so when the estimate moved every such row moved with it, and no resize
+ * said so. A row that no longer holds what it held when it was measured (`rowFacts`) is measured again.
  */
 type RowSizes = Virtualizer<HTMLDivElement, Element>["itemSizeCache"]
-const measuredRows = new Map<string, { width: number; sizes: RowSizes }>()
-const MEASURED_KEPT = 8
+type RowKey = RowSizes extends Map<infer Key, number> ? Key : never
+/** The window's storage, where it has one it may use: a page refused it keeps its sizes for its own life only. */
+function windowStorage(): Storage | undefined {
+  try {
+    return globalThis.localStorage
+  } catch {
+    return undefined
+  }
+}
+const rowHeights = new RowHeights(windowStorage())
+/** The window's width, which the sizes are kept by; none where a transcript is drawn without a window (a test's render). */
+const windowWidth = () => globalThis.innerWidth ?? 0
+/** A turn nothing can be told about (a released one) stands at this until it's measured. */
 const ESTIMATED_ROW = 360
 /** The column's `gap-7` between turns, kept by the virtualizer between windowed rows. */
 const ROW_GAP = 28
 /** A row can grow with nothing in the document changing (an image's size, a font): how long that can go unseen. */
 const ROW_CHECK_MS = 1_000
+/** How often, at most, a transcript's measured rows are kept while it's read, and how soon after they're written. */
+const KEEP_ROWS_MS = 2_000
 
-function keepMeasured(source: string, sizes: RowSizes): void {
-  if (!sizes.size) return
-  measuredRows.delete(source)
-  measuredRows.set(source, { width: innerWidth, sizes })
-  for (const oldest of measuredRows.keys()) {
-    if (measuredRows.size <= MEASURED_KEPT) break
-    measuredRows.delete(oldest)
+/** What a turn's height comes from, read once for the turn as it stands. */
+const turnFacts = new WeakMap<ExchangeData, RowFacts>()
+function rowFacts(exchange: ExchangeData): RowFacts {
+  let facts = turnFacts.get(exchange)
+  if (!facts) {
+    facts = { chars: 0, lines: 0, tools: 0 }
+    for (const message of exchange.prompt ? [exchange.prompt, ...exchange.response] : exchange.response)
+      for (const block of message.blocks) {
+        if (block.type === "toolCall") facts.tools += 1
+        else if (block.type === "text") {
+          facts.chars += block.text.length
+          for (let at = block.text.indexOf("\n"); at >= 0; at = block.text.indexOf("\n", at + 1)) facts.lines += 1
+        }
+      }
+    turnFacts.set(exchange, facts)
+  }
+  return facts
+}
+
+let savingRows: ReturnType<typeof setTimeout> | undefined
+
+function keepMeasured(source: string, sizes: RowSizes, exchanges: readonly ExchangeData[], keyOf: (index: number) => RowKey): void {
+  const rows = new Map<string, KeptRow>()
+  for (let index = 0; index < exchanges.length; index += 1) {
+    const exchange = exchanges[index]!
+    const size = exchange.unloaded === undefined ? sizes.get(keyOf(index)) : undefined
+    if (size !== undefined) rows.set(String(keyOf(index)), { size, ...rowFacts(exchange) })
+  }
+  rowHeights.keep(source, windowWidth(), rows)
+  savingRows ??= setTimeout(() => {
+    savingRows = undefined
+    rowHeights.save()
+  }, KEEP_ROWS_MS)
+}
+
+/** Each row kept at this width that still holds what it held stands at its size; one that changed is measured again. */
+function seedMeasured(source: string, sizes: RowSizes, exchanges: readonly ExchangeData[], keyOf: (index: number) => RowKey): void {
+  const kept = rowHeights.kept(source, windowWidth())
+  if (!kept) return
+  for (let index = 0; index < exchanges.length; index += 1) {
+    // A released turn holds nothing to compare: its placeholder stands at the height its row last had.
+    if (exchanges[index]!.unloaded !== undefined) continue
+    const key = keyOf(index)
+    const row = kept.get(String(key))
+    if (!row) continue
+    if (!sameFacts(row, rowFacts(exchanges[index]!))) sizes.delete(key)
+    else if (!sizes.has(key)) sizes.set(key, row.size)
   }
 }
 
-function seedMeasured(source: string, sizes: RowSizes): void {
-  const kept = measuredRows.get(source)
-  if (kept?.width !== innerWidth || kept.sizes === sizes) return
-  for (const [key, size] of kept.sizes) if (!sizes.has(key)) sizes.set(key, size)
+/** A turn's messages and calls, counted once for the turn as it stands: a settled turn is the same object in every frame. */
+const turnItemCounts = new WeakMap<ExchangeData, number>()
+
+/** Whether the turns hold more than `WINDOWED_ITEMS` messages and calls, counting no further than it takes to say so. */
+function pastWindowedItems(exchanges: readonly ExchangeData[]): boolean {
+  let items = 0
+  for (const exchange of exchanges) {
+    let count = turnItemCounts.get(exchange)
+    if (count === undefined) {
+      count = exchange.system.length + exchange.response.reduce((blocks, message) => blocks + message.blocks.length, 0)
+      turnItemCounts.set(exchange, count)
+    }
+    items += count
+    if (items > WINDOWED_ITEMS) return true
+  }
+  return false
 }
 
+/** When the page next has nothing to do, or its next task where a browser has no idle callback (WebKit). */
+function whenIdle(work: () => void): () => void {
+  if ("requestIdleCallback" in globalThis) {
+    const idle = requestIdleCallback(work, { timeout: 200 })
+    return () => cancelIdleCallback(idle)
+  }
+  const timer = setTimeout(work, 32)
+  return () => clearTimeout(timer)
+}
+
+const NO_WOKE: ReadonlyMap<string, WokeAfterRest> = new Map()
 const NO_KEYS: ReadonlyMap<string, string> = new Map()
 const NO_RENAMES: ReadonlyMap<string, string> = new Map()
 
@@ -291,7 +389,7 @@ function captureAnchor(
  * pane render in full until the frame after the first paint has recorded
  * their sizes; `contain-intrinsic-size: auto` keeps them from then on.
  */
-function layOutEnd(node: HTMLDivElement): () => void {
+function layOutEnd(node: HTMLDivElement) {
   const turns = node.querySelectorAll<HTMLElement>("[data-exchange]")
   const settling: HTMLElement[] = []
   let covered = 0
@@ -310,9 +408,13 @@ function layOutEnd(node: HTMLDivElement): () => void {
       for (const turn of settling) turn.removeAttribute("data-settling")
     })
   })
-  return () => {
-    cancelAnimationFrame(frame)
-    for (const turn of settling) turn.removeAttribute("data-settling")
+  return {
+    release: () => {
+      cancelAnimationFrame(frame)
+      for (const turn of settling) turn.removeAttribute("data-settling")
+    },
+    // The turns mounted above the ones that fill the pane, or fewer than none while those don't fill it yet.
+    spare: covered < node.clientHeight ? -1 : turns.length - settling.length,
   }
 }
 
@@ -498,9 +600,11 @@ export function ConversationTimeline({
   makoPrompts,
   carriedHistories,
   askedAt,
+  sentId,
   failedId,
   empty,
   footer,
+  beside,
   opening,
   hasEarlier = false,
   loadingEarlier = false,
@@ -520,9 +624,13 @@ export function ConversationTimeline({
   carriedHistories?: ReadonlyMap<string, CarriedHistory>
   /** When each request was sent, by request id: a live prompt's time, which its blocks don't carry. */
   askedAt?: ReadonlyMap<string, number>
+  /** The turn the person's newest message opened, by its id: arriving at the end, it's placed near the top (`sentTurn`). */
+  sentId?: string
   failedId?: string
   empty: ReactNode
   footer?: ReactNode
+  /** What stands beside "Jump to latest" while the reader is away from the end: the conversation's activity pill. */
+  beside?: ReactNode
   /** The transcript's first line in place of "Beginning of conversation", once its start is on screen. */
   opening?: ReactNode
   hasEarlier?: boolean
@@ -579,9 +687,7 @@ export function ConversationTimeline({
    */
   const sized = useRef<{ identity: string; windowed: boolean; drawn?: number; waitingSince?: number }>({ identity, windowed: false })
   if (sized.current.identity !== identity) sized.current = { identity, windowed: false }
-  if (!sized.current.windowed && (exchanges.length > WINDOWED_TURNS ||
-      exchanges.reduce((items, exchange) => items + exchange.system.length +
-        exchange.response.reduce((blocks, message) => blocks + message.blocks.length, 0), 0) > WINDOWED_ITEMS)) {
+  if (!sized.current.windowed && (exchanges.length > WINDOWED_TURNS || pastWindowedItems(exchanges))) {
     const since = sized.current.waitingSince ?? performance.now()
     const drawn = sized.current.drawn
     if (drawn === undefined || exchanges.length - drawn > 1 || !inputMoving() || performance.now() - since >= CROSSING_WAIT_MS)
@@ -624,6 +730,8 @@ export function ConversationTimeline({
    * reading position, which must follow it.
    */
   const ownScrollTop = useRef<number | null>(null)
+  /** That offset, kept after its scroll event has been read: what the row check tells the transcript's own scroll by. */
+  const lastOwnScrollTop = useRef<number | null>(null)
   const correction = useRef<{ node: HTMLDivElement; anchor: ScrollAnchor; top: number; frame: number; revision: number } | null>(null)
   const restore = useRef<ScrollAnchor | null>(null)
   const readingAnchor = useRef<ScrollAnchor | null>(null)
@@ -695,6 +803,7 @@ export function ConversationTimeline({
   const owned = useCallback((node: HTMLDivElement) => {
     lastScrollTop.current = node.scrollTop
     ownScrollTop.current = node.scrollTop
+    lastOwnScrollTop.current = node.scrollTop
     if (correction.current?.node === node) {
       correction.current.top = node.scrollTop
       settleCorrection()
@@ -709,6 +818,8 @@ export function ConversationTimeline({
   const paneKey = persistentPane ?? readerPane.current
   const bookmarkRestore = useRef<TranscriptReading["anchor"]>(undefined)
   const reportReading = useRef<() => void>(() => {})
+  /** The same report for what the transcript did itself (the end followed as an answer grows): said at most once a second. */
+  const reportGrowth = useRef<() => void>(() => {})
   const heights = useRef(new Map<string, number>())
   const direction = useRef<"up" | "down">("down")
   const readingSource = source.liveId ? liveReadingSource(source.liveId)
@@ -728,6 +839,11 @@ export function ConversationTimeline({
   /** The latest proximity check, for callers that outlive one render. */
   const wake = useRef<() => void>(() => {})
   const [showJump, setShowJump] = useState(false)
+  // Where the transcript ended when the reader left its end, so the way back says how much arrived since.
+  const [leftAt, setLeftAt] = useState<LeftAt | null>(null)
+  if (!showJump && leftAt !== null) setLeftAt(null)
+  else if (showJump && leftAt === null) setLeftAt(endOf(exchanges))
+  const arrived = showJump && leftAt ? arrivedSince(exchanges, leftAt) : 0
   const transcriptEnd = useContext(TranscriptEndContext)
   // A phone's width keeps no rail of turns: its gutter would take a tenth of the screen, and it reads back by hover.
   const navigates = useContext(CompactPresentationContext)?.navigator !== false
@@ -805,6 +921,36 @@ export function ConversationTimeline({
   const [everMore, setEverMore] = useState(false)
   const hidden = windowed ? 0 : Math.max(0, exchanges.length - tail.limit)
   const shown = hidden > 0 ? exchanges.slice(hidden) : exchanges
+  /*
+   * Of the turns shown, the ones drawn so far: from `first` on, or all of them (`FIRST_TURNS`). Named by its id, so a
+   * turn arriving at the end or the count settling at the front leaves the same turns drawn. A reader coming back to a
+   * place up the transcript gets all of them at once: that place is among the ones that would wait.
+   */
+  const [stage, setStage] = useState<{ identity: string; first: string | null; fills: number }>({ identity: "", first: null, fills: 0 })
+  let undrawn = 0
+  if (!windowed && shown.length > 0) {
+    if (stage.identity !== identity) {
+      const bookmark = transcriptReaders.bookmark(readingSource, paneKey)
+      undrawn = shown.length <= FIRST_TURNS || (bookmark && !bookmark.following && bookmark.anchor) ? 0 : shown.length - FIRST_TURNS
+      setStage({ identity, first: undrawn ? shown[undrawn]!.id : null, fills: 0 })
+    } else if (stage.first !== null) undrawn = Math.max(0, shown.findIndex((exchange) => exchange.id === stage.first))
+  }
+  const drawn = undrawn > 0 ? shown.slice(undrawn) : shown
+  const staging = undrawn > 0
+  /** The turns shown as this render has them, for the idle moment that draws more of them. */
+  const staged = useRef({ shown, undrawn })
+  staged.current = { shown, undrawn }
+  /** What the end's last layout found (`layOutEnd`): the turns drawn above those that fill the pane. */
+  const endSpare = useRef(0)
+  /**
+   * The reader has begun to move: every turn still waiting is drawn now, in this event, so wherever their input takes
+   * them the turn is there, as it was when an open drew them all. It costs that one input what the open was spared,
+   * and only for a reader who moves in the moments before the idle slices finish.
+   */
+  const drawAll = useCallback(() => {
+    if (staged.current.undrawn === 0) return
+    flushSync(() => setStage((current) => (current.first === null ? current : { ...current, first: null })))
+  }, [])
   const isEmpty = exchanges.length === 0
   const more = hidden > 0 || hasEarlier
   const edge = more || everMore || exchanges.length > INITIAL_TURNS
@@ -822,9 +968,30 @@ export function ConversationTimeline({
     let height = 0
     for (let index = 0; index < exchanges.length; index += 1) {
       const key = rowKey(index)
-      if (!rows.itemSizeCache.has(key)) height += ESTIMATED_ROW
+      if (!rows.itemSizeCache.has(key)) height += estimateTurn(index)
     }
     return height
+  }
+  /*
+   * A row never measured is placed at what its turn's words and calls come to, at the pixels a character has been
+   * taking in this window (`RowHeights.pxPerChar`), read once for the conversation shown: an estimate that moved
+   * while its rows stood on it would move them. One constant for every turn left a long transcript's column wrong by
+   * most of its height, and corrected it a row at a time as a reader scrolled.
+   */
+  const pxPerChar = useRef({ identity: "", value: 0, made: new Map<RowKey, number>() })
+  if (pxPerChar.current.identity !== identity) pxPerChar.current = { identity, value: rowHeights.pxPerChar(windowWidth()), made: new Map() }
+  // A row keeps the estimate it was first given: a turn released from memory holds nothing to estimate from, and
+  // given another, every unmeasured row above a reader moved at once as memory was trimmed.
+  const estimateTurn = (index: number) => {
+    const exchange = exchanges[index]
+    if (!exchange) return ESTIMATED_ROW
+    const key = rowKey(index)
+    let estimate = pxPerChar.current.made.get(key)
+    if (estimate === undefined) {
+      estimate = exchange.unloaded !== undefined ? ESTIMATED_ROW : estimateRow(rowFacts(exchange), pxPerChar.current.value)
+      pxPerChar.current.made.set(key, estimate)
+    }
+    return estimate
   }
   /*
    * A row's new size is placed in the frame it is laid out, never the next: the resize observer's sizes apply in its
@@ -844,9 +1011,10 @@ export function ConversationTimeline({
     getScrollElement: () => viewport.current,
     initialRect: crossingRect.current,
     initialOffset: () => crossingOffset.current,
-    estimateSize: () => ESTIMATED_ROW,
+    estimateSize: (index) => estimateTurn(index),
     getItemKey: (index) => rowKey(index),
-    overscan: 6,
+    // Two turns each way: six drew, parsed and laid out a dozen turns nobody was looking at on every open and jump.
+    overscan: 2,
     gap: ROW_GAP,
     scrollMargin: edge ? 80 : 24,
     directDomUpdates: true,
@@ -889,7 +1057,7 @@ export function ConversationTimeline({
     if (!anchor) return
     let start = rows.options.scrollMargin
     for (let index = 0; index < anchor.index; index += 1)
-      start += (rows.itemSizeCache.get(rowKey(index)) ?? ESTIMATED_ROW) + ROW_GAP
+      start += (rows.itemSizeCache.get(rowKey(index)) ?? estimateTurn(index)) + ROW_GAP
     crossingRect.current.width = node.clientWidth
     crossingRect.current.height = node.clientHeight
     crossingOffset.current = Math.max(0, start + view.top - anchor.top)
@@ -901,18 +1069,52 @@ export function ConversationTimeline({
     crossingRect.current.width = crossingRect.current.height = crossingOffset.current = 0
   } else if (seeded.current !== identity) {
     seeded.current = identity
-    seedMeasured(readingSource, rows.itemSizeCache)
+    seedMeasured(readingSource, rows.itemSizeCache, exchanges, rowKey)
     carryIntoWindow()
   }
-  const mountedRows = useRef<() => boolean>(() => false)
-  mountedRows.current = () => rowCheck.check({
+  const mountedRows = useRef<(only?: ReadonlySet<Element>) => boolean>(() => false)
+  mountedRows.current = (only) => rowCheck.check({
     rows,
     list: viewport.current?.querySelector("[data-virtual-transcript]") ?? null,
     keyOf: rowKey,
     partsOf: (index) => exchanges[index]!.response.length,
     streaming: (index) => exchanges[index]!.id === streamingId,
     following: pinned.current,
-  })
+  }, only)
+  /*
+   * A message the person just sent is placed near the pane's top (`SENT_TOP`), and its answer grows under it with
+   * nothing moving: the reader starts each answer at its first line, not by chasing its last. It's the end being
+   * followed, as ever, over room kept after the column (`sendRoom`): as tall as it takes for the end of the scroller
+   * to put the sent turn's top there, and shorter by every line the answer adds, so the scroller's height stands
+   * still while it fills. Once the turn fills the pane the room is nothing, and the end is followed as it always
+   * was, without a step between the two. Every rule of following holds through it: only the reader lets go.
+   * The room is the transcript's while it's shown: a Thread opened lands on its newest turn at its end.
+   */
+  const sendRoom = useRef<HTMLDivElement>(null)
+  const sentTurn = useRef<string | null>(null)
+  const keepSendRoom = useCallback((node: HTMLDivElement) => {
+    const room = sendRoom.current
+    const id = sentTurn.current
+    if (!room || !id) return
+    const view = node.getBoundingClientRect()
+    const place = room.getBoundingClientRect()
+    const held = place.height
+    const turn = node.querySelector(`[data-exchange="${CSS.escape(id)}"]`)
+    if (!turn) {
+      // Its turn left the page (a window's reader far up): room nobody can see goes, and seen, it stays as it is.
+      if (held && place.top < view.bottom) return
+      room.style.height = "0px"
+      sentTurn.current = null
+      return
+    }
+    // From the turn's top to the scroller's end, less the room itself: what the scroller holds for the pane to show.
+    const below = place.top - turn.getBoundingClientRect().top
+    const after = view.top - node.scrollTop + node.scrollHeight - place.bottom
+    // To the fraction of a pixel the boxes are at: rounded, the turn sat half a pixel off and stepped as it filled.
+    const want = Math.max(0, node.clientHeight - SENT_TOP - below - after)
+    if (Math.abs(want - held) > 0.05) room.style.height = `${want}px`
+    if (!want) sentTurn.current = null
+  }, [])
   /** Sends the virtualizer toward a row or the end, which it keeps reconciling toward until `endSeek`. */
   const seek = useCallback((target: number | "end") => {
     seeking.current = true
@@ -940,7 +1142,7 @@ export function ConversationTimeline({
       // A resize can arrive before the scroll event for this frame. Preserve the movement not yet reported as well as
       // the reader's place in the media. Not the reader's input alone: while an anchor holds, the scroller anchors
       // nothing itself (`overflow-anchor: none`) and this file reports its own writes as it makes them (`owned`), so a
-      // change it hasn't heard of is a scroll, the reader's or one made for them, such as the crew card's "Fins need you"
+      // change it hasn't heard of is a scroll, the reader's or one made for them, such as the Shiver card's "Fins need you"
       // line bringing the card back. Counted as layout, the hold put the old point back over it, a frame before that
       // scroll's event. Left out are what it can't tell apart: the virtualizer's own writes while windowed, and the
       // browser's clamp at a newly shorter end.
@@ -998,6 +1200,8 @@ export function ConversationTimeline({
     setActiveTurn((current) => (current ? follow(current) : current))
     // Turns can trade places at the same total height, which no resize reports.
     if (viewport.current && !pinned.current) holdReader(viewport.current)
+    // The turns a report names go by other ids now.
+    reportReading.current()
   }, [identity, exchanges, keys, renamed, holdReader])
   const previousWindowed = useRef(windowed)
   useLayoutEffect(() => {
@@ -1044,6 +1248,39 @@ export function ConversationTimeline({
   const mountedKeys = windowed
     ? virtualRows.map((row) => row.key).join("\0")
     : ""
+  /*
+   * The rows kept mounted around the pane (the overscan) are left to the browser to skip while they're out of view
+   * (`data-sized`: `content-visibility: auto` in index.css), each standing at the height it was just laid out at, so
+   * it costs no layout or paint until it's read and the virtualizer finds it the size it placed. A row in view is laid
+   * out for real. Marked in the next frame's first moment, by hand: marked in the render a row's measurement caused,
+   * it changed size under the observer delivering that measurement, which Chromium reports as a resize loop.
+   */
+  const inView = rows.range
+  const firstInView = windowed ? inView?.startIndex : undefined
+  const lastInView = windowed ? inView?.endIndex : undefined
+  useLayoutEffect(() => {
+    if (firstInView === undefined || lastInView === undefined) return
+    const frame = requestAnimationFrame(() => {
+      const list = viewport.current?.querySelector("[data-virtual-transcript]")
+      if (!list) return
+      const skip: [HTMLElement, number][] = []
+      const draw: HTMLElement[] = []
+      for (const row of list.children) {
+        if (!(row instanceof HTMLElement)) continue
+        const index = Number(row.dataset.index)
+        const out = index < firstInView || index > lastInView
+        if (out && !row.hasAttribute("data-sized")) skip.push([row, row.getBoundingClientRect().height])
+        else if (!out && row.hasAttribute("data-sized")) draw.push(row)
+      }
+      for (const [row, height] of skip) {
+        if (!height) continue
+        row.style.setProperty("--row-size", `${height}px`)
+        row.setAttribute("data-sized", "")
+      }
+      for (const row of draw) row.removeAttribute("data-sized")
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [firstInView, lastInView, mountedKeys])
 
   useLayoutEffect(() => {
     const node = viewport.current,
@@ -1067,7 +1304,7 @@ export function ConversationTimeline({
     owned(node)
     readingAnchor.current = snapshot
     restoringReader.current = null
-  }, [mountedKeys, shown.length, endSeek, owned])
+  }, [mountedKeys, shown.length, undrawn, endSeek, owned])
 
   useEffect(() => {
     if (more) setEverMore(true)
@@ -1115,6 +1352,7 @@ export function ConversationTimeline({
     const node = viewport.current
     if (!node) return
     const readerScroll = () => {
+      drawAll()
       endSeek(node)
       bookmarkRestore.current = undefined
       if (!awaitingEarlier.current) node.removeAttribute("data-preserve-scroll")
@@ -1129,7 +1367,7 @@ export function ConversationTimeline({
     }
     node.addEventListener(READER_SCROLL_EVENT, readerScroll)
     return () => node.removeEventListener(READER_SCROLL_EVENT, readerScroll)
-  }, [endSeek, displaceCorrection, settleCorrection, settleInput])
+  }, [endSeek, displaceCorrection, settleCorrection, settleInput, drawAll])
   useEffect(() => transcriptEnd?.away(showJump), [transcriptEnd, showJump])
   useEffect(() => {
     if (!transcriptEnd) return
@@ -1193,7 +1431,9 @@ export function ConversationTimeline({
     // A reader scrolling again after a stalled request asks once more; the
     // edge observer alone stays silent while the edge never left view.
     if (userScrolling.current) wake.current()
-    reportReading.current()
+    // The end followed as an answer grows is the transcript's own write, a frame apart for as long as it streams.
+    if (ours && pinned.current) reportGrowth.current()
+    else reportReading.current()
   }, [settleInput, displaceCorrection, settleCorrection])
 
   useEffect(() => {
@@ -1210,7 +1450,8 @@ export function ConversationTimeline({
 
   const onWheel = useCallback(
     (event: ReactWheelEvent<HTMLDivElement>) => {
-      // The crew card's list or a code block taking the wheel: it scrolls that, and the transcript is left as it was.
+      drawAll()
+      // The Shiver card's list or a code block taking the wheel: it scrolls that, and the transcript is left as it was.
       if (viewport.current && wheelTakenInside(event.target, viewport.current, event.deltaY)) innerWheel.current = true
       if (innerWheel.current) return settleInput()
       if (viewport.current) endSeek(viewport.current)
@@ -1241,7 +1482,7 @@ export function ConversationTimeline({
       if (event.deltaY < 0) wake.current()
       reportReading.current()
     },
-    [endSeek, settleInput, displaceCorrection, settleCorrection]
+    [endSeek, settleInput, displaceCorrection, settleCorrection, drawAll]
   )
 
   /** The last finger lifts: a glide may go on, and the end, if followed, is caught up with. */
@@ -1251,6 +1492,7 @@ export function ConversationTimeline({
   }, [])
 
   const onPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    drawAll()
     // Preview controls may change layout without scrolling. Keep the media
     // anchor while a mouse click loads, folds, or starts a preview.
     if (event.pointerType === "mouse" && event.target instanceof Element &&
@@ -1291,7 +1533,7 @@ export function ConversationTimeline({
     stalled.current = false
     if (!awaitingEarlier.current) restore.current = null
     reportReading.current()
-  }, [endSeek, displaceCorrection, settleCorrection])
+  }, [endSeek, displaceCorrection, settleCorrection, drawAll])
 
   useEffect(() => {
     const node = viewport.current
@@ -1315,7 +1557,7 @@ export function ConversationTimeline({
       observer.observe(element)
     }
     return () => observer.disconnect()
-  }, [identity, shown.length, mountedKeys])
+  }, [identity, shown.length, undrawn, mountedKeys])
 
   // One lease per pane and source while both hold. A stream renders the transcript again every batch, and a lease
   // made again each time has no reading until the next frame, which memory cleanup must read as "keep everything".
@@ -1329,18 +1571,40 @@ export function ConversationTimeline({
     }
   }, [readingSource, paneKey])
 
+  /** What a report reads of the last render, so the report itself is set up once per pane and source. */
+  const reported = useRef({ exchanges, historyBlocks, historyBase, rowKey })
+  reported.current = { exchanges, historyBlocks, historyBase, rowKey }
+  /*
+   * What the pane is reading, said to its lease: on the reader's scroll and input, a resize of the pane, a selection
+   * or focus moving, and whenever the turns on the page change (the effect after this one). Never for each frame of a stream:
+   * set up again for every paced frame, it made a resize observer and three listeners each time and then read every
+   * mounted turn's box three times and hit-tested the pane's middle up to thirteen times, for a reading that had not
+   * moved. While an answer grows under a reader following its end the report is paced to a second (`growth`), enough
+   * for the navigator's mark to follow the answer past the pane's middle.
+   */
   useLayoutEffect(() => {
     const node = viewport.current
     const lease = readingLease.current
     if (!node || !lease) return
     let frame = 0
+    let paced: ReturnType<typeof setTimeout> | undefined
+    /** When this transcript's measured rows were last kept (`keepMeasured`): every row is read for it. */
+    let keptRowsAt = -KEEP_ROWS_MS
+    /** Whether the last report said the end was followed: only then is the next one of the transcript's own doing. */
+    let followed = false
     const report = () => {
       frame = 0
+      clearTimeout(paced)
+      paced = undefined
+      const { exchanges, historyBlocks, historyBase } = reported.current
       const bounds = node.getBoundingClientRect()
       // A collapsed/covered pane hasn't proved a new reading location. The
       // lease remains conservative until the actual transcript is painted.
       if (!node.clientHeight || !node.clientWidth || !node.isConnected) return
-      if (windowed) keepMeasured(readingSource, rows.itemSizeCache)
+      if (windowed && performance.now() - keptRowsAt >= KEEP_ROWS_MS) {
+        keptRowsAt = performance.now()
+        keepMeasured(readingSource, rows.itemSizeCache, exchanges, reported.current.rowKey)
+      }
       const elements = Array.from(node.querySelectorAll<HTMLElement>("[data-exchange]"))
       const visible = elements.filter(element => {
         const rect = element.getBoundingClientRect()
@@ -1382,15 +1646,32 @@ export function ConversationTimeline({
       // Focus resting in a turn keeps that turn; it isn't a reason to keep every other. A selection may span any of them.
       const focused = document.activeElement?.closest("[data-exchange]")
       const focusedTurn = focused && node.contains(focused) ? focused.getAttribute("data-exchange") : null
+      const moving = userScrolling.current || scrollMotion.current || awaitingEarlier.current || !!pendingJump.current || !!bookmarkRestore.current
+      followed = pinned.current && !moving
+      // Nothing may come to say a jump or a page has since landed: what was said as moving is said again within a second.
+      if (moving) paced = setTimeout(schedule, ROW_CHECK_MS)
       lease.report({ visible: ids, nearby: focusedTurn ? [...nearby, focusedTurn] : nearby,
         anchor: anchorTurn ? { turn: anchorTurn, offset: snapshot.exchangeOffset ?? 0, block } : undefined,
-        following: pinned.current, moving: userScrolling.current || scrollMotion.current || awaitingEarlier.current || !!pendingJump.current || !!bookmarkRestore.current,
+        following: pinned.current, moving,
         interacting: selecting, window: historyBlocks !== undefined && historyBase !== undefined ? { blocks: historyBlocks, base: historyBase } : undefined })
       if (anchorTurn) setActiveTurn(current => current === anchorTurn ? current : anchorTurn)
     }
     const schedule = () => { if (!frame) frame = requestAnimationFrame(report) }
+    // Anything but a followed end growing is said at once: the reader left it, or nothing has been said yet.
+    const growth = () => {
+      if (!followed || !pinned.current) schedule()
+      else paced ??= setTimeout(() => {
+        paced = undefined
+        schedule()
+      }, ROW_CHECK_MS)
+    }
     reportReading.current = schedule
-    const resize = new ResizeObserver(schedule)
+    reportGrowth.current = growth
+    const resize = new ResizeObserver((entries) => {
+      // The pane's own size is the reader's doing or the window's; the column's is the transcript growing.
+      if (entries.some((entry) => entry.target === node)) schedule()
+      else growth()
+    })
     resize.observe(node)
     if (node.firstElementChild) resize.observe(node.firstElementChild)
     document.addEventListener("selectionchange", schedule)
@@ -1399,12 +1680,37 @@ export function ConversationTimeline({
     schedule()
     return () => {
       cancelAnimationFrame(frame)
+      clearTimeout(paced)
+      reportReading.current = () => {}
+      reportGrowth.current = () => {}
       resize.disconnect()
       document.removeEventListener("selectionchange", schedule)
       node.removeEventListener("focusin", schedule)
       node.removeEventListener("focusout", schedule)
     }
-  }, [readingSource, exchanges, mountedKeys, paneKey, historyBlocks, historyBase, windowed, rows])
+    // `identity` and `isEmpty`: the column observed is that conversation's, once it has turns.
+  }, [readingSource, paneKey, windowed, rows, identity, isEmpty])
+
+  // The answers of the turns about to mount are parsed ahead, in the prose worker: the ones waiting for an idle moment
+  // after an open, nearest the end first, and the few either side of a window's mounted rows, nearest first.
+  const firstRow = windowed ? virtualRows[0]?.index : undefined
+  const lastRow = windowed ? virtualRows.at(-1)?.index : undefined
+  useEffect(() => {
+    const { exchanges } = reported.current
+    const coming: number[] = []
+    if (firstRow !== undefined && lastRow !== undefined)
+      for (let step = 1; step <= PARSED_AHEAD; step += 1) coming.push(firstRow - step, lastRow + step)
+    else for (let index = hidden + undrawn - 1; index >= hidden; index -= 1) coming.push(index)
+    const texts = coming.flatMap((index) => drawnProse(exchanges[index]?.response ?? []))
+    if (texts.length) warmSettledProse(texts)
+  }, [firstRow, lastRow, hidden, undrawn])
+
+  // The turns on the page changed, or what a report says of them did: a turn arrived or left, a stream began or
+  // ended, rows mounted, more of the transcript drawn, the history's window moved.
+  const turnCount = exchanges.length
+  useLayoutEffect(() => {
+    reportReading.current()
+  }, [turnCount, streamingId, mountedKeys, undrawn, hidden, historyBlocks, historyBase])
 
   useEffect(() => {
     const pane = readerPane.current
@@ -1437,11 +1743,51 @@ export function ConversationTimeline({
   useLayoutEffect(() => {
     const node = viewport.current
     if (!node || isEmpty || !pinned.current) return
-    const release = layOutEnd(node)
+    const end = layOutEnd(node)
+    endSpare.current = end.spare
     node.scrollTop = node.scrollHeight
     owned(node)
-    return release
-  }, [identity, isEmpty, owned])
+    return end.release
+    // Again for each count raised before that paint (`stage.fills`): the end is laid out over the turns just drawn.
+  }, [identity, isEmpty, owned, stage.fills])
+
+  // Still before that paint: the turns drawn first fill the pane with a pane's worth above them, or more are drawn now
+  // and the end laid out again. Painted short of that, the newest turn would move as the rest arrived above it.
+  useLayoutEffect(() => {
+    const node = viewport.current
+    if (!node || !staging || !pinned.current) return
+    const want = Math.ceil(node.clientHeight / ESTIMATED_ROW)
+    const spare = endSpare.current
+    if (spare >= want) return
+    const { shown, undrawn } = staged.current
+    const to = Math.max(0, undrawn - (spare < 0 ? shown.length - undrawn : want - spare))
+    setStage((current) => current.identity !== identity || current.first === null ? current
+      : { ...current, first: to ? shown[to]!.id : null, fills: current.fills + 1 })
+  }, [identity, isEmpty, staging, stage.fills])
+
+  // The rest are drawn a few at a time while the page has nothing else to do. They arrive above the reader.
+  useEffect(() => {
+    if (!staging) return
+    return whenIdle(() => setStage((current) => {
+      if (current.identity !== identity || current.first === null) return current
+      const { shown, undrawn } = staged.current
+      const to = undrawn - IDLE_TURNS
+      return { ...current, first: to > 0 ? shown[to]!.id : null }
+    }))
+  }, [identity, staging, stage.first])
+
+  // In the commit that draws them, the end is followed again, or the reader's place kept: the column and its offset
+  // agree before anything reads the page, so no frame, painted or measured, has the turns on screen moved down by the
+  // ones that just arrived above. Under a finger the end waits for it to lift, as it does everywhere (`pin`).
+  useLayoutEffect(() => {
+    const node = viewport.current
+    if (!node || windowed || isEmpty) return
+    if (!pinned.current) holdReader(node)
+    else if (!touching.current) {
+      node.scrollTop = node.scrollHeight
+      owned(node)
+    }
+  }, [undrawn, windowed, isEmpty, owned, holdReader])
 
   useEffect(() => {
     const node = viewport.current
@@ -1454,6 +1800,7 @@ export function ConversationTimeline({
       if (pinned.current && (userScrolling.current || scrollMotion.current || touching.current) && leftEnd(node, lastScrollTop.current) &&
         node.scrollHeight - node.scrollTop - node.clientHeight >= LEFT_END)
         pinned.current = false
+      keepSendRoom(node)
       const column = node.firstElementChild
       const spacer = steadyEnd.current
       if (spacer && column instanceof HTMLElement) {
@@ -1539,31 +1886,78 @@ export function ConversationTimeline({
     })
     structure.observe(node, { childList: true, characterData: true, subtree: true })
     return () => { structure.disconnect(); grown.disconnect(); cancelAnimationFrame(shrinkFrame); node.style.overflowY = "" }
-  }, [identity, isEmpty, owned, holdReader])
+  }, [identity, isEmpty, owned, holdReader, keepSendRoom])
 
+  // A turn arrived at the end, opened by a message the person just sent (the one the panel names, or one still in
+  // this window's outbox, which no request says yet), under a reader following the end: it goes near the top.
+  const endTurn = useRef({ identity, newest })
+  useLayoutEffect(() => {
+    const was = endTurn.current
+    endTurn.current = { identity, newest }
+    if (was.identity !== identity) {
+      sentTurn.current = null
+      if (sendRoom.current) sendRoom.current.style.height = "0px"
+      return
+    }
+    if (was.newest === newest || was.newest === undefined || !pinned.current) return
+    const turn = exchanges.at(-1)
+    const request = turn?.prompt?.requestId
+    if (!turn || !request || exchanges.at(-2)?.id !== was.newest) return
+    if (turn.id !== sentId && (!askedAt || askedAt.has(request))) return
+    sentTurn.current = turn.id
+    followEnd.current()
+  }, [identity, newest, exchanges, sentId, askedAt])
+
+  /*
+   * The rows are held against the virtualizer before a frame paints (`row-check.ts`): all of them when rows come or
+   * go, when the reader scrolls, and each second; and when something changes inside rows, those rows alone. A stream
+   * changes its one row a frame apart for as long as it runs, and holding every mounted row against the virtualizer
+   * for each of those frames read all their boxes twice to learn about one. The end followed under that stream is the
+   * transcript's own scroll, and checks nothing: a row it brings in is a change to the list.
+   */
   useEffect(() => {
     const node = viewport.current
-    if (!windowed || !node) return
+    const list = node?.querySelector("[data-virtual-transcript]")
+    if (!windowed || !node || !list) return
     let frame = 0
+    /** The rows changed since the last look, or every row. */
+    let changed: Set<Element> | "all" = "all"
     const look = () => {
       frame = 0
-      if (mountedRows.current()) soon()
+      const only = changed === "all" ? undefined : changed
+      changed = new Set()
+      if (mountedRows.current(only)) soon("all")
     }
-    const soon = () => {
+    const soon = (rows: Iterable<Element> | "all") => {
+      if (rows === "all") changed = "all"
+      else if (changed !== "all") for (const row of rows) changed.add(row)
       frame ||= requestAnimationFrame(look)
     }
-    const changes = new MutationObserver(soon)
-    changes.observe(node, { childList: true, characterData: true, subtree: true })
-    node.addEventListener("scroll", soon, { passive: true })
-    const steady = setInterval(soon, ROW_CHECK_MS)
-    soon()
+    const changes = new MutationObserver((mutations) => {
+      const rows = new Set<Element>()
+      for (const mutation of mutations) {
+        if (mutation.target === list) return soon("all")
+        let row: Element | null = mutation.target instanceof Element ? mutation.target : mutation.target.parentElement
+        while (row && row.parentElement !== list) row = row.parentElement
+        if (row) rows.add(row)
+      }
+      if (rows.size) soon(rows)
+    })
+    changes.observe(list, { childList: true, characterData: true, subtree: true })
+    const scrolled = () => {
+      if (pinned.current && node.scrollTop === lastOwnScrollTop.current) return
+      soon("all")
+    }
+    node.addEventListener("scroll", scrolled, { passive: true })
+    const steady = setInterval(() => soon("all"), ROW_CHECK_MS)
+    soon("all")
     return () => {
       changes.disconnect()
-      node.removeEventListener("scroll", soon)
+      node.removeEventListener("scroll", scrolled)
       clearInterval(steady)
       cancelAnimationFrame(frame)
     }
-  }, [windowed, identity])
+  }, [windowed, identity, isEmpty])
 
   const endEarlier = useCallback((progressed: boolean) => {
     awaitingEarlier.current = false
@@ -1674,6 +2068,8 @@ export function ConversationTimeline({
     const node = viewport.current
     const mark = edgeRow.current
     if (!node || !mark || isEmpty || !more) return
+    // The top on screen isn't the top yet while turns already held are still being drawn above it.
+    if (staging) return
     if (awaitingEarlier.current || stalled.current || loadingEarlier) return
     // A reader following the end of a transcript that fills the pane is not
     // near its top, whatever the edge measures: turns offscreen still stand
@@ -1684,7 +2080,7 @@ export function ConversationTimeline({
       node.getBoundingClientRect().top - mark.getBoundingClientRect().bottom
     if (distance > LOAD_AHEAD) return
     requestEarlier()
-  }, [isEmpty, more, loadingEarlier, requestEarlier])
+  }, [isEmpty, more, staging, loadingEarlier, requestEarlier])
   useEffect(() => {
     wake.current = maybeLoadEarlier
   })
@@ -1764,12 +2160,18 @@ export function ConversationTimeline({
         setTail((current) => ({ ...current, limit: exchanges.length - index }))
         return
       }
+      // One of the turns still waiting to be drawn: they all are now, and the jump lands once it's there.
+      if (index < hidden + undrawn) {
+        pendingJump.current = id
+        setStage((current) => current.identity === identity ? { ...current, first: null } : current)
+        return
+      }
       const element = viewport.current?.querySelector(
         `[data-exchange="${CSS.escape(id)}"]`
       )
       if (element) land(element)
     },
-    [exchanges, hidden, windowed, seek, land]
+    [exchanges, hidden, undrawn, identity, windowed, seek, land]
   )
 
   useLayoutEffect(() => {
@@ -1882,7 +2284,13 @@ export function ConversationTimeline({
 
   const showNavigator = navigates && !isEmpty && exchanges.length >= 3
   const navigatorPrompts = useNavigatorPrompts(exchanges)
-  const woke = useMemo(() => wokeAfterRest(exchanges, askedAt), [exchanges, askedAt])
+  // The same object for a turn that woke the same way: the turns change with every paced frame of a stream, and a new
+  // object for each made every turn that followed a day's rest draw again with them.
+  const wokeBefore = useRef<ReadonlyMap<string, WokeAfterRest>>(NO_WOKE)
+  const woke = useMemo(() => {
+    wokeBefore.current = keptEntries(wokeBefore.current, wokeAfterRest(exchanges, askedAt), sameWoke)
+    return wokeBefore.current
+  }, [exchanges, askedAt])
   const renderExchange = (exchange: ExchangeData) => exchange.unloaded !== undefined ? (
     <ReleasedExchange key={keys.get(exchange.id) ?? exchange.id} id={exchange.id} label={exchange.unloaded}
       height={heights.current.get(`${readingSource}:${exchange.id}`) ?? 360} viewport={viewport.current}
@@ -1933,6 +2341,8 @@ export function ConversationTimeline({
             settleInput()
           }}
           onTouchStart={(event) => {
+            // Before the finger counts as down: the end is still written for the turns this draws.
+            drawAll()
             touching.current = event.touches.length > 0
           }}
           onTouchEnd={lifted}
@@ -1971,6 +2381,7 @@ export function ConversationTimeline({
                 scrollToEnd()
                 return
               }
+              drawAll()
               if (viewport.current) endSeek(viewport.current)
               pendingJump.current = null
               bookmarkRestore.current = undefined
@@ -2020,7 +2431,7 @@ export function ConversationTimeline({
                 </div>
               ) : (
                 <div style={{ display: "contents" }}>
-                  {shown.map((exchange) => (
+                  {drawn.map((exchange) => (
                     <div key={keys.get(exchange.id) ?? exchange.id} style={{ display: "contents" }}>
                       {renderExchange(exchange)}
                     </div>
@@ -2030,6 +2441,7 @@ export function ConversationTimeline({
               {footer}
             </div>
           )}
+          {isEmpty ? null : <div ref={sendRoom} aria-hidden data-send-room />}
           {transcriptEnd && !isEmpty ? <div ref={steadyEnd} aria-hidden data-steady-end /> : null}
         </div>
         {showNavigator ? (
@@ -2040,29 +2452,40 @@ export function ConversationTimeline({
             paneRef={pane}
           />
         ) : null}
-        {transcriptEnd ? null : <button
-          type="button"
-          onClick={() => scrollToEnd("smooth")}
-          aria-hidden={!showJump}
-          tabIndex={showJump ? 0 : -1}
-          style={{
-            left: `calc(50% - ${showNavigator ? NAVIGATOR_WIDTH / 2 : 0}px)`,
-          }}
-          className={cn(
-            "pressable absolute bottom-3 flex h-7 -translate-x-1/2 items-center gap-1.5 rounded-full",
-            "bg-raised px-3 text-ui text-muted-foreground ring-1 ring-hairline",
-            "[transition:opacity_180ms_var(--ease-out),transform_180ms_var(--ease-out)]",
-            showJump
-              ? "pointer-events-auto opacity-100"
-              : "pointer-events-none translate-y-1 opacity-0"
-          )}
-        >
-          <ArrowDownIcon className="size-3" />
-          Jump to latest
-        </button>}
+        {transcriptEnd ? null : (
+          <div
+            data-transcript-jump
+            inert={!showJump}
+            style={{
+              left: `calc(50% - ${showNavigator ? NAVIGATOR_WIDTH / 2 : 0}px)`,
+            }}
+            className={cn(
+              "absolute bottom-3 flex -translate-x-1/2 items-end gap-2",
+              "[transition:opacity_180ms_var(--ease-out),transform_180ms_var(--ease-out)]",
+              showJump ? "pointer-events-auto opacity-100" : "pointer-events-none translate-y-1 opacity-0"
+            )}
+          >
+            <button
+              type="button"
+              onClick={() => scrollToEnd("smooth")}
+              aria-hidden={!showJump}
+              tabIndex={showJump ? 0 : -1}
+              className="pressable flex h-7 items-center gap-1.5 rounded-full bg-raised px-3 text-ui whitespace-nowrap text-muted-foreground ring-1 ring-hairline"
+            >
+              <ArrowDownIcon className="size-3" />
+              Jump to latest
+              {arrived > 0 ? <span data-jump-new={arrived} className="tabular text-foreground">· {arrived} new</span> : null}
+            </button>
+            {showJump ? beside : null}
+          </div>
+        )}
       </div>
     </TranscriptSourceContext>
   )
+}
+
+function sameWoke(left: WokeAfterRest, right: WokeAfterRest): boolean {
+  return left.restedMs === right.restedMs && left.lastAt === right.lastAt && left.harness === right.harness
 }
 
 function exchangeInterrupted(exchange: ExchangeData): boolean {

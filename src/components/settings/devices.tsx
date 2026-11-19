@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState, type ComponentType, type ReactNode } from "react"
+import { everyWhileShown } from "@/lib/window-shown"
 import { ArrowUpRightIcon, CheckIcon, CopyIcon, GlobeIcon, LaptopIcon, MonitorSmartphoneIcon, PlusIcon, ServerIcon, TerminalIcon } from "lucide-react"
 import { toast } from "sonner"
 import {
@@ -92,10 +93,10 @@ function useMinuteClock(): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const read = () => setNow(Date.now())
-    const timer = setInterval(read, 30_000)
+    const stop = everyWhileShown(30_000, read)
     window.addEventListener("focus", read)
     return () => {
-      clearInterval(timer)
+      stop()
       window.removeEventListener("focus", read)
     }
   }, [])

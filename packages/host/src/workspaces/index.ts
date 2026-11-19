@@ -3,6 +3,7 @@ import { declareThreadScratchMethods } from "./thread-scratch-methods.js"
 import { AppOutputHints } from "./app-output-hints.js"
 import type { BuildSlots } from "./build-slots.js"
 import { sessionAccessTier } from "../contracts/access.js"
+import { closedFinished } from "../contracts/agents.js"
 import type { GitHubPerson } from "../contracts/github-person.js"
 import type { PullRequestsAs } from "../contracts/github-authorship.js"
 import type { Git } from "@mako/git"
@@ -33,7 +34,9 @@ import { CheckoutHeadService } from "./checkout-heads.js"
 import { PlanBuilds } from "./plan-builds.js"
 import { beginTrace, TraceRefresh } from "./app-probe.js"
 import { childHistory, childProcessReader, type DaemonRestarts, type ProcessReader, type WatchBackend } from "./watch-backend.js"
-import type { WatchReadings } from "./watch-readings.js"
+import type { WatchedTrees } from "./watched-trees.js"
+export { WatchedTrees } from "./watched-trees.js"
+import { WatchReadings } from "./watch-readings.js"
 import { commandEnvironment, environmentTools, registerEnvironmentTools, type EnvironmentTools } from "./environment-tools.js"
 import { spareInstaller } from "./spare-install.js"
 import { isSpareCheckout } from "./worktree-carry.js"
@@ -97,6 +100,11 @@ export { MovePlanSchema, MoveRefused, resumeMove, rewriteInPlace, type InPlaceFi
 
 /** A long quiet, not a short timer: a stopped app keeps its files and data, and restarting it for nothing costs more than it frees. */
 const THREAD_APP_IDLE_MS = 6 * 60 * 60 * 1000
+/**
+ * The checkpoints' history child stays this long without an ask: the next turn usually comes within it, and a child
+ * started for a turn's mark could take longer than the checkpoint waits for history (`CHECKPOINT_HISTORY_MS`).
+ */
+const CHECKPOINT_HISTORY_IDLE_MS = 15 * 60_000
 
 /** Worktrees, spares, checkouts, recipes, and each Thread's apps and their processes. */
 export interface Workspaces {
@@ -108,7 +116,7 @@ export interface Workspaces {
   processes: ThreadProcesses | null
   /** Beside the Thread store, so every profile sharing the store shares its worktrees. */
   worktrees: ThreadWorktreeService | null
-  /** Automatic retirement is off until the person enables it in Settings. */
+  /** Automatic retirement is off until the person enables it in Settings, but for the worktrees of Fins closed as finished. */
   retention: WorktreeRetention | null
   scratch: ThreadScratch | null
   threadData: ThreadScratch | null
@@ -122,6 +130,12 @@ export interface Workspaces {
   appOwner(app: AppKey): { id: string; title: string } | undefined
   /** What changed on disk while apps ran, for their probes; FSEvents keeps that history, so macOS only. */
   fileHistory: ReturnType<typeof childHistory>
+  /**
+   * The same history, read for turns' checkpoints alone, in a child of their own that stays up between turns
+   * (`CHECKPOINT_HISTORY_IDLE_MS`): a read holds parcel's FSEvents lock in its child, and behind the journal's and the
+   * probes' reads from marks hours back a turn's mark or read waited seconds, past the checkpoint's wait for history.
+   */
+  checkpointHistory: ReturnType<typeof childHistory>
   close(): Promise<void>
 }
 
@@ -160,6 +174,8 @@ export interface WorkspacesDeps {
   watchReadings?: WatchReadings
   /** Every native and tree watch shares this host-owned child. */
   watch: WatchBackend
+  /** The folders the host's tree watches hear, for the worktrees' summaries to take their file events from. */
+  trees?: WatchedTrees
   /** When fseventsd started over, so a read of history across it is reported lost. */
   daemonRestarts?: DaemonRestarts
   /** The host's probe child (`childProcessReader`), which reads the apps' processes too; one of its own without it. */
@@ -191,6 +207,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     }, recipesRoot: recipes, where: deps.where, recipes: deps.recipes })
     : null
   const fileHistory = childHistory(undefined, deps.watchReadings, deps.daemonRestarts)
+  const checkpointHistory = childHistory(undefined, new WatchReadings((message, fields) => hostLog("checkpoints", message, fields)), deps.daemonRestarts, CHECKPOINT_HISTORY_IDLE_MS)
   const whoseApp = (app: AppKey): string | undefined => {
     const thread = ThreadIdSchema.safeParse(app)
     if (thread.success) {
@@ -256,8 +273,14 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
       } : undefined, deps.conversations, deps.ledger, deps.workingFolders, () => deps.subscribed?.on ?? true, async repoRoot => {
         await forgetGitHubReads(repoRoot)
         emit({ type: "github-changed" })
-      }, deps.watch)
+      }, deps.watch, {
+        // A row asks for its worktree's branch as it's drawn (`CheckoutHeadService`), so what's followed there is what windows show.
+        shown: (path) => checkoutHeads.known(path) !== undefined,
+        heard: (path) => deps.trees?.covers(path) ?? false,
+      })
     : null
+  // A worktree's files changing is heard from the tree watches the host already keeps, never from one of its own.
+  if (worktrees) deps.trees?.follow((root, paths) => worktrees.filesHeard(root, paths))
   const openFiles = async (): Promise<string[]> => {
     const { stdout, stderr } = await reader.run("lsof", ["-nP", "-F0n", "-u", String(process.getuid?.())], { timeout: 10_000, maxBuffer: 32 * 1024 * 1024 })
     if (stderr.trim() || !stdout.trim()) throw new Error("Open-file inspection was incomplete.")
@@ -279,6 +302,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     root: worktrees.root,
     worktrees: () => store.worktrees(),
     finished: (thread) => deps.finished?.(thread),
+    closedFinished: (thread) => closedFinished(store.edges().of(thread)),
     using: async (path) => {
       if (!deps.retirementUsers || !processes) throw new Error("Live-use checks are unavailable.")
       const users = await deps.retirementUsers(path)
@@ -291,10 +315,12 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     repository: (worktree, refresh) => worktrees.retirementRepository(worktree, refresh),
     fetch: (common) => worktrees.retirementFetch(common),
     openFiles,
-    remove: async (path) => {
+    remove: async (path, finished) => {
       const member = store.worktrees().find((row) => worktreeCheckout(row) === path)
       if (!member) throw new Error("The checkout is no longer registered.")
-      await worktrees.remove(member.path, true)
+      // Read again as it goes: a Fin opened since is no longer one whose worktree is Mako's to retire.
+      if (finished && !closedFinished(store.edges().of(member.thread))) throw new Error("The Fin was opened again; its checkout was kept.")
+      await worktrees.remove(member.path, finished ? "finished" : true)
     },
     packagesRemoved: async (path) => {
       await processes?.forgetPrepared(path)
@@ -324,16 +350,19 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
   // Reconsider registered worlds left by a crash once conversations have opened, then hourly.
   if (scratch) deps.jobs.every("retire owned Thread scratch", SCRATCH_PASS_MS, async () => { await scratch?.run(); await threadData?.run() }, { firstAfterMs: 60_000 })
   if (retention && !deps.readOnly) deps.jobs.every("retire finished Thread worktrees", WORKTREE_RETENTION_MS, async () => { await retention.run() })
-  // Windows hear the summaries as they change, rather than each asking every half minute. What no event of its own
-  // says (a pull request on GitHub, an edit outside a turn) a pass of the host's says, each worktree read only once
-  // its index, pull request, status's freshness or age moved (`current`).
+  // Windows hear the summaries as they change, rather than each asking every half minute: each one as it's read
+  // (`worktree-summary-changes`), and the whole list too while a window that knows only that form may be listening.
+  // What no event of its own says (a pull request on GitHub) a pass of the host's says, each worktree asked of Git
+  // only where what it was read at moved (`readListed`).
   if (worktrees) {
-    worktrees.followSummaries((summaries) => {
-      emit({ type: "worktree-summaries", summaries })
+    worktrees.followSummaries((summaries) => emit({ type: "worktree-summaries", summaries }))
+    worktrees.followSummaryChanges((changes) => {
+      emit({ type: "worktree-summary-changes", ...changes })
       retention?.changed()
       scratch?.changed()
       threadData?.changed()
     })
+    worktrees.followSizes(() => emit({ type: "worktree-sizes" }))
     deps.jobs.every("say the worktrees' summaries as they change", SUMMARY_PASS_MS, () => void worktrees.summaries().catch(() => undefined), deps.subscribed ? { needs: [deps.subscribed] } : {})
   }
   if (worktrees) {
@@ -356,6 +385,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     whoseApp,
     appOwner,
     fileHistory,
+    checkpointHistory,
     close: async () => {
       retention?.close()
       scratch?.close()
@@ -438,7 +468,8 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     source: (id) => moveSource(live, id),
     companions: (id) => worktreeMoves?.companions(id) ?? [],
     place: (id, cwd) => moveablePlace(git, worktrees, id, worktreeMoves?.project(id) ?? cwd),
-    move: async (id, bring) => (await worktreeMove().carry(id, { lead: true, tell: true, bring })).session.id,
+    // The agent asked to move and it moves now it's idle: a turn it begins while its worktree is made is waited out.
+    move: async (id, bring) => (await worktreeMove().carry(id, { lead: true, tell: true, bring, waitTurn: true })).session.id,
     follow: async (id, told, lead, haste) => { await worktreeMove().carry(id, { lead: false, tell: told, after: lead, ...haste && { haste } }) },
     announce: (state) => emit({ type: "workspace-moves", moves: state }),
     failed: (id, message) => {
@@ -575,10 +606,12 @@ export interface WorkspaceMethodsDeps {
   emit(event: HostEvent): void
   /** The machine the host runs on, which opens, reveals and picks what people ask for. */
   machine: MachineCapability
+  /** A window saying whether it's on screen, for what's sent to it only to be painted; false when it has no stream here. */
+  windowShown?: (client: string, shown: boolean) => boolean
 }
 
 /** The files people open, the editors and folders they reach for, worktrees, moves, apps and automations. */
-export function declareWorkspaceMethods(methods: MethodTable, { workspaces, movers, live, automations, withHost, session, emit, machine }: WorkspaceMethodsDeps): WatchedFile {
+export function declareWorkspaceMethods(methods: MethodTable, { workspaces, movers, live, automations, withHost, session, emit, machine, windowShown }: WorkspaceMethodsDeps): WatchedFile {
   declareSessionMethods(methods, session)
   const files = declareFileMethods(methods, { withHost, emit, machine })
   methods.handle("mako:pick-folder", () => presentMachine(machine).chooseFolder("Choose a folder"))
@@ -614,7 +647,7 @@ export function declareWorkspaceMethods(methods: MethodTable, { workspaces, move
   declareMoveMethods(methods, movers.moves, (target) => moveHold(live, movers.worktreeMoves, movers.moves, target), workspaces.worktrees)
   declarePlanBuildMethods(methods, workspaces.planBuilds)
   declareCheckoutHeadMethods(methods, workspaces.checkoutHeads)
-  declareThreadAppMethods(methods, movers.appTools?.desk, movers.sampler, apps => movers.outputHints?.ready(apps) ?? false)
+  declareThreadAppMethods(methods, movers.appTools?.desk, movers.sampler, apps => movers.outputHints?.ready(apps) ?? false, windowShown)
   return files
 }
 

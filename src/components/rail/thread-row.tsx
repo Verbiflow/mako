@@ -7,7 +7,7 @@ import { AppMarkIcon } from "@/components/rail/app-mark"
 import { ThreadPurposeChip } from "@/components/rail/purpose-chip"
 import { ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/components/rail/thread-actions"
 import { archivedThread, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
-import { ApexCrewLine } from "@/components/rail/fin-pips"
+import { ApexShiverLine } from "@/components/rail/fin-pips"
 import { useIsApex } from "@/state/fin-pips"
 import { ApexAsks } from "@/components/rail/apex-asks"
 import {
@@ -36,7 +36,8 @@ import { cn } from "@/lib/utils"
 import { togglePinned, usePrefs } from "@/state/prefs"
 import { actions, useSession } from "@/state/session"
 import { useTabs, type TabInfo } from "@/state/tabs"
-import { acpForThread, activeAcp, useAcp } from "@/state/acp"
+import { acpForThread, activeAcp } from "@/state/acp"
+import { useRailAcp } from "@/state/acp-state"
 import { keptSessionText } from "@/lib/kept-session"
 import { sameThreadStatus, threadStatus, threads, useThreads } from "@/state/threads"
 import { threadLiveKey } from "@/state/thread-status"
@@ -82,7 +83,7 @@ export const ROW_SURFACE =
 export const ROW_ACTIONS =
   "pointer-events-none absolute inset-y-0 right-0 z-[1] flex items-center pl-4 pr-1 opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-visible:pointer-events-auto group-focus-visible:opacity-100 [.group:has(:focus-visible)_&]:pointer-events-auto [.group:has(:focus-visible)_&]:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100"
 
-/** An Apex's row is two lines, its crew's pips under its title (`ApexCrewLine`). */
+/** An Apex's row is two lines, its Shiver's pips under its title (`ApexShiverLine`). */
 export const APEX_SURFACE = "h-11 flex-col items-stretch justify-center gap-[3px]"
 
 /**
@@ -127,7 +128,7 @@ export const ThreadRow = memo(function ThreadRow({
   // A thread whose CLI is being driven from here right now wears a pulse —
   // the same promise a tab's dot makes: something is working behind this row.
   // Its status also reads the live store; this repaints the row when those facts move, so it never stays stale.
-  useAcp((state) => threadLiveKey(state, ref))
+  useRailAcp((state) => threadLiveKey(state, ref))
   const ownStatus = useThreads((state) => threadStatus(ref, state), sameThreadStatus)
   const foldState = useThreads(
     (state) => (folded ? foldedThreadState(folded.members, (member) => threadStatus(member, state)) : null),
@@ -136,7 +137,7 @@ export const ThreadRow = memo(function ThreadRow({
   const status = foldState?.status ?? ownStatus
   const archived = useThreadArchives((state) => archivedThread(ref, state.keys))
   const target = nativeThreadTarget(ref)
-  const foldedLive = useAcp((state) =>
+  const foldedLive = useRailAcp((state) =>
     Boolean(
       folded &&
         state.activeKey &&
@@ -172,9 +173,9 @@ export const ThreadRow = memo(function ThreadRow({
   const selectedPath = useThreads(
     (state) => state.opening?.ref.path ?? state.viewing?.ref.path
   )
-  const livePath = useAcp((state) => activeAcp(state)?.threadPath)
-  const liveProvider = useAcp((state) => acpForThread(state, ref)?.harness)
-  const selectedLive = useAcp((state) =>
+  const livePath = useRailAcp((state) => activeAcp(state)?.threadPath)
+  const liveProvider = useRailAcp((state) => acpForThread(state, ref)?.harness)
+  const selectedLive = useRailAcp((state) =>
     Boolean(
       state.activeKey && acpForThread(state, ref)?.key === state.activeKey
     )
@@ -367,7 +368,7 @@ export const ThreadRow = memo(function ThreadRow({
         {foldState?.readyBeside ? <ReadyBesideMark sessions={foldState.sessions} /> : null}
         <ThreadStatusEnd status={status} updatedAt={ref.updatedAt} />
         </RowLine>
-        {apex ? <ApexCrewLine thread={thread} /> : null}
+        {apex ? <ApexShiverLine thread={thread} /> : null}
       </div>
     </ThreadContextMenu>
     {apex ? <ApexAsks apex={thread} apexTitle={title} indent={indent} /> : null}

@@ -70,18 +70,33 @@ export function payloadFor(event: RuntimeEvent, reads: WindowLiveForm): string |
 
 export type RuntimeEventChannel = "event" | "terminal"
 
-/** An event encoded once, for every subscriber of every host and window it reaches. */
+/**
+ * An event encoded once, for every subscriber of every host and window it reaches. A batch has up to three forms and
+ * each reader takes one, so each is written when the first reader of it asks and kept: with every window on the
+ * newest form, writing all three for every batch was twice the encoding any of them read.
+ */
 export function encodeRuntimeEvent(event: HostEvent | TerminalEvent): RuntimeEvent {
   if (event.type !== "live-batch") return { type: event.type, conversation: undefined, payload: JSON.stringify(event) }
   const { compact, rostered, ...whole } = event
-  return {
-    type: event.type,
-    conversation: event.batch.id,
-    ...(event.batch.trace && { trace: event.batch.trace }),
-    payload: JSON.stringify(whole),
-    ...(compact && { compact: JSON.stringify({ type: event.type, batch: compact }) }),
-    ...(rostered && { rostered: JSON.stringify({ type: event.type, batch: rostered }) }),
-  }
+  const encoded: RuntimeEvent = { type: event.type, conversation: event.batch.id, ...(event.batch.trace && { trace: event.batch.trace }), payload: "" }
+  writtenWhenRead(encoded, "payload", () => JSON.stringify(whole))
+  if (compact) writtenWhenRead(encoded, "compact", () => JSON.stringify({ type: event.type, batch: compact }))
+  if (rostered) writtenWhenRead(encoded, "rostered", () => JSON.stringify({ type: event.type, batch: rostered }))
+  return encoded
+}
+
+/** `event[form]` as a field that is written at its first read, then is that text: a copy of the event holds the text. */
+function writtenWhenRead(event: RuntimeEvent, form: "payload" | "compact" | "rostered", write: () => string): void {
+  Object.defineProperty(event, form, {
+    enumerable: true,
+    configurable: true,
+    get: () => {
+      const text = write()
+      Object.defineProperty(event, form, { value: text, enumerable: true, configurable: true, writable: true })
+      return text
+    },
+    set: (text: string) => Object.defineProperty(event, form, { value: text, enumerable: true, configurable: true, writable: true }),
+  })
 }
 
 /** An event for its window, decoded once; only the host and the desktop's main process write what reaches it. */

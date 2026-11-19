@@ -11,7 +11,7 @@ import { codexNativeRunner } from "./native-runner.js"
 import { createCodexProcessProbe } from "./process-probe.js"
 import { codexProfileLoader } from "./profile.js"
 import { codexSkillSource } from "./skills.js"
-import { resolveCodexExecutable } from "./executable.js"
+import { CodexExecutables } from "./executable.js"
 import { npmInstall } from "../update-source.js"
 import { CODEX_VERSIONS } from "./versions.js"
 import { codexPlatformPackages } from "./platform-packages.js"
@@ -20,6 +20,8 @@ import { codexPresentation } from "./presentation.js"
 
 export const installCodex: ProviderModule = (host, context) => {
   const probe = createCodexProcessProbe()
+  // One memory of which installation reads the configuration, for every start, discovery and reading of this host.
+  const executables = new CodexExecutables()
   installHarness(host, {
     provider: "codex",
     presentation: codexPresentation,
@@ -61,10 +63,10 @@ export const installCodex: ProviderModule = (host, context) => {
     toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
     skillEditing: { provider: "codex", route: "skill-registry", operations: ["import", "remove"] },
     mcpEditing: createCodexMcpEditing(),
-    live: createCodexLiveDriver(probe, context),
+    live: createCodexLiveDriver(probe, context, executables),
     decoder: codexDecoderSource,
-    profile: codexProfileLoader(host.discovery),
-    accounts: codexAccountCapability(host.accounts.root, host.discovery),
+    profile: codexProfileLoader(host.discovery, executables),
+    accounts: codexAccountCapability(host.accounts.root, host.discovery, executables),
     acp: lacks("Runs on Codex’s app-server"),
     nativeRunner: codexNativeRunner,
     processProbe: probe,
@@ -75,7 +77,8 @@ export const installCodex: ProviderModule = (host, context) => {
     // bundled one arrives with ChatGPT.app, and `codex` on PATH could be either.
     updates: {
       provider: "codex",
-      binary: (env) => resolveCodexExecutable(env),
+      binary: (env) => executables.resolve(env),
+      remembered: executables,
       npmPackage: "@openai/codex",
       npmCompanions: (version) => codexPlatformPackages(version),
       homebrew: { name: "codex" },

@@ -10,6 +10,16 @@ export interface MakoFootprint {
   watching: WatchFootprint
   /** Rescans after lost file events; null where this host doesn't keep the record of changes. */
   rescans: RescanFootprint | null
+  /** What the worker that writes the record of changes holds in memory; absent where this host doesn't run it. */
+  journalWriter?: JournalWriterFootprint
+}
+
+/** The journal writer's own memory: its JavaScript heap, its typed arrays (each awake root's stat cache), and the roots behind them. */
+export interface JournalWriterFootprint {
+  heapBytes: number
+  arrayBytes: number
+  awake: number
+  asleep: number
 }
 
 export interface MakoProcess {

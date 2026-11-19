@@ -14,12 +14,13 @@ export { CHILDREN_BINDING, WAITING_ON_LIMIT, WaitingOnSchema, type WaitingOn }
 /**
  * What every person-facing string and every agent's instructions call a
  * Thread that others work for, and a Thread that works for another: an Apex
- * and its Fins. The two together have no word of their own. Identifiers say
- * `apex`; the edge's data keeps the `lead` every build reads (`ChildRole`, a
+ * and its Fins. The two together are a Shiver, as sharks are. Identifiers say
+ * `apex` and `shiver`; the edge's data keeps the `lead` every build reads (`ChildRole`, a
  * question's `on`), and the tree's records keep `parent` and `child`.
  */
 export const APEX_WORD = "Apex"
 export const FIN_WORD = "Fin"
+export const SHIVER_WORD = "Shiver"
 
 /** "1 Fin", "3 Fins". */
 export function finsWord(count: number): string {
@@ -435,7 +436,7 @@ export const LimitNoticeSchema = z.object({
 })
 export type LimitNotice = z.infer<typeof LimitNoticeSchema>
 
-/** The exact held work and fallback place shown by a crew notice; a press cannot take newer work with it. */
+/** The exact held work and fallback place shown by a Shiver notice; a press cannot take newer work with it. */
 export const LimitNoticeChoiceSchema = z.object({
   notice: z.string().min(1).max(600),
   place: z.string().min(1).max(1200),
@@ -466,11 +467,14 @@ export const ThreadParentSchema = z.object({
   op: z.string().min(1).max(512),
   startedBy: ActorSchema,
   createdAt: z.number(),
-  /** The delegation is stopped: paused until a message to the child resumes it (`resumed`). */
+  /**
+   * The delegation is closed until a message to the child opens it again (`resumed`): stopped by its Apex or the
+   * person, or closed by Mako once it had finished with nothing left open (`closedFinished`).
+   */
   closedAt: z.number().optional(),
-  /** Why it was stopped, as whoever stopped it said: said once, with `closedAt`. */
+  /** Why it was closed, as whoever stopped it said, or `FINISHED_CLOSE`: said once, with `closedAt`. */
   closedReason: z.string().max(2000).optional(),
-  /** The last time a message resumed it after a stop: when, and the stop it ended. */
+  /** The last time a message opened it again after a close: when, and the close it ended. */
   resumed: z.object({ at: z.number(), closedAt: z.number(), reason: z.string().max(2000).optional() }).optional(),
   /** Present while a process Mako didn't start runs the child's turns (`FollowedRun`). */
   run: FollowedRunSchema.optional(),
@@ -493,6 +497,27 @@ export const ThreadParentSchema = z.object({
   placed: PlacedSchema.optional(),
 })
 export type ThreadParent = z.infer<typeof ThreadParentSchema>
+
+/**
+ * Why Mako closed the edge of a Fin that had finished with nothing left open (`Agents.closeFinished`). It is a stop's
+ * reason on the wire, in words a row can show, so a build from before it reads the edge as any closed one ("Stopped:
+ * It finished…") and opens it again with a message as it opens a stopped Fin. This build knows it by these exact
+ * words: such a Fin still reads as done or failed, and nothing it could still hear is held back.
+ */
+export const FINISHED_CLOSE = "It finished with nothing left open; a message opens it again."
+
+/** Whether Mako closed this edge because its Fin had finished (`FINISHED_CLOSE`): closed, never stopped. */
+export function closedFinished(edge: Pick<ThreadParent, "closedAt" | "closedReason"> | undefined): boolean {
+  return edge?.closedAt !== undefined && edge.closedReason === FINISHED_CLOSE
+}
+
+/** Whether its Apex, the person or an archive stopped this edge: closed for any reason but having finished. */
+export function edgeStopped(edge: Pick<ThreadParent, "closedAt" | "closedReason"> | undefined): boolean {
+  return edge?.closedAt !== undefined && edge.closedReason !== FINISHED_CLOSE
+}
+
+/** Why the edge of a harness's own reviewer run is closed as soon as it's known for one: nobody delegated it, and nothing reaches it. */
+export const INTERNAL_RUN_CLOSE = "It was its harness's own reviewer run, not a Fin."
 
 /** An old discovery of a provider's internal reviewer is history, never a managed delegation. */
 export function internalDiscoveredRun(edge: ThreadParent): boolean {
@@ -748,8 +773,10 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
     return { kind: "queued", reason, ahead, ...(after?.length && { after }), ...(held && { held }), ...(refused && { refused }), ...(apexStopped && { apexStopped }) }
   }
   const latest = journal.latest
+  // One Mako closed for having finished reads as it finished: done or failed, by its last report, never as stopped.
+  const stopped = edgeStopped(edge)
   // A stop after its last report is how it ended, in the words of whoever stopped it, whatever its harness still winds down.
-  if (edge.closedAt !== undefined && (!latest || latest.at <= edge.closedAt)) {
+  if (stopped && edge.closedAt !== undefined && (!latest || latest.at <= edge.closedAt)) {
     const reason = stuckWords(edge.run, edge.name) ?? edge.closedReason ?? (thread.ended?.outcome === "stopped" ? thread.ended.reason : undefined)
     // Stopped for want of an account, not by anyone's choice: its work isn't finished, and it never reads as done.
     const unfinished = reason !== undefined && reason === edge.tuned?.rerouted?.line
@@ -761,9 +788,9 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
   const phase = latest?.status === "progress" && !thread.awaiting ? reportPhase(latest) : undefined
   // By identity, never by time: an answer settles the ask it names, and a newer ask is open whatever the clocks say.
   const answered = journal.answered && latest && journal.answered.ask === reportAsk(latest).id ? { by: journal.answered.by, answer: journal.answered.answer } : undefined
-  if (thread.working && edge.closedAt === undefined) return { kind: "working", ...(thread.step && { step: thread.step }), ...(phase && { phase }), ...(answered && answerShown(journal, thread) && { answered }), ...(thread.quiet && { quiet: thread.quiet }) }
+  if (thread.working && !stopped) return { kind: "working", ...(thread.step && { step: thread.step }), ...(phase && { phase }), ...(answered && answerShown(journal, thread) && { answered }), ...(thread.quiet && { quiet: thread.quiet }) }
   // A question it waits on blocks it until the answer has reached it: that answer is what it goes on with.
-  if (latest && (latest.status === "blocked" || latest.status === "needs-input") && !(answered && journal.answered?.delivered) && !edge.closedAt)
+  if (latest && (latest.status === "blocked" || latest.status === "needs-input") && !(answered && journal.answered?.delivered) && !stopped)
     return {
       kind: "blocked",
       question: latest.question ?? reportPhase(latest) ?? "It asks for a decision.",
@@ -774,7 +801,7 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
   const ended = thread.ended
   if (ended?.outcome === "stopped") return { kind: "ended", outcome: "stopped", ...(ended.reason && { reason: ended.reason }) }
   if (latest?.status === "done") {
-    const open = latest.question !== undefined && latest.question.trim() !== "" && !answered && !edge.closedAt
+    const open = latest.question !== undefined && latest.question.trim() !== "" && !answered && !stopped
     return {
       kind: "ended",
       outcome: "done",
@@ -787,7 +814,7 @@ export function childState(edge: ThreadParent, thread: ChildThread, journal: Chi
   if (ended) return ended.outcome === "done"
     ? { kind: "ended", outcome: "done" }
     : { kind: "ended", outcome: ended.outcome === "unknown" ? "failed" : ended.outcome, ...(ended.reason && { reason: ended.reason }) }
-  if (edge.closedAt) return { kind: "ended", outcome: "stopped" }
+  if (stopped) return { kind: "ended", outcome: "stopped" }
   if (latest?.status === "progress" && latest.waitingOn?.length) return { kind: "idle", waitingOn: latest.waitingOn, since: latest.at }
   return { kind: "idle" }
 }

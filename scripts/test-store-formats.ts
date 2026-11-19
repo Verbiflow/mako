@@ -316,8 +316,8 @@ async function sharedFiles(): Promise<void> {
   writeFileSync(cachePath, newerCache)
   const cache = new ProviderProfileCache(cachePath)
   const profile = { id: "codex", label: "Codex", available: true, transport: "app-server" as const, models: [] }
-  await cache.put("codex:/tmp", profile)
-  assert.deepEqual(await cache.get("codex:/tmp"), profile, "this host still caches")
+  await cache.put("codex:account:", "codex:account:/work", profile)
+  assert.deepEqual((await cache.get("codex:account:", "codex:account:/work"))?.profile, profile, "this host still caches")
   assert.equal(readFileSync(cachePath, "utf8"), newerCache, "and leaves the file to the newer Mako")
 
   // A newer Mako's lease this build can't read the accounts of holds them, so removal waits.

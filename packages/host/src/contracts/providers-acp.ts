@@ -70,8 +70,10 @@ export interface HarnessProfile {
   settings?: SessionSettings
   configurationError?: string
   error?: string
-  /** Discovery is still running; nothing here is known yet. */
+  /** Nothing is known yet: no discovery has answered and no snapshot is held. Never set beside models. */
   pending?: boolean
+  /** Held from an earlier discovery and past its freshness; the next read or the picker opening refreshes it. */
+  stale?: boolean
 }
 
 /* ------------------------------------------------------------------ */

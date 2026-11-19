@@ -8,6 +8,7 @@ import { isBusyProviderWork } from "../contracts/native-agents.js"
 import { failureAfterRetry, holdForRetry, transientCause } from "../contracts/delivery-retry.js"
 import { classifyStartFailure, failureEvidenceOf } from "../contracts/provider-failure.js"
 import { SessionBusyError } from "../contracts/session-hold.js"
+import { NativeVerificationPendingError } from "../contracts/native-verification.js"
 import { SessionHeldError } from "../threads/index.js"
 import { holdForSignIn, releaseSignIn, signInPause } from "../contracts/sign-in-hold.js"
 import type { Actor } from "../contracts/thread-identity.js"
@@ -54,7 +55,8 @@ export class LiveAccounts {
     const busy = boundary.error instanceof SessionBusyError || boundary.error instanceof SessionHeldError
     // A start with nothing to resume is retried too: its release starts it again (`LiveLaunches.relaunch`).
     const cause = resuming || !launched(activeBinding(resident)) ? transientCause(message, failure, busy, evidence) : undefined
-    const retried = cause && holdForRetry(resident.snapshot.requests, cause, message, Date.now())
+    // A wake whose ownership check only timed out is asked again soon; a session held elsewhere keeps the long steps.
+    const retried = cause && holdForRetry(resident.snapshot.requests, cause, message, Date.now(), boundary.error instanceof NativeVerificationPendingError && boundary.error.soon)
     if (retried) {
       hostLog("live", "a message waits to go again: its harness couldn't take it for now", { conversation: resident.snapshot.session.id, cause, error: message })
       return retried

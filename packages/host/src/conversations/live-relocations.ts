@@ -79,6 +79,18 @@ export class LiveRelocations {
     return to
   }
 
+  /**
+   * Before a native start, and before `returnFromRemovedWorktree`: a conversation of a Fin whose worktree Mako retired
+   * once it had finished gets that worktree made again at the same path, so its session resumes where it began, on its
+   * branch, and never in the project's own checkout. Undefined, with nothing to wait for, when its folder is there or
+   * was never retired. When it can't be made again the start goes on as for any removed worktree, and its transcript
+   * says why (`restoreWorktree`).
+   */
+  restoreRetiredWorktree(resident: Resident): Promise<void> | undefined {
+    if (resident.driver || resident.opening || resident.closing) return undefined
+    return this.access.dependencies.restoreWorktree?.(resident.snapshot.session.id, resident.snapshot.session.cwd)
+  }
+
   /** Before a native start: a conversation whose worktree was removed goes on in the project folder it was made from. */
   returnFromRemovedWorktree(resident: Resident): void {
     if (resident.driver || resident.opening || resident.closing) return

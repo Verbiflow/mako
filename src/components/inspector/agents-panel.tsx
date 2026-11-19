@@ -2,7 +2,7 @@ import { useHarnessIdentity } from "@/lib/harness-label"
 import { memo, useCallback, useMemo, useRef, useState } from "react"
 import { ChevronDownIcon, GitBranchIcon, HourglassIcon, SquareIcon } from "lucide-react"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
-import { conversationWork, type AcpState, type LiveAcpConversation } from "@/state/acp-state"
+import { conversationWork, useAcpConversation, useRailAcp, type AcpState, type LiveAcpConversation } from "@/state/acp-state"
 import { toggleAgentsPanel } from "@/state/window-routes"
 import { shallowEqual } from "@/state/store"
 import { threads, useThreads } from "@/state/threads"
@@ -11,8 +11,9 @@ import { capabilityText } from "@mako/host/contracts/harness-capabilities"
 import { backgroundWork, backgroundWorkText } from "@mako/host/contracts/background-work"
 import { isActiveNativeAgent, isProviderWork, type NativeWork } from "@mako/host/contracts/native-agents"
 import { rollup, rollupChip, rollupLabel, rosterChildren } from "@mako/host/contracts/children"
-import { ApexFinsSection } from "@/components/inspector/apex-fins-section"
-import { apexConversation, openFinInApex, threadChildren, threadRollup, useApexView } from "@/state/apex-fins"
+import { ApexOverview, OverviewHeading, OverviewMore } from "@/components/inspector/apex-overview"
+import { foldKey, OVERVIEW_SHOWN, overviewChildren, toggleOverviewFold, toggleOverviewOpened, useOverviewFolds } from "@/state/apex-overview"
+import { apexConversation, openFinInApex, threadRollup, useApexView } from "@/state/apex-fins"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { HarnessIcon } from "@/components/ui/provider-icon"
@@ -103,10 +104,11 @@ function ordered(agents: readonly NativeAgent[]): NativeAgent[] {
 
 export function AgentsPanel() {
   const focus = useWorkspaceFocus()
-  const key = useAcp((state) => (focus.identity === `live:${state.activeKey}` ? state.activeKey : undefined))
+  // The rail's store throughout: who's on screen, a roster, a status and a title are facts it says, and a token moves none.
+  const key = useRailAcp((state) => (focus.identity === `live:${state.activeKey}` ? state.activeKey : undefined))
   // A Fin open in its Apex's Thread keeps the Apex's panel, the Fin's row lit.
   const open = useApexView((state) => state.open)
-  const apex = useAcp((state) => (open && key && state.conversations[key]?.threadId === open.child ? apexConversation(state, open.apex)?.key : undefined))
+  const apex = useRailAcp((state) => (open && key && state.conversations[key]?.threadId === open.child ? apexConversation(state, open.apex)?.key : undefined))
   return <ConversationAgents key={apex ?? focus.identity} conversation={apex ?? key ?? undefined} litChild={apex ? open?.child : undefined} />
 }
 
@@ -115,7 +117,11 @@ function liveConversation(state: AcpState, conversation: string | undefined): Li
   return found?.kind === "live" ? found : undefined
 }
 
-/** One conversation's roster as the desk's Agents panel and a phone's Agents sheet both draw it. */
+/**
+ * One conversation's roster as the desk's right rail and a phone's Agents sheet both draw it: an Apex's Overview
+ * (`ApexOverview`) with what its own harness runs under it as Background work, or for a Session with no Fins, that
+ * work alone.
+ */
 export function ConversationAgents({
   conversation,
   transcripts = true,
@@ -129,11 +135,11 @@ export function ConversationAgents({
   /** Where a Fin's row opens it: in place in its Apex's Thread on the desk (`openFinInApex`). */
   onOpenChild?: (agent: NativeAgent, apex: { thread: string; title: string }) => void
 }) {
-  const roster = useAcp((state) => liveConversation(state, conversation)?.nativeAgents)
-  const provider = useAcp((state) => liveConversation(state, conversation)?.harness)
-  const thread = useAcp((state) => liveConversation(state, conversation)?.threadId)
+  const roster = useRailAcp((state) => liveConversation(state, conversation)?.nativeAgents)
+  const provider = useRailAcp((state) => liveConversation(state, conversation)?.harness)
+  const thread = useRailAcp((state) => liveConversation(state, conversation)?.threadId)
   // Its Thread's Fins, as the newest of its conversations holds them: an older Session hears only how they stand.
-  const children = useAcp((state) => (thread ? threadChildren(state, thread) : rosterChildren(liveConversation(state, conversation)?.nativeAgents)))
+  const apex = useRailAcp((state) => overviewChildren(state, thread, conversation).length > 0)
   const apexTitle = useApexName(conversation, thread)
   // Stable, so a batch moving one Fin repaints that Fin's row alone.
   const openChild = useCallback(
@@ -144,24 +150,28 @@ export function ConversationAgents({
     },
     [onOpenChild, thread, apexTitle]
   )
-  const background = useAcp((state) => {
+  const background = useRailAcp((state) => {
     const live = liveConversation(state, conversation)
     const work = live ? backgroundWork(live.session, live.nativeAgents) : null
-    // The Fins section counts the Fins; this line says what else the session waits on.
+    // The Fins' sections count the Fins; this line says what else the session waits on.
     const named = work?.named.filter((agent) => !agent.child) ?? []
     const rest = work && (named.length || work.unnamed) ? { ...work, named, count: named.length + work.unnamed } : null
-    return { waiting: rest ? backgroundWorkText(rest) : undefined, unnamed: work?.unnamed ?? 0, stopping: live?.canceling ?? false }
+    return { waiting: rest ? backgroundWorkText(rest) : undefined, unnamed: work?.unnamed ?? 0 }
   }, shallowEqual)
+  // A stop under way is said with the batches, which the rail's store doesn't repeat: read from the conversation's own entry.
+  const stopping = useAcpConversation(conversation, (live) => (live?.kind === "live" ? live.canceling : false))
   return (
     <AgentRoster
       conversation={conversation}
       roster={roster}
-      children={children}
+      apex={apex}
+      thread={thread}
       provider={provider}
       transcripts={transcripts}
       apexTitle={apexTitle}
       litChild={litChild}
       onOpenChild={thread ? openChild : undefined}
+      stopping={stopping}
       {...background}
     />
   )
@@ -170,14 +180,15 @@ export function ConversationAgents({
 /** An Apex's name as its rail row says it: its Thread's, else its conversation's. */
 function useApexName(conversation: string | undefined, thread: string | undefined): string {
   const listed = useThreads((state) => (thread ? state.threads.find((ref) => ref.threadId === thread)?.title : undefined))
-  const live = useAcp((state) => liveConversation(state, conversation)?.title)
+  const live = useRailAcp((state) => liveConversation(state, conversation)?.title)
   return listed ?? live ?? "This Thread"
 }
 
 function AgentRoster({
   conversation,
   roster,
-  children,
+  apex,
+  thread,
   provider,
   transcripts,
   waiting,
@@ -189,8 +200,9 @@ function AgentRoster({
 }: {
   conversation?: string
   roster?: NativeAgentRoster
-  /** Its Thread's Fins (`threadChildren`). */
-  children: readonly NativeAgent[]
+  /** Whether it leads Fins: its panel is then the Overview, its own provider's work a section under the Fins'. */
+  apex: boolean
+  thread: string | undefined
   apexTitle: string
   litChild?: string
   onOpenChild?: (agent: NativeAgent) => void
@@ -204,11 +216,13 @@ function AgentRoster({
   stopping: boolean
 }) {
   useHarnessIdentity()
-  const [visible, setVisible] = useState(40)
   const capability = useThreads((state) => descriptorFor(state, provider)?.capabilities.nativeAgents)
   const scroller = useRef<HTMLDivElement>(null)
   const agents = useMemo(() => ordered((roster?.agents ?? []).filter(isProviderWork)), [roster])
-  if (agents.length === 0 && !unnamed && !children.length)
+  const foldedKey = foldKey(thread ?? conversation, "background")
+  const folded = useOverviewFolds((state) => Boolean(state.folded[foldedKey]))
+  const opened = useOverviewFolds((state) => Boolean(state.opened[foldedKey]))
+  if (agents.length === 0 && !unnamed && !apex)
     return (
       <Blank
         icon={<GitBranchIcon />}
@@ -222,59 +236,66 @@ function AgentRoster({
         }
       />
     )
-  // Fins are counted by their own section, as every surface counts them (`rollup`); this line is the rest.
+  // Fins are counted by their own sections, as every surface counts them (`rollup`); this line is the rest.
   const running = agents.filter((agent) => !agent.child && isActiveNativeAgent(agent) && !agent.ambient).length + unnamed
   const finished = agents.filter((agent) => !agent.child && !isActiveNativeAgent(agent)).length
+  const summary = waiting || running > 0 || finished > 0 ? (
+    <div className={cn("flex h-7 shrink-0 items-center gap-2 text-label text-faint", apex ? "px-1.5 pl-8" : "px-3.5")}>
+      {waiting ? (
+        <span data-background-summary className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+          <HourglassIcon aria-hidden className="size-3 shrink-0" />
+          <span className="truncate">Waiting on {waiting}</span>
+        </span>
+      ) : running > 0 ? (
+        <span className="tabular text-muted-foreground">{running} running</span>
+      ) : null}
+      {finished > 0 ? <span className="tabular">{finished} finished</span> : null}
+      {waiting && conversation ? (
+        <button
+          type="button"
+          disabled={stopping}
+          onClick={() => void acp.stopBackground(conversation)}
+          className="pressable ml-auto shrink-0 px-1.5 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground disabled:opacity-40"
+        >
+          {stopping ? "Stopping" : "Stop all"}
+        </button>
+      ) : null}
+    </div>
+  ) : null
+  // An Apex's section opens on its first rows, as its Fins' sections do; a Session's own list draws them all, as it did.
+  const shown = !apex || opened ? agents : agents.slice(0, OVERVIEW_SHOWN)
+  const work = (
+    <>
+      {unnamed > 0 ? (
+        <p className="px-2.5 py-2 text-label text-faint">
+          {unnamed === 1 ? "1 more task runs" : `${unnamed} more tasks run`} that {provider ? harnessLabel(provider) : "the provider"} counts without naming.
+        </p>
+      ) : null}
+      {shown.map((agent) => (
+        <AgentRow key={`${agent.bindingId}:${agent.nativeId}`} agent={agent} conversation={conversation} transcript={transcripts} />
+      ))}
+      {apex && agents.length > OVERVIEW_SHOWN ? <OverviewMore rest={agents.length - OVERVIEW_SHOWN} opened={opened} onToggle={() => toggleOverviewOpened(foldedKey)} /> : null}
+      {roster?.limited ? (
+        <p className="px-3 py-2 text-label text-faint">Some older entries are omitted.</p>
+      ) : null}
+    </>
+  )
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {waiting || running > 0 || finished > 0 ? <div className="flex h-7 shrink-0 items-center gap-2 px-3.5 text-label text-faint">
-        {waiting ? (
-          <span data-background-summary className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
-            <HourglassIcon aria-hidden className="size-3 shrink-0" />
-            <span className="truncate">Waiting on {waiting}</span>
-          </span>
-        ) : running > 0 ? (
-          <span className="tabular text-muted-foreground">{running} running</span>
-        ) : null}
-        {finished > 0 ? <span className="tabular">{finished} finished</span> : null}
-        {waiting && conversation ? (
-          <button
-            type="button"
-            disabled={stopping}
-            onClick={() => void acp.stopBackground(conversation)}
-            className="pressable ml-auto shrink-0 px-1.5 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground disabled:opacity-40"
-          >
-            {stopping ? "Stopping" : "Stop all"}
-          </button>
-        ) : null}
-      </div> : null}
+      {apex ? null : summary}
       <div ref={scroller} data-sheet-scroll className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-2">
-        {children.length ? (
-          <ApexFinsSection children={children} conversation={conversation} apexTitle={apexTitle} scroller={scroller} open={litChild} onOpen={onOpenChild} />
-        ) : null}
-        {children.length && (agents.length || unnamed) ? (
-          <div className="flex h-7 items-end px-1.5 pb-1 text-label text-faint">In this turn</div>
-        ) : null}
-        {unnamed > 0 ? (
-          <p className="px-2.5 py-2 text-label text-faint">
-            {unnamed === 1 ? "1 more task runs" : `${unnamed} more tasks run`} that {provider ? harnessLabel(provider) : "the provider"} counts without naming.
-          </p>
-        ) : null}
-        {agents.slice(0, visible).map((agent) => (
-          <AgentRow key={`${agent.bindingId}:${agent.nativeId}`} agent={agent} conversation={conversation} transcript={transcripts} />
-        ))}
-        {agents.length > visible ? (
-          <button
-            type="button"
-            className="pressable w-full px-3 py-2 text-left text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
-            onClick={() => setVisible((count) => count + 40)}
-          >
-            Show more
-          </button>
-        ) : null}
-        {roster?.limited ? (
-          <p className="px-3 py-2 text-label text-faint">Some older entries are omitted.</p>
-        ) : null}
+        {apex ? <ApexOverview thread={thread} conversation={conversation} apexTitle={apexTitle} scroller={scroller} open={litChild} onOpen={onOpenChild} /> : null}
+        {apex && (agents.length || unnamed) ? (
+          <div data-overview-section="background">
+            <OverviewHeading id="background" label="Background work" count={agents.length + unnamed} folded={folded} onToggle={() => toggleOverviewFold(foldedKey)} />
+            {folded ? null : (
+              <>
+                {summary}
+                {work}
+              </>
+            )}
+          </div>
+        ) : apex ? null : work}
       </div>
     </div>
   )
@@ -411,7 +432,7 @@ export function AgentsToggle() {
     const live = activeLiveAcp(state)
     // Its provider's own work; its Fins are its Thread's (`conversationRoster`), whichever of its Sessions is on screen.
     const work = (live?.nativeAgents?.agents ?? []).filter((agent) => !agent.child)
-    // An Apex's Fins say how they stand by the Thread's one rollup, as the crew card, the pips and the phone read it;
+    // An Apex's Fins say how they stand by the Thread's one rollup, as the Shiver card, the pips and the phone read it;
     // the rest of the roster counts as it runs.
     const children = live?.threadId ? threadRollup(state, live.threadId) : rollup(rosterChildren(live?.nativeAgents))
     const running = work.filter((agent) => isActiveNativeAgent(agent) && !agent.ambient)
@@ -437,7 +458,7 @@ export function AgentsToggle() {
       data-fin-counts={reading.finsLabel || undefined}
       onClick={toggleAgentsPanel}
       aria-label={reading.fins || undefined}
-      title={reading.finsLabel ? `${reading.finsLabel}; open the Agents panel` : reading.waiting ? "Background work the session waits on; open the Agents panel" : "Open the Agents panel"}
+      title={reading.finsLabel ? `${reading.finsLabel}; open the Overview` : reading.waiting ? "Background work the session waits on; open the Agents panel" : "Open the Agents panel"}
       className="pressable flex h-7 shrink-0 items-center gap-1.5 px-2 text-ui text-faint hover:bg-fill-hover hover:text-foreground"
     >
       {marks.length ? (

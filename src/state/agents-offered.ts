@@ -1,6 +1,6 @@
 import { rollup, rosterChildren } from "@mako/host/contracts/children"
-import { activeLiveAcp, useAcp } from "@/state/acp"
-import type { AcpState } from "@/state/acp-state"
+import { activeLiveAcp } from "@/state/acp"
+import { useRailAcp, type AcpState } from "@/state/acp-state"
 import { apexViewStore, threadRollup } from "@/state/apex-fins"
 
 /**
@@ -14,12 +14,29 @@ export function rosterOnScreen(state: AcpState, conversation?: string) {
   const inPlace = apexViewStore.get().open
   const thread = inPlace && inPlace.child === live?.threadId ? inPlace.apex : live?.threadId
   const counts = thread ? threadRollup(state, thread) : rollup(rosterChildren(live?.nativeAgents))
-  return { live, counts }
+  return { live, counts, thread }
 }
+
+/**
+ * The Apex on screen, by its Thread: the Thread shown when it has Fins, or the Apex of a Fin opened in place. Its right
+ * rail opens on the Overview and its Agents row is named so; undefined for any other Thread.
+ */
+export function apexOnScreen(state: AcpState, conversation?: string): string | undefined {
+  const { counts, thread } = rosterOnScreen(state, conversation)
+  return counts.total > 0 ? thread : undefined
+}
+
+/** What the Agents surface is called now: an Apex's is its Overview, and a Session's own work stays Agents. */
+export function useAgentsLabel(conversation?: string): string {
+  return useRailAcp((state) => (apexOnScreen(state, conversation) ? OVERVIEW_LABEL : AGENTS_LABEL))
+}
+export const OVERVIEW_LABEL = "Overview"
+export const AGENTS_LABEL = "Agents"
 
 /** Agents has its row while there is anyone to show: a quiet Session has no use for it, and the composer's chip says the same. */
 export function useAgentsOffered(conversation?: string): boolean {
-  return useAcp((state) => {
+  // The rail's store: a roster, a status and the conversation on screen are facts it says, and no token moves one.
+  return useRailAcp((state) => {
     const { live, counts } = rosterOnScreen(state, conversation)
     // Its provider's own work, or its Thread's Fins, whichever of its Sessions is on screen (`conversationRoster`).
     return counts.total > 0 || Boolean(live?.nativeAgents?.agents.some((agent) => !agent.child))

@@ -1,6 +1,6 @@
 import { chatFolderOf } from "@mako/host/contracts/chat-folders"
 import { getMako, hasBridge } from "@/lib/bridge"
-import { acpStore } from "@/state/acp-state"
+import { railAcpStore } from "@/state/acp-state"
 import { createHook, createStore } from "@/state/store"
 import { threadsStore } from "@/state/thread-store"
 
@@ -68,9 +68,11 @@ export function followChatFolders(): void {
     check(fresh)
   }
   threadsStore.subscribe(scan)
-  acpStore.subscribe(() => {
+  // The rail's store: which conversations run, and where, are facts it says. Heard from the live store, this passed
+  // over every conversation for each streamed batch of any of them.
+  railAcpStore.subscribe(() => {
     const now = new Set<string>()
-    for (const conversation of Object.values(acpStore.get().conversations)) {
+    for (const conversation of Object.values(railAcpStore.get().conversations)) {
       if (conversation.kind !== "live" || conversation.session.status !== "running") continue
       const folder = folderOf(conversation.session.cwd)
       if (folder) now.add(folder)

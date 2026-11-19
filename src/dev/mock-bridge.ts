@@ -1,8 +1,10 @@
+import { getMako } from "@/lib/bridge"
 import type { LimitNoticeChoice } from "@mako/host/contracts/agents"
 import { fixtureHarnesses } from "./harness-fixtures"
 import type { ToolStep } from "@mako/host/contracts/tool-steps"
 import { FileIndexCore, type FileFoldersOptions, type FileGrepResults } from "@mako/host/contracts/file-index"
 import { mockAppshots } from "./mock-appshots"
+import { crowdedRail } from "./mock-crowded-rail"
 import { mockAuthoring } from "./mock-authoring"
 import { encodeControlVideoBatch } from "@mako/control-runtime/contracts"
 import { planContinuation, resumeLedger } from "@mako/host/contracts/thread-continuation"
@@ -96,7 +98,7 @@ import {
 } from "./mock-runtime-fixtures"
 import { agedGroup, busyRefs, busySnapshot, busySummaries, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE } from "./mock-busy-thread"
 import { openAsk } from "@mako/host/contracts/children"
-import { benchChild, benchApexes, CHURN, apexRefs, apexSnapshots, apexSummaries, placedSnapshot, APEX_CONVERSATION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
+import { apexWorktrees, apexWorktreeSummaries, benchChild, benchApexes, CHURN, apexRefs, apexSnapshots, apexSummaries, placedSnapshot, APEX_CONVERSATION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
 
 /** The repository's pull requests as the `#` menu finds them. */
 const MOCK_PULLS: PullRequestListing[] = [
@@ -142,6 +144,8 @@ async function mockThreadContexts(paths: string[]): Promise<Array<ThreadFileCont
 /** What the page staged, so a pasted or reloaded attachment reads back the words it was given. */
 const STAGED_TEXT = new Map<string, string>()
 const STAGED_MEDIA = new Map<string, string>()
+/** A file staged in pieces (`stageFilePart`), as base64 so far, by its path. */
+const STAGED_PARTS = new Map<string, string>()
 
 const utilityChoices: UtilityWorkChoices = { commit: "auto" }
 /** Whether a fixture hands agents to the cloud as the Mac sleeps. */
@@ -313,6 +317,21 @@ function mockPick() {
   }
 }
 
+/**
+ * The crowded world's clock, kept across reloads: a real host's times stay where they were when the window reloads,
+ * and a world stamped afresh on each load would read as new work everywhere.
+ */
+/** The crowded world's archive as a reload finds it: keys, or none when what's there doesn't read. */
+const CrowdedArchived = z.array(z.string()).catch([])
+
+function crowdedClock(): number {
+  const kept = Number(localStorage.getItem("mako.mock.crowded.now"))
+  if (kept > 0) return kept
+  const now = Date.now()
+  localStorage.setItem("mako.mock.crowded.now", String(now))
+  return now
+}
+
 export function installMockBridge() {
   const pickStarted = new Map<string, number>()
   const listeners = new Set<(event: HostEvent) => void>()
@@ -366,7 +385,7 @@ export function installMockBridge() {
   const removedWorktrees = new Set<string>()
   const listedWorktrees = () => ({
     root: SETUP_WORKTREE_ROOT,
-    worktrees: [...(setupWorktree ? [setupWorktree] : []), ...madeWorktrees, ...(scene === "rail" ? RAIL_WORKTREES : [])].filter((worktree) => !removedWorktrees.has(worktree.path)),
+    worktrees: [...(setupWorktree ? [setupWorktree] : []), ...madeWorktrees, ...(scene === "rail" ? RAIL_WORKTREES : []), ...(scene === "apex" ? apexWorktrees() : [])].filter((worktree) => !removedWorktrees.has(worktree.path)),
   })
   let meta = { ...META }
   if (sinceWorktree) meta.cwd = sinceWorktree.path
@@ -401,10 +420,10 @@ export function installMockBridge() {
   const returnCalls: string[] = []
   let refuseNextAgentAnswer = false
   const continueCalls: string[] = []
-  const crewContinueCalls: { conversation: string; request: string; choice: LimitNoticeChoice }[] = []
-  let crewLimitRoom = true
-  let crewNextCalls = 0
-  const crewWait = crypto.randomUUID()
+  const shiverContinueCalls: { conversation: string; request: string; choice: LimitNoticeChoice }[] = []
+  let shiverLimitRoom = true
+  let shiverNextCalls = 0
+  const shiverWait = crypto.randomUUID()
   /** Sessions whose work is paused because the account signed out mid-turn, as the host pauses them. */
   const signInPauses = new Map<string, SignInHold>()
   /** Messages that already waited for this Mac to hear its account. */
@@ -488,6 +507,10 @@ export function installMockBridge() {
    * (`ThreadRef.copyOnly`), as the archive's migration leaves them.
    */
   const keptScene = scene === "kept"
+  /** `?app=crowded`: many projects, an Apex with 60 Fins, a catalog that lands in steps and another device's rows after it (`crowdedRail`). */
+  const crowded = scene === "crowded" ? crowdedRail(crowdedClock()) : undefined
+  let crowdedReads = 0
+  if (crowded) boot.live.push(...crowded.own)
   /** `?app=busy`: a long Thread of four Sessions, its first waiting on three agents and twenty-two commands. */
   if (scene === "busy") {
     BUSY_SESSIONS.forEach((entry, index) => liveSnapshots.set(entry.conversation, busySnapshot(index)))
@@ -567,15 +590,15 @@ export function installMockBridge() {
         emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: APEX_CONVERSATION, revision: next.revision, updates: [], control })) })
       },
       continues: () => [...continueCalls],
-      crewContinues: () => [...crewContinueCalls],
-      crewReads: () => crewNextCalls,
-      crewLimitRoom(value: boolean) {
-        crewLimitRoom = value
+      shiverContinues: () => [...shiverContinueCalls],
+      shiverReads: () => shiverNextCalls,
+      shiverLimitRoom(value: boolean) {
+        shiverLimitRoom = value
         setChildren((liveSnapshots.get(APEX_CONVERSATION)?.nativeAgents?.agents ?? []).map(agent => ({ ...agent, ...(agent.child && { child: { ...agent.child } }) })))
       },
       /**
        * The Apex's own turn starts or ends, as a wake or a settle would: ending it also settles its own still-
-       * dispatching request (the digest it was reading), so the crew card draws in its place, the Fins in the
+       * dispatching request (the digest it was reading), so the Shiver card draws in its place, the Fins in the
        * roster untouched.
        */
       /** The Apex's session goes through a transition as its host would say it: starting, reconnecting, hibernated, failed. */
@@ -969,7 +992,9 @@ export function installMockBridge() {
     )
   }
 
-  const archivedThreads = new Set<string>()
+  /** The crowded world's archive outlives a reload, as a host's does (`?app=crowded`). */
+  const CROWDED_ARCHIVED = "mako.mock.crowded.archived"
+  const archivedThreads = new Set<string>(crowded ? CrowdedArchived.parse(JSON.parse(localStorage.getItem(CROWDED_ARCHIVED) ?? "[]")) : [])
   let archiveRevision = 0
   let workspaceMoves: WorkspaceMoves = { requests: [], alwaysAllowed: [] }
   let planBuilds: PlanBuilds = {}
@@ -1036,6 +1061,7 @@ export function installMockBridge() {
     threadAppOutput: async () => ({ text: "", cursor: { file: "", offset: 0 }, reset: false }),
     threadAppMarks: async () => [],
     followThreadApps: async () => ({ kind: "unavailable" }),
+    windowShown: async () => false,
     viewHints: async () => null,
     followConversationApp: async () => ({ kind: "unavailable" }),
     conversationApp: async () => ({ folder: "/fixture", app: { kind: "none", project: "fixture", root: "/fixture" } }),
@@ -1079,6 +1105,7 @@ export function installMockBridge() {
     },
     worktreeSummaries: async (): Promise<WorktreeSummary[]> => [
       ...madeWorktrees.map((worktree) => ({ path: worktree.path, into: "main", ahead: 0, changes: 0, landing: { kind: "empty" as const }, pull: null, behind: { from: "origin/main", commits: 0 } })),
+      ...(scene === "apex" ? apexWorktreeSummaries() : []),
       ...(scene === "rail" ? RAIL_SUMMARIES.map((summary) => summary.path !== sinceWorktree?.path ? summary : {
         ...summary,
         ahead: sinceLanded ? 0 : 3,
@@ -1258,6 +1285,7 @@ export function installMockBridge() {
       const key = threadArchiveKey(command.target)
       if (command.archived) archivedThreads.add(key)
       else archivedThreads.delete(key)
+      if (crowded) localStorage.setItem(CROWDED_ARCHIVED, JSON.stringify([...archivedThreads]))
       const snapshot = {
         revision: ++archiveRevision,
         keys: [...archivedThreads],
@@ -1351,6 +1379,13 @@ export function installMockBridge() {
       elapsed: 3,
     }),
     watchFile: async () => {},
+    stageFilePart: async (name: string, data: string, into?: { path: string; offset: number }) => {
+      // Pieces are whole three-byte groups, so their base64 joins: the file is what `stageFile` makes of them so far.
+      const whole = (into ? STAGED_PARTS.get(into.path) ?? "" : "") + data
+      const staged = await getMako().stageFile(name, whole)
+      STAGED_PARTS.set(staged.path, whole)
+      return staged
+    },
     stageFilePath: async (sourcePath: string) => ({
       path: sourcePath,
       name: sourcePath.split("/").pop() ?? "f",
@@ -1766,6 +1801,12 @@ export function installMockBridge() {
     openUrl: async () => {},
     threads: async () => {
       const fixture = mockThreads()
+      if (crowded) {
+        crowdedReads += 1
+        // The first read finds the host still scanning; the other device's Sessions arrive once the list is whole.
+        if (crowdedReads === 2) setTimeout(() => emit({ type: "live-listed", summaries: crowded.elsewhere }), 1_000)
+        return { ready: crowdedReads > 1, threads: crowdedReads > 1 ? crowded.refs : crowded.early, activity: {} }
+      }
       const threads = scene === "rail" ? fixture.threads.map(railRef) : [...keptThreads(), ...(scene === "busy" ? busyRefs() : []), ...(scene === "apex" ? [...apexRefs(), ...benchScene.refs] : []), ...fixture.threads]
       if (scene === "rail" && !railRunsSent) {
         railRunsSent = true
@@ -3674,15 +3715,15 @@ export function installMockBridge() {
     },
     agentsNextPlace: async (conversation: string, notice?: string) => {
       if (!notice) return { label: "Codex", harness: "codex" }
-      crewNextCalls++
+      shiverNextCalls++
       const agent = liveSnapshots.get(conversation)?.nativeAgents?.agents.find(agent => agent.child?.limitNotice?.id === notice && agent.child.limitNotice.waiting)
-      return crewLimitRoom && agent?.child ? { label: "Codex", harness: "codex", choice: { notice, place: "codex", waits: [{ thread: agent.child.thread, request: agent.child.limitNotice!.waiting!.version ?? crewWait }] } } : null
+      return shiverLimitRoom && agent?.child ? { label: "Codex", harness: "codex", choice: { notice, place: "codex", waits: [{ thread: agent.child.thread, request: agent.child.limitNotice!.waiting!.version ?? shiverWait }] } } : null
     },
     agentsContinueNext: async (conversation: string, request: string, choice?: LimitNoticeChoice) => {
       if (!choice) { continueCalls.push(conversation); return true }
-      crewContinueCalls.push({ conversation, request, choice })
+      shiverContinueCalls.push({ conversation, request, choice })
       const snapshot = liveSnapshots.get(conversation)
-      if (!snapshot?.nativeAgents || !crewLimitRoom) return false
+      if (!snapshot?.nativeAgents || !shiverLimitRoom) return false
       const agents = snapshot.nativeAgents.agents.map(agent => {
         if (agent.child?.limitNotice?.id !== choice.notice) return agent
         const child = { ...agent.child }; delete child.limitNotice

@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs"
-import { join } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { PreviewBudget } from "./preview-cache.js"
 import { locate, Repository } from "./repository.js"
 import type { Git } from "./run.js"
@@ -25,6 +25,12 @@ export class Repositories {
    */
   readonly #folders = new Map<string, { root: string; own: boolean }>()
   readonly #locating = new Map<string, Promise<Repository | null>>()
+  /**
+   * Folders Git said are in no repository, when no `.git` was at or above them: the answer stands until one is, so
+   * asking again starts no process. A folder that never is one was asked about again by everything that listed it,
+   * each time by a `git rev-parse` that failed the same way.
+   */
+  readonly #outside = new Set<string>()
   #sweeping: NodeJS.Timeout | undefined
 
   constructor(git: Git) {
@@ -43,6 +49,10 @@ export class Repositories {
     signal?.throwIfAborted()
     const known = this.known(cwd)
     if (known) return known
+    if (this.#outside.has(cwd)) {
+      if (!holdsDotGit(cwd)) return null
+      this.#outside.delete(cwd)
+    }
     // Callers share one lookup, so none of their signals may cancel it; each stops waiting on its own.
     let pending = this.#locating.get(cwd)
     if (!pending) {
@@ -87,13 +97,21 @@ export class Repositories {
     this.#open.clear()
     this.#used.clear()
     this.#folders.clear()
+    this.#outside.clear()
     clearInterval(this.#sweeping)
     this.#sweeping = undefined
   }
 
   async #find(cwd: string): Promise<Repository | null> {
     const location = await locate(this.#git, cwd)
-    if (!location) return null
+    if (!location) {
+      // Only where the files agree with Git: a `.git` Git wouldn't read (a broken one, one it doesn't trust) is asked about each time.
+      if (!holdsDotGit(cwd)) {
+        this.#outside.add(cwd)
+        if (this.#outside.size > FOLDER_LIMIT) this.#outside.delete(this.#outside.keys().next().value!)
+      }
+      return null
+    }
     let repository = this.#open.get(location.root)
     if (!repository || repository.gitDir !== location.gitDir) {
       if (repository) this.#forget(location.root, repository)
@@ -128,5 +146,13 @@ export class Repositories {
     this.#open.delete(root)
     this.#used.delete(repository)
     for (const [cwd, folder] of this.#folders) if (folder.root === root) this.#folders.delete(cwd)
+  }
+}
+
+/** Whether `cwd` or a folder above it holds a `.git`, which is where Git looks for a repository around a folder. */
+function holdsDotGit(cwd: string): boolean {
+  for (let folder = resolve(cwd); ; folder = dirname(folder)) {
+    if (existsSync(join(folder, ".git"))) return true
+    if (dirname(folder) === folder) return false
   }
 }

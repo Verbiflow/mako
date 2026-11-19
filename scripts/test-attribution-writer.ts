@@ -654,7 +654,7 @@ test("ten seconds of journal traffic cannot bypass a broken writer's backoff", {
 })
 
 
-test("a completed shell recovers silent writes through the writer and Git helper while the host stays runnable", { timeout: 20_000 }, async () => {
+test("a completed shell recovers silent writes through the writer, its Git its own, while the host stays runnable", { timeout: 20_000 }, async () => {
   const root = scratch(), repo = join(root, "repo")
   execFileSync("git", ["init", "-q", repo])
   writeFileSync(join(repo, "a.ts"), "original\n")
@@ -691,8 +691,8 @@ test("a completed shell recovers silent writes through the writer and Git helper
       const entries = store.entries(0)
       assert.deepEqual(entries.map((entry) => [entry.path, entry.author.certainty]).sort(), [["a.ts", "window"], ["generated.ts", "window"]])
     } finally { store.close() }
-    assert(traces.some((trace) => trace.args.includes("--exclude-standard")), "the real Git inventory went through the injected helper runner")
-    assert(!traces.some((trace) => trace.args.length === 2 && trace.args[0] === "ls-files" && trace.args[1] === "-z"), "the cached tracked-path hint must cross both sides of the writer boundary")
+    // The owner runs its own Git, in its worker: a flush once waited behind the host's thread and its Git queue for it.
+    assert(!traces.some((trace) => trace.args.includes("--exclude-standard")), "the owner's Git never goes through the host's runner")
   } finally {
     clearInterval(pulse)
     await client?.close()

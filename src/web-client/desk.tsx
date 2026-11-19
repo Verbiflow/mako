@@ -1,4 +1,5 @@
 import { useLimitContinueNotice } from "@/components/composer/account-notice"
+import { revealFolder } from "@/state/rail-ranks"
 import { useAskNotice } from "@/components/composer/agent-ask-card"
 import { askBringBack } from "./moves"
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
@@ -128,6 +129,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
         },
         newSession: () => addSession.current?.() ?? false,
         newThreadIn: (cwd) => {
+          revealFolder(cwd, null)
           // Where the folder's Sessions run: its Mac, or the cloud.
           const row = latest.current.list.rows.find((each) => each.folder === cwd)
           latest.current.newThread(row ? { place: row.runsOn.kind === "cloud" ? CLOUD_PLACE : row.runsOn.deviceId, project: cwd } : undefined)
@@ -488,7 +490,7 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession 
   }, [addSessionRef, canAdd])
   const tabs = useThreadTabs(useMemo(() => ({ thread: threadId, session: session?.row.session }), [threadId, session?.row.session]))
   const shown = session?.row.session
-  // The Fin opened from the crew card or Agents, in this pane as the phone opens it: its one tab beside the Apex's Sessions.
+  // The Fin opened from the Shiver card or Agents, in this pane as the phone opens it: its one tab beside the Apex's Sessions.
   const apexConversation = session?.row.conversation
   const child = useDeskFin((state) => (state.fin?.thread === threadId ? state.fin.agent : null))
   const openChild = useCallback(
