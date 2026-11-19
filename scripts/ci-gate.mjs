@@ -365,6 +365,8 @@ export const STEPS = [
   [3, "tsx scripts/test-refreshed-fork.ts"],
   [2, "tsx scripts/test-release-timelines.ts"],
   [3, "node scripts/test-remove-fixture-desk.mjs"],
+  // build-control-runtime's cache: a build over another run's outputs is a cold build's, whatever their times (#987).
+  [2, "node scripts/test-restored-build.mjs"],
   [1, "tsx --tsconfig tsconfig.app.json scripts/test-render-caches.ts"],
   [1, "tsx scripts/test-repeated-calls.ts"],
   [3, "tsx scripts/test-replay-setup-notices.ts"],
