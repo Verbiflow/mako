@@ -334,10 +334,10 @@ try {
     assert.deepEqual(await f.sweep(), ["part"], "its own Fin closes first, and holds it open that pass")
     assert.equal(f.edge().closedAt, undefined)
     // The check-in Mako armed for it while its part worked is a wait of its own: armed, it holds its edge open too.
-    const crew = f.world.store.armedTurnWaitOf(f.fin)
-    assert.equal(crew?.armedBy, "mako")
+    const shiver = f.world.store.armedTurnWaitOf(f.fin)
+    assert.equal(shiver?.armedBy, "mako")
     assert.deepEqual(await f.sweep(false), [], "an armed check-in keeps it open")
-    assert.equal(f.world.agents.stopWaiting(f.fin, crew.id), true)
+    assert.equal(f.world.agents.stopWaiting(f.fin, shiver.id), true)
     assert.deepEqual(await f.sweep(false), ["worker"], `then it closes: ${f.world.agents.keptOpenBy(f.child)}`)
     // The person writing to the part opens it, and the Fin above it with it: no open Fin stands under a closed one.
     f.world.say(sub.conversation, "One more part.")

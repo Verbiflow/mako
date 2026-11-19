@@ -711,7 +711,7 @@ if (model) {
   phases.push({ name: "steady", from: probedFrom, to: Date.now() })
   regions("working")
   // The burst: every working Fin's turn ends in one moment, while a window opens the longest conversation and reads
-  // it back a page at a time, and each seeded Apex's Fins are listed, as its own turn and its window's crew ask.
+  // it back a page at a time, and each seeded Apex's Fins are listed, as its own turn and its window's Shiver ask.
   let burst: { seconds: number; finsEnded: number; finsGated: number; openMs: number | null; pages: number; bytes: number; listMs: (number | null)[]; railMs: number | null } | undefined
   if (Number(values.burst) > 0) {
     const burstFrom = Date.now()

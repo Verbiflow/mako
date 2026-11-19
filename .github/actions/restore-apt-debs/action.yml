@@ -1,0 +1,40 @@
+name: Restore Ubuntu packages' .debs
+description: Restore the folder of .debs `scripts/install-apt-cached.sh` installs the given packages from with no network. The job saves it with actions/cache/save under `key` when `cache-hit` isn't true and the folder holds `complete`.
+inputs:
+  packages:
+    description: The packages, as the install names them, which name the folder and its key.
+    required: true
+outputs:
+  path:
+    description: The folder, for `install-apt-cached.sh` and the save.
+    value: ${{ steps.key.outputs.path }}
+  key:
+    description: The key to save the folder under.
+    value: ${{ steps.key.outputs.key }}
+  cache-hit:
+    description: Whether an entry for exactly this image was restored.
+    value: ${{ steps.restore.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    # The runner's image decides the set: the folder holds what the image lacks, at the versions Ubuntu had when it was
+    # saved. Its weekly version is in the key, so each image saves its own set; one rolling out restores the last
+    # image's (the install leaves alone what the image already has, and downloads what the set no longer covers).
+    # v1 is bumped by hand to start every set over.
+    - id: key
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+      run: |
+        name=$(echo "$PACKAGES" | tr ' ' '-')
+        os=$(. /etc/os-release && echo "$ID$VERSION_ID-$VERSION_CODENAME")
+        prefix="apt-debs-v1-$name-${{ runner.os }}-${{ runner.arch }}-${ImageOS:-$os}-"
+        echo "path=$RUNNER_TEMP/apt-debs-$name" >> "$GITHUB_OUTPUT"
+        echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+        echo "key=$prefix${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+    - id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.key.outputs.path }}
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: ${{ steps.key.outputs.prefix }}
