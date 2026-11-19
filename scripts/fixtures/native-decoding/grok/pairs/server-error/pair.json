@@ -1,13 +1,13 @@
 {
   "harness": "grok",
   "native": {
-    "version": "1.0.88"
+    "version": "1.0.89"
   },
   "about": "Say hello. The model fails with a server error, the harness retries once and the turn fails.",
   "stores": [
     {
       "reader": "grok",
-      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a1eb19-8e90-7a32-a9c7-e3d1fbc81883/updates.jsonl",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a1ef51-4235-7e01-a880-9ca13f196a25/updates.jsonl",
       "known": []
     }
   ]

@@ -152,8 +152,8 @@
         "shell": {
           "form": "function",
           "description": {
-            "chars": 600,
-            "sha": "b8b2953bfbd9"
+            "chars": 599,
+            "sha": "f2278ede28e0"
           },
           "parameters": {
             "command": {
@@ -430,8 +430,8 @@
         "shell": {
           "form": "function",
           "description": {
-            "chars": 600,
-            "sha": "b8b2953bfbd9"
+            "chars": 599,
+            "sha": "f2278ede28e0"
           },
           "parameters": {
             "command": {
@@ -679,8 +679,8 @@
         "shell": {
           "form": "function",
           "description": {
-            "chars": 600,
-            "sha": "b8b2953bfbd9"
+            "chars": 599,
+            "sha": "f2278ede28e0"
           },
           "parameters": {
             "command": {
@@ -957,8 +957,8 @@
         "shell": {
           "form": "function",
           "description": {
-            "chars": 600,
-            "sha": "b8b2953bfbd9"
+            "chars": 599,
+            "sha": "f2278ede28e0"
           },
           "parameters": {
             "command": {
@@ -1188,8 +1188,8 @@
         "shell": {
           "form": "function",
           "description": {
-            "chars": 600,
-            "sha": "b8b2953bfbd9"
+            "chars": 599,
+            "sha": "f2278ede28e0"
           },
           "parameters": {
             "command": {
@@ -1425,8 +1425,8 @@
         "shell": {
           "form": "function",
           "description": {
-            "chars": 600,
-            "sha": "b8b2953bfbd9"
+            "chars": 599,
+            "sha": "f2278ede28e0"
           },
           "parameters": {
             "command": {
@@ -1633,8 +1633,8 @@
         "shell": {
           "form": "function",
           "description": {
-            "chars": 600,
-            "sha": "b8b2953bfbd9"
+            "chars": 599,
+            "sha": "f2278ede28e0"
           },
           "parameters": {
             "command": {
@@ -1870,8 +1870,8 @@
         "shell": {
           "form": "function",
           "description": {
-            "chars": 600,
-            "sha": "b8b2953bfbd9"
+            "chars": 599,
+            "sha": "f2278ede28e0"
           },
           "parameters": {
             "command": {

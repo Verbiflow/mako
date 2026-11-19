@@ -27,6 +27,11 @@ import type { Entry } from "@mako/sessions/entries"
 export interface ResidencyBudget {
   bytes: number
   recent: number
+  /**
+   * The host's alone: one of the rest unused this long goes under budget too, to its listing's line. A few hundred
+   * conversations read in as the host starts and never looked at again held their content and a connection each.
+   */
+  idleMs?: number
 }
 
 export interface ResidencyCandidate {
@@ -44,7 +49,8 @@ export interface ResidencyPlan {
   pinned: number
 }
 
-export function residencyPlan(candidates: readonly ResidencyCandidate[], budget: ResidencyBudget): ResidencyPlan {
+export function residencyPlan(candidates: readonly ResidencyCandidate[], budget: ResidencyBudget, now?: number): ResidencyPlan {
+  const idleBefore = budget.idleMs !== undefined && now !== undefined ? now - budget.idleMs : -Infinity
   let kept = 0
   let pinned = 0
   const loose: ResidencyCandidate[] = []
@@ -58,7 +64,7 @@ export function residencyPlan(candidates: readonly ResidencyCandidate[], budget:
   loose.sort((left, right) => right.usedAt - left.usedAt)
   const evict: string[] = []
   loose.forEach((candidate, index) => {
-    if (index < budget.recent || kept + candidate.weight <= budget.bytes) kept += candidate.weight
+    if (index < budget.recent || (candidate.usedAt >= idleBefore && kept + candidate.weight <= budget.bytes)) kept += candidate.weight
     else evict.push(candidate.id)
   })
   return { evict, kept, pinned }
@@ -119,6 +125,11 @@ export class ContentWeights {
     for (const request of content.requests ?? []) shared.add(request)
     if (content.control) shared.add(content.control)
     if (content.configOptions) shared.add(content.configOptions)
+  }
+
+  /** What one entry weighs, measured once while it is the same object: twice its JSON length. */
+  entry(value: Entry): number {
+    return this.#measure(value)
   }
 
   #measure(value: Measured): number {

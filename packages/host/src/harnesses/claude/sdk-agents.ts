@@ -51,6 +51,11 @@ export class ClaudeAgents {
     return this.agents.get(taskId)
   }
 
+  /** The session's own tasks still at work: what a Stop that keeps the process ends one by one. A subagent's go with it. */
+  running(): string[] {
+    return [...this.agents.values()].filter((agent) => !settledKinds.has(agent.state.kind) && !this.owned.has(agent.nativeId)).map((agent) => agent.nativeId)
+  }
+
   /** The task belongs to a subagent; its end is not the session's news. */
   ownedBySubagent(taskId: string): boolean {
     return this.owned.has(taskId)

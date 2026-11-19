@@ -38,8 +38,11 @@ export interface GitRuntime {
   /** Runs a background command below foreground work, such as `nice -n 19`. */
   background?: (command: string, args: readonly string[]) => [string, string[]]
   trace?: (trace: GitTrace) => void
-  /** How long a write waits for its repository's earlier writes; `WRITE_TURN_WAIT_MS` unless a test shortens it. */
-  writeTurnWaitMs?: number
+  /**
+   * Calls `waited` once a write has waited `ms` (`WRITE_TURN_WAIT_MS`) for its repository's earlier writes, and returns
+   * what calls the wait off: a timer, unless a test says itself when the wait has run out.
+   */
+  writeTurnWait?: (ms: number, waited: () => void) => () => void
   /**
    * Calls `overdue` once an idle read has waited `ms` (`IDLE_READ_WAIT_MS`), and returns what calls the wait off: a
    * timer, unless a test says itself when the wait has run out.
@@ -150,7 +153,7 @@ export class Git {
   /** Each repository's last write asked for, by the folder its checkouts share: the next one starts once it ends. */
   readonly #writes = new Map<string, Promise<void>>()
   #writesWaiting = 0
-  readonly #writeTurnWaitMs: number
+  readonly #writeTurnWait: (ms: number, waited: () => void) => () => void
   #readsRunning = 0
   #executable: string | undefined
   #environment: NodeJS.ProcessEnv | undefined
@@ -158,7 +161,7 @@ export class Git {
 
   constructor(runtime: GitRuntime = {}) {
     this.#runtime = runtime
-    this.#writeTurnWaitMs = runtime.writeTurnWaitMs ?? WRITE_TURN_WAIT_MS
+    this.#writeTurnWait = runtime.writeTurnWait ?? timedWait
     this.#idleReadWait = runtime.idleReadWait ?? timedWait
     this.processes = trackProcesses(runtime.processes ?? processRunner, runtime.signal, this.#children)
     this.#repositories = new Repositories(this)
@@ -352,8 +355,8 @@ export class Git {
     }
     if (!before) return done
     this.#writesWaiting += 1
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const waited = new Promise<"waited">((resolve) => { timer = setTimeout(() => resolve("waited"), this.#writeTurnWaitMs) })
+    let cancel = () => {}
+    const waited = new Promise<"waited">((resolve) => { cancel = this.#writeTurnWait(WRITE_TURN_WAIT_MS, () => resolve("waited")) })
     try {
       if ((await Promise.race([before.then(() => "turn" as const), waited])) === "waited") {
         done()
@@ -361,12 +364,12 @@ export class Git {
         throw new GitError({
           kind: "timeout",
           command: subcommandOf(options.args).command,
-          message: `git ${subcommandOf(options.args).command} waited ${(this.#writeTurnWaitMs / 1000).toFixed(this.#writeTurnWaitMs < 10_000 ? 1 : 0)} s for the repository's earlier writes${holding ? `, behind git ${holding.command} in ${holding.cwd}` : ""}.`,
+          message: `git ${subcommandOf(options.args).command} waited ${WRITE_TURN_WAIT_MS / 1000} s for the repository's earlier writes${holding ? `, behind git ${holding.command} in ${holding.cwd}` : ""}.`,
         })
       }
       return done
     } finally {
-      clearTimeout(timer)
+      cancel()
       this.#writesWaiting -= 1
     }
   }

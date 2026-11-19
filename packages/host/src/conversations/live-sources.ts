@@ -20,7 +20,7 @@ import { type CompactionRecovery, ForkPointSchema } from "../contracts/conversat
 import type { Entry } from "@mako/sessions/entries"
 import { retainMismatches } from "../base/stream-mismatches.js"
 import { pagedOf, readBack } from "./paged-entries.js"
-import { inSlices, type Steps } from "@mako/sessions/slices"
+import { inSlices, SLICE_MS, type Steps } from "@mako/sessions/slices"
 
 /**
  * Waits before reading an unread base again after an error: the catalog
@@ -440,7 +440,14 @@ export class LiveSources {
     const { root } = this.access.dependencies
     const started = performance.now()
     const copies: { id: string; bytes: number; changed: number }[] = []
+    // One slice's time for the journals together: a journal with no copy is measured within its own slice, so awaiting
+    // each alone never left the thread, and a few hundred of them, each opened and its base row read, held it 136 ms.
+    let until = performance.now() + SLICE_MS
     for (const id of journalIds(root)) {
+      if (performance.now() >= until) {
+        await new Promise((resolve) => setImmediate(resolve))
+        until = performance.now() + SLICE_MS
+      }
       try {
         const stamp = this.journalStamp(id)
         const settled = this.settledAt.get(id)

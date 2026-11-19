@@ -18,6 +18,7 @@ import {
 import type { LiveAccess, Resident } from "./live-runtime.js"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog } from "../base/host-log.js"
+import { stagedCall } from "../base/live-steps.js"
 import { heldSubmission, STEER_LANDS_MS } from "../harnesses/index.js"
 
 export type SteerInput = Extract<LiveActionInput, { kind: "steer" | "steer-queued" }>
@@ -325,14 +326,14 @@ export class LiveActions {
       const expectedRunId = request.nativeRun.runId
       const attachments = this.host.retainAttachments(input.attachments, input.id)
       retained = { ...input, attachments }
-      const send = () =>
+      const send = () => stagedCall(id, "driver.steer", () =>
         steer(bindingId, {
           id: input.id,
           expectedRunId,
           text: input.text,
           ...input.displayText !== undefined && input.displayText !== input.text && { shown: input.displayText },
           attachments,
-        })
+        }))
       const native = () => {
         // A steer is submitted as a message is: one that runs the person's code by itself waits for the checkpoint
         // its turn's writes still wait on.

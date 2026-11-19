@@ -78,7 +78,7 @@ import { devHostBuildDirectories } from "./base/dev-host-build.js"
 import type { HostOwner } from "./create-host.js"
 import { backgroundWork } from "./contracts/background-work.js"
 import { withChildren } from "./contracts/native-agents.js"
-import { projectFolder, worktreeAt } from "./contracts/worktree-paths.js"
+import { projectFolder, projectFolderOf, worktreeIn } from "./contracts/worktree-paths.js"
 
 type WebHost = Awaited<ReturnType<typeof startWebHost>>
 
@@ -744,9 +744,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       titles: (ids) => store.titlesOf(ids),
       forks: (ids) => store.forksOf(ids),
       moving: (thread) => movesUnderWay.of(thread),
+      // One list for the whole making, indexed once (`worktreeIn`): looked through for every row, twice, it was 600
+      // rows by 108 worktrees a report, 50 to 113 ms of the loop twenty times in five minutes.
       worktree: (folder) => {
-        const found = worktreeAt(made, folder)
-        const project = found && projectFolder(made, folder)
+        const found = worktreeIn(made, folder)
+        const project = found && projectFolderOf(found, folder)
         return found && project ? { project, branch: found.worktree.branch } : undefined
       },
       head: listedHead,
@@ -1263,6 +1265,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     writeHolds,
     // A person's own device reaches their others through the account; a fixture desk reaches none.
     ...(!fixtureDesk && { account: () => late.cloud }),
+    // Only a proof's isolated host opens cloud Fins (`HostConfig.cloudFinProof`); every other host refuses `place: cloud`.
+    ...(!fixtureDesk && config.cloudFinProof && { cloudFinProof: () => late.cloud }),
     finDefaults,
     finCapacity,
     lent: () => lent.count(),

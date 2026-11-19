@@ -160,6 +160,12 @@ export interface Resident {
    * `moveOn`): the process running now was started on what it had, so the next message that names none carries this.
    */
   retuned?: SessionSettings
+  /**
+   * How many access changes the harness hasn't answered yet (`LiveConversations.setMode`). Nothing is dispatched while
+   * one is on its way: a message that arrives behind a change to a narrower level never starts its turn under the
+   * wider one the session is leaving.
+   */
+  modeChanging?: number
   /** One coalesced resume for every prompt that arrives while hibernated. */
   waking?: Promise<void>
   /** At most one automatic account reopen for an input proven unsent. */
