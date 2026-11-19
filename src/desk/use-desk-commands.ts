@@ -40,6 +40,7 @@ import { applyLoadoutEntry } from "@/state/model-loadout"
 import { AGENT_TAB_ID, viewer, viewerStore } from "@/state/viewer"
 import { markAllSeen } from "@/state/notifications"
 import { inboxShortcut } from "@/components/inbox/open-inbox"
+import { toggleAutomations } from "@/state/automations-view"
 import { terminalActions, terminalStore } from "@/state/terminal"
 import { terminalGroupFor } from "@/lib/terminal-layout"
 import { toast } from "sonner"
@@ -116,6 +117,15 @@ const DESK_COMMANDS: DeskCommand[] = [
     hint: "Everything that needs you, across Threads and Fins; again, or Enter, opens the first",
     keywords: "inbox needs you approvals questions next attention",
     run: inboxShortcut,
+  },
+  {
+    id: "view.automations",
+    title: "Automations",
+    section: "View",
+    keys: "mod+shift+a",
+    hint: "Agents that start on a schedule, a commit or an event, and changes agents propose to them",
+    keywords: "automation schedule cron trigger recurring run proposal",
+    run: toggleAutomations,
   },
   {
     id: "attention.clear",

@@ -37,6 +37,11 @@ export const AgentAskWantSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("harness"), action: z.enum(["install", "update"]), harness: z.string() }),
   /** Run now, or the switch, on an automation. */
   z.object({ kind: z.literal("automation"), action: z.enum(["run", "on", "off"]), id: z.string(), cwd: z.string().min(1).optional() }),
+  /**
+   * An agent's proposal to create, change, delete or turn on an automation (`AutomationProposal`): the person's alone
+   * to answer, never an Apex's, and it doesn't hold the agent. `name` is the automation's, as the card says it.
+   */
+  z.object({ kind: z.literal("automation-proposal"), proposal: z.string(), change: z.enum(["create", "update", "delete", "enable"]), id: z.string(), name: z.string().max(120).optional(), cwd: z.string().min(1) }),
 ])
 export type AgentAskWant = z.infer<typeof AgentAskWantSchema>
 
@@ -52,6 +57,8 @@ export type AgentAskAnswer = z.infer<typeof AgentAskAnswerSchema>
 
 /** An ask's two answers as an approval's options, on the path a Fin's asks take to its Apex and the person. */
 export const AGENT_ASK_ALLOW = "allow"
+/** Why an allow for an agent's automation proposal is refused wherever it's sent through its ask. */
+export const PROPOSAL_ELSEWHERE = "A proposal is approved where its change is shown: its card in Automations or the Inbox. Its ask only declines."
 export const AGENT_ASK_KEEP = "keep"
 
 /** What a row says while the ask waits, in a line. */
@@ -73,7 +80,16 @@ export function agentAskLine(want: AgentAskWant): string {
       return `Wants to ${want.action} ${want.harness}`
     case "automation":
       return want.action === "run" ? `Wants to run the automation ${want.id}` : `Wants to turn ${want.action} the automation ${want.id}`
+    case "automation-proposal":
+      return `${PROPOSAL_VERBS[want.change]} the automation ${want.name ?? want.id}`
   }
+}
+
+const PROPOSAL_VERBS = { create: "Wants to add", update: "Wants to change", delete: "Wants to delete", enable: "Wants to turn on" } as const
+
+/** Whether only the person may answer an ask: an Apex on full access answers its Fins' other asks. */
+export function personOnlyAsk(want: AgentAskWant): boolean {
+  return want.kind === "automation-proposal"
 }
 
 function settingLine(setting: Setting): string {
@@ -130,6 +146,18 @@ export function agentAskWords(want: AgentAskWant, name: string): AgentAskWords {
         detail: want.action === "run" ? "It starts the automation's agent now, as Run now does." : "It changes whether this automation runs by itself.",
         allow: want.action === "run" ? "Run now" : want.action === "on" ? "Turn on" : "Turn off",
         keep: "Not now",
+      }
+    case "automation-proposal":
+      return {
+        title,
+        description: "in Automations",
+        detail: want.change === "delete"
+          ? "It removes this automation from the project's .mako/automations.json. Automations shows what it was."
+          : want.change === "enable"
+            ? "It lets this automation start Threads on its own, as its triggers say. Automations shows what it runs."
+            : "It writes this automation to the project's .mako/automations.json; it stays off until you turn it on. Automations shows what changes.",
+        allow: want.change === "delete" ? "Delete" : want.change === "enable" ? "Turn on" : "Approve",
+        keep: "Decline",
       }
     case "harness":
       return {

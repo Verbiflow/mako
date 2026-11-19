@@ -1,18 +1,37 @@
 {
+  "version": 2,
   "automations": [
     {
-      "id": "typecheck-on-source-change",
-      "name": "Typecheck after source changes",
-      "prompt": "Run `npm run typecheck` and, if it fails, fix only what it reports. Do not change anything else.",
-      "trigger": "files",
-      "paths": ["src/**/*.ts", "src/**/*.tsx", "electron/**/*.ts"]
-    },
-    {
-      "id": "changelog-on-commit",
-      "name": "Summarise the last commit",
-      "prompt": "Summarise the most recent commit in two sentences: what changed, and why it mattered.",
-      "trigger": "commit",
-      "paths": []
+      "id": "harness-version-bump",
+      "name": "Harness version bump",
+      "prompt": {
+        "objective": "One or more harnesses Mako runs published a release newer than the version Mako tests (the gate's `bumps` below name each harness, the version Mako is on, and the release). Move Mako to each of those releases and finish the job: one pull request, on this run's branch, that a person can merge without redoing anything. For each harness in `bumps`, run `npx tsx scripts/bump-harness-versions.ts <harness> --write --summary <file>` and read what each step says. Where the bump finishes itself (the gate's tools below, if present), let it; where it says something needs a judgement (a new tool, a native kind with no place, a record a newer build changed, a patch that no longer applies, a check that fails), place it in Mako the way the existing harness code does, by reading that harness's decoder, vocabulary and records first. Tools that may be on main by the time this runs, from draft PR #1056 (`mako/bump-finishes-itself`), which lands separately: `scripts/lib/bump-records.ts` (moves each version record once the new build's recording backs it), `scripts/lib/native-kinds.ts` (finds native kinds and record kinds with no place yet), the bump's `--outcome <file>` (`{ harness, version, state, judgements }`, state finished, judgement or broken), `--own-model --budget-tokens <n>` (records a harness whose session flows need its own model, with the key from the environment only and at most n tokens), a patch script's `--check`, and `scripts/assemble-harness-bumps.ts` (puts several harnesses' bumps on one tree without conflicts). Use each one if it's present; if it isn't, do its step by hand with the script that is.",
+        "doneWhen": [
+          "Every harness the gate named is moved to its release, or the pull request says exactly why it isn't (the vendor's feed or install failed, or the release breaks something a person must decide).",
+          "`npm run typecheck`, `npm run lint` (zero errors), `npm run harness:descriptors` with no unexpected diff, `npx tsx scripts/test-harness-definitions.ts` and `npm run test:decoders` pass on the branch.",
+          "One pull request is open from this run's branch against main, with each harness's version change, what the release changed for Mako, and each step's result in its body."
+        ],
+        "boundaries": [
+          "Only the harnesses and versions the gate named; no other dependency moves.",
+          "Session flows run against `scripts/scripted-model.ts`; a harness's own model only with `--own-model` and its token budget, and with no key but the environment's.",
+          "Don't sign in to, or spend from, the person's accounts, and don't edit files outside this worktree.",
+          "Don't merge, force-push, or change main; don't disable, skip or loosen a check to make it pass."
+        ],
+        "output": "The pull request's link; each harness from version to version and whether its checks pass; and every judgement the bump left, each with where it was placed or why it needs the person."
+      },
+      "start": {
+        "harness": "claude",
+        "model": "claude-opus-5-5",
+        "access": "full",
+        "place": "cloud",
+        "whenAway": "cloud",
+        "workspace": { "base": "main", "branch": "harness-versions/{date}" }
+      },
+      "thread": "new",
+      "triggers": [{ "kind": "schedule", "cron": "17 6 * * *", "timezone": "UTC" }],
+      "gate": { "command": "npx tsx scripts/bump-harness-versions.ts --json --gate", "timeoutS": 120 },
+      "limits": { "overlap": "skip", "maxRunsPerDay": 1, "timeoutMin": 180 },
+      "result": "pull-request"
     }
   ]
 }

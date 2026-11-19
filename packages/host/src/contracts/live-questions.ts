@@ -38,6 +38,20 @@ export interface PendingAsk {
   gone?: true
   /** Answered in its own words: its first option allows, its second keeps (`FinAsk.named`). */
   named?: true
+  /** The person's alone to answer, never an Apex's (an agent's automation proposal, `personOnlyAsk`). */
+  personOnly?: true
+  /**
+   * Approved only where its change is shown (an agent's automation proposal): Automations or its Inbox card, by the
+   * fingerprint that showed. Its options here only decline.
+   */
+  review?: AskReview
+}
+
+/** Where an ask is approved instead of from its card: the automation, and the proposal, in Automations. */
+export interface AskReview {
+  project: string
+  automation: string
+  proposal: string
 }
 
 /** Only answered, visible predecessors participate in dependent questions. */
