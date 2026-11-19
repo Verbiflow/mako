@@ -1696,16 +1696,17 @@ async function keep(harness: string, recorder: Recorder, scenario: Scenario, san
     harness,
     native: { version: pair.version },
     about: `${scenario.turns.map((turn) => turn.prompt).join(" / ")} ${scenario.about}`,
-    stores: found.stores.map(({ reader, path, differences }) => {
+    stores: await Promise.all(found.stores.map(async ({ reader, path, differences }) => {
       const previous = before?.stores.find((store) => store.reader === reader)
+      const children = await carriedChildren(reader, sandbox.home, path, previous?.children)
       return {
         reader,
         path: scrub(relative(sandbox.home, path)),
         known: explained(differences, previous?.known),
         ...previous?.uncited && { uncited: previous.uncited },
-        ...previous?.children && { children: previous.children },
+        ...children && { children },
       }
-    }),
+    })),
   }
   if (found.replay) kept.replay = { known: explained(found.replay, before?.replay?.known) }
   await writeFile(join(folder, "pair.json"), `${JSON.stringify(kept, null, 2)}\n`)
@@ -1717,6 +1718,23 @@ async function keep(harness: string, recorder: Recorder, scenario: Scenario, san
     throw new Error(`The ${harness} ${scenario.name} pair still identified someone after scrubbing, so it wasn't kept (values not printed):\n${describeLeaks(leaks)}`)
   }
   return folder
+}
+
+/**
+ * The children a pair declares, carried to this recording's ids. A child's id is its session's, so every recording
+ * has new ones: each declaration goes to the child at its place in the store's own listing, as it was recorded
+ * before. When the listing has another number of children the declarations stay as they were, for
+ * `test:decoders` to name what differs.
+ */
+export async function carriedChildren<Child extends { nativeId: string }>(reader: string, home: string, store: string, previous: readonly Child[] | undefined): Promise<Child[] | undefined> {
+  if (!previous?.length) return previous && [...previous]
+  const read = storeReader(reader, home)
+  try {
+    const now = (await read.children?.(store).catch(() => null)) ?? []
+    return now.length === previous.length ? previous.map((child, at) => ({ ...child, nativeId: now[at]!.nativeId })) : [...previous]
+  } finally {
+    read.close?.()
+  }
 }
 
 /**
