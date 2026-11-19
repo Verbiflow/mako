@@ -1,13 +1,13 @@
 {
   "harness": "claude",
   "native": {
-    "version": "2.1.327"
+    "version": "2.1.326"
   },
   "about": "Run `sleep 3` in the shell, then tell me how it went. A message steered in while a shell command runs, which the harness reads at its next step, then the answer it asked for.",
   "stores": [
     {
       "reader": "claude",
-      "path": ".claude/projects/-tmp-mako-pair-project/3adf6012-aebe-404e-b1bc-098b30bcc550.jsonl",
+      "path": ".claude/projects/-tmp-mako-pair-project/c74cfe47-e27f-4955-a3ce-9719cc585720.jsonl",
       "known": []
     }
   ]

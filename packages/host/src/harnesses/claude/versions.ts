@@ -7,11 +7,11 @@ import type { HarnessVersions } from "../../contracts/harness-versions.js"
  * stays on Anthropic's own updates.
  */
 export const CLAUDE_VERSIONS: HarnessVersions = {
-  tested: "2.1.327",
-  bundled: { package: "@anthropic-ai/claude-agent-sdk", version: "0.3.327" },
+  tested: "2.1.326",
+  bundled: { package: "@anthropic-ai/claude-agent-sdk", version: "0.3.326" },
   feed: { npm: "@anthropic-ai/claude-agent-sdk" },
   checked: {
-    on: "2026-11-18",
+    on: "2026-11-17",
     how: "the Claude Code build @anthropic-ai/claude-agent-sdk 0.3.283 ships, which the vocabulary, native-tools/claude-2.1.283.json and the decoder fixtures name",
   },
 }

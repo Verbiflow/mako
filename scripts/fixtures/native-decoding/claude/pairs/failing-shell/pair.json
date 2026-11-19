@@ -1,13 +1,13 @@
 {
   "harness": "claude",
   "native": {
-    "version": "2.1.327"
+    "version": "2.1.326"
   },
   "about": "Run `grep -q Monday notes.md` in the shell and tell me from its exit code whether notes.md mentions Monday. A shell command that exits non-zero, which the harness may report as completed.",
   "stores": [
     {
       "reader": "claude",
-      "path": ".claude/projects/-tmp-mako-pair-project/c5db2c8d-561c-4eb6-88af-47721959abcd.jsonl",
+      "path": ".claude/projects/-tmp-mako-pair-project/898d7d22-9504-465d-82b2-ddb69e410b7c.jsonl",
       "known": []
     }
   ]
