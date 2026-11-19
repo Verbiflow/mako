@@ -123,6 +123,8 @@ async function messageAtLimit(world: AgentsWorld, limits: Limits, conversation: 
   const held = rows(world, conversation).find((request) => request.status === "held" && request.retry?.cause === "rate-limited")
   assert.ok(held?.retry, `${label}: a usage-limit retry owns the wait`)
   const due = held.retry.at
+  // Before its time, or any wake on the clock (the held messages' timer, armed for something else) sends it, rightly.
+  assert.ok(Date.now() < due, `${label}: the retry's time is still to come`)
   const knocks = limits.knocks.length
   const message = world.say(conversation, "Then this.")
   world.live.wakeDue(due - 1)
@@ -285,7 +287,7 @@ try {
       waitsAsOne(world, conversation, names.slice(0, 2), `${harness} ${failures} failures`)
       const sent = digests(world, conversation).length
       limits.failing.clear()
-      passed += 61_000
+      // No minute on: two failures' retry is 30 s away and three's 60 s, so a minute's jump put their time in the past.
       await messageAtLimit(world, limits, conversation, `${harness} ${failures} failures`)
       await until(`${harness} ${failures} failures: their message to be taken`, () => rows(world, conversation).some((request) => request.text === "Then this." && request.status === "completed"))
       const went = digests(world, conversation).slice(sent)

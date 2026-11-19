@@ -302,7 +302,9 @@ export class AgentWakes {
     // An Apex on its way to another harness, its own run out, hears it there: sent at once, it meets the limit it is
     // leaving, and that knock stops the move.
     const moving = ready === "idle" && this.deps.moving?.(conversation) === true
-    const due = Math.max(last === undefined ? now : last + window, leftOver || moving ? now + WAKE_COALESCE_MS : 0, awaited ? now + RESULT_COALESCE_MS : 0)
+    // Never past its window from now: a last digest that reads as sent later than now (a clock set back since) holds the
+    // next no longer than the window, so a digest held for an idle Apex always goes.
+    const due = Math.min(Math.max(last === undefined ? now : last + window, leftOver || moving ? now + WAKE_COALESCE_MS : 0, awaited ? now + RESULT_COALESCE_MS : 0), now + WAKE_COALESCE_MS)
     const hold = ready === "paused" ? "paused" : ready === "idle" && due > now ? { at: due } : undefined
     const lines = this.deps.takeLines?.(conversation) ?? []
     try {

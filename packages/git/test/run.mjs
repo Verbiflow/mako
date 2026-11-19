@@ -292,18 +292,30 @@ try {
     const { PassThrough } = await import("node:stream")
     const root = await repository("turn-wait")
     await sh(root, "commit", "--allow-empty", "-q", "-m", "first")
-    const writes = new Git({ writeTurnWaitMs: 300 })
+    // The test says when a write's wait has run out, in the order they began waiting: no clock decides it. With a real
+    // 0.3 s bound, the write behind ran out too whenever update-ref took longer to exit than the gap between the two.
+    const waits = []
+    const writes = new Git({
+      writeTurnWait: (ms, waited) => {
+        const wait = { ms, waited, cancelled: false }
+        waits.push(wait)
+        return () => { wait.cancelled = true }
+      },
+    })
     const input = new PassThrough()
     const holding = writes.run({ cwd: root, args: ["update-ref", "--stdin"], input })
-    await new Promise((resolve) => setTimeout(resolve, 50))
     const gaveUp = writes.output(root, ["branch", "--no-track", "gave-up", "HEAD"])
-    await new Promise((resolve) => setTimeout(resolve, 100))
     // Asked for behind the one that gives up: it waits only for the write under way.
     const behind = writes.output(root, ["branch", "--no-track", "behind", "HEAD"])
-    await assert.rejects(gaveUp, (error) => error instanceof GitError && error.kind === "timeout" && /waited 0\.3 s for the repository's earlier writes, behind git update-ref/.test(error.message))
+    assert.deepEqual(waits.map((wait) => wait.ms), [60_000, 60_000], "each write behind another waits, for a minute at most")
+    waits[0].waited()
+    await assert.rejects(gaveUp, (error) => error instanceof GitError && error.kind === "timeout" && /waited 60 s for the repository's earlier writes, behind git update-ref/.test(error.message))
+    assert.ok(waits[0].cancelled, "the wait that ran out is called off")
+    assert.ok(!waits[1].cancelled, "the write behind it still waits for update-ref")
     input.end("create refs/heads/held HEAD\n")
     await holding
     await behind
+    assert.ok(waits[1].cancelled, "its turn came, and its wait was called off")
     assert.equal(await writes.readOutput(root, ["branch", "--list", "behind"]), "behind")
     assert.equal(await writes.readOutput(root, ["branch", "--list", "gave-up"]), "", "the write that gave up never ran")
     writes.close()

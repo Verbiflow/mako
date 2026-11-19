@@ -197,6 +197,13 @@ try {
     assert.deepEqual(f.open()!.hold, { at: clock + WAKE_COALESCE_MS }, "a left-over report waits the window")
     f.open()!.sent = clock + WAKE_COALESCE_MS
     clock += 2 * WAKE_COALESCE_MS
+    // A last digest that reads as sent in the future (the clock set back since) holds the next no longer than its window.
+    f.entries.push({ id: "future", text: "", notices: [], hold: undefined, sent: clock + 3_600_000 })
+    wakes.notice("apex", "", notice())
+    assert.deepEqual(f.open()!.hold, { at: clock + WAKE_COALESCE_MS }, "held no longer than the window from now")
+    f.open()!.sent = clock
+    f.entries.splice(f.entries.findIndex((entry) => entry.id === "future"), 1)
+    clock += 2 * WAKE_COALESCE_MS
     // A busy Apex's digest waits for its turn's end, unheld; a stopped Fin's is paused for its resume.
     ready = "queue"
     wakes.notice("apex", "", notice())
@@ -490,6 +497,54 @@ try {
       } finally {
         later.mock.restore()
       }
+      await world.close()
+    }
+
+    // A digest steered into a long turn (`FOCUS_MS`) whose harness refuses the steer after that turn ended goes back to
+    // the queue of an idle Apex: it goes, rather than waiting there for a turn's end that has already come.
+    if (harness === "claude") {
+      const world = new AgentsWorld({ root: join(root, `${harness}-steer-refused`), focusMs: 100, steering: { claude: { lands: "step", holds: true } }, script: (turn) => (turn.text.endsWith("Hold.") ? turn.world.hold(turn.conversation).then(() => "Held.") : turn.text.includes("You're fin:") ? "Labels finished." : "ok") })
+      const { conversation, caller } = await world.apex(harness, "full")
+      world.say(conversation, "Hold.")
+      await until(`${harness}: the Apex's long turn`, () => world.prompts.some((prompt) => prompt.conversation === conversation && prompt.text.endsWith("Hold.")))
+      const started = await world.agents.start(caller, { brief: { objective: "Label it" }, harness: "codex", name: "labels", clientKey: "labels", cwd: world.root })
+      assert.ok(!("refused" in started), JSON.stringify(started))
+      // Its report waits for the turn's end, and is steered in once the turn has run long: the harness holds the steer.
+      await until(`${harness}: the digest steered in`, () => world.live.snapshot(conversation)?.control?.actions?.some((action) => action.input.kind === "steer-queued" && action.state.kind === "dispatching") === true)
+      world.release(conversation)
+      await until(`${harness}: the turn to end`, () => !world.live.atWork(conversation))
+      assert.ok(world.answerSteer(conversation, { kind: "not-accepted", reason: "The turn moved on" }), "the held steer was answered")
+      await until(`${harness}: the refused digest to go`, () => world.prompts.some((prompt) => prompt.conversation === conversation && prompt.text.includes(FROM_AGENTS) && prompt.text.includes('"labels"')), 5_000)
+      await world.settle()
+      assert.equal(world.store.undeliveredReports().length, 0, `${harness}: every report heard`)
+      await world.close()
+    }
+
+    // A digest its harness refused before taking it woke nobody: it isn't counted in the minute, so its own next try,
+    // the sixth to reach the harness, goes at once rather than waiting out a minute it never spent.
+    {
+      let refusing = false
+      const world = new AgentsWorld({ root: join(root, `${harness}-budget-refused`), script: () => "ok", refusePrompt: () => {
+        if (!refusing) return undefined
+        refusing = false
+        return "Not now: the test refuses it."
+      } })
+      const { conversation } = await world.apex(harness, "full")
+      const actor = { kind: "agent" as const, session: world.store.journalPlacement(conversation)!.session }
+      const reached = () => world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.includes("Digest ")).length
+      for (let index = 0; index < WAKES_PER_MINUTE - 1; index++) {
+        world.live.submit(conversation, randomUUID(), `${FROM_AGENTS}\nDigest ${index}.`, [], undefined, undefined, undefined, actor, { digest: { notices: [notice()] } })
+        await until(`${harness}: digest ${index} to go`, () => reached() === index + 1)
+      }
+      refusing = true
+      const last = randomUUID()
+      world.live.submit(conversation, last, `${FROM_AGENTS}\nDigest ${WAKES_PER_MINUTE - 1}.`, [], undefined, undefined, undefined, actor, { digest: { notices: [notice()] } })
+      await until(`${harness}: the refusal`, () => !refusing && world.live.snapshot(conversation)?.requests.find((request) => request.id === last)?.status !== "dispatching")
+      // Refused for no reason that clears by itself, it rests until the next turn that can run: the next news brings it.
+      world.live.submit(conversation, randomUUID(), `${FROM_AGENTS}\nNews after it.`, [], undefined, undefined, undefined, actor, { digest: { notices: [notice()] } })
+      await until(`${harness}: the refused digest's next try`, () => world.prompts.some((prompt) => prompt.conversation === conversation && prompt.text.includes(`Digest ${WAKES_PER_MINUTE - 1}.`)))
+      const went = world.live.snapshot(conversation)!.requests.find((request) => request.id === last)!
+      assert.notEqual(went.wake?.after, DIGEST_WAITS, `${harness}: not held for the minute's budget`)
       await world.close()
     }
 
