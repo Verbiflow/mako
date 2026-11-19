@@ -315,6 +315,15 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
 export function mockAutomations(emit: (event: HostEvent) => void) {
   const definitions: Record<string, AutomationDefinition[]> = Object.fromEntries(Object.entries(DEFINITIONS).map(([project, list]) => [project, [...list]]))
   const locals = new Map<string, AutomationLocal>(Object.entries(LOCALS))
+  // What the person approved, as the host keeps it: each one that's on, its definition as the file has it; the one paused
+  // for a change, an earlier prompt, so its page shows what changed.
+  for (const list of Object.values(DEFINITIONS))
+    for (const each of list) {
+      const held = locals.get(each.id)
+      if (!held?.enabled) continue
+      const approvedAs = held.paused?.kind === "changed" ? { ...each, prompt: { ...each.prompt, objective: "Check the docs' links once a week and list the broken ones." } } : each
+      locals.set(each.id, { ...held, approved: automationFingerprint(approvedAs), approvedDefinition: json(approvedAs) })
+    }
   const runs = seedRuns()
   const proposals = proposalsSeed()
   const hooks = new Map<string, { provider: AutomationHook["provider"]; url: string }>()
@@ -381,8 +390,13 @@ export function mockAutomations(emit: (event: HostEvent) => void) {
       automations: async (project?: string): Promise<AutomationsReading> => ({ projects: Object.keys(definitions).filter((each) => !project || each === project).map(reading) }),
       automationRuns: async (project: string, id?: string, limit = 50): Promise<AutomationRun[]> =>
         (id ? (runs[key(project, id)] ?? []) : Object.entries(runs).filter(([each]) => each.startsWith(`${project}\u0000`)).flatMap(([, list]) => list)).slice(0, limit),
-      saveAutomation: async (project: string, input: JsonValue, replaces?: string): Promise<AutomationProjectReading> => {
+      saveAutomation: async (project: string, input: JsonValue, replaces?: string, approve?: string): Promise<AutomationProjectReading> => {
         const next = AutomationDefinitionSchema.parse(input)
+        const before = locals.get(replaces ?? next.id)
+        const prior = (definitions[project] ?? []).find((each) => each.id === (replaces ?? next.id))
+        // As the host does: an edit to one the person approved as it stood approves the edit; any other only with `approve`.
+        if (before?.enabled && (approve === automationFingerprint(next) || (prior && before.approved === automationFingerprint(prior))))
+          locals.set(replaces ?? next.id, { ...before, approved: automationFingerprint(next), approvedDefinition: json(next), ...(before.paused?.kind === "changed" && { paused: undefined }) })
         const list = definitions[project] ?? (definitions[project] = [])
         const at = list.findIndex((each) => each.id === (replaces ?? next.id))
         if (at === -1) list.push(next)
@@ -398,13 +412,21 @@ export function mockAutomations(emit: (event: HostEvent) => void) {
         definitions[project] = (definitions[project] ?? []).filter((each) => each.id !== id)
         return changed(project)
       },
-      setAutomationEnabled: async (project: string, id: string, enabled: boolean): Promise<AutomationProjectReading> => {
+      setAutomationEnabled: async (project: string, id: string, enabled: boolean, approve?: string): Promise<AutomationProjectReading> => {
         const rest: AutomationLocal = { ...(locals.get(id) ?? { enabled: false, failures: 0 }) }
+        const current = (definitions[project] ?? []).find((each) => each.id === id)
+        if (enabled && current && rest.approvedDefinition !== undefined && rest.approved !== automationFingerprint(current) && approve !== automationFingerprint(current)) throw new Error(`${current.name} changed since you approved it. Review what changed, then turn it on.`)
         delete rest.paused
-        locals.set(id, { ...rest, enabled, failures: enabled ? 0 : rest.failures, ...(enabled && { enabledAt: Date.now() }) })
+        locals.set(id, { ...rest, enabled, failures: enabled ? 0 : rest.failures, ...(enabled && { enabledAt: Date.now() }), ...(enabled && current && { approved: automationFingerprint(current), approvedDefinition: json(current) }) })
         return changed(project)
       },
-      runAutomation: async (project: string, id: string, clientKey: string): Promise<AutomationRunNowResult> => {
+      runAutomation: async (project: string, id: string, clientKey: string, approve?: string): Promise<AutomationRunNowResult> => {
+        const current = (definitions[project] ?? []).find((each) => each.id === id)
+        const kept = locals.get(id) ?? { enabled: false, failures: 0 }
+        if (current && kept.approved !== automationFingerprint(current)) {
+          if (approve !== automationFingerprint(current)) return { refused: `${current.name} changed since you approved it: review it, then run it.` }
+          locals.set(id, { ...kept, approved: approve, approvedDefinition: json(current) })
+        }
         const held = runs[key(project, id)] ?? []
         const repeat = held.find((each) => each.occurrence === clientKey)
         if (repeat) return { run: repeat }

@@ -11,6 +11,8 @@ import type {
   AutomationTemplate,
   AutomationView,
 } from "@mako/host/contracts/automations"
+import { automationFingerprint } from "@mako/host/contracts/automations"
+import type { JsonValue } from "@mako/host/contracts/json"
 import { createHook, createStore } from "@/state/store"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
@@ -36,6 +38,22 @@ export interface AutomationsState {
   byConversation: Record<string, AutomationRun>
   /** What the host said a Thread is (`mako:automations-run-of`), for a run this window never heard of; null for none. */
   runOf: Record<string, AutomationRunOf | null>
+  /** A change the person reviews before it's approved (`reviewChange`), answered from `AutomationReviewHost`. */
+  review: AutomationReview | null
+}
+
+/**
+ * What turning on, Run now or a save would approve, against what the person approved before (absent: never approved),
+ * shown before it's approved: nothing runs a definition they haven't seen.
+ */
+export interface AutomationReview {
+  project: string
+  id: string
+  name: string
+  action: "on" | "run" | "save"
+  before?: JsonValue
+  after: JsonValue
+  answer(approved: boolean): void
 }
 
 export const automationsStore = createStore<AutomationsState>({
@@ -45,6 +63,7 @@ export const automationsStore = createStore<AutomationsState>({
   templates: null,
   byConversation: {},
   runOf: {},
+  review: null,
 })
 
 export const useAutomations = createHook(automationsStore)
@@ -163,6 +182,28 @@ function failure(error: Error | string): string {
 
 const JSON_VALUE = z.json()
 
+/** A definition as JSON, as a review shows it. */
+function definitionJson(definition: AutomationDefinition): JsonValue {
+  return JSON_VALUE.parse(JSON.parse(JSON.stringify(definition)))
+}
+
+/** Whether `view`'s definition, as the file says it now, is one the person approved. */
+export function approvedNow(view: Pick<AutomationView, "local" | "fingerprint">): boolean {
+  return view.local.approved === view.fingerprint
+}
+
+/** Shows what approving would approve and waits for the person's answer; a second review answers the first with no. */
+export function reviewChange(request: Omit<AutomationReview, "answer">): Promise<boolean> {
+  automationsStore.get().review?.answer(false)
+  return new Promise((resolve) => {
+    const answer = (approved: boolean) => {
+      if (automationsStore.get().review?.answer === answer) automationsStore.set({ review: null })
+      resolve(approved)
+    }
+    automationsStore.set({ review: { ...request, answer } })
+  })
+}
+
 let loading: Promise<void> | null = null
 
 export const automations = {
@@ -203,10 +244,22 @@ export const automations = {
     return templates
   },
 
-  /** The person's edit, written to the project's file at once; `replaces` is the id it had when renamed. */
+  /**
+   * The person's edit, written to the project's file at once; `replaces` is the id it had when renamed. On one that's on
+   * whose file changed since they approved it (an edit outside Mako), they see everything their save would approve,
+   * from what they approved, first: declined, nothing is saved.
+   */
   async save(project: string, definition: AutomationDefinition, replaces?: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    const view = automationView(automationsStore.get(), project, replaces ?? definition.id)
+    let approve: string | undefined
+    if (view?.local.enabled && !approvedNow(view)) {
+      const after = definitionJson(definition)
+      if (!(await reviewChange({ project, id: definition.id, name: definition.name, action: "save", ...(view.local.approvedDefinition !== undefined && { before: view.local.approvedDefinition }), after })))
+        return { ok: false, error: "Not saved: its file changed since you approved it, and saving approves that change too." }
+      approve = automationFingerprint(definition)
+    }
     try {
-      const reading = await getMako().saveAutomation(project, JSON_VALUE.parse(definition), replaces)
+      const reading = await getMako().saveAutomation(project, JSON_VALUE.parse(definition), replaces, approve)
       applyAutomationsChanged(reading)
       return { ok: true }
     } catch (error) {
@@ -234,9 +287,19 @@ export const automations = {
     return true
   },
 
-  async setEnabled(project: string, id: string, enabled: boolean): Promise<void> {
+  /**
+   * On or off. On again after its file changed since the person approved it shows them that change first, unless they
+   * just read it on its page (`reviewed`); declined, it stays as it is.
+   */
+  async setEnabled(project: string, id: string, enabled: boolean, reviewed = false): Promise<void> {
+    const view = automationView(automationsStore.get(), project, id)
+    let approve: string | undefined
+    if (enabled && view && view.local.approvedDefinition !== undefined && !approvedNow(view)) {
+      if (!reviewed && !(await reviewChange({ project, id, name: view.definition.name, action: "on", before: view.local.approvedDefinition, after: definitionJson(view.definition) }))) return
+      approve = view.fingerprint
+    }
     try {
-      applyAutomationsChanged(await getMako().setAutomationEnabled(project, id, enabled))
+      applyAutomationsChanged(await getMako().setAutomationEnabled(project, id, enabled, approve))
     } catch (error) {
       toast.error(enabled ? "Couldn't turn it on" : "Couldn't turn it off", { description: failure(error instanceof Error ? error : String(error)) })
     }
@@ -245,8 +308,15 @@ export const automations = {
   /** Run now, under a key of this press: a second press is another run, a retry of this one the same. */
   async runNow(project: string, id: string): Promise<AutomationRun | undefined> {
     const clientKey = `now-${crypto.randomUUID()}`
+    // Only an approved definition runs: one the file changed since, or never approved, is shown first, and approved by running it.
+    const view = automationView(automationsStore.get(), project, id)
+    let approve: string | undefined
+    if (view && !approvedNow(view)) {
+      if (!(await reviewChange({ project, id, name: view.definition.name, action: "run", ...(view.local.approvedDefinition !== undefined && { before: view.local.approvedDefinition }), after: definitionJson(view.definition) }))) return undefined
+      approve = view.fingerprint
+    }
     try {
-      const result = await getMako().runAutomation(project, id, clientKey)
+      const result = await getMako().runAutomation(project, id, clientKey, approve)
       if ("refused" in result) {
         toast(`${nameOf(project, id)} didn't run`, { description: result.refused })
         return undefined

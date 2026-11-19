@@ -3,6 +3,7 @@ import { FileWarningIcon, PlusIcon, SearchIcon, WorkflowIcon } from "lucide-reac
 import type { AutomationProjectReading, AutomationTemplate } from "@mako/host/contracts/automations"
 import { AutomationEditor } from "@/components/automations/automation-editor"
 import { AutomationPage } from "@/components/automations/automation-page"
+import { AutomationReviewHost } from "@/components/automations/automation-review"
 import { AutomationRow, ProposedRow } from "@/components/automations/automation-row"
 import { TRIGGER_ICONS } from "@/components/automations/trigger-icons"
 import { Action, Keys } from "@/components/ui/kit"
@@ -52,6 +53,7 @@ function AutomationsPane() {
   return (
     <section data-automations={route.kind} aria-label="Automations" className="absolute inset-0 z-30 flex min-h-0 flex-col bg-surface">
       {route.kind === "list" ? <ListPage /> : route.kind === "detail" ? <AutomationPage key={`${route.project}#${route.id}`} project={route.project} id={route.id} /> : route.kind === "new" ? <NewPage project={route.project} /> : <AutomationEditor key={`${route.project}#${route.id ?? "new"}#${route.source}`} route={route} />}
+      <AutomationReviewHost />
     </section>
   )
 }

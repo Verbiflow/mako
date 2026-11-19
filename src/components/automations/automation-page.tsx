@@ -9,7 +9,9 @@ import { Action, Keys, Toggle } from "@/components/ui/kit"
 import { limitFacts, nextRunOf, nextRunTitle, zoneDate, projectName, RESULT_WORDS, standingNote, startFacts, triggerWaits, triggerWithCondition } from "@/lib/automation-words"
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
-import { automations, automationView, useAutomations } from "@/state/automations"
+import { approvedNow, automations, automationView, useAutomations } from "@/state/automations"
+import { AutomationDiff } from "@/components/automations/automation-diff"
+import { z } from "zod"
 import { automationsBack, duplicateAutomation, editAutomation, goAutomations } from "@/state/automations-view"
 
 /**
@@ -17,6 +19,8 @@ import { automationsBack, duplicateAutomation, editAutomation, goAutomations } f
  * trigger as its sentence, a schedule's next three runs), what it does and starts with, and its runs. Keys: E edits,
  * R runs it now, T turns it on or off, D duplicates; Escape goes back to the list.
  */
+const JSON_VALUE = z.json()
+
 export function AutomationPage({ project, id }: { project: string; id: string }) {
   useHarnessIdentity()
   const view = useAutomations((state) => automationView(state, project, id))
@@ -88,9 +92,20 @@ export function AutomationPage({ project, id }: { project: string; id: string })
               {note.tone === "faint" ? <CloudIcon aria-hidden className="mt-1 size-3.5 shrink-0" /> : <TriangleAlertIcon aria-hidden className="mt-1 size-3.5 shrink-0" />}
               <span>
                 {note.text}
-                {view.standing === "paused" ? <span className="text-muted-foreground"> Turning it on again clears this.</span> : null}
+                {view.standing === "paused" && approvedNow(view) ? <span className="text-muted-foreground"> Turning it on again clears this.</span> : null}
               </span>
             </p>
+          ) : null}
+          {local.enabled && !approvedNow(view) ? (
+            <section data-automation-page-changed aria-label="Changed since you approved it" className="flex flex-col gap-3 bg-raised px-4 py-3.5">
+              <h2 className="text-ui font-medium text-foreground">{local.approvedDefinition === undefined ? "Not yet approved: it runs nothing until you approve what it says" : "Changed since you approved it: it runs nothing until you approve what it says now"}</h2>
+              <AutomationDiff proposal={{ change: "update", ...(local.approvedDefinition !== undefined && { before: local.approvedDefinition }), after: JSON_VALUE.parse(JSON.parse(JSON.stringify(definition))) }} />
+              <div>
+                <Action tone="outline" data-automation-page-approve onClick={() => void automations.setEnabled(project, id, true, true)}>
+                  Approve and turn on
+                </Action>
+              </div>
+            </section>
           ) : null}
           {pending.map((proposal) => (
             <section key={proposal.id} aria-label="Proposed change" className="bg-raised px-4 py-3.5">

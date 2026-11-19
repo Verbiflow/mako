@@ -19,6 +19,7 @@ import {
   automationDiff,
   automationFingerprint,
   branchFor,
+  legacyAutomationFingerprint,
   cloudTriggerWaiting,
   scheduleOccurrence,
   triggerFiresInCloud,
@@ -145,7 +146,8 @@ export interface AutomationsDeps {
   emit(event: HostEvent): void
   /** The project folders windows have open now. */
   openProjects(): string[]
-  startThread(launch: AutomationLaunch): Promise<{ thread?: string; place?: string }>
+  /** `conversation`: the run went to another conversation than the launch named (a standing Thread's fresh session). */
+  startThread(launch: AutomationLaunch): Promise<{ thread?: string; place?: string; conversation?: string }>
   threadOf(conversation: string, request: string): AutomationThreadReading
   stopThread(conversation: string): Promise<void>
   runGate(project: string, command: string, timeoutMs: number): Promise<GateOutcome>
@@ -280,6 +282,7 @@ export class Automations {
     await this.start()
     const file = await this.#file(project)
     const store = this.#deps.store
+    for (const definition of file.definitions) this.#local(project, definition)
     const automations = file.definitions.map((definition) => this.#view(project, definition))
     const proposals = [...store.proposals(project)].sort((a, b) => (a.status === "pending" ? 0 : 1) - (b.status === "pending" ? 0 : 1) || b.at - a.at).slice(0, 50)
     return {
@@ -317,6 +320,34 @@ export class Automations {
 
   async #definition(project: string, id: string): Promise<AutomationDefinition | undefined> {
     return (await this.#file(project)).definitions.find((definition) => definition.id === id)
+  }
+
+  /**
+   * What this Mac keeps of an automation, its approval carried forward: an older build's approval (its short
+   * fingerprint) still matching the file becomes that definition, approved, kept whole; one that doesn't stays
+   * unapproved. An approval without the definition it approved takes the file's only while the file is that one.
+   */
+  #local(project: string, definition: AutomationDefinition): AutomationLocal {
+    const store = this.#deps.store
+    const local = store.local(project, definition.id)
+    if (local.approved === undefined) return local
+    const legacy = local.approved.length === 16 && legacyAutomationFingerprint(definition) === local.approved
+    const unkept = local.approvedDefinition === undefined && local.approved === automationFingerprint(definition)
+    if (!legacy && !unkept) return local
+    const approved = approve(local, definition)
+    store.setLocal(project, definition.id, approved)
+    return approved
+  }
+
+  /** The definition the person approved, as they approved it; undefined when none is kept, or it isn't the approved one. */
+  #approvedDefinition(local: AutomationLocal): AutomationDefinition | undefined {
+    const definition = AutomationDefinitionSchema.safeParse(local.approvedDefinition).data
+    return definition && local.approved === automationFingerprint(definition) ? definition : undefined
+  }
+
+  /** Runs still waiting their turn, passed over now: their automation was turned off or paused. */
+  #dropQueued(project: string, id: string, why: string): void {
+    for (const run of this.#deps.store.runs(project, id)) if (run.status === "queued" && !run.cloud) this.#deps.store.putRun({ ...run, status: "skipped", why, endedAt: this.#now() })
   }
 
   runs(project: string, id?: string, limit = 50): AutomationRun[] {
@@ -410,9 +441,18 @@ export class Automations {
 
   /* ---------------------------------------------------------------- the person's edits */
 
-  /** The person's own edit: written at once. One that's on stays on, its new definition the one they approved. */
-  async save(project: string, raw: JsonValue, replaces?: string): Promise<AutomationProjectReading> {
+  /**
+   * The person's own edit: written at once. One that's on stays on with its new definition approved, when the file
+   * held what they'd approved and this edit is the only change; otherwise (an edit outside Mako came first) only with
+   * `approve`, the fingerprint of the definition saved, given after they saw what changed since their approval.
+   * Unapproved, it stays paused, and its row shows that change.
+   */
+  async save(project: string, raw: JsonValue, replaces?: string, approveAs?: string): Promise<AutomationProjectReading> {
+    await this.start()
     const definition = AutomationDefinitionSchema.parse(raw)
+    const prior = await this.#definition(project, replaces ?? definition.id)
+    const priorLocal = prior ? this.#local(project, prior) : this.#deps.store.local(project, replaces ?? definition.id)
+    const clean = prior !== undefined && priorLocal.approved === automationFingerprint(prior)
     await this.#write(project, (definitions) => {
       const without = definitions.filter((each) => each.id !== definition.id && each.id !== replaces)
       const at = definitions.findIndex((each) => each.id === (replaces ?? definition.id))
@@ -424,7 +464,8 @@ export class Automations {
       store.forget(project, replaces)
     }
     const local = store.local(project, definition.id)
-    if (local.enabled) store.setLocal(project, definition.id, { ...local, approved: automationFingerprint(definition), paused: local.paused?.kind === "changed" ? undefined : local.paused, nextRunAt: this.#nextRun(definition, this.#now()) })
+    const fingerprint = automationFingerprint(definition)
+    if (local.enabled && local.approved !== fingerprint && (clean || approveAs === fingerprint)) store.setLocal(project, definition.id, { ...approve(local, definition), nextRunAt: this.#nextRun(definition, this.#now()) })
     return this.#changed(project)
   }
 
@@ -434,25 +475,46 @@ export class Automations {
     return this.#changed(project)
   }
 
-  /** On or off. On approves the definition as it stands now, and clears a pause. */
-  async setEnabled(project: string, id: string, enabled: boolean): Promise<AutomationProjectReading> {
+  /**
+   * On or off. On approves the definition as it stands now and clears a pause: at once the first time, and after an
+   * earlier approval only with `approve`, the fingerprint of what the file says now, given once the person saw what
+   * changed since. Off passes over what was queued.
+   */
+  async setEnabled(project: string, id: string, enabled: boolean, approveAs?: string): Promise<AutomationProjectReading> {
+    await this.start()
     const definition = await this.#definition(project, id)
     if (!definition) throw new Error(`No automation here has the id ${id}.`)
     const store = this.#deps.store
-    const local = store.local(project, id)
+    const local = this.#local(project, definition)
+    const fingerprint = automationFingerprint(definition)
+    if (enabled && local.approvedDefinition !== undefined && local.approved !== fingerprint && approveAs !== fingerprint)
+      throw new Error(`${definition.name} changed since you approved it. Review what changed, then turn it on.`)
     const now = this.#now()
+    if (!enabled) this.#dropQueued(project, id, "It was turned off before its turn.")
     store.setLocal(project, id, enabled
-      ? { ...local, enabled: true, approved: automationFingerprint(definition), paused: undefined, failures: 0, enabledAt: now, scheduledThrough: now, nextRunAt: this.#nextRun(definition, now) }
+      ? { ...approve(local, definition), enabled: true, paused: undefined, failures: 0, enabledAt: now, scheduledThrough: now, nextRunAt: this.#nextRun(definition, now) }
       : { ...local, enabled: false, nextRunAt: undefined })
     hostLog("automations", enabled ? "turned on" : "turned off", { automation: id })
     return this.#changed(project)
   }
 
-  /** Run now: the person's press, or an agent's `run_now`, under its caller's key. */
-  async runNow(project: string, id: string, clientKey: string, cause: AutomationCause = { kind: "person" }): Promise<AutomationRunNowResult> {
+  /**
+   * Run now: the person's press, or an agent's `run_now`, under its caller's key. Only the approved definition runs: an
+   * agent's run of one the file changed since (or never approved) is refused, and the person's runs it only with
+   * `approve`, the fingerprint of what the file says now, given once they saw what changed, which approves it too.
+   */
+  async runNow(project: string, id: string, clientKey: string, cause: AutomationCause = { kind: "person" }, approveAs?: string): Promise<AutomationRunNowResult> {
     await this.start()
     const definition = await this.#definition(project, id)
     if (!definition) return { refused: `No automation in ${project} has the id ${id}.` }
+    const local = this.#local(project, definition)
+    const fingerprint = automationFingerprint(definition)
+    if (local.approved !== fingerprint) {
+      if (cause.kind !== "person") return { refused: `${definition.name} runs only as the person approved it, and its definition ${local.approved === undefined ? "was never approved" : "changed since they did"}. Ask them to review it in Automations.` }
+      if (approveAs !== fingerprint) return { refused: `${definition.name} ${local.approved === undefined ? "hasn't been approved yet" : "changed since you approved it"}: review it, then run it.` }
+      this.#deps.store.setLocal(project, id, { ...approve(local, definition), ...(local.paused?.kind === "changed" && { paused: undefined }) })
+      await this.#changed(project)
+    }
     const occurrence = `now-${createHash("sha256").update(clientKey).digest("hex").slice(0, 16)}`
     return { run: await this.fire(project, definition, cause, occurrence) }
   }
@@ -525,7 +587,7 @@ export class Automations {
       return kept
     }
     const now = this.#now()
-    const base: AutomationRun = { occurrence, automation: id, project, clientKey: automationClientKey(id, occurrence), cause, status: "fired", at: now }
+    const base: AutomationRun = { occurrence, automation: id, project, clientKey: automationClientKey(id, occurrence), cause, status: "fired", at: now, approved: automationFingerprint(definition) }
     const runs = store.runs(project, id)
     const limit = definition.limits.maxRunsPerDay
     if (limit !== undefined && runs.filter((run) => COUNTED.has(run.status) && run.at > now - DAY_MS).length >= limit)
@@ -589,8 +651,10 @@ export class Automations {
     if (definition.gate) {
       const outcome = await this.#deps.runGate(project, definition.gate.command, definition.gate.timeoutS * 1000)
       if ("error" in outcome) {
-        if (offer) await this.#decline(project, base, `Its gate couldn't run on its Mac: ${outcome.error}`)
-        return this.#failedToStart({ ...base }, `Its gate couldn't run: ${outcome.error}`)
+        // A command killed by a signal says so with everything it printed: only its last words are the reason.
+        const error = outcome.error.trim().split("\n").slice(-3).join(" ").slice(-600)
+        if (offer) await this.#decline(project, base, `Its gate couldn't run on its Mac: ${error}`)
+        return this.#failedToStart({ ...base }, `Its gate couldn't run: ${error}`)
       }
       if (outcome.exit === 1) return this.#passOver(offer, { ...base, status: "gate-skipped", why: "Its gate found nothing to do (exit 1)." })
       if (outcome.exit !== 0) {
@@ -654,8 +718,8 @@ export class Automations {
       })
       hostLog("automations", "run started", { automation: definition.id, occurrence: run.occurrence, conversation: thread.conversation })
       const now = this.#deps.store.run(project, definition.id, run.occurrence) ?? run
-      if (now.status !== "fired" || (!started.thread && !started.place)) return now
-      return this.#record({ ...now, thread: { ...thread, ...(started.thread && { thread: started.thread }), ...(started.place && { place: started.place }) } })
+      if (now.status !== "fired" || (!started.thread && !started.place && !started.conversation)) return now
+      return this.#record({ ...now, thread: { ...thread, ...(started.conversation && { conversation: started.conversation }), ...(started.thread && { thread: started.thread }), ...(started.place && { place: started.place }) } })
     } catch (error) {
       const why = error instanceof Error ? error.message : String(error)
       if (error instanceof AutomationNotStartedError) return this.#failedToStart(run, `Its Thread didn't start: ${why}`)
@@ -673,9 +737,10 @@ export class Automations {
     return run
   }
 
-  async #failedToStart(run: AutomationRun, why: string): Promise<AutomationRun> {
+  async #failedToStart(run: AutomationRun, said: string): Promise<AutomationRun> {
+    const why = said.slice(0, 2000)
     const kept = await this.#record({ ...run, status: "failed-to-start", why, endedAt: this.#now() })
-    await this.#failed(run.project, run.automation, why)
+    await this.#failed(run.project, run.automation, why.slice(0, 400))
     return kept
   }
 
@@ -688,7 +753,10 @@ export class Automations {
       ? { kind: "failures" as const, reason: `Paused after ${failures} failed runs in a row. The last: ${why}`.slice(0, 1000), at: this.#now() }
       : local.paused
     store.setLocal(project, id, { ...local, failures, ...(paused && { paused }) })
-    if (paused && !local.paused) hostWarn("automations", "paused after failures", { automation: id, failures })
+    if (paused && !local.paused) {
+      hostWarn("automations", "paused after failures", { automation: id, failures })
+      this.#dropQueued(project, id, "It was paused before its turn.")
+    }
     await this.#changed(project)
   }
 
@@ -720,20 +788,30 @@ export class Automations {
     await this.#dequeue(run.project, run.automation)
   }
 
-  /** The oldest queued run starts once nothing else of its automation runs. */
+  /**
+   * The oldest queued run starts once nothing else of its automation runs: from the definition approved when it was
+   * queued, and only while that is still the approved one and the automation is on and unpaused (a person's Run now runs
+   * on one that's off). Anything else passes it over, saying why; the file as it reads by then never runs.
+   */
   async #dequeue(project: string, id: string): Promise<void> {
-    const definition = await this.#definition(project, id)
     await this.#inTurn(project, id, async () => {
-      const runs = this.#deps.store.runs(project, id)
+      const store = this.#deps.store
+      const runs = store.runs(project, id)
       if (runs.some((run) => run.status === "fired")) return
       // The cloud's queued records are its own to offer, never this Mac's queue.
       const next = runs.filter((run) => run.status === "queued" && !run.cloud).at(-1)
       if (!next) return
-      if (!definition) {
-        await this.#record({ ...next, status: "skipped", why: "It left the project's file before its turn." })
+      const local = store.local(project, id)
+      const approved = this.#approvedDefinition(local)
+      const why = !approved || next.approved !== local.approved ? "Its definition changed after it was queued, so it didn't run."
+        : local.paused ? "It was paused before its turn."
+        : !local.enabled && next.cause.kind !== "person" ? "It was turned off before its turn."
+        : undefined
+      if (why || !approved) {
+        await this.#record({ ...next, status: "skipped", why: why ?? "", endedAt: this.#now() })
         return
       }
-      await this.#admit(project, definition, { ...next, status: "fired", at: this.#now() })
+      await this.#admit(project, approved, { ...next, status: "fired", at: this.#now() })
     })
   }
 
@@ -757,10 +835,11 @@ export class Automations {
     const file = await this.#file(project)
     const store = this.#deps.store
     for (const definition of file.definitions) {
-      const local = store.local(project, definition.id)
+      const local = this.#local(project, definition)
       if (!local.enabled || local.paused) continue
-      if (local.approved !== undefined && local.approved !== automationFingerprint(definition)) {
+      if (local.approved !== automationFingerprint(definition)) {
         store.setLocal(project, definition.id, { ...local, paused: { kind: "changed", reason: CHANGED_REASON, at: now } })
+        this.#dropQueued(project, definition.id, "Its definition changed before its turn.")
         hostWarn("automations", "paused: its definition changed since it was turned on", { automation: definition.id })
         await this.#changed(project)
         continue
@@ -821,7 +900,7 @@ export class Automations {
     const definitions = only ? [only] : (await this.#file(project)).definitions.filter((definition) => definition.triggers.some((trigger) => trigger.kind === "commit"))
     const enabled = definitions.filter((definition) => {
       const local = store.local(project, definition.id)
-      return local.enabled && !local.paused && (local.approved === undefined || local.approved === automationFingerprint(definition))
+      return local.enabled && !local.paused && this.#local(project, definition).approved === automationFingerprint(definition)
     })
     if (!enabled.length) return
     const read = await this.#deps.head(project).catch(() => undefined)
@@ -875,8 +954,14 @@ export class Automations {
       if (run.thread.place && run.thread.place !== "here") continue
       // Only a start a stopped host may have cut: an older one settles by its Thread's end or its timeout.
       if (this.#now() - (run.startedAt ?? run.at) > RECOVER_WITHIN_MS) continue
-      const definition = (await readAutomationFile(run.project)).definitions.find((each) => each.id === run.automation)
-      if (!definition) continue
+      // Started again only from the definition it was started with, while that is still the approved one; the file as
+      // it reads now never runs.
+      const local = this.#deps.store.local(run.project, run.automation)
+      const definition = this.#approvedDefinition(local)
+      if (!definition || run.approved !== local.approved || local.paused) {
+        hostWarn("automations", "a cut-short run wasn't started again: its definition isn't the approved one now", { automation: run.automation, occurrence: run.occurrence })
+        continue
+      }
       void this.#startThread(run.project, definition, run).catch(() => undefined)
     }
   }
@@ -942,17 +1027,23 @@ export class Automations {
       if (current && automationFingerprint(current) === automationFingerprint(after)) return { refused: "invalid", why: "That changes nothing." }
     } else {
       if (!current) return { refused: "no-automation", why: `No automation in ${project} has the id ${id}: list gives each one's id.` }
-      if (change === "enable" && this.#deps.store.local(project, id).enabled && !this.#deps.store.local(project, id).paused) return { refused: "invalid", why: `${id} is on already.` }
+      const local = this.#local(project, current)
+      if (change === "enable" && local.enabled && !local.paused && local.approved === automationFingerprint(current)) return { refused: "invalid", why: `${id} is on already.` }
+      // Turning it on approves what the file says now: that is what its card shows, against what was approved before.
+      if (change === "enable") after = current
     }
     const now = this.#now()
     const name = after?.name ?? current?.name
+    // Its card shows the change from what the person approved: an edit the file got before this proposal shows too.
+    const shown = current && change !== "create" ? (this.#approvedDefinition(this.#local(project, current)) ?? current) : undefined
     const proposal: AutomationProposal = {
       id: proposalId,
       project,
       automation: id,
       change,
-      ...(current && { before: JsonSchema.parse(JSON.parse(JSON.stringify(current))) }),
-      ...(after && { after: JsonSchema.parse(JSON.parse(JSON.stringify(after))) }),
+      ...(shown && { before: definitionJson(shown) }),
+      ...(after && { after: definitionJson(after) }),
+      ...(current && { base: automationFingerprint(current) }),
       ...(input.why?.trim() && { why: input.why.trim().slice(0, 2000) }),
       by,
       at: now,
@@ -993,7 +1084,9 @@ export class Automations {
     if (approve) {
       const current = await this.#definition(proposal.project, proposal.automation)
       const before = proposal.before === undefined ? undefined : AutomationDefinitionSchema.safeParse(proposal.before).data
-      const stale = proposal.change === "create" ? current !== undefined : !current || !before || automationFingerprint(current) !== automationFingerprint(before)
+      // What the file held when proposed: its `base`, or for an older proposal the definition it showed.
+      const base = proposal.base ?? (before && automationFingerprint(before))
+      const stale = proposal.change === "create" ? current !== undefined : !current || base === undefined || automationFingerprint(current) !== base
       if (stale) decided = { ...decided, status: "stale", note: "The automation changed after this was proposed, so approving it would undo that change. Nothing was applied." }
       else await this.#apply(proposal)
     }
@@ -1012,7 +1105,9 @@ export class Automations {
       return
     }
     if (proposal.change === "enable") {
-      await this.setEnabled(project, automation, true)
+      // What they approved is the definition the card showed, which the stale check holds the file to.
+      const shown = AutomationDefinitionSchema.parse(proposal.after)
+      await this.setEnabled(project, automation, true, automationFingerprint(shown))
       return
     }
     const after = AutomationDefinitionSchema.parse(proposal.after)
@@ -1022,7 +1117,7 @@ export class Automations {
     })
     // An update the person approved keeps an automation that's on, on: what they approved is the new definition.
     const local = this.#deps.store.local(project, automation)
-    if (local.enabled) this.#deps.store.setLocal(project, automation, { ...local, approved: automationFingerprint(after), nextRunAt: this.#nextRun(after, this.#now()) })
+    if (local.enabled) this.#deps.store.setLocal(project, automation, { ...approve(local, after), nextRunAt: this.#nextRun(after, this.#now()) })
   }
 
   async #expireProposals(now: number): Promise<void> {
@@ -1100,18 +1195,24 @@ export class Automations {
       const held = store.proposal(remote.id)
       if (held && !held.from) continue
       if (!held) {
-        // Its ask, decision and note are the cloud Thread's; here it starts pending, under this Mac's project.
+        // Only the proposal is the cloud Thread's: its status, decision and note there are its host's word, which its
+        // agent could have written itself, so it waits here, pending, for a decision made on this Mac. Its card shows
+        // the change from what the person approved here; turning it on approves this Mac's file, as it reads now.
+        const current = await this.#definition(project, remote.automation)
+        const shown = current && remote.change !== "create" ? (this.#approvedDefinition(this.#local(project, current)) ?? current) : undefined
+        const after = remote.change === "enable" ? (current && definitionJson(current)) : remote.after
+        const base = remote.change === "enable" ? (current && automationFingerprint(current)) : (remote.base ?? baseOf(remote.before))
         store.putProposal({
           id: remote.id, project, automation: remote.automation, change: remote.change,
-          ...(remote.before !== undefined && { before: remote.before }), ...(remote.after !== undefined && { after: remote.after }), ...(remote.why && { why: remote.why }),
-          by: remote.by, at: remote.at, expiresAt: remote.expiresAt, status: "pending", from: { thread },
+          ...(shown && { before: definitionJson(shown) }), ...(after !== undefined && { after }), ...(base && { base }), ...(remote.why && { why: remote.why.slice(0, 2000) }),
+          by: remote.by, at: this.#now(), expiresAt: this.#now() + AUTOMATION_PROPOSAL_TTL_MS, status: "pending", from: { thread },
         })
         hostLog("automations", "a cloud run's proposal came to this Mac", { proposal: remote.id, change: remote.change, automation: remote.automation })
         await this.#changed(project)
       }
       const now = store.proposal(remote.id)!
-      if (now.status === "pending" && remote.relay === "awaiting" && (remote.status === "approved" || remote.status === "declined")) await this.decide(remote.id, remote.status === "approved", "ask")
-      else if (now.status !== "pending" && remote.status === "pending") await this.#tell(now)
+      // Decided here and not yet settled there: its cloud Thread hears again.
+      if (now.status !== "pending" && remote.relay !== "settled") await this.#tell(now)
     }
   }
 
@@ -1119,6 +1220,22 @@ export class Automations {
   static diff(proposal: AutomationProposal): AutomationDiffEntry[] {
     return automationDiff(proposal.before, proposal.after)
   }
+}
+
+/** A definition as JSON, as a proposal or an approval keeps it. */
+function definitionJson(definition: AutomationDefinition): JsonValue {
+  return JsonSchema.parse(JSON.parse(JSON.stringify(definition)))
+}
+
+/** The fingerprint of a proposal's `before`, when it reads as a definition. */
+function baseOf(before: JsonValue | undefined): string | undefined {
+  const definition = AutomationDefinitionSchema.safeParse(before).data
+  return definition && automationFingerprint(definition)
+}
+
+/** `local` approving `definition`: its fingerprint and the definition itself, and a pause for a change cleared. */
+function approve(local: AutomationLocal, definition: AutomationDefinition): AutomationLocal {
+  return { ...local, approved: automationFingerprint(definition), approvedDefinition: definitionJson(definition), ...(local.paused?.kind === "changed" && { paused: undefined }) }
 }
 
 const CHANGED_REASON = "Its definition changed after you turned it on (a pull, or an edit outside Mako). Turn it on again to run what it says now."
@@ -1160,15 +1277,19 @@ function eventWords(definition: AutomationDefinition, cause: AutomationCause, ga
 
 /** An offered event's content, fenced as untrusted for its agent, the fence fixed by the event so a repeat is the same text. */
 async function eventText(cause: AutomationCause, offer: AutomationOffer | undefined): Promise<string | undefined> {
-  if (cause.kind !== "event" || offer?.event === undefined) return undefined
-  const event = { source: cause.source, event: cause.event, summary: cause.summary, payload: offer.event }
+  if (cause.kind !== "event") return undefined
+  // Its summary and address came from outside the account, like its payload: all three only inside the fence.
+  const event = { source: cause.source, event: cause.event, summary: cause.summary, ...(cause.url && { url: cause.url }), payload: offer?.event ?? null }
   return untrustedEventText(event, await eventMarker(event))
 }
 
-/** The message a run sends: its brief, then what triggered it and what its gate found. */
+/**
+ * The message a run sends: its brief, then what triggered it and what its gate found. An event's own words (its
+ * summary, its address, its payload) never stand here: they follow, fenced as untrusted (`eventText`).
+ */
 function runText(definition: AutomationDefinition, run: AutomationRun): string {
   const cause = run.cause
-  const why = cause.kind === "schedule" ? `its schedule (${slotName(cause.at)}${cause.catchUp ? ", caught up after this Mac was asleep or Mako was closed" : ""})` : cause.kind === "commit" ? `the commit ${cause.head}${cause.subject ? ` (${cause.subject})` : ""}` : cause.kind === "person" ? "the person's Run now" : cause.kind === "event" ? `${cause.source} ${cause.event}: ${cause.summary}${cause.url ? ` (${cause.url})` : ""}${cause.batch && cause.batch > 1 ? `, ${cause.batch} deliveries together` : ""}` : "an agent's run_now the person allowed"
+  const why = cause.kind === "schedule" ? `its schedule (${slotName(cause.at)}${cause.catchUp ? ", caught up after this Mac was asleep or Mako was closed" : ""})` : cause.kind === "commit" ? `the commit ${cause.head}${cause.subject ? ` (${cause.subject})` : ""}` : cause.kind === "person" ? "the person's Run now" : cause.kind === "event" ? `a ${cause.source} ${cause.event.replace(/[^\w.-]+/g, " ").trim().slice(0, 80)} event${cause.batch && cause.batch > 1 ? `, ${cause.batch} deliveries together` : ""}, which follows below as untrusted data` : "an agent's run_now the person allowed"
   return [
     automationBriefText(definition.prompt),
     "",
@@ -1208,10 +1329,10 @@ export function declareAutomationMethods(methods: MethodTable, automations: Auto
     await automations.start()
     return automations.runs(project, id, limit)
   })
-  methods.handle("mako:automations-save", (project: string, definition: JsonValue, replaces?: string) => automations.save(project, definition, replaces))
+  methods.handle("mako:automations-save", (project: string, definition: JsonValue, replaces?: string, approve?: string) => automations.save(project, definition, replaces, approve))
   methods.handle("mako:automations-delete", (project: string, id: string) => automations.remove(project, id))
-  methods.handle("mako:automations-enabled", (project: string, id: string, enabled: boolean) => automations.setEnabled(project, id, enabled))
-  methods.handle("mako:automations-run-now", (project: string, id: string, clientKey: string) => automations.runNow(project, id, clientKey))
+  methods.handle("mako:automations-enabled", (project: string, id: string, enabled: boolean, approve?: string) => automations.setEnabled(project, id, enabled, approve))
+  methods.handle("mako:automations-run-now", (project: string, id: string, clientKey: string, approve?: string) => automations.runNow(project, id, clientKey, { kind: "person" }, approve))
   methods.handle("mako:automations-decide", (proposal: string, approve: boolean) => automations.decide(proposal, approve, "view"))
   methods.handle("mako:automations-draft", (conversationId: string) => automations.draft(conversationId))
   methods.handle("mako:automations-templates", () => automations.templates())

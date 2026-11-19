@@ -83,3 +83,36 @@ export async function planAutomationStart(ports: AutomationStartPorts, input: Au
     },
   }
 }
+
+/** Where a standing Thread's run goes: its conversation, and whether its session takes it as its next message. */
+export interface StandingTarget {
+  conversationId: string
+  submit: boolean
+}
+
+/** How a standing Thread's session runs now, as far as a run's plan compares it. */
+export interface StandingSession {
+  harness: string
+  mode: string | null
+  model?: string
+}
+
+/**
+ * Where a standing Thread's next run goes. Its session takes the run as its next message only while it runs as the
+ * approved start plans now: the same harness, mode and model. One that doesn't (its access tightened since, or its
+ * harness or model changed) is left as it is, and the run starts a fresh session under a conversation named by the
+ * plan, which later runs of the same plan reach. One that drifted from its own plan (its mode changed by hand) refuses
+ * the run, saying why, rather than run it at another access than the one approved.
+ */
+export function standingTarget(fixed: string, plan: { harness: string; options: LiveStartOptions }, sessionOf: (conversation: string) => StandingSession | undefined, derive: (signature: string) => string): StandingTarget {
+  const model = plan.options.tuning?.model
+  const matches = (session: StandingSession) => session.harness === plan.harness && session.mode === (plan.options.modeId ?? null) && (model === undefined || session.model === model)
+  const kept = sessionOf(fixed)
+  if (!kept) return { conversationId: fixed, submit: false }
+  if (matches(kept)) return { conversationId: fixed, submit: true }
+  const conversationId = derive(`${plan.harness}\0${plan.options.modeId ?? ""}\0${model ?? ""}`)
+  const fresh = sessionOf(conversationId)
+  if (!fresh) return { conversationId, submit: false }
+  if (matches(fresh)) return { conversationId, submit: true }
+  throw new AutomationNotStartedError("Its standing Thread no longer runs at the access, harness or model its approved start says; it wasn't sent this run. Start it again from Automations.")
+}

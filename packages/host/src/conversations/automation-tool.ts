@@ -86,6 +86,10 @@ export class AutomationTool {
     if (action === "update" || action === "delete" || action === "enable") return this.#propose(automations, caller, own, project, action, input)
     // disable and run_now: now on full access, else once the person allows.
     const change = action === "disable" ? "off" : "run"
+    // Only the definition the person approved runs: an agent never asks to run one its file changed since, or one never
+    // approved, since its card couldn't say what would run.
+    if (change === "run" && own && view.local.approved !== view.fingerprint)
+      return { refused: "invalid", why: `${view.definition.name} runs only as the person approved it, and its definition ${view.local.approved === undefined ? "was never approved" : "changed since they did"}. Propose the change (update or enable) for them to review, or ask them to approve it in Automations.` }
     if (own && this.#deps.tier(own) !== "full") {
       const ask = this.#deps.gate.ask(own, { kind: "automation", action: change, id: input.id, cwd: project })
       return { outcome: "asked", ask: ask.id, next: AFTER_ACT.asked }

@@ -12,11 +12,15 @@ import { cn } from "@/lib/utils"
 export const AutomationDiff = memo(function AutomationDiff({ proposal, only, className }: { proposal: Pick<AutomationProposal, "before" | "after" | "change">; /** Just these parts, when the rest is a press away. */ only?: readonly string[]; className?: string }) {
   const all = useMemo(() => readableDiff(automationDiff(proposal.before, proposal.after), harnessLabel), [proposal.before, proposal.after])
   const parts = only ? all.filter((part) => only.includes(part.field)) : all
-  if (proposal.change === "enable")
-    return <p className={cn("text-label text-muted-foreground", className)}>Nothing in its definition changes; it starts running on its own, as its triggers say.</p>
+  // Turning it on approves what its file says now: against what the person approved before, or all of it if never.
+  if (proposal.change === "enable" && !parts.length)
+    return <p className={cn("text-label text-muted-foreground", className)}>Nothing changed since you approved it; it starts running on its own, as its triggers say.</p>
   if (!parts.length) return <p className={cn("text-label text-muted-foreground", className)}>Nothing changes.</p>
+  const lead = proposal.change === "enable" ? (proposal.before === undefined ? "Turning it on approves all it says:" : "Turning it on approves what changed since you approved it:") : undefined
   return (
-    <dl data-automation-diff className={cn("flex flex-col gap-2.5", className)}>
+    <div className={cn("flex flex-col gap-2.5", className)}>
+      {lead ? <p data-diff-lead className="text-label text-muted-foreground">{lead}</p> : null}
+    <dl data-automation-diff className="flex flex-col gap-2.5">
       {parts.map((part) => (
         <div key={part.field} data-diff-field={part.field} className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-3">
           <dt className="pt-px text-label text-faint">{DIFF_FIELD_WORDS[part.field]}</dt>
@@ -26,6 +30,7 @@ export const AutomationDiff = memo(function AutomationDiff({ proposal, only, cla
         </div>
       ))}
     </dl>
+    </div>
   )
 })
 
