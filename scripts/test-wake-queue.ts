@@ -548,6 +548,23 @@ try {
       await world.close()
     }
 
+    // A harness that refuses every prompt before taking it, for a cause that clears by itself or one that doesn't: a digest
+    // it refuses is tried again a bounded number of times, never in a loop, however the minute's budget counts it.
+    for (const refusal of ["503 Service Unavailable", "Not now: the test refuses it."]) {
+      let tries = 0
+      const world = new AgentsWorld({ root: join(root, `${harness}-refused-loop-${tries}-${refusal.length}`), script: () => "ok", refusePrompt: () => {
+        tries += 1
+        return refusal
+      } })
+      const { conversation } = await world.apex(harness, "full")
+      const actor = { kind: "agent" as const, session: world.store.journalPlacement(conversation)!.session }
+      world.live.submit(conversation, randomUUID(), `${FROM_AGENTS}\nRefused again.`, [], undefined, undefined, undefined, actor, { digest: { notices: [notice()] } })
+      await until(`${harness}: the first refusal`, () => tries > 0)
+      await pause(3_000)
+      assert.ok(tries <= 3, `${harness}: "${refusal}" refused ${tries} times in three seconds`)
+      await world.close()
+    }
+
     // A journal that can't be written fails its own conversation alone: the others' times go, and its own once writes come back.
     {
       const world = new AgentsWorld({ root: join(root, `${harness}-readonly`), script: () => "ok" })
