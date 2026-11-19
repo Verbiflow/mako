@@ -81,9 +81,10 @@ export class JournalWriter {
     worker.postMessage({ kind: "open", key: handle.key, path, cell: handle.cell.buffer, keptBytes })
     const settle = (): string | undefined => {
       for (;;) {
-        while (Atomics.load(handle.cell, 0) < handle.posted) {
+        // The wait is for a change from the count just compared, read once: read again for the wait, an answer that
+        // came between the two reads was the count it waited to change, and it held the thread `SETTLE_MS` for nothing.
+        for (let done = Atomics.load(handle.cell, 0); done < handle.posted; done = Atomics.load(handle.cell, 0)) {
           if (this.dead !== undefined) return handle.failure ??= this.dead
-          const done = Atomics.load(handle.cell, 0)
           if (Atomics.wait(handle.cell, 0, done, SETTLE_MS) === "timed-out") return handle.failure ??= "its writer didn't answer"
         }
         if (Atomics.load(handle.cell, 1) !== 0) return handle.failure ??= "a write of it failed on its writer"
@@ -113,8 +114,8 @@ export class JournalWriter {
           handle.posted += 1
           this.worker.postMessage({ kind: "close", key: handle.key, seq: handle.posted })
           this.hold(true)
-          while (Atomics.load(handle.cell, 0) < handle.posted && this.dead === undefined)
-            if (Atomics.wait(handle.cell, 0, Atomics.load(handle.cell, 0), SETTLE_MS) === "timed-out") break
+          for (let done = Atomics.load(handle.cell, 0); done < handle.posted && this.dead === undefined; done = Atomics.load(handle.cell, 0))
+            if (Atomics.wait(handle.cell, 0, done, SETTLE_MS) === "timed-out") break
         }
         this.handles.delete(handle.key)
         return failure
