@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AgentsReadResult, AgentsReportResult, AgentsStarted } from "@mako/host/contracts/agent-tools"
 import type { AgentRefused } from "@mako/host/contracts/agents"
+import { FOCUS_MS } from "@mako/host/contracts/children"
 import { AgentsWorld } from "./lib/agents-world.ts"
 
 /** Report delivery/read receipts never resolve the parent's unanswered decisions. No real model/provider is called. */
@@ -114,14 +115,15 @@ try {
     await next.settle(100)
     const report = kept(await next.agents.report(next.caller(started.conversation!), { clientKey: "ready", status: "done", summary: "Review is ready.", question: "Route this review?" }))
     const first = [...timers][0]!
-    assert.ok(first.ms > 0 && first.ms <= 5_000)
+    // Its Apex hasn't taken the digest yet: it waits to be heard, at most the focus stretch and the Apex's window.
+    assert.ok(first.ms > 5_000 && first.ms <= FOCUS_MS + 5_000)
     offset += 2_000
     kept(await next.agents.report(next.caller(started.conversation!), { clientKey: "quiet", status: "progress", summary: "Saved additional context." }))
     assert.ok(timers.has(first), "quiet narration cannot cancel/restart the original unanswered timer")
     await next.restart()
     assert.equal(timers.size, 1)
     const restored = [...timers][0]!
-    assert.ok(restored.ms <= 3_000, "restart preserves elapsed age instead of starting a fresh escalation window")
+    assert.ok(restored.ms <= FOCUS_MS + 5_000 - 2_000, "restart preserves elapsed age instead of starting a fresh escalation window")
     offset += 4_000
     timers.delete(restored)
     restored.run()

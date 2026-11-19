@@ -11,7 +11,7 @@ import type { ThreadAppSampler } from "./app-sampler.js"
  * A folder's app for the strip and the terminal dock: its view, its buttons, and what it printed. `target` is the one the person picked.
  * Without the Thread store there are no apps, and each call says so.
  */
-export function declareThreadAppMethods(methods: MethodTable, apps: DeskApp | undefined, sampler?: ThreadAppSampler, outputReady?: (apps: readonly AppKey[]) => boolean) {
+export function declareThreadAppMethods(methods: MethodTable, apps: DeskApp | undefined, sampler?: ThreadAppSampler, outputReady?: (apps: readonly AppKey[]) => boolean, windowShown?: (client: string, shown: boolean) => boolean) {
   const desk = (): DeskApp => {
     if (!apps) throw new Error("Thread apps need the Thread store, which this host couldn't open.")
     return apps
@@ -25,6 +25,9 @@ export function declareThreadAppMethods(methods: MethodTable, apps: DeskApp | un
     const connection = sampler?.connection(client)
     return connection ? { kind: "ready", connection, generation: sampler?.generation(client) ?? 0 } : { kind: "unavailable" }
   })
+  // A window saying nobody can see it, or that someone can again: while hidden its stream is told nothing that exists
+  // only to be painted (`live-ahead`). Everything it must hold to be right when it shows still reaches it.
+  methods.handle("mako:window-shown", (shown: boolean): boolean => windowShown?.(hostClient(), shown) ?? false)
   // A window showing a folder's app hears it change by the sampler's pushes, so its ask keeps the sampler looking.
   methods.handle("mako:thread-app", (cwd: string, target?: string): Promise<ThreadAppView> => {
     sampler?.wanted(hostClient())

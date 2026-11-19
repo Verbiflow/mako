@@ -162,9 +162,14 @@ try {
   await tools.stop(conversation)
   await other.stop(conversation)
 
-  // Going back: app_status lists this Thread's draft and the newest published versions, newest first.
+  // Going back: app_status says the current version and how many are kept, and lists them only when asked.
   const latest = third + 2
-  const history = parseYaml(await tools.status(conversation)).recipe
+  const brief = parseYaml(await tools.status(conversation)).recipe
+  assert.equal(brief.versions, undefined, "the history isn't listed unless asked")
+  assert.match(brief.version, new RegExp(`^${third + 1}, this Thread's draft`))
+  assert.match(brief.goBack, new RegExp(`^${latest} versions kept; app_status with versions: true lists this Thread's draft and the newest published\\. recipe_save with a version number`))
+  // With versions, it lists this Thread's draft and the newest published versions, newest first.
+  const history = parseYaml(await tools.status(conversation, { versions: true })).recipe
   assert.match(history.versions[1], new RegExp(`^${third + 1}: this Thread's draft, saved \\d+ (?:s|min) ago, made from ${third}; passed its proof, but wasn't published\\. My change$`))
   assert.match(history.versions[0], new RegExp(`^${latest}: published \\d+ (?:s|min) ago, what every Thread runs; proved\\. Their second change$`))
   assert.match(history.versions.at(-1), new RegExp(`^${first}: published \\d+ (?:s|min) ago; proved\\. Verify by looking$`))
@@ -173,7 +178,7 @@ try {
   assert.ok(Object.keys(history).indexOf("goBack") < Object.keys(history).indexOf("contents"), "before the recipe itself")
 
   // recipe_save with a version brings its recipe back as a new draft made from the published version, proved again before anyone gets it.
-  await assert.rejects(tools.restore(conversation, 999, "Wrong number"), { message: `Not saved: the project has no version 999; it keeps versions 1 to ${latest}, and app_status lists the newest.` })
+  await assert.rejects(tools.restore(conversation, 999, "Wrong number"), { message: `Not saved: the project has no version 999; it keeps versions 1 to ${latest}, and app_status with versions: true lists the newest.` })
   const prefix = `Back to version ${first}: `.length
   await assert.rejects(tools.restore(conversation, first, "x".repeat(500)), { message: `Not saved: the history keeps this reason after "Back to version ${first}: ", so it can be at most ${500 - prefix} characters; it's 500.` })
   const back = await tools.restore(conversation, first, "Their values broke the start")

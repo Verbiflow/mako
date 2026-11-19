@@ -56,6 +56,9 @@ const ImageMimeSchema = z.enum([
   "image/gif",
   "image/webp",
 ])
+/** How much of an image is read and encoded at a time: a multiple of three bytes, about a millisecond's work. */
+const ENCODE_STEP = 3 * 256 * 1024
+
 export async function claudeInputContent(
   text: string,
   attachments: PromptAttachment[]
@@ -74,27 +77,31 @@ export async function claudeInputContent(
         throw new Error("Claude image attachments must be under 20 MB")
       const mediaType = ImageMimeSchema.parse(attachment.mimeType)
       const file = await open(attachment.path, "r")
-      let data: Buffer
+      // The SDK takes an image as base64, so this is where the file's bytes are first read: a step at a time,
+      // each encoded as it's read, so a large picture never holds the loop for a read or an encode of all of it.
+      const encoded: string[] = []
       try {
         const limit = 20 * 1024 * 1024
         const stat = await file.stat()
         if (!stat.isFile() || stat.size > limit)
           throw new Error("Claude image attachments must be files under 20 MB")
-        const buffer = Buffer.alloc(limit + 1)
+        const step = Buffer.allocUnsafe(ENCODE_STEP)
         let size = 0
-        while (size < buffer.length) {
-          const { bytesRead } = await file.read(
-            buffer,
-            size,
-            buffer.length - size,
-            null
-          )
-          if (!bytesRead) break
-          size += bytesRead
+        for (;;) {
+          // A step is filled before it's encoded: three bytes are four characters, so whole steps join cleanly.
+          let filled = 0
+          while (filled < step.length) {
+            const { bytesRead } = await file.read(step, filled, step.length - filled, null)
+            if (!bytesRead) break
+            filled += bytesRead
+          }
+          if (!filled) break
+          size += filled
+          if (size > limit)
+            throw new Error("Claude image attachments must be under 20 MB")
+          encoded.push(step.toString("base64", 0, filled))
+          if (filled < step.length) break
         }
-        if (size > limit)
-          throw new Error("Claude image attachments must be under 20 MB")
-        data = buffer.subarray(0, size)
       } finally {
         await file.close()
       }
@@ -103,7 +110,7 @@ export async function claudeInputContent(
         source: {
           type: "base64",
           media_type: mediaType,
-          data: data.toString("base64"),
+          data: encoded.join(""),
         },
       })
     }

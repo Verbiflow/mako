@@ -1,7 +1,7 @@
 import type { HarnessDescriptor } from "@/lib/types"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
-import { internalReviewSession, listedAsThread, sameNativeSession, threadList } from "@mako/host/contracts/thread-list"
+import { internalReviewSession, listedAsThread, sameNativeSession, threadList, withListedRef } from "@mako/host/contracts/thread-list"
 import { toast } from "sonner"
 import type { ExternalThreadActivity, ThreadRef } from "@/lib/types"
 import {
@@ -12,8 +12,8 @@ import {
   activeThreadRefs,
   applyThreadRun,
   clearObserved,
-  markObserved,
   markThreadReviewed,
+  observedAfter,
   OBSERVED_IDLE_MS,
   recentThreadActivityDuration,
   sameThreadStatus,
@@ -117,16 +117,9 @@ export function applyThreadRef(ref: ThreadRef) {
     ((ref.bytes ?? 0) > (previous.bytes ?? 0) ||
       ref.updatedAt !== previous.updatedAt)
   )
-  if (ref.active !== undefined) clearObserved(ref.path)
-  else if (recentlyAdded || advanced) markObserved(ref.path)
-  const next =
-    at === -1
-      ? [...current, ref]
-      : current.map((entry, index) => (index === at ? ref : entry))
-  next.sort((left, right) =>
-    (right.updatedAt ?? "").localeCompare(left.updatedAt ?? "")
-  )
-  applyThreads(next, threadsStore.get().loaded)
+  // Whether it's been seen moving goes into the store with the list, in one change: each was a pass over the rail.
+  const seen = ref.active !== undefined ? false : recentlyAdded || advanced ? true : undefined
+  applyThreads(withListedRef(current, ref, at), threadsStore.get().loaded, seen === undefined ? undefined : { path: ref.path, seen })
   followViewedRef(ref)
 }
 
@@ -214,7 +207,8 @@ export function applyThreadRemoved(path: string) {
   )
 }
 
-export function applyThreads(list: ThreadRef[], loaded = true) {
+/** `moved`: one row of the list, and whether it's been seen moving, said in the same change (`observedAfter`). */
+export function applyThreads(list: ThreadRef[], loaded = true, moved?: { path: string; seen: boolean }) {
   const { threads: previous, loaded: wasLoaded } = threadsStore.get()
   const initialHydration = loaded && !wasLoaded
   const observed = list.map(ref => nativeSessionRefs.observe(ref))
@@ -226,7 +220,8 @@ export function applyThreads(list: ThreadRef[], loaded = true) {
   })
   noteHelpers(candidates)
   const unique = threadList(candidates)
-  threadsStore.set({ threads: unique, loaded })
+  const seenMoving = moved && observedAfter(moved.path, moved.seen)
+  threadsStore.set({ threads: unique, loaded, ...(seenMoving && { observed: seenMoving }) })
   followThreadMoves(previous, unique)
   offerWindowRenames(unique)
   if (initialHydration) seedRecentThreadActivity(unique)
@@ -270,15 +265,17 @@ const threadCatalogActions = {
 
   async load() {
     if (!hasBridge()) return
+    // Asked beside the catalog, never before its rows: the rail draws without them, and a host whose loop is held
+    // answers each ask after the hold, so one after another waited out a hold each.
+    const requests = getMako()
+      .nativeRequests()
+      .catch(() => [])
+      .then((nativeRequests) => threadsStore.set({ nativeRequests }))
     const [raw, descriptors]: [ThreadCatalogResponse, HarnessDescriptor[]] =
       await Promise.all([
         getMako().threads().catch(unavailableThreadCatalog),
         harnessDescriptors(),
       ])
-    const nativeRequests = await getMako()
-      .nativeRequests()
-      .catch(() => [])
-    threadsStore.set({ nativeRequests })
     // An engine one vintage older answers with a bare array; treat it as
     // ready rather than spinning forever against the shape difference.
     const result = normalizeThreadCatalog(raw)
@@ -292,6 +289,7 @@ const threadCatalogActions = {
     if (!result.ready) {
       setTimeout(() => void threadCatalogActions.load(), 1500)
     }
+    await requests
   },
 }
 

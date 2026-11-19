@@ -60,7 +60,10 @@ export const CLAUDE_RECORD_TYPES: readonly string[] = [
  * draws it as a marker, never as the person's prompt. Its
  * `late_allow_not_run` tells the program running it that an Allow answered
  * after its card closed ran nothing; it goes only to that program's stream,
- * and the transcript keeps the call's own result.
+ * and the transcript keeps the call's own result. 2.1.327's `shell_cwd` is the
+ * folder a main-thread shell call left its shell in, sent on the stream only to
+ * a host whose PostToolUse matcher asks for it in place of its own hook
+ * (`sendsShellCwd`); Mako's hooks don't ask, and no transcript keeps it.
  */
 export const CLAUDE_SYSTEM_SUBTYPES: readonly string[] = [
   "agents_killed", "api_error", "api_retry", "away_summary", "background_tasks_changed",
@@ -79,6 +82,7 @@ export const CLAUDE_SYSTEM_SUBTYPES: readonly string[] = [
   "ui_panes", "ui_placed", "ui_scroll", "ui_status", "ui_toast",
   "vcs_state_changed", "worker_shutting_down", "session_writes_lost", "start_folder",
   "ui_notify", "ui_notify_cancel", "voice_call_talk", "late_allow_not_run",
+  "shell_cwd",
 ]
 
 /**
@@ -98,7 +102,10 @@ export const CLAUDE_SYSTEM_SUBTYPES: readonly string[] = [
  * model (`plugin_note`); a long prompt also saved as a file for the model to
  * read (`prompt_as_file`), whose prompt the transcript keeps whole; and the
  * mark that a request left out files the person attached whole because they
- * no longer fit (`whole_texts_withdrawn`).
+ * no longer fit (`whole_texts_withdrawn`). 2.1.327's is context too: which
+ * subagents have waited half a minute or more for a permission answer
+ * (`agent_ask_notice`), so the model tells the person rather than taking a
+ * chat message as that answer.
  */
 export const CLAUDE_ATTACHMENT_TYPES: readonly string[] = [
   "account_memory_recall", "advisor_stripped", "advisor_tool", "agent_listing_delta", "agent_mention",
@@ -128,6 +135,7 @@ export const CLAUDE_ATTACHMENT_TYPES: readonly string[] = [
   "workflow_size_guideline_change", "claude_app_notice", "message_pdf_reads", "widget_context_hint",
   "instruction_files_not_loaded", "linked_plugin_tools_note", "tool_results_cut",
   "plugin_note", "prompt_as_file", "whole_texts_withdrawn",
+  "agent_ask_notice",
 ]
 
 const MCP_RESOURCES = "Defined only beside an MCP server that offers resources; the capture runs with none."
@@ -151,9 +159,9 @@ const CLAUDE_REFUSALS = [
 export const CLAUDE_VOCABULARY = defineVocabulary({
   harness: "claude",
   checked: {
-    version: "2.1.326",
-    on: "2026-11-17",
-    against: "the model request of the SDK's Claude Code 2.1.326, which Mako runs, in every Mako mode (scripts/fixtures/native-tools; the same tools since 2.1.283, AskUserQuestion's, Bash's and DesignSync's descriptions reworded in 2.1.314, DesignSync's again and PushNotification's status optional in 2.1.319, none changed in 2.1.322, and Agent's, AskUserQuestion's, ExitWorktree's, Monitor's, Skill's, ToolSearch's and Workflow's descriptions reworded in 2.1.326 with the same parameters), its print-run tools (scripts/fixtures/native-vocabulary/claude-init.json), and ~/.claude/projects through audit:tools as of 2026-10-06",
+    version: "2.1.327",
+    on: "2026-11-18",
+    against: "the model request of the SDK's Claude Code 2.1.327, which Mako runs, in every Mako mode (scripts/fixtures/native-tools; the same tools since 2.1.283, AskUserQuestion's, Bash's and DesignSync's descriptions reworded in 2.1.314, DesignSync's again and PushNotification's status optional in 2.1.319, none changed in 2.1.322, Agent's, AskUserQuestion's, ExitWorktree's, Monitor's, Skill's, ToolSearch's and Workflow's descriptions reworded in 2.1.326 with the same parameters, and AskUserQuestion's, Bash's and ListAgents' descriptions reworded in 2.1.327, ListAgents taking an optional page `cursor`), its print-run tools (scripts/fixtures/native-vocabulary/claude-init.json), and ~/.claude/projects through audit:tools as of 2026-10-06",
   },
   mcp: [],
   refusals: CLAUDE_REFUSALS,
@@ -205,9 +213,9 @@ export const CLAUDE_VOCABULARY = defineVocabulary({
   },
   concepts: {
     checked: {
-      version: "2.1.326",
-      on: "2026-11-17",
-      against: "SDK 0.3.326 types (HOOK_EVENTS, unchanged since 0.3.283; AgentDefinition's observer may name up to four agents in 0.3.326; Settings adds a plugin's `engines` and a sandbox auto-approval in 0.3.326, none of them where Mako reads), code.claude.com docs (memory, hooks, skills, sub-agents, mcp, settings) as read on 2026-10-06, and the build the SDK bundles through harness:self-report",
+      version: "2.1.327",
+      on: "2026-11-18",
+      against: "SDK 0.3.327 types (HOOK_EVENTS, unchanged since 0.3.283; AgentDefinition's observer may name up to four agents in 0.3.326; Settings adds a plugin's `engines` and a sandbox auto-approval in 0.3.326 and a runner host's allowNestedModelAccessUnderForceLogin in 0.3.327, and AgentDefinition ignores an in-process MCP server in its mcpServers from 0.3.327, none of them where Mako reads or sets), code.claude.com docs (memory, hooks, skills, sub-agents, mcp, settings) as read on 2026-10-06, and the build the SDK bundles through harness:self-report",
     },
     instructions: {
       files: ["CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".claude/AGENTS.md"],

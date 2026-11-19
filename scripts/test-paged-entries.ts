@@ -175,7 +175,14 @@ try {
       assert.ok(window.data.length > 0)
       const warm = JSON.stringify(live.held(id)!.blocks)
       assert.ok(warm.length > WARM_CHARS * 4, "the conversation holds far more than it keeps warm")
-      await waitFor(() => live.held(id)!.blocks.some(isPaged), "the sweep pages a running conversation")
+      // The sweep pages in slices, so it is awaited until it has paged every earlier turn, not merely begun.
+      const earlierPaged = () => {
+        const held = live.held(id)!.blocks
+        let start = held.length - 1
+        while (start > 0 && held[start]!.type !== "user") start--
+        return held.slice(0, start).some(isPaged) && held.slice(0, start).every((block) => isPaged(block) || block.type === "user")
+      }
+      await waitFor(earlierPaged, "the sweep pages a running conversation's earlier turns")
       const blocks = live.held(id)!.blocks
       assert.equal(live.held(id)!.session.status, "running", "it is still running")
       let turnStart = blocks.length - 1

@@ -8,7 +8,7 @@ import type { FileCitation } from "@/lib/file-citations"
 import { UNSURE } from "@/lib/turn-changes"
 import { lineWords } from "@/lib/turn-writers"
 import { cn } from "@/lib/utils"
-import { useAcp } from "@/state/acp"
+import { requestOf, useAcpConversation } from "@/state/acp-state"
 import { chooseFileReference, useFileReference } from "@/state/file-references"
 import { formatAgo } from "@/state/thread-app"
 import { viewer } from "@/state/viewer"
@@ -67,9 +67,8 @@ function titleOf(file: FileCandidate, now: number, here?: ChangedHere): string {
  */
 function useChangedHere(liveId: string | undefined, path: string | undefined): ChangedHere {
   const requestId = useContext(AnswerRequestContext)
-  return useAcp((state) => {
-    const live = liveId && requestId && path ? state.conversations[liveId] : undefined
-    const request = live?.kind === "live" ? live.requests?.find((each) => each.id === requestId) : undefined
+  return useAcpConversation(liveId, (live) => {
+    const request = path && live?.kind === "live" ? requestOf(live, requestId) : undefined
     return path && request?.changes ? changedFiles(request.changes).get(path) : undefined
   })
 }

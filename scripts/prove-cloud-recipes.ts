@@ -88,7 +88,7 @@ try {
   const version = /Published version (\d+)/.exec(first.text)?.[1]
   check(Boolean(version), "the first machine published a version, numbered by the account", first.text)
 
-  const second = await cloudTurn(cwd, "Call the app_status tool and copy the recipe's `version:` line and every line under `versions:` exactly as it returned them. Then call recipe_publish with no draft and copy what it returned, verbatim. Reply with only those copied lines.")
+  const second = await cloudTurn(cwd, "Call the app_status tool with versions: true and copy the recipe's `version:` line and every line under `versions:` exactly as it returned them. Then call recipe_publish with no draft and copy what it returned, verbatim. Reply with only those copied lines.")
   opened.push(second.id)
   console.log(`second machine: ${(second.ms / 1000).toFixed(1)} s\n${second.text}\n`)
   check(Boolean(version) && new RegExp(`version: ${version}, published`).test(second.text), `a second machine, with nothing of its own, runs version ${version ?? "?"} from the account`, second.text)

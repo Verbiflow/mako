@@ -18,7 +18,8 @@ import {
 import type { LiveAccess, Resident } from "./live-runtime.js"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog } from "../base/host-log.js"
-import { STEER_LANDS_MS } from "../harnesses/index.js"
+import { stagedCall } from "../base/live-steps.js"
+import { heldSubmission, STEER_LANDS_MS } from "../harnesses/index.js"
 
 export type SteerInput = Extract<LiveActionInput, { kind: "steer" | "steer-queued" }>
 
@@ -323,16 +324,22 @@ export class LiveActions {
         return this.receipt(resident, { input, digest, bindingId, createdAt: Date.now(), sender, state: { kind: "accepted" } })
       }
       const expectedRunId = request.nativeRun.runId
-      const attachments = this.host.retainAttachments(input.attachments)
+      const attachments = this.host.retainAttachments(input.attachments, input.id)
       retained = { ...input, attachments }
-      const native = () =>
+      const send = () => stagedCall(id, "driver.steer", () =>
         steer(bindingId, {
           id: input.id,
           expectedRunId,
           text: input.text,
           ...input.displayText !== undefined && input.displayText !== input.text && { shown: input.displayText },
           attachments,
-        })
+        }))
+      const native = () => {
+        // A steer is submitted as a message is: one that runs the person's code by itself waits for the checkpoint
+        // its turn's writes still wait on.
+        const held = heldSubmission(this.host.dependencies.writeHolds, driver.firstWrite?.submitRuns, bindingId, input.text)
+        return held ? held.then(send) : send()
+      }
       perform = landing === "native" ? native : async () => {
         const started = Date.now()
         const answer = native()

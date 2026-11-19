@@ -1,4 +1,4 @@
-import { acpStore } from "@/state/acp-state"
+import { acpStore, railAcpStore } from "@/state/acp-state"
 import { interfacePreview } from "@/state/development"
 import { inboxView } from "@/state/inbox-view"
 import {
@@ -77,7 +77,8 @@ export function bindNotifications(options: {
   document.addEventListener("visibilitychange", sync)
   sync()
 
-  // Each store wakes on every token; comparing one string keeps that free.
+  // What's on screen moves with the rail's facts (the conversation on screen, its file), so the live store is heard
+  // through the rail's: a streamed batch says nothing here. The others compare one string.
   let stage = ""
   const watch = () => {
     const acp = acpStore.get()
@@ -92,7 +93,7 @@ export function bindNotifications(options: {
     stage = next
     reconcileVisible()
   }
-  const unsubscribe = [acpStore, threadsStore, tabsStore].map((store) => store.subscribe(watch))
+  const unsubscribe = [railAcpStore, threadsStore, tabsStore].map((store) => store.subscribe(watch))
   watch()
   void refreshNotificationPermission()
 

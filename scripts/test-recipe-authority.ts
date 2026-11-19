@@ -178,7 +178,7 @@ try {
   assert.match(refused, /Version 3 was published after this draft was made from version 1/, refused)
   assert.equal(await publishedVersion(laptopFile), 3, "the laptop's store takes what was published")
   assert.equal(authority.published, 3)
-  assert.match(await laptop.status("on-mac"), /1: published[^\n]*proved on this computer, proved on a cloud machine/, "app_status says where each was proved")
+  assert.match(await laptop.status("on-mac", { versions: true }), /1: published[^\n]*proved on this computer, proved on a cloud machine/, "app_status says where each was proved")
   await laptop.stop("on-mac")
 
   // The account out of reach: reads go on from what was taken; a save is refused, so nothing is numbered apart.

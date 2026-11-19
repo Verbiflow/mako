@@ -1,5 +1,6 @@
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import { edgeStopped } from "../contracts/agents.js"
 import { disconnectNativeAgents } from "../contracts/native-agents.js"
 import { autoContinueCandidate } from "../contracts/turn-continuation.js"
 import { stoppedWork } from "./interrupted-turn.js"
@@ -24,6 +25,9 @@ export interface ClosingParts {
   transfers: LiveTransfers
   restarts: LiveRestarts
 }
+
+/** How long journals close in one go as the host stops, before the loop turns (`stop`). */
+const CLOSE_SLICE_MS = 8
 
 /** Conversations closing: one at a time on Close, all of them when the host leaves. */
 export class LiveClosing {
@@ -115,7 +119,8 @@ export class LiveClosing {
     const placed = threads?.journalPlacement(resident.snapshot.session.id)
     if (!placed || !threads) return false
     const edges = threads.edges()
-    return edges.of(placed.thread) !== undefined || edges.children(placed.thread).some((edge) => edge.closedAt === undefined)
+    // A Fin closed as finished counts as before it closed: only a stop takes its Apex out of the tree.
+    return edges.of(placed.thread) !== undefined || edges.children(placed.thread).some((edge) => !edgeStopped(edge))
   }
 
   private async closeResident(
@@ -315,6 +320,7 @@ export class LiveClosing {
     const { records } = this.parts
     const closing: Promise<unknown>[] = []
     const releases: Promise<void>[] = []
+    const journals: Resident["journal"][] = []
     releases.push(records.stop())
     this.parts.actions.stop()
     for (const resident of records.values()) {
@@ -377,12 +383,37 @@ export class LiveClosing {
       } catch (error) {
         hostWarn("live", "a conversation couldn't be saved as Mako stopped", { conversation: resident.snapshot.session.id, error: errorMessage({ error }) })
       }
-      // Open questions keep a conversation loaded until the host stops, so its dropped copy's space is reclaimed here.
-      releases.push(resident.journal.close((path) => this.access.reclaims.reclaim(path), true))
+      journals.push(resident.journal)
     }
-    releases.push(records.stopCheckpoints(), this.access.reclaims.stop())
     records.clear()
-    return this.shutdown = Promise.all([Promise.allSettled(closing), Promise.allSettled(releases)]).then(([, released]) => {
+    // Every conversation is saved as this host left it, above, in one go. Their journals close after, a few
+    // milliseconds' worth at a time: each close of a file's last connection checkpoints and syncs it, and a few hundred
+    // closed in one go held the loop 2.5 s, through which nothing else that stops could run.
+    const closed = (async () => {
+      const settled: Promise<void>[] = []
+      const failed: Error[] = []
+      // What the writer still holds of them is written first, awaited, and its side of each closed: a journal's
+      // close then waits for nothing of the writer's on this thread.
+      await records.closeWrites().catch((error) => hostWarn("live", "the journal writer didn't close its writes; each journal waits for its own", { error: errorMessage({ error }) }))
+      let since = performance.now()
+      for (const journal of journals) {
+        // Open questions keep a conversation loaded until the host stops, so its dropped copy's space is reclaimed here.
+        try {
+          const done = journal.close((path) => this.access.reclaims.reclaim(path), true)
+          // Joined below, once every journal has begun closing: one that fails before then is reported there.
+          done.catch(() => undefined)
+          settled.push(done)
+        } catch (error) {
+          failed.push(error instanceof Error ? error : new Error(String(error)))
+        }
+        if (performance.now() - since < CLOSE_SLICE_MS) continue
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        since = performance.now()
+      }
+      // All resident journals closed: their checkpoint handles and what reclaims were queued are joined after.
+      return Promise.allSettled([...releases, ...settled, ...failed.map((error) => Promise.reject(error)), records.stopCheckpoints(), this.access.reclaims.stop()])
+    })()
+    return this.shutdown = Promise.all([Promise.allSettled(closing), closed]).then(([, released]) => {
       const failed = released.flatMap(result => result.status === "rejected" ? [result.reason] : [])
       if (failed.length) throw new AggregateError(failed, "Journal ownership could not be released as Mako stopped")
     })
