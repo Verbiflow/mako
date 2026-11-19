@@ -234,6 +234,9 @@ const reads = [
   "mako:automations-runs",
   "mako:automations-draft",
   "mako:automations-templates",
+  "mako:automations-run-of",
+  /** A cloud machine's host's proposals its person's Mac takes, as they stand. */
+  "mako:automations-forwarded",
   "mako:external-editors",
   "mako:default-commit-prompt",
   "mako:native-requests",
@@ -294,6 +297,8 @@ const replays = [
   "mako:automations-run-now",
   /** A decided proposal answers as it was decided. */
   "mako:automations-decide",
+  /** A settled forwarded proposal answers as it was settled. */
+  "mako:automations-forward-settle",
   /** A spawn, a link, a report, a message and an answer are settled by the caller's key; stopping a stopped child stops nothing. */
   "mako:agents-start",
   "mako:agents-move",

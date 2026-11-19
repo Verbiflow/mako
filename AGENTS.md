@@ -3911,7 +3911,17 @@ the definition changes after the person turned it on (a pull can't change what r
 delete or enable through the `automation` tool is a proposal: saved pending, carried to the person by an
 `automation-proposal` ask (person-only: an Apex can't answer it), decided from the card or Automations, its agent
 told by Mako's note; stale and expired ones apply nothing. `runWhen` asks the person's utility model
-(`UtilityRunWhen`). `npm run test:automations` holds all of it.
+(`UtilityRunWhen`). The cloud account's half is `AutomationCloud` (`workspaces/automation-cloud.ts`, wire in
+`@mako/protocol/automations-cloud`): each automation that's on with a trigger the account holds is registered under its
+project's stable key (`github.com/<owner>/<name>[/<folder>]`, never a path; `cloudRegistered`, or `cloudIssue` on a
+409), the account's runs are read every half minute while one is registered, on the account's `automations-changed`
+event and when its link opens, and kept as runs marked `cloud`, which only the account settles. An offered run is held to
+this Mac's cap, overlap and gate, then claimed (`POST /claim`) or declined; a registered schedule's slot or event is
+claimed before it runs here, and a 409 or an unreachable account means it doesn't. A cloud run's agent's proposals stay
+on its machine's host (`relaysProposals`) until the Mac reads them (`mako:automations-forwarded`), applies the
+person's decision to the project's file here, and says how it went (`mako:automations-forward-settle`).
+`mako:automations-run-of` names the run a Thread is, from an index of every kept run by conversation.
+`npm run test:automations` holds all of it.
 
 ## Notifications
 

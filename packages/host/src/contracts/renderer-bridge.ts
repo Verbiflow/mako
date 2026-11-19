@@ -99,7 +99,7 @@ import type { ContinueReading } from "./cloud-continues.js"
 import type { TelemetryChoice, TelemetryState } from "./telemetry.js"
 import type { HarnessUpdateInfo } from "./harness-updates.js"
 import type { UpdateState, UsageSummary } from "./automations-usage-updates.js"
-import type { AutomationDraft, AutomationProjectReading, AutomationProposal, AutomationRun, AutomationRunNowResult, AutomationsReading, AutomationTemplate } from "./automations.js"
+import type { AutomationDraft, AutomationHook, AutomationProjectReading, AutomationProposal, AutomationRun, AutomationRunNowResult, AutomationRunOf, AutomationsReading, AutomationTemplate } from "./automations.js"
 import type { Entry, ModelInfo, SessionState, SessionSummary, Thread, ThreadContextOptions, ThreadFileContext, ThreadPage, ThreadRef, ThreadRunState, ThinkingLevel } from "./conversation-session.js"
 import type { StorageReport } from "./storage.js"
 import type { BootPayload, ExternalThreadActivity, HostEvent, TabSnapshot } from "./host-events-boot.js"
@@ -1025,6 +1025,10 @@ export function createMakoBridge(transport: BridgeTransport) {
     decideAutomationProposal: (proposal: string, approve: boolean) => invokeTrustedHost<AutomationProposal>("mako:automations-decide", proposal, approve),
     draftAutomation: (conversationId: string) => invokeTrustedHost<AutomationDraft>("mako:automations-draft", conversationId),
     automationTemplates: () => invokeTrustedHost<AutomationTemplate[]>("mako:automations-templates"),
+    /** The run a Thread is, by its conversation, however old: for "Run of <name>"; null for a Thread no automation started. */
+    automationRunOf: (conversation: string) => invokeTrustedHost<AutomationRunOf | null>("mako:automations-run-of", conversation),
+    /** A webhook for an automation's trigger, made in the account or its secret rotated: the secret is shown this once. */
+    automationHook: (name: string, provider?: AutomationHook["provider"], rotate?: boolean, secret?: string) => invokeTrustedHost<AutomationHook>("mako:automations-hook", name, provider, rotate, secret),
 
     terminalList: () =>
       invokeTrustedHost<TerminalSession[]>("mako:terminal-list"),

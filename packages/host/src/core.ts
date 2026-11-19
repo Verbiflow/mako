@@ -40,7 +40,7 @@ import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAttribution, writtenPaths, type Attribution } from "./attribution/index.js"
-import { childProcessReader, CheckoutLeave, cloudHasAll, cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, WatchedTrees, Automations, AutomationStore, AutomationNotStartedError, type AutomationLaunch, type AutomationThreadReading, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, declareRemoteAppMethods, ViewHints, declareViewHints, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers, declareSetupMethods, SetupViews } from "./workspaces/index.js"
+import { childProcessReader, CheckoutLeave, cloudHasAll, cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, WatchedTrees, Automations, AutomationStore, AutomationCloud, projectKey, AutomationNotStartedError, type AutomationLaunch, type AutomationThreadReading, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, declareRemoteAppMethods, ViewHints, declareViewHints, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers, declareSetupMethods, SetupViews } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
 import { commonDirOf } from "@mako/git"
@@ -70,7 +70,7 @@ import { accountBorrowing, BorrowedSimulators, ControlResidency, controlLine, op
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
 import { SyncRecorder } from "./contracts/sync-readings.js"
-import { AgentAskGate, AutomationTool, HarnessTool, SettingsTool, declareAutomationToolMethods, declareHarnessToolMethods, declareSettingsMethods, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, machineLeaving, SHUTDOWN_HOLD_MS, CloudWorktrees, CloudMoves, CloudReadiness, AwayNotes, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, WorkingSet, conversationShown, finAsking, ownedSessions, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, CheckoutRepositories, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type ThreadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations, sessionOrderIn } from "./conversations/index.js"
+import { AgentAskGate, AutomationTool, HarnessTool, SettingsTool, declareAutomationToolMethods, declareHarnessToolMethods, declareSettingsMethods, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, machineLeaving, SHUTDOWN_HOLD_MS, CloudWorktrees, CloudMoves, CloudReadiness, AwayNotes, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, WorkingSet, conversationShown, finAsking, ownedSessions, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, CheckoutRepositories, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type ThreadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations, sessionOrderIn, placeLink } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, McpSignIns, declareMcpSignInMethods, type ConversationMcp } from "./tools/index.js"
 import { hostCommand } from "./base/host-command.js"
 import { declareGitMethods, hostGit, machinePullRequestsAs, UtilityRunWhen } from "./git/index.js"
@@ -1863,8 +1863,19 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   }
   // Automations (`workspaces/automations.ts`): every open project's, and every one with an automation on, on one job.
   const automationsFolder = join(environment.dataRoot, "automations")
+  const automationStore = new AutomationStore(automationsFolder)
+  // Linked to the person's Mako account (`AutomationCloud`): only a person's own Mac registers, never a cloud machine's
+  // host or the fixture desk, and only while the account's link is heard, so a Mac signed out or offline asks nothing.
+  let automationCloud: AutomationCloud | undefined
+  let automationThreads: { close(): void } | undefined
   const workspaceAutomations = new Automations({
-    store: new AutomationStore(automationsFolder),
+    store: automationStore,
+    claims: () => automationCloud?.claims,
+    changed: (project) => void automationCloud?.sync(project),
+    hooks: () => automationCloud,
+    forward: () => automationCloud?.forward,
+    // A cloud machine's host: what its agents propose is applied on the person's Mac, which reads it from here.
+    relaysProposals: config.machineAgentFd !== undefined,
     scheduler: { start: (due) => shell.jobs.every("automations due", AUTOMATIONS_TICK_MS, () => due(Date.now()), { firstAfterMs: 10_000 }) },
     emit,
     openProjects: () => [...new Set(workspaceClients.everyTab().map((tab) => tab.workspace))],
@@ -2012,6 +2023,32 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     return start.place === "cloud" ? { place: "cloud" } : {}
   }
   late.automations = workspaceAutomations
+  if (!fixtureDesk && config.machineAgentFd === undefined) {
+    const automationsLinked = shell.jobs.demand("an automation is registered with the cloud account")
+    const threads = placeLink(() => late.cloud)
+    const linked = new AutomationCloud({
+      api: () => (late.cloud?.accountHeard?.() ? late.cloud.automations : undefined),
+      threadCall: (thread, channel, args, passive) => threads.call({ kind: "cloud", thread }, channel, args, { passive }),
+      automations: workspaceAutomations,
+      store: automationStore,
+      demand: automationsLinked,
+      // The project's stable key: its GitHub repository and the folder in it, never this Mac's path.
+      repository: async (project) => {
+        const url = githubRepositoryUrl(await git.output(project, ["remote", "get-url", "origin"]).catch(() => ""))
+        const key = url && projectKey(url, await git.output(project, ["rev-parse", "--show-prefix"]).catch(() => ""))
+        if (!url || !key) return undefined
+        const branch = (await git.output(project, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]).catch(() => "")).trim().replace(/^origin\//, "")
+        return { key, repository: { url, ...(branch && { branch }) } }
+      },
+    })
+    automationCloud = linked
+    automationThreads = threads
+    const carryOn = () => void linked.sync().then(() => linked.feed()).catch((error: Error) => hostWarn("automations", "the cloud account's runs couldn't be read", { error: error.message }))
+    shell.jobs.every("automations' cloud runs", AUTOMATIONS_TICK_MS, () => linked.sync().then(() => linked.feed()), { needs: [automationsLinked] })
+    late.cloud?.onAutomationsChanged?.(carryOn)
+    late.cloud?.onRuntimeLinked?.(carryOn)
+    void workspaceAutomations.start().then(carryOn, () => undefined)
+  }
   void harnesses.accounts.completePendingRemovals().catch((error) =>
     hostWarn("accounts", "pending removals could not be read", { error: error instanceof Error ? error.message : String(error) })
   )
@@ -2443,7 +2480,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     "builds": () => { for (const build of builds) build.close() },
     "browser and computer calls": () => control.stop(),
     "file calls": () => files.stop(),
-    "workspace automations": () => workspaceAutomations.stop(),
+    "workspace automations": () => {
+      workspaceAutomations.stop()
+      automationCloud?.stop()
+      automationThreads?.close()
+    },
     "harness updates": () => harnesses.updates.stop(),
     "catalog calls": () => catalog.stop(),
   } satisfies Record<string, () => void | Promise<void>>

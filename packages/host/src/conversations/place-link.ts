@@ -34,12 +34,13 @@ export function placeLink(account: () => Pick<CloudAccount, "deviceId" | "device
       const listed = await account()?.devices?.()
       return (listed?.devices ?? []).filter((device) => device.kind === undefined || RUNS_THREADS.has(device.kind)).map((device) => ({ id: device.id, name: device.name, ...(device.platform && { platform: device.platform }) }))
     },
-    call: async (target, channel, args) => {
+    call: async (target, channel, args, how) => {
       const { session, deviceId } = await connected()
       const actor: Actor = { kind: "client", client: "desktop", deviceId }
       const runtime = target.kind === "device" ? `d-${target.device}` : undefined
-      const send = gatewayHostCalls(session, runtime ? { runtimeId: runtime, actor } : { threadId: target.kind === "cloud" ? target.thread : "", actor }).call(channel, args)
-      return decodeRuntimeValue(await sendWithRepeats(channel, send, { ...(runtime ? { runtime } : target.kind === "cloud" && { threadId: target.thread }), log: CALL_LOG }))
+      const passive = how?.passive === true
+      const send = gatewayHostCalls(session, runtime ? { runtimeId: runtime, actor, ...(passive && { passive }) } : { threadId: target.kind === "cloud" ? target.thread : "", actor, ...(passive && { passive }) }).call(channel, args)
+      return decodeRuntimeValue(await sendWithRepeats(channel, send, { ...(runtime ? { runtime } : target.kind === "cloud" && { threadId: target.thread }), ...(passive && { passive }), log: CALL_LOG }))
     },
     close: () => {
       held?.session.close()

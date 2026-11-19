@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { AccessChoicesSchema } from "./access-choices.js"
+import { AutomationsChangedEventSchema } from "./automations-cloud.js"
 import { PreferencesSchema } from "./preferences.js"
 import type { StreamId } from "./events.js"
 import { ThreadIdSchema } from "./ids.js"
@@ -63,6 +64,11 @@ export const AccountEventSchema = z.discriminatedUnion("type", [
    * made. A device that missed one (a skipped number, a sign-in) reads them all again.
    */
   z.object({ type: z.literal("preferences-changed"), preferences: PreferencesSchema, revision: z.number().int().nonnegative() }),
+  /**
+   * The account's automations' runs changed, up to the run sequence `seq` (`automations-cloud.ts`): a device reads
+   * `GET /v1/automations/runs` on from the last it took, its poll kept as the fallback.
+   */
+  AutomationsChangedEventSchema,
 ])
 export type AccountEvent = z.infer<typeof AccountEventSchema>
 /** An event about the account's devices, as against its Threads. */

@@ -3470,6 +3470,8 @@ export function installMockBridge() {
     decideAutomationProposal: async () => { throw new Error("The mock has no proposals.") },
     draftAutomation: async () => { throw new Error("The mock has no Threads to draft from.") },
     automationTemplates: async () => [],
+    automationRunOf: async () => null,
+    automationHook: async () => { throw new Error("The mock has no cloud account to make a webhook in.") },
     terminalList: async () => terminalSessions,
     terminalCreate: async (options) => {
       const now = Date.now()

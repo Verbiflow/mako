@@ -2,6 +2,7 @@ import { z } from "zod"
 import { ACCESS_TIER_NAMES } from "./access.js"
 import { BriefSchema, PlaceSchema, ReportStatusSchema, type Brief } from "./agents.js"
 import { knownTimezone, parseCron } from "./automation-cron.js"
+import { automationClientKey, scheduleOccurrence } from "@mako/protocol/automations-cloud"
 import type { JsonValue } from "./json.js"
 
 /**
@@ -282,6 +283,8 @@ export const AutomationLocalSchema = z.object({
    * triggers wait for the cloud, and its row says so.
    */
   cloudRegistered: z.boolean().optional(),
+  /** Why the cloud account wouldn't register it (a repository Mako's GitHub App can't read), in its words; its row says so. */
+  cloudIssue: z.string().max(1000).optional(),
 })
 export type AutomationLocal = z.infer<typeof AutomationLocalSchema>
 
@@ -358,21 +361,19 @@ export const AutomationRunSchema = z.object({
   thread: z.object({ conversation: z.string().max(200), thread: z.string().max(200).optional(), request: z.string().max(200), place: z.string().max(200).optional(), branch: z.string().max(200).optional() }).optional(),
   /** How its Thread's turn ended, in a Fin report's words: done, failed, blocked or needs-input, and its last reply. */
   result: z.object({ status: ReportStatusSchema, summary: z.string().max(4000), pullRequest: z.string().max(400).optional() }).optional(),
+  /**
+   * The cloud account holds this occurrence (`@mako/protocol/automations-cloud`): `seq` is its record's there, `thread`
+   * its cloud Thread once made. Its record follows the account's (`AutomationCloud`'s runs feed), not this Mac's clock.
+   */
+  cloud: z.object({ seq: z.number().int().nonnegative(), thread: z.string().max(200).optional() }).optional(),
 })
 export type AutomationRun = z.infer<typeof AutomationRunSchema>
 
 /**
- * A schedule occurrence's name, the same on this Mac and in the cloud: its slot's instant from the cron helper (never
- * when it actually fired), to the minute in UTC: `2026-11-19T06:17Z`.
+ * A schedule occurrence's name (`2026-11-19T06:17Z`) and the client key every repeat of one occurrence starts under,
+ * the same on this Mac and in the cloud: the open protocol's.
  */
-export function scheduleOccurrence(at: number): string {
-  return `${new Date(at).toISOString().slice(0, 16)}Z`
-}
-
-/** The client key every repeat of one occurrence starts under. */
-export function automationClientKey(id: string, occurrence: string): string {
-  return `automation:${id}:${occurrence}`
-}
+export { automationClientKey, scheduleOccurrence }
 
 /** A run's branch: the template with `{date}`, `{time}`, `{automation}` and `{run}` filled in; `at` read in `timezone`. */
 export function branchFor(template: string, input: { id: string; occurrence: string; at: number; timezone?: string }): string {
@@ -432,8 +433,20 @@ export const AutomationProposalSchema = z.object({
   note: z.string().max(1000).optional(),
   /** Whether its agent was told of the decision. */
   told: z.boolean().optional(),
+  /**
+   * On a cloud machine's host, whose agent proposed it in a cloud run: it's applied on the person's Mac, never in the
+   * machine's clone. `awaiting` once decided here (from the ask's card in its Thread) until the Mac applies it;
+   * `settled` once the Mac said how it went (`mako:automations-forward-settle`).
+   */
+  relay: z.enum(["awaiting", "settled"]).optional(),
+  /** On the person's Mac: forwarded from the cloud Thread whose agent proposed it, which hears the decision. */
+  from: z.object({ thread: z.string().max(200) }).optional(),
 })
 export type AutomationProposal = z.infer<typeof AutomationProposalSchema>
+
+/** How a forwarded proposal went on the person's Mac, as its cloud Thread's host is told. */
+export const ForwardedOutcomeSchema = z.object({ status: z.enum(["approved", "declined", "expired", "stale"]), note: z.string().max(1000).optional() })
+export type ForwardedOutcome = z.infer<typeof ForwardedOutcomeSchema>
 
 /** The parts of a definition a proposal's diff names, in the order a card shows them. */
 export const AUTOMATION_DIFF_FIELDS = ["name", "prompt", "triggers", "start", "limits", "gate", "thread", "result"] as const
@@ -523,6 +536,25 @@ export interface AutomationTemplate {
   definition: AutomationDefinitionInput
 }
 
+/** `mako:automations-run-of`: the run a Thread is, by its conversation; null for a Thread no automation started. */
+export interface AutomationRunOf {
+  project: string
+  id: string
+  occurrence: string
+  /** The automation's name now, or its id once it left the project's file. */
+  name: string
+}
+
+/** `mako:automations-hook`: a webhook the account takes deliveries at, its secret shown this once. */
+export interface AutomationHook {
+  name: string
+  provider: "webhook" | "linear" | "sentry"
+  /** The address to give the sender. */
+  url: string
+  /** Shown once, when it's made or rotated; the account keeps it sealed and never shows it again. */
+  secret?: string
+}
+
 /** `mako:automations-draft`: an automation made from a Thread's first prompt and how it started, for the editor. */
 export interface AutomationDraft {
   project: string
@@ -547,6 +579,10 @@ export interface AutomationDraft {
  * | `decide` | `(proposal: string, approve: boolean)` | `AutomationProposal` as decided |
  * | `draft` | `(conversationId: string)` | `AutomationDraft` |
  * | `templates` | `()` | `AutomationTemplate[]` |
+ * | `run-of` | `(conversation: string)` | `AutomationRunOf \| null`: the run a Thread is, however old |
+ * | `forwarded` | `()` | `AutomationProposal[]`: on a cloud machine's host, its agents' proposals the person's Mac takes |
+ * | `forward-settle` | `(proposal: string, outcome: ForwardedOutcome)` | `AutomationProposal`: how one went on the Mac |
+ * | `hook` | `(name: string, provider?: "webhook" \| "linear" \| "sentry", rotate?: boolean, secret?: string)` | `AutomationHook`: made, or its secret rotated |
  *
  * and `mako:automations-act`, the agent's `automation` tool (`contracts/thread-tools.ts`).
  */
@@ -560,6 +596,10 @@ export const AUTOMATION_CALLS = {
   decide: "mako:automations-decide",
   draft: "mako:automations-draft",
   templates: "mako:automations-templates",
+  runOf: "mako:automations-run-of",
+  hook: "mako:automations-hook",
+  forwarded: "mako:automations-forwarded",
+  forwardSettle: "mako:automations-forward-settle",
   act: "mako:automations-act",
 } as const
 
